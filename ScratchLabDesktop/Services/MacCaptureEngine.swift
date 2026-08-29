@@ -2935,6 +2935,24 @@ final class MacCaptureEngine: NSObject, ObservableObject {
     @Published private(set) var routineAudioBuffersSkipped = 0
     @Published private(set) var lastRoutineAudioWriterError: String?
 
+#if DEBUG
+    // Rane channel-map diagnostic (Phase 2). Developer-only: samples the live
+    // capture device's raw multichannel stream and reports per-channel /
+    // per-pair RMS, peak, DC, silence, clipping and a program-likelihood score
+    // so the correct stereo program pair can be identified with hardware.
+    @Published private(set) var isChannelMapDiagnosticRunning = false
+    @Published private(set) var channelMapDiagnosticSnapshot: MultichannelSignalProbe.Snapshot?
+    @Published private(set) var channelMapDiagnosticStatus =
+        "Idle. Start the diagnostic, then play obvious program audio through the Rane."
+    /// Guarded by `audioQueue`.
+    private var channelMapDiagnosticActive = false
+    private var channelMapDiagnosticChannels: [[Float]] = []
+    private var channelMapDiagnosticFrames = 0
+    private var channelMapDiagnosticSampleRate: Double = 0
+    /// ~1.5 s at 48 kHz — enough to characterise a pair without a long wait.
+    private let channelMapDiagnosticTargetFrames = 72_000
+#endif
+
     // CXL notation capture
     let cxlRecorder = CXLNotationCaptureRecorder()
     @Published private(set) var cxlIsRecording = false
@@ -6351,7 +6369,7 @@ final class MacCaptureEngine: NSObject, ObservableObject {
                 trackerPoint: rawTrackedPoint,
                 trackerTime: now,
                 jointConfidence: Double(rawJointConfidence),
-                builderPoint: currentPoint,
+                builderPosition: processed.position,
                 builderState: movementState,
                 builderConfidence: processed.confidence,
                 rawDirection: direction,
@@ -6753,7 +6771,7 @@ final class MacCaptureEngine: NSObject, ObservableObject {
                 trackerPoint: nil,
                 trackerTime: processingStartTime,
                 jointConfidence: nil,
-                builderPoint: nil, builderState: .searching, builderConfidence: nil,
+                builderPosition: nil, builderState: .searching, builderConfidence: nil,
                 rawDirection: direction, idleReason: nil,
                 trackerConfidence: Double(handDirectionTracker.confidence),
                 semanticDirection: .searching,
@@ -6783,7 +6801,7 @@ final class MacCaptureEngine: NSObject, ObservableObject {
                 trackerPoint: nil,
                 trackerTime: processingStartTime,
                 jointConfidence: nil,
-                builderPoint: smoothedHandPoint,
+                builderPosition: nil,
                 builderState: movementState,
                 builderConfidence: Double(handDirectionTracker.confidence),
                 rawDirection: direction,
@@ -6877,7 +6895,7 @@ final class MacCaptureEngine: NSObject, ObservableObject {
     /// returns its stable observation ID. DEBUG-only — the trace is the
     /// capture-evidence path; it must never depend on MainActor.
     ///
-    /// `builderPoint`/`builderState`/`builderConfidence` are the ACTUAL builder
+    /// `builderPosition`/`builderState`/`builderConfidence` are the ACTUAL builder
     /// input: they must be nil whenever the builder was not fed (dedup rejected,
     /// continuity-filled, or a miss/jump that never reached publication).
     @discardableResult
@@ -6889,7 +6907,7 @@ final class MacCaptureEngine: NSObject, ObservableObject {
         trackerPoint: CGPoint?,
         trackerTime: Double,
         jointConfidence: Double?,
-        builderPoint: CGPoint?,
+        builderPosition: Double?,
         builderState: HandMotionState?,
         builderConfidence: Double?,
         rawDirection: HandDirectionTracker.Direction?,
@@ -6913,7 +6931,7 @@ final class MacCaptureEngine: NSObject, ObservableObject {
             trackerPoint: trackerPoint.map(MovementTraceObservation.Point.init),
             trackerTime: trackerTime,
             jointConfidence: jointConfidence,
-            builderPoint: fedToBuilder ? builderPoint.map(MovementTraceObservation.Point.init) : nil,
+            builderPoint: fedToBuilder ? builderPosition.map { .init(x: $0, y: 0) } : nil,
             builderState: fedToBuilder ? builderState.map { String(describing: $0) } : nil,
             builderConfidence: fedToBuilder ? builderConfidence : nil,
             rawDirection: rawDirection.map { String(describing: $0) },
@@ -7501,6 +7519,203 @@ final class MacCaptureEngine: NSObject, ObservableObject {
             self.routineMovementDiagnostics = snapshot
         }
     }
+
+    // MARK: - Rane channel-map diagnostic (Phase 2, DEBUG only)
+
+    /// Begin sampling the live capture device's raw multichannel stream. The
+    /// capture session must already be running on the target audio input.
+    func startChannelMapDiagnostic() {
+        audioQueue.async { [weak self] in
+            guard let self else { return }
+            self.channelMapDiagnosticActive = true
+            self.channelMapDiagnosticChannels = []
+            self.channelMapDiagnosticFrames = 0
+            self.channelMapDiagnosticSampleRate = 0
+            Task { @MainActor in
+                self.isChannelMapDiagnosticRunning = true
+                self.channelMapDiagnosticSnapshot = nil
+                self.channelMapDiagnosticStatus =
+                    "Sampling… play or scratch obvious program audio through the Rane now."
+            }
+        }
+    }
+
+    /// Stop sampling without waiting for the window to fill.
+    func stopChannelMapDiagnostic() {
+        audioQueue.async { [weak self] in
+            guard let self else { return }
+            let hadSamples = self.channelMapDiagnosticFrames > 0
+            self.finishChannelMapDiagnosticLocked(reason: hadSamples ? nil : "No audio reached the diagnostic — check the input selection.")
+        }
+    }
+
+    /// Called on `audioQueue` for every captured audio buffer while the
+    /// diagnostic is active. Accumulates de-interleaved per-channel Float
+    /// samples until the target window is filled, then analyses once.
+    private func accumulateChannelMapDiagnosticSampleBufferIfNeeded(_ sampleBuffer: CMSampleBuffer) {
+        guard channelMapDiagnosticActive else { return }
+        guard let decoded = Self.planarFloatChannels(from: sampleBuffer) else { return }
+
+        if channelMapDiagnosticChannels.isEmpty {
+            channelMapDiagnosticChannels = Array(
+                repeating: [Float](),
+                count: decoded.channels.count
+            )
+            channelMapDiagnosticSampleRate = decoded.sampleRate
+        }
+        guard decoded.channels.count == channelMapDiagnosticChannels.count else { return }
+
+        for index in 0..<decoded.channels.count {
+            channelMapDiagnosticChannels[index].append(contentsOf: decoded.channels[index])
+        }
+        channelMapDiagnosticFrames += decoded.channels.first?.count ?? 0
+
+        if channelMapDiagnosticFrames >= channelMapDiagnosticTargetFrames {
+            finishChannelMapDiagnosticLocked(reason: nil)
+        }
+    }
+
+    /// `audioQueue`-isolated. Runs the probe (if any samples) and publishes.
+    private func finishChannelMapDiagnosticLocked(reason: String?) {
+        guard channelMapDiagnosticActive else { return }
+        channelMapDiagnosticActive = false
+
+        let channels = channelMapDiagnosticChannels
+        let sampleRate = channelMapDiagnosticSampleRate
+        channelMapDiagnosticChannels = []
+        channelMapDiagnosticFrames = 0
+        channelMapDiagnosticSampleRate = 0
+
+        let snapshot = channels.isEmpty
+            ? nil
+            : MultichannelSignalProbe.analyze(planarChannels: channels, sampleRate: sampleRate)
+
+        Task { @MainActor in
+            self.isChannelMapDiagnosticRunning = false
+            self.channelMapDiagnosticSnapshot = snapshot
+            if let reason {
+                self.channelMapDiagnosticStatus = reason
+            } else if let snapshot {
+                if let recommended = snapshot.recommendedPair {
+                    self.channelMapDiagnosticStatus =
+                        "Done. Program audio looks strongest on CH \(recommended.label). Verify against the report, then set it as the program pair."
+                } else {
+                    self.channelMapDiagnosticStatus =
+                        "Done. No pair clearly carries program audio — play louder/obvious audio and re-run."
+                }
+                NSLog("[MacCaptureEngine] Channel-map diagnostic:\n%@", snapshot.reportText)
+            } else {
+                self.channelMapDiagnosticStatus = "Stopped before any audio was captured."
+            }
+        }
+    }
+
+    /// De-interleave a captured PCM buffer into one Float array per channel.
+    /// Handles Float32 / Int16 / Int32, interleaved or non-interleaved.
+    static func planarFloatChannels(
+        from sampleBuffer: CMSampleBuffer
+    ) -> (channels: [[Float]], sampleRate: Double)? {
+        guard let formatDescription = CMSampleBufferGetFormatDescription(sampleBuffer),
+              let asbdPointer = CMAudioFormatDescriptionGetStreamBasicDescription(formatDescription) else {
+            return nil
+        }
+        let asbd = asbdPointer.pointee
+        guard asbd.mFormatID == kAudioFormatLinearPCM else { return nil }
+
+        let isFloat = (asbd.mFormatFlags & kAudioFormatFlagIsFloat) != 0
+        let isNonInterleaved = (asbd.mFormatFlags & kAudioFormatFlagIsNonInterleaved) != 0
+        let bitsPerChannel = Int(asbd.mBitsPerChannel)
+        let channelCount = Int(asbd.mChannelsPerFrame)
+        let frameCount = CMSampleBufferGetNumSamples(sampleBuffer)
+        guard channelCount > 0,
+              channelCount <= maximumAudioPacketChannelCount,
+              frameCount > 0,
+              frameCount <= maximumAudioPacketFrameCount else {
+            return nil
+        }
+
+        let bytesPerSample: Int
+        if isFloat && bitsPerChannel == 32 {
+            bytesPerSample = MemoryLayout<Float>.size
+        } else if !isFloat && bitsPerChannel == 16 {
+            bytesPerSample = MemoryLayout<Int16>.size
+        } else if !isFloat && bitsPerChannel == 32 {
+            bytesPerSample = MemoryLayout<Int32>.size
+        } else {
+            return nil
+        }
+
+        let bufferCount = isNonInterleaved ? channelCount : 1
+        let audioBufferListSize = MemoryLayout<AudioBufferList>.size
+            + max(0, bufferCount - 1) * MemoryLayout<AudioBuffer>.size
+        let rawPointer = UnsafeMutableRawPointer.allocate(
+            byteCount: audioBufferListSize,
+            alignment: max(16, MemoryLayout<AudioBufferList>.alignment)
+        )
+        defer { rawPointer.deallocate() }
+        let listPointer = rawPointer.bindMemory(to: AudioBufferList.self, capacity: 1)
+        listPointer.pointee = AudioBufferList(
+            mNumberBuffers: UInt32(bufferCount),
+            mBuffers: AudioBuffer(mNumberChannels: 0, mDataByteSize: 0, mData: nil)
+        )
+
+        var blockBuffer: CMBlockBuffer?
+        let status = CMSampleBufferGetAudioBufferListWithRetainedBlockBuffer(
+            sampleBuffer,
+            bufferListSizeNeededOut: nil,
+            bufferListOut: listPointer,
+            bufferListSize: audioBufferListSize,
+            blockBufferAllocator: nil,
+            blockBufferMemoryAllocator: nil,
+            flags: UInt32(kCMSampleBufferFlag_AudioBufferList_Assure16ByteAlignment),
+            blockBufferOut: &blockBuffer
+        )
+        guard status == noErr else { return nil }
+
+        let buffers = UnsafeMutableAudioBufferListPointer(listPointer)
+        guard !buffers.isEmpty else { return nil }
+
+        func normalize(_ raw: UnsafeRawPointer, sampleIndex: Int) -> Float {
+            if isFloat {
+                return raw.assumingMemoryBound(to: Float.self)[sampleIndex]
+            } else if bitsPerChannel == 16 {
+                return Float(raw.assumingMemoryBound(to: Int16.self)[sampleIndex]) / Float(Int16.max)
+            } else {
+                return Float(raw.assumingMemoryBound(to: Int32.self)[sampleIndex]) / Float(Int32.max)
+            }
+        }
+
+        var channels = Array(repeating: [Float](), count: channelCount)
+
+        if isNonInterleaved {
+            guard buffers.count == channelCount else { return nil }
+            for channel in 0..<channelCount {
+                guard let data = buffers[channel].mData else { return nil }
+                let available = Int(buffers[channel].mDataByteSize) / bytesPerSample
+                let count = min(frameCount, available)
+                var out = [Float](repeating: 0, count: count)
+                for index in 0..<count {
+                    out[index] = normalize(data, sampleIndex: index)
+                }
+                channels[channel] = out
+            }
+        } else {
+            guard buffers.count == 1, let data = buffers[0].mData else { return nil }
+            let totalSamples = Int(buffers[0].mDataByteSize) / bytesPerSample
+            let frames = min(frameCount, totalSamples / channelCount)
+            for channel in 0..<channelCount {
+                channels[channel] = [Float](repeating: 0, count: frames)
+            }
+            for frame in 0..<frames {
+                let base = frame * channelCount
+                for channel in 0..<channelCount {
+                    channels[channel][frame] = normalize(data, sampleIndex: base + channel)
+                }
+            }
+        }
+
+        return (channels, asbd.mSampleRate)
+    }
     #endif
 
     private func startAudioSignalDecayTimer() {
@@ -7644,6 +7859,39 @@ final class MacCaptureEngine: NSObject, ObservableObject {
                 self.platterTestLoadStatus = "loaded: \(sampleID)"
             } else {
                 self.platterTestLoadStatus = "load failed: \(snapshot.lastLoadError ?? "unknown")"
+            }
+        }
+    }
+
+    /// Plays the controller's bounded audible diagnostic using the exact
+    /// bundled `dvs_ahhh` asset, then leaves that sample armed for right-deck
+    /// platter movement. This is deliberately separate from
+    /// `loadPlatterTestSample()`: applying a MIDI mapping must remain silent,
+    /// while an explicit Test action must prove the real sample and macOS
+    /// output chain are audible. Unloading first resets the controller's
+    /// once-per-load preview guard, so every button press is a real test.
+    func previewPlatterTestSample() {
+        let sampleID = "dvs_ahhh"
+        print("[ScratchSamplePlaybackBridge] audible platter test requested · sampleID=\(sampleID)")
+        scratchPlaybackController.unload()
+        scratchPlaybackController.waitForAudioQueue()
+
+        let requested = scratchPlaybackController.load(sampleID: sampleID, playDiagnosticPreview: true)
+        guard requested else {
+            publishOnMainAsync(field: "platterTestLoadStatus") { [weak self] in
+                self?.platterTestLoadStatus = "not found: \(sampleID)"
+            }
+            return
+        }
+
+        scratchPlaybackController.waitForAudioQueue()
+        let snapshot = scratchPlaybackController.diagnosticsSnapshot()
+        publishOnMainAsync(field: "platterTestLoadStatus") { [weak self] in
+            guard let self else { return }
+            if snapshot.loadedSampleID == sampleID, snapshot.engineRunning {
+                self.platterTestLoadStatus = "audible test: \(sampleID)"
+            } else {
+                self.platterTestLoadStatus = "test failed: \(snapshot.lastLoadError ?? "audio engine unavailable")"
             }
         }
     }
@@ -10676,6 +10924,9 @@ extension MacCaptureEngine: AVCaptureVideoDataOutputSampleBufferDelegate, AVCapt
                 count: Int(CMSampleBufferGetNumSamples(sampleBuffer))
             )
             appendRoutineAudioSampleBufferIfNeeded(sampleBuffer)
+            #if DEBUG
+            accumulateChannelMapDiagnosticSampleBufferIfNeeded(sampleBuffer)
+            #endif
         }
         guard shouldProcessCaptureSamples else { return }
         let signpostID = ScratchLabPerformanceSignpost.begin("CaptureFrameProcess")
@@ -10796,7 +11047,10 @@ struct MovementTraceObservation: Codable, Equatable {
     // observation (dedup rejected, continuity-filled, or never reached
     // publication). These values are identical to what was enqueued — position,
     // state, and confidence are captured before the MainActor hop.
-    let builderPoint: Point?            // smoothed/displayed point the builder received
+    /// Actual scalar movement position the builder received, stored in `x`;
+    /// `y` is reserved as zero. Current camera capture supplies angular platter
+    /// position here, not the smoothed image-space display point.
+    let builderPoint: Point?
     let builderState: String?           // HandMotionState the builder received
     let builderConfidence: Double?      // tracker confidence the builder received
 

@@ -137,9 +137,10 @@ struct ScratchMotionLane: View {
 
     // MARK: Palette — one shared language across both orientations
 
-    /// Flat dark gray — a study-chart canvas, not a tinted gradient. Keeps the
-    /// notation as the only thing carrying colour information.
-    private static let background = Color(white: 0.10)
+    /// Figma-aligned notation has no backing rectangle. The containing screen
+    /// supplies its page/camera context; only semantic bands, grid, motion,
+    /// fader state, and the action line are drawn here.
+    private static let background = Color.clear
     /// Demo segments read cool; copy windows read warm/active.
     private static let demoAccent = Color(red: 0.23, green: 0.51, blue: 0.96)
     private static let copyAccent = Color(red: 0.96, green: 0.62, blue: 0.07)
@@ -520,6 +521,191 @@ struct ScratchMotionLane: View {
             return label
         }
         return segment.kind == .copy ? "Your turn" : "Demo"
+    }
+}
+
+// MARK: - Platter sample position overview
+
+/// Transparent Serato-style overview of the currently armed scratch sample.
+/// The waveform is immutable PCM-derived evidence; only the playhead moves,
+/// using the renderer's real smoothed frame position. This complements the
+/// platter/fader notation above it and never substitutes for that notation.
+struct SamplePositionWaveformView: View {
+    @EnvironmentObject private var playbackEngine: IOScratchPlaybackEngine
+
+    private static let refreshInterval: TimeInterval = 1.0 / 30.0
+
+    var body: some View {
+        TimelineView(.animation(minimumInterval: Self.refreshInterval)) { _ in
+            let snapshot = playbackEngine.platterSamplePlayheadSnapshot
+            let waveform = snapshot?.waveform ?? playbackEngine.platterSampleWaveform
+
+            VStack(alignment: .leading, spacing: ScratchLabDesign.Spacing.xxs) {
+                HStack(spacing: ScratchLabDesign.Spacing.sm) {
+                    Text("\(waveform?.displayName ?? "AHHH") SAMPLE POSITION")
+                        .font(ScratchLabDesign.Typo.statusPill)
+                        .foregroundStyle(ScratchLabDesign.Sem.accent)
+
+                    Spacer(minLength: ScratchLabDesign.Spacing.sm)
+
+                    Text(statusText(for: snapshot))
+                        .font(ScratchLabDesign.Typo.statusPill)
+                        .foregroundStyle(statusColor(for: snapshot))
+                        .monospacedDigit()
+                }
+
+                GeometryReader { geometry in
+                    Canvas { context, size in
+                        drawWaveform(
+                            waveform,
+                            snapshot: snapshot,
+                            in: &context,
+                            size: size
+                        )
+                    }
+                    .frame(width: geometry.size.width, height: geometry.size.height)
+                }
+
+                HStack {
+                    Text("START")
+                    Spacer()
+                    Text("MID")
+                    Spacer()
+                    Text("END")
+                }
+                .font(ScratchLabDesign.Typo.statusPill)
+                .foregroundStyle(ScratchLabDesign.Sem.textSecondary)
+            }
+            .padding(.horizontal, ScratchLabDesign.Spacing.md)
+            .padding(.vertical, ScratchLabDesign.Spacing.sm)
+            .background(Color.clear)
+            .shadow(color: .black.opacity(0.9), radius: 2, x: 0, y: 1)
+            .accessibilityElement(children: .ignore)
+            .accessibilityLabel(accessibilityLabel(for: snapshot))
+        }
+        .allowsHitTesting(false)
+    }
+
+    private func statusText(for snapshot: PlatterSamplePlayheadSnapshot?) -> String {
+        guard let snapshot else { return "LOAD AHHH" }
+        switch snapshot.region {
+        case .unloaded:
+            return "LOAD AHHH"
+        case .cue:
+            return "READY · CUE 0.00"
+        case .beforeStart:
+            return String(format: "BEFORE START · %.2f s", snapshot.positionSeconds)
+        case .pastEnd:
+            let overshoot = max(0, snapshot.positionSeconds - snapshot.waveform.duration)
+            return String(format: "PAST END · +%.2f s", overshoot)
+        case .start, .middle, .end:
+            return String(format: "LIVE · %.2f s", max(0, snapshot.positionSeconds))
+        }
+    }
+
+    private func statusColor(for snapshot: PlatterSamplePlayheadSnapshot?) -> Color {
+        switch snapshot?.region {
+        case .beforeStart, .pastEnd:
+            return ScratchLabDesign.Sem.warning
+        default:
+            return ScratchLabDesign.Sem.textSecondary
+        }
+    }
+
+    private func accessibilityLabel(for snapshot: PlatterSamplePlayheadSnapshot?) -> String {
+        guard let snapshot else {
+            return "AHHH sample position unavailable. Load AHHH to show the playhead."
+        }
+        let location: String
+        switch snapshot.region {
+        case .unloaded: location = "unloaded"
+        case .cue: location = "at the cue origin"
+        case .start: location = "in the start of the sample"
+        case .middle: location = "in the middle of the sample"
+        case .end: location = "in the end of the sample"
+        case .beforeStart: location = "before the cue origin"
+        case .pastEnd: location = "past the end of the audible sample"
+        }
+        return "\(snapshot.waveform.displayName) playhead \(location), \(String(format: "%.2f", snapshot.positionSeconds)) seconds."
+    }
+
+    private func drawWaveform(
+        _ waveform: PlatterSampleWaveform?,
+        snapshot: PlatterSamplePlayheadSnapshot?,
+        in context: inout GraphicsContext,
+        size: CGSize
+    ) {
+        guard size.width > 0, size.height > 0 else { return }
+
+        let centerY = size.height / 2
+        var axis = Path()
+        axis.move(to: CGPoint(x: 0, y: centerY))
+        axis.addLine(to: CGPoint(x: size.width, y: centerY))
+        context.stroke(
+            axis,
+            with: .color(ScratchLabDesign.Notation.lineNeutral),
+            lineWidth: 1
+        )
+
+        guard let waveform, !waveform.amplitudes.isEmpty else {
+            let emptyText = Text("LOAD AHHH TO SEE SAMPLE POSITION")
+                .font(ScratchLabDesign.Typo.statusPill)
+                .foregroundColor(ScratchLabDesign.Sem.textSecondary)
+            context.draw(
+                emptyText,
+                at: CGPoint(x: size.width / 2, y: max(7, centerY - 9)),
+                anchor: .center
+            )
+            return
+        }
+
+        let count = waveform.amplitudes.count
+        let step = size.width / CGFloat(count)
+        let barWidth = min(max(step * 0.58, 1.5), 5)
+        let playheadX = CGFloat(snapshot?.progress ?? 0) * max(0, size.width - 2) + 1
+        var baseBars = Path()
+        var playedBars = Path()
+
+        for (index, amplitude) in waveform.amplitudes.enumerated() {
+            let x = CGFloat(index) * step + (step - barWidth) / 2
+            let barHeight = max(1.5, CGFloat(amplitude) * size.height * 0.82)
+            let rect = CGRect(
+                x: x,
+                y: centerY - barHeight / 2,
+                width: barWidth,
+                height: barHeight
+            )
+            baseBars.addRoundedRect(in: rect, cornerSize: CGSize(width: 1, height: 1))
+            if x + barWidth / 2 <= playheadX {
+                playedBars.addRoundedRect(in: rect, cornerSize: CGSize(width: 1, height: 1))
+            }
+        }
+
+        context.fill(baseBars, with: .color(ScratchLabDesign.Notation.targetTrace))
+        context.fill(playedBars, with: .color(ScratchLabDesign.Notation.performanceTrace))
+
+        var cueOrigin = Path()
+        cueOrigin.move(to: CGPoint(x: 1, y: 0))
+        cueOrigin.addLine(to: CGPoint(x: 1, y: size.height))
+        context.stroke(
+            cueOrigin,
+            with: .color(ScratchLabDesign.Notation.targetTrace),
+            lineWidth: 1.5
+        )
+
+        if let snapshot {
+            let isOutOfRange = snapshot.region == .beforeStart || snapshot.region == .pastEnd
+            var playhead = Path()
+            playhead.move(to: CGPoint(x: playheadX, y: 0))
+            playhead.addLine(to: CGPoint(x: playheadX, y: size.height))
+            context.stroke(
+                playhead,
+                with: .color(isOutOfRange
+                    ? ScratchLabDesign.Sem.warning
+                    : ScratchLabDesign.Notation.performanceTrace),
+                lineWidth: 2
+            )
+        }
     }
 }
 

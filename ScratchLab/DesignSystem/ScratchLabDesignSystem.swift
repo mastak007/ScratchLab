@@ -1488,8 +1488,18 @@ enum LessonStage: String, CaseIterable, Sendable {
 struct LessonProgressIndicator: View {
     let stages: [LessonStage]
     let current: LessonStage
+    var desktopLayout: Bool = false
+    var desktopCompact: Bool = false
 
     var body: some View {
+        if desktopLayout {
+            desktopBody
+        } else {
+            compactBody
+        }
+    }
+
+    private var compactBody: some View {
         HStack(spacing: ScratchLabDesign.Spacing.xs) {
             ForEach(Array(stages.enumerated()), id: \.offset) { index, stage in
                 HStack(spacing: ScratchLabDesign.Spacing.xxs) {
@@ -1511,6 +1521,53 @@ struct LessonProgressIndicator: View {
                 }
             }
         }
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel(Text("Lesson progress: \(current.label)"))
+    }
+
+    private var desktopBody: some View {
+        let markerSize: CGFloat = desktopCompact ? 18 : 24
+        let connectorWidth: CGFloat = desktopCompact ? 14 : 18
+        let horizontalPadding: CGFloat = desktopCompact ? 12 : ScratchLabDesign.Spacing.lg
+        let verticalPadding: CGFloat = desktopCompact ? 9 : ScratchLabDesign.Spacing.md
+
+        return HStack(spacing: desktopCompact ? 6 : ScratchLabDesign.Spacing.sm) {
+            ForEach(Array(stages.enumerated()), id: \.offset) { index, stage in
+                VStack(spacing: desktopCompact ? 3 : 5) {
+                    Text("\(index + 1)")
+                        .font(.system(size: desktopCompact ? 8 : 10, weight: .bold))
+                        .foregroundStyle(stage == current
+                                         ? ScratchLabDesign.Sem.textOnAccent
+                                         : ScratchLabDesign.Sem.textTertiary)
+                        .frame(width: markerSize, height: markerSize)
+                        .background(
+                            Circle().fill(stage == current
+                                          ? ScratchLabDesign.Sem.accent
+                                          : ScratchLabDesign.Surface.raised)
+                        )
+                        .overlay {
+                            Circle().stroke(ScratchLabDesign.Border.default, lineWidth: 1)
+                        }
+
+                    Text(stage.label)
+                        .font(.system(size: desktopCompact ? 7 : 9, weight: .medium))
+                        .foregroundStyle(stage == current
+                                         ? ScratchLabDesign.Sem.textAccent
+                                         : ScratchLabDesign.Sem.textTertiary)
+                }
+                .frame(maxWidth: .infinity)
+
+                if index < stages.count - 1 {
+                    Rectangle()
+                        .fill(ScratchLabDesign.Border.default)
+                        .frame(width: connectorWidth, height: 1)
+                }
+            }
+        }
+        .padding(.horizontal, horizontalPadding)
+        .padding(.vertical, verticalPadding)
+        .frame(width: desktopCompact ? 540 : 720, height: desktopCompact ? 57 : 76)
+        .background(ScratchLabDesign.Surface.surface)
         .accessibilityElement(children: .combine)
         .accessibilityLabel(Text("Lesson progress: \(current.label)"))
     }

@@ -12,6 +12,7 @@ final class WatchMotionRecorder: NSObject, ObservableObject {
     @Published private(set) var isPhonePaired = false
     @Published private(set) var isCompanionInstalled = false
     @Published private(set) var isPhoneReachable = false
+    @Published private(set) var isPhoneCaptureCommandPending = false
 
     let sampleRateHz = 100.0
 
@@ -202,6 +203,66 @@ final class WatchMotionRecorder: NSObject, ObservableObject {
 
         activeCommandPayload = nil
         activeAcknowledgedAt = nil
+    }
+
+    /// Asks the paired iPhone to run its real guided-capture Start/Stop action.
+    /// The watch motion recorder then starts/stops only when the iPhone sends
+    /// its existing linked-capture command with the authoritative take ID.
+    func requestPairedPhoneCapture(_ command: PhoneCaptureCommandPayload.Command) {
+        guard let watchSession,
+              watchSession.activationState == .activated,
+              watchSession.isCompanionAppInstalled,
+              watchSession.isReachable else {
+            isPhoneCaptureCommandPending = false
+            if command == .stop, isRecording {
+                stopCapture()
+                transferStatus = "Stopped locally. Open Capture on iPhone to finish the phone take."
+            } else {
+                transferStatus = "Open ScratchLab Capture on iPhone, then try Start Take again."
+            }
+            return
+        }
+
+        let payload = PhoneCaptureCommandPayload(command: command)
+        let formatter = ISO8601DateFormatter()
+        let message: [String: Any] = [
+            "kind": PhoneCaptureCommandPayload.packetKind,
+            "commandID": payload.commandID,
+            "command": payload.command.rawValue,
+            "requestedAt": formatter.string(from: payload.requestedAt)
+        ]
+
+        isPhoneCaptureCommandPending = true
+        transferStatus = command == .start
+            ? "Starting take on iPhone…"
+            : "Stopping take on iPhone…"
+
+        watchSession.sendMessage(message, replyHandler: { reply in
+            let syncState = CaptureWatchSyncState(rawValue: reply["syncState"] as? String ?? "") ?? .failed
+            let detail = reply["detail"] as? String
+            DispatchQueue.main.async {
+                let replyDetail = detail.flatMap { $0.isEmpty ? nil : $0 }
+                let commandHasCompleted = command == .start ? self.isRecording : !self.isRecording
+                self.isPhoneCaptureCommandPending = syncState == .requested && !commandHasCompleted
+                if commandHasCompleted {
+                    return
+                }
+                switch syncState {
+                case .requested, .acknowledged:
+                    self.transferStatus = replyDetail
+                        ?? (command == .start ? "Starting take on iPhone…" : "Stopping take on iPhone…")
+                default:
+                    self.isPhoneCaptureCommandPending = false
+                    self.transferStatus = replyDetail
+                        ?? "The iPhone could not complete that capture command."
+                }
+            }
+        }, errorHandler: { error in
+            DispatchQueue.main.async {
+                self.isPhoneCaptureCommandPending = false
+                self.transferStatus = "iPhone control failed: \(error.localizedDescription)"
+            }
+        })
     }
 
     private func activateWatchSession() {
@@ -402,6 +463,7 @@ extension WatchMotionRecorder: WCSessionDelegate {
         guard let payload = decodeCommandPayload(from: message) else { return }
 
         DispatchQueue.main.async {
+            self.isPhoneCaptureCommandPending = false
             let reply: (CaptureWatchSyncState, String?) -> Void = { syncState, detail in
                 if session.isReachable {
                     session.sendMessage(
@@ -442,6 +504,7 @@ extension WatchMotionRecorder: WCSessionDelegate {
         }
 
         DispatchQueue.main.async {
+            self.isPhoneCaptureCommandPending = false
             switch payload.command {
             case .start:
                 guard !self.isRecording else {

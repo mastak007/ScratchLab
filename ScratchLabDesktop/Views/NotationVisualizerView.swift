@@ -19,8 +19,8 @@ final class NotationVisualizerViewModel: ObservableObject {
 
     let notation: ScratchNotation?
     // Display duration derived from the loaded notation's actual phrase end.
-    // For the 76-stroke beat-quantized coach demo this is ~41.5s;
-    // for the short deterministic template (12-stroke) it would be 4.700s.
+    // For the bundled live-performance demo this is ~14.05s;
+    // for the short deterministic template (12-stroke) it is 4.700s.
     var loopDuration: TimeInterval { notation?.timelineDuration ?? BabyScratchReferenceMotionTimeline.phraseEnd }
 
     // MARK: Shared coordinator — master clock for all timing
@@ -85,10 +85,9 @@ final class NotationVisualizerViewModel: ObservableObject {
 
     init(demo: BabyScratchDemoPlaybackCoordinator) {
         self.demo = demo
-        // Use the 76-stroke beat-quantized notation (same source as Practice)
-        // which spans ~41.5s with varied speed classifications, so stroke
-        // heights are differentiated and timing matches the coach demo audio.
-        notation = ScratchNotation.babyScratchFull76BeatQuantized
+        // Use the motion timeline paired with the bundled live-performance
+        // WAV so the visualizer follows the exact 16-cycle demonstration.
+        notation = ScratchNotation.babyScratchDemo
         overlayModel = Self.makeOverlayModel(for: notation)
     }
 
@@ -178,7 +177,7 @@ final class NotationVisualizerViewModel: ObservableObject {
         }
 
         // Audio player time is the master clock. Map it to notation phrase time
-        // using the full demo audio cycle (42.866s) — same as Practice.
+        // using the complete bundled demo audio cycle — same as Practice.
         let audioTime = demo.currentAudioTime
         ScratchLabPerformanceSignpost.event("CoachPlaybackTick", time: audioTime)
         let cycleDur = BabyScratchReferenceMotionTimeline.demoAudioPhraseCycleDuration

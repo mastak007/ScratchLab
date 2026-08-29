@@ -30,6 +30,10 @@ final class WatchMotionCaptureStore: NSObject, ObservableObject {
     @Published private(set) var macAcknowledgedCaptureIDs: Set<UUID> = []
 
     var onImportedCapture: ((ImportedWatchMotionCapture) -> Void)?
+    /// Handles Start/Stop Take requests initiated on Apple Watch. The iPhone
+    /// capture view installs this only while its real guided-capture state
+    /// machine is on screen.
+    var onPhoneCaptureCommand: ((PhoneCaptureCommandPayload, @escaping (WatchCaptureControlReply) -> Void) -> Void)?
     /// (isPaired, isInstalled, isReachable) — fired whenever the local WCSession's view of the
     /// watch changes, so the Mac bridge can relay a fresh snapshot over MultipeerConnectivity.
     var onAvailabilityChange: ((Bool, Bool, Bool) -> Void)?
@@ -433,6 +437,36 @@ final class WatchMotionCaptureStore: NSObject, ObservableObject {
         }
     }
 
+    private func decodePhoneCaptureCommand(from message: [String: Any]) -> PhoneCaptureCommandPayload? {
+        guard message["kind"] as? String == PhoneCaptureCommandPayload.packetKind,
+              let command = PhoneCaptureCommandPayload.Command(
+                rawValue: message["command"] as? String ?? ""
+              ) else {
+            return nil
+        }
+        let requestedAt = ISO8601DateFormatter().date(
+            from: message["requestedAt"] as? String ?? ""
+        ) ?? Date()
+        return PhoneCaptureCommandPayload(
+            commandID: message["commandID"] as? String ?? UUID().uuidString.lowercased(),
+            command: command,
+            requestedAt: requestedAt
+        )
+    }
+
+    private func phoneCaptureReplyDictionary(_ reply: WatchCaptureControlReply) -> [String: Any] {
+        let formatter = ISO8601DateFormatter()
+        return [
+            "kind": WatchCaptureControlReply.packetKind,
+            "commandID": reply.commandID,
+            "sessionID": reply.sessionID,
+            "takeID": reply.takeID ?? "",
+            "syncState": reply.syncState.rawValue,
+            "detail": reply.detail ?? "",
+            "acknowledgedAt": formatter.string(from: reply.acknowledgedAt ?? Date())
+        ]
+    }
+
     private func importTransferredFile(_ sessionFile: WCSessionFile) {
         processingQueue.async {
             do {
@@ -615,6 +649,40 @@ extension WatchMotionCaptureStore: WCSessionDelegate {
     func sessionWatchStateDidChange(_ session: WCSession) {
         DispatchQueue.main.async {
             self.refreshConnectionStatus(using: session)
+        }
+    }
+
+    func session(
+        _ session: WCSession,
+        didReceiveMessage message: [String: Any],
+        replyHandler: @escaping ([String: Any]) -> Void
+    ) {
+        guard let payload = decodePhoneCaptureCommand(from: message) else {
+            replyHandler([
+                "kind": WatchCaptureControlReply.packetKind,
+                "syncState": CaptureWatchSyncState.failed.rawValue,
+                "detail": "Unsupported watch control request."
+            ])
+            return
+        }
+
+        DispatchQueue.main.async {
+            guard let onPhoneCaptureCommand = self.onPhoneCaptureCommand else {
+                let reply = WatchCaptureControlReply(
+                    commandID: payload.commandID,
+                    sessionID: "",
+                    takeID: nil,
+                    syncState: .unavailable,
+                    detail: "Open Capture on iPhone and finish System Check before starting from Watch.",
+                    acknowledgedAt: Date()
+                )
+                replyHandler(self.phoneCaptureReplyDictionary(reply))
+                return
+            }
+
+            onPhoneCaptureCommand(payload) { reply in
+                replyHandler(self.phoneCaptureReplyDictionary(reply))
+            }
         }
     }
 

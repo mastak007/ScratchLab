@@ -9,7 +9,7 @@ import SwiftUI
 // visual language as the iOS lane: cyan forward push and hot pink backward
 // pull, deflect-and-return tent ramps with apex nodes on each rail, and a
 // dashed rest line between strokes. macOS-specific affordances (beat-number
-// labels, PLATTER/FADER lane labels, turnaround diamonds, OPEN/CLOSED binary
+// labels, PLATTER/FADER lane labels, directional chevrons, OPEN/CLOSED binary
 // fader rails with transition markers, and the optional playhead) live around
 // the shared renderer's record-lane output. The CAPTURED / EMPTY cases are
 // unchanged.
@@ -31,6 +31,9 @@ struct ScratchPhraseChartView: View {
 
     let source: ChartSource
     var bpm: Double = 90
+    /// Beatless audio references still need the notation renderer, but must not
+    /// imply a tempo by drawing beat/subdivision lines and beat numbers.
+    var showBeatGrid: Bool = true
     /// Review-only render-time window for the `.target` source. When `nil`,
     /// the chart renders the full notation timeline (Practice/iOS/preview
     /// behaviour preserved). When set, the chart maps `[lowerBound, upperBound]`
@@ -54,6 +57,12 @@ struct ScratchPhraseChartView: View {
     /// fader sub-lane. `nil` (every pre-existing call site) renders the
     /// chart byte-identically to before. Ignored by `.captured`/`.empty`.
     var comparisonOverlay: ScratchComparisonOverlay? = nil
+    /// In-progress performed movement drawn directly over a target phrase.
+    /// This is presentation-only: callers supply attempt-relative events and
+    /// the chart renders them with the canonical cyan performance style on
+    /// the target's time and vertical axes. Nothing here mutates, scores, or
+    /// persists the events.
+    var livePerformedEvents: [CaptureCore.DetectedNotationRecordMovementEvent] = []
     /// Captured fader spans for the `.performedPlatter` source's fader lane.
     /// Empty means "no trustworthy fader capture" — the lane shows a subdued
     /// "Fader not captured" state instead of inventing an open line. Non-empty
@@ -149,15 +158,21 @@ struct ScratchPhraseChartView: View {
         ScratchMotionRenderer.draw(motionPath, in: ctx, viewport: viewport,
                                     style: .target)
 
-        // Explicit turnaround anchors + per-stroke directional chevrons, drawn
-        // over the shared motion path so FORWARD → TURNAROUND → BACKWARD reads
-        // without any colour.
-        drawTurnaroundMarkers(ctx: ctx, strokes: laneContent.strokes, path: motionPath,
-                              windowStart: windowStart, pps: pps,
-                              strokeRegionHeight: strokeRegionHeight)
+        // Per-stroke directional chevrons keep FORWARD / BACKWARD readable
+        // without reusing the fader-transition diamond on platter reversals.
+        // A diamond is reserved for a real OPEN/CLOSED fader transition.
         drawPlatterDirectionCues(ctx: ctx, strokes: laneContent.strokes,
                                   windowStart: windowStart, pps: pps,
                                   strokeRegionHeight: strokeRegionHeight)
+
+        drawLivePerformedOverlay(
+            ctx: ctx,
+            size: strokeRegion,
+            events: livePerformedEvents,
+            windowStart: windowStart,
+            duration: duration,
+            targetFrame: ScratchStrokeGeometry.rawRange(for: laneContent)
+        )
 
         // PLATTER lane label — top-left anchor at the head of the stroke region
         ctx.draw(
@@ -184,6 +199,47 @@ struct ScratchPhraseChartView: View {
             drawPlayhead(ctx: ctx, size: size,
                          x: CGFloat(playheadTime - windowStart) * pps)
         }
+    }
+
+    /// Draws the live take with the same motion-path renderer as Review, but
+    /// without adding a second grid, label set, or fader lane. The target is
+    /// already the chart substrate; this layer contributes only measured
+    /// platter motion in the stronger performance colour.
+    private func drawLivePerformedOverlay(
+        ctx: GraphicsContext,
+        size: CGSize,
+        events: [CaptureCore.DetectedNotationRecordMovementEvent],
+        windowStart: TimeInterval,
+        duration: TimeInterval,
+        targetFrame: ClosedRange<CGFloat>
+    ) {
+        let strokes = events.compactMap(PerformedStrokeAdapter.laneStroke)
+        guard !strokes.isEmpty else { return }
+
+        let content = LaneContent(
+            strokes: strokes,
+            segments: [],
+            beatsPerMinute: bpm,
+            duration: max(windowStart + duration, 0.001),
+            loops: false
+        )
+        let path = ScratchStrokeGeometry.motionPath(
+            for: content,
+            normalizingTo: targetFrame
+        )
+        let viewport = LaneViewport(
+            size: size,
+            now: windowStart,
+            axis: .horizontal,
+            actionLineFraction: 0,
+            secondsAhead: duration
+        )
+        ScratchMotionRenderer.draw(
+            path,
+            in: ctx,
+            viewport: viewport,
+            style: Self.performedStyle
+        )
     }
 
     // MARK: - Captured (recordMovementEvents)
@@ -305,9 +361,6 @@ struct ScratchPhraseChartView: View {
         ScratchMotionRenderer.draw(motionPath, in: ctx, viewport: viewport,
                                     style: Self.performedStyle)
 
-        drawTurnaroundMarkers(ctx: ctx, strokes: laneStrokes, path: motionPath,
-                              windowStart: windowStart, pps: pps,
-                              strokeRegionHeight: strokeRegionHeight)
         drawPlatterDirectionCues(ctx: ctx, strokes: laneStrokes,
                                   windowStart: windowStart, pps: pps,
                                   strokeRegionHeight: strokeRegionHeight)
@@ -553,6 +606,7 @@ struct ScratchPhraseChartView: View {
                               startTime: Double = 0,
                               duration: Double, pps: CGFloat,
                               labelBottomY: CGFloat) {
+        guard showBeatGrid else { return }
         let beatInterval = 60.0 / max(bpm, 1)
         let subdivInterval = beatInterval / 2  // eighth-note subdivision
 
@@ -715,47 +769,6 @@ struct ScratchPhraseChartView: View {
             at: CGPoint(x: 4, y: bottomY - 1),
             anchor: .bottomLeading
         )
-    }
-
-    /// Explicit turnaround anchors at forward→backward direction-change
-    /// boundaries. The corrected path is one continuous trace, so the
-    /// reversal sits at the forward stroke's peak position on the path
-    /// (not the lane centre) — a filled diamond with a faint ring reads as a
-    /// deliberate reversal marker rather than an accidental corner in the
-    /// polyline.
-    private func drawTurnaroundMarkers(ctx: GraphicsContext,
-                                        strokes: [LaneStroke],
-                                        path: MotionPath,
-                                        windowStart: Double,
-                                        pps: CGFloat,
-                                        strokeRegionHeight: CGFloat) {
-        let anchors = ScratchStrokeGeometry.turnaroundAnchors(strokes: strokes, path: path)
-        guard !anchors.isEmpty else { return }
-        let inset = strokeRegionHeight * ScratchMotionRenderer.crossInsetFraction
-        let band = max(strokeRegionHeight - inset * 2, 1)
-
-        func screenY(for position: CGFloat) -> CGFloat {
-            // Mirrors `ScratchMotionRenderer.crossCoordinate` for the
-            // horizontal axis: position 0 → bottom, 1 → top.
-            let clamped = min(max(position, 0), 1)
-            return (strokeRegionHeight - inset) - clamped * band
-        }
-
-        for anchor in anchors {
-            let x = CGFloat(anchor.time - windowStart) * pps
-            guard x >= -20 else { continue }
-            let turnaroundY = screenY(for: anchor.position)
-
-            let d: CGFloat = 4.5
-            var diamond = Path()
-            diamond.move(to: CGPoint(x: x, y: turnaroundY - d))
-            diamond.addLine(to: CGPoint(x: x + d, y: turnaroundY))
-            diamond.addLine(to: CGPoint(x: x, y: turnaroundY + d))
-            diamond.addLine(to: CGPoint(x: x - d, y: turnaroundY))
-            diamond.closeSubpath()
-            ctx.fill(diamond, with: .color(Color(white: 0.85).opacity(0.92)))
-            ctx.stroke(diamond, with: .color(Color(white: 0.98).opacity(0.70)), lineWidth: 0.9)
-        }
     }
 
     /// Restrained directional chevrons on the platter lane — a small up chevron

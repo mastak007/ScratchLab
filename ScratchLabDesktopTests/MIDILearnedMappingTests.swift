@@ -11,6 +11,54 @@ import XCTest
 
 final class MIDILearnedMappingTests: XCTestCase {
 
+    func testVerifiedRaneOneMKIIMappingContainsMixerAndRightDeckPads() throws {
+        let controls = RaneOneMKIIVerifiedLearnedMapping.controls(learnedAt: Date(timeIntervalSince1970: 1))
+        func control(_ action: MIDISemanticAction) -> MIDILearnedControl? {
+            controls.first { $0.action == action }
+        }
+
+        XCTAssertEqual(controls.count, 11)
+        XCTAssertEqual(control(.crossfader)?.channel, 15)
+        XCTAssertEqual(control(.crossfader)?.controlNumber, 8)
+        XCTAssertEqual(control(.leftUpfader)?.channel, 0)
+        XCTAssertEqual(control(.leftUpfader)?.controlNumber, 28)
+        XCTAssertEqual(control(.rightUpfader)?.channel, 1)
+        XCTAssertEqual(control(.rightUpfader)?.controlNumber, 28)
+        XCTAssertEqual(control(.hotCue1)?.messageType, .note)
+        XCTAssertEqual(control(.hotCue1)?.channel, 5)
+        XCTAssertEqual(control(.hotCue1)?.controlNumber, 20)
+        XCTAssertEqual(control(.hotCue1)?.assignedSampleID, "dvs_ahhh")
+        XCTAssertEqual(control(.hotCue8)?.controlNumber, 27)
+    }
+
+    func testVerifiedRaneMappingCanObserveSeratoPadsWithoutRoutingScratchLabAudio() throws {
+        let controls = RaneOneMKIIVerifiedLearnedMapping.controls(
+            learnedAt: Date(timeIntervalSince1970: 1),
+            assignsScratchLabSamples: false
+        )
+
+        XCTAssertEqual(controls.count, 11)
+        XCTAssertTrue(controls.filter { $0.action.hotCueIndex != nil }.allSatisfy {
+            $0.assignedSampleID == nil
+        })
+    }
+
+    func testVerifiedRaneSeedPreservesExistingOverridesWhenRequested() throws {
+        var mapping = MIDIDeviceMapping(deviceIdentifier: "rane", deviceName: "Rane ONE MKII")
+        mapping.upsert(MIDILearnedControl(
+            action: .crossfader,
+            messageType: .controlChange,
+            channel: 3,
+            controlNumber: 44
+        ))
+
+        RaneOneMKIIVerifiedLearnedMapping.apply(to: &mapping, overwriteExisting: false)
+
+        XCTAssertEqual(mapping.control(for: .crossfader)?.channel, 3)
+        XCTAssertEqual(mapping.control(for: .crossfader)?.controlNumber, 44)
+        XCTAssertTrue(RaneOneMKIIVerifiedLearnedMapping.isComplete(mapping))
+    }
+
     // MARK: - MIDILearnedControl
 
     func testLearnedControlCodableRoundTrip() throws {
@@ -113,6 +161,56 @@ final class MIDILearnedMappingTests: XCTestCase {
         XCTAssertFalse(mapping.hasHotCueMappings)
         mapping.upsert(MIDILearnedControl(action: .hotCue3, messageType: .note, channel: 5, controlNumber: 22))
         XCTAssertTrue(mapping.hasHotCueMappings)
+    }
+
+    func testRestoringAssignedHotCueSamplesPreservesLearnedControllerMapping() throws {
+        let learnedAt = Date(timeIntervalSince1970: 1_700_000_000)
+        let fader = MIDILearnedControl(
+            action: .crossfader,
+            messageType: .controlChange,
+            channel: 15,
+            controlNumber: 8,
+            minValue: 4,
+            maxValue: 120,
+            inverted: true,
+            learnedAt: learnedAt,
+            isVerified: true
+        )
+        let hotCue = MIDILearnedControl(
+            action: .hotCue1,
+            messageType: .note,
+            channel: 5,
+            controlNumber: 20,
+            deck: 1,
+            minValue: 1,
+            maxValue: 126,
+            inverted: true,
+            assignedSampleID: nil,
+            learnedAt: learnedAt,
+            isVerified: true
+        )
+        var mapping = MIDIDeviceMapping(
+            deviceIdentifier: "midi_1",
+            deviceName: "Rane ONE MKII",
+            controls: [fader, hotCue]
+        )
+
+        XCTAssertTrue(mapping.restoreMissingAssignedHotCueSamples())
+        XCTAssertEqual(mapping.control(for: .crossfader), fader)
+
+        let normalizedHotCue = try XCTUnwrap(mapping.control(for: .hotCue1))
+        XCTAssertEqual(normalizedHotCue.assignedSampleID, "dvs_ahhh")
+        XCTAssertEqual(normalizedHotCue.action, hotCue.action)
+        XCTAssertEqual(normalizedHotCue.messageType, hotCue.messageType)
+        XCTAssertEqual(normalizedHotCue.channel, hotCue.channel)
+        XCTAssertEqual(normalizedHotCue.controlNumber, hotCue.controlNumber)
+        XCTAssertEqual(normalizedHotCue.deck, hotCue.deck)
+        XCTAssertEqual(normalizedHotCue.minValue, hotCue.minValue)
+        XCTAssertEqual(normalizedHotCue.maxValue, hotCue.maxValue)
+        XCTAssertEqual(normalizedHotCue.inverted, hotCue.inverted)
+        XCTAssertEqual(normalizedHotCue.learnedAt, hotCue.learnedAt)
+        XCTAssertEqual(normalizedHotCue.isVerified, hotCue.isVerified)
+        XCTAssertFalse(mapping.restoreMissingAssignedHotCueSamples(), "The repair must be idempotent")
     }
 
     func testDeviceMappingDecodeFailsClosedOnUnsupportedSchemaVersion() throws {

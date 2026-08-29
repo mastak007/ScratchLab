@@ -418,10 +418,10 @@ final class LiveNotationOverlayTests: XCTestCase {
         XCTAssertNotNil(demo, "babyScratchDemo factory must produce non-nil notation from the app bundle")
     }
 
-    func testBabyScratchDemoHasExactly47Strokes() throws {
+    func testBabyScratchDemoHasExactly32Strokes() throws {
         let demo = try XCTUnwrap(ScratchNotation.babyScratchDemoFromExtractedStrokes(appBundle))
-        XCTAssertEqual(demo.strokes.count, 47,
-                       "Full-demo extracted stroke resource must have 47 strokes")
+        XCTAssertEqual(demo.strokes.count, 32,
+                       "Live demo must contain the selected 16 forward/backward cycles")
         XCTAssertEqual(demo.strokes.count, demo.strokeSegments.count)
     }
 
@@ -434,10 +434,10 @@ final class LiveNotationOverlayTests: XCTestCase {
                        "Deterministic authored template must have 12 strokes")
     }
 
-    func testBabyScratchDemoTimelineDurationIsAbout42Seconds() throws {
+    func testBabyScratchDemoTimelineDurationMatchesSelectedTake() throws {
         let demo = try XCTUnwrap(ScratchNotation.babyScratchDemoFromExtractedStrokes(appBundle))
-        XCTAssertEqual(demo.timelineDuration, 42.4, accuracy: 0.1,
-                       "Full-demo timeline duration must be ~42.4 s, got \(demo.timelineDuration)")
+        XCTAssertEqual(demo.timelineDuration, 14.048311, accuracy: 0.001,
+                       "Movement timeline must match the live take, got \(demo.timelineDuration)")
         let phraseEnd = try XCTUnwrap(demo.phraseEnd)
         XCTAssertEqual(demo.timelineDuration, phraseEnd, accuracy: 0.1,
                        "timelineDuration must match phraseEnd")
@@ -447,9 +447,9 @@ final class LiveNotationOverlayTests: XCTestCase {
         let demo = try XCTUnwrap(ScratchNotation.babyScratchDemoFromExtractedStrokes(appBundle))
         XCTAssertEqual(demo.scratchID, "baby")
         XCTAssertEqual(demo.demoStart, 0.0, accuracy: 0.0001)
-        XCTAssertEqual(demo.demoEnd, 42.866625, accuracy: 0.1)
+        XCTAssertEqual(demo.demoEnd, 16.0483125, accuracy: 0.001)
         let phraseStart = try XCTUnwrap(demo.phraseStart)
-        XCTAssertEqual(phraseStart, 0.27, accuracy: 0.01)
+        XCTAssertEqual(phraseStart, 2.0, accuracy: 0.001)
         XCTAssertEqual(demo.timingBasis, "extracted_strokes_full_demo")
     }
 
@@ -458,13 +458,13 @@ final class LiveNotationOverlayTests: XCTestCase {
         let first = try XCTUnwrap(demo.strokes.first)
         let last = try XCTUnwrap(demo.strokes.last)
         XCTAssertGreaterThanOrEqual(first.startTime, 0.0)
-        XCTAssertEqual(first.startTime, 0.27, accuracy: 0.01,
-                       "First extracted stroke should start at ~0.27 s")
-        XCTAssertLessThanOrEqual(first.endTime, 2.0,
-                                 "First stroke should end early in the demo")
-        XCTAssertGreaterThan(last.endTime, 40.0,
-                             "Last stroke should end near full demo duration")
-        XCTAssertEqual(last.endTime, 42.4, accuracy: 0.1,
+        XCTAssertEqual(first.startTime, 2.0, accuracy: 0.001,
+                       "First stroke must start after the two-second lead-in")
+        XCTAssertLessThan(first.endTime, 3.0,
+                          "First stroke should end early in the demo")
+        XCTAssertGreaterThan(last.endTime, 14.0,
+                             "Last stroke should end before the two-second tail")
+        XCTAssertEqual(last.endTime, 14.048311, accuracy: 0.001,
                        "Last stroke end time must match phraseEnd")
         XCTAssertLessThanOrEqual(last.endTime, demo.timelineDuration + 0.01)
     }
@@ -507,7 +507,8 @@ final class LiveNotationOverlayTests: XCTestCase {
         let model = LiveNotationOverlayModel.targetNotation(from: notation)
         XCTAssertFalse(model.isEmpty)
         XCTAssertEqual(model.mode, .target)
-        XCTAssertGreaterThan(model.duration, 40.0, "Full-demo overlay model duration should cover the whole demo")
+        XCTAssertEqual(model.duration, notation.timelineDuration, accuracy: 0.001,
+                       "Overlay model duration must cover the complete movement phrase")
         XCTAssertEqual(model.events.count, notation.strokes.count)
     }
 
@@ -518,8 +519,8 @@ final class LiveNotationOverlayTests: XCTestCase {
         let model = LiveNotationOverlayModel.replayNotation(from: notation)
         XCTAssertFalse(model.isEmpty)
         XCTAssertEqual(model.mode, .captured)
-        XCTAssertGreaterThan(model.duration, 40.0)
-        XCTAssertEqual(model.events.count, 47)
+        XCTAssertEqual(model.duration, notation.timelineDuration, accuracy: 0.001)
+        XCTAssertEqual(model.events.count, 32)
     }
 
     func testReplayNotationEventsHaveVaryingAmplitude() throws {
@@ -533,24 +534,25 @@ final class LiveNotationOverlayTests: XCTestCase {
                              "Replay notation strokes must have varying amplitudes, got \(uniqueFractions.count) unique values")
         XCTAssertGreaterThan(fractions.max() ?? 0, 0.8,
                              "Longest stroke should reach near full amplitude")
-        XCTAssertLessThan(fractions.min() ?? 1, 0.5,
-                          "Shortest stroke should be visibly smaller than medium reference (0.5)")
+        XCTAssertLessThan(fractions.min() ?? 1, fractions.max() ?? 0,
+                          "Shortest live stroke should be visibly smaller than the longest")
     }
 
     func testReplayNotationHidesFutureStrokes() throws {
         let notation = try XCTUnwrap(ScratchNotation.babyScratchDemoFromExtractedStrokes(appBundle))
         let model = LiveNotationOverlayModel.replayNotation(from: notation)
-        // At time 0, only the first stroke has started (startTime ≈ 0.27).
+        // The demo has a two-second silent lead-in before its first stroke.
         let atStart = model.visibleEvents(at: 0.0)
         XCTAssertEqual(atStart.count, 0, "No strokes should be visible before the first stroke starts")
-        // At time 1.0, several early strokes should be visible.
-        let atOneSecond = model.visibleEvents(at: 1.0)
-        XCTAssertGreaterThan(atOneSecond.count, 0, "Some strokes should be visible at 1.0s")
-        XCTAssertLessThan(atOneSecond.count, 10,
-                          "Only early strokes should be visible at 1.0s, not all 47")
+        let duringLeadIn = model.visibleEvents(at: 1.0)
+        XCTAssertEqual(duringLeadIn.count, 0, "Lead-in must remain visually empty")
+        let afterFirstStroke = model.visibleEvents(at: 2.5)
+        XCTAssertGreaterThan(afterFirstStroke.count, 0, "The first stroke should be visible after 2.5s")
+        XCTAssertLessThan(afterFirstStroke.count, 10,
+                          "Only early strokes should be visible after 2.5s, not all 32")
         // All strokes visible at end.
         let atEnd = model.visibleEvents(at: model.duration)
-        XCTAssertEqual(atEnd.count, 47, "All 47 strokes must be visible at the end")
+        XCTAssertEqual(atEnd.count, 32, "All 32 strokes must be visible at the end")
     }
 
     func testReplayNotationShortestStrokeHasAtLeastFloorAmplitude() throws {
@@ -726,8 +728,8 @@ final class LiveNotationOverlayTests: XCTestCase {
         let demoTimelineDuration = BabyScratchReferenceMotionTimeline.phraseEnd
         XCTAssertEqual(templateDuration, 4.700, accuracy: 0.001,
                        "Template loop duration must be ~4.700s")
-        XCTAssertGreaterThan(demoTimelineDuration, 40.0,
-                             "BabyScratchReferenceMotionTimeline.phraseEnd must reflect the ~42s coach-motion demo")
+        XCTAssertEqual(demoTimelineDuration, 14.048311, accuracy: 0.001,
+                       "Reference timeline must match the selected live demo phrase")
         XCTAssertNotEqual(templateDuration, demoTimelineDuration, accuracy: 1.0,
                           "Notation Lab loop duration must not be derived from BabyScratchReferenceMotionTimeline.phraseEnd")
     }
@@ -735,22 +737,22 @@ final class LiveNotationOverlayTests: XCTestCase {
     func testBabyScratchDemoStillAvailableForCoachPaths() throws {
         let demo = try XCTUnwrap(ScratchNotation.babyScratchDemoFromExtractedStrokes(appBundle),
                                   "babyScratchDemo factory must remain available for coach/audio demo paths")
-        XCTAssertEqual(demo.strokes.count, 47,
-                       "Coach-motion demo must still have 47 strokes")
-        XCTAssertEqual(demo.timelineDuration, 42.4, accuracy: 0.1,
-                       "Coach-motion demo timeline must still be ~42.4s")
+        XCTAssertEqual(demo.strokes.count, 32,
+                       "Coach-motion demo must expose all 16 forward/backward cycles")
+        XCTAssertEqual(demo.timelineDuration, 14.048311, accuracy: 0.001,
+                       "Coach-motion demo timeline must match the selected live take")
     }
 
     func testNotationLabTemplateAndDemoAreDistinctResources() throws {
         let template = try XCTUnwrap(ScratchNotation.loadBabyScratchFromBundle(appBundle))
         let demo = try XCTUnwrap(ScratchNotation.babyScratchDemoFromExtractedStrokes(appBundle))
         XCTAssertNotEqual(template.strokes.count, demo.strokes.count,
-                          "Template (12) and demo (47) must have different stroke counts")
+                          "Template (12) and demo (32) must have different stroke counts")
         XCTAssertNotEqual(template.timingBasis, demo.timingBasis,
                           "Template and demo must carry different timingBasis values")
         let templateDuration = template.timelineDuration
         let demoDuration = demo.timelineDuration
-        XCTAssertGreaterThan(demoDuration, templateDuration * 5,
+        XCTAssertGreaterThan(demoDuration, templateDuration * 2.5,
                              "Coach-motion demo must be substantially longer than the short template")
     }
 
@@ -963,13 +965,13 @@ final class LiveNotationOverlayTests: XCTestCase {
         // The demo is a separate resource — longer, more strokes. The Notation Lab
         // must use the short template, not the demo.
         if let demo {
-            XCTAssertGreaterThan(demo.timelineDuration, template.timelineDuration * 5,
+            XCTAssertGreaterThan(demo.timelineDuration, template.timelineDuration * 2.5,
                                  "Demo must be substantially longer — Notation Lab uses template")
         }
 
         // The strokes in the template are the deterministic 12-stroke authored phrase.
         XCTAssertEqual(template.strokes.count, 12,
-                       "Template has 12 strokes — Notation Lab uses this, not the 47-stroke demo")
+                       "Template has 12 strokes — Notation Lab uses this, not the 32-stroke demo")
     }
 
     func testViewportMapperIsPlayheadRelative_NotStaticClampedTimeline() {

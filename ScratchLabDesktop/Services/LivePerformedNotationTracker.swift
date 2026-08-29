@@ -56,6 +56,7 @@ final class LivePerformedNotationTracker: ObservableObject {
 
     private let dataSource: LivePerformedNotationDataSource
     private let baselineTimestamp: Double
+    private var frozenTimestamp: Double?
     private var timer: DispatchSourceTimer?
     private let pollQueue = DispatchQueue(label: "com.scratchlab.livePerformedNotation.poll")
 
@@ -88,8 +89,17 @@ final class LivePerformedNotationTracker: ObservableObject {
         guard !isFrozen else { return }
         isFrozen = true
         frozenAt = Date()
+        frozenTimestamp = CACurrentMediaTime()
         timer?.cancel()
         timer = nil
+    }
+
+    /// Monotonic attempt-relative presentation time in the same
+    /// `CACurrentMediaTime()` domain used to baseline incoming MIDI events.
+    /// The live camera overlay and its notation playhead therefore share the
+    /// tracker's real capture start instead of a separate wall-clock anchor.
+    var elapsedTime: TimeInterval {
+        max(0, (frozenTimestamp ?? CACurrentMediaTime()) - baselineTimestamp)
     }
 
     /// Canonical renderer input. The open run is represented as a preview
@@ -188,19 +198,20 @@ final class LivePerformedNotationTracker: ObservableObject {
 
 import SwiftUI
 
-/// Live performed-notation card for Practice (during a scored attempt) and
-/// Capture (while actively recording) — its own separate card/region, never
-/// layered on the camera image (that's reserved for `CalibrationCameraOverlay`).
-/// It deliberately uses the same canonical platter geometry as Target and
-/// Review; lane labels and the performance colour preserve trace identity.
+/// Live performed-notation card for Capture (while actively recording) and
+/// any standalone diagnostic presentation. Practice's canonical Copy screen
+/// now reads the same tracker directly into its camera overlay, while Capture
+/// keeps this separate card. Both routes use the same canonical platter
+/// geometry; neither feeds Review or export.
 struct LivePerformedNotationCard: View {
     @ObservedObject var tracker: LivePerformedNotationTracker
     var bpm: Double = 90
+    var canvasHeight: CGFloat = 220
     /// True while the calibration box editor is open — the card dims
     /// strongly rather than competing visually with the edit handles, per
-    /// Karl's directive. The two surfaces are already separate regions
-    /// (this card is never on the camera), so this is a plain
-    /// visibility/opacity binding, not a z-order fix.
+    /// Karl's directive. This is a plain visibility/opacity binding so the
+    /// calibration handles remain readable when the transparent notation
+    /// canvas is composited over the camera.
     var isDimmedForCalibrationEditing: Bool = false
 
     var body: some View {
@@ -215,17 +226,15 @@ struct LivePerformedNotationCard: View {
                     .foregroundStyle(stateColor)
             }
 
-            ScratchNotationPanel(
-                lane: .performance,
-                presentation: .standard,
+            ScratchPhraseChartView(
                 source: tracker.renderedEvents.isEmpty
                     ? .empty(emptyMessage)
                     : .performedPlatter(tracker.renderedEvents),
                 bpm: bpm,
-                domain: renderedDomain,
-                mode: tracker.isFrozen ? .reviewComparison : .liveComparison,
-                canvasHeightOverride: 220
+                capturedWindow: renderedDomain,
+                backgroundColor: .clear
             )
+            .frame(height: canvasHeight)
         }
         .opacity(isDimmedForCalibrationEditing ? 0.15 : 1)
         .allowsHitTesting(!isDimmedForCalibrationEditing)

@@ -32,4 +32,20 @@ final class PlatterTestSampleLoadTests: XCTestCase {
 
         XCTAssertEqual(engine.platterTestLoadStatus, "loaded: dvs_ahhh")
     }
+
+    func testAudiblePlatterTestUsesDVSAhhhAndLeavesItArmed() {
+        let engine = MacCaptureEngine(autoRefreshDevices: false)
+        engine.previewPlatterTestSample()
+
+        let snapshot = engine.testOnly_scratchPlaybackDiagnosticsSnapshot()
+        XCTAssertEqual(snapshot.loadedSampleID, "dvs_ahhh")
+        XCTAssertNil(snapshot.lastLoadError)
+        XCTAssertTrue(snapshot.engineRunning)
+
+        let statusPublished = expectation(description: "audible platter test status published")
+        DispatchQueue.main.async { statusPublished.fulfill() }
+        wait(for: [statusPublished], timeout: 2.0)
+
+        XCTAssertEqual(engine.platterTestLoadStatus, "audible test: dvs_ahhh")
+    }
 }

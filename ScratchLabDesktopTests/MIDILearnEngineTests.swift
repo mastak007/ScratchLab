@@ -30,6 +30,20 @@ final class MIDILearnEngineTests: XCTestCase {
         RunLoop.main.run(until: Date().addingTimeInterval(0.05))
     }
 
+    func testSyntheticSelectionDoesNotOverwriteAppStandardDefaults() {
+        let key = "scratchlab.mac.selectedMIDIInputSourceID"
+        let appSelectionBeforeTest = UserDefaults.standard.string(forKey: key)
+
+        let engine = MacCaptureEngine(autoRefreshDevices: false)
+        engine.selectedMIDIInputSourceID = "midi_test_selection_isolation"
+
+        XCTAssertEqual(
+            UserDefaults.standard.string(forKey: key),
+            appSelectionBeforeTest,
+            "Hosted MIDI tests must never replace the user's selected controller"
+        )
+    }
+
     func testCC6PlatterFloodIgnoredDuringUpfaderLearn() {
         let engine = MacCaptureEngine(autoRefreshDevices: false)
         let deviceID = "midi_test_cc6_flood"

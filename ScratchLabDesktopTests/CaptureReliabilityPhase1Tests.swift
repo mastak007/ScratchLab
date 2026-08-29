@@ -1286,21 +1286,18 @@ final class CaptureReliabilityPhase1CoreTests: XCTestCase {
         // Probe inside each stroke's active window. Use the midpoint so we
         // are well clear of either boundary.
         let forwardActiveTime = firstForward.startTime + firstForward.duration * 0.5
-        // Probe the hold immediately after each stroke ends. holdEndTime
-        // marks the end of the hold, so endTime + small epsilon is reliably
-        // inside the hold window.
-        let forwardHoldTime = firstForward.endTime + 0.001
         let backwardActiveTime = firstBackward.startTime + firstBackward.duration * 0.5
-        let backwardHoldTime = firstBackward.endTime + 0.001
+        let transitionAfterForwardTime = firstForward.endTime + 0.001
+        let tailHoldTime = BabyScratchReferenceMotionTimeline.phraseEnd + 1.0
 
         let forwardState = ScratchCoachDemoAnimator.state(
             scratchType: "baby_scratch",
             playbackTime: forwardActiveTime,
             isPlaying: true
         )
-        let forwardHoldState = ScratchCoachDemoAnimator.state(
+        let transitionAfterForwardState = ScratchCoachDemoAnimator.state(
             scratchType: "baby_scratch",
-            playbackTime: forwardHoldTime,
+            playbackTime: transitionAfterForwardTime,
             isPlaying: true
         )
         let backwardState = ScratchCoachDemoAnimator.state(
@@ -1308,9 +1305,9 @@ final class CaptureReliabilityPhase1CoreTests: XCTestCase {
             playbackTime: backwardActiveTime,
             isPlaying: true
         )
-        let backwardHoldState = ScratchCoachDemoAnimator.state(
+        let tailHoldState = ScratchCoachDemoAnimator.state(
             scratchType: "baby_scratch",
-            playbackTime: backwardHoldTime,
+            playbackTime: tailHoldTime,
             isPlaying: true
         )
         let stoppedState = ScratchCoachDemoAnimator.state(
@@ -1320,15 +1317,16 @@ final class CaptureReliabilityPhase1CoreTests: XCTestCase {
         )
 
         // Crossfader stays in the baby-scratch open position throughout
-        // playback (open during stroke and during the hold that follows).
+        // playback (open during strokes, transitions, and the tail hold).
         XCTAssertEqual(
             forwardState.crossfaderPosition,
             ScratchCoachDemoAnimationState.babyScratchCrossfaderPosition,
             accuracy: 0.0001
         )
         XCTAssertTrue(forwardState.crossfaderOpenState)
-        XCTAssertTrue(forwardHoldState.crossfaderOpenState)
+        XCTAssertTrue(transitionAfterForwardState.crossfaderOpenState)
         XCTAssertTrue(backwardState.crossfaderOpenState)
+        XCTAssertTrue(tailHoldState.crossfaderOpenState)
 
         // Forward stroke moves the record toward the forward extreme; mid-
         // stroke values must sit strictly between rest (0) and the forward
@@ -1338,19 +1336,15 @@ final class CaptureReliabilityPhase1CoreTests: XCTestCase {
         XCTAssertGreaterThan(forwardState.recordRotationDegrees, 0)
         XCTAssertLessThan(forwardState.recordRotationDegrees, 60)
 
-        // Forward hold sits at the forward extreme.
-        XCTAssertEqual(forwardHoldState.recordPosition, 1, accuracy: 0.0001)
-        XCTAssertEqual(forwardHoldState.recordRotationDegrees, 60, accuracy: 0.0001)
-
         // Backward stroke moves the record back from the forward extreme.
-        XCTAssertLessThan(backwardState.recordPosition, forwardHoldState.recordPosition)
         XCTAssertGreaterThan(backwardState.recordPosition, 0)
+        XCTAssertLessThan(backwardState.recordPosition, 1)
         XCTAssertLessThan(backwardState.recordRotationDegrees, 60)
         XCTAssertGreaterThan(backwardState.recordRotationDegrees, 0)
 
-        // Backward hold returns to the resting "open" position (record back
-        // at 0, fader still open).
-        XCTAssertEqual(backwardHoldState, .babyScratchOpen)
+        // The phrase ends on a backward stroke, so the two-second tail hold
+        // rests at record position 0 with the fader still open.
+        XCTAssertEqual(tailHoldState, .babyScratchOpen)
 
         // When playback is stopped the animator collapses to the neutral
         // disabled state regardless of timestamp.
@@ -2769,8 +2763,47 @@ final class CaptureReliabilityPhase1CoreTests: XCTestCase {
         let sourceURL = projectRootURL().appendingPathComponent("ScratchLab/Views/CompanionCameraView.swift")
         let source = try String(contentsOf: sourceURL, encoding: .utf8)
 
-        XCTAssertTrue(source.contains(".toolbar(.visible, for: .navigationBar)"))
+        XCTAssertTrue(source.contains(".toolbar(usesImmersiveCameraLayout ? .hidden : .visible, for: .navigationBar)"))
         XCTAssertTrue(source.contains("ToolbarItem(placement: .topBarLeading)"))
+        XCTAssertTrue(source.contains("landscapeNavigationButton("))
+        XCTAssertTrue(source.contains("systemImage: \"slider.horizontal.3\""))
+    }
+
+    func testGuidedCaptureSavingFreezesElapsedTimeAtStopRequest() throws {
+        let sourceURL = projectRootURL().appendingPathComponent("ScratchLab/Views/CompanionCameraView.swift")
+        let source = try String(contentsOf: sourceURL, encoding: .utf8)
+
+        XCTAssertTrue(source.contains("activeTake.stoppedAt = Date()"))
+        XCTAssertTrue(source.contains("recordingStoppedAt: captureStore.activeTake?.stoppedAt"))
+        XCTAssertTrue(source.contains("(recordingStoppedAt ?? now).timeIntervalSince(recordingStartedAt)"))
+    }
+
+    func testGuidedCaptureConsumesCompletedSummaryBeforeOptionalAudioInspection() throws {
+        let sourceURL = projectRootURL().appendingPathComponent("ScratchLab/Views/CompanionCameraView.swift")
+        let source = try String(contentsOf: sourceURL, encoding: .utf8)
+        let broadcasterURL = projectRootURL().appendingPathComponent("ScratchLab/Services/CompanionCameraBroadcaster.swift")
+        let broadcasterSource = try String(contentsOf: broadcasterURL, encoding: .utf8)
+        let finalizationSource = try sourceSlice(
+            in: source,
+            from: "private func handleFinishedRecording(_ summary:",
+            through: "private func refreshReviewMotionAssociation()"
+        )
+
+        XCTAssertTrue(source.contains("onReceive(broadcaster.$lastRecordingSummary.compactMap { $0 })"))
+        XCTAssertTrue(source.contains("broadcaster.endRecording { summary in"))
+        XCTAssertTrue(source.contains("captureStore.matchesActiveSavingTake(summary)"))
+        XCTAssertTrue(source.contains("captureStore.handleFinalizationTimeout(status: broadcaster.recordingStatus)"))
+        XCTAssertTrue(broadcasterSource.contains("pendingRecordingFinalizations"))
+        XCTAssertTrue(broadcasterSource.contains("stopRequestedWhileRecordingStarts"))
+        XCTAssertTrue(broadcasterSource.contains("completions.forEach { $0(summary) }"))
+
+        let reviewTransition = try XCTUnwrap(finalizationSource.range(of: "captureStore.handleRecordingFinished("))
+        let optionalInspection = try XCTUnwrap(finalizationSource.range(of: "let audioPresent = await Self.mediaContainsAudio"))
+        XCTAssertLessThan(
+            reviewTransition.lowerBound,
+            optionalInspection.lowerBound,
+            "A finalized movie must leave Saving before optional AVAsset audio inspection begins"
+        )
     }
 
     func testGuidedCaptureSystemCheckScrollsOnSmallScreens() throws {
@@ -2984,6 +3017,208 @@ final class CaptureReliabilityPhase1CoreTests: XCTestCase {
         XCTAssertFalse(source.contains(".padding(.top, 16)"))
     }
 
+    func testMainMenuWiresAdaptiveFigmaSurfacesToProductionFlows() throws {
+        let sourceURL = projectRootURL().appendingPathComponent("ScratchLab/Views/MainMenuView.swift")
+        let source = try String(contentsOf: sourceURL, encoding: .utf8)
+
+        XCTAssertTrue(source.contains("@State private var selectedWorkspaceTab: WorkspaceTab = .home"))
+        XCTAssertTrue(source.contains("if usesNavigationSidebar(in: geometry.size)"))
+        XCTAssertTrue(source.contains("AdaptiveSidebarView("))
+        XCTAssertTrue(source.contains("homeScrollContent(geometry: geometry)"))
+
+        for tab in ["home", "practice", "capture", "review", "advanced"] {
+            XCTAssertTrue(
+                source.contains(".tag(WorkspaceTab.\(tab))"),
+                "Compact iOS navigation must expose the \(tab) workspace"
+            )
+        }
+
+        XCTAssertTrue(source.contains("PracticeModeView("))
+        XCTAssertTrue(source.contains("CompanionCameraView()"))
+        XCTAssertTrue(source.contains("AdvancedHubView()"))
+        XCTAssertFalse(source.contains("CapturePlaceholderView"))
+        XCTAssertFalse(source.contains("ReviewPlaceholderView"))
+    }
+
+    func testProductionIOSControllerFlowOffersExplicitLocalAhhhPlayback() throws {
+        let practiceURL = projectRootURL().appendingPathComponent("ScratchLab/Views/PracticeModeView.swift")
+        let captureURL = projectRootURL().appendingPathComponent("ScratchLab/Views/CompanionCameraView.swift")
+        let mainMenuURL = projectRootURL().appendingPathComponent("ScratchLab/Views/MainMenuView.swift")
+        let coordinatorURL = projectRootURL().appendingPathComponent("ScratchLab/MIDI/iOSMIDILearnCoordinator.swift")
+        let dispatcherURL = projectRootURL().appendingPathComponent("ScratchLab/MIDI/iOSMIDIManager.swift")
+        let practiceSource = try String(contentsOf: practiceURL, encoding: .utf8)
+        let captureSource = try String(contentsOf: captureURL, encoding: .utf8)
+        let mainMenuSource = try String(contentsOf: mainMenuURL, encoding: .utf8)
+        let coordinatorSource = try String(contentsOf: coordinatorURL, encoding: .utf8)
+        let dispatcherSource = try String(contentsOf: dispatcherURL, encoding: .utf8)
+
+        for source in [practiceSource, captureSource] {
+            XCTAssertTrue(source.contains("Button(\"Load AHHH\")"))
+            XCTAssertTrue(source.contains("loadPlatterAHHH()"))
+            XCTAssertTrue(source.contains("platterSampleStatus"))
+        }
+
+        XCTAssertFalse(practiceSource.contains("Serato owns deck audio."))
+        XCTAssertFalse(captureSource.contains("Serato remains responsible for deck audio."))
+        XCTAssertTrue(coordinatorSource.contains("restoreMissingAssignedHotCueSamples()"))
+        XCTAssertTrue(coordinatorSource.contains("assignsScratchLabSamples: true"))
+        XCTAssertTrue(coordinatorSource.contains("func assignSample("))
+        XCTAssertTrue(coordinatorSource.contains("assignedSampleID: preservedSampleID ?? defaultSampleID"))
+
+        XCTAssertTrue(mainMenuSource.contains("advanced-midi-learn-hotCue1"))
+        XCTAssertTrue(mainMenuSource.contains("advanced-assign-ahhh-hot-cue-1"))
+        XCTAssertTrue(mainMenuSource.contains("advanced-load-platter-ahhh"))
+        XCTAssertFalse(mainMenuSource.localizedCaseInsensitiveContains("intentionally read-only"))
+        XCTAssertFalse(mainMenuSource.localizedCaseInsensitiveContains("listen only"))
+
+        XCTAssertTrue(dispatcherSource.contains("HotCueTriggerResolver.resolve(action: action)"))
+        XCTAssertFalse(dispatcherSource.contains("HotCueTriggerResolver.resolve(\n                action: action,\n                transportState: transportState"))
+    }
+
+    func testIOSLandscapeNotationUsesTheFullSafeWorkspaceOnPhoneAndPad() throws {
+        let practiceURL = projectRootURL().appendingPathComponent("ScratchLab/Views/PracticeModeView.swift")
+        let captureURL = projectRootURL().appendingPathComponent("ScratchLab/Views/CompanionCameraView.swift")
+        let mainMenuURL = projectRootURL().appendingPathComponent("ScratchLab/Views/MainMenuView.swift")
+        let practiceSource = try String(contentsOf: practiceURL, encoding: .utf8)
+        let captureSource = try String(contentsOf: captureURL, encoding: .utf8)
+        let mainMenuSource = try String(contentsOf: mainMenuURL, encoding: .utf8)
+
+        XCTAssertTrue(practiceSource.contains("landscapeLiveNotationOverlay"))
+        XCTAssertTrue(practiceSource.contains(".frame(maxWidth: .infinity, maxHeight: .infinity)"))
+        XCTAssertTrue(practiceSource.contains(".layoutPriority(1)"))
+        XCTAssertTrue(practiceSource.contains(".background(Color.clear)"))
+        XCTAssertFalse(practiceSource.contains(".frame(height: min(max(geometry.size.height * 0.40, 144), 184))"))
+
+        XCTAssertTrue(captureSource.contains("private struct CaptureLiveNotationOverlay"))
+        XCTAssertTrue(captureSource.contains(".frame(maxWidth: .infinity, maxHeight: .infinity)"))
+        XCTAssertTrue(captureSource.contains(".layoutPriority(1)"))
+        XCTAssertFalse(captureSource.contains(".frame(height: min(max(proxy.size.height * 0.40, 144), 184))"))
+
+        XCTAssertTrue(mainMenuSource.contains("phoneLandscapeHomeContent(geometry: geometry)"))
+        XCTAssertTrue(mainMenuSource.contains(".padding(.bottom, max(geometry.safeAreaInsets.bottom, 8) + 76)"))
+    }
+
+    func testIOSLandscapeShowsRealAHHHSampleWaveformAndRendererPlayhead() throws {
+        let rendererURL = projectRootURL().appendingPathComponent("ScratchLab/Audio/iOS/IOScratchRenderer.swift")
+        let playbackURL = projectRootURL().appendingPathComponent("ScratchLab/Audio/iOS/IOScratchPlaybackEngine.swift")
+        let waveformURL = projectRootURL().appendingPathComponent("ScratchLab/Views/ScratchMotionLane.swift")
+        let practiceURL = projectRootURL().appendingPathComponent("ScratchLab/Views/PracticeModeView.swift")
+        let captureURL = projectRootURL().appendingPathComponent("ScratchLab/Views/CompanionCameraView.swift")
+        let rendererSource = try String(contentsOf: rendererURL, encoding: .utf8)
+        let playbackSource = try String(contentsOf: playbackURL, encoding: .utf8)
+        let waveformSource = try String(contentsOf: waveformURL, encoding: .utf8)
+        let practiceSource = try String(contentsOf: practiceURL, encoding: .utf8)
+        let captureSource = try String(contentsOf: captureURL, encoding: .utf8)
+
+        XCTAssertTrue(rendererSource.contains("currentUnwrappedFramePositionSnapshot()"))
+        XCTAssertTrue(rendererSource.contains("unwrappedTargetFrameBits"))
+        XCTAssertTrue(playbackSource.contains("struct PlatterSampleWaveform"))
+        XCTAssertTrue(playbackSource.contains("platterSamplePlayheadSnapshot"))
+        XCTAssertTrue(playbackSource.contains("case beforeStart"))
+        XCTAssertTrue(playbackSource.contains("case pastEnd"))
+        XCTAssertTrue(playbackSource.contains("makeWaveform("))
+        XCTAssertTrue(waveformSource.contains("struct SamplePositionWaveformView"))
+        XCTAssertTrue(waveformSource.contains("SAMPLE POSITION"))
+        XCTAssertTrue(waveformSource.contains("Text(\"START\")"))
+        XCTAssertTrue(waveformSource.contains("Text(\"MID\")"))
+        XCTAssertTrue(waveformSource.contains("Text(\"END\")"))
+        XCTAssertTrue(waveformSource.contains(".background(Color.clear)"))
+        XCTAssertTrue(practiceSource.contains("SamplePositionWaveformView()"))
+        XCTAssertGreaterThanOrEqual(captureSource.components(separatedBy: "SamplePositionWaveformView()").count - 1, 2)
+    }
+
+    func testWatchStartStopControlsTheIPhoneCaptureStateMachine() throws {
+        let captureURL = projectRootURL().appendingPathComponent("ScratchLab/Views/CompanionCameraView.swift")
+        let storeURL = projectRootURL().appendingPathComponent("ScratchLab/Services/WatchMotionCaptureStore.swift")
+        let recorderURL = projectRootURL().appendingPathComponent("ScratchLabWatch/Services/WatchMotionRecorder.swift")
+        let viewURL = projectRootURL().appendingPathComponent("ScratchLabWatch/WatchCaptureView.swift")
+        let captureSource = try String(contentsOf: captureURL, encoding: .utf8)
+        let storeSource = try String(contentsOf: storeURL, encoding: .utf8)
+        let recorderSource = try String(contentsOf: recorderURL, encoding: .utf8)
+        let viewSource = try String(contentsOf: viewURL, encoding: .utf8)
+
+        XCTAssertTrue(storeSource.contains("onPhoneCaptureCommand"))
+        XCTAssertTrue(storeSource.contains("PhoneCaptureCommandPayload.packetKind"))
+        XCTAssertTrue(captureSource.contains("private func handlePhoneCaptureCommand("))
+        XCTAssertTrue(captureSource.contains("case .start:"))
+        XCTAssertTrue(captureSource.contains("startTake()"))
+        XCTAssertTrue(captureSource.contains("case .recording:"))
+        XCTAssertTrue(captureSource.contains("stopTake()"))
+        XCTAssertTrue(recorderSource.contains("func requestPairedPhoneCapture("))
+        XCTAssertTrue(viewSource.contains("recorder.requestPairedPhoneCapture("))
+        XCTAssertTrue(viewSource.contains("recorder.isPhoneCaptureCommandPending || !canSendCaptureCommand"))
+        XCTAssertTrue(viewSource.contains("Open Capture on iPhone. Start Take becomes available when Transfer says Connected."))
+        XCTAssertFalse(viewSource.contains("recorder.startCapture()"))
+    }
+
+    func testRaneScratchPlaybackUsesRightDeckOutputThreeFourIndependentlyOfDVSInput() throws {
+        let playbackURL = projectRootURL().appendingPathComponent("ScratchLab/Audio/iOS/IOScratchPlaybackEngine.swift")
+        let dvsURL = projectRootURL().appendingPathComponent("ScratchLab/Models/DVSHardwareProfile.swift")
+        let playbackSource = try String(contentsOf: playbackURL, encoding: .utf8)
+        let dvsSource = try String(contentsOf: dvsURL, encoding: .utf8)
+
+        XCTAssertTrue(playbackSource.contains("let raneOutputChannelCount = 14"))
+        XCTAssertTrue(playbackSource.contains("let raneOutputPairStartIndex = 2"))
+        XCTAssertTrue(playbackSource.contains("channelMap[startIndex] = NSNumber(value: 0)"))
+        XCTAssertTrue(playbackSource.contains("channelMap[startIndex + 1] = NSNumber(value: 1)"))
+        XCTAssertTrue(dvsSource.contains("firstChannelIndex: 2, secondChannelIndex: 3"))
+    }
+
+    func testIOSCaptureOwnsScratchStemAndPersistsControllerAndWatchEvidence() throws {
+        let captureURL = projectRootURL().appendingPathComponent("ScratchLab/Views/CompanionCameraView.swift")
+        let midiURL = projectRootURL().appendingPathComponent("ScratchLab/MIDI/iOSMIDIManager.swift")
+        let broadcasterURL = projectRootURL().appendingPathComponent("ScratchLab/Services/CompanionCameraBroadcaster.swift")
+        let captureSource = try String(contentsOf: captureURL, encoding: .utf8)
+        let midiSource = try String(contentsOf: midiURL, encoding: .utf8)
+        let broadcasterSource = try String(contentsOf: broadcasterURL, encoding: .utf8)
+
+        XCTAssertTrue(captureSource.contains("summary.sidecarURL"))
+        XCTAssertTrue(captureSource.contains("appendingPathExtension(\"wav\")"))
+        XCTAssertTrue(captureSource.contains("broadcaster.persistingDetectedNotation("))
+        XCTAssertTrue(captureSource.contains("broadcaster.recordingWatchRequest = request"))
+        XCTAssertTrue(captureSource.contains("broadcaster.recordWatchControlReply(reply)"))
+        XCTAssertTrue(midiSource.contains("capturedCrossfaderMIDIEvents.append("))
+        XCTAssertTrue(midiSource.contains("mappedControl: \"crossfader\""))
+        XCTAssertTrue(midiSource.contains("CaptureCore.deriveDetectedNotationFaderEvents"))
+        XCTAssertTrue(broadcasterSource.contains("sidecar.withPendingWatchRequest(request)"))
+        XCTAssertTrue(broadcasterSource.contains("sidecar.withWatchSync(reply)"))
+    }
+
+    func testMacCopyNotationIsTallAndTransparentLikeIOSLandscape() throws {
+        let macURL = projectRootURL().appendingPathComponent("ScratchLabDesktop/Views/MacAnalyzerView.swift")
+        let source = try String(contentsOf: macURL, encoding: .utf8)
+        let surfaceSource = try sourceSlice(
+            in: source,
+            from: "private var practiceFigmaLiveCameraNotationSurface: some View",
+            through: "private var practiceCopyTargetNotation: ScratchNotation?"
+        )
+
+        XCTAssertTrue(surfaceSource.contains("min(300, max(220, geometry.size.height * 0.48))"))
+        XCTAssertTrue(surfaceSource.contains("backgroundColor: .clear"))
+        XCTAssertFalse(surfaceSource.contains("ScratchLabDesign.Surface.surface.opacity(0.94)"))
+    }
+
+    func testCanonicalFigmaNotationSurfacesUseNoBackingCanvasOrCard() throws {
+        let panelURL = projectRootURL().appendingPathComponent("ScratchLab/Views/Notation/ScratchNotationPanel.swift")
+        let motionURL = projectRootURL().appendingPathComponent("ScratchLab/Views/ScratchMotionLane.swift")
+        let panelSource = try String(contentsOf: panelURL, encoding: .utf8)
+        let motionSource = try String(contentsOf: motionURL, encoding: .utf8)
+
+        XCTAssertTrue(panelSource.contains("private var laneBackground: Color"))
+        XCTAssertTrue(panelSource.contains(".clear"))
+        XCTAssertFalse(panelSource.contains("ScratchLabDesign.Surface.card,"))
+        XCTAssertFalse(panelSource.contains(".stroke(ScratchLabDesign.Surface.divider"))
+        XCTAssertTrue(motionSource.contains("private static let background = Color.clear"))
+    }
+
+    func testMacDVSRefreshOnlyInvalidatesAdvancedWorkspace() throws {
+        let sourceURL = projectRootURL().appendingPathComponent("ScratchLabDesktop/Views/MacAnalyzerView.swift")
+        let source = try String(contentsOf: sourceURL, encoding: .utf8)
+
+        XCTAssertTrue(source.contains(".onReceive(dvsUIRefreshTimer) { _ in"))
+        XCTAssertTrue(source.contains("guard workspaceTab == .advanced else { return }"))
+    }
+
     func testDemoModeProducesFeedbackWithoutHardware() throws {
         let mainMenuURL = projectRootURL().appendingPathComponent("ScratchLab/Views/MainMenuView.swift")
         let mainMenuSource = try String(contentsOf: mainMenuURL, encoding: .utf8)
@@ -3016,7 +3251,7 @@ final class CaptureReliabilityPhase1CoreTests: XCTestCase {
         XCTAssertTrue(coreSource.contains("fallbackStrokeSegments"))
         XCTAssertTrue(coreSource.contains("struct ScratchLabBabyScratchDemoMotionPattern"))
         XCTAssertTrue(coreSource.contains("static let demoStart: TimeInterval = 0"))
-        XCTAssertTrue(coreSource.contains("static let demoEnd: TimeInterval = 42.866625"))
+        XCTAssertTrue(coreSource.contains("static let demoEnd: TimeInterval = 16.0483125"))
         XCTAssertTrue(coreSource.contains("private static let activityFrameSize = 1_024"))
         XCTAssertTrue(coreSource.contains("private static let activeEnergyThresholdOn: Float = 0.20"))
         XCTAssertTrue(coreSource.contains("private static let activeEnergyThresholdOff: Float = 0.10"))
@@ -3083,8 +3318,8 @@ final class CaptureReliabilityPhase1CoreTests: XCTestCase {
         let sampleBuffer = ScratchLabDemoAudioSampleBuffer(samples: samples, sampleRate: 48_000)
         let analyzer = ScratchLabDemoModeAnalyzer(sampleBuffer: sampleBuffer)
 
-        // Mid-first-stroke (forward 0.27 → 0.778 in the bundled notation).
-        let frame = analyzer.processFrame(playbackTime: 0.40, windowDuration: 1.0 / 30.0)
+        // Mid-first-stroke (forward 2.0 → 2.410975 in the bundled demo).
+        let frame = analyzer.processFrame(playbackTime: 2.20, windowDuration: 1.0 / 30.0)
 
         XCTAssertGreaterThan(abs(frame.animationState.recordPosition), 0.2)
         XCTAssertGreaterThan(abs(frame.animationState.recordRotationDegrees), 5)
@@ -3092,35 +3327,20 @@ final class CaptureReliabilityPhase1CoreTests: XCTestCase {
     }
 
     func testDemoModeBabyScratchPatternIncludesHoldPhases() {
-        // Extracted-stroke ground truth: stroke 0 is backward (0.27..0.778) with
-        // holdAfter=0.292 → backward hold runs 0.778..1.07. The hold returns the
-        // backward endProgress (0), which produces animationState == .neutral.
-        let backwardHoldA = ScratchLabBabyScratchDemoMotionPattern.state(
-            playbackTime: 0.85,
+        // The trimmed demo has continuous F/B movement between 2.0 and
+        // 14.048311 seconds, followed by a two-second neutral tail hold.
+        let tailHoldA = ScratchLabBabyScratchDemoMotionPattern.state(
+            playbackTime: 14.50,
             activityLevel: 1
         )
-        let backwardHoldB = ScratchLabBabyScratchDemoMotionPattern.state(
-            playbackTime: 1.00,
-            activityLevel: 1
-        )
-        // Stroke 5 is forward (2.99..3.278) with holdAfter=0.082 → forward hold
-        // runs 3.278..3.36. The hold returns the forward endProgress (1), so the
-        // animationState is non-neutral with recordPosition == 1.
-        let forwardHoldA = ScratchLabBabyScratchDemoMotionPattern.state(
-            playbackTime: 3.30,
-            activityLevel: 1
-        )
-        let forwardHoldB = ScratchLabBabyScratchDemoMotionPattern.state(
-            playbackTime: 3.32,
+        let tailHoldB = ScratchLabBabyScratchDemoMotionPattern.state(
+            playbackTime: 15.50,
             activityLevel: 1
         )
 
-        XCTAssertEqual(forwardHoldA.animationState, forwardHoldB.animationState)
-        XCTAssertEqual(forwardHoldA.direction, .neutral)
-        XCTAssertEqual(forwardHoldA.animationState.recordPosition, 1, accuracy: 0.0001)
-        XCTAssertEqual(backwardHoldA.animationState, backwardHoldB.animationState)
-        XCTAssertEqual(backwardHoldA.direction, .neutral)
-        XCTAssertEqual(backwardHoldA.animationState, .neutral)
+        XCTAssertEqual(tailHoldA.animationState, tailHoldB.animationState)
+        XCTAssertEqual(tailHoldA.direction, .neutral)
+        XCTAssertEqual(tailHoldA.animationState, .neutral)
     }
 
     private func decodedBabyScratchStrokeResource() throws -> BabyScratchExtractedStrokeResource {
@@ -3317,29 +3537,28 @@ final class CaptureReliabilityPhase1CoreTests: XCTestCase {
         let resource = try decodedBabyScratchStrokeResource()
 
         XCTAssertEqual(resource.scratchID, "baby")
-        // The 42 s extension adds explicit forward release / backward reset
-        // segments between each repetition, so the timing source label now
-        // records that direction provenance lives alongside the WAV transient
-        // extraction.
-        XCTAssertEqual(resource.timingSource, "wav_transient_extraction_video_direction")
+        XCTAssertEqual(resource.timingSource, "live_capture_trimmed_79bpm")
         XCTAssertEqual(resource.demoStart, BabyScratchReferenceMotionTimeline.demoStart, accuracy: 0.0001)
         XCTAssertEqual(resource.demoEnd, BabyScratchReferenceMotionTimeline.demoEnd, accuracy: 0.0001)
-        // 10 strokes per phrase repeat × 4 + 7 inter-phrase release/reset
-        // segments = 47 segments across the full 42 s demo.
-        XCTAssertEqual(resource.strokes.count, 47)
+        XCTAssertEqual(resource.strokes.count, 32)
         XCTAssertEqual(resource.strokes.count, resource.strokeSegments.count)
         let phraseStart = try XCTUnwrap(resource.phraseStart)
         let phraseEnd = try XCTUnwrap(resource.phraseEnd)
         let firstStroke = try XCTUnwrap(resource.strokes.first)
         let lastStroke = try XCTUnwrap(resource.strokes.last)
         XCTAssertEqual(phraseStart, firstStroke.startTime, accuracy: 0.0001)
-        // The last stroke ends at the timeline's phrase end (42.4 s); the
-        // remaining ~0.47 s of audio is a tail hold before sourceDuration.
         XCTAssertEqual(phraseEnd, lastStroke.endTime, accuracy: 0.0001)
-        XCTAssertGreaterThan(phraseEnd, 42)
+        XCTAssertEqual(phraseStart, 2.0, accuracy: 0.0001)
+        XCTAssertEqual(phraseEnd, 14.048311, accuracy: 0.0001)
+        XCTAssertEqual(resource.demoEnd - phraseEnd, 2.0000015, accuracy: 0.0001)
         XCTAssertEqual(resource.timelineDuration, phraseEnd, accuracy: 0.0001)
         XCTAssertTrue(resource.strokes.allSatisfy { $0.startTime >= phraseStart && $0.endTime <= phraseEnd })
-        XCTAssertLessThan(resource.strokes[2].startTime - resource.strokes[1].endTime, 0.20)
+        XCTAssertEqual(firstStroke.direction, "forward")
+        XCTAssertEqual(lastStroke.direction, "backward")
+        XCTAssertTrue(resource.strokes.enumerated().allSatisfy { indexedStroke in
+            let (index, stroke) = indexedStroke
+            return stroke.direction == (index.isMultiple(of: 2) ? "forward" : "backward")
+        })
         XCTAssertFalse(rawJSON.contains("/Users/"))
         XCTAssertFalse(rawJSON.localizedCaseInsensitiveContains("cxl"))
         XCTAssertFalse(rawJSON.localizedCaseInsensitiveContains("makemkv"))
@@ -3365,9 +3584,8 @@ final class CaptureReliabilityPhase1CoreTests: XCTestCase {
     }
 
     func testBabyScratchReferenceMotionTimelineUsesChapterOffsetAndNonUniformSegments() throws {
-        // The 42 s coach demo prefers the extracted-stroke resource because it
-        // adds explicit forward release / backward reset segments between phrase
-        // repeats that the visual rig needs but the notation must not see.
+        // The coach demo prefers the captured 16-cycle motion resource so its
+        // visual rig follows the same performance as the bundled dry WAV.
         let resource = try decodedBabyScratchStrokeResource()
         let timeline = BabyScratchReferenceMotionTimeline.strokeSegments
         let keyframes = BabyScratchReferenceMotionTimeline.keyframes
@@ -3383,18 +3601,16 @@ final class CaptureReliabilityPhase1CoreTests: XCTestCase {
         XCTAssertEqual(timeline.count, resource.strokes.count)
         XCTAssertGreaterThan(keyframes.count, timeline.count)
         XCTAssertEqual(BabyScratchReferenceMotionTimeline.demoStart, 0, accuracy: 0.0001)
-        XCTAssertEqual(BabyScratchReferenceMotionTimeline.demoEnd, 42.866625, accuracy: 0.0001)
-        XCTAssertEqual(BabyScratchReferenceMotionTimeline.sourceDuration, 42.866625, accuracy: 0.0001)
+        XCTAssertEqual(BabyScratchReferenceMotionTimeline.demoEnd, 16.0483125, accuracy: 0.0001)
+        XCTAssertEqual(BabyScratchReferenceMotionTimeline.sourceDuration, 16.0483125, accuracy: 0.0001)
         XCTAssertEqual(bundledDuration, BabyScratchReferenceMotionTimeline.sourceDuration, accuracy: 0.01)
         XCTAssertEqual(BabyScratchReferenceMotionTimeline.sourceTime(forPlaybackTime: 0), 0, accuracy: 0.0001)
         XCTAssertEqual(BabyScratchReferenceMotionTimeline.timelineTime(forSourceTime: 0), 0, accuracy: 0.0001)
         XCTAssertEqual(BabyScratchReferenceMotionTimeline.timelineTime(forPlaybackTime: 0), 0, accuracy: 0.0001)
-        XCTAssertEqual(BabyScratchReferenceMotionTimeline.timelineTime(forPlaybackTime: 1.46), 1.46, accuracy: 0.0001)
-        XCTAssertEqual(BabyScratchReferenceMotionTimeline.phraseStart, 0.27, accuracy: 0.0001)
-        XCTAssertEqual(BabyScratchReferenceMotionTimeline.phraseEnd, 42.4, accuracy: 0.0001)
-        XCTAssertEqual(BabyScratchReferenceMotionTimeline.phraseLoopDuration, 42.13, accuracy: 0.0001)
-        // The clean-demo timeline plays through once (no playback-time looping),
-        // so one audio cycle covers the full source duration.
+        XCTAssertEqual(BabyScratchReferenceMotionTimeline.timelineTime(forPlaybackTime: 2.2), 2.2, accuracy: 0.0001)
+        XCTAssertEqual(BabyScratchReferenceMotionTimeline.phraseStart, 2.0, accuracy: 0.0001)
+        XCTAssertEqual(BabyScratchReferenceMotionTimeline.phraseEnd, 14.048311, accuracy: 0.0001)
+        XCTAssertEqual(BabyScratchReferenceMotionTimeline.phraseLoopDuration, 12.048311, accuracy: 0.0001)
         XCTAssertEqual(BabyScratchReferenceMotionTimeline.demoAudioPhraseCycleCount, 1)
         XCTAssertEqual(
             BabyScratchReferenceMotionTimeline.demoAudioPhraseCycleDuration,
@@ -3407,22 +3623,14 @@ final class CaptureReliabilityPhase1CoreTests: XCTestCase {
         XCTAssertEqual(timeline[0].direction, resource.strokes[0].motionDirection)
         XCTAssertEqual(timeline[0].holdAfter, resource.strokeSegments[0].holdAfter, accuracy: 0.0001)
         XCTAssertGreaterThan(roundedDurations.count, 1)
-        // Four phrase repeats (10 strokes) plus inter-phrase release/reset
-        // segments → 47 segments. The lower bound preserves "more than a single
-        // phrase"; the upper bound still rules out runaway segment generation.
-        XCTAssertGreaterThanOrEqual(timeline.count, 40)
-        XCTAssertLessThanOrEqual(timeline.count, 60)
+        XCTAssertEqual(timeline.count, 32)
         XCTAssertEqual(keyframes[0].sourceTime, BabyScratchReferenceMotionTimeline.demoStart + timeline[0].startTime, accuracy: 0.0001)
-        // Stroke 0 of the extracted timeline is backward (scratchProgress
-        // 1 → 0), so the keyframe at the stroke start sits at hand hour 5 /
-        // sticker hour 8 / 60° rotation, and the keyframe at the stroke end
-        // returns to hand hour 3 / sticker hour 6 / 0° rotation.
-        XCTAssertEqual(keyframes[0].handViewerHour, 5, accuracy: 0.0001)
-        XCTAssertEqual(keyframes[0].stickerViewerHour, 8, accuracy: 0.0001)
-        XCTAssertEqual(keyframes[0].recordRotationDegrees, 60, accuracy: 0.0001)
-        XCTAssertEqual(keyframes[1].handViewerHour, 3, accuracy: 0.0001)
-        XCTAssertEqual(keyframes[1].stickerViewerHour, 6, accuracy: 0.0001)
-        XCTAssertEqual(keyframes[1].recordRotationDegrees, 0, accuracy: 0.0001)
+        XCTAssertEqual(keyframes[0].handViewerHour, 3, accuracy: 0.0001)
+        XCTAssertEqual(keyframes[0].stickerViewerHour, 6, accuracy: 0.0001)
+        XCTAssertEqual(keyframes[0].recordRotationDegrees, 0, accuracy: 0.0001)
+        XCTAssertEqual(keyframes[1].handViewerHour, 5, accuracy: 0.0001)
+        XCTAssertEqual(keyframes[1].stickerViewerHour, 8, accuracy: 0.0001)
+        XCTAssertEqual(keyframes[1].recordRotationDegrees, 60, accuracy: 0.0001)
         XCTAssertEqual(
             ScratchLabBabyScratchDemoMotionPattern.babyScratchStrokeTimelineDuration,
             resource.timelineDuration,
@@ -3435,47 +3643,42 @@ final class CaptureReliabilityPhase1CoreTests: XCTestCase {
                 playbackTime: timeline[0].startTime + 0.001
             )
         )
-        XCTAssertFalse(
-            ScratchLabBabyScratchDemoMotionPattern.isMovingStrokeWindow(
-                playbackTime: timeline[0].endTime + min(0.02, max(0.001, timeline[0].holdAfter / 2))
-            )
-        )
         XCTAssertTrue(
             ScratchLabBabyScratchDemoMotionPattern.isMovingStrokeWindow(
                 playbackTime: timeline[1].startTime + 0.001
             )
         )
+        XCTAssertFalse(
+            ScratchLabBabyScratchDemoMotionPattern.isMovingStrokeWindow(
+                playbackTime: BabyScratchReferenceMotionTimeline.phraseEnd + 1.0
+            )
+        )
     }
 
     func testBabyScratchCoachTimingLoadsNotationAtAudioPlaybackTime() throws {
-        // The 42 s coach demo loads the extracted-stroke resource. The third
-        // stroke (index 2) still starts at 1.46 s, but the audio-derived
-        // ground truth reports it as part of an opening run of backward
-        // strokes; the first forward stroke arrives later at stroke 5.
+        // The coach demo loads the captured, trimmed 16-cycle resource.
         let resource = try decodedBabyScratchStrokeResource()
         let timeline = BabyScratchReferenceMotionTimeline.strokeSegments
         let thirdStroke = try XCTUnwrap(timeline.dropFirst(2).first)
-        let firstForwardStroke = try XCTUnwrap(timeline.first { $0.direction == .forward })
+        let firstBackwardStroke = try XCTUnwrap(timeline.first { $0.direction == .backward })
 
         XCTAssertFalse(BabyScratchReferenceMotionTimeline.usesNotationResource)
         XCTAssertTrue(BabyScratchReferenceMotionTimeline.usesExtractedStrokeResource)
-        XCTAssertEqual(resource.strokes.count, 47)
-        XCTAssertEqual(timeline.count, 47)
-        XCTAssertEqual(thirdStroke.direction, .backward)
-        XCTAssertEqual(thirdStroke.startTime, 1.46, accuracy: 0.0001)
-        XCTAssertEqual(resource.strokes[2].startTime, 1.46, accuracy: 0.0001)
+        XCTAssertEqual(resource.strokes.count, 32)
+        XCTAssertEqual(timeline.count, 32)
+        XCTAssertEqual(thirdStroke.direction, .forward)
+        XCTAssertEqual(thirdStroke.startTime, 2.707172, accuracy: 0.0001)
+        XCTAssertEqual(resource.strokes[2].startTime, 2.707172, accuracy: 0.0001)
 
-        // At a backward stroke start, scratchProgress sits at startProgress = 1.
-        let poseAtThirdStrokeStart = BabyScratchReferenceMotionTimeline.pose(at: 1.46)
-        XCTAssertEqual(poseAtThirdStrokeStart.direction, .backward)
-        XCTAssertEqual(poseAtThirdStrokeStart.scratchProgress, 1, accuracy: 0.0001)
+        let poseAtThirdStrokeStart = BabyScratchReferenceMotionTimeline.pose(at: 2.707172)
+        XCTAssertEqual(poseAtThirdStrokeStart.direction, .forward)
+        XCTAssertEqual(poseAtThirdStrokeStart.scratchProgress, 0, accuracy: 0.0001)
 
-        // The first forward stroke samples cleanly inside the segment.
-        let forwardMid = firstForwardStroke.startTime + firstForwardStroke.duration / 2
-        let forwardPose = BabyScratchReferenceMotionTimeline.pose(at: forwardMid)
-        XCTAssertEqual(forwardPose.direction, .forward)
-        XCTAssertGreaterThan(forwardPose.scratchProgress, 0.3)
-        XCTAssertLessThan(forwardPose.scratchProgress, 0.7)
+        let backwardMid = firstBackwardStroke.startTime + firstBackwardStroke.duration / 2
+        let backwardPose = BabyScratchReferenceMotionTimeline.pose(at: backwardMid)
+        XCTAssertEqual(backwardPose.direction, .backward)
+        XCTAssertGreaterThan(backwardPose.scratchProgress, 0.3)
+        XCTAssertLessThan(backwardPose.scratchProgress, 0.7)
 
         let pastEndPose = BabyScratchReferenceMotionTimeline.pose(
             at: BabyScratchReferenceMotionTimeline.sourceDuration + 1.0
@@ -3486,19 +3689,12 @@ final class CaptureReliabilityPhase1CoreTests: XCTestCase {
 
     func testBabyScratchCoachTimingUsesFullAudioCycleAndPhraseLoopMode() throws {
         let firstStroke = try XCTUnwrap(BabyScratchReferenceMotionTimeline.strokeSegments.first)
-        // The full 42 s demo plays through a single audio cycle, so the "post
-        // phrase silence" zone now sits between phraseEnd (≈42.4 s) and the
-        // bundled audio duration (≈42.87 s).
         let postPhraseSilenceTime: TimeInterval = BabyScratchReferenceMotionTimeline.phraseEnd + 0.5
         let postPhraseSilencePose = BabyScratchReferenceMotionTimeline.pose(at: postPhraseSilenceTime)
-        // A probe deep inside the timeline (well past the first 10-stroke
-        // repeat) confirms the full audio cycle drives a real moving stroke.
-        let midPhraseProbe: TimeInterval = 12.45
+        let midPhraseProbe: TimeInterval = 8.5
         let midPhrasePose = BabyScratchReferenceMotionTimeline.pose(at: midPhraseProbe)
-        // Phrase-loop mode wraps once playback crosses phraseEnd. Sampling at
-        // phraseEnd + 0.254 wraps back to phraseStart + 0.254 = 0.524, which
-        // lands at the midpoint of stroke 0 (backward, 0.27..0.778).
-        let notationPhraseLoopTime = BabyScratchReferenceMotionTimeline.phraseEnd + 0.254
+        // Phrase-loop mode wraps into the first forward stroke.
+        let notationPhraseLoopTime = BabyScratchReferenceMotionTimeline.phraseEnd + 0.2
         let notationPhraseLoopPose = BabyScratchReferenceMotionTimeline.pose(
             at: notationPhraseLoopTime,
             loopMode: .notationPhrase
@@ -3519,7 +3715,7 @@ final class CaptureReliabilityPhase1CoreTests: XCTestCase {
                 forPlaybackTime: notationPhraseLoopTime,
                 loopMode: .notationPhrase
             ),
-            0.524,
+            2.2,
             accuracy: 0.001
         )
         XCTAssertEqual(notationPhraseLoopPose.direction, firstStroke.direction)
@@ -3531,111 +3727,61 @@ final class CaptureReliabilityPhase1CoreTests: XCTestCase {
 
     #if DEBUG
     func testBabyScratchCoachTimingDebugProbeReportsStrokeProgress() {
-        // Probe coverage now spans the full 42 s phrase: stroke starts/ends,
-        // the inter-repeat release/reset hold band, a second-repeat probe, and
-        // the post-phrase tail. The extracted-stroke ground truth reports
-        // stroke 0 as backward (scratchProgress 1 → 0), so the start-of-stroke
-        // probes assert that direction explicitly.
-        let firstScratchStart = BabyScratchReferenceMotionTimeline.debugTimingProbe(at: 0.27)
-        let firstScratchEnd = BabyScratchReferenceMotionTimeline.debugTimingProbe(at: 0.778)
-        let slowBackwardEnd = BabyScratchReferenceMotionTimeline.debugTimingProbe(at: 2.368)
-        let thirdStrokeStart = BabyScratchReferenceMotionTimeline.debugTimingProbe(at: 1.46)
-        let releaseStrokeActive = BabyScratchReferenceMotionTimeline.debugTimingProbe(at: 5.85)
-        let interPhraseHold = BabyScratchReferenceMotionTimeline.debugTimingProbe(at: 8.5)
-        let secondRepeatForward = BabyScratchReferenceMotionTimeline.debugTimingProbe(at: 12.45)
-        let postPhraseTail = BabyScratchReferenceMotionTimeline.debugTimingProbe(at: 42.654)
+        let firstScratchStart = BabyScratchReferenceMotionTimeline.debugTimingProbe(at: 2.0)
+        let firstScratchMid = BabyScratchReferenceMotionTimeline.debugTimingProbe(at: 2.205)
+        let secondScratchStart = BabyScratchReferenceMotionTimeline.debugTimingProbe(at: 2.410975)
+        let midPhraseStroke = BabyScratchReferenceMotionTimeline.debugTimingProbe(at: 8.5)
+        let postPhraseTail = BabyScratchReferenceMotionTimeline.debugTimingProbe(at: 15.0)
         let phraseLoopWrap = BabyScratchReferenceMotionTimeline.debugTimingProbe(
-            at: 42.654,
+            at: BabyScratchReferenceMotionTimeline.phraseEnd + 0.2,
             loopMode: .notationPhrase
         )
 
         XCTAssertEqual(
             BabyScratchReferenceMotionTimeline.debugProbePlaybackTimes,
-            [0.27, 0.778, 2.368, 1.46, 5.85, 8.5, 12.45, 42.654]
+            [2.0, 2.410975, 3.062990, 5.85, 8.5, 12.45, 14.048311, 15.0]
         )
         XCTAssertEqual(firstScratchStart.strokeIndex, 0)
-        XCTAssertEqual(firstScratchStart.direction, .backward)
+        XCTAssertEqual(firstScratchStart.direction, .forward)
         XCTAssertFalse(firstScratchStart.isHold)
-        XCTAssertEqual(firstScratchStart.progress, 1, accuracy: 0.0001)
-        XCTAssertEqual(firstScratchEnd.strokeIndex, 0)
-        XCTAssertEqual(firstScratchEnd.direction, .neutral)
-        XCTAssertTrue(firstScratchEnd.isHold)
-        XCTAssertEqual(firstScratchEnd.progress, 0, accuracy: 0.0001)
-        XCTAssertEqual(slowBackwardEnd.strokeIndex, 3)
-        XCTAssertEqual(slowBackwardEnd.direction, .neutral)
-        XCTAssertTrue(slowBackwardEnd.isHold)
-        XCTAssertEqual(slowBackwardEnd.progress, 0, accuracy: 0.0001)
-        XCTAssertEqual(slowBackwardEnd.timingSource, "CoachDemoMotion/baby_scratch_strokes.json")
-
-        XCTAssertEqual(thirdStrokeStart.strokeIndex, 2)
-        XCTAssertEqual(thirdStrokeStart.direction, .backward)
-        XCTAssertFalse(thirdStrokeStart.isHold)
-        XCTAssertEqual(thirdStrokeStart.timelineTime, 1.46, accuracy: 0.0001)
-        XCTAssertEqual(thirdStrokeStart.progress, 1, accuracy: 0.0001)
-
-        // 5.85 s lands inside the forward release segment (5.743..6.5) that
-        // bridges from the end of repeat 1 toward the next repeat.
-        XCTAssertEqual(releaseStrokeActive.strokeIndex, 10)
-        XCTAssertEqual(releaseStrokeActive.direction, .forward)
-        XCTAssertFalse(releaseStrokeActive.isHold)
-        XCTAssertGreaterThan(releaseStrokeActive.progress, 0)
-        XCTAssertLessThan(releaseStrokeActive.progress, 0.5)
-
-        // 8.5 s is inside the long inter-phrase hold band after the release
-        // segment, before the next backward reset stroke begins.
-        XCTAssertEqual(interPhraseHold.strokeIndex, 10)
-        XCTAssertEqual(interPhraseHold.direction, .neutral)
-        XCTAssertTrue(interPhraseHold.isHold)
-
-        // 12.45 s lands inside the first stroke of the second phrase repeat.
-        XCTAssertNotNil(secondRepeatForward.strokeIndex)
-        XCTAssertFalse(secondRepeatForward.isHold)
-        XCTAssertNotEqual(secondRepeatForward.direction, .neutral)
-        XCTAssertGreaterThan(secondRepeatForward.progress, 0)
-
-        // 42.654 s is past the last stroke's endTime (42.4) but still within
-        // sourceDuration. In fullDemoAudio mode it sits in the tail hold of
-        // the final stroke; in notationPhrase mode it wraps back to 0.524 s
-        // (mid-stroke 0, backward, scratchProgress ≈ 0.5).
+        XCTAssertEqual(firstScratchStart.progress, 0, accuracy: 0.0001)
+        XCTAssertEqual(firstScratchMid.strokeIndex, 0)
+        XCTAssertEqual(firstScratchMid.direction, .forward)
+        XCTAssertGreaterThan(firstScratchMid.progress, 0.45)
+        XCTAssertLessThan(firstScratchMid.progress, 0.55)
+        XCTAssertEqual(secondScratchStart.strokeIndex, 1)
+        XCTAssertEqual(secondScratchStart.direction, .backward)
+        XCTAssertEqual(secondScratchStart.progress, 1, accuracy: 0.0001)
+        XCTAssertEqual(secondScratchStart.timingSource, "CoachDemoMotion/baby_scratch_strokes.json")
+        XCTAssertNotNil(midPhraseStroke.strokeIndex)
+        XCTAssertNotEqual(midPhraseStroke.direction, .neutral)
         XCTAssertEqual(postPhraseTail.direction, .neutral)
         XCTAssertTrue(postPhraseTail.isHold)
         XCTAssertEqual(phraseLoopWrap.strokeIndex, 0)
-        XCTAssertEqual(phraseLoopWrap.direction, .backward)
+        XCTAssertEqual(phraseLoopWrap.direction, .forward)
         XCTAssertFalse(phraseLoopWrap.isHold)
-        XCTAssertEqual(phraseLoopWrap.timelineTime, 0.524, accuracy: 0.001)
-        XCTAssertEqual(phraseLoopWrap.progress, 0.5, accuracy: 0.001)
-        XCTAssertTrue(BabyScratchReferenceMotionTimeline.debugTimingReport(at: 1.46).contains("stroke=2"))
+        XCTAssertEqual(phraseLoopWrap.timelineTime, 2.2, accuracy: 0.001)
+        XCTAssertGreaterThan(phraseLoopWrap.progress, 0.45)
+        XCTAssertLessThan(phraseLoopWrap.progress, 0.55)
+        XCTAssertTrue(BabyScratchReferenceMotionTimeline.debugTimingReport(at: 2.8).contains("stroke=2"))
     }
     #endif
 
     func testBabyScratchReferenceMotionTimelineDoesNotSkipAlternatingStrokes() throws {
-        // Timeline strokes come from the extracted-stroke resource (47 segments
-        // covering four phrase repeats plus inter-phrase release/reset moves).
-        // The audio-derived ground truth does not strictly alternate
-        // forward/backward by index, so the meaningful invariants now are:
-        // counts match the resource, the segment list is sorted, both
-        // directions are present, multiple direction changes occur within
-        // each phrase repeat, and successive segments hand off scratchProgress.
         let timeline = BabyScratchReferenceMotionTimeline.strokeSegments
         let resource = try decodedBabyScratchStrokeResource()
 
         XCTAssertEqual(timeline.count, resource.strokes.count)
-        XCTAssertGreaterThanOrEqual(timeline.count, 40)
-        XCTAssertLessThanOrEqual(timeline.count, 60)
+        XCTAssertEqual(timeline.count, 32)
         XCTAssertEqual(timeline.map(\.direction), resource.strokeSegments.map(\.direction))
 
         let directions = timeline.map(\.direction)
-        XCTAssertTrue(directions.contains(.forward), "Timeline must contain forward strokes")
-        XCTAssertTrue(directions.contains(.backward), "Timeline must contain backward strokes")
+        XCTAssertEqual(directions.filter { $0 == .forward }.count, 16)
+        XCTAssertEqual(directions.filter { $0 == .backward }.count, 16)
         let directionChanges = zip(directions, directions.dropFirst()).filter { $0 != $1 }.count
-        XCTAssertGreaterThanOrEqual(directionChanges, 4, "Phrase must include several direction changes")
+        XCTAssertEqual(directionChanges, 31)
 
-        // The first stroke is backward (extracted-stroke ground truth), so
-        // scratchProgress starts at 1 and unwinds to 0 across the segment.
-        // The previous strict-alternation chain (endProgress == next
-        // startProgress) no longer holds because the audio-derived timeline
-        // includes runs of same-direction strokes.
-        XCTAssertEqual(timeline[0].startProgress, 1, accuracy: 0.0001)
+        XCTAssertEqual(timeline[0].startProgress, 0, accuracy: 0.0001)
         for segment in timeline {
             let expectedStart: Double = segment.direction == .forward ? 0 : 1
             let expectedEnd: Double = segment.direction == .forward ? 1 : 0
@@ -3648,8 +3794,7 @@ final class CaptureReliabilityPhase1CoreTests: XCTestCase {
         let gaps = zip(timeline, timeline.dropFirst()).map { next, following in
             following.startTime - next.endTime
         }
-        XCTAssertTrue(gaps.contains { $0 < 0.20 })
-        XCTAssertGreaterThan(Set(gaps.map { Int(($0 * 1_000).rounded()) }).count, 1)
+        XCTAssertTrue(gaps.allSatisfy { abs($0) < 0.000_002 })
     }
 
     func testBabyScratchReferenceMotionTimelineUsesNotationWithoutGeometryChanges() throws {
@@ -3817,7 +3962,7 @@ final class CaptureReliabilityPhase1CoreTests: XCTestCase {
         let secondBackward = try XCTUnwrap(
             timeline.first { $0.startTime > secondForward.startTime && $0.direction == .backward }
         )
-        let firstHoldTime = firstForward.endTime + min(0.02, max(0.001, firstForward.holdAfter / 2))
+        let tailHoldTime = BabyScratchReferenceMotionTimeline.phraseEnd + 1.0
         func strokeTime(_ segment: ScratchLabBabyScratchStrokeSegment, progress: TimeInterval) -> TimeInterval {
             segment.startTime + (segment.duration * progress)
         }
@@ -3834,7 +3979,7 @@ final class CaptureReliabilityPhase1CoreTests: XCTestCase {
             playbackTime: strokeTime(firstBackward, progress: 0.60),
             windowDuration: 1.0 / 30.0
         )
-        let firstHoldFrame = analyzer.processFrame(playbackTime: firstHoldTime, windowDuration: 1.0 / 30.0)
+        let tailHoldFrame = analyzer.processFrame(playbackTime: tailHoldTime, windowDuration: 1.0 / 30.0)
         let secondForwardFrame = analyzer.processFrame(
             playbackTime: strokeTime(secondForward, progress: 0.60),
             windowDuration: 1.0 / 30.0
@@ -3848,8 +3993,8 @@ final class CaptureReliabilityPhase1CoreTests: XCTestCase {
         XCTAssertGreaterThan(firstStrokeFrame.animationState.recordPosition, 0.2)
         XCTAssertEqual(firstBackwardFrame.direction, .backward)
         XCTAssertLessThan(firstBackwardFrame.animationState.recordPosition, firstStrokeFrame.animationState.recordPosition)
-        XCTAssertEqual(firstHoldFrame.direction, .neutral)
-        XCTAssertEqual(firstHoldFrame.animationState.recordPosition, 1, accuracy: 0.0001)
+        XCTAssertEqual(tailHoldFrame.direction, .neutral)
+        XCTAssertEqual(tailHoldFrame.animationState.recordPosition, 0, accuracy: 0.0001)
         XCTAssertEqual(secondForwardFrame.direction, .forward)
         XCTAssertEqual(secondBackwardFrame.direction, .backward)
         XCTAssertLessThan(secondBackwardFrame.animationState.recordPosition, secondForwardFrame.animationState.recordPosition)
@@ -3871,12 +4016,12 @@ final class CaptureReliabilityPhase1CoreTests: XCTestCase {
             timeline.first { $0.startTime > secondForward.startTime && $0.direction == .backward }
         )
         let laterForward = try XCTUnwrap(
-            timeline.first { $0.startTime > 1.3 && $0.direction == .forward }
+            timeline.first { $0.startTime > secondBackward.startTime && $0.direction == .forward }
         )
         let laterBackward = try XCTUnwrap(
             timeline.first { $0.startTime > laterForward.startTime && $0.direction == .backward }
         )
-        let firstHoldTime = firstForward.endTime + min(0.02, max(0.001, firstForward.holdAfter / 2))
+        let tailHoldTime = BabyScratchReferenceMotionTimeline.phraseEnd + 1.0
         func strokeTime(_ segment: ScratchLabBabyScratchStrokeSegment, progress: TimeInterval) -> TimeInterval {
             segment.startTime + (segment.duration * progress)
         }
@@ -3891,9 +4036,9 @@ final class CaptureReliabilityPhase1CoreTests: XCTestCase {
             playbackTime: strokeTime(firstBackward, progress: 0.60),
             isPlaying: true
         )
-        let firstHoldState = sampleBuffer.coachRigAnimationState(
+        let tailHoldState = sampleBuffer.coachRigAnimationState(
             scratchType: "baby",
-            playbackTime: firstHoldTime,
+            playbackTime: tailHoldTime,
             isPlaying: true
         )
         let secondForwardState = sampleBuffer.coachRigAnimationState(
@@ -3924,7 +4069,7 @@ final class CaptureReliabilityPhase1CoreTests: XCTestCase {
 
         XCTAssertGreaterThan(firstForwardState.recordPosition, 0.2)
         XCTAssertLessThan(firstBackwardState.recordPosition, firstForwardState.recordPosition)
-        XCTAssertEqual(firstHoldState.recordPosition, 1, accuracy: 0.0001)
+        XCTAssertEqual(tailHoldState.recordPosition, 0, accuracy: 0.0001)
         XCTAssertGreaterThan(secondForwardState.recordPosition, 0.2)
         XCTAssertLessThan(secondBackwardState.recordPosition, secondForwardState.recordPosition)
         XCTAssertGreaterThan(laterForwardState.recordPosition, 0.2)
@@ -3968,22 +4113,20 @@ final class CaptureReliabilityPhase1CoreTests: XCTestCase {
         let audioURL = projectRootURL()
             .appendingPathComponent("ScratchLab/Resources/CoachDemoAudio/baby_noBeat.wav")
         let sampleBuffer = try ScratchLabDemoAudioSampleBuffer(audioURL: audioURL)
-        let firstStrokeMidpoint: TimeInterval = 0.524
-        let secondAudioCycleFirstStroke = BabyScratchReferenceMotionTimeline.demoAudioPhraseCycleDuration
-            + BabyScratchReferenceMotionTimeline.phraseStart
+        let firstStrokeMidpoint: TimeInterval = 2.205
         let activeState = sampleBuffer.coachRigAnimationState(
             scratchType: "baby",
             playbackTime: firstStrokeMidpoint,
             isPlaying: true
         )
-        let secondCycleState = sampleBuffer.coachRigAnimationState(
+        let laterFirstStrokeState = sampleBuffer.coachRigAnimationState(
             scratchType: "baby",
-            playbackTime: secondAudioCycleFirstStroke + 0.10,
+            playbackTime: firstStrokeMidpoint + 0.10,
             isPlaying: true
         )
 
         XCTAssertGreaterThan(activeState.recordPosition, 0.2)
-        XCTAssertGreaterThan(secondCycleState.recordPosition, 0.1)
+        XCTAssertGreaterThan(laterFirstStrokeState.recordPosition, activeState.recordPosition)
         XCTAssertEqual(BabyScratchReferenceMotionTimeline.timelineTime(forPlaybackTime: 1.46), 1.46, accuracy: 0.0001)
         XCTAssertEqual(
             BabyScratchReferenceMotionTimeline.timelineTime(
@@ -4086,12 +4229,9 @@ final class CaptureReliabilityPhase1CoreTests: XCTestCase {
         let sampleBuffer = ScratchLabDemoAudioSampleBuffer(samples: samples, sampleRate: 48_000)
         let analyzer = ScratchLabDemoModeAnalyzer(sampleBuffer: sampleBuffer)
 
-        // Pick a timestamp that lies inside the first backward stroke of the
-        // bundled baby_scratch.json timeline (originally 1.07s -> 1.378s) so
-        // the analyzer reports a backward demo frame. The previous fixture
-        // value 0.44 lined up with the older fallback strokes; the bundled
-        // notation moved the strokes later in the phrase.
-        let backwardStrokeProbe: TimeInterval = 1.2
+        // Pick a timestamp inside the first backward stroke of the captured
+        // motion timeline (2.410975s -> 2.707172s).
+        let backwardStrokeProbe: TimeInterval = 2.55
         let firstFrame = analyzer.processFrame(playbackTime: backwardStrokeProbe, windowDuration: 1.0 / 30.0)
         let secondFrame = analyzer.processFrame(playbackTime: backwardStrokeProbe, windowDuration: 1.0 / 30.0)
 
@@ -4680,7 +4820,8 @@ final class CaptureReliabilityPhase1CoreTests: XCTestCase {
 
         XCTAssertTrue(project.contains("CoachInstructions"))
         XCTAssertTrue(project.contains("CoachInstructions in Resources"))
-        XCTAssertTrue(project.contains("B9AF9ED5370241CF8BEFDB7C /* CoachInstructions in Resources */"))
+        XCTAssertTrue(project.contains("B9AF9ED5370241CF8BEFDB7C"))
+        XCTAssertTrue(project.contains("path = Resources/CoachInstructions;"))
         XCTAssertTrue(project.contains("CoachDemoAudio"))
         XCTAssertTrue(project.contains("CoachDemoAudio in Resources"))
         XCTAssertTrue(project.contains("09C738A56A342FC5A7BBBEA3 /* Resources */"))
@@ -4858,7 +4999,7 @@ final class CaptureReliabilityPhase1CoreTests: XCTestCase {
             }
         )
         let expectedClips: [(name: String, file: String, demoStart: Double, demoEnd: Double)] = [
-            ("baby", "baby_noBeat.wav", 0.0, 12.0),
+            ("baby", "baby_noBeat.wav", 0.0, 16.0483125),
             ("chirpflare", "chirpflare_noBeat.wav", 0.0, 11.0),
         ]
 
@@ -6132,7 +6273,10 @@ final class CaptureReliabilityPhase1CoreTests: XCTestCase {
 
         let takeLog = preview.takeLogCSV
         XCTAssertTrue(takeLog.contains("bpm,take_number,raw_camA,raw_camB,raw_audio,raw_watch,verbal_slate_used,sync_clap_used,notes"))
-        XCTAssertTrue(takeLog.contains("\"70\",\"1\",\"\",\"\",\"\",\"\",\"true\",\"true\",\"take 1 note\""))
+        // Raw-media columns must carry the same authoritative paths the manifest
+        // emits (take 1 = bpm 70, which has a linked watch capture).
+        XCTAssertTrue(takeLog.contains("\"70\",\"1\",\"video/DJALPHA_baby_070_take01_camA.mov\",\"\",\"audio/DJALPHA_baby_070_take01_scratch_only.wav\",\"watch/DJALPHA_baby_070_take01_watch.csv\",\"true\",\"true\",\"take 1 note\""))
+        XCTAssertEqual(takeLog.contains(",\"\",\"\",\"\",\"\","), false, "raw-media columns must not all be empty")
         XCTAssertEqual(
             takeLog.split(whereSeparator: \.isNewline).count - 1,
             takes.count,
@@ -7167,8 +7311,8 @@ final class CaptureReliabilityPhase1CoreTests: XCTestCase {
 
         let tabSource = try sourceSlice(
             in: source,
-            from: "TabView(selection: workspaceTabBinding)",
-            through: ".background(ScratchLabDesign.Surface.applicationBackground)"
+            from: "HStack(spacing: 0) {\n            workspaceRail",
+            through: ".background(ScratchLabDesign.Surface.canvas)"
         )
         XCTAssertFalse(tabSource.contains("Notation Lab"))
         XCTAssertFalse(tabSource.contains("Test Lab"))
@@ -7798,7 +7942,18 @@ final class CaptureReliabilityPhase1CoreTests: XCTestCase {
         )
 
         XCTAssertEqual((manifest["allowed_bpms"] as? [Int]) ?? [], [90])
-        XCTAssertTrue(preview.takeLogCSV.contains("\"90\",\"1\",\"\",\"\",\"\",\"\",\"false\",\"false\",\"\""))
+        // Raw-media columns are populated from the authoritative manifest names;
+        // this take has no watch capture, so only raw_watch stays empty.
+        let takeLogRow = try XCTUnwrap(
+            preview.takeLogCSV.split(whereSeparator: \.isNewline).first(where: { $0.hasPrefix("\"90\",\"1\",") }).map(String.init)
+        )
+        let manifestTakeFiles = try XCTUnwrap(
+            ((manifest["takes"] as? [[String: Any]])?.first?["files"]) as? [String: String]
+        )
+        XCTAssertTrue(takeLogRow.contains("\"\(manifestTakeFiles["camA"] ?? "MISSING")\""))
+        XCTAssertTrue(takeLogRow.contains("\"\(manifestTakeFiles["scratch_only"] ?? "MISSING")\""))
+        XCTAssertTrue(takeLogRow.hasSuffix(",\"false\",\"false\",\"\""))
+        XCTAssertFalse(takeLogRow.contains("\"90\",\"1\",\"\",\"\",\"\",\"\","))
     }
 
     // MARK: - Baby Scratch sync tests (notation coach + audio master clock)
@@ -7830,23 +7985,20 @@ final class CaptureReliabilityPhase1CoreTests: XCTestCase {
         let phraseEnd = BabyScratchReferenceMotionTimeline.phraseEnd
         let cycleDuration = BabyScratchReferenceMotionTimeline.demoAudioPhraseCycleDuration
 
-        // The 42 s coach demo plays as a single, multi-phrase recording — no
-        // playback-time looping — so the audio covers a single cycle that
-        // equals (and is bounded by) sourceDuration. The phrase still ends
-        // strictly before audio so a short silence/hold tail exists at the
-        // end of the recording.
-        XCTAssertGreaterThan(audioDuration, 40)
+        // The cleaned 16-cycle demo plays once, with a two-second lead-in and
+        // a two-second trailing hold.
+        XCTAssertEqual(audioDuration, 16.0483125, accuracy: 0.0001)
         XCTAssertEqual(BabyScratchReferenceMotionTimeline.demoAudioPhraseCycleCount, 1)
         XCTAssertEqual(cycleDuration, audioDuration, accuracy: 0.05)
         XCTAssertGreaterThan(audioDuration, phraseEnd)
-        XCTAssertGreaterThan(audioDuration - phraseEnd, 0.1)
+        XCTAssertEqual(audioDuration - phraseEnd, 2.0, accuracy: 0.001)
     }
 
     func testBabyScratchPhraseTimeHoldsAtPhraseEndDuringSilence() {
         let phraseEnd = BabyScratchReferenceMotionTimeline.phraseEnd
         let sourceDuration = BabyScratchReferenceMotionTimeline.sourceDuration
-        // After the last notated stroke ends (~42.4 s) the audio plays for
-        // another ~0.47 s of trailing silence/hold before sourceDuration. A
+        // After the last notated stroke ends, the audio has a two-second
+        // trailing silence/hold before sourceDuration. A
         // probe midway through that tail must hold neutral. A probe past
         // sourceDuration must also report neutral (no looping).
         let silenceTime = phraseEnd + (sourceDuration - phraseEnd) / 2
@@ -7861,27 +8013,22 @@ final class CaptureReliabilityPhase1CoreTests: XCTestCase {
         XCTAssertEqual(pastEndPose.direction, .neutral)
         XCTAssertTrue(pastEndPose.isHold)
 
-        // Deep inside the 42 s phrase the coach is still actively scratching;
-        // we never short-circuit to a hold just because we are past the first
-        // phrase repeat.
+        // Deep inside the phrase the coach is still actively scratching.
         XCTAssertTrue(ScratchLabBabyScratchDemoMotionPattern.isMovingStrokeWindow(playbackTime: lateMidPhraseProbe))
         XCTAssertNotEqual(lateMidPhrasePose.direction, .neutral)
     }
 
     func testBabyScratchNotationStrokesAlternateForwardBackInsidePhrase() throws {
-        // The 42 s phrase is audio-derived: some strokes legitimately repeat
-        // direction (e.g. opening backward run, multi-stroke release/reset
-        // bridges), so strict index%2 alternation no longer applies. The
-        // invariants we keep: both directions are present, several direction
-        // changes happen inside the phrase, and every stroke ends at or
-        // before phraseEnd.
+        // The cleaned source contains exactly 16 complete F/B cycles.
         let timeline = BabyScratchReferenceMotionTimeline.strokeSegments
-        XCTAssertGreaterThanOrEqual(timeline.count, 40)
+        XCTAssertEqual(timeline.count, 32)
         let directions = timeline.map(\.direction)
-        XCTAssertTrue(directions.contains(.forward))
-        XCTAssertTrue(directions.contains(.backward))
+        XCTAssertTrue(directions.enumerated().allSatisfy { indexedDirection in
+            let (index, direction) = indexedDirection
+            return direction == (index.isMultiple(of: 2) ? .forward : .backward)
+        })
         let directionChanges = zip(directions, directions.dropFirst()).filter { $0 != $1 }.count
-        XCTAssertGreaterThanOrEqual(directionChanges, 8, "Phrase must include several direction changes")
+        XCTAssertEqual(directionChanges, 31)
         let phraseEnd = BabyScratchReferenceMotionTimeline.phraseEnd
         XCTAssertTrue(timeline.allSatisfy { $0.endTime <= phraseEnd + 0.001 })
     }
@@ -8084,6 +8231,40 @@ final class CaptureRecoveryPhase2CoreTests: XCTestCase {
         XCTAssertTrue(report.issues.contains(where: { $0.code == .quarantinedOrphanedMedia && $0.fileName == "orphan.wav" }))
         XCTAssertTrue(FileManager.default.fileExists(atPath: root.appendingPathComponent("Quarantine/orphan.mov").path))
         XCTAssertTrue(FileManager.default.fileExists(atPath: root.appendingPathComponent("Quarantine/orphan.wav").path))
+    }
+
+    func testSameBasenameScratchStemRemainsOwnedByCompletedTakeDuringRecovery() throws {
+        let root = try makeTemporaryDirectory()
+        let auditRoot = root.appendingPathComponent("audit", isDirectory: true)
+        let sessionID = "scratch-stem-session"
+        let takeIdentity = CaptureCore.LocalRecordingNaming.takeIdentity(
+            sessionID: sessionID,
+            takeNumber: 1
+        )
+        let baseName = "\(sessionID)_take001_camA"
+        let mediaURL = root.appendingPathComponent("\(baseName).mov")
+        let sidecarURL = root.appendingPathComponent("\(baseName).json")
+        let scratchURL = root.appendingPathComponent("\(baseName).wav")
+        try Data("mov".utf8).write(to: mediaURL, options: .atomic)
+        try Data("wav".utf8).write(to: scratchURL, options: .atomic)
+        try makeCompletedSidecar(
+            sessionID: sessionID,
+            takeIdentity: takeIdentity,
+            mediaURL: mediaURL,
+            sidecarURL: sidecarURL
+        )
+
+        let report = StagedCaptureRecoveryManager(
+            fileManager: .default,
+            nowProvider: { Date(timeIntervalSince1970: 1_720_000_201) },
+            auditRootDirectoryOverride: auditRoot
+        ).recoverRecordingDirectory(at: root, storageKind: .companion)
+
+        XCTAssertEqual(report.quarantinedArtifactCount, 0)
+        XCTAssertTrue(FileManager.default.fileExists(atPath: scratchURL.path))
+        XCTAssertFalse(FileManager.default.fileExists(
+            atPath: root.appendingPathComponent("Quarantine/\(baseName).wav").path
+        ))
     }
 
     func testInterruptedTransactionHistoryAnnotatesOrphanedMediaQuarantine() throws {
@@ -9371,45 +9552,16 @@ final class CaptureRecoveryPhase2CoreTests: XCTestCase {
 
     // MARK: - Release readiness source-inspection tests
 
-    // Slice X.2 follow-up: the V3.2 Home redesign dropped the DEBUG-gated
-    // Capture/Review menu buttons entirely rather than keeping them behind
-    // a #if DEBUG route (there is no `menuButtons` property or
-    // showingCapturePlaceholder/showingReviewPlaceholder state any more).
-    // CapturePlaceholderView/ReviewPlaceholderView are intentionally kept
-    // as unreferenced dead code for a future re-wire but must not be reachable
-    // from any navigation route in ANY build configuration — a strictly
-    // safer App Review contract than "hidden outside DEBUG".
-    func testMainMenuViewHidesCapturePlaceholderRouteOutsideDebug() throws {
+    func testMainMenuViewUsesOnlyImplementedCaptureAndReviewRoutes() throws {
         let sourceURL = projectRootURL().appendingPathComponent("ScratchLab/Views/MainMenuView.swift")
         let source = try String(contentsOf: sourceURL, encoding: .utf8)
 
-        XCTAssertTrue(
-            source.contains("private struct CapturePlaceholderView: View"),
-            "CapturePlaceholderView must still exist for a future re-wire"
-        )
-        XCTAssertTrue(
-            source.contains("private struct ReviewPlaceholderView: View"),
-            "ReviewPlaceholderView must still exist for a future re-wire"
-        )
-        XCTAssertTrue(
-            source.contains("On-device take capture is coming."),
-            "Capture placeholder must keep truthful coming-soon copy"
-        )
-        XCTAssertTrue(
-            source.contains("On-device Review is coming."),
-            "Review placeholder must keep truthful coming-soon copy"
-        )
-
-        // No navigation route may instantiate either placeholder — the only
-        // occurrence of each identifier must be its own struct declaration.
-        XCTAssertEqual(
-            source.components(separatedBy: "CapturePlaceholderView").count - 1, 1,
-            "CapturePlaceholderView must not be referenced/instantiated by any route"
-        )
-        XCTAssertEqual(
-            source.components(separatedBy: "ReviewPlaceholderView").count - 1, 1,
-            "ReviewPlaceholderView must not be referenced/instantiated by any route"
-        )
+        XCTAssertFalse(source.contains("CapturePlaceholderView"))
+        XCTAssertFalse(source.contains("ReviewPlaceholderView"))
+        XCTAssertTrue(source.contains("private var captureWorkspaceLanding: some View"))
+        XCTAssertTrue(source.contains("private var reviewWorkspaceLanding: some View"))
+        XCTAssertTrue(source.contains("showingCaptureHub = true"))
+        XCTAssertTrue(source.contains("CompanionCameraView()"))
         XCTAssertFalse(source.contains("showingCapturePlaceholder"))
         XCTAssertFalse(source.contains("showingReviewPlaceholder"))
     }
@@ -11085,17 +11237,12 @@ extension CaptureReliabilityPhase1CoreTests {
     }
 
     func testSelectedMIDISourceIsPersisted() {
-        let defaults = UserDefaults.standard
-        let key = "scratchlab.mac.selectedMIDIInputSourceID"
-        defaults.removeObject(forKey: key)
-
         let firstEngine = MacCaptureEngine(autoRefreshDevices: false)
         firstEngine.selectedMIDIInputSourceID = "midi_1"
 
         let secondEngine = MacCaptureEngine(autoRefreshDevices: false)
         XCTAssertEqual(secondEngine.selectedMIDIInputSourceID, "midi_1")
-
-        defaults.removeObject(forKey: key)
+        secondEngine.selectedMIDIInputSourceID = ""
     }
 
     func testReceivingMIDICCUpdatesLastMIDIEventSummary() {
@@ -11595,28 +11742,29 @@ final class ScratchLabNotationAndExportTests: XCTestCase {
         let source = try String(contentsOf: macURL, encoding: .utf8)
         XCTAssertFalse(source.contains("\"TTM\""), "Primary nav must not expose TTM branding")
         XCTAssertFalse(source.contains("\"SXRATCH\""), "Primary nav must not expose SXRATCH branding")
-
-        let formulaURL = projectRootURL().appendingPathComponent("ScratchLab/Views/FormulaPlaygroundView.swift")
-        let formulaSource = try String(contentsOf: formulaURL, encoding: .utf8)
-        XCTAssertFalse(formulaSource.contains("\"TTM GRAPH\""), "TTM GRAPH label must be replaced")
-        XCTAssertFalse(formulaSource.contains("TTM-style aliases"), "TTM-style alias label must be replaced")
     }
 
     // Slice U.1 — Battle Mode user-facing copy must not contain "AI" wording.
-    // Internal type names (AICharacter) and enum case identifiers (aiChallenge)
-    // are allowed because they are not surfaced to users; only the literal UI
-    // strings are guarded here.
+    // The obsolete AIBattleModeView was removed; scan every current SwiftUI
+    // view so the retired copy cannot reappear on another production surface.
+    // Internal type names and enum identifiers remain allowed.
     func testBattleModeUserFacingCopyHasNoAIWording() throws {
-        let battleURL = projectRootURL().appendingPathComponent("ScratchLab/Views/AIBattleModeView.swift")
-        let battleSource = try String(contentsOf: battleURL, encoding: .utf8)
-        XCTAssertFalse(
-            battleSource.contains("\"AI BATTLE\""),
-            "Battle mode header must not display 'AI BATTLE'"
-        )
-        XCTAssertFalse(
-            battleSource.contains("\"Challenge an AI opponent\""),
-            "Battle mode subtitle must not display 'Challenge an AI opponent'"
-        )
+        let viewsURL = projectRootURL().appendingPathComponent("ScratchLab/Views", isDirectory: true)
+        guard let viewFiles = FileManager.default.enumerator(
+            at: viewsURL,
+            includingPropertiesForKeys: nil,
+            options: [.skipsHiddenFiles]
+        ) else {
+            return XCTFail("Could not enumerate production SwiftUI views")
+        }
+        for case let viewURL as URL in viewFiles where viewURL.pathExtension == "swift" {
+            let source = try String(contentsOf: viewURL, encoding: .utf8)
+            XCTAssertFalse(source.contains("\"AI BATTLE\""), "AI BATTLE must not appear in \(viewURL.lastPathComponent)")
+            XCTAssertFalse(
+                source.contains("\"Challenge an AI opponent\""),
+                "AI-opponent copy must not appear in \(viewURL.lastPathComponent)"
+            )
+        }
 
         let gameStateURL = projectRootURL().appendingPathComponent("ScratchLab/Models/GameState.swift")
         let gameStateSource = try String(contentsOf: gameStateURL, encoding: .utf8)
@@ -12872,6 +13020,81 @@ final class MovementTraceDiagnosticsTests: XCTestCase {
         // Exact (execution order): start x=0.40 (obs 1), obs 0 (x=0.20) does not
         // extend the max → start == furthest → dropped → 0 events.
         XCTAssertEqual(exact.events.count, 0, "reversed execution order must yield a different movement")
+    }
+
+    /// Replays a real exported hardware take when the two environment variables
+    /// are supplied. This keeps customer/session data out of the repository
+    /// while making the Phase 2 evidence comparison repeatable.
+    func testExternalHardwareTraceExactReplayMatchesLiveDiagnostics() throws {
+        let environment = ProcessInfo.processInfo.environment
+        guard let tracePath = environment["SCRATCHLAB_MOVEMENT_TRACE"],
+              let diagnosticsPath = environment["SCRATCHLAB_MOVEMENT_DIAGNOSTICS"] else {
+            throw XCTSkip("Set SCRATCHLAB_MOVEMENT_TRACE and SCRATCHLAB_MOVEMENT_DIAGNOSTICS to replay a hardware take")
+        }
+
+        let trace = try JSONDecoder().decode(
+            MovementTraceExport.self,
+            from: Data(contentsOf: URL(fileURLWithPath: tracePath))
+        )
+        let live = try JSONDecoder().decode(
+            MovementDiagnosticsExport.self,
+            from: Data(contentsOf: URL(fileURLWithPath: diagnosticsPath))
+        )
+        XCTAssertEqual(trace.schemaVersion, "scratchlab_movement_trace_v1")
+        XCTAssertEqual(live.schemaVersion, "scratchlab_movement_diagnostics_v1")
+        XCTAssertEqual(trace.takeID, live.takeID)
+        XCTAssertEqual(trace.takeNumber, live.takeNumber)
+
+        let handPoseInterval = Double(live.diagnostics.handPoseIntervalMS) / 1_000
+        let ideal = MovementTraceReplay.idealReplay(
+            observations: trace.observations,
+            audioEvents: [],
+            handPoseInterval: handPoseInterval,
+            drainTime: trace.finalizationHostTime
+        )
+        let exact = MovementTraceReplay.exactReplay(
+            observations: trace.observations,
+            audioEvents: [],
+            handPoseInterval: handPoseInterval,
+            drainTime: trace.finalizationHostTime
+        )
+
+        let summary: [String: Any] = [
+            "takeID": trace.takeID,
+            "observations": trace.observations.count,
+            "live": replayEvidence(from: live.diagnostics),
+            "ideal": replayEvidence(from: ideal.snapshot),
+            "exact": replayEvidence(from: exact.snapshot),
+            "idealEventCount": ideal.events.count,
+            "exactEventCount": exact.events.count,
+        ]
+        let summaryData = try JSONSerialization.data(withJSONObject: summary, options: [.prettyPrinted, .sortedKeys])
+        print("MOVEMENT_TRACE_REPLAY_EVIDENCE\n\(String(decoding: summaryData, as: UTF8.self))")
+
+        XCTAssertEqual(
+            exact.snapshot.finalRecordMovementEvents,
+            live.diagnostics.finalRecordMovementEvents,
+            "exact replay must reproduce the live take's final movement count"
+        )
+    }
+
+    private func replayEvidence(
+        from snapshot: MacCaptureEngine.RoutineMovementDiagnosticsSnapshot
+    ) -> [String: Any] {
+        [
+            "builderSamples": snapshot.builderSamplesReceived,
+            "rawMovements": snapshot.rawMovementEventsCreated,
+            "normalizedMovements": snapshot.normalizedMovementEvents,
+            "fusedMovements": snapshot.fusedMovementEvents,
+            "trustedMovements": snapshot.trustedDirectionalEvents,
+            "finalMovements": snapshot.finalRecordMovementEvents,
+            "builderAccepted": snapshot.builderInputAccepted,
+            "builderExtended": snapshot.builderInputExtended,
+            "builderRejectedDirection": snapshot.builderInputRejectedDirection,
+            "rawDropReasons": snapshot.rawDropReasons,
+            "normalizedDropReasons": snapshot.normalizedDropReasons,
+            "trustDropReasons": snapshot.trustDropReasons,
+        ]
     }
 
     // MARK: - Per-take isolation + archive companion copy
@@ -14173,7 +14396,7 @@ final class CameraReplayTests: XCTestCase {
         return result
     }
 
-    func testReplayTake002CameraThroughProductionPath() throws {
+    func testReplayTake002CameraThroughProductionPath() async throws {
         guard let videoPath = ProcessInfo.processInfo.environment["SCRATCHLAB_CAMREPLAY_VIDEO"] else {
             throw XCTSkip("SCRATCHLAB_CAMREPLAY_VIDEO not set")
         }
@@ -14234,7 +14457,7 @@ final class CameraReplayTests: XCTestCase {
             framesAnalyzed += 1
 
             let time = CMTime(seconds: now, preferredTimescale: 600)
-            guard let cgImage = try? generator.copyCGImage(at: time, actualTime: nil) else { continue }
+            guard let cgImage = try? await generator.image(at: time).image else { continue }
             framesReceived += 1
 
             let handler = VNImageRequestHandler(cgImage: cgImage, orientation: .up, options: [:])
@@ -14394,5 +14617,349 @@ final class SessionExportRoundTripTests: XCTestCase {
         XCTAssertEqual(decodedExport.first?.source, "controller")
         XCTAssertEqual(decodedExport.first?.confidence ?? 0, 0.9, accuracy: 1e-9)
         XCTAssertEqual(decodedExport.first?.direction, "forward")
+    }
+}
+
+// MARK: - Rane channel-map diagnostic (Phase 2)
+
+final class MultichannelSignalProbeTests: XCTestCase {
+
+    private func sine(_ frequency: Double, frames: Int, sampleRate: Double = 48_000, amplitude: Float = 0.25, phase: Double = 0) -> [Float] {
+        (0..<frames).map { index in
+            amplitude * Float(sin(2 * Double.pi * frequency * Double(index) / sampleRate + phase))
+        }
+    }
+
+    func testProgramPairValidation() {
+        XCTAssertNil(CaptureAudioProgramPair(leftChannel: 2, rightChannel: 2))
+        XCTAssertNil(CaptureAudioProgramPair(leftChannel: -1, rightChannel: 0))
+        let pair = CaptureAudioProgramPair(startChannel: 2)
+        XCTAssertEqual(pair?.leftChannel, 2)
+        XCTAssertEqual(pair?.rightChannel, 3)
+        XCTAssertEqual(pair?.label, "3/4")
+        XCTAssertEqual(pair?.isResolvable(inChannelCount: 4), true)
+        XCTAssertEqual(pair?.isResolvable(inChannelCount: 3), false)
+    }
+
+    func testProgramPairStoreRoundTripsPerDevice() {
+        let defaults = UserDefaults(suiteName: "probe-tests-\(UUID().uuidString)")!
+        let pair = CaptureAudioProgramPair(startChannel: 4)
+        CaptureAudioProgramPairStore.setPair(pair, forDeviceUniqueID: "rane-one", defaults: defaults)
+        XCTAssertEqual(CaptureAudioProgramPairStore.pair(forDeviceUniqueID: "rane-one", defaults: defaults), pair)
+        XCTAssertNil(CaptureAudioProgramPairStore.pair(forDeviceUniqueID: "other", defaults: defaults))
+        CaptureAudioProgramPairStore.setPair(nil, forDeviceUniqueID: "rane-one", defaults: defaults)
+        XCTAssertNil(CaptureAudioProgramPairStore.pair(forDeviceUniqueID: "rane-one", defaults: defaults))
+    }
+
+    /// A 14-channel layout resembling the failed Rane take: only one pair carries
+    /// real decorrelated stereo program audio; the rest are silent, DC-heavy or
+    /// full-scale data.
+    func testRecommendsOnlyRealStereoProgramPair() throws {
+        let frames = 24_000
+        var channels = Array(repeating: [Float](repeating: 0, count: frames), count: 14)
+        // CH 1/2 — real, slightly decorrelated stereo program.
+        channels[0] = sine(220, frames: frames, amplitude: 0.3)
+        channels[1] = sine(220, frames: frames, amplitude: 0.3, phase: 0.6)
+        // CH 3/4 — silent.
+        // CH 5..12 — near-silent hum.
+        for index in 4..<12 { channels[index] = sine(60, frames: frames, amplitude: 0.00005) }
+        // CH 13 — large negative DC pedestal.
+        channels[12] = [Float](repeating: -0.868, count: frames)
+        // CH 14 — full-scale data line.
+        channels[13] = (0..<frames).map { $0 % 2 == 0 ? Float(1.0) : Float(-1.0) }
+
+        let snapshot = try XCTUnwrap(MultichannelSignalProbe.analyze(planarChannels: channels, sampleRate: 48_000))
+        XCTAssertEqual(snapshot.channelCount, 14)
+        XCTAssertEqual(snapshot.recommendedPair, CaptureAudioProgramPair(startChannel: 0))
+
+        let pair12 = try XCTUnwrap(snapshot.pairs.first { $0.label == "1/2" })
+        let pair1314 = try XCTUnwrap(snapshot.pairs.first { $0.label == "13/14" })
+        XCTAssertGreaterThan(pair12.programLikelihood, 0.5)
+        XCTAssertLessThan(pair1314.programLikelihood, 0.2)
+        XCTAssertEqual(snapshot.channels[12].hasExcessiveDC, true)
+        XCTAssertEqual(snapshot.channels[12].kind, .dcHeavy)
+        XCTAssertEqual(snapshot.channels[13].isClipping, true)
+        XCTAssertEqual(snapshot.channels[13].kind, .dataOrControl)
+        XCTAssertEqual(snapshot.channels[2].kind, .silent)
+        XCTAssertTrue(snapshot.reportText.contains("CH 1/2"))
+    }
+
+    func testNonFiniteChannelNeverRecommended() throws {
+        let frames = 8_000
+        var channels = Array(repeating: [Float](repeating: 0, count: frames), count: 2)
+        channels[0] = sine(440, frames: frames, amplitude: 0.3)
+        channels[1] = sine(440, frames: frames, amplitude: 0.3)
+        channels[0][100] = .nan
+        let snapshot = try XCTUnwrap(MultichannelSignalProbe.analyze(planarChannels: channels, sampleRate: 48_000))
+        XCTAssertTrue(snapshot.channels[0].hasNonFiniteSamples)
+        XCTAssertNil(snapshot.recommendedPair)
+        XCTAssertEqual(snapshot.pairs.first?.programLikelihood, 0)
+    }
+
+    func testInterleavedDeinterleavesToPlanar() throws {
+        let frames = 1_000
+        let left = sine(200, frames: frames, amplitude: 0.4)
+        let right = sine(200, frames: frames, amplitude: 0.1)
+        var interleaved = [Float](repeating: 0, count: frames * 2)
+        for index in 0..<frames {
+            interleaved[index * 2] = left[index]
+            interleaved[index * 2 + 1] = right[index]
+        }
+        let snapshot = try XCTUnwrap(MultichannelSignalProbe.analyzeInterleaved(interleaved, channelCount: 2, sampleRate: 48_000))
+        XCTAssertEqual(snapshot.channels.count, 2)
+        XCTAssertGreaterThan(snapshot.channels[0].rms, snapshot.channels[1].rms)
+        XCTAssertEqual(snapshot.channels[0].peakDBFS, MultichannelSignalProbe.dbfs(0.4), accuracy: 0.5)
+    }
+}
+
+// MARK: - Capture motion evidence (Slice A)
+//
+// Motion presence must reflect every source that genuinely supplied evidence,
+// not the Apple Watch alone. Before `CaptureMotionEvidence` existed, three
+// sites derived presence from a linked Watch artifact only, so a real RANE
+// platter take with no Watch paired reported motion missing in review and
+// exported as motionless.
+
+final class CaptureMotionEvidenceTests: XCTestCase {
+
+    // MARK: Fixtures
+
+    private func platterMIDIEvent(_ value: Int, _ time: Double) -> CaptureCore.RawMixerMIDIEvent {
+        .init(timestamp: time, takeRelativeTime: time, deviceName: "Rane ONE MKII",
+              channel: 1, controller: 6, value: value,
+              normalizedValue: Double(value) / 127.0, mappedControl: nil)
+    }
+
+    /// A monotonic CC6 ring-counter run. `step: +1` is forward travel,
+    /// `step: -1` is backward travel.
+    private func platterRun(
+        from value: Int,
+        count: Int,
+        startingAt time: Double,
+        step: Int,
+        interval: Double = 0.01
+    ) -> [CaptureCore.RawMixerMIDIEvent] {
+        (0..<count).map { index in
+            let raw = value + step * index
+            let wrapped = ((raw % 128) + 128) % 128
+            return platterMIDIEvent(wrapped, time + Double(index) * interval)
+        }
+    }
+
+    private func movementEvents(
+        _ raw: [CaptureCore.RawMixerMIDIEvent]
+    ) -> [CaptureCore.DetectedNotationRecordMovementEvent] {
+        CaptureCore.derivePlatterMovementEvents(from: raw, controller: 6, channel: 1)
+    }
+
+    private func snapshot(
+        movementEvents: [CaptureCore.DetectedNotationRecordMovementEvent],
+        faderEvents: [CaptureCore.DetectedNotationFaderEvent] = []
+    ) -> CaptureCore.DetectedNotationSnapshot {
+        CaptureCore.DetectedNotationSnapshot(
+            notationSource: "detected",
+            notationConfidence: 0.8,
+            detectedLabel: nil,
+            labelSource: "unknown",
+            labelConfidence: nil,
+            detectionSources: ["controller"],
+            recordMovementEvents: movementEvents,
+            audioEvents: [],
+            faderEvents: faderEvents,
+            mixerMidiEvents: [],
+            capturedAt: Date(timeIntervalSince1970: 0)
+        )
+    }
+
+    private func faderEvent(at time: Double) -> CaptureCore.DetectedNotationFaderEvent {
+        .init(startTime: time, endTime: time + 0.02, eventKind: .cut, control: "crossfader",
+              fromValue: 1.0, toValue: 0.0, source: "midi", confidence: 0.9)
+    }
+
+    /// Forward push then pull-back — the minimal real scratch gesture.
+    private var babyScratchMovementEvents: [CaptureCore.DetectedNotationRecordMovementEvent] {
+        let forward = platterRun(from: 0, count: 30, startingAt: 0.0, step: 1)
+        let backward = platterRun(from: 29, count: 30, startingAt: 0.30, step: -1)
+        return movementEvents(forward + backward)
+    }
+
+    // MARK: Source resolution
+
+    func testPlatterGestureWithoutWatchResolvesToMotionPresent() {
+        let events = babyScratchMovementEvents
+        XCTAssertFalse(events.isEmpty, "fixture must decode real movement runs")
+
+        let evidence = CaptureMotionEvidenceResolver.resolve(
+            detectedNotation: snapshot(movementEvents: events),
+            watchCaptureLinked: false
+        )
+
+        XCTAssertTrue(evidence.motionPresent, "RANE platter movement is motion even with no Watch paired")
+        XCTAssertEqual(evidence.motionSources, [.platter])
+        XCTAssertTrue(evidence.platter.isGesture)
+        XCTAssertFalse(evidence.requiresLinkedWatchArtifact)
+    }
+
+    func testWatchMotionWithoutControllerStillResolvesToMotionPresent() {
+        let evidence = CaptureMotionEvidenceResolver.resolve(
+            detectedNotation: nil,
+            watchCaptureLinked: true
+        )
+
+        XCTAssertTrue(evidence.motionPresent)
+        XCTAssertEqual(evidence.motionSources, [.watch])
+        XCTAssertEqual(evidence.platter, .absent)
+        XCTAssertTrue(evidence.requiresLinkedWatchArtifact, "a Watch-only claim must still be backed by a watch artifact")
+    }
+
+    func testNoWatchAndNoControllerMovementResolvesToMotionMissing() {
+        let evidence = CaptureMotionEvidenceResolver.resolve(
+            detectedNotation: snapshot(movementEvents: []),
+            watchCaptureLinked: false
+        )
+
+        XCTAssertFalse(evidence.motionPresent)
+        XCTAssertTrue(evidence.motionSources.isEmpty)
+        XCTAssertEqual(evidence.platter, .absent)
+    }
+
+    func testBothSourcesReportBothWithoutDuplication() {
+        let evidence = CaptureMotionEvidenceResolver.resolve(
+            detectedNotation: snapshot(movementEvents: babyScratchMovementEvents),
+            watchCaptureLinked: true
+        )
+
+        XCTAssertEqual(evidence.motionSources, [.platter, .watch])
+        XCTAssertFalse(evidence.requiresLinkedWatchArtifact, "platter evidence stands on its own")
+    }
+
+    // MARK: Steady motor rotation is not a gesture
+
+    func testSteadyMotorRotationAloneIsNotAScratchGesture() {
+        // A released, powered 33 1/3 RPM platter: a long forward-only CC6
+        // stream with no reversal anywhere in it.
+        let freeRunning = platterRun(from: 0, count: 400, startingAt: 0.0, step: 1, interval: 0.0005)
+        let events = movementEvents(freeRunning)
+        XCTAssertFalse(events.isEmpty, "the decoder should still see forward runs")
+        XCTAssertTrue(events.allSatisfy { $0.direction == "forward" })
+
+        let evidence = CaptureMotionEvidenceResolver.resolve(
+            detectedNotation: snapshot(movementEvents: events),
+            watchCaptureLinked: false
+        )
+
+        XCTAssertFalse(evidence.motionPresent, "motor rotation alone must never count as a scratch gesture")
+        XCTAssertEqual(evidence.motionSources, [])
+        if case .steadyRotationOnly = evidence.platter {
+            // Expected: movement was seen, but classified as rotation only.
+        } else {
+            XCTFail("forward-only travel must classify as steadyRotationOnly, got \(evidence.platter)")
+        }
+    }
+
+    func testOneReversalPromotesRotationToGesture() {
+        // Identical free-running prefix, plus a single genuine pull-back.
+        let freeRunning = platterRun(from: 0, count: 400, startingAt: 0.0, step: 1, interval: 0.0005)
+        let pullBack = platterRun(from: 60, count: 30, startingAt: 0.25, step: -1)
+        let evidence = CaptureMotionEvidenceResolver.resolve(
+            detectedNotation: snapshot(movementEvents: movementEvents(freeRunning + pullBack)),
+            watchCaptureLinked: false
+        )
+
+        XCTAssertTrue(evidence.motionPresent)
+        XCTAssertEqual(evidence.motionSources, [.platter])
+    }
+
+    // MARK: Fader must not substitute for platter movement
+
+    func testFaderEventsAloneDoNotEstablishMotionPresence() {
+        let evidence = CaptureMotionEvidenceResolver.resolve(
+            detectedNotation: snapshot(
+                movementEvents: [],
+                faderEvents: [faderEvent(at: 0.2), faderEvent(at: 0.6), faderEvent(at: 1.1)]
+            ),
+            watchCaptureLinked: false
+        )
+
+        XCTAssertEqual(evidence.faderEventCount, 3, "fader evidence is still recorded")
+        XCTAssertFalse(evidence.motionPresent, "a cut is not platter movement")
+        XCTAssertTrue(evidence.motionSources.isEmpty)
+    }
+
+    // MARK: DVS stays truthful until a real pipeline exists
+
+    func testDVSIsReportedUnsupportedAndNeverContributesPresence() {
+        let evidence = CaptureMotionEvidenceResolver.resolve(
+            detectedNotation: snapshot(movementEvents: []),
+            watchCaptureLinked: false
+        )
+
+        XCTAssertEqual(evidence.dvs, .unsupported)
+        XCTAssertFalse(evidence.motionSources.contains(.dvs))
+    }
+
+    // MARK: Export validation contract
+
+    func testControllerBackedTakeDoesNotRequireAWatchArtifact() {
+        let take = Self.exportTake(motionPresent: true, motionSources: [.platter])
+
+        XCTAssertFalse(take.claimsWatchBackedMotion, "a platter-backed take must not demand a watch file")
+        XCTAssertFalse(take.claimsMotionWithoutAnySource)
+    }
+
+    func testWatchBackedTakeStillRequiresAWatchArtifact() {
+        let take = Self.exportTake(motionPresent: true, motionSources: [.watch])
+
+        XCTAssertTrue(take.claimsWatchBackedMotion)
+    }
+
+    func testLegacyTakeWithoutSourcesKeepsWatchOnlyValidation() {
+        // `motionSources: nil` means a caller predating source-aware
+        // resolution; existing fixtures must validate exactly as before.
+        let take = Self.exportTake(motionPresent: true, motionSources: nil)
+
+        XCTAssertTrue(take.claimsWatchBackedMotion)
+        XCTAssertFalse(take.claimsMotionWithoutAnySource)
+    }
+
+    func testMotionClaimWithNoSourceIsAContradiction() {
+        let take = Self.exportTake(motionPresent: true, motionSources: [])
+
+        XCTAssertTrue(take.claimsMotionWithoutAnySource)
+    }
+
+    func testTakeWithoutMotionNeverRequiresAWatchArtifact() {
+        let take = Self.exportTake(motionPresent: false, motionSources: [])
+
+        XCTAssertFalse(take.claimsWatchBackedMotion)
+        XCTAssertFalse(take.claimsMotionWithoutAnySource)
+    }
+
+    private static func exportTake(
+        motionPresent: Bool,
+        motionSources: [CaptureMotionSource]?
+    ) -> SessionExportTake {
+        SessionExportTake(
+            takeID: "take-002",
+            takeNumber: 2,
+            bpm: 79,
+            mediaURL: URL(fileURLWithPath: "/tmp/scratchlab-take-002.mov"),
+            audioArtifactURL: URL(fileURLWithPath: "/tmp/scratchlab-take-002.wav"),
+            sidecarURL: URL(fileURLWithPath: "/tmp/scratchlab-take-002.json"),
+            watchCaptureSession: nil,
+            drillName: "Baby Scratch",
+            duration: 8.4,
+            quality: nil,
+            comboTagged: false,
+            audioPresent: true,
+            motionPresent: motionPresent,
+            syncStatus: nil,
+            recordingStatus: "completed",
+            verbalSlateUsed: false,
+            syncClapUsed: false,
+            note: nil,
+            captureTiming: nil,
+            motionSources: motionSources
+        )
     }
 }

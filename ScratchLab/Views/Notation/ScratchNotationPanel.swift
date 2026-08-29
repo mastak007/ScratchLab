@@ -5,8 +5,9 @@ import SwiftUI
 // node 148:123; three modes Target / Live / Review; presentation Standard /
 // Compact).
 //
-// This view owns presentation ONLY — the mode header, the lane label, the card
-// chrome, and which `ScratchNotationPanelPresentation` size is shown. It
+// This view owns presentation ONLY — the mode header, the lane label, the
+// transparent spacing envelope, and which `ScratchNotationPanelPresentation`
+// size is shown. It
 // contributes no notation geometry or drawing of its own: the lane itself is
 // `ScratchPhraseChartView`, the single renderer both platforms already compile
 // against (`ScratchStrokeGeometry` → `ScratchMotionRenderer`, turnaround
@@ -98,13 +99,11 @@ struct ScratchNotationPanel: View {
         }
     }
 
-    /// Distinct lane canvases — target (`#101013`) and performance (`#0E131B`)
-    /// never blend into one surface.
+    /// Figma-aligned notation is drawn without a backing card/canvas. Target
+    /// and performance remain distinct through their trace tokens and labels,
+    /// not through opaque rectangles that obscure live camera context.
     private var laneBackground: Color {
-        switch lane {
-        case .target:      return ScratchLabDesign.Notation.targetCanvas
-        case .performance: return ScratchLabDesign.Notation.performanceCanvas
-        }
+        .clear
     }
 
     // Figma specifies a 72pt inner-lane height for Compact, but that mock
@@ -119,10 +118,6 @@ struct ScratchNotationPanel: View {
     /// `nil` falls back to the Standard/Compact heights.
     var canvasHeightOverride: CGFloat? = nil
     private var canvasHeight: CGFloat { canvasHeightOverride ?? (isCompact ? 96 : 118) }
-
-    private var cornerRadius: CGFloat {
-        isCompact ? ScratchLabDesign.Card.compactCornerRadius : ScratchLabDesign.Card.cornerRadius
-    }
 
     private var cardPadding: CGFloat {
         isCompact ? ScratchLabDesign.Card.compactPadding : ScratchLabDesign.Card.padding
@@ -163,14 +158,6 @@ struct ScratchNotationPanel: View {
             .clipShape(RoundedRectangle(cornerRadius: ScratchLabDesign.Card.compactCornerRadius, style: .continuous))
         }
         .padding(cardPadding)
-        .background(
-            ScratchLabDesign.Surface.card,
-            in: RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
-        )
-        .overlay {
-            RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
-                .stroke(ScratchLabDesign.Surface.divider, lineWidth: 1)
-        }
         .accessibilityElement(children: .combine)
         .accessibilityLabel(Text(accessibilitySummary))
         .accessibilityHint(Text("Canonical scratch notation: platter lane above the fader lane, with one playhead"))

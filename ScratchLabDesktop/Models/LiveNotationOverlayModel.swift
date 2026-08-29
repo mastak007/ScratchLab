@@ -275,11 +275,9 @@ struct LiveNotationOverlayModel: Equatable {
     /// Build a `.captured`-mode model from an authored `ScratchNotation`
     /// with **gap-compressed timing and duration-derived amplitude**.
     ///
-    /// The full extracted stroke resource spans ~42.4 s but includes
-    /// ~15 s of instructional hold gaps between the four Baby Scratch
-    /// phrases. This factory collapses those gaps so the active scratch
-    /// timeline (~26–27 s) fills the stage overlay display width without
-    /// the cursor scanning through 5-second blank stretches.
+    /// Extracted stroke resources may contain long instructional gaps. This
+    /// factory collapses those gaps so active scratching fills the stage
+    /// overlay display width without the cursor scanning through blank spans.
     ///
     /// - Amplitude: derived from stroke duration, normalized against the
     ///   longest stroke, with a 0.15 floor.

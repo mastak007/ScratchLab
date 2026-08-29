@@ -13,6 +13,10 @@ enum QuickStartSettings {
     static let currentVersion = 1
 }
 
+enum MIDISelectionSettings {
+    static let selectedSourceIDKey = "selectedMIDISourceID"
+}
+
 @main
 struct ScratchLabApp: App {
     #if canImport(UIKit)
@@ -21,8 +25,28 @@ struct ScratchLabApp: App {
 
     var body: some Scene {
         WindowGroup {
-            RootContainerView()
+            AppLaunchContainerView()
                 .preferredColorScheme(.dark)
+        }
+    }
+}
+
+/// Keeps first paint independent from the app's audio, MIDI, camera-relay,
+/// watch, and upload services. Those objects are intentionally constructed
+/// only after the lightweight SwiftUI splash has rendered and completed.
+private struct AppLaunchContainerView: View {
+    @State private var showSplash = true
+
+    var body: some View {
+        ZStack {
+            ScratchLabDesign.Surface.applicationBackground
+                .ignoresSafeArea()
+
+            if showSplash {
+                SplashView(showSplash: $showSplash)
+            } else {
+                RootContainerView()
+            }
         }
     }
 }
@@ -42,6 +66,7 @@ private struct RootContainerView: View {
     @StateObject private var watchMotionCaptureStore = WatchMotionCaptureStore()
     @StateObject private var sessionUploadManager = SessionUploadManager()
     @AppStorage("localNetworkRationaleAccepted") private var localNetworkRationaleAccepted = false
+    @AppStorage(MIDISelectionSettings.selectedSourceIDKey) private var selectedMIDISourceID = ""
 
     init() {
         let transportState = TransportState()
@@ -82,6 +107,9 @@ private struct RootContainerView: View {
             .onChange(of: midiManager.sources) { _, _ in
                 configureMIDILearnDevice()
             }
+            .onChange(of: selectedMIDISourceID) { _, _ in
+                configureMIDILearnDevice()
+            }
             .onChange(of: companionRelayBroadcaster.connectedPeerNames) { _, peers in
                 guard !peers.isEmpty else { return }
                 syncWatchStateWithMac()
@@ -99,6 +127,9 @@ private struct RootContainerView: View {
     }
 
     private func configureMIDILearn() {
+        midiLearnCoordinator.onMappingChanged = { [weak midiControllerDispatcher] deviceID in
+            midiControllerDispatcher?.updateMapping(deviceIdentifier: deviceID)
+        }
         midiManager.setPlatterAudioMessageHandler { [weak midiControllerDispatcher] message in
             midiControllerDispatcher?.receivePlatterAudioMessage(message)
         }
@@ -110,12 +141,25 @@ private struct RootContainerView: View {
     }
 
     private func configureMIDILearnDevice() {
-        guard midiManager.sources.count == 1, let source = midiManager.sources.first else {
+        let persistedSource = midiManager.sources.first(where: { $0.id == selectedMIDISourceID })
+        let source = persistedSource ?? (selectedMIDISourceID.isEmpty && midiManager.sources.count == 1
+            ? midiManager.sources.first
+            : nil)
+
+        guard let source else {
             midiLearnCoordinator.clearDeviceSelection()
             midiControllerDispatcher.updateMapping(deviceIdentifier: nil)
             return
         }
+
+        if selectedMIDISourceID != source.id {
+            selectedMIDISourceID = source.id
+        }
         midiLearnCoordinator.selectDevice(id: source.id, name: source.name)
+        if RaneOneMKIIVerifiedLearnedMapping.matches(deviceName: source.name),
+           !RaneOneMKIIVerifiedLearnedMapping.isComplete(midiLearnCoordinator.currentMapping) {
+            midiLearnCoordinator.applyVerifiedRaneOneMKIIMapping()
+        }
         midiControllerDispatcher.updateMapping(deviceIdentifier: source.id)
     }
 
@@ -210,8 +254,6 @@ final class ScratchLabAppDelegate: NSObject, UIApplicationDelegate {
 
 // MARK: - Content View (Root Navigation)
 struct ContentView: View {
-    @EnvironmentObject var gameState: GameState
-    @State private var showSplash = true
     @State private var showingQuickStart = false
     @AppStorage(QuickStartSettings.hasSeenKey) private var hasSeenQuickStart = false
     @AppStorage(QuickStartSettings.versionKey) private var quickStartVersion = 0
@@ -221,21 +263,12 @@ struct ContentView: View {
             ScratchLabDesign.Surface.applicationBackground
                 .ignoresSafeArea()
 
-            if showSplash {
-                SplashView(showSplash: $showSplash)
-            } else {
-                NavigationStack {
-                    MainMenuView()
-                }
+            NavigationStack {
+                MainMenuView()
             }
         }
         .onAppear {
             presentQuickStartIfNeeded()
-        }
-        .onChange(of: showSplash) { _, isShowingSplash in
-            if !isShowingSplash {
-                presentQuickStartIfNeeded()
-            }
         }
         .fullScreenCover(isPresented: $showingQuickStart) {
             QuickStartView(onFinish: completeQuickStart)
@@ -248,7 +281,7 @@ struct ContentView: View {
     }
 
     private func presentQuickStartIfNeeded() {
-        guard !showSplash, needsQuickStart else { return }
+        guard needsQuickStart else { return }
         showingQuickStart = true
     }
 
@@ -438,13 +471,13 @@ struct QuickStartView: View {
                     .tabViewStyle(.page(indexDisplayMode: .never))
 
                     Button(action: advanceOrFinish) {
-                        Text(currentPage == pages.count - 1 ? "Start Session" : "Next")
+                        Text(currentPage == pages.count - 1 ? "Go to ScratchLab" : "Next")
                     }
                     .scratchLabPrimaryButton(fillsWidth: true)
                     .frame(maxWidth: 560)
                     .padding(.horizontal, ScratchLabDesign.Spacing.xxl)
                     .padding(.bottom, ScratchLabDesign.Spacing.xxl)
-                    .accessibilityLabel(currentPage == pages.count - 1 ? "Start Session" : "Next quick start page")
+                    .accessibilityLabel(currentPage == pages.count - 1 ? "Go to ScratchLab" : "Next quick start page")
                 }
                 .frame(width: geometry.size.width, height: geometry.size.height)
             }
@@ -495,50 +528,76 @@ private struct QuickStartProgressView: View {
 private struct QuickStartPageView: View {
     let page: QuickStartPage
 
-    @Environment(\.horizontalSizeClass) private var horizontalSizeClass
+    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
 
     var body: some View {
-        ScrollView {
-            Group {
-                if horizontalSizeClass == .regular {
-                    HStack(alignment: .center, spacing: ScratchLabDesign.Spacing.xxxl) {
-                        introduction
-                            .frame(maxWidth: 260)
+        GeometryReader { geometry in
+            let isLandscape = geometry.size.width > geometry.size.height
+            let usesWidePortraitLayout = !isLandscape && geometry.size.width >= 700
 
-                        instructions
-                            .frame(maxWidth: 440)
-                    }
+            Group {
+                if isLandscape && !dynamicTypeSize.isAccessibilitySize {
+                    landscapeContent
                 } else {
-                    VStack(spacing: ScratchLabDesign.Spacing.xxl) {
-                        introduction
-                        instructions
+                    ScrollView(showsIndicators: false) {
+                        if isLandscape || usesWidePortraitLayout {
+                            HStack(alignment: .center, spacing: ScratchLabDesign.Spacing.xxxl) {
+                                introduction(isCompact: isLandscape)
+                                    .frame(maxWidth: isLandscape ? 220 : 260)
+
+                                instructions(isCompact: isLandscape)
+                                    .frame(maxWidth: isLandscape ? 520 : 440)
+                            }
+                            .frame(maxWidth: 800)
+                            .frame(maxWidth: .infinity, minHeight: isLandscape ? 180 : 360)
+                            .padding(.vertical, isLandscape ? ScratchLabDesign.Spacing.sm : ScratchLabDesign.Spacing.xl)
+                        } else {
+                            VStack(spacing: ScratchLabDesign.Spacing.xxl) {
+                                introduction(isCompact: false)
+                                instructions(isCompact: false)
+                            }
+                            .frame(maxWidth: 760)
+                            .frame(maxWidth: .infinity, minHeight: 360)
+                            .padding(.vertical, ScratchLabDesign.Spacing.xl)
+                        }
                     }
                 }
             }
-            .frame(maxWidth: 760)
-            .frame(maxWidth: .infinity, minHeight: 360)
-            .padding(.vertical, ScratchLabDesign.Spacing.xl)
+            .frame(width: geometry.size.width, height: geometry.size.height)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 
-    private var introduction: some View {
-        VStack(spacing: ScratchLabDesign.Spacing.lg) {
+    private var landscapeContent: some View {
+        HStack(alignment: .center, spacing: ScratchLabDesign.Spacing.xxxl) {
+            introduction(isCompact: true)
+                .frame(maxWidth: 220)
+
+            instructions(isCompact: true)
+                .frame(maxWidth: 520)
+        }
+        .frame(maxWidth: 800)
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .padding(.vertical, ScratchLabDesign.Spacing.sm)
+    }
+
+    private func introduction(isCompact: Bool) -> some View {
+        VStack(spacing: isCompact ? ScratchLabDesign.Spacing.md : ScratchLabDesign.Spacing.lg) {
             Image(systemName: page.icon)
-                .font(.system(size: 36, weight: .semibold))
+                .font(.system(size: isCompact ? 26 : 36, weight: .semibold))
                 .foregroundStyle(ScratchLabDesign.Sem.accent)
-                .frame(width: 72, height: 72)
+                .frame(width: isCompact ? 52 : 72, height: isCompact ? 52 : 72)
                 .background(
                     ScratchLabDesign.Sem.accent.opacity(0.12),
                     in: RoundedRectangle(
-                        cornerRadius: ScratchLabDesign.Radius.hero,
+                        cornerRadius: isCompact ? ScratchLabDesign.Radius.card : ScratchLabDesign.Radius.hero,
                         style: .continuous
                     )
                 )
                 .accessibilityHidden(true)
 
             Text(page.title)
-                .font(ScratchLabDesign.Typo.title1)
+                .font(isCompact ? ScratchLabDesign.Typo.title2 : ScratchLabDesign.Typo.title1)
                 .foregroundStyle(ScratchLabDesign.Sem.textPrimary)
                 .multilineTextAlignment(.center)
                 .fixedSize(horizontal: false, vertical: true)
@@ -547,8 +606,8 @@ private struct QuickStartPageView: View {
         .frame(maxWidth: .infinity)
     }
 
-    private var instructions: some View {
-        VStack(spacing: ScratchLabDesign.Spacing.lg) {
+    private func instructions(isCompact: Bool) -> some View {
+        VStack(spacing: isCompact ? ScratchLabDesign.Spacing.sm : ScratchLabDesign.Spacing.lg) {
             ForEach(page.lines, id: \.self) { line in
                 HStack(alignment: .top, spacing: ScratchLabDesign.Spacing.md) {
                     Circle()
@@ -567,7 +626,22 @@ private struct QuickStartPageView: View {
                 }
             }
         }
-        .scratchLabCard(.standard)
+        .padding(isCompact ? ScratchLabDesign.Card.compactPadding : ScratchLabDesign.Card.padding)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(
+            ScratchLabDesign.Surface.card,
+            in: RoundedRectangle(
+                cornerRadius: isCompact ? ScratchLabDesign.Card.compactCornerRadius : ScratchLabDesign.Card.cornerRadius,
+                style: .continuous
+            )
+        )
+        .overlay {
+            RoundedRectangle(
+                cornerRadius: isCompact ? ScratchLabDesign.Card.compactCornerRadius : ScratchLabDesign.Card.cornerRadius,
+                style: .continuous
+            )
+            .stroke(Color.primary.opacity(0.06), lineWidth: 1)
+        }
     }
 }
 

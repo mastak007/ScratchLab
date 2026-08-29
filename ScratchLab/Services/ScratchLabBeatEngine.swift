@@ -9,6 +9,11 @@ protocol ClickTrackTimingEngine: AnyObject {
         onRecordingStart: (() -> Void)?
     ) throws -> ClickTrackStartMetadata
     func stop()
+    func setOutputGain(_ normalizedGain: Double)
+}
+
+extension ClickTrackTimingEngine {
+    func setOutputGain(_ normalizedGain: Double) {}
 }
 
 extension ClickTrackEngine: ClickTrackTimingEngine {}
@@ -240,6 +245,13 @@ final class ScratchLabBeatEngine: ObservableObject {
         if audioEngine.isRunning {
             audioEngine.stop()
         }
+    }
+
+    func setOutputGain(_ normalizedGain: Double) {
+        let finiteGain = normalizedGain.isFinite ? normalizedGain : 0
+        let clampedGain = min(max(finiteGain, 0), 1)
+        playerNode.volume = Float(clampedGain)
+        clickTrackEngine.setOutputGain(clampedGain)
     }
 
     static func renderedTimingBuffer(

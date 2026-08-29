@@ -23,10 +23,12 @@ struct WatchCaptureView: View {
 
                 Button(action: toggleCapture) {
                     VStack(spacing: 6) {
-                        Image(systemName: recorder.isRecording ? "stop.fill" : "record.circle.fill")
+                        Image(systemName: recorder.isPhoneCaptureCommandPending
+                            ? "hourglass"
+                            : (recorder.isRecording ? "stop.fill" : "record.circle.fill"))
                             .font(.system(size: 30, weight: .bold))
 
-                        Text(recorder.isRecording ? "Stop Take" : "Start Take")
+                        Text(captureButtonTitle)
                             .font(.headline)
                     }
                     .frame(maxWidth: .infinity)
@@ -36,7 +38,8 @@ struct WatchCaptureView: View {
                     .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
                 }
                 .buttonStyle(.plain)
-                .accessibilityLabel(recorder.isRecording ? "Stop Take, recording in progress" : "Start Take")
+                .disabled(recorder.isPhoneCaptureCommandPending || !canSendCaptureCommand)
+                .accessibilityLabel(captureButtonAccessibilityLabel)
 
                 VStack(alignment: .leading, spacing: 8) {
                     infoRow(label: "Elapsed", value: recorder.elapsedDescription, tone: .neutral)
@@ -54,11 +57,11 @@ struct WatchCaptureView: View {
                 }
                 .font(.caption2)
 
-                Text("Keep the watch app open during recording.")
+                Text(watchInstruction)
                     .font(.caption2)
                     .foregroundStyle(ScratchLabCoreColor.textTertiary)
                     .padding(.top, 2)
-                    .accessibilityLabel("Keep the watch app open during recording.")
+                    .accessibilityLabel(watchInstruction)
             }
             .padding(14)
         }
@@ -114,11 +117,41 @@ struct WatchCaptureView: View {
     }
 
     private func toggleCapture() {
-        if recorder.isRecording {
-            recorder.stopCapture()
-        } else {
-            recorder.startCapture()
+        recorder.requestPairedPhoneCapture(recorder.isRecording ? .stop : .start)
+    }
+
+    private var captureButtonTitle: String {
+        guard recorder.isPhoneCaptureCommandPending else {
+            if !canSendCaptureCommand {
+                return "Open iPhone Capture"
+            }
+            return recorder.isRecording ? "Stop Take" : "Start Take"
         }
+        return recorder.isRecording ? "Stopping…" : "Starting…"
+    }
+
+    /// Pairing alone is not enough for an immediate camera command. Starting
+    /// is offered only while the foreground iPhone Capture screen is reachable;
+    /// stopping remains available so an already-running local Watch take can
+    /// still be ended safely if the live connection drops.
+    private var canSendCaptureCommand: Bool {
+        recorder.isRecording || recorder.isPhoneReachable
+    }
+
+    private var captureButtonAccessibilityLabel: String {
+        if recorder.isRecording {
+            return "Stop Take, recording in progress"
+        }
+        if !recorder.isPhoneReachable {
+            return "Open Capture on iPhone and wait for Transfer Connected"
+        }
+        return "Start Take"
+    }
+
+    private var watchInstruction: String {
+        recorder.isPhoneReachable
+            ? "Keep the watch app open during recording."
+            : "Open Capture on iPhone. Start Take becomes available when Transfer says Connected."
     }
 }
 

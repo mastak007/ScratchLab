@@ -1,5 +1,133 @@
 # AI Handoff
 
+## 2026-08-29 — Capture-integrity Slice A: shared capture-evidence model (uncommitted; current)
+
+Karl's ten-requirement capture-integrity prompt (physical iPhone take-002: live notation moving while the HUD read `MOTION Motion Missing`, and Review showing `Ready to keep` + `Motion pending` + `Motion Missing` + `Fader: No movement` at once) was classified as roughly eight architectural slices rather than one batch, decomposed into A–H at the top of `TASKS.md`, and Karl selected **Slice A only**. Nothing else in that prompt has been implemented.
+
+**Root cause, verified in code.** Motion presence was derived solely from a linked Apple Watch artifact at three sites: `CompanionCameraView.handleFinishedRecording`, that file's `makeSessionExportPackage` take builder, and `SessionExportCoordinator`'s recovery builder. The take's real controller evidence was already decoded by `iOSMIDIManager.detectedNotationSnapshot()` and persisted into the sidecar four lines above the first check, then ignored by all three.
+
+**Second root cause found during implementation.** Two export gates would have *rejected* the newly-truthful takes: `packageValidationIssues` flagged "claims watch motion, but no linked watch artifact was supplied", and the canonical-context builder hard-`throw`s `invalidSessionMetadata` on the same condition. Both are now source-aware. Do not collapse `claimsWatchBackedMotion` / `claimsMotionWithoutAnySource` back into a bare `motionPresent == true` test.
+
+**What is in place.** A domain-only `CaptureMotionEvidence` (platter / fader count / watch / DVS) plus `CaptureMotionEvidenceResolver` in `CaptureCore`, carrying no user-facing strings by design — presentation is Slice B. Gesture-vs-motor discrimination is structural (a decoded reversal), reusing the existing decoder noise gates rather than adding a threshold. Fader events never establish platter motion. DVS is `.unsupported` because iOS capture has no timecode feed at finalization. Live export and recovery both resolve from the same persisted `sidecar.detectedNotation`, so they cannot disagree. `SessionExportTake.motionSources` is additive and optional, `nil` preserves legacy Watch-only validation, and `SessionExportTake` is not a serialized type — there is **no on-disk export-schema change**.
+
+**Verification.** 13 new `CaptureMotionEvidenceTests` passed twice; `ControllerPlatterDecoderTests` 14/14, `CaptureRecoveryPhase2CoreTests` 58/58, `ScratchLabNotationAndExportTests` 29/29, `Take002ControllerRoundTripTests` 3 passed/1 skipped; isolated macOS build, macOS `build-for-testing`, and generic iOS Simulator build all green; fixtures 47/47; `git diff --check` clean. `scripts/build.sh all` was run once and exited on the pre-existing dirty-WIP baseline only (four documented UI-layout failures, the documented `testRaneOneMkiiDebugPresetHasSetupNoteOtherPresetsDoNot`, the Coach-demo/reference-audio resource suites from deleted WIP resources, and four `ScratchSamplePlaybackControllerTests` DVS/wrap tests from the dirty renderer WIP). That attribution was proven, not assumed: the missing `chirpflare_noBeat.wav` was confirmed absent from the built bundle, and intersecting the failing test names against every test referencing a Slice A symbol produced the empty set.
+
+**Still true and unfixed** (do not report these as done): the hardcoded `"Ready to keep"` literal and the resolver's two-strings-for-one-false-input shape survive until Slice B, so a genuinely motionless take can still show contradictory labels; crossfader capture still requires a learned mapping, so `Fader: No movement` is unchanged until Slice C; notation coordinate drift, audio ownership, finalization bounding, export discoverability, clipping/health, and landscape layout are all untouched.
+
+**Decision recorded.** Karl chose an explicit audio-ownership mode (external Serato silent / standalone local AHHH retained) rather than deleting local AHHH. This supersedes the "restore local AHHH" gate below without erasing it — keep the existing Load AHHH controls and add the mode in Slice G.
+
+**Next action is physical, not code:** one short RANE take with no Watch paired, confirming Review reports motion present and the export validates. Nothing was committed or pushed.
+
+## 2026-08-29 — latest physical iOS evidence fixes and audible macOS AHHH test (uncommitted; supersedes output-13/14 notes below)
+
+- Physical RANE evidence disproved the earlier ScratchLab-output 13/14 assumption: iOS now sends its right-deck stereo to physical outputs 3/4. DVS still reads physical inputs 3/4; input and output channel spaces are independent. Do not restore iOS output 13/14 unless new hardware evidence proves it.
+- iOS take ownership is now complete for this path: raw take-relative crossfader MIDI, canonical fader transitions, detected notation, and Watch command/reply evidence are persisted. The scratch WAV is renamed to the exact movie/sidecar basename before Review/export, so recovery no longer treats it as an unrelated UUID stem.
+- Watch Start is truthful: it is disabled unless the iPhone is live-reachable. The iPhone Capture/System Check screen must be foreground and ready and the Watch must say Transfer Connected; paired alone cannot start the camera. Stop remains reachable for an active take.
+- macOS notation can exist without audio because it is driven by motion/timing data. `Apply mapping + load AHHH` deliberately arms `dvs_ahhh` silently. A separate repeatable `Test AHHH audio` button now plays a short excerpt from that exact bundled sample through the macOS system output and leaves it armed for right-platter CC6 movement.
+- Focused iOS evidence/route/Watch/recovery tests are green twice, fixtures pass 47/47, and `PlatterTestSampleLoadTests` passes 2/2 twice. Signed iPhone/embedded-Watch and isolated macOS builds succeed. The current clean macOS build is open from `build/CodexProducts-macos-ahhh-final/Debug/ScratchLab.app` (PID 20154); its AHHH hash exactly matches source: `4c932a6fd6b26af317eaa7850ca8e11626c5a41e8d382561dcfac81e95949791`. A final broad-gate rerun passed fixtures 47/47, retained the known missing Coach Demo failures, and then lost the sandboxed runner/IDE helper connection before the next export test completed; do not treat that incomplete test as a new assertion regression. Nothing committed or pushed.
+
+## 2026-08-29 — AHHH waveform/playhead designed and implemented for iOS landscape (uncommitted)
+
+- Figma file `AgrnQXwRvkAKlORTQ2U25z` now contains reusable `SamplePositionWaveform` component set `457:3817` with Unloaded/Ready/Active states and exact `VirtualPlatter/ahhh.wav` envelope data. It has separate cue and live-playhead markers, START/MID/END labels, transparent presentation, and one audited placement in each of eight current iPhone/iPad landscape Practice/Capture states. Do not replace it with a decorative/fake waveform or opaque card.
+- Production reads the same real sample: `IOScratchPlaybackEngine` builds a 128-bin envelope and exposes the renderer's actual smoothed playhead; `IOScratchRenderer` publishes that position through atomics while preserving signed before-cue/past-end travel across its loop. `SamplePositionWaveformView` renders at 30 fps along the bottom of active landscape Practice and both Capture camera paths, with amber bounds warnings and no backing surface.
+- This view answers “where am I in the AHHH sample?” and shows bound overshoot. The existing target notation answers “how far should this exercise move?” Keep both; do not claim the waveform adds a separate performance score.
+- Focused coverage passed twice, fixtures passed 47/47, and iOS/macOS/watchOS builds succeeded. A fresh signed build with the embedded Watch companion is installed and launched on physical iPhone `K`. `scripts/build.sh all` still exits 65 on the established dirty-WIP deleted-resource/UI/MIDI/DVS/profile baseline after reaching 366 tests; the new waveform test is green. Physical RANE comparison of the cyan playhead with audible output remains. Nothing committed or pushed.
+
+## 2026-08-29 — complete Figma notation audit and current device integration state (uncommitted)
+
+- Figma file `AgrnQXwRvkAKlORTQ2U25z` is now the audited notation source. All 44 direct target/performance surfaces, five canonical variants, 17 instances, and the macOS overlay/preview set were checked. Result: zero structural failures, zero stale demo metadata, and zero notation/control overlaps.
+- Every teaching target uses the current BBB 79 BPM 32-movement/16-cycle demo. Performance traces are intentionally independent examples. Decorative turnaround/click-like squares are gone; the open-fader rail remains. Notation canvases are transparent, including Prototype A, iPhone Entry + Practice, iPhone/iPad live Practice/Capture, and macOS Copy. Mac Copy is taller rather than the prior flat dark strip.
+- Production matches the design rule through transparent `ScratchNotationPanel` / `ScratchMotionLane` surfaces and the taller unbacked macOS Copy overlay. iOS Save Take now completes from the matching recorder finalization callback, including Stop-during-start. Watch Start/Stop sends an authoritative phone capture command and waits for the phone reply. RANE ScratchLab playback uses physical outputs 13/14; DVS remains physical 3/4.
+- Focused tests pass 9/9; fixtures pass 47/47; isolated macOS and iOS Simulator/embedded-watch builds succeed. Current signed iOS source was installed/launched on iPhone `K`; current macOS source was built/launched. Direct Watch installation failed at the external Bluetooth pairing layer (CoreDevice 4000 / remote pairing 1035); the companion is embedded in the phone app and should sync once the Watch is reachable/unlocked.
+- `scripts/build.sh all` reached the broad 366-test macOS plan after fixtures, then exited 65 on existing dirty-WIP missing-resource/UI/profile/DVS/demo failures. Do not claim that broad baseline is green, and do not restore unrelated deleted assets. The slice-specific tests are green. Manual closure: save/export a short phone take, start/stop Capture from Watch, confirm RANE 13/14, and approve notation on physical phone/iPad/macOS. Nothing committed or pushed.
+
+## 2026-08-29 — iOS Save Take state/UI repaired and deployed to physical iPhone (uncommitted)
+
+- The reported “Saving Take” hang was a UI finalization defect, not lost capture media. Device inspection found a completed 10.4-second HEVC/AAC movie and matching completed JSON sidecar in `Documents/CompanionCaptures`; preserve those files.
+- `CompanionCameraView` now consumes matching broadcaster summaries, freezes elapsed time at the Save Take request, advances to Review before optional audio inspection, and bounds Saving with a stop retry/recovery watchdog. `CompanionCameraBroadcaster` clears stale summaries at start and no longer silently ignores an inactive-recorder stop.
+- Immersive iPhone/iPad landscape uses one safe-area-aware control row. The native toolbar is hidden only for that immersive layout; local back/settings controls, summary, Recheck/action, metrics, and notation now have non-overlapping reserved space.
+- Both normal `ahhh` and `dvs_ahhh` playback resolve to `VirtualPlatter/ahhh.wav`; this is important because the built app still contains a different legacy flattened `ahhh.wav`. The approved hash is `4c932a6fd6b26af317eaa7850ca8e11626c5a41e8d382561dcfac81e95949791`.
+- Signed iPhone/watch build succeeded, was installed, and launched on iPhone `K` (iPhone 16 Pro Max, iOS 27.0). Focused capture tests pass 3/3 and fixtures pass 47/47. The required broad script compiled and began tests, but the existing macOS test runner hung after starting `AutoCutVisualPlaybackTests`; it was interrupted after 92 seconds and no xcodebuild/xctest process was left running.
+- Manual closure: make one fresh physical take, press Save Take, confirm the timer freezes and the app immediately reaches Review, then Keep/Export. Nothing committed or pushed.
+
+## 2026-08-29 — current iPhone and macOS products built and launched (uncommitted)
+
+- A signed current-source iOS Debug build was installed and launched on physical iPhone `K` (iPhone 16 Pro Max, iOS 27.0), bundle `com.machelpnz.scratchlab`. Its packaged `VirtualPlatter/ahhh.wav` exactly matches the approved source SHA-256 `4c932a6fd6b26af317eaa7850ca8e11626c5a41e8d382561dcfac81e95949791`.
+- A fresh arm64 `ScratchLabDesktop` Debug product was built and launched from `build/CodexProducts-macos-launch/Debug/ScratchLab.app`. Its packaged BBB demo exactly matches source SHA-256 `220a2d74568b91d580ab5945ad77d9f0acc74a19d5e839dd2ae8e01c3dbee74f`; the process was alive after launch.
+- Both builds used isolated DerivedData/OBJROOT/SYMROOT paths, so Xcode's shared locked `build.db` was untouched. No database or `.priors` error recurred.
+- Remaining manual smoke: rotate the physical iPhone/iPad through active Practice/Capture, arm AHHH with Load/HC1 then move the right platter, and watch/listen to the macOS demo for subjective alignment. Nothing committed or pushed.
+
+## 2026-08-29 — iPhone/iPad live notation is full-screen; Advanced HC1 AHHH is functional (uncommitted)
+
+- Practice and both Capture camera paths now give the target/performance notation overlay the complete landscape safe workspace on iPhone and iPad. Do not reintroduce the previous 144–184-point height cap. Compact iPhone Home uses a minimum-width horizontal carousel and clears the tab bar; compact System Check details wrap.
+- Advanced MIDI is no longer a read-only mock. It observes `IOSMIDIManager`, `IOSMIDILearnCoordinator`, `IOSMIDIControllerDispatcher`, and `IOScratchPlaybackEngine`; the user can select/refresh a source, apply the verified RANE mapping, learn/relearn HC1, assign `dvs_ahhh`, and explicitly load AHHH.
+- HC1 dispatch intentionally calls the ungated `HotCueTriggerResolver.resolve(action:)`: Serato can own transport while ScratchLab listens to controller MIDI. A learned RANE HC1 automatically receives its default AHHH assignment. Sound is platter-driven—pressing Load/HC1 arms the sample, then right-platter movement produces audio.
+- Figma file `AgrnQXwRvkAKlORTQ2U25z` was updated first: iPhone live HUDs, Advanced frame `416:4202`, iPad Capture `360:71`, and active iPad Practice `281:969` with HUD `436:2421` now match the full-screen behavior.
+- Isolated generic iOS Simulator build succeeded with the embedded watch app; resolver tests passed 3/3; capture fixtures passed 47/47; `git diff --check` passed. Source-contract tests compile, but the sandboxed macOS host hung on project reads under `Downloads` and that run was interrupted. No iPad Simulator is installed, so final physical iPad landscape and RANE audio smoke remain.
+- Nothing committed or pushed. Preserve unrelated dirty WIP and keep using isolated build roots while Xcode is open.
+
+## 2026-08-29 — macOS Watch notation now follows the BBB demo audio; false click diamonds removed (uncommitted)
+
+- Root cause: Practice Watch used the old 4.700-second canonical template while playing the new 16.048-second BBB demo, then applied modulo timing. It also drew a decorative diamond at every platter reversal, colliding with the chart's real fader-transition symbol.
+- `MacAnalyzerView` now uses `ScratchNotation.babyScratchDemo` for Ready/Watch/Listen and uses the audio player's sampled time directly, clamped at the final movement through the two-second tail. Copy/scoring/review still use `ScratchNotation.babyScratch`.
+- `ScratchPhraseChartView` no longer draws decorative platter-turnaround diamonds. Direction remains encoded by path slope and chevrons; fader OPEN remains visible; a transition diamond is retained only for a real fader-state change.
+- Isolated macOS build/tests succeeded without touching Xcode's shared database: 11/11 Watch/live tests twice, 61/61 demo-notation tests, and 3/3 audio/motion/tail checks twice. `git diff --check` passed. Final manual eyes-and-ears playback approval remains.
+- The stale `.priors` file was removed earlier, and all Codex build/test work used separate DerivedData/OBJROOT/SYMROOT paths; the `ReadError 15` and locked `build.db` did not recur. Do not run concurrent CLI and Xcode builds against the same build root.
+- Nothing committed or pushed; preserve all unrelated dirty WIP.
+
+## 2026-08-29 — explicit iOS Load AHHH restored after Karl's follow-up (uncommitted)
+
+- Karl's later instruction supersedes the earlier Serato-listen-only/no-AHHH note below. Practice Controller Setup and Capture Hardware Setup now expose explicit `Load AHHH` actions with truthful status, and the verified Rane mapping owns local ScratchLab samples for this iOS test path.
+- Restored the correct platter-ready `ScratchLab/Resources/VirtualPlatter/ahhh.wav` (1.047415 seconds; Git blob `2895220755832dff90d940789533bc7111041fb6`), not the padded 4.466667-second `ScratchSamples/ahhh.wav`.
+- Existing sampleless Rane mappings are repaired without losing learned MIDI/calibration/custom sample IDs. iOS Simulator build passed; mapping tests 29/29 twice and the explicit-AHHH source contract passed twice.
+- Physical iPhone/iPad + Rane Hot Cue 1 smoke remains. Nothing committed or pushed.
+
+## 2026-08-29 — six missing Xcode binary resources restored; macOS/iOS builds green (uncommitted)
+
+- Restored the exact tracked versions of four `ScratchSamples` WAVs (`ah_yeah`, `ahhh`, `check_it_out`, `fresh`), `ScratchLabDesktop/AppIcon.icns`, and `Resources/Coach/Coach.usdz` from the intact `ScratchLab-fix-stable-ios-audio-session-activation` checkout. Every source Git blob matched the destination index blob, so no binary content or Xcode project configuration changed.
+- `ScratchLabDesktop` now builds/links on macOS and `ScratchLab` builds for the generic iOS Simulator. Capture fixtures passed 47/47. `scripts/build.sh` copied all six resources and linked before unrelated tests failed on other intentionally deleted WIP assets, including `chirpflare_noBeat.wav`; the long test run was then stopped. Preserve those unrelated deletions unless Karl explicitly expands scope.
+- Nothing committed or pushed.
+
+## 2026-08-29 — iOS adaptive views, BBB demo routing, cold-launch repair, and Serato-companion mapping COMPLETE (uncommitted)
+
+### Root causes and result
+- The new local Home/sidebar views existed but were unreachable; compact iOS omitted Home and used Capture/Review placeholders. They now route to the implemented Practice, Capture/Review, and Advanced flows, with a persistent sidebar on regular-width landscape iPad.
+- iOS Demo preferred the old 42-second reel. Baby Demo and Demo + My Motion now select the exact 16.048-second BBB `baby_noBeat.wav` + 32-stroke motion resource at fixed 79 BPM before any legacy fallback.
+- Static launch first named the full logo SVG and scaled it to fill; making it background-only then exposed a black-looking frame for the app's roughly 5–7-second cold initialization. It now uses a dedicated compact 240×240 launch logo, and `AppLaunchContainerView` renders the SwiftUI splash before constructing heavyweight root services.
+- Serato cannot run on iPhone. The supported architecture is Serato on Mac/PC feeding audio/MIDI to ScratchLab on iPhone/iPad. Production iOS no longer shows or silently invokes AHHH loading; verified and manually learned RANE pad mappings are listen-only and carry no local ScratchLab sample IDs. Older saved mappings are normalized on load by stripping only pad sample IDs while preserving their MIDI/calibration fields. DEBUG Virtual Platter retains its own standalone AHHH test.
+
+### Verification and remaining scope
+- iOS device and Simulator builds succeeded; watchOS embedded build succeeded; macOS built through focused tests. Capture fixtures passed 47/47. Mapping tests passed 29/29 twice; adaptive-route/no-AHHH contracts passed twice; BBB lane tests passed 11/11 twice. Final bundle audio/motion hashes match the sources, and built launch configuration contains `LaunchBackground` plus `ScratchLabLaunchLogo`. A fresh iPhone 17 Pro simulator showed the compact logo at 0.5 seconds and Home at 7.5 seconds. New launch contracts compiled; the normal macOS test host could not read source under `Downloads`, and an unsandboxed retry stopped earlier on the unrelated pre-existing deleted `Coach.usdz` resource.
+- `scripts/build.sh all`: 47/47 capture fixtures passed; desktop tests stopped on seven occurrences / six unique known dirty-WIP failures recorded in `DEV_LOG.md`; standalone builds completed target coverage.
+- Latest saved Figma node is deleted. Exact latest-frame parity needs a current node-specific Figma URL. NDI/breakout overlay and iOS timecode test-side-app work were not implemented.
+- Nothing committed or pushed. Preserve all unrelated dirty WIP.
+
+## 2026-08-29 — BBB 79 BPM take cleaned and installed as the Baby Scratch demo
+
+### Completed slice
+- Treated Karl's “CCC” as the latest supplied BBB archive (`session_2026_08_29_bbb_baby_scratch_79_bpm.zip`); no CCC archive was present.
+- `ScratchLab/Resources/CoachDemoAudio/baby_noBeat.wav` is now the dry BBB scratch-only performance: setup backward and two surplus cycles removed, 16 forward/backward cycles retained, +4 dB, two-second lead/tail, 48 kHz 16-bit stereo, 16.048313 s, SHA-256 `220a2d74568b91d580ab5945ad77d9f0acc74a19d5e839dd2ae8e01c3dbee74f`.
+- `ScratchLab/Resources/CoachDemoMotion/baby_scratch_strokes.json` now carries the matching 32-stroke live timeline, and `NotationVisualizerView` uses it, eliminating the old audio/76-stroke visualization mismatch. Runtime constants, developer manifest, and all affected test contracts were updated.
+- Focused demo timing/audio checks passed twice; `LiveNotationOverlayTests` passed 61/61; macOS/iOS simulator builds succeeded; iOS installed and launched on iPhone 17 simulator. See the top `DEV_LOG.md` entry for the final `scripts/build.sh` result.
+
+### Still open
+- Do a physical-device listening check before release. Capture-movement loss Phase 1/2 remains open and independent: a fresh hardware trace must exactly replay the live final count. Nothing was committed or pushed.
+
+## 2026-08-29 — Take 009 movement replay diagnosed; corrected trace needs one new hardware take
+
+### Current slice
+- Selected the first unchecked `TASKS.md` item: Capture-movement loss Phase 1/2. Replayed `session_2026_08_29_platter_baby_scratch_95_bpm.zip` before making any detection-threshold or sampling change.
+- Take 009 live diagnostics reported 48 final movements; exact offline replay produced 0. The first mismatch was the builder funnel: live 134 starts / 6 extensions versus replay 64 starts / 76 extensions.
+- Root cause is a DEBUG evidence-wiring defect: the live builder received angular `processed.position`, but the trace stored the smoothed image/display X as `builderPoint`; brief misses also recorded a display point when the live builder received nil. Take 009 is therefore not exactly reconstructable after export.
+- Corrected only the DEBUG trace wiring in `ScratchLabDesktop/Services/MacCaptureEngine.swift` and added an environment-gated real-hardware replay assertion in `ScratchLabDesktopTests/CaptureReliabilityPhase1Tests.swift`. No Release capture behavior, audio routing, thresholds, sampling, notation, schema, or Ableton Link integration changed.
+- `TASKS.md` remains unchecked. The next required action is one fresh hardware take from this build, then run the replay test using the exported `debug/take-N_movement_trace.json` and `debug/take-N_movement_diagnostics.json`. Only after exact replay equals live may the true capture-loss stage and any fix be selected.
+
+### Verification and repository state
+- `MovementTraceDiagnosticsTests`: 20 executable tests passed in each configured test-plan run; the external-data test skips when paths are absent. Old Take 009 fails deliberately at exact 0 vs live 48, proving its trace is unusable for exact replay.
+- `scripts/build.sh`: capture fixtures 47/47 and movement suites passed; the broad desktop plan exited 65 on the existing six UI/source-profile results documented in `DEV_LOG.md`. `git diff --check` is clean.
+- Worktree remains heavily dirty with user WIP. This slice touched only `MacCaptureEngine.swift`, `CaptureReliabilityPhase1Tests.swift`, `TASKS.md`, `DEV_LOG.md`, and these handoff files. Nothing staged, committed, or pushed.
+- Ableton Link recommendation: integrate shared Link tempo/phase as a future separately reviewed task, not as a claimed left-deck detector. Link has no deck identity; the operator must make Serato's left deck the Link/master reference. Canonical CXL recording should be scratch-only audio while the performer hears the beat in cue/headphones, with Link timing metadata and an optional separate beat-reference/evaluation stem.
+
 ## 2026-08-28 — MIDI Learn fixes + Rane ONE MKII operator docs COMPLETE; branch pushed — AWAITING PRODUCT-PRIORITY DECISION
 
 ### Repository state
@@ -3898,4 +4026,3 @@ inside a Copy Bundle Resources phase. Audit-only - do not modify the project.
 - Do not touch the dirty checkout at `/Users/karlwatson/Downloads/ScratchLab`.
 - Do not commit. Do not push.
 - No `Co-Authored-By` trailers.
-

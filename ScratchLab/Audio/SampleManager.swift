@@ -199,6 +199,14 @@ class SampleManager: ObservableObject {
 
     static func bundledDefaultSampleURL(for sample: ScratchSample, in resourceRoot: URL?) -> URL? {
         guard let resourceRoot else { return nil }
+        if sample.id == "ahhh" {
+            let approvedURL = resourceRoot
+                .appendingPathComponent("VirtualPlatter", isDirectory: true)
+                .appendingPathComponent("ahhh.wav")
+            if FileManager.default.fileExists(atPath: approvedURL.path) {
+                return approvedURL
+            }
+        }
         let url = resourceRoot.appendingPathComponent(sample.fileName)
         return FileManager.default.fileExists(atPath: url.path) ? url : nil
     }

@@ -257,10 +257,10 @@ final class MIDIPacketBoundsCrashFixTests: XCTestCase {
 
     // MARK: - Parser-level: stateless per-packet framing
 
-    private func decode(_ bytes: [UInt8]) -> [MacCaptureEngine.MIDIChannelMessageParser.Message] {
-        var messages: [MacCaptureEngine.MIDIChannelMessageParser.Message] = []
+    private func decode(_ bytes: [UInt8]) -> [MIDIChannelMessageParser.Message] {
+        var messages: [MIDIChannelMessageParser.Message] = []
         bytes.withUnsafeBytes { raw in
-            MacCaptureEngine.MIDIChannelMessageParser.parse(raw) { messages.append($0) }
+            MIDIChannelMessageParser.parse(raw) { messages.append($0) }
         }
         return messages
     }
@@ -347,5 +347,57 @@ final class MIDIPacketBoundsCrashFixTests: XCTestCase {
 
         XCTAssertEqual(messages.count, 2)
         XCTAssertEqual(messages.map(\.data2), [0x10, 0x11])
+    }
+
+    func testSupportedChannelMessagesConvertToExistingParsedModel() {
+        let messages = decode([
+            0x90, 0x24, 0x7F,
+            0xB1, 0x06, 0x40,
+            0xE2, 0x00, 0x40
+        ])
+        let parsed = messages.compactMap(\.parsedMessage)
+
+        XCTAssertEqual(parsed.count, 3)
+        XCTAssertEqual(parsed.map(\.messageType), [.noteOn, .controlChange, .pitchBend])
+        XCTAssertEqual(parsed.map(\.channel), [0, 1, 2])
+    }
+
+    func testTwoByteMessagesDoNotBecomeMisleadingParsedMessages() {
+        let messages = decode([0xC0, 0x05, 0xD1, 0x7F])
+
+        XCTAssertEqual(messages.count, 2)
+        XCTAssertTrue(messages.compactMap(\.parsedMessage).isEmpty)
+    }
+
+    func testMIDIReadinessRequiresDeviceAndMessageEvidence() {
+        XCTAssertEqual(
+            MIDIReadinessState.classify(
+                hasConnectedDevice: false,
+                hasReceivedValidMessage: false
+            ),
+            .unavailable
+        )
+        XCTAssertEqual(
+            MIDIReadinessState.classify(
+                hasConnectedDevice: true,
+                hasReceivedValidMessage: false
+            ),
+            .deviceConnected
+        )
+        XCTAssertEqual(
+            MIDIReadinessState.classify(
+                hasConnectedDevice: true,
+                hasReceivedValidMessage: true
+            ),
+            .receivingMessages
+        )
+        XCTAssertEqual(
+            MIDIReadinessState.classify(
+                hasConnectedDevice: false,
+                hasReceivedValidMessage: true
+            ),
+            .unavailable,
+            "message history cannot imply readiness after every device disconnects"
+        )
     }
 }

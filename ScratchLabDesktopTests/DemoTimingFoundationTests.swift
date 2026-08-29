@@ -562,18 +562,79 @@ struct LaneWiringTests {
         #expect(startBody.contains("configureDemoPlayback()"))
         #expect(startBody.contains("audioEngine.startAnalyzing(for: activeScratch)"))
         let demoBranch = try sliceBetween(startBody,
-            from: "if practiceAssistMode == .demo {", to: "} else {")
+            from: "if isDemoAudioMode {", to: "} else {")
         #expect(demoBranch.contains("demoPlayer.play()"))
         #expect(!demoBranch.contains("startAnalyzing"))
     }
 
-    @Test("A missing or invalid reel manifest falls back gracefully")
+    @Test("iOS Baby Demo selects the exact BBB audio and motion before the legacy reel")
+    func babyDemoUsesExactBBBReference() throws {
+        let source = try practiceSource()
+        let configuration = try sliceBetween(source,
+            from: "private func configureDemoPlayback()",
+            to: "private func loadDemoReelTimeline()")
+
+        #expect(configuration.contains("ScratchNotation.babyScratchDemo != nil"))
+        #expect(configuration.contains("demoPlayer.configure(with: coachInstruction)"))
+        #expect(configuration.contains("return"))
+        #expect(configuration.range(of: "demoPlayer.configure(with: coachInstruction)")!.lowerBound
+            < configuration.range(of: "loadDemoReelTimeline()")!.lowerBound)
+
+        let lane = try sliceBetween(source,
+            from: "private var activeLaneTargetNotation",
+            to: "private func notationLanePanel")
+        #expect(lane.contains("ScratchNotation.babyScratchDemo ?? targetNotation"))
+        #expect(lane.contains("ScratchLabDemoSessionBuilder.demoBPM"))
+    }
+
+    @Test("A future non-Baby reel can still fall back gracefully")
     func fallbackPathExists() throws {
         let source = try practiceSource()
         #expect(source.contains("demoReel = demoPlayer.isAudioAvailable ? reel : nil"))
         #expect(source.contains("demoPlayer.configure(with: coachInstruction)"))
-        // The demo fallback still drives a lane — from the demo audio.
-        #expect(source.contains("// Reel manifest missing/invalid"))
+        #expect(source.contains("PracticeReelTimeline.loadBundled"))
+    }
+
+    @Test("The static iOS launch screen uses the compact launch-only logo")
+    func launchScreenUsesCompactLogo() throws {
+        let plistURL = reelTestsRepoRoot().appendingPathComponent("ScratchLab/Info.plist")
+        let data = try Data(contentsOf: plistURL)
+        let root = try #require(
+            PropertyListSerialization.propertyList(from: data, format: nil) as? [String: Any]
+        )
+        let launch = try #require(root["UILaunchScreen"] as? [String: Any])
+
+        #expect(launch["UIColorName"] as? String == "LaunchBackground")
+        #expect(launch["UIImageName"] as? String == "ScratchLabLaunchLogo")
+
+        let logoURL = reelTestsRepoRoot().appendingPathComponent(
+            "ScratchLab/Assets.xcassets/ScratchLabLaunchLogo.imageset/ScratchLabLaunchLogo.svg"
+        )
+        let logo = try String(contentsOf: logoURL, encoding: .utf8)
+        #expect(logo.contains("width=\"240\" height=\"240\""))
+        #expect(logo.contains("viewBox=\"0 0 240 240\""))
+    }
+
+    @Test("The SwiftUI splash renders before heavyweight iOS services are constructed")
+    func swiftUISplashWrapsTheRootServiceContainer() throws {
+        let appURL = reelTestsRepoRoot().appendingPathComponent("ScratchLab/ScratchLabApp.swift")
+        let source = try String(contentsOf: appURL, encoding: .utf8)
+        let launchContainer = try sliceBetween(
+            source,
+            from: "private struct AppLaunchContainerView: View",
+            to: "private struct RootContainerView: View"
+        )
+        let contentView = try sliceBetween(
+            source,
+            from: "struct ContentView: View",
+            to: "// MARK: - Splash Screen"
+        )
+
+        #expect(source.contains("WindowGroup {\n            AppLaunchContainerView()"))
+        #expect(launchContainer.contains("if showSplash"))
+        #expect(launchContainer.contains("SplashView(showSplash: $showSplash)"))
+        #expect(launchContainer.contains("} else {\n                RootContainerView()"))
+        #expect(!contentView.contains("@State private var showSplash"))
     }
 
     @Test("Guided keeps its crossfader cue layer")

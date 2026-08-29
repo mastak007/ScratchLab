@@ -3,6 +3,7 @@ import AVFoundation
 import AppKit
 import ApplicationServices
 import Combine
+import CoreAudio
 import Network
 import OSLog
 import Darwin
@@ -580,6 +581,13 @@ struct MacAnalyzerView: View {
     }
 
     @AppStorage(MacWorkspaceRouting.workspaceTabStorageKey) private var workspaceTabRaw = WorkspaceTab.practice.rawValue
+#if DEBUG
+    /// Input-scope channel count of the currently-selected capture audio device.
+    /// Drives whether the Rane Channel-Map Diagnostic card is offered on the
+    /// Capture screen (only useful for multichannel interfaces). Refreshed on
+    /// appear and whenever the audio device selection or device list changes.
+    @State private var selectedAudioInputChannelCount = 0
+#endif
     @AppStorage("scratchlab.mac.stageLayout") private var stageLayoutRaw = StageLayout.desktopDeck.rawValue
     @AppStorage("scratchlab.mac.practiceDuration") private var practiceDurationRaw = PracticeDuration.fiveMinutes.rawValue
     @AppStorage("scratchlab.mac.liveInputEnabled") private var liveInputEnabled = false
@@ -600,17 +608,10 @@ struct MacAnalyzerView: View {
     @StateObject private var sessionExportCoordinator = SessionExportCoordinator()
     @StateObject private var routineSessionSetup = SessionSetupViewModel(surface: .macRoutine)
     @StateObject private var babyScratchDemo = BabyScratchDemoPlaybackCoordinator()
-    // Practice notation is authored against the reel manifest's audio file.
-    // Do not use the generic dry-demo default here: it is a different recording
-    // with a different duration and cannot stay aligned with baby_reel.json.
-    @StateObject private var demoModeController = ScratchLabDemoModeController(
-        audioFileName: PracticeReelTimeline.loadBundled(
-            named: PracticeReelTimeline.babyReelManifestName
-        )?.audioFile ?? ScratchLabDemoSessionBuilder.demoAudioFileName
-    )
-    /// Dedicated beat engine for Demo with Beat mode. Isolated from the
-    /// practice-beat engine so mode switches don't stomp each other.
-    @StateObject private var demoWithBeatEngine = ScratchLabBeatEngine()
+    // Practice demo playback is beatless. Its replacement recording will be
+    // captured and re-authored later; until then the UI shows the original
+    // deterministic Baby Scratch target rather than claiming an audio mapping.
+    @StateObject private var demoModeController = ScratchLabDemoModeController()
     @StateObject private var rawJSONInspector = RawJSONInspectorViewModel()
     /// WATCH → COPY → RESULT state for one deterministic, canonical-cycle
     /// scored attempt (`practiceScoredAttemptCard`). Independent of the
@@ -627,6 +628,13 @@ struct MacAnalyzerView: View {
     /// constructed fresh per take at record-start, discarded at stop.
     /// Fully decoupled from `completeRoutineFinalization`'s own pipeline.
     @State private var captureLiveNotationTracker: LivePerformedNotationTracker?
+    /// Presentation-only override used when the Ready card reopens the
+    /// existing session form. Capture readiness remains engine-derived.
+    @State private var isEditingCaptureSetup = false
+    /// Prevents duplicate Ready-card taps while live input reaches the
+    /// engine's existing routine-capture readiness state.
+    @State private var isStartingCaptureFromReadyCard = false
+    @State private var isPreparingRoutineRetake = false
     // REMOVED: @ObservedObject private var runtimeDiagnostics — see Fix 1.
     // ScratchLabRuntimeDiagnostics.shared is read directly in leaf computed
     // properties so the root MacAnalyzerView.body is not invalidated at
@@ -655,12 +663,8 @@ struct MacAnalyzerView: View {
     @State private var practiceScoredAttemptUnavailableMessage: String?
     @State private var practiceAttemptStartInProgress = false
     @State private var routineCountInBeat: Int?
-    // Demo with Beat transport state
-    @State private var isDemoWithBeatMode = false
-    @State private var demoWithBeatStartUptime: TimeInterval? = nil
     // Practice with Beat notation clock anchor (systemUptime when beat started)
     @State private var practiceBeatStartUptime: TimeInterval? = nil
-    @State private var showPracticeLiveInput = false
     @State private var isShowingAllRoutineSessions = false
     @State private var isRevealingManualConnectAddress = false
     @State private var captureTimingMode: CaptureTimingMode = .noBeat
@@ -933,32 +937,15 @@ struct MacAnalyzerView: View {
     }
 
     var body: some View {
-        TabView(selection: workspaceTabBinding) {
-            practiceWorkspace
-                .tabItem {
-                    Label(WorkspaceTab.practice.title, systemImage: WorkspaceTab.practice.systemImage)
-                }
-                .tag(WorkspaceTab.practice)
+        HStack(spacing: 0) {
+            workspaceRail
 
-            captureWorkspace
-                .tabItem {
-                    Label(WorkspaceTab.capture.title, systemImage: WorkspaceTab.capture.systemImage)
-                }
-                .tag(WorkspaceTab.capture)
-
-            reviewWorkspace
-                .tabItem {
-                    Label(WorkspaceTab.review.title, systemImage: WorkspaceTab.review.systemImage)
-                }
-                .tag(WorkspaceTab.review)
-
-            advancedWorkspace
-                .tabItem {
-                    Label(WorkspaceTab.advanced.title, systemImage: WorkspaceTab.advanced.systemImage)
-                }
-                .tag(WorkspaceTab.advanced)
+            VStack(spacing: 0) {
+                workspaceContextBar
+                workspaceContent
+            }
         }
-        .background(ScratchLabDesign.Surface.applicationBackground)
+        .background(ScratchLabDesign.Surface.canvas)
         .background(
             SessionSharePresenter(
                 request: exportShareRequestBinding,
@@ -1005,6 +992,15 @@ struct MacAnalyzerView: View {
             sessionUploadManager.refresh()
             captureEngine.setPerformerMonitorStreamingEnabled(!performerBroadcaster.connectedPeerNames.isEmpty)
             practiceBeatStore.configurePracticeContext(scratchID: CaptureSessionScratchType.babyScratch.rawValue)
+            practiceBeatStore.setBeatEnabled(false)
+            captureEngine.leftUpfaderOutputHandler = {
+                [weak practiceBeatStore, weak beatEngine, weak babyScratchDemo, weak demoModeController] outputGain in
+                practiceBeatStore?.setOutputGain(outputGain)
+                beatEngine?.setOutputGain(outputGain)
+                babyScratchDemo?.audioPlayer.setOutputGain(outputGain)
+                demoModeController?.demoPlayer.setOutputGain(outputGain)
+            }
+            applyLeftDeckOutputGain(captureEngine.leftUpfaderOutputGain)
             seratoWindowMover.refreshStatus()
             synchronizeSelectedRoutineSession()
             babyScratchDemo.configureBabyScratchIfNeeded()
@@ -1029,10 +1025,8 @@ struct MacAnalyzerView: View {
             beatEngine.stop()
             babyScratchDemo.stop()
             demoModeController.stopDemo()
-            demoWithBeatEngine.stop()
-            isDemoWithBeatMode = false
-            demoWithBeatStartUptime = nil
             practiceBeatStore.handleLeavingPractice()
+            captureEngine.leftUpfaderOutputHandler = nil
             cancelTestLabPracticeSession()
             captureEngine.setPerformerMonitorStreamingEnabled(false)
             practiceLiveNotationTracker = nil
@@ -1043,6 +1037,10 @@ struct MacAnalyzerView: View {
         .onChange(of: stageLayoutRaw) { _, newValue in
             guard liveInputEnabled, StageLayout(rawValue: newValue) == .desktopDeck else { return }
             captureEngine.preferMacCameraForDesktopDeck()
+        }
+        .onChange(of: demoModeController.demoPlayer.isPlaying) { wasPlaying, isPlaying in
+            guard wasPlaying, !isPlaying else { return }
+            practiceCoordinator.finishWatching()
         }
         .onChange(of: workspaceTabRaw) { _, newValue in
             let resolvedTab = WorkspaceTab.resolved(from: newValue)
@@ -1056,9 +1054,6 @@ struct MacAnalyzerView: View {
             guard resolvedTab != .practice else { return }
             babyScratchDemo.stop()
             demoModeController.stopDemo()
-            demoWithBeatEngine.stop()
-            isDemoWithBeatMode = false
-            demoWithBeatStartUptime = nil
             practiceBeatStore.handleLeavingPractice()
             cancelTestLabPracticeSession()
             practiceLiveNotationTracker = nil
@@ -1123,8 +1118,143 @@ struct MacAnalyzerView: View {
         .sheet(isPresented: $isShowingStagingInspector) {
             StagingInspectorView(contexts: stagingInspectorContexts)
         }
-        .onReceive(dvsUIRefreshTimer) { _ in dvsUIRefreshTick += 1 }
+        .onReceive(dvsUIRefreshTimer) { _ in
+            guard workspaceTab == .advanced else { return }
+            dvsUIRefreshTick += 1
+        }
 #endif
+    }
+
+    @ViewBuilder
+    private var workspaceContent: some View {
+        switch workspaceTab {
+        case .practice:
+            practiceWorkspace
+        case .capture:
+            captureWorkspace
+        case .review:
+            reviewWorkspace
+        case .advanced:
+            advancedWorkspace
+        }
+    }
+
+    private var workspaceRail: some View {
+        VStack(spacing: 0) {
+            VStack(spacing: ScratchLabDesign.Spacing.sm) {
+                ForEach(WorkspaceTab.allCases) { tab in
+                    Button {
+                        workspaceTab = tab
+                    } label: {
+                        ZStack(alignment: .leading) {
+                            if workspaceTab == tab {
+                                Rectangle()
+                                    .fill(ScratchLabDesign.Sem.accent)
+                                    .frame(width: 3, height: 34)
+                            }
+
+                            VStack(spacing: 3) {
+                                Text(String(tab.title.prefix(1)))
+                                    .font(.system(size: 11, weight: .bold))
+                                Text(tab.title)
+                                    .font(.system(size: 9, weight: .medium))
+                                Text("⌘\(tabShortcutNumber(tab))")
+                                    .font(.system(size: 7, design: .monospaced))
+                                    .foregroundStyle(workspaceTab == tab
+                                                     ? ScratchLabDesign.Sem.textSecondary
+                                                     : ScratchLabDesign.Sem.textTertiary)
+                            }
+                            .foregroundStyle(workspaceTab == tab
+                                             ? ScratchLabDesign.Sem.textAccent
+                                             : ScratchLabDesign.Sem.textSecondary)
+                            .frame(maxWidth: .infinity, maxHeight: .infinity)
+                        }
+                        .frame(width: 78, height: 70)
+                        .background(workspaceTab == tab
+                                    ? ScratchLabDesign.Surface.raised
+                                    : ScratchLabDesign.Surface.surface)
+                        .clipShape(RoundedRectangle(cornerRadius: ScratchLabDesign.Radius.control, style: .continuous))
+                    }
+                    .buttonStyle(.plain)
+                    .keyboardShortcut(KeyEquivalent(Character("\(tabShortcutNumber(tab))")), modifiers: .command)
+                    .accessibilityLabel(Text(tab.title))
+                    .accessibilityValue(Text(workspaceTab == tab ? "Selected" : "Not selected"))
+                }
+            }
+            .frame(height: 320)
+            .padding(.top, 72)
+
+            Spacer(minLength: 24)
+        }
+        .frame(width: 78)
+        .frame(maxHeight: .infinity)
+        .background(ScratchLabDesign.Surface.surface)
+        .overlay(alignment: .trailing) {
+            Rectangle()
+                .fill(ScratchLabDesign.Border.default)
+                .frame(width: 1)
+        }
+    }
+
+    private func tabShortcutNumber(_ tab: WorkspaceTab) -> Int {
+        switch tab {
+        case .practice: return 1
+        case .capture: return 2
+        case .review: return 3
+        case .advanced: return 4
+        }
+    }
+
+    private var workspaceContextBar: some View {
+        HStack(spacing: ScratchLabDesign.Spacing.md) {
+            Text(workspaceTab.title)
+                .font(.system(size: 17, weight: .bold))
+                .foregroundStyle(ScratchLabDesign.Sem.textPrimary)
+
+            Text("·")
+                .font(.system(size: 14))
+                .foregroundStyle(ScratchLabDesign.Sem.textSecondary)
+
+            Text(workspaceContextState)
+                .font(.system(size: 14, weight: .medium))
+                .foregroundStyle(ScratchLabDesign.Sem.textAccent)
+
+            Spacer(minLength: 24)
+
+            Text(workspaceContextDetail)
+                .font(.system(size: 14, weight: .medium))
+                .foregroundStyle(ScratchLabDesign.Sem.textSecondary)
+        }
+        .padding(.horizontal, ScratchLabDesign.Spacing.xxl)
+        .frame(height: 44)
+        .background(ScratchLabDesign.Surface.surface)
+    }
+
+    private var workspaceContextState: String {
+        switch workspaceTab {
+        case .practice:
+            switch practicePresentationState {
+            case .ready: return "WATCH"
+            case .listening: return "LISTEN"
+            case .copyActive: return "COPY ACTIVE"
+            case .paused: return "PAUSED"
+            case .result: return "RESULT"
+            case .review: return "REVIEW"
+            case .lessonComplete: return "COMPLETE"
+            }
+        case .capture: return "SESSION"
+        case .review: return hasRecordedTake ? "TAKE READY" : "EMPTY"
+        case .advanced: return "TOOLS"
+        }
+    }
+
+    private var workspaceContextDetail: String {
+        switch workspaceTab {
+        case .practice: return "Baby Scratch · Beginner"
+        case .capture: return "Routine capture"
+        case .review: return hasRecordedTake ? "Recorded take" : "No take selected"
+        case .advanced: return "Technical workspace"
+        }
     }
 
     private func handleScenePhaseChange(_ newPhase: ScenePhase) {
@@ -1136,10 +1266,14 @@ struct MacAnalyzerView: View {
         guard newPhase != .active else { return }
         babyScratchDemo.stop()
         demoModeController.stopDemo()
-        demoWithBeatEngine.stop()
-        isDemoWithBeatMode = false
-        demoWithBeatStartUptime = nil
         practiceBeatStore.handleAppDidBecomeInactive()
+    }
+
+    private func applyLeftDeckOutputGain(_ normalizedGain: Double) {
+        practiceBeatStore.setOutputGain(normalizedGain)
+        beatEngine.setOutputGain(normalizedGain)
+        babyScratchDemo.audioPlayer.setOutputGain(normalizedGain)
+        demoModeController.demoPlayer.setOutputGain(normalizedGain)
     }
 
 #if ENABLE_TIMECODE_LIVE_TAP
@@ -1217,36 +1351,657 @@ struct MacAnalyzerView: View {
 #endif
 
     private var practiceWorkspace: some View {
-        HSplitView {
-            practiceSidebar
-                .frame(
-                    minWidth: ScratchLabDesign.Sidebar.practiceMin,
-                    idealWidth: ScratchLabDesign.Sidebar.practiceIdeal,
-                    maxWidth: ScratchLabDesign.Sidebar.practiceMax
+        GeometryReader { proxy in
+            let horizontalPadding: CGFloat = proxy.size.width < 1_180 ? 24 : 32
+            let contentWidth = max(proxy.size.width - (horizontalPadding * 2), 760)
+            let usesCompactLayout = contentWidth < 1_290
+            let instructionWidth = usesCompactLayout
+                ? min(280, contentWidth * 0.29)
+                : min(394, contentWidth * 0.31)
+            // Keep the teaching stage wide, not tall. The notation encodes time on
+            // the horizontal axis, so stretching this row vertically only creates
+            // dead space and weakens the relationship between the copy card and trace.
+            let teachingHeight = max(282, min(320, proxy.size.height - 158))
+
+            ScrollView(.vertical) {
+                VStack(alignment: .leading, spacing: 20) {
+                    practiceFigmaLessonHeader(compact: usesCompactLayout)
+
+                    if practicePresentationState == .copyActive
+                        || practicePresentationState == .paused {
+                        practiceFigmaCopyWorkspace(
+                            availableWidth: contentWidth,
+                            compact: usesCompactLayout
+                        )
+                    } else {
+                        HStack(alignment: .top, spacing: 24) {
+                            practiceFigmaInstructionCard
+                                .frame(width: instructionWidth, height: teachingHeight)
+
+                            practiceFigmaNotation(height: teachingHeight)
+                                .frame(maxWidth: .infinity, minHeight: teachingHeight, maxHeight: teachingHeight, alignment: .top)
+                        }
+                        .frame(width: contentWidth, height: teachingHeight, alignment: .topLeading)
+
+                        if practiceShowsAchievementSummary {
+                            practiceFigmaAchievement
+                                .frame(maxWidth: min(520, contentWidth), minHeight: 108, maxHeight: 108)
+                        }
+                    }
+                }
+                .frame(width: contentWidth, alignment: .topLeading)
+                .padding(.horizontal, horizontalPadding)
+                .padding(.top, usesCompactLayout ? 20 : 28)
+                .padding(.bottom, 24)
+            }
+        }
+        .background(ScratchLabDesign.Surface.canvas)
+    }
+
+    private var practiceShowsAchievementSummary: Bool {
+        switch practicePresentationState {
+        case .result, .review, .lessonComplete:
+            return true
+        case .ready, .listening, .copyActive, .paused:
+            return false
+        }
+    }
+
+    /// Keeps the approved desktop hierarchy without shrinking the whole
+    /// Figma frame. At compact widths the progress control moves below the
+    /// lesson identity so the notation column retains useful horizontal room.
+    @ViewBuilder
+    private func practiceFigmaLessonHeader(compact: Bool) -> some View {
+        if compact {
+            ViewThatFits(in: .horizontal) {
+                HStack(alignment: .center, spacing: 20) {
+                    practiceFigmaLessonIdentity
+                        .frame(maxWidth: .infinity, alignment: .leading)
+
+                    LessonProgressIndicator(
+                        stages: [.watch, .listen, .copy, .result, .review],
+                        current: practiceLessonStage
+                    )
+                    .fixedSize(horizontal: true, vertical: false)
+
+                    practiceFigmaLessonStatus
+                }
+                .frame(maxWidth: .infinity, minHeight: 76)
+
+                VStack(alignment: .leading, spacing: 10) {
+                    HStack(alignment: .center, spacing: 16) {
+                        practiceFigmaLessonIdentity
+                        Spacer(minLength: 12)
+                        practiceFigmaLessonStatus
+                    }
+                    LessonProgressIndicator(
+                        stages: [.watch, .listen, .copy, .result, .review],
+                        current: practiceLessonStage
+                    )
+                }
+                .frame(maxWidth: .infinity, minHeight: 104, alignment: .leading)
+            }
+        } else {
+            HStack(alignment: .center, spacing: 27) {
+                practiceFigmaLessonIdentity
+                    .frame(width: 563, alignment: .leading)
+
+                LessonProgressIndicator(
+                    stages: [.watch, .listen, .copy, .result, .review],
+                    current: practiceLessonStage,
+                    desktopLayout: true,
+                    desktopCompact: true
                 )
 
-            // Wrapped in a ScrollView (matching the `practiceSidebar` pattern
-            // above) so header + notation + camera stay reachable at short
-            // macOS window heights instead of being compressed/clipped by
-            // the HSplitView pane with no scroll fallback. Single ScrollView,
-            // no nesting — none of the content below has a scroll of its own,
-            // so normal trackpad scrolling is never trapped.
-            ScrollView {
-                VStack(spacing: ScratchLabDesign.Stage.headerToContent) {
-                    practiceStageHeader
-                    practiceTeachingNotation
-                    if let practiceLiveNotationTracker {
-                        LivePerformedNotationCard(
-                            tracker: practiceLiveNotationTracker,
-                            bpm: Double(routineSessionSetup.bpmValue ?? 79),
-                            isDimmedForCalibrationEditing: !captureEngine.calibrationLocked
+                Spacer(minLength: 22)
+
+                practiceFigmaLessonStatus
+            }
+            .frame(height: 76)
+        }
+    }
+
+    private var practiceFigmaLessonIdentity: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Text("CURRENT LESSON")
+                .font(.system(size: 12, weight: .medium))
+                .foregroundStyle(ScratchLabDesign.Sem.textAccent)
+            Text("Baby Scratch")
+                .font(.system(size: 30, weight: .bold))
+                .foregroundStyle(ScratchLabDesign.Sem.textPrimary)
+            Text(practiceFigmaLessonDescription)
+                .font(.system(size: 15))
+                .foregroundStyle(ScratchLabDesign.Sem.textSecondary)
+                .lineLimit(2)
+        }
+    }
+
+    private var practiceFigmaLessonDescription: String {
+        switch practicePresentationState {
+        case .copyActive, .paused:
+            return "Copy the target motion while ScratchLab compares your movement in real time."
+        case .result, .review, .lessonComplete:
+            return "Compare your recorded motion with the target and review the result."
+        case .ready, .listening:
+            return "Watch the target, then listen and copy one clean Baby Scratch cycle."
+        }
+    }
+
+    private var practiceFigmaLessonStatus: some View {
+        VStack(alignment: .trailing, spacing: 4) {
+            Text("BEGINNER")
+                .font(.system(size: 12, weight: .medium))
+                .foregroundStyle(ScratchLabDesign.Sem.textSecondary)
+            Text("NO BEAT")
+                .font(.system(size: 14, weight: .medium))
+                .foregroundStyle(ScratchLabDesign.Sem.textPrimary)
+        }
+        .fixedSize(horizontal: true, vertical: false)
+    }
+
+    private var practiceDisplayedBPM: Double {
+        if practicePresentationState == .copyActive
+            || practicePresentationState == .paused {
+            return practiceCoordinator.lastSession?.bpm ?? practiceNotationBPM
+        }
+        return practiceTeachingBPM
+    }
+
+    private func practiceFigmaCopyWorkspace(
+        availableWidth: CGFloat,
+        compact: Bool
+    ) -> some View {
+        let instructionWidth: CGFloat = compact ? 220 : 250
+        let cameraWidth = max(availableWidth - instructionWidth - 24, 520)
+        let cameraHeight = min(576, cameraWidth * 9 / 16)
+
+        return HStack(alignment: .top, spacing: 24) {
+            practiceFigmaCopyInstructionCard
+                .frame(width: instructionWidth, height: cameraHeight)
+
+            practiceFigmaLiveCameraNotationSurface
+                .frame(width: cameraWidth, height: cameraHeight)
+        }
+        .frame(width: availableWidth, height: cameraHeight, alignment: .topLeading)
+    }
+
+    private var practiceFigmaCopyInstructionCard: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            Text(practiceFigmaStepLabel)
+                .font(.system(size: 12, weight: .medium))
+                .foregroundStyle(ScratchLabDesign.Sem.textAccent)
+            Text(practiceFigmaCardTitle)
+                .font(.system(size: 22, weight: .bold))
+                .foregroundStyle(ScratchLabDesign.Sem.textPrimary)
+            Text(practiceFigmaInstruction)
+                .font(.system(size: 15))
+                .foregroundStyle(ScratchLabDesign.Sem.textSecondary)
+                .fixedSize(horizontal: false, vertical: true)
+
+            Spacer(minLength: 0)
+
+            Button("Stop copying") {
+                stopPracticeScoredAttempt()
+            }
+            .buttonStyle(.plain)
+            .font(.system(size: 14, weight: .medium))
+            .foregroundStyle(ScratchLabDesign.Sem.textPrimary)
+            .frame(maxWidth: .infinity, minHeight: 44, maxHeight: 44)
+            .background(
+                ScratchLabDesign.Sem.danger,
+                in: RoundedRectangle(cornerRadius: ScratchLabDesign.Radius.control, style: .continuous)
+            )
+        }
+        .padding(20)
+        .background(
+            ScratchLabDesign.Surface.surface,
+            in: RoundedRectangle(cornerRadius: 16, style: .continuous)
+        )
+        .overlay {
+            RoundedRectangle(cornerRadius: 16, style: .continuous)
+                .stroke(ScratchLabDesign.Border.default, lineWidth: 1)
+        }
+    }
+
+    private var practiceLessonStage: LessonStage {
+        switch practicePresentationState {
+        case .ready: return .watch
+        case .listening: return .listen
+        case .copyActive, .paused: return .copy
+        case .result: return .result
+        case .review, .lessonComplete: return .review
+        }
+    }
+
+    private var practiceFigmaInstructionCard: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            Text(practiceFigmaStepLabel)
+                .font(.system(size: 12, weight: .medium))
+                .foregroundStyle(ScratchLabDesign.Sem.textAccent)
+            Text(practiceFigmaCardTitle)
+                .font(.system(size: 22, weight: .bold))
+                .foregroundStyle(ScratchLabDesign.Sem.textPrimary)
+            Text(practiceFigmaInstruction)
+                .font(.system(size: 15))
+                .foregroundStyle(ScratchLabDesign.Sem.textSecondary)
+                .fixedSize(horizontal: false, vertical: true)
+
+            Spacer(minLength: 0)
+            practiceFigmaActions
+        }
+        .padding(24)
+        .background(
+            ScratchLabDesign.Surface.surface,
+            in: RoundedRectangle(cornerRadius: 16, style: .continuous)
+        )
+        .overlay {
+            RoundedRectangle(cornerRadius: 16, style: .continuous)
+                .stroke(ScratchLabDesign.Border.default, lineWidth: 1)
+        }
+    }
+
+    private var practiceFigmaStepLabel: String {
+        switch practicePresentationState {
+        case .ready: return "WATCH FIRST"
+        case .listening: return "LISTEN"
+        case .copyActive: return "COPY ACTIVE"
+        case .paused: return "COPY PAUSED"
+        case .result: return "RESULT"
+        case .review: return "REVIEW"
+        case .lessonComplete: return "LESSON COMPLETE"
+        }
+    }
+
+    private var practiceFigmaCardTitle: String {
+        switch practicePresentationState {
+        case .ready: return "See one clean cycle"
+        case .listening: return "Hear the reference"
+        case .copyActive: return "Match the motion"
+        case .paused: return "Attempt paused"
+        case .result: return "See how you did"
+        case .review: return "Review your attempt"
+        case .lessonComplete: return "Lesson complete"
+        }
+    }
+
+    private var practiceFigmaInstruction: String {
+        switch practicePresentationState {
+        case .ready:
+            return "Follow the forward push and smooth pull back. Keep the fader open for the whole cycle."
+        case .listening:
+            return "Listen for an even push forward and pull back at a smooth, consistent speed."
+        case .copyActive:
+            return "Push forward and pull back smoothly with the fader open. Stay with the target shape."
+        case .paused:
+            return "Your captured evidence is preserved. Resume when you are ready."
+        case .result:
+            return "Compare your captured cycle with the target before trying again."
+        case .review:
+            return "Inspect timing, direction, and fader evidence from the completed attempt."
+        case .lessonComplete:
+            return "You completed the Baby Scratch lesson with a saved result."
+        }
+    }
+
+    @ViewBuilder
+    private var practiceFigmaActions: some View {
+        switch practicePresentationState {
+        case .ready:
+            if practiceWatchHasFinished {
+                ViewThatFits(in: .horizontal) {
+                    HStack(spacing: 12) {
+                        practiceFigmaButton("Watch again", primary: true) {
+                            practiceCoordinator.beginWatch()
+                            startMacDemo()
+                        }
+                        practiceFigmaButton("Start copying", primary: false) {
+                            Task { await startPracticeScoredAttempt() }
+                        }
+                    }
+                    VStack(alignment: .leading, spacing: 10) {
+                        practiceFigmaButton("Watch again", primary: true) {
+                            practiceCoordinator.beginWatch()
+                            startMacDemo()
+                        }
+                        practiceFigmaButton("Start copying", primary: false) {
+                            Task { await startPracticeScoredAttempt() }
+                        }
+                    }
+                }
+            } else {
+                ViewThatFits(in: .horizontal) {
+                    HStack(spacing: 12) {
+                        practiceFigmaButton("Watch demo", primary: true) {
+                            practiceCoordinator.beginWatch()
+                            startMacDemo()
+                        }
+                        practiceFigmaButton("Listen only", primary: false) {
+                            practiceCoordinator.beginWatch()
+                            startMacDemo()
+                        }
+                    }
+                    VStack(alignment: .leading, spacing: 10) {
+                        practiceFigmaButton("Watch demo", primary: true) {
+                            practiceCoordinator.beginWatch()
+                            startMacDemo()
+                        }
+                        practiceFigmaButton("Listen only", primary: false) {
+                            practiceCoordinator.beginWatch()
+                            startMacDemo()
+                        }
+                    }
+                }
+            }
+        case .listening:
+            ViewThatFits(in: .horizontal) {
+                HStack(spacing: 12) {
+                    practiceFigmaButton("Restart", primary: true) { startMacDemo() }
+                    practiceFigmaButton("Start copying", primary: false) {
+                        Task { await startPracticeScoredAttempt() }
+                    }
+                }
+                VStack(alignment: .leading, spacing: 10) {
+                    practiceFigmaButton("Restart", primary: true) { startMacDemo() }
+                    practiceFigmaButton("Start copying", primary: false) {
+                        Task { await startPracticeScoredAttempt() }
+                    }
+                }
+            }
+        case .copyActive, .paused:
+            practiceFigmaButton("Stop copying", primary: true) {
+                stopPracticeScoredAttempt()
+            }
+        case .result, .review, .lessonComplete:
+            ViewThatFits(in: .horizontal) {
+                HStack(spacing: 12) {
+                    practiceFigmaButton("Review attempt", primary: true) {
+                        workspaceTab = .review
+                    }
+                    practiceFigmaButton("Try again", primary: false) {
+                        retryPracticeScoredAttempt()
+                    }
+                }
+                VStack(alignment: .leading, spacing: 10) {
+                    practiceFigmaButton("Review attempt", primary: true) {
+                        workspaceTab = .review
+                    }
+                    practiceFigmaButton("Try again", primary: false) {
+                        retryPracticeScoredAttempt()
+                    }
+                }
+            }
+        }
+    }
+
+    private var practiceWatchHasFinished: Bool {
+        practiceCoordinator.state == .ready
+    }
+
+    private func practiceFigmaButton(
+        _ title: String,
+        primary: Bool,
+        action: @escaping () -> Void
+    ) -> some View {
+        Button(title, action: action)
+            .buttonStyle(.plain)
+            .font(.system(size: 14, weight: .medium))
+            .foregroundStyle(primary
+                             ? ScratchLabDesign.Sem.textOnAccent
+                             : ScratchLabDesign.Sem.textPrimary)
+            .frame(maxWidth: .infinity, minHeight: 44, maxHeight: 44)
+            .background(primary
+                        ? ScratchLabDesign.Sem.accent
+                        : ScratchLabDesign.Surface.surface)
+            .clipShape(RoundedRectangle(cornerRadius: ScratchLabDesign.Radius.control, style: .continuous))
+    }
+
+    private func practiceFigmaNotation(height: CGFloat) -> some View {
+        Group {
+            if let notation = practiceTeachingSequenceNotation {
+                TimelineView(.animation(paused: !practiceNotationShouldAnimate)) { _ in
+                    let time = practiceNotationCurrentTime
+                    practiceFigmaNotationPanel(
+                        notation: notation,
+                        time: time,
+                        window: practiceNotationWindow(at: time, notation: notation),
+                        chartHeight: max(216, height - 66)
+                    )
+                }
+            } else {
+                Text("Target notation isn't available for this technique yet.")
+                    .font(ScratchLabDesign.Typo.bodySecondary)
+                    .foregroundStyle(ScratchLabDesign.Sem.textSecondary)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+            }
+        }
+    }
+
+    private func practiceFigmaNotationPanel(
+        notation: ScratchNotation,
+        time: TimeInterval,
+        window: ClosedRange<TimeInterval>,
+        chartHeight: CGFloat
+    ) -> some View {
+        VStack(alignment: .leading, spacing: 18) {
+            Text("TARGET REFERENCE")
+                .font(.system(size: 12, weight: .bold))
+                .foregroundStyle(ScratchLabDesign.Sem.textPrimary)
+
+            ZStack(alignment: .topLeading) {
+                ScratchPhraseChartView(
+                    source: .target(notation),
+                    bpm: practiceTeachingBPM,
+                    showBeatGrid: false,
+                    targetWindow: window,
+                    playheadTime: time,
+                    showPlayhead: practiceNotationShouldAnimate,
+                    backgroundColor: .clear
+                )
+
+                Text(practiceReelSegmentLabel(at: time))
+                    .font(.system(size: 10, design: .monospaced))
+                    .foregroundStyle(ScratchLabDesign.Notation.targetTrace)
+                    .padding(.leading, 16)
+                    .padding(.top, 10)
+            }
+            .frame(height: chartHeight)
+            .clipShape(RoundedRectangle(cornerRadius: 9, style: .continuous))
+        }
+        .padding(.horizontal, 20)
+        .padding(.top, 12)
+        .padding(.bottom, 20)
+    }
+
+    private var practiceFigmaAchievement: some View {
+        HStack(spacing: 16) {
+            VStack(alignment: .leading, spacing: 5) {
+                Text(practiceCoordinator.currentResult == nil ? "No result yet" : "Attempt complete")
+                    .font(.system(size: 15, weight: .bold))
+                    .foregroundStyle(ScratchLabDesign.Sem.textPrimary)
+                Text(practiceCoordinator.currentResult == nil
+                     ? "Complete an attempt to create a result."
+                     : "Your latest assessed Baby Scratch cycle.")
+                    .font(.system(size: 11))
+                    .foregroundStyle(ScratchLabDesign.Sem.textSecondary)
+            }
+
+            Spacer(minLength: 16)
+
+            Text(practiceCoordinator.currentResult?.overallScore.map { String(format: "%.0f", $0) } ?? "—")
+                .font(.system(size: 16, design: .monospaced))
+                .foregroundStyle(practiceCoordinator.currentResult == nil
+                                 ? ScratchLabDesign.Sem.textTertiary
+                                 : ScratchLabDesign.Sem.textPrimary)
+                .frame(width: 72, height: 52)
+                .background(ScratchLabDesign.Surface.raised, in: Capsule())
+        }
+        .padding(16)
+        .background(ScratchLabDesign.Surface.surface, in: RoundedRectangle(cornerRadius: 9, style: .continuous))
+        .overlay {
+            RoundedRectangle(cornerRadius: 9, style: .continuous)
+                .stroke(ScratchLabDesign.Border.default, lineWidth: 1)
+        }
+    }
+
+    @ViewBuilder
+    private var practiceFigmaLiveCameraNotationSurface: some View {
+        if liveInputEnabled {
+            GeometryReader { geometry in
+                let inset: CGFloat = geometry.size.width < 800 ? 14 : 20
+                // Copy is a motion-reading task: give the notation almost half
+                // the camera height so the Baby Scratch rise/fall is legible
+                // instead of compressed into a shallow footer strip.
+                let overlayHeight = min(300, max(220, geometry.size.height * 0.48))
+
+                ZStack {
+                    MacCameraPreviewView(
+                        session: captureEngine.captureSession,
+                        videoGravity: .resizeAspect
+                    )
+
+                    Canvas { context, size in
+                        var grid = Path()
+                        for fraction in [1.0 / 3.0, 2.0 / 3.0] {
+                            let x = size.width * fraction
+                            grid.move(to: CGPoint(x: x, y: 0))
+                            grid.addLine(to: CGPoint(x: x, y: size.height * 0.64))
+                        }
+                        let y = size.height * 0.32
+                        grid.move(to: CGPoint(x: 0, y: y))
+                        grid.addLine(to: CGPoint(x: size.width, y: y))
+                        context.stroke(
+                            grid,
+                            with: .color(ScratchLabDesign.Border.default.opacity(0.8)),
+                            lineWidth: 1
                         )
                     }
-                    practiceOptionalLiveInput
+                    .allowsHitTesting(false)
+
+                    VStack {
+                        HStack {
+                            Text("LIVE CAMERA · FIT 16:9")
+                                .font(.system(size: 10, weight: .bold, design: .monospaced))
+                                .foregroundStyle(ScratchLabDesign.Sem.textOnAccent)
+                                .padding(.horizontal, 9)
+                                .frame(height: 24)
+                                .background(ScratchLabDesign.Sem.accent, in: Capsule())
+                            Spacer()
+                        }
+                        Spacer()
+                        practiceFigmaLiveNotationOverlay
+                            .frame(height: overlayHeight)
+                    }
+                    .padding(inset)
                 }
-                .padding(ScratchLabDesign.Stage.outerPadding)
             }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
             .background(ScratchLabDesign.Surface.canvas)
+            .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+            .overlay {
+                RoundedRectangle(cornerRadius: 10, style: .continuous)
+                    .stroke(ScratchLabDesign.Border.default, lineWidth: 1)
+            }
+        } else {
+            VStack(spacing: 14) {
+                Text("Live camera is preparing…")
+                    .font(ScratchLabDesign.Typo.bodySecondary)
+                    .foregroundStyle(ScratchLabDesign.Sem.textSecondary)
+                Button("Start live input", action: startMacLiveInput)
+                    .scratchLabPrimaryButton()
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .background(
+                ScratchLabDesign.Surface.surface,
+                in: RoundedRectangle(cornerRadius: 10, style: .continuous)
+            )
+        }
+    }
+
+    private var practiceFigmaLiveNotationOverlay: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            HStack(spacing: 10) {
+                Text("MY PERFORMANCE — LIVE")
+                    .font(.system(size: 10, weight: .bold, design: .monospaced))
+                    .foregroundStyle(ScratchLabDesign.Notation.performanceTrace)
+                    .shadow(color: .black.opacity(0.9), radius: 2)
+                Spacer(minLength: 12)
+                Text(practiceLiveNotationStatus)
+                    .font(.system(size: 9, weight: .medium))
+                    .foregroundStyle(ScratchLabDesign.Sem.textPrimary)
+                    .shadow(color: .black.opacity(0.9), radius: 2)
+            }
+
+            if let notation = practiceCopyTargetNotation {
+                TimelineView(.animation(paused: accessibilityReduceMotion)) { _ in
+                    let tracker = practiceLiveNotationTracker
+                    let now = tracker.map {
+                        practiceCopyNotationTime(at: Date(), notation: notation, tracker: $0)
+                    } ?? 0
+                    ScratchPhraseChartView(
+                        source: .target(notation),
+                        bpm: practiceDisplayedBPM,
+                        targetWindow: practiceNotationWindow(at: now, notation: notation),
+                        playheadTime: now,
+                        showPlayhead: tracker != nil,
+                        livePerformedEvents: tracker.map {
+                            practiceLiveEventsForCurrentCycle(tracker: $0, notation: notation)
+                        } ?? [],
+                        backgroundColor: .clear
+                    )
+                }
+            } else {
+                Text("Target notation isn't available.")
+                    .font(ScratchLabDesign.Typo.bodySecondary)
+                    .foregroundStyle(ScratchLabDesign.Sem.textSecondary)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+            }
+        }
+        .padding(.horizontal, 8)
+        .padding(.vertical, 6)
+    }
+
+    private var practiceCopyTargetNotation: ScratchNotation? {
+        guard let pattern = practiceCanonicalPattern,
+              practiceDisplayedBPM > 0 else { return nil }
+        return pattern.materialized(bpm: practiceDisplayedBPM)
+    }
+
+    private var practiceLiveNotationStatus: String {
+        guard let tracker = practiceLiveNotationTracker else {
+            return "Preparing capture…"
+        }
+        if tracker.isFrozen {
+            return tracker.renderedEvents.isEmpty ? "No movement captured" : "Attempt complete"
+        }
+        switch tracker.state {
+        case .unavailable: return "No motion signal"
+        case .waiting: return "Waiting for movement…"
+        case .tracking: return "Tracking"
+        }
+    }
+
+    private func practiceLiveEventsForCurrentCycle(
+        tracker: LivePerformedNotationTracker,
+        notation: ScratchNotation
+    ) -> [CaptureCore.DetectedNotationRecordMovementEvent] {
+        let duration = notation.timelineDuration
+        guard duration > 0 else { return [] }
+        let cycleStart = floor(tracker.elapsedTime / duration) * duration
+        let cycleEnd = cycleStart + duration
+
+        return tracker.renderedEvents.compactMap { event in
+            guard event.endTime >= cycleStart, event.startTime <= cycleEnd else { return nil }
+            return CaptureCore.DetectedNotationRecordMovementEvent(
+                startTime: event.startTime - cycleStart,
+                endTime: event.endTime - cycleStart,
+                startPosition: event.startPosition,
+                endPosition: event.endPosition,
+                direction: event.direction,
+                movementKind: event.movementKind,
+                speed: event.speed,
+                confidence: event.confidence,
+                source: event.source
+            )
         }
     }
 
@@ -1344,19 +2099,40 @@ struct MacAnalyzerView: View {
     }
 
     private var practiceTeachingSequenceNotation: ScratchNotation? {
-        if let reel = PracticeReelTimeline.loadBundled(
-            named: PracticeReelTimeline.babyReelManifestName
-        ) {
-            return reel.referenceNotation()
+        switch practicePresentationState {
+        case .ready, .listening:
+            // Watch follows the exact motion timeline paired with the bundled
+            // 16.048-second demo audio, including its two-second lead-in.
+            return ScratchNotation.babyScratchDemo ?? ScratchNotation.babyScratch
+        case .copyActive, .paused, .result, .review, .lessonComplete:
+            // Scored copy/review remains the short canonical teaching cycle.
+            return ScratchNotation.babyScratch
         }
-        guard let notation = ScratchNotation.babyScratch else { return nil }
-        return notation.projectedToSeconds(bpm: practiceNotationBPM) ?? notation
+    }
+
+    /// Keeps roughly two bars visible while the reel's frame-authored notation
+    /// travels beneath the playhead. At the head and tail the window pins to
+    /// the document bounds instead of introducing blank time.
+    private func practiceNotationWindow(
+        at time: TimeInterval,
+        notation: ScratchNotation
+    ) -> ClosedRange<TimeInterval> {
+        let documentDuration = max(notation.timelineDuration, 0.1)
+        // There is deliberately no tempo/beat grid in this lesson. Keep a
+        // stable eight-second audio window instead of inventing musical bars.
+        let visibleDuration = min(documentDuration, 8.0)
+        let leadingContext = visibleDuration * 0.28
+        let latestStart = max(0, documentDuration - visibleDuration)
+        let start = min(max(0, time - leadingContext), latestStart)
+        return start...(start + visibleDuration)
+    }
+
+    private func practiceReelSegmentLabel(at time: TimeInterval) -> String {
+        "BABY SCRATCH TARGET — WATCH"
     }
 
     private var practiceTeachingBPM: Double {
-        PracticeReelTimeline.loadBundled(
-            named: PracticeReelTimeline.babyReelManifestName
-        )?.bpm ?? practiceNotationBPM
+        practiceNotationBPM
     }
 
     private func practiceCopyNotationTime(
@@ -1371,78 +2147,27 @@ struct MacAnalyzerView: View {
         return elapsed.truncatingRemainder(dividingBy: duration)
     }
 
-    /// Camera / live input is optional and progressively disclosed — it is
-    /// NOT part of the standard Practice teaching surface. Collapsed by
-    /// default so the notation stays dominant; expanding it offers the live
-    /// camera path only when the performer opts in.
-    private var practiceOptionalLiveInput: some View {
-        DisclosureGroup(isExpanded: $showPracticeLiveInput) {
-            if liveInputEnabled {
-                liveCameraStage(
-                    title: "Practice Camera",
-                    subtitle: "\(selectedCameraName) · \(captureEngine.selectedVideoSourceDescription)",
-                    videoGravity: .resizeAspect
-                )
-                // Adaptive bounded height: the card's own `.aspectRatio(16/9,
-                // contentMode: .fit)` already shrinks proportionally with
-                // whatever width is available, so this `maxHeight` is purely
-                // a ceiling — it never forces a fixed height that could clip
-                // content at a different window size, it only stops the
-                // camera from dominating the Practice viewport when there's
-                // plenty of vertical room.
-                .frame(maxHeight: 320)
-                .padding(.top, ScratchLabDesign.Spacing.disclosureContentTop)
-            } else {
-                VStack(alignment: .leading, spacing: 10) {
-                    Text("Live input runs the Practice camera and hardware path. Notation stays the teaching surface either way.")
-                        .font(ScratchLabDesign.Typo.bodySecondary)
-                        .foregroundStyle(.secondary)
-                        .fixedSize(horizontal: false, vertical: true)
-                    Button("Start live input", action: startMacLiveInput)
-                        .scratchLabPrimaryButton()
-                }
-                .padding(.top, ScratchLabDesign.Spacing.disclosureContentTop)
-            }
-        } label: {
-            cameraDisclosureRow(
-                title: "Camera / live input",
-                subtitle: liveInputEnabled ? "Live camera preview below" : "Optional live input for practice",
-                status: liveInputEnabled ? "OPEN" : "CLOSED",
-                statusColor: liveInputEnabled ? ScratchLabDesign.Sem.textAccent : ScratchLabDesign.Sem.textSecondary
-            )
-        }
-        .padding(.horizontal, 4)
-    }
-
     private var practiceNotationShouldAnimate: Bool {
         guard !accessibilityReduceMotion else { return false }
         return demoModeController.demoPlayer.isPlaying
-            || (isDemoWithBeatMode && demoWithBeatStartUptime != nil)
-            || (practiceBeatStore.isPlaying && practiceBeatStartUptime != nil)
     }
 
     private var practiceNotationCurrentTime: TimeInterval {
-        // Demo with Beat: use beat-engine wall-clock anchor for phase alignment.
-        // The notation stays locked to the 79 BPM grid rather than following
-        // the raw AVAudioPlayer time, which can have startup jitter.
-        if isDemoWithBeatMode, let anchor = demoWithBeatStartUptime {
-            let elapsed = max(0, ProcessInfo.processInfo.systemUptime - anchor)
-            return practiceLoopedNotationTime(elapsed)
-        }
-        // Practice with Beat: follow beat clock so notation moves even though
-        // the scratch demo audio is not playing.
-        if practiceBeatStore.isPlaying, let anchor = practiceBeatStartUptime {
-            let elapsed = max(0, ProcessInfo.processInfo.systemUptime - anchor)
-            return practiceLoopedNotationTime(elapsed)
-        }
-        // Listen (scratch only): follow the actual audio playback time.
-        return demoModeController.demoPlayer.sampledPlaybackTime()
+        guard let notation = practiceTeachingSequenceNotation else { return 0 }
+        return practiceDemoNotationTime(
+            demoModeController.demoPlayer.sampledPlaybackTime(),
+            notation: notation
+        )
     }
 
-    private func practiceLoopedNotationTime(_ elapsed: TimeInterval) -> TimeInterval {
-        guard let duration = practiceTeachingSequenceNotation?.timelineDuration,
-              duration > 0 else { return 0 }
-        return max(0, elapsed).truncatingRemainder(dividingBy: duration)
+    private func practiceDemoNotationTime(
+        _ elapsed: TimeInterval,
+        notation: ScratchNotation
+    ) -> TimeInterval {
+        // The audio player is the only Watch clock. Clamp at the final motion
+        // so the two-second audio tail holds the completed notation instead of
+        // wrapping back to the beginning mid-playback.
+        min(max(0, elapsed), max(0, notation.timelineDuration))
     }
 
     /// The single derived Practice presentation state driving the whole
@@ -1464,31 +2189,18 @@ struct MacAnalyzerView: View {
     }
 
     private var captureWorkspace: some View {
-        HSplitView {
-            captureSidebar
-                .frame(
-                    minWidth: ScratchLabDesign.Sidebar.captureMin,
-                    idealWidth: ScratchLabDesign.Sidebar.captureIdeal,
-                    maxWidth: ScratchLabDesign.Sidebar.captureMax
-                )
-
-            VStack(spacing: ScratchLabDesign.Stage.headerToContent) {
-                captureStageHeader
-
-                if !hasRoutineSessions {
-                    captureEmptyStateStage
-                } else {
-                    captureCameraSection
-                    if let captureLiveNotationTracker {
-                        LivePerformedNotationCard(
-                            tracker: captureLiveNotationTracker,
-                            bpm: Double(routineSessionSetup.bpmValue ?? 90),
-                            isDimmedForCalibrationEditing: !captureEngine.calibrationLocked
-                        )
-                    }
+        GeometryReader { proxy in
+            let contentWidth = min(1298, max(920, proxy.size.width - 64))
+            ScrollView {
+                VStack(alignment: .leading, spacing: 20) {
+                    captureFigmaHeader
+                    captureFigmaMainWorkspace(width: contentWidth)
                 }
+                .frame(width: contentWidth, alignment: .topLeading)
+                .padding(.top, 28)
+                .padding(.bottom, 24)
+                .frame(maxWidth: .infinity, alignment: .top)
             }
-            .padding(ScratchLabDesign.Stage.outerPadding)
             .background(ScratchLabDesign.Surface.canvas)
         }
         .onChange(of: captureEngine.isRoutineRecording) { _, isRecording in
@@ -1505,6 +2217,11 @@ struct MacAnalyzerView: View {
                 )
             } else {
                 captureLiveNotationTracker = nil
+            }
+        }
+        .onChange(of: captureEngine.lastRoutineRecordingURL) { _, newURL in
+            if newURL != nil {
+                isPreparingRoutineRetake = false
             }
         }
     }
@@ -1557,28 +2274,415 @@ struct MacAnalyzerView: View {
     }
 
     private var reviewWorkspace: some View {
-        HSplitView {
-            reviewSidebar
-                .frame(
-                    minWidth: ScratchLabDesign.Sidebar.reviewMin,
-                    idealWidth: ScratchLabDesign.Sidebar.reviewIdeal,
-                    maxWidth: ScratchLabDesign.Sidebar.reviewMax
-                )
+        GeometryReader { proxy in
+            let contentWidth = min(1298, max(920, proxy.size.width - 64))
+            ScrollView {
+                VStack(alignment: .leading, spacing: 20) {
+                    reviewFigmaHeader
+                    reviewFigmaMainWorkspace(width: contentWidth)
+                }
+                .frame(width: contentWidth, alignment: .topLeading)
+                .padding(.top, 28)
+                .padding(.bottom, 40)
+                .frame(maxWidth: .infinity, alignment: .top)
+            }
+            .background(ScratchLabDesign.Surface.canvas)
+        }
+    }
 
-            reviewStage
+    // MARK: - Figma Review workspace
+
+    private var reviewFigmaHeader: some View {
+        HStack(alignment: .top, spacing: 20) {
+            VStack(alignment: .leading, spacing: 6) {
+                Text("REVIEW WORKSPACE")
+                    .font(.system(size: 11, weight: .semibold))
+                    .foregroundStyle(ScratchLabDesign.Sem.textAccent)
+                Text(hasRecordedTake ? "Review timeline" : "Nothing to review yet")
+                    .font(.system(size: 28, weight: .semibold))
+                    .foregroundStyle(ScratchLabDesign.Sem.textPrimary)
+                Text(hasRecordedTake
+                     ? "Compare the target with your captured performance, then confirm or correct the label."
+                     : "Record a take in Capture and it will appear here ready for comparison.")
+                    .font(.system(size: 13, weight: .medium))
+                    .foregroundStyle(ScratchLabDesign.Sem.textSecondary)
+            }
+
+            Spacer(minLength: 20)
+
+            VStack(alignment: .trailing, spacing: 5) {
+                Text(hasRecordedTake ? "READY FOR REVIEW" : "NO TAKE")
+                    .font(.system(size: 10, weight: .semibold))
+                    .foregroundStyle(hasRecordedTake ? ScratchLabDesign.Sem.textPrimary : ScratchLabDesign.Sem.textSecondary)
+                Text(hasRecordedTake ? lastRoutineTakeDisplayName : "Capture required")
+                    .font(.system(size: 12, weight: .semibold))
+                    .foregroundStyle(ScratchLabDesign.Sem.textPrimary)
+                    .lineLimit(1)
+            }
+            .padding(.top, 12)
+        }
+        .frame(maxWidth: .infinity, minHeight: 72, alignment: .topLeading)
+    }
+
+    @ViewBuilder
+    private func reviewFigmaMainWorkspace(width: CGFloat) -> some View {
+        let gap: CGFloat = 24
+
+        if hasRecordedTake {
+            VStack(alignment: .leading, spacing: gap) {
+                reviewFigmaComparison
+                    .frame(maxWidth: .infinity, alignment: .topLeading)
+
+                reviewFigmaTakeDetail
+                    .frame(maxWidth: .infinity, alignment: .topLeading)
+            }
+
+            DisclosureGroup {
+                VStack(alignment: .leading, spacing: 18) {
+                    reviewActionsCard
+                    reviewExportCard
+                    reviewSummaryFooterCard
+                }
+                .padding(.top, 12)
+            } label: {
+                Label("Review notes, quality flags & technical details", systemImage: "slider.horizontal.3")
+                    .font(ScratchLabDesign.Typo.disclosureLabel)
+                    .foregroundStyle(.secondary)
+            }
+            .padding(.horizontal, 4)
+        } else {
+            let leftWidth = max(360, min(554, (width - gap) * 0.43))
+            let rightWidth = width - gap - leftWidth
+            HStack(alignment: .top, spacing: gap) {
+                reviewFigmaEmptyTake
+                    .frame(width: leftWidth, alignment: .topLeading)
+                    .frame(minHeight: 504, alignment: .topLeading)
+                reviewFigmaTargetPreview
+                    .frame(width: rightWidth, alignment: .topLeading)
+                    .frame(minHeight: 504, alignment: .topLeading)
+            }
+        }
+    }
+
+    private var reviewFigmaTakeDetail: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            HStack(alignment: .firstTextBaseline) {
+                Text("TAKE DETAIL")
+                    .font(.system(size: 11, weight: .semibold))
+                    .foregroundStyle(ScratchLabDesign.Sem.textAccent)
+                Text(lastRoutineTakeDisplayName)
+                    .font(.system(size: 18, weight: .semibold))
+                    .foregroundStyle(ScratchLabDesign.Sem.textPrimary)
+                Spacer(minLength: 12)
+                Text(reviewDetectedScratchLabel)
+                    .font(.system(size: 12, weight: .semibold))
+                    .foregroundStyle(ScratchLabDesign.Sem.textSecondary)
+            }
+
+            HStack(spacing: 12) {
+                reviewFigmaMetric("Detected", reviewDetectedScratchLabel)
+                reviewFigmaMetric("Signal confidence", reviewConfidenceLabel)
+                reviewFigmaMetric("Strokes", "\(reviewStrokeCount)")
+                reviewFigmaMetric("Fader events", "\(reviewFaderEventCount)")
+            }
+
+            HStack(alignment: .bottom, spacing: 10) {
+                VStack(alignment: .leading, spacing: 6) {
+                    captureFigmaFieldLabel("Correct label")
+                    Picker("Correct label", selection: $reviewCorrectionSelection) {
+                        ForEach(ReviewCorrection.allCases) { correction in
+                            Text(correction.rawValue).tag(correction)
+                        }
+                    }
+                    .labelsHidden()
+                    .pickerStyle(.menu)
+                    .frame(width: 220, alignment: .leading)
+                }
+                Button("Confirm label") { acceptReviewLabel() }
+                    .buttonStyle(.borderedProminent)
+                    .controlSize(.large)
+                Button("Correct label") { correctReviewLabel() }
+                    .buttonStyle(.bordered)
+                    .controlSize(.large)
+                Spacer(minLength: 0)
+                Button {
+                    shareLastRoutineSession()
+                } label: {
+                    Label("Export", systemImage: "square.and.arrow.up")
+                }
+                .buttonStyle(.plain)
+                .disabled(sessionExportCoordinator.isPreparing || captureEngine.isRoutineRecording)
+                Spacer(minLength: 8)
+                Button("Leave unknown") { leaveReviewLabelUnknown() }
+                    .buttonStyle(.plain)
+                    .foregroundStyle(ScratchLabDesign.Sem.textSecondary)
+                Button("Record another") { prepareRetake() }
+                    .scratchLabDestructiveButton()
+            }
+        }
+        .padding(20)
+        .scratchLabCard()
+        .onAppear { loadReviewMetadataForCurrentTake() }
+        .onChange(of: captureEngine.lastRoutineRecordingURL) { _, _ in
+            loadReviewMetadataForCurrentTake()
+        }
+    }
+
+    private func reviewFigmaMetric(_ label: String, _ value: String) -> some View {
+        VStack(alignment: .leading, spacing: 5) {
+            captureFigmaFieldLabel(label)
+            captureFigmaReadOnlyField(value)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    private var reviewFigmaComparison: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text("REVIEW COMPARISON")
+                .font(.system(size: 11, weight: .semibold))
+                .foregroundStyle(ScratchLabDesign.Sem.textPrimary)
+            reviewTargetVsPerformedStageCard
+        }
+    }
+
+    private var reviewFigmaEmptyTake: some View {
+        VStack(alignment: .leading, spacing: 18) {
+            ZStack {
+                RoundedRectangle(cornerRadius: 14, style: .continuous)
+                    .fill(ScratchLabDesign.Sem.accent.opacity(0.10))
+                Image(systemName: "waveform.badge.plus")
+                    .font(.system(size: 30, weight: .medium))
+                    .foregroundStyle(ScratchLabDesign.Sem.accent)
+            }
+            .frame(width: 58, height: 58)
+
+            Text("Record a take to begin")
+                .font(.system(size: 22, weight: .semibold))
+                .foregroundStyle(ScratchLabDesign.Sem.textPrimary)
+            Text("Your target is ready. Open Capture to record a clean take, then return here to compare and confirm it.")
+                .font(.system(size: 13, weight: .medium))
+                .foregroundStyle(ScratchLabDesign.Sem.textSecondary)
+                .fixedSize(horizontal: false, vertical: true)
+
+            Button {
+                workspaceTab = .capture
+            } label: {
+                Label("Open Capture", systemImage: "record.circle")
+            }
+            .buttonStyle(.borderedProminent)
+            .controlSize(.large)
+
+            Spacer(minLength: 0)
+
+            Text("Capture creates the audio, camera and notation evidence used by Review. No result is estimated before a take exists.")
+                .font(.system(size: 11, weight: .medium))
+                .foregroundStyle(ScratchLabDesign.Sem.textTertiary)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+        .padding(24)
+        .scratchLabCard()
+    }
+
+    private var reviewFigmaTargetPreview: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            Text("TARGET PREVIEW")
+                .font(.system(size: 11, weight: .semibold))
+                .foregroundStyle(ScratchLabDesign.Sem.textPrimary)
+            reviewTargetNotationStageCard
+            Spacer(minLength: 0)
         }
     }
 
     private var advancedWorkspace: some View {
-        HSplitView {
-            advancedSidebar
-                .frame(
-                    minWidth: ScratchLabDesign.Sidebar.advancedMin,
-                    idealWidth: ScratchLabDesign.Sidebar.advancedIdeal,
-                    maxWidth: ScratchLabDesign.Sidebar.advancedMax
-                )
+        GeometryReader { proxy in
+            let contentWidth = min(1298, max(920, proxy.size.width - 64))
+            ScrollView {
+                VStack(alignment: .leading, spacing: 20) {
+                    advancedFigmaHeader
 
-            advancedMainContent
+                    if advancedSection == .overview {
+                        advancedFigmaOverview(width: contentWidth)
+                    } else {
+                        advancedSelectedSectionContent
+                            .frame(maxWidth: 1000, alignment: .topLeading)
+                    }
+                }
+                .frame(width: contentWidth, alignment: .topLeading)
+                .padding(.top, 28)
+                .padding(.bottom, 48)
+                .frame(maxWidth: .infinity, alignment: .top)
+            }
+            .background(ScratchLabDesign.Surface.canvas)
+        }
+    }
+
+    // MARK: - Figma Advanced workspace
+
+    private var advancedFigmaHeader: some View {
+        let summary = advancedOverviewSummary
+        return HStack(alignment: .top, spacing: 20) {
+            VStack(alignment: .leading, spacing: 6) {
+                Text("ADVANCED WORKSPACE")
+                    .font(.system(size: 11, weight: .semibold))
+                    .foregroundStyle(ScratchLabDesign.Sem.textAccent)
+                Text(advancedSection == .overview ? "System overview" : advancedSection.title)
+                    .font(.system(size: 28, weight: .semibold))
+                    .foregroundStyle(ScratchLabDesign.Sem.textPrimary)
+                Text(advancedSection == .overview
+                     ? "Inspect each input and connection independently before capture."
+                     : "Configure this system area without crowding the main capture workflow.")
+                    .font(.system(size: 13, weight: .medium))
+                    .foregroundStyle(ScratchLabDesign.Sem.textSecondary)
+            }
+
+            Spacer(minLength: 20)
+
+            VStack(alignment: .trailing, spacing: 5) {
+                Picker("Advanced section", selection: advancedSectionBinding) {
+                    ForEach(AdvancedSection.allCases) { section in
+                        Label(section.title, systemImage: section.systemImage).tag(section)
+                    }
+                }
+                .labelsHidden()
+                .pickerStyle(.menu)
+                .controlSize(.small)
+                .frame(maxWidth: 190, alignment: .trailing)
+
+                Text("NEXT ACTION")
+                    .font(.system(size: 10, weight: .semibold))
+                    .foregroundStyle(summary.nextAction.variant.color)
+                Text(summary.nextAction.message)
+                    .font(.system(size: 12, weight: .semibold))
+                    .foregroundStyle(ScratchLabDesign.Sem.textPrimary)
+                    .multilineTextAlignment(.trailing)
+                    .lineLimit(2)
+            }
+            .frame(maxWidth: 280, alignment: .trailing)
+            .padding(.top, 12)
+        }
+        .frame(maxWidth: .infinity, minHeight: 72, alignment: .topLeading)
+    }
+
+    private func advancedFigmaOverview(width: CGFloat) -> some View {
+        let gap: CGFloat = 24
+        let leftWidth = max(360, min(554, (width - gap) * 0.43))
+        let rightWidth = width - gap - leftWidth
+        return HStack(alignment: .top, spacing: gap) {
+            advancedFigmaActiveSession
+                .frame(width: leftWidth, alignment: .topLeading)
+                .frame(minHeight: 504, alignment: .topLeading)
+            advancedFigmaHardwareReadiness
+                .frame(width: rightWidth, alignment: .topLeading)
+                .frame(minHeight: 504, alignment: .topLeading)
+        }
+    }
+
+    private var advancedFigmaActiveSession: some View {
+        let summary = advancedOverviewSummary
+        return VStack(alignment: .leading, spacing: 16) {
+            Text("OVERVIEW")
+                .font(.system(size: 11, weight: .semibold))
+                .foregroundStyle(ScratchLabDesign.Sem.textAccent)
+            Text("Active session")
+                .font(.system(size: 21, weight: .semibold))
+                .foregroundStyle(ScratchLabDesign.Sem.textPrimary)
+
+            captureFigmaFieldLabel("Session")
+            captureFigmaReadOnlyField(advancedOverviewSessionValue)
+
+            captureFigmaFieldLabel("Hardware profile")
+            captureFigmaReadOnlyField(detectedControllerName)
+
+            HStack(spacing: 12) {
+                VStack(alignment: .leading, spacing: 6) {
+                    captureFigmaFieldLabel("Capture state")
+                    captureFigmaReadOnlyField(captureReadiness.label)
+                }
+                VStack(alignment: .leading, spacing: 6) {
+                    captureFigmaFieldLabel("Next action")
+                    captureFigmaReadOnlyField(summary.nextAction.message)
+                }
+            }
+
+            HStack(spacing: 10) {
+                Button("Open Capture") { workspaceTab = .capture }
+                    .buttonStyle(.borderedProminent)
+                    .controlSize(.large)
+                Button("Performer Monitor") { openWindow(id: "performer-monitor") }
+                    .buttonStyle(.plain)
+            }
+
+            Spacer(minLength: 0)
+
+            cameraDisclosureRow(
+                title: "Camera / visual guide",
+                subtitle: "Optional · opens in calibration",
+                status: "OPEN",
+                statusColor: ScratchLabDesign.Sem.textSecondary
+            )
+            .onTapGesture { advancedSection = .cameraDeck }
+        }
+        .padding(20)
+        .scratchLabCard()
+    }
+
+    private var advancedFigmaHardwareReadiness: some View {
+        let summary = advancedOverviewSummary
+        return VStack(alignment: .leading, spacing: 14) {
+            HStack(alignment: .top, spacing: 12) {
+                VStack(alignment: .leading, spacing: 5) {
+                    Text(detectedControllerName.uppercased())
+                        .font(.system(size: 14, weight: .semibold))
+                        .foregroundStyle(ScratchLabDesign.Sem.textPrimary)
+                    Text(selectedMixerMIDIDeviceName == nil
+                         ? "No MIDI controller selected"
+                         : "Detected controller · audio, DVS and MIDI are verified independently")
+                        .font(.system(size: 11, weight: .medium))
+                        .foregroundStyle(ScratchLabDesign.Sem.textSecondary)
+                }
+                Spacer(minLength: 10)
+                Text(captureReadiness.label.uppercased())
+                    .font(.system(size: 9, weight: .semibold))
+                    .foregroundStyle(captureReadiness.variant.color)
+            }
+            .padding(16)
+            .background(ScratchLabDesign.Surface.surface, in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+            .overlay(RoundedRectangle(cornerRadius: 8, style: .continuous).stroke(ScratchLabDesign.Border.default, lineWidth: 1))
+
+            ForEach(Array(summary.items.enumerated()), id: \.offset) { _, item in
+                HStack(spacing: 12) {
+                    Circle()
+                        .fill(item.status.variant.color)
+                        .frame(width: 8, height: 8)
+                    VStack(alignment: .leading, spacing: 3) {
+                        Text(item.lane.title)
+                            .font(.system(size: 13, weight: .medium))
+                            .foregroundStyle(ScratchLabDesign.Sem.textPrimary)
+                        Text(advancedFigmaLaneDetail(item.lane))
+                            .font(.system(size: 10, weight: .medium))
+                            .foregroundStyle(ScratchLabDesign.Sem.textSecondary)
+                            .lineLimit(1)
+                    }
+                    Spacer(minLength: 10)
+                    Text(overviewStatusValue(item))
+                        .font(.system(size: 9, weight: .semibold))
+                        .foregroundStyle(item.status.variant.color)
+                }
+                .padding(.horizontal, 16)
+                .frame(height: 54)
+                .background(ScratchLabDesign.Surface.surface, in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+                .overlay(RoundedRectangle(cornerRadius: 8, style: .continuous).stroke(ScratchLabDesign.Border.default, lineWidth: 1))
+            }
+        }
+    }
+
+    private func advancedFigmaLaneDetail(_ lane: AdvancedOverviewLane) -> String {
+        switch lane {
+        case .audio: return captureEngine.selectedAudioDeviceStatusLine
+        case .dvsTimecode: return dvsTimecodeMode == .disabled ? "Timecode input disabled" : dvsTimecodeSignalHealth.rawValue
+        case .midiController: return selectedMixerMIDIDeviceName ?? "Connect a MIDI controller"
+        case .camera: return captureEngine.selectedVideoDeviceName
+        case .performerMonitor: return performerBroadcaster.connectionStatus
         }
     }
 
@@ -1619,24 +2723,6 @@ struct MacAnalyzerView: View {
                                 .font(ScratchLabDesign.Typo.statusPill)
                                 .foregroundStyle(ScratchLabDesign.Sem.danger)
                         }
-                    }
-                }
-                .padding(.horizontal, 4)
-
-                DisclosureGroup {
-                    practiceBeatTrainerCard
-                        .padding(.top, ScratchLabDesign.Spacing.disclosureContentTop)
-                } label: {
-                    HStack(spacing: 8) {
-                        Label("Beat trainer", systemImage: "metronome")
-                            .font(ScratchLabDesign.Typo.disclosureLabel)
-                            .foregroundStyle(.secondary)
-
-                        Spacer(minLength: 8)
-
-                        Text(practiceBeatStore.isBeatEnabled ? "On" : "Off")
-                            .font(ScratchLabDesign.Typo.statusPill)
-                            .foregroundStyle(practiceBeatStore.isBeatEnabled ? ScratchLabDesign.Sem.success : .secondary)
                     }
                 }
                 .padding(.horizontal, 4)
@@ -1716,20 +2802,16 @@ struct MacAnalyzerView: View {
                     // Play / Pause / Resume (Listen mode)
                     let playbackState = demoModeController.demoPlayer.playbackState
                     let primaryLabel: String = {
-                        guard !isDemoWithBeatMode else { return "Listen" }
                         switch playbackState {
                         case .playing: return "Pause"
                         case .paused:  return "Resume"
                         default:       return "Listen"
                         }
                     }()
-                    let primaryIcon: String = (!isDemoWithBeatMode && playbackState == .playing) ? "pause.fill" : "headphones"
+                    let primaryIcon: String = playbackState == .playing ? "pause.fill" : "headphones"
 
                     Button {
-                        if isDemoWithBeatMode {
-                            stopDemoWithBeat()
-                            startMacDemo()
-                        } else if playbackState == .paused {
+                        if playbackState == .paused {
                             demoModeController.resumeDemo()
                         } else if playbackState == .playing {
                             demoModeController.pauseDemo()
@@ -1743,28 +2825,13 @@ struct MacAnalyzerView: View {
                     .scratchLabPrimaryButton(fillsWidth: true)
 
                     Button {
-                        if isDemoWithBeatMode { startDemoWithBeat() } else { demoModeController.replayDemo() }
+                        demoModeController.replayDemo()
                     } label: {
                         Label("Restart", systemImage: "arrow.counterclockwise")
                             .frame(maxWidth: .infinity)
                     }
                     .buttonStyle(.bordered)
-                    .disabled(!demoModeController.isReady && demoWithBeatStartUptime == nil)
-                }
-
-                if isDemoWithBeatMode {
-                    Button { stopDemoWithBeat() } label: {
-                        Label("Stop Demo with Beat", systemImage: "stop.fill")
-                            .frame(maxWidth: .infinity)
-                    }
-                    .buttonStyle(.borderedProminent)
-                    .tint(ScratchLabDesign.Sem.warning)
-                } else {
-                    Button { startDemoWithBeat() } label: {
-                        Label("Demo with Beat", systemImage: "metronome")
-                            .frame(maxWidth: .infinity)
-                    }
-                    .buttonStyle(.bordered)
+                    .disabled(!demoModeController.isReady)
                 }
             }
 
@@ -2601,6 +3668,7 @@ struct MacAnalyzerView: View {
                     routineRecordingCard
                 }
                 cxlCaptureCard
+                channelMapDiagnosticCard
             }
         case .timecodeInput:
             VStack(alignment: .leading, spacing: ScratchLabDesign.Spacing.cardGroup) {
@@ -2686,6 +3754,637 @@ struct MacAnalyzerView: View {
         }
     }
 
+    // MARK: - Figma Capture workspace
+
+    private var captureFigmaHeader: some View {
+        HStack(alignment: .center, spacing: 20) {
+            VStack(alignment: .leading, spacing: 4) {
+                Text("NEW CAPTURE")
+                    .font(.system(size: 12, weight: .medium))
+                    .foregroundStyle(ScratchLabDesign.Sem.textAccent)
+                Text("Capture session")
+                    .font(.system(size: 30, weight: .bold))
+                    .foregroundStyle(ScratchLabDesign.Sem.textPrimary)
+                Text(captureFigmaHeaderSubtitle)
+                    .font(.system(size: 15))
+                    .foregroundStyle(ScratchLabDesign.Sem.textSecondary)
+                    .lineLimit(2)
+            }
+            .frame(minWidth: 300, alignment: .leading)
+
+            captureFigmaStageStepper
+                .frame(maxWidth: 520)
+
+            VStack(alignment: .trailing, spacing: 4) {
+                Text(captureFigmaStatusLabel)
+                    .font(.system(size: 12, weight: .medium))
+                    .foregroundStyle(captureReadiness.variant.color)
+                Text(captureFigmaSessionLabel)
+                    .font(.system(size: 14, weight: .medium))
+                    .foregroundStyle(ScratchLabDesign.Sem.textPrimary)
+                    .lineLimit(1)
+            }
+            .frame(minWidth: 150, alignment: .trailing)
+        }
+        .frame(minHeight: 72)
+    }
+
+    private var captureFigmaHeaderSubtitle: String {
+        if isEditingCaptureSetup {
+            return "Update the existing session details, then continue back to recording."
+        }
+        switch captureReadiness {
+        case .complete:
+            return "The latest take is saved and ready for review."
+        case .recording:
+            return "Recording the active take. Keep the movement clean and controlled."
+        case .finalizing:
+            return "Finalizing the take and validating its capture artifacts."
+        case .incomplete, .failed:
+            return "The last take needs attention before it can be reviewed or exported."
+        default:
+            return "Set session details and hardware before recording a take."
+        }
+    }
+
+    private var captureFigmaStatusLabel: String {
+        if isEditingCaptureSetup { return "EDITING SETUP" }
+        switch captureReadiness {
+        case .complete: return "TAKE SAVED"
+        case .recording: return "RECORDING"
+        case .finalizing: return "FINALIZING"
+        case .ready: return "READY"
+        case .setupRequired: return "SETUP REQUIRED"
+        case .hardwareDetected: return "HARDWARE DETECTED"
+        case .needsAttention, .timecodeLost, .permissionRequired: return "NEEDS ATTENTION"
+        case .incomplete, .failed: return "RECOVERY REQUIRED"
+        }
+    }
+
+    private var captureFigmaSessionLabel: String {
+        if captureReadiness == .complete {
+            return "Take \(String(format: "%03d", max(visibleTakeCount, 1))) · Saved"
+        }
+        let name = routineSessionSetup.performerName.trimmingCharacters(in: .whitespacesAndNewlines)
+        return name.isEmpty ? "Untitled session" : name
+    }
+
+    private var captureFigmaStageIndex: Int {
+        if isEditingCaptureSetup { return 1 }
+        switch captureReadiness {
+        case .setupRequired: return 1
+        case .hardwareDetected, .needsAttention, .timecodeLost, .permissionRequired: return 2
+        case .ready, .recording, .finalizing, .incomplete, .failed: return 3
+        case .complete: return 4
+        }
+    }
+
+    private var captureFigmaStageStepper: some View {
+        let labels = ["Setup", "Ready", "Record", "Review"]
+        return HStack(spacing: 7) {
+            ForEach(Array(labels.enumerated()), id: \.offset) { offset, label in
+                let number = offset + 1
+                let isComplete = number < captureFigmaStageIndex || captureFigmaStageIndex == 4
+                let isCurrent = number == captureFigmaStageIndex
+
+                HStack(spacing: 5) {
+                    Circle()
+                        .fill(isComplete
+                              ? ScratchLabDesign.Sem.success
+                              : (isCurrent ? ScratchLabDesign.Sem.accent : ScratchLabDesign.Surface.surface))
+                        .frame(width: 18, height: 18)
+                        .overlay {
+                            if isComplete {
+                                Image(systemName: "checkmark")
+                                    .font(.system(size: 8, weight: .bold))
+                                    .foregroundStyle(.white)
+                            } else {
+                                Text("\(number)")
+                                    .font(.system(size: 9, weight: .bold))
+                                    .foregroundStyle(isCurrent
+                                                     ? ScratchLabDesign.Sem.textOnAccent
+                                                     : ScratchLabDesign.Sem.textSecondary)
+                            }
+                        }
+                    Text(label)
+                        .font(.system(size: 10, weight: isCurrent ? .semibold : .medium))
+                        .foregroundStyle(isCurrent
+                                         ? ScratchLabDesign.Sem.textPrimary
+                                         : ScratchLabDesign.Sem.textSecondary)
+                        .lineLimit(1)
+                    }
+
+                if number < labels.count {
+                    Rectangle()
+                        .fill(ScratchLabDesign.Border.default)
+                        .frame(maxWidth: 24, minHeight: 1, maxHeight: 1)
+                }
+            }
+        }
+        .padding(.horizontal, 12)
+        .frame(height: 36)
+        .background(ScratchLabDesign.Surface.surface.opacity(0.72),
+                    in: Capsule())
+        .overlay(Capsule().stroke(ScratchLabDesign.Border.default, lineWidth: 1))
+    }
+
+    @ViewBuilder
+    private func captureFigmaMainWorkspace(width: CGFloat) -> some View {
+        let isSetup = captureFigmaShowsSessionSetup
+        let leftWidth = isSetup ? min(420, width * 0.34) : min(330, width * 0.27)
+        let rightWidth = max(0, width - leftWidth - 24)
+
+        VStack(alignment: .leading, spacing: 20) {
+            HStack(alignment: .top, spacing: 24) {
+                Group {
+                    if captureFigmaShowsSessionSetup {
+                        captureFigmaSessionDetails
+                    } else if captureReadiness == .complete {
+                        captureFigmaCompleteSummary
+                    } else if captureReadiness == .recording || captureReadiness == .finalizing {
+                        captureFigmaRecordingSummary
+                    } else if captureReadiness == .incomplete || captureReadiness == .failed {
+                        captureFigmaRecoverySummary
+                    } else {
+                        // Once Continue has persisted valid session details,
+                        // keep the recording action visible for every input-
+                        // readiness state. Blockers disable it with an honest
+                        // reason instead of silently returning to Setup.
+                        captureFigmaRecordSummary
+                    }
+                }
+                .frame(width: leftWidth, alignment: .topLeading)
+
+                Group {
+                    if captureReadiness == .complete {
+                        captureFigmaReviewComparison
+                    } else if captureReadiness == .finalizing {
+                        captureInputStatusCard
+                    } else {
+                        captureFigmaRecordingSurface
+                    }
+                }
+                .frame(width: rightWidth, alignment: .topLeading)
+            }
+
+            if captureReadiness != .complete && captureReadiness != .finalizing {
+                DisclosureGroup {
+                    captureInputStatusCard
+                        .padding(.top, 12)
+                } label: {
+                    cameraDisclosureRow(
+                        title: "Input readiness",
+                        subtitle: "A mic and camera are enough · DJ hardware and MIDI are optional",
+                        status: captureReadiness.label,
+                        statusColor: captureReadiness.variant.color
+                    )
+                }
+                .padding(.horizontal, 4)
+            }
+        }
+    }
+
+    private var captureFigmaShowsSessionSetup: Bool {
+        isEditingCaptureSetup
+            || selectedRoutineSession == nil
+            || routineMetadataStatusMessage != nil
+    }
+
+    private var captureFigmaSessionDetails: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text("1 · SET UP THE SESSION")
+                .font(.system(size: 12, weight: .medium))
+                .foregroundStyle(ScratchLabDesign.Sem.textAccent)
+            Text("Session details")
+                .font(.system(size: 22, weight: .bold))
+
+            captureFigmaFieldLabel("Session name")
+            TextField("Untitled session", text: routinePerformerBinding)
+                .textFieldStyle(.plain)
+                .padding(.horizontal, 12)
+                .frame(height: 40)
+                .background(ScratchLabDesign.Surface.canvas,
+                            in: RoundedRectangle(cornerRadius: 7, style: .continuous))
+                .disabled(captureEngine.isRoutineRecording)
+
+            captureFigmaFieldLabel("Technique")
+            Picker("Technique", selection: captureTargetBinding) {
+                ForEach(CaptureTarget.allCases) { target in
+                    Text(target.title).tag(target)
+                }
+            }
+            .labelsHidden()
+            .pickerStyle(.menu)
+            .frame(maxWidth: .infinity, minHeight: 40, alignment: .leading)
+            .padding(.horizontal, 8)
+            .background(ScratchLabDesign.Surface.canvas,
+                        in: RoundedRectangle(cornerRadius: 7, style: .continuous))
+            .disabled(captureEngine.isRoutineRecording)
+
+            HStack(spacing: 12) {
+                VStack(alignment: .leading, spacing: 5) {
+                    captureFigmaFieldLabel("BPM")
+                    DeferredBPMTextField("90", bpmText: routineBPMTextBinding)
+                        .textFieldStyle(.plain)
+                        .padding(.horizontal, 12)
+                        .frame(height: 40)
+                        .background(ScratchLabDesign.Surface.canvas,
+                                    in: RoundedRectangle(cornerRadius: 7, style: .continuous))
+                        .disabled(captureEngine.isRoutineRecording)
+                }
+                VStack(alignment: .leading, spacing: 5) {
+                    captureFigmaFieldLabel("Take length")
+                    Text("60 seconds")
+                        .font(.system(size: 14))
+                        .padding(.horizontal, 12)
+                        .frame(maxWidth: .infinity, minHeight: 40, alignment: .leading)
+                        .background(ScratchLabDesign.Surface.canvas,
+                                    in: RoundedRectangle(cornerRadius: 7, style: .continuous))
+                }
+            }
+
+            Picker("Mode", selection: captureTimingModeBinding) {
+                ForEach(CaptureTimingMode.allCases) { mode in
+                    Text(mode.title).tag(mode)
+                }
+            }
+            .labelsHidden()
+            .pickerStyle(.segmented)
+            .disabled(captureEngine.isRoutineRecording)
+
+            if selectedRoutineSession == nil {
+                Label("Enter the details, then continue to create this session.", systemImage: "info.circle")
+                    .font(.system(size: 11, weight: .medium))
+                    .foregroundStyle(ScratchLabDesign.Sem.textSecondary)
+                    .fixedSize(horizontal: false, vertical: true)
+
+                Button("Create session now", action: createCaptureSessionFromCurrentDetails)
+                    .scratchLabSecondaryButton(fillsWidth: true)
+                    .disabled(captureEngine.isRoutineRecording)
+            }
+
+            if let routineMetadataStatusMessage {
+                Label(routineMetadataStatusMessage, systemImage: "exclamationmark.circle.fill")
+                    .font(.system(size: 11, weight: .semibold))
+                    .foregroundStyle(ScratchLabDesign.Sem.warning)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+
+            HStack(spacing: 12) {
+                Button("Continue setup") { continueCaptureSetup() }
+                    .scratchLabPrimaryButton()
+                    .disabled(
+                        routineMetadataStatusMessage != nil
+                            || captureEngine.isRoutineRecording
+                    )
+                Button(isEditingCaptureSetup ? "Back to ready" : "Cancel") {
+                    cancelCaptureSetupPresentation()
+                }
+                    .scratchLabSecondaryButton()
+            }
+        }
+        .padding(.horizontal, 24)
+        .padding(.vertical, 22)
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+        .background(ScratchLabDesign.Surface.surface,
+                    in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+        .overlay {
+            RoundedRectangle(cornerRadius: 14, style: .continuous)
+                .stroke(ScratchLabDesign.Border.default, lineWidth: 1)
+        }
+    }
+
+    private func captureFigmaFieldLabel(_ text: String) -> some View {
+        Text(text)
+            .font(.system(size: 12, weight: .medium))
+            .foregroundStyle(ScratchLabDesign.Sem.textSecondary)
+    }
+
+    private func captureFigmaReadOnlyField(_ value: String) -> some View {
+        Text(value)
+            .font(.system(size: 14))
+            .foregroundStyle(ScratchLabDesign.Sem.textPrimary)
+            .lineLimit(1)
+            .padding(.horizontal, 12)
+            .frame(maxWidth: .infinity, minHeight: 40, alignment: .leading)
+            .background(ScratchLabDesign.Surface.canvas,
+                        in: RoundedRectangle(cornerRadius: 7, style: .continuous))
+    }
+
+    private var captureFigmaCompleteSummary: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text("4 · REVIEW THE RESULT")
+                .font(.system(size: 12, weight: .medium))
+                .foregroundStyle(ScratchLabDesign.Sem.textAccent)
+            Text("Take complete")
+                .font(.system(size: 22, weight: .bold))
+
+            captureFigmaFieldLabel("Take")
+            captureFigmaReadOnlyField("Take \(String(format: "%03d", max(visibleTakeCount, 1)))")
+            captureFigmaFieldLabel("Detected")
+            captureFigmaReadOnlyField(reviewDetectedScratchLabel)
+
+            HStack(spacing: 12) {
+                VStack(alignment: .leading, spacing: 5) {
+                    captureFigmaFieldLabel("Strokes")
+                    captureFigmaReadOnlyField("\(reviewStrokeCount)")
+                }
+                VStack(alignment: .leading, spacing: 5) {
+                    captureFigmaFieldLabel("Signal confidence")
+                    captureFigmaReadOnlyField(reviewConfidenceLabel)
+                }
+            }
+
+            HStack(spacing: 12) {
+                Button("Review take") { workspaceTab = .review }
+                    .scratchLabPrimaryButton()
+                Button("Record another") { prepareRetake() }
+                    .scratchLabSecondaryButton()
+            }
+        }
+        .padding(.horizontal, 24)
+        .padding(.vertical, 22)
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+        .background(ScratchLabDesign.Surface.surface,
+                    in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+        .overlay {
+            RoundedRectangle(cornerRadius: 14, style: .continuous)
+                .stroke(ScratchLabDesign.Border.default, lineWidth: 1)
+        }
+    }
+
+    private var captureFigmaRecordSummary: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text(captureReadiness == .ready ? "3 · RECORD THE TAKE" : "2 · CHECK INPUTS")
+                .font(.system(size: 11, weight: .medium))
+                .foregroundStyle(ScratchLabDesign.Sem.textAccent)
+            Text(captureReadiness == .ready ? "Ready to record" : "Prepare to record")
+                .font(.system(size: 19, weight: .bold))
+                .foregroundStyle(ScratchLabDesign.Sem.textPrimary)
+            Text(
+                captureReadiness == .ready
+                    ? "An available mic and camera are enough for a test take. No DJ controller, DVS, or MIDI device is required."
+                    : "Your session is saved. Resolve the input message below; the recording button will unlock when the required inputs are available."
+            )
+                .font(.system(size: 12))
+                .foregroundStyle(ScratchLabDesign.Sem.textSecondary)
+                .fixedSize(horizontal: false, vertical: true)
+
+            Divider().overlay(ScratchLabDesign.Border.default)
+
+            VStack(spacing: 7) {
+                captureFigmaCompactSummaryRow("Session", captureFigmaSessionLabel)
+                captureFigmaCompactSummaryRow("Technique", routineSessionSetup.scratchType?.title ?? "Auto Detect")
+                captureFigmaCompactSummaryRow("Mode", selectedCaptureTimingMode.title)
+                captureFigmaCompactSummaryRow("Length", "60 seconds")
+            }
+
+            Label(
+                captureReadyActionStatusMessage,
+                systemImage: captureReadyActionBlockedMessage == nil
+                    ? "info.circle"
+                    : "exclamationmark.circle.fill"
+            )
+            .font(.system(size: 11, weight: .semibold))
+            .foregroundStyle(
+                captureReadyActionBlockedMessage == nil
+                    ? ScratchLabDesign.Sem.textSecondary
+                    : ScratchLabDesign.Sem.warning
+            )
+            .fixedSize(horizontal: false, vertical: true)
+
+            VStack(spacing: 8) {
+                Button(captureReadyPrimaryActionTitle) {
+                    Task { await startReadyCapture() }
+                }
+                .scratchLabPrimaryButton(fillsWidth: true)
+                .disabled(
+                    isStartingCaptureFromReadyCard
+                        || captureReadyActionBlockedMessage != nil
+                )
+
+                Button("Edit setup") {
+                    isEditingCaptureSetup = true
+                }
+                .scratchLabSecondaryButton(fillsWidth: true)
+                .disabled(captureEngine.isRoutineRecording || isStartingCaptureFromReadyCard)
+            }
+        }
+        .padding(18)
+        .frame(maxWidth: .infinity, alignment: .topLeading)
+        .background(ScratchLabDesign.Surface.surface,
+                    in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+        .overlay {
+            RoundedRectangle(cornerRadius: 14, style: .continuous)
+                .stroke(ScratchLabDesign.Border.default, lineWidth: 1)
+        }
+    }
+
+    private func captureFigmaCompactSummaryRow(_ label: String, _ value: String) -> some View {
+        HStack(alignment: .firstTextBaseline, spacing: 10) {
+            Text(label)
+                .font(.system(size: 11, weight: .medium))
+                .foregroundStyle(ScratchLabDesign.Sem.textSecondary)
+            Spacer(minLength: 8)
+            Text(value)
+                .font(.system(size: 11, weight: .semibold))
+                .foregroundStyle(ScratchLabDesign.Sem.textPrimary)
+                .lineLimit(1)
+                .truncationMode(.middle)
+        }
+    }
+
+    private var captureFigmaRecordingSummary: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            Text(captureReadiness == .recording ? "3 · RECORD THE TAKE" : "3 · FINALIZING")
+                .font(.system(size: 12, weight: .medium))
+                .foregroundStyle(ScratchLabDesign.Sem.textAccent)
+            Text(captureReadiness == .recording ? "Recording" : "Finalizing take")
+                .font(.system(size: 22, weight: .bold))
+            Text(Self.friendlyStatusMessage(captureEngine.routineRecordingStatus))
+                .font(.system(size: 14))
+                .foregroundStyle(ScratchLabDesign.Sem.textSecondary)
+            Spacer()
+            Button(captureEngine.isRoutineRecording ? "Stop recording" : "Please wait") {
+                if captureEngine.isRoutineRecording { handleMainCaptureAction() }
+            }
+            .scratchLabPrimaryButton(fillsWidth: true)
+            .disabled(!captureEngine.isRoutineRecording)
+        }
+        .padding(24)
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+        .background(ScratchLabDesign.Surface.surface,
+                    in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+    }
+
+    private var captureFigmaRecoverySummary: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            Text("RECOVERY REQUIRED")
+                .font(.system(size: 12, weight: .medium))
+                .foregroundStyle(ScratchLabDesign.Sem.warning)
+            Text("Take incomplete")
+                .font(.system(size: 22, weight: .bold))
+            Text("The recording ended before a complete take could be saved. Retry without deleting any earlier take.")
+                .font(.system(size: 14))
+                .foregroundStyle(ScratchLabDesign.Sem.textSecondary)
+            Label(
+                captureReadyActionBlockedMessage
+                    ?? Self.friendlyStatusMessage(captureEngine.routineRecordingStatus),
+                systemImage: captureReadyActionBlockedMessage == nil
+                    ? "info.circle"
+                    : "exclamationmark.circle.fill"
+            )
+            .font(.system(size: 11, weight: .semibold))
+            .foregroundStyle(
+                captureReadyActionBlockedMessage == nil
+                    ? ScratchLabDesign.Sem.textSecondary
+                    : ScratchLabDesign.Sem.warning
+            )
+            .fixedSize(horizontal: false, vertical: true)
+            Spacer()
+            Button(isStartingCaptureFromReadyCard ? "Preparing retry…" : "Retry take") {
+                Task { await startReadyCapture() }
+            }
+                .scratchLabPrimaryButton(fillsWidth: true)
+                .disabled(
+                    isStartingCaptureFromReadyCard
+                        || captureReadyActionBlockedMessage != nil
+                )
+        }
+        .padding(24)
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+        .background(ScratchLabDesign.Surface.surface,
+                    in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+    }
+
+    private var captureFigmaRecordingSurface: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack {
+                Text(captureReadiness == .recording ? "CAMERA + LIVE NOTATION" : "CAMERA + NOTATION PREVIEW")
+                    .font(.system(size: 12, weight: .bold))
+                    .foregroundStyle(captureReadiness == .recording
+                                     ? ScratchLabDesign.Sem.danger
+                                     : ScratchLabDesign.Sem.textAccent)
+                Spacer(minLength: 8)
+                Text(captureReadiness == .recording ? "RECORDING" : "READY")
+                    .font(.system(size: 10, weight: .semibold))
+                    .foregroundStyle(captureReadiness.variant.color)
+            }
+
+            ZStack(alignment: .bottom) {
+                MacCameraPreviewView(
+                    session: captureEngine.captureSession,
+                    videoGravity: .resizeAspect
+                )
+                .aspectRatio(16.0 / 9.0, contentMode: .fit)
+                .frame(maxWidth: .infinity)
+                .background(Color.black)
+
+                CalibrationCameraOverlay(captureEngine: captureEngine)
+
+                VStack(alignment: .leading, spacing: 6) {
+                    if let captureLiveNotationTracker {
+                        LivePerformedNotationCard(
+                            tracker: captureLiveNotationTracker,
+                            bpm: Double(routineSessionSetup.bpmValue ?? 90),
+                            canvasHeight: 118,
+                            isDimmedForCalibrationEditing: !captureEngine.calibrationLocked
+                        )
+                    } else {
+                        HStack {
+                            Text("YOUR MOTION — LIVE")
+                                .font(.system(size: 10, weight: .bold, design: .monospaced))
+                                .foregroundStyle(Color(white: 0.65))
+                            Spacer()
+                            Text("Starts with recording")
+                                .font(.system(size: 10, weight: .semibold))
+                                .foregroundStyle(ScratchLabDesign.Sem.textSecondary)
+                        }
+                        ScratchPhraseChartView(
+                            source: .empty("Live notation will scroll here while you perform"),
+                            bpm: Double(routineSessionSetup.bpmValue ?? 90),
+                            backgroundColor: .clear
+                        )
+                        .frame(height: 118)
+                    }
+                }
+                .padding(.horizontal, 14)
+                .padding(.vertical, 10)
+                .background {
+                    LinearGradient(
+                        colors: [.clear, Color.black.opacity(0.28)],
+                        startPoint: .top,
+                        endPoint: .bottom
+                    )
+                    .allowsHitTesting(false)
+                }
+                .allowsHitTesting(false)
+            }
+            .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+            .overlay(RoundedRectangle(cornerRadius: 12, style: .continuous)
+                .stroke(ScratchLabDesign.Border.default, lineWidth: 1))
+
+            Text("Camera uses fit mode so the full frame remains visible. Live notation scrolls independently over the lower camera edge and is not baked into exported camera video.")
+                .font(.system(size: 10, weight: .medium))
+                .foregroundStyle(ScratchLabDesign.Sem.textTertiary)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+        .onAppear { captureEngine.start() }
+    }
+
+    @ViewBuilder
+    private var captureFigmaReviewComparison: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text("REVIEW COMPARISON")
+                .font(.system(size: 12, weight: .bold))
+                .foregroundStyle(ScratchLabDesign.Sem.textPrimary)
+
+            switch reviewPerformanceComparison {
+            case .unavailable(let reason):
+                Text(reason)
+                    .font(.system(size: 13))
+                    .foregroundStyle(ScratchLabDesign.Sem.textSecondary)
+                    .frame(maxWidth: .infinity, minHeight: 220, alignment: .center)
+                    .background(ScratchLabDesign.Surface.surface,
+                                in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+            case .ready(let model):
+                let domain = ScratchPhraseChartComparisonDomain.commonDomain(
+                    targetDuration: model.notation.timelineDuration
+                )
+                let performedFrame = ScratchStrokeGeometry.rawRange(
+                    for: LaneContent(notation: model.notation)
+                )
+                VStack(alignment: .leading, spacing: 5) {
+                    Text("TARGET — COPY THIS")
+                        .font(.system(size: 10, weight: .medium, design: .monospaced))
+                        .foregroundStyle(ScratchLabDesign.Notation.targetTrace)
+                    ScratchPhraseChartView(
+                        source: .target(model.notation),
+                        bpm: model.bpm,
+                        targetWindow: domain
+                    )
+                    .frame(height: 120)
+                    .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+                }
+                VStack(alignment: .leading, spacing: 5) {
+                    Text("MY PERFORMANCE — CAPTURED")
+                        .font(.system(size: 10, weight: .medium, design: .monospaced))
+                        .foregroundStyle(ScratchLabDesign.Notation.performanceTrace)
+                    ScratchPhraseChartView(
+                        source: .performedPlatter(model.performedEvents),
+                        bpm: model.bpm,
+                        capturedWindow: domain,
+                        performedFrame: performedFrame
+                    )
+                    .frame(height: 120)
+                    .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+                }
+            }
+        }
+        .padding(.horizontal, 14)
+        .padding(.vertical, 10)
+    }
+
     private var localCameraStage: some View {
         liveCameraStage(
             title: stageLayout == .desktopDeck ? "Deck Camera" : "Analyzer Camera",
@@ -2693,16 +4392,14 @@ struct MacAnalyzerView: View {
         )
     }
 
-    /// - Parameter videoGravity: defaults to `.resizeAspectFill` (unchanged
-    ///   behavior for Capture and every other existing caller). Practice's
-    ///   live camera passes `.resizeAspect` so the full frame is visible,
-    ///   letterboxed rather than cropped.
+    /// - Parameter videoGravity: defaults to `.resizeAspectFill` for Capture's
+    ///   calibration stage. Practice COPY owns its separate clean 16:9 camera
+    ///   surface with synchronized notation and does not use this card.
     private func liveCameraStage(title: String, subtitle: String, videoGravity: AVLayerVideoGravity = .resizeAspectFill) -> some View {
         cameraStageCard(title: title, subtitle: subtitle) {
             // Standard camera preview + the deck/mixer calibration overlay,
-            // rendered directly on the camera image (both Practice and
-            // Capture, per Karl's directive). No hand-region pill, no
-            // coaching overlay. Advanced keeps its own separate, coarser
+            // rendered directly on the Capture camera image. No hand-region
+            // pill or coaching overlay. Advanced keeps its own coarser
             // Lock/Unlock + slider entry point; Performer Monitor keeps its
             // own existing calibration editor — all three share the exact
             // same `captureEngine.zoneAdjustments`/`calibrationLocked` state.
@@ -2711,8 +4408,7 @@ struct MacAnalyzerView: View {
                 CalibrationCameraOverlay(captureEngine: captureEngine)
             }
         }
-        // Slice X.Perf.2: the disclosure (Practice `practiceOptionalLiveInput` /
-        // Capture `captureCameraSection`) animates its content height over
+        // Slice X.Perf.2: the Capture disclosure animates its content height over
         // SwiftUI's default duration; the AppKit `AVCaptureVideoPreviewLayer`
         // (`resizeAspectFill`) would crop to each intermediate non-16:9 bounds
         // during that animation, leaving a half-frame preview. Disable the
@@ -3040,6 +4736,14 @@ struct MacAnalyzerView: View {
         return "\(mapping.deviceName) · \(mapping.controls.count) control\(mapping.controls.count == 1 ? "" : "s") mapped"
     }
 
+    private var midiControllerActivitySummary: String {
+        let crossfader = captureEngine.liveCrossfaderRawValue.map { String($0) } ?? "--"
+        let left = captureEngine.liveLeftUpfaderRawValue.map { String($0) } ?? "--"
+        let right = captureEngine.liveRightUpfaderRawValue.map { String($0) } ?? "--"
+        let hotCue = captureEngine.liveHotCueIndex.map { "HC\($0)" } ?? "HC--"
+        return "LIVE · XF \(crossfader) · L \(left) · R \(right) · \(hotCue)"
+    }
+
     /// Status text for a continuous action's calibration row — live observed
     /// range while calibrating, or the persisted range/inversion otherwise.
     private func calibrationStatusText(for action: MIDISemanticAction, control: MIDILearnedControl, isCalibrating: Bool) -> String {
@@ -3205,12 +4909,8 @@ struct MacAnalyzerView: View {
         }
     }
 
-    /// Compact "Fader curves" section — Crossfader and Right Upfader only.
-    /// Left upfader's curve is intentionally never shown here: the model
-    /// and persistence support it for a future beat bus, but exposing a
-    /// control with no audible effect would mislead a learner. Its
-    /// existing MIDI mapping stays visible in the rows above; only its
-    /// curve editor is hidden.
+    /// Compact fader-curve controls for both audible deck buses and the
+    /// crossfader. Left controls beat/demo output; right controls AHHH.
     @ViewBuilder
     private var faderCurveSection: some View {
         VStack(alignment: .leading, spacing: 10) {
@@ -3218,6 +4918,7 @@ struct MacAnalyzerView: View {
                 .font(.system(size: 11, weight: .medium))
                 .foregroundStyle(.secondary)
             faderCurveRow(for: .crossfader, title: "Crossfader")
+            faderCurveRow(for: .leftUpfader, title: "Left Upfader")
             faderCurveRow(for: .rightUpfader, title: "Right Upfader")
         }
     }
@@ -3229,6 +4930,35 @@ struct MacAnalyzerView: View {
                 Text(midiMappingDeviceSummary)
                     .font(.system(size: 11, weight: .medium))
                     .foregroundStyle(.secondary)
+
+                HStack(spacing: 8) {
+                    if captureEngine.canApplyVerifiedRaneOneMKIIMapping {
+                        Button("Apply mapping + load AHHH") {
+                            captureEngine.applyVerifiedRaneOneMKIIMappingAndLoadAhhh()
+                        }
+                        .buttonStyle(.borderedProminent)
+                        .controlSize(.small)
+                        .help("Maps CC8 Ch16 crossfader, CC28 deck faders, and right-deck notes 20–27, then silently arms the validated platter sample.")
+                    }
+
+                    Button("Test AHHH audio") {
+                        captureEngine.previewPlatterTestSample()
+                    }
+                    .buttonStyle(.bordered)
+                    .controlSize(.small)
+                    .help("Plays a short audible excerpt of the exact bundled dvs_ahhh sample, then leaves it armed for right-platter movement.")
+                }
+
+                if !captureEngine.platterTestLoadStatus.isEmpty {
+                    Text(captureEngine.platterTestLoadStatus)
+                        .font(.system(size: 11, weight: .medium, design: .monospaced))
+                        .foregroundStyle(
+                            captureEngine.platterTestLoadStatus.hasPrefix("loaded:")
+                                || captureEngine.platterTestLoadStatus.hasPrefix("audible test:")
+                                ? .green
+                                : .red
+                        )
+                }
 
                 if !captureEngine.midiMappingError.isEmpty {
                     Label(captureEngine.midiMappingError, systemImage: "exclamationmark.triangle.fill")
@@ -4325,6 +6055,94 @@ struct MacAnalyzerView: View {
         }
     }
 
+    private func continueCaptureSetup() {
+        // The setup model already owns an in-memory draft, so let people enter
+        // session details before a persisted session exists. Continue assigns
+        // that draft the existing store's session identity and persistence flow.
+        guard routineMetadataStatusMessage == nil,
+              ensureCaptureSessionForRecording() != nil else { return }
+        captureEngine.recordingSessionConfig = routineSessionSetup.config
+        captureEngine.refreshDevices()
+        isEditingCaptureSetup = false
+    }
+
+    private func createCaptureSessionFromCurrentDetails() {
+        _ = ensureCaptureSessionForRecording()
+    }
+
+    private func cancelCaptureSetupPresentation() {
+        if isEditingCaptureSetup {
+            isEditingCaptureSetup = false
+        } else {
+            workspaceTab = .practice
+        }
+    }
+
+    private var captureReadyPrimaryActionTitle: String {
+        if isStartingCaptureFromReadyCard { return "Preparing capture…" }
+        return liveInputEnabled ? "Start recording" : "Enable input & record"
+    }
+
+    private var captureReadyActionBlockedMessage: String? {
+        if !Self.audioCapturePermissionGranted {
+            return "Allow microphone access in System Settings before recording."
+        }
+        if !captureEngine.calibrationLocked {
+            return "Camera boxes are still being edited. Tap Done on the camera preview before recording."
+        }
+        if !captureEngine.isSelectedAudioInputAvailable {
+            return "Choose an available audio input under Input readiness before recording."
+        }
+        if captureEngine.selectedVideoDevice == nil {
+            return "Choose an available camera under Input readiness before recording."
+        }
+        if dvsTimecodeMode != .disabled, !dvsSignalState.isReady {
+            return "DVS input is enabled but not ready. Restore its signal or disable DVS under Input readiness."
+        }
+        return routineMetadataStatusMessage
+    }
+
+    private var captureReadyActionStatusMessage: String {
+        if isStartingCaptureFromReadyCard {
+            return "Preparing the selected live inputs…"
+        }
+        if let captureReadyActionBlockedMessage {
+            return captureReadyActionBlockedMessage
+        }
+        return Self.friendlyStatusMessage(captureEngine.routineRecordingStatus)
+    }
+
+    @MainActor
+    private func startReadyCapture() async {
+        guard !isStartingCaptureFromReadyCard else { return }
+        guard let blockedMessage = captureReadyActionBlockedMessage else {
+            return await beginReadyCaptureUsingExistingFlow()
+        }
+        captureEngine.reportRoutineRecordingIssue(blockedMessage)
+    }
+
+    @MainActor
+    private func beginReadyCaptureUsingExistingFlow() async {
+        isStartingCaptureFromReadyCard = true
+        defer { isStartingCaptureFromReadyCard = false }
+
+        if !liveInputEnabled {
+            startMacLiveInput()
+        }
+        captureEngine.autoSelectCaptureAudioDeviceIfNeeded()
+
+        // Reuse the same bounded readiness wait already used by Practice.
+        // Recording admission and all calibration/session semantics remain in
+        // `handleMainCaptureAction` / `handleRoutineRecordingButton`.
+        guard await waitForPracticeCaptureReadiness() else {
+            captureEngine.reportRoutineRecordingIssue(
+                "Capture inputs are not ready. Check the required audio input and any enabled camera, then try again."
+            )
+            return
+        }
+        handleMainCaptureAction()
+    }
+
     private func handleMainCaptureAction() {
         guard liveInputEnabled else {
             startMacLiveInput()
@@ -4389,6 +6207,7 @@ struct MacAnalyzerView: View {
 
     private func prepareRetake() {
         guard hasRecordedTake else { return }
+        isPreparingRoutineRetake = true
         captureEngine.reportRoutineRecordingIssue("Retake selected. Press Record to capture the next take; the previous take remains stored.")
         workspaceTab = .capture
     }
@@ -4715,74 +6534,11 @@ struct MacAnalyzerView: View {
     }
 
     private func startMacDemo() {
-        isDemoWithBeatMode = false
         if demoModeController.isReady {
             demoModeController.replayDemo()
         } else {
             demoModeController.startDemo()
         }
-    }
-
-    /// Starts scratch audio and a beat engine at 79 BPM together.
-    ///
-    /// Transport alignment: the beat engine reports a future `clickStartHostTime`
-    /// (~120 ms from now). `AVAudioTime.seconds(forHostTime:)` converts that mach
-    /// time to seconds-since-boot, matching `ProcessInfo.systemUptime`.
-    /// `DispatchQueue.main.asyncAfter` fires the `AVAudioPlayer` play call at that
-    /// moment — typically within 1–5 ms of the beat's first audio buffer.
-    ///
-    /// This is a v1 teaching approximation, not sample-accurate sync. The two
-    /// streams may drift by < 20 ms over a 2-minute session, which is
-    /// imperceptible in a beginner teaching context.
-    private func startDemoWithBeat() {
-        // Stop any running listen-mode demo and practice beat
-        demoModeController.stopDemo()
-        practiceBeatStore.stopPlayback()
-        practiceBeatStartUptime = nil
-
-        isDemoWithBeatMode = true
-        demoWithBeatStartUptime = nil
-
-        // Prepare audio without playing — configure the player so it is
-        // ready to replay() the instant the asyncAfter fires.
-        demoModeController.prepareDemoForBeatAlignment()
-        guard demoModeController.isReady else {
-            isDemoWithBeatMode = false
-            return
-        }
-
-        do {
-            // Call the full start signature to obtain BeatEngineStartMetadata,
-            // which carries clickStartHostTime — the mach-absolute-time anchor
-            // we need for aligned asyncAfter scheduling.
-            let metadata = try demoWithBeatEngine.start(
-                mode: .boomBapTrainer,
-                bpm: 79,
-                onCountInBeat: nil,
-                onRecordingStart: nil
-            )
-            // Convert the beat engine's future host-time start to wall-clock
-            // seconds-since-boot (same epoch as ProcessInfo.systemUptime).
-            let clickUptimeAnchor = AVAudioTime.seconds(forHostTime: metadata.clickStartHostTime)
-            demoWithBeatStartUptime = clickUptimeAnchor
-
-            let delay = max(0, clickUptimeAnchor - ProcessInfo.processInfo.systemUptime)
-            DispatchQueue.main.asyncAfter(deadline: .now() + delay) { [weak demoModeController] in
-                demoModeController?.startAlignedPlayback()
-            }
-        } catch {
-            isDemoWithBeatMode = false
-            demoWithBeatStartUptime = nil
-            demoModeController.stopDemo()
-        }
-    }
-
-    /// Stops both the Demo with Beat scratch audio and the beat engine.
-    private func stopDemoWithBeat() {
-        demoWithBeatEngine.stop()
-        demoModeController.stopDemo()
-        isDemoWithBeatMode = false
-        demoWithBeatStartUptime = nil
     }
 
     private func exportMacDemoSession() {
@@ -5736,7 +7492,7 @@ struct MacAnalyzerView: View {
             // Only timecode-loss still has no single owner (SignalHealth has no
             // "lost" case) — left false and reported.
             isFinalizing: artifactReadiness == .finalizing,
-            didComplete: hasRecordedTake,
+            didComplete: hasRecordedTake && !isPreparingRoutineRetake,
             didFail: didFail,
             didEndIncomplete: isLastRecordingIncomplete,
             isTimecodeLost: false
@@ -6142,10 +7898,46 @@ struct MacAnalyzerView: View {
                             // without the chained-redundant "Audio Ready —
                             // Virtual audio device — No signal" copy.
                         }
+
+                        VStack(alignment: .leading, spacing: 6) {
+                            Text("Camera source")
+                                .font(.system(size: 13, weight: .semibold))
+
+                            Picker("Camera", selection: selectedVideoDeviceBinding) {
+                                if captureEngine.availableVideoDevices.isEmpty {
+                                    Text("No cameras found").tag("")
+                                } else {
+                                    ForEach(captureEngine.availableVideoDevices, id: \.uniqueID) { device in
+                                        Text(device.localizedName).tag(device.uniqueID)
+                                    }
+                                }
+                            }
+                            .pickerStyle(.menu)
+                            .disabled(
+                                captureEngine.availableVideoDevices.isEmpty
+                                    || captureEngine.isRoutineRecording
+                                    || routineCountInBeat != nil
+                            )
+
+                            if captureEngine.availableVideoDevices.isEmpty {
+                                Label("Connect or permit a camera, then refresh inputs.", systemImage: "video.slash")
+                                    .font(.system(size: 11, weight: .medium))
+                                    .foregroundStyle(ScratchLabDesign.Sem.warning)
+                                    .fixedSize(horizontal: false, vertical: true)
+                            }
+                        }
                     }
 
                     midiSourcePickerRow
                     midiLearnRow
+
+                    Button("Refresh inputs") {
+                        captureEngine.refreshDevices()
+                        captureEngine.autoSelectCaptureAudioDeviceIfNeeded()
+                    }
+                    .buttonStyle(.bordered)
+                    .controlSize(.small)
+                    .disabled(captureEngine.isRoutineRecording || routineCountInBeat != nil)
                 }
                 .padding(.top, ScratchLabDesign.Spacing.disclosureContentTop)
             } label: {
@@ -6153,9 +7945,98 @@ struct MacAnalyzerView: View {
                     .font(.system(size: 13, weight: .semibold))
                     .foregroundStyle(.secondary)
             }
+
+#if DEBUG
+            // Directly under Input details: the Rane channel-map diagnostic,
+            // shown only when the selected audio device exposes more than a
+            // stereo pair of input channels (a plain 2-ch interface can't be
+            // mis-routed this way).
+            if selectedAudioInputChannelCount > 2 {
+                channelMapDiagnosticCard
+            }
+#endif
         }
         .scratchLabCard()
+#if DEBUG
+        .onAppear { refreshSelectedAudioInputChannelCount() }
+        .onChange(of: captureEngine.selectedAudioDeviceUniqueID) { _, _ in
+            refreshSelectedAudioInputChannelCount()
+        }
+        .onChange(of: captureEngine.availableAudioDevices.count) { _, _ in
+            refreshSelectedAudioInputChannelCount()
+        }
+#endif
     }
+
+#if DEBUG
+    private func refreshSelectedAudioInputChannelCount() {
+        selectedAudioInputChannelCount = Self.audioInputChannelCount(
+            forDeviceUID: captureEngine.selectedAudioDeviceUniqueID
+        )
+    }
+
+    /// Sum of input-scope channels the CoreAudio device with `uid` exposes.
+    /// Read-only HAL query; does not touch the capture session or routing.
+    private static func audioInputChannelCount(forDeviceUID uid: String) -> Int {
+        guard !uid.isEmpty else { return 0 }
+
+        var devicesAddress = AudioObjectPropertyAddress(
+            mSelector: kAudioHardwarePropertyDevices,
+            mScope: kAudioObjectPropertyScopeGlobal,
+            mElement: kAudioObjectPropertyElementMain
+        )
+        var devicesSize: UInt32 = 0
+        guard AudioObjectGetPropertyDataSize(
+            AudioObjectID(kAudioObjectSystemObject), &devicesAddress, 0, nil, &devicesSize
+        ) == noErr, devicesSize > 0 else { return 0 }
+
+        let deviceCount = Int(devicesSize) / MemoryLayout<AudioDeviceID>.size
+        var deviceIDs = [AudioDeviceID](repeating: 0, count: deviceCount)
+        guard AudioObjectGetPropertyData(
+            AudioObjectID(kAudioObjectSystemObject), &devicesAddress, 0, nil, &devicesSize, &deviceIDs
+        ) == noErr else { return 0 }
+
+        for deviceID in deviceIDs {
+            var uidAddress = AudioObjectPropertyAddress(
+                mSelector: kAudioDevicePropertyDeviceUID,
+                mScope: kAudioObjectPropertyScopeGlobal,
+                mElement: kAudioObjectPropertyElementMain
+            )
+            var uidSize = UInt32(MemoryLayout<Unmanaged<CFString>?>.size)
+            var deviceUID: Unmanaged<CFString>? = nil
+            let uidStatus = AudioObjectGetPropertyData(
+                deviceID, &uidAddress, 0, nil, &uidSize, &deviceUID
+            )
+            guard uidStatus == noErr,
+                  let resolvedUID = deviceUID?.takeRetainedValue() as String?,
+                  resolvedUID == uid else { continue }
+
+            var configAddress = AudioObjectPropertyAddress(
+                mSelector: kAudioDevicePropertyStreamConfiguration,
+                mScope: kAudioObjectPropertyScopeInput,
+                mElement: kAudioObjectPropertyElementMain
+            )
+            var configSize: UInt32 = 0
+            guard AudioObjectGetPropertyDataSize(deviceID, &configAddress, 0, nil, &configSize) == noErr,
+                  configSize > 0 else { return 0 }
+
+            let listPointer = UnsafeMutableRawPointer.allocate(
+                byteCount: Int(configSize),
+                alignment: MemoryLayout<AudioBufferList>.alignment
+            )
+            defer { listPointer.deallocate() }
+            guard AudioObjectGetPropertyData(
+                deviceID, &configAddress, 0, nil, &configSize, listPointer
+            ) == noErr else { return 0 }
+
+            let bufferList = UnsafeMutableAudioBufferListPointer(
+                listPointer.assumingMemoryBound(to: AudioBufferList.self)
+            )
+            return bufferList.reduce(0) { $0 + Int($1.mNumberChannels) }
+        }
+        return 0
+    }
+#endif
 
     private var midiMonitorCard: some View {
         VStack(alignment: .leading, spacing: 14) {
@@ -6186,6 +8067,9 @@ struct MacAnalyzerView: View {
                 Text(captureEngine.lastMIDICCMessage)
                     .font(.system(size: 11, weight: .medium, design: .monospaced))
                     .foregroundStyle(.secondary)
+                Text(midiControllerActivitySummary)
+                    .font(.system(size: 11, weight: .semibold, design: .monospaced))
+                    .foregroundStyle(.secondary)
             }
 
             // Crossfader status (learned/listening/idle) is covered by
@@ -6210,21 +8094,6 @@ struct MacAnalyzerView: View {
                 }
             }
             .toggleStyle(.switch)
-
-            // TEMP HARDWARE DIAGNOSTIC: loads the validated one-revolution
-            // platter asset (dvs_ahhh) with no auto-preview — move the
-            // right platter afterward to hear it.
-            Button("Load platter ahhh test") {
-                captureEngine.loadPlatterTestSample()
-            }
-            .buttonStyle(.borderedProminent)
-            .controlSize(.small)
-
-            if !captureEngine.platterTestLoadStatus.isEmpty {
-                Text(captureEngine.platterTestLoadStatus)
-                    .font(.system(size: 11, weight: .medium, design: .monospaced))
-                    .foregroundStyle(captureEngine.platterTestLoadStatus.hasPrefix("loaded:") ? .green : .red)
-            }
 
             if !captureEngine.lastScratchBankPadLabel.isEmpty {
                 VStack(alignment: .leading, spacing: 4) {
@@ -7333,12 +9202,38 @@ struct MacAnalyzerView: View {
 
             switch reviewPerformanceComparison {
             case .unavailable(let reason):
-                Text(reason)
-                    .font(.system(size: 12, weight: .medium))
-                    .foregroundStyle(ScratchLabDesign.Sem.textSecondary)
-                    .frame(maxWidth: .infinity, minHeight: 60, alignment: .leading)
-                    .padding(12)
-                    .background(ScratchLabDesign.Surface.subtleFill, in: RoundedRectangle(cornerRadius: ScratchLabDesign.Radius.compactPanel, style: .continuous))
+                let scratchType = routineSessionSetup.scratchType ?? .babyScratch
+                let target = reviewTargetReferenceNotation(for: scratchType)
+                VStack(alignment: .leading, spacing: 10) {
+                    VStack(alignment: .leading, spacing: 4) {
+                        Label("TARGET", systemImage: "target")
+                            .font(.system(size: 11, weight: .bold, design: .monospaced))
+                            .foregroundStyle(ScratchLabDesign.Notation.targetTrace)
+                        if let target {
+                            ScratchPhraseChartView(
+                                source: .target(target),
+                                bpm: Double(routineSessionSetup.bpmValue ?? 90),
+                                targetWindow: reviewTargetNotationWindow(for: target)
+                            )
+                            .frame(height: 190)
+                            .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+                        }
+                    }
+
+                    VStack(alignment: .leading, spacing: 4) {
+                        Label("MY PERFORMANCE", systemImage: "person.fill")
+                            .font(.system(size: 11, weight: .bold, design: .monospaced))
+                            .foregroundStyle(ScratchLabDesign.Notation.performanceTrace)
+                        ScratchPhraseChartView(
+                            source: .empty(reason),
+                            bpm: Double(routineSessionSetup.bpmValue ?? 90),
+                            showBeatGrid: false,
+                            backgroundColor: ScratchLabDesign.Notation.performanceCanvas
+                        )
+                        .frame(height: 118)
+                        .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+                    }
+                }
             case .ready(let model):
                 // Stacked comparison — TARGET above, MY PERFORMANCE below, on
                 // the same musical-time axis. Direct labels keep the two
@@ -7359,7 +9254,7 @@ struct MacAnalyzerView: View {
                             .foregroundStyle(ScratchLabDesign.Notation.targetTrace)
                         ScratchPhraseChartView(source: .target(model.notation), bpm: model.bpm,
                                                targetWindow: domain)
-                            .frame(height: 96)
+                            .frame(height: 150)
                             .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
                     }
                     VStack(alignment: .leading, spacing: 3) {
@@ -7369,7 +9264,7 @@ struct MacAnalyzerView: View {
                         ScratchPhraseChartView(source: .performedPlatter(model.performedEvents), bpm: model.bpm,
                                                capturedWindow: domain,
                                                performedFrame: performedFrame)
-                            .frame(height: 96)
+                            .frame(height: 150)
                             .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
                     }
                 }
@@ -7958,26 +9853,19 @@ struct MacAnalyzerView: View {
                 HStack(spacing: 10) {
                     let listenPlayState = demoModeController.demoPlayer.playbackState
                     let listenLabel: String = {
-                        guard !isDemoWithBeatMode else { return "Listen" }
                         switch listenPlayState {
                         case .playing: return "Pause"
                         case .paused:  return "Resume"
                         default:       return "Listen"
                         }
                     }()
-                    let listenIcon: String = (!isDemoWithBeatMode && listenPlayState == .playing) ? "pause.fill" : "headphones"
+                    let listenIcon: String = listenPlayState == .playing ? "pause.fill" : "headphones"
 
                     Button {
-                        if isDemoWithBeatMode {
-                            // Switch from Demo with Beat → Listen mode
-                            stopDemoWithBeat()
-                            startMacDemo()
-                        } else {
-                            switch listenPlayState {
-                            case .paused:  demoModeController.resumeDemo()
-                            case .playing: demoModeController.pauseDemo()
-                            default:       startMacDemo()
-                            }
+                        switch listenPlayState {
+                        case .paused:  demoModeController.resumeDemo()
+                        case .playing: demoModeController.pauseDemo()
+                        default:       startMacDemo()
                         }
                     } label: {
                         Label(listenLabel, systemImage: listenIcon)
@@ -7986,36 +9874,14 @@ struct MacAnalyzerView: View {
                     .scratchLabPrimaryButton(fillsWidth: true)
 
                     Button {
-                        if isDemoWithBeatMode {
-                            startDemoWithBeat()
-                        } else {
-                            demoModeController.replayDemo()
-                        }
+                        demoModeController.replayDemo()
                     } label: {
                         Label("Restart", systemImage: "arrow.counterclockwise")
                             .frame(maxWidth: .infinity)
                     }
                     .buttonStyle(.bordered)
                     .controlSize(.large)
-                    .disabled(!demoModeController.isReady && demoWithBeatStartUptime == nil)
-                }
-
-                // Row 2 — Demo with Beat (scratch + beat aligned at 79 BPM)
-                if isDemoWithBeatMode {
-                    Button { stopDemoWithBeat() } label: {
-                        Label("Stop Demo with Beat", systemImage: "stop.fill")
-                            .frame(maxWidth: .infinity)
-                    }
-                    .buttonStyle(.borderedProminent)
-                    .controlSize(.large)
-                    .tint(ScratchLabDesign.Sem.warning)
-                } else {
-                    Button { startDemoWithBeat() } label: {
-                        Label("Demo with Beat", systemImage: "metronome")
-                            .frame(maxWidth: .infinity)
-                    }
-                    .buttonStyle(.bordered)
-                    .controlSize(.large)
+                    .disabled(!demoModeController.isReady)
                 }
             }
 
@@ -8505,7 +10371,7 @@ struct MacAnalyzerView: View {
                     }
                 }
             } else {
-                Text("Beat off. Use Listen or Demo with Beat in the Coach card to hear the scratch reference.")
+                Text("Beat is unavailable for this lesson.")
                     .font(.system(size: 12, weight: .medium))
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
@@ -9159,9 +11025,73 @@ struct MacAnalyzerView: View {
                     }
                 }
 
-                TextField("Custom BPM · 60–140", text: $bpmText)
+                DeferredBPMTextField("Custom BPM · 60–140", bpmText: $bpmText)
                     .textFieldStyle(.roundedBorder)
             }
+        }
+    }
+
+    /// Keeps incomplete multi-digit entry local to the text field. The setup
+    /// model deliberately clamps committed values to 60…140, but writing every
+    /// keystroke directly into that model turns the first digit of `120` into
+    /// `60` and makes ordinary typing impossible.
+    private struct DeferredBPMTextField: View {
+        @Binding var bpmText: String
+
+        let prompt: String
+
+        @State private var draftText = ""
+        @FocusState private var isFocused: Bool
+
+        init(_ prompt: String, bpmText: Binding<String>) {
+            self.prompt = prompt
+            _bpmText = bpmText
+        }
+
+        var body: some View {
+            TextField(prompt, text: $draftText)
+                .focused($isFocused)
+                .onAppear {
+                    draftText = bpmText
+                }
+                .onChange(of: bpmText) { _, newValue in
+                    guard draftText != newValue else { return }
+                    draftText = newValue
+                }
+                .onChange(of: draftText) { _, newValue in
+                    let digitsOnly = newValue.filter(\.isNumber)
+                    if digitsOnly != newValue {
+                        draftText = digitsOnly
+                        return
+                    }
+
+                    if digitsOnly.isEmpty {
+                        bpmText = ""
+                    } else if let bpm = Int(digitsOnly),
+                              CaptureClickTrackDefaults.supportedBPMRange.contains(bpm) {
+                        bpmText = String(bpm)
+                    }
+                }
+                .onChange(of: isFocused) { wasFocused, nowFocused in
+                    guard wasFocused, !nowFocused else { return }
+                    commitDraft()
+                }
+                .onSubmit {
+                    commitDraft()
+                }
+        }
+
+        private func commitDraft() {
+            let trimmed = draftText.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !trimmed.isEmpty else {
+                bpmText = ""
+                draftText = bpmText
+                return
+            }
+
+            // Reuse the existing model setter for final range clamping.
+            bpmText = trimmed
+            draftText = bpmText
         }
     }
 
@@ -10112,6 +12042,64 @@ struct MacAnalyzerView: View {
                         .font(.system(size: 12, weight: .semibold))
                     }
                 }
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(20)
+        .background(Color(nsColor: .controlBackgroundColor), in: RoundedRectangle(cornerRadius: 18, style: .continuous))
+    }
+
+    // Rane channel-map diagnostic (Phase 2). Identifies which stereo pair of a
+    // multichannel input (e.g. Rane ONE MKII, 14 ch) carries program audio.
+    private var channelMapDiagnosticCard: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            HStack {
+                Text("Rane Channel-Map Diagnostic")
+                    .font(.headline)
+                Spacer()
+                Circle()
+                    .fill(captureEngine.isChannelMapDiagnosticRunning ? Color(nsColor: .systemRed) : Color.secondary)
+                    .frame(width: 8, height: 8)
+                Text(captureEngine.isChannelMapDiagnosticRunning ? "Sampling" : "Idle")
+                    .font(.system(size: 11, weight: .medium))
+                    .foregroundStyle(captureEngine.isChannelMapDiagnosticRunning ? Color(nsColor: .systemRed) : .secondary)
+            }
+
+            Text(captureEngine.channelMapDiagnosticStatus)
+                .font(.system(size: 11))
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+
+            HStack(spacing: 8) {
+                Button(captureEngine.isChannelMapDiagnosticRunning ? "Stop" : "Start Diagnostic") {
+                    if captureEngine.isChannelMapDiagnosticRunning {
+                        captureEngine.stopChannelMapDiagnostic()
+                    } else {
+                        captureEngine.startChannelMapDiagnostic()
+                    }
+                }
+                .buttonStyle(.borderedProminent)
+                .tint(captureEngine.isChannelMapDiagnosticRunning ? Color(nsColor: .systemRed) : Color(nsColor: .systemBlue))
+                .font(.system(size: 12, weight: .semibold))
+
+                if let report = captureEngine.channelMapDiagnosticSnapshot?.reportText {
+                    Button("Copy Report") {
+                        NSPasteboard.general.clearContents()
+                        NSPasteboard.general.setString(report, forType: .string)
+                    }
+                    .buttonStyle(.bordered)
+                    .font(.system(size: 12, weight: .semibold))
+                }
+            }
+
+            if let report = captureEngine.channelMapDiagnosticSnapshot?.reportText {
+                ScrollView {
+                    Text(report)
+                        .font(.system(size: 10, design: .monospaced))
+                        .textSelection(.enabled)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                }
+                .frame(maxHeight: 260)
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)

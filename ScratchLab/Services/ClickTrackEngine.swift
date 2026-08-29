@@ -147,6 +147,11 @@ final class ClickTrackEngine: ObservableObject {
         }
     }
 
+    func setOutputGain(_ normalizedGain: Double) {
+        let finiteGain = normalizedGain.isFinite ? normalizedGain : 0
+        playerNode.volume = Float(min(max(finiteGain, 0), 1))
+    }
+
     private func resolvedSampleRate() -> Double {
         let sampleRate = audioEngine.outputNode.outputFormat(forBus: 0).sampleRate
         return sampleRate > 0 ? sampleRate : 48_000

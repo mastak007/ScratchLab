@@ -473,6 +473,155 @@ struct CaptureTimingMetadata: Codable, Equatable, Sendable {
     var recordingStartHostTime: UInt64?
 }
 
+// MARK: - Capture motion evidence
+
+/// Which platter evidence a take's decoded movement runs actually amount to.
+///
+/// A powered, released turntable is still *moving* — it produces a long
+/// forward-only stream of CC6 steps — but it is not a scratch gesture. Every
+/// real gesture contains a reversal (the pull-back), so the presence of a
+/// decoded backward run is the structural discriminator. This deliberately
+/// reuses `derivePlatterMovementEvents`' existing noise gates (minimum run
+/// duration and step count) rather than introducing a second, independently
+/// tunable threshold layer.
+enum CapturePlatterMotionEvidence: Equatable, Sendable {
+    /// No decoded movement runs at all.
+    case absent
+    /// Forward-only runs: motion, but never a scratch gesture on its own.
+    case steadyRotationOnly(forwardRuns: Int)
+    /// At least one decoded reversal.
+    case gesture(movementRuns: Int, reversalRuns: Int)
+
+    var isGesture: Bool {
+        if case .gesture = self { return true }
+        return false
+    }
+}
+
+enum CaptureWatchMotionEvidence: Equatable, Sendable {
+    case notUsed
+    case linked
+}
+
+/// DVS is modelled so the evidence type is complete and callers can switch
+/// exhaustively, but iOS capture has no timecode-pipeline feed at take
+/// finalization today. It therefore reports `.unsupported` rather than a
+/// fabricated value — wiring a genuine DVS source is a separate slice, and
+/// until then this must never contribute to motion presence.
+enum CaptureDVSMotionEvidence: Equatable, Sendable {
+    case unsupported
+}
+
+/// The sources that can independently establish that a take contains motion.
+enum CaptureMotionSource: String, Codable, Sendable, CaseIterable {
+    case platter
+    case watch
+    case dvs
+}
+
+/// Typed, domain-only record of which capture sources produced motion
+/// evidence for one take.
+///
+/// This carries no user-facing strings by design: presentation belongs to the
+/// review/HUD layer, so the two platforms cannot drift into different
+/// vocabularies for the same underlying state.
+///
+/// Motion presence is not a Watch-only question. A RANE platter scratch
+/// captured over MIDI is real movement even with no Watch paired. Before this
+/// model existed, three separate sites derived presence solely from a linked
+/// Watch artifact, so valid controller takes reported motion missing in review
+/// and exported as motionless.
+struct CaptureMotionEvidence: Equatable, Sendable {
+    let platter: CapturePlatterMotionEvidence
+    let faderEventCount: Int
+    let watch: CaptureWatchMotionEvidence
+    let dvs: CaptureDVSMotionEvidence
+
+    init(
+        platter: CapturePlatterMotionEvidence,
+        faderEventCount: Int,
+        watch: CaptureWatchMotionEvidence,
+        dvs: CaptureDVSMotionEvidence = .unsupported
+    ) {
+        self.platter = platter
+        self.faderEventCount = faderEventCount
+        self.watch = watch
+        self.dvs = dvs
+    }
+
+    /// Sources that independently establish motion presence, in a stable
+    /// order so callers and tests never depend on incidental ordering.
+    ///
+    /// Crossfader activity is deliberately excluded. A cut is real captured
+    /// evidence and is persisted and exported as such, but it is not platter
+    /// movement and must never stand in for it — a take where only the fader
+    /// moved has no scratch gesture to review.
+    var motionSources: [CaptureMotionSource] {
+        var sources: [CaptureMotionSource] = []
+        if platter.isGesture { sources.append(.platter) }
+        if watch == .linked { sources.append(.watch) }
+        switch dvs {
+        case .unsupported: break
+        }
+        return sources
+    }
+
+    var motionPresent: Bool { !motionSources.isEmpty }
+
+    /// True when the only motion claim comes from a linked Watch artifact.
+    /// Export validation uses this to decide whether a watch file is required.
+    var requiresLinkedWatchArtifact: Bool { motionSources == [.watch] }
+
+    static let none = CaptureMotionEvidence(
+        platter: .absent,
+        faderEventCount: 0,
+        watch: .notUsed
+    )
+}
+
+extension ScratchMovementKind {
+    /// Backward (pull) travel. Used to identify the reversal that separates a
+    /// scratch gesture from free-running forward platter rotation.
+    var isReversal: Bool {
+        switch self {
+        case .fastPull, .normalPull, .slowPullDrag:
+            return true
+        case .fastPush, .normalPush, .slowDrag, .hold, .releaseNormalPlayback:
+            return false
+        }
+    }
+}
+
+/// Single place that turns persisted take evidence into a `CaptureMotionEvidence`.
+///
+/// Both the live capture path and the recovery/export path resolve through
+/// this, reading the same persisted sidecar notation, so a take that is
+/// reviewed live and the same take rebuilt from disk can never disagree about
+/// whether it contains motion.
+enum CaptureMotionEvidenceResolver {
+    static func platterEvidence(
+        from movementEvents: [CaptureCore.DetectedNotationRecordMovementEvent]
+    ) -> CapturePlatterMotionEvidence {
+        guard !movementEvents.isEmpty else { return .absent }
+        let reversalRuns = movementEvents.filter { $0.movementKind.isReversal }.count
+        guard reversalRuns > 0 else {
+            return .steadyRotationOnly(forwardRuns: movementEvents.count)
+        }
+        return .gesture(movementRuns: movementEvents.count, reversalRuns: reversalRuns)
+    }
+
+    static func resolve(
+        detectedNotation: CaptureCore.DetectedNotationSnapshot?,
+        watchCaptureLinked: Bool
+    ) -> CaptureMotionEvidence {
+        CaptureMotionEvidence(
+            platter: platterEvidence(from: detectedNotation?.recordMovementEvents ?? []),
+            faderEventCount: detectedNotation?.faderEvents.count ?? 0,
+            watch: watchCaptureLinked ? .linked : .notUsed
+        )
+    }
+}
+
 struct GuidedCaptureMotionAssessment: Equatable, Sendable {
     let syncStatus: String
     let motionStatusTitle: String
@@ -1159,6 +1308,11 @@ protocol PracticeBeatPlaybackEngine: AnyObject {
     func start(mode: BeatEngineMode, bpm: Int) throws
     func stop()
     func hardResetBeatPlayback()
+    func setOutputGain(_ normalizedGain: Double)
+}
+
+extension PracticeBeatPlaybackEngine {
+    func setOutputGain(_ normalizedGain: Double) {}
 }
 
 extension ScratchLabBeatEngine: PracticeBeatPlaybackEngine {
@@ -1213,6 +1367,10 @@ final class PracticeBeatStore: ObservableObject {
         } else {
             self.preferences = PracticeBeatPreferences.defaultValue
         }
+    }
+
+    func setOutputGain(_ normalizedGain: Double) {
+        beatEngine.setOutputGain(normalizedGain)
     }
 
     var scratchType: CaptureSessionScratchType {
@@ -1670,6 +1828,11 @@ protocol ScratchCoachDemoPlayable: AnyObject {
     @discardableResult func play() -> Bool
     func pause()
     func stop()
+    func setOutputGain(_ normalizedGain: Float)
+}
+
+extension ScratchCoachDemoPlayable {
+    func setOutputGain(_ normalizedGain: Float) {}
 }
 
 private final class ScratchCoachAVAudioPlayerAdapter: ScratchCoachDemoPlayable {
@@ -1711,6 +1874,11 @@ private final class ScratchCoachAVAudioPlayerAdapter: ScratchCoachDemoPlayable {
 
     func stop() {
         player.stop()
+    }
+
+    func setOutputGain(_ normalizedGain: Float) {
+        let finiteGain = normalizedGain.isFinite ? normalizedGain : 0
+        player.volume = min(max(finiteGain, 0), 1)
     }
 }
 
@@ -1765,6 +1933,7 @@ final class ScratchCoachDemoAudioPlayer: ObservableObject {
     private var player: ScratchCoachDemoPlayable?
     private var currentAudioFile: String?
     private var lifecycleObservers: [NSObjectProtocol] = []
+    private var outputGain: Float = 1.0
 
     // Host-clock source for the Demo-mode playhead clock (injectable for tests).
     private let hostTimeProvider: () -> TimeInterval
@@ -1840,6 +2009,7 @@ final class ScratchCoachDemoAudioPlayer: ObservableObject {
 
         do {
             let nextPlayer = try playerFactory(audioURL)
+            nextPlayer.setOutputGain(outputGain)
             nextPlayer.prepareToPlay()
             player = nextPlayer
             isAudioAvailable = true
@@ -1863,6 +2033,7 @@ final class ScratchCoachDemoAudioPlayer: ObservableObject {
 
         do {
             let nextPlayer = try playerFactory(url)
+            nextPlayer.setOutputGain(outputGain)
             nextPlayer.prepareToPlay()
             player = nextPlayer
             isAudioAvailable = true
@@ -1909,6 +2080,12 @@ final class ScratchCoachDemoAudioPlayer: ObservableObject {
         player.stop()
         player.currentTime = 0
         playbackState = .stopped
+    }
+
+    func setOutputGain(_ normalizedGain: Double) {
+        let finiteGain = normalizedGain.isFinite ? normalizedGain : 0
+        outputGain = Float(min(max(finiteGain, 0), 1))
+        player?.setOutputGain(outputGain)
     }
 
     nonisolated static func bundledDemoAudioURL(
@@ -2749,11 +2926,9 @@ struct ScratchNotation: Codable, Equatable, Sendable {
     static let babyScratch: ScratchNotation? = loadBabyScratchFromBundle()
 
     /// Full-demo notation constructed from the extracted stroke resource
-    /// (`CoachDemoMotion/baby_scratch_strokes.json`). Covers all four
-    /// demonstration phrases across the full ~42.4 s timeline, so the
-    /// Practice Coach cursor and the Advanced template canvas display
-    /// strokes for the entire demo audio instead of freezing after the
-    /// first ~5 s excerpt.
+    /// (`CoachDemoMotion/baby_scratch_strokes.json`). The resource follows
+    /// the bundled 79 BPM performance exactly: a 2-second lead-in, 16
+    /// forward/backward cycles, and a 2-second tail hold.
     ///
     /// Falls back to `nil` when the extracted stroke resource is missing
     /// from the bundle — callers should treat `nil` as the empty state
@@ -3353,10 +3528,10 @@ struct BabyScratchReferenceMotionTimeline: Sendable {
     static let recordRotationRangeDegrees: Double = 60
     // The bundled WAV is itself the demo, so app playback time 0 == demoStart.
     static let demoStart: TimeInterval = 0
-    static let demoEnd: TimeInterval = 42.866625
+    static let demoEnd: TimeInterval = 16.0483125
     static let phaseOffset: TimeInterval = 0
-    // The clean-demo timeline encodes all phrases explicitly (no looping),
-    // so the audio plays through one full cycle of the multi-phrase notation.
+    // The clean-demo timeline encodes the complete 16-cycle performance, so
+    // the audio and coach motion play through once without synthetic looping.
     static let demoAudioPhraseCycleCount = 1
     private static let fallbackPhraseDuration: TimeInterval = 1.0
     private static let notationResource = ScratchNotation.loadBabyScratchFromBundle()
@@ -3639,7 +3814,7 @@ struct BabyScratchCoachTimingProbe: Equatable, Sendable {
 }
 
 extension BabyScratchReferenceMotionTimeline {
-    static let debugProbePlaybackTimes: [TimeInterval] = [0.27, 0.778, 2.368, 1.46, 5.85, 8.5, 12.45, 42.654]
+    static let debugProbePlaybackTimes: [TimeInterval] = [2.0, 2.410975, 3.062990, 5.85, 8.5, 12.45, 14.048311, 15.0]
 
     static func debugTimingProbe(
         at playbackTime: TimeInterval,
@@ -4877,7 +5052,7 @@ struct ScratchLabDemoSessionBuilder: Sendable {
     static let demoAudioFileName = "baby_noBeat.wav"
     private static let demoSessionName = "ScratchLab Demo"
     private static let demoPerformerName = "App Review Demo"
-    private static let demoBPM = 79
+    static let demoBPM = 79
     private static let videoFrameRate: Int32 = 10
     private static let videoSize = CGSize(width: 160, height: 90)
 

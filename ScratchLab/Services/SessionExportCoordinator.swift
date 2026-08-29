@@ -191,6 +191,13 @@ struct SessionExportTake: Sendable {
     let syncClapUsed: Bool?
     let note: String?
     let captureTiming: CaptureTimingMetadata?
+    /// Typed provenance behind `motionPresent`. Additive and optional: `nil`
+    /// means a caller that predates source-aware motion resolution, and is
+    /// treated as the historical Watch-only claim by export validation.
+    ///
+    /// `SessionExportTake` is an in-memory input struct, not a serialized
+    /// type, so this adds no on-disk export-schema field.
+    let motionSources: [CaptureMotionSource]?
 
     init(
         takeID: String,
@@ -211,7 +218,8 @@ struct SessionExportTake: Sendable {
         verbalSlateUsed: Bool?,
         syncClapUsed: Bool?,
         note: String?,
-        captureTiming: CaptureTimingMetadata? = nil
+        captureTiming: CaptureTimingMetadata? = nil,
+        motionSources: [CaptureMotionSource]? = nil
     ) {
         self.takeID = takeID
         self.takeNumber = takeNumber
@@ -232,6 +240,26 @@ struct SessionExportTake: Sendable {
         self.syncClapUsed = syncClapUsed
         self.note = note
         self.captureTiming = captureTiming
+        self.motionSources = motionSources
+    }
+
+    /// Whether export must find a valid linked Watch artifact to honour this
+    /// take's motion claim.
+    ///
+    /// A take whose motion came from controller platter evidence has no Watch
+    /// file to point at and must not be rejected for lacking one. `nil`
+    /// sources keep the historical Watch-only behaviour so pre-existing
+    /// callers and fixtures validate exactly as before.
+    var claimsWatchBackedMotion: Bool {
+        guard motionPresent == true else { return false }
+        guard let motionSources else { return true }
+        return motionSources.contains(.watch)
+    }
+
+    /// A motion claim with no source behind it is a contradiction, not a
+    /// Watch-backed take, and must fail validation on its own terms.
+    var claimsMotionWithoutAnySource: Bool {
+        motionPresent == true && motionSources?.isEmpty == true
     }
 }
 
@@ -1873,6 +1901,13 @@ struct SessionArchiveBuilder: Sendable {
                     (sidecar.endedAt ?? sidecar.startedAt).timeIntervalSince(sidecar.startedAt)
                 )
                 let linkedWatchCapture = self.resolveLinkedWatchCapture(for: sidecar)
+                // Same resolver and same persisted sidecar notation the live
+                // capture path uses, so a recovered take and a live-exported
+                // take report identical motion evidence.
+                let motionEvidence = CaptureMotionEvidenceResolver.resolve(
+                    detectedNotation: sidecar.detectedNotation,
+                    watchCaptureLinked: linkedWatchCapture != nil
+                )
 
                 return SessionExportTake(
                     takeID: sidecar.takeID,
@@ -1887,13 +1922,14 @@ struct SessionArchiveBuilder: Sendable {
                     quality: nil,
                     comboTagged: false,
                     audioPresent: true,
-                    motionPresent: linkedWatchCapture != nil,
+                    motionPresent: motionEvidence.motionPresent,
                     syncStatus: sidecar.watchSyncState.rawValue,
                     recordingStatus: sidecar.recordingStatus,
                     verbalSlateUsed: false,
                     syncClapUsed: false,
                     note: nil,
-                    captureTiming: sidecar.captureTiming
+                    captureTiming: sidecar.captureTiming,
+                    motionSources: motionEvidence.motionSources
                 )
             }
             .sorted { $0.takeNumber < $1.takeNumber }
@@ -3068,17 +3104,29 @@ struct SessionArchiveBuilder: Sendable {
                     issues.append("\(takeLabel) failed and is not exportable.")
                 }
             }
-            if let motionPresent = take.motionPresent, motionPresent,
-               let watchCaptureSession = take.watchCaptureSession {
-                if !WatchAssociationResolver.isLinkedCaptureValid(
-                    sessionID: package.metadata.sessionID,
-                    takeID: take.takeID,
-                    captureSession: watchCaptureSession
-                ) {
-                    issues.append("Take \(take.takeID) has a watch artifact that is not linked to this session/take.")
+            if take.claimsMotionWithoutAnySource {
+                issues.append("Take \(take.takeID) claims motion, but no motion source was recorded for it.")
+            } else if take.claimsWatchBackedMotion {
+                if let watchCaptureSession = take.watchCaptureSession {
+                    if !WatchAssociationResolver.isLinkedCaptureValid(
+                        sessionID: package.metadata.sessionID,
+                        takeID: take.takeID,
+                        captureSession: watchCaptureSession
+                    ) {
+                        issues.append("Take \(take.takeID) has a watch artifact that is not linked to this session/take.")
+                    }
+                } else {
+                    issues.append("Take \(take.takeID) claims watch motion, but no linked watch artifact was supplied.")
                 }
-            } else if take.motionPresent == true {
-                issues.append("Take \(take.takeID) claims watch motion, but no linked watch artifact was supplied.")
+            } else if let watchCaptureSession = take.watchCaptureSession,
+                      !WatchAssociationResolver.isLinkedCaptureValid(
+                        sessionID: package.metadata.sessionID,
+                        takeID: take.takeID,
+                        captureSession: watchCaptureSession
+                      ) {
+                // Controller/DVS-backed motion still must not ship a watch
+                // artifact belonging to a different session or take.
+                issues.append("Take \(take.takeID) has a watch artifact that is not linked to this session/take.")
             }
         }
 
@@ -3166,7 +3214,8 @@ struct SessionArchiveBuilder: Sendable {
                 verbalSlateUsed: resolvedVerbalSlateUsed,
                 syncClapUsed: resolvedSyncClapUsed,
                 note: take.note,
-                captureTiming: take.captureTiming
+                captureTiming: take.captureTiming,
+                motionSources: take.motionSources
             )
         }
 
@@ -3455,7 +3504,14 @@ struct SessionArchiveBuilder: Sendable {
                 throw SessionExportError.invalidSessionMetadata
             }
 
-            if sidecar.linkedMotionFileName != nil || take.motionPresent == true {
+            if take.claimsMotionWithoutAnySource {
+                throw SessionExportError.invalidSessionMetadata
+            }
+            // A watch file is required only when the sidecar names one or the
+            // take's motion claim actually rests on the Watch. Controller
+            // platter evidence is motion in its own right and has no watch
+            // artifact to validate against.
+            if sidecar.linkedMotionFileName != nil || take.claimsWatchBackedMotion {
                 guard let watchCaptureSession = take.watchCaptureSession,
                       WatchAssociationResolver.isLinkedCaptureValid(
                         sessionID: package.metadata.sessionID,
@@ -3464,8 +3520,14 @@ struct SessionArchiveBuilder: Sendable {
                       ) else {
                     throw SessionExportError.invalidSessionMetadata
                 }
-            } else if let motionPresent = take.motionPresent, motionPresent {
-                throw SessionExportError.invalidSessionMetadata
+            } else if let watchCaptureSession = take.watchCaptureSession {
+                guard WatchAssociationResolver.isLinkedCaptureValid(
+                    sessionID: package.metadata.sessionID,
+                    takeID: take.takeID,
+                    captureSession: watchCaptureSession
+                ) else {
+                    throw SessionExportError.invalidSessionMetadata
+                }
             }
 
             let videoExtension = take.mediaURL.pathExtension.lowercased()
@@ -3593,17 +3655,21 @@ struct SessionArchiveBuilder: Sendable {
             takes: manifestTakes
         )
 
-        let takeLogRows = takeContexts.map {
+        let takeLogRows = takeContexts.map { context in
+            // Raw-media references must come from the same authoritative
+            // per-take names the manifest's `canonicalFilesMap` emits, so
+            // take_log.csv and session_manifest.json never disagree. ScratchLab
+            // captures a single camera, so there is no `raw_camB` artifact.
             CanonicalTakeLogRow(
-                bpm: $0.canonicalBPM,
-                takeNumber: $0.take.takeNumber,
-                rawCamA: "",
+                bpm: context.canonicalBPM,
+                takeNumber: context.take.takeNumber,
+                rawCamA: "video/\(context.videoFileName)",
                 rawCamB: "",
-                rawAudio: "",
-                rawWatch: "",
-                verbalSlateUsed: $0.verbalSlateUsed,
-                syncClapUsed: $0.syncClapUsed,
-                notes: $0.notes
+                rawAudio: context.scratchOnlyRelativePath,
+                rawWatch: context.watchFileName.map { "watch/\($0)" } ?? "",
+                verbalSlateUsed: context.verbalSlateUsed,
+                syncClapUsed: context.syncClapUsed,
+                notes: context.notes
             )
         }
 

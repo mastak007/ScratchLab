@@ -118,6 +118,35 @@ struct WatchCaptureCommandPayload: Codable, Equatable, Sendable {
     }
 }
 
+/// A control request initiated on Apple Watch for the paired iPhone's guided
+/// capture state machine. This is intentionally distinct from
+/// `WatchCaptureCommandPayload`, which travels in the opposite direction to
+/// start/stop the watch motion recorder after iPhone capture is ready.
+struct PhoneCaptureCommandPayload: Codable, Equatable, Sendable {
+    static let packetKind = "phone_capture_control_command_v1"
+
+    enum Command: String, Codable, Equatable, Sendable {
+        case start
+        case stop
+    }
+
+    let kind: String
+    let commandID: String
+    let command: Command
+    let requestedAt: Date
+
+    init(
+        commandID: String = UUID().uuidString.lowercased(),
+        command: Command,
+        requestedAt: Date = Date()
+    ) {
+        self.kind = Self.packetKind
+        self.commandID = commandID
+        self.command = command
+        self.requestedAt = requestedAt
+    }
+}
+
 struct WatchCaptureControlReply: Codable, Equatable, Sendable {
     static let packetKind = "watch_motion_control_status_v2"
 
@@ -360,5 +389,384 @@ final class WatchCaptureCommandCoordinator: @unchecked Sendable {
         stateLock.lock()
         defer { stateLock.unlock() }
         return finalizedReplies[commandID]
+    }
+}
+
+// MARK: - Multichannel capture: program-pair selection & signal probe
+//
+// A Rane ONE MKII exposes ~14 CoreAudio channels, but ScratchLab must record
+// exactly ONE explicitly-selected stereo program (master) pair — never the
+// whole device. These pure, hardware-free types back:
+//   * the Rane channel-map diagnostic (identify which pair carries program audio),
+//   * per-device persistence of the resolved pair, and
+//   * (Stage B) the canonical-stereo capture-health gate.
+// Thresholds intentionally mirror `TimecodeSignalDiagnostics` so the capture
+// path and the timecode path agree on what "silent" / "clipping" mean.
+
+/// An explicitly-selected stereo program channel pair, as zero-based indices
+/// into a capture device's interleaved channel order.
+struct CaptureAudioProgramPair: Equatable, Codable, Sendable {
+    let leftChannel: Int
+    let rightChannel: Int
+
+    init?(leftChannel: Int, rightChannel: Int) {
+        guard leftChannel >= 0, rightChannel >= 0, leftChannel != rightChannel else { return nil }
+        self.leftChannel = leftChannel
+        self.rightChannel = rightChannel
+    }
+
+    /// The common adjacent ascending pair (`startChannel`, `startChannel + 1`).
+    init?(startChannel: Int) {
+        self.init(leftChannel: startChannel, rightChannel: startChannel + 1)
+    }
+
+    /// Human, 1-based label, e.g. `"1/2"`.
+    var label: String { "\(leftChannel + 1)/\(rightChannel + 1)" }
+
+    var maxChannelIndex: Int { max(leftChannel, rightChannel) }
+
+    /// True when both channels exist in a stream carrying `channelCount` channels.
+    func isResolvable(inChannelCount channelCount: Int) -> Bool {
+        leftChannel >= 0 && rightChannel >= 0 && maxChannelIndex < channelCount
+    }
+}
+
+/// Per-audio-device persistence of the resolved program pair, keyed by the
+/// AVFoundation/CoreAudio device unique ID so each interface keeps its own
+/// mapping. Ordinary 2-channel interfaces need no entry — absence resolves to
+/// channels 0/1 at the call site.
+enum CaptureAudioProgramPairStore {
+    static let defaultsKeyPrefix = "scratchlab.capture.programPair."
+
+    static func key(forDeviceUniqueID uid: String) -> String { defaultsKeyPrefix + uid }
+
+    static func pair(
+        forDeviceUniqueID uid: String,
+        defaults: UserDefaults = .standard
+    ) -> CaptureAudioProgramPair? {
+        guard !uid.isEmpty, let data = defaults.data(forKey: key(forDeviceUniqueID: uid)) else { return nil }
+        return try? JSONDecoder().decode(CaptureAudioProgramPair.self, from: data)
+    }
+
+    static func setPair(
+        _ pair: CaptureAudioProgramPair?,
+        forDeviceUniqueID uid: String,
+        defaults: UserDefaults = .standard
+    ) {
+        guard !uid.isEmpty else { return }
+        let k = key(forDeviceUniqueID: uid)
+        guard let pair, let data = try? JSONEncoder().encode(pair) else {
+            defaults.removeObject(forKey: k)
+            return
+        }
+        defaults.set(data, forKey: k)
+    }
+}
+
+/// Deterministic per-channel / per-pair signal statistics for a multichannel
+/// capture buffer. No AVFoundation or hardware dependency; suitable for the
+/// live diagnostic and for unit tests.
+enum MultichannelSignalProbe {
+
+    /// RMS (linear, full-scale) below this counts as silence.
+    static let silenceRMS: Float = 0.001
+    /// RMS below this is "weak" — present but under a usable program level.
+    static let weakRMS: Float = 0.02
+    /// |sample| at or above this counts as clipping.
+    static let clippingPeak: Float = 0.999
+    /// |DC mean| at or above this fraction of full-scale is an implausible
+    /// pedestal for program audio (the failed Rane take's ch13 sat near −0.868).
+    static let excessiveDCOffset: Float = 0.02
+    /// |sample − mean| above this counts toward a channel's AC "activity"
+    /// fraction. Measured against the mean so a pure-DC channel reads as
+    /// inactive however large its offset.
+    static let activityThreshold: Float = 0.003
+
+    enum ChannelKind: String, Equatable, Sendable {
+        case program          // plausible real audio
+        case weakSignal       // audio, but low level
+        case silent
+        case dcHeavy          // large DC pedestal, little AC content
+        case dataOrControl    // non-finite, or near-constant full-scale
+        case noiseOnly        // above silence, essentially no structured activity
+    }
+
+    struct ChannelStats: Equatable, Sendable {
+        let channelIndex: Int
+        let frameCount: Int
+        let rms: Float
+        let peak: Float
+        let dcOffset: Float
+        let sampleActivity: Float
+        let hasNonFiniteSamples: Bool
+
+        var rmsDBFS: Float { MultichannelSignalProbe.dbfs(rms) }
+        var peakDBFS: Float { MultichannelSignalProbe.dbfs(peak) }
+        var isSilent: Bool { !hasNonFiniteSamples && rms < MultichannelSignalProbe.silenceRMS }
+        var isClipping: Bool { peak >= MultichannelSignalProbe.clippingPeak }
+        var hasExcessiveDC: Bool { dcOffset.isFinite && abs(dcOffset) >= MultichannelSignalProbe.excessiveDCOffset }
+
+        var kind: ChannelKind {
+            if hasNonFiniteSamples { return .dataOrControl }
+            if peak >= 0.999 && rms >= 0.98 { return .dataOrControl }
+            if isSilent { return .silent }
+            if hasExcessiveDC && sampleActivity < 0.05 { return .dcHeavy }
+            if rms < MultichannelSignalProbe.silenceRMS { return .silent }
+            if sampleActivity < 0.02 { return .noiseOnly }
+            if rms < MultichannelSignalProbe.weakRMS { return .weakSignal }
+            return .program
+        }
+    }
+
+    struct PairStats: Equatable, Sendable {
+        let pair: CaptureAudioProgramPair
+        let left: ChannelStats
+        let right: ChannelStats
+        let correlation: Float
+        /// 0…1; higher means the pair looks more like real stereo program audio.
+        let programLikelihood: Float
+
+        var label: String { pair.label }
+    }
+
+    struct Snapshot: Equatable, Sendable {
+        let channelCount: Int
+        let sampleRate: Double
+        let frameCount: Int
+        let channels: [ChannelStats]
+        let pairs: [PairStats]
+        let recommendedPair: CaptureAudioProgramPair?
+
+        /// The "CH 1/2 …" block described in the diagnostic spec.
+        var reportText: String {
+            var lines: [String] = []
+            lines.append(String(
+                format: "device: %d ch @ %.0f Hz, %d frames",
+                channelCount, sampleRate, frameCount
+            ))
+            if let recommendedPair {
+                lines.append("recommended program pair: CH \(recommendedPair.label)")
+            } else {
+                lines.append("recommended program pair: (none — no pair looks like program audio)")
+            }
+            for pairStats in pairs {
+                lines.append("")
+                lines.append("CH \(pairStats.label)")
+                lines.append(String(
+                    format: "L RMS: %@   R RMS: %@",
+                    Self.db(pairStats.left.rmsDBFS), Self.db(pairStats.right.rmsDBFS)
+                ))
+                lines.append(String(
+                    format: "L peak: %@   R peak: %@",
+                    Self.db(pairStats.left.peakDBFS), Self.db(pairStats.right.peakDBFS)
+                ))
+                lines.append(String(
+                    format: "L DC: %+.5f   R DC: %+.5f",
+                    pairStats.left.dcOffset, pairStats.right.dcOffset
+                ))
+                lines.append(String(
+                    format: "corr: %+.3f   likelihood: %.2f",
+                    pairStats.correlation, pairStats.programLikelihood
+                ))
+                lines.append("status: L \(pairStats.left.kind.rawValue) / R \(pairStats.right.kind.rawValue)")
+            }
+            return lines.joined(separator: "\n")
+        }
+
+        private static func db(_ value: Float) -> String {
+            value <= -160 ? "  -inf dBFS" : String(format: "%7.1f dBFS", value)
+        }
+    }
+
+    static func dbfs(_ linear: Float) -> Float {
+        guard linear.isFinite, linear > 0 else { return -160 }
+        return 20 * log10(linear)
+    }
+
+    /// Analyse planar per-channel Float samples (one array per channel).
+    static func analyze(planarChannels: [[Float]], sampleRate: Double) -> Snapshot? {
+        guard !planarChannels.isEmpty else { return nil }
+        let frameCount = planarChannels.map(\.count).min() ?? 0
+        guard frameCount > 0 else { return nil }
+
+        let channels = planarChannels.enumerated().map { index, samples in
+            channelStats(channelIndex: index, samples: samples, limit: frameCount)
+        }
+
+        var pairs: [PairStats] = []
+        var start = 0
+        while start + 1 < channels.count {
+            if let pair = CaptureAudioProgramPair(startChannel: start) {
+                pairs.append(pairStats(
+                    pair: pair,
+                    left: channels[start],
+                    right: channels[start + 1],
+                    leftSamples: planarChannels[start],
+                    rightSamples: planarChannels[start + 1],
+                    limit: frameCount
+                ))
+            }
+            start += 2
+        }
+
+        let recommendedPair = pairs
+            .max(by: { $0.programLikelihood < $1.programLikelihood })
+            .flatMap { $0.programLikelihood >= 0.5 ? $0.pair : nil }
+
+        return Snapshot(
+            channelCount: channels.count,
+            sampleRate: sampleRate,
+            frameCount: frameCount,
+            channels: channels,
+            pairs: pairs,
+            recommendedPair: recommendedPair
+        )
+    }
+
+    /// Analyse an interleaved buffer of `frameCount * channelCount` samples.
+    static func analyzeInterleaved(
+        _ interleaved: [Float],
+        channelCount: Int,
+        sampleRate: Double
+    ) -> Snapshot? {
+        guard channelCount > 0, interleaved.count >= channelCount else { return nil }
+        let frameCount = interleaved.count / channelCount
+        guard frameCount > 0 else { return nil }
+        var planar = Array(
+            repeating: [Float](repeating: 0, count: frameCount),
+            count: channelCount
+        )
+        for frame in 0..<frameCount {
+            let base = frame * channelCount
+            for channel in 0..<channelCount {
+                planar[channel][frame] = interleaved[base + channel]
+            }
+        }
+        return analyze(planarChannels: planar, sampleRate: sampleRate)
+    }
+
+    // MARK: - Internals
+
+    static func channelStats(channelIndex: Int, samples: [Float], limit: Int) -> ChannelStats {
+        let count = min(limit, samples.count)
+        guard count > 0 else {
+            return ChannelStats(
+                channelIndex: channelIndex, frameCount: 0, rms: 0, peak: 0,
+                dcOffset: 0, sampleActivity: 0, hasNonFiniteSamples: false
+            )
+        }
+        var sum: Double = 0
+        var sumSquares: Double = 0
+        var peak: Float = 0
+        var nonFinite = false
+        for index in 0..<count {
+            let value = samples[index]
+            if !value.isFinite {
+                nonFinite = true
+                continue
+            }
+            let magnitude = abs(value)
+            sum += Double(value)
+            sumSquares += Double(value) * Double(value)
+            if magnitude > peak { peak = magnitude }
+        }
+        let n = Double(count)
+        let mean = sum / n
+        let rms = Float((sumSquares / n).squareRoot())
+
+        // AC activity: fraction of finite samples that swing away from the mean.
+        var activeCount = 0
+        for index in 0..<count {
+            let value = samples[index]
+            guard value.isFinite else { continue }
+            if abs(value - Float(mean)) > activityThreshold { activeCount += 1 }
+        }
+        return ChannelStats(
+            channelIndex: channelIndex,
+            frameCount: count,
+            rms: rms.isFinite ? rms : 0,
+            peak: peak,
+            dcOffset: Float(mean),
+            sampleActivity: Float(activeCount) / Float(count),
+            hasNonFiniteSamples: nonFinite
+        )
+    }
+
+    static func pairStats(
+        pair: CaptureAudioProgramPair,
+        left: ChannelStats,
+        right: ChannelStats,
+        leftSamples: [Float],
+        rightSamples: [Float],
+        limit: Int
+    ) -> PairStats {
+        let correlation = pearsonCorrelation(leftSamples, rightSamples, limit: limit)
+        let likelihood = programLikelihood(left: left, right: right, correlation: correlation)
+        return PairStats(
+            pair: pair,
+            left: left,
+            right: right,
+            correlation: correlation,
+            programLikelihood: likelihood
+        )
+    }
+
+    static func pearsonCorrelation(_ a: [Float], _ b: [Float], limit: Int) -> Float {
+        let count = min(limit, min(a.count, b.count))
+        guard count > 1 else { return 0 }
+        var sumA: Double = 0, sumB: Double = 0
+        for index in 0..<count {
+            let x = a[index], y = b[index]
+            guard x.isFinite, y.isFinite else { return 0 }
+            sumA += Double(x); sumB += Double(y)
+        }
+        let meanA = sumA / Double(count)
+        let meanB = sumB / Double(count)
+        var covariance: Double = 0, varA: Double = 0, varB: Double = 0
+        for index in 0..<count {
+            let dx = Double(a[index]) - meanA
+            let dy = Double(b[index]) - meanB
+            covariance += dx * dy
+            varA += dx * dx
+            varB += dy * dy
+        }
+        guard varA > 0, varB > 0 else { return 0 }
+        let result = covariance / (varA.squareRoot() * varB.squareRoot())
+        return Float(max(-1, min(1, result)))
+    }
+
+    static func programLikelihood(
+        left: ChannelStats,
+        right: ChannelStats,
+        correlation: Float
+    ) -> Float {
+        var score: Float = 0
+
+        for channel in [left, right] {
+            switch channel.kind {
+            case .program: score += 0.35
+            case .weakSignal: score += 0.12
+            case .noiseOnly: score += 0.02
+            case .silent, .dcHeavy, .dataOrControl: score -= 0.30
+            }
+        }
+
+        // Both channels sitting in a plausible program band.
+        let bandOK = [left, right].allSatisfy { $0.rmsDBFS <= -3 && $0.rmsDBFS >= -55 }
+        if bandOK { score += 0.20 }
+
+        // Real stereo: correlated enough to be one performance, decorrelated
+        // enough not to be dual-mono / a duplicated data line.
+        let magnitude = abs(correlation)
+        if magnitude > 0.05 && magnitude < 0.985 { score += 0.15 }
+        if magnitude >= 0.999 { score -= 0.10 }
+
+        // Hard disqualifiers.
+        if left.isClipping || right.isClipping { score *= 0.5 }
+        if left.hasExcessiveDC || right.hasExcessiveDC { score *= 0.3 }
+        if left.hasNonFiniteSamples || right.hasNonFiniteSamples { score = 0 }
+        if left.isSilent || right.isSilent { score *= 0.15 }
+
+        return max(0, min(1, score))
     }
 }

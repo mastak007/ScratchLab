@@ -9,6 +9,10 @@ struct CompanionCameraView: View {
     @StateObject private var sessionExportCoordinator = SessionExportCoordinator()
     @State private var exportMixMode: ExportMixMode = .scratchOnly
     @State private var activeWatchCaptureLink: (sessionID: String, takeID: String)?
+    @State private var captureLiveNotationEvents: [CaptureCore.DetectedNotationRecordMovementEvent] = []
+    @State private var captureLiveFaderEvents: [CaptureCore.DetectedNotationFaderEvent] = []
+    @State private var captureNotationBaselineTime: TimeInterval?
+    @State private var finalizationWatchdog: Task<Void, Never>?
     /// The rendered-scratch WAV destination for the take currently recording,
     /// if any — set when scratch capture starts and consumed once the take
     /// finishes (see `beginLinkedRecording`/`handleFinishedRecording`).
@@ -21,34 +25,25 @@ struct CompanionCameraView: View {
     @EnvironmentObject private var sessionUploadManager: SessionUploadManager
     @EnvironmentObject private var watchMotionCaptureStore: WatchMotionCaptureStore
     @EnvironmentObject private var scratchPlaybackEngine: IOScratchPlaybackEngine
+    @EnvironmentObject private var midiControllerDispatcher: IOSMIDIControllerDispatcher
     @Environment(\.dismiss) private var dismiss
-    #if DEBUG
-    @State private var isShowingStagingInspector = false
-    #endif
+    @State private var isShowingHardwareSetup = false
 
     private let scratches = ScratchLibrary.shared.allScratches.sorted { $0.name < $1.name }
 
-    private var stagingInspectorContexts: [StagingInspectorContext] {
-        [
-            StagingInspectorContext(
-                storageKind: .companion,
-                title: "Companion Capture",
-                actionTitle: "Re-scan",
-                captureDirectoryURLProvider: { broadcaster.stagedCaptureDirectoryURL },
-                statusTextProvider: { broadcaster.recordingStatus },
-                runAction: { broadcaster.rescanStagedCaptures() },
-                validationReportProvider: nil
-            ),
-            StagingInspectorContext(
-                storageKind: .importedWatch,
-                title: "Watch Capture",
-                actionTitle: "Reconcile",
-                captureDirectoryURLProvider: { watchMotionCaptureStore.captureDirectoryURL },
-                statusTextProvider: { watchMotionCaptureStore.lastImportStatus },
-                runAction: { watchMotionCaptureStore.reconcileStoredCapturesNow() },
-                validationReportProvider: nil
+    /// Presentation-only target for the live camera HUD. This reuses the
+    /// canonical registry and materializer already used by Practice; it does
+    /// not create a second notation path or write into capture evidence.
+    private var captureTargetNotation: ScratchNotation? {
+        guard let pattern = ScratchNotation.canonicalBeatPattern(
+            forScratchID: captureStore.sessionSetup.scratchTypeID
+        ) else { return nil }
+        return pattern.materialized(
+            bpm: Double(
+                captureStore.sessionSetup.bpmValue
+                    ?? CaptureClickTrackDefaults.defaultTimedBPM
             )
-        ]
+        )
     }
 
     var body: some View {
@@ -57,28 +52,37 @@ struct CompanionCameraView: View {
 
     private var contentView: some View {
         GeometryReader { proxy in
-            let topPadding = max(20, proxy.safeAreaInsets.top + 12)
-            let bottomPadding = max(20, proxy.safeAreaInsets.bottom + 12)
+            let isLandscape = proxy.size.width > proxy.size.height
+            let topPadding: CGFloat = isLandscape ? 8 : 12
+            let bottomPadding: CGFloat = isLandscape ? 8 : 16
+            let horizontalPadding = isLandscape ? 12.0 : 20.0
+            let usesImmersiveCameraLayout = isImmersiveCaptureFlow && isLandscape
 
             ZStack(alignment: .top) {
                 ScratchLabDesign.Surface.applicationBackground
                 .ignoresSafeArea()
 
-                currentScreen
-                    .padding(.horizontal, 20)
-                    .padding(.bottom, bottomPadding)
-                    .padding(.top, topPadding)
+                if usesImmersiveCameraLayout {
+                    currentScreen
+                        .ignoresSafeArea()
+                } else {
+                    currentScreen
+                        .padding(.horizontal, horizontalPadding)
+                        .padding(.bottom, bottomPadding)
+                        .padding(.top, topPadding)
+                }
 
                 if let banner = captureStore.banner {
                     CaptureBannerView(banner: banner)
                         .padding(.top, topPadding)
-                        .padding(.horizontal, 20)
+                        .padding(.horizontal, horizontalPadding)
                         .transition(.move(edge: .top).combined(with: .opacity))
                 }
             }
             .frame(width: proxy.size.width, height: proxy.size.height)
+            .toolbar(usesImmersiveCameraLayout ? .hidden : .visible, for: .navigationBar)
+            .toolbarBackground(usesImmersiveCameraLayout ? .hidden : .visible, for: .navigationBar)
         }
-        .toolbar(.visible, for: .navigationBar)
         .navigationBarBackButtonHidden(true)
         .alert("Start a new scratch block?", isPresented: $captureStore.showDrillChangeConfirmation) {
             Button("Continue with New Scratch Type", role: .destructive) {
@@ -90,11 +94,21 @@ struct CompanionCameraView: View {
         } message: {
             Text("This will return to session setup and keep the current take loop ready for a new scratch type.")
         }
-        #if DEBUG
-        .sheet(isPresented: $isShowingStagingInspector) {
-            StagingInspectorView(contexts: stagingInspectorContexts)
+        .sheet(isPresented: $isShowingHardwareSetup) {
+            CaptureHardwareSetupView(
+                availableAudioInputs: broadcaster.availableAudioInputs,
+                selectedAudioInputID: broadcaster.selectedAudioInputID,
+                activeAudioInputName: broadcaster.activeAudioInputName,
+                onSelectAudioInput: { option in
+                    selectAudioInput(option)
+                },
+                onRetestAudio: {
+                    retestSelectedAudioInput()
+                }
+            )
+            .presentationDetents([.large])
+            .presentationDragIndicator(.visible)
         }
-        #endif
         .background(
             SessionSharePresenter(
                 request: exportShareRequestBinding,
@@ -106,6 +120,15 @@ struct CompanionCameraView: View {
                 }
             )
         )
+    }
+
+    private var isImmersiveCaptureFlow: Bool {
+        switch captureStore.flowState {
+        case .cameraSetup, .calibrationSetup, .ready, .preRoll, .recording, .saving:
+            return true
+        default:
+            return false
+        }
     }
 
     private func makeBody() -> AnyView {
@@ -134,8 +157,38 @@ struct CompanionCameraView: View {
             refreshReadiness()
             refreshReviewMotionAssociation()
         })
-        view = AnyView(view.onChange(of: broadcaster.lastRecordingSummary?.id) { _, _ in
-            handleFinishedRecording()
+        view = AnyView(view.onReceive(broadcaster.$lastRecordingSummary.compactMap { $0 }) { summary in
+            guard captureStore.matchesActiveSavingTake(summary) else { return }
+            handleFinishedRecording(summary)
+        })
+        view = AnyView(view.onChange(of: captureStore.flowState) { _, newState in
+            if newState != .saving {
+                finalizationWatchdog?.cancel()
+                finalizationWatchdog = nil
+            }
+            if newState == .recording {
+                // `beginLinkedRecording` resets the dispatcher's take clock,
+                // so the recording owns a fresh 0-based notation timeline.
+                captureNotationBaselineTime = nil
+                captureLiveNotationEvents.removeAll()
+                captureLiveFaderEvents.removeAll()
+            } else {
+                captureNotationBaselineTime = nil
+                captureLiveNotationEvents.removeAll()
+                captureLiveFaderEvents.removeAll()
+            }
+        })
+        view = AnyView(view.onReceive(midiControllerDispatcher.$livePlatterMovementEvents) { events in
+            guard captureStore.flowState == .recording else { return }
+            if let baseline = captureNotationBaselineTime {
+                captureLiveNotationEvents = events.filter { $0.endTime > baseline }
+            } else {
+                captureLiveNotationEvents = events
+            }
+        })
+        view = AnyView(view.onReceive(midiControllerDispatcher.$crossfaderMIDIValue) { _ in
+            guard captureStore.flowState == .recording else { return }
+            captureLiveFaderEvents = midiControllerDispatcher.capturedCrossfaderEvents
         })
         view = AnyView(view.animation(.easeInOut(duration: 0.2), value: captureStore.flowState))
         view = AnyView(view.animation(.easeInOut(duration: 0.2), value: captureStore.banner?.id))
@@ -147,10 +200,10 @@ struct CompanionCameraView: View {
         switch captureStore.flowState {
         case .idle, .sessionSetup:
             CaptureScreen(
-                title: "Capture Session",
-                subtitle: "Review the active session or start a new one before you capture the next take.",
+                title: "",
+                subtitle: nil,
                 onBack: { dismiss() },
-                trailingAction: stagingInspectorAction
+                trailingAction: hardwareSetupAction
             ) {
                 SessionSetupView(
                     performerName: performerNameBinding,
@@ -188,7 +241,7 @@ struct CompanionCameraView: View {
                 title: "System Check",
                 subtitle: "Confirm the capture path before you roll the next take.",
                 onBack: { dismiss() },
-                trailingAction: stagingInspectorAction
+                trailingAction: hardwareSetupAction
             ) {
                 SystemCheckView(
                     results: captureStore.readinessResults,
@@ -202,8 +255,8 @@ struct CompanionCameraView: View {
                     onRecheck: {
                         runSystemCheck()
                     },
-                    onFixIssues: {
-                        captureStore.openFocusedSetupForFirstIssue()
+                    onFixIssue: { kind in
+                        captureStore.openSetup(for: kind)
                     },
                     onCompleteSessionSetup: {
                         captureStore.flowState = .sessionSetup
@@ -220,10 +273,10 @@ struct CompanionCameraView: View {
 
         case .cameraSetup:
             CaptureScreen(
-                title: "Align Camera",
-                subtitle: "Fit the decks and mixer inside the guides.",
+                title: "",
+                subtitle: nil,
                 onBack: { captureStore.flowState = .systemCheck },
-                trailingAction: stagingInspectorAction
+                trailingAction: hardwareSetupAction
             ) {
                 CameraSetupView(
                     session: broadcaster.captureSession,
@@ -246,24 +299,28 @@ struct CompanionCameraView: View {
                 title: "Check Audio",
                 subtitle: "Scratch the record to confirm audio is reaching ScratchLab.",
                 onBack: { captureStore.flowState = .systemCheck },
-                trailingAction: stagingInspectorAction
+                // Figma's iOS audio surface has no trailing toolbar action.
+                // Keep the DEBUG staging inspector available from the other
+                // capture screens instead of presenting a confusing extra
+                // control during input selection.
+                trailingAction: nil
             ) {
                 AudioSetupView(
                     selectedInputName: broadcaster.selectedAudioInputName,
                     availableInputs: broadcaster.availableAudioInputs,
-                    selectedAudioInputID: Binding(
-                        get: { broadcaster.selectedAudioInputID },
-                        set: { broadcaster.selectedAudioInputID = $0 }
-                    ),
+                    selectedAudioInputID: broadcaster.selectedAudioInputID,
                     inputMonitorState: audioEngine.inputMonitorState,
                     inputLevel: audioEngine.inputLevel,
                     isClipping: audioEngine.inputLevel > 0.18,
+                    inputErrorMessage: audioEngine.lastAudioError,
+                    onSelectInput: { option in
+                        selectAudioInput(option)
+                    },
                     onUseThisInput: {
-                        captureStore.flowState = .systemCheck
-                        runSystemCheck()
+                        confirmSelectedAudioInput()
                     },
                     onTestAgain: {
-                        runSystemCheck()
+                        retestSelectedAudioInput()
                     }
                 )
             }
@@ -273,7 +330,7 @@ struct CompanionCameraView: View {
                 title: "Check Motion",
                 subtitle: "Make one quick test movement.",
                 onBack: { captureStore.flowState = .systemCheck },
-                trailingAction: stagingInspectorAction
+                trailingAction: hardwareSetupAction
             ) {
                 MotionSetupView(
                     connectionSummary: watchMotionCaptureStore.connectionSummary,
@@ -297,10 +354,10 @@ struct CompanionCameraView: View {
 
         case .calibrationSetup:
             CaptureScreen(
-                title: "Calibrate Deck Layout",
-                subtitle: "Match the guides to the real deck and mixer positions.",
+                title: "",
+                subtitle: nil,
                 onBack: { captureStore.flowState = .systemCheck },
-                trailingAction: stagingInspectorAction
+                trailingAction: hardwareSetupAction
             ) {
                 CalibrationSetupView(
                     session: broadcaster.captureSession,
@@ -322,10 +379,14 @@ struct CompanionCameraView: View {
             }
 
         case .ready, .preRoll, .recording, .saving:
-            CaptureScreen(title: "Capture Take", subtitle: nil, onBack: { dismiss() }, trailingAction: stagingInspectorAction) {
+            CaptureScreen(title: "", subtitle: nil, onBack: { dismiss() }, trailingAction: hardwareSetupAction) {
                 CaptureHubView(
                     flowState: captureStore.flowState,
                     sessionLabel: captureStore.sessionSetup.takeHeader,
+                    techniqueName: captureStore.sessionSetup.scratchTypeName,
+                    bpmLabel: captureStore.sessionSetup.bpmValue.map { "\($0) BPM" } ?? "No beat",
+                    modeLabel: captureStore.sessionSetup.drillMode.title,
+                    hardwareLabel: broadcaster.selectedAudioInputName,
                     readinessSummary: captureStore.readinessSummaryText,
                     canStartTake: captureStore.canBeginCapture,
                     takeNumber: captureStore.currentTakeNumber(fallback: broadcaster.nextTakeNumberPreview),
@@ -334,10 +395,15 @@ struct CompanionCameraView: View {
                     calibrationProfile: captureTakeCalibrationBinding,
                     preRollCount: captureStore.preRollCountdown,
                     recordingStartedAt: captureStore.activeTake?.startedAt,
+                    recordingStoppedAt: captureStore.activeTake?.stoppedAt,
                     audioStateText: audioStateText,
                     motionStateText: motionStateText,
                     captureHealthText: captureHealthText,
-                    clickTrackStatusText: captureStore.sessionSetup.clickEnabled ? "Click track on" : nil,
+                    targetNotation: captureTargetNotation,
+                    liveNotationEvents: captureLiveNotationEvents,
+                    liveFaderEvents: captureLiveFaderEvents,
+                    notationBPM: Double(captureStore.sessionSetup.bpmValue ?? CaptureClickTrackDefaults.defaultTimedBPM),
+                    showsNotationBeatGrid: captureStore.sessionSetup.clickEnabled,
                     warningText: recordingWarningText,
                     onStart: {
                         startTake()
@@ -348,13 +414,19 @@ struct CompanionCameraView: View {
                     onRecheck: {
                         captureStore.flowState = .systemCheck
                         runSystemCheck()
+                    },
+                    onBack: {
+                        dismiss()
+                    },
+                    onHardwareSetup: {
+                        isShowingHardwareSetup = true
                     }
                 )
             }
 
         case .review:
             if let review = captureStore.review {
-                CaptureScreen(title: "Review Take", subtitle: nil, onBack: { dismiss() }, trailingAction: stagingInspectorAction) {
+                CaptureScreen(title: "", subtitle: nil, onBack: { dismiss() }, trailingAction: hardwareSetupAction) {
                     TakeReviewView(
                         review: review,
                         onSelectQuality: { quality in
@@ -386,10 +458,10 @@ struct CompanionCameraView: View {
         case .sessionComplete:
             let currentSessionPackage = makeSessionExportPackage()
             CaptureScreen(
-                title: "Session Ready",
-                subtitle: captureStore.banner?.message ?? "Take saved.",
+                title: "",
+                subtitle: nil,
                 onBack: { dismiss() },
-                trailingAction: stagingInspectorAction
+                trailingAction: hardwareSetupAction
             ) {
                 SessionCompleteView(
                     sessionName: currentSessionPackage?.metadata.sessionName ?? "ScratchLab Session",
@@ -436,16 +508,12 @@ struct CompanionCameraView: View {
         }
     }
 
-    private var stagingInspectorAction: CaptureScreenAction? {
-        #if DEBUG
+    private var hardwareSetupAction: CaptureScreenAction? {
         CaptureScreenAction(
-            title: "Staging",
-            systemImage: "checklist",
-            action: { isShowingStagingInspector = true }
+            title: "Hardware Setup",
+            systemImage: "slider.horizontal.3",
+            action: { isShowingHardwareSetup = true }
         )
-        #else
-        nil
-        #endif
     }
 
     private func prepareFlow() {
@@ -467,10 +535,16 @@ struct CompanionCameraView: View {
         audioEngine.start()
         syncAnalyzerTarget()
         watchMotionCaptureStore.activateIfNeeded()
+        watchMotionCaptureStore.onPhoneCaptureCommand = { payload, completion in
+            self.handlePhoneCaptureCommand(payload, completion: completion)
+        }
         refreshReadiness()
     }
 
     private func cleanupFlow() {
+        watchMotionCaptureStore.onPhoneCaptureCommand = nil
+        finalizationWatchdog?.cancel()
+        finalizationWatchdog = nil
         beatEngine.stop()
         audioEngine.stopAnalyzing()
         audioEngine.stop()
@@ -512,6 +586,70 @@ struct CompanionCameraView: View {
     private func runSystemCheck() {
         refreshReadiness()
         captureStore.runSystemCheck()
+    }
+
+    /// Keeps the capture recorder and the live audio monitor on the same
+    /// system input. The broadcaster owns the exact port UID used by the
+    /// recording session; `AudioEngine` reuses its existing source-selection
+    /// flow so the visible meter follows that route as well.
+    private func selectAudioInput(
+        _ option: CompanionCameraBroadcaster.AudioInputOption,
+        completion: (() -> Void)? = nil
+    ) {
+        broadcaster.selectedAudioInputID = option.id
+        audioEngine.stop()
+        audioEngine.selectInputSource(
+            audioInputSource(for: option),
+            preferredPortUID: option.id
+        ) { didSelect in
+            guard didSelect else {
+                refreshReadiness()
+                return
+            }
+
+            audioEngine.start()
+            syncAnalyzerTarget()
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) {
+                refreshReadiness()
+                completion?()
+            }
+        }
+    }
+
+    private func confirmSelectedAudioInput() {
+        guard let option = broadcaster.availableAudioInputs.first(where: {
+            $0.id == broadcaster.selectedAudioInputID
+        }) else { return }
+
+        selectAudioInput(option) {
+            captureStore.flowState = .systemCheck
+            runSystemCheck()
+        }
+    }
+
+    private func retestSelectedAudioInput() {
+        if let option = broadcaster.availableAudioInputs.first(where: {
+            $0.id == broadcaster.selectedAudioInputID
+        }) {
+            selectAudioInput(option) {
+                runSystemCheck()
+            }
+        } else {
+            audioEngine.start()
+            syncAnalyzerTarget()
+            runSystemCheck()
+        }
+    }
+
+    private func audioInputSource(
+        for option: CompanionCameraBroadcaster.AudioInputOption
+    ) -> AudioInputSource {
+        switch option.portType {
+        case .usbAudio, .lineIn:
+            return .lineIn
+        default:
+            return .microphone
+        }
     }
 
     private func startTake() {
@@ -572,6 +710,7 @@ struct CompanionCameraView: View {
     private func stopTake() {
         beatEngine.stop()
         captureStore.requestStopRecording()
+        startFinalizationWatchdog()
         if let link = activeWatchCaptureLink {
             watchMotionCaptureStore.requestRemoteCaptureStop(
                 sessionID: link.sessionID,
@@ -580,7 +719,110 @@ struct CompanionCameraView: View {
             activeWatchCaptureLink = nil
         }
         scratchPlaybackEngine.stopRecordingScratchAudio()
-        broadcaster.endRecording()
+        broadcaster.endRecording { summary in
+            guard captureStore.flowState == .saving else { return }
+            guard let summary else {
+                captureStore.handleFinalizationTimeout(status: broadcaster.recordingStatus)
+                return
+            }
+            guard captureStore.matchesActiveSavingTake(summary) else {
+                captureStore.handleFinalizationTimeout(
+                    status: "The recorder finalized a different take than the active Save Take request."
+                )
+                return
+            }
+            handleFinishedRecording(summary)
+        }
+    }
+
+    /// Routes the Watch's Start/Stop button through the same capture actions
+    /// used by the iPhone UI. The iPhone remains authoritative for readiness,
+    /// pre-roll, take identity, file recording, and finalization.
+    private func handlePhoneCaptureCommand(
+        _ payload: PhoneCaptureCommandPayload,
+        completion: @escaping (WatchCaptureControlReply) -> Void
+    ) {
+        let sessionID = captureStore.sessionSetup.config.sessionID
+        let takeNumber = captureStore.activeTake?.takeNumber ?? broadcaster.nextTakeNumberPreview
+        let takeID = CaptureCore.LocalRecordingNaming.takeID(takeNumber: takeNumber)
+
+        func reply(_ state: CaptureWatchSyncState, _ detail: String) {
+            completion(
+                WatchCaptureControlReply(
+                    commandID: payload.commandID,
+                    sessionID: sessionID,
+                    takeID: takeID,
+                    syncState: state,
+                    detail: detail,
+                    acknowledgedAt: Date()
+                )
+            )
+        }
+
+        switch payload.command {
+        case .start:
+            if watchMotionCaptureStore.isWatchReachable, captureStore.motionSkipped {
+                captureStore.motionSkipped = false
+                refreshReadiness()
+            }
+            guard captureStore.flowState == .ready, captureStore.canBeginCapture else {
+                reply(.unavailable, "Finish System Check on iPhone before starting the take from Watch.")
+                return
+            }
+            startTake()
+            reply(.requested, "iPhone accepted Start Take. Waiting for the linked recording to begin.")
+
+        case .stop:
+            switch captureStore.flowState {
+            case .preRoll:
+                beatEngine.stop()
+                captureStore.cancelPendingCapture(message: "Take start cancelled from Watch.")
+                reply(.notRequested, "The pending iPhone take was cancelled.")
+            case .recording:
+                stopTake()
+                reply(.requested, "iPhone accepted Stop Take and is saving the recording.")
+            case .saving:
+                reply(.requested, "The iPhone take is already saving.")
+            default:
+                reply(.unavailable, "There is no active iPhone take to stop.")
+            }
+        }
+    }
+
+    /// Saving must never become an unbounded state. The broadcaster normally
+    /// publishes a finalized summary within a moment; if that event was
+    /// already delivered, consume it. Otherwise preserve the staged files and
+    /// return the operator to System Check with an explicit recovery message.
+    private func startFinalizationWatchdog() {
+        finalizationWatchdog?.cancel()
+        finalizationWatchdog = Task { @MainActor in
+            try? await Task.sleep(nanoseconds: 12_000_000_000)
+            guard !Task.isCancelled, captureStore.flowState == .saving else { return }
+
+            if let summary = broadcaster.lastRecordingSummary,
+               captureStore.matchesActiveSavingTake(summary) {
+                handleFinishedRecording(summary)
+                return
+            }
+
+            // A missing callback can mean the original stop request raced the
+            // movie output becoming active. Retry once before abandoning the
+            // UI state so recording cannot continue invisibly in the
+            // background after the operator has pressed Save Take.
+            if broadcaster.isRecording {
+                broadcaster.endRecording()
+                try? await Task.sleep(nanoseconds: 3_000_000_000)
+                guard !Task.isCancelled, captureStore.flowState == .saving else { return }
+
+                if let summary = broadcaster.lastRecordingSummary,
+                   captureStore.matchesActiveSavingTake(summary) {
+                    handleFinishedRecording(summary)
+                    return
+                }
+            }
+
+            captureStore.handleFinalizationTimeout(status: broadcaster.recordingStatus)
+        }
     }
 
     /// Starts the existing WatchConnectivity capture command with the exact
@@ -588,18 +830,32 @@ struct CompanionCameraView: View {
     /// available when the watch is optional, skipped, or unreachable.
     private func beginLinkedRecording(captureTiming: CaptureTimingMetadata) {
         broadcaster.recordingSessionConfig = captureStore.sessionSetup.config
+        midiControllerDispatcher.resetCapturedPlatterEvents()
+        captureNotationBaselineTime = nil
+        captureLiveNotationEvents.removeAll()
+        captureLiveFaderEvents.removeAll()
 
         if !captureStore.motionSkipped, watchMotionCaptureStore.isWatchReachable {
             let sessionID = captureStore.sessionSetup.config.sessionID
             let takeNumber = captureStore.activeTake?.takeNumber ?? broadcaster.nextTakeNumberPreview
             let takeID = CaptureCore.LocalRecordingNaming.takeID(takeNumber: takeNumber)
-            activeWatchCaptureLink = (sessionID, takeID)
-            watchMotionCaptureStore.requestRemoteCaptureStart(
+            let request = WatchCaptureCommandPayload(
+                command: .start,
                 sessionID: sessionID,
                 takeID: takeID
-            ) { _ in }
+            )
+            activeWatchCaptureLink = (sessionID, takeID)
+            broadcaster.recordingWatchRequest = request
+            watchMotionCaptureStore.requestRemoteCaptureStart(
+                sessionID: sessionID,
+                takeID: takeID,
+                commandID: request.commandID
+            ) { reply in
+                broadcaster.recordWatchControlReply(reply)
+            }
         } else {
             activeWatchCaptureLink = nil
+            broadcaster.recordingWatchRequest = nil
         }
 
         beginScratchAudioCapture()
@@ -631,27 +887,84 @@ struct CompanionCameraView: View {
         }
     }
 
-    private func handleFinishedRecording() {
+    private func handleFinishedRecording(_ summary: CompanionCameraBroadcaster.RecordingSummary) {
         beatEngine.stop()
-        guard let summary = broadcaster.lastRecordingSummary else { return }
+        finalizationWatchdog?.cancel()
+        finalizationWatchdog = nil
         let calibrationValid = captureStore.isCalibrationConfirmed
-        let scratchAudioURL = pendingScratchAudioURL
+        let scratchAudioURL = finalizedScratchAudioURL(for: summary)
         pendingScratchAudioURL = nil
+        let notationSnapshot = midiControllerDispatcher.detectedNotationSnapshot()
+        let persistedSummary: CompanionCameraBroadcaster.RecordingSummary
+        do {
+            persistedSummary = try broadcaster.persistingDetectedNotation(
+                notationSnapshot,
+                in: summary
+            )
+        } catch {
+            persistedSummary = summary
+            captureStore.reportTakeArtifactIssue(
+                "The take was saved, but its controller notation could not be attached: \(error.localizedDescription)"
+            )
+        }
+        if scratchAudioURL == nil {
+            captureStore.reportTakeArtifactIssue(
+                "The take video was saved, but the rendered AHHH audio file is missing. Retake before export."
+            )
+        }
+
+        // A completed movie-file callback is sufficient to leave Saving.
+        // Track inspection is useful validation, but it must never hold the
+        // entire capture state machine hostage on a slow AVAsset load.
+        let expectedAudioPresent = persistedSummary.sidecar.recordingStatus == "completed"
+            && persistedSummary.sidecar.errorDescription == nil
+            && !(persistedSummary.sidecar.audioInputName?.isEmpty ?? true)
+        // Resolve motion from the notation this take actually persisted, not
+        // from the Watch alone. `persistedSummary.sidecar.detectedNotation` is
+        // the same field the recovery/export path reads, so a take reviewed
+        // live and the same take rebuilt from disk resolve identically.
+        let motionEvidence = CaptureMotionEvidenceResolver.resolve(
+            detectedNotation: persistedSummary.sidecar.detectedNotation,
+            watchCaptureLinked: watchMotionCaptureStore.hasLinkedCapture(
+                sessionID: persistedSummary.sidecar.sessionID,
+                takeID: persistedSummary.sidecar.takeID
+            )
+        )
+        captureStore.handleRecordingFinished(
+            summary: persistedSummary,
+            audioPresent: expectedAudioPresent,
+            motionEvidence: motionEvidence,
+            calibrationValid: calibrationValid,
+            scratchAudioURL: scratchAudioURL
+        )
 
         Task {
-            let audioPresent = await Self.mediaContainsAudio(summary.mediaURL)
-            guard broadcaster.lastRecordingSummary?.id == summary.id else { return }
-            let motionPresent = watchMotionCaptureStore.hasLinkedCapture(
-                sessionID: summary.sidecar.sessionID,
-                takeID: summary.sidecar.takeID
-            )
-            captureStore.handleRecordingFinished(
-                summary: summary,
-                audioPresent: audioPresent,
-                motionPresent: motionPresent,
-                calibrationValid: calibrationValid,
-                scratchAudioURL: scratchAudioURL
-            )
+            let audioPresent = await Self.mediaContainsAudio(persistedSummary.mediaURL)
+            captureStore.updateAudioPresence(audioPresent, forRecordingID: persistedSummary.id)
+        }
+    }
+
+    /// Gives the scratch stem the same basename as the take's MOV/JSON pair.
+    /// Recovery already recognizes same-basename WAVs as owned media, whereas
+    /// the old anonymous UUID file was correctly quarantined as an orphan.
+    private func finalizedScratchAudioURL(
+        for summary: CompanionCameraBroadcaster.RecordingSummary
+    ) -> URL? {
+        guard let sourceURL = pendingScratchAudioURL,
+              FileManager.default.fileExists(atPath: sourceURL.path),
+              (try? sourceURL.resourceValues(forKeys: [.fileSizeKey]).fileSize ?? 0) ?? 0 > 0 else {
+            return nil
+        }
+        let destinationURL = summary.sidecarURL
+            .deletingPathExtension()
+            .appendingPathExtension("wav")
+        guard sourceURL != destinationURL else { return sourceURL }
+        guard !FileManager.default.fileExists(atPath: destinationURL.path) else { return nil }
+        do {
+            try FileManager.default.moveItem(at: sourceURL, to: destinationURL)
+            return destinationURL
+        } catch {
+            return nil
         }
     }
 
@@ -661,7 +974,7 @@ struct CompanionCameraView: View {
                 sessionID: review.summary.sidecar.sessionID,
                 takeID: review.summary.sidecar.takeID
               ) else { return }
-        captureStore.markReviewMotionPresent()
+        captureStore.markReviewWatchMotionLinked()
     }
 
     private var hasRecentMotionImport: Bool {
@@ -906,7 +1219,14 @@ struct CompanionCameraView: View {
                 sessionID: review.summary.sidecar.sessionID,
                 takeID: review.summary.sidecar.takeID
             )
-            let exportMotionPresent = linkedWatchCapture != nil
+            // Resolve from the take's persisted sidecar notation — the same
+            // input `SessionExportCoordinator`'s recovery path uses — so a
+            // live-exported take and a recovered one resolve identically.
+            // Controller platter evidence counts here even with no Watch.
+            let exportMotionEvidence = CaptureMotionEvidenceResolver.resolve(
+                detectedNotation: review.summary.sidecar.detectedNotation,
+                watchCaptureLinked: linkedWatchCapture != nil
+            )
             // Prefer the take's own live-rendered scratch capture; if it
             // never started or failed, `audioArtifactURL: nil` falls back to
             // the existing camera-audio-derived source exactly as before.
@@ -928,13 +1248,14 @@ struct CompanionCameraView: View {
                 quality: review.quality?.title,
                 comboTagged: review.isComboTagged,
                 audioPresent: review.audioPresent,
-                motionPresent: exportMotionPresent,
+                motionPresent: exportMotionEvidence.motionPresent,
                 syncStatus: review.syncStatus,
                 recordingStatus: review.summary.sidecar.recordingStatus,
                 verbalSlateUsed: nil,
                 syncClapUsed: nil,
                 note: review.operatorMessage,
-                captureTiming: review.summary.sidecar.captureTiming
+                captureTiming: review.summary.sidecar.captureTiming,
+                motionSources: exportMotionEvidence.motionSources
             )
         }
 
@@ -985,6 +1306,7 @@ private enum CaptureCheckKind: String, CaseIterable, Identifiable {
         case .storage: return "Storage"
         }
     }
+
 }
 
 private enum CaptureReadinessStatus: String {
@@ -1285,6 +1607,7 @@ private enum CaptureReadinessValidator {
 private struct CaptureTakeContext: Equatable {
     let takeNumber: Int
     var startedAt: Date?
+    var stoppedAt: Date? = nil
 }
 
 private struct CaptureBanner: Identifiable, Equatable {
@@ -1317,10 +1640,14 @@ private struct CaptureReview: Equatable {
     let drillName: String
     let duration: TimeInterval
     var syncStatus: String
-    let audioPresent: Bool
+    var audioPresent: Bool
     var motionStatusTitle: String
     var motionPresent: Bool
-    let operatorMessage: String
+    /// Typed provenance behind `motionPresent` — which sources actually
+    /// supplied evidence. Resolved from this take's persisted sidecar
+    /// notation, so it survives into export and recovery unchanged.
+    var motionEvidence: CaptureMotionEvidence
+    var operatorMessage: String
     var quality: CaptureQualityTag?
     var isComboTagged: Bool = false
     /// The rendered-scratch WAV captured for this take, if the capture tap
@@ -1622,13 +1949,40 @@ private final class GuidedCaptureStore: ObservableObject {
     }
 
     func requestStopRecording() {
+        guard flowState == .recording else { return }
+        if var activeTake {
+            activeTake.stoppedAt = Date()
+            self.activeTake = activeTake
+        }
         flowState = .saving
+    }
+
+    func matchesActiveSavingTake(_ summary: CompanionCameraBroadcaster.RecordingSummary) -> Bool {
+        guard flowState == .saving, let activeTake else { return false }
+        return summary.sidecar.sessionID == sessionSetup.config.sessionID
+            && summary.sidecar.appLocalTakeNumber == activeTake.takeNumber
+    }
+
+    func handleFinalizationTimeout(status: String) {
+        guard flowState == .saving else { return }
+        let trimmedStatus = status.trimmingCharacters(in: .whitespacesAndNewlines)
+        let detail = trimmedStatus.isEmpty ? "The recorder did not report completion." : trimmedStatus
+        showBanner(
+            message: "Take save did not finish. The staged recording was preserved. \(detail)",
+            tone: .warning
+        )
+        activeTake = nil
+        flowState = .systemCheck
+    }
+
+    func reportTakeArtifactIssue(_ message: String) {
+        showBanner(message: message, tone: .warning)
     }
 
     func handleRecordingFinished(
         summary: CompanionCameraBroadcaster.RecordingSummary,
         audioPresent: Bool,
-        motionPresent: Bool,
+        motionEvidence: CaptureMotionEvidence,
         calibrationValid: Bool,
         scratchAudioURL: URL? = nil
     ) {
@@ -1653,7 +2007,7 @@ private final class GuidedCaptureStore: ObservableObject {
         let motionAssessment = GuidedCaptureReviewStateResolver.motionAssessment(
             calibrationValid: calibrationValid,
             audioPresent: audioPresent,
-            motionPresent: motionPresent,
+            motionPresent: motionEvidence.motionPresent,
             motionSkipped: motionSkipped,
             motionOptional: sessionSetup.drillMode.motionOptional
         )
@@ -1666,10 +2020,51 @@ private final class GuidedCaptureStore: ObservableObject {
             audioPresent: audioPresent,
             motionStatusTitle: motionAssessment.motionStatusTitle,
             motionPresent: motionAssessment.motionPresent,
+            motionEvidence: motionEvidence,
             operatorMessage: operatorMessage,
             scratchAudioURL: scratchAudioURL
         )
         flowState = .review
+    }
+
+    func updateAudioPresence(_ audioPresent: Bool, forRecordingID recordingID: String) {
+        if var currentReview = review, currentReview.summary.id == recordingID {
+            applyAudioPresence(audioPresent, to: &currentReview)
+            review = currentReview
+        }
+
+        if let index = keptReviews.firstIndex(where: { $0.summary.id == recordingID }) {
+            var keptReview = keptReviews[index]
+            applyAudioPresence(audioPresent, to: &keptReview)
+            keptReviews[index] = keptReview
+        }
+    }
+
+    private func applyAudioPresence(_ audioPresent: Bool, to review: inout CaptureReview) {
+        review.audioPresent = audioPresent
+        let duration = review.duration
+        if review.summary.sidecar.recordingStatus == "failed" {
+            review.operatorMessage = "Recording interrupted"
+        } else if duration < 1.0 {
+            review.operatorMessage = "Take too short"
+        } else if !audioPresent {
+            review.operatorMessage = "Missing audio"
+        } else if !isCalibrationConfirmed {
+            review.operatorMessage = "Calibration invalid"
+        } else {
+            review.operatorMessage = "Ready to keep"
+        }
+
+        let motionAssessment = GuidedCaptureReviewStateResolver.motionAssessment(
+            calibrationValid: isCalibrationConfirmed,
+            audioPresent: audioPresent,
+            motionPresent: review.motionEvidence.motionPresent,
+            motionSkipped: motionSkipped,
+            motionOptional: sessionSetup.drillMode.motionOptional
+        )
+        review.syncStatus = motionAssessment.syncStatus
+        review.motionStatusTitle = motionAssessment.motionStatusTitle
+        review.motionPresent = motionAssessment.motionPresent
     }
 
     func setQuality(_ quality: CaptureQualityTag) {
@@ -1684,15 +2079,26 @@ private final class GuidedCaptureStore: ObservableObject {
         self.review = review
     }
 
-    func markReviewMotionPresent() {
-        guard var review, !review.motionPresent else { return }
+    /// A Watch artifact linked after the take finished. Records the Watch as a
+    /// source on the existing evidence rather than flipping a bare boolean, so
+    /// a take that already had platter evidence keeps it and a Watch-only take
+    /// gains the source that actually arrived.
+    func markReviewWatchMotionLinked() {
+        guard var review, review.motionEvidence.watch != .linked else { return }
+        let updatedEvidence = CaptureMotionEvidence(
+            platter: review.motionEvidence.platter,
+            faderEventCount: review.motionEvidence.faderEventCount,
+            watch: .linked,
+            dvs: review.motionEvidence.dvs
+        )
         let assessment = GuidedCaptureReviewStateResolver.motionAssessment(
             calibrationValid: isCalibrationConfirmed,
             audioPresent: review.audioPresent,
-            motionPresent: true,
+            motionPresent: updatedEvidence.motionPresent,
             motionSkipped: motionSkipped,
             motionOptional: sessionSetup.drillMode.motionOptional
         )
+        review.motionEvidence = updatedEvidence
         review.syncStatus = assessment.syncStatus
         review.motionStatusTitle = assessment.motionStatusTitle
         review.motionPresent = assessment.motionPresent
@@ -1831,19 +2237,37 @@ private struct CaptureScreen<Content: View>: View {
     let onBack: () -> Void
     let trailingAction: CaptureScreenAction?
     @ViewBuilder let content: Content
+    @Environment(\.verticalSizeClass) private var verticalSizeClass
 
     var body: some View {
-        VStack(alignment: .leading, spacing: ScratchLabDesign.Spacing.cardSection) {
-            VStack(alignment: .leading, spacing: ScratchLabDesign.Spacing.xs) {
-                Text(title)
-                    .font(ScratchLabDesign.Typo.display)
-                    .foregroundStyle(ScratchLabDesign.Sem.textPrimary)
+        VStack(alignment: .leading, spacing: verticalSizeClass == .compact ? ScratchLabDesign.Spacing.sm : ScratchLabDesign.Spacing.cardSection) {
+            if !title.isEmpty {
+                if verticalSizeClass == .compact {
+                    HStack(alignment: .firstTextBaseline, spacing: ScratchLabDesign.Spacing.md) {
+                        Text(title)
+                            .font(ScratchLabDesign.Typo.title2)
+                            .foregroundStyle(ScratchLabDesign.Sem.textPrimary)
 
-                if let subtitle {
-                    Text(subtitle)
-                        .font(ScratchLabDesign.Typo.pageSubtitle)
-                        .foregroundStyle(ScratchLabDesign.Sem.textSecondary)
-                        .fixedSize(horizontal: false, vertical: true)
+                        if let subtitle {
+                            Text(subtitle)
+                                .font(ScratchLabDesign.Typo.label)
+                                .foregroundStyle(ScratchLabDesign.Sem.textSecondary)
+                                .lineLimit(1)
+                        }
+                    }
+                } else {
+                    VStack(alignment: .leading, spacing: ScratchLabDesign.Spacing.xs) {
+                        Text(title)
+                            .font(ScratchLabDesign.Typo.display)
+                            .foregroundStyle(ScratchLabDesign.Sem.textPrimary)
+
+                        if let subtitle {
+                            Text(subtitle)
+                                .font(ScratchLabDesign.Typo.pageSubtitle)
+                                .foregroundStyle(ScratchLabDesign.Sem.textSecondary)
+                                .fixedSize(horizontal: false, vertical: true)
+                        }
+                    }
                 }
             }
 
@@ -1897,6 +2321,7 @@ private struct SessionSetupView: View {
 
     @State private var activePicker: ActivePicker?
     @State private var isShowingAllSessions = false
+    @State private var isShowingSessionBrowser = false
 
     private enum ActivePicker: Identifiable {
         case scratchType
@@ -1928,9 +2353,45 @@ private struct SessionSetupView: View {
             && (captureMode == .calibrationNoClick || (Int(bpmText) ?? 0) > 0)
     }
 
+    private var visibleSetupMessage: String? {
+        if let validationMessage { return validationMessage }
+        if performerName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            return "Enter a performer name to continue."
+        }
+        if drillID.isEmpty {
+            return "Choose a scratch type to continue."
+        }
+        if captureMode == .timedClick, (Int(bpmText) ?? 0) <= 0 {
+            return "Enter a tempo from 60 to 140 BPM to continue."
+        }
+        return nil
+    }
+
+    private var continueAccessibilityHint: String {
+        if isContinueEnabled {
+            return "Saves this session and opens input readiness"
+        }
+        return visibleSetupMessage ?? "Complete the required session details before continuing"
+    }
+
     var body: some View {
-        ScrollView(showsIndicators: false) {
-            VStack(spacing: 16) {
+        GeometryReader { proxy in
+            if proxy.size.width > proxy.size.height {
+                landscapeContent(availableWidth: proxy.size.width)
+            } else {
+                ScrollView(showsIndicators: false) {
+                    VStack(spacing: 16) {
+                VStack(alignment: .leading, spacing: ScratchLabDesign.Spacing.xs) {
+                    Text("Session Setup")
+                        .font(ScratchLabDesign.Typo.display)
+                        .foregroundStyle(ScratchLabDesign.Sem.textPrimary)
+
+                    Text("Complete the take details, then check the inputs.")
+                        .font(ScratchLabDesign.Typo.pageSubtitle)
+                        .foregroundStyle(ScratchLabDesign.Sem.textSecondary)
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+
                 if let activeSession = sessionListPresentation.activeSession {
                     CaptureCard {
                         VStack(alignment: .leading, spacing: 14) {
@@ -1983,15 +2444,25 @@ private struct SessionSetupView: View {
                     DisclosureGroup("All Sessions", isExpanded: $isShowingAllSessions) {
                         VStack(spacing: 10) {
                             ForEach(sessionListPresentation.allSessions) { session in
-                                Button(action: { onOpenSession(session.id) }) {
+                                if session.id == sessionListPresentation.activeSession?.id {
                                     CaptureSessionSummaryRow(
                                         title: sessionTitle(for: session.session),
                                         subtitle: sessionSubtitle(for: session.session),
                                         detail: sessionDetail(for: session.session),
-                                        actionLabel: session.id == sessionListPresentation.activeSession?.id ? "Current" : "Open"
+                                        actionLabel: "Current"
                                     )
+                                    .accessibilityHint("This session is already open")
+                                } else {
+                                    Button(action: { onOpenSession(session.id) }) {
+                                        CaptureSessionSummaryRow(
+                                            title: sessionTitle(for: session.session),
+                                            subtitle: sessionSubtitle(for: session.session),
+                                            detail: sessionDetail(for: session.session),
+                                            actionLabel: "Open"
+                                        )
+                                    }
+                                    .buttonStyle(.plain)
                                 }
-                                .buttonStyle(.plain)
                             }
                         }
                         .padding(.top, 10)
@@ -2090,19 +2561,22 @@ private struct SessionSetupView: View {
                     }
                 }
 
-                if let validationMessage {
-                    Label(validationMessage, systemImage: "exclamationmark.circle.fill")
+                if let visibleSetupMessage {
+                    Label(visibleSetupMessage, systemImage: "exclamationmark.circle.fill")
                         .font(ScratchLabDesign.Typo.sectionLabel)
                         .foregroundStyle(ScratchLabDesign.Sem.warning)
                         .frame(maxWidth: .infinity, alignment: .leading)
                 }
 
-                Button("Continue", action: onContinue)
-                    .scratchLabSuccessButton(fillsWidth: true)
+                Button("Continue Setup", action: onContinue)
+                    .scratchLabPrimaryButton(fillsWidth: true)
                     .disabled(!isContinueEnabled)
+                    .accessibilityHint(continueAccessibilityHint)
             }
-            .padding(.bottom, 32)
-        }
+                        .padding(.bottom, 32)
+                    }
+                }
+            }
         .sheet(item: $activePicker) { picker in
             switch picker {
             case .scratchType:
@@ -2211,6 +2685,235 @@ private struct SessionSetupView: View {
                 }
             }
         }
+        .sheet(isPresented: $isShowingSessionBrowser) {
+            CaptureSelectionSheet(title: "All Sessions") {
+                ForEach(sessionListPresentation.allSessions) { session in
+                    CaptureSelectionRow(
+                        title: "\(sessionTitle(for: session.session)) · \(sessionSubtitle(for: session.session))",
+                        isSelected: session.id == sessionListPresentation.activeSession?.id,
+                        action: {
+                            guard session.id != sessionListPresentation.activeSession?.id else { return }
+                            onOpenSession(session.id)
+                            isShowingSessionBrowser = false
+                        }
+                    )
+                }
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func landscapeContent(availableWidth: CGFloat) -> some View {
+        VStack(spacing: ScratchLabDesign.Spacing.sm) {
+            compactLandscapeSessionStrip
+            landscapeSetupForm(minimumColumnWidth: availableWidth < 760 ? 132 : 148)
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+    }
+
+    private var landscapeSessionRail: some View {
+        CaptureCard {
+            VStack(alignment: .leading, spacing: ScratchLabDesign.Spacing.md) {
+                HStack(spacing: ScratchLabDesign.Spacing.sm) {
+                    Text("Current Session")
+                        .font(ScratchLabDesign.Typo.cardHeading)
+                        .foregroundStyle(ScratchLabDesign.Sem.textPrimary)
+
+                    Spacer(minLength: ScratchLabDesign.Spacing.xs)
+
+                    Button("New", action: onStartNewSession)
+                        .scratchLabTertiaryButton()
+                }
+
+                landscapeSessionIdentity
+
+                Button("All Sessions") {
+                    isShowingSessionBrowser = true
+                }
+                .scratchLabSecondaryButton(fillsWidth: true)
+            }
+        }
+    }
+
+    private var compactLandscapeSessionStrip: some View {
+        HStack(spacing: ScratchLabDesign.Spacing.sm) {
+            Label("CURRENT", systemImage: "circle.fill")
+                .font(ScratchLabDesign.Typo.metricLabel)
+                .foregroundStyle(ScratchLabDesign.Sem.accent)
+                .labelStyle(.titleAndIcon)
+
+            if let activeSession = sessionListPresentation.activeSession {
+                Text(sessionTitle(for: activeSession.session))
+                    .font(ScratchLabDesign.Typo.controlValue)
+                    .foregroundStyle(ScratchLabDesign.Sem.textPrimary)
+                    .lineLimit(1)
+
+                Text("· \(sessionSubtitle(for: activeSession.session))")
+                    .font(ScratchLabDesign.Typo.label)
+                    .foregroundStyle(ScratchLabDesign.Sem.textSecondary)
+                    .lineLimit(1)
+            } else {
+                Text("New session")
+                    .font(ScratchLabDesign.Typo.controlValue)
+                    .foregroundStyle(ScratchLabDesign.Sem.textPrimary)
+            }
+
+            Spacer(minLength: 0)
+
+            Button("Sessions") {
+                isShowingSessionBrowser = true
+            }
+            .scratchLabTertiaryButton()
+
+            Button("New", action: onStartNewSession)
+                .scratchLabTertiaryButton()
+        }
+        .padding(.horizontal, ScratchLabDesign.Spacing.md)
+        .padding(.vertical, ScratchLabDesign.Spacing.xs)
+        .background(
+            ScratchLabDesign.Surface.raised,
+            in: RoundedRectangle(cornerRadius: ScratchLabDesign.Radius.control, style: .continuous)
+        )
+        .overlay {
+            RoundedRectangle(cornerRadius: ScratchLabDesign.Radius.control, style: .continuous)
+                .stroke(ScratchLabDesign.Border.default, lineWidth: 1)
+        }
+    }
+
+    @ViewBuilder
+    private var landscapeSessionIdentity: some View {
+        if let activeSession = sessionListPresentation.activeSession {
+            VStack(alignment: .leading, spacing: 2) {
+                Text(sessionTitle(for: activeSession.session))
+                    .font(ScratchLabDesign.Typo.controlValue)
+                    .foregroundStyle(ScratchLabDesign.Sem.textPrimary)
+                    .lineLimit(1)
+
+                Text(sessionSubtitle(for: activeSession.session))
+                    .font(ScratchLabDesign.Typo.label)
+                    .foregroundStyle(ScratchLabDesign.Sem.textSecondary)
+                    .lineLimit(1)
+            }
+        } else {
+            Text("Set the performer and scratch type for this take.")
+                .font(ScratchLabDesign.Typo.bodySmall)
+                .foregroundStyle(ScratchLabDesign.Sem.textSecondary)
+                .lineLimit(1)
+        }
+    }
+
+    private func landscapeSetupForm(minimumColumnWidth: CGFloat) -> some View {
+        VStack(alignment: .leading, spacing: ScratchLabDesign.Spacing.sm) {
+            HStack(spacing: ScratchLabDesign.Spacing.sm) {
+                Text("TAKE DETAILS")
+                    .font(ScratchLabDesign.Typo.metricLabel)
+                    .foregroundStyle(ScratchLabDesign.Sem.textSecondary)
+
+                Spacer(minLength: ScratchLabDesign.Spacing.sm)
+
+                if let visibleSetupMessage {
+                    Label(visibleSetupMessage, systemImage: "exclamationmark.circle.fill")
+                        .font(ScratchLabDesign.Typo.label)
+                        .foregroundStyle(ScratchLabDesign.Sem.warning)
+                        .lineLimit(1)
+                }
+            }
+
+            LazyVGrid(
+                columns: [GridItem(.adaptive(minimum: minimumColumnWidth), spacing: ScratchLabDesign.Spacing.xs)],
+                alignment: .leading,
+                spacing: ScratchLabDesign.Spacing.xs
+            ) {
+                CaptureTextField(title: "Performer", text: $performerName, isCompact: true)
+
+                CapturePickerField(
+                    title: "Scratch Type",
+                    selectionTitle: scratches.first(where: { $0.id == drillID })?.name ?? "Choose",
+                    action: { activePicker = .scratchType },
+                    isCompact: true
+                )
+
+                if captureMode == .timedClick {
+                    CaptureCompactTempoEditor(bpmText: $bpmText)
+                } else {
+                    CaptureCompactValueField(title: "Tempo", value: "No beat")
+                }
+
+                CapturePickerField(
+                    title: "Handedness",
+                    selectionTitle: handedness.title,
+                    action: { activePicker = .handedness },
+                    isCompact: true
+                )
+
+                CapturePickerField(
+                    title: "Click track",
+                    selectionTitle: captureMode.title,
+                    action: { activePicker = .captureMode },
+                    isCompact: true
+                )
+
+                if captureMode == .timedClick {
+                    CapturePickerField(
+                        title: "Practice beat",
+                        selectionTitle: beatEngineMode.title,
+                        action: { activePicker = .beatEngineMode },
+                        isCompact: true
+                    )
+                } else {
+                    CaptureCompactValueField(title: "Practice beat", value: BeatEngineMode.silent.title)
+                }
+
+                CapturePickerField(
+                    title: "Deck / mixer",
+                    selectionTitle: deckProfile.title,
+                    action: { activePicker = .deckProfile },
+                    isCompact: true
+                )
+
+                CapturePickerField(
+                    title: "Camera",
+                    selectionTitle: cameraProfile.title,
+                    action: { activePicker = .cameraProfile },
+                    isCompact: true
+                )
+
+                CapturePickerField(
+                    title: "Capture Mode",
+                    selectionTitle: practiceMode.title,
+                    action: { activePicker = .practiceMode },
+                    isCompact: true
+                )
+
+                CapturePickerField(
+                    title: "Watch wrist",
+                    selectionTitle: watchWrist.title,
+                    action: { activePicker = .watchWrist },
+                    isCompact: true
+                )
+
+                CaptureTextField(title: "Notes", text: $notes, isCompact: true)
+            }
+
+            HStack(spacing: ScratchLabDesign.Spacing.sm) {
+                Spacer(minLength: ScratchLabDesign.Spacing.xs)
+
+                Button("Continue Setup", action: onContinue)
+                    .scratchLabPrimaryButton(fillsWidth: false)
+                    .disabled(!isContinueEnabled)
+                    .accessibilityHint(continueAccessibilityHint)
+            }
+        }
+        .padding(ScratchLabDesign.Spacing.sm)
+        .background(
+            ScratchLabDesign.Surface.surface,
+            in: RoundedRectangle(cornerRadius: ScratchLabDesign.Radius.control, style: .continuous)
+        )
+        .overlay {
+            RoundedRectangle(cornerRadius: ScratchLabDesign.Radius.control, style: .continuous)
+                .stroke(ScratchLabDesign.Border.default, lineWidth: 1)
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
     }
 
     private func sessionTitle(for config: CaptureSessionConfig) -> String {
@@ -2274,6 +2977,11 @@ private struct CaptureTempoEditor: View {
 
     let presetBPMs: [Int]
 
+    @State private var draftBPM = ""
+    @FocusState private var isBPMFocused: Bool
+
+    private let supportedRange = CaptureClickTrackDefaults.supportedBPMRange
+
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
             Text("Timed capture")
@@ -2282,20 +2990,173 @@ private struct CaptureTempoEditor: View {
 
             HStack(spacing: ScratchLabDesign.Spacing.sm) {
                 ForEach(presetBPMs, id: \.self) { bpm in
-                    Chip("\(bpm)", isSelected: Int(bpmText) == bpm, isNumeric: true) {
-                        bpmText = String(bpm)
+                    Chip("\(bpm)", isSelected: Int(draftBPM) == bpm, isNumeric: true) {
+                        let value = String(bpm)
+                        draftBPM = value
+                        bpmText = value
                     }
                     .frame(maxWidth: .infinity)
                 }
             }
 
-            TextField("Custom BPM (60–140)", text: $bpmText)
+            TextField(
+                "Custom BPM (\(supportedRange.lowerBound)–\(supportedRange.upperBound))",
+                text: Binding(
+                    get: { draftBPM },
+                    set: updateDraftBPM
+                )
+            )
                 .keyboardType(.numberPad)
+                .focused($isBPMFocused)
                 .font(ScratchLabDesign.Typo.bodyDefault)
                 .foregroundStyle(ScratchLabDesign.Sem.textPrimary)
                 .padding(ScratchLabDesign.Card.compactPadding)
                 .background(ScratchLabDesign.Surface.raised, in: RoundedRectangle(cornerRadius: ScratchLabDesign.Radius.control, style: .continuous))
+
+            if !draftBPM.isEmpty, !isDraftValid {
+                Text("Enter a tempo from \(supportedRange.lowerBound) to \(supportedRange.upperBound) BPM.")
+                    .font(ScratchLabDesign.Typo.label)
+                    .foregroundStyle(ScratchLabDesign.Sem.warning)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
         }
+        .onAppear {
+            draftBPM = bpmText
+        }
+        .onChange(of: bpmText) { _, newValue in
+            guard !isBPMFocused else { return }
+            draftBPM = newValue
+        }
+        .toolbar {
+            ToolbarItemGroup(placement: .keyboard) {
+                Spacer()
+                Button("Done") {
+                    isBPMFocused = false
+                }
+            }
+        }
+    }
+
+    private var isDraftValid: Bool {
+        guard let value = Int(draftBPM) else { return false }
+        return supportedRange.contains(value)
+    }
+
+    private func updateDraftBPM(_ proposedValue: String) {
+        let digits = proposedValue.filter(\.isNumber)
+        let limitedDigits = String(digits.prefix(3))
+        draftBPM = limitedDigits
+
+        guard let value = Int(limitedDigits), supportedRange.contains(value) else {
+            // Clear only the persisted binding while the user is between valid
+            // multi-digit values. This avoids the model's per-keystroke clamp
+            // turning the first digit of "100" into "60".
+            bpmText = ""
+            return
+        }
+
+        bpmText = String(value)
+    }
+}
+
+private struct CaptureCompactValueField: View {
+    let title: String
+    let value: String
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: ScratchLabDesign.Spacing.xxs) {
+            Text(title)
+                .font(ScratchLabDesign.Typo.label)
+                .foregroundStyle(ScratchLabDesign.Sem.textSecondary)
+
+            Text(value)
+                .font(ScratchLabDesign.Typo.bodyDefault)
+                .foregroundStyle(ScratchLabDesign.Sem.textPrimary)
+                .lineLimit(1)
+                .frame(maxWidth: .infinity, minHeight: 34, alignment: .leading)
+                .padding(.horizontal, 10)
+                .background(
+                    ScratchLabDesign.Surface.raised,
+                    in: RoundedRectangle(cornerRadius: ScratchLabDesign.Radius.control, style: .continuous)
+                )
+                .overlay {
+                    RoundedRectangle(cornerRadius: ScratchLabDesign.Radius.control, style: .continuous)
+                        .stroke(ScratchLabDesign.Border.default, lineWidth: 1)
+                }
+        }
+    }
+}
+
+private struct CaptureCompactTempoEditor: View {
+    @Binding var bpmText: String
+
+    @State private var draftBPM = ""
+    @FocusState private var isFocused: Bool
+
+    private let supportedRange = CaptureClickTrackDefaults.supportedBPMRange
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: ScratchLabDesign.Spacing.xxs) {
+            Text("Tempo")
+                .font(ScratchLabDesign.Typo.label)
+                .foregroundStyle(ScratchLabDesign.Sem.textSecondary)
+
+            HStack(spacing: ScratchLabDesign.Spacing.xs) {
+                TextField("BPM", text: Binding(get: { draftBPM }, set: updateDraftBPM))
+                    .keyboardType(.numberPad)
+                    .focused($isFocused)
+                    .font(ScratchLabDesign.Typo.bodyDefault)
+                    .foregroundStyle(ScratchLabDesign.Sem.textPrimary)
+                    .accessibilityLabel("Tempo in beats per minute")
+
+                Text("BPM")
+                    .font(ScratchLabDesign.Typo.label)
+                    .foregroundStyle(ScratchLabDesign.Sem.textSecondary)
+            }
+            .frame(maxWidth: .infinity, minHeight: 34, alignment: .leading)
+            .padding(.horizontal, 10)
+            .background(
+                ScratchLabDesign.Surface.raised,
+                in: RoundedRectangle(cornerRadius: ScratchLabDesign.Radius.control, style: .continuous)
+            )
+            .overlay {
+                RoundedRectangle(cornerRadius: ScratchLabDesign.Radius.control, style: .continuous)
+                    .stroke(isDraftValid ? ScratchLabDesign.Border.default : ScratchLabDesign.Sem.warning, lineWidth: 1)
+            }
+        }
+        .onAppear {
+            draftBPM = bpmText
+        }
+        .onChange(of: bpmText) { _, newValue in
+            guard !isFocused else { return }
+            draftBPM = newValue
+        }
+        .toolbar {
+            ToolbarItemGroup(placement: .keyboard) {
+                Spacer()
+                Button("Done") {
+                    isFocused = false
+                }
+            }
+        }
+    }
+
+    private var isDraftValid: Bool {
+        guard let value = Int(draftBPM) else { return false }
+        return supportedRange.contains(value)
+    }
+
+    private func updateDraftBPM(_ proposedValue: String) {
+        let digits = proposedValue.filter(\.isNumber)
+        let limitedDigits = String(digits.prefix(3))
+        draftBPM = limitedDigits
+
+        guard let value = Int(limitedDigits), supportedRange.contains(value) else {
+            bpmText = ""
+            return
+        }
+
+        bpmText = String(value)
     }
 }
 
@@ -2307,7 +3168,7 @@ private struct SystemCheckView: View {
     let configurationMessage: String?
     let onStartCheck: () -> Void
     let onRecheck: () -> Void
-    let onFixIssues: () -> Void
+    let onFixIssue: (CaptureCheckKind) -> Void
     let onCompleteSessionSetup: () -> Void
     let onBeginCapture: () -> Void
     let onSkipMotion: () -> Void
@@ -2320,41 +3181,121 @@ private struct SystemCheckView: View {
         !hasBlockingIssue && !canBeginCapture && configurationMessage != nil
     }
 
+    private var firstActionableBlockingIssue: CaptureCheckResult? {
+        results.first { result in
+            result.status == .blocked && result.kind != .storage
+        }
+    }
+
+    private var hasStorageBlocker: Bool {
+        results.contains { $0.status == .blocked && $0.kind == .storage }
+    }
+
     var body: some View {
-        ScrollView(showsIndicators: false) {
-            VStack(spacing: 16) {
-                ForEach(results) { result in
-                    CaptureStatusCard(result: result)
+        GeometryReader { proxy in
+            if proxy.size.width > proxy.size.height {
+                VStack(spacing: ScratchLabDesign.Spacing.sm) {
+                    LazyVGrid(
+                        columns: Array(
+                            repeating: GridItem(.flexible(), spacing: ScratchLabDesign.Spacing.sm),
+                            count: 3
+                        ),
+                        spacing: ScratchLabDesign.Spacing.sm
+                    ) {
+                        ForEach(results) { result in
+                            CaptureStatusCard(result: result, isCompact: true)
+                        }
+                    }
+
+                    landscapeActions
                 }
+                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+            } else {
+                ScrollView(showsIndicators: false) {
+                    VStack(spacing: 16) {
+                        ForEach(results) { result in
+                            CaptureStatusCard(result: result)
+                        }
 
-                VStack(spacing: 12) {
-                    if let configurationMessage, needsSessionSetup {
-                        Label(configurationMessage, systemImage: "exclamationmark.circle.fill")
-                            .font(ScratchLabDesign.Typo.sectionLabel)
-                            .foregroundStyle(ScratchLabDesign.Sem.warning)
-                            .frame(maxWidth: .infinity, alignment: .leading)
+                        VStack(spacing: 12) {
+                            if let configurationMessage, needsSessionSetup {
+                                Label(configurationMessage, systemImage: "exclamationmark.circle.fill")
+                                    .font(ScratchLabDesign.Typo.sectionLabel)
+                                    .foregroundStyle(ScratchLabDesign.Sem.warning)
+                                    .frame(maxWidth: .infinity, alignment: .leading)
+                            }
+
+                            Button(hasRunCheck ? "Recheck" : "Start Setup Check", action: hasRunCheck ? onRecheck : onStartCheck)
+                                .scratchLabPrimaryButton(fillsWidth: true)
+
+                            if let firstActionableBlockingIssue {
+                                CaptureSecondaryButton(title: "Fix \(firstActionableBlockingIssue.kind.title)") {
+                                    onFixIssue(firstActionableBlockingIssue.kind)
+                                }
+                            } else if hasStorageBlocker {
+                                Label("Storage unavailable — free space, then recheck", systemImage: "internaldrive.fill")
+                                    .font(ScratchLabDesign.Typo.bodySmall)
+                                    .foregroundStyle(ScratchLabDesign.Sem.warning)
+                                    .frame(maxWidth: .infinity, alignment: .leading)
+                            } else if needsSessionSetup {
+                                CaptureSecondaryButton(title: "Complete Session Setup", action: onCompleteSessionSetup)
+                            }
+
+                            Button(canBeginCapture ? "Open Record Controls" : "Recording unavailable", action: onBeginCapture)
+                                .scratchLabPrimaryButton(fillsWidth: true)
+                                .disabled(!canBeginCapture)
+                                .accessibilityHint(canBeginCapture
+                                    ? "Opens the capture-ready screen"
+                                    : "Resolve the setup issue shown above before recording")
+
+                            if canSkipMotion {
+                                CaptureSecondaryButton(title: "Skip Motion", action: onSkipMotion)
+                            }
+                        }
                     }
-
-                    Button(hasRunCheck ? "Recheck" : "Start Setup Check", action: hasRunCheck ? onRecheck : onStartCheck)
-                        .scratchLabSuccessButton(fillsWidth: true)
-
-                    if hasBlockingIssue {
-                        CaptureSecondaryButton(title: "Fix Issues", action: onFixIssues)
-                    } else if needsSessionSetup {
-                        CaptureSecondaryButton(title: "Complete Session Setup", action: onCompleteSessionSetup)
-                    }
-
-                    Button(action: onBeginCapture) {
-                        Text("Open Record Controls")
-                    }
-                        .scratchLabPrimaryButton(fillsWidth: true)
-
-                    if canSkipMotion {
-                        CaptureSecondaryButton(title: "Skip Motion", action: onSkipMotion)
-                    }
+                    .frame(maxWidth: .infinity, alignment: .leading)
                 }
             }
-            .frame(maxWidth: .infinity, alignment: .leading)
+        }
+    }
+
+    private var landscapeActions: some View {
+        HStack(spacing: ScratchLabDesign.Spacing.sm) {
+            if let configurationMessage, needsSessionSetup {
+                Label(configurationMessage, systemImage: "exclamationmark.circle.fill")
+                    .font(ScratchLabDesign.Typo.label)
+                    .foregroundStyle(ScratchLabDesign.Sem.warning)
+                    .lineLimit(2)
+            }
+
+            Button(hasRunCheck ? "Recheck" : "Start Check", action: hasRunCheck ? onRecheck : onStartCheck)
+                .scratchLabSecondaryButton(fillsWidth: true)
+
+            if let firstActionableBlockingIssue {
+                Button("Fix \(firstActionableBlockingIssue.kind.title)") {
+                    onFixIssue(firstActionableBlockingIssue.kind)
+                }
+                .scratchLabSecondaryButton(fillsWidth: true)
+            } else if hasStorageBlocker {
+                Label("Free storage, then recheck", systemImage: "internaldrive.fill")
+                    .font(ScratchLabDesign.Typo.label)
+                    .foregroundStyle(ScratchLabDesign.Sem.warning)
+            } else if needsSessionSetup {
+                Button("Session Setup", action: onCompleteSessionSetup)
+                    .scratchLabSecondaryButton(fillsWidth: true)
+            }
+
+            Button(canBeginCapture ? "Record Controls" : "Recording unavailable", action: onBeginCapture)
+                .scratchLabPrimaryButton(fillsWidth: true)
+                .disabled(!canBeginCapture)
+                .accessibilityHint(canBeginCapture
+                    ? "Opens the capture-ready screen"
+                    : "Resolve the setup issue shown above before recording")
+
+            if canSkipMotion {
+                Button("Skip Motion", action: onSkipMotion)
+                    .scratchLabTertiaryButton()
+            }
         }
     }
 }
@@ -2362,25 +3303,39 @@ private struct SystemCheckView: View {
 /// A camera/deck preview paired with a control row, sized by the widescreen
 /// vs. tall shape of the space it's given (raw width/height comparison,
 /// rather than horizontal/vertical size class, because iPad reports the same
-/// regular/regular size classes in both orientations). Wide: preview fills
-/// the available height with controls beside it in a fixed-width column.
-/// Tall: preview dominates, controls sit in a footer below it.
+/// regular/regular size classes in both orientations). Wide: the complete
+/// camera canvas fills the available space and compact controls float over
+/// it. Tall: preview dominates, controls sit in a footer below it.
 private struct CameraCalibrationAdaptiveLayout<Controls: View>: View {
-    let preview: CalibrationPreviewCard
+    let preview: (_ fillsAvailableSpace: Bool) -> CalibrationPreviewCard
     @ViewBuilder let controls: (_ isWide: Bool) -> Controls
 
     var body: some View {
         GeometryReader { proxy in
             let isWide = proxy.size.width > proxy.size.height
             if isWide {
-                HStack(alignment: .top, spacing: 16) {
-                    preview
+                ZStack(alignment: .top) {
+                    preview(true)
+                        .frame(width: proxy.size.width, height: proxy.size.height)
+
                     controls(true)
-                        .frame(width: 220)
+                        .frame(width: min(660, max(440, proxy.size.width - 200)))
+                        .padding(.horizontal, ScratchLabDesign.Spacing.sm)
+                        .padding(.vertical, ScratchLabDesign.Spacing.xs)
+                        .background(
+                            .ultraThinMaterial,
+                            in: RoundedRectangle(
+                                cornerRadius: ScratchLabDesign.Radius.control,
+                                style: .continuous
+                            )
+                        )
+                        .padding(.top, ScratchLabDesign.Spacing.xs)
                 }
+                .frame(width: proxy.size.width, height: proxy.size.height)
             } else {
                 VStack(spacing: 16) {
-                    preview
+                    preview(false)
+                        .frame(maxWidth: .infinity, alignment: .top)
                     controls(false)
                 }
             }
@@ -2398,20 +3353,65 @@ private struct CameraSetupView: View {
 
     var body: some View {
         CameraCalibrationAdaptiveLayout(
-            preview: CalibrationPreviewCard(
+            preview: { fillsAvailableSpace in
+                CalibrationPreviewCard(
                 session: session,
                 videoRotationAngle: videoRotationAngle,
                 calibrationProfile: $calibrationProfile,
-                allowsEditing: true
-            )
+                allowsEditing: true,
+                fillsAvailableSpace: fillsAvailableSpace
+                )
+            }
         ) { isWide in
-            let stack = isWide ? AnyLayout(VStackLayout(spacing: 12)) : AnyLayout(HStackLayout(spacing: 12))
-            stack {
-                CaptureSecondaryButton(title: "Adjust Guides", action: onAdjustGuides)
+            if isWide {
+                HStack(spacing: ScratchLabDesign.Spacing.sm) {
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("Align Camera")
+                            .font(ScratchLabDesign.Typo.cardHeading)
+                            .foregroundStyle(ScratchLabDesign.Sem.textPrimary)
 
-                Button("Confirm Camera", action: onConfirmCamera)
-                    .scratchLabSuccessButton(fillsWidth: true)
-                    .disabled(!isCameraReady)
+                        Text("Fit the decks and mixer inside the guides.")
+                            .font(ScratchLabDesign.Typo.label)
+                            .foregroundStyle(ScratchLabDesign.Sem.textSecondary)
+                            .lineLimit(1)
+                    }
+
+                    Spacer(minLength: ScratchLabDesign.Spacing.xs)
+
+                    Button("Adjust Guides", action: onAdjustGuides)
+                        .scratchLabSecondaryButton()
+
+                    Button(isCameraReady ? "Confirm Camera" : "Waiting for Camera", action: onConfirmCamera)
+                        .scratchLabSuccessButton()
+                        .disabled(!isCameraReady)
+                        .accessibilityHint(isCameraReady
+                            ? "Saves the current camera alignment"
+                            : "Unavailable until the camera preview is ready")
+                }
+            } else {
+                VStack(alignment: .leading, spacing: ScratchLabDesign.Spacing.md) {
+                VStack(alignment: .leading, spacing: ScratchLabDesign.Spacing.xs) {
+                    Text("Align Camera")
+                        .font(ScratchLabDesign.Typo.cardHeading)
+                        .foregroundStyle(ScratchLabDesign.Sem.textPrimary)
+
+                    Text("Fit the decks and mixer inside the guides.")
+                        .font(ScratchLabDesign.Typo.bodySmall)
+                        .foregroundStyle(ScratchLabDesign.Sem.textSecondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+
+                    HStack(spacing: 12) {
+                    CaptureSecondaryButton(title: "Adjust Guides", action: onAdjustGuides)
+
+                    Button(isCameraReady ? "Confirm Camera" : "Waiting for Camera", action: onConfirmCamera)
+                        .scratchLabSuccessButton(fillsWidth: true)
+                        .disabled(!isCameraReady)
+                        .accessibilityHint(isCameraReady
+                            ? "Saves the current camera alignment"
+                            : "Unavailable until the camera preview is ready")
+                    }
+                }
             }
         }
     }
@@ -2420,10 +3420,12 @@ private struct CameraSetupView: View {
 private struct AudioSetupView: View {
     let selectedInputName: String
     let availableInputs: [CompanionCameraBroadcaster.AudioInputOption]
-    @Binding var selectedAudioInputID: String
+    let selectedAudioInputID: String
     let inputMonitorState: AudioMonitorState
     let inputLevel: Float
     let isClipping: Bool
+    let inputErrorMessage: String?
+    let onSelectInput: (CompanionCameraBroadcaster.AudioInputOption) -> Void
     let onUseThisInput: () -> Void
     let onTestAgain: () -> Void
 
@@ -2432,66 +3434,522 @@ private struct AudioSetupView: View {
     }
 
     private var canUseInput: Bool {
-        inputMonitorState == .listening || inputLevel > 0.02
+        !selectedAudioInputID.isEmpty
+            && availableInputs.contains(where: { $0.id == selectedAudioInputID })
+    }
+
+    private var monitorStatusText: String {
+        switch inputMonitorState {
+        case .micOff:
+            return "Audio monitor off — test again"
+        case .micLive:
+            return "Listening — scratch the record"
+        case .listening:
+            return "Signal present"
+        case .noSignal:
+            return "No signal — test again"
+        }
+    }
+
+    private var monitorHealthText: String {
+        if isClipping { return "Clipping" }
+        switch inputMonitorState {
+        case .listening:
+            return "Healthy"
+        case .micLive:
+            return "Listening"
+        case .micOff, .noSignal:
+            return "Waiting"
+        }
+    }
+
+    private var monitorHealthColor: Color {
+        if isClipping { return ScratchLabDesign.Sem.textError }
+        return inputMonitorState == .listening
+            ? ScratchLabDesign.Sem.textSuccess
+            : ScratchLabDesign.Sem.textSecondary
     }
 
     var body: some View {
-        VStack(spacing: 16) {
-            CaptureCard {
-                VStack(alignment: .leading, spacing: 14) {
-                    Text("Selected input")
+        GeometryReader { proxy in
+            if proxy.size.width > proxy.size.height {
+                HStack(spacing: ScratchLabDesign.Spacing.md) {
+                    inputSummary
+                    VStack(spacing: ScratchLabDesign.Spacing.md) {
+                        inputMenu
+                        actionButtons
+                    }
+                    .frame(width: min(320, proxy.size.width * 0.38))
+                }
+                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+            } else {
+                VStack(spacing: 16) {
+                    inputSummary
+                    inputMenu
+                    actionButtons
+                }
+            }
+        }
+    }
+
+    private var inputSummary: some View {
+        CaptureCard {
+            VStack(alignment: .leading, spacing: ScratchLabDesign.Spacing.md) {
+                Text("Selected input")
+                    .font(ScratchLabDesign.Typo.label)
+                    .foregroundStyle(ScratchLabDesign.Sem.textSecondary)
+
+                Text(selectedInputName)
+                    .font(ScratchLabDesign.Typo.title2)
+                    .foregroundStyle(ScratchLabDesign.Sem.textPrimary)
+                    .lineLimit(1)
+
+                VStack(alignment: .leading, spacing: ScratchLabDesign.Spacing.sm) {
+                    Text("Live meter")
                         .font(ScratchLabDesign.Typo.label)
                         .foregroundStyle(ScratchLabDesign.Sem.textSecondary)
 
-                    Text(selectedInputName)
-                        .font(ScratchLabDesign.Typo.title2)
+                    ProgressView(value: normalizedLevel)
+                        .tint(isClipping ? ScratchLabDesign.Sem.danger : ScratchLabDesign.Sem.success)
+
+                    HStack {
+                        Text(monitorStatusText)
+                            .font(ScratchLabDesign.Typo.bodySmall)
+                            .foregroundStyle(ScratchLabDesign.Sem.textSecondary)
+
+                        Spacer()
+
+                        Text(monitorHealthText)
+                            .font(ScratchLabDesign.Typo.statusPill)
+                            .foregroundStyle(monitorHealthColor)
+                    }
+                }
+
+                if let inputErrorMessage {
+                    Label(inputErrorMessage, systemImage: "exclamationmark.triangle.fill")
+                        .font(ScratchLabDesign.Typo.bodySmall)
+                        .foregroundStyle(ScratchLabDesign.Sem.warning)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+            }
+        }
+    }
+
+    private var inputMenu: some View {
+        Menu {
+            if availableInputs.isEmpty {
+                Text("No alternate inputs").disabled(true)
+            } else {
+                ForEach(availableInputs) { option in
+                    Button {
+                        onSelectInput(option)
+                    } label: {
+                        if option.id == selectedAudioInputID {
+                            Label(option.displayName, systemImage: "checkmark")
+                        } else {
+                            Text(option.displayName)
+                        }
+                    }
+                }
+            }
+        } label: {
+            Text(availableInputs.isEmpty ? "No alternate inputs" : "Choose Input")
+        }
+        .scratchLabSecondaryButton(fillsWidth: true)
+        .disabled(availableInputs.isEmpty)
+        .accessibilityHint(availableInputs.isEmpty
+            ? "No additional audio inputs are currently available"
+            : "Selects an available audio input")
+    }
+
+    private var actionButtons: some View {
+        HStack(spacing: 12) {
+            Button("Use This Input", action: onUseThisInput)
+                .scratchLabSuccessButton(fillsWidth: true)
+                .disabled(!canUseInput)
+                .accessibilityHint(canUseInput
+                    ? "Keeps the selected input and returns to System Check"
+                    : "Choose an available audio input first")
+
+            Button("Test Again", systemImage: "arrow.clockwise", action: onTestAgain)
+                .scratchLabSecondaryButton(fillsWidth: true)
+                .accessibilityHint("Restarts listening on the selected input")
+        }
+    }
+}
+
+private struct CaptureHardwareSetupView: View {
+    let availableAudioInputs: [CompanionCameraBroadcaster.AudioInputOption]
+    let selectedAudioInputID: String
+    let activeAudioInputName: String
+    let onSelectAudioInput: (CompanionCameraBroadcaster.AudioInputOption) -> Void
+    let onRetestAudio: () -> Void
+
+    @Environment(\.dismiss) private var dismiss
+    @EnvironmentObject private var audioEngine: AudioEngine
+    @EnvironmentObject private var midiManager: IOSMIDIManager
+    @EnvironmentObject private var midiLearnCoordinator: IOSMIDILearnCoordinator
+    @EnvironmentObject private var midiControllerDispatcher: IOSMIDIControllerDispatcher
+    @EnvironmentObject private var scratchPlaybackEngine: IOScratchPlaybackEngine
+    @AppStorage(MIDISelectionSettings.selectedSourceIDKey) private var selectedMIDISourceID = ""
+
+    private let verifiedActions: [MIDISemanticAction] = [
+        .crossfader,
+        .leftUpfader,
+        .rightUpfader,
+        .hotCue1,
+        .hotCue2,
+        .hotCue3,
+        .hotCue4,
+        .hotCue5,
+        .hotCue6,
+        .hotCue7,
+        .hotCue8
+    ]
+
+    private var selectedMIDISource: IOSMIDIManager.Source? {
+        midiManager.sources.first(where: { $0.id == selectedMIDISourceID })
+    }
+
+    private var selectedSourceIsRane: Bool {
+        selectedMIDISource?.name.localizedCaseInsensitiveContains("rane") == true
+    }
+
+    private var hasVerifiedMapping: Bool {
+        verifiedActions.allSatisfy { midiLearnCoordinator.control(for: $0) != nil }
+    }
+
+    var body: some View {
+        NavigationStack {
+            ScrollView(showsIndicators: false) {
+                VStack(alignment: .leading, spacing: ScratchLabDesign.Spacing.cardSection) {
+                    VStack(alignment: .leading, spacing: ScratchLabDesign.Spacing.xs) {
+                        Text("Hardware Setup")
+                            .font(ScratchLabDesign.Typo.display)
+                            .foregroundStyle(ScratchLabDesign.Sem.textPrimary)
+
+                        Text("Choose the recording input and the MIDI source ScratchLab should map.")
+                            .font(ScratchLabDesign.Typo.pageSubtitle)
+                            .foregroundStyle(ScratchLabDesign.Sem.textSecondary)
+                    }
+
+                    audioCard
+                    midiCard
+                }
+                .frame(maxWidth: 760, alignment: .leading)
+                .frame(maxWidth: .infinity, alignment: .top)
+                .padding(.horizontal, ScratchLabDesign.Spacing.lg)
+                .padding(.bottom, ScratchLabDesign.Spacing.xxl)
+            }
+            .background(ScratchLabDesign.Surface.applicationBackground.ignoresSafeArea())
+            .toolbar {
+                ToolbarItem(placement: .topBarTrailing) {
+                    Button("Close") {
+                        dismiss()
+                    }
+                }
+            }
+        }
+        .onAppear {
+            midiManager.refreshSources()
+        }
+    }
+
+    private var audioCard: some View {
+        CaptureCard {
+            VStack(alignment: .leading, spacing: ScratchLabDesign.Spacing.md) {
+                HStack(alignment: .firstTextBaseline) {
+                    Text("Audio Input")
+                        .font(ScratchLabDesign.Typo.cardHeading)
                         .foregroundStyle(ScratchLabDesign.Sem.textPrimary)
 
-                    VStack(alignment: .leading, spacing: 8) {
-                        Text("Live meter")
+                    Spacer()
+
+                    Text(activeAudioInputName)
+                        .font(ScratchLabDesign.Typo.statusPill)
+                        .foregroundStyle(ScratchLabDesign.Sem.textSecondary)
+                        .lineLimit(1)
+                }
+
+                if availableAudioInputs.isEmpty {
+                    Label("No selectable inputs are available. Check microphone permission or reconnect USB-C.", systemImage: "exclamationmark.triangle.fill")
+                        .font(ScratchLabDesign.Typo.bodySmall)
+                        .foregroundStyle(ScratchLabDesign.Sem.warning)
+                } else {
+                    VStack(spacing: ScratchLabDesign.Spacing.sm) {
+                        ForEach(availableAudioInputs) { option in
+                            hardwareSelectionRow(
+                                title: option.displayName,
+                                detail: audioInputDetail(option),
+                                isSelected: option.id == selectedAudioInputID
+                            ) {
+                                onSelectAudioInput(option)
+                            }
+                        }
+                    }
+                }
+
+                let route = audioEngine.audioHardwareRouteState
+                VStack(alignment: .leading, spacing: ScratchLabDesign.Spacing.xs) {
+                    HardwareSetupDetailRow(
+                        title: "Current route",
+                        value: route.deviceName ?? activeAudioInputName
+                    )
+                    HardwareSetupDetailRow(
+                        title: "Transport",
+                        value: route.transport.rawValue.uppercased()
+                    )
+                    HardwareSetupDetailRow(
+                        title: "Input monitor",
+                        value: route.isInputActive ? "Active" : "Waiting for PCM"
+                    )
+                }
+
+                if route.availableStereoPairs.count > 1 {
+                    VStack(alignment: .leading, spacing: ScratchLabDesign.Spacing.sm) {
+                        Text("Stereo Pair")
                             .font(ScratchLabDesign.Typo.label)
                             .foregroundStyle(ScratchLabDesign.Sem.textSecondary)
 
-                        ProgressView(value: normalizedLevel)
-                            .tint(isClipping ? ScratchLabDesign.Sem.danger : ScratchLabDesign.Sem.success)
-
-                        HStack {
-                            Text(canUseInput ? "Signal present" : "No signal yet")
-                                .font(ScratchLabDesign.Typo.bodySmall)
-                                .foregroundStyle(ScratchLabDesign.Sem.textSecondary)
-
-                            Spacer()
-
-                            Text(isClipping ? "Clipping" : "Healthy")
-                                .font(ScratchLabDesign.Typo.statusPill)
-                                .foregroundStyle(isClipping ? ScratchLabDesign.Sem.textError : ScratchLabDesign.Sem.textSuccess)
+                        HStack(spacing: ScratchLabDesign.Spacing.sm) {
+                            ForEach(route.availableStereoPairs) { pair in
+                                Button(pair.displayName) {
+                                    audioEngine.selectStereoPair(pair)
+                                }
+                                .buttonStyle(.bordered)
+                                .tint(route.selectedStereoPair == pair
+                                    ? ScratchLabDesign.Sem.accent
+                                    : ScratchLabDesign.Sem.textSecondary)
+                            }
                         }
                     }
                 }
-            }
 
-            Menu {
-                if availableInputs.isEmpty {
-                    Text("No alternate inputs").disabled(true)
+                if let error = audioEngine.lastAudioError {
+                    Label(error, systemImage: "exclamationmark.triangle.fill")
+                        .font(ScratchLabDesign.Typo.bodySmall)
+                        .foregroundStyle(ScratchLabDesign.Sem.warning)
+                }
+
+                Button("Test Selected Input", action: onRetestAudio)
+                    .scratchLabPrimaryButton(fillsWidth: true)
+                    .disabled(selectedAudioInputID.isEmpty)
+
+                if selectedAudioInputID.isEmpty {
+                    Text("Select an audio input before testing.")
+                        .font(ScratchLabDesign.Typo.bodySmall)
+                        .foregroundStyle(ScratchLabDesign.Sem.warning)
+                }
+            }
+        }
+    }
+
+    private var midiCard: some View {
+        CaptureCard {
+            VStack(alignment: .leading, spacing: ScratchLabDesign.Spacing.md) {
+                HStack(alignment: .firstTextBaseline) {
+                    Text("MIDI Controller")
+                        .font(ScratchLabDesign.Typo.cardHeading)
+                        .foregroundStyle(ScratchLabDesign.Sem.textPrimary)
+
+                    Spacer()
+
+                    Text(midiReadinessText)
+                        .font(ScratchLabDesign.Typo.statusPill)
+                        .foregroundStyle(midiReadinessColor)
+                }
+
+                if midiManager.sources.isEmpty {
+                    Label("No MIDI source detected. Connect and power the RANE ONE MKII, then refresh.", systemImage: "cable.connector")
+                        .font(ScratchLabDesign.Typo.bodySmall)
+                        .foregroundStyle(ScratchLabDesign.Sem.warning)
                 } else {
-                    ForEach(availableInputs) { option in
-                        Button(option.displayName) {
-                            selectedAudioInputID = option.id
+                    VStack(spacing: ScratchLabDesign.Spacing.sm) {
+                        ForEach(midiManager.sources) { source in
+                            hardwareSelectionRow(
+                                title: source.name,
+                                detail: source.id,
+                                isSelected: source.id == selectedMIDISourceID
+                            ) {
+                                selectMIDISource(source)
+                            }
                         }
                     }
                 }
-            } label: {
-                Text("Choose Input")
-            }
-            .scratchLabSecondaryButton(fillsWidth: true)
 
-            HStack(spacing: 12) {
-                Button("Use This Input", action: onUseThisInput)
-                    .scratchLabSuccessButton(fillsWidth: true)
-                    .disabled(!canUseInput)
+                Button("Refresh MIDI Devices") {
+                    midiManager.refreshSources()
+                }
+                .scratchLabSecondaryButton(fillsWidth: true)
 
-                CaptureSecondaryButton(title: "Test Again", action: onTestAgain)
+                Button(hasVerifiedMapping ? "Reapply Verified RANE Mapping" : "Apply Verified RANE Mapping") {
+                    applyVerifiedRaneMapping()
+                }
+                .scratchLabPrimaryButton(fillsWidth: true)
+                .disabled(!selectedSourceIsRane)
+
+                Button("Load AHHH") {
+                    scratchPlaybackEngine.loadPlatterAHHH()
+                }
+                .scratchLabSecondaryButton(fillsWidth: true)
+                .disabled(!selectedSourceIsRane)
+                .accessibilityIdentifier("load-platter-ahhh")
+
+                Text(scratchPlaybackEngine.platterSampleStatus)
+                    .font(ScratchLabDesign.Typo.bodySmall)
+                    .foregroundStyle(ScratchLabDesign.Sem.textSecondary)
+                    .fixedSize(horizontal: false, vertical: true)
+
+                Text(raneMappingAvailabilityText)
+                    .font(ScratchLabDesign.Typo.bodySmall)
+                    .foregroundStyle(selectedSourceIsRane
+                        ? ScratchLabDesign.Sem.textSecondary
+                        : ScratchLabDesign.Sem.warning)
+
+                VStack(alignment: .leading, spacing: ScratchLabDesign.Spacing.xs) {
+                    HardwareSetupDetailRow(title: "Crossfader", value: mappingDescription(for: .crossfader, fallback: "Raw ch 15 · CC 8"))
+                    HardwareSetupDetailRow(title: "Left upfader", value: mappingDescription(for: .leftUpfader, fallback: "Raw ch 0 · CC 28"))
+                    HardwareSetupDetailRow(title: "Right upfader", value: mappingDescription(for: .rightUpfader, fallback: "Raw ch 1 · CC 28"))
+                    HardwareSetupDetailRow(title: "Right pads", value: "Raw ch 5 · Notes 20–27 · ScratchLab samples")
+                    HardwareSetupDetailRow(title: "Hot Cue 1", value: hotCueOneDescription)
+                }
+
+                if let message = midiManager.latestMessage {
+                    Text("Last MIDI: \(String(describing: message.messageType)) · raw ch \(message.channel) · value \(message.value)")
+                        .font(.system(.caption, design: .monospaced))
+                        .foregroundStyle(ScratchLabDesign.Sem.textSecondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                } else {
+                    Text("Move a RANE control after selecting its MIDI source. The latest message will appear here.")
+                        .font(ScratchLabDesign.Typo.bodySmall)
+                        .foregroundStyle(ScratchLabDesign.Sem.textSecondary)
+                }
+
+                if !midiLearnCoordinator.feedback.isEmpty {
+                    Text(midiLearnCoordinator.feedback)
+                        .font(ScratchLabDesign.Typo.bodySmall)
+                        .foregroundStyle(ScratchLabDesign.Sem.accent)
+                }
             }
+        }
+    }
+
+    private func hardwareSelectionRow(
+        title: String,
+        detail: String,
+        isSelected: Bool,
+        action: @escaping () -> Void
+    ) -> some View {
+        Button(action: action) {
+            HStack(spacing: ScratchLabDesign.Spacing.md) {
+                Image(systemName: isSelected ? "checkmark.circle.fill" : "circle")
+                    .foregroundStyle(isSelected
+                        ? ScratchLabDesign.Sem.accent
+                        : ScratchLabDesign.Sem.textSecondary)
+
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(title)
+                        .font(ScratchLabDesign.Typo.bodyDefault)
+                        .foregroundStyle(ScratchLabDesign.Sem.textPrimary)
+                    Text(detail)
+                        .font(ScratchLabDesign.Typo.caption)
+                        .foregroundStyle(ScratchLabDesign.Sem.textSecondary)
+                        .lineLimit(1)
+                }
+
+                Spacer()
+            }
+            .padding(ScratchLabDesign.Card.compactPadding)
+            .background(
+                isSelected ? ScratchLabDesign.Sem.accent.opacity(0.12) : ScratchLabDesign.Surface.raised,
+                in: RoundedRectangle(cornerRadius: ScratchLabDesign.Radius.control, style: .continuous)
+            )
+            .overlay {
+                RoundedRectangle(cornerRadius: ScratchLabDesign.Radius.control, style: .continuous)
+                    .stroke(isSelected ? ScratchLabDesign.Sem.accent : ScratchLabDesign.Border.default, lineWidth: 1)
+            }
+        }
+        .buttonStyle(.plain)
+    }
+
+    private func selectMIDISource(_ source: IOSMIDIManager.Source) {
+        selectedMIDISourceID = source.id
+        midiLearnCoordinator.selectDevice(id: source.id, name: source.name)
+        midiControllerDispatcher.updateMapping(deviceIdentifier: source.id)
+    }
+
+    private func applyVerifiedRaneMapping() {
+        guard let source = selectedMIDISource, selectedSourceIsRane else { return }
+        selectMIDISource(source)
+        midiLearnCoordinator.applyVerifiedRaneOneMKIIMapping()
+    }
+
+    private func audioInputDetail(_ option: CompanionCameraBroadcaster.AudioInputOption) -> String {
+        switch option.portType {
+        case .usbAudio: return "USB-C audio interface"
+        case .lineIn: return "Line input"
+        case .builtInMic: return "Built-in microphone"
+        default: return option.portType.rawValue
+        }
+    }
+
+    private var midiReadinessText: String {
+        switch midiManager.readinessState {
+        case .unavailable: return "Not connected"
+        case .deviceConnected: return "Connected"
+        case .receivingMessages: return "Receiving"
+        }
+    }
+
+    private var midiReadinessColor: Color {
+        switch midiManager.readinessState {
+        case .unavailable: return ScratchLabDesign.Sem.textSecondary
+        case .deviceConnected: return ScratchLabDesign.Sem.warning
+        case .receivingMessages: return ScratchLabDesign.Sem.success
+        }
+    }
+
+    private var raneMappingAvailabilityText: String {
+        guard selectedMIDISource != nil else {
+            return "Select the RANE MIDI source before applying mappings."
+        }
+        guard selectedSourceIsRane else {
+            return "The verified mapping is only available for a detected RANE source."
+        }
+        return "Applies the verified controller mapping for notation, capture, and local ScratchLab sample playback."
+    }
+
+    private func mappingDescription(for action: MIDISemanticAction, fallback: String) -> String {
+        guard let control = midiLearnCoordinator.control(for: action) else {
+            return "Not active · expected \(fallback)"
+        }
+        let kind = control.messageType == .controlChange ? "CC" : "Note"
+        return "Raw ch \(control.channel) · \(kind) \(control.controlNumber)"
+    }
+
+    private var hotCueOneDescription: String {
+        guard let control = midiLearnCoordinator.control(for: .hotCue1) else {
+            return "Not active · expected raw ch 5 · Note 20"
+        }
+        let sampleName = control.assignedSampleID == "dvs_ahhh" ? "AHHH" : (control.assignedSampleID ?? "No sample")
+        return "Raw ch \(control.channel) · Note \(control.controlNumber) · \(sampleName)"
+    }
+}
+
+private struct HardwareSetupDetailRow: View {
+    let title: String
+    let value: String
+
+    var body: some View {
+        HStack(alignment: .firstTextBaseline, spacing: ScratchLabDesign.Spacing.md) {
+            Text(title)
+                .font(ScratchLabDesign.Typo.label)
+                .foregroundStyle(ScratchLabDesign.Sem.textSecondary)
+            Spacer()
+            Text(value)
+                .font(ScratchLabDesign.Typo.bodySmall)
+                .foregroundStyle(ScratchLabDesign.Sem.textPrimary)
+                .multilineTextAlignment(.trailing)
         }
     }
 }
@@ -2514,29 +3972,47 @@ private struct MotionSetupView: View {
     }
 
     var body: some View {
-        VStack(spacing: 16) {
-            CaptureCard {
-                VStack(alignment: .leading, spacing: 14) {
-                    HStack {
-                        Text(isConnected ? "Device paired" : "Waiting for device")
-                            .font(ScratchLabDesign.Typo.sectionTitle)
-                            .foregroundStyle(ScratchLabDesign.Sem.textPrimary)
+        GeometryReader { proxy in
+            if proxy.size.width > proxy.size.height {
+                HStack(spacing: ScratchLabDesign.Spacing.md) {
+                    motionSummary
+                    actionButtons
+                        .frame(width: min(320, proxy.size.width * 0.38))
+                }
+                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+            } else {
+                VStack(spacing: 16) {
+                    motionSummary
+                    actionButtons
+                }
+            }
+        }
+    }
 
-                        Spacer()
+    private var motionSummary: some View {
+        CaptureCard {
+            VStack(alignment: .leading, spacing: ScratchLabDesign.Spacing.md) {
+                HStack {
+                    Text(isConnected ? "Device paired" : "Waiting for device")
+                        .font(ScratchLabDesign.Typo.sectionTitle)
+                        .foregroundStyle(ScratchLabDesign.Sem.textPrimary)
 
-                        StatusBadge(
-                            title: "",
-                            value: isConnected ? "Ready" : "Warning",
-                            variant: isConnected ? .success : .warning
-                        )
-                    }
+                    Spacer()
 
-                    Text(connectionSummary)
-                        .font(ScratchLabDesign.Typo.pageSubtitle)
-                        .foregroundStyle(ScratchLabDesign.Sem.textSecondary)
-                        .fixedSize(horizontal: false, vertical: true)
+                    StatusBadge(
+                        title: "",
+                        value: isConnected ? "Ready" : "Warning",
+                        variant: isConnected ? .success : .warning
+                    )
+                }
 
-                    VStack(alignment: .leading, spacing: 8) {
+                Text(connectionSummary)
+                    .font(ScratchLabDesign.Typo.pageSubtitle)
+                    .foregroundStyle(ScratchLabDesign.Sem.textSecondary)
+                    .lineLimit(2)
+
+                HStack(spacing: ScratchLabDesign.Spacing.xl) {
+                    VStack(alignment: .leading, spacing: ScratchLabDesign.Spacing.xs) {
                         Text("Last sample")
                             .font(ScratchLabDesign.Typo.label)
                             .foregroundStyle(ScratchLabDesign.Sem.textSecondary)
@@ -2546,7 +4022,7 @@ private struct MotionSetupView: View {
                             .foregroundStyle(ScratchLabDesign.Sem.textPrimary)
                     }
 
-                    VStack(alignment: .leading, spacing: 8) {
+                    VStack(alignment: .leading, spacing: ScratchLabDesign.Spacing.xs) {
                         Text("Movement activity")
                             .font(ScratchLabDesign.Typo.label)
                             .foregroundStyle(ScratchLabDesign.Sem.textSecondary)
@@ -2554,12 +4030,17 @@ private struct MotionSetupView: View {
                         ProgressView(value: activityLevel)
                             .tint(ScratchLabDesign.Sem.motion)
                     }
+                    .frame(maxWidth: .infinity)
                 }
             }
+        }
+    }
 
+    private var actionButtons: some View {
+        VStack(spacing: ScratchLabDesign.Spacing.md) {
             HStack(spacing: 12) {
                 CaptureSecondaryButton(title: "Reconnect", action: onReconnect)
-                CaptureSecondaryButton(title: "Test Motion", action: onTestMotion)
+                CaptureSecondaryButton(title: "Recheck Motion", action: onTestMotion)
             }
 
             if canSkip {
@@ -2580,24 +4061,65 @@ private struct CalibrationSetupView: View {
 
     var body: some View {
         CameraCalibrationAdaptiveLayout(
-            preview: CalibrationPreviewCard(
+            preview: { fillsAvailableSpace in
+                CalibrationPreviewCard(
                 session: session,
                 videoRotationAngle: videoRotationAngle,
                 calibrationProfile: $calibrationProfile,
-                allowsEditing: true
-            )
+                allowsEditing: true,
+                fillsAvailableSpace: fillsAvailableSpace
+                )
+            }
         ) { isWide in
-            let stack = isWide ? AnyLayout(VStackLayout(spacing: 12)) : AnyLayout(HStackLayout(spacing: 12))
-            VStack(spacing: 12) {
-                stack {
+            if isWide {
+                HStack(spacing: ScratchLabDesign.Spacing.sm) {
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("Calibrate Deck Layout")
+                            .font(ScratchLabDesign.Typo.cardHeading)
+                            .foregroundStyle(ScratchLabDesign.Sem.textPrimary)
+
+                        Text("Match the guides to the real deck and mixer positions.")
+                            .font(ScratchLabDesign.Typo.label)
+                            .foregroundStyle(ScratchLabDesign.Sem.textSecondary)
+                            .lineLimit(1)
+                    }
+
+                    Spacer(minLength: ScratchLabDesign.Spacing.xs)
+
+                    Button("Save", action: onSave)
+                        .scratchLabSuccessButton()
+
+                    Button("Reset", action: onReset)
+                        .scratchLabSecondaryButton()
+
+                    if hasStoredCalibration {
+                        Button("Use Previous", action: onUsePrevious)
+                            .scratchLabSecondaryButton()
+                    }
+                }
+            } else {
+                VStack(alignment: .leading, spacing: 12) {
+                VStack(alignment: .leading, spacing: ScratchLabDesign.Spacing.xs) {
+                    Text("Calibrate Deck Layout")
+                        .font(ScratchLabDesign.Typo.cardHeading)
+                        .foregroundStyle(ScratchLabDesign.Sem.textPrimary)
+
+                    Text("Match the guides to the real deck and mixer positions.")
+                        .font(ScratchLabDesign.Typo.bodySmall)
+                        .foregroundStyle(ScratchLabDesign.Sem.textSecondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+
+                    HStack(spacing: 12) {
                     Button("Save Calibration", action: onSave)
                         .scratchLabSuccessButton(fillsWidth: true)
 
                     CaptureSecondaryButton(title: "Reset", action: onReset)
-                }
+                    }
 
-                if hasStoredCalibration {
-                    CaptureSecondaryButton(title: "Use Previous Calibration", action: onUsePrevious)
+                    if hasStoredCalibration {
+                        CaptureSecondaryButton(title: "Use Previous Calibration", action: onUsePrevious)
+                    }
                 }
             }
         }
@@ -2607,6 +4129,10 @@ private struct CalibrationSetupView: View {
 private struct CaptureHubView: View {
     let flowState: CaptureFlowState
     let sessionLabel: String
+    let techniqueName: String
+    let bpmLabel: String
+    let modeLabel: String
+    let hardwareLabel: String
     let readinessSummary: String
     let canStartTake: Bool
     let takeNumber: Int
@@ -2615,150 +4141,388 @@ private struct CaptureHubView: View {
     @Binding var calibrationProfile: CaptureCalibrationProfile
     let preRollCount: Int
     let recordingStartedAt: Date?
+    let recordingStoppedAt: Date?
     let audioStateText: String
     let motionStateText: String
     let captureHealthText: String
-    let clickTrackStatusText: String?
+    let targetNotation: ScratchNotation?
+    let liveNotationEvents: [CaptureCore.DetectedNotationRecordMovementEvent]
+    let liveFaderEvents: [CaptureCore.DetectedNotationFaderEvent]
+    let notationBPM: Double
+    let showsNotationBeatGrid: Bool
     let warningText: String?
     let onStart: () -> Void
     let onStop: () -> Void
     let onRecheck: () -> Void
+    let onBack: () -> Void
+    let onHardwareSetup: () -> Void
 
-    private var showsRecordingIndicator: Bool {
-        flowState == .recording || flowState == .saving
-    }
-
-    private var allowsCalibrationEditing: Bool {
-        flowState == .ready
-    }
+    @State private var isShowingCameraMonitor = false
 
     var body: some View {
         GeometryReader { proxy in
             if proxy.size.width > proxy.size.height {
-                landscapeBody
+                landscapeWorkspace(proxy: proxy)
             } else {
-                portraitBody
-            }
-        }
-    }
+                ScrollView(showsIndicators: false) {
+                    VStack(alignment: .leading, spacing: ScratchLabDesign.Spacing.cardSection) {
+                        workspaceHeader
+                        sessionStateCard
 
-    /// Preview dominates; status and controls stack in a footer below it.
-    private var portraitBody: some View {
-        VStack(spacing: 16) {
-            headerBlock
-            if showsRecordingIndicator { recordingIndicator }
-            previewStack
-            if flowState == .recording || flowState == .saving {
-                if let warningText { WarningBannerView(text: warningText) }
-                metricsRow
-            }
-            controlsBlock
-        }
-    }
+                        if flowState == .preRoll {
+                            countInCard
+                        }
 
-    /// Header and status/helper text run full width above and below a
-    /// preview/controls HStack, so the control rail stays controls-only —
-    /// matching the rail CameraSetupView and CalibrationSetupView use in
-    /// landscape — instead of carrying text that only that rail's narrow
-    /// width would force to wrap or clip. This keeps the same fixed →
-    /// flexible → fixed sandwich shape portraitBody already relies on, with
-    /// the flexible preview never the first or only child of its stack.
-    private var landscapeBody: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            headerBlock
-            if showsRecordingIndicator { recordingIndicator }
+                        if flowState == .recording || flowState == .saving {
+                            if let warningText {
+                                WarningBannerView(text: warningText)
+                            }
+                            metricsRow
+                        } else if flowState == .ready {
+                            CaptureCameraLauncherRow {
+                                isShowingCameraMonitor = true
+                            }
 
-            HStack(alignment: .top, spacing: 16) {
-                previewStack
-                controlsOnlyBlock
-                    .frame(width: 220)
-            }
-
-            if flowState == .recording || flowState == .saving {
-                if let warningText { WarningBannerView(text: warningText) }
-                metricsRow
-            } else if flowState != .preRoll {
-                helperText
-            }
-        }
-    }
-
-    private var headerBlock: some View {
-        VStack(alignment: .leading, spacing: 6) {
-            Text("\(sessionLabel) · Take \(String(format: "%03d", takeNumber))")
-                .font(ScratchLabDesign.Typo.sectionTitle)
-                .foregroundStyle(ScratchLabDesign.Sem.textPrimary)
-
-            Text(readinessSummary)
-                .font(ScratchLabDesign.Typo.bodySmall)
-                .foregroundStyle(ScratchLabDesign.Sem.textSecondary)
-                .fixedSize(horizontal: false, vertical: true)
-        }
-    }
-
-    private var recordingIndicator: some View {
-        HStack(spacing: 10) {
-            Image(systemName: flowState == .saving ? "waveform.circle.fill" : "record.circle.fill")
-                .font(ScratchLabDesign.Typo.sectionTitle)
-                .foregroundStyle(ScratchLabDesign.Sem.textPrimary)
-
-            VStack(alignment: .leading, spacing: 2) {
-                Text(flowState == .saving ? "Finishing Recording" : "Recording")
-                    .font(ScratchLabDesign.Typo.controlValue)
-                    .foregroundStyle(ScratchLabDesign.Sem.textPrimary)
-
-                Text(clickTrackStatusText ?? "ScratchLab is actively capturing this take.")
-                    .font(ScratchLabDesign.Typo.label)
-                    .foregroundStyle(ScratchLabDesign.Sem.textPrimary.opacity(0.82))
-            }
-
-            Spacer(minLength: 0)
-        }
-        .padding(.horizontal, 14)
-        .padding(.vertical, 12)
-        .background(
-            flowState == .saving ? ScratchLabDesign.Sem.warning : ScratchLabDesign.Sem.danger,
-            in: RoundedRectangle(cornerRadius: ScratchLabDesign.Radius.panel, style: .continuous)
-        )
-        .accessibilityElement(children: .combine)
-        .accessibilityLabel(flowState == .saving
-            ? "Finishing recording. ScratchLab is still capturing this take."
-            : (clickTrackStatusText == nil
-                ? "Recording. ScratchLab is actively capturing this take."
-                : "Recording. Click track on. ScratchLab is actively capturing this take."))
-    }
-
-    private var previewStack: some View {
-        ZStack {
-            CalibrationPreviewCard(
-                session: session,
-                videoRotationAngle: videoRotationAngle,
-                calibrationProfile: $calibrationProfile,
-                allowsEditing: allowsCalibrationEditing
-            )
-
-            if flowState == .preRoll {
-                ZStack {
-                    Circle()
-                        .fill(ScratchLabDesign.Surface.scrim)
-                        .frame(width: 140, height: 140)
-
-                    VStack(spacing: 8) {
-                        Text("Count-in")
-                            .font(ScratchLabDesign.Typo.statusPill)
-                            .foregroundStyle(ScratchLabDesign.Sem.textSecondary)
-
-                        Text("\(preRollCount)")
-                            .font(ScratchLabDesign.Typo.largeScore)
-                            .foregroundStyle(ScratchLabDesign.Sem.textPrimary)
-
-                        Text("Get ready")
-                            .font(ScratchLabDesign.Typo.controlValue)
-                            .foregroundStyle(ScratchLabDesign.Sem.textSecondary)
+                            CaptureSecondaryButton(title: "Recheck Setup", action: onRecheck)
+                        }
                     }
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.bottom, 24)
                 }
             }
         }
+        .fullScreenCover(isPresented: $isShowingCameraMonitor) {
+            CaptureCameraMonitorView(
+                flowState: flowState,
+                session: session,
+                videoRotationAngle: videoRotationAngle,
+                calibrationProfile: $calibrationProfile,
+                canStartTake: canStartTake,
+                preRollCount: preRollCount,
+                targetNotation: targetNotation,
+                liveNotationEvents: liveNotationEvents,
+                liveFaderEvents: liveFaderEvents,
+                notationBPM: notationBPM,
+                showsNotationBeatGrid: showsNotationBeatGrid,
+                onStart: onStart,
+                onStop: onStop,
+                onRecheck: onRecheck
+            )
+        }
+    }
+
+    private func landscapeWorkspace(proxy: GeometryProxy) -> some View {
+        ZStack {
+            Color.black
+
+            CompanionCameraPreview(
+                session: session,
+                videoRotationAngle: videoRotationAngle,
+                videoGravity: .resizeAspectFill
+            )
+            .frame(width: proxy.size.width, height: proxy.size.height)
+            .allowsHitTesting(false)
+
+            CaptureLiveNotationOverlay(
+                targetNotation: targetNotation,
+                events: liveNotationEvents,
+                faderEvents: liveFaderEvents,
+                bpm: notationBPM,
+                showsBeatGrid: showsNotationBeatGrid
+            )
+            .padding(.horizontal, max(ScratchLabDesign.Spacing.lg, proxy.safeAreaInsets.leading + 8))
+            .padding(.top, max(ScratchLabDesign.Spacing.sm, proxy.safeAreaInsets.top + 8) + 96)
+            .padding(.bottom, max(ScratchLabDesign.Spacing.sm, proxy.safeAreaInsets.bottom + 8) + 108)
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .allowsHitTesting(false)
+
+            SamplePositionWaveformView()
+                .frame(height: 108)
+                .padding(.horizontal, max(ScratchLabDesign.Spacing.lg, proxy.safeAreaInsets.leading + 8))
+                .padding(.bottom, max(ScratchLabDesign.Spacing.sm, proxy.safeAreaInsets.bottom + 8))
+                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottom)
+
+            if flowState == .preRoll {
+                countInOverlay
+            }
+
+            VStack(spacing: ScratchLabDesign.Spacing.sm) {
+                HStack(alignment: .center, spacing: ScratchLabDesign.Spacing.sm) {
+                    landscapeNavigationButton(
+                        title: "Back",
+                        systemImage: "chevron.left",
+                        action: onBack
+                    )
+
+                    landscapeSessionSummary
+                        .frame(maxWidth: 360, alignment: .leading)
+
+                    Spacer(minLength: ScratchLabDesign.Spacing.sm)
+
+                    if flowState == .ready {
+                        Button("Recheck", action: onRecheck)
+                            .buttonStyle(.bordered)
+                            .buttonBorderShape(.capsule)
+                            .tint(ScratchLabDesign.Sem.textPrimary)
+                    }
+
+                    primaryActionButton
+                        .frame(width: 164)
+
+                    landscapeNavigationButton(
+                        title: "Hardware Setup",
+                        systemImage: "slider.horizontal.3",
+                        action: onHardwareSetup
+                    )
+                }
+
+                if flowState == .recording || flowState == .saving {
+                    HStack(spacing: ScratchLabDesign.Spacing.sm) {
+                        if let warningText {
+                            Label(warningText, systemImage: "exclamationmark.triangle.fill")
+                                .font(ScratchLabDesign.Typo.label)
+                                .foregroundStyle(ScratchLabDesign.Sem.warning)
+                                .lineLimit(1)
+                        }
+
+                        Spacer(minLength: ScratchLabDesign.Spacing.sm)
+                        landscapeMetrics
+                    }
+                }
+            }
+            .padding(.horizontal, max(ScratchLabDesign.Spacing.lg, proxy.safeAreaInsets.leading + 8))
+            .padding(.top, max(ScratchLabDesign.Spacing.sm, proxy.safeAreaInsets.top + 8))
+            .frame(maxHeight: .infinity, alignment: .top)
+        }
+        .frame(width: proxy.size.width, height: proxy.size.height)
+        .ignoresSafeArea()
+    }
+
+    private func landscapeNavigationButton(
+        title: String,
+        systemImage: String,
+        action: @escaping () -> Void
+    ) -> some View {
+        Button(action: action) {
+            Label(title, systemImage: systemImage)
+                .labelStyle(.iconOnly)
+        }
+        .buttonStyle(.bordered)
+        .buttonBorderShape(.circle)
+        .controlSize(.large)
+        .tint(ScratchLabDesign.Sem.textPrimary)
+        .accessibilityLabel(title)
+    }
+
+    private var landscapeSessionSummary: some View {
+        VStack(alignment: .leading, spacing: ScratchLabDesign.Spacing.xxs) {
+            HStack(spacing: ScratchLabDesign.Spacing.sm) {
+                Circle()
+                    .fill(captureStatusColor)
+                    .frame(width: 9, height: 9)
+
+                Text(workspaceTitle)
+                    .font(ScratchLabDesign.Typo.controlValue)
+                    .foregroundStyle(ScratchLabDesign.Sem.textPrimary)
+
+                Text("·")
+                    .foregroundStyle(ScratchLabDesign.Sem.textSecondary)
+
+                Text(sessionLabel)
+                    .font(ScratchLabDesign.Typo.label)
+                    .foregroundStyle(ScratchLabDesign.Sem.textSecondary)
+                    .lineLimit(1)
+            }
+
+            Text("\(techniqueName) · \(bpmLabel) · \(modeLabel)")
+                .font(ScratchLabDesign.Typo.caption)
+                .foregroundStyle(ScratchLabDesign.Sem.textSecondary)
+                .lineLimit(1)
+        }
+        .padding(.horizontal, ScratchLabDesign.Spacing.md)
+        .frame(minHeight: 44)
+        .background(.ultraThinMaterial, in: Capsule())
+    }
+
+    private var landscapeMetrics: some View {
+        HStack(spacing: ScratchLabDesign.Spacing.xs) {
+            TimelineView(.periodic(from: .now, by: 0.5)) { context in
+                landscapeMetric(label: "TIME", value: elapsedTimeText(now: context.date))
+            }
+            landscapeMetric(label: "AUDIO", value: audioStateText)
+            landscapeMetric(label: "MOTION", value: motionStateText)
+            landscapeMetric(label: "HEALTH", value: captureHealthText)
+        }
+    }
+
+    private func landscapeMetric(label: String, value: String) -> some View {
+        Text("\(label) \(value)")
+            .font(ScratchLabDesign.Typo.statusPill)
+            .foregroundStyle(ScratchLabDesign.Sem.textPrimary)
+            .lineLimit(1)
+            .minimumScaleFactor(0.75)
+            .padding(.horizontal, ScratchLabDesign.Spacing.sm)
+            .frame(minHeight: 32)
+            .background(.ultraThinMaterial, in: Capsule())
+    }
+
+    private var countInOverlay: some View {
+        VStack(spacing: ScratchLabDesign.Spacing.sm) {
+            Text("COUNT-IN")
+                .font(ScratchLabDesign.Typo.metricLabel)
+                .foregroundStyle(ScratchLabDesign.Sem.textSecondary)
+            Text("\(preRollCount)")
+                .font(ScratchLabDesign.Typo.largeScore)
+                .foregroundStyle(ScratchLabDesign.Sem.textPrimary)
+                .contentTransition(.numericText())
+        }
+        .padding(ScratchLabDesign.Spacing.xl)
+        .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: ScratchLabDesign.Radius.panel, style: .continuous))
+    }
+
+    private var workspaceStatus: WorkspaceStatus {
+        switch flowState {
+        case .recording:
+            return .recording
+        case .saving:
+            return .standard
+        case .ready, .preRoll:
+            return .ready
+        default:
+            return .standard
+        }
+    }
+
+    private var workspaceTitle: String {
+        switch flowState {
+        case .recording:
+            return "Recording"
+        case .saving:
+            return "Saving Take"
+        case .preRoll:
+            return "Get Ready"
+        default:
+            return canStartTake ? "Capture Ready" : "Needs Attention"
+        }
+    }
+
+    @ViewBuilder
+    private var workspaceHeader: some View {
+        if flowState == .recording || flowState == .saving {
+            TimelineView(.periodic(from: .now, by: 0.5)) { context in
+                CaptureWorkspaceHeader(
+                    title: workspaceTitle,
+                    status: workspaceStatus,
+                    detail: "Take \(String(format: "%02d", takeNumber)) · \(elapsedTimeText(now: context.date))"
+                )
+            }
+        } else {
+            CaptureWorkspaceHeader(
+                title: workspaceTitle,
+                status: canStartTake ? workspaceStatus : .needsAttention,
+                detail: flowState == .preRoll
+                    ? "Count-in before recording starts"
+                    : (canStartTake ? "All required inputs are ready" : readinessSummary)
+            )
+        }
+    }
+
+    private var sessionSummaryState: SessionSummaryState {
+        switch flowState {
+        case .recording, .saving:
+            return .recording
+        case .ready, .preRoll:
+            return canStartTake ? .ready : .incomplete
+        default:
+            return .configured
+        }
+    }
+
+    private var captureStatusText: String {
+        switch flowState {
+        case .recording:
+            return "Recording"
+        case .saving:
+            return "Saving recording"
+        case .preRoll:
+            return "Count-in"
+        default:
+            return canStartTake ? "Capture ready" : "Setup requires attention"
+        }
+    }
+
+    private var captureStatusColor: Color {
+        switch flowState {
+        case .recording:
+            return ScratchLabDesign.Sem.danger
+        case .saving:
+            return ScratchLabDesign.Sem.warning
+        case .ready, .preRoll:
+            return canStartTake ? ScratchLabDesign.Sem.success : ScratchLabDesign.Sem.warning
+        default:
+            return ScratchLabDesign.Sem.warning
+        }
+    }
+
+    private var sessionStateCard: some View {
+        VStack(alignment: .leading, spacing: ScratchLabDesign.Spacing.cardSection) {
+            HStack(spacing: ScratchLabDesign.Spacing.sm) {
+                Text(sessionLabel)
+                    .font(ScratchLabDesign.Typo.cardHeading)
+                    .foregroundStyle(ScratchLabDesign.Sem.textPrimary)
+                    .lineLimit(1)
+
+                Spacer(minLength: ScratchLabDesign.Spacing.sm)
+
+                StatusBadge(
+                    title: "",
+                    value: sessionSummaryState.label,
+                    variant: sessionSummaryState.variant
+                )
+            }
+
+            LazyVGrid(
+                columns: [GridItem(.flexible()), GridItem(.flexible())],
+                alignment: .leading,
+                spacing: ScratchLabDesign.Spacing.md
+            ) {
+                CaptureSummaryField(label: "TECHNIQUE", value: techniqueName)
+                CaptureSummaryField(label: "BPM", value: bpmLabel)
+                CaptureSummaryField(label: "MODE", value: modeLabel)
+                CaptureSummaryField(label: "AUDIO", value: hardwareLabel)
+            }
+
+            CaptureSummaryField(
+                label: "CAPTURE STATUS",
+                value: captureStatusText,
+                valueColor: captureStatusColor
+            )
+
+            primaryActionButton
+        }
+        .scratchLabCard(.standard)
+    }
+
+    private var countInCard: some View {
+        HStack(spacing: ScratchLabDesign.Spacing.md) {
+            VStack(alignment: .leading, spacing: ScratchLabDesign.Spacing.xxs) {
+                Text("COUNT-IN")
+                    .font(ScratchLabDesign.Typo.metricLabel)
+                    .foregroundStyle(ScratchLabDesign.Sem.textSecondary)
+
+                Text("Recording starts automatically")
+                    .font(ScratchLabDesign.Typo.bodySmall)
+                    .foregroundStyle(ScratchLabDesign.Sem.textPrimary)
+            }
+
+            Spacer(minLength: ScratchLabDesign.Spacing.sm)
+
+            Text("\(preRollCount)")
+                .font(ScratchLabDesign.Typo.largeScore)
+                .foregroundStyle(ScratchLabDesign.Sem.accent)
+                .contentTransition(.numericText())
+        }
+        .scratchLabCard(.standard)
     }
 
     private var metricsRow: some View {
@@ -2772,72 +4536,528 @@ private struct CaptureHubView: View {
         }
     }
 
-    /// Full control stack: primary action button, plus (when idle) the
-    /// helper sentence and the Recheck Setup button.
-    private var controlsBlock: some View {
-        VStack(spacing: 12) {
-            primaryActionButton
-            if flowState != .recording, flowState != .saving, flowState != .preRoll {
-                helperText
-                CaptureSecondaryButton(title: "Recheck Setup", action: onRecheck)
-                    .keyboardShortcut("k", modifiers: [])
-            }
-        }
-    }
-
-    /// Same as `controlsBlock` but without the helper sentence, for layouts
-    /// (landscape) that show that sentence elsewhere at full width instead
-    /// of wrapped inside a narrow control rail.
-    private var controlsOnlyBlock: some View {
-        VStack(spacing: 12) {
-            primaryActionButton
-            if flowState != .recording, flowState != .saving, flowState != .preRoll {
-                CaptureSecondaryButton(title: "Recheck Setup", action: onRecheck)
-                    .keyboardShortcut("k", modifiers: [])
-            }
-        }
-    }
-
     private var primaryActionButton: some View {
         Group {
             if flowState == .recording || flowState == .saving {
-                Button(flowState == .saving ? "Saving..." : "Stop Take", action: onStop)
+                Button(flowState == .saving ? "Saving…" : "Stop", action: onStop)
                     .scratchLabDestructiveButton(fillsWidth: true)
                     .disabled(flowState == .saving)
                     .keyboardShortcut(.space, modifiers: [])
             } else if flowState == .preRoll {
-                Button("Starting...", action: {})
-                    .scratchLabSuccessButton(fillsWidth: true)
+                Button("Starting…", action: {})
+                    .scratchLabPrimaryButton(fillsWidth: true)
                     .disabled(true)
             } else {
                 if canStartTake {
-                    Button("Record Take", action: onStart)
-                        .scratchLabSuccessButton(fillsWidth: true)
+                    Button("Start Recording", action: onStart)
+                        .scratchLabPrimaryButton(fillsWidth: true)
                         .keyboardShortcut(.space, modifiers: [])
                 } else {
-                    Button("Record Take", action: onStart)
+                    Button("Resolve Setup", action: onRecheck)
                         .scratchLabWarningButton(fillsWidth: true)
-                        .keyboardShortcut(.space, modifiers: [])
                 }
             }
         }
     }
 
-    private var helperText: some View {
-        Text(canStartTake
-             ? "Pause briefly before starting. Perform one scratch type only."
-             : "Preview is live. Tap Record Take to jump to the remaining setup issue.")
-            .font(ScratchLabDesign.Typo.bodySmall)
-            .foregroundStyle(ScratchLabDesign.Sem.textSecondary)
-            .fixedSize(horizontal: false, vertical: true)
-    }
-
     private func elapsedTimeText(now: Date) -> String {
         guard let recordingStartedAt else { return "00:00" }
-        let elapsed = now.timeIntervalSince(recordingStartedAt)
+        let elapsed = max(0, (recordingStoppedAt ?? now).timeIntervalSince(recordingStartedAt))
         let minutes = Int(elapsed) / 60
         let seconds = Int(elapsed) % 60
         return String(format: "%02d:%02d", minutes, seconds)
+    }
+}
+
+private struct CaptureWorkspaceHeader: View {
+    let title: String
+    let status: WorkspaceStatus
+    let detail: String
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: ScratchLabDesign.Spacing.xs) {
+            Text("CAPTURE")
+                .font(ScratchLabDesign.Typo.metricLabel)
+                .foregroundStyle(ScratchLabDesign.Sem.textSecondary)
+
+            AdaptiveWorkspaceHeader(
+                title: title,
+                status: status,
+                detail: detail
+            )
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+}
+
+private struct CaptureSummaryField: View {
+    let label: String
+    let value: String
+    var valueColor: Color = ScratchLabDesign.Sem.textPrimary
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: ScratchLabDesign.Spacing.xxs) {
+            Text(label)
+                .font(ScratchLabDesign.Typo.metricLabel)
+                .foregroundStyle(ScratchLabDesign.Sem.textSecondary)
+
+            Text(value)
+                .font(ScratchLabDesign.Typo.technical)
+                .foregroundStyle(valueColor)
+                .lineLimit(2)
+                .minimumScaleFactor(0.8)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+}
+
+private struct CaptureCameraLauncherRow: View {
+    let action: () -> Void
+
+    var body: some View {
+        Button(action: action) {
+            HStack(spacing: ScratchLabDesign.Spacing.md) {
+                Image(systemName: "chevron.right")
+                    .font(ScratchLabDesign.Typo.controlValue)
+                    .foregroundStyle(ScratchLabDesign.Sem.textSecondary)
+
+                VStack(alignment: .leading, spacing: ScratchLabDesign.Spacing.xxs) {
+                    Text("Camera / visual guide")
+                        .font(ScratchLabDesign.Typo.controlValue)
+                        .foregroundStyle(ScratchLabDesign.Sem.textPrimary)
+
+                    Text("Optional · Opens full-screen monitor")
+                        .font(ScratchLabDesign.Typo.caption)
+                        .foregroundStyle(ScratchLabDesign.Sem.textSecondary)
+                }
+
+                Spacer(minLength: ScratchLabDesign.Spacing.sm)
+
+                Text("OPEN")
+                    .font(ScratchLabDesign.Typo.statusPill)
+                    .foregroundStyle(ScratchLabDesign.Sem.textSecondary)
+            }
+            .padding(.horizontal, ScratchLabDesign.Spacing.lg)
+            .frame(minHeight: 60)
+            .contentShape(Rectangle())
+            .background(
+                ScratchLabDesign.Surface.surface,
+                in: RoundedRectangle(cornerRadius: ScratchLabDesign.Radius.control, style: .continuous)
+            )
+            .overlay {
+                RoundedRectangle(cornerRadius: ScratchLabDesign.Radius.control, style: .continuous)
+                    .stroke(ScratchLabDesign.Border.default, lineWidth: 1)
+            }
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel("Open camera and visual guide")
+        .accessibilityHint("Shows the complete camera frame without cropping")
+    }
+}
+
+private struct CaptureCameraMonitorView: View {
+    let flowState: CaptureFlowState
+    let session: AVCaptureSession
+    let videoRotationAngle: CGFloat
+    @Binding var calibrationProfile: CaptureCalibrationProfile
+    let canStartTake: Bool
+    let preRollCount: Int
+    let targetNotation: ScratchNotation?
+    let liveNotationEvents: [CaptureCore.DetectedNotationRecordMovementEvent]
+    let liveFaderEvents: [CaptureCore.DetectedNotationFaderEvent]
+    let notationBPM: Double
+    let showsNotationBeatGrid: Bool
+    let onStart: () -> Void
+    let onStop: () -> Void
+    let onRecheck: () -> Void
+
+    @Environment(\.dismiss) private var dismiss
+
+    var body: some View {
+        GeometryReader { proxy in
+            let isWide = proxy.size.width > proxy.size.height
+
+            if isWide {
+                landscapeCameraSurface(proxy: proxy)
+                    .statusBarHidden(true)
+            } else {
+                NavigationStack {
+                    VStack(spacing: ScratchLabDesign.Spacing.cardSection) {
+                        preview
+                        controls
+                    }
+                    .padding(ScratchLabDesign.Spacing.lg)
+                    .frame(width: proxy.size.width, height: proxy.size.height, alignment: .top)
+                    .background(ScratchLabDesign.Surface.applicationBackground)
+                    .navigationTitle("Camera / visual guide")
+                    .navigationBarTitleDisplayMode(.inline)
+                    .toolbar {
+                        ToolbarItem(placement: .topBarTrailing) {
+                            Button("Done") {
+                                dismiss()
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        .background(Color.black)
+    }
+
+    private func landscapeCameraSurface(proxy: GeometryProxy) -> some View {
+        ZStack {
+            Color.black
+
+            CompanionCameraPreview(
+                session: session,
+                videoRotationAngle: videoRotationAngle,
+                videoGravity: .resizeAspectFill
+            )
+            .frame(width: proxy.size.width, height: proxy.size.height)
+            .allowsHitTesting(false)
+
+            CaptureLiveNotationOverlay(
+                targetNotation: targetNotation,
+                events: liveNotationEvents,
+                faderEvents: liveFaderEvents,
+                bpm: notationBPM,
+                showsBeatGrid: showsNotationBeatGrid
+            )
+            .padding(.horizontal, max(ScratchLabDesign.Spacing.lg, proxy.safeAreaInsets.leading + 8))
+            .padding(.top, max(ScratchLabDesign.Spacing.sm, proxy.safeAreaInsets.top + 8) + 52)
+            .padding(.bottom, max(ScratchLabDesign.Spacing.sm, proxy.safeAreaInsets.bottom + 8) + 108)
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .allowsHitTesting(false)
+
+            SamplePositionWaveformView()
+                .frame(height: 108)
+                .padding(.horizontal, max(ScratchLabDesign.Spacing.lg, proxy.safeAreaInsets.leading + 8))
+                .padding(.bottom, max(ScratchLabDesign.Spacing.sm, proxy.safeAreaInsets.bottom + 8))
+                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottom)
+
+            if flowState == .preRoll {
+                countInOverlay
+            }
+
+            HStack(spacing: ScratchLabDesign.Spacing.sm) {
+                Button {
+                    dismiss()
+                } label: {
+                    Label("Close camera", systemImage: "xmark")
+                        .labelStyle(.iconOnly)
+                        .font(.system(size: 16, weight: .bold))
+                        .frame(width: 44, height: 44)
+                }
+                .buttonStyle(.plain)
+                .foregroundStyle(ScratchLabDesign.Sem.textPrimary)
+                .background(.ultraThinMaterial, in: Circle())
+
+                Spacer(minLength: ScratchLabDesign.Spacing.md)
+
+                landscapeCaptureControl
+            }
+            .padding(.horizontal, max(ScratchLabDesign.Spacing.lg, proxy.safeAreaInsets.leading + 8))
+            .padding(.top, max(ScratchLabDesign.Spacing.sm, proxy.safeAreaInsets.top + 8))
+            .frame(maxHeight: .infinity, alignment: .top)
+        }
+        .frame(width: proxy.size.width, height: proxy.size.height)
+        .ignoresSafeArea()
+    }
+
+    @ViewBuilder
+    private var landscapeCaptureControl: some View {
+        if flowState == .recording || flowState == .saving {
+            Button(flowState == .saving ? "Saving…" : "Stop", action: onStop)
+                .buttonStyle(.borderedProminent)
+                .buttonBorderShape(.capsule)
+                .tint(ScratchLabDesign.Sem.danger)
+                .disabled(flowState == .saving)
+        } else if flowState == .preRoll {
+            Label("Starting…", systemImage: "timer")
+                .font(ScratchLabDesign.Typo.controlValue)
+                .foregroundStyle(ScratchLabDesign.Sem.textPrimary)
+                .padding(.horizontal, ScratchLabDesign.Spacing.md)
+                .frame(minHeight: 44)
+                .background(.ultraThinMaterial, in: Capsule())
+        } else if canStartTake {
+            Button("Start Recording", action: onStart)
+                .buttonStyle(.borderedProminent)
+                .buttonBorderShape(.capsule)
+                .tint(ScratchLabDesign.Sem.accent)
+        } else {
+            Button("Resolve Setup", action: onRecheck)
+                .buttonStyle(.borderedProminent)
+                .buttonBorderShape(.capsule)
+                .tint(ScratchLabDesign.Sem.warning)
+        }
+    }
+
+    private var countInOverlay: some View {
+        VStack(spacing: ScratchLabDesign.Spacing.sm) {
+            Text("COUNT-IN")
+                .font(ScratchLabDesign.Typo.metricLabel)
+                .foregroundStyle(ScratchLabDesign.Sem.textSecondary)
+            Text("\(preRollCount)")
+                .font(ScratchLabDesign.Typo.largeScore)
+                .foregroundStyle(ScratchLabDesign.Sem.textPrimary)
+                .contentTransition(.numericText())
+        }
+        .padding(ScratchLabDesign.Spacing.xl)
+        .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: ScratchLabDesign.Radius.panel, style: .continuous))
+    }
+
+    private var preview: some View {
+        ZStack {
+            CalibrationPreviewCard(
+                session: session,
+                videoRotationAngle: videoRotationAngle,
+                calibrationProfile: $calibrationProfile,
+                allowsEditing: flowState == .ready
+            )
+
+            if flowState == .preRoll {
+                VStack(spacing: ScratchLabDesign.Spacing.sm) {
+                    Text("COUNT-IN")
+                        .font(ScratchLabDesign.Typo.metricLabel)
+                        .foregroundStyle(ScratchLabDesign.Sem.textSecondary)
+                    Text("\(preRollCount)")
+                        .font(ScratchLabDesign.Typo.largeScore)
+                        .foregroundStyle(ScratchLabDesign.Sem.textPrimary)
+                        .contentTransition(.numericText())
+                }
+                .padding(ScratchLabDesign.Spacing.xl)
+                .background(ScratchLabDesign.Surface.scrim, in: RoundedRectangle(cornerRadius: ScratchLabDesign.Radius.panel, style: .continuous))
+            }
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+
+    private var controls: some View {
+        VStack(alignment: .leading, spacing: ScratchLabDesign.Spacing.md) {
+            Text("Full camera frame")
+                .font(ScratchLabDesign.Typo.cardHeading)
+                .foregroundStyle(ScratchLabDesign.Sem.textPrimary)
+
+            Text("Use the corner handles to adjust the deck guides before recording.")
+                .font(ScratchLabDesign.Typo.bodySmall)
+                .foregroundStyle(ScratchLabDesign.Sem.textSecondary)
+                .fixedSize(horizontal: false, vertical: true)
+
+            if flowState == .recording || flowState == .saving {
+                Button(flowState == .saving ? "Saving…" : "Stop", action: onStop)
+                    .scratchLabDestructiveButton(fillsWidth: true)
+                    .disabled(flowState == .saving)
+            } else if flowState == .preRoll {
+                Button("Starting…", action: {})
+                    .scratchLabPrimaryButton(fillsWidth: true)
+                    .disabled(true)
+            } else if canStartTake {
+                Button("Start Recording", action: onStart)
+                    .scratchLabPrimaryButton(fillsWidth: true)
+            } else {
+                Button("Resolve Setup", action: onRecheck)
+                    .scratchLabWarningButton(fillsWidth: true)
+            }
+        }
+        .scratchLabCard(.standard)
+    }
+}
+
+/// Display-only live notation over the landscape camera. The event stream is
+/// the existing coalesced MIDI/DVS presentation feed; this view does not
+/// decode, score, persist, or modify capture evidence.
+private struct CaptureLiveNotationOverlay: View {
+    let targetNotation: ScratchNotation?
+    let events: [CaptureCore.DetectedNotationRecordMovementEvent]
+    let faderEvents: [CaptureCore.DetectedNotationFaderEvent]
+    let bpm: Double
+    let showsBeatGrid: Bool
+
+    private var visibleWindow: ClosedRange<TimeInterval>? {
+        guard let first = events.first, let last = events.last else { return nil }
+        return first.startTime...max(first.startTime + 0.1, last.endTime)
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: ScratchLabDesign.Spacing.xs) {
+            HStack {
+                Text("LIVE NOTATION")
+                    .font(ScratchLabDesign.Typo.metricLabel)
+                    .foregroundStyle(ScratchLabDesign.Sem.accent)
+
+                Spacer()
+
+                Text("CAMERA CLEAN · NOTATION SEPARATE")
+                    .font(ScratchLabDesign.Typo.statusPill)
+                    .foregroundStyle(ScratchLabDesign.Sem.textSecondary)
+            }
+
+            Text("TARGET")
+                .font(ScratchLabDesign.Typo.statusPill)
+                .foregroundStyle(ScratchLabDesign.Notation.targetTrace)
+
+            if let targetNotation {
+                CaptureTargetNotationTrace(notation: targetNotation, bpm: bpm)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    .layoutPriority(1)
+            } else {
+                Text("Target notation is unavailable for this technique.")
+                    .font(ScratchLabDesign.Typo.caption)
+                    .foregroundStyle(ScratchLabDesign.Sem.textSecondary)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .leading)
+                    .layoutPriority(1)
+            }
+
+            Text("MY PERFORMANCE · LIVE")
+                .font(ScratchLabDesign.Typo.statusPill)
+                .foregroundStyle(ScratchLabDesign.Notation.performanceTrace)
+
+            if events.isEmpty {
+                Text("Waiting for MIDI / DVS movement")
+                    .font(ScratchLabDesign.Typo.caption)
+                    .foregroundStyle(ScratchLabDesign.Sem.textSecondary)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .leading)
+                    .layoutPriority(1)
+            } else {
+                CaptureLiveNotationTrace(
+                    events: events,
+                    bpm: showsBeatGrid ? bpm : nil,
+                    visibleWindow: visibleWindow
+                )
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .layoutPriority(1)
+            }
+
+            if !faderEvents.isEmpty {
+                HStack(spacing: ScratchLabDesign.Spacing.sm) {
+                    Text("FADER")
+                        .font(ScratchLabDesign.Typo.metricLabel)
+                        .foregroundStyle(ScratchLabDesign.Sem.textSecondary)
+                    CaptureLiveFaderTrace(
+                        events: faderEvents,
+                        visibleWindow: visibleWindow
+                    )
+                    .frame(height: 18)
+                }
+            }
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+        .padding(ScratchLabDesign.Spacing.md)
+        .background(Color.clear)
+        .overlay {
+            RoundedRectangle(cornerRadius: ScratchLabDesign.Radius.control, style: .continuous)
+                .stroke(Color.white.opacity(0.24), lineWidth: 1)
+        }
+        .shadow(color: .black.opacity(0.9), radius: 2, x: 0, y: 1)
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel(events.isEmpty
+            ? "Live notation waiting for MIDI or DVS movement"
+            : "Live notation showing \(events.count) measured movement events")
+    }
+}
+
+/// Captured crossfader marks share the measured take clock and canonical
+/// renderer vocabulary. The baseline remains clear; only real derived cuts,
+/// pulses, transforms, or flares draw marks.
+private struct CaptureLiveFaderTrace: View {
+    let events: [CaptureCore.DetectedNotationFaderEvent]
+    let visibleWindow: ClosedRange<TimeInterval>?
+
+    var body: some View {
+        Canvas { context, size in
+            let start = visibleWindow?.lowerBound ?? events.map(\.startTime).min() ?? 0
+            let end = visibleWindow?.upperBound ?? events.map(\.endTime).max() ?? (start + 0.1)
+            let duration = max(end - start, 0.1)
+            let viewport = LaneViewport(
+                size: size,
+                now: start,
+                axis: .horizontal,
+                actionLineFraction: 0,
+                secondsAhead: duration
+            )
+            var baseline = Path()
+            baseline.move(to: CGPoint(x: 0, y: size.height / 2))
+            baseline.addLine(to: CGPoint(x: size.width, y: size.height / 2))
+            context.stroke(baseline, with: .color(Color.white.opacity(0.35)), lineWidth: 1)
+            ScratchMotionRenderer.drawCrossfaderTicks(
+                events,
+                in: context,
+                viewport: viewport,
+                style: .performance
+            )
+        }
+        .allowsHitTesting(false)
+        .accessibilityLabel("Crossfader activity: \(events.count) detected events")
+    }
+}
+
+/// Full-width canonical target trace for the camera HUD. The target is
+/// materialized upstream by the existing registry and only rendered here.
+private struct CaptureTargetNotationTrace: View {
+    let notation: ScratchNotation
+    let bpm: Double
+
+    var body: some View {
+        Canvas { context, size in
+            let content = LaneContent(notation: notation, beatsPerMinute: bpm)
+            let motionPath = ScratchStrokeGeometry.motionPath(for: content)
+            let viewport = LaneViewport(
+                size: size,
+                now: 0,
+                axis: .horizontal,
+                actionLineFraction: 0,
+                secondsAhead: max(notation.timelineDuration, 0.1)
+            )
+            ScratchMotionRenderer.draw(
+                motionPath,
+                in: context,
+                viewport: viewport,
+                style: .target
+            )
+        }
+        .allowsHitTesting(false)
+    }
+}
+
+/// Transparent measured-stroke renderer used by the camera overlay. It
+/// reuses the canonical stroke adapter, geometry, and cyan performance style,
+/// while intentionally omitting the chart card, grid, labels, and fader lane.
+private struct CaptureLiveNotationTrace: View {
+    let events: [CaptureCore.DetectedNotationRecordMovementEvent]
+    let bpm: Double?
+    let visibleWindow: ClosedRange<TimeInterval>?
+
+    var body: some View {
+        Canvas { context, size in
+            let strokes = events.compactMap(PerformedStrokeAdapter.laneStroke)
+            guard !strokes.isEmpty else { return }
+
+            let windowStart = visibleWindow?.lowerBound ?? 0
+            let windowEnd = visibleWindow?.upperBound ?? max(events.map(\.endTime).max() ?? 0.1, 0.1)
+            let windowDuration = max(windowEnd - windowStart, 0.1)
+            let content = LaneContent(
+                strokes: strokes,
+                segments: [],
+                beatsPerMinute: bpm,
+                duration: max(windowEnd, 0.1),
+                loops: false
+            )
+            let motionPath = ScratchStrokeGeometry.motionPath(for: content)
+            let viewport = LaneViewport(
+                size: size,
+                now: windowStart,
+                axis: .horizontal,
+                actionLineFraction: 0,
+                secondsAhead: windowDuration
+            )
+            ScratchMotionRenderer.draw(
+                motionPath,
+                in: context,
+                viewport: viewport,
+                style: .performance
+            )
+        }
+        .allowsHitTesting(false)
     }
 }
 
@@ -2851,84 +5071,222 @@ private struct TakeReviewView: View {
     let onDiscard: () -> Void
 
     var body: some View {
-        ScrollView(showsIndicators: false) {
-            VStack(spacing: 16) {
-                CaptureCard {
-                    VStack(alignment: .leading, spacing: 14) {
-                        Text(review.operatorMessage)
-                            .font(ScratchLabDesign.Typo.keyMetric)
-                            .foregroundStyle(ScratchLabDesign.Sem.textPrimary)
+        GeometryReader { proxy in
+            let usesTwoPaneReview = proxy.size.width > proxy.size.height
 
-                        LazyVGrid(columns: reviewColumns, spacing: 10) {
-                            ReadinessPill(title: review.syncStatus, variant: review.syncStatus == "Ready" ? .success : .warning)
-                            ReadinessPill(title: review.audioPresent ? "Audio Present" : "Missing Audio", variant: review.audioPresent ? .success : .danger)
-                            ReadinessPill(title: review.motionStatusTitle, variant: review.motionPresent ? .success : .warning)
-                        }
+            if usesTwoPaneReview {
+                landscapeReview(proxy: proxy)
+            } else {
+                ScrollView(showsIndicators: false) {
+                    VStack(spacing: ScratchLabDesign.Spacing.cardSection) {
+                        reviewStatusCard
+                        CaptureThumbnailView(mediaURL: review.summary.mediaURL)
+                        decisionColumn
                     }
-                }
-
-                CaptureThumbnailView(mediaURL: review.summary.mediaURL)
-
-                CaptureCard {
-                    VStack(alignment: .leading, spacing: 12) {
-                        CaptureReviewDetailBlock(label: "Take ID", value: review.summary.sidecar.takeID)
-                        CaptureReviewDetailBlock(label: "Scratch Type", value: review.drillName)
-                        CaptureReviewDetailBlock(label: "Duration", value: formatDuration(review.duration))
-                        CaptureReviewDetailBlock(label: "Sync", value: review.syncStatus)
-                    }
-                }
-
-                CaptureCard {
-                    VStack(alignment: .leading, spacing: 12) {
-                        Text("Quality")
-                            .font(ScratchLabDesign.Typo.sectionLabel)
-                            .foregroundStyle(ScratchLabDesign.Sem.textSecondary)
-
-                        LazyVGrid(columns: qualityColumns, spacing: 10) {
-                            ForEach(CaptureQualityTag.allCases) { quality in
-                                Chip(quality.title, isSelected: review.quality == quality) {
-                                    onSelectQuality(quality)
-                                }
-                                .frame(maxWidth: .infinity)
-                            }
-                        }
-
-                        Button(action: onToggleCombo) {
-                            HStack {
-                                Image(systemName: review.isComboTagged ? "checkmark.square.fill" : "square")
-                                Text("Tag as Combo")
-                            }
-                            .font(ScratchLabDesign.Typo.controlValue)
-                            .foregroundStyle(ScratchLabDesign.Sem.textPrimary)
-                        }
-                    }
-                }
-
-                HStack(spacing: 12) {
-                    Button("Keep", action: onKeep)
-                        .scratchLabSuccessButton(fillsWidth: true)
-
-                    Button("Retry", action: onRetry)
-                        .scratchLabSecondaryButton(fillsWidth: true)
-                        .keyboardShortcut("r", modifiers: [])
-                }
-
-                HStack(spacing: 12) {
-                    Button("Discard", action: onDiscard)
-                        .scratchLabDestructiveButton(fillsWidth: true)
-                        .keyboardShortcut("d", modifiers: [])
-
-                    Button("Keep and Next", action: onKeepAndNext)
-                        .scratchLabPrimaryButton(fillsWidth: true)
-                        .keyboardShortcut(.return, modifiers: [])
+                    .frame(maxWidth: 1100)
+                    .frame(maxWidth: .infinity)
+                    .padding(.bottom, ScratchLabDesign.Spacing.xl)
                 }
             }
-            .padding(.bottom, 24)
         }
     }
 
-    private var reviewColumns: [GridItem] {
-        [GridItem(.flexible()), GridItem(.flexible())]
+    private func landscapeReview(proxy: GeometryProxy) -> some View {
+        VStack(spacing: ScratchLabDesign.Spacing.sm) {
+            HStack(spacing: ScratchLabDesign.Spacing.md) {
+                Text(review.operatorMessage)
+                    .font(ScratchLabDesign.Typo.controlValue)
+                    .foregroundStyle(ScratchLabDesign.Sem.textPrimary)
+                    .lineLimit(1)
+
+                Spacer(minLength: ScratchLabDesign.Spacing.sm)
+                reviewStatusPills
+            }
+            .padding(.horizontal, ScratchLabDesign.Spacing.md)
+            .frame(minHeight: 44)
+            .background(
+                ScratchLabDesign.Surface.surface,
+                in: RoundedRectangle(cornerRadius: ScratchLabDesign.Radius.control, style: .continuous)
+            )
+            .overlay {
+                RoundedRectangle(cornerRadius: ScratchLabDesign.Radius.control, style: .continuous)
+                    .stroke(ScratchLabDesign.Border.default, lineWidth: 1)
+            }
+
+            HStack(alignment: .top, spacing: ScratchLabDesign.Spacing.sm) {
+                CaptureThumbnailView(mediaURL: review.summary.mediaURL)
+                    .frame(maxWidth: .infinity, alignment: .top)
+
+                landscapeDetails
+                    .frame(width: min(270, proxy.size.width * 0.32))
+
+                landscapeActions
+                    .frame(width: min(180, proxy.size.width * 0.22))
+            }
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+    }
+
+    private var landscapeDetails: some View {
+        VStack(alignment: .leading, spacing: ScratchLabDesign.Spacing.sm) {
+            LazyVGrid(
+                columns: [GridItem(.flexible()), GridItem(.flexible())],
+                alignment: .leading,
+                spacing: ScratchLabDesign.Spacing.sm
+            ) {
+                CaptureReviewDetailBlock(label: "Take", value: String(review.summary.sidecar.takeID.prefix(8)))
+                CaptureReviewDetailBlock(label: "Scratch", value: review.drillName)
+                CaptureReviewDetailBlock(label: "Duration", value: formatDuration(review.duration))
+                CaptureReviewDetailBlock(label: "Sync", value: review.syncStatus)
+                CaptureReviewDetailBlock(label: "Fader", value: faderEvidenceText)
+            }
+
+            Divider().overlay(ScratchLabDesign.Border.default)
+
+            LazyVGrid(columns: qualityColumns, spacing: ScratchLabDesign.Spacing.xs) {
+                ForEach(CaptureQualityTag.allCases) { quality in
+                    Chip(quality.title, isSelected: review.quality == quality) {
+                        onSelectQuality(quality)
+                    }
+                    .frame(maxWidth: .infinity)
+                }
+            }
+
+            Button(action: onToggleCombo) {
+                Label("Combo", systemImage: review.isComboTagged ? "checkmark.square.fill" : "square")
+                    .font(ScratchLabDesign.Typo.controlValue)
+                    .foregroundStyle(ScratchLabDesign.Sem.textPrimary)
+            }
+        }
+        .padding(12)
+        .background(
+            ScratchLabDesign.Surface.surface,
+            in: RoundedRectangle(cornerRadius: ScratchLabDesign.Radius.control, style: .continuous)
+        )
+        .overlay {
+            RoundedRectangle(cornerRadius: ScratchLabDesign.Radius.control, style: .continuous)
+                .stroke(ScratchLabDesign.Border.default, lineWidth: 1)
+        }
+    }
+
+    private var landscapeActions: some View {
+        VStack(spacing: ScratchLabDesign.Spacing.sm) {
+            Button("Keep and Next", action: onKeepAndNext)
+                .scratchLabPrimaryButton(fillsWidth: true)
+
+            Button("Keep", action: onKeep)
+                .scratchLabSecondaryButton(fillsWidth: true)
+
+            Button("Retry", action: onRetry)
+                .scratchLabSecondaryButton(fillsWidth: true)
+
+            Button("Discard", action: onDiscard)
+                .scratchLabDestructiveButton(fillsWidth: true)
+        }
+    }
+
+    private var reviewStatusCard: some View {
+        CaptureCard {
+            VStack(alignment: .leading, spacing: ScratchLabDesign.Spacing.md) {
+                Text(review.operatorMessage)
+                    .font(ScratchLabDesign.Typo.keyMetric)
+                    .foregroundStyle(ScratchLabDesign.Sem.textPrimary)
+
+                ViewThatFits(in: .horizontal) {
+                    HStack(spacing: ScratchLabDesign.Spacing.sm) {
+                        reviewStatusPills
+                    }
+
+                    VStack(alignment: .leading, spacing: ScratchLabDesign.Spacing.sm) {
+                        reviewStatusPills
+                    }
+                }
+            }
+        }
+    }
+
+    @ViewBuilder
+    private var reviewStatusPills: some View {
+        ReadinessPill(title: review.syncStatus, variant: review.syncStatus == "Ready" ? .success : .warning)
+        ReadinessPill(title: review.audioPresent ? "Audio Present" : "Missing Audio", variant: review.audioPresent ? .success : .danger)
+        ReadinessPill(title: review.motionStatusTitle, variant: review.motionPresent ? .success : .warning)
+    }
+
+    private var faderEvidenceText: String {
+        let count = review.summary.sidecar.detectedNotation?.faderEvents.count ?? 0
+        return count == 0 ? "No movement" : "\(count) event\(count == 1 ? "" : "s")"
+    }
+
+    private var decisionColumn: some View {
+        VStack(spacing: ScratchLabDesign.Spacing.md) {
+            CaptureCard {
+                LazyVGrid(columns: detailColumns, alignment: .leading, spacing: ScratchLabDesign.Spacing.md) {
+                    CaptureReviewDetailBlock(label: "Take ID", value: review.summary.sidecar.takeID)
+                    CaptureReviewDetailBlock(label: "Scratch Type", value: review.drillName)
+                    CaptureReviewDetailBlock(label: "Duration", value: formatDuration(review.duration))
+                    CaptureReviewDetailBlock(label: "Sync", value: review.syncStatus)
+                    CaptureReviewDetailBlock(label: "Fader", value: faderEvidenceText)
+                }
+            }
+
+            CaptureCard {
+                VStack(alignment: .leading, spacing: ScratchLabDesign.Spacing.md) {
+                    Text("Quality")
+                        .font(ScratchLabDesign.Typo.sectionLabel)
+                        .foregroundStyle(ScratchLabDesign.Sem.textSecondary)
+
+                    LazyVGrid(columns: qualityColumns, spacing: ScratchLabDesign.Spacing.sm) {
+                        ForEach(CaptureQualityTag.allCases) { quality in
+                            Chip(quality.title, isSelected: review.quality == quality) {
+                                onSelectQuality(quality)
+                            }
+                            .frame(maxWidth: .infinity)
+                        }
+                    }
+
+                    Button(action: onToggleCombo) {
+                        HStack {
+                            Image(systemName: review.isComboTagged ? "checkmark.square.fill" : "square")
+                            Text("Tag as Combo")
+                        }
+                        .font(ScratchLabDesign.Typo.controlValue)
+                        .foregroundStyle(ScratchLabDesign.Sem.textPrimary)
+                    }
+                }
+            }
+
+            Button("Keep and Next", action: onKeepAndNext)
+                .scratchLabPrimaryButton(fillsWidth: true)
+                .keyboardShortcut(.return, modifiers: [])
+
+            ViewThatFits(in: .horizontal) {
+                HStack(spacing: ScratchLabDesign.Spacing.sm) {
+                    secondaryReviewActions
+                }
+
+                VStack(spacing: ScratchLabDesign.Spacing.sm) {
+                    secondaryReviewActions
+                }
+            }
+
+            Button("Discard", action: onDiscard)
+                .scratchLabDestructiveButton(fillsWidth: true)
+                .keyboardShortcut("d", modifiers: [])
+        }
+    }
+
+    @ViewBuilder
+    private var secondaryReviewActions: some View {
+        Button("Keep", action: onKeep)
+            .scratchLabSecondaryButton(fillsWidth: true)
+
+        Button("Retry", action: onRetry)
+            .scratchLabSecondaryButton(fillsWidth: true)
+            .keyboardShortcut("r", modifiers: [])
+    }
+
+    private var detailColumns: [GridItem] {
+        [GridItem(.adaptive(minimum: 132), spacing: ScratchLabDesign.Spacing.md)]
     }
 
     private var qualityColumns: [GridItem] {
@@ -2982,157 +5340,363 @@ private struct SessionCompleteView: View {
     }
 
     var body: some View {
-        VStack(spacing: 16) {
-            CaptureCard {
-                VStack(alignment: .leading, spacing: 10) {
-                    Text("Take saved")
-                        .font(ScratchLabDesign.Typo.keyMetric)
-                        .foregroundStyle(ScratchLabDesign.Sem.textPrimary)
+        GeometryReader { proxy in
+            if proxy.size.width > proxy.size.height {
+                landscapeContent(proxy: proxy)
+            } else {
+                ScrollView(showsIndicators: false) {
+                    VStack(spacing: 16) {
+                CaptureCard {
+                    VStack(alignment: .leading, spacing: 10) {
+                        Text("Take saved")
+                            .font(ScratchLabDesign.Typo.keyMetric)
+                            .foregroundStyle(ScratchLabDesign.Sem.textPrimary)
 
-                    Text("Keep the loop moving or reset the block before the next take.")
-                        .font(ScratchLabDesign.Typo.pageSubtitle)
-                        .foregroundStyle(ScratchLabDesign.Sem.textSecondary)
-                        .fixedSize(horizontal: false, vertical: true)
+                        Text("Keep the loop moving or reset the block before the next take.")
+                            .font(ScratchLabDesign.Typo.pageSubtitle)
+                            .foregroundStyle(ScratchLabDesign.Sem.textSecondary)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
                 }
-            }
 
-            #if DEBUG
-            if showsUploadSection {
+                #if DEBUG
+                if showsUploadSection {
+                    CaptureCard {
+                        VStack(alignment: .leading, spacing: 12) {
+                            Text("Upload Session")
+                                .font(ScratchLabDesign.Typo.sectionTitle)
+                                .foregroundStyle(ScratchLabDesign.Sem.textPrimary)
+
+                            Text(uploadJob?.statusText ?? (uploadAvailable ? "Ready to upload" : uploadAvailabilityText ?? "Upload isn't available right now."))
+                                .font(ScratchLabDesign.Typo.pageSubtitle)
+                                .foregroundStyle(ScratchLabDesign.Sem.textSecondary)
+                                .fixedSize(horizontal: false, vertical: true)
+
+                            Text("\(sessionName) · \(takeCount) take\(takeCount == 1 ? "" : "s")")
+                                .font(ScratchLabDesign.Typo.label)
+                                .foregroundStyle(ScratchLabDesign.Sem.textSecondary)
+                                .fixedSize(horizontal: false, vertical: true)
+
+                            if let uploadJob, uploadJob.fileSizeBytes > 0 {
+                                Text(uploadJob.formattedFileSize)
+                                    .font(ScratchLabDesign.Typo.technical)
+                                    .foregroundStyle(ScratchLabDesign.Sem.textSecondary)
+                                    .lineLimit(1)
+                                    .truncationMode(.middle)
+                            }
+
+                            if let progressFraction = uploadJob?.progressFraction {
+                                ProgressView(value: progressFraction)
+                                    .tint(ScratchLabDesign.Sem.success)
+                            } else if uploadJob?.state == .preparing || uploadJob?.state == .requestingUploadURL {
+                                ProgressView()
+                                    .tint(ScratchLabDesign.Sem.success)
+                            }
+
+                            Button(uploadJob?.state == .completed ? "Uploaded" : "Upload Session", action: onUploadSession)
+                                .scratchLabSuccessButton(fillsWidth: true)
+                                .disabled(
+                                    !canShare
+                                        || !uploadAvailable
+                                        || uploadJob?.state == .completed
+                                        || uploadJob?.state == .uploading
+                                        || uploadJob?.state == .requestingUploadURL
+                                        || uploadJob?.state == .preparing
+                                )
+
+                            if uploadJob?.canRetry == true {
+                                CaptureSecondaryButton(title: "Retry Upload", action: onRetryUpload)
+                            }
+                        }
+                    }
+                }
+                #endif
+
                 CaptureCard {
                     VStack(alignment: .leading, spacing: 12) {
-                        Text("Upload Session")
+                        Text("Share Session")
                             .font(ScratchLabDesign.Typo.sectionTitle)
                             .foregroundStyle(ScratchLabDesign.Sem.textPrimary)
 
-                        Text(uploadJob?.statusText ?? (uploadAvailable ? "Ready to upload" : uploadAvailabilityText ?? "Upload isn't available right now."))
+                        Text(exportStatusText ?? "Export this session as a ZIP archive.")
                             .font(ScratchLabDesign.Typo.pageSubtitle)
                             .foregroundStyle(ScratchLabDesign.Sem.textSecondary)
                             .fixedSize(horizontal: false, vertical: true)
 
-                        Text("\(sessionName) · \(takeCount) take\(takeCount == 1 ? "" : "s")")
-                            .font(ScratchLabDesign.Typo.label)
-                            .foregroundStyle(ScratchLabDesign.Sem.textSecondary)
-                            .fixedSize(horizontal: false, vertical: true)
+                        VStack(alignment: .leading, spacing: 6) {
+                            Text("Export mix")
+                                .font(ScratchLabDesign.Typo.label)
+                                .foregroundStyle(ScratchLabDesign.Sem.textSecondary)
 
-                        if let uploadJob, uploadJob.fileSizeBytes > 0 {
-                            Text(uploadJob.formattedFileSize)
+                            #if DEBUG
+                            Picker("Export mix", selection: $exportMixMode) {
+                                ForEach(ExportMixMode.appReviewVisibleModes) { mode in
+                                    Text(mode.title).tag(mode)
+                                }
+                            }
+                            .pickerStyle(.menu)
+                            .tint(.white)
+                            #else
+                            Text(ExportMixMode.scratchOnly.title)
+                                .font(ScratchLabDesign.Typo.controlValue)
+                                .foregroundStyle(ScratchLabDesign.Sem.textPrimary)
+                                .onAppear {
+                                    exportMixMode = .scratchOnly
+                                }
+                            #endif
+                        }
+
+                        if !exportBlockingIssues.isEmpty {
+                            VStack(alignment: .leading, spacing: 6) {
+                                ForEach(exportBlockingIssues, id: \.self) { issue in
+                                    Text("• \(issue)")
+                                        .font(ScratchLabDesign.Typo.label)
+                                        .foregroundStyle(ScratchLabDesign.Sem.textError)
+                                        .fixedSize(horizontal: false, vertical: true)
+                                }
+                            }
+                        }
+
+                        if let exportSummaryText {
+                            Text(exportSummaryText)
                                 .font(ScratchLabDesign.Typo.technical)
                                 .foregroundStyle(ScratchLabDesign.Sem.textSecondary)
                                 .lineLimit(1)
                                 .truncationMode(.middle)
                         }
 
-                        if let progressFraction = uploadJob?.progressFraction {
-                            ProgressView(value: progressFraction)
-                                .tint(ScratchLabDesign.Sem.success)
-                        } else if uploadJob?.state == .preparing || uploadJob?.state == .requestingUploadURL {
-                            ProgressView()
-                                .tint(ScratchLabDesign.Sem.success)
+                        if let exportWarningText {
+                            Text(exportWarningText)
+                                .font(ScratchLabDesign.Typo.label)
+                                .foregroundStyle(ScratchLabDesign.Sem.warning)
+                                .fixedSize(horizontal: false, vertical: true)
                         }
 
-                        Button(uploadJob?.state == .completed ? "Uploaded" : "Upload Session", action: onUploadSession)
-                            .scratchLabSuccessButton(fillsWidth: true)
-                            .disabled(
-                                !canShare
-                                    || !uploadAvailable
-                                    || uploadJob?.state == .completed
-                                    || uploadJob?.state == .uploading
-                                    || uploadJob?.state == .requestingUploadURL
-                                    || uploadJob?.state == .preparing
-                            )
-
-                        if uploadJob?.canRetry == true {
-                            CaptureSecondaryButton(title: "Retry Upload", action: onRetryUpload)
+                        if let timingWarningText {
+                            Text(timingWarningText)
+                                .font(ScratchLabDesign.Typo.label)
+                                .foregroundStyle(ScratchLabDesign.Sem.warning)
+                                .fixedSize(horizontal: false, vertical: true)
                         }
+
+                        Button(isExporting ? "Preparing…" : "Share Session", action: onShareSession)
+                            .scratchLabPrimaryButton(fillsWidth: true)
+                            .disabled(isExporting || !canShare)
+                            .accessibilityHint(canShare
+                                ? "Creates and opens the existing session export"
+                                : "Keep at least one take before sharing")
                     }
                 }
+
+                Button("Next Take", action: onNextTake)
+                    .scratchLabPrimaryButton(fillsWidth: true)
+                    .keyboardShortcut(.return, modifiers: [])
+
+                CaptureSecondaryButton(title: "Change Scratch Type", action: onChangeDrill)
+                    .keyboardShortcut("c", modifiers: [])
+
+                CaptureSecondaryButton(title: "Recheck Setup", action: onRecheckSetup)
+                    .keyboardShortcut("k", modifiers: [])
+
+                CaptureSecondaryButton(title: "End Session", action: onEndSession)
+            }
+                        .padding(.bottom, ScratchLabDesign.Spacing.xl)
+                    }
+                }
+        }
+    }
+    private func landscapeContent(proxy: GeometryProxy) -> some View {
+        let sideWidth = min(210, max(172, proxy.size.width * 0.24))
+
+        return HStack(alignment: .top, spacing: ScratchLabDesign.Spacing.sm) {
+            completionColumn
+                .frame(width: sideWidth)
+
+            #if DEBUG
+            if showsUploadSection {
+                uploadPanel
+                    .frame(width: sideWidth)
             }
             #endif
 
-            CaptureCard {
-                VStack(alignment: .leading, spacing: 12) {
+            sharePanel
+                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+    }
+
+    private var completionColumn: some View {
+        VStack(spacing: ScratchLabDesign.Spacing.sm) {
+            VStack(alignment: .leading, spacing: ScratchLabDesign.Spacing.xs) {
+                Label("Take saved", systemImage: "checkmark.circle.fill")
+                    .font(ScratchLabDesign.Typo.controlValue)
+                    .foregroundStyle(ScratchLabDesign.Sem.textSuccess)
+
+                Text("\(sessionName) · \(takeCount) take\(takeCount == 1 ? "" : "s")")
+                    .font(ScratchLabDesign.Typo.label)
+                    .foregroundStyle(ScratchLabDesign.Sem.textSecondary)
+                    .lineLimit(2)
+            }
+            .padding(12)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(
+                ScratchLabDesign.Surface.surface,
+                in: RoundedRectangle(cornerRadius: ScratchLabDesign.Radius.control, style: .continuous)
+            )
+            .overlay {
+                RoundedRectangle(cornerRadius: ScratchLabDesign.Radius.control, style: .continuous)
+                    .stroke(ScratchLabDesign.Sem.success.opacity(0.65), lineWidth: 1)
+            }
+
+            Button("Next Take", action: onNextTake)
+                .scratchLabPrimaryButton(fillsWidth: true)
+            Button("Change Scratch", action: onChangeDrill)
+                .scratchLabSecondaryButton(fillsWidth: true)
+            Button("Recheck Setup", action: onRecheckSetup)
+                .scratchLabSecondaryButton(fillsWidth: true)
+            Button("End Session", action: onEndSession)
+                .scratchLabTertiaryButton()
+                .frame(maxWidth: .infinity)
+        }
+    }
+
+    #if DEBUG
+    private var uploadPanel: some View {
+        VStack(alignment: .leading, spacing: ScratchLabDesign.Spacing.sm) {
+            Text("Upload Session")
+                .font(ScratchLabDesign.Typo.controlValue)
+                .foregroundStyle(ScratchLabDesign.Sem.textPrimary)
+
+            Text(uploadJob?.statusText ?? (uploadAvailable ? "Ready to upload" : uploadAvailabilityText ?? "Upload unavailable"))
+                .font(ScratchLabDesign.Typo.label)
+                .foregroundStyle(ScratchLabDesign.Sem.textSecondary)
+                .lineLimit(2)
+
+            if let uploadJob, uploadJob.fileSizeBytes > 0 {
+                Text(uploadJob.formattedFileSize)
+                    .font(ScratchLabDesign.Typo.technical)
+                    .foregroundStyle(ScratchLabDesign.Sem.textSecondary)
+                    .lineLimit(1)
+            }
+
+            if let progressFraction = uploadJob?.progressFraction {
+                ProgressView(value: progressFraction)
+                    .tint(ScratchLabDesign.Sem.success)
+            } else if uploadJob?.state == .preparing || uploadJob?.state == .requestingUploadURL {
+                ProgressView()
+                    .tint(ScratchLabDesign.Sem.success)
+            }
+
+            Button(uploadJob?.state == .completed ? "Uploaded" : "Upload", action: onUploadSession)
+                .scratchLabSuccessButton(fillsWidth: true)
+                .disabled(
+                    !canShare
+                        || !uploadAvailable
+                        || uploadJob?.state == .completed
+                        || uploadJob?.state == .uploading
+                        || uploadJob?.state == .requestingUploadURL
+                        || uploadJob?.state == .preparing
+                )
+
+            if uploadJob?.canRetry == true {
+                Button("Retry Upload", action: onRetryUpload)
+                    .scratchLabSecondaryButton(fillsWidth: true)
+            }
+        }
+        .padding(12)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(
+            ScratchLabDesign.Surface.surface,
+            in: RoundedRectangle(cornerRadius: ScratchLabDesign.Radius.control, style: .continuous)
+        )
+        .overlay {
+            RoundedRectangle(cornerRadius: ScratchLabDesign.Radius.control, style: .continuous)
+                .stroke(ScratchLabDesign.Border.default, lineWidth: 1)
+        }
+    }
+    #endif
+
+    private var sharePanel: some View {
+        VStack(alignment: .leading, spacing: ScratchLabDesign.Spacing.sm) {
+            HStack(alignment: .firstTextBaseline, spacing: ScratchLabDesign.Spacing.md) {
+                VStack(alignment: .leading, spacing: ScratchLabDesign.Spacing.xxs) {
                     Text("Share Session")
                         .font(ScratchLabDesign.Typo.sectionTitle)
                         .foregroundStyle(ScratchLabDesign.Sem.textPrimary)
 
                     Text(exportStatusText ?? "Export this session as a ZIP archive.")
-                        .font(ScratchLabDesign.Typo.pageSubtitle)
+                        .font(ScratchLabDesign.Typo.label)
                         .foregroundStyle(ScratchLabDesign.Sem.textSecondary)
-                        .fixedSize(horizontal: false, vertical: true)
-
-                    VStack(alignment: .leading, spacing: 6) {
-                        Text("Export mix")
-                            .font(ScratchLabDesign.Typo.label)
-                            .foregroundStyle(ScratchLabDesign.Sem.textSecondary)
-
-                        #if DEBUG
-                        Picker("Export mix", selection: $exportMixMode) {
-                            ForEach(ExportMixMode.appReviewVisibleModes) { mode in
-                                Text(mode.title).tag(mode)
-                            }
-                        }
-                        .pickerStyle(.menu)
-                        .tint(.white)
-                        #else
-                        Text(ExportMixMode.scratchOnly.title)
-                            .font(ScratchLabDesign.Typo.controlValue)
-                            .foregroundStyle(ScratchLabDesign.Sem.textPrimary)
-                            .onAppear {
-                                exportMixMode = .scratchOnly
-                            }
-                        #endif
-                    }
-
-                    if !exportBlockingIssues.isEmpty {
-                        VStack(alignment: .leading, spacing: 6) {
-                            ForEach(exportBlockingIssues, id: \.self) { issue in
-                                Text("• \(issue)")
-                                    .font(ScratchLabDesign.Typo.label)
-                                    .foregroundStyle(ScratchLabDesign.Sem.textError)
-                                    .fixedSize(horizontal: false, vertical: true)
-                            }
-                        }
-                    }
-
-                    if let exportSummaryText {
-                        Text(exportSummaryText)
-                            .font(ScratchLabDesign.Typo.technical)
-                            .foregroundStyle(ScratchLabDesign.Sem.textSecondary)
-                            .lineLimit(1)
-                            .truncationMode(.middle)
-                    }
-
-                    if let exportWarningText {
-                        Text(exportWarningText)
-                            .font(ScratchLabDesign.Typo.label)
-                            .foregroundStyle(ScratchLabDesign.Sem.warning)
-                            .fixedSize(horizontal: false, vertical: true)
-                    }
-
-                    if let timingWarningText {
-                        Text(timingWarningText)
-                            .font(ScratchLabDesign.Typo.label)
-                            .foregroundStyle(ScratchLabDesign.Sem.warning)
-                            .fixedSize(horizontal: false, vertical: true)
-                    }
-
-                    Button(isExporting ? "Preparing..." : "Share Session", action: onShareSession)
-                        .scratchLabPrimaryButton(fillsWidth: true)
-                        .disabled(isExporting || !canShare)
+                        .lineLimit(2)
                 }
+
+                Spacer(minLength: ScratchLabDesign.Spacing.sm)
+
+                #if DEBUG
+                Picker("Export mix", selection: $exportMixMode) {
+                    ForEach(ExportMixMode.appReviewVisibleModes) { mode in
+                        Text(mode.title).tag(mode)
+                    }
+                }
+                .pickerStyle(.menu)
+                .tint(.white)
+                #else
+                Text(ExportMixMode.scratchOnly.title)
+                    .font(ScratchLabDesign.Typo.controlValue)
+                    .foregroundStyle(ScratchLabDesign.Sem.textPrimary)
+                    .onAppear { exportMixMode = .scratchOnly }
+                #endif
             }
 
-            Button("Next Take", action: onNextTake)
-                .scratchLabSuccessButton(fillsWidth: true)
-                .keyboardShortcut(.return, modifiers: [])
+            if let exportSummaryText {
+                Text(exportSummaryText)
+                    .font(ScratchLabDesign.Typo.technical)
+                    .foregroundStyle(ScratchLabDesign.Sem.textSecondary)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+            }
 
-            CaptureSecondaryButton(title: "Change Scratch Type", action: onChangeDrill)
-                .keyboardShortcut("c", modifiers: [])
+            if !exportBlockingIssues.isEmpty || exportWarningText != nil || timingWarningText != nil {
+                ScrollView(showsIndicators: false) {
+                    VStack(alignment: .leading, spacing: ScratchLabDesign.Spacing.xs) {
+                        ForEach(exportBlockingIssues, id: \.self) { issue in
+                            Text("• \(issue)")
+                                .font(ScratchLabDesign.Typo.label)
+                                .foregroundStyle(ScratchLabDesign.Sem.textError)
+                        }
+                        if let exportWarningText {
+                            Text(exportWarningText)
+                                .font(ScratchLabDesign.Typo.label)
+                                .foregroundStyle(ScratchLabDesign.Sem.warning)
+                        }
+                        if let timingWarningText {
+                            Text(timingWarningText)
+                                .font(ScratchLabDesign.Typo.label)
+                                .foregroundStyle(ScratchLabDesign.Sem.warning)
+                        }
+                    }
+                }
+                .frame(maxHeight: 86)
+            }
 
-            CaptureSecondaryButton(title: "Recheck Setup", action: onRecheckSetup)
-                .keyboardShortcut("k", modifiers: [])
+            Spacer(minLength: 0)
 
-            CaptureSecondaryButton(title: "End Session", action: onEndSession)
+            Button(isExporting ? "Preparing…" : "Share Session", action: onShareSession)
+                .scratchLabPrimaryButton(fillsWidth: true)
+                .disabled(isExporting || !canShare)
+                .accessibilityHint(canShare
+                    ? "Creates and opens the existing session export"
+                    : "Keep at least one take before sharing")
+        }
+        .padding(12)
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+        .background(
+            ScratchLabDesign.Surface.surface,
+            in: RoundedRectangle(cornerRadius: ScratchLabDesign.Radius.control, style: .continuous)
+        )
+        .overlay {
+            RoundedRectangle(cornerRadius: ScratchLabDesign.Radius.control, style: .continuous)
+                .stroke(ScratchLabDesign.Border.default, lineWidth: 1)
         }
     }
 }
@@ -3150,9 +5714,10 @@ private struct CaptureTextField: View {
     let title: String
     @Binding var text: String
     var keyboard: UIKeyboardType = .default
+    var isCompact = false
 
     var body: some View {
-        VStack(alignment: .leading, spacing: ScratchLabDesign.Spacing.sm) {
+        VStack(alignment: .leading, spacing: isCompact ? ScratchLabDesign.Spacing.xxs : ScratchLabDesign.Spacing.sm) {
             Text(title)
                 .font(ScratchLabDesign.Typo.label)
                 .foregroundStyle(ScratchLabDesign.Sem.textSecondary)
@@ -3163,7 +5728,9 @@ private struct CaptureTextField: View {
                 .autocorrectionDisabled()
                 .font(ScratchLabDesign.Typo.bodyDefault)
                 .foregroundStyle(ScratchLabDesign.Sem.textPrimary)
-                .padding(ScratchLabDesign.Card.compactPadding)
+                .padding(.horizontal, isCompact ? 10 : ScratchLabDesign.Card.compactPadding)
+                .padding(.vertical, isCompact ? 0 : ScratchLabDesign.Card.compactPadding)
+                .frame(minHeight: isCompact ? 34 : nil)
                 .background(
                     ScratchLabDesign.Surface.raised,
                     in: RoundedRectangle(cornerRadius: ScratchLabDesign.Radius.control, style: .continuous)
@@ -3180,10 +5747,11 @@ private struct CapturePickerField: View {
     let title: String
     let selectionTitle: String
     let action: () -> Void
+    var isCompact = false
 
     var body: some View {
         Button(action: action) {
-            VStack(alignment: .leading, spacing: ScratchLabDesign.Spacing.sm) {
+            VStack(alignment: .leading, spacing: isCompact ? ScratchLabDesign.Spacing.xxs : ScratchLabDesign.Spacing.sm) {
                 Text(title)
                     .font(ScratchLabDesign.Typo.label)
                     .foregroundStyle(ScratchLabDesign.Sem.textSecondary)
@@ -3199,7 +5767,9 @@ private struct CapturePickerField: View {
                         .font(ScratchLabDesign.Typo.label)
                         .foregroundStyle(ScratchLabDesign.Sem.textSecondary)
                 }
-                .padding(ScratchLabDesign.Card.compactPadding)
+                .padding(.horizontal, isCompact ? 10 : ScratchLabDesign.Card.compactPadding)
+                .padding(.vertical, isCompact ? 0 : ScratchLabDesign.Card.compactPadding)
+                .frame(minHeight: isCompact ? 34 : nil)
                 .background(
                     ScratchLabDesign.Surface.raised,
                     in: RoundedRectangle(cornerRadius: ScratchLabDesign.Radius.control, style: .continuous)
@@ -3274,25 +5844,29 @@ private struct CaptureSelectionRow: View {
 
 private struct CaptureStatusCard: View {
     let result: CaptureCheckResult
+    var isCompact = false
 
     var body: some View {
-        CaptureCard {
-            HStack(spacing: ScratchLabDesign.Spacing.itemRow) {
+        HStack(alignment: .top, spacing: isCompact ? ScratchLabDesign.Spacing.sm : ScratchLabDesign.Spacing.itemRow) {
                 Circle()
                     .fill(result.status.color)
-                    .frame(width: 12, height: 12)
+                    .frame(width: isCompact ? 9 : 12, height: isCompact ? 9 : 12)
 
                 VStack(alignment: .leading, spacing: ScratchLabDesign.Spacing.xxs) {
                     Text(result.kind.title)
-                        .font(ScratchLabDesign.Typo.title3)
+                        .font(isCompact ? ScratchLabDesign.Typo.controlValue : ScratchLabDesign.Typo.title3)
                         .foregroundStyle(ScratchLabDesign.Sem.textPrimary)
+                        .lineLimit(1)
 
                     Text(result.detail)
-                        .font(ScratchLabDesign.Typo.pageSubtitle)
+                        .font(isCompact ? ScratchLabDesign.Typo.label : ScratchLabDesign.Typo.pageSubtitle)
                         .foregroundStyle(ScratchLabDesign.Sem.textSecondary)
+                        .lineLimit(isCompact ? 2 : nil)
+                        .fixedSize(horizontal: false, vertical: true)
                 }
+                .layoutPriority(1)
 
-                Spacer()
+                Spacer(minLength: ScratchLabDesign.Spacing.xs)
 
                 StatusBadge(
                     title: "",
@@ -3300,7 +5874,15 @@ private struct CaptureStatusCard: View {
                     variant: result.status.badgeVariant
                 )
             }
-        }
+            .padding(isCompact ? 10 : ScratchLabDesign.Card.padding)
+            .background(
+                ScratchLabDesign.Surface.surface,
+                in: RoundedRectangle(cornerRadius: ScratchLabDesign.Radius.panel, style: .continuous)
+            )
+            .overlay {
+                RoundedRectangle(cornerRadius: ScratchLabDesign.Radius.panel, style: .continuous)
+                    .stroke(ScratchLabDesign.Border.default, lineWidth: 1)
+            }
     }
 }
 
@@ -3319,36 +5901,71 @@ private struct CalibrationPreviewCard: View {
     let videoRotationAngle: CGFloat
     @Binding var calibrationProfile: CaptureCalibrationProfile
     let allowsEditing: Bool
+    var fillsAvailableSpace = false
 
     var body: some View {
-        GeometryReader { proxy in
-            ZStack {
-                CompanionCameraPreview(
-                    session: session,
-                    videoRotationAngle: videoRotationAngle
-                )
-                .allowsHitTesting(false)
-
-                ForEach(CaptureCalibrationRole.allCases) { role in
-                    InteractiveCalibrationZone(
-                        zone: Binding(
-                            get: { calibrationProfile[role] },
-                            set: { calibrationProfile[role] = $0 }
-                        ),
-                        role: role,
-                        containerSize: proxy.size,
-                        allowsEditing: allowsEditing
-                    )
-                }
+        Group {
+            if fillsAvailableSpace {
+                calibrationCanvas
+            } else {
+                calibrationCanvas
+                    .aspectRatio(16.0 / 9.0, contentMode: .fit)
             }
         }
-        .aspectRatio(4.0 / 3.0, contentMode: .fit)
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
         .clipShape(RoundedRectangle(cornerRadius: ScratchLabDesign.Radius.control, style: .continuous))
         .overlay(
             RoundedRectangle(cornerRadius: ScratchLabDesign.Radius.control, style: .continuous)
                 .stroke(ScratchLabDesign.Border.default, lineWidth: 1)
         )
+    }
+
+    private var calibrationCanvas: some View {
+        GeometryReader { proxy in
+            let viewport = fittedCameraViewport(in: proxy.size)
+
+            ZStack {
+                Color.black
+
+                ZStack {
+                    CompanionCameraPreview(
+                        session: session,
+                        videoRotationAngle: videoRotationAngle,
+                        videoGravity: .resizeAspect
+                    )
+                    .allowsHitTesting(false)
+
+                    ForEach(CaptureCalibrationRole.allCases) { role in
+                        InteractiveCalibrationZone(
+                            zone: Binding(
+                                get: { calibrationProfile[role] },
+                                set: { calibrationProfile[role] = $0 }
+                            ),
+                            role: role,
+                            containerSize: viewport.size,
+                            allowsEditing: allowsEditing
+                        )
+                    }
+                }
+                .frame(width: viewport.width, height: viewport.height)
+                .position(x: viewport.midX, y: viewport.midY)
+            }
+        }
+    }
+
+    private func fittedCameraViewport(in size: CGSize) -> CGRect {
+        guard fillsAvailableSpace else {
+            return CGRect(origin: .zero, size: size)
+        }
+
+        let cameraAspect: CGFloat = 16.0 / 9.0
+        let containerAspect = size.width / max(size.height, 1)
+        if containerAspect > cameraAspect {
+            let width = size.height * cameraAspect
+            return CGRect(x: (size.width - width) / 2, y: 0, width: width, height: size.height)
+        }
+
+        let height = size.width / cameraAspect
+        return CGRect(x: 0, y: (size.height - height) / 2, width: size.width, height: height)
     }
 }
 
@@ -3382,21 +5999,27 @@ private struct InteractiveCalibrationZone: View {
 
             if allowsEditing {
                 Circle()
-                    .fill(role.color)
-                    .frame(width: 28, height: 28)
-                    .overlay(
+                    .fill(ScratchLabDesign.Sem.success)
+                    .frame(width: 22, height: 22)
+                    .overlay {
                         Circle()
                             .stroke(ScratchLabDesign.Sem.textPrimary.opacity(0.92), lineWidth: 2)
-                    )
-                    .contentShape(Circle())
-                    .position(x: rect.width - 18, y: rect.height - 18)
-                    .gesture(resizeGesture)
+                    }
+                    // Keep the visible handle compact while giving it a full
+                    // touch target, matching the iPhone calibration control.
+                    .frame(width: 52, height: 52)
+                    .contentShape(Rectangle())
+                    .position(x: rect.width - 22, y: rect.height - 22)
+                    .highPriorityGesture(resizeGesture)
+                    .accessibilityLabel("Resize \(role.title) guide")
             }
         }
         .frame(width: rect.width, height: rect.height)
         .contentShape(Rectangle())
         .position(x: rect.midX, y: rect.midY)
-        .gesture(moveGesture)
+        // Apply movement to the guide itself without stealing touches from
+        // the dedicated resize handle above.
+        .gesture(moveGesture, including: .gesture)
     }
 
     private var moveGesture: some Gesture {
@@ -3562,7 +6185,8 @@ private struct CaptureThumbnailView: View {
             if let image {
                 Image(uiImage: image)
                     .resizable()
-                    .scaledToFill()
+                    .scaledToFit()
+                    .background(Color.black)
             } else {
                 ZStack {
                     ScratchLabDesign.Surface.subtleFill
@@ -3615,16 +6239,18 @@ private func formatDuration(_ duration: TimeInterval) -> String {
 private struct CompanionCameraPreview: UIViewRepresentable {
     let session: AVCaptureSession
     let videoRotationAngle: CGFloat
+    var videoGravity: AVLayerVideoGravity = .resizeAspect
 
     func makeUIView(context: Context) -> PreviewView {
         let view = PreviewView()
-        view.previewLayer.videoGravity = .resizeAspectFill
+        view.updateVideoGravity(videoGravity)
         view.updateSession(session)
         view.updateRotationAngle(videoRotationAngle)
         return view
     }
 
     func updateUIView(_ uiView: PreviewView, context: Context) {
+        uiView.updateVideoGravity(videoGravity)
         uiView.updateSession(session)
         uiView.updateRotationAngle(videoRotationAngle)
     }
@@ -3643,6 +6269,11 @@ private struct CompanionCameraPreview: UIViewRepresentable {
         }
 
         private var currentVideoRotationAngle: CGFloat = .nan
+
+        func updateVideoGravity(_ videoGravity: AVLayerVideoGravity) {
+            guard previewLayer.videoGravity != videoGravity else { return }
+            previewLayer.videoGravity = videoGravity
+        }
 
         func updateSession(_ session: AVCaptureSession?) {
             guard previewLayer.session !== session else { return }

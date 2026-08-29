@@ -286,6 +286,15 @@ final class MIDIFaderCurveTests: XCTestCase {
 
 final class HotCueTriggerResolverTests: XCTestCase {
 
+    func testUngatedHotCueAcceptsWhenExternalSoftwareOwnsTransport() {
+        let decision = HotCueTriggerResolver.resolve(
+            action: .hotCue(action: .hotCue1, sampleID: "dvs_ahhh")
+        )
+
+        XCTAssertTrue(decision.shouldTrigger)
+        XCTAssertEqual(decision.sampleID, "dvs_ahhh")
+    }
+
     func testStoppedTransportRejectsHotCue() {
         let transportState = TransportState()
         let decision = HotCueTriggerResolver.resolve(

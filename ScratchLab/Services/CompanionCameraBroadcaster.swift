@@ -161,6 +161,11 @@ final class CompanionCameraBroadcaster: NSObject, ObservableObject {
         }
     }
     var recordingSessionConfig: CaptureSessionConfig?
+    /// Optional Watch request that belongs to the next local recording. The
+    /// request is folded into the initial sidecar on the capture queue so a
+    /// linked Watch start can never be reported later as `notRequested`.
+    var recordingWatchRequest: WatchCaptureCommandPayload?
+    private var recordingWatchReply: WatchCaptureControlReply?
 
     let captureSession = AVCaptureSession()
 
@@ -190,6 +195,8 @@ final class CompanionCameraBroadcaster: NSObject, ObservableObject {
     private var activeRecordingURL: URL?
     private var activeRecordingSidecar: CaptureCore.LocalRecordingSidecar?
     private var activeRecordingSidecarURL: URL?
+    private var pendingRecordingFinalizations: [(RecordingSummary?) -> Void] = []
+    private var stopRequestedWhileRecordingStarts = false
     private var rotationCoordinator: AVCaptureDevice.RotationCoordinator?
     private var rotationAngleObservation: NSKeyValueObservation?
 
@@ -251,7 +258,7 @@ final class CompanionCameraBroadcaster: NSObject, ObservableObject {
     }
 
     func toggleRecording() {
-        isRecording ? stopRecording() : startRecording()
+        isRecording ? stopRecording(onFinalized: nil) : startRecording()
     }
 
     func beginRecording(captureTiming: CaptureTimingMetadata? = nil) {
@@ -259,7 +266,15 @@ final class CompanionCameraBroadcaster: NSObject, ObservableObject {
     }
 
     func endRecording() {
-        stopRecording()
+        stopRecording(onFinalized: nil)
+    }
+
+    /// Stops the exact local recording currently owned by the movie output
+    /// and completes only after its media + sidecar finalization callback has
+    /// run. The completion is delivered on the main queue so capture UI state
+    /// does not depend solely on a separately published observation.
+    func endRecording(onFinalized: @escaping (RecordingSummary?) -> Void) {
+        stopRecording(onFinalized: onFinalized)
     }
 
     func validateStorageLocation() -> Bool {
@@ -295,6 +310,12 @@ final class CompanionCameraBroadcaster: NSObject, ObservableObject {
             }
             if FileManager.default.fileExists(atPath: summary.sidecarURL.path) {
                 try FileManager.default.removeItem(at: summary.sidecarURL)
+            }
+            let scratchAudioURL = summary.sidecarURL
+                .deletingPathExtension()
+                .appendingPathExtension("wav")
+            if FileManager.default.fileExists(atPath: scratchAudioURL.path) {
+                try FileManager.default.removeItem(at: scratchAudioURL)
             }
 
             DispatchQueue.main.async {
@@ -336,6 +357,46 @@ final class CompanionCameraBroadcaster: NSObject, ObservableObject {
                 #endif
                 DispatchQueue.main.async {
                     self.connectionStatus = "Unable to relay watch motion to Mac. Check connection."
+                }
+            }
+        }
+    }
+
+    /// Persists finalized controller/notation evidence into the exact sidecar
+    /// represented by `summary`, returning the matching in-memory summary for
+    /// Guided Capture review/export. The write is atomic and intentionally
+    /// fails to the caller instead of silently exporting a stale sidecar.
+    func persistingDetectedNotation(
+        _ detectedNotation: CaptureCore.DetectedNotationSnapshot?,
+        in summary: RecordingSummary
+    ) throws -> RecordingSummary {
+        let updatedSidecar = summary.sidecar.withDetectedNotation(detectedNotation)
+        try writeRecordingSidecar(updatedSidecar, to: summary.sidecarURL)
+        return RecordingSummary(
+            mediaURL: summary.mediaURL,
+            sidecarURL: summary.sidecarURL,
+            sidecar: updatedSidecar,
+            statusMessage: summary.statusMessage
+        )
+    }
+
+    /// Records the Watch's acknowledgement/failure against the active take.
+    /// The reply is retained on the capture queue so it is also applied when it
+    /// arrives just before `prepareRecording` has created the initial sidecar.
+    func recordWatchControlReply(_ reply: WatchCaptureControlReply) {
+        captureQueue.async {
+            self.recordingWatchReply = reply
+            guard var sidecar = self.activeRecordingSidecar,
+                  sidecar.sessionID == reply.sessionID,
+                  sidecar.takeID == reply.takeID else { return }
+            sidecar = sidecar.withWatchSync(reply)
+            guard let sidecarURL = self.activeRecordingSidecarURL else { return }
+            do {
+                try self.writeRecordingSidecar(sidecar, to: sidecarURL)
+                self.activeRecordingSidecar = sidecar
+            } catch {
+                DispatchQueue.main.async {
+                    self.recordingStatus = "Watch sync status could not be saved with this take."
                 }
             }
         }
@@ -409,6 +470,7 @@ final class CompanionCameraBroadcaster: NSObject, ObservableObject {
                 self.activeRecordingSidecarURL = preparedRecording.sidecarURL
                 self.applyVideoRotationToCaptureOutputs()
                 DispatchQueue.main.async {
+                    self.lastRecordingSummary = nil
                     self.recordingStatus = "Starting local recording"
                 }
                 self.movieOutput.startRecording(to: preparedRecording.mediaURL, recordingDelegate: self)
@@ -420,13 +482,38 @@ final class CompanionCameraBroadcaster: NSObject, ObservableObject {
         }
     }
 
-    private func stopRecording() {
+    private func stopRecording(onFinalized: ((RecordingSummary?) -> Void)?) {
         captureQueue.async {
-            guard self.movieOutput.isRecording else { return }
-            DispatchQueue.main.async {
-                self.recordingStatus = "Stopping recording"
+            if let onFinalized {
+                self.pendingRecordingFinalizations.append(onFinalized)
             }
-            self.movieOutput.stopRecording()
+
+            if self.movieOutput.isRecording {
+                DispatchQueue.main.async {
+                    self.recordingStatus = "Stopping recording"
+                }
+                self.movieOutput.stopRecording()
+                return
+            }
+
+            // `startRecording(to:)` returns before AVCaptureFileOutput reports
+            // didStart. A fast Save Take can therefore arrive while the staged
+            // sidecar exists but `isRecording` is still false. Remember that
+            // stop and execute it from didStart rather than losing the request.
+            if self.activeRecordingSidecar != nil {
+                self.stopRequestedWhileRecordingStarts = true
+                DispatchQueue.main.async {
+                    self.recordingStatus = "Waiting for recorder to finish starting"
+                }
+                return
+            }
+
+            let completions = self.pendingRecordingFinalizations
+            self.pendingRecordingFinalizations.removeAll()
+            DispatchQueue.main.async {
+                self.recordingStatus = "The camera recorder was not active when Save Take was requested."
+                completions.forEach { $0(nil) }
+            }
         }
     }
 
@@ -806,7 +893,7 @@ final class CompanionCameraBroadcaster: NSObject, ObservableObject {
             roleLabel: roleLabel
         )
 
-        let sidecar = CaptureCore.LocalRecordingSidecar.recording(
+        var sidecar = CaptureCore.LocalRecordingSidecar.recording(
             sessionID: sessionID,
             sessionConfig: recordingSessionConfig,
             takeIdentity: takeIdentity,
@@ -820,6 +907,16 @@ final class CompanionCameraBroadcaster: NSObject, ObservableObject {
             captureTiming: captureTiming,
             startedAt: startedAt
         )
+        if let request = recordingWatchRequest,
+           request.sessionID == sessionID,
+           request.takeID == takeIdentity.takeID {
+            sidecar = sidecar.withPendingWatchRequest(request)
+        }
+        if let reply = recordingWatchReply,
+           reply.sessionID == sessionID,
+           reply.takeID == takeIdentity.takeID {
+            sidecar = sidecar.withWatchSync(reply)
+        }
 
         return PreparedRecording(mediaURL: files.mediaURL, sidecarURL: files.sidecarURL, sidecar: sidecar)
     }
@@ -854,6 +951,8 @@ final class CompanionCameraBroadcaster: NSObject, ObservableObject {
             activeRecordingURL = nil
             activeRecordingSidecar = nil
             activeRecordingSidecarURL = nil
+            recordingWatchRequest = nil
+            recordingWatchReply = nil
         }
 
         let captureErrorDescription = error?.localizedDescription
@@ -934,9 +1033,18 @@ extension CompanionCameraBroadcaster: AVCaptureFileOutputRecordingDelegate {
     func fileOutput(_ output: AVCaptureFileOutput,
                     didStartRecordingTo fileURL: URL,
                     from connections: [AVCaptureConnection]) {
-        DispatchQueue.main.async {
-            self.isRecording = true
-            self.recordingStatus = "Recording to \(fileURL.lastPathComponent)"
+        captureQueue.async {
+            let shouldStopImmediately = self.stopRequestedWhileRecordingStarts
+            self.stopRequestedWhileRecordingStarts = false
+            DispatchQueue.main.async {
+                self.isRecording = true
+                self.recordingStatus = shouldStopImmediately
+                    ? "Stopping recording"
+                    : "Recording to \(fileURL.lastPathComponent)"
+            }
+            if shouldStopImmediately {
+                self.movieOutput.stopRecording()
+            }
         }
     }
 
@@ -944,20 +1052,26 @@ extension CompanionCameraBroadcaster: AVCaptureFileOutputRecordingDelegate {
                     didFinishRecordingTo outputFileURL: URL,
                     from connections: [AVCaptureConnection],
                     error: Error?) {
-        let (statusMessage, summary) = finalizeRecording(outputFileURL: outputFileURL, error: error)
-        DispatchQueue.main.async {
-            self.isRecording = false
+        captureQueue.async {
+            let (statusMessage, summary) = self.finalizeRecording(outputFileURL: outputFileURL, error: error)
+            let completions = self.pendingRecordingFinalizations
+            self.pendingRecordingFinalizations.removeAll()
+            self.stopRequestedWhileRecordingStarts = false
+            DispatchQueue.main.async {
+                self.isRecording = false
 
-            if error == nil {
-                self.lastRecordingName = outputFileURL.lastPathComponent
-            }
+                if error == nil {
+                    self.lastRecordingName = outputFileURL.lastPathComponent
+                }
 
-            if let summary {
-                self.lastRecordingSummary = summary
+                if let summary {
+                    self.lastRecordingSummary = summary
+                }
+                self.recordingStatus = statusMessage
+                completions.forEach { $0(summary) }
             }
-            self.recordingStatus = statusMessage
+            self.refreshNextTakeNumberPreview()
         }
-        refreshNextTakeNumberPreview()
     }
 }
 

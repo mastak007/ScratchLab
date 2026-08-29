@@ -336,8 +336,10 @@ final class IOSMIDIManager: ObservableObject {
 /// `IOSMIDIManager` to the virtual-platter transport and hot-cue runtime.
 ///
 /// References the shared `TransportState` the platter view reads: a controller
-/// PLAY (transport Start/Stop press) toggles it on/off, the platter motor then
-/// spins the record, and hot-cue presses are only resolved while it is playing.
+/// PLAY (transport Start/Stop press) toggles it on/off and the platter motor
+/// spins the record. Hot-cue presses arm their assigned local sample regardless
+/// of ScratchLab's transport state because Serato may own deck transport while
+/// iOS still receives the controller's MIDI and platter movement.
 /// Resolves transport against the hardware registry's `.transport`
 /// bindings and hot cues against the learned mapping / pad router. No fader or
 /// platter-motion mapping, no audio playback, no MIDI Learn.
@@ -382,6 +384,10 @@ final class IOSMIDIControllerDispatcher: ObservableObject {
     /// purely a notation/state feed; it plays no part in scratch audio or
     /// hotcue behaviour. Reset per attempt via `resetCapturedPlatterEvents()`.
     private(set) var capturedPlatterMIDIEvents: [CaptureCore.RawMixerMIDIEvent] = []
+    /// Per-attempt learned crossfader telemetry. This stays separate from the
+    /// platter array so the existing platter decoders keep their exact input,
+    /// then both streams are merged only when the take snapshot is finalized.
+    private(set) var capturedCrossfaderMIDIEvents: [CaptureCore.RawMixerMIDIEvent] = []
     /// Coalesced live renderer input. Raw platter MIDI can arrive much faster
     /// than SwiftUI should redraw, so this is refreshed at the same ~25 Hz
     /// cadence as the macOS live tracker rather than publishing every packet.
@@ -434,6 +440,7 @@ final class IOSMIDIControllerDispatcher: ObservableObject {
     /// attempt's movement can never leak into the next one's notation trace.
     func resetCapturedPlatterEvents() {
         capturedPlatterMIDIEvents.removeAll()
+        capturedCrossfaderMIDIEvents.removeAll()
         livePlatterMovementEvents.removeAll()
         captureBaselineTimestamp = CACurrentMediaTime()
         isSuppressingReleasedMotorRotation = false
@@ -453,6 +460,61 @@ final class IOSMIDIControllerDispatcher: ObservableObject {
             from: capturedPlatterMIDIEvents,
             controller: 6,
             channel: ScratchPlatterTracker.rightChannel
+        )
+    }
+
+    /// Raw take-relative controller evidence, ordered across platter and
+    /// crossfader streams for sidecar persistence and canonical export.
+    var capturedMixerMIDIEvents: [CaptureCore.RawMixerMIDIEvent] {
+        (capturedPlatterMIDIEvents + capturedCrossfaderMIDIEvents).sorted { lhs, rhs in
+            if lhs.takeRelativeTime == rhs.takeRelativeTime {
+                return lhs.timestamp < rhs.timestamp
+            }
+            return lhs.takeRelativeTime < rhs.takeRelativeTime
+        }
+    }
+
+    /// Shared crossfader-event derivation used by both the live Capture HUD
+    /// and the finalized take snapshot. No presentation-specific inference.
+    var capturedCrossfaderEvents: [CaptureCore.DetectedNotationFaderEvent] {
+        CaptureCore.deriveDetectedNotationFaderEvents(from: capturedCrossfaderMIDIEvents)
+    }
+
+    /// Final take evidence in the same `DetectedNotationSnapshot` schema used
+    /// by macOS and canonical export. Returns nil only when the controller did
+    /// not produce any platter or crossfader evidence during this take.
+    func detectedNotationSnapshot(capturedAt: Date = Date()) -> CaptureCore.DetectedNotationSnapshot? {
+        let mixerEvents = capturedMixerMIDIEvents
+        let movementEvents = platterMovementEvents
+        let faderEvents = capturedCrossfaderEvents
+        guard !mixerEvents.isEmpty || !movementEvents.isEmpty || !faderEvents.isEmpty else {
+            return nil
+        }
+
+        let confidences = movementEvents.map(\.confidence) + faderEvents.map(\.confidence)
+        let notationConfidence = confidences.isEmpty
+            ? nil
+            : confidences.reduce(0, +) / Double(confidences.count)
+        var detectionSources: [String] = []
+        if !movementEvents.isEmpty {
+            detectionSources.append("controller")
+        }
+        if !faderEvents.isEmpty {
+            detectionSources.append("midi")
+        }
+
+        return CaptureCore.DetectedNotationSnapshot(
+            notationSource: confidences.isEmpty ? "unavailable" : "detected",
+            notationConfidence: notationConfidence,
+            detectedLabel: nil,
+            labelSource: "unknown",
+            labelConfidence: nil,
+            detectionSources: detectionSources,
+            recordMovementEvents: movementEvents,
+            audioEvents: [],
+            faderEvents: faderEvents,
+            mixerMidiEvents: mixerEvents,
+            capturedAt: capturedAt
         )
     }
 
@@ -597,10 +659,7 @@ final class IOSMIDIControllerDispatcher: ObservableObject {
             print("[MIDI-DEBUG] platter running = \(transportState.isPlaying)")
             #endif
         case .hotCue(let semanticAction, _):
-            let decision = HotCueTriggerResolver.resolve(
-                action: action,
-                transportState: transportState
-            )
+            let decision = HotCueTriggerResolver.resolve(action: action)
             #if DEBUG
             print("[MIDI-DEBUG] hotcue trigger decision · shouldTrigger=\(decision.shouldTrigger) sample=\(decision.sampleID ?? "nil")")
             #endif
@@ -614,7 +673,21 @@ final class IOSMIDIControllerDispatcher: ObservableObject {
         case .crossfader(let value):
             crossfaderMIDIValue = value
             if let control = currentMapping?.control(for: .crossfader) {
-                playbackEngine.setCrossfaderPosition(control.normalizedValue(from: value))
+                let normalizedValue = control.normalizedValue(from: value)
+                let eventTimestamp = CACurrentMediaTime()
+                capturedCrossfaderMIDIEvents.append(
+                    CaptureCore.RawMixerMIDIEvent(
+                        timestamp: eventTimestamp,
+                        takeRelativeTime: max(0, eventTimestamp - captureBaselineTimestamp),
+                        deviceName: currentMapping?.deviceName ?? "iOS MIDI Controller",
+                        channel: Int(message.channel),
+                        controller: Int(message.controlNumber),
+                        value: value,
+                        normalizedValue: normalizedValue,
+                        mappedControl: "crossfader"
+                    )
+                )
+                playbackEngine.setCrossfaderPosition(normalizedValue)
             }
         case .upfader(let deck, let value):
             if deck == 0 {
