@@ -22,8 +22,8 @@ import AVFoundation
 /// - Camera feed: `MacCameraPreviewView` (existing `NSViewRepresentable`).
 /// - Notation model: `LiveNotationOverlayModel` in `.captured` mode → future-
 ///   note guard + silence suppression.
-/// - Stroke geometry: `CapturedNotationStrokeGeometry.travelFraction(for:)`
-///   for proportional travel.
+/// - Stroke geometry: `ControllerGestureNotationDisplayScale` for a fixed,
+///   shared controller zoom while camera/DVS/target travel remains unchanged.
 /// - Playback cursor: `OverlayReplayController` + `TimelineView`.
 struct CameraPassthroughNotationView: View {
 
@@ -95,13 +95,25 @@ struct CameraPassthroughNotationView: View {
             return (targetModel, OverlayReplayController(timeline: timeline))
 
         case .captured:
-            guard let snapshot, !snapshot.recordMovementEvents.isEmpty else {
+            guard let snapshot else {
                 let empty = SessionReplayTimeline(takeDurationSeconds: 0, events: [])
                 return (nil, OverlayReplayController(timeline: empty))
             }
-            let duration = max(snapshot.capturedEvidenceEndTime ?? 0, 0.1)
+            let presentationEvents = CaptureCore
+                .gestureRelativeRecordMovementEventsForPresentation(from: snapshot)
+            guard !presentationEvents.isEmpty else {
+                let empty = SessionReplayTimeline(takeDurationSeconds: 0, events: [])
+                return (nil, OverlayReplayController(timeline: empty))
+            }
+            let duration = max(
+                CaptureCore.gestureRelativeRecordMovementPresentationEndTime(
+                    from: snapshot,
+                    presentationEvents: presentationEvents
+                ) ?? 0,
+                0.1
+            )
             let model = LiveNotationOverlayModel(
-                events: snapshot.recordMovementEvents,
+                events: presentationEvents,
                 duration: duration,
                 mode: .captured
             )
@@ -269,18 +281,16 @@ struct CameraPassthroughNotationView: View {
             context.stroke(path, with: .color(color.opacity(alpha)), lineWidth: 3)
             // Dot at start of arc
             let startPoint = CameraNotationOverlayGeometry.point(
+                on: stroke,
                 angle: stroke.startAngle,
-                travelFraction: stroke.radius / max(params.radius, 0.001),
-                center: params.center,
-                radius: stroke.radius
+                center: params.center
             )
             drawDot(context: context, at: startPoint)
             // Dot at end of arc
             let endPoint = CameraNotationOverlayGeometry.point(
+                on: stroke,
                 angle: stroke.endAngle,
-                travelFraction: stroke.radius / max(params.radius, 0.001),
-                center: params.center,
-                radius: stroke.radius
+                center: params.center
             )
             drawDot(context: context, at: endPoint)
         }

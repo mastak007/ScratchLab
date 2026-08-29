@@ -377,7 +377,11 @@ struct NotationVisualizerView: View {
                     // room to breathe.
                     ScrollView(.vertical) {
                         ScratchPhraseChartView(
-                            source: .captured(snapshot.recordMovementEvents)
+                            source: .captured(
+                                CaptureCore.gestureRelativeRecordMovementEventsForPresentation(
+                                    from: snapshot
+                                )
+                            )
                         )
                             .frame(maxWidth: .infinity)
                             .frame(minHeight: 360)

@@ -5056,7 +5056,15 @@ private struct CaptureLiveNotationTrace: View {
                 duration: max(windowEnd, 0.1),
                 loops: false
             )
-            let motionPath = ScratchStrokeGeometry.motionPath(for: content)
+            let motionPath: MotionPath
+            if let frame = PerformedStrokeAdapter.gestureRelativeNormalizationFrame(for: events) {
+                motionPath = ScratchStrokeGeometry.motionPath(
+                    for: content,
+                    normalizingTo: frame
+                )
+            } else {
+                motionPath = ScratchStrokeGeometry.motionPath(for: content)
+            }
             let viewport = LaneViewport(
                 size: size,
                 now: windowStart,

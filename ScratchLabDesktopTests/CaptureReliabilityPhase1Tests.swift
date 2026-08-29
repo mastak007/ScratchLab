@@ -3101,11 +3101,19 @@ final class CaptureReliabilityPhase1CoreTests: XCTestCase {
     func testIOSLandscapeShowsRealAHHHSampleWaveformAndRendererPlayhead() throws {
         let rendererURL = projectRootURL().appendingPathComponent("ScratchLab/Audio/iOS/IOScratchRenderer.swift")
         let playbackURL = projectRootURL().appendingPathComponent("ScratchLab/Audio/iOS/IOScratchPlaybackEngine.swift")
+        let captureCoreURL = projectRootURL().appendingPathComponent("ScratchLab/Models/CaptureCore.swift")
+        let dispatcherURL = projectRootURL().appendingPathComponent("ScratchLab/MIDI/iOSMIDIManager.swift")
+        let macTrackerURL = projectRootURL().appendingPathComponent("ScratchLabDesktop/Services/LivePerformedNotationTracker.swift")
+        let macAnalyzerURL = projectRootURL().appendingPathComponent("ScratchLabDesktop/Views/MacAnalyzerView.swift")
         let waveformURL = projectRootURL().appendingPathComponent("ScratchLab/Views/ScratchMotionLane.swift")
         let practiceURL = projectRootURL().appendingPathComponent("ScratchLab/Views/PracticeModeView.swift")
         let captureURL = projectRootURL().appendingPathComponent("ScratchLab/Views/CompanionCameraView.swift")
         let rendererSource = try String(contentsOf: rendererURL, encoding: .utf8)
         let playbackSource = try String(contentsOf: playbackURL, encoding: .utf8)
+        let captureCoreSource = try String(contentsOf: captureCoreURL, encoding: .utf8)
+        let dispatcherSource = try String(contentsOf: dispatcherURL, encoding: .utf8)
+        let macTrackerSource = try String(contentsOf: macTrackerURL, encoding: .utf8)
+        let macAnalyzerSource = try String(contentsOf: macAnalyzerURL, encoding: .utf8)
         let waveformSource = try String(contentsOf: waveformURL, encoding: .utf8)
         let practiceSource = try String(contentsOf: practiceURL, encoding: .utf8)
         let captureSource = try String(contentsOf: captureURL, encoding: .utf8)
@@ -3117,6 +3125,22 @@ final class CaptureReliabilityPhase1CoreTests: XCTestCase {
         XCTAssertTrue(playbackSource.contains("case beforeStart"))
         XCTAssertTrue(playbackSource.contains("case pastEnd"))
         XCTAssertTrue(playbackSource.contains("makeWaveform("))
+        XCTAssertTrue(playbackSource.contains("PlatterCoordinateSemantics.samplePosition("))
+        XCTAssertTrue(playbackSource.contains("rawSignedPosition: phase"))
+        XCTAssertTrue(playbackSource.contains("hotCueOrigin: hotCuePhase"))
+        XCTAssertFalse(playbackSource.contains("gestureRelativeNotation("))
+        XCTAssertTrue(captureCoreSource.contains("deriveGestureRelativePlatterNotationEvents("))
+        XCTAssertTrue(captureCoreSource.contains("gestureRelativeRecordMovementEventsForPresentation("))
+        XCTAssertTrue(dispatcherSource.contains("derivePlatterMovementEventsWithProvisional("))
+        XCTAssertTrue(dispatcherSource.contains("deriveGestureRelativePlatterNotationEvents("))
+        XCTAssertTrue(dispatcherSource.contains("advanceLiveNotationAnchor("))
+        XCTAssertTrue(dispatcherSource.contains("advanceLiveNotationAnchorPastSuppressedMotorRotation()"))
+        XCTAssertTrue(macTrackerSource.contains("resolvedControllerMovementEventsWithProvisional("))
+        XCTAssertTrue(macAnalyzerSource.contains("LiveNotationOverlayModel.capturedGestureRelativePresentation(from:"))
+        XCTAssertFalse(macTrackerSource.contains("var canvasHeight: CGFloat"))
+        XCTAssertFalse(macAnalyzerSource.contains("canvasHeight: 118"))
+        XCTAssertTrue(macTrackerSource.contains(".frame(maxWidth: .infinity, maxHeight: .infinity)"))
+        XCTAssertTrue(macAnalyzerSource.contains("LivePerformedNotationCard("))
         XCTAssertTrue(waveformSource.contains("struct SamplePositionWaveformView"))
         XCTAssertTrue(waveformSource.contains("SAMPLE POSITION"))
         XCTAssertTrue(waveformSource.contains("Text(\"START\")"))
@@ -3124,7 +3148,10 @@ final class CaptureReliabilityPhase1CoreTests: XCTestCase {
         XCTAssertTrue(waveformSource.contains("Text(\"END\")"))
         XCTAssertTrue(waveformSource.contains(".background(Color.clear)"))
         XCTAssertTrue(practiceSource.contains("SamplePositionWaveformView()"))
+        XCTAssertTrue(practiceSource.contains("gestureRelativeNormalizationFrame(for: events)"))
+        XCTAssertTrue(practiceSource.contains("gestureRelativePlatterNotationEvents"))
         XCTAssertGreaterThanOrEqual(captureSource.components(separatedBy: "SamplePositionWaveformView()").count - 1, 2)
+        XCTAssertTrue(captureSource.contains("gestureRelativeNormalizationFrame(for: events)"))
     }
 
     func testWatchStartStopControlsTheIPhoneCaptureStateMachine() throws {
@@ -7184,12 +7211,12 @@ final class CaptureReliabilityPhase1CoreTests: XCTestCase {
         let macSourceURL = projectRootURL().appendingPathComponent("ScratchLabDesktop/Views/MacAnalyzerView.swift")
         let source = try String(contentsOf: macSourceURL, encoding: .utf8)
 
-        XCTAssertTrue(source.contains("currentRoutineNotationSnapshot?.recordMovementEvents.isEmpty == false"))
+        XCTAssertTrue(source.contains("CaptureCore.gestureRelativeRecordMovementEventsForPresentation("))
         XCTAssertTrue(source.contains("hasPartialReviewNotation"))
         XCTAssertTrue(source.contains("Audio-only take"))
         XCTAssertTrue(source.contains("Hand motion wasn't detected — review timing only."))
         XCTAssertTrue(source.contains("No record movement detected."))
-        XCTAssertTrue(source.contains("ScratchNotation.detectedPreview("))
+        XCTAssertTrue(source.contains("LiveNotationOverlayModel.capturedGestureRelativePresentation(from:"))
         XCTAssertTrue(source.contains("Notation unavailable for this take."))
         XCTAssertFalse(source.contains("hasRecordedTake && (captureEngine.cxlEventCount > 0 || captureEngine.scratchDetectionCount > 0)"))
     }
@@ -13489,6 +13516,28 @@ final class ControllerPlatterDecoderTests: XCTestCase {
         (0..<count).map { (value + $0, time + Double($0) * step) }
     }
 
+    private func wrappedRuns(
+        signedSteps: [Int],
+        maximumPacketDelta: Int = 60,
+        interval: Double = 0.03
+    ) -> [(Int, Double)] {
+        var phase = 0
+        var time = 0.0
+        var events: [(Int, Double)] = [(0, 0)]
+        for runSteps in signedSteps where runSteps != 0 {
+            let sign = runSteps > 0 ? 1 : -1
+            var remaining = abs(runSteps)
+            while remaining > 0 {
+                let magnitude = min(maximumPacketDelta, remaining)
+                phase += sign * magnitude
+                remaining -= magnitude
+                time += interval
+                events.append((((phase % 128) + 128) % 128, time))
+            }
+        }
+        return events
+    }
+
     // MARK: - Modular wraparound (both directions)
 
     func testModularWrapForwardDoesNotCreateFalseReversal() {
@@ -13568,6 +13617,183 @@ final class ControllerPlatterDecoderTests: XCTestCase {
         XCTAssertFalse(snapshot.detectionSources.contains("video"))
         // Confidence is preserved, not penalized by the camera multiplier.
         XCTAssertEqual(snapshot.recordMovementEvents.first?.confidence ?? 0, 0.9, accuracy: 1e-6)
+    }
+
+    func testFusedSnapshotRederivesPhysicalGestureExcursionForPresentationOnly() throws {
+        // 360 wrapped CC6 steps are exactly 0.1 of the measured direct-MIDI
+        // revolution. Fusion intentionally keeps its canonical/global evidence
+        // semantics; presentation must recover physical travel from the raw
+        // mixer stream, not from fusion-normalized `speed`.
+        let fixture: [(Int, Double)] = (0...360).map {
+            ($0 % 128, Double($0) / 1_000)
+        }
+        let rawMIDI = fixture.map { midiEvent($0.0, $0.1) }
+        let decoded = try XCTUnwrap(decode(fixture).first)
+        XCTAssertEqual(
+            decoded.speed * (decoded.endTime - decoded.startTime),
+            360,
+            accuracy: 1e-9
+        )
+
+        let snapshot = MacCaptureEngine.RoutineNotationFusionEngine().snapshot(
+            audioSnapshot: ScratchAudioNotationSnapshot(audioEvents: [], confidence: nil),
+            motionEvents: [decoded],
+            detectedLabel: nil,
+            labelSource: "unknown",
+            labelConfidence: nil
+        ).withMixerMidiEvents(rawMIDI)
+        let canonicalEvents = snapshot.recordMovementEvents
+        let canonicalMIDI = snapshot.mixerMidiEvents
+        let canonicalExport = SessionExportRecordMovementEvent(
+            from: try XCTUnwrap(canonicalEvents.first)
+        )
+
+        let presentation = CaptureCore
+            .gestureRelativeRecordMovementEventsForPresentation(from: snapshot)
+        let event = try XCTUnwrap(presentation.first)
+        let stroke = try XCTUnwrap(PerformedStrokeAdapter.laneStroke(from: event))
+
+        XCTAssertEqual(try XCTUnwrap(stroke.measuredStartPosition), 0, accuracy: 1e-12)
+        XCTAssertEqual(try XCTUnwrap(stroke.measuredEndPosition), 0.4, accuracy: 1e-12)
+        XCTAssertEqual(try XCTUnwrap(stroke.normalizedTravel), 0.1, accuracy: 1e-12)
+        XCTAssertEqual(snapshot.recordMovementEvents, canonicalEvents)
+        XCTAssertEqual(snapshot.mixerMidiEvents, canonicalMIDI)
+        XCTAssertEqual(
+            SessionExportRecordMovementEvent(from: try XCTUnwrap(snapshot.recordMovementEvents.first)),
+            canonicalExport
+        )
+    }
+
+    func testPresentationProjectionPreservesCanonicalControllerMetadata() throws {
+        let fixture: [(Int, Double)] = (0...360).map {
+            ($0 % 128, Double($0) / 1_000)
+        }
+        let rawMIDI = fixture.map { midiEvent($0.0, $0.1) }
+        let canonical = CaptureCore.DetectedNotationRecordMovementEvent(
+            startTime: 0,
+            endTime: 0.36,
+            startPosition: 0.62,
+            endPosition: 0.98,
+            direction: "forward",
+            movementKind: .fastPush,
+            speed: 123,
+            confidence: 0.83,
+            source: "controller"
+        )
+        let snapshot = CaptureCore.DetectedNotationSnapshot(
+            notationSource: "detected",
+            notationConfidence: 0.83,
+            detectedLabel: nil,
+            labelSource: "unknown",
+            labelConfidence: nil,
+            detectionSources: ["controller"],
+            recordMovementEvents: [canonical],
+            audioEvents: [],
+            faderEvents: [],
+            mixerMidiEvents: rawMIDI,
+            capturedAt: Date(timeIntervalSince1970: 0)
+        )
+
+        let event = try XCTUnwrap(
+            CaptureCore.gestureRelativeRecordMovementEventsForPresentation(
+                from: snapshot
+            ).first
+        )
+
+        XCTAssertEqual(event.startPosition, 0, accuracy: 1e-12)
+        XCTAssertEqual(event.endPosition, 0.1, accuracy: 1e-12)
+        XCTAssertEqual(event.startTime, canonical.startTime, accuracy: 1e-12)
+        XCTAssertEqual(event.endTime, canonical.endTime, accuracy: 1e-12)
+        XCTAssertEqual(event.direction, canonical.direction)
+        XCTAssertEqual(event.movementKind, canonical.movementKind)
+        XCTAssertEqual(event.speed, canonical.speed, accuracy: 1e-12)
+        XCTAssertEqual(event.confidence, canonical.confidence, accuracy: 1e-12)
+        XCTAssertEqual(event.source, canonical.source)
+    }
+
+    func testSavedMultiRevolutionSpinThenPullSurvivesFusionPresentationGate() throws {
+        // Five revolutions over nine seconds make the canonical attempt-wide
+        // normalized speed too small for fusion; the following quarter-turn
+        // pull is similarly flattened. The shared raw decoder accepted both
+        // runs before fusion, so presentation must recover them without adding
+        // either to canonical scoring/export evidence.
+        let fixture = wrappedRuns(signedSteps: [18_000, -900])
+        let rawMIDI = fixture.map { midiEvent($0.0, $0.1) }
+        let decoderEvents = decode(fixture)
+        XCTAssertEqual(decoderEvents.map(\.direction), ["forward", "backward"])
+
+        let snapshot = MacCaptureEngine.RoutineNotationFusionEngine().snapshot(
+            audioSnapshot: ScratchAudioNotationSnapshot(audioEvents: [], confidence: nil),
+            motionEvents: decoderEvents,
+            detectedLabel: nil,
+            labelSource: "unknown",
+            labelConfidence: nil
+        ).withMixerMidiEvents(rawMIDI)
+        XCTAssertTrue(snapshot.detectionSources.contains("controller"))
+        XCTAssertTrue(snapshot.recordMovementEvents.isEmpty,
+                      "fixture must exercise the all-canonical-events-dropped gate")
+
+        let canonicalEvents = snapshot.recordMovementEvents
+        let canonicalMIDI = snapshot.mixerMidiEvents
+        let presentation = CaptureCore
+            .gestureRelativeRecordMovementEventsForPresentation(from: snapshot)
+        XCTAssertEqual(presentation.count, 2)
+        XCTAssertEqual(presentation[0].direction, "forward")
+        XCTAssertEqual(presentation[0].startPosition, 0, accuracy: 1e-12)
+        XCTAssertEqual(presentation[0].endPosition, 5, accuracy: 1e-12)
+        XCTAssertEqual(presentation[1].direction, "backward")
+        XCTAssertEqual(presentation[1].startPosition, 0.25, accuracy: 1e-12)
+        XCTAssertEqual(presentation[1].endPosition, 0, accuracy: 1e-12)
+        XCTAssertEqual(
+            CaptureCore.gestureRelativeRecordMovementPresentationEndTime(
+                from: snapshot,
+                presentationEvents: presentation
+            ) ?? 0,
+            presentation[1].endTime,
+            accuracy: 1e-12,
+            "overlay playback must include the fusion-dropped pull"
+        )
+        XCTAssertEqual(snapshot.recordMovementEvents, canonicalEvents)
+        XCTAssertEqual(snapshot.mixerMidiEvents, canonicalMIDI)
+    }
+
+    func testSavedPresentationDoesNotDuplicateFusionMergedControllerRuns() {
+        // The four-step reversal fails the decoder's existing 8-step/80ms
+        // gates. Its two surrounding forward runs survive, then fusion merges
+        // those same-direction records across the 40ms gap into one canonical
+        // record. Presentation must use the two accepted decoder runs once —
+        // never the merged record plus both raw runs.
+        let fixture = wrappedRuns(
+            signedSteps: [20, -4, 20],
+            maximumPacketDelta: 1,
+            interval: 0.01
+        )
+        let rawMIDI = fixture.map { midiEvent($0.0, $0.1) }
+        let decoderEvents = decode(fixture)
+        XCTAssertEqual(decoderEvents.map(\.direction), ["forward", "forward"])
+
+        let snapshot = MacCaptureEngine.RoutineNotationFusionEngine().snapshot(
+            audioSnapshot: ScratchAudioNotationSnapshot(audioEvents: [], confidence: nil),
+            motionEvents: decoderEvents,
+            detectedLabel: nil,
+            labelSource: "unknown",
+            labelConfidence: nil
+        ).withMixerMidiEvents(rawMIDI)
+        XCTAssertEqual(snapshot.recordMovementEvents.count, 1,
+                       "fixture must exercise fusion's same-direction merge")
+        let canonicalEvents = snapshot.recordMovementEvents
+
+        let presentation = CaptureCore
+            .gestureRelativeRecordMovementEventsForPresentation(from: snapshot)
+
+        XCTAssertEqual(presentation.count, 2)
+        XCTAssertEqual(presentation.map(\.direction), ["forward", "forward"])
+        XCTAssertEqual(presentation[0].startPosition, 0, accuracy: 1e-12)
+        XCTAssertEqual(presentation[0].endPosition, 20.0 / 3_600.0, accuracy: 1e-12)
+        XCTAssertEqual(presentation[1].startPosition, 0, accuracy: 1e-12)
+        XCTAssertEqual(presentation[1].endPosition, 20.0 / 3_600.0, accuracy: 1e-12)
+        XCTAssertEqual(snapshot.recordMovementEvents, canonicalEvents)
+        XCTAssertEqual(snapshot.mixerMidiEvents, rawMIDI)
     }
 
     // MARK: - Reduced Take 002 fixture (alternating region 12.45–12.54s)

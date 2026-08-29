@@ -18,13 +18,14 @@ final class CameraNotationOverlayTests: XCTestCase {
         startPosition: Double = 0.0,
         endPosition: Double = 1.0,
         direction: String = "forward",
-        confidence: Double = 0.8
+        confidence: Double = 0.8,
+        source: String = "detected"
     ) -> CaptureCore.DetectedNotationRecordMovementEvent {
         CaptureCore.DetectedNotationRecordMovementEvent(
             startTime: startTime, endTime: endTime,
             startPosition: startPosition, endPosition: endPosition,
             direction: direction, movementKind: .normalPush,
-            speed: 0.5, confidence: confidence, source: "detected"
+            speed: 0.5, confidence: confidence, source: source
         )
     }
 
@@ -256,6 +257,92 @@ final class CameraNotationOverlayTests: XCTestCase {
                              "Full must exceed half in radius")
         XCTAssertGreaterThan(halfStroke!.radius, quarterStroke!.radius,
                              "Half must exceed quarter in radius")
+    }
+
+    func testCameraOverlayUsesSharedQuarterRevolutionControllerScale() throws {
+        let quarterTurn = makeEvent(
+            startTime: 0,
+            endTime: 0.4,
+            startPosition: 0,
+            endPosition: 0.25,
+            source: "controller"
+        )
+        let eighthTurn = makeEvent(
+            startTime: 0.5,
+            endTime: 0.9,
+            startPosition: 0,
+            endPosition: 0.125,
+            source: "controller"
+        )
+        let cameraTravel = makeEvent(
+            startTime: 1,
+            endTime: 1.4,
+            startPosition: 0,
+            endPosition: 0.125
+        )
+
+        let fullRadius = try XCTUnwrap(
+            CameraNotationOverlayGeometry.arcStroke(
+                for: quarterTurn,
+                duration: 2,
+                maxRadius: 100
+            )
+        )
+        let halfRadius = try XCTUnwrap(
+            CameraNotationOverlayGeometry.arcStroke(
+                for: eighthTurn,
+                duration: 2,
+                maxRadius: 100
+            )
+        )
+        let unchangedCameraRadius = try XCTUnwrap(
+            CameraNotationOverlayGeometry.arcStroke(
+                for: cameraTravel,
+                duration: 2,
+                maxRadius: 100
+            )
+        )
+
+        XCTAssertEqual(fullRadius.radius, 100, accuracy: 1e-12)
+        XCTAssertEqual(halfRadius.radius, 50, accuracy: 1e-12)
+        XCTAssertEqual(unchangedCameraRadius.radius, 12.5, accuracy: 1e-12)
+        XCTAssertEqual(quarterTurn.endPosition, 0.25, accuracy: 1e-12,
+                       "camera display zoom must not rewrite physical gesture travel")
+    }
+
+    func testCameraArcEndpointAppliesSubFullStrokeRadiusExactlyOnce() throws {
+        let event = makeEvent(
+            startTime: 0,
+            endTime: 0.4,
+            startPosition: 0,
+            endPosition: 0.125,
+            source: "controller"
+        )
+        let stroke = try XCTUnwrap(
+            CameraNotationOverlayGeometry.arcStroke(
+                for: event,
+                duration: 1,
+                maxRadius: 100,
+                startAngle: 0,
+                arcSweep: .pi
+            )
+        )
+        XCTAssertEqual(stroke.radius, 50, accuracy: 1e-6)
+
+        let center = CGPoint(x: 100, y: 100)
+        let endpoint = CameraNotationOverlayGeometry.point(
+            on: stroke,
+            angle: 0,
+            center: center
+        )
+
+        XCTAssertEqual(endpoint.x, 150, accuracy: 1e-6)
+        XCTAssertEqual(endpoint.y, 100, accuracy: 1e-6)
+        XCTAssertEqual(
+            hypot(endpoint.x - center.x, endpoint.y - center.y),
+            stroke.radius,
+            accuracy: 1e-6
+        )
     }
 
     // MARK: - Direction distinction

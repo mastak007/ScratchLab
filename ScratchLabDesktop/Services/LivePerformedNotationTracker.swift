@@ -116,7 +116,12 @@ final class LivePerformedNotationTracker: ObservableObject {
         guard case .tracking(let committed, let provisional) = state else { return [] }
         guard let provisional else { return committed }
         let duration = max(0, provisional.currentTime - provisional.startTime)
-        let distance = abs(provisional.currentPosition - provisional.startPosition)
+        // Keep controller speed in raw steps/second, matching committed
+        // controller events. The positions above are now gesture-relative
+        // notation coordinates; deriving speed from them would divide the
+        // physical excursion by the platter calibration a second time when
+        // the shared performed-stroke adapter projects this preview.
+        let distance = abs(provisional.displacement)
         let preview = CaptureCore.DetectedNotationRecordMovementEvent(
             startTime: provisional.startTime,
             endTime: provisional.currentTime,
@@ -206,7 +211,6 @@ import SwiftUI
 struct LivePerformedNotationCard: View {
     @ObservedObject var tracker: LivePerformedNotationTracker
     var bpm: Double = 90
-    var canvasHeight: CGFloat = 220
     /// True while the calibration box editor is open — the card dims
     /// strongly rather than competing visually with the edit handles, per
     /// Karl's directive. This is a plain visibility/opacity binding so the
@@ -234,8 +238,9 @@ struct LivePerformedNotationCard: View {
                 capturedWindow: renderedDomain,
                 backgroundColor: .clear
             )
-            .frame(height: canvasHeight)
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         .opacity(isDimmedForCalibrationEditing ? 0.15 : 1)
         .allowsHitTesting(!isDimmedForCalibrationEditing)
         .animation(.easeInOut(duration: 0.2), value: isDimmedForCalibrationEditing)

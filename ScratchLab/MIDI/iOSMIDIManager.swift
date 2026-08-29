@@ -404,10 +404,12 @@ final class IOSMIDIControllerDispatcher: ObservableObject {
     private var captureBaselineTimestamp: Double = CACurrentMediaTime()
     private var liveNotationUpdateScheduled = false
     private static let liveNotationUpdateInterval: TimeInterval = 0.04
-    /// Keep live position normalization local to the same rolling interval the
-    /// Practice lane displays. Finalized Result notation continues to decode
-    /// the complete attempt from `capturedPlatterMIDIEvents`.
     private static let liveNotationWindowDuration: TimeInterval = 3.2
+    /// Index into the append-only per-attempt raw stream. It moves only to an
+    /// existing decoder-committed run boundary after that run leaves the live
+    /// viewport, or along motor rotation already rejected by the pre-existing
+    /// release gate. It never enters an active/visible scratch run.
+    private var liveNotationDecodeAnchorIndex = 0
     /// Until the RANE touch-state message is captured, distinguish a released
     /// powered platter from hand motion by its sustained, stable 33⅓-RPM CC6
     /// rate. This gates only the live preview publication; raw attempt evidence
@@ -465,6 +467,7 @@ final class IOSMIDIControllerDispatcher: ObservableObject {
         capturedPlatterMIDIEvents.removeAll()
         capturedCrossfaderMIDIEvents.removeAll()
         livePlatterMovementEvents.removeAll()
+        liveNotationDecodeAnchorIndex = 0
         captureBaselineTimestamp = CACurrentMediaTime()
         captureStopRelativeTime = nil
         isSuppressingReleasedMotorRotation = false
@@ -508,6 +511,17 @@ final class IOSMIDIControllerDispatcher: ObservableObject {
     /// this dispatcher.
     var platterMovementEvents: [CaptureCore.DetectedNotationRecordMovementEvent] {
         CaptureCore.derivePlatterMovementEvents(
+            from: withinTakeWindow(capturedPlatterMIDIEvents),
+            controller: 6,
+            channel: ScratchPlatterTracker.rightChannel
+        )
+    }
+
+    /// Finalized Result-only notation coordinates. Canonical snapshot/export
+    /// evidence continues to use `platterMovementEvents`; this view model
+    /// reuses the shared decoder and projects accepted runs per gesture.
+    var gestureRelativePlatterNotationEvents: [CaptureCore.DetectedNotationRecordMovementEvent] {
+        CaptureCore.deriveGestureRelativePlatterNotationEvents(
             from: withinTakeWindow(capturedPlatterMIDIEvents),
             controller: 6,
             channel: ScratchPlatterTracker.rightChannel
@@ -585,18 +599,30 @@ final class IOSMIDIControllerDispatcher: ObservableObject {
     /// Result), this keeps the current run provisional and adapts it to the
     /// existing performed-notation event shape. The decoder and its noise/
     /// segmentation rules remain the shared `CaptureCore` implementation.
-    private var decodedLivePlatterMovementEvents: [CaptureCore.DetectedNotationRecordMovementEvent] {
+    private func decodeLivePlatterMovementEvents() -> [CaptureCore.DetectedNotationRecordMovementEvent] {
         let result = CaptureCore.derivePlatterMovementEventsWithProvisional(
             from: liveNotationMIDIEvents,
             controller: 6,
             channel: ScratchPlatterTracker.rightChannel
         )
+        let latestTime = capturedPlatterMIDIEvents.last(where: isRightPlatterEvent)?
+            .takeRelativeTime ?? 0
+        let cutoff = max(0, latestTime - Self.liveNotationWindowDuration)
+        let committed = result.committedEvents.filter { $0.endTime >= cutoff }
+        advanceLiveNotationAnchor(
+            past: result.committedEvents,
+            before: cutoff
+        )
         guard let provisional = result.provisionalMovement else {
-            return result.committedEvents
+            return committed
         }
 
         let duration = max(0, provisional.currentTime - provisional.startTime)
-        let distance = abs(provisional.currentPosition - provisional.startPosition)
+        // Match finalized controller events: speed remains raw steps/second,
+        // while start/currentPosition are the shared gesture-relative notation
+        // coordinate. This prevents the presentation adapter from applying the
+        // platter scale twice to an open stroke.
+        let distance = abs(provisional.displacement)
         let preview = CaptureCore.DetectedNotationRecordMovementEvent(
             startTime: provisional.startTime,
             endTime: provisional.currentTime,
@@ -608,33 +634,77 @@ final class IOSMIDIControllerDispatcher: ObservableObject {
             confidence: 0.5,
             source: "live_preview"
         )
-        return result.committedEvents + [preview]
+        return committed + [preview]
     }
 
-    /// Right-deck CC6 telemetry covering the visible live interval, plus the
-    /// immediately preceding sample needed to preserve the first modular
-    /// delta. Re-decoding this bounded slice rebases the decoder's existing
-    /// 0...1 position normalization as the window advances, preventing a long
-    /// forward or backward run from pinning the trace to an attempt-wide
-    /// maximum or minimum. This is presentation-only; the source telemetry is
-    /// never trimmed or mutated.
+    private func isRightPlatterEvent(
+        _ event: CaptureCore.RawMixerMIDIEvent
+    ) -> Bool {
+        event.controller == 6 && event.channel == ScratchPlatterTracker.rightChannel
+    }
+
+    /// A decoder-boundary-anchored suffix. Unlike the former time-cut slice,
+    /// this cannot start inside a committed or provisional run, so coordinates
+    /// and timing of every still-visible stroke remain append-only.
     private var liveNotationMIDIEvents: [CaptureCore.RawMixerMIDIEvent] {
-        let matchesRightPlatter: (CaptureCore.RawMixerMIDIEvent) -> Bool = {
-            $0.controller == 6 && $0.channel == ScratchPlatterTracker.rightChannel
-        }
-        guard let latestTime = capturedPlatterMIDIEvents.last(where: matchesRightPlatter)?.takeRelativeTime else {
+        guard liveNotationDecodeAnchorIndex < capturedPlatterMIDIEvents.count else {
             return []
         }
+        return Array(capturedPlatterMIDIEvents.dropFirst(liveNotationDecodeAnchorIndex))
+    }
 
-        let cutoff = max(0, latestTime - Self.liveNotationWindowDuration)
-        var reversedWindow: [CaptureCore.RawMixerMIDIEvent] = []
-        for event in capturedPlatterMIDIEvents.reversed() where matchesRightPlatter(event) {
-            reversedWindow.append(event)
-            if event.takeRelativeTime < cutoff {
-                break
-            }
+    private func advanceLiveNotationAnchor(
+        past committedEvents: [CaptureCore.DetectedNotationRecordMovementEvent],
+        before cutoff: TimeInterval
+    ) {
+        guard let boundaryTime = committedEvents
+            .filter({ $0.endTime < cutoff })
+            .map(\.endTime)
+            .max(),
+              liveNotationDecodeAnchorIndex < capturedPlatterMIDIEvents.count else {
+            return
         }
-        return Array(reversedWindow.reversed())
+        let candidateIndexes = liveNotationDecodeAnchorIndex..<capturedPlatterMIDIEvents.count
+        guard let boundaryIndex = candidateIndexes.last(where: { index in
+            let event = capturedPlatterMIDIEvents[index]
+            return isRightPlatterEvent(event)
+                && event.takeRelativeTime <= boundaryTime + 1e-9
+        }) else {
+            return
+        }
+        liveNotationDecodeAnchorIndex = boundaryIndex
+    }
+
+    /// While the existing motor-release gate suppresses free rotation, bound
+    /// decode work but retain one complete classifier window. The gate can stay
+    /// true for the first few reverse packets; that tail must survive so a pull
+    /// keeps its exact onset and excursion when suppression clears.
+    private func advanceLiveNotationAnchorPastSuppressedMotorRotation() {
+        guard let latestIndex = capturedPlatterMIDIEvents.indices.last(where: {
+            isRightPlatterEvent(capturedPlatterMIDIEvents[$0])
+        }) else {
+            return
+        }
+        let latestTime = capturedPlatterMIDIEvents[latestIndex].takeRelativeTime
+        guard CaptureCore.canAdvanceLiveNotationAnchorPastSuppressedMotorRotation(
+            publishedEvents: livePlatterMovementEvents,
+            latestTime: latestTime,
+            viewportDuration: Self.liveNotationWindowDuration
+        ) else {
+            return
+        }
+        guard let boundedIndex = CaptureCore
+            .liveNotationAnchorIndexPreservingSuppressedMotorTail(
+                in: capturedPlatterMIDIEvents,
+                currentAnchorIndex: liveNotationDecodeAnchorIndex,
+                controller: 6,
+                channel: ScratchPlatterTracker.rightChannel,
+                latestTime: latestTime,
+                lookBehindDuration: Self.motorReleaseDetectionWindow
+            ) else {
+            return
+        }
+        liveNotationDecodeAnchorIndex = boundedIndex
     }
 
     private func scheduleLiveNotationUpdate() {
@@ -650,8 +720,11 @@ final class IOSMIDIControllerDispatcher: ObservableObject {
             }
             #endif
             self.isSuppressingReleasedMotorRotation = suppressMotorRotation
-            guard !suppressMotorRotation else { return }
-            self.livePlatterMovementEvents = self.decodedLivePlatterMovementEvents
+            guard !suppressMotorRotation else {
+                self.advanceLiveNotationAnchorPastSuppressedMotorRotation()
+                return
+            }
+            self.livePlatterMovementEvents = self.decodeLivePlatterMovementEvents()
         }
     }
 

@@ -6314,6 +6314,108 @@ enum CaptureCore {
         let source: String
     }
 
+    /// Controller notation is gesture-relative, while persisted movement
+    /// evidence keeps its existing finalized/export coordinate. `live_preview`
+    /// is produced only from the controller decoder's open run and follows the
+    /// same presentation rule.
+    static func usesGestureRelativeControllerNotation(
+        _ event: DetectedNotationRecordMovementEvent
+    ) -> Bool {
+        event.source == "controller" || event.source == "live_preview"
+    }
+
+    /// Presentation-only projection for one decoder-committed controller run.
+    ///
+    /// The existing run/reversal boundaries and noise gates have already made
+    /// the gesture decision before this method is called. No event is added,
+    /// removed, merged, or re-timed here; only its lane coordinates are locally
+    /// rebased from the explicit raw step displacement supplied by the shared
+    /// decoder. Finalized sidecars/export continue to own the unprojected event
+    /// returned by `derivePlatterMovementEvents`.
+    static func gestureRelativeControllerNotationEvent(
+        _ event: DetectedNotationRecordMovementEvent,
+        signedDisplacementSteps: Double,
+        stepsPerRevolution: Double = PlatterCoordinateSemantics
+            .raneOneMKIIDirectMIDIStepsPerRevolution
+    ) -> DetectedNotationRecordMovementEvent {
+        guard usesGestureRelativeControllerNotation(event) else { return event }
+        let coordinates = PlatterCoordinateSemantics.gestureRelativeNotation(
+            signedDisplacementSteps: signedDisplacementSteps,
+            stepsPerRevolution: stepsPerRevolution
+        )
+        return DetectedNotationRecordMovementEvent(
+            startTime: event.startTime,
+            endTime: event.endTime,
+            startPosition: coordinates.startPosition,
+            endPosition: coordinates.endPosition,
+            direction: event.direction,
+            movementKind: event.movementKind,
+            speed: event.speed,
+            confidence: event.confidence,
+            source: event.source
+        )
+    }
+
+    /// The decoder boundary is the only place where `speed × duration` is raw
+    /// step displacement. Keeping that conversion private prevents a fused or
+    /// persisted controller event's normalized `speed` from entering the
+    /// physical notation projection.
+    private static func gestureRelativeNotationEventFromDecodedRun(
+        _ event: DetectedNotationRecordMovementEvent,
+        stepsPerRevolution: Double
+    ) -> DetectedNotationRecordMovementEvent? {
+        let duration = event.endTime - event.startTime
+        guard duration.isFinite, duration > 0, event.speed.isFinite else {
+            return nil
+        }
+        let magnitude = abs(event.speed) * duration
+        let signedDisplacement: Double
+        switch event.direction {
+        case "forward": signedDisplacement = magnitude
+        case "backward": signedDisplacement = -magnitude
+        default: return nil
+        }
+        return gestureRelativeControllerNotationEvent(
+            event,
+            signedDisplacementSteps: signedDisplacement,
+            stepsPerRevolution: stepsPerRevolution
+        )
+    }
+
+    /// Event-only presentation fallback for controller evidence whose raw CC6
+    /// stream is unavailable (for example, an older sidecar). It preserves the
+    /// stored endpoint excursion exactly and only moves that span onto the
+    /// local gesture baseline. It intentionally never reads `speed`: macOS
+    /// finalization normalizes that field, so treating it as raw steps would
+    /// divide saved excursions by the platter scale a second time.
+    static func locallyRebasedControllerNotationEvent(
+        _ event: DetectedNotationRecordMovementEvent
+    ) -> DetectedNotationRecordMovementEvent {
+        guard usesGestureRelativeControllerNotation(event) else { return event }
+        let excursion = abs(event.endPosition - event.startPosition)
+        let signedExcursion: Double
+        switch event.direction {
+        case "forward": signedExcursion = excursion
+        case "backward": signedExcursion = -excursion
+        default: return event
+        }
+        let coordinates = PlatterCoordinateSemantics.gestureRelativeNotation(
+            signedDisplacementSteps: signedExcursion,
+            stepsPerRevolution: 1
+        )
+        return DetectedNotationRecordMovementEvent(
+            startTime: event.startTime,
+            endTime: event.endTime,
+            startPosition: coordinates.startPosition,
+            endPosition: coordinates.endPosition,
+            direction: event.direction,
+            movementKind: event.movementKind,
+            speed: event.speed,
+            confidence: event.confidence,
+            source: event.source
+        )
+    }
+
     struct DetectedNotationAudioEvent: Codable, Equatable, Sendable {
         let startTime: Double
         let endTime: Double
@@ -6756,6 +6858,36 @@ enum CaptureCore {
         return core.events
     }
 
+    /// Finalized, presentation-only controller notation using the exact same
+    /// filter/integrate/run segmentation and noise gates as canonical evidence.
+    /// Unlike `derivePlatterMovementEvents`, this projects each accepted run
+    /// from its raw step excursion onto a gesture-local coordinate and is never
+    /// persisted, scored, or exported.
+    static func deriveGestureRelativePlatterNotationEvents(
+        from mixerMidiEvents: [RawMixerMIDIEvent],
+        controller: Int,
+        channel: Int? = nil,
+        deviceName: String? = nil,
+        ringModulus: Int = 128,
+        minRunDuration: Double = 0.08,
+        minRunSteps: Int = 8,
+        maxEventGap: Double = 0.10,
+        notationStepsPerRevolution: Double = PlatterCoordinateSemantics
+            .raneOneMKIIDirectMIDIStepsPerRevolution
+    ) -> [DetectedNotationRecordMovementEvent] {
+        let core = decodePlatterCore(
+            from: mixerMidiEvents, controller: controller, channel: channel,
+            deviceName: deviceName, ringModulus: ringModulus,
+            minRunDuration: minRunDuration, minRunSteps: minRunSteps,
+            maxEventGap: maxEventGap)
+        return core.events.compactMap {
+            gestureRelativeNotationEventFromDecodedRun(
+                $0,
+                stepsPerRevolution: notationStepsPerRevolution
+            )
+        }
+    }
+
     /// Shared decode core: filters, integrates modular signed deltas, segments
     /// same-sign runs, and emits movement events, returning both the events and
     /// the stage-by-stage diagnostics.
@@ -6941,10 +7073,12 @@ enum CaptureCore {
 
     /// Live/provisional variant of `derivePlatterMovementEvents`, sharing
     /// the exact same filter/integrate/segment core (`decodePlatterCore`)
-    /// rather than a second reconstruction algorithm. The only behavioral
-    /// difference from `derivePlatterMovementEvents` is that the run still
-    /// open at the end of `mixerMidiEvents` is never force-closed into a
-    /// committed event — it is exposed separately as `provisionalMovement`.
+    /// rather than a second reconstruction algorithm. The run still open at
+    /// the end of `mixerMidiEvents` is never force-closed into a committed
+    /// event — it is exposed separately as `provisionalMovement`. After that
+    /// shared decode, committed/open controller runs are projected into the
+    /// explicit gesture-relative notation coordinate; finalized/export
+    /// evidence remains on `derivePlatterMovementEvents` and is not rewritten.
     /// Calling this repeatedly with a monotonically growing
     /// `mixerMidiEvents` prefix (e.g. from a live poll) yields a
     /// `committedEvents` array that only ever grows/extends, since a run
@@ -6958,25 +7092,219 @@ enum CaptureCore {
         ringModulus: Int = 128,
         minRunDuration: Double = 0.08,
         minRunSteps: Int = 8,
-        maxEventGap: Double = 0.10
+        maxEventGap: Double = 0.10,
+        notationStepsPerRevolution: Double = PlatterCoordinateSemantics
+            .raneOneMKIIDirectMIDIStepsPerRevolution
     ) -> PlatterMovementDecodeResult {
         let core = decodePlatterCore(
             from: mixerMidiEvents, controller: controller, channel: channel,
             deviceName: deviceName, ringModulus: ringModulus,
             minRunDuration: minRunDuration, minRunSteps: minRunSteps,
             maxEventGap: maxEventGap, forceCloseTrailingRun: false)
+        let committed = core.events.compactMap {
+            gestureRelativeNotationEventFromDecodedRun(
+                $0,
+                stepsPerRevolution: notationStepsPerRevolution
+            )
+        }
         let provisional = core.trailingRun.map {
-            ProvisionalPlatterMovement(
+            let coordinates = PlatterCoordinateSemantics.gestureRelativeNotation(
+                signedDisplacementSteps: $0.displacement,
+                stepsPerRevolution: notationStepsPerRevolution
+            )
+            return ProvisionalPlatterMovement(
                 startTime: $0.startTime,
                 currentTime: $0.currentTime,
-                startPosition: $0.startPosition,
-                currentPosition: $0.currentPosition,
+                startPosition: coordinates.startPosition,
+                currentPosition: coordinates.endPosition,
                 direction: $0.direction,
                 movementKind: $0.movementKind,
                 displacement: $0.displacement
             )
         }
-        return PlatterMovementDecodeResult(committedEvents: core.events, provisionalMovement: provisional)
+        return PlatterMovementDecodeResult(
+            committedEvents: committed,
+            provisionalMovement: provisional
+        )
+    }
+
+    /// Shared iOS/macOS presentation view of a finalized notation snapshot.
+    ///
+    /// Canonical `recordMovementEvents` remain byte-for-byte unchanged for
+    /// scoring, persistence, and export. When exactly one right-deck CC6 source
+    /// is present, physical gesture excursions are re-derived from the raw MIDI
+    /// evidence through the existing decoder. Ambiguous/missing raw evidence
+    /// fails closed to an event-only local rebase that preserves the stored
+    /// excursion and never guesses raw motor travel.
+    static func gestureRelativeRecordMovementEventsForPresentation(
+        from snapshot: DetectedNotationSnapshot,
+        controller: Int = 6,
+        channel: Int = 1
+    ) -> [DetectedNotationRecordMovementEvent] {
+        let canonical = snapshot.recordMovementEvents
+        let hasControllerEvidence = canonical.contains(
+            where: usesGestureRelativeControllerNotation
+        ) || snapshot.detectionSources.contains("controller")
+        guard hasControllerEvidence else {
+            return canonical
+        }
+
+        let eligibleMIDI = snapshot.mixerMidiEvents.filter {
+            $0.controller == controller && $0.channel == channel
+        }
+        let deviceNames = Set(eligibleMIDI.map(\.deviceName))
+        guard deviceNames.count == 1, let deviceName = deviceNames.first else {
+            return canonical.map(locallyRebasedControllerNotationEvent)
+        }
+
+        let controllerEvents = deriveGestureRelativePlatterNotationEvents(
+            from: eligibleMIDI,
+            controller: controller,
+            channel: channel,
+            deviceName: deviceName
+        )
+        guard !controllerEvents.isEmpty else {
+            return canonical.map(locallyRebasedControllerNotationEvent)
+        }
+
+        // Preserve the finalized record's metadata whenever fusion retained the
+        // decoder run. Only its coordinates are presentation-projected. This
+        // keeps fusion's movement kind, confidence, source, speed, and timing
+        // intact instead of replacing them with a fresh decoder record.
+        var matchedControllerIndexes = Set<Int>()
+        var expandedMergedControllerEvents: [DetectedNotationRecordMovementEvent] = []
+        let projectedCanonical: [DetectedNotationRecordMovementEvent] = canonical.compactMap { event in
+            guard usesGestureRelativeControllerNotation(event) else {
+                return event
+            }
+            if let match = controllerEvents.indices.first(where: { index in
+                guard !matchedControllerIndexes.contains(index) else { return false }
+                let candidate = controllerEvents[index]
+                return candidate.direction == event.direction
+                    && abs(candidate.startTime - event.startTime) <= 1e-6
+                    && abs(candidate.endTime - event.endTime) <= 1e-6
+            }) {
+                matchedControllerIndexes.insert(match)
+                let coordinates = controllerEvents[match]
+                return DetectedNotationRecordMovementEvent(
+                    startTime: event.startTime,
+                    endTime: event.endTime,
+                    startPosition: coordinates.startPosition,
+                    endPosition: coordinates.endPosition,
+                    direction: event.direction,
+                    movementKind: event.movementKind,
+                    speed: event.speed,
+                    confidence: event.confidence,
+                    source: event.source
+                )
+            }
+
+            // Fusion may merge two accepted same-direction decoder runs when a
+            // tiny intervening reversal failed the decoder noise gates. The
+            // merged canonical timing then covers multiple raw runs and cannot
+            // exact-match either one. For presentation, expand it back to those
+            // accepted shared-decoder runs so live and saved notation agree and
+            // do not render the merged record plus both runs as duplicates.
+            if let firstIndex = controllerEvents.indices.first(where: { index in
+                !matchedControllerIndexes.contains(index)
+                    && controllerEvents[index].direction == event.direction
+                    && abs(controllerEvents[index].startTime - event.startTime) <= 1e-6
+            }),
+               let lastIndex = controllerEvents.indices.last(where: { index in
+                !matchedControllerIndexes.contains(index)
+                    && controllerEvents[index].direction == event.direction
+                    && abs(controllerEvents[index].endTime - event.endTime) <= 1e-6
+            }),
+               firstIndex < lastIndex {
+                let coveredIndexes = firstIndex...lastIndex
+                let isCoveredBySameDirectionRuns = coveredIndexes.allSatisfy { index in
+                    !matchedControllerIndexes.contains(index)
+                        && controllerEvents[index].direction == event.direction
+                        && controllerEvents[index].startTime >= event.startTime - 1e-6
+                        && controllerEvents[index].endTime <= event.endTime + 1e-6
+                }
+                if isCoveredBySameDirectionRuns {
+                    matchedControllerIndexes.formUnion(coveredIndexes)
+                    expandedMergedControllerEvents.append(
+                        contentsOf: coveredIndexes.map { controllerEvents[$0] }
+                    )
+                    return nil
+                }
+            }
+            return locallyRebasedControllerNotationEvent(event)
+        }
+
+        // A controller run can pass the shared decoder gates yet be rejected
+        // later by attempt-wide fusion normalization (the original Slice D
+        // defect after a long free spin). It still belongs in notation-only
+        // presentation, but never mutates the canonical snapshot used by
+        // scoring, persistence, or export.
+        let unmatchedControllerEvents = controllerEvents.indices.compactMap { index in
+            matchedControllerIndexes.contains(index) ? nil : controllerEvents[index]
+        }
+        return (
+            projectedCanonical
+                + expandedMergedControllerEvents
+                + unmatchedControllerEvents
+        ).sorted {
+            if $0.startTime == $1.startTime {
+                return $0.endTime < $1.endTime
+            }
+            return $0.startTime < $1.startTime
+        }
+    }
+
+    /// Timeline end for presentation-only gesture notation. Canonical evidence
+    /// remains the primary duration source; a decoder-valid controller run that
+    /// fusion omitted may extend it, so overlay playback must include that run
+    /// instead of stopping at the earlier canonical edge.
+    static func gestureRelativeRecordMovementPresentationEndTime(
+        from snapshot: DetectedNotationSnapshot,
+        presentationEvents: [DetectedNotationRecordMovementEvent]
+    ) -> Double? {
+        [
+            snapshot.capturedEvidenceEndTime,
+            presentationEvents.map(\.endTime).max()
+        ].compactMap { $0 }.max()
+    }
+
+    /// Whether iOS may move its raw decode anchor along motor rotation already
+    /// rejected by the existing release gate. A committed stroke remains an
+    /// immutable published prefix until it has genuinely left the live
+    /// viewport; `live_preview` is open/provisional and is not an anchor block.
+    static func canAdvanceLiveNotationAnchorPastSuppressedMotorRotation(
+        publishedEvents: [DetectedNotationRecordMovementEvent],
+        latestTime: TimeInterval,
+        viewportDuration: TimeInterval
+    ) -> Bool {
+        let cutoff = max(0, latestTime - max(0, viewportDuration))
+        return !publishedEvents.contains { event in
+            event.source != "live_preview" && event.endTime >= cutoff
+        }
+    }
+
+    /// Finds a bounded raw-stream anchor while retaining the complete recent
+    /// window the existing motor-release classifier needs to recognize a
+    /// reversal. The classifier can remain true for the first few backward
+    /// packets; keeping this tail ensures those packets are decoded once the
+    /// gate clears, preserving the pull's true onset and excursion.
+    static func liveNotationAnchorIndexPreservingSuppressedMotorTail(
+        in mixerMidiEvents: [RawMixerMIDIEvent],
+        currentAnchorIndex: Int,
+        controller: Int,
+        channel: Int,
+        latestTime: TimeInterval,
+        lookBehindDuration: TimeInterval
+    ) -> Int? {
+        guard !mixerMidiEvents.isEmpty else { return nil }
+        let lowerBound = max(0, min(currentAnchorIndex, mixerMidiEvents.count - 1))
+        let tailStart = max(0, latestTime - max(0, lookBehindDuration))
+        return (lowerBound..<mixerMidiEvents.count).last(where: { index in
+            let event = mixerMidiEvents[index]
+            return event.controller == controller
+                && event.channel == channel
+                && event.takeRelativeTime <= tailStart
+        })
     }
 
     struct LocalRecordingSidecar: Codable, Equatable {

@@ -5,11 +5,78 @@
 // Thread-safe via os_unfair_lock. No audio/MIDI dependency.
 // No scoring. No routing.
 //
-// Rane ONE MKII: CC6 ±1 per event, ~3932 steps/rev, ~800–935 Hz update.
+// Rane ONE MKII: CC6 ±1 per event, ~800–935 Hz update.
 // Two independent decks: ch=0 (left), ch=1 (right).
 
 import Foundation
 import os
+
+/// Explicit coordinate semantics for platter motion.
+///
+/// Notation and sample playback deliberately consume different coordinates:
+/// a committed notation stroke is local to that stroke, while sample playback
+/// follows the full signed displacement from the hot-cue origin. Keeping both
+/// transforms here, beside the raw ring-counter tracker, prevents presentation
+/// code from accidentally reusing the audio clock's accumulated motor phase.
+enum PlatterCoordinateSemantics {
+    /// Direct-MIDI RANE ONE MKII resolution measured from powered-rotation
+    /// hardware runs. The older 3,932-step value belongs to the DVS/timecode
+    /// calibration and must not scale direct CC6 gesture travel.
+    static let raneOneMKIIDirectMIDIStepsPerRevolution: Double = 3_600
+
+    struct GestureRelativeCoordinates: Equatable, Sendable {
+        let startPosition: Double
+        let endPosition: Double
+        /// Unsigned physical travel as a fraction of one platter revolution.
+        /// Deliberately unbounded: a multi-revolution run remains > 1 rather
+        /// than being clamped or rescaled by later motion.
+        let excursion: Double
+    }
+
+    /// Rebase one decoder-committed directional run onto the notation baseline.
+    /// Forward rises from baseline; backward returns to baseline. Direction,
+    /// timing, and the run's real excursion are retained without consulting any
+    /// earlier/later motor phase or inventing another gesture detector.
+    static func gestureRelativeNotation(
+        signedDisplacementSteps: Double,
+        stepsPerRevolution: Double = raneOneMKIIDirectMIDIStepsPerRevolution
+    ) -> GestureRelativeCoordinates {
+        guard signedDisplacementSteps.isFinite,
+              stepsPerRevolution.isFinite,
+              stepsPerRevolution > 0 else {
+            return GestureRelativeCoordinates(
+                startPosition: 0,
+                endPosition: 0,
+                excursion: 0
+            )
+        }
+
+        let excursion = abs(signedDisplacementSteps) / stepsPerRevolution
+        if signedDisplacementSteps < 0 {
+            return GestureRelativeCoordinates(
+                startPosition: excursion,
+                endPosition: 0,
+                excursion: excursion
+            )
+        }
+        return GestureRelativeCoordinates(
+            startPosition: 0,
+            endPosition: excursion,
+            excursion: excursion
+        )
+    }
+
+    /// Raw signed, unwrapped sample displacement from the hot-cue origin.
+    /// No modulo, normalization, or clamp is allowed here: negative and
+    /// past-end positions are required by the waveform's BEFORE START / PAST
+    /// END states and by the audio renderer's authoritative playhead.
+    static func samplePosition(
+        rawSignedPosition: Double,
+        hotCueOrigin: Double
+    ) -> Double {
+        rawSignedPosition - hotCueOrigin
+    }
+}
 
 /// Accumulated platter position from CC6 ring-counter events, per deck.
 /// Thread-safe. Call `ingest(channel:value:)` from the MIDI receive thread

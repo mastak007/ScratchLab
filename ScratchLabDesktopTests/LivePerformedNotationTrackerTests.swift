@@ -106,6 +106,29 @@ final class LivePerformedNotationTrackerTests: XCTestCase {
         }
     }
 
+    /// Deterministic CC6 stream built from signed run lengths. Positive =
+    /// forward steps, negative = backward steps. Raw values wrap at 128 just
+    /// like the real ring counter; run boundaries are therefore only the
+    /// decoder's existing sign reversals, with no test-only gesture marker.
+    private func platterEvents(
+        signedRunSteps: [Int],
+        interval: Double = 0.01
+    ) -> [CaptureCore.RawMixerMIDIEvent] {
+        var phase = 0
+        var time = 0.0
+        var events = [midiEvent(value: 0, takeRelativeTime: 0)]
+        for signedSteps in signedRunSteps where signedSteps != 0 {
+            let direction = signedSteps > 0 ? 1 : -1
+            for _ in 0..<abs(signedSteps) {
+                phase += direction
+                time += interval
+                let wrapped = ((phase % 128) + 128) % 128
+                events.append(midiEvent(value: wrapped, takeRelativeTime: time))
+            }
+        }
+        return events
+    }
+
     // MARK: - Provisional-stroke transition (CaptureCore.derivePlatterMovementEventsWithProvisional)
 
     /// The exact transition the plan requires: an open push has no committed
@@ -166,6 +189,191 @@ final class LivePerformedNotationTrackerTests: XCTestCase {
             previousCommitted = result.committedEvents
         }
         XCTAssertEqual(previousCommitted.count, 2, "both turnarounds should have committed a stroke by the end")
+    }
+
+    /// Three free-running revolutions are a large committed forward run once
+    /// the platter reverses, but that accumulated motor phase must not become
+    /// the next pull/push's lane baseline. Each run is locally rebased using
+    /// the same reversal boundaries and noise gates that committed it.
+    func testMultiRevolutionFreeSpinCannotShiftNextGestureBaseline() throws {
+        let events = platterEvents(signedRunSteps: [300, -25, 40])
+        let result = CaptureCore.derivePlatterMovementEventsWithProvisional(
+            from: events,
+            controller: 6,
+            channel: 1,
+            deviceName: "Test Device",
+            notationStepsPerRevolution: 100
+        )
+
+        XCTAssertEqual(result.committedEvents.count, 2)
+        let freeSpin = try XCTUnwrap(result.committedEvents.first)
+        XCTAssertEqual(freeSpin.direction, "forward")
+        XCTAssertEqual(freeSpin.startPosition, 0, accuracy: 1e-12)
+        XCTAssertEqual(freeSpin.endPosition, 3, accuracy: 1e-12,
+                       "multi-revolution travel stays real and unbounded")
+        XCTAssertEqual(freeSpin.startTime, 0, accuracy: 1e-12)
+        XCTAssertEqual(freeSpin.endTime, 3, accuracy: 1e-9)
+
+        let pull = result.committedEvents[1]
+        XCTAssertEqual(pull.direction, "backward")
+        XCTAssertEqual(pull.startPosition, 0.25, accuracy: 1e-12)
+        XCTAssertEqual(pull.endPosition, 0, accuracy: 1e-12,
+                       "the pull returns to its own local baseline")
+        XCTAssertEqual(pull.startTime, 3, accuracy: 1e-9)
+        XCTAssertEqual(pull.endTime, 3.25, accuracy: 1e-9)
+
+        let nextPush = try XCTUnwrap(result.provisionalMovement)
+        XCTAssertEqual(nextPush.direction, "forward")
+        XCTAssertEqual(nextPush.startPosition, 0, accuracy: 1e-12,
+                       "the next gesture starts at baseline, not motor phase 300")
+        XCTAssertEqual(nextPush.currentPosition, 0.4, accuracy: 1e-12)
+        XCTAssertEqual(nextPush.displacement, 40, accuracy: 1e-12)
+        XCTAssertEqual(nextPush.startTime, 3.25, accuracy: 1e-9)
+        XCTAssertEqual(nextPush.currentTime, 3.65, accuracy: 1e-9)
+    }
+
+    /// A later, much larger opposite excursion changes the whole-stream raw
+    /// min/max, which used to renormalize already-committed strokes. Gesture
+    /// projection is per run, so every earlier event remains byte-identical.
+    func testCommittedGestureCoordinatesNeverMoveWhenLaterRevolutionsExpandRange() {
+        let full = platterEvents(signedRunSteps: [300, -25, 40, -500, 10])
+        let prefixThroughThirdCommit = 1 + 300 + 25 + 40 + 1
+        let early = CaptureCore.derivePlatterMovementEventsWithProvisional(
+            from: Array(full.prefix(prefixThroughThirdCommit)),
+            controller: 6,
+            channel: 1,
+            deviceName: "Test Device",
+            notationStepsPerRevolution: 100
+        )
+        let later = CaptureCore.derivePlatterMovementEventsWithProvisional(
+            from: full,
+            controller: 6,
+            channel: 1,
+            deviceName: "Test Device",
+            notationStepsPerRevolution: 100
+        )
+
+        XCTAssertEqual(early.committedEvents.count, 3)
+        XCTAssertGreaterThan(later.committedEvents.count, early.committedEvents.count)
+        XCTAssertEqual(
+            Array(later.committedEvents.prefix(early.committedEvents.count)),
+            early.committedEvents,
+            "later motor phase/revolutions must never move committed notation"
+        )
+        XCTAssertEqual(early.committedEvents.map(\.direction), ["forward", "backward", "forward"])
+        XCTAssertEqual(early.committedEvents[0].endPosition, 3, accuracy: 1e-12)
+        XCTAssertEqual(early.committedEvents[1].startPosition, 0.25, accuracy: 1e-12)
+        XCTAssertEqual(early.committedEvents[2].endPosition, 0.4, accuracy: 1e-12)
+    }
+
+    func testSamplePositionRemainsRawSignedUnwrappedFromHotCueOrigin() {
+        let revolution = PlatterCoordinateSemantics.raneOneMKIIDirectMIDIStepsPerRevolution
+        let origin = 1_250.0
+
+        XCTAssertEqual(
+            PlatterCoordinateSemantics.samplePosition(
+                rawSignedPosition: origin + 4 * revolution + 225,
+                hotCueOrigin: origin
+            ),
+            4 * revolution + 225,
+            accuracy: 1e-12
+        )
+        XCTAssertEqual(
+            PlatterCoordinateSemantics.samplePosition(
+                rawSignedPosition: origin - 3 * revolution - 90,
+                hotCueOrigin: origin
+            ),
+            -3 * revolution - 90,
+            accuracy: 1e-12,
+            "negative travel must not wrap to the end of the sample"
+        )
+    }
+
+    func testSuppressedMotorAnchorWaitsForCommittedStrokeToLeaveViewport() {
+        let committed = CaptureCore.DetectedNotationRecordMovementEvent(
+            startTime: 0,
+            endTime: 1,
+            startPosition: 0,
+            endPosition: 0.2,
+            direction: "forward",
+            movementKind: .normalPush,
+            speed: 720,
+            confidence: 0.9,
+            source: "controller"
+        )
+        let openMotorPreview = CaptureCore.DetectedNotationRecordMovementEvent(
+            startTime: 1,
+            endTime: 2,
+            startPosition: 0,
+            endPosition: 0.5,
+            direction: "forward",
+            movementKind: .normalPush,
+            speed: 1_800,
+            confidence: 0.5,
+            source: "live_preview"
+        )
+
+        XCTAssertFalse(
+            CaptureCore.canAdvanceLiveNotationAnchorPastSuppressedMotorRotation(
+                publishedEvents: [committed, openMotorPreview],
+                latestTime: 2,
+                viewportDuration: 3.2
+            ),
+            "catching the platter must not replace a still-visible committed stroke"
+        )
+        XCTAssertTrue(
+            CaptureCore.canAdvanceLiveNotationAnchorPastSuppressedMotorRotation(
+                publishedEvents: [committed, openMotorPreview],
+                latestTime: 4.21,
+                viewportDuration: 3.2
+            ),
+            "the anchor may advance once the committed stroke has scrolled out"
+        )
+        XCTAssertTrue(
+            CaptureCore.canAdvanceLiveNotationAnchorPastSuppressedMotorRotation(
+                publishedEvents: [openMotorPreview],
+                latestTime: 2,
+                viewportDuration: 3.2
+            ),
+            "an open motor preview is provisional and cannot freeze the anchor"
+        )
+    }
+
+    func testSuppressedMotorAnchorRetainsCompleteReversalOnsetTail() throws {
+        let forward = (0...70).map { index in
+            midiEvent(
+                value: index % 128,
+                takeRelativeTime: Double(index) * 0.01
+            )
+        }
+        let reversalStart = 0.701
+        let backward = (0..<14).map { index in
+            midiEvent(
+                value: (69 - index + 128) % 128,
+                takeRelativeTime: reversalStart + Double(index) * 0.001
+            )
+        }
+        let events = forward + backward
+        let latestTime = try XCTUnwrap(events.last?.takeRelativeTime)
+        let anchor = try XCTUnwrap(
+            CaptureCore.liveNotationAnchorIndexPreservingSuppressedMotorTail(
+                in: events,
+                currentAnchorIndex: 0,
+                controller: 6,
+                channel: 1,
+                latestTime: latestTime,
+                lookBehindDuration: 0.35
+            )
+        )
+        let retained = Array(events.dropFirst(anchor))
+
+        XCTAssertGreaterThan(anchor, 0, "old free-spin packets should be bounded")
+        XCTAssertLessThan(events[anchor].takeRelativeTime, reversalStart)
+        XCTAssertEqual(
+            retained.filter { $0.takeRelativeTime >= reversalStart }.count,
+            backward.count,
+            "all early pull packets must survive until release suppression clears"
+        )
     }
 
     // MARK: - computeState

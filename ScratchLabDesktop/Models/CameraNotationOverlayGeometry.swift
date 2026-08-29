@@ -76,6 +76,24 @@ enum CameraNotationOverlayGeometry {
         let isForward: Bool
     }
 
+    /// Project a point onto an already-scaled arc stroke.
+    ///
+    /// `ArcStroke.radius` already includes the event's display travel. Keeping
+    /// the projection at a unit travel fraction prevents applying that travel
+    /// a second time to endpoint markers.
+    static func point(
+        on stroke: ArcStroke,
+        angle: Double,
+        center: CGPoint
+    ) -> CGPoint {
+        point(
+            angle: angle,
+            travelFraction: 1,
+            center: center,
+            radius: stroke.radius
+        )
+    }
+
     /// Derive arc stroke parameters from a single captured record-movement event.
     ///
     /// - Parameter event:      the captured movement event.
@@ -93,7 +111,8 @@ enum CameraNotationOverlayGeometry {
         arcSweep: Double = 2 * .pi
     ) -> ArcStroke? {
         guard duration > 0 else { return nil }
-        let travel = CapturedNotationStrokeGeometry.travelFraction(for: event)
+        let travel = ControllerGestureNotationDisplayScale
+            .displayTravelFraction(for: event)
         guard travel > 0 else { return nil }   // silence / idle → no stroke
 
         let fractionStart = event.startTime / duration

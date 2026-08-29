@@ -2,6 +2,20 @@ Read `CLAUDE.md`, then `SOUL.md` and `PROFILE.md`.
 Read `AI_HANDOFF.md` — the top entry (2026-08-29) is current state; older branch histories below it are reference material only.
 Run `git status --short --branch` and `git rev-parse HEAD origin/feature/ios-capture-camera-ux`.
 
+## Capture-integrity Slice D: COMPLETE (2026-08-29)
+
+Started from committed HEAD `c0bb3babc1`; no prior commit was amended/reset/rebased. The dirty worktree remains intentional. Do not alter or stage `project.pbxproj`, `ScratchLab.xcscheme`, `Info.plist`, or `CalibrationCameraOverlayTests.swift.plist` without new scope.
+
+Gesture notation and raw sample travel now have explicit separate semantics. `PlatterCoordinateSemantics.gestureRelativeNotation` rebases every decoder-committed movement run locally while retaining signed direction, timestamps, displacement/speed, and real excursion. `samplePosition` remains exact signed/unwrapped travel from the hot-cue origin for audio and the waveform playhead. All live/saved iOS and macOS notation paths use the shared presentation semantics. Do not reintroduce accumulated motor phase into notation or clamp/wrap the waveform to make the graph look flatter.
+
+Replacement iOS/macOS hardware captures exposed a display-only follow-up: ordinary 0.08–0.22-revolution scratches were too small under the former one-revolution scale and macOS 118-point canvas. Controller notation now uses a fixed quarter-revolution full-scale projection shared across renderers, and macOS live notation fills the camera stage. Thus 0.10 / 0.20 / 0.25 revolution displays as 40% / 80% / 100% lane travel. At or above 0.25 revolution the display intentionally reaches the rail, but the physical event/export remains exact and unbounded. Do not replace this fixed frame with per-take auto-fit, which would retroactively move committed strokes. Camera endpoint dots must continue to apply a reduced radius only once.
+
+The existing controller decoder remains the only scratch boundary/noise authority. Canonical `recordMovementEvents` still feed scoring/export unchanged; raw fusion-dropped or fusion-split events are presentation-only. Preserve the iOS decoder-boundary anchor and motor-release lookbehind, which keep work bounded without mutating a visible committed stroke or losing the first reversal. Preserve direct saved mini-rendering; round-tripping these strokes through `ScratchNotation.detectedPreview` loses direction and unequal excursion.
+
+Verification is complete: focused 147/147 twice, relevant regressions + saved-Review 88/88 twice, fixtures 47/47, and isolated macOS plus generic iOS Simulator/embedded-Watch builds green. Both broad configured passes ran 3,111 XCTest cases / 49 skipped with exactly the established 11 assertion failures / identical 9-name set; all 366 Swift Testing cases passed in each. **Physical approval RECORDED (Karl, 2026-08-30): all three refreshed checks passed.** macOS free-spin did not accumulate into the next gesture's baseline; catch, unequal push/pull, and reversal direction displayed correctly with completed strokes remaining fixed; macOS saved Review and Take Detail preserved stroke order, direction, timing, and relative excursion; iOS playhead crossed `BEFORE START` and `PAST END` without wrapping and stayed synchronized with audible AHHH. The macOS export corroborates this but is not itself the approval.
+
+The next unchecked implementation-ready item is Slice E, bounded finalization state machine. Do not fold E into D or reopen D without new physical/test evidence.
+
 ## Standalone test isolation: COMPLETE (2026-08-29)
 
 `PlatterTestSampleLoadTests` now resolves `dvs_ahhh` from an explicitly injected app-bundle resource root. `MIDILearnEngineTests` now injects a unique `UserDefaults` suite that is cleared before and after each test; production defaults remain unchanged. Both suites pass standalone twice and inside the full desktop plan. The full gate remains at the 11-failure / 9-unique-name baseline, with neither suite failing. Do not reopen this slice unless new evidence appears.

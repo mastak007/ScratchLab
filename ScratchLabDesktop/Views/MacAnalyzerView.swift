@@ -4287,9 +4287,9 @@ struct MacAnalyzerView: View {
                         LivePerformedNotationCard(
                             tracker: captureLiveNotationTracker,
                             bpm: Double(routineSessionSetup.bpmValue ?? 90),
-                            canvasHeight: 118,
                             isDimmedForCalibrationEditing: !captureEngine.calibrationLocked
                         )
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
                     } else {
                         HStack {
                             Text("YOUR MOTION — LIVE")
@@ -4310,6 +4310,7 @@ struct MacAnalyzerView: View {
                 }
                 .padding(.horizontal, 14)
                 .padding(.vertical, 10)
+                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
                 .background {
                     LinearGradient(
                         colors: [.clear, Color.black.opacity(0.28)],
@@ -5098,16 +5099,21 @@ struct MacAnalyzerView: View {
     }
 
     private var hasReviewNotationPreview: Bool {
-        currentRoutineNotationSnapshot?.recordMovementEvents.isEmpty == false
+        guard let snapshot = currentRoutineNotationSnapshot else { return false }
+        return !CaptureCore.gestureRelativeRecordMovementEventsForPresentation(
+            from: snapshot
+        ).isEmpty
     }
 
-    /// True only when the current take has captured record/platter movement
-    /// events. Audio-only takes and empty takes return false. This is the
-    /// single gate for captured-notation UI surfaces — when false, notation
-    /// overlay, camera overlay, and captured notation canvas must not render.
+    /// True only when the current take has controller-decoder or canonical
+    /// movement events eligible for notation presentation. Audio-only and empty
+    /// takes return false. This is the single gate for captured-notation UI
+    /// surfaces.
     private var hasCapturedMotionNotation: Bool {
         guard let snapshot = currentRoutineNotationSnapshot else { return false }
-        return !snapshot.recordMovementEvents.isEmpty
+        return !CaptureCore.gestureRelativeRecordMovementEventsForPresentation(
+            from: snapshot
+        ).isEmpty
     }
 
     private var hasPartialReviewNotation: Bool {
@@ -5390,18 +5396,6 @@ struct MacAnalyzerView: View {
 
     private var currentRoutineNotationSnapshot: CaptureCore.DetectedNotationSnapshot? {
         currentRoutineArtifactStatus?.detectedNotation ?? captureEngine.lastRoutineDetectedNotation
-    }
-
-    private var currentRoutineNotationPreview: ScratchNotation? {
-        guard let snapshot = currentRoutineNotationSnapshot,
-              snapshot.recordMovementEvents.isEmpty == false else {
-            return nil
-        }
-        let scratchID = routineSessionSetup.scratchType?.rawValue ?? "detected_capture"
-        return ScratchNotation.detectedPreview(
-            scratchID: scratchID,
-            events: snapshot.recordMovementEvents
-        )
     }
 
     private var reviewStrokeCount: Int {
@@ -9159,22 +9153,25 @@ struct MacAnalyzerView: View {
                     offsetMilliseconds: $0.offsetMilliseconds)
             }
         )
-        // Raw performed strokes, shifted onto the target's time origin so the
-        // stacked MY PERFORMANCE chart shares the TARGET chart's axis (phrase
-        // beat 0 = time 0). No direction or timing is invented — this is the
-        // captured movement evidence exactly as measured.
-        let performedEvents = snapshot.recordMovementEvents.map { event in
-            CaptureCore.DetectedNotationRecordMovementEvent(
-                startTime: event.startTime - clock.beatZeroTime,
-                endTime: event.endTime - clock.beatZeroTime,
-                startPosition: event.startPosition,
-                endPosition: event.endPosition,
-                direction: event.direction,
-                movementKind: event.movementKind,
-                speed: event.speed,
-                confidence: event.confidence,
-                source: event.source)
-        }
+        // Presentation-only gesture coordinates, shifted onto the target's
+        // time origin so the stacked MY PERFORMANCE chart shares the TARGET
+        // axis (phrase beat 0 = time 0). Direction, timing, and raw physical
+        // excursion come from the captured evidence; scoring above continues
+        // to use the canonical finalized movement records unchanged.
+        let performedEvents = CaptureCore
+            .gestureRelativeRecordMovementEventsForPresentation(from: snapshot)
+            .map { event in
+                CaptureCore.DetectedNotationRecordMovementEvent(
+                    startTime: event.startTime - clock.beatZeroTime,
+                    endTime: event.endTime - clock.beatZeroTime,
+                    startPosition: event.startPosition,
+                    endPosition: event.endPosition,
+                    direction: event.direction,
+                    movementKind: event.movementKind,
+                    speed: event.speed,
+                    confidence: event.confidence,
+                    source: event.source)
+            }
         return .ready(ReviewPerformanceComparisonModel(
             notation: notation,
             overlay: shifted,
@@ -9445,7 +9442,11 @@ struct MacAnalyzerView: View {
             if let snapshot = currentRoutineNotationSnapshot,
                hasCapturedMotionNotation {
                 ScratchPhraseChartView(
-                    source: .captured(snapshot.recordMovementEvents)
+                    source: .captured(
+                        CaptureCore.gestureRelativeRecordMovementEventsForPresentation(
+                            from: snapshot
+                        )
+                    )
                 )
                     .frame(maxWidth: .infinity, minHeight: 320, maxHeight: 520)
                     .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
@@ -9478,7 +9479,7 @@ struct MacAnalyzerView: View {
             }
             if showNotationOverlay,
                let snapshot = currentRoutineNotationSnapshot,
-               !snapshot.recordMovementEvents.isEmpty {
+               hasCapturedMotionNotation {
                 LiveNotationOverlayPlayable(snapshot: snapshot)
                     .id(snapshot.capturedAt)
             }
@@ -9700,9 +9701,14 @@ struct MacAnalyzerView: View {
         guard let snapshot = currentRoutineNotationSnapshot else {
             return ReviewCapturedSource(label: "None", systemImage: "circle.dashed", color: .secondary)
         }
-        if !snapshot.recordMovementEvents.isEmpty {
+        let presentationEvents = CaptureCore
+            .gestureRelativeRecordMovementEventsForPresentation(from: snapshot)
+        if !presentationEvents.isEmpty {
+            if snapshot.detectionSources.contains("controller") {
+                return ReviewCapturedSource(label: "Controller platter", systemImage: "dial.medium", color: ScratchLabDesign.Sem.success)
+            }
             if snapshot.notationSource == "detected" {
-                switch snapshot.recordMovementEvents.first?.source {
+                switch presentationEvents.first?.source {
                 case "controller":
                     return ReviewCapturedSource(label: "Controller platter", systemImage: "dial.medium", color: ScratchLabDesign.Sem.success)
                 case "timecode_live":
@@ -9982,7 +9988,7 @@ struct MacAnalyzerView: View {
                 .fixedSize(horizontal: false, vertical: true)
 
                 if let snapshot = currentRoutineNotationSnapshot,
-                   !snapshot.recordMovementEvents.isEmpty {
+                   hasCapturedMotionNotation {
                     LiveNotationOverlayPlayable(snapshot: snapshot)
                         .id(snapshot.capturedAt)
                 }
@@ -12109,7 +12115,9 @@ struct MacAnalyzerView: View {
     #endif
 
     private var miniNotationTimeline: some View {
-        let notation = currentRoutineNotationPreview
+        let model = currentRoutineNotationSnapshot.flatMap {
+            LiveNotationOverlayModel.capturedGestureRelativePresentation(from: $0)
+        }
         let hasTake = captureEngine.lastRoutineRecordingURL != nil
 
         return VStack(alignment: .leading, spacing: 8) {
@@ -12117,11 +12125,13 @@ struct MacAnalyzerView: View {
                 .font(.system(size: 12, weight: .semibold))
                 .foregroundStyle(.secondary)
 
-            if let notation {
-                ScratchNotationCanvasView(
-                    notation: notation,
-                    playbackTime: 0,
-                    loopDuration: notation.timelineDuration
+            if let model {
+                LiveNotationOverlayView(
+                    model: model,
+                    currentTime: model.duration,
+                    background: .solid,
+                    drawMode: .fullReference,
+                    maximumAmplitude: 1
                 )
                 .frame(height: 80)
                 .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
@@ -12749,13 +12759,13 @@ private struct ReviewOverlayPlayableSurface: View {
 /// booth display.
 ///
 /// Takes an optional `DetectedNotationSnapshot` from the capture engine's
-/// latest routine take. When the snapshot carries record-movement events,
-/// builds a `LiveNotationOverlayModel` in `.captured` mode with an
-/// `OverlayReplayController` for independent playback. The `.captured`
-/// mode guard ensures no future strokes appear before `currentTime`
+/// latest routine take. When its canonical or raw controller evidence yields
+/// presentation movement, builds a `LiveNotationOverlayModel` in `.captured`
+/// mode with an `OverlayReplayController` for independent playback. The
+/// `.captured` mode guard ensures no future strokes appear before `currentTime`
 /// reaches their `startTime`.
 ///
-/// When the snapshot is `nil` or has no movement events, an empty state
+/// When the snapshot is `nil` or has no presentation movement, an empty state
 /// is shown.
 ///
 /// This view does NOT add camera permissions, ARKit, Vision tracking,
@@ -12770,10 +12780,30 @@ private struct PerformerNotationDisplayView: View {
 
     init(snapshot: CaptureCore.DetectedNotationSnapshot?) {
         self.snapshot = snapshot
-        if let snapshot, !snapshot.recordMovementEvents.isEmpty {
-            let duration = max(snapshot.capturedEvidenceEndTime ?? 0, 0.1)
+        if let snapshot {
+            let presentationEvents = CaptureCore
+                .gestureRelativeRecordMovementEventsForPresentation(from: snapshot)
+            let duration = max(
+                CaptureCore.gestureRelativeRecordMovementPresentationEndTime(
+                    from: snapshot,
+                    presentationEvents: presentationEvents
+                ) ?? 0,
+                0.1
+            )
+            guard !presentationEvents.isEmpty else {
+                self.model = nil
+                self._controller = State(
+                    initialValue: OverlayReplayController(
+                        timeline: SessionReplayTimeline(
+                            takeDurationSeconds: 0,
+                            events: []
+                        )
+                    )
+                )
+                return
+            }
             self.model = LiveNotationOverlayModel(
-                events: snapshot.recordMovementEvents,
+                events: presentationEvents,
                 duration: duration,
                 mode: .captured
             )
@@ -12932,9 +12962,17 @@ private struct LiveNotationOverlayPlayable: View {
 
     init(snapshot: CaptureCore.DetectedNotationSnapshot) {
         self.snapshot = snapshot
-        let duration = max(snapshot.capturedEvidenceEndTime ?? 0, 0.1)
+        let presentationEvents = CaptureCore
+            .gestureRelativeRecordMovementEventsForPresentation(from: snapshot)
+        let duration = max(
+            CaptureCore.gestureRelativeRecordMovementPresentationEndTime(
+                from: snapshot,
+                presentationEvents: presentationEvents
+            ) ?? 0,
+            0.1
+        )
         self.model = LiveNotationOverlayModel(
-            events: snapshot.recordMovementEvents,
+            events: presentationEvents,
             duration: duration,
             mode: .captured
         )

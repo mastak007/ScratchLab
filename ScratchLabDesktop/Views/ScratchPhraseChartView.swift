@@ -279,7 +279,11 @@ struct ScratchPhraseChartView: View {
             let x2 = CGFloat(event.endTime - windowStart) * pps
             guard x2 > x1 else { continue }
 
-            let travel = CGFloat(CapturedNotationStrokeGeometry.travelFraction(for: event))
+            let travel = CGFloat(
+                ControllerGestureNotationDisplayScale.displayTravelFraction(
+                    for: event
+                )
+            )
             guard travel > 0 else { continue }  // idle / no movement: draw nothing
 
             let isForward = event.direction == "forward"
@@ -355,6 +359,17 @@ struct ScratchPhraseChartView: View {
         let motionPath: MotionPath
         if let performedFrame {
             motionPath = ScratchStrokeGeometry.motionPath(for: content, normalizingTo: performedFrame)
+        } else if let gestureFrame = PerformedStrokeAdapter.gestureRelativeNormalizationFrame(
+            for: events
+        ) {
+            // Gesture-relative controller notation owns a stable one-revolution
+            // frame. Do not normalize against the take's extrema: a multi-turn
+            // motor run would otherwise shrink every later scratch even though
+            // their local baselines are correct.
+            motionPath = ScratchStrokeGeometry.motionPath(
+                for: content,
+                normalizingTo: gestureFrame
+            )
         } else {
             motionPath = ScratchStrokeGeometry.motionPath(for: content)
         }
@@ -919,6 +934,49 @@ enum CapturedNotationStrokeGeometry {
     }
 }
 
+// MARK: - Controller gesture display scale
+
+/// Fixed presentation zoom for locally rebased controller notation.
+///
+/// CaptureCore keeps each event's exact, unbounded physical excursion in
+/// platter revolutions. The notation lane maps one quarter revolution to its
+/// full cross-axis so normal scratches remain legible; this mapping never
+/// depends on the take's extrema, so a later multi-revolution run cannot move
+/// or shrink an already committed stroke. Camera/DVS/target evidence keeps its
+/// established 0...1 presentation.
+enum ControllerGestureNotationDisplayScale {
+    static let fullScaleExcursionRevolutions: Double = 0.25
+
+    static func displayTravelFraction(
+        for event: CaptureCore.DetectedNotationRecordMovementEvent
+    ) -> Double {
+        let physicalTravel = CapturedNotationStrokeGeometry.travelFraction(
+            for: event
+        )
+        guard CaptureCore.usesGestureRelativeControllerNotation(event) else {
+            return physicalTravel
+        }
+        return min(
+            1,
+            max(0, physicalTravel / fullScaleExcursionRevolutions)
+        )
+    }
+
+    static func displayPositions(
+        for event: CaptureCore.DetectedNotationRecordMovementEvent
+    ) -> (start: Double, end: Double) {
+        guard CaptureCore.usesGestureRelativeControllerNotation(event) else {
+            return (event.startPosition, event.endPosition)
+        }
+        let travel = displayTravelFraction(for: event)
+        switch event.direction {
+        case "forward": return (0, travel)
+        case "backward": return (travel, 0)
+        default: return (event.startPosition, event.endPosition)
+        }
+    }
+}
+
 // MARK: - Performed stroke adapter
 
 /// Pure, Foundation-only adapter that maps a captured record-movement event
@@ -932,33 +990,61 @@ enum CapturedNotationStrokeGeometry {
 enum PerformedStrokeAdapter {
 
     static func laneStroke(from event: CaptureCore.DetectedNotationRecordMovementEvent) -> LaneStroke? {
-        guard PerformedScratchTimelineAdapter.isStrokeKind(event.movementKind) else { return nil }
+        // Snapshot-aware callers supply physical gesture events re-derived
+        // from raw MIDI. This event-only fallback still guarantees a local
+        // baseline for older/isolated controller events, while preserving
+        // their stored excursion and never interpreting normalized speed as
+        // raw motor steps.
+        let projectedEvent = CaptureCore.locallyRebasedControllerNotationEvent(event)
+        guard PerformedScratchTimelineAdapter.isStrokeKind(projectedEvent.movementKind) else { return nil }
 
         let direction: ScratchNotationDirection
-        switch event.direction {
+        switch projectedEvent.direction {
         case "forward": direction = .forward
         case "backward": direction = .backward
         default: return nil
         }
 
         let speed: ScratchNotationSpeedClassification
-        switch event.movementKind {
+        switch projectedEvent.movementKind {
         case .fastPush, .fastPull: speed = .fast
         case .slowDrag, .slowPullDrag: speed = .slow
         default: speed = .medium
         }
 
+        let displayPositions = ControllerGestureNotationDisplayScale
+            .displayPositions(for: projectedEvent)
+
         return LaneStroke(
-            startTime: event.startTime,
-            endTime: event.endTime,
+            startTime: projectedEvent.startTime,
+            endTime: projectedEvent.endTime,
             direction: direction,
             speed: speed,
             faderState: .open,
             isGhost: false,
-            normalizedTravel: CapturedNotationStrokeGeometry.travelFraction(for: event),
-            measuredStartPosition: event.startPosition,
-            measuredEndPosition: event.endPosition
+            normalizedTravel: CapturedNotationStrokeGeometry.travelFraction(for: projectedEvent),
+            measuredStartPosition: displayPositions.start,
+            measuredEndPosition: displayPositions.end
         )
+    }
+
+    /// Standalone controller-performance lanes use one stable display frame.
+    /// `laneStroke(from:)` has already projected a quarter revolution onto
+    /// that frame without changing the physical event. Target/performance
+    /// comparisons still use the caller-supplied target frame, which takes
+    /// precedence. Camera/DVS events retain their existing content-derived
+    /// frame.
+    static func gestureRelativeNormalizationFrame(
+        for events: [CaptureCore.DetectedNotationRecordMovementEvent]
+    ) -> ClosedRange<CGFloat>? {
+        let usableStrokeEvents = events.filter { laneStroke(from: $0) != nil }
+        guard !usableStrokeEvents.isEmpty,
+              usableStrokeEvents.allSatisfy(
+                CaptureCore.usesGestureRelativeControllerNotation
+              ) else {
+            return nil
+        }
+        return 0...1
     }
 }
 

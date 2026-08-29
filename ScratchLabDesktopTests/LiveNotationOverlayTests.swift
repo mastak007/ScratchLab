@@ -96,6 +96,177 @@ final class LiveNotationOverlayTests: XCTestCase {
         XCTAssertGreaterThan(fractions[1], fractions[2], "Half must exceed quarter")
     }
 
+    func testControllerPairKeepsShortPullIndependentFromMultiRevolutionForwardRun() {
+        let freeSpin = CaptureCore.DetectedNotationRecordMovementEvent(
+            startTime: 0,
+            endTime: 5,
+            startPosition: 0,
+            endPosition: 3,
+            direction: "forward",
+            movementKind: .normalPush,
+            speed: 2_160,
+            confidence: 0.9,
+            source: "controller"
+        )
+        let pull = CaptureCore.DetectedNotationRecordMovementEvent(
+            startTime: 5,
+            endTime: 5.4,
+            startPosition: 0.125,
+            endPosition: 0,
+            direction: "backward",
+            movementKind: .normalPull,
+            speed: 2_250,
+            confidence: 0.9,
+            source: "controller"
+        )
+
+        let travels = LiveNotationOverlayStrokeGeometry.pairedTravels(
+            forward: freeSpin,
+            backward: pull,
+            maximumAmplitude: 1
+        )
+
+        XCTAssertEqual(travels.forward, 1, accuracy: 1e-12)
+        XCTAssertEqual(travels.backward, 0.5, accuracy: 1e-12,
+                       "the scratch after free spin must start at its own local height")
+    }
+
+    func testControllerOverlayUsesQuarterRevolutionFullScale() {
+        func event(travel: Double, source: String) -> CaptureCore.DetectedNotationRecordMovementEvent {
+            CaptureCore.DetectedNotationRecordMovementEvent(
+                startTime: 0,
+                endTime: 0.4,
+                startPosition: 0,
+                endPosition: travel,
+                direction: "forward",
+                movementKind: .normalPush,
+                speed: 1,
+                confidence: 0.9,
+                source: source
+            )
+        }
+
+        XCTAssertEqual(
+            LiveNotationOverlayStrokeGeometry.cappedTravel(
+                for: event(travel: 0.125, source: "controller"),
+                maximumAmplitude: 1
+            ),
+            0.5,
+            accuracy: 1e-12
+        )
+        XCTAssertEqual(
+            LiveNotationOverlayStrokeGeometry.cappedTravel(
+                for: event(travel: 0.25, source: "live_preview"),
+                maximumAmplitude: 1
+            ),
+            1,
+            accuracy: 1e-12
+        )
+        XCTAssertEqual(
+            LiveNotationOverlayStrokeGeometry.cappedTravel(
+                for: event(travel: 0.125, source: "detected"),
+                maximumAmplitude: 1
+            ),
+            0.125,
+            accuracy: 1e-12,
+            "camera/DVS notation keeps its established travel scale"
+        )
+    }
+
+    func testNonControllerPairRetainsConnectedForwardAmplitude() {
+        let forward = makeEvent(
+            startTime: 0,
+            endTime: 0.3,
+            startPosition: 0,
+            endPosition: 0.4,
+            direction: "forward"
+        )
+        let backward = makeEvent(
+            startTime: 0.3,
+            endTime: 0.6,
+            startPosition: 0.15,
+            endPosition: 0,
+            direction: "backward"
+        )
+
+        let travels = LiveNotationOverlayStrokeGeometry.pairedTravels(
+            forward: forward,
+            backward: backward,
+            maximumAmplitude: 1
+        )
+
+        XCTAssertEqual(travels.forward, 0.4, accuracy: 1e-12)
+        XCTAssertEqual(travels.backward, 0.4, accuracy: 1e-12,
+                       "camera/target pairs keep the established connected-V geometry")
+    }
+
+    func testCapturedMiniPresentationKeepsMeasuredTravelAndNonAlternatingDirection() throws {
+        func controllerEvent(
+            startTime: Double,
+            endTime: Double,
+            startPosition: Double,
+            endPosition: Double
+        ) -> CaptureCore.DetectedNotationRecordMovementEvent {
+            CaptureCore.DetectedNotationRecordMovementEvent(
+                startTime: startTime,
+                endTime: endTime,
+                startPosition: startPosition,
+                endPosition: endPosition,
+                direction: "forward",
+                movementKind: .normalPush,
+                speed: 1,
+                confidence: 0.9,
+                source: "controller"
+            )
+        }
+        let snapshot = CaptureCore.DetectedNotationSnapshot(
+            notationSource: "detected",
+            notationConfidence: 0.9,
+            detectedLabel: nil,
+            labelSource: "unknown",
+            labelConfidence: nil,
+            detectionSources: ["controller"],
+            recordMovementEvents: [
+                controllerEvent(
+                    startTime: 0,
+                    endTime: 0.3,
+                    startPosition: 0.7,
+                    endPosition: 0.9
+                ),
+                controllerEvent(
+                    startTime: 0.5,
+                    endTime: 0.9,
+                    startPosition: 0.1,
+                    endPosition: 0.5
+                )
+            ],
+            audioEvents: [],
+            faderEvents: [],
+            mixerMidiEvents: [],
+            capturedAt: Date(timeIntervalSince1970: 0)
+        )
+
+        let model = try XCTUnwrap(
+            LiveNotationOverlayModel.capturedGestureRelativePresentation(
+                from: snapshot
+            )
+        )
+
+        XCTAssertEqual(model.events.map(\.direction), ["forward", "forward"],
+                       "captured direction must not be replaced by authored alternation")
+        XCTAssertEqual(
+            CapturedNotationStrokeGeometry.travelFraction(for: model.events[0]),
+            0.2,
+            accuracy: 1e-12
+        )
+        XCTAssertEqual(
+            CapturedNotationStrokeGeometry.travelFraction(for: model.events[1]),
+            0.4,
+            accuracy: 1e-12
+        )
+        XCTAssertEqual(model.duration, 0.9, accuracy: 1e-12)
+    }
+
     // MARK: - Silence stays empty
 
     func testLiveNotationKeepsSilenceEmpty() {

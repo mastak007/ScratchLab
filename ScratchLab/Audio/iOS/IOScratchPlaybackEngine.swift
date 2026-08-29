@@ -121,7 +121,10 @@ private final class IOScratchMIDIControlLoop: @unchecked Sendable {
             now: CACurrentMediaTime()
         )
         renderer.update(
-            relativePlatterSteps: phase - hotCuePhase,
+            relativePlatterSteps: PlatterCoordinateSemantics.samplePosition(
+                rawSignedPosition: phase,
+                hotCueOrigin: hotCuePhase
+            ),
             signedVelocityStepsPerSecond: result?.velocity ?? 0
         )
     }

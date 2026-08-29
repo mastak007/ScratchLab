@@ -163,8 +163,8 @@ struct PracticeModeView: View {
     // Notation feedback overlay state — driven by live scratch detection results.
     @State private var notationFeedbackState: NotationFeedbackState = .neutral
     // Active-attempt performance evidence for the live notation lane. This is
-    // presentation state only; Result continues to resolve its finalized
-    // evidence directly from `midiControllerDispatcher.platterMovementEvents`.
+    // presentation state only; Result independently resolves its finalized
+    // gesture-relative view from the same raw attempt evidence.
     @State private var livePerformedMovementEvents: [CaptureCore.DetectedNotationRecordMovementEvent] = []
 
     let durationOptions: [(String, TimeInterval)] = [
@@ -2316,14 +2316,15 @@ struct PracticeModeView: View {
     // movement evidence and `resolve` returns `.targetOnly`. When a RANE
     // platter was used this attempt, `midiControllerDispatcher` already
     // accumulated its CC6 telemetry (see `resetCapturedPlatterEvents` in
-    // `startSession`/`resetSession`); `platterMovementEvents` decodes it via
-    // the same shared `CaptureCore.derivePlatterMovementEvents` macOS's
-    // Practice/Review notation uses. The decision itself lives in
+    // `startSession`/`resetSession`);
+    // `gestureRelativePlatterNotationEvents` decodes the same shared run and
+    // reversal boundaries macOS presentation uses, then locally rebases each
+    // accepted gesture. The decision itself lives in
     // `PracticeResultNotation.resolve` (pure, evidence-driven) — this is the
     // "future DVS/MIDI/camera input path" the type's own doc comment
     // anticipated; no change to the result view itself.
     private var practiceResultNotation: PracticeResultNotation {
-        let events = midiControllerDispatcher.platterMovementEvents
+        let events = midiControllerDispatcher.gestureRelativePlatterNotationEvents
         #if DEBUG
         if !events.isEmpty {
             print("[SCRATCH-DEBUG] practice received update · movementEvents=\(events.count)")
@@ -2512,7 +2513,14 @@ private struct PracticeLandscapePerformedTrace: View {
             duration: end,
             loops: false
         )
-        self.motionPath = ScratchStrokeGeometry.motionPath(for: content)
+        if let frame = PerformedStrokeAdapter.gestureRelativeNormalizationFrame(for: events) {
+            self.motionPath = ScratchStrokeGeometry.motionPath(
+                for: content,
+                normalizingTo: frame
+            )
+        } else {
+            self.motionPath = ScratchStrokeGeometry.motionPath(for: content)
+        }
 
         if let first = events.first, let last = events.last {
             self.visibleWindow = first.startTime...max(first.startTime + 0.1, last.endTime)
