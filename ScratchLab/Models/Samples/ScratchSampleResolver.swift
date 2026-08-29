@@ -28,19 +28,25 @@ enum ScratchSampleResolver {
     /// Resolves a scratch sample ID to a playable bundle URL, or nil when the
     /// sample is unknown. The common case is a direct `<id>.wav` lookup against
     /// the flattened bundle root; a small set of IDs live in a subdirectory.
-    static func url(for sampleID: String) -> URL? {
+    static func url(
+        for sampleID: String,
+        resourceRoot: URL? = Bundle.main.resourceURL
+    ) -> URL? {
         guard !sampleID.isEmpty else { return nil }
 
         if let path = Self.subdirectoryPaths[sampleID],
-           let root = Bundle.main.resourceURL {
+           let root = resourceRoot {
             let url = root.appendingPathComponent(path)
             if FileManager.default.fileExists(atPath: url.path) {
                 return url
             }
         }
 
-        if let url = Bundle.main.url(forResource: sampleID, withExtension: "wav") {
-            return url
+        if let root = resourceRoot {
+            let url = root.appendingPathComponent("\(sampleID).wav")
+            if FileManager.default.fileExists(atPath: url.path) {
+                return url
+            }
         }
 
         return nil

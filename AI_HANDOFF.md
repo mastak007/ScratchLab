@@ -1,5 +1,11 @@
 # AI Handoff
 
+## 2026-08-29 — Standalone test isolation cleanup: COMPLETE (2026-08-29)
+
+`PlatterTestSampleLoadTests` and `MIDILearnEngineTests` no longer depend on shared host state. The platter suite explicitly supplies `Bundle(for: MacCaptureEngine.self).resourceURL`; `ScratchSampleResolver` and `ScratchSamplePlaybackController` retain `Bundle.main.resourceURL` as their production default. The MIDI suite creates a unique `UserDefaults` suite in `setUp`, clears it before/after every test, and explicitly injects it into `MacCaptureEngine`; production and callers without explicit injection retain their prior `.standard` legacy-crossfader behavior. No assertion was weakened and no audio, routing, MIDI-event, or sample-selection behavior changed.
+
+Verification: both target suites passed standalone twice before editing and twice on the final code (`PlatterTestSampleLoadTests` 2/2; `MIDILearnEngineTests` 32/32). `MIDILearnHangFixTests` passed 15/15 after the compatibility correction. Both target suites passed inside the full desktop plan. The full gate remains the **11 failures / 9 unique-name baseline** (3,090 tests / 49 skipped); neither target suite is in the failing set. Isolated iOS and macOS builds succeeded; capture-pipeline fixtures passed 47/47. The pre-existing untracked `.codex-build/` disappeared externally during the task and was not recreated. Protected dirty `project.pbxproj`, `ScratchLab.xcscheme`, `Info.plist`, and `CalibrationCameraOverlayTests.swift.plist` were not altered. Committed as its own isolated checkpoint; nothing was pushed.
+
 ## 2026-08-29 — RANE right-deck playback routing FIXED and PHYSICALLY APPROVED (uncommitted; current)
 
 Started from `37e2d1d1`. No commit amended or reset.
@@ -20,7 +26,7 @@ Started from `37e2d1d1`. No commit amended or reset.
 
 **Verification.** 17/17 twice; regressions green (39/39, 22/22, 40/40, 17/17, plus Slice A/B/C); iOS + signed device + macOS `build-for-testing` all built; fixtures 47/47; `git diff --check` clean. `scripts/build.sh all` exit 65, **3090 / 49 skipped / 11 failures**, failing-name set **identical to the post-restore baseline (9 names)**.
 
-**Known unrelated fragility:** `PlatterTestSampleLoadTests` (5) and `MIDILearnEngineTests` (3) fail when run **standalone** via `xcrun xctest` but pass in the full plan. Shared-state/test-isolation sensitivity — `dvs_ahhh` is present in source and bundle. A test-isolation cleanup slice is warranted.
+**Standalone isolation fragility resolved:** see the current entry above. Both suites pass standalone twice and in-plan.
 
 ## 2026-08-29 — Capture-integrity Slice C: crossfader provenance + take-window bounding (now in commit 37e2d1d1)
 
@@ -40,7 +46,7 @@ Started from `14685e06`. Neither `089965f4` nor `14685e06` was amended, reset, o
 
 **Verification.** 21 new `CrossfaderMappingProvenanceTests` + Slice A/B suites = 51/51, twice. Regressions green (46/46, 29/29, 22/22, 58/58, 29/29, 14/14). iOS + macOS builds and `build-for-testing` green; fixtures 47/47; `git diff --check` clean. `scripts/build.sh all` exit 65, **3073 tests / 49 skipped / 11 failures** — count up by exactly 21, failing-name set **identical to the post-restore baseline (9 names)**.
 
-**Known pre-existing fragility, not a regression:** `MIDILearnEngineTests` shows 3 failures when run standalone via `xcrun xctest` but passes inside the full plan both before and after this change. All three read shared `UserDefaults.standard` and reference zero Slice C symbols. Worth its own cleanup slice.
+**Historical standalone fragility resolved 2026-08-29:** `MIDILearnEngineTests` now uses an explicitly injected, reset-per-test defaults suite; see the current entry above.
 
 **Physical RANE checks still required:** registry matching depends on the real CoreMIDI endpoint name (`"rane one"` matching is unverified against the actual device string); confirm a fader cut records with `· certified default` provenance when no mapping is learned, that ScratchLab stays silent on that path, and that a move made just after Stop does not appear in the take.
 

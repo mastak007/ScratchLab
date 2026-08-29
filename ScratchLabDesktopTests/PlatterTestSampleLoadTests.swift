@@ -10,8 +10,19 @@ import XCTest
 
 final class PlatterTestSampleLoadTests: XCTestCase {
 
-    func testLoadPlatterTestSampleRequestsDVSAhhhNotTheLongPadAsset() {
-        let engine = MacCaptureEngine(autoRefreshDevices: false)
+    private func makeEngine() throws -> MacCaptureEngine {
+        let resourceRoot = try XCTUnwrap(
+            Bundle(for: MacCaptureEngine.self).resourceURL,
+            "The app test host must expose its resource root"
+        )
+        return MacCaptureEngine(
+            autoRefreshDevices: false,
+            sampleResourceRoot: resourceRoot
+        )
+    }
+
+    func testLoadPlatterTestSampleRequestsDVSAhhhNotTheLongPadAsset() throws {
+        let engine = try makeEngine()
         engine.loadPlatterTestSample()
 
         let snapshot = engine.testOnly_scratchPlaybackDiagnosticsSnapshot()
@@ -33,8 +44,8 @@ final class PlatterTestSampleLoadTests: XCTestCase {
         XCTAssertEqual(engine.platterTestLoadStatus, "loaded: dvs_ahhh")
     }
 
-    func testAudiblePlatterTestUsesDVSAhhhAndLeavesItArmed() {
-        let engine = MacCaptureEngine(autoRefreshDevices: false)
+    func testAudiblePlatterTestUsesDVSAhhhAndLeavesItArmed() throws {
+        let engine = try makeEngine()
         engine.previewPlatterTestSample()
 
         let snapshot = engine.testOnly_scratchPlaybackDiagnosticsSnapshot()

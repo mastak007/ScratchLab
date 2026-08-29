@@ -2,6 +2,10 @@ Read `CLAUDE.md`, then `SOUL.md` and `PROFILE.md`.
 Read `AI_HANDOFF.md` — the top entry (2026-08-29) is current state; older branch histories below it are reference material only.
 Run `git status --short --branch` and `git rev-parse HEAD origin/feature/ios-capture-camera-ux`.
 
+## Standalone test isolation: COMPLETE (2026-08-29)
+
+`PlatterTestSampleLoadTests` now resolves `dvs_ahhh` from an explicitly injected app-bundle resource root. `MIDILearnEngineTests` now injects a unique `UserDefaults` suite that is cleared before and after each test; production defaults remain unchanged. Both suites pass standalone twice and inside the full desktop plan. The full gate remains at the 11-failure / 9-unique-name baseline, with neither suite failing. Do not reopen this slice unless new evidence appears.
+
 ## RANE right-deck routing: FIXED and physically approved (2026-08-29; current, uncommitted)
 
 **Settled hardware truth — do not re-derive or re-test from scratch.** RANE ONE MKII exposes **10** USB output channels. **1/2 = left deck, 3/4 = right deck, 13/14 = master** (never route deck playback there). Karl physically approved: AHHH on the right deck, only the right meter, right upfader/crossfader control, master normal, DVS unaffected.
@@ -14,7 +18,7 @@ Invariants to preserve: `minimumRequiredOutputChannels` stays **derived** from t
 
 **Do not reintroduce source-string routing tests.** The old one asserted `"let raneOutputPairStartIndex = 2"` and passed throughout the entire bug.
 
-**Test-isolation cleanup is now clearly warranted** (suggest scheduling it before more capture slices): `PlatterTestSampleLoadTests` (5 failures) and `MIDILearnEngineTests` (3 failures) fail when run standalone via `xcrun xctest` but pass in the full plan. Shared `UserDefaults`/bundle-state sensitivity, unrelated to any slice so far.
+**Test-isolation cleanup is complete.** See the current section above.
 
 Full-gate baseline is now **11 failures / 9 unique names** (post resource-restore). Compare against that, not the older 15/13.
 
@@ -26,7 +30,7 @@ Keep these invariants: learned mapping always wins; the certified-registry fallb
 
 **Resource deletions were restored**, dropping the full-gate baseline to **11 failures / 9 unique names**. Use that as the comparison point, not the older 15/13.
 
-**Known pre-existing fragility:** `MIDILearnEngineTests` fails 3 tests when run standalone via `xcrun xctest` but passes in the full plan. Shared `UserDefaults.standard` pollution; unrelated to any slice so far. A cleanup slice for test isolation is worth scheduling.
+**Historical test-isolation fragility is resolved.** Do not schedule another cleanup without a new reproduction.
 
 ## Capture-integrity batch: Slices A+B landed (2026-08-29; superseded by the section above)
 

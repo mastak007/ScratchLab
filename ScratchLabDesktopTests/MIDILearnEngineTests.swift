@@ -20,6 +20,27 @@ import XCTest
 
 final class MIDILearnEngineTests: XCTestCase {
 
+    private var defaultsSuiteName: String!
+    private var midiDefaults: UserDefaults!
+
+    override func setUp() {
+        super.setUp()
+        defaultsSuiteName = "com.machelpnz.scratchlab.tests.MIDILearnEngineTests.\(UUID().uuidString)"
+        midiDefaults = UserDefaults(suiteName: defaultsSuiteName)
+        midiDefaults.removePersistentDomain(forName: defaultsSuiteName)
+    }
+
+    override func tearDown() {
+        midiDefaults.removePersistentDomain(forName: defaultsSuiteName)
+        midiDefaults = nil
+        defaultsSuiteName = nil
+        super.tearDown()
+    }
+
+    private func makeEngine() -> MacCaptureEngine {
+        MacCaptureEngine(autoRefreshDevices: false, midiDefaults: midiDefaults)
+    }
+
     /// Removes any on-disk mapping left behind by a test's device identifier.
     private func cleanUpMIDIMapping(deviceIdentifier: String) {
         MIDILearnedMappingStore.default.delete(deviceIdentifier: deviceIdentifier)
@@ -30,22 +51,22 @@ final class MIDILearnEngineTests: XCTestCase {
         RunLoop.main.run(until: Date().addingTimeInterval(0.05))
     }
 
-    func testSyntheticSelectionDoesNotOverwriteAppStandardDefaults() {
+    func testSyntheticSelectionUsesIsolatedDefaults() {
         let key = "scratchlab.mac.selectedMIDIInputSourceID"
-        let appSelectionBeforeTest = UserDefaults.standard.string(forKey: key)
+        XCTAssertNil(midiDefaults.string(forKey: key))
 
-        let engine = MacCaptureEngine(autoRefreshDevices: false)
+        let engine = makeEngine()
         engine.selectedMIDIInputSourceID = "midi_test_selection_isolation"
 
         XCTAssertEqual(
-            UserDefaults.standard.string(forKey: key),
-            appSelectionBeforeTest,
-            "Hosted MIDI tests must never replace the user's selected controller"
+            midiDefaults.string(forKey: key),
+            "midi_test_selection_isolation",
+            "Hosted MIDI tests must persist synthetic selections only in their isolated suite"
         )
     }
 
     func testCC6PlatterFloodIgnoredDuringUpfaderLearn() {
-        let engine = MacCaptureEngine(autoRefreshDevices: false)
+        let engine = makeEngine()
         let deviceID = "midi_test_cc6_flood"
         engine.selectedMIDIInputSourceID = deviceID
         defer { cleanUpMIDIMapping(deviceIdentifier: deviceID) }
@@ -63,7 +84,7 @@ final class MIDILearnEngineTests: XCTestCase {
     }
 
     func testCC8AcceptedForCrossfaderLearn() {
-        let engine = MacCaptureEngine(autoRefreshDevices: false)
+        let engine = makeEngine()
         let deviceID = "midi_test_cc8_crossfader"
         engine.selectedMIDIInputSourceID = deviceID
         defer { cleanUpMIDIMapping(deviceIdentifier: deviceID) }
@@ -83,7 +104,7 @@ final class MIDILearnEngineTests: XCTestCase {
     }
 
     func testCC8NotBlanketBannedForNonCrossfaderLearn() {
-        let engine = MacCaptureEngine(autoRefreshDevices: false)
+        let engine = makeEngine()
         let deviceID = "midi_test_cc8_upfader"
         engine.selectedMIDIInputSourceID = deviceID
         defer { cleanUpMIDIMapping(deviceIdentifier: deviceID) }
@@ -101,7 +122,7 @@ final class MIDILearnEngineTests: XCTestCase {
     }
 
     func testCrossfaderLearnStopsAfterFirstAcceptedEvent() {
-        let engine = MacCaptureEngine(autoRefreshDevices: false)
+        let engine = makeEngine()
         let deviceID = "midi_test_learn_stops"
         engine.selectedMIDIInputSourceID = deviceID
         defer { cleanUpMIDIMapping(deviceIdentifier: deviceID) }
@@ -121,7 +142,7 @@ final class MIDILearnEngineTests: XCTestCase {
     }
 
     func testLeftAndRightUpfaderLearnAssignCorrectDeck() {
-        let engine = MacCaptureEngine(autoRefreshDevices: false)
+        let engine = makeEngine()
         let deviceID = "midi_test_upfader_deck"
         engine.selectedMIDIInputSourceID = deviceID
         defer { cleanUpMIDIMapping(deviceIdentifier: deviceID) }
@@ -139,7 +160,7 @@ final class MIDILearnEngineTests: XCTestCase {
     }
 
     func testHotCueNoteOffDoesNotTriggerLoad() {
-        let engine = MacCaptureEngine(autoRefreshDevices: false)
+        let engine = makeEngine()
         let deviceID = "midi_test_hotcue_noteoff"
         engine.selectedMIDIInputSourceID = deviceID
         defer { cleanUpMIDIMapping(deviceIdentifier: deviceID) }
@@ -158,7 +179,7 @@ final class MIDILearnEngineTests: XCTestCase {
     }
 
     func testHotCueCCReleaseDoesNotTriggerLoad() {
-        let engine = MacCaptureEngine(autoRefreshDevices: false)
+        let engine = makeEngine()
         let deviceID = "midi_test_hotcue_ccrelease"
         engine.selectedMIDIInputSourceID = deviceID
         defer { cleanUpMIDIMapping(deviceIdentifier: deviceID) }
@@ -177,7 +198,7 @@ final class MIDILearnEngineTests: XCTestCase {
     }
 
     func testHotCuePressLoadsAssignedSample() {
-        let engine = MacCaptureEngine(autoRefreshDevices: false)
+        let engine = makeEngine()
         let deviceID = "midi_test_hotcue_press"
         engine.selectedMIDIInputSourceID = deviceID
         defer { cleanUpMIDIMapping(deviceIdentifier: deviceID) }
@@ -199,7 +220,7 @@ final class MIDILearnEngineTests: XCTestCase {
     /// guard can suppress it — this is the one case that actually exercises "a
     /// learned hot cue must not double-fire alongside the temp fallback."
     func testLearnedHotCueSuppressesTempAhhhFallbackOnSameEvent() {
-        let engine = MacCaptureEngine(autoRefreshDevices: false)
+        let engine = makeEngine()
         let deviceID = "midi_test_hotcue_no_double_fire"
         engine.selectedMIDIInputSourceID = deviceID
         defer { cleanUpMIDIMapping(deviceIdentifier: deviceID) }
@@ -221,7 +242,7 @@ final class MIDILearnEngineTests: XCTestCase {
     }
 
     func testLearningHotCueDoesNotFireItsOwnActionOnTheLearnEvent() {
-        let engine = MacCaptureEngine(autoRefreshDevices: false)
+        let engine = makeEngine()
         let deviceID = "midi_test_hotcue_no_fire_on_learn"
         engine.selectedMIDIInputSourceID = deviceID
         defer { cleanUpMIDIMapping(deviceIdentifier: deviceID) }
@@ -247,7 +268,7 @@ final class MIDILearnEngineTests: XCTestCase {
     }
 
     func testEngineDeviceMappingIsolationBetweenDevices() {
-        let engine = MacCaptureEngine(autoRefreshDevices: false)
+        let engine = makeEngine()
         let raneID = "midi_test_iso_rane"
         let pioneerID = "midi_test_iso_pioneer"
         cleanUpMIDIMapping(deviceIdentifier: raneID)
@@ -283,7 +304,7 @@ final class MIDILearnEngineTests: XCTestCase {
         cleanUpMIDIMapping(deviceIdentifier: deviceID)
         defer { cleanUpMIDIMapping(deviceIdentifier: deviceID) }
 
-        let engine1 = MacCaptureEngine(autoRefreshDevices: false)
+        let engine1 = makeEngine()
         engine1.selectedMIDIInputSourceID = deviceID
         engine1.startMIDILearn(for: .rightUpfader)
         _ = engine1.evaluateMIDILearnForCC(channel: 1, controller: 21, value: 100)
@@ -293,7 +314,7 @@ final class MIDILearnEngineTests: XCTestCase {
 
         // A fresh engine instance (simulating relaunch) loading the same persisted
         // device identifier must recover the same mapping.
-        let engine2 = MacCaptureEngine(autoRefreshDevices: false)
+        let engine2 = makeEngine()
         engine2.selectedMIDIInputSourceID = deviceID
         loadMappingAndWait(on: engine2)
         XCTAssertEqual(engine2.currentMIDIDeviceMapping?.control(for: .rightUpfader)?.controlNumber, 21)
@@ -302,7 +323,7 @@ final class MIDILearnEngineTests: XCTestCase {
     // MARK: - Continuous control calibration
 
     func testCalibrationFullZeroTo127RangeAccepted() {
-        let engine = MacCaptureEngine(autoRefreshDevices: false)
+        let engine = makeEngine()
         let deviceID = "midi_test_calibration_full_range"
         engine.selectedMIDIInputSourceID = deviceID
         defer { cleanUpMIDIMapping(deviceIdentifier: deviceID) }
@@ -327,7 +348,7 @@ final class MIDILearnEngineTests: XCTestCase {
     }
 
     func testCalibrationRestrictedRangeAccepted() {
-        let engine = MacCaptureEngine(autoRefreshDevices: false)
+        let engine = makeEngine()
         let deviceID = "midi_test_calibration_restricted_range"
         engine.selectedMIDIInputSourceID = deviceID
         defer { cleanUpMIDIMapping(deviceIdentifier: deviceID) }
@@ -351,7 +372,7 @@ final class MIDILearnEngineTests: XCTestCase {
     }
 
     func testCalibrationInsufficientRangeRejectedAndNotPersisted() {
-        let engine = MacCaptureEngine(autoRefreshDevices: false)
+        let engine = makeEngine()
         let deviceID = "midi_test_calibration_narrow_range"
         engine.selectedMIDIInputSourceID = deviceID
         defer { cleanUpMIDIMapping(deviceIdentifier: deviceID) }
@@ -375,7 +396,7 @@ final class MIDILearnEngineTests: XCTestCase {
     }
 
     func testCalibrationNoMovementRejected() {
-        let engine = MacCaptureEngine(autoRefreshDevices: false)
+        let engine = makeEngine()
         let deviceID = "midi_test_calibration_no_movement"
         engine.selectedMIDIInputSourceID = deviceID
         defer { cleanUpMIDIMapping(deviceIdentifier: deviceID) }
@@ -395,7 +416,7 @@ final class MIDILearnEngineTests: XCTestCase {
     }
 
     func testCalibrationNormalizationNormalAndInverted() {
-        let engine = MacCaptureEngine(autoRefreshDevices: false)
+        let engine = makeEngine()
         let deviceID = "midi_test_calibration_normalize"
         engine.selectedMIDIInputSourceID = deviceID
         defer { cleanUpMIDIMapping(deviceIdentifier: deviceID) }
@@ -427,7 +448,7 @@ final class MIDILearnEngineTests: XCTestCase {
     }
 
     func testCalibrationClampsOutOfRangeValues() {
-        let engine = MacCaptureEngine(autoRefreshDevices: false)
+        let engine = makeEngine()
         let deviceID = "midi_test_calibration_clamp"
         engine.selectedMIDIInputSourceID = deviceID
         defer { cleanUpMIDIMapping(deviceIdentifier: deviceID) }
@@ -449,7 +470,7 @@ final class MIDILearnEngineTests: XCTestCase {
     }
 
     func testCalibrationIgnoresUnrelatedCC() {
-        let engine = MacCaptureEngine(autoRefreshDevices: false)
+        let engine = makeEngine()
         let deviceID = "midi_test_calibration_unrelated_cc"
         engine.selectedMIDIInputSourceID = deviceID
         defer { cleanUpMIDIMapping(deviceIdentifier: deviceID) }
@@ -469,7 +490,7 @@ final class MIDILearnEngineTests: XCTestCase {
     }
 
     func testCalibrationIgnoresCC6PlatterFlood() {
-        let engine = MacCaptureEngine(autoRefreshDevices: false)
+        let engine = makeEngine()
         let deviceID = "midi_test_calibration_cc6_flood"
         engine.selectedMIDIInputSourceID = deviceID
         defer { cleanUpMIDIMapping(deviceIdentifier: deviceID) }
@@ -494,7 +515,7 @@ final class MIDILearnEngineTests: XCTestCase {
         cleanUpMIDIMapping(deviceIdentifier: deviceID)
         defer { cleanUpMIDIMapping(deviceIdentifier: deviceID) }
 
-        let engine1 = MacCaptureEngine(autoRefreshDevices: false)
+        let engine1 = makeEngine()
         engine1.selectedMIDIInputSourceID = deviceID
         engine1.startMIDILearn(for: .leftUpfader)
         _ = engine1.evaluateMIDILearnForCC(channel: 0, controller: 20, value: 50)
@@ -507,7 +528,7 @@ final class MIDILearnEngineTests: XCTestCase {
         engine1.testOnly_waitForMappingPersistenceQueue()
         RunLoop.main.run(until: Date().addingTimeInterval(0.05))
 
-        let engine2 = MacCaptureEngine(autoRefreshDevices: false)
+        let engine2 = makeEngine()
         engine2.selectedMIDIInputSourceID = deviceID
         loadMappingAndWait(on: engine2)
 
@@ -518,7 +539,7 @@ final class MIDILearnEngineTests: XCTestCase {
     }
 
     func testCalibrationIsolatedBetweenDevices() {
-        let engine = MacCaptureEngine(autoRefreshDevices: false)
+        let engine = makeEngine()
         let raneID = "midi_test_calibration_iso_rane"
         let pioneerID = "midi_test_calibration_iso_pioneer"
         defer {
@@ -552,7 +573,7 @@ final class MIDILearnEngineTests: XCTestCase {
     }
 
     func testStartMIDILearnCancelsActiveCalibration() {
-        let engine = MacCaptureEngine(autoRefreshDevices: false)
+        let engine = makeEngine()
         let deviceID = "midi_test_calibration_learn_cancels"
         engine.selectedMIDIInputSourceID = deviceID
         defer { cleanUpMIDIMapping(deviceIdentifier: deviceID) }
@@ -577,7 +598,7 @@ final class MIDILearnEngineTests: XCTestCase {
     /// serial, so each write's read-modify-write sees the result of the one
     /// before it, in the order they were requested.
     func testRapidSequentialMappingWritesPreserveNewestOnDisk() {
-        let engine = MacCaptureEngine(autoRefreshDevices: false)
+        let engine = makeEngine()
         let deviceID = "midi_test_persistence_order"
         engine.selectedMIDIInputSourceID = deviceID
         defer { cleanUpMIDIMapping(deviceIdentifier: deviceID) }
@@ -599,7 +620,7 @@ final class MIDILearnEngineTests: XCTestCase {
     }
 
     func testAssignSampleToHotCueRejectsUnknownSampleID() {
-        let engine = MacCaptureEngine(autoRefreshDevices: false)
+        let engine = makeEngine()
         let deviceID = "midi_test_unknown_sample"
         engine.selectedMIDIInputSourceID = deviceID
         defer { cleanUpMIDIMapping(deviceIdentifier: deviceID) }
@@ -631,7 +652,7 @@ final class MIDILearnEngineTests: XCTestCase {
     }
 
     func testLearnObservedValueIsNilUntilAFreshEventArrives() {
-        let engine = MacCaptureEngine(autoRefreshDevices: false)
+        let engine = makeEngine()
         let deviceID = "midi_test_learn_observed_fresh"
         engine.selectedMIDIInputSourceID = deviceID
         defer { cleanUpMIDIMapping(deviceIdentifier: deviceID) }
@@ -652,7 +673,7 @@ final class MIDILearnEngineTests: XCTestCase {
     }
 
     func testLearnObservedValueResetsWhenANewSessionStarts() {
-        let engine = MacCaptureEngine(autoRefreshDevices: false)
+        let engine = makeEngine()
         let deviceID = "midi_test_learn_observed_reset"
         engine.selectedMIDIInputSourceID = deviceID
         defer { cleanUpMIDIMapping(deviceIdentifier: deviceID) }
@@ -672,7 +693,7 @@ final class MIDILearnEngineTests: XCTestCase {
     }
 
     func testLearnObservedValueIsClearedOnCancel() {
-        let engine = MacCaptureEngine(autoRefreshDevices: false)
+        let engine = makeEngine()
         let deviceID = "midi_test_learn_observed_cancel"
         engine.selectedMIDIInputSourceID = deviceID
         defer { cleanUpMIDIMapping(deviceIdentifier: deviceID) }
@@ -691,7 +712,7 @@ final class MIDILearnEngineTests: XCTestCase {
     }
 
     func testHotCueNoteLearnSurfacesTheNoteNumberAsObservedValue() {
-        let engine = MacCaptureEngine(autoRefreshDevices: false)
+        let engine = makeEngine()
         let deviceID = "midi_test_learn_observed_hotcue"
         engine.selectedMIDIInputSourceID = deviceID
         defer { cleanUpMIDIMapping(deviceIdentifier: deviceID) }
@@ -708,7 +729,7 @@ final class MIDILearnEngineTests: XCTestCase {
     // MARK: - Learn guard: a streaming other-control CC cannot claim the session
 
     func testLearnRightUpfaderIgnoresStreamingCrossfaderCCThenLearnsTheRealControl() {
-        let engine = MacCaptureEngine(autoRefreshDevices: false)
+        let engine = makeEngine()
         let deviceID = "midi_test_learn_guard_stale_cc"
         defer { cleanUpMIDIMapping(deviceIdentifier: deviceID) }
 
@@ -740,7 +761,7 @@ final class MIDILearnEngineTests: XCTestCase {
     }
 
     func testLearnGuardDoesNotBlockADistinctCCWhenNoCollision() {
-        let engine = MacCaptureEngine(autoRefreshDevices: false)
+        let engine = makeEngine()
         let deviceID = "midi_test_learn_guard_no_collision"
         defer { cleanUpMIDIMapping(deviceIdentifier: deviceID) }
 

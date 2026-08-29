@@ -2360,7 +2360,7 @@ final class MacCaptureEngine: NSObject, ObservableObject {
     private let platterTracker = ScratchPlatterTracker()
 
     /// Platter-driven scratch sample playback controller.
-    private let scratchPlaybackController = ScratchSamplePlaybackController()
+    private let scratchPlaybackController: ScratchSamplePlaybackController
     private var tempDirectAhhhTriggerArmed = true
 
     /// When true, a gated `TimecodePlaybackDrive` from `TimecodePlaybackBridge`
@@ -3679,6 +3679,9 @@ final class MacCaptureEngine: NSObject, ObservableObject {
     /// `.standard`; tests get a process-local suite while retaining normal
     /// persistence semantics between engine instances in the same test run.
     private let midiSelectionDefaults: UserDefaults
+    /// Keeps the legacy crossfader mapping on the production app domain unless
+    /// a caller explicitly injects a fully isolated MIDI defaults store.
+    private let midiPersistenceDefaults: UserDefaults
     private var hasStartedDeviceDiscoveryAfterViewMount = false
     private let audioSignalStaleInterval: CFTimeInterval = 0.8
     private let audioSignalDecayPollInterval: CFTimeInterval = 0.25
@@ -3701,6 +3704,8 @@ final class MacCaptureEngine: NSObject, ObservableObject {
         let midiSelectionDefaults = Self.makeMIDISelectionDefaults()
         autoRefreshDevicesAfterViewMount = true
         self.midiSelectionDefaults = midiSelectionDefaults
+        midiPersistenceDefaults = .standard
+        scratchPlaybackController = ScratchSamplePlaybackController()
         selectedMIDIInputSourceID = midiSelectionDefaults.string(
             forKey: ScratchLabDesktopDefaultsKey.selectedMIDIInputSourceID
         ) ?? ""
@@ -3708,10 +3713,18 @@ final class MacCaptureEngine: NSObject, ObservableObject {
         configureInitialState()
     }
 
-    init(autoRefreshDevices: Bool) {
-        let midiSelectionDefaults = Self.makeMIDISelectionDefaults()
+    init(
+        autoRefreshDevices: Bool,
+        midiDefaults: UserDefaults? = nil,
+        sampleResourceRoot: URL? = Bundle.main.resourceURL
+    ) {
+        let midiSelectionDefaults = midiDefaults ?? Self.makeMIDISelectionDefaults()
         autoRefreshDevicesAfterViewMount = autoRefreshDevices
         self.midiSelectionDefaults = midiSelectionDefaults
+        midiPersistenceDefaults = midiDefaults ?? .standard
+        scratchPlaybackController = ScratchSamplePlaybackController(
+            sampleResourceRoot: sampleResourceRoot
+        )
         selectedMIDIInputSourceID = midiSelectionDefaults.string(
             forKey: ScratchLabDesktopDefaultsKey.selectedMIDIInputSourceID
         ) ?? ""
@@ -3778,7 +3791,7 @@ final class MacCaptureEngine: NSObject, ObservableObject {
             object: nil
         )
 
-        if let data = UserDefaults.standard.data(forKey: ScratchLabDesktopDefaultsKey.crossfaderMIDIMapping),
+        if let data = midiPersistenceDefaults.data(forKey: ScratchLabDesktopDefaultsKey.crossfaderMIDIMapping),
            let mapping = try? JSONDecoder().decode(CrossfaderCCMapping.self, from: data) {
             crossfaderCCMapping = mapping
             midiLearnState = .learned(mapping)
@@ -8023,7 +8036,7 @@ final class MacCaptureEngine: NSObject, ObservableObject {
         learnSessionAction = nil
         midiLearnRequestID &+= 1
         midiCaptureLock.unlock()
-        UserDefaults.standard.removeObject(forKey: ScratchLabDesktopDefaultsKey.crossfaderMIDIMapping)
+        midiPersistenceDefaults.removeObject(forKey: ScratchLabDesktopDefaultsKey.crossfaderMIDIMapping)
         publishOnMainAsync(field: "midiLearn") { [weak self] in
             guard let self else { return }
             self.activeMIDILearnAction = nil
@@ -8060,7 +8073,7 @@ final class MacCaptureEngine: NSObject, ObservableObject {
         midiCaptureLock.unlock()
         midiMappingPersistenceQueue.async {
             if let data = try? JSONEncoder().encode(mapping) {
-                UserDefaults.standard.set(data, forKey: ScratchLabDesktopDefaultsKey.crossfaderMIDIMapping)
+                self.midiPersistenceDefaults.set(data, forKey: ScratchLabDesktopDefaultsKey.crossfaderMIDIMapping)
             }
         }
     }

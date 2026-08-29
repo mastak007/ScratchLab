@@ -1425,8 +1425,14 @@ final class ScratchSamplePlaybackController {
 
     // MARK: - Lifecycle
 
-    init(schedulingClock: @escaping () -> TimeInterval = { CACurrentMediaTime() }) {
+    private let sampleResourceRoot: URL?
+
+    init(
+        schedulingClock: @escaping () -> TimeInterval = { CACurrentMediaTime() },
+        sampleResourceRoot: URL? = Bundle.main.resourceURL
+    ) {
         self.schedulingClock = schedulingClock
+        self.sampleResourceRoot = sampleResourceRoot
         audioQueue.setSpecific(key: audioQueueKey, value: ())
         engine.attach(playerNode)
         engine.attach(varispeedNode)
@@ -3568,7 +3574,7 @@ final class ScratchSamplePlaybackController {
     ]
 
     private func wavURL(for sampleID: String) -> URL? {
-        ScratchSampleResolver.url(for: sampleID)
+        ScratchSampleResolver.url(for: sampleID, resourceRoot: sampleResourceRoot)
     }
 
     static var knownSampleIDs: Set<String> {
