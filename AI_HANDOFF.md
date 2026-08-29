@@ -1,6 +1,22 @@
 # AI Handoff
 
-## 2026-08-29 — Capture-integrity Slice A: shared capture-evidence model (uncommitted; current)
+## 2026-08-29 — Capture-integrity Slice B: truthful review state derivation (uncommitted; current)
+
+Started from Codex checkpoint `089965f4`, which had absorbed Karl's prior WIP **and** Slice A. That commit was not amended, reset, rebased, or overwritten. The unstaged Xcode settings, resource deletions, and stray `CalibrationCameraOverlayTests.swift.plist` were left untouched — Slice B needed none of them.
+
+**Root cause was three defects, not one.** The operator message was a hardcoded `"Ready to keep"` literal decided at two call sites that never consulted motion; `motionAssessment` computed `syncStatus` and `motionStatusTitle` as two independent strings and deliberately returned `"Motion pending"` alongside `"Motion Missing"` for one false input; and `CaptureReview` stored all four labels as separately-settable `var`s.
+
+**What is in place.** One `GuidedCaptureReviewState` built from typed `CaptureReviewReadiness` and `CaptureMotionStatus`. `reviewState(...)` now also takes `recordingFailed` and `duration`, so readiness cannot be decided at a call site. `operatorMessage` / `syncStatus` / `motionStatusTitle` / `motionPresent` are computed projections of one stored value — do not reintroduce them as independent stored properties. `syncStatus` intentionally restates the motion wording verbatim when motion is the blocker; that repetition is the fix, not a bug to "clean up". A new `retakeRecommended` readiness keeps a motionless-but-valid take honest and still keepable. A shared `CaptureMotionEvidencePresenter` renders `Platter: Present · MIDI` / `Fader: N events` / `Watch: Not used` in both review layouts. DVS is deliberately not a row while no real feed exists.
+
+**Verification.** `GuidedCaptureReviewStateTests` 10/10 and `CaptureMotionEvidencePresenterTests` 7/7 plus Slice A's 13/13, all twice. Two tests are exhaustive over all seven resolver inputs and assert `"Motion pending"` is unreachable and `readyToKeep` can never pair with missing motion. Regressions green (58/58, 29/29, 14/14, 3+1 skipped). iOS + macOS builds and `build-for-testing` green; fixtures 47/47; `git diff --check` clean. `scripts/build.sh all` exit 65 with **3052 tests / 49 skipped / 15 failures**, and the `CaptureReliabilityPhase1CoreTests` failing-name set diffed **identical to the Slice A baseline (26 names, nothing added, nothing fixed)**.
+
+**Still unfixed, do not report as done:** crossfader capture still requires a learned mapping so `Fader` reads `No movement` on an unmapped controller (Slice C); bounded finalization is Slice E, not this slice; notation coordinates, audio ownership, export discoverability, clipping/health, and landscape layout are untouched.
+
+**Needs Karl's eyes:** a required-motion-missing take now reads `Retake recommended` instead of `Ready to keep` — intended, but user-visible copy. The evidence rows add two cells to the landscape detail grid and were not verified on hardware; landscape crowding is Slice H.
+
+Nothing was committed or pushed.
+
+## 2026-08-29 — Capture-integrity Slice A: shared capture-evidence model (now in checkpoint 089965f4)
 
 Karl's ten-requirement capture-integrity prompt (physical iPhone take-002: live notation moving while the HUD read `MOTION Motion Missing`, and Review showing `Ready to keep` + `Motion pending` + `Motion Missing` + `Fader: No movement` at once) was classified as roughly eight architectural slices rather than one batch, decomposed into A–H at the top of `TASKS.md`, and Karl selected **Slice A only**. Nothing else in that prompt has been implemented.
 

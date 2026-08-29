@@ -5108,7 +5108,9 @@ final class CaptureReliabilityPhase1CoreTests: XCTestCase {
     }
 
     func testGuidedCaptureReviewStateDoesNotInventWatchMotionWhenMotionIsSkipped() {
-        let assessment = GuidedCaptureReviewStateResolver.motionAssessment(
+        let state = GuidedCaptureReviewStateResolver.reviewState(
+            recordingFailed: false,
+            duration: 8.4,
             calibrationValid: true,
             audioPresent: true,
             motionPresent: false,
@@ -5116,9 +5118,9 @@ final class CaptureReliabilityPhase1CoreTests: XCTestCase {
             motionOptional: false
         )
 
-        XCTAssertEqual(assessment.syncStatus, "Motion optional")
-        XCTAssertEqual(assessment.motionStatusTitle, "Motion Optional")
-        XCTAssertFalse(assessment.motionPresent)
+        XCTAssertEqual(state.syncStatus, "Motion optional")
+        XCTAssertEqual(state.motionStatusTitle, "Motion Optional")
+        XCTAssertFalse(state.motionPresent)
     }
 
     func testLocalRecordingIdentityIncludesSessionWhenTakeNumbersReset() throws {
@@ -14961,5 +14963,255 @@ final class CaptureMotionEvidenceTests: XCTestCase {
             captureTiming: nil,
             motionSources: motionSources
         )
+    }
+}
+
+// MARK: - Guided capture review state (Slice B)
+//
+// Karl's take-002 Review rendered "Ready to keep", "Motion pending",
+// "Motion Missing" and "Fader: No movement" simultaneously. The operator
+// message was a hardcoded literal decided at the call site, and the sync and
+// motion labels were computed independently from the same inputs. Slice B
+// makes every label a projection of one resolved state, so the contradiction
+// is unrepresentable rather than merely unlikely.
+
+final class GuidedCaptureReviewStateTests: XCTestCase {
+
+    private func state(
+        recordingFailed: Bool = false,
+        duration: TimeInterval = 8.4,
+        calibrationValid: Bool = true,
+        audioPresent: Bool = true,
+        motionPresent: Bool,
+        motionSkipped: Bool = false,
+        motionOptional: Bool = false
+    ) -> GuidedCaptureReviewState {
+        GuidedCaptureReviewStateResolver.reviewState(
+            recordingFailed: recordingFailed,
+            duration: duration,
+            calibrationValid: calibrationValid,
+            audioPresent: audioPresent,
+            motionPresent: motionPresent,
+            motionSkipped: motionSkipped,
+            motionOptional: motionOptional
+        )
+    }
+
+    // MARK: The exact reported contradiction
+
+    func testRequiredMotionMissingIsNeverAlsoReadyToKeep() {
+        let resolved = state(motionPresent: false)
+
+        XCTAssertEqual(resolved.readiness, .retakeRecommended)
+        XCTAssertEqual(resolved.operatorMessage, "Retake recommended")
+        XCTAssertNotEqual(resolved.operatorMessage, "Ready to keep")
+        XCTAssertEqual(resolved.motionStatusTitle, "Motion Missing")
+    }
+
+    func testMotionPendingAndMotionMissingAreNeverShownTogether() {
+        let resolved = state(motionPresent: false)
+
+        // The old resolver produced "Motion pending" for syncStatus while
+        // motionStatusTitle said "Motion Missing" for this same input.
+        XCTAssertNotEqual(resolved.syncStatus, "Motion pending")
+        XCTAssertEqual(resolved.syncStatus, resolved.motionStatusTitle,
+                       "when motion is the blocker both labels must say the same thing")
+    }
+
+    func testNoInputCombinationEverProducesMotionPending() {
+        for recordingFailed in [true, false] {
+            for duration in [0.2, 8.4] as [TimeInterval] {
+                for calibrationValid in [true, false] {
+                    for audioPresent in [true, false] {
+                        for motionPresent in [true, false] {
+                            for motionSkipped in [true, false] {
+                                for motionOptional in [true, false] {
+                                    let resolved = state(
+                                        recordingFailed: recordingFailed,
+                                        duration: duration,
+                                        calibrationValid: calibrationValid,
+                                        audioPresent: audioPresent,
+                                        motionPresent: motionPresent,
+                                        motionSkipped: motionSkipped,
+                                        motionOptional: motionOptional
+                                    )
+                                    XCTAssertNotEqual(resolved.syncStatus, "Motion pending")
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    /// The structural invariant behind the whole slice: "Ready to keep" and a
+    /// missing-motion label can never co-occur, for any input.
+    func testReadyToKeepNeverCoexistsWithMissingMotion() {
+        for recordingFailed in [true, false] {
+            for duration in [0.2, 1.0, 8.4] as [TimeInterval] {
+                for calibrationValid in [true, false] {
+                    for audioPresent in [true, false] {
+                        for motionPresent in [true, false] {
+                            for motionSkipped in [true, false] {
+                                for motionOptional in [true, false] {
+                                    let resolved = state(
+                                        recordingFailed: recordingFailed,
+                                        duration: duration,
+                                        calibrationValid: calibrationValid,
+                                        audioPresent: audioPresent,
+                                        motionPresent: motionPresent,
+                                        motionSkipped: motionSkipped,
+                                        motionOptional: motionOptional
+                                    )
+                                    if resolved.readiness == .readyToKeep {
+                                        XCTAssertNotEqual(
+                                            resolved.motionStatus, .missing,
+                                            "a take cannot be ready to keep while required motion is missing"
+                                        )
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // MARK: Readiness precedence
+
+    func testHardFailuresOutrankMissingMotion() {
+        XCTAssertEqual(state(recordingFailed: true, motionPresent: false).readiness, .recordingInterrupted)
+        XCTAssertEqual(state(duration: 0.4, motionPresent: false).readiness, .takeTooShort)
+        XCTAssertEqual(state(audioPresent: false, motionPresent: false).readiness, .missingAudio)
+        XCTAssertEqual(state(calibrationValid: false, motionPresent: false).readiness, .calibrationInvalid)
+    }
+
+    func testHardFailuresAreNotKeepableButRetakeRecommendedIs() {
+        XCTAssertFalse(state(recordingFailed: true, motionPresent: true).readiness.isKeepable)
+        XCTAssertFalse(state(audioPresent: false, motionPresent: true).readiness.isKeepable)
+        // The media is valid; it just will not teach anything.
+        XCTAssertTrue(state(motionPresent: false).readiness.isKeepable)
+        XCTAssertTrue(state(motionPresent: true).readiness.isKeepable)
+    }
+
+    func testMotionPresentTakeIsReadyAndReportsReady() {
+        let resolved = state(motionPresent: true)
+
+        XCTAssertEqual(resolved.readiness, .readyToKeep)
+        XCTAssertEqual(resolved.operatorMessage, "Ready to keep")
+        XCTAssertEqual(resolved.syncStatus, "Ready")
+        XCTAssertEqual(resolved.motionStatusTitle, "Motion Present")
+    }
+
+    // MARK: Optional / skipped motion says so, rather than "missing"
+
+    func testOptionalMotionSaysMotionOptionalNotMissing() {
+        let resolved = state(motionPresent: false, motionOptional: true)
+
+        XCTAssertEqual(resolved.readiness, .readyToKeep)
+        XCTAssertEqual(resolved.motionStatusTitle, "Motion Optional")
+        XCTAssertEqual(resolved.syncStatus, "Motion optional")
+    }
+
+    func testSkippedMotionSaysMotionOptionalNotMissing() {
+        let resolved = state(motionPresent: false, motionSkipped: true)
+
+        XCTAssertEqual(resolved.readiness, .readyToKeep)
+        XCTAssertEqual(resolved.motionStatusTitle, "Motion Optional")
+    }
+
+    func testMotionRequirementClassification() {
+        XCTAssertEqual(
+            GuidedCaptureReviewStateResolver.motionRequirement(motionSkipped: false, motionOptional: false),
+            .required
+        )
+        XCTAssertEqual(
+            GuidedCaptureReviewStateResolver.motionRequirement(motionSkipped: false, motionOptional: true),
+            .optional
+        )
+        XCTAssertEqual(
+            GuidedCaptureReviewStateResolver.motionRequirement(motionSkipped: true, motionOptional: false),
+            .skipped
+        )
+    }
+}
+
+// MARK: - Capture evidence presentation (Slice B)
+
+final class CaptureMotionEvidencePresenterTests: XCTestCase {
+
+    private func evidence(
+        platter: CapturePlatterMotionEvidence,
+        faderEventCount: Int = 0,
+        watch: CaptureWatchMotionEvidence = .notUsed
+    ) -> CaptureMotionEvidence {
+        CaptureMotionEvidence(platter: platter, faderEventCount: faderEventCount, watch: watch)
+    }
+
+    private func value(_ rows: [CaptureEvidenceRow], _ label: String) -> String? {
+        rows.first { $0.label == label }?.value
+    }
+
+    func testControllerTakeReportsPlatterPresentFaderCountAndWatchNotUsed() {
+        let rows = CaptureMotionEvidencePresenter.rows(
+            for: evidence(platter: .gesture(movementRuns: 12, reversalRuns: 6), faderEventCount: 4)
+        )
+
+        XCTAssertEqual(value(rows, "Platter"), "Present · MIDI")
+        XCTAssertEqual(value(rows, "Fader"), "4 events")
+        XCTAssertEqual(value(rows, "Watch"), "Not used")
+    }
+
+    func testSteadyRotationIsNamedSeparatelyFromAbsentPlatter() {
+        let rotation = CaptureMotionEvidencePresenter.rows(for: evidence(platter: .steadyRotationOnly(forwardRuns: 9)))
+        let absent = CaptureMotionEvidencePresenter.rows(for: evidence(platter: .absent))
+
+        XCTAssertEqual(value(rotation, "Platter"), "Rotation only")
+        XCTAssertEqual(value(absent, "Platter"), "Not detected")
+        XCTAssertNotEqual(value(rotation, "Platter"), value(absent, "Platter"))
+    }
+
+    func testSingleFaderEventIsNotPluralised() {
+        let rows = CaptureMotionEvidencePresenter.rows(for: evidence(platter: .absent, faderEventCount: 1))
+
+        XCTAssertEqual(value(rows, "Fader"), "1 event")
+    }
+
+    func testOpenFaderBabyScratchShowsNoFaderMovement() {
+        // A Baby Scratch played with the fader open must not invent clicks.
+        let rows = CaptureMotionEvidencePresenter.rows(
+            for: evidence(platter: .gesture(movementRuns: 8, reversalRuns: 4), faderEventCount: 0)
+        )
+
+        XCTAssertEqual(value(rows, "Fader"), "No movement")
+        XCTAssertEqual(value(rows, "Platter"), "Present · MIDI")
+    }
+
+    func testLinkedWatchIsReportedAsLinked() {
+        let rows = CaptureMotionEvidencePresenter.rows(for: evidence(platter: .absent, watch: .linked))
+
+        XCTAssertEqual(value(rows, "Watch"), "Linked")
+    }
+
+    func testPresenceFlagsMatchContributingSources() {
+        let rows = CaptureMotionEvidencePresenter.rows(
+            for: evidence(platter: .steadyRotationOnly(forwardRuns: 5), faderEventCount: 2, watch: .linked)
+        )
+
+        // Rotation-only is not a gesture, so the platter row is not "present"
+        // even though movement was decoded.
+        XCTAssertEqual(rows.first { $0.label == "Platter" }?.isPresent, false)
+        XCTAssertEqual(rows.first { $0.label == "Fader" }?.isPresent, true)
+        XCTAssertEqual(rows.first { $0.label == "Watch" }?.isPresent, true)
+    }
+
+    func testDVSIsNotPresentedWhileNoRealFeedExists() {
+        let rows = CaptureMotionEvidencePresenter.rows(for: evidence(platter: .absent))
+
+        XCTAssertFalse(rows.contains { $0.label == "DVS" },
+                       "a permanent Unavailable row would imply a source the product does not have")
+        XCTAssertEqual(rows.map(\.label), ["Platter", "Fader", "Watch"])
     }
 }

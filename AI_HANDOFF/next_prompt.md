@@ -2,9 +2,15 @@ Read `CLAUDE.md`, then `SOUL.md` and `PROFILE.md`.
 Read `AI_HANDOFF.md` — the top entry (2026-08-29) is current state; older branch histories below it are reference material only.
 Run `git status --short --branch` and `git rev-parse HEAD origin/feature/ios-capture-camera-ux`.
 
-## Capture-integrity batch: Slice A landed, B–H open (2026-08-29; current)
+## Capture-integrity batch: Slices A+B landed, C–H open (2026-08-29; current)
 
-Karl's ten-requirement capture-integrity prompt was decomposed into eight slices (A–H) recorded at the top of `TASKS.md`. Only **Slice A** is implemented. Do not attempt the remaining slices as one batch — the repository still carries a large pre-existing dirty WIP baseline, and a single combined diff makes new regressions indistinguishable from it.
+Karl's ten-requirement capture-integrity prompt was decomposed into eight slices (A–H) recorded at the top of `TASKS.md`. **Slices A and B are implemented.** Slice A is in Codex checkpoint `089965f4`; Slice B is uncommitted in the working tree. Do not attempt the remaining slices as one batch — the repository still carries a pre-existing dirty WIP baseline, and a single combined diff makes new regressions indistinguishable from it.
+
+**Slice B (current, uncommitted).** Every review label is now a projection of one `GuidedCaptureReviewState` (typed `CaptureReviewReadiness` + `CaptureMotionStatus`). Do not reintroduce `operatorMessage` / `syncStatus` / `motionStatusTitle` / `motionPresent` as independently stored properties on `CaptureReview`, and do not "de-duplicate" `syncStatus` restating the motion wording — that repetition is what guarantees the two labels cannot contradict each other. `"Motion pending"` is gone and two exhaustive-input tests assert it is unreachable. A shared `CaptureMotionEvidencePresenter` renders the Platter/Fader/Watch rows; DVS stays out until a real feed exists.
+
+**Next slice is C (crossfader evidence persistence).** `iOSMIDIManager.receive`'s `.crossfader` case only appends to `capturedCrossfaderMIDIEvents` when `currentMapping?.control(for: .crossfader)` is non-nil, so an unmapped controller persists zero events while Capture Hardware Setup still displays the `"Raw ch 15 · CC 8"` fallback string as though it were configured. Verify against the learned mapping rather than hardcoding a second one, bound events to the take window, and check sidecar/review/export parity. Slice B already presents the count truthfully, so C only has to make the capture real.
+
+**A physical check is still outstanding from Slice A:** one short RANE take with no Watch paired, confirming Review reports motion present and the export validates. Slice B additionally changed user-visible copy — a motionless take now reads `Retake recommended` — which is worth confirming on device at the same time.
 
 Slice A added a shared, domain-only `CaptureMotionEvidence` + `CaptureMotionEvidenceResolver` in `CaptureCore`, and all three motion-presence sites (`CompanionCameraView.handleFinishedRecording`, that file's export-package builder, and `SessionExportCoordinator`'s recovery builder) now resolve through it from the same persisted `sidecar.detectedNotation`. Controller platter movement counts as motion with no Watch paired; a forward-only powered platter does not, because the discriminator is a decoded reversal reusing the existing decoder noise gates. Fader events never substitute for platter movement. DVS is `.unsupported` and must stay that way until a genuine timecode feed exists at take finalization — do not let it report presence.
 

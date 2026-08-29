@@ -622,47 +622,214 @@ enum CaptureMotionEvidenceResolver {
     }
 }
 
-struct GuidedCaptureMotionAssessment: Equatable, Sendable {
-    let syncStatus: String
-    let motionStatusTitle: String
-    let motionPresent: Bool
+// MARK: - Guided capture review state
+
+/// Whether this take is required to contain motion at all.
+enum CaptureMotionRequirement: Equatable, Sendable {
+    /// The drill needs motion and the operator did not skip it.
+    case required
+    /// The drill declares motion optional.
+    case optional
+    /// The operator explicitly skipped motion for this take.
+    case skipped
+}
+
+enum CaptureMotionStatus: Equatable, Sendable {
+    case present
+    case optional
+    case missing
+
+    var title: String {
+        switch self {
+        case .present: return "Motion Present"
+        case .optional: return "Motion Optional"
+        case .missing: return "Motion Missing"
+        }
+    }
+}
+
+/// The single readiness verdict for a finished take.
+///
+/// Ordered most- to least-blocking. Exactly one case is reported, so the
+/// review surface cannot present a take as simultaneously ready and blocked.
+enum CaptureReviewReadiness: Equatable, Sendable {
+    case recordingInterrupted
+    case takeTooShort
+    case missingAudio
+    case calibrationInvalid
+    /// Required motion is absent. Distinct from a hard failure: the media is
+    /// valid and keepable, but the take will not teach anything.
+    case retakeRecommended
+    case readyToKeep
+
+    var title: String {
+        switch self {
+        case .recordingInterrupted: return "Recording interrupted"
+        case .takeTooShort: return "Take too short"
+        case .missingAudio: return "Missing audio"
+        case .calibrationInvalid: return "Calibration invalid"
+        case .retakeRecommended: return "Retake recommended"
+        case .readyToKeep: return "Ready to keep"
+        }
+    }
+
+    var isKeepable: Bool {
+        switch self {
+        case .readyToKeep, .retakeRecommended: return true
+        case .recordingInterrupted, .takeTooShort, .missingAudio, .calibrationInvalid: return false
+        }
+    }
+}
+
+/// One resolved review state for a finished take.
+///
+/// Every label the review surface renders is a projection of this single
+/// value. Previously the operator message was a hardcoded literal and the
+/// sync/motion labels were computed independently from the same inputs, so
+/// one take could truthfully render "Ready to keep", "Motion pending" and
+/// "Motion Missing" at the same time. Deriving all three here makes that
+/// combination unrepresentable rather than merely unlikely.
+struct GuidedCaptureReviewState: Equatable, Sendable {
+    let readiness: CaptureReviewReadiness
+    let motionStatus: CaptureMotionStatus
+
+    var operatorMessage: String { readiness.title }
+    var motionStatusTitle: String { motionStatus.title }
+    var motionPresent: Bool { motionStatus == .present }
+
+    /// The sync label. Deliberately a projection of the same readiness rather
+    /// than an independently computed string: when motion is the blocker it
+    /// repeats the motion wording verbatim, so the two labels can restate each
+    /// other but can never contradict each other.
+    var syncStatus: String {
+        switch readiness {
+        case .recordingInterrupted: return "Recording interrupted"
+        case .takeTooShort: return "Take too short"
+        case .missingAudio: return "Missing audio"
+        case .calibrationInvalid: return "Needs calibration"
+        case .retakeRecommended: return motionStatus.title
+        case .readyToKeep:
+            return motionStatus == .optional ? "Motion optional" : "Ready"
+        }
+    }
 }
 
 enum GuidedCaptureReviewStateResolver {
-    static func motionAssessment(
+    static func motionRequirement(
+        motionSkipped: Bool,
+        motionOptional: Bool
+    ) -> CaptureMotionRequirement {
+        if motionSkipped { return .skipped }
+        if motionOptional { return .optional }
+        return .required
+    }
+
+    static func motionStatus(
+        motionPresent: Bool,
+        requirement: CaptureMotionRequirement
+    ) -> CaptureMotionStatus {
+        if motionPresent { return .present }
+        switch requirement {
+        case .optional, .skipped: return .optional
+        case .required: return .missing
+        }
+    }
+
+    /// Resolves the one state every review label projects from.
+    ///
+    /// `recordingFailed` and `duration` are folded in here so the operator
+    /// message can no longer be decided at the call site — that split is what
+    /// let a hardcoded "Ready to keep" survive next to a missing-motion pill.
+    static func reviewState(
+        recordingFailed: Bool,
+        duration: TimeInterval,
         calibrationValid: Bool,
         audioPresent: Bool,
         motionPresent: Bool,
         motionSkipped: Bool,
         motionOptional: Bool
-    ) -> GuidedCaptureMotionAssessment {
-        let motionStatusTitle: String
-        if motionSkipped || motionOptional {
-            motionStatusTitle = "Motion Optional"
-        } else if motionPresent {
-            motionStatusTitle = "Motion Present"
-        } else {
-            motionStatusTitle = "Motion Missing"
-        }
+    ) -> GuidedCaptureReviewState {
+        let requirement = motionRequirement(motionSkipped: motionSkipped, motionOptional: motionOptional)
+        let status = motionStatus(motionPresent: motionPresent, requirement: requirement)
 
-        let syncStatus: String
-        if !calibrationValid {
-            syncStatus = "Needs calibration"
+        let readiness: CaptureReviewReadiness
+        if recordingFailed {
+            readiness = .recordingInterrupted
+        } else if duration < minimumKeepableTakeDuration {
+            readiness = .takeTooShort
         } else if !audioPresent {
-            syncStatus = "Missing audio"
-        } else if motionSkipped || motionOptional {
-            syncStatus = "Motion optional"
-        } else if motionPresent {
-            syncStatus = "Ready"
+            readiness = .missingAudio
+        } else if !calibrationValid {
+            readiness = .calibrationInvalid
+        } else if status == .missing {
+            readiness = .retakeRecommended
         } else {
-            syncStatus = "Motion pending"
+            readiness = .readyToKeep
         }
 
-        return GuidedCaptureMotionAssessment(
-            syncStatus: syncStatus,
-            motionStatusTitle: motionStatusTitle,
-            motionPresent: motionPresent
-        )
+        return GuidedCaptureReviewState(readiness: readiness, motionStatus: status)
+    }
+
+    /// Shortest take the review flow will offer to keep.
+    static let minimumKeepableTakeDuration: TimeInterval = 1.0
+}
+
+// MARK: - Capture evidence presentation
+
+/// One labelled evidence row for the review surface.
+struct CaptureEvidenceRow: Equatable, Sendable, Identifiable {
+    let label: String
+    let value: String
+    /// True when this row represents evidence that was actually captured, so
+    /// the surface can style contributing sources differently from absent ones
+    /// without re-deriving the meaning of the string.
+    let isPresent: Bool
+
+    var id: String { label }
+}
+
+/// Turns the typed `CaptureMotionEvidence` into review rows.
+///
+/// Lives in the shared model, alongside the readiness vocabulary, so iOS and
+/// macOS name the same evidence identically rather than each inventing its own
+/// wording for the same state.
+enum CaptureMotionEvidencePresenter {
+    static func rows(for evidence: CaptureMotionEvidence) -> [CaptureEvidenceRow] {
+        [
+            CaptureEvidenceRow(
+                label: "Platter",
+                value: platterValue(evidence.platter),
+                isPresent: evidence.platter.isGesture
+            ),
+            CaptureEvidenceRow(
+                label: "Fader",
+                value: evidence.faderEventCount == 0
+                    ? "No movement"
+                    : "\(evidence.faderEventCount) event\(evidence.faderEventCount == 1 ? "" : "s")",
+                isPresent: evidence.faderEventCount > 0
+            ),
+            CaptureEvidenceRow(
+                label: "Watch",
+                value: evidence.watch == .linked ? "Linked" : "Not used",
+                isPresent: evidence.watch == .linked
+            )
+        ]
+        // DVS is deliberately absent: iOS capture has no timecode feed at take
+        // finalization, and a permanent "Unavailable" row would imply a source
+        // the product does not have. It returns as a row when a real feed exists.
+    }
+
+    private static func platterValue(_ platter: CapturePlatterMotionEvidence) -> String {
+        switch platter {
+        case .gesture:
+            return "Present · MIDI"
+        case .steadyRotationOnly:
+            // Movement was decoded, but forward-only: a running motor, not a
+            // scratch. Naming it separately stops it reading as a capture bug.
+            return "Rotation only"
+        case .absent:
+            return "Not detected"
+        }
     }
 }
 

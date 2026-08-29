@@ -1639,15 +1639,24 @@ private struct CaptureReview: Equatable {
     let summary: CompanionCameraBroadcaster.RecordingSummary
     let drillName: String
     let duration: TimeInterval
-    var syncStatus: String
     var audioPresent: Bool
-    var motionStatusTitle: String
-    var motionPresent: Bool
-    /// Typed provenance behind `motionPresent` — which sources actually
+    /// Typed provenance behind motion presence — which sources actually
     /// supplied evidence. Resolved from this take's persisted sidecar
     /// notation, so it survives into export and recovery unchanged.
     var motionEvidence: CaptureMotionEvidence
-    var operatorMessage: String
+    /// The single resolved verdict every review label projects from. Stored as
+    /// one value rather than four independently-settable strings so the review
+    /// surface cannot render a take as ready and blocked at the same time.
+    var reviewState: GuidedCaptureReviewState
+
+    var operatorMessage: String { reviewState.operatorMessage }
+    var syncStatus: String { reviewState.syncStatus }
+    var motionStatusTitle: String { reviewState.motionStatusTitle }
+    var motionPresent: Bool { reviewState.motionPresent }
+    var evidenceRows: [CaptureEvidenceRow] {
+        CaptureMotionEvidencePresenter.rows(for: motionEvidence)
+    }
+
     var quality: CaptureQualityTag?
     var isComboTagged: Bool = false
     /// The rendered-scratch WAV captured for this take, if the capture tap
@@ -1990,41 +1999,44 @@ private final class GuidedCaptureStore: ObservableObject {
         lastHandledRecordingID = summary.id
 
         let duration = max(0, (summary.sidecar.endedAt ?? Date()).timeIntervalSince(summary.sidecar.startedAt))
-        let operatorMessage: String
-        if summary.sidecar.recordingStatus == "failed" {
-            operatorMessage = "Recording interrupted"
-        } else if duration < 1.0 {
-            operatorMessage = "Take too short"
-        } else if !audioPresent {
-            operatorMessage = "Missing audio"
-        } else if !calibrationValid {
-            operatorMessage = "Calibration invalid"
-        } else {
-            operatorMessage = "Ready to keep"
-        }
-
         let drillName = ScratchLibrary.shared.scratch(byID: sessionSetup.scratchTypeID)?.name ?? sessionSetup.scratchTypeName
-        let motionAssessment = GuidedCaptureReviewStateResolver.motionAssessment(
-            calibrationValid: calibrationValid,
-            audioPresent: audioPresent,
-            motionPresent: motionEvidence.motionPresent,
-            motionSkipped: motionSkipped,
-            motionOptional: sessionSetup.drillMode.motionOptional
-        )
 
         review = CaptureReview(
             summary: summary,
             drillName: drillName,
             duration: duration,
-            syncStatus: motionAssessment.syncStatus,
             audioPresent: audioPresent,
-            motionStatusTitle: motionAssessment.motionStatusTitle,
-            motionPresent: motionAssessment.motionPresent,
             motionEvidence: motionEvidence,
-            operatorMessage: operatorMessage,
+            reviewState: resolvedReviewState(
+                recordingFailed: summary.sidecar.recordingStatus == "failed",
+                duration: duration,
+                calibrationValid: calibrationValid,
+                audioPresent: audioPresent,
+                motionPresent: motionEvidence.motionPresent
+            ),
             scratchAudioURL: scratchAudioURL
         )
         flowState = .review
+    }
+
+    /// Single entry point to the shared readiness resolver, so the finish
+    /// handler and every later refresh cannot drift apart.
+    private func resolvedReviewState(
+        recordingFailed: Bool,
+        duration: TimeInterval,
+        calibrationValid: Bool,
+        audioPresent: Bool,
+        motionPresent: Bool
+    ) -> GuidedCaptureReviewState {
+        GuidedCaptureReviewStateResolver.reviewState(
+            recordingFailed: recordingFailed,
+            duration: duration,
+            calibrationValid: calibrationValid,
+            audioPresent: audioPresent,
+            motionPresent: motionPresent,
+            motionSkipped: motionSkipped,
+            motionOptional: sessionSetup.drillMode.motionOptional
+        )
     }
 
     func updateAudioPresence(_ audioPresent: Bool, forRecordingID recordingID: String) {
@@ -2042,29 +2054,13 @@ private final class GuidedCaptureStore: ObservableObject {
 
     private func applyAudioPresence(_ audioPresent: Bool, to review: inout CaptureReview) {
         review.audioPresent = audioPresent
-        let duration = review.duration
-        if review.summary.sidecar.recordingStatus == "failed" {
-            review.operatorMessage = "Recording interrupted"
-        } else if duration < 1.0 {
-            review.operatorMessage = "Take too short"
-        } else if !audioPresent {
-            review.operatorMessage = "Missing audio"
-        } else if !isCalibrationConfirmed {
-            review.operatorMessage = "Calibration invalid"
-        } else {
-            review.operatorMessage = "Ready to keep"
-        }
-
-        let motionAssessment = GuidedCaptureReviewStateResolver.motionAssessment(
+        review.reviewState = resolvedReviewState(
+            recordingFailed: review.summary.sidecar.recordingStatus == "failed",
+            duration: review.duration,
             calibrationValid: isCalibrationConfirmed,
             audioPresent: audioPresent,
-            motionPresent: review.motionEvidence.motionPresent,
-            motionSkipped: motionSkipped,
-            motionOptional: sessionSetup.drillMode.motionOptional
+            motionPresent: review.motionEvidence.motionPresent
         )
-        review.syncStatus = motionAssessment.syncStatus
-        review.motionStatusTitle = motionAssessment.motionStatusTitle
-        review.motionPresent = motionAssessment.motionPresent
     }
 
     func setQuality(_ quality: CaptureQualityTag) {
@@ -2091,17 +2087,14 @@ private final class GuidedCaptureStore: ObservableObject {
             watch: .linked,
             dvs: review.motionEvidence.dvs
         )
-        let assessment = GuidedCaptureReviewStateResolver.motionAssessment(
+        review.motionEvidence = updatedEvidence
+        review.reviewState = resolvedReviewState(
+            recordingFailed: review.summary.sidecar.recordingStatus == "failed",
+            duration: review.duration,
             calibrationValid: isCalibrationConfirmed,
             audioPresent: review.audioPresent,
-            motionPresent: updatedEvidence.motionPresent,
-            motionSkipped: motionSkipped,
-            motionOptional: sessionSetup.drillMode.motionOptional
+            motionPresent: updatedEvidence.motionPresent
         )
-        review.motionEvidence = updatedEvidence
-        review.syncStatus = assessment.syncStatus
-        review.motionStatusTitle = assessment.motionStatusTitle
-        review.motionPresent = assessment.motionPresent
         self.review = review
     }
 
@@ -5138,7 +5131,9 @@ private struct TakeReviewView: View {
                 CaptureReviewDetailBlock(label: "Scratch", value: review.drillName)
                 CaptureReviewDetailBlock(label: "Duration", value: formatDuration(review.duration))
                 CaptureReviewDetailBlock(label: "Sync", value: review.syncStatus)
-                CaptureReviewDetailBlock(label: "Fader", value: faderEvidenceText)
+                ForEach(review.evidenceRows) { row in
+                    CaptureReviewDetailBlock(label: row.label, value: row.value)
+                }
             }
 
             Divider().overlay(ScratchLabDesign.Border.default)
@@ -5205,16 +5200,23 @@ private struct TakeReviewView: View {
         }
     }
 
+    /// Sync and motion are both projections of one resolved readiness, so these
+    /// pills restate each other at worst — they can no longer disagree the way
+    /// a separately-computed "Motion pending" could sit beside "Motion Missing".
     @ViewBuilder
     private var reviewStatusPills: some View {
-        ReadinessPill(title: review.syncStatus, variant: review.syncStatus == "Ready" ? .success : .warning)
-        ReadinessPill(title: review.audioPresent ? "Audio Present" : "Missing Audio", variant: review.audioPresent ? .success : .danger)
-        ReadinessPill(title: review.motionStatusTitle, variant: review.motionPresent ? .success : .warning)
-    }
-
-    private var faderEvidenceText: String {
-        let count = review.summary.sidecar.detectedNotation?.faderEvents.count ?? 0
-        return count == 0 ? "No movement" : "\(count) event\(count == 1 ? "" : "s")"
+        ReadinessPill(
+            title: review.syncStatus,
+            variant: review.reviewState.readiness == .readyToKeep ? .success : .warning
+        )
+        ReadinessPill(
+            title: review.audioPresent ? "Audio Present" : "Missing Audio",
+            variant: review.audioPresent ? .success : .danger
+        )
+        ReadinessPill(
+            title: review.motionStatusTitle,
+            variant: review.motionPresent ? .success : .warning
+        )
     }
 
     private var decisionColumn: some View {
@@ -5225,7 +5227,9 @@ private struct TakeReviewView: View {
                     CaptureReviewDetailBlock(label: "Scratch Type", value: review.drillName)
                     CaptureReviewDetailBlock(label: "Duration", value: formatDuration(review.duration))
                     CaptureReviewDetailBlock(label: "Sync", value: review.syncStatus)
-                    CaptureReviewDetailBlock(label: "Fader", value: faderEvidenceText)
+                    ForEach(review.evidenceRows) { row in
+                        CaptureReviewDetailBlock(label: row.label, value: row.value)
+                    }
                 }
             }
 
