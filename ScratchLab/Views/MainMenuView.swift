@@ -1940,7 +1940,7 @@ private struct AdvancedMIDIControllerView: View {
 
             Text(hotCueOneControl == nil
                  ? "Map Hot Cue 1 first. On a RANE ONE MKII, learning the pad automatically assigns the local AHHH sample."
-                 : "Hot Cue 1 can arm ScratchLab's local AHHH even while Serato owns deck transport. Audio starts when the right platter moves.")
+                 : "Hot Cue 1 arms ScratchLab's local AHHH. Audio starts when the right platter moves.")
                 .font(ScratchLabDesign.Typo.bodySmall)
                 .foregroundStyle(ScratchLabDesign.Sem.textSecondary)
                 .fixedSize(horizontal: false, vertical: true)

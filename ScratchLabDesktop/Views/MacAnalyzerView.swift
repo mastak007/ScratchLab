@@ -2408,7 +2408,12 @@ struct MacAnalyzerView: View {
                 Button {
                     shareLastRoutineSession()
                 } label: {
-                    Label("Export", systemImage: "square.and.arrow.up")
+                    Label(
+                        sessionExportCoordinator.isPreparing ? "Exporting..." : "Export",
+                        systemImage: sessionExportCoordinator.isPreparing
+                            ? "arrow.triangle.2.circlepath"
+                            : "square.and.arrow.up"
+                    )
                 }
                 .buttonStyle(.plain)
                 .disabled(sessionExportCoordinator.isPreparing || captureEngine.isRoutineRecording)
@@ -2418,6 +2423,15 @@ struct MacAnalyzerView: View {
                     .foregroundStyle(ScratchLabDesign.Sem.textSecondary)
                 Button("Record another") { prepareRetake() }
                     .scratchLabDestructiveButton()
+            }
+            if sessionExportCoordinator.isPreparing {
+                HStack(spacing: 8) {
+                    ProgressView()
+                        .controlSize(.small)
+                    Text(sessionExportCoordinator.statusMessage ?? "Preparing export...")
+                        .font(.system(size: 11, weight: .medium))
+                        .foregroundStyle(ScratchLabDesign.Sem.textSecondary)
+                }
             }
         }
         .padding(20)
@@ -5007,12 +5021,21 @@ struct MacAnalyzerView: View {
         }
     }
 
+    /// Watch is an optional input, so the headline stays "Watch Optional" until
+    /// the relayed availability signals say a watch is actually usable. Derived
+    /// from `watchInputReadiness`, never from capture history alone — see
+    /// `RelayedWatchCaptureStore.WatchInputReadiness`.
     private var watchStatusValue: String {
-        relayedWatchCaptureStore.importedSessions.isEmpty ? "Watch Optional" : "Watch Connected"
+        switch relayedWatchCaptureStore.watchInputReadiness {
+        case .awaitingPhoneReport, .notPaired, .notInstalled, .unreachable:
+            return "Watch Optional"
+        case .reachableAwaitingCapture, .motionAvailable, .motionAvailableUnreachable:
+            return "Watch Connected"
+        }
     }
 
     private var watchStatusDetail: String {
-        relayedWatchCaptureStore.importedSessions.isEmpty ? "Not connected" : "Motion data available"
+        relayedWatchCaptureStore.watchInputReadiness.detail
     }
 
     // Slice X.1: Hand chip on the Capture tab. Reads the existing
@@ -6503,6 +6526,9 @@ struct MacAnalyzerView: View {
         reviewStateSelection = metadata.reviewState
         reviewNotesDraft = metadata.reviewNotes ?? ""
         reviewerNameDraft = metadata.reviewedBy ?? ""
+        reviewDecisionByTakeID.removeValue(forKey: reviewTakeID)
+        reviewDecisionStatusByTakeID.removeValue(forKey: reviewTakeID)
+        reviewStatusMessage = "Confirm before export."
 
         // Reload the persisted label decision too, so the header badge and
         // summary agree with the sidecar after relaunch. Previously only
@@ -6516,6 +6542,19 @@ struct MacAnalyzerView: View {
                 reviewDecisionByTakeID[reviewTakeID] = correction
             }
         }
+    }
+
+    private var matchingLastRoutineExportConfig: CaptureSessionConfig? {
+        guard routineSessionSetup.config.sessionID == captureEngine.lastRoutineRecordingSessionID else {
+            return nil
+        }
+        return routineSessionSetup.config
+    }
+
+    private var matchingLastRoutineExportSessionName: String {
+        matchingLastRoutineExportConfig == nil
+            ? "Routine Capture"
+            : routineSessionSetup.sessionName(defaultAppName: "Untitled Session")
     }
 
     private func startMacLiveInput() {
@@ -6567,8 +6606,8 @@ struct MacAnalyzerView: View {
         sessionExportCoordinator.prepareShare(
             for: .localRecordingSession(
                 lastRecordingURL: lastRoutineRecordingURL,
-                sessionName: routineSessionSetup.sessionName(defaultAppName: "Untitled Session"),
-                config: routineSessionSetup.config
+                sessionName: matchingLastRoutineExportSessionName,
+                config: matchingLastRoutineExportConfig
             ),
             options: SessionExportOptions(mixMode: exportMixMode)
         )
@@ -6585,8 +6624,8 @@ struct MacAnalyzerView: View {
         sessionExportCoordinator.saveArchiveCopy(
             for: .localRecordingSession(
                 lastRecordingURL: lastRoutineRecordingURL,
-                sessionName: routineSessionSetup.sessionName(defaultAppName: "Untitled Session"),
-                config: routineSessionSetup.config
+                sessionName: matchingLastRoutineExportSessionName,
+                config: matchingLastRoutineExportConfig
             ),
             options: SessionExportOptions(mixMode: exportMixMode)
         )
@@ -6667,8 +6706,8 @@ struct MacAnalyzerView: View {
         sessionUploadManager.startUpload(
             for: .localRecordingSession(
                 lastRecordingURL: lastRoutineRecordingURL,
-                sessionName: routineSessionSetup.sessionName(defaultAppName: "Untitled Session"),
-                config: routineSessionSetup.config
+                sessionName: matchingLastRoutineExportSessionName,
+                config: matchingLastRoutineExportConfig
             )
         )
     }
@@ -7836,8 +7875,8 @@ struct MacAnalyzerView: View {
                 )
                 InputReadinessRow(
                     title: "Watch",
-                    state: relayedWatchCaptureStore.importedSessions.isEmpty ? .neutral : .ready,
-                    detail: watchStatusDetail
+                    state: relayedWatchCaptureStore.watchInputReadiness.readinessState,
+                    detail: relayedWatchCaptureStore.watchInputReadiness.detail
                 )
             }
 

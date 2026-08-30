@@ -36,15 +36,7 @@ struct PlatterSampleWaveform: Equatable, Sendable {
 /// Negative/past-end regions remain explicit so the visual does not falsely
 /// wrap a backward move to the end of the sample.
 struct PlatterSamplePlayheadSnapshot: Equatable, Sendable {
-    enum Region: Equatable, Sendable {
-        case unloaded
-        case cue
-        case start
-        case middle
-        case end
-        case beforeStart
-        case pastEnd
-    }
+    typealias Region = PlatterSamplePositionProjection.Region
 
     let waveform: PlatterSampleWaveform
     let framePosition: Double
@@ -250,8 +242,10 @@ final class IOScratchPlaybackEngine: ObservableObject {
 
     @Published private(set) var platterSampleStatus = "No platter sample loaded"
     @Published private(set) var platterSampleWaveform: PlatterSampleWaveform?
+    @Published private(set) var audioOwnershipMode: ScratchAudioOwnershipMode
 
     private let engine = AVAudioEngine()
+    private let defaults: UserDefaults
     private var renderer: IOScratchRenderer?
     private var outputConfiguration: OutputConfiguration?
     private let midiControlLoop = IOScratchMIDIControlLoop()
@@ -274,7 +268,26 @@ final class IOScratchPlaybackEngine: ObservableObject {
     private let platterLogInterval: TimeInterval = 0.5
     #endif
 
-    init() {}
+    init(defaults: UserDefaults = .standard) {
+        self.defaults = defaults
+        audioOwnershipMode = ScratchAudioOwnershipMode.load(from: defaults)
+        if !audioOwnershipMode.allowsLocalScratchPlayback {
+            platterSampleStatus = audioOwnershipMode.detail
+        }
+    }
+
+    func setAudioOwnershipMode(_ mode: ScratchAudioOwnershipMode) {
+        guard audioOwnershipMode != mode else { return }
+        audioOwnershipMode = mode
+        mode.persist(to: defaults)
+        if mode.allowsLocalScratchPlayback {
+            platterSampleStatus = "Standalone audio enabled — load AHHH to arm the platter."
+        } else {
+            stop()
+            platterSampleWaveform = nil
+            platterSampleStatus = mode.detail
+        }
+    }
 
     /// Samples the renderer's lock-free callback snapshot. `TimelineView`
     /// reads this at display cadence; no timer or `@Published` mutation is
@@ -285,33 +298,18 @@ final class IOScratchPlaybackEngine: ObservableObject {
               waveform.sampleRate > 0,
               waveform.contentFrameCount > 0 else { return nil }
 
-        let framePosition = renderer.currentUnwrappedFramePositionSnapshot()
-        let contentFrames = Double(waveform.contentFrameCount)
-        let unclampedProgress = framePosition / contentFrames
-        let progress = min(max(unclampedProgress, 0), 1)
-        let toleranceFrames = max(1, waveform.sampleRate * 0.005)
-
-        let region: PlatterSamplePlayheadSnapshot.Region
-        if framePosition < -toleranceFrames {
-            region = .beforeStart
-        } else if framePosition > contentFrames + toleranceFrames {
-            region = .pastEnd
-        } else if abs(framePosition) <= toleranceFrames {
-            region = .cue
-        } else if progress < 1.0 / 3.0 {
-            region = .start
-        } else if progress < 2.0 / 3.0 {
-            region = .middle
-        } else {
-            region = .end
-        }
+        let projection = PlatterSamplePositionProjection.resolve(
+            framePosition: renderer.currentUnwrappedFramePositionSnapshot(),
+            contentFrameCount: waveform.contentFrameCount,
+            sampleRate: waveform.sampleRate
+        )
 
         return PlatterSamplePlayheadSnapshot(
             waveform: waveform,
-            framePosition: framePosition,
-            positionSeconds: framePosition / waveform.sampleRate,
-            progress: progress,
-            region: region
+            framePosition: projection.framePosition,
+            positionSeconds: projection.positionSeconds,
+            progress: projection.progress,
+            region: projection.region
         )
     }
 
@@ -399,6 +397,10 @@ final class IOScratchPlaybackEngine: ObservableObject {
     /// frame (silent at frame 0 until platter movement, via
     /// `updatePlatterPosition`, moves the playhead) rather than free-running.
     func playHotCue(sampleID: String) {
+        guard audioOwnershipMode.allowsLocalScratchPlayback else {
+            platterSampleStatus = audioOwnershipMode.detail
+            return
+        }
         platterSampleStatus = "Loading platter sample…"
         platterSampleWaveform = nil
         #if DEBUG

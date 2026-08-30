@@ -130,7 +130,7 @@ final class IOSMIDILearnCoordinator: ObservableObject {
         store.save(mapping)
         currentMapping = mapping
         activeAction = nil
-        feedback = "Applied verified Rane ONE MKII mapping. Hot Cue 1 loads AHHH."
+        feedback = "Applied verified Rane ONE MKII mapping. Local sample playback follows Audio Ownership."
         onMappingChanged?(deviceID)
     }
 

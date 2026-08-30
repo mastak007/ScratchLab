@@ -392,6 +392,13 @@ final class IOSMIDIControllerDispatcher: ObservableObject {
     /// platter array so the existing platter decoders keep their exact input,
     /// then both streams are merged only when the take snapshot is finalized.
     private(set) var capturedCrossfaderMIDIEvents: [CaptureCore.RawMixerMIDIEvent] = []
+    /// Per-attempt upfader (channel-fader) telemetry. Kept in its own array
+    /// for the same reason the crossfader is: the platter decoders must keep
+    /// their exact input, and `deriveDetectedNotationFaderEvents` must keep
+    /// seeing only crossfader samples. Upfader movement is recorded as raw
+    /// evidence only - it drives gain, and the canonical notation model has
+    /// no upfader lane, so nothing here is turned into notation events.
+    private(set) var capturedUpfaderMIDIEvents: [CaptureCore.RawMixerMIDIEvent] = []
     /// Coalesced live renderer input. Raw platter MIDI can arrive much faster
     /// than SwiftUI should redraw, so this is refreshed at the same ~25 Hz
     /// cadence as the macOS live tracker rather than publishing every packet.
@@ -466,6 +473,7 @@ final class IOSMIDIControllerDispatcher: ObservableObject {
     func resetCapturedPlatterEvents() {
         capturedPlatterMIDIEvents.removeAll()
         capturedCrossfaderMIDIEvents.removeAll()
+        capturedUpfaderMIDIEvents.removeAll()
         livePlatterMovementEvents.removeAll()
         liveNotationDecodeAnchorIndex = 0
         captureBaselineTimestamp = CACurrentMediaTime()
@@ -531,7 +539,9 @@ final class IOSMIDIControllerDispatcher: ObservableObject {
     /// Raw take-relative controller evidence, ordered across platter and
     /// crossfader streams for sidecar persistence and canonical export.
     var capturedMixerMIDIEvents: [CaptureCore.RawMixerMIDIEvent] {
-        (withinTakeWindow(capturedPlatterMIDIEvents) + withinTakeWindow(capturedCrossfaderMIDIEvents)).sorted { lhs, rhs in
+        (withinTakeWindow(capturedPlatterMIDIEvents)
+            + withinTakeWindow(capturedCrossfaderMIDIEvents)
+            + withinTakeWindow(capturedUpfaderMIDIEvents)).sorted { lhs, rhs in
             if lhs.takeRelativeTime == rhs.takeRelativeTime {
                 return lhs.timestamp < rhs.timestamp
             }
@@ -804,7 +814,9 @@ final class IOSMIDIControllerDispatcher: ObservableObject {
             #endif
             guard decision.shouldTrigger, let sampleID = decision.sampleID else { return }
             lastHotCueIndex = semanticAction?.hotCueIndex
-            lastHotCueSampleID = sampleID
+            lastHotCueSampleID = playbackEngine.audioOwnershipMode.allowsLocalScratchPlayback
+                ? sampleID
+                : nil
             #if DEBUG
             print("[MIDI-DEBUG] hotcue resolved · sample=\(sampleID)")
             #endif
@@ -847,6 +859,30 @@ final class IOSMIDIControllerDispatcher: ObservableObject {
             } else if deck == 1 {
                 rightUpfaderMIDIValue = value
             }
+
+            // Raw evidence only, mirroring the crossfader path. Without this
+            // the upfader drove audible gain while leaving no trace in
+            // `mixerMidiEvents`, so a take's exported evidence silently
+            // omitted an entire control stream.
+            let upfaderControl = deck == 0 ? "leftUpfader" : "rightUpfader"
+            let upfaderLearnedControl = currentMapping?
+                .control(for: deck == 0 ? .leftUpfader : .rightUpfader)
+            let upfaderTimestamp = CACurrentMediaTime()
+            capturedUpfaderMIDIEvents.append(
+                CaptureCore.RawMixerMIDIEvent(
+                    timestamp: upfaderTimestamp,
+                    takeRelativeTime: max(0, upfaderTimestamp - captureBaselineTimestamp),
+                    deviceName: currentMapping?.deviceName
+                        ?? currentDeviceIdentity?.sourceName
+                        ?? "iOS MIDI Controller",
+                    channel: Int(message.channel),
+                    controller: Int(message.controlNumber),
+                    value: value,
+                    normalizedValue: upfaderLearnedControl?.normalizedValue(from: value)
+                        ?? MIDIControlNormalization.sevenBit(value),
+                    mappedControl: upfaderControl
+                )
+            )
 
             // The loaded scratch sample remains right-deck-owned, so the
             // right upfader is the primary gain source. If this device has

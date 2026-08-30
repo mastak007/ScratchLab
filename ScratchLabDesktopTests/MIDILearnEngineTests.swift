@@ -28,6 +28,7 @@ final class MIDILearnEngineTests: XCTestCase {
         defaultsSuiteName = "com.machelpnz.scratchlab.tests.MIDILearnEngineTests.\(UUID().uuidString)"
         midiDefaults = UserDefaults(suiteName: defaultsSuiteName)
         midiDefaults.removePersistentDomain(forName: defaultsSuiteName)
+        ScratchAudioOwnershipMode.scratchLabStandalone.persist(to: midiDefaults)
     }
 
     override func tearDown() {

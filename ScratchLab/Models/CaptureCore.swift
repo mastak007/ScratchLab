@@ -11,6 +11,34 @@ import UIKit
 import AppKit
 #endif
 
+/// ScratchLab owns audible scratch-sample playback. The persisted raw value is
+/// retained so installs that previously saved another ownership mode migrate
+/// cleanly to the standalone product behavior.
+enum ScratchAudioOwnershipMode: String, Codable, CaseIterable, Identifiable, Sendable {
+    case scratchLabStandalone
+
+    static let defaultsKey = "scratchlab.audio.ownershipMode"
+    static let defaultMode: Self = .scratchLabStandalone
+
+    var id: String { rawValue }
+    var allowsLocalScratchPlayback: Bool { true }
+    var title: String { "ScratchLab AHHH" }
+    var detail: String { "ScratchLab loads and plays its local AHHH sample from the platter." }
+
+    static func load(from defaults: UserDefaults) -> Self {
+        if let rawValue = defaults.string(forKey: defaultsKey),
+           let mode = Self(rawValue: rawValue) {
+            return mode
+        }
+        defaultMode.persist(to: defaults)
+        return defaultMode
+    }
+
+    func persist(to defaults: UserDefaults) {
+        defaults.set(rawValue, forKey: Self.defaultsKey)
+    }
+}
+
 enum ScratchLabPerformanceSignpost {
     private static let log = OSLog(
         subsystem: "com.machelpnz.scratchlab",
@@ -1574,6 +1602,1569 @@ struct CaptureSessionConfig: Codable, Equatable, Sendable {
         } else if config.scratchType != nil {
             config.bpm = CaptureClickTrackDefaults.defaultTimedBPM
         }
+    }
+}
+
+// MARK: - App-container artifact references
+
+/// The app-container roots ScratchLab owns capture artifacts inside.
+///
+/// iOS reissues the Data-container UUID across installs, so an absolute URL
+/// captured under one container is not a durable reference to the same file.
+/// Everything ScratchLab writes itself is therefore addressed as a root plus a
+/// relative path, and the root is resolved fresh on every launch.
+enum CaptureContainerRoot: String, Codable, Equatable, Sendable, CaseIterable {
+    case documents
+    case applicationSupport = "application_support"
+
+    /// The directory segments that identify this root inside an absolute path.
+    /// Used only to interpret a legacy absolute URL that was written before
+    /// references existed; never to construct a new location.
+    var legacyPathMarker: [String] {
+        switch self {
+        case .documents:
+            return ["Documents"]
+        case .applicationSupport:
+            return ["Library", "Application Support"]
+        }
+    }
+}
+
+/// The kinds of capture artifact the kept-session ledger addresses, and the one
+/// directory each is allowed to live in. A legacy absolute URL may only be
+/// rebased into the exact directory its kind owns, so recovery can never walk
+/// the container looking for a plausible file.
+enum CaptureArtifactKind: String, Equatable, Sendable, CaseIterable {
+    case media
+    case sidecar
+    case audio
+    case watchMotion
+
+    var containerRoot: CaptureContainerRoot {
+        switch self {
+        case .media, .sidecar, .audio:
+            return .documents
+        case .watchMotion:
+            return .applicationSupport
+        }
+    }
+
+    /// Every directory, relative to `containerRoot`, this kind is allowed to
+    /// live in. A legacy absolute URL is only rebased when its own directory is
+    /// one of these, so recovery never reaches outside the app's own capture
+    /// storage. `RelayedWatchCaptures` is included because the export
+    /// coordinator already resolves linked Watch captures from there too.
+    var allowedDirectories: [String] {
+        switch self {
+        case .media, .sidecar, .audio:
+            return ["CompanionCaptures"]
+        case .watchMotion:
+            return ["WatchMotionCaptures", "ScratchLab/RelayedWatchCaptures"]
+        }
+    }
+
+    /// The human-readable field name used in ledger errors.
+    var fieldName: String {
+        switch self {
+        case .media: return "media"
+        case .sidecar: return "sidecar"
+        case .audio: return "audio"
+        case .watchMotion: return "watch motion"
+        }
+    }
+}
+
+/// One capture-artifact location.
+///
+/// App-owned artifacts are persisted relative to their container root so they
+/// survive a container UUID change. Anything ScratchLab does not own keeps its
+/// absolute URL, because rewriting a foreign path would be fabrication.
+enum CaptureArtifactReference: Equatable, Sendable {
+    case containerRelative(root: CaptureContainerRoot, path: String)
+    case absolute(URL)
+
+    /// Rejects empty, absolute, traversing, and current/parent-directory
+    /// components. A stored relative path must be a plain chain of real names.
+    static func isSafeRelativePath(_ path: String) -> Bool {
+        guard !path.isEmpty, !path.hasPrefix("/") else { return false }
+        let components = path.components(separatedBy: "/")
+        guard !components.isEmpty else { return false }
+        return components.allSatisfy(isSafePathComponent)
+    }
+
+    static func isSafePathComponent(_ component: String) -> Bool {
+        !component.isEmpty && component != "." && component != ".."
+    }
+}
+
+extension CaptureArtifactReference: Codable {
+    private enum CodingKeys: String, CodingKey {
+        case containerRoot
+        case relativePath
+    }
+
+    init(from decoder: Decoder) throws {
+        // Ledgers written before this type persisted a bare absolute file-URL
+        // string. Decoding those unchanged is what lets an existing install's
+        // takes survive to the rebase step instead of failing the whole load.
+        if let singleValue = try? decoder.singleValueContainer(),
+           let url = try? singleValue.decode(URL.self) {
+            self = .absolute(url)
+            return
+        }
+
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        let root = try container.decode(CaptureContainerRoot.self, forKey: .containerRoot)
+        let relativePath = try container.decode(String.self, forKey: .relativePath)
+        self = .containerRelative(root: root, path: relativePath)
+    }
+
+    func encode(to encoder: Encoder) throws {
+        switch self {
+        case let .absolute(url):
+            var singleValue = encoder.singleValueContainer()
+            try singleValue.encode(url)
+        case let .containerRelative(root, path):
+            var container = encoder.container(keyedBy: CodingKeys.self)
+            try container.encode(root, forKey: .containerRoot)
+            try container.encode(path, forKey: .relativePath)
+        }
+    }
+}
+
+/// Resolves container roots to their locations in the *current* container.
+///
+/// Total by construction: both roots are always known, so resolving a stored
+/// reference can never fail. Resolution is pure path arithmetic and never
+/// consults the file system — a reference whose file is genuinely missing must
+/// still produce the path the export validators report, so the failure stays
+/// visible and retryable instead of silently disappearing.
+struct CaptureContainerLocator: Equatable, Sendable {
+    let documentsURL: URL
+    let applicationSupportURL: URL
+
+    init(documentsURL: URL, applicationSupportURL: URL) {
+        self.documentsURL = documentsURL.standardizedFileURL
+        self.applicationSupportURL = applicationSupportURL.standardizedFileURL
+    }
+
+    static func current(fileManager: FileManager = .default) -> CaptureContainerLocator {
+        let home = URL(fileURLWithPath: NSHomeDirectory(), isDirectory: true)
+        let documentsURL = fileManager.urls(for: .documentDirectory, in: .userDomainMask).first
+            ?? home.appendingPathComponent("Documents", isDirectory: true)
+        let applicationSupportURL = fileManager.urls(for: .applicationSupportDirectory, in: .userDomainMask).first
+            ?? home
+                .appendingPathComponent("Library", isDirectory: true)
+                .appendingPathComponent("Application Support", isDirectory: true)
+        return CaptureContainerLocator(
+            documentsURL: documentsURL,
+            applicationSupportURL: applicationSupportURL
+        )
+    }
+
+    func rootURL(for root: CaptureContainerRoot) -> URL {
+        switch root {
+        case .documents:
+            return documentsURL
+        case .applicationSupport:
+            return applicationSupportURL
+        }
+    }
+
+    func url(for reference: CaptureArtifactReference) -> URL {
+        switch reference {
+        case let .absolute(url):
+            return url
+        case let .containerRelative(root, path):
+            return path
+                .components(separatedBy: "/")
+                .filter { !$0.isEmpty }
+                .reduce(rootURL(for: root)) { $0.appendingPathComponent($1) }
+        }
+    }
+
+    /// Classifies a concrete URL for durable storage. Anything inside a
+    /// container root becomes relative to it; anything else stays absolute.
+    func reference(for url: URL) -> CaptureArtifactReference {
+        let standardized = url.standardizedFileURL
+        for root in CaptureContainerRoot.allCases {
+            if let relativePath = Self.relativePath(of: standardized, under: rootURL(for: root)),
+               CaptureArtifactReference.isSafeRelativePath(relativePath) {
+                return .containerRelative(root: root, path: relativePath)
+            }
+        }
+        return .absolute(url)
+    }
+
+    /// True when this absolute URL lies inside a container root, which means
+    /// persisting it absolutely would reintroduce the stale-path defect.
+    func isContainerOwned(_ url: URL) -> Bool {
+        if case .containerRelative = reference(for: url) { return true }
+        return false
+    }
+
+    private static func relativePath(of url: URL, under rootURL: URL) -> String? {
+        let rootComponents = rootURL.standardizedFileURL.pathComponents
+        let urlComponents = url.pathComponents
+        guard urlComponents.count > rootComponents.count,
+              Array(urlComponents.prefix(rootComponents.count)) == rootComponents else {
+            return nil
+        }
+        return urlComponents.dropFirst(rootComponents.count).joined(separator: "/")
+    }
+}
+
+// MARK: - Guided capture kept-session ledger
+
+/// The durable information needed to rebuild one guided-capture
+/// `SessionExportTake` after the capture view has gone away.
+///
+/// These references deliberately point at the original staged artifacts, so a
+/// Keep action never copies or renames media, and the export coordinator stays
+/// responsible for validating and packaging the real files at Export/Share.
+///
+/// They are `CaptureArtifactReference`, not `URL`, on purpose: iOS reissues the
+/// Data-container UUID across installs, so an absolute container URL persisted
+/// by one install dangles in the next even though the capture is untouched.
+/// Resolving a reference requires a `CaptureContainerLocator`, which makes it a
+/// compile-time error to read a stored location without rebasing it onto the
+/// container the app is actually running in.
+struct GuidedCaptureKeptTake: Codable, Equatable, Sendable, Identifiable {
+    /// Legacy ledgers wrote these four locations as bare absolute file URLs
+    /// under the keys below. The keys are preserved so an existing install
+    /// still decodes; `CaptureArtifactReference` accepts either form.
+    private enum CodingKeys: String, CodingKey {
+        case sessionID
+        case takeID
+        case takeNumber
+        case bpm
+        case sourceMedia = "sourceMediaURL"
+        case sourceSidecar = "sourceSidecarURL"
+        case sourceAudio = "sourceAudioURL"
+        case sourceWatchMotion = "sourceWatchMotionURL"
+        case drillName
+        case duration
+        case quality
+        case comboTagged
+        case audioPresent
+        case motionPresent
+        case syncStatus
+        case recordingStatus
+        case verbalSlateUsed
+        case syncClapUsed
+        case note
+        case captureTiming
+        case motionSources
+        case faderMappingSource
+    }
+
+    let sessionID: String
+    let takeID: String
+    let takeNumber: Int
+    let bpm: Int
+    let sourceMedia: CaptureArtifactReference
+    let sourceSidecar: CaptureArtifactReference
+    var sourceAudio: CaptureArtifactReference?
+    let sourceWatchMotion: CaptureArtifactReference?
+    let drillName: String?
+    let duration: TimeInterval
+    let quality: String?
+    let comboTagged: Bool
+    var audioPresent: Bool?
+    let motionPresent: Bool?
+    let syncStatus: String?
+    let recordingStatus: String
+    let verbalSlateUsed: Bool?
+    let syncClapUsed: Bool?
+    let note: String?
+    let captureTiming: CaptureTimingMetadata?
+    let motionSources: [CaptureMotionSource]?
+    let faderMappingSource: FaderMappingSource?
+
+    var id: String { recordingID }
+    var recordingID: String { "\(sessionID):\(takeID)" }
+
+    init(
+        sessionID: String,
+        takeID: String,
+        takeNumber: Int,
+        bpm: Int,
+        sourceMedia: CaptureArtifactReference,
+        sourceSidecar: CaptureArtifactReference,
+        sourceAudio: CaptureArtifactReference?,
+        sourceWatchMotion: CaptureArtifactReference?,
+        drillName: String?,
+        duration: TimeInterval,
+        quality: String?,
+        comboTagged: Bool,
+        audioPresent: Bool?,
+        motionPresent: Bool?,
+        syncStatus: String?,
+        recordingStatus: String,
+        verbalSlateUsed: Bool?,
+        syncClapUsed: Bool?,
+        note: String?,
+        captureTiming: CaptureTimingMetadata? = nil,
+        motionSources: [CaptureMotionSource]? = nil,
+        faderMappingSource: FaderMappingSource? = nil
+    ) {
+        self.sessionID = sessionID
+        self.takeID = takeID
+        self.takeNumber = takeNumber
+        self.bpm = bpm
+        self.sourceMedia = sourceMedia
+        self.sourceSidecar = sourceSidecar
+        self.sourceAudio = sourceAudio
+        self.sourceWatchMotion = sourceWatchMotion
+        self.drillName = drillName
+        self.duration = duration
+        self.quality = quality
+        self.comboTagged = comboTagged
+        self.audioPresent = audioPresent
+        self.motionPresent = motionPresent
+        self.syncStatus = syncStatus
+        self.recordingStatus = recordingStatus
+        self.verbalSlateUsed = verbalSlateUsed
+        self.syncClapUsed = syncClapUsed
+        self.note = note
+        self.captureTiming = captureTiming
+        self.motionSources = motionSources
+        self.faderMappingSource = faderMappingSource
+    }
+
+    /// Builds a take from the concrete URLs a live capture produced.
+    ///
+    /// The locator classifies each URL as it is stored, so an app-owned
+    /// artifact is durable from the moment it is kept and never has to be
+    /// recovered later. Artifacts outside the app container keep their
+    /// absolute URL, because ScratchLab does not own those paths.
+    init(
+        sessionID: String,
+        takeID: String,
+        takeNumber: Int,
+        bpm: Int,
+        sourceMediaURL: URL,
+        sourceSidecarURL: URL,
+        sourceAudioURL: URL?,
+        sourceWatchMotionURL: URL?,
+        drillName: String?,
+        duration: TimeInterval,
+        quality: String?,
+        comboTagged: Bool,
+        audioPresent: Bool?,
+        motionPresent: Bool?,
+        syncStatus: String?,
+        recordingStatus: String,
+        verbalSlateUsed: Bool?,
+        syncClapUsed: Bool?,
+        note: String?,
+        captureTiming: CaptureTimingMetadata? = nil,
+        motionSources: [CaptureMotionSource]? = nil,
+        faderMappingSource: FaderMappingSource? = nil,
+        containerLocator: CaptureContainerLocator = .current()
+    ) {
+        self.init(
+            sessionID: sessionID,
+            takeID: takeID,
+            takeNumber: takeNumber,
+            bpm: bpm,
+            sourceMedia: containerLocator.reference(for: sourceMediaURL),
+            sourceSidecar: containerLocator.reference(for: sourceSidecarURL),
+            sourceAudio: sourceAudioURL.map(containerLocator.reference(for:)),
+            sourceWatchMotion: sourceWatchMotionURL.map(containerLocator.reference(for:)),
+            drillName: drillName,
+            duration: duration,
+            quality: quality,
+            comboTagged: comboTagged,
+            audioPresent: audioPresent,
+            motionPresent: motionPresent,
+            syncStatus: syncStatus,
+            recordingStatus: recordingStatus,
+            verbalSlateUsed: verbalSlateUsed,
+            syncClapUsed: syncClapUsed,
+            note: note,
+            captureTiming: captureTiming,
+            motionSources: motionSources,
+            faderMappingSource: faderMappingSource
+        )
+    }
+
+    func sourceMediaURL(in locator: CaptureContainerLocator) -> URL {
+        locator.url(for: sourceMedia)
+    }
+
+    func sourceSidecarURL(in locator: CaptureContainerLocator) -> URL {
+        locator.url(for: sourceSidecar)
+    }
+
+    func sourceAudioURL(in locator: CaptureContainerLocator) -> URL? {
+        sourceAudio.map(locator.url(for:))
+    }
+
+    func sourceWatchMotionURL(in locator: CaptureContainerLocator) -> URL? {
+        sourceWatchMotion.map(locator.url(for:))
+    }
+
+    /// The reference for one artifact kind, or `nil` when the take has none.
+    func reference(for kind: CaptureArtifactKind) -> CaptureArtifactReference? {
+        switch kind {
+        case .media: return sourceMedia
+        case .sidecar: return sourceSidecar
+        case .audio: return sourceAudio
+        case .watchMotion: return sourceWatchMotion
+        }
+    }
+
+    /// Returns a copy with the given artifact locations replaced. Used only by
+    /// the ledger's legacy rebase, which replaces every location of a take
+    /// together or none of them.
+    func replacingArtifactReferences(
+        media: CaptureArtifactReference,
+        sidecar: CaptureArtifactReference,
+        audio: CaptureArtifactReference?,
+        watchMotion: CaptureArtifactReference?
+    ) -> GuidedCaptureKeptTake {
+        GuidedCaptureKeptTake(
+            sessionID: sessionID,
+            takeID: takeID,
+            takeNumber: takeNumber,
+            bpm: bpm,
+            sourceMedia: media,
+            sourceSidecar: sidecar,
+            sourceAudio: audio,
+            sourceWatchMotion: watchMotion,
+            drillName: drillName,
+            duration: duration,
+            quality: quality,
+            comboTagged: comboTagged,
+            audioPresent: audioPresent,
+            motionPresent: motionPresent,
+            syncStatus: syncStatus,
+            recordingStatus: recordingStatus,
+            verbalSlateUsed: verbalSlateUsed,
+            syncClapUsed: syncClapUsed,
+            note: note,
+            captureTiming: captureTiming,
+            motionSources: motionSources,
+            faderMappingSource: faderMappingSource
+        )
+    }
+}
+
+/// Durable guided-capture session context plus every take the operator kept.
+/// Profile values stay as raw strings because their current UI enums are
+/// private to `CompanionCameraView`; persisting the raw values keeps this
+/// shared ledger platform-agnostic without creating a second profile model.
+struct GuidedCaptureKeptSession: Codable, Equatable, Sendable, Identifiable {
+    let sessionID: String
+    var config: CaptureSessionConfig
+    var deckProfileRawValue: String
+    var cameraProfileRawValue: String
+    var watchWristRawValue: String
+    var workflow: String
+    var platform: String
+    var sessionName: String
+    var calibrationData: Data?
+    fileprivate(set) var takes: [GuidedCaptureKeptTake]
+    fileprivate(set) var updatedAt: Date?
+
+    var id: String { sessionID }
+
+    init(
+        sessionID: String,
+        config: CaptureSessionConfig,
+        deckProfileRawValue: String,
+        cameraProfileRawValue: String,
+        watchWristRawValue: String,
+        workflow: String = "guided_capture",
+        platform: String,
+        sessionName: String,
+        calibrationData: Data?,
+        takes: [GuidedCaptureKeptTake] = [],
+        updatedAt: Date? = nil
+    ) {
+        self.sessionID = sessionID
+        self.config = config
+        self.deckProfileRawValue = deckProfileRawValue
+        self.cameraProfileRawValue = cameraProfileRawValue
+        self.watchWristRawValue = watchWristRawValue
+        self.workflow = workflow
+        self.platform = platform
+        self.sessionName = sessionName
+        self.calibrationData = calibrationData
+        self.takes = takes
+        self.updatedAt = updatedAt
+    }
+
+    func take(id takeID: String) -> GuidedCaptureKeptTake? {
+        takes.first { $0.takeID == takeID }
+    }
+}
+
+/// A validated, read-only production projection of one durable kept take.
+///
+/// The ledger remains the source of identity and artifact locations. Opening a
+/// take re-reads its finalized sidecar and verifies the real movie before UI is
+/// allowed to offer playback. Notation is presentation-only and goes through
+/// the same gesture-relative projection used by macOS Review/Take Detail;
+/// canonical evidence in the sidecar is never changed.
+struct GuidedCaptureSavedTakeDetail: Equatable, Sendable, Identifiable {
+    let take: GuidedCaptureKeptTake
+    let mediaURL: URL
+    let sidecar: CaptureCore.LocalRecordingSidecar
+    let presentationEvents: [CaptureCore.DetectedNotationRecordMovementEvent]
+    let presentationDuration: TimeInterval
+
+    var id: String { take.recordingID }
+
+    static func load(
+        take: GuidedCaptureKeptTake,
+        containerLocator: CaptureContainerLocator,
+        fileManager: FileManager = .default
+    ) throws -> GuidedCaptureSavedTakeDetail {
+        let mediaURL = take.sourceMediaURL(in: containerLocator)
+        let sidecarURL = take.sourceSidecarURL(in: containerLocator)
+
+        try requireNonemptyRegularFile(
+            at: mediaURL,
+            missing: .mediaMissing(take.takeID),
+            empty: .mediaEmpty(take.takeID),
+            fileManager: fileManager
+        )
+        try requireNonemptyRegularFile(
+            at: sidecarURL,
+            missing: .sidecarMissing(take.takeID),
+            empty: .sidecarEmpty(take.takeID),
+            fileManager: fileManager
+        )
+
+        let sidecar: CaptureCore.LocalRecordingSidecar
+        do {
+            let decoder = JSONDecoder()
+            decoder.dateDecodingStrategy = .iso8601
+            sidecar = try decoder.decode(
+                CaptureCore.LocalRecordingSidecar.self,
+                from: Data(contentsOf: sidecarURL)
+            )
+        } catch {
+            throw GuidedCaptureSavedTakeDetailError.sidecarUnreadable(take.takeID)
+        }
+
+        guard sidecar.sessionID == take.sessionID,
+              sidecar.takeID == take.takeID,
+              sidecar.appLocalTakeNumber == take.takeNumber else {
+            throw GuidedCaptureSavedTakeDetailError.sidecarIdentityMismatch(take.takeID)
+        }
+        guard sidecar.sidecarFileName == sidecarURL.lastPathComponent,
+              sidecar.mediaFileName == mediaURL.lastPathComponent else {
+            throw GuidedCaptureSavedTakeDetailError.artifactAssociationMismatch(take.takeID)
+        }
+        guard sidecar.recordingStatus == "completed",
+              take.recordingStatus == "completed" else {
+            throw GuidedCaptureSavedTakeDetailError.recordingIncomplete(take.takeID)
+        }
+
+        let events = sidecar.detectedNotation.map {
+            CaptureCore.gestureRelativeRecordMovementEventsForPresentation(from: $0)
+        } ?? []
+        let notationEnd = sidecar.detectedNotation.flatMap {
+            CaptureCore.gestureRelativeRecordMovementPresentationEndTime(
+                from: $0,
+                presentationEvents: events
+            )
+        } ?? 0
+
+        return GuidedCaptureSavedTakeDetail(
+            take: take,
+            mediaURL: mediaURL,
+            sidecar: sidecar,
+            presentationEvents: events,
+            presentationDuration: max(take.duration, notationEnd)
+        )
+    }
+
+    private static func requireNonemptyRegularFile(
+        at url: URL,
+        missing: GuidedCaptureSavedTakeDetailError,
+        empty: GuidedCaptureSavedTakeDetailError,
+        fileManager: FileManager
+    ) throws {
+        guard fileManager.fileExists(atPath: url.path) else { throw missing }
+        let values: URLResourceValues
+        do {
+            values = try url.resourceValues(forKeys: [.isRegularFileKey, .fileSizeKey])
+        } catch {
+            throw missing
+        }
+        guard values.isRegularFile == true else { throw missing }
+        guard (values.fileSize ?? 0) > 0 else { throw empty }
+    }
+}
+
+enum GuidedCaptureSavedTakeDetailError: Error, Equatable, Sendable {
+    case mediaMissing(String)
+    case mediaEmpty(String)
+    case sidecarMissing(String)
+    case sidecarEmpty(String)
+    case sidecarUnreadable(String)
+    case sidecarIdentityMismatch(String)
+    case artifactAssociationMismatch(String)
+    case recordingIncomplete(String)
+}
+
+extension GuidedCaptureSavedTakeDetailError: LocalizedError {
+    var errorDescription: String? {
+        switch self {
+        case .mediaMissing:
+            return "This saved take's video is missing. The take was left in the session."
+        case .mediaEmpty:
+            return "This saved take's video is empty. The take was left in the session."
+        case .sidecarMissing:
+            return "This saved take's metadata is missing. The take was left in the session."
+        case .sidecarEmpty:
+            return "This saved take's metadata is empty. The take was left in the session."
+        case .sidecarUnreadable:
+            return "This saved take's metadata could not be read. The take was left in the session."
+        case .sidecarIdentityMismatch, .artifactAssociationMismatch:
+            return "This saved take's files do not match its session record. The take was left in the session."
+        case .recordingIncomplete:
+            return "This saved take did not finish recording, so playback is unavailable. The take was left in the session."
+        }
+    }
+}
+
+// MARK: - Legacy kept-ledger rebase
+
+/// Why one take's legacy absolute locations were refused a rebase.
+///
+/// Every case leaves the take's stored locations exactly as they were: the
+/// capture files are never touched, the ledger keeps the take, and Export keeps
+/// reporting the real problem so the operator can retry.
+enum GuidedCaptureLedgerRebaseRejection: String, Equatable, Sendable {
+    /// A stored path contained `.`/`..` or was otherwise not a plain name chain.
+    case pathTraversal
+    /// The legacy path named its container root more than once, so which
+    /// segment was the root is genuinely unknowable.
+    case ambiguousContainerRoot
+    /// The legacy path was inside the container but not in a capture directory
+    /// this artifact kind owns.
+    case unknownCaptureLocation
+    /// The recovered sidecar could not be read or decoded.
+    case sidecarUnreadable
+    /// The recovered sidecar belongs to a different session, take, or number.
+    case sidecarIdentityMismatch
+    /// The recovered sidecar does not name itself as the candidate file.
+    case sidecarFileNameMismatch
+    /// The recovered sidecar does not name the candidate media file.
+    case mediaAssociationMismatch
+    /// The candidate audio file is not the media file's audio sibling.
+    case audioAssociationMismatch
+    /// The recovered sidecar does not link the candidate Watch/motion file.
+    case watchMotionAssociationMismatch
+    /// A candidate file is genuinely absent from the current container.
+    case artifactMissing
+    /// Two takes in one session resolved onto the same file.
+    case duplicateResolvedPath
+}
+
+/// What happened to one take during a rebase pass.
+enum GuidedCaptureLedgerTakeRebase: Equatable, Sendable {
+    /// Nothing needed rebasing; the take is already durable.
+    case unchanged
+    case rebased(GuidedCaptureKeptTake)
+    case rejected(GuidedCaptureLedgerRebaseRejection)
+}
+
+/// The outcome of one whole-ledger rebase pass, for logging and tests.
+struct GuidedCaptureLedgerRebaseReport: Equatable, Sendable {
+    /// `sessionID:takeID` of every take whose locations were made durable.
+    var rebasedRecordingIDs: [String] = []
+    /// `sessionID:takeID` to the reason its rebase was refused.
+    var rejections: [String: GuidedCaptureLedgerRebaseRejection] = [:]
+
+    var didChangeAnything: Bool { !rebasedRecordingIDs.isEmpty }
+}
+
+/// Rebases legacy absolute artifact locations onto the container the app is
+/// running in now.
+///
+/// This is deliberately not a search. Each legacy path is *interpreted* — its
+/// container-root segment is located and the remainder must already be a
+/// capture directory that artifact kind owns — and the single resulting
+/// candidate is then proved against the recovered sidecar before it is
+/// accepted. Nothing is ever matched by basename alone, no directory is
+/// enumerated, no take is invented, and a take that fails any check keeps its
+/// stale location so the failure stays visible.
+enum GuidedCaptureLedgerRebase {
+    private static let sidecarDecoder: JSONDecoder = {
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .iso8601
+        return decoder
+    }()
+
+    /// One artifact location's interpretation.
+    enum DerivedReference: Equatable, Sendable {
+        /// Already durable, or a path ScratchLab does not own. Left alone.
+        case unchanged
+        case candidate(CaptureArtifactReference)
+        case rejected(GuidedCaptureLedgerRebaseRejection)
+    }
+
+    static func derivedReference(
+        for reference: CaptureArtifactReference,
+        kind: CaptureArtifactKind
+    ) -> DerivedReference {
+        switch reference {
+        case let .containerRelative(_, path):
+            guard CaptureArtifactReference.isSafeRelativePath(path) else {
+                return .rejected(.pathTraversal)
+            }
+            return .unchanged
+
+        case let .absolute(url):
+            let components = url.pathComponents
+            guard components.allSatisfy({ $0 == "/" || CaptureArtifactReference.isSafePathComponent($0) }) else {
+                return .rejected(.pathTraversal)
+            }
+
+            let root = kind.containerRoot
+            let marker = root.legacyPathMarker
+            let markerStarts = markerStartIndices(of: marker, in: components)
+            guard !markerStarts.isEmpty else {
+                // Not an app-container path at all — nothing to rebase.
+                return .unchanged
+            }
+            guard markerStarts.count == 1, let markerStart = markerStarts.first else {
+                return .rejected(.ambiguousContainerRoot)
+            }
+
+            let suffix = Array(components.dropFirst(markerStart + marker.count))
+            guard let relativePath = knownCaptureRelativePath(for: suffix, kind: kind) else {
+                return .rejected(.unknownCaptureLocation)
+            }
+            return .candidate(.containerRelative(root: root, path: relativePath))
+        }
+    }
+
+    /// Rebases one take, proving every candidate against the recovered sidecar
+    /// before accepting any of them. All four locations move together or none
+    /// do, so a take can never end up half-rebased.
+    static func rebasedTake(
+        _ take: GuidedCaptureKeptTake,
+        locator: CaptureContainerLocator,
+        fileManager: FileManager = .default
+    ) -> GuidedCaptureLedgerTakeRebase {
+        var proposed: [CaptureArtifactKind: CaptureArtifactReference] = [:]
+        var didDeriveCandidate = false
+
+        for kind in CaptureArtifactKind.allCases {
+            guard let existing = take.reference(for: kind) else { continue }
+            switch derivedReference(for: existing, kind: kind) {
+            case .unchanged:
+                proposed[kind] = existing
+            case let .candidate(candidate):
+                proposed[kind] = candidate
+                didDeriveCandidate = true
+            case let .rejected(reason):
+                return .rejected(reason)
+            }
+        }
+
+        guard didDeriveCandidate else { return .unchanged }
+
+        guard let mediaReference = proposed[.media], let sidecarReference = proposed[.sidecar] else {
+            return .rejected(.unknownCaptureLocation)
+        }
+        let audioReference = proposed[.audio]
+        let watchMotionReference = proposed[.watchMotion]
+
+        let sidecarURL = locator.url(for: sidecarReference)
+        let mediaURL = locator.url(for: mediaReference)
+
+        guard fileManager.fileExists(atPath: sidecarURL.path) else {
+            return .rejected(.artifactMissing)
+        }
+        guard let sidecarData = try? Data(contentsOf: sidecarURL),
+              let sidecar = try? sidecarDecoder.decode(
+                  CaptureCore.LocalRecordingSidecar.self,
+                  from: sidecarData
+              ) else {
+            return .rejected(.sidecarUnreadable)
+        }
+
+        guard sidecar.sessionID == take.sessionID,
+              sidecar.takeID == take.takeID,
+              sidecar.appLocalTakeNumber == take.takeNumber else {
+            return .rejected(.sidecarIdentityMismatch)
+        }
+        guard sidecar.sidecarFileName == sidecarURL.lastPathComponent else {
+            return .rejected(.sidecarFileNameMismatch)
+        }
+        guard sidecar.mediaFileName == mediaURL.lastPathComponent else {
+            return .rejected(.mediaAssociationMismatch)
+        }
+        guard fileManager.fileExists(atPath: mediaURL.path) else {
+            return .rejected(.artifactMissing)
+        }
+
+        if let audioReference {
+            let audioURL = locator.url(for: audioReference)
+            guard audioURL.deletingPathExtension().lastPathComponent
+                    == mediaURL.deletingPathExtension().lastPathComponent else {
+                return .rejected(.audioAssociationMismatch)
+            }
+            guard fileManager.fileExists(atPath: audioURL.path) else {
+                return .rejected(.artifactMissing)
+            }
+        }
+
+        if let watchMotionReference {
+            let watchMotionURL = locator.url(for: watchMotionReference)
+            // The sidecar's linked file name is the only durable evidence that
+            // this Watch capture belongs to this take. Without it there is
+            // nothing to prove the association, so the rebase is refused.
+            guard sidecar.linkedMotionFileName == watchMotionURL.lastPathComponent else {
+                return .rejected(.watchMotionAssociationMismatch)
+            }
+            guard fileManager.fileExists(atPath: watchMotionURL.path) else {
+                return .rejected(.artifactMissing)
+            }
+        }
+
+        return .rebased(
+            take.replacingArtifactReferences(
+                media: mediaReference,
+                sidecar: sidecarReference,
+                audio: audioReference,
+                watchMotion: watchMotionReference
+            )
+        )
+    }
+
+    /// Rebases every take in every session, preserving take count and order.
+    /// Takes are never added, removed, merged, or reordered here.
+    static func rebasedSessions(
+        _ sessions: [GuidedCaptureKeptSession],
+        locator: CaptureContainerLocator,
+        fileManager: FileManager = .default
+    ) -> (sessions: [GuidedCaptureKeptSession], report: GuidedCaptureLedgerRebaseReport) {
+        var report = GuidedCaptureLedgerRebaseReport()
+        var outcomes: [[GuidedCaptureLedgerTakeRebase]] = []
+        outcomes.reserveCapacity(sessions.count)
+        for session in sessions {
+            outcomes.append(
+                session.takes.map { rebasedTake($0, locator: locator, fileManager: fileManager) }
+            )
+        }
+
+        // No two takes may land on the same file, in this session or any other.
+        // A collision is mutually ambiguous evidence, so every take involved
+        // keeps its original locations rather than one of them silently
+        // winning and the other pointing at a file it does not own.
+        struct TakeAddress: Hashable {
+            let session: Int
+            let take: Int
+        }
+        var pathOwners: [String: TakeAddress] = [:]
+        var collidingAddresses: Set<TakeAddress> = []
+        for (sessionIndex, sessionOutcomes) in outcomes.enumerated() {
+            for (takeIndex, outcome) in sessionOutcomes.enumerated() {
+                guard case let .rebased(candidate) = outcome else { continue }
+                let address = TakeAddress(session: sessionIndex, take: takeIndex)
+                for path in resolvedPaths(of: candidate, locator: locator) {
+                    if let owner = pathOwners[path] {
+                        collidingAddresses.insert(owner)
+                        collidingAddresses.insert(address)
+                    } else {
+                        pathOwners[path] = address
+                    }
+                }
+            }
+        }
+
+        var updatedSessions: [GuidedCaptureKeptSession] = []
+        updatedSessions.reserveCapacity(sessions.count)
+        for (sessionIndex, session) in sessions.enumerated() {
+            var updatedSession = session
+            for (takeIndex, outcome) in outcomes[sessionIndex].enumerated() {
+                let take = session.takes[takeIndex]
+                let address = TakeAddress(session: sessionIndex, take: takeIndex)
+                if collidingAddresses.contains(address) {
+                    report.rejections[take.recordingID] = .duplicateResolvedPath
+                    continue
+                }
+                switch outcome {
+                case .unchanged:
+                    continue
+                case let .rejected(reason):
+                    report.rejections[take.recordingID] = reason
+                case let .rebased(rebasedTake):
+                    updatedSession.takes[takeIndex] = rebasedTake
+                    report.rebasedRecordingIDs.append(rebasedTake.recordingID)
+                }
+            }
+            updatedSessions.append(updatedSession)
+        }
+
+        return (updatedSessions, report)
+    }
+
+    private static func resolvedPaths(
+        of take: GuidedCaptureKeptTake,
+        locator: CaptureContainerLocator
+    ) -> [String] {
+        CaptureArtifactKind.allCases.compactMap { kind in
+            take.reference(for: kind).map { locator.url(for: $0).standardizedFileURL.path }
+        }
+    }
+
+    private static func markerStartIndices(of marker: [String], in components: [String]) -> [Int] {
+        guard !marker.isEmpty, components.count >= marker.count else { return [] }
+        return (0...(components.count - marker.count)).filter { start in
+            Array(components[start..<(start + marker.count)]) == marker
+        }
+    }
+
+    /// Accepts a container-relative suffix only when it is exactly one of the
+    /// capture directories this kind owns followed by a single file name.
+    private static func knownCaptureRelativePath(
+        for suffix: [String],
+        kind: CaptureArtifactKind
+    ) -> String? {
+        for directory in kind.allowedDirectories {
+            let directoryComponents = directory.components(separatedBy: "/")
+            guard suffix.count == directoryComponents.count + 1,
+                  Array(suffix.prefix(directoryComponents.count)) == directoryComponents,
+                  let fileName = suffix.last,
+                  CaptureArtifactReference.isSafePathComponent(fileName) else {
+                continue
+            }
+            return "\(directory)/\(fileName)"
+        }
+        return nil
+    }
+}
+
+enum GuidedCaptureKeptSessionStoreError: Error, Equatable, Sendable {
+    case unableToResolveDefaultStorage
+    case invalidStorageURL(String)
+    case unreadableStore(String)
+    case invalidStoredData(String)
+    case unsupportedSchemaVersion(Int)
+    case duplicateSessionID(String)
+    case sessionIdentityMismatch(sessionID: String, configSessionID: String)
+    case takeSessionMismatch(sessionID: String, takeSessionID: String)
+    case invalidSessionID(String)
+    case invalidSessionContext(sessionID: String)
+    case invalidTakeIdentity(sessionID: String, takeID: String, takeNumber: Int)
+    case nonAbsoluteSourceURL(sessionID: String, takeID: String, field: String)
+    case containerOwnedAbsoluteSourceURL(sessionID: String, takeID: String, field: String)
+    case unsafeRelativeSourcePath(sessionID: String, takeID: String, field: String)
+    case takeIDCollision(sessionID: String, takeID: String)
+    case takeNumberCollision(sessionID: String, takeNumber: Int)
+    case takePayloadConflict(sessionID: String, takeID: String, takeNumber: Int)
+    case sessionNotFound(String)
+    case takeNotFound(sessionID: String, takeID: String)
+    case recordingNotFound(String)
+    case storageChanged(String)
+    case persistenceFailed(String)
+}
+
+extension GuidedCaptureKeptSessionStoreError: LocalizedError {
+    var errorDescription: String? {
+        switch self {
+        case .unableToResolveDefaultStorage:
+            return "ScratchLab could not locate Application Support for the kept-session ledger."
+        case let .invalidStorageURL(path):
+            return "The kept-session storage location is invalid: \(path)"
+        case .unreadableStore:
+            return "ScratchLab could not read the kept-session ledger."
+        case .invalidStoredData:
+            return "The kept-session ledger is damaged or inconsistent. It was left unchanged."
+        case let .unsupportedSchemaVersion(version):
+            return "This kept-session ledger uses unsupported schema version \(version)."
+        case let .duplicateSessionID(sessionID):
+            return "The kept-session ledger contains more than one session named \(sessionID)."
+        case .sessionIdentityMismatch:
+            return "The kept session and its capture configuration have different session IDs."
+        case .takeSessionMismatch:
+            return "The kept take belongs to a different capture session."
+        case .invalidSessionID:
+            return "The kept session has an invalid session ID."
+        case .invalidSessionContext:
+            return "The kept session is missing required export context."
+        case let .invalidTakeIdentity(_, takeID, takeNumber):
+            return "Take \(takeID) has invalid take number \(takeNumber)."
+        case let .nonAbsoluteSourceURL(_, takeID, field):
+            return "Take \(takeID) has an invalid \(field) source location."
+        case let .containerOwnedAbsoluteSourceURL(_, takeID, field):
+            return "Take \(takeID) tried to store its \(field) location as an absolute app-container path, which does not survive reinstalling."
+        case let .unsafeRelativeSourcePath(_, takeID, field):
+            return "Take \(takeID) has an unsafe \(field) source path."
+        case let .takeIDCollision(_, takeID):
+            return "A different take already uses take ID \(takeID)."
+        case let .takeNumberCollision(_, takeNumber):
+            return "A different take already uses take number \(takeNumber)."
+        case let .takePayloadConflict(_, takeID, _):
+            return "Take \(takeID) was already kept with different capture details."
+        case let .sessionNotFound(sessionID):
+            return "Kept session \(sessionID) was not found."
+        case let .takeNotFound(_, takeID):
+            return "Kept take \(takeID) was not found."
+        case let .recordingNotFound(recordingID):
+            return "Kept recording \(recordingID) was not found."
+        case .storageChanged:
+            return "The kept-session ledger changed on disk. Reload it before retrying."
+        case .persistenceFailed:
+            return "ScratchLab could not save the kept-session ledger. The in-memory ledger was left unchanged."
+        }
+    }
+}
+
+/// File-backed source of truth for guided captures the operator has kept.
+///
+/// A mutation is published only after its complete JSON document has been
+/// written atomically. The exact bytes loaded or written are retained as an
+/// optimistic concurrency token, so another store instance (or damaged file)
+/// can never be silently overwritten by stale in-memory state.
+@MainActor
+final class GuidedCaptureKeptSessionStore: ObservableObject {
+    private struct Document: Codable, Equatable, Sendable {
+        static let currentSchemaVersion = 1
+
+        let schemaVersion: Int
+        let sessions: [GuidedCaptureKeptSession]
+
+        init(sessions: [GuidedCaptureKeptSession]) {
+            self.schemaVersion = Self.currentSchemaVersion
+            self.sessions = sessions
+        }
+    }
+
+    @Published private(set) var sessions: [GuidedCaptureKeptSession] = []
+
+    let storageURL: URL
+
+    /// The container roots every stored reference is resolved against. Held
+    /// here rather than baked into the ledger so a container UUID change is
+    /// absorbed at load time.
+    let containerLocator: CaptureContainerLocator
+
+    /// What the last load did with legacy absolute locations, for diagnostics.
+    private(set) var lastRebaseReport = GuidedCaptureLedgerRebaseReport()
+
+    private let fileManager: FileManager
+    private let now: () -> Date
+    private let encoder: JSONEncoder
+    private let decoder: JSONDecoder
+    private var lastPersistedData: Data?
+
+    init(
+        storageURL: URL? = nil,
+        fileManager: FileManager = .default,
+        containerLocator: CaptureContainerLocator? = nil,
+        now: @escaping () -> Date = { Date() }
+    ) throws {
+        self.fileManager = fileManager
+        self.containerLocator = containerLocator ?? .current(fileManager: fileManager)
+        self.now = now
+
+        if let storageURL {
+            self.storageURL = storageURL
+        } else {
+            self.storageURL = try Self.defaultStorageURL(fileManager: fileManager)
+        }
+
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+        self.encoder = encoder
+        self.decoder = JSONDecoder()
+
+        guard Self.isAbsoluteFileURL(self.storageURL) else {
+            throw GuidedCaptureKeptSessionStoreError.invalidStorageURL(self.storageURL.absoluteString)
+        }
+
+        try reload()
+    }
+
+    static func defaultStorageURL(fileManager: FileManager = .default) throws -> URL {
+        guard let applicationSupportURL = fileManager.urls(
+            for: .applicationSupportDirectory,
+            in: .userDomainMask
+        ).first else {
+            throw GuidedCaptureKeptSessionStoreError.unableToResolveDefaultStorage
+        }
+
+        return applicationSupportURL
+            .appendingPathComponent("ScratchLab", isDirectory: true)
+            .appendingPathComponent("guided-capture-kept-sessions.json", isDirectory: false)
+    }
+
+    /// Reloads a complete document. Invalid data throws before published state
+    /// or the concurrency token changes, so a later retry cannot overwrite it.
+    func reload() throws {
+        guard fileManager.fileExists(atPath: storageURL.path) else {
+            sessions = []
+            lastPersistedData = nil
+            return
+        }
+
+        let data: Data
+        do {
+            data = try Data(contentsOf: storageURL)
+        } catch {
+            throw GuidedCaptureKeptSessionStoreError.unreadableStore(storageURL.path)
+        }
+
+        let document: Document
+        do {
+            document = try decoder.decode(Document.self, from: data)
+        } catch {
+            throw GuidedCaptureKeptSessionStoreError.invalidStoredData(storageURL.path)
+        }
+
+        guard document.schemaVersion == Document.currentSchemaVersion else {
+            throw GuidedCaptureKeptSessionStoreError.unsupportedSchemaVersion(document.schemaVersion)
+        }
+
+        let canonicalSessions: [GuidedCaptureKeptSession]
+        do {
+            // A legacy ledger legitimately still holds absolute container URLs,
+            // so loading only enforces structural validity. The durable-form
+            // rule is enforced on write, below and in `persist`.
+            canonicalSessions = try Self.validatedCanonicalSessions(
+                document.sessions,
+                containerLocator: containerLocator,
+                mode: .loading
+            )
+        } catch let storeError as GuidedCaptureKeptSessionStoreError {
+            throw storeError
+        } catch {
+            throw GuidedCaptureKeptSessionStoreError.invalidStoredData(storageURL.path)
+        }
+
+        sessions = canonicalSessions
+        lastPersistedData = data
+
+        migrateLegacyReferencesIfNeeded(from: canonicalSessions)
+    }
+
+    /// Rebases any legacy absolute locations onto the current container and
+    /// writes the result back in the same atomic transaction the store uses for
+    /// every other mutation.
+    ///
+    /// A take that cannot be proved keeps its stale location: the capture files
+    /// are untouched, the take stays in the ledger, and Export keeps reporting
+    /// the real failure so the operator can retry after the next install.
+    private func migrateLegacyReferencesIfNeeded(from loadedSessions: [GuidedCaptureKeptSession]) {
+        let (rebasedSessions, report) = GuidedCaptureLedgerRebase.rebasedSessions(
+            loadedSessions,
+            locator: containerLocator,
+            fileManager: fileManager
+        )
+        lastRebaseReport = report
+        guard report.didChangeAnything, rebasedSessions != loadedSessions else { return }
+
+        do {
+            try persist(rebasedSessions)
+        } catch {
+            // The rebase is a durability improvement, not the operator's
+            // request. If the write fails, keep the resolved ledger in memory
+            // so this launch can still export, and let the next mutation retry
+            // the write.
+            if let validated = try? Self.validatedCanonicalSessions(
+                rebasedSessions,
+                containerLocator: containerLocator,
+                mode: .persisting
+            ) {
+                sessions = validated
+            }
+        }
+    }
+
+    func session(id sessionID: String) -> GuidedCaptureKeptSession? {
+        sessions.first { $0.sessionID == sessionID }
+    }
+
+    /// Adds a take to its active session without ever replacing an existing
+    /// take. Passing the same record again is an idempotent no-op. Passing the
+    /// same identity with different payload, or reusing either half of the
+    /// identity for another take, fails visibly.
+    @discardableResult
+    func keep(
+        _ take: GuidedCaptureKeptTake,
+        in session: GuidedCaptureKeptSession
+    ) throws -> GuidedCaptureKeptSession {
+        guard take.sessionID == session.sessionID else {
+            throw GuidedCaptureKeptSessionStoreError.takeSessionMismatch(
+                sessionID: session.sessionID,
+                takeSessionID: take.sessionID
+            )
+        }
+
+        var nextSessions = sessions
+        let sessionIndex = nextSessions.firstIndex { $0.sessionID == session.sessionID }
+        var updatedSession: GuidedCaptureKeptSession
+
+        if let sessionIndex {
+            let existing = nextSessions[sessionIndex]
+            updatedSession = session
+            // Kept takes are append-only here. Metadata/profile changes can be
+            // refreshed by the active session, but omission from an incoming
+            // snapshot never detaches an earlier take.
+            updatedSession.takes = existing.takes
+            updatedSession.updatedAt = existing.updatedAt
+        } else {
+            updatedSession = session
+            updatedSession.takes = []
+            updatedSession.updatedAt = nil
+        }
+
+        var didChange = sessionIndex == nil
+        for incomingTake in session.takes + [take] {
+            didChange = try Self.merge(incomingTake, into: &updatedSession.takes) || didChange
+        }
+
+        if let sessionIndex,
+           Self.sessionContext(updatedSession, equals: nextSessions[sessionIndex]) == false {
+            didChange = true
+        }
+
+        guard didChange else { return updatedSession }
+
+        updatedSession.takes.sort(by: Self.takeOrder)
+        updatedSession.updatedAt = now()
+
+        if let sessionIndex {
+            nextSessions[sessionIndex] = updatedSession
+        } else {
+            nextSessions.append(updatedSession)
+        }
+
+        try persist(nextSessions)
+        return self.session(id: updatedSession.sessionID) ?? updatedSession
+    }
+
+    /// Refines the delayed media-track verdict for a take that may already
+    /// have been kept. An optional newly-resolved scratch-audio URL is stored
+    /// in the same atomic transaction; omitting it preserves the prior URL.
+    @discardableResult
+    func updateAudioPresence(
+        _ audioPresent: Bool,
+        sourceAudioURL: URL? = nil,
+        sessionID: String,
+        takeID: String
+    ) throws -> GuidedCaptureKeptTake {
+        guard let sessionIndex = sessions.firstIndex(where: { $0.sessionID == sessionID }) else {
+            throw GuidedCaptureKeptSessionStoreError.sessionNotFound(sessionID)
+        }
+        guard let takeIndex = sessions[sessionIndex].takes.firstIndex(where: { $0.takeID == takeID }) else {
+            throw GuidedCaptureKeptSessionStoreError.takeNotFound(sessionID: sessionID, takeID: takeID)
+        }
+
+        if let sourceAudioURL,
+           !Self.isAbsoluteFileURL(sourceAudioURL) {
+            throw GuidedCaptureKeptSessionStoreError.nonAbsoluteSourceURL(
+                sessionID: sessionID,
+                takeID: takeID,
+                field: "audio"
+            )
+        }
+
+        var nextSessions = sessions
+        var updatedTake = nextSessions[sessionIndex].takes[takeIndex]
+        let resolvedAudio = sourceAudioURL.map(containerLocator.reference(for:))
+            ?? updatedTake.sourceAudio
+        guard updatedTake.audioPresent != audioPresent
+                || updatedTake.sourceAudio != resolvedAudio else {
+            return updatedTake
+        }
+
+        updatedTake.audioPresent = audioPresent
+        updatedTake.sourceAudio = resolvedAudio
+        nextSessions[sessionIndex].takes[takeIndex] = updatedTake
+        nextSessions[sessionIndex].updatedAt = now()
+        try persist(nextSessions)
+        return updatedTake
+    }
+
+    /// Convenience for the existing delayed inspection path, whose stable ID
+    /// is the sidecar's `sessionID:takeID` recording identity.
+    @discardableResult
+    func updateAudioPresence(
+        _ audioPresent: Bool,
+        forRecordingID recordingID: String
+    ) throws -> GuidedCaptureKeptTake {
+        for session in sessions {
+            if let take = session.takes.first(where: { $0.recordingID == recordingID }) {
+                return try updateAudioPresence(
+                    audioPresent,
+                    sessionID: session.sessionID,
+                    takeID: take.takeID
+                )
+            }
+        }
+        throw GuidedCaptureKeptSessionStoreError.recordingNotFound(recordingID)
+    }
+
+    private func persist(_ proposedSessions: [GuidedCaptureKeptSession]) throws {
+        let canonicalSessions = try Self.validatedCanonicalSessions(
+            proposedSessions,
+            containerLocator: containerLocator,
+            mode: .persisting
+        )
+        let data: Data
+        do {
+            data = try encoder.encode(Document(sessions: canonicalSessions))
+        } catch {
+            throw GuidedCaptureKeptSessionStoreError.persistenceFailed(storageURL.path)
+        }
+
+        try assertStorageHasNotChanged()
+
+        do {
+            try fileManager.createDirectory(
+                at: storageURL.deletingLastPathComponent(),
+                withIntermediateDirectories: true
+            )
+            try data.write(to: storageURL, options: .atomic)
+            guard try Data(contentsOf: storageURL) == data else {
+                throw GuidedCaptureKeptSessionStoreError.persistenceFailed(storageURL.path)
+            }
+        } catch {
+            if let storeError = error as? GuidedCaptureKeptSessionStoreError {
+                throw storeError
+            }
+            throw GuidedCaptureKeptSessionStoreError.persistenceFailed(storageURL.path)
+        }
+
+        lastPersistedData = data
+        sessions = canonicalSessions
+    }
+
+    private func assertStorageHasNotChanged() throws {
+        let exists = fileManager.fileExists(atPath: storageURL.path)
+        guard exists else {
+            guard lastPersistedData == nil else {
+                throw GuidedCaptureKeptSessionStoreError.storageChanged(storageURL.path)
+            }
+            return
+        }
+
+        guard let lastPersistedData else {
+            throw GuidedCaptureKeptSessionStoreError.storageChanged(storageURL.path)
+        }
+
+        let currentData: Data
+        do {
+            currentData = try Data(contentsOf: storageURL)
+        } catch {
+            throw GuidedCaptureKeptSessionStoreError.storageChanged(storageURL.path)
+        }
+        guard currentData == lastPersistedData else {
+            throw GuidedCaptureKeptSessionStoreError.storageChanged(storageURL.path)
+        }
+    }
+
+    private static func merge(
+        _ incoming: GuidedCaptureKeptTake,
+        into takes: inout [GuidedCaptureKeptTake]
+    ) throws -> Bool {
+        if let takeIDMatch = takes.first(where: { $0.takeID == incoming.takeID }) {
+            guard takeIDMatch.takeNumber == incoming.takeNumber else {
+                throw GuidedCaptureKeptSessionStoreError.takeIDCollision(
+                    sessionID: incoming.sessionID,
+                    takeID: incoming.takeID
+                )
+            }
+            guard takeIDMatch == incoming else {
+                throw GuidedCaptureKeptSessionStoreError.takePayloadConflict(
+                    sessionID: incoming.sessionID,
+                    takeID: incoming.takeID,
+                    takeNumber: incoming.takeNumber
+                )
+            }
+            return false
+        }
+
+        if takes.contains(where: { $0.takeNumber == incoming.takeNumber }) {
+            throw GuidedCaptureKeptSessionStoreError.takeNumberCollision(
+                sessionID: incoming.sessionID,
+                takeNumber: incoming.takeNumber
+            )
+        }
+
+        takes.append(incoming)
+        return true
+    }
+
+    /// Loading must accept a legacy ledger's absolute container URLs so the
+    /// rebase can repair them; writing must refuse them so the defect can never
+    /// be reintroduced.
+    private enum LedgerValidationMode {
+        case loading
+        case persisting
+    }
+
+    private static func validatedCanonicalSessions(
+        _ candidateSessions: [GuidedCaptureKeptSession],
+        containerLocator: CaptureContainerLocator,
+        mode: LedgerValidationMode
+    ) throws -> [GuidedCaptureKeptSession] {
+        var seenSessionIDs: Set<String> = []
+        var canonicalSessions: [GuidedCaptureKeptSession] = []
+        canonicalSessions.reserveCapacity(candidateSessions.count)
+
+        for var session in candidateSessions {
+            guard !session.sessionID.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+                throw GuidedCaptureKeptSessionStoreError.invalidSessionID(session.sessionID)
+            }
+            guard seenSessionIDs.insert(session.sessionID).inserted else {
+                throw GuidedCaptureKeptSessionStoreError.duplicateSessionID(session.sessionID)
+            }
+            guard session.config.sessionID == session.sessionID else {
+                throw GuidedCaptureKeptSessionStoreError.sessionIdentityMismatch(
+                    sessionID: session.sessionID,
+                    configSessionID: session.config.sessionID
+                )
+            }
+            guard Self.hasText(session.workflow),
+                  Self.hasText(session.platform),
+                  Self.hasText(session.sessionName),
+                  Self.hasText(session.deckProfileRawValue),
+                  Self.hasText(session.cameraProfileRawValue),
+                  Self.hasText(session.watchWristRawValue) else {
+                throw GuidedCaptureKeptSessionStoreError.invalidSessionContext(
+                    sessionID: session.sessionID
+                )
+            }
+
+            var seenTakeIDs: Set<String> = []
+            var seenTakeNumbers: Set<Int> = []
+            for take in session.takes {
+                guard take.sessionID == session.sessionID,
+                      Self.hasText(take.takeID),
+                      take.takeNumber > 0 else {
+                    throw GuidedCaptureKeptSessionStoreError.invalidTakeIdentity(
+                        sessionID: session.sessionID,
+                        takeID: take.takeID,
+                        takeNumber: take.takeNumber
+                    )
+                }
+                guard seenTakeIDs.insert(take.takeID).inserted else {
+                    throw GuidedCaptureKeptSessionStoreError.takeIDCollision(
+                        sessionID: session.sessionID,
+                        takeID: take.takeID
+                    )
+                }
+                guard seenTakeNumbers.insert(take.takeNumber).inserted else {
+                    throw GuidedCaptureKeptSessionStoreError.takeNumberCollision(
+                        sessionID: session.sessionID,
+                        takeNumber: take.takeNumber
+                    )
+                }
+                for kind in CaptureArtifactKind.allCases {
+                    guard let reference = take.reference(for: kind) else { continue }
+                    try validateArtifactReference(
+                        reference,
+                        kind: kind,
+                        sessionID: session.sessionID,
+                        takeID: take.takeID,
+                        containerLocator: containerLocator,
+                        mode: mode
+                    )
+                }
+            }
+
+            session.takes.sort(by: takeOrder)
+            canonicalSessions.append(session)
+        }
+
+        return canonicalSessions.sorted(by: sessionOrder)
+    }
+
+    private static func validateArtifactReference(
+        _ reference: CaptureArtifactReference,
+        kind: CaptureArtifactKind,
+        sessionID: String,
+        takeID: String,
+        containerLocator: CaptureContainerLocator,
+        mode: LedgerValidationMode
+    ) throws {
+        switch reference {
+        case let .containerRelative(_, path):
+            guard CaptureArtifactReference.isSafeRelativePath(path) else {
+                throw GuidedCaptureKeptSessionStoreError.unsafeRelativeSourcePath(
+                    sessionID: sessionID,
+                    takeID: takeID,
+                    field: kind.fieldName
+                )
+            }
+
+        case let .absolute(url):
+            guard isAbsoluteFileURL(url) else {
+                throw GuidedCaptureKeptSessionStoreError.nonAbsoluteSourceURL(
+                    sessionID: sessionID,
+                    takeID: takeID,
+                    field: kind.fieldName
+                )
+            }
+            // Writing an absolute path that lives inside the current app
+            // container is exactly the defect this type exists to prevent:
+            // the next install reissues the container UUID and the path dies.
+            if mode == .persisting, containerLocator.isContainerOwned(url) {
+                throw GuidedCaptureKeptSessionStoreError.containerOwnedAbsoluteSourceURL(
+                    sessionID: sessionID,
+                    takeID: takeID,
+                    field: kind.fieldName
+                )
+            }
+        }
+    }
+
+    private static func isAbsoluteFileURL(_ url: URL) -> Bool {
+        url.isFileURL && url.path.hasPrefix("/")
+    }
+
+    private static func hasText(_ value: String) -> Bool {
+        !value.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    }
+
+    private static func takeOrder(
+        _ lhs: GuidedCaptureKeptTake,
+        _ rhs: GuidedCaptureKeptTake
+    ) -> Bool {
+        if lhs.takeNumber != rhs.takeNumber {
+            return lhs.takeNumber < rhs.takeNumber
+        }
+        return lhs.takeID < rhs.takeID
+    }
+
+    private static func sessionOrder(
+        _ lhs: GuidedCaptureKeptSession,
+        _ rhs: GuidedCaptureKeptSession
+    ) -> Bool {
+        if lhs.config.createdAt != rhs.config.createdAt {
+            return lhs.config.createdAt > rhs.config.createdAt
+        }
+        return lhs.sessionID < rhs.sessionID
+    }
+
+    /// Compares mutable session/export context while deliberately excluding
+    /// the append-only take ledger and store-owned update timestamp.
+    private static func sessionContext(
+        _ lhs: GuidedCaptureKeptSession,
+        equals rhs: GuidedCaptureKeptSession
+    ) -> Bool {
+        lhs.sessionID == rhs.sessionID
+            && lhs.config == rhs.config
+            && lhs.deckProfileRawValue == rhs.deckProfileRawValue
+            && lhs.cameraProfileRawValue == rhs.cameraProfileRawValue
+            && lhs.watchWristRawValue == rhs.watchWristRawValue
+            && lhs.workflow == rhs.workflow
+            && lhs.platform == rhs.platform
+            && lhs.sessionName == rhs.sessionName
+            && lhs.calibrationData == rhs.calibrationData
     }
 }
 
@@ -6974,9 +8565,18 @@ enum CaptureCore {
         }
 
         let minimumValueDelta = 0.10
-        let minimumCutDelta = 0.35
-        let maximumCutDuration = 0.15
+        // Cut gate widened 2026-08-30 from (0.35, 0.15) against physically
+        // captured RANE ONE MKII evidence: across 39 real closing gestures the
+        // median close lasted 0.110 s (p90 0.276 s) and travelled 0.409
+        // (p10 0.236), because a right-deck cut runs centre-to-left rather
+        // than rail-to-rail. The old duration gate sat on top of the median,
+        // so only 19 of 39 real closes classified as `.cut` - and since the
+        // renderer draws only cut-family kinds, the rest were detected but
+        // invisible. These values classify 31 of the same 39.
+        let minimumCutDelta = 0.25
+        let maximumCutDuration = 0.25
         let maximumPulseGap = 0.20
+        let maximumRunSampleGap = 0.20
         let minimumConfidence = 0.75
 
         let crossfaderEvents = mixerMidiEvents
@@ -6990,7 +8590,51 @@ enum CaptureCore {
 
         guard crossfaderEvents.count >= 2 else { return [] }
 
-        let primitives: [PrimitiveEvent] = zip(crossfaderEvents, crossfaderEvents.dropFirst()).compactMap { previous, current in
+        // A primitive is one *monotonic run* of the stream, not one adjacent
+        // sample pair. Crossfader update rates differ by two orders of
+        // magnitude between controllers (a RANE ONE MKII streams CC8 at
+        // ~800 Hz, moving 1-3 MIDI steps per sample), so gating on the
+        // adjacent-sample delta made this derivation sample-rate dependent:
+        // on a dense stream no pair can ever clear `minimumValueDelta`, and a
+        // take full of real cuts derived no fader events at all. Runs are
+        // segmented the way `decodePlatterCore` segments CC6 - zero deltas
+        // ignored, a direction reversal or a gap longer than
+        // `maximumRunSampleGap` closes the run - so the gates below measure
+        // the gesture instead of the sample period. On a sparse stream (one
+        // sample per reversal) every run is a single adjacent pair, which is
+        // exactly the previous behavior.
+        struct Run {
+            let startIndex: Int
+            let endIndex: Int
+        }
+
+        var runs: [Run] = []
+        var runSign = 0
+        var runStart = 0
+        for index in 0..<(crossfaderEvents.count - 1) {
+            let change = crossfaderEvents[index + 1].normalizedValue
+                - crossfaderEvents[index].normalizedValue
+            let sign = change > 0 ? 1 : (change < 0 ? -1 : 0)
+            if sign == 0 { continue }
+            let gap = crossfaderEvents[index + 1].takeRelativeTime
+                - crossfaderEvents[index].takeRelativeTime
+            let breaksRun = gap > maximumRunSampleGap || (runSign != 0 && sign != runSign)
+            if runSign != 0, breaksRun {
+                runs.append(Run(startIndex: runStart, endIndex: index))
+                runStart = index
+                runSign = sign
+            } else {
+                if runSign == 0 { runStart = index }
+                runSign = sign
+            }
+        }
+        if runSign != 0 {
+            runs.append(Run(startIndex: runStart, endIndex: crossfaderEvents.count - 1))
+        }
+
+        let primitives: [PrimitiveEvent] = runs.compactMap { run in
+            let previous = crossfaderEvents[run.startIndex]
+            let current = crossfaderEvents[run.endIndex]
             let duration = current.takeRelativeTime - previous.takeRelativeTime
             let delta = abs(current.normalizedValue - previous.normalizedValue)
             guard duration > 0, delta >= minimumValueDelta else { return nil }

@@ -10,14 +10,49 @@ import XCTest
 
 final class PlatterTestSampleLoadTests: XCTestCase {
 
-    private func makeEngine() throws -> MacCaptureEngine {
+    private func makeDefaults() throws -> UserDefaults {
+        let suiteName = "PlatterTestSampleLoadTests.\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suiteName))
+        defaults.removePersistentDomain(forName: suiteName)
+        return defaults
+    }
+
+    private func makeEngine(
+        mode: ScratchAudioOwnershipMode? = .scratchLabStandalone,
+        defaults: UserDefaults? = nil
+    ) throws -> MacCaptureEngine {
         let resourceRoot = try XCTUnwrap(
             Bundle(for: MacCaptureEngine.self).resourceURL,
             "The app test host must expose its resource root"
         )
+        let defaults = try defaults ?? makeDefaults()
+        mode?.persist(to: defaults)
         return MacCaptureEngine(
             autoRefreshDevices: false,
+            midiDefaults: defaults,
             sampleResourceRoot: resourceRoot
+        )
+    }
+
+    private func flushMainQueue(file: StaticString = #filePath, line: UInt = #line) {
+        let published = expectation(description: "main-queue publication")
+        DispatchQueue.main.async { published.fulfill() }
+        wait(for: [published], timeout: 2.0)
+    }
+
+    func testAudioOwnershipDefaultsToScratchLabStandalone() throws {
+        let defaults = try makeDefaults()
+        XCTAssertEqual(ScratchAudioOwnershipMode.load(from: defaults), .scratchLabStandalone)
+        XCTAssertTrue(ScratchAudioOwnershipMode.defaultMode.allowsLocalScratchPlayback)
+    }
+
+    func testLegacyExternalOwnershipPreferenceMigratesToStandalone() throws {
+        let defaults = try makeDefaults()
+        defaults.set("externalSerato", forKey: ScratchAudioOwnershipMode.defaultsKey)
+        XCTAssertEqual(ScratchAudioOwnershipMode.load(from: defaults), .scratchLabStandalone)
+        XCTAssertEqual(
+            defaults.string(forKey: ScratchAudioOwnershipMode.defaultsKey),
+            ScratchAudioOwnershipMode.scratchLabStandalone.rawValue
         )
     }
 

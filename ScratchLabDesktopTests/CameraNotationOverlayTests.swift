@@ -113,7 +113,7 @@ final class CameraNotationOverlayTests: XCTestCase {
                        "Reset must restore default centre x")
         XCTAssertEqual(cal.platterCenter.y, 0.5, accuracy: 1e-9,
                        "Reset must restore default centre y")
-        XCTAssertEqual(cal.platterRadius, 0.35, accuracy: 1e-9,
+        XCTAssertEqual(cal.platterRadius, 0.5, accuracy: 1e-9,
                        "Reset must restore default radius")
         XCTAssertFalse(cal.isLocked, "Reset must unlock calibration")
     }
@@ -498,7 +498,7 @@ final class CameraNotationOverlayTests: XCTestCase {
                        "Default center.x when no persisted key")
         XCTAssertEqual(cal.platterCenter.y, 0.5, accuracy: 1e-9,
                        "Default center.y when no persisted key")
-        XCTAssertEqual(cal.platterRadius, 0.35, accuracy: 1e-9,
+        XCTAssertEqual(cal.platterRadius, 0.5, accuracy: 1e-9,
                        "Default radius when no persisted key")
         XCTAssertEqual(cal.angleOffset, 0.0, accuracy: 1e-9,
                        "Default angle offset when no persisted key")
@@ -605,7 +605,7 @@ final class CameraNotationOverlayTests: XCTestCase {
                        "Reset must restore default centre x")
         XCTAssertEqual(cal.platterCenter.y, 0.5, accuracy: 1e-9,
                        "Reset must restore default centre y")
-        XCTAssertEqual(cal.platterRadius, 0.35, accuracy: 1e-9,
+        XCTAssertEqual(cal.platterRadius, 0.5, accuracy: 1e-9,
                        "Reset must restore default radius")
         XCTAssertEqual(cal.angleOffset, 0.0, accuracy: 1e-9,
                        "Reset must restore default angle offset")

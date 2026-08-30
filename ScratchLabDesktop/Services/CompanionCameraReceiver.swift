@@ -64,6 +64,97 @@ final class RelayedWatchCaptureStore: ObservableObject {
         return "Watch status: paired and installed, but not currently reachable through the iPhone."
     }
 
+    /// Semantic readiness of the Apple Watch input, as macOS can actually know it.
+    ///
+    /// macOS has no direct `WCSession`: pairing / installed / reachable are all
+    /// relayed by the paired iPhone over the companion bridge. "Nothing reported
+    /// yet" is therefore a distinct state from "no watch paired", and neither may
+    /// be rendered as "not connected" — that phrasing previously came from
+    /// `importedSessions.isEmpty`, i.e. capture *history*, which said nothing
+    /// about whether a watch was paired, installed, or reachable. A healthy,
+    /// reachable watch that simply had not relayed a capture yet read as
+    /// "Not connected".
+    ///
+    /// The watch is an **optional** input, so every case here maps to a
+    /// non-blocking `InputReadinessState` (never `.setupRequired`,
+    /// `.needsAttention` or `.lost`, all of which are `isBlocking`).
+    enum WatchInputReadiness: Equatable, Sendable {
+        /// The paired iPhone has not reported watch status yet — usually the
+        /// companion bridge itself is not connected.
+        case awaitingPhoneReport
+        case notPaired
+        case notInstalled
+        /// Paired and installed, but not currently reachable through the iPhone.
+        case unreachable
+        /// Reachable, but no motion capture has been relayed in this session yet.
+        case reachableAwaitingCapture
+        case motionAvailable
+        /// Motion was relayed earlier, but the watch is not reachable right now.
+        case motionAvailableUnreachable
+
+        static func resolve(
+            hasPhoneReport: Bool,
+            isPaired: Bool,
+            isInstalled: Bool,
+            isReachable: Bool,
+            hasImportedCaptures: Bool
+        ) -> WatchInputReadiness {
+            guard hasPhoneReport else { return .awaitingPhoneReport }
+            guard isPaired else { return .notPaired }
+            guard isInstalled else { return .notInstalled }
+            if isReachable {
+                return hasImportedCaptures ? .motionAvailable : .reachableAwaitingCapture
+            }
+            return hasImportedCaptures ? .motionAvailableUnreachable : .unreachable
+        }
+
+        var detail: String {
+            switch self {
+            case .awaitingPhoneReport:
+                return "Waiting for the paired iPhone to report watch status"
+            case .notPaired:
+                return "No Apple Watch paired with the iPhone"
+            case .notInstalled:
+                return "Paired — ScratchLab is not installed on the watch"
+            case .unreachable:
+                return "Paired and installed — not currently reachable"
+            case .reachableAwaitingCapture:
+                return "Reachable — no motion relayed yet"
+            case .motionAvailable:
+                return "Motion data available"
+            case .motionAvailableUnreachable:
+                return "Motion data available — watch not currently reachable"
+            }
+        }
+
+        /// Optional input: never blocking. `.detected` means "the watch is
+        /// present and usable"; `.ready` is reserved for "motion has actually
+        /// arrived", matching the design-system rule that `detected` is not
+        /// `ready`.
+        var readinessState: InputReadinessState {
+            switch self {
+            case .awaitingPhoneReport, .notPaired, .notInstalled, .unreachable:
+                return .neutral
+            case .reachableAwaitingCapture, .motionAvailableUnreachable:
+                return .detected
+            case .motionAvailable:
+                return .ready
+            }
+        }
+    }
+
+    /// Live watch readiness derived from the relayed availability signals —
+    /// never from capture history alone.
+    var watchInputReadiness: WatchInputReadiness {
+        WatchInputReadiness.resolve(
+            hasPhoneReport: watchAvailabilityUpdatedAt != nil,
+            isPaired: watchIsPaired,
+            isInstalled: watchIsInstalled,
+            isReachable: watchIsReachable,
+            hasImportedCaptures: !importedSessions.isEmpty
+        )
+    }
+
     @MainActor
     func updateWatchAvailability(isPaired: Bool, isInstalled: Bool, isReachable: Bool) {
         watchIsPaired = isPaired

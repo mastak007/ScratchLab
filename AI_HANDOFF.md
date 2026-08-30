@@ -1,6 +1,304 @@
 # AI Handoff
 
-## 2026-08-30 — Capture-integrity Slice E COMPLETE: one bounded, take-ID-scoped finalization state machine
+## 2026-08-31 (latest) - Standalone-only audio and export reliability validated; physical RC remains
+
+- Karl explicitly retired the `External Serato` product mode because the ownership choice confused users. This supersedes earlier workflow instructions that required External Serato as the safe default or as a physical RC case.
+- Source now has one `ScratchAudioOwnershipMode` case, `scratchLabStandalone`, and defaults to local AHHH playback. Legacy persisted `externalSerato` values migrate to standalone on load. iOS and macOS ownership selectors and Serato-specific copy were removed; Load/Test AHHH actions remain available through their existing hardware gates.
+- Renderer/audio scheduling, RANE channel routing, signed/unwrapped `PlatterSamplePositionProjection`, and the 5 ms cue tolerance were not changed.
+- Export reliability fixes in the pending batch are now validated: cross-session Review/export uses persisted sidecar identity unless mutable UI configuration matches the recorded session; AVFoundation's documented successful-stop marker no longer creates a false failed take; multichannel RANE audio is read as deinterleaved Float32 and projected from the audible pair into a playable stereo export; missing source audio still fails closed; export progress remains visible.
+- Focused evidence passed twice for canonical export parity, recorded-BPM subset export, mono-to-stereo duplication, 14-channel RANE audible-pair projection, and missing-audio rejection. Capture fixtures passed 47/47. The final configured gate ran 377 XCTest cases per repetition and reproduced exactly the established 11 failing invocations / 9 unique names, with no new export/ownership failure; Swift Testing passed 366/366 in each repetition.
+- Isolated `ScratchLabDesktop` macOS, `ScratchLab` iOS Simulator (including embedded Watch validation), and `ScratchLabWatch` Watch Simulator builds all succeeded. The earlier iOS/Watch attempt failed only because concurrent Xcode processes contended for the shared build database; sequential reruns succeeded.
+- Diff accounting: local `HEAD` is nine commits ahead of `origin/feature/ios-capture-camera-ux`. The full branch delta is 73 files, 37,527 insertions, and 14,676 deletions; the actual unstaged worktree before this change was 28 files, 8,654 insertions, and 1,812 deletions. Do not reset or squash this history blindly.
+- Physical RC is still required on the exact candidate: prove standalone local AHHH through the RANE; cyan playhead audible alignment through `BEFORE START` and `PAST END` without wrapping; compact-landscape Capture/Review reachability, scrolling, and fixed actions; Watch relay association; and successful end-to-end export. The retired External Serato switch/silence cases are no longer release requirements.
+- Karl explicitly authorized validation, commit, and push with "proceed and dont stop until were clean." At this record point changes are validated but not yet committed or pushed.
+
+## 2026-08-31 (latest) — RANE audio captured; Review/export crossed session identities
+
+- Running app remains the stale 2026-08-29 binary at `build/CodexProducts-ios-save-tests/Debug/ScratchLab.app`, not the 2026-08-31 rebuilt product.
+- Live Review reproduced an identity split: primary evidence showed 36 strokes from newest session `72b7923d-7086-46d8-b1a9-b7c05af7d75d`, while stale review status named session `82223c61-938e-421e-9f5f-ae29d47106c8` take 2. Export failed with `ScratchLab could not validate the canonical export artifacts.`
+- Both new takes truthfully captured `Rane ONE MKII` as 14-channel 48 kHz audio. Strong program signal exists on channels 13/14; the hardware channel/master LEDs not lighting did not mean capture silence. ScratchLab does not drive those hardware meter LEDs.
+- Minimal source fix in `MacAnalyzerView.swift`: mutable `routineSessionSetup.config` and session name are supplied to export/upload only when their session ID matches `lastRoutineRecordingSessionID`; otherwise the builder must derive truth from the persisted sidecar. Review reload now clears stale message/decision state before loading the current sidecar.
+- Previously pending stereo projection and export-progress changes remain in `SessionExportCoordinator.swift`, `MacAnalyzerView.swift`, and focused tests. All current edits are unverified; no tests/build were run after Karl had not yet authorized validation.
+
+## 2026-08-31 (latest) — attached FTR ZIP proves built-in mic capture, not isolated RANE scratch
+
+- Inspected `/Users/karlwatson/Downloads/session_2026_08_31_ftr_baby_scratch_95_bpm.zip` as data only. Session `82223c61-938e-421e-9f5f-ae29d47106c8`, take `take-001` is a failed isolated-scratch RC capture.
+- Manifest truth: `audioDeviceName: MacBook Pro Microphone`, `audioDeviceUniqueID: BuiltInMicrophoneDevice`. `scratch_only.wav` is mono 44.1 kHz microphone audio, so TV/room sound is expected and the file is not isolated Serato/RANE program audio.
+- Beat truth: `captureMode: timed_click`, `beatEnabled: true`, `beatEngineMode: boom_bap_trainer`. The archive intentionally contains `beat_only.wav` and `scratch_with_beat.wav`; export metadata still says `exportMixMode: scratch_only`. The isolated file to inspect is `scratch_only.wav`, but in this take it is still the wrong microphone source.
+- Required retest configuration: choose `Rane ONE MKII` as Capture audio input, use External Serato ownership, use no-click/beat-disabled capture for isolated scratch, and verify the input meter responds to platter audio but not TV/room sound before recording.
+- Treat this as a capture preflight/UI safety failure. Do not relabel or repair this archive as isolated scratch.
+- Pending unverified production edits from the immediately preceding investigation project multichannel RANE exports to playable stereo and show export progress. They have not been built or tested because permission was requested but not granted yet.
+
+## 2026-08-31 (latest) — physical relay/UI retest failed; take data intact and backend-exportable
+
+- New physical Mac-led take: session `af2f4238-228b-4847-b7dc-ac9ec3c4f537`, `take-001`. Watch stopped and notation rendered live, but the user reported no notation in Review and could not export through the UI.
+- Persisted truth is healthy: `recordingStatus: completed`; MOV 65,527,963 bytes; WAV 55,771,136 bytes; `detectedNotation` contains 70 final record-movement events and 4 audio events. The movement funnel reports 70 fused/trusted/final events with no trust drops.
+- The Watch leg failed: `watchSyncState: timedOut`, `linkedMotionFileName: null`, and no new relayed Watch artifact was stored. Watch stopping does not prove linked motion returned.
+- Exact artifact test passed twice, 1/1 each run: all 70 events decode, gesture-relative Review presentation is non-empty, export validation returns no issue, package preparation succeeds for the correct session/take, and ZIP archive creation succeeds. Result: `build/DerivedData-latest-physical-take/Logs/Test/Test-ScratchLabDesktop-2026.08.31_04-19-50-+1200.xcresult`. The temporary artifact-specific test was removed afterward.
+- Review's raw captured chart is currently inside the collapsed `Technical evidence & diagnostics` disclosure, but the primary Target/My Performance card should still represent saved presentation events. User-visible blank notation therefore remains an open UI failure, not missing data.
+- UI export failure remains open because the exact on-screen status/validation text was not captured. Backend export is proven good; do not mutate or recover this sidecar. Re-scan/relaunch, reopen Review, expand Technical evidence, and retry `Save ZIP...`; capture the exact status if the UI still fails.
+- No new production code was changed for this retest. Nothing staged, committed, or pushed.
+
+## 2026-08-31 (latest) — macOS normal-stop export defect fixed; recovered take exports; Watch relay retest open
+
+- Physical macOS capture exposed a reproducible release defect: `AVCaptureMovieFileOutput` returned a non-nil `Recording Stopped` completion error carrying `AVErrorRecordingSuccessfullyFinishedKey == true`, but `MacCaptureEngine` treated every non-nil completion error as fatal. The sidecar was therefore persisted with `recordingStatus: failed`, and export correctly refused it.
+- Production fix is intentionally narrow: `MacCaptureEngine.routineCaptureFailureDescription(for:)` accepts only the documented AVFoundation successful-finish marker as success. Every AVFoundation error without that marker, and every non-AVFoundation error even if it spoofs the key, remains fail-closed.
+- Permanent regression coverage in `ScratchLabDesktopTests/CaptureReliabilityPhase1Tests.swift` passed twice: 3/3 tests, 0 failures per run. The selected macOS test action built successfully.
+- Affected take `0c813395-28b1-42d6-9061-e2399c312a1f` / `take-001` was validated before recovery: MOV 99.696563 s / 291,314,513 bytes; WAV 100.693333 s / 270,667,776 bytes; duration delta 0.996770 s. Original sidecar is backed up as `0c813395-28b1-42d6-9061-e2399c312a1f_take001_routine.json.pre-stop-recovery.bak`.
+- Recovery changed only `recordingStatus` to `completed`, cleared `errorDescription`, and appended audit event `2DAA3C48-907A-4E32-B5A9-0F6C5C794A83`; the original `recording_failed` audit entry remains. The recovered take then passed actual package preparation and archive creation twice, exporting 4,833,280 scratch-audio frames each time.
+- The reported validation warnings are advisory, not export blockers: median peak 0.01 is below 0.10, and onset-spacing stdev 6.415 s exceeds 0.6 x mean gap 3.828 s. `Saved review notes.` confirms notes persistence only.
+- Watch behavior is not yet a reproduced code defect. This take recorded `watchSyncState: unavailable`, no `linkedMotionFileName`, and no relayed Watch artifact. For the next short physical run, keep ScratchLab open on iPhone with relay connected and Watch reachable, start only from macOS, confirm Watch acknowledgment, stop only from macOS, confirm Watch stops automatically, confirm linked motion returns, then export.
+- Physical RC matrix remains incomplete. A7/A8/A9 and the previously open hardware checks remain open. Nothing staged, committed, or pushed.
+
+## 2026-08-30 (latest) — macOS upfaders + hot cues working; A8/A9 open
+
+Karl: "11 controls mapped now, upfaders and pads working". Fixed by **Refresh MIDI + explicitly selecting "Rane ONE MKII"** — the 11-control mapping was already correct on disk; the app simply had `currentMIDIDeviceMapping` nil, so `evaluateUserMixerGainForCC` bailed before any upfader/hot-cue dispatch. Crossfader kept working via the separate legacy `crossfaderCCMapping` path.
+
+**If this recurs: re-select the MIDI source first.** It is a load/selection problem, not a mapping problem.
+
+### New open anomalies
+- **A8** — `MIDILearnedMappingStore.fileURL(for:)` accepts an empty device identifier, so a "Not Connected" session writes a loadable mapping file literally named `.json` containing crossfader only. Found on disk during diagnosis; matches Karl's "only crossfader shows" symptom exactly. Not fixed.
+- **A9** — `MIDILearnedMappingStore.save` uses `try?` on both encode and write, so a failed save reports success to the caller. Not the cause here, but it hides real failures. Not fixed.
+- Mapping stores exist in **both** the sandboxed container and plain `~/Library/Application Support` — two builds with different sandbox states. Future confusion risk.
+- `installVerifiedRaneOneMKIIMapping` pushes resolved curves for crossfader and rightUpfader but **not** leftUpfader.
+
+### A7 status — likely explained, NOT yet confirmed
+A7 (RANE not playing AHHH, CH 3/4 silent) was reported when the macOS build had **no Audio-ownership picker at all** (it is uncommitted work, absent from `HEAD` — `git log -S` finds no commit adding it). With no control and `defaultMode = .externalSerato` blocking every local AHHH route, silence was expected behaviour. The picker now renders after relaunch. **Karl has not yet confirmed AHHH is audible**, so A7 stays open.
+
+## 2026-08-30 (later) — macOS ring fills camera view; RANE AHHH silent (A7, OPEN)
+
+**Branch** `feature/ios-capture-camera-ux`, **HEAD `7761c09f`** — still nothing committed, staged, or pushed.
+
+### Done since the previous entry
+- **macOS notation ring fills the camera view.** `CameraNotationOverlayCalibration.platterRadius` default 0.35 -> 0.5 (property and `reset()`). No clamp/slider change needed — `radiusRange` already allowed 0.5. Three tests updated from 0.35 to 0.5. Failing set for `CameraNotationOverlayTests` is byte-for-byte identical before and after (same 9 bundle-resource cases), so for that class the failures are now **proven** pre-existing.
+- **Karl must press Reset** in the calibration controls to see it — his persisted `scratchlab.mac.cameraOverlay.platterRadius` overrides the new default.
+- macOS app rebuilt 20:12; earlier rebuild 16:36 carries the crossfader fix.
+
+### A7 (NEW, OPEN, HIGHEST PRIORITY) — RANE not playing AHHH
+Regression against Case 3, which passed earlier the same day. Karl's 14 ch @ 48 kHz analysis: **CH 3/4 silent** (the established AHHH right-deck route); only CH 13/14 carries signal (R -4.8 dBFS RMS / -0.0 peak, L flagged `dcHeavy` with DC **-0.14937**); 7/8 through 11/12 are true `-inf`; tool reported "no pair looks like program audio".
+
+**Check these before assuming a code defect, in this order:**
+1. **Which app** — iOS or macOS? Karl had just relaunched the rebuilt macOS app.
+2. **`ScratchAudioOwnershipMode`** — if it reads External Serato, silent AHHH is *correct by design*; that mode blocks and unloads every local AHHH route. A relaunch starting on the safe default would fully explain the symptom.
+3. **Is the AHHH sample loaded?** (`"Standalone audio enabled — load AHHH to arm the platter."`)
+4. Is the measurement input-side or output-side?
+5. Separately explain the **DC offset of -0.14937** on CH 13 L — anomalous regardless of AHHH.
+
+This session's changes are **not a plausible cause** (reasoning, not proof): the notation derivation and calibration default touch no audio path, and the one edit near audio — `iOSMIDIManager` `.upfader` — was re-inspected after the report, with `setRightUpfaderGain(...)` byte-for-byte unchanged and the new capture block sitting strictly before it.
+
+### Still outstanding
+- **iOS hardware judgement never given**: build 2760 is on `K`; Karl has not reported whether cut ticks now read correctly, and specifically **whether any tick appears where he did not cut** (the false-positive risk from widening the gate).
+- **macOS crossfader confirmation**: fresh take should show ~44 fader events / ~31 drawn (was 0).
+- **Upfader capture confirmation**: next iOS export should carry CC28 with `mappedControl: "leftUpfader"/"rightUpfader"`.
+- **Physical RC matrix INCOMPLETE**: Case 1 PASS, Case 2 NOT TESTED, Case 3 PASS (now contradicted by A7 — re-run it), Cases 4-8 NOT OBSERVED.
+- Requested, not started: macOS AHHH sample playhead display (Figma first), upfader notation lane (architect slice).
+- Anomalies A1-A4 unchanged and unfixed.
+
+### Files changed this session (all uncommitted)
+`ScratchLab/Models/CaptureCore.swift`, `ScratchLab/MIDI/iOSMIDIManager.swift`, `ScratchLabDesktopTests/CaptureReliabilityPhase1Tests.swift`, `ScratchLabDesktop/Models/CameraNotationOverlayCalibration.swift`, `ScratchLabDesktopTests/CameraNotationOverlayTests.swift`. The other 24 pre-existing dirty files and the untracked `CalibrationCameraOverlayTests.swift.plist` were not touched.
+
+## 2026-08-30 — RC smoke halted at Case 4; crossfader notation fixed on both platforms
+
+**Branch** `feature/ios-capture-camera-ux`. **HEAD `7761c09f`** — nothing committed, staged, or pushed this session. Local is 9 commits ahead of `origin/feature/ios-capture-camera-ux` (`9b2b445f`).
+
+### Status: physical RC matrix is INCOMPLETE — do not mark it complete
+- **Case 1 PASS** (External Serato selected on entry, no local AHHH through the RANE). Caveat recorded: confirms *selected on entry*, not *first-run default*.
+- **Case 2 NOT TESTED.** Serato does not run on iOS; both exports were recorded in `ScratchLab AHHH` mode. Requires Serato on a Mac via the RANE's second USB port, ownership held on External Serato for the whole take.
+- **Case 3 PASS** by control authority (right upfader controls AHHH, left does nothing, crossfader cuts it, smooth). **No channel meter LEDs lit at all** — meters recorded as unavailable evidence, not as pass or fail; whether they light for any source was never tested.
+- **Cases 4-8 NOT OBSERVED.** Case 4 was queued and never run.
+
+### Work completed instead (Karl redirected: "stop the matrix and fix the crossfader notation bug")
+Three defects found and fixed, all evidence-backed from Karl's own exports. Full detail in `DEV_LOG.md`.
+1. **Crossfader gestures never became notation.** `deriveDetectedNotationFaderEvents` gated primitives on adjacent-sample delta (0.10) while the RANE streams CC8 at ~800 Hz — measured max adjacent delta **0.0236**, so it always returned `[]`. Now segments monotonic runs like `decodePlatterCore`. Hardware-confirmed **0 -> 78** fader events.
+2. **Detected but invisible.** Renderer draws only cut-family kinds, so 58 of 78 were `.unknown` and drew nothing. Cut gate widened to 0.25/0.25 on Karl's approval, from measured evidence (39 closes, median 0.110 s / 0.409 travel). **19 -> 31 of 39** now render.
+3. **Upfader evidence never captured.** No CC28 in any iOS export. Now recorded as raw evidence only.
+
+### Immediate next actions
+1. **Relaunch the macOS app** — rebuilt 16:36 with the fix. Karl's 16:30 macOS take predates it and shows the old signature (1599 crossfader events, 0 fader events, max adjacent delta 0.0236). A fresh take should yield ~44 events / ~31 drawn.
+2. **Confirm iOS on hardware** — build sequence **2760** is on `K` with all three changes. Karl has not yet reported whether the ticks read correctly, and specifically whether any tick appears where he did NOT cut (the false-positive risk from widening the gate).
+3. **Confirm upfader capture** — next iOS export should carry CC28 with `mappedControl: "leftUpfader"/"rightUpfader"`.
+4. **Resume the RC matrix at Case 4**, then 5-8.
+
+### Requested but not started (Karl, this session)
+- **macOS notation should fill the entire camera view.** Layout work, not yet scoped.
+- **macOS has no AHHH sample playhead display like iOS.** New surface; Karl's steer is Figma first, then wire code. iOS equivalent is `PlatterSamplePositionProjection` with BEFORE START / PAST END (Cases 5-6, never run).
+- **Upfader notation lane.** "upfader" exists nowhere in `CaptureCore.swift`, `ScratchMotionRenderer.swift`, `ScratchMotionLane.swift`. Spans capture + canonical model + renderer — a proper architect slice.
+
+### Open anomalies (banked, none fixed)
+- **A1** periodic 8 s pop from the iPhone speaker, idle on Practice. Continues backgrounded, **stops on force-quit** — ScratchLab owns it. No 8 s timer exists in the app. Absent from captured audio. Root cause not investigated.
+- **A2** `audioEvents: []` on iOS across both takes despite -0.2 dBFS peaks. `iOSMIDIManager.detectedNotationSnapshot` hardcodes `audioEvents: []`. macOS produces them, so this is **iOS-specific**. Sits on the path PROFILE.md calls the reliable one.
+- **A3** `SessionExportCoordinator.swift:4272` hardcodes `audioSource: "serato"` regardless of ownership — mislabelled dataset provenance.
+- **A4** `CaptureCore.swift:14-16` doc comment wrong: capture is an `inputNode` tap, not the output bus, and is not silent under Serato ownership.
+
+### Verification caveat carried forward
+Full bundle via `xcrun xctest`: 3180 tests, 208 failures / 92 cases, 78 of them `XCTUnwrap`/bundle-resource failures from running without the app host. None on the fader path. **No baseline run was captured before editing**, so they are "unrelated, almost certainly pre-existing" — not proven so.
+
+## 2026-08-30 — Physical RC smoke command reached iPhone K build/install/launch twice
+
+Unlock confirmed; `./scripts/run-on-phone.sh 1F80398A-96C8-537A-B0EE-821E186918B9` now reaches build/install/launch on `K`.
+
+- Retry evidence after Karl confirmed the phone was unlocked: the same command exited `0` in about 8 seconds, reported `** BUILD SUCCEEDED **`, installed `com.machelpnz.scratchlab` at `file:///private/var/containers/Bundle/Application/EC170B5E-8286-466B-82C3-49C437724A1D/ScratchLab.app/` with install database UUID `91F773FB-990B-4254-A7D6-CDD841AE068C` and sequence `2744`, then reported `Launched application with com.machelpnz.scratchlab bundle identifier.`
+- Scope of the retry: second pass of the build/install/launch gate only. It does not establish any audible RANE, signed/unwrapped playhead, compact-landscape reachability/scrolling, or fixed Review action result.
+
+- Pass/Fail: **PASS at script gate** (build/install/launch), with all required feature checks still pending by design.
+- Evidence:
+  - `Using device: 1F80398A-96C8-537A-B0EE-821E186918B9`
+  - `Build settings from command line:`
+  - `SDKROOT = iphoneos27.0`
+  - `** BUILD SUCCEEDED **`
+  - `Installing com.machelpnz.scratchlab...`
+  - `Launched application with com.machelpnz.scratchlab bundle identifier.`
+  - `Done.`
+- Remaining required checks still not executed (manual):
+  - External Serato produces no local AHHH
+  - Standalone loads/plays local AHHH
+  - External re-select silences an already armed sample
+  - Playhead remains aligned across `BEFORE START` / `PAST END` without wrapping
+  - Capture + Review fixed landscape action reachability and scrolling behavior
+- Next action: perform the operator RC checks on-device with RANE connected and log concrete pass/fail evidence for each item.
+
+## 2026-08-30 — RC smoke attempt blocked by device lock on iPhone K
+
+Execution attempt made with the user-specified iPhone `K` UUID `1F80398A-96C8-537A-B0EE-821E186918B9`.
+
+- Pass/Fail: **FAILED at unlock gate** during smoke-preparation.
+- Evidence:
+  - `./scripts/run-on-phone.sh 1F80398A-96C8-537A-B0EE-821E186918B9` output:
+    - `Using device: 1F80398A-96C8-537A-B0EE-821E186918B9`
+    - `Checking lock state...`
+    - `Phone is locked. Unlock it and rerun.`
+  - `xcrun devicectl device info lockState --device 1F80398A-96C8-537A-B0EE-821E186918B9` output:
+    - `passcodeRequired: true`
+- Result: smoke could not proceed to build install, app launch, or manual checks because the phone is locked.
+- Remaining required checks not run (all blocked): External Serato no-local AHHH, Standalone local AHHH, External→Standalone transition silence, signed cyan playhead with `BEFORE START`/`PAST END`, landscape Capture/Review scroll/fixed action behavior.
+- Next action: unlock iPhone `K` and rerun the same smoke flow before ARC/ASC physical-release signoff.
+
+## 2026-08-30 — Capture-integrity Slice H COMPLETE (uncommitted; current)
+
+Started from committed HEAD `7761c09f43` on `feature/ios-capture-camera-ux`. Nothing was reset, amended, staged, committed, or pushed. Existing dirty work was preserved. The protected `project.pbxproj`, `ScratchLab.xcscheme`, `Info.plist`, and `CalibrationCameraOverlayTests.swift.plist` remain byte-for-byte unchanged from the recorded task-start hashes.
+
+**Root cause.** Audio/render semantics already kept a signed, unwrapped playhead and correctly distinguished travel before cue and beyond sample end, but the classification was trapped in iOS engine code and guarded only by a source-string test. On iPhone landscape, Review's detail stack could exceed its finite height while take actions must remain reachable, Capture treated the leading safe-area inset as both edges, and the toolbar needed a compact form that never hides Export. External Serato also inherited Standalone's `LOAD AHHH` empty-waveform instruction.
+
+**Figma and implementation.** In Figma file `AgrnQXwRvkAKlORTQ2U25z`, `SamplePositionWaveform` set `457:3817` now includes reviewed Before Start `493:262` and Past End `493:277` variants using the existing warning token and explicit signed-time/boundary/fill semantics. Production adds pure shared `PlatterSamplePositionProjection`; the iOS engine delegates its unchanged 5 ms-tolerant classification to it, and renderer/audio scheduling remain untouched. External mode now says Serato owns scratch audio. Capture uses separate horizontal safe-area insets and `ViewThatFits` while retaining every action; Review gives only the detail column a finite-height scroller, keeping media and Keep / Keep and Next / Retry / Discard fixed.
+
+**Files changed for Slice H.** `ScratchLab/Models/ScratchSoundBank/ScratchPlatterTracker.swift`; `ScratchLab/Audio/iOS/IOScratchPlaybackEngine.swift`; `ScratchLab/Views/ScratchMotionLane.swift`; `ScratchLab/Views/CompanionCameraView.swift`; `ScratchLabDesktopTests/ScratchPlatterTrackerTests.swift`; `ScratchLabDesktopTests/CaptureReliabilityPhase1Tests.swift`; Figma file `AgrnQXwRvkAKlORTQ2U25z`; and the workflow records. Other hunks in overlapping files predate this slice and were preserved.
+
+**Verification.** Focused tests passed 26/26 in both configured executions; relevant waveform/notation/review/motion regressions passed 60/60 in both. Isolated iOS Simulator Debug with embedded Watch and explicit macOS Debug builds succeeded. Fixtures passed 47/47. The full configured gate ran 3,545 tests across two configurations and retained exactly the established 11 failing invocations across 9 unique names, with no Slice H failure; 366/366 Swift Testing cases passed. `git diff --check` passed before the record update; protected hashes were unchanged.
+
+**Next release work.** Three release-critical batches remain before App Store Connect readiness: (1) one physical iPhone/RANE smoke covering Slice G ownership switching plus Slice H landscape/actions/signed playhead, (2) the final cross-platform release-candidate audit and manual smoke/screenshots, and (3) archive/distribution validation for that exact candidate. The unchecked capture-movement trace item is DEBUG-only evidence collection and is not an ASC blocker unless Karl elevates it. Do not reopen Slice H without new physical/test evidence.
+
+## 2026-08-30 — Capture-integrity Slice G COMPLETE (uncommitted; current)
+
+Started from committed HEAD `7761c09f43` on `feature/ios-capture-camera-ux`. Nothing was reset, amended, staged, committed, or pushed. Existing dirty work was preserved. The protected `project.pbxproj`, `ScratchLab.xcscheme`, `Info.plist`, and `CalibrationCameraOverlayTests.swift.plist` remain byte-for-byte unchanged from the recorded task-start hashes.
+
+**Root cause.** ScratchLab could locally arm or play AHHH from manual controls, learned hot cues, DVS motion, and DEBUG fallbacks without declaring whether Serato or ScratchLab owned deck audio. That made double-audio possible and allowed UI/MIDI state to imply local playback even when the intended product role was an external-Serato companion.
+
+**Implemented.** Shared `ScratchAudioOwnershipMode` persists one cross-platform choice and defaults safely to `.externalSerato`. iOS exposes it in Practice Controller Setup, Capture Hardware Setup, and Advanced MIDI; macOS exposes it in Advanced mapping. External mode unloads any armed local sample and blocks manual load/preview, learned-hot-cue load, DVS auto-load/drive, and temporary DEBUG triggers. Standalone mode preserves local `dvs_ahhh` playback. The iOS dispatcher no longer reports a suppressed hot cue as played, and mapping/status/waveform/accessibility copy states the real owner. Capture remains active in both modes so required export audio is a truthful ScratchLab bus WAV (silent when no local ScratchLab audio is rendered), rather than a missing or fabricated artifact. The macOS CoreMIDI/DVS gate uses lock-backed state and does not touch UserDefaults or SwiftUI observation at MIDI rate.
+
+**Files changed for Slice G.** `ScratchLab/Models/CaptureCore.swift`; `ScratchLab/Audio/iOS/IOScratchPlaybackEngine.swift`; `ScratchLab/MIDI/iOSMIDIManager.swift`; `ScratchLab/MIDI/iOSMIDILearnCoordinator.swift`; `ScratchLab/Views/PracticeModeView.swift`; `ScratchLab/Views/CompanionCameraView.swift`; `ScratchLab/Views/MainMenuView.swift`; `ScratchLab/Views/ScratchMotionLane.swift`; `ScratchLabDesktop/Services/MacCaptureEngine.swift`; `ScratchLabDesktop/Views/MacAnalyzerView.swift`; `ScratchLabDesktopTests/PlatterTestSampleLoadTests.swift`; `ScratchLabDesktopTests/MIDILearnEngineTests.swift`; `ScratchLabDesktopTests/MIDILearnHangFixTests.swift`; `ScratchLabDesktopTests/TimecodeBridgeContinuityFixTests.swift`; and the four workflow records. Other hunks in overlapping files predate this slice and were preserved.
+
+**Verification.** The final ownership/MIDI/DVS set executed 48 tests with zero failures twice after the last code change. The configured broad gate previously completed both passes with exactly the established 11 failing invocations across 9 unique names and no Slice G failure. Isolated generic iOS device Debug with embedded Watch and macOS Debug/test builds succeeded. Capture fixtures passed 47/47. `git diff --check` passed. Physical RANE/iOS smoke remains prudent before release: External Serato must produce no local AHHH, Standalone must load/play it, and changing back to External must silence an already armed sample.
+
+**Next task.** The first unchecked implementation-ready item is **Slice H: iPhone landscape layout, waveform playhead, and BEFORE START / PAST END sign correctness**. Do not reopen Slice G or combine it with the later capture-movement evidence task.
+
+## 2026-08-30 — Production iOS saved-take notation/playback/detail COMPLETE (uncommitted; current)
+
+Started from committed HEAD `7761c09f43` on `feature/ios-capture-camera-ux`. Nothing was reset, amended, committed, staged, or pushed. The pre-existing dirty tree was preserved. Protected `project.pbxproj`, `ScratchLab.xcscheme`, `Info.plist`, and `CalibrationCameraOverlayTests.swift.plist` retain their recorded SHA-256 values and were not altered.
+
+**Root cause.** iOS had no production route to reopen a kept take. `TakeReviewView` only showed a thumbnail and text, `Take Detail` was macOS-only, and the two iOS saved-notation views were DEBUG-only. The durable Slice F ledger already owned the authoritative active session and real artifact references, so the smallest correct implementation was to present that ledger directly rather than introduce a second saved-session store.
+
+**Implemented.** `GuidedCaptureSavedTakeDetail.load` resolves the kept take through the current `CaptureContainerLocator`, requires non-empty regular media and sidecar files, decodes the real sidecar, and validates session ID, take ID, take number, sidecar/media filename association, and completed status. It derives presentation strokes only through `CaptureCore.gestureRelativeRecordMovementEventsForPresentation` and the shared presentation-duration helper. Validation errors are explicit and retryable and never remove the take from the ledger.
+
+`CompanionCameraView` now exposes `Review Saved Take(s)` from both Session Setup and Session Complete whenever the active durable ledger session has kept takes. The production sheet lists those takes and opens a detail surface using native `VideoPlayer` with the actual media URL plus the shared `ScratchPhraseChartView` with the saved notation projection. Missing/inconsistent files show a visible Retry action; empty notation says so truthfully; playback pauses when detail disappears. No DEBUG gate, second detector, copied notation algorithm, fabricated playable state, or alternate persistence layer was added.
+
+**Files changed for this task.** `ScratchLab/Models/CaptureCore.swift`, `ScratchLab/Views/CompanionCameraView.swift`, `ScratchLabDesktopTests/CaptureReliabilityPhase1Tests.swift`, `TASKS.md`, `DEV_LOG.md`, `AI_HANDOFF.md`, and `AI_HANDOFF/next_prompt.md`. Other hunks in those files predate this task and were preserved.
+
+**Verification.** Three focused deterministic tests cover real media/sidecar loading plus the shared notation projection, missing-media refusal without ledger detachment, and sidecar identity mismatch. They passed in two separate executions. Relevant kept-ledger/export regressions and shared-presentation regressions passed. Isolated macOS `build-for-testing`, generic iOS Simulator Debug, and generic iOS device Debug with embedded Watch succeeded. Fixtures passed 47/47 and `git diff --check` is clean.
+
+**Full-gate note.** The configured Xcode gate was attempted with isolated paths but Xcode 27's sandboxed app-host hung inside Foundation while an existing source-contract test read `CompanionCameraView.swift`; the same runner defect was reproduced with the temporary source-inspection test and that brittle new test was removed. The direct unsandboxed XCTest fallback completed 3,169 tests / 51 skipped with 208 assertions across 92 names, the known non-equivalent missing-resource/timing pattern; it is not a valid comparison to the configured 11-failure / 9-name baseline. No failure referenced `GuidedCaptureSavedTakeDetail` or any of the three new tests. Do not record the direct fallback as baseline drift.
+
+**Next task.** The first unchecked implementation-ready item is **Capture-integrity Slice G: explicit audio-ownership mode (external Serato silent / standalone local AHHH)**. Do not begin Slice H or fold more work into this completed saved-take task.
+
+## 2026-08-30 — Capture-integrity Slice F COMPLETE and PHYSICALLY APPROVED (uncommitted; current)
+
+Started from committed HEAD `7761c09f43`. Nothing was reset, amended, committed, staged, or pushed. `project.pbxproj`, `ScratchLab.xcscheme`, `Info.plist`, and the untracked `CalibrationCameraOverlayTests.swift.plist` were not touched. All other pre-existing dirty hunks were preserved. Production files changed: `ScratchLab/Models/CaptureCore.swift` and `ScratchLab/Views/CompanionCameraView.swift`; tests in `ScratchLabDesktopTests/CaptureReliabilityPhase1Tests.swift`; plus `DEV_LOG.md`, `TASKS.md`, `AI_HANDOFF.md`, `AI_HANDOFF/next_prompt.md`.
+
+**Slice F is complete and checked in `TASKS.md`.** Karl explicitly approved closure after the physical retry, cancellation, multi-take archive inspection, and his operator-reported subsequent-take export.
+
+**Root cause, as fixed.** The kept-session ledger persisted each take's media/sidecar/audio/Watch location as an absolute `file://` URL embedding the iOS Data-container UUID, which iOS reissues across installs. The captures were intact; the ledger paths were not. The export validators were correct — they were reporting genuinely dead paths.
+
+**What changed.** The four take locations are now `CaptureArtifactReference`: `.containerRelative(root:path:)` for anything ScratchLab owns, `.absolute` only for paths it does not. Resolving one to a `URL` requires a `CaptureContainerLocator`, which is built for the container the app is running in now — so a stored location cannot be consumed without being rebased. JSON keys are unchanged and legacy absolute-URL ledgers still decode.
+
+**Legacy repair is an interpretation, not a search.** `GuidedCaptureLedgerRebase` runs once at load. It locates the container-root segment of a legacy path, requires the remainder to already be a capture directory that artifact kind owns plus a single file name, and proves the single resulting candidate against the recovered sidecar — session ID, take ID, take number, sidecar file name, `mediaFileName`, the audio file's media-sibling basename, and `linkedMotionFileName` for Watch/motion — before accepting it. Notation has no separate reference: it is generated from the sidecar, so proving the sidecar proves it. All four locations of a take move together or none do. Do not replace this with a directory scan or a basename match.
+
+**Refusals are visible and non-destructive.** Path traversal, a doubly-named container root, a location outside the directories its kind owns, an unreadable sidecar, a wrong-session/take/number sidecar, a media/audio/Watch file the sidecar does not name, a genuinely missing file, and two takes resolving onto one file are each refused with a named reason in `lastRebaseReport`. A refusal leaves the ledger byte-identical, keeps every take attached, and lets Export keep reporting the real failure so it stays retryable. The repair never adopts an unkept capture that merely completed. Captures are never moved, renamed, or deleted.
+
+**Fail-closed on write.** Persisting an absolute path inside a current container root is now rejected (`containerOwnedAbsoluteSourceURL`), so the defect cannot be reintroduced. Loading still accepts absolute paths, because a legacy ledger legitimately holds them and must survive to be repaired. Do not "simplify" that asymmetry away. No export validator was weakened and no path or file is fabricated.
+
+**Preserved from the prior turn — do not undo.** Staged BYTES are still compared against the same documents re-encoded through the canonical encoder; `testSubSecondCreatedAtIsPreservedAndStagedMetadataIsCanonicalBytes` fails if that becomes a value comparison or if `createdAt` is floored. `SessionExportValidationReason` / `SessionExportValidationFailure` still name the staged check that fired. Retry/cancel semantics and the fail-closed platter-motion-without-recorded-movement check are unchanged.
+
+**Verification.** 9 new deterministic tests + the 9 existing kept-ledger/export tests passed 18/18 twice via `xcodebuild test-without-building` with per-method `-only-testing:` selectors. Teeth were proved by mutation, not assumed: 8 of the 9 new tests FAILED against a temporary restoration of the pre-fix behaviour, and the traversal test FAILED against a disabled path-safety check. `CaptureRecoveryPhase2CoreTests` 58/58, `ScratchLabNotationAndExportTests` 29/29, `CaptureMotionEvidenceTests` 13/13, `CaptureFinalizationMachineTests` 28/28, `GuidedCaptureReviewStateTests` 10/10, `SessionExportRoundTripTests` 1/1. Isolated generic iOS Simulator Debug and macOS Debug builds plus macOS `build-for-testing` succeeded. Fixtures 47/47. `git diff --check` clean. The full configured gate returned 3,166 tests / 49 skipped / 11 assertion failures across the established 9 unique names, plus 366/366 Swift Testing cases, in both configurations.
+
+**Physical approval.** A signed build made with isolated Xcode paths was installed on iPhone `K` as an upgrade, with no uninstall or container erase. Loading the preserved `b5a93fd7-…` session migrated its legacy ledger on device: takes 002/003/004 now store `{containerRoot, relativePath}` references and no stale `B116F53B-…` URL. Take 001 was completed but was never kept, so its absence from the ledger/export is correct. Retry Export reached the share sheet and produced `/Users/karlwatson/Downloads/session_2026_08_30_new_dj_baby_scratch_95_bpm 5.zip`. Read-only inspection proved all three kept takes occur exactly once; 17/17 manifest artifact hashes match; device-source media/audio hashes equal the packaged video/scratch artifacts; source sidecars are completed, identity-correct, and error-free; exported notation matches persisted notation (with the documented timestamp omission/default unavailable document); Watch JSON for takes 003/004 matches the exported Watch evidence; metadata, export metadata, review, replay, and take log agree on take IDs/numbers; and no packaged file is zero bytes. Karl reports current-build share cancellation is shown as cancellation and a subsequent newly kept take remained exportable. The latter is recorded as operator evidence because no second archive was supplied; Karl explicitly directed that it be trusted and Slice F marked complete.
+
+**Next task.** The first unchecked implementation-ready item is the separately scoped **Production iOS saved-take notation, playback, and take-detail surface**. It must reuse the shared gesture-relative presentation and must not reopen or fold into Slice F. Nothing staged, committed, or pushed.
+
+
+## 2026-08-30 — Capture-integrity Slice F: PHYSICAL VERIFICATION FAILED — kept-session ledger stores stale absolute container paths (uncommitted; current)
+
+Verification-only turn on iPhone `K`. No production code was changed. HEAD stayed `7761c09f43` (no amend/reset/rebase/commit/push). The pre-existing dirty worktree, the four protected project/config files, and the untracked `CalibrationCameraOverlayTests.swift.plist` were left untouched and unstaged. Only `DEV_LOG.md`, `TASKS.md`, `AI_HANDOFF.md`, and `AI_HANDOFF/next_prompt.md` were edited, to record this result.
+
+**Do not read either Slice F entry below as a physical result. Slice F stays unchecked in `TASKS.md`.**
+
+**What was done.** Isolated Debug build (`-derivedDataPath` / `OBJROOT` / `SYMROOT` / `SHARED_PRECOMPS_DIR`, Xcode open) for `platform=iOS,id=…` → `BUILD SUCCEEDED`. Installed with `xcrun devicectl device install app` (upgrade; no uninstall, no erase). The failed session's container was preserved and verified: `Documents/CompanionCaptures/b5a93fd7-…_take00{1,2,3,4}_camA.{mov,wav,json}` all present, non-empty, every sidecar `recordingStatus: "completed"`.
+
+**Installed binary carries the latest code.** `ScratchLab.app/ScratchLab.debug.dylib` (built 09:16 from source last modified 08:56) contains all seven `SessionExportValidationReason` raw values, the "Export blocked: manifests/session_metadata.json did not match the session it was generated from." detail string, `guided-capture-kept-sessions.json`, and `sourceMediaURL`. The sub-second-`createdAt` staged-bytes comparison is present. The diagnostic-reason work is NOT missing from the device.
+
+**Physical result — FAILED, no new take recorded.**
+1. The kept session did not present its takes as usable after the upgrade install/relaunch.
+2. Retry Export did not reach the share sheet. On this freshly installed build it reports, per take: "Take 002 video is missing. Retake it before export.", "Take take-002 is missing b5a93fd7-…_take002_camA.json.", "Take 002 audio is missing. Retake it before export.", "Take 003 video is missing. Retake it before export." The pre-existing build showed the opaque "This session has inconsistent metadata." for the same underlying condition.
+
+**Confirmed root cause (Retry Export failure).** `~/Library/Application Support/ScratchLab/guided-capture-kept-sessions.json` persists each take's `sourceMediaURL`, `sourceSidecarURL`, `sourceAudioURL`, and `sourceWatchMotionURL` as absolute `file://` URLs containing the app Data-container UUID `B116F53B-B4D3-4C1F-805D-40722E98025D`. The device's current Data container has a different UUID, so every one of those paths now dangles. The capture data itself is intact — sidecars store only relative filenames (`mediaFileName` / `sidecarFileName`), so local recovery can still resolve the files, but the ledger cannot. `CompanionCameraView` builds `SessionExportTake` with `mediaURL: keptTake.sourceMediaURL` / `audioArtifactURL: keptTake.sourceAudioURL` / `sidecarURL: keptTake.sourceSidecarURL` — no rebasing against the current container — and `SessionArchiveBuilder.packageValidationIssues` then fails `ArtifactPreflight.checkFileReady` / `FileManager.fileExists` on those dead URLs. `packageValidationReport` maps any "missing" issue to `SessionExportError.missingRequiredFiles`, so `validateStagedPackage` and the new `SessionExportValidationReason` vocabulary are never reached for this session. The sub-second-`createdAt` / staged-bytes fix is therefore neither implicated nor disproven here — the pre-flight source-file check fails before staging runs.
+
+**Failure 1 (kept session "missing") — only partly explained.** The ledger file survived intact and still holds session `b5a93fd7` with takes 002/003/004 (take-001 is not in the ledger; the companion audit summary records four completed takes). Because every ledger take resolves to a dead path, surfaces that gate on file resolution can render the session empty or unexportable. The exact on-screen appearance of "missing" was not captured; this is not fully closed.
+
+**Timeline not established.** Today's `devicectl` upgrade install preserved the container contents, which normally also preserves the Data-container UUID, so the UUID most likely changed at an earlier install cycle. Whether the original 2026-08-30 "inconsistent metadata" failure that reopened Slice F was this same stale-path condition or the distinct `createdAt` bug is not proven. Device logs and/or the original failing archive would settle it.
+
+**Next action for Slice F is code, not another physical run:** the kept-session ledger must resolve take artifacts against the current container — store container-relative paths (or security-scoped bookmarks) and rebase on load — instead of persisting absolute Data-container URLs. This is the "persisted absolute container URLs have no relocation migration" risk already noted below, now a confirmed physical defect. No fix was made in this verification turn. After the fix, rerun a real iPhone export of a freshly kept take plus Share-sheet presentation/cancellation on device.
+
+## 2026-08-30 — Capture-integrity Slice F: iOS "inconsistent metadata" export FIXED; still PHYSICALLY UNAPPROVED (uncommitted)
+
+Started from committed HEAD `7761c09f43`; no amend/reset/rebase, commit, or push. The pre-existing dirty worktree was preserved, including the four protected project/config files, which were not altered or staged.
+
+**Read this before the entry below it.** The next entry records Slice F as COMPLETE with a green gate. That was true of the tests but NOT of the device: the first real iPhone export of a freshly kept take failed with "This session has inconsistent metadata." Do not read that entry as a physical result.
+
+**Root cause.** `SessionArchiveBuilder.validateStagedPackage` wrote `manifests/session_metadata.json`, `export_metadata.json`, `session_review.json`, and `session_replay.json` through the canonical `JSONEncoder`, whose `.iso8601` strategy serializes **whole seconds**, then decoded those files back and compared the decoded documents against the in-memory ones. A `Date` carrying a sub-second component cannot survive that round trip, so a byte-identical, fully valid export was rejected. Measured: `Date(timeIntervalSince1970: 1_710_000_000.372)` encodes to `"2024-03-09T16:00:00Z"` and decodes back 0.372 s earlier; re-encoding the same value is byte-stable.
+
+**Why only freshly kept takes.** A guided kept session's `createdAt` is a live `Date()`, and `GuidedCaptureKeptSessionStore` persists it with the default (`.deferredToDate`) strategy, so the fraction survives in memory and across a reload. `packageForLocalRecordingSession` instead derives `createdAt` from sidecar dates that have already been through `.iso8601`, so recovered sessions are always whole-second. That is exactly why device recovery exports succeeded while a freshly kept take did not — and why every existing fixture missed it, since all of them used a whole-second `createdAt`.
+
+**Fix.** Compare the staged BYTES against the same documents re-encoded through the same canonical encoder — the pattern `session_manifest.json` and every notation document already used in that same function. Decoded documents are kept only for the structural identity assertions (session ID, take IDs, counts, review/replay `generatedAt` agreement). Nothing is rounded, mutated, defaulted, filtered, or softened with `try?`/`compactMap`; the check is now stricter, because it also proves each staged file is the canonical byte-for-byte serialization rather than merely an equal-valued one. **Do not "simplify" this back into a value comparison** — `testSubSecondCreatedAtIsPreservedAndStagedMetadataIsCanonicalBytes` exists to stop that, and also fails if someone floors `createdAt` instead.
+
+**Failure detail.** `SessionExportValidationReason` / `SessionExportValidationFailure` were added because "This session has inconsistent metadata." named nothing an operator or a device log could act on. A staged rejection now carries the specific check that fired alongside the unchanged `SessionExportError`; the coordinator surfaces it through the existing `validationReport`, so the coarse error, its user message, and retry/cancel semantics are unchanged. The reason vocabulary is closed and holds check names only — never paths, performer names, notes, or capture content.
+
+**Preserved deliberately.** The fail-closed "take claims `.platter` motion but its notation recorded no movement events" check. It is still unreproduced on hardware, so it stays strict and is covered by a named-error regression instead of being relaxed. Intentional metadata groups in legacy local sessions keep their established selected-group behaviour; `matchingCompatibleLocalRecordingSidecarURLs` was not touched.
+
+**Verification.** Focused set 14/14 in two executions. The four sub-second cases were first confirmed to FAIL against a temporarily reverted value comparison, then to pass against the fix — without that step the new tests prove nothing. Affected regressions 135/135 (`CaptureRecoveryPhase2CoreTests` 58, `ScratchLabNotationAndExportTests` 29, `SessionExportRoundTripTests` 1, `SessionReviewMetadataTests` 17, `SessionQualityAnalyzerTests` 15, `SessionReplayTimelineTests` 7, `SessionReplayDocumentTests` 8). Isolated generic iOS Simulator and macOS Debug builds green; fixtures 47/47; `git diff --check` clean. Full configured gate: **3,157 XCTest cases / 49 skipped / 11 assertion failures across exactly the established 9 unique names**, no export or Slice F name in the set, plus 366/366 Swift Testing cases.
+
+**Slice F is NOT physically approved.** A real iPhone export of a freshly kept take must succeed, and Share-sheet presentation and cancellation must be checked on device. The earlier remaining risk still stands: kept ledgers persist absolute app-container URLs with no bookmark/rebase layer for a migration that relocates files. Nothing staged, committed, or pushed.
+
+## 2026-08-30 — Capture-integrity Slice F COMPLETE: durable kept-session export (uncommitted; current)
+
+Started from committed HEAD `7761c09f43`; no amend/reset/rebase, commit, or push. Existing dirty files were preserved, including the four protected project/config files.
+
+**Root cause.** Keep only advanced transient UI state. There was no durable authoritative set of kept takes, so Export could disappear after Keep-and-Next or navigation, and archive completion did not establish that all real inputs and generated outputs were present, associated with the right take, unique, and byte-correct.
+
+**Implemented.** `GuidedCaptureKeptSessionStore` atomically persists an append-only, idempotent session ledger and restores it across view lifetimes. Both Keep paths cross that boundary before presenting success. Ready/setup/session-complete surfaces expose Export / Share whenever the active session has kept takes, and later takes append to rather than replace the export set. Retry never discards staged captures; only explicit Discard does. `SessionExportCoordinator` now keeps failure visible/retryable, treats share-sheet cancellation separately, rejects stale/fabricated completion, and validates the source plus unzipped package: media/audio identity and hashes, sidecars, notation, Watch/motion, metadata, manifests, review/replay, take log, optional generated mixes/stems, and unique take numbers/IDs/paths. Local recovery is fail-closed so a corrupt or mismatched take cannot be silently filtered out.
+
+**Verification.** The seven Slice F deterministic tests, seven affected notation/MIDI export regressions, and two legacy metadata-group compatibility tests passed in two final focused executions (16/16 each). Isolated generic iOS Simulator and macOS Debug builds passed after the final compatibility patch; capture fixtures passed 47/47; `git diff --check` passed. The first broad gate exposed seven review-timestamp regressions, and an intermediate gate exposed two metadata-group regressions; both sets were fixed. The final isolated broad gate returned exactly the established **11 assertion failures / 9 unique names**, with no Slice F or export name in the set.
+
+**Remaining risk.** Kept ledgers persist absolute app-container URLs; normal app updates preserve the container, but a migration/restore that relocates files has no bookmark/rebase layer. Physical Share-sheet presentation and cancellation should still be checked once on device. Nothing staged, committed, or pushed.
+
+## 2026-08-30 — Capture-integrity Slice E COMPLETE: one bounded, take-ID-scoped finalization state machine (uncommitted; current)
 
 Started from committed HEAD `c0bb3babc1` without amend/reset/rebase. The pre-existing dirty worktree was preserved. Protected `project.pbxproj`, `ScratchLab.xcscheme`, `Info.plist`, and untracked `CalibrationCameraOverlayTests.swift.plist` were not altered or staged.
 
@@ -22,9 +320,11 @@ It is a **consolidation, not an addition**: the view's `finalizationWatchdog` ta
 
 **Supplied iOS export inspected and healthy.** Session `b5a93fd7` (2026-08-30) exported one 11-second take: `recordingStatus: completed`, `errorDescription: null`, 35 movement events, 9,572 mixer MIDI events, notation confidence 0.948, `watchSyncState: acknowledged`, and a real Watch CSV carried through to `watch/NEWDJ_baby_095_take01_watch.csv`. Its audit trail runs `take_allocated` → `watch_requested` → `watch_sync acknowledged` → `recording_completed` → `notation_snapshot` → `watch_linked` → `watch_reconciled`. An earlier session `568857c3` was also inspected: all three of its takes carried `recording_completed` + `notation_snapshot`, including the take that was reviewed but not kept, so its absence from that export is correct behaviour and not a finalization failure. No sidecar inspected on device shows `recordingStatus: failed` or any `errorDescription`.
 
-Slice E was committed as its own isolated checkpoint on top of Slice D; nothing was pushed.
+**Separate product gap, NOT a Slice E defect and NOT to be folded into D or E.** Production iOS has no saved-take playback/detail surface: `TakeReviewView` renders a status card, video thumbnail, text detail blocks and decision buttons only, with no notation, lane, trace or chart; `Take Detail` exists solely on macOS (`MacAnalyzerView.reviewFigmaTakeDetail`); and the only iOS saved-notation surfaces, `DebugReviewNotationCard` and `DebugNotationLaneHostView`, are entirely `#if DEBUG` and wired into no production surface. A saved take therefore cannot be reopened or played back on iOS. This is tracked as its own unchecked task in `TASKS.md` and must not be silently dropped.
 
-## 2026-08-29 — Capture-integrity Slice D COMPLETE: gesture-relative notation versus raw sample position (2026-08-29)
+Slice D's own refreshed physical approval (macOS free-spin → catch → unequal push/pull/reversal, and the iOS signed-playhead/saved-surface check) is separate and **still outstanding**; Slice E's device pass does not cover it.
+
+## 2026-08-29 — Capture-integrity Slice D COMPLETE: gesture-relative notation versus raw sample position (uncommitted; current)
 
 Started from committed HEAD `c0bb3babc1` without amend/reset/rebase. The pre-existing dirty worktree was preserved. Protected `project.pbxproj`, `ScratchLab.xcscheme`, `Info.plist`, and untracked `CalibrationCameraOverlayTests.swift.plist` were not altered or staged.
 
@@ -38,17 +338,17 @@ Started from committed HEAD `c0bb3babc1` without amend/reset/rebase. The pre-exi
 
 **Verification.** Focused suites passed 147/147 twice; the relevant regression + saved-Review set passed 88/88 twice; isolated macOS and generic iOS Simulator builds succeeded, including the embedded Watch target; capture fixtures passed 47/47. Both broad configured passes ran 3,111 XCTest cases / 49 skipped / 11 assertion failures across exactly the established 9-name set, and 366/366 Swift Testing cases passed in each. The four-test increase from the prior 3,107 baseline is exactly the new display-scale/endpoint coverage. `git diff --check` passed after the final record update. Independent review found and prompted the now-fixed double-scaled camera endpoint; its follow-up audit found no remaining semantic-scope issue.
 
-**Physical status — approval recorded; the procedure is retained for reference.** The replacement iOS/macOS archives and screenshots supersede the earlier `rr` session. They show stable local direction/baseline behavior but also prove the former trace was too small; because they predate the quarter-turn zoom, they are not approval of the final presentation. On macOS, select RANE ONE MKII with channel assign fully left; Advanced → Mixer & Hot Cue Mapping → apply mapping + load AHHH; open live Practice Copy or a short Capture; allow at least three hands-off forward revolutions; catch the platter and perform a short pull, a different-length push, then another pull/quick reversal. The caught gesture must begin at its own baseline; ordinary 0.10–0.20-revolution scratches should occupy about 40–80% of the lane; quarter-turn-or-larger strokes intentionally reach the rail; signed slope/timing/relative sub-quarter excursion must match the hand; completed strokes must stay fixed. On iOS, separately move backward through cue and forward past sample end: audible AHHH and cyan waveform/playhead must remain synchronized and show `BEFORE START` / `PAST END` without wrapping. Then, **on macOS**, save a take and compare live notation against saved Review and Take Detail, plus the camera overlay, for stroke order, direction, timing, and relative sub-quarter excursion; scrolling/viewport, horizontal scale, and camera radial geometry may intentionally differ. The saved-surface comparison belongs to macOS because those are the only production surfaces that render saved notation — do not attempt it on iOS, which has no such surface. **PHYSICAL APPROVAL RECORDED (Karl, 2026-08-30).** All three refreshed checks passed. macOS: the free-spin did not accumulate into the next gesture's baseline; catch, unequal push/pull, and reversal direction displayed correctly; completed strokes remained fixed. macOS saved Review and Take Detail preserved stroke order, direction, timing, and relative excursion. iOS: the playhead crossed `BEFORE START` and `PAST END` without wrapping and stayed synchronized with audible AHHH.
+**Physical status and required recheck.** The replacement iOS/macOS archives and screenshots supersede the earlier `rr` session. They show stable local direction/baseline behavior but also prove the former trace was too small; because they predate the quarter-turn zoom, they are not approval of the final presentation. On macOS, select RANE ONE MKII with channel assign fully left; Advanced → Mixer & Hot Cue Mapping → apply mapping + load AHHH; open live Practice Copy or a short Capture; allow at least three hands-off forward revolutions; catch the platter and perform a short pull, a different-length push, then another pull/quick reversal. The caught gesture must begin at its own baseline; ordinary 0.10–0.20-revolution scratches should occupy about 40–80% of the lane; quarter-turn-or-larger strokes intentionally reach the rail; signed slope/timing/relative sub-quarter excursion must match the hand; completed strokes must stay fixed. On iOS, separately move backward through cue and forward past sample end: audible AHHH and cyan waveform/playhead must remain synchronized and show `BEFORE START` / `PAST END` without wrapping. Then, **on macOS**, save a take and compare live notation against saved Review and Take Detail, plus the camera overlay, for stroke order, direction, timing, and relative sub-quarter excursion; scrolling/viewport, horizontal scale, and camera radial geometry may intentionally differ. The saved-surface comparison belongs to macOS because those are the only production surfaces that render saved notation — do not attempt it on iOS, which has no such surface. **PHYSICAL APPROVAL RECORDED (Karl, 2026-08-30).** All three refreshed checks passed. macOS: the free-spin did not accumulate into the next gesture's baseline; catch, unequal push/pull, and reversal direction displayed correctly; completed strokes remained fixed. macOS saved Review and Take Detail preserved stroke order, direction, timing, and relative excursion. iOS: the playhead crossed `BEFORE START` and `PAST END` without wrapping and stayed synchronized with audible AHHH.
 
 The supplied macOS export corroborates the visual approval but is **not** the approval itself — visual acceptance came from Karl, not the archive. Session `53d4b65d` (`calibration_no_click`, RANE ONE MKII, 20s, 12 files, none zero-byte, three debug traces present) contains one `slowDrag` free-spin run of **0.8419 revolution over 5.99s**, then 18 pulls spanning −0.0240 to −0.0558 rev and 7 pushes spanning 0.0273 to 0.0524 rev, so the performed asymmetry survives into the evidence. Note for future readers: in that export every post-catch gesture still starts at **0.7915–0.8507**, i.e. carrying the free-spin offset. That is CORRECT — canonical export/scoring keep the raw signed coordinate and gesture-relative rebasing is a presentation transform. Do not mistake those raw values for a regression of the old accumulated-motor-phase bug.
 
-Slice D therefore has no outstanding physical acceptance risk. Committed as its own checkpoint on top of the test-isolation commit; nothing was pushed.
+Slice D therefore has no outstanding physical acceptance risk. Nothing staged, committed, or pushed.
 
-## 2026-08-29 — Standalone test isolation cleanup: COMPLETE (2026-08-29)
+## 2026-08-29 — Standalone test isolation cleanup complete (uncommitted; current)
 
 `PlatterTestSampleLoadTests` and `MIDILearnEngineTests` no longer depend on shared host state. The platter suite explicitly supplies `Bundle(for: MacCaptureEngine.self).resourceURL`; `ScratchSampleResolver` and `ScratchSamplePlaybackController` retain `Bundle.main.resourceURL` as their production default. The MIDI suite creates a unique `UserDefaults` suite in `setUp`, clears it before/after every test, and explicitly injects it into `MacCaptureEngine`; production and callers without explicit injection retain their prior `.standard` legacy-crossfader behavior. No assertion was weakened and no audio, routing, MIDI-event, or sample-selection behavior changed.
 
-Verification: both target suites passed standalone twice before editing and twice on the final code (`PlatterTestSampleLoadTests` 2/2; `MIDILearnEngineTests` 32/32). `MIDILearnHangFixTests` passed 15/15 after the compatibility correction. Both target suites passed inside the full desktop plan. The full gate remains the **11 failures / 9 unique-name baseline** (3,090 tests / 49 skipped); neither target suite is in the failing set. Isolated iOS and macOS builds succeeded; capture-pipeline fixtures passed 47/47. The pre-existing untracked `.codex-build/` disappeared externally during the task and was not recreated. Protected dirty `project.pbxproj`, `ScratchLab.xcscheme`, `Info.plist`, and `CalibrationCameraOverlayTests.swift.plist` were not altered. Committed as its own isolated checkpoint; nothing was pushed.
+Verification: both target suites passed standalone twice before editing and twice on the final code (`PlatterTestSampleLoadTests` 2/2; `MIDILearnEngineTests` 32/32). `MIDILearnHangFixTests` passed 15/15 after the compatibility correction. Both target suites passed inside the full desktop plan. The full gate remains the **11 failures / 9 unique-name baseline** (3,090 tests / 49 skipped); neither target suite is in the failing set. Isolated iOS and macOS builds succeeded; capture-pipeline fixtures passed 47/47. The pre-existing untracked `.codex-build/` disappeared externally during the task and was not recreated. Protected dirty `project.pbxproj`, `ScratchLab.xcscheme`, `Info.plist`, and `CalibrationCameraOverlayTests.swift.plist` were not altered. Nothing committed or pushed.
 
 ## 2026-08-29 — RANE right-deck playback routing FIXED and PHYSICALLY APPROVED (uncommitted; current)
 

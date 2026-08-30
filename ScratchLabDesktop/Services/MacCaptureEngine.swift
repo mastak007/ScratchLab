@@ -2354,6 +2354,7 @@ final class MacCaptureEngine: NSObject, ObservableObject {
     /// Outcome of the most recent validated platter-sample load request, so
     /// a missing asset is never mistaken for a platter/MIDI hardware fault.
     @Published private(set) var platterTestLoadStatus: String = ""
+    @Published private(set) var scratchAudioOwnershipMode: ScratchAudioOwnershipMode = .defaultMode
     var scratchBankPadPreviewCallback: ((String) -> Void)?
 
     /// Platter CC6 ring-counter tracker per deck (ch=0 left, ch=1 right).
@@ -2362,6 +2363,16 @@ final class MacCaptureEngine: NSObject, ObservableObject {
     /// Platter-driven scratch sample playback controller.
     private let scratchPlaybackController: ScratchSamplePlaybackController
     private var tempDirectAhhhTriggerArmed = true
+    private let audioOwnershipLock = NSLock()
+    private var audioOwnershipModeStorage: ScratchAudioOwnershipMode = .defaultMode
+
+    /// Lock-backed so CoreMIDI/DVS callbacks enforce the boundary without
+    /// touching SwiftUI state or performing UserDefaults I/O at MIDI rate.
+    private var allowsLocalScratchPlayback: Bool {
+        audioOwnershipLock.lock()
+        defer { audioOwnershipLock.unlock() }
+        return audioOwnershipModeStorage.allowsLocalScratchPlayback
+    }
 
     /// When true, a gated `TimecodePlaybackDrive` from `TimecodePlaybackBridge`
     /// drives `scratchPlaybackController`, and the raw MIDI CC6 platter path
@@ -2593,6 +2604,7 @@ final class MacCaptureEngine: NSObject, ObservableObject {
         elapsed: TimeInterval
     ) {
         guard dvsPlaybackDriveActive else { return }
+        guard allowsLocalScratchPlayback else { return }
         let driveEntryUptime = CACurrentMediaTime()
 
 #if DEBUG
@@ -3702,10 +3714,13 @@ final class MacCaptureEngine: NSObject, ObservableObject {
 
     override init() {
         let midiSelectionDefaults = Self.makeMIDISelectionDefaults()
+        let audioOwnershipMode = ScratchAudioOwnershipMode.load(from: .standard)
         autoRefreshDevicesAfterViewMount = true
         self.midiSelectionDefaults = midiSelectionDefaults
         midiPersistenceDefaults = .standard
         scratchPlaybackController = ScratchSamplePlaybackController()
+        scratchAudioOwnershipMode = audioOwnershipMode
+        audioOwnershipModeStorage = audioOwnershipMode
         selectedMIDIInputSourceID = midiSelectionDefaults.string(
             forKey: ScratchLabDesktopDefaultsKey.selectedMIDIInputSourceID
         ) ?? ""
@@ -3719,12 +3734,15 @@ final class MacCaptureEngine: NSObject, ObservableObject {
         sampleResourceRoot: URL? = Bundle.main.resourceURL
     ) {
         let midiSelectionDefaults = midiDefaults ?? Self.makeMIDISelectionDefaults()
+        let audioOwnershipMode = ScratchAudioOwnershipMode.load(from: midiDefaults ?? .standard)
         autoRefreshDevicesAfterViewMount = autoRefreshDevices
         self.midiSelectionDefaults = midiSelectionDefaults
         midiPersistenceDefaults = midiDefaults ?? .standard
         scratchPlaybackController = ScratchSamplePlaybackController(
             sampleResourceRoot: sampleResourceRoot
         )
+        scratchAudioOwnershipMode = audioOwnershipMode
+        audioOwnershipModeStorage = audioOwnershipMode
         selectedMIDIInputSourceID = midiSelectionDefaults.string(
             forKey: ScratchLabDesktopDefaultsKey.selectedMIDIInputSourceID
         ) ?? ""
@@ -3742,6 +3760,24 @@ final class MacCaptureEngine: NSObject, ObservableObject {
             return .standard
         }
         return isolatedDefaults
+    }
+
+    func setScratchAudioOwnershipMode(_ mode: ScratchAudioOwnershipMode) {
+        audioOwnershipLock.lock()
+        audioOwnershipModeStorage = mode
+        audioOwnershipLock.unlock()
+        mode.persist(to: midiPersistenceDefaults)
+        if !mode.allowsLocalScratchPlayback {
+            scratchPlaybackController.unload()
+            scratchPlaybackController.waitForAudioQueue()
+        }
+        publishOnMainAsync(field: "scratchAudioOwnershipMode") { [weak self] in
+            guard let self else { return }
+            self.scratchAudioOwnershipMode = mode
+            self.platterTestLoadStatus = mode.allowsLocalScratchPlayback
+                ? "Standalone audio enabled — load AHHH to arm the platter."
+                : mode.detail
+        }
     }
 
     private func configureInitialState() {
@@ -5694,7 +5730,7 @@ final class MacCaptureEngine: NSObject, ObservableObject {
     /// captures the take's state, and schedules the second half via
     /// `group.notify(queue: finalizationQueue)`.
     private func finalizeRoutineRecording(outputFileURL: URL, error: Error?) {
-        let captureErrorDescription = error?.localizedDescription
+        let captureErrorDescription = Self.routineCaptureFailureDescription(for: error)
 
         guard let sidecar = activeRoutineRecordingSidecar else {
             let message = captureErrorDescription != nil
@@ -5921,6 +5957,20 @@ final class MacCaptureEngine: NSObject, ObservableObject {
             statusMessage: statusMessage,
             sessionID: sessionID,
             sidecar: finalizedSidecar)
+    }
+
+    /// `AVCaptureMovieFileOutput` may finish a manually stopped recording with
+    /// a non-nil AVFoundation error while explicitly marking the file as having
+    /// finished successfully. Treat only that documented marker as success;
+    /// every other error remains a fail-closed capture failure.
+    static func routineCaptureFailureDescription(for error: Error?) -> String? {
+        guard let error else { return nil }
+        let nsError = error as NSError
+        if nsError.domain == AVFoundationErrorDomain,
+           nsError.userInfo[AVErrorRecordingSuccessfullyFinishedKey] as? Bool == true {
+            return nil
+        }
+        return error.localizedDescription
     }
 
     /// Publishes the completed take's UI state on the MainActor and clears the
@@ -7851,6 +7901,12 @@ final class MacCaptureEngine: NSObject, ObservableObject {
     /// direct-MIDI path is out of scope here (hot-cue/sample-mapping
     /// design, later).
     func loadPlatterTestSample() {
+        guard allowsLocalScratchPlayback else {
+            publishOnMainAsync(field: "platterTestLoadStatus") { [weak self] in
+                self?.platterTestLoadStatus = "ScratchLab audio is unavailable."
+            }
+            return
+        }
         let sampleID = "dvs_ahhh"
         print("[ScratchSamplePlaybackBridge] platter test load requested · sampleID=\(sampleID)")
         let requested = scratchPlaybackController.load(sampleID: sampleID, playDiagnosticPreview: false)
@@ -7884,6 +7940,12 @@ final class MacCaptureEngine: NSObject, ObservableObject {
     /// output chain are audible. Unloading first resets the controller's
     /// once-per-load preview guard, so every button press is a real test.
     func previewPlatterTestSample() {
+        guard allowsLocalScratchPlayback else {
+            publishOnMainAsync(field: "platterTestLoadStatus") { [weak self] in
+                self?.platterTestLoadStatus = "ScratchLab audio is unavailable."
+            }
+            return
+        }
         let sampleID = "dvs_ahhh"
         print("[ScratchSamplePlaybackBridge] audible platter test requested · sampleID=\(sampleID)")
         scratchPlaybackController.unload()
@@ -9485,6 +9547,10 @@ final class MacCaptureEngine: NSObject, ObservableObject {
         guard decision.shouldTrigger, let sampleID = decision.sampleID else {
             return false
         }
+        guard allowsLocalScratchPlayback else {
+            print("[HotCueAutoLoad] suppressed · ScratchLab audio unavailable")
+            return false
+        }
 
         queueControllerActivity(.hotCue(index: action.hotCueIndex ?? 0, sampleID: sampleID))
 
@@ -10279,7 +10345,10 @@ final class MacCaptureEngine: NSObject, ObservableObject {
         let isTemporaryAhhhFallback =
             ((channel == 4 || channel == 5) && (noteNumber == 20 || noteNumber == 24)) ||
             (channel == 6 && noteNumber == 20)
-        if isTemporaryAhhhFallback, routedSampleID == nil, !productionMatched {
+        if isTemporaryAhhhFallback,
+           routedSampleID == nil,
+           !productionMatched,
+           allowsLocalScratchPlayback {
             print("[RanePad] TEMP diagnostic direct load · sampleID=dvs_ahhh channel=\(channel) note=\(noteNumber) velocity=\(velocity)")
             scratchPlaybackController.load(sampleID: "dvs_ahhh", playDiagnosticPreview: false)
             testOnly_hotCueLoadObserver?("dvs_ahhh")
@@ -10300,6 +10369,7 @@ final class MacCaptureEngine: NSObject, ObservableObject {
     // Loads `dvs_ahhh`, not the legacy raw `ahhh` — product decision 2026-08-14:
     // dvs_ahhh is the only user-facing "Ahh" sample.
     private func handleTemporaryDirectAhhhTrigger(rawValue: Int) {
+        guard allowsLocalScratchPlayback else { return }
         if rawValue > 120, tempDirectAhhhTriggerArmed {
             tempDirectAhhhTriggerArmed = false
             print("[ScratchSamplePlaybackBridge] TEMP direct ahhh trigger fired · source=cc8 raw=\(rawValue)")

@@ -1673,6 +1673,783 @@ final class CaptureReliabilityPhase1CoreTests: XCTestCase {
     }
 
     @MainActor
+    func testGuidedKeptLedgerSingleTakeReloadIsDurableAndIdempotent() throws {
+        let root = try makeTemporaryDirectory()
+        let storageURL = root.appendingPathComponent("kept-sessions.json")
+        let sessionID = "slice-f-single-session"
+        let timestamp = Date(timeIntervalSince1970: 1_730_000_000)
+        let session = makeGuidedKeptSession(sessionID: sessionID, timestamp: timestamp)
+        let take = makeGuidedKeptTake(
+            in: root,
+            sessionID: sessionID,
+            takeNumber: 1,
+            bpm: 70
+        )
+
+        let writer = try GuidedCaptureKeptSessionStore(
+            storageURL: storageURL,
+            now: { timestamp }
+        )
+        let keptSession = try writer.keep(take, in: session)
+        XCTAssertEqual(keptSession.takes, [take])
+
+        let persistedBeforeIdempotentKeep = try Data(contentsOf: storageURL)
+        let reloaded = try GuidedCaptureKeptSessionStore(
+            storageURL: storageURL,
+            now: { timestamp.addingTimeInterval(10) }
+        )
+        XCTAssertEqual(reloaded.session(id: sessionID)?.takes, [take])
+
+        _ = try reloaded.keep(take, in: session)
+
+        XCTAssertEqual(reloaded.session(id: sessionID)?.takes, [take])
+        XCTAssertEqual(
+            try Data(contentsOf: storageURL),
+            persistedBeforeIdempotentKeep,
+            "Keeping the same take twice must not rewrite or duplicate the durable ledger."
+        )
+    }
+
+    @MainActor
+    func testGuidedKeptLedgerOrdersMultipleTakesAndRejectsDuplicateTakeNumber() throws {
+        let root = try makeTemporaryDirectory()
+        let storageURL = root.appendingPathComponent("kept-sessions.json")
+        let sessionID = "slice-f-multi-session"
+        let timestamp = Date(timeIntervalSince1970: 1_730_000_100)
+        let session = makeGuidedKeptSession(sessionID: sessionID, timestamp: timestamp)
+        let takeThree = makeGuidedKeptTake(
+            in: root,
+            sessionID: sessionID,
+            takeNumber: 3,
+            bpm: 110
+        )
+        let takeOne = makeGuidedKeptTake(
+            in: root,
+            sessionID: sessionID,
+            takeNumber: 1,
+            bpm: 70
+        )
+        let duplicateNumber = makeGuidedKeptTake(
+            in: root,
+            sessionID: sessionID,
+            takeID: "different-take-id",
+            takeNumber: 3,
+            bpm: 90
+        )
+        let store = try GuidedCaptureKeptSessionStore(
+            storageURL: storageURL,
+            now: { timestamp }
+        )
+
+        _ = try store.keep(takeThree, in: session)
+        _ = try store.keep(takeOne, in: session)
+
+        XCTAssertEqual(store.session(id: sessionID)?.takes.map(\.takeNumber), [1, 3])
+        XCTAssertEqual(store.session(id: sessionID)?.takes.map(\.takeID), ["take-001", "take-003"])
+        XCTAssertThrowsError(try store.keep(duplicateNumber, in: session)) { error in
+            XCTAssertEqual(
+                error as? GuidedCaptureKeptSessionStoreError,
+                .takeNumberCollision(sessionID: sessionID, takeNumber: 3)
+            )
+        }
+        XCTAssertEqual(
+            store.session(id: sessionID)?.takes.map(\.takeID),
+            ["take-001", "take-003"],
+            "A rejected collision must leave every previously kept take attached."
+        )
+    }
+
+    @MainActor
+    func testGuidedKeptLedgerRecreationRetainsSessionAndCanAppendNextTake() throws {
+        let root = try makeTemporaryDirectory()
+        let storageURL = root.appendingPathComponent("kept-sessions.json")
+        let sessionID = "slice-f-navigation-session"
+        let timestamp = Date(timeIntervalSince1970: 1_730_000_200)
+        let session = makeGuidedKeptSession(sessionID: sessionID, timestamp: timestamp)
+        let takeOne = makeGuidedKeptTake(
+            in: root,
+            sessionID: sessionID,
+            takeNumber: 1,
+            bpm: 70
+        )
+        let takeTwo = makeGuidedKeptTake(
+            in: root,
+            sessionID: sessionID,
+            takeNumber: 2,
+            bpm: 90
+        )
+
+        let firstViewLifetimeStore = try GuidedCaptureKeptSessionStore(
+            storageURL: storageURL,
+            now: { timestamp }
+        )
+        _ = try firstViewLifetimeStore.keep(takeOne, in: session)
+
+        let recreatedViewStore = try GuidedCaptureKeptSessionStore(
+            storageURL: storageURL,
+            now: { timestamp.addingTimeInterval(1) }
+        )
+        let restoredSession = try XCTUnwrap(recreatedViewStore.session(id: sessionID))
+        XCTAssertEqual(restoredSession.takes, [takeOne])
+        _ = try recreatedViewStore.keep(takeTwo, in: restoredSession)
+
+        let nextNavigationStore = try GuidedCaptureKeptSessionStore(storageURL: storageURL)
+        XCTAssertEqual(nextNavigationStore.session(id: sessionID)?.takes, [takeOne, takeTwo])
+        XCTAssertEqual(nextNavigationStore.session(id: sessionID)?.sessionName, session.sessionName)
+    }
+
+    @MainActor
+    func testSessionExportCoordinatorValidationFailureRemainsRetryableAfterMediaRepair() async throws {
+        let root = try makeTemporaryDirectory()
+        let package = try makeCanonicalPackage(rootURL: root, useRealMedia: true)
+        let damagedAudioURL = try XCTUnwrap(package.takes.first?.audioArtifactURL)
+        try FileManager.default.removeItem(at: damagedAudioURL)
+        let coordinator = SessionExportCoordinator()
+
+        coordinator.prepareShare(for: .package(package))
+        for _ in 0..<320 {
+            if case .failed = coordinator.state { break }
+            try await Task.sleep(nanoseconds: 25_000_000)
+        }
+
+        if case .failed(.missingRequiredFiles) = coordinator.state {
+            XCTAssertTrue(coordinator.canRetry)
+            XCTAssertNil(coordinator.lastResult)
+            XCTAssertNil(coordinator.shareRequest)
+            XCTAssertFalse(coordinator.statusMessage?.isEmpty ?? true)
+        } else {
+            XCTFail("Missing source audio must produce a visible, retryable validation failure.")
+        }
+        for take in package.takes {
+            XCTAssertTrue(FileManager.default.fileExists(atPath: take.mediaURL.path))
+            XCTAssertTrue(FileManager.default.fileExists(atPath: take.sidecarURL.path))
+        }
+
+        try writeTestWAV(at: damagedAudioURL)
+        coordinator.prepareShare(for: .package(package))
+        for _ in 0..<320 {
+            if coordinator.shareRequest != nil || coordinator.canRetry { break }
+            try await Task.sleep(nanoseconds: 25_000_000)
+        }
+
+        let result = try XCTUnwrap(coordinator.lastResult)
+        XCTAssertNotNil(coordinator.shareRequest)
+        XCTAssertFalse(coordinator.canRetry)
+        XCTAssertTrue(FileManager.default.fileExists(atPath: result.archiveURL.path))
+        XCTAssertEqual(coordinator.statusMessage, "Ready to share")
+    }
+
+    @MainActor
+    func testSessionExportCoordinatorCancellationIsDistinctAndCompletionCannotFabricateSuccess() async throws {
+        let root = try makeTemporaryDirectory()
+        let package = try makeCanonicalPackage(rootURL: root, useRealMedia: true)
+        let coordinator = SessionExportCoordinator()
+
+        coordinator.prepareShare(for: .package(package))
+        for _ in 0..<320 {
+            if coordinator.shareRequest != nil || coordinator.canRetry { break }
+            try await Task.sleep(nanoseconds: 25_000_000)
+        }
+        let preparedResult = try XCTUnwrap(coordinator.lastResult)
+        coordinator.markSharePresented()
+        coordinator.handleShareOutcome(.cancelled)
+
+        if case let .cancelled(cancelledResult) = coordinator.state {
+            XCTAssertEqual(cancelledResult, preparedResult)
+        } else {
+            XCTFail("Share-sheet cancellation must remain a cancellation, not an export failure.")
+        }
+        XCTAssertTrue(coordinator.wasCancelled)
+        XCTAssertFalse(coordinator.canRetry)
+        XCTAssertEqual(coordinator.statusMessage, "Share cancelled.")
+        XCTAssertEqual(coordinator.lastResult, preparedResult)
+        for take in package.takes {
+            XCTAssertTrue(FileManager.default.fileExists(atPath: take.mediaURL.path))
+            XCTAssertTrue(FileManager.default.fileExists(atPath: take.sidecarURL.path))
+            XCTAssertTrue(FileManager.default.fileExists(atPath: try XCTUnwrap(take.audioArtifactURL).path))
+        }
+
+        let impossibleCompletion = SessionExportCoordinator()
+        impossibleCompletion.handleShareOutcome(.completed)
+        if case .failed(.unableToPresentShareOptions) = impossibleCompletion.state {
+            XCTAssertTrue(impossibleCompletion.canRetry)
+        } else {
+            XCTFail("Completion without a real archive must fail instead of fabricating an Exported state.")
+        }
+        XCTAssertNil(impossibleCompletion.lastResult)
+        XCTAssertNotEqual(impossibleCompletion.statusMessage, "Export complete.")
+    }
+
+    // MARK: - Slice F: freshly kept sub-second session export
+
+    /// Builds a package the way the guided kept-session ledger does.
+    ///
+    /// The distinction that matters: sidecar dates come back from disk through
+    /// `.iso8601` and are therefore always whole seconds, while the session's
+    /// own `createdAt` keeps the sub-second precision of the live `Date()` the
+    /// session was created with. The kept-session ledger persists that config
+    /// with the default (`.deferredToDate`) strategy, so the fraction survives
+    /// both in memory and across a reload. Local-recovery exports derive
+    /// `createdAt` from sidecar dates instead, which is exactly why they never
+    /// reproduced this failure.
+    ///
+    /// `verbalSlateUsed` / `syncClapUsed` are left `nil` because that is what
+    /// production `Keep` records; `preparePackage` is responsible for
+    /// resolving them, so callers must stage through it.
+    func makeKeptLedgerPackage(
+        rootURL: URL,
+        sessionCreatedAt: Date,
+        bpms: [Int],
+        motionPresent: Bool = false,
+        motionSources: [CaptureMotionSource]? = nil
+    ) throws -> SessionExportPackage {
+        let sessionID = "slice-f-kept-session"
+        let sidecarCreatedAt = Date(timeIntervalSince1970: 1_730_000_000)
+        var takes: [SessionExportTake] = []
+        var decodedSidecars: [CaptureCore.LocalRecordingSidecar] = []
+
+        for (index, bpm) in bpms.enumerated() {
+            let takeNumber = index + 1
+            let takeIdentity = CaptureCore.LocalRecordingNaming.takeIdentity(
+                sessionID: sessionID,
+                takeNumber: takeNumber
+            )
+            let videoURL = rootURL.appendingPathComponent("kept-\(takeNumber).mov")
+            let audioURL = rootURL.appendingPathComponent("kept-\(takeNumber).wav")
+            let sidecarURL = rootURL.appendingPathComponent("kept-\(takeNumber).json")
+            try writeTestMOV(at: videoURL)
+            try writeTestWAV(at: audioURL)
+            try writeFinalizedSidecar(
+                to: sidecarURL,
+                sessionID: sessionID,
+                takeIdentity: takeIdentity,
+                mediaURL: videoURL,
+                performerName: "DJ Ledger",
+                bpm: bpm,
+                createdAt: sidecarCreatedAt
+            )
+            decodedSidecars.append(
+                try JSONDecoder.captureCoreDecoder.decode(
+                    CaptureCore.LocalRecordingSidecar.self,
+                    from: try Data(contentsOf: sidecarURL)
+                )
+            )
+            takes.append(
+                SessionExportTake(
+                    takeID: takeIdentity.takeID,
+                    takeNumber: takeNumber,
+                    bpm: bpm,
+                    mediaURL: videoURL,
+                    audioArtifactURL: audioURL,
+                    sidecarURL: sidecarURL,
+                    watchCaptureSession: nil,
+                    drillName: "Full capture",
+                    duration: 1,
+                    quality: "kept",
+                    comboTagged: false,
+                    audioPresent: true,
+                    motionPresent: motionPresent,
+                    syncStatus: "not_requested",
+                    recordingStatus: "completed",
+                    verbalSlateUsed: nil,
+                    syncClapUsed: nil,
+                    note: "Ready to keep",
+                    motionSources: motionSources
+                )
+            )
+        }
+
+        let config = SessionExportMetadataResolver.mergedConfig(
+            preferredConfig: nil,
+            seedSidecar: try XCTUnwrap(decodedSidecars.first),
+            sidecars: decodedSidecars,
+            fallbackSessionID: sessionID,
+            createdAt: sessionCreatedAt,
+            updatedAt: sessionCreatedAt,
+            takeCount: takes.count,
+            totalDurationSeconds: Double(takes.count)
+        )
+        let metadata = SessionExportMetadata(
+            config: config,
+            workflow: "guided_capture",
+            platform: "iOS",
+            sessionName: "Slice F Kept Session",
+            totalDurationSeconds: Double(takes.count)
+        )
+        return SessionExportPackage(metadata: metadata, takes: takes, calibrationData: nil)
+    }
+
+    /// The exact physical mismatch: a freshly kept take whose session
+    /// `createdAt` carries a sub-second component. Staging writes the date
+    /// through the canonical `.iso8601` encoder (whole seconds); validation
+    /// used to decode that file back and compare the decoded `Date` against
+    /// the in-memory one, which could never be equal. The export was valid the
+    /// whole time.
+    func testFreshlyKeptSubSecondCreatedAtSessionExportsSuccessfully() throws {
+        let root = try makeTemporaryDirectory()
+        let package = try makeKeptLedgerPackage(
+            rootURL: root,
+            sessionCreatedAt: Date(timeIntervalSince1970: 1_730_000_000.372),
+            bpms: [95]
+        )
+        XCTAssertNotEqual(
+            package.metadata.createdAt.timeIntervalSince1970
+                .truncatingRemainder(dividingBy: 1),
+            0,
+            "This regression is meaningless unless createdAt really carries sub-second precision."
+        )
+
+        let archiveDirectory = root.appendingPathComponent("archives", isDirectory: true)
+        try FileManager.default.createDirectory(at: archiveDirectory, withIntermediateDirectories: true)
+        let builder = SessionArchiveBuilder()
+        let result = try builder.createArchive(
+            from: try builder.preparePackage(from: .package(package)),
+            options: SessionExportOptions(mixMode: .scratchOnly),
+            in: archiveDirectory
+        )
+
+        XCTAssertGreaterThan(result.archiveSizeBytes, 0)
+        XCTAssertTrue(FileManager.default.fileExists(atPath: result.archiveURL.path))
+    }
+
+    /// Locks in HOW the fix works: the sub-second value is never rounded or
+    /// mutated, and validation compares canonical bytes rather than decoded
+    /// values. If someone "fixes" this again by flooring `createdAt`, the
+    /// first assertion fails.
+    func testSubSecondCreatedAtIsPreservedAndStagedMetadataIsCanonicalBytes() throws {
+        let root = try makeTemporaryDirectory()
+        let package = try makeKeptLedgerPackage(
+            rootURL: root,
+            sessionCreatedAt: Date(timeIntervalSince1970: 1_730_000_000.372),
+            bpms: [95]
+        )
+        let archiveDirectory = root.appendingPathComponent("archives", isDirectory: true)
+        try FileManager.default.createDirectory(at: archiveDirectory, withIntermediateDirectories: true)
+        let builder = SessionArchiveBuilder()
+        let preparedPackage = try builder.preparePackage(from: .package(package))
+
+        XCTAssertEqual(
+            preparedPackage.metadata.createdAt,
+            package.metadata.createdAt,
+            "Export must not round or mutate createdAt to make validation pass."
+        )
+
+        let result = try builder.createArchive(
+            from: preparedPackage,
+            options: SessionExportOptions(mixMode: .scratchOnly),
+            in: archiveDirectory
+        )
+        let archiveRoot = try unzipArchive(
+            result.archiveURL,
+            to: root.appendingPathComponent("unzipped", isDirectory: true)
+        )
+
+        let stagedMetadataData = try Data(
+            contentsOf: archiveRoot.appendingPathComponent("manifests/session_metadata.json")
+        )
+        let canonicalEncoder = JSONEncoder()
+        canonicalEncoder.dateEncodingStrategy = .iso8601
+        canonicalEncoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+        let expectedMetadataData = try canonicalEncoder.encode(
+            try builder.metadataDocument(for: preparedPackage)
+        )
+        XCTAssertEqual(
+            stagedMetadataData,
+            expectedMetadataData,
+            "Staged session_metadata.json must be the canonical byte-for-byte serialization."
+        )
+
+        // The on-disk format is genuinely lossy for sub-second dates. That is
+        // the reason value comparison could not work, and documenting it here
+        // stops the byte comparison being "simplified" back into one.
+        let decodedDocument = try decodeSessionMetadataDocument(from: archiveRoot)
+        XCTAssertNotEqual(decodedDocument.session.createdAt, package.metadata.createdAt)
+        XCTAssertEqual(
+            decodedDocument.session.createdAt.timeIntervalSince1970,
+            package.metadata.createdAt.timeIntervalSince1970.rounded(.down),
+            accuracy: 0.0001
+        )
+    }
+
+    /// A single freshly kept take is attached and exported exactly once.
+    func testFreshlyKeptSingleTakeIsExportedExactlyOnce() throws {
+        let root = try makeTemporaryDirectory()
+        let package = try makeKeptLedgerPackage(
+            rootURL: root,
+            sessionCreatedAt: Date(timeIntervalSince1970: 1_730_000_000.372),
+            bpms: [95]
+        )
+        let archiveDirectory = root.appendingPathComponent("archives", isDirectory: true)
+        try FileManager.default.createDirectory(at: archiveDirectory, withIntermediateDirectories: true)
+        let builder = SessionArchiveBuilder()
+        let result = try builder.createArchive(
+            from: try builder.preparePackage(from: .package(package)),
+            options: SessionExportOptions(mixMode: .scratchOnly),
+            in: archiveDirectory
+        )
+        let archiveRoot = try unzipArchive(
+            result.archiveURL,
+            to: root.appendingPathComponent("unzipped", isDirectory: true)
+        )
+
+        let videoFiles = try FileManager.default.contentsOfDirectory(
+            atPath: archiveRoot.appendingPathComponent("video").path
+        )
+        XCTAssertEqual(videoFiles.count, 1)
+
+        let takeLog = try String(
+            contentsOf: archiveRoot.appendingPathComponent("manifests/take_log.csv"),
+            encoding: .utf8
+        )
+        XCTAssertEqual(takeLog.split(whereSeparator: \.isNewline).count, 2)
+
+        let metadataDocument = try decodeSessionMetadataDocument(from: archiveRoot)
+        XCTAssertEqual(metadataDocument.takes.count, 1)
+        XCTAssertEqual(metadataDocument.session.takeCount, 1)
+    }
+
+    /// Every kept take in a restored durable ledger stays attached and reaches
+    /// the archive exactly once — no take may be filtered out to make an
+    /// export succeed.
+    @MainActor
+    func testRestoredTwoTakeLedgerExportsBothTakesExactlyOnce() throws {
+        let root = try makeTemporaryDirectory()
+        let storageURL = root.appendingPathComponent("kept-sessions.json")
+        let sessionID = "slice-f-kept-session"
+        let sessionCreatedAt = Date(timeIntervalSince1970: 1_730_000_000.372)
+
+        var ledgerSession = makeGuidedKeptSession(sessionID: sessionID, timestamp: sessionCreatedAt)
+        ledgerSession.config.createdAt = sessionCreatedAt
+        ledgerSession.config.updatedAt = sessionCreatedAt
+        let writer = try GuidedCaptureKeptSessionStore(storageURL: storageURL)
+        _ = try writer.keep(
+            makeGuidedKeptTake(in: root, sessionID: sessionID, takeNumber: 1, bpm: 95),
+            in: ledgerSession
+        )
+        _ = try writer.keep(
+            makeGuidedKeptTake(in: root, sessionID: sessionID, takeNumber: 2, bpm: 95),
+            in: ledgerSession
+        )
+
+        // Reload across a view lifetime, as navigation away and back does.
+        let restored = try GuidedCaptureKeptSessionStore(storageURL: storageURL)
+        let restoredSession = try XCTUnwrap(restored.session(id: sessionID))
+        XCTAssertEqual(restoredSession.takes.count, 2)
+        XCTAssertEqual(restoredSession.takes.map(\.takeNumber), [1, 2])
+        XCTAssertEqual(Set(restoredSession.takes.map(\.takeID)).count, 2)
+        XCTAssertEqual(
+            restoredSession.config.createdAt,
+            sessionCreatedAt,
+            "The ledger must preserve the sub-second createdAt across a reload."
+        )
+
+        let package = try makeKeptLedgerPackage(
+            rootURL: root,
+            sessionCreatedAt: restoredSession.config.createdAt,
+            bpms: [95, 95]
+        )
+        let archiveDirectory = root.appendingPathComponent("archives", isDirectory: true)
+        try FileManager.default.createDirectory(at: archiveDirectory, withIntermediateDirectories: true)
+        let builder = SessionArchiveBuilder()
+        let result = try builder.createArchive(
+            from: try builder.preparePackage(from: .package(package)),
+            options: SessionExportOptions(mixMode: .scratchOnly),
+            in: archiveDirectory
+        )
+        let archiveRoot = try unzipArchive(
+            result.archiveURL,
+            to: root.appendingPathComponent("unzipped", isDirectory: true)
+        )
+
+        let metadataDocument = try decodeSessionMetadataDocument(from: archiveRoot)
+        XCTAssertEqual(metadataDocument.takes.count, 2)
+        XCTAssertEqual(metadataDocument.session.takeCount, 2)
+        XCTAssertEqual(Set(metadataDocument.takes.map(\.takeID)).count, 2)
+        XCTAssertEqual(Set(metadataDocument.takes.map(\.takeNumber)), [1, 2])
+
+        let videoFiles = try FileManager.default.contentsOfDirectory(
+            atPath: archiveRoot.appendingPathComponent("video").path
+        )
+        XCTAssertEqual(videoFiles.count, 2)
+        XCTAssertEqual(Set(videoFiles).count, 2)
+
+        let takeLog = try String(
+            contentsOf: archiveRoot.appendingPathComponent("manifests/take_log.csv"),
+            encoding: .utf8
+        )
+        XCTAssertEqual(takeLog.split(whereSeparator: \.isNewline).count, 3)
+    }
+
+    /// The coordinator share path — the surface the operator actually taps —
+    /// must reach `readyToShare` for a freshly kept sub-second session.
+    @MainActor
+    func testCoordinatorSharePathSucceedsForFreshlyKeptSubSecondSession() async throws {
+        let root = try makeTemporaryDirectory()
+        let package = try makeKeptLedgerPackage(
+            rootURL: root,
+            sessionCreatedAt: Date(timeIntervalSince1970: 1_730_000_000.372),
+            bpms: [95]
+        )
+        let coordinator = SessionExportCoordinator()
+
+        coordinator.prepareShare(for: .package(package))
+        for _ in 0..<320 {
+            if coordinator.shareRequest != nil || coordinator.canRetry { break }
+            try await Task.sleep(nanoseconds: 25_000_000)
+        }
+
+        let result = try XCTUnwrap(coordinator.lastResult)
+        XCTAssertFalse(coordinator.canRetry)
+        XCTAssertNil(coordinator.validationReport)
+        XCTAssertNotNil(coordinator.shareRequest)
+        XCTAssertEqual(coordinator.statusMessage, "Ready to share")
+        XCTAssertTrue(FileManager.default.fileExists(atPath: result.archiveURL.path))
+        if case .readyToShare = coordinator.state {} else {
+            XCTFail("A freshly kept sub-second session must reach readyToShare.")
+        }
+
+        // Cancellation stays distinct from failure on this same path.
+        coordinator.markSharePresented()
+        coordinator.handleShareOutcome(.cancelled)
+        XCTAssertTrue(coordinator.wasCancelled)
+        XCTAssertFalse(coordinator.canRetry)
+        XCTAssertEqual(coordinator.statusMessage, "Share cancelled.")
+    }
+
+    /// The unresolved device-specific path stays fail-closed, and now says
+    /// which check fired instead of only "inconsistent metadata".
+    func testPlatterMotionWithoutRecordedMovementFailsWithNamedReason() throws {
+        let root = try makeTemporaryDirectory()
+        let package = try makeKeptLedgerPackage(
+            rootURL: root,
+            sessionCreatedAt: Date(timeIntervalSince1970: 1_730_000_000.372),
+            bpms: [95],
+            motionPresent: true,
+            motionSources: [.platter]
+        )
+        let archiveDirectory = root.appendingPathComponent("archives", isDirectory: true)
+        try FileManager.default.createDirectory(at: archiveDirectory, withIntermediateDirectories: true)
+        let builder = SessionArchiveBuilder()
+        let preparedPackage = try builder.preparePackage(from: .package(package))
+
+        XCTAssertThrowsError(
+            try builder.createArchive(
+                from: preparedPackage,
+                options: SessionExportOptions(mixMode: .scratchOnly),
+                in: archiveDirectory
+            )
+        ) { error in
+            let failure = error as? SessionExportValidationFailure
+            XCTAssertEqual(failure?.reason, .platterMotionWithoutRecordedMovement)
+            XCTAssertEqual(failure?.exportError, .invalidSessionMetadata)
+            XCTAssertEqual(failure?.exportError.userMessage, "This session has inconsistent metadata.")
+        }
+    }
+
+    /// A named validation failure must reach the operator as specific detail,
+    /// while keeping the coarse error, the retryable failure state, and the
+    /// staged source captures intact.
+    @MainActor
+    func testCoordinatorReportsNamedValidationReasonAndPreservesStagedCaptures() async throws {
+        let root = try makeTemporaryDirectory()
+        let package = try makeKeptLedgerPackage(
+            rootURL: root,
+            sessionCreatedAt: Date(timeIntervalSince1970: 1_730_000_000.372),
+            bpms: [95],
+            motionPresent: true,
+            motionSources: [.platter]
+        )
+        let coordinator = SessionExportCoordinator()
+
+        coordinator.prepareShare(for: .package(package))
+        for _ in 0..<320 {
+            if case .failed = coordinator.state { break }
+            try await Task.sleep(nanoseconds: 25_000_000)
+        }
+
+        guard case .failed(.invalidSessionMetadata) = coordinator.state else {
+            return XCTFail("A platter motion claim with no recorded movement must fail closed.")
+        }
+        XCTAssertTrue(coordinator.canRetry)
+        XCTAssertNil(coordinator.lastResult)
+        XCTAssertNil(coordinator.shareRequest)
+        XCTAssertEqual(
+            coordinator.validationReport?.issues,
+            [SessionExportValidationReason.platterMotionWithoutRecordedMovement.detailText]
+        )
+        XCTAssertEqual(
+            coordinator.statusMessage,
+            SessionExportValidationReason.platterMotionWithoutRecordedMovement.detailText,
+            "The operator must see which check failed, not only the generic message."
+        )
+
+        // Retry must never consume the staged captures.
+        for take in package.takes {
+            XCTAssertTrue(FileManager.default.fileExists(atPath: take.mediaURL.path))
+            XCTAssertTrue(FileManager.default.fileExists(atPath: take.sidecarURL.path))
+            XCTAssertTrue(
+                FileManager.default.fileExists(atPath: try XCTUnwrap(take.audioArtifactURL).path)
+            )
+        }
+    }
+
+    func testCanonicalMultiTakeArchiveContainsEveryUniqueArtifactAndManifestRecord() throws {
+        let root = try makeTemporaryDirectory()
+        let package = try makeCanonicalPackage(rootURL: root, useRealMedia: true)
+        let archiveDirectory = root.appendingPathComponent("archives", isDirectory: true)
+        try FileManager.default.createDirectory(at: archiveDirectory, withIntermediateDirectories: true)
+        let result = try SessionArchiveBuilder().createArchive(
+            from: package,
+            options: SessionExportOptions(mixMode: .scratchOnly),
+            in: archiveDirectory
+        )
+        let archiveRoot = try unzipArchive(
+            result.archiveURL,
+            to: root.appendingPathComponent("unzipped", isDirectory: true)
+        )
+
+        let manifestURL = archiveRoot.appendingPathComponent("manifests/session_manifest.json")
+        let manifest = try XCTUnwrap(
+            try JSONSerialization.jsonObject(with: Data(contentsOf: manifestURL)) as? [String: Any]
+        )
+        let manifestTakes = try XCTUnwrap(manifest["takes"] as? [[String: Any]])
+        XCTAssertEqual(manifestTakes.count, package.takes.count)
+
+        var videoPaths: [String] = []
+        var audioPaths: [String] = []
+        var notationPaths: [String] = []
+        var watchPaths: [String] = []
+        for manifestTake in manifestTakes {
+            let files = try XCTUnwrap(manifestTake["files"] as? [String: String])
+            videoPaths.append(try XCTUnwrap(files["camA"]))
+            audioPaths.append(try XCTUnwrap(files["serato"]))
+            notationPaths.append(try XCTUnwrap(files["notation"]))
+            if let watchPath = files["watch"] {
+                watchPaths.append(watchPath)
+            }
+        }
+
+        XCTAssertEqual(Set(videoPaths).count, package.takes.count)
+        XCTAssertEqual(Set(audioPaths).count, package.takes.count)
+        XCTAssertEqual(Set(notationPaths).count, package.takes.count)
+        XCTAssertEqual(Set(watchPaths).count, 1)
+        for relativePath in videoPaths + audioPaths + notationPaths + watchPaths {
+            let artifactURL = archiveRoot.appendingPathComponent(relativePath)
+            XCTAssertTrue(FileManager.default.fileExists(atPath: artifactURL.path), relativePath)
+            XCTAssertGreaterThan(
+                (try FileManager.default.attributesOfItem(atPath: artifactURL.path)[.size] as? NSNumber)?.int64Value ?? 0,
+                0,
+                relativePath
+            )
+        }
+
+        let expectedManifestFiles = [
+            "export_metadata.json",
+            "session_manifest.json",
+            "session_metadata.json",
+            "session_replay.json",
+            "session_review.json",
+            "take_log.csv",
+        ]
+        let manifestFiles = try FileManager.default.contentsOfDirectory(
+            at: archiveRoot.appendingPathComponent("manifests", isDirectory: true),
+            includingPropertiesForKeys: nil,
+            options: [.skipsHiddenFiles]
+        ).map(\.lastPathComponent).sorted()
+        XCTAssertEqual(manifestFiles, expectedManifestFiles)
+
+        let metadata = try decodeSessionMetadataDocument(from: archiveRoot)
+        let exportMetadata = try decodeExportMetadataDocument(from: archiveRoot)
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .iso8601
+        let review = try decoder.decode(
+            SessionExportReviewDocument.self,
+            from: Data(contentsOf: archiveRoot.appendingPathComponent("manifests/session_review.json"))
+        )
+        let replay = try decoder.decode(
+            SessionExportReplayDocument.self,
+            from: Data(contentsOf: archiveRoot.appendingPathComponent("manifests/session_replay.json"))
+        )
+        let expectedTakeIDs = Set(package.takes.map(\.takeID))
+        XCTAssertEqual(Set(metadata.takes.map(\.takeID)), expectedTakeIDs)
+        XCTAssertEqual(Set(exportMetadata.takes.map(\.takeID)), expectedTakeIDs)
+        XCTAssertEqual(Set(review.takes.map(\.takeID)), expectedTakeIDs)
+        XCTAssertEqual(Set(replay.takes.map(\.takeID)), expectedTakeIDs)
+
+        let takeLog = try String(
+            contentsOf: archiveRoot.appendingPathComponent("manifests/take_log.csv"),
+            encoding: .utf8
+        )
+        XCTAssertEqual(takeLog.split(whereSeparator: \.isNewline).count, package.takes.count + 1)
+        for relativePath in videoPaths + audioPaths + watchPaths {
+            XCTAssertTrue(takeLog.contains(relativePath), relativePath)
+        }
+
+        for take in package.takes {
+            XCTAssertTrue(FileManager.default.fileExists(atPath: take.mediaURL.path))
+            XCTAssertTrue(FileManager.default.fileExists(atPath: take.sidecarURL.path))
+            XCTAssertTrue(FileManager.default.fileExists(atPath: try XCTUnwrap(take.audioArtifactURL).path))
+            let sidecar = try JSONDecoder.captureCoreDecoder.decode(
+                CaptureCore.LocalRecordingSidecar.self,
+                from: Data(contentsOf: take.sidecarURL)
+            )
+            XCTAssertEqual(sidecar.sessionID, package.metadata.sessionID)
+            XCTAssertEqual(sidecar.takeID, take.takeID)
+            XCTAssertEqual(sidecar.appLocalTakeNumber, take.takeNumber)
+        }
+    }
+
+    func testGuidedCaptureKeepRetryAndExportRoutesUseDurableContracts() throws {
+        let sourceURL = projectRootURL().appendingPathComponent("ScratchLab/Views/CompanionCameraView.swift")
+        let source = try String(contentsOf: sourceURL, encoding: .utf8)
+        let reviewRoute = try sourceSlice(
+            in: source,
+            from: "case .review:",
+            through: "case .sessionComplete:"
+        )
+        XCTAssertTrue(reviewRoute.contains("captureStore.keepTake("))
+        XCTAssertTrue(reviewRoute.contains("captureStore.keepAndNext("))
+        XCTAssertTrue(reviewRoute.contains("onRetry: {\n                            captureStore.retryTake()"))
+        XCTAssertFalse(reviewRoute.contains("onRetry: {\n                            captureStore.discardTake"))
+
+        let keepMethods = try sourceSlice(
+            in: source,
+            from: "func keepTake(watchMotionURL: URL?, platform: String)",
+            through: "func discardTake(onDiscard:"
+        )
+        XCTAssertEqual(
+            keepMethods.components(separatedBy: "guard recordCurrentReviewAsKept(").count - 1,
+            2,
+            "Keep and Keep and Next must both persist through the same durable ledger boundary."
+        )
+        XCTAssertTrue(source.contains("let persistedSession = try keptSessionStore.keep(keptTake, in: keptSession)"))
+
+        let retryMethod = try sourceSlice(
+            in: source,
+            from: "func retryTake()",
+            through: "func prepareNextTake()"
+        )
+        XCTAssertFalse(retryMethod.contains("discardRecording"))
+        XCTAssertTrue(retryMethod.contains("Previous take preserved"))
+
+        let sessionSetup = try sourceSlice(
+            in: source,
+            from: "private struct SessionSetupView: View",
+            through: "private struct CaptureSessionSummaryRow: View"
+        )
+        let captureHub = try sourceSlice(
+            in: source,
+            from: "private struct CaptureHubView: View",
+            through: "private struct CaptureWorkspaceHeader: View"
+        )
+        for routeSource in [sessionSetup, captureHub] {
+            XCTAssertTrue(routeSource.contains("if keptTakeCount > 0"))
+            XCTAssertTrue(routeSource.contains(#"Export / Share \(keptTakeCount) Kept Take"#))
+            XCTAssertTrue(routeSource.contains("action: onExportSession"))
+        }
+    }
+
+    @MainActor
     func testSessionExportCoordinatorSaveArchiveUsesChosenDestination() async throws {
         let root = try makeTemporaryDirectory()
         let package = try makeCanonicalPackage(rootURL: root, useRealMedia: true)
@@ -1905,6 +2682,111 @@ final class CaptureReliabilityPhase1CoreTests: XCTestCase {
         XCTAssertEqual(audioFile.fileFormat.channelCount, AVAudioChannelCount(channelCount))
         XCTAssertEqual(audioFile.fileFormat.sampleRate, 48_000)
         XCTAssertEqual(audioFile.length, AVAudioFramePosition(frameCount))
+    }
+
+    func testSessionExportProjectsAudibleRanePairToPlayableStereo() throws {
+        let directory = try makeTemporaryDirectory()
+        let sourceURL = directory.appendingPathComponent("rane-14-channel.caf")
+        let destinationURL = directory.appendingPathComponent("scratch-only-stereo.wav")
+        let frameCount = 512
+        let channelCount = 14
+        let channelLayout = try XCTUnwrap(
+            AVAudioChannelLayout(
+                layoutTag: kAudioChannelLayoutTag_DiscreteInOrder | AudioChannelLayoutTag(channelCount)
+            )
+        )
+        let format = AVAudioFormat(
+            commonFormat: .pcmFormatFloat32,
+            sampleRate: 48_000,
+            interleaved: false,
+            channelLayout: channelLayout
+        )
+        let buffer = try XCTUnwrap(
+            AVAudioPCMBuffer(pcmFormat: format, frameCapacity: AVAudioFrameCount(frameCount))
+        )
+        let channels = try XCTUnwrap(buffer.floatChannelData)
+        buffer.frameLength = AVAudioFrameCount(frameCount)
+        for channel in 0..<channelCount {
+            channels[channel].initialize(repeating: 0, count: frameCount)
+        }
+        for frame in 0..<frameCount {
+            channels[0][frame] = 0.000_01
+            channels[1][frame] = -0.000_01
+            channels[12][frame] = 0.25
+            channels[13][frame] = -0.50
+        }
+        do {
+            let sourceFile = try AVAudioFile(
+                forWriting: sourceURL,
+                settings: format.settings,
+                commonFormat: .pcmFormatFloat32,
+                interleaved: false
+            )
+            try sourceFile.write(from: buffer)
+        }
+
+        try SessionExportAudioProjection.writePlayableStereo(
+            from: sourceURL,
+            to: destinationURL
+        )
+
+        let exportedFile = try AVAudioFile(forReading: destinationURL)
+        XCTAssertEqual(exportedFile.processingFormat.channelCount, 2)
+        XCTAssertEqual(exportedFile.length, AVAudioFramePosition(frameCount))
+        let exportedBuffer = try XCTUnwrap(
+            AVAudioPCMBuffer(
+                pcmFormat: exportedFile.processingFormat,
+                frameCapacity: AVAudioFrameCount(frameCount)
+            )
+        )
+        try exportedFile.read(into: exportedBuffer)
+        let exportedChannels = try XCTUnwrap(exportedBuffer.floatChannelData)
+        XCTAssertEqual(exportedChannels[0][100], 0.25, accuracy: 0.000_1)
+        XCTAssertEqual(exportedChannels[1][100], -0.50, accuracy: 0.000_1)
+    }
+
+    func testSessionExportDuplicatesMonoIntoPlayableStereo() throws {
+        let directory = try makeTemporaryDirectory()
+        let sourceURL = directory.appendingPathComponent("mono.wav")
+        let destinationURL = directory.appendingPathComponent("stereo.wav")
+        let format = try XCTUnwrap(
+            AVAudioFormat(
+                commonFormat: .pcmFormatFloat32,
+                sampleRate: 48_000,
+                channels: 1,
+                interleaved: false
+            )
+        )
+        let buffer = try XCTUnwrap(
+            AVAudioPCMBuffer(pcmFormat: format, frameCapacity: 32)
+        )
+        buffer.frameLength = 32
+        let sourceChannels = try XCTUnwrap(buffer.floatChannelData)
+        sourceChannels[0].initialize(repeating: 0.125, count: 32)
+        do {
+            let sourceFile = try AVAudioFile(
+                forWriting: sourceURL,
+                settings: format.settings,
+                commonFormat: .pcmFormatFloat32,
+                interleaved: false
+            )
+            try sourceFile.write(from: buffer)
+        }
+
+        try SessionExportAudioProjection.writePlayableStereo(
+            from: sourceURL,
+            to: destinationURL
+        )
+
+        let exportedFile = try AVAudioFile(forReading: destinationURL)
+        XCTAssertEqual(exportedFile.processingFormat.channelCount, 2)
+        let exportedBuffer = try XCTUnwrap(
+            AVAudioPCMBuffer(pcmFormat: exportedFile.processingFormat, frameCapacity: 32)
+        )
+        try exportedFile.read(into: exportedBuffer)
+        let exportedChannels = try XCTUnwrap(exportedBuffer.floatChannelData)
+        XCTAssertEqual(exportedChannels[0][10], 0.125, accuracy: 0.000_1)
+        XCTAssertEqual(exportedChannels[1][10], 0.125, accuracy: 0.000_1)
     }
 
     private func makeNonInterleavedFloatSampleBuffer(
@@ -3194,6 +4076,7 @@ final class CaptureReliabilityPhase1CoreTests: XCTestCase {
     func testIOSLandscapeShowsRealAHHHSampleWaveformAndRendererPlayhead() throws {
         let rendererURL = projectRootURL().appendingPathComponent("ScratchLab/Audio/iOS/IOScratchRenderer.swift")
         let playbackURL = projectRootURL().appendingPathComponent("ScratchLab/Audio/iOS/IOScratchPlaybackEngine.swift")
+        let platterTrackerURL = projectRootURL().appendingPathComponent("ScratchLab/Models/ScratchSoundBank/ScratchPlatterTracker.swift")
         let captureCoreURL = projectRootURL().appendingPathComponent("ScratchLab/Models/CaptureCore.swift")
         let dispatcherURL = projectRootURL().appendingPathComponent("ScratchLab/MIDI/iOSMIDIManager.swift")
         let macTrackerURL = projectRootURL().appendingPathComponent("ScratchLabDesktop/Services/LivePerformedNotationTracker.swift")
@@ -3203,6 +4086,7 @@ final class CaptureReliabilityPhase1CoreTests: XCTestCase {
         let captureURL = projectRootURL().appendingPathComponent("ScratchLab/Views/CompanionCameraView.swift")
         let rendererSource = try String(contentsOf: rendererURL, encoding: .utf8)
         let playbackSource = try String(contentsOf: playbackURL, encoding: .utf8)
+        let platterTrackerSource = try String(contentsOf: platterTrackerURL, encoding: .utf8)
         let captureCoreSource = try String(contentsOf: captureCoreURL, encoding: .utf8)
         let dispatcherSource = try String(contentsOf: dispatcherURL, encoding: .utf8)
         let macTrackerSource = try String(contentsOf: macTrackerURL, encoding: .utf8)
@@ -3215,8 +4099,10 @@ final class CaptureReliabilityPhase1CoreTests: XCTestCase {
         XCTAssertTrue(rendererSource.contains("unwrappedTargetFrameBits"))
         XCTAssertTrue(playbackSource.contains("struct PlatterSampleWaveform"))
         XCTAssertTrue(playbackSource.contains("platterSamplePlayheadSnapshot"))
-        XCTAssertTrue(playbackSource.contains("case beforeStart"))
-        XCTAssertTrue(playbackSource.contains("case pastEnd"))
+        XCTAssertTrue(platterTrackerSource.contains("struct PlatterSamplePositionProjection"))
+        XCTAssertTrue(platterTrackerSource.contains("case beforeStart"))
+        XCTAssertTrue(platterTrackerSource.contains("case pastEnd"))
+        XCTAssertTrue(playbackSource.contains("PlatterSamplePositionProjection.resolve("))
         XCTAssertTrue(playbackSource.contains("makeWaveform("))
         XCTAssertTrue(playbackSource.contains("PlatterCoordinateSemantics.samplePosition("))
         XCTAssertTrue(playbackSource.contains("rawSignedPosition: phase"))
@@ -3240,11 +4126,16 @@ final class CaptureReliabilityPhase1CoreTests: XCTestCase {
         XCTAssertTrue(waveformSource.contains("Text(\"MID\")"))
         XCTAssertTrue(waveformSource.contains("Text(\"END\")"))
         XCTAssertTrue(waveformSource.contains(".background(Color.clear)"))
+        XCTAssertTrue(waveformSource.contains("LOAD AHHH TO SEE SAMPLE POSITION"))
+        XCTAssertFalse(waveformSource.localizedCaseInsensitiveContains("Serato owns"))
         XCTAssertTrue(practiceSource.contains("SamplePositionWaveformView()"))
         XCTAssertTrue(practiceSource.contains("gestureRelativeNormalizationFrame(for: events)"))
         XCTAssertTrue(practiceSource.contains("gestureRelativePlatterNotationEvents"))
         XCTAssertGreaterThanOrEqual(captureSource.components(separatedBy: "SamplePositionWaveformView()").count - 1, 2)
         XCTAssertTrue(captureSource.contains("gestureRelativeNormalizationFrame(for: events)"))
+        XCTAssertTrue(captureSource.contains("ViewThatFits(in: .horizontal)"))
+        XCTAssertTrue(captureSource.contains("ScrollView(.vertical, showsIndicators: true)"))
+        XCTAssertTrue(captureSource.contains("proxy.safeAreaInsets.trailing + 8"))
     }
 
     func testWatchStartStopControlsTheIPhoneCaptureStateMachine() throws {
@@ -5236,6 +6127,51 @@ final class CaptureReliabilityPhase1CoreTests: XCTestCase {
         XCTAssertEqual(latestSnapshot.sessionID, otherSessionID)
     }
 
+    func testRoutineCaptureSuccessfulStopMarkerIsNotPersistedAsFailure() {
+        let stoppedNormally = NSError(
+            domain: AVFoundationErrorDomain,
+            code: -11818,
+            userInfo: [
+                AVErrorRecordingSuccessfullyFinishedKey: true,
+                NSLocalizedDescriptionKey: "Recording Stopped"
+            ]
+        )
+
+        XCTAssertNil(MacCaptureEngine.routineCaptureFailureDescription(for: stoppedNormally))
+    }
+
+    func testRoutineCaptureRealAVFoundationFailureRemainsFatal() {
+        let failed = NSError(
+            domain: AVFoundationErrorDomain,
+            code: -1,
+            userInfo: [
+                AVErrorRecordingSuccessfullyFinishedKey: false,
+                NSLocalizedDescriptionKey: "Capture device failed"
+            ]
+        )
+
+        XCTAssertEqual(
+            MacCaptureEngine.routineCaptureFailureDescription(for: failed),
+            "Capture device failed"
+        )
+    }
+
+    func testRoutineCaptureNonAVFoundationErrorCannotClaimSuccessfulFinish() {
+        let failed = NSError(
+            domain: "com.scratchlab.tests.capture",
+            code: 1,
+            userInfo: [
+                AVErrorRecordingSuccessfullyFinishedKey: true,
+                NSLocalizedDescriptionKey: "Unrelated failure"
+            ]
+        )
+
+        XCTAssertEqual(
+            MacCaptureEngine.routineCaptureFailureDescription(for: failed),
+            "Unrelated failure"
+        )
+    }
+
     func testGuidedCaptureReviewStateDoesNotInventWatchMotionWhenMotionIsSkipped() {
         let state = GuidedCaptureReviewStateResolver.reviewState(
             recordingFailed: false,
@@ -5380,6 +6316,8 @@ final class CaptureReliabilityPhase1CoreTests: XCTestCase {
         let root = try makeTemporaryDirectory()
         let package = try makeCanonicalPackage(rootURL: root)
         let validTake = try XCTUnwrap(package.takes.first)
+        let audioArtifactURL = try XCTUnwrap(validTake.audioArtifactURL)
+        try FileManager.default.removeItem(at: audioArtifactURL)
         let brokenTake = SessionExportTake(
             takeID: validTake.takeID,
             takeNumber: validTake.takeNumber,
@@ -6389,18 +7327,18 @@ final class CaptureReliabilityPhase1CoreTests: XCTestCase {
         XCTAssertEqual(firstFiles["camA"], "video/DJALPHA_baby_070_take01_camA.mov")
         XCTAssertEqual(firstFiles["serato"], "audio/DJALPHA_baby_070_take01_scratch_only.wav")
         XCTAssertEqual(firstFiles["scratch_only"], "audio/DJALPHA_baby_070_take01_scratch_only.wav")
-        XCTAssertNil(firstFiles["beat_only"])
-        XCTAssertNil(firstFiles["scratch_with_beat"])
+        XCTAssertEqual(firstFiles["beat_only"], "audio/DJALPHA_baby_070_take01_beat_only.wav")
+        XCTAssertEqual(firstFiles["scratch_with_beat"], "audio/DJALPHA_baby_070_take01_scratch_with_beat.wav")
         XCTAssertEqual(firstFiles["notation"], "notation/take-001_detected_notation.json")
         let firstStemAvailability = try XCTUnwrap(takes.first?["stem_availability"] as? [String: String])
         XCTAssertEqual(firstStemAvailability["scratch_only"], "available")
-        XCTAssertEqual(firstStemAvailability["beat_only"], "unavailable")
-        XCTAssertEqual(firstStemAvailability["scratch_with_beat"], "unavailable")
+        XCTAssertEqual(firstStemAvailability["beat_only"], "available")
+        XCTAssertEqual(firstStemAvailability["scratch_with_beat"], "available")
         let firstArtifacts = try XCTUnwrap(takes.first?["artifacts"] as? [String: [String: Any]])
         XCTAssertEqual(firstArtifacts["scratch_only"]?["path"] as? String, "audio/DJALPHA_baby_070_take01_scratch_only.wav")
         XCTAssertEqual(firstArtifacts["serato"]?["path"] as? String, "audio/DJALPHA_baby_070_take01_scratch_only.wav")
-        XCTAssertNil(firstArtifacts["beat_only"])
-        XCTAssertNil(firstArtifacts["scratch_with_beat"])
+        XCTAssertEqual(firstArtifacts["beat_only"]?["path"] as? String, "audio/DJALPHA_baby_070_take01_beat_only.wav")
+        XCTAssertEqual(firstArtifacts["scratch_with_beat"]?["path"] as? String, "audio/DJALPHA_baby_070_take01_scratch_with_beat.wav")
 
         let takeLog = preview.takeLogCSV
         XCTAssertTrue(takeLog.contains("bpm,take_number,raw_camA,raw_camB,raw_audio,raw_watch,verbal_slate_used,sync_clap_used,notes"))
@@ -6432,7 +7370,7 @@ final class CaptureReliabilityPhase1CoreTests: XCTestCase {
         let sidecarURL = root.appendingPathComponent("routine.json")
 
         try writePlaceholderFile(at: videoURL, contents: Data("mov".utf8))
-        try writePlaceholderFile(at: audioURL, contents: Data("wav".utf8))
+        try writeTestWAV(at: audioURL)
         try writeFinalizedSidecar(
             to: sidecarURL,
             sessionID: sessionID,
@@ -6533,8 +7471,8 @@ final class CaptureReliabilityPhase1CoreTests: XCTestCase {
         XCTAssertEqual(files["notation"], "notation/take-001_detected_notation.json")
         XCTAssertEqual(files["serato"], "audio/DJALPHA_stab_090_take01_scratch_only.wav")
         XCTAssertEqual(files["scratch_only"], "audio/DJALPHA_stab_090_take01_scratch_only.wav")
-        XCTAssertNil(files["beat_only"])
-        XCTAssertNil(files["scratch_with_beat"])
+        XCTAssertEqual(files["beat_only"], "audio/DJALPHA_stab_090_take01_beat_only.wav")
+        XCTAssertEqual(files["scratch_with_beat"], "audio/DJALPHA_stab_090_take01_scratch_with_beat.wav")
     }
 
     func testRoutineExportValidationAcceptsSelectedNonBabyScratchType() throws {
@@ -8287,6 +9225,144 @@ final class CaptureReliabilityPhase1CoreTests: XCTestCase {
         XCTAssertFalse(macSource.contains("action: babyScratchDemo.audioPlayer.replay"))
         XCTAssertFalse(macSource.contains("babyScratchDemo.audioPlayer.configure(with: coachInstruction)"))
     }
+}
+
+// MARK: - Production iOS saved-take detail
+
+extension CaptureReliabilityPhase1CoreTests {
+    func savedTakeNotationSnapshot() -> CaptureCore.DetectedNotationSnapshot {
+        CaptureCore.DetectedNotationSnapshot(
+            notationSource: "controller",
+            notationConfidence: 0.92,
+            detectedLabel: "baby_scratch",
+            labelSource: "controller",
+            labelConfidence: 0.9,
+            detectionSources: ["controller"],
+            recordMovementEvents: [
+                CaptureCore.DetectedNotationRecordMovementEvent(
+                    startTime: 0.2,
+                    endTime: 0.6,
+                    startPosition: 1.25,
+                    endPosition: 1.40,
+                    direction: "forward",
+                    movementKind: .normalPush,
+                    speed: 0.375,
+                    confidence: 0.92,
+                    source: "controller"
+                )
+            ],
+            audioEvents: [],
+            faderEvents: [],
+            mixerMidiEvents: [],
+            capturedAt: Date(timeIntervalSince1970: 1_780_000_000)
+        )
+    }
+
+    func writeSavedTakeFixture(
+        in container: SimulatedAppContainer,
+        sessionID: String = "saved-take-session",
+        takeNumber: Int = 1
+    ) throws -> GuidedCaptureKeptTake {
+        let createdAt = Date(timeIntervalSince1970: 1_780_000_000)
+        let artifacts = try writeSimulatedCapture(
+            in: container,
+            sessionID: sessionID,
+            takeNumber: takeNumber,
+            bpm: 95,
+            createdAt: createdAt
+        )
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .iso8601
+        let sidecar = try decoder.decode(
+            CaptureCore.LocalRecordingSidecar.self,
+            from: Data(contentsOf: artifacts.sidecarURL)
+        ).withDetectedNotation(savedTakeNotationSnapshot(), recordedAt: createdAt)
+        try sidecar.encodedData().write(to: artifacts.sidecarURL, options: .atomic)
+        return makeKeptTake(
+            from: artifacts,
+            sessionID: sessionID,
+            takeNumber: takeNumber,
+            bpm: 95,
+            locator: container.locator
+        )
+    }
+
+    func testSavedTakeDetailLoadsRealMediaSidecarAndSharedNotationProjection() throws {
+        let root = try makeTemporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let container = try makeSimulatedAppContainer(in: root, named: "current")
+        let take = try writeSavedTakeFixture(in: container)
+
+        let detail = try GuidedCaptureSavedTakeDetail.load(
+            take: take,
+            containerLocator: container.locator
+        )
+
+        XCTAssertEqual(detail.mediaURL, take.sourceMediaURL(in: container.locator))
+        XCTAssertEqual(detail.sidecar.sessionID, take.sessionID)
+        XCTAssertEqual(detail.sidecar.takeID, take.takeID)
+        XCTAssertEqual(
+            detail.presentationEvents,
+            CaptureCore.gestureRelativeRecordMovementEventsForPresentation(
+                from: savedTakeNotationSnapshot()
+            )
+        )
+        XCTAssertEqual(detail.presentationDuration, take.duration, accuracy: 1e-12)
+    }
+
+    func testSavedTakeDetailRefusesMissingMediaWithoutDetachingTake() throws {
+        let root = try makeTemporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let container = try makeSimulatedAppContainer(in: root, named: "current")
+        let take = try writeSavedTakeFixture(in: container)
+        try FileManager.default.removeItem(at: take.sourceMediaURL(in: container.locator))
+
+        XCTAssertThrowsError(
+            try GuidedCaptureSavedTakeDetail.load(
+                take: take,
+                containerLocator: container.locator
+            )
+        ) { error in
+            XCTAssertEqual(
+                error as? GuidedCaptureSavedTakeDetailError,
+                .mediaMissing(take.takeID)
+            )
+        }
+        XCTAssertEqual(take.takeID, "take-001", "validation must not mutate or detach the ledger record")
+    }
+
+    func testSavedTakeDetailRefusesSidecarIdentityMismatch() throws {
+        let root = try makeTemporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let container = try makeSimulatedAppContainer(in: root, named: "current")
+        let take = try writeSavedTakeFixture(in: container)
+        let sidecarURL = take.sourceSidecarURL(in: container.locator)
+        try writeFinalizedSidecar(
+            to: sidecarURL,
+            sessionID: take.sessionID,
+            takeIdentity: CaptureCore.LocalRecordingNaming.takeIdentity(
+                sessionID: take.sessionID,
+                takeNumber: 99
+            ),
+            mediaURL: take.sourceMediaURL(in: container.locator),
+            performerName: "DJ Ledger",
+            bpm: 95,
+            createdAt: Date(timeIntervalSince1970: 1_780_000_000)
+        )
+
+        XCTAssertThrowsError(
+            try GuidedCaptureSavedTakeDetail.load(
+                take: take,
+                containerLocator: container.locator
+            )
+        ) { error in
+            XCTAssertEqual(
+                error as? GuidedCaptureSavedTakeDetailError,
+                .sidecarIdentityMismatch(take.takeID)
+            )
+        }
+    }
+
 }
 
 final class CaptureRecoveryPhase2CoreTests: XCTestCase {
@@ -10444,6 +11520,67 @@ extension CaptureReliabilityPhase1CoreTests {
         return String(source[start.lowerBound..<end.upperBound])
     }
 
+    func makeGuidedKeptSession(
+        sessionID: String,
+        timestamp: Date
+    ) -> GuidedCaptureKeptSession {
+        GuidedCaptureKeptSession(
+            sessionID: sessionID,
+            config: CaptureSessionConfig(
+                performerName: "DJ Ledger",
+                bpm: 70,
+                scratchType: .babyScratch,
+                drillMode: .fullCapture,
+                captureMode: .timedClick,
+                takeDurationSeconds: 1,
+                takeCount: 0,
+                handedness: .right,
+                notes: "Slice F durable session",
+                sessionID: sessionID,
+                createdAt: timestamp,
+                updatedAt: timestamp
+            ),
+            deckProfileRawValue: "right-handed",
+            cameraProfileRawValue: "overhead",
+            watchWristRawValue: "left",
+            workflow: "guided_capture",
+            platform: "iOS",
+            sessionName: "Slice F Kept Session",
+            calibrationData: nil
+        )
+    }
+
+    func makeGuidedKeptTake(
+        in root: URL,
+        sessionID: String,
+        takeID: String? = nil,
+        takeNumber: Int,
+        bpm: Int
+    ) -> GuidedCaptureKeptTake {
+        let resolvedTakeID = takeID ?? String(format: "take-%03d", takeNumber)
+        return GuidedCaptureKeptTake(
+            sessionID: sessionID,
+            takeID: resolvedTakeID,
+            takeNumber: takeNumber,
+            bpm: bpm,
+            sourceMediaURL: root.appendingPathComponent("\(resolvedTakeID).mov"),
+            sourceSidecarURL: root.appendingPathComponent("\(resolvedTakeID).json"),
+            sourceAudioURL: root.appendingPathComponent("\(resolvedTakeID).wav"),
+            sourceWatchMotionURL: nil,
+            drillName: "Full capture",
+            duration: 1,
+            quality: "kept",
+            comboTagged: false,
+            audioPresent: true,
+            motionPresent: false,
+            syncStatus: "not_requested",
+            recordingStatus: "completed",
+            verbalSlateUsed: true,
+            syncClapUsed: true,
+            note: "Kept take \(takeNumber)"
+        )
+    }
+
     func makeCanonicalPackage(rootURL: URL) throws -> SessionExportPackage {
         try makeCanonicalPackage(rootURL: rootURL, scratchType: .babyScratch)
     }
@@ -10478,7 +11615,7 @@ extension CaptureReliabilityPhase1CoreTests {
                 try writeTestWAV(at: audioURL)
             } else {
                 try writePlaceholderFile(at: videoURL, contents: Data("mov-\(takeNumber)".utf8))
-                try writePlaceholderFile(at: audioURL, contents: Data("wav-\(takeNumber)".utf8))
+                try writeTestWAV(at: audioURL)
             }
 
             try writeFinalizedSidecar(
@@ -11303,6 +12440,208 @@ extension CaptureReliabilityPhase1CoreTests {
         XCTAssertEqual(derived.count, 1)
         XCTAssertEqual(derived.first?.eventKind, .transformPulse)
     }
+
+    /// Regression (physical RC smoke, 2026-08-30): a RANE ONE MKII streams the
+    /// crossfader at ~800 Hz, so a physically instant cut arrives as ~60 samples
+    /// each moving 1-3 MIDI steps (adjacent-sample delta ~0.008). Gating
+    /// primitive formation on the delta between *adjacent samples* made the
+    /// derivation sample-rate dependent: a take carrying 1712 CC8 ch15 events
+    /// and six physically observed cuts derived zero fader events, so the
+    /// notation drew one unbroken line. Primitives must be formed from
+    /// monotonic runs so the gates measure the gesture, not the sample period.
+    func testDenseCrossfaderStreamDerivesFaderEventsAtHardwareUpdateRate() {
+        // Close: 0.465 -> 0.0 in ~56 ms, one MIDI step per ~0.95 ms.
+        var events: [CaptureCore.RawMixerMIDIEvent] = []
+        var time = 0.10
+        for value in stride(from: 59, through: 0, by: -1) {
+            events.append(
+                CaptureCore.RawMixerMIDIEvent(
+                    timestamp: 1000.0 + time,
+                    takeRelativeTime: time,
+                    deviceName: "Rane ONE MKII",
+                    channel: 15,
+                    controller: 8,
+                    value: value,
+                    normalizedValue: Double(value) / 127.0,
+                    mappedControl: "crossfader"
+                )
+            )
+            time += 0.00095
+        }
+
+        let derived = CaptureCore.deriveDetectedNotationFaderEvents(from: events)
+        XCTAssertFalse(
+            derived.isEmpty,
+            "A cut streamed at hardware update rate must still derive fader events"
+        )
+        XCTAssertEqual(derived.count, 1)
+        XCTAssertEqual(derived.first?.eventKind, .cut)
+        XCTAssertEqual(derived.first?.control, "crossfader")
+        XCTAssertEqual(derived.first?.source, "midi")
+    }
+
+    /// Physical evidence (2026-08-30): a right-deck cut on a RANE ONE MKII
+    /// runs centre-to-left, not rail-to-rail, so real closes travel ~0.25-0.5
+    /// and last ~0.10-0.28 s. The pre-2026-08-30 gate (delta 0.35 / duration
+    /// 0.15) classified those as `.unknown`, which the renderer draws as
+    /// nothing - detected but invisible. A representative real close must
+    /// classify as `.cut`.
+    func testRepresentativeRightDeckCutClassifiesAsCut() {
+        // 0.409 travel over 0.110 s - the measured median of 39 real closes.
+        let events = [
+            CaptureCore.RawMixerMIDIEvent(
+                timestamp: 1000.0, takeRelativeTime: 0.10, deviceName: "Rane ONE MKII",
+                channel: 15, controller: 8, value: 52, normalizedValue: 0.409,
+                mappedControl: "crossfader"
+            ),
+            CaptureCore.RawMixerMIDIEvent(
+                timestamp: 1000.11, takeRelativeTime: 0.21, deviceName: "Rane ONE MKII",
+                channel: 15, controller: 8, value: 0, normalizedValue: 0.0,
+                mappedControl: "crossfader"
+            )
+        ]
+
+        let derived = CaptureCore.deriveDetectedNotationFaderEvents(from: events)
+        XCTAssertEqual(derived.count, 1)
+        XCTAssertEqual(
+            derived.first?.eventKind, .cut,
+            "A 0.409 travel close over 0.110 s is a real cut and must render"
+        )
+    }
+
+    /// A shallow, slow fader drift is not a cut and must stay `.unknown`, so
+    /// widening the gate for real cuts cannot start drawing ticks for noise.
+    func testShallowSlowFaderDriftStaysUnknown() {
+        let events = [
+            CaptureCore.RawMixerMIDIEvent(
+                timestamp: 1000.0, takeRelativeTime: 0.10, deviceName: "Rane ONE MKII",
+                channel: 15, controller: 8, value: 20, normalizedValue: 0.157,
+                mappedControl: "crossfader"
+            ),
+            CaptureCore.RawMixerMIDIEvent(
+                timestamp: 1000.9, takeRelativeTime: 1.00, deviceName: "Rane ONE MKII",
+                channel: 15, controller: 8, value: 0, normalizedValue: 0.0,
+                mappedControl: "crossfader"
+            )
+        ]
+
+        let derived = CaptureCore.deriveDetectedNotationFaderEvents(from: events)
+        XCTAssertEqual(derived.count, 1)
+        XCTAssertEqual(derived.first?.eventKind, .unknown)
+    }
+
+    // MARK: - A10: Watch readiness reflects relayed availability, not capture history
+
+    /// Regression: the Capture "Watch" row derived its state from
+    /// `importedSessions.isEmpty`, so a paired, installed, reachable watch that
+    /// had simply not relayed a capture yet displayed "Not connected" — while
+    /// iOS reported the same watch as motion-ready. Readiness must come from the
+    /// relayed availability signals.
+    func testReachableWatchWithNoCapturesIsNotReportedAsDisconnected() {
+        let readiness = RelayedWatchCaptureStore.WatchInputReadiness.resolve(
+            hasPhoneReport: true,
+            isPaired: true,
+            isInstalled: true,
+            isReachable: true,
+            hasImportedCaptures: false
+        )
+        XCTAssertEqual(readiness, .reachableAwaitingCapture)
+        XCTAssertEqual(readiness.readinessState, .detected)
+        XCTAssertFalse(
+            readiness.detail.localizedCaseInsensitiveContains("not connected"),
+            "A reachable watch must never be described as not connected"
+        )
+    }
+
+    /// "Nothing reported yet" is a distinct state from "no watch paired":
+    /// macOS has no direct WCSession, so an unconnected companion bridge must
+    /// never be rendered as a definitive statement about the watch.
+    func testNoPhoneReportIsDistinctFromNoWatchPaired() {
+        let awaiting = RelayedWatchCaptureStore.WatchInputReadiness.resolve(
+            hasPhoneReport: false,
+            isPaired: false,
+            isInstalled: false,
+            isReachable: false,
+            hasImportedCaptures: false
+        )
+        let notPaired = RelayedWatchCaptureStore.WatchInputReadiness.resolve(
+            hasPhoneReport: true,
+            isPaired: false,
+            isInstalled: false,
+            isReachable: false,
+            hasImportedCaptures: false
+        )
+        XCTAssertEqual(awaiting, .awaitingPhoneReport)
+        XCTAssertEqual(notPaired, .notPaired)
+        XCTAssertNotEqual(awaiting.detail, notPaired.detail)
+    }
+
+    func testWatchReadinessReportsMotionAvailableOnlyWhenCapturesExist() {
+        XCTAssertEqual(
+            RelayedWatchCaptureStore.WatchInputReadiness.resolve(
+                hasPhoneReport: true, isPaired: true, isInstalled: true,
+                isReachable: true, hasImportedCaptures: true
+            ),
+            .motionAvailable
+        )
+        XCTAssertEqual(
+            RelayedWatchCaptureStore.WatchInputReadiness.resolve(
+                hasPhoneReport: true, isPaired: true, isInstalled: true,
+                isReachable: false, hasImportedCaptures: true
+            ),
+            .motionAvailableUnreachable
+        )
+        XCTAssertEqual(
+            RelayedWatchCaptureStore.WatchInputReadiness.resolve(
+                hasPhoneReport: true, isPaired: true, isInstalled: false,
+                isReachable: false, hasImportedCaptures: false
+            ),
+            .notInstalled
+        )
+        XCTAssertEqual(
+            RelayedWatchCaptureStore.WatchInputReadiness.resolve(
+                hasPhoneReport: true, isPaired: true, isInstalled: true,
+                isReachable: false, hasImportedCaptures: false
+            ),
+            .unreachable
+        )
+    }
+
+    /// The watch is an optional input: no readiness state it can reach may
+    /// block recording, or a missing watch would gate a take that never needed
+    /// one.
+    func testWatchReadinessIsNeverBlocking() {
+        let all: [RelayedWatchCaptureStore.WatchInputReadiness] = [
+            .awaitingPhoneReport, .notPaired, .notInstalled, .unreachable,
+            .reachableAwaitingCapture, .motionAvailable, .motionAvailableUnreachable
+        ]
+        for readiness in all {
+            XCTAssertFalse(
+                readiness.readinessState.isBlocking,
+                "Optional watch input must never block recording (\(readiness))"
+            )
+        }
+    }
+
+    /// Upfader samples are raw evidence, never notation: they must not be
+    /// mistaken for crossfader samples by the fader derivation.
+    func testUpfaderEvidenceIsNotDerivedAsCrossfaderNotation() {
+        let events = [
+            CaptureCore.RawMixerMIDIEvent(
+                timestamp: 1000.0, takeRelativeTime: 0.10, deviceName: "Rane ONE MKII",
+                channel: 1, controller: 28, value: 127, normalizedValue: 1.0,
+                mappedControl: "rightUpfader"
+            ),
+            CaptureCore.RawMixerMIDIEvent(
+                timestamp: 1000.1, takeRelativeTime: 0.16, deviceName: "Rane ONE MKII",
+                channel: 1, controller: 28, value: 0, normalizedValue: 0.0,
+                mappedControl: "rightUpfader"
+            )
+        ]
+
+        XCTAssertTrue(CaptureCore.deriveDetectedNotationFaderEvents(from: events).isEmpty)
+    }
+
 
     func testDetectedNotationJSONIncludesMixerMidiEventsArray() throws {
         let root = try makeTemporaryDirectory()
@@ -16628,4 +17967,1074 @@ final class CaptureFinalizationMachineTests: XCTestCase {
 private final class FinalizationFireCounter {
     private(set) var value = 0
     func increment() { value += 1 }
+}
+
+// MARK: - Slice F: container-relative kept-ledger references
+
+extension CaptureReliabilityPhase1CoreTests {
+    /// A simulated iOS app Data container. Two of these stand in for the same
+    /// app before and after an install that reissued the container UUID: the
+    /// capture files are byte-identical, only the container path changed.
+    struct SimulatedAppContainer {
+        let rootURL: URL
+        let locator: CaptureContainerLocator
+        let companionCapturesURL: URL
+        let watchMotionCapturesURL: URL
+    }
+
+    struct SimulatedCaptureArtifacts {
+        let baseName: String
+        let mediaURL: URL
+        let sidecarURL: URL
+        let audioURL: URL
+        let watchMotionURL: URL?
+    }
+
+    func makeSimulatedAppContainer(in root: URL, named name: String) throws -> SimulatedAppContainer {
+        let containerURL = root.appendingPathComponent(name, isDirectory: true)
+        let documentsURL = containerURL.appendingPathComponent("Documents", isDirectory: true)
+        let applicationSupportURL = containerURL
+            .appendingPathComponent("Library", isDirectory: true)
+            .appendingPathComponent("Application Support", isDirectory: true)
+        let companionCapturesURL = documentsURL
+            .appendingPathComponent("CompanionCaptures", isDirectory: true)
+        let watchMotionCapturesURL = applicationSupportURL
+            .appendingPathComponent("WatchMotionCaptures", isDirectory: true)
+        try FileManager.default.createDirectory(at: companionCapturesURL, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: watchMotionCapturesURL, withIntermediateDirectories: true)
+        return SimulatedAppContainer(
+            rootURL: containerURL,
+            locator: CaptureContainerLocator(
+                documentsURL: documentsURL,
+                applicationSupportURL: applicationSupportURL
+            ),
+            companionCapturesURL: companionCapturesURL,
+            watchMotionCapturesURL: watchMotionCapturesURL
+        )
+    }
+
+    /// Writes one real take — movie, scratch WAV, finalized sidecar, and
+    /// optionally a linked Watch capture — into a simulated container, using
+    /// the same naming production capture uses.
+    @discardableResult
+    func writeSimulatedCapture(
+        in container: SimulatedAppContainer,
+        sessionID: String,
+        takeNumber: Int,
+        bpm: Int,
+        createdAt: Date,
+        includeWatchMotion: Bool = false
+    ) throws -> SimulatedCaptureArtifacts {
+        let takeIdentity = CaptureCore.LocalRecordingNaming.takeIdentity(
+            sessionID: sessionID,
+            takeNumber: takeNumber
+        )
+        let baseName = CaptureCore.LocalRecordingNaming.baseName(
+            sessionID: sessionID,
+            takeNumber: takeNumber,
+            roleLabel: "camA"
+        )
+        let mediaURL = container.companionCapturesURL
+            .appendingPathComponent(baseName)
+            .appendingPathExtension("mov")
+        let audioURL = container.companionCapturesURL
+            .appendingPathComponent(baseName)
+            .appendingPathExtension("wav")
+        let sidecarURL = container.companionCapturesURL
+            .appendingPathComponent(baseName)
+            .appendingPathExtension("json")
+
+        try writeTestMOV(at: mediaURL)
+        try writeTestWAV(at: audioURL)
+        try writeFinalizedSidecar(
+            to: sidecarURL,
+            sessionID: sessionID,
+            takeIdentity: takeIdentity,
+            mediaURL: mediaURL,
+            performerName: "DJ Ledger",
+            bpm: bpm,
+            createdAt: createdAt
+        )
+
+        var watchMotionURL: URL?
+        if includeWatchMotion {
+            let watchFileName = "\(baseName)_watch.json"
+            let url = container.watchMotionCapturesURL.appendingPathComponent(watchFileName)
+            let watchSession = makeWatchSession(sessionID: sessionID, takeID: takeIdentity.takeID)
+            try WatchMotionCaptureCodec.encoder.encode(watchSession).write(to: url, options: .atomic)
+            try linkWatchCapture(
+                fileName: watchFileName,
+                captureID: watchSession.id,
+                inSidecarAt: sidecarURL
+            )
+            watchMotionURL = url
+        }
+
+        return SimulatedCaptureArtifacts(
+            baseName: baseName,
+            mediaURL: mediaURL,
+            sidecarURL: sidecarURL,
+            audioURL: audioURL,
+            watchMotionURL: watchMotionURL
+        )
+    }
+
+    func linkWatchCapture(fileName: String, captureID: UUID, inSidecarAt sidecarURL: URL) throws {
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .iso8601
+        let sidecar = try decoder.decode(
+            CaptureCore.LocalRecordingSidecar.self,
+            from: try Data(contentsOf: sidecarURL)
+        ).linkingWatchCapture(id: captureID, fileName: fileName)
+        try sidecar.encodedData().write(to: sidecarURL, options: .atomic)
+    }
+
+    func makeKeptTake(
+        from artifacts: SimulatedCaptureArtifacts,
+        sessionID: String,
+        takeNumber: Int,
+        bpm: Int,
+        locator: CaptureContainerLocator
+    ) -> GuidedCaptureKeptTake {
+        GuidedCaptureKeptTake(
+            sessionID: sessionID,
+            takeID: CaptureCore.LocalRecordingNaming.takeID(takeNumber: takeNumber),
+            takeNumber: takeNumber,
+            bpm: bpm,
+            sourceMediaURL: artifacts.mediaURL,
+            sourceSidecarURL: artifacts.sidecarURL,
+            sourceAudioURL: artifacts.audioURL,
+            sourceWatchMotionURL: artifacts.watchMotionURL,
+            drillName: "Full capture",
+            duration: 1,
+            quality: "kept",
+            comboTagged: false,
+            audioPresent: true,
+            motionPresent: false,
+            syncStatus: "not_requested",
+            recordingStatus: "completed",
+            verbalSlateUsed: nil,
+            syncClapUsed: nil,
+            note: "Ready to keep",
+            containerLocator: locator
+        )
+    }
+
+    /// Mirrors `CompanionCameraView.makeSessionExportPackage`: every location
+    /// comes out of the ledger, resolved against the running container.
+    func makeExportPackage(
+        from session: GuidedCaptureKeptSession,
+        locator: CaptureContainerLocator
+    ) throws -> SessionExportPackage {
+        let sidecarDecoder = JSONDecoder()
+        sidecarDecoder.dateDecodingStrategy = .iso8601
+        let decodedSidecars = session.takes.compactMap { take -> CaptureCore.LocalRecordingSidecar? in
+            guard let data = try? Data(contentsOf: take.sourceSidecarURL(in: locator)) else { return nil }
+            return try? sidecarDecoder.decode(CaptureCore.LocalRecordingSidecar.self, from: data)
+        }
+        let totalDurationSeconds = session.takes.reduce(0) { $0 + $1.duration }
+        // Mirrors production exactly: when no sidecar can be read — which is
+        // what a stale ledger looks like — the ledger's own config is used and
+        // the package is still built, so Export reports the real missing files
+        // instead of silently producing nothing.
+        let config: CaptureSessionConfig = {
+            guard let seedSidecar = decodedSidecars.first else { return session.config }
+            return SessionExportMetadataResolver.mergedConfig(
+                preferredConfig: nil,
+                seedSidecar: seedSidecar,
+                sidecars: decodedSidecars,
+                fallbackSessionID: session.sessionID,
+                createdAt: session.config.createdAt,
+                updatedAt: session.config.updatedAt,
+                takeCount: session.takes.count,
+                totalDurationSeconds: totalDurationSeconds
+            )
+        }()
+        let metadata = SessionExportMetadata(
+            config: config,
+            workflow: session.workflow,
+            platform: session.platform,
+            sessionName: session.sessionName,
+            totalDurationSeconds: totalDurationSeconds
+        )
+        let takes = session.takes.map { take in
+            SessionExportTake(
+                takeID: take.takeID,
+                takeNumber: take.takeNumber,
+                bpm: take.bpm,
+                mediaURL: take.sourceMediaURL(in: locator),
+                audioArtifactURL: take.sourceAudioURL(in: locator),
+                sidecarURL: take.sourceSidecarURL(in: locator),
+                watchCaptureSession: nil,
+                drillName: take.drillName,
+                duration: take.duration,
+                quality: take.quality,
+                comboTagged: take.comboTagged,
+                audioPresent: take.audioPresent,
+                motionPresent: take.motionPresent,
+                syncStatus: take.syncStatus,
+                recordingStatus: take.recordingStatus,
+                verbalSlateUsed: take.verbalSlateUsed,
+                syncClapUsed: take.syncClapUsed,
+                note: take.note,
+                captureTiming: take.captureTiming,
+                motionSources: take.motionSources,
+                faderMappingSource: take.faderMappingSource
+            )
+        }
+        return SessionExportPackage(
+            metadata: metadata,
+            takes: takes,
+            calibrationData: session.calibrationData
+        )
+    }
+
+    /// Moves every capture artifact from one simulated container to another,
+    /// leaving the files byte-identical — exactly what an upgrade install that
+    /// reissues the Data-container UUID does.
+    func relocateCaptures(
+        from source: SimulatedAppContainer,
+        to destination: SimulatedAppContainer
+    ) throws {
+        for (sourceDirectory, destinationDirectory) in [
+            (source.companionCapturesURL, destination.companionCapturesURL),
+            (source.watchMotionCapturesURL, destination.watchMotionCapturesURL)
+        ] {
+            let entries = try FileManager.default.contentsOfDirectory(
+                at: sourceDirectory,
+                includingPropertiesForKeys: nil,
+                options: [.skipsHiddenFiles]
+            )
+            for entry in entries {
+                try FileManager.default.moveItem(
+                    at: entry,
+                    to: destinationDirectory.appendingPathComponent(entry.lastPathComponent)
+                )
+            }
+        }
+    }
+
+    /// Writes a ledger in the pre-fix on-disk shape: each take's four locations
+    /// are bare absolute `file://` URLs under a container that no longer exists.
+    func writeLegacyAbsoluteLedger(
+        to storageURL: URL,
+        session: GuidedCaptureKeptSession
+    ) throws {
+        struct LegacyLedgerDocument: Encodable {
+            let schemaVersion: Int
+            let sessions: [GuidedCaptureKeptSession]
+        }
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+        let data = try encoder.encode(
+            LegacyLedgerDocument(schemaVersion: 1, sessions: [session])
+        )
+        try FileManager.default.createDirectory(
+            at: storageURL.deletingLastPathComponent(),
+            withIntermediateDirectories: true
+        )
+        try data.write(to: storageURL, options: .atomic)
+    }
+
+    func makeLegacyAbsoluteTake(
+        sessionID: String,
+        takeNumber: Int,
+        bpm: Int,
+        legacyContainerURL: URL,
+        baseName: String,
+        legacyWatchMotionFileName: String? = nil,
+        takeID: String? = nil
+    ) -> GuidedCaptureKeptTake {
+        let legacyCompanionURL = legacyContainerURL
+            .appendingPathComponent("Documents", isDirectory: true)
+            .appendingPathComponent("CompanionCaptures", isDirectory: true)
+        let legacyWatchURL = legacyContainerURL
+            .appendingPathComponent("Library", isDirectory: true)
+            .appendingPathComponent("Application Support", isDirectory: true)
+            .appendingPathComponent("WatchMotionCaptures", isDirectory: true)
+        return GuidedCaptureKeptTake(
+            sessionID: sessionID,
+            takeID: takeID ?? CaptureCore.LocalRecordingNaming.takeID(takeNumber: takeNumber),
+            takeNumber: takeNumber,
+            bpm: bpm,
+            sourceMedia: .absolute(
+                legacyCompanionURL.appendingPathComponent(baseName).appendingPathExtension("mov")
+            ),
+            sourceSidecar: .absolute(
+                legacyCompanionURL.appendingPathComponent(baseName).appendingPathExtension("json")
+            ),
+            sourceAudio: .absolute(
+                legacyCompanionURL.appendingPathComponent(baseName).appendingPathExtension("wav")
+            ),
+            sourceWatchMotion: legacyWatchMotionFileName.map {
+                .absolute(legacyWatchURL.appendingPathComponent($0))
+            },
+            drillName: "Full capture",
+            duration: 1,
+            quality: "kept",
+            comboTagged: false,
+            audioPresent: true,
+            motionPresent: false,
+            syncStatus: "not_requested",
+            recordingStatus: "completed",
+            verbalSlateUsed: nil,
+            syncClapUsed: nil,
+            note: "Ready to keep"
+        )
+    }
+}
+
+/// Slice F physical failure: the kept-session ledger persisted every take's
+/// media/sidecar/audio/Watch location as an absolute `file://` URL containing
+/// the iOS Data-container UUID. The next install reissued that UUID, so the
+/// captures were intact but every ledger path dangled and Export reported them
+/// missing. These tests pin the durable form and the one-way legacy repair.
+extension CaptureReliabilityPhase1CoreTests {
+    /// 1. A ledger written under one container still exports after the app's
+    /// container is reissued and the captures move with it.
+    @MainActor
+    func testKeptLedgerSurvivesContainerRelocationAndStillExports() throws {
+        let root = try makeTemporaryDirectory()
+        let containerA = try makeSimulatedAppContainer(in: root, named: "ContainerA")
+        let containerB = try makeSimulatedAppContainer(in: root, named: "ContainerB")
+        let storageURL = root.appendingPathComponent("ledger/kept-sessions.json")
+        let sessionID = "slice-f-relocation"
+        let createdAt = Date(timeIntervalSince1970: 1_730_000_000.372)
+
+        let artifacts = try writeSimulatedCapture(
+            in: containerA,
+            sessionID: sessionID,
+            takeNumber: 1,
+            bpm: 95,
+            createdAt: Date(timeIntervalSince1970: 1_730_000_000)
+        )
+        var session = makeGuidedKeptSession(sessionID: sessionID, timestamp: createdAt)
+        session.config.createdAt = createdAt
+        session.config.updatedAt = createdAt
+
+        let writer = try GuidedCaptureKeptSessionStore(
+            storageURL: storageURL,
+            containerLocator: containerA.locator
+        )
+        _ = try writer.keep(
+            makeKeptTake(
+                from: artifacts,
+                sessionID: sessionID,
+                takeNumber: 1,
+                bpm: 95,
+                locator: containerA.locator
+            ),
+            in: session
+        )
+
+        try relocateCaptures(from: containerA, to: containerB)
+        XCTAssertFalse(
+            FileManager.default.fileExists(atPath: artifacts.mediaURL.path),
+            "The relocation must genuinely invalidate the old absolute path."
+        )
+
+        let reopened = try GuidedCaptureKeptSessionStore(
+            storageURL: storageURL,
+            containerLocator: containerB.locator
+        )
+        let restored = try XCTUnwrap(reopened.session(id: sessionID))
+        XCTAssertEqual(restored.takes.count, 1)
+        let restoredTake = try XCTUnwrap(restored.takes.first)
+        XCTAssertTrue(
+            FileManager.default.fileExists(
+                atPath: restoredTake.sourceMediaURL(in: containerB.locator).path
+            ),
+            "A container-relative reference must resolve into the container the app is running in."
+        )
+        XCTAssertFalse(
+            reopened.lastRebaseReport.didChangeAnything,
+            "A ledger already stored in the durable form needs no legacy repair."
+        )
+
+        let package = try makeExportPackage(from: restored, locator: containerB.locator)
+        let archiveDirectory = root.appendingPathComponent("archives", isDirectory: true)
+        try FileManager.default.createDirectory(at: archiveDirectory, withIntermediateDirectories: true)
+        let builder = SessionArchiveBuilder()
+        let result = try builder.createArchive(
+            from: try builder.preparePackage(from: .package(package)),
+            options: SessionExportOptions(mixMode: .scratchOnly),
+            in: archiveDirectory
+        )
+        XCTAssertGreaterThan(result.archiveSizeBytes, 0)
+    }
+
+    /// 2. Relocation is not allowed to drop, duplicate, or overwrite takes.
+    @MainActor
+    func testMultiTakeRelocationKeepsEveryTakeExactlyOnce() throws {
+        let root = try makeTemporaryDirectory()
+        let containerA = try makeSimulatedAppContainer(in: root, named: "ContainerA")
+        let containerB = try makeSimulatedAppContainer(in: root, named: "ContainerB")
+        let storageURL = root.appendingPathComponent("ledger/kept-sessions.json")
+        let sessionID = "slice-f-multi-relocation"
+        let createdAt = Date(timeIntervalSince1970: 1_730_000_000.372)
+
+        var session = makeGuidedKeptSession(sessionID: sessionID, timestamp: createdAt)
+        session.config.createdAt = createdAt
+        session.config.updatedAt = createdAt
+        let writer = try GuidedCaptureKeptSessionStore(
+            storageURL: storageURL,
+            containerLocator: containerA.locator
+        )
+        for takeNumber in 1...3 {
+            let artifacts = try writeSimulatedCapture(
+                in: containerA,
+                sessionID: sessionID,
+                takeNumber: takeNumber,
+                bpm: 95,
+                createdAt: Date(timeIntervalSince1970: 1_730_000_000)
+            )
+            _ = try writer.keep(
+                makeKeptTake(
+                    from: artifacts,
+                    sessionID: sessionID,
+                    takeNumber: takeNumber,
+                    bpm: 95,
+                    locator: containerA.locator
+                ),
+                in: session
+            )
+        }
+
+        try relocateCaptures(from: containerA, to: containerB)
+
+        let reopened = try GuidedCaptureKeptSessionStore(
+            storageURL: storageURL,
+            containerLocator: containerB.locator
+        )
+        let restored = try XCTUnwrap(reopened.session(id: sessionID))
+        XCTAssertEqual(restored.takes.map(\.takeNumber), [1, 2, 3])
+        XCTAssertEqual(Set(restored.takes.map(\.takeID)).count, 3)
+        let resolvedMediaPaths = restored.takes.map {
+            $0.sourceMediaURL(in: containerB.locator).path
+        }
+        XCTAssertEqual(
+            Set(resolvedMediaPaths).count,
+            3,
+            "Three takes must resolve to three distinct files, never onto each other."
+        )
+        for path in resolvedMediaPaths {
+            XCTAssertTrue(FileManager.default.fileExists(atPath: path))
+        }
+
+        let package = try makeExportPackage(from: restored, locator: containerB.locator)
+        let archiveDirectory = root.appendingPathComponent("archives", isDirectory: true)
+        try FileManager.default.createDirectory(at: archiveDirectory, withIntermediateDirectories: true)
+        let builder = SessionArchiveBuilder()
+        let result = try builder.createArchive(
+            from: try builder.preparePackage(from: .package(package)),
+            options: SessionExportOptions(mixMode: .scratchOnly),
+            in: archiveDirectory
+        )
+        let archiveRoot = try unzipArchive(
+            result.archiveURL,
+            to: root.appendingPathComponent("unzipped", isDirectory: true)
+        )
+        let videoFiles = try FileManager.default.contentsOfDirectory(
+            atPath: archiveRoot.appendingPathComponent("video").path
+        )
+        XCTAssertEqual(videoFiles.count, 3)
+        XCTAssertEqual(Set(videoFiles).count, 3)
+        let metadataDocument = try decodeSessionMetadataDocument(from: archiveRoot)
+        XCTAssertEqual(metadataDocument.takes.count, 3)
+        XCTAssertEqual(Set(metadataDocument.takes.map(\.takeNumber)), [1, 2, 3])
+    }
+
+    /// 3. The failure Karl actually hit: a ledger full of dead absolute
+    /// container URLs is repaired in place, atomically, and reads back durable.
+    @MainActor
+    func testLegacyAbsoluteLedgerIsMigratedAtomicallyAndReadsBackDurable() throws {
+        let root = try makeTemporaryDirectory()
+        let currentContainer = try makeSimulatedAppContainer(in: root, named: "ContainerCurrent")
+        let legacyContainerURL = root.appendingPathComponent("ContainerB116F53B", isDirectory: true)
+        let storageURL = root.appendingPathComponent("ledger/kept-sessions.json")
+        let sessionID = "slice-f-legacy"
+        let createdAt = Date(timeIntervalSince1970: 1_730_000_000.372)
+
+        let artifacts = try writeSimulatedCapture(
+            in: currentContainer,
+            sessionID: sessionID,
+            takeNumber: 1,
+            bpm: 95,
+            createdAt: Date(timeIntervalSince1970: 1_730_000_000)
+        )
+        // A second completed capture sits in the same directory but was never
+        // kept. Repairing the ledger must not adopt it: "the file completed" is
+        // not evidence the operator kept the take.
+        let unkeptArtifacts = try writeSimulatedCapture(
+            in: currentContainer,
+            sessionID: sessionID,
+            takeNumber: 2,
+            bpm: 95,
+            createdAt: Date(timeIntervalSince1970: 1_730_000_000)
+        )
+        var session = makeGuidedKeptSession(sessionID: sessionID, timestamp: createdAt)
+        session.config.createdAt = createdAt
+        session.config.updatedAt = createdAt
+        let legacySession = GuidedCaptureKeptSession(
+            sessionID: sessionID,
+            config: session.config,
+            deckProfileRawValue: session.deckProfileRawValue,
+            cameraProfileRawValue: session.cameraProfileRawValue,
+            watchWristRawValue: session.watchWristRawValue,
+            platform: session.platform,
+            sessionName: session.sessionName,
+            calibrationData: nil,
+            takes: [
+                makeLegacyAbsoluteTake(
+                    sessionID: sessionID,
+                    takeNumber: 1,
+                    bpm: 95,
+                    legacyContainerURL: legacyContainerURL,
+                    baseName: artifacts.baseName
+                )
+            ],
+            updatedAt: createdAt
+        )
+        try writeLegacyAbsoluteLedger(to: storageURL, session: legacySession)
+        let legacyText = try String(contentsOf: storageURL, encoding: .utf8)
+        XCTAssertTrue(
+            legacyText.contains("ContainerB116F53B"),
+            "The fixture must really contain the stale container path being repaired."
+        )
+
+        let store = try GuidedCaptureKeptSessionStore(
+            storageURL: storageURL,
+            containerLocator: currentContainer.locator
+        )
+        XCTAssertEqual(
+            store.lastRebaseReport.rebasedRecordingIDs,
+            ["\(sessionID):take-001"]
+        )
+        XCTAssertTrue(store.lastRebaseReport.rejections.isEmpty)
+
+        XCTAssertEqual(
+            store.session(id: sessionID)?.takes.map(\.takeID),
+            ["take-001"],
+            "Repair rebases the takes the ledger already holds. It never adopts an unkept capture."
+        )
+        XCTAssertTrue(
+            FileManager.default.fileExists(atPath: unkeptArtifacts.mediaURL.path),
+            "The unkept capture must be left on disk, untouched."
+        )
+        let migratedTake = try XCTUnwrap(store.session(id: sessionID)?.takes.first)
+        XCTAssertEqual(
+            migratedTake.sourceMedia,
+            .containerRelative(
+                root: .documents,
+                path: "CompanionCaptures/\(artifacts.baseName).mov"
+            )
+        )
+        XCTAssertEqual(
+            migratedTake.sourceMediaURL(in: currentContainer.locator).path,
+            artifacts.mediaURL.path
+        )
+
+        // The repair is written, not just resolved in memory.
+        let migratedText = try String(contentsOf: storageURL, encoding: .utf8)
+        XCTAssertFalse(migratedText.contains("ContainerB116F53B"))
+        XCTAssertTrue(migratedText.contains("\"relativePath\""))
+
+        let reloaded = try GuidedCaptureKeptSessionStore(
+            storageURL: storageURL,
+            containerLocator: currentContainer.locator
+        )
+        XCTAssertEqual(reloaded.session(id: sessionID)?.takes, store.session(id: sessionID)?.takes)
+        XCTAssertFalse(
+            reloaded.lastRebaseReport.didChangeAnything,
+            "A migrated ledger must be stable — the repair runs once, not on every launch."
+        )
+        XCTAssertEqual(
+            try Data(contentsOf: storageURL),
+            Data(migratedText.utf8),
+            "Reloading a migrated ledger must not rewrite it again."
+        )
+    }
+
+    /// 4. A file that happens to sit at the derived path but belongs to another
+    /// session, take, or take number is refused. Nothing is renamed to fit.
+    @MainActor
+    func testLegacyRebaseRejectsSidecarSessionAndTakeMismatch() throws {
+        let root = try makeTemporaryDirectory()
+        let currentContainer = try makeSimulatedAppContainer(in: root, named: "ContainerCurrent")
+        let legacyContainerURL = root.appendingPathComponent("ContainerOld", isDirectory: true)
+        let storageURL = root.appendingPathComponent("ledger/kept-sessions.json")
+        let ledgerSessionID = "slice-f-identity"
+        let strangerSessionID = "someone-elses-session"
+        let createdAt = Date(timeIntervalSince1970: 1_730_000_000.372)
+
+        // The only file at the derived path belongs to a different session.
+        let strangerArtifacts = try writeSimulatedCapture(
+            in: currentContainer,
+            sessionID: strangerSessionID,
+            takeNumber: 1,
+            bpm: 95,
+            createdAt: Date(timeIntervalSince1970: 1_730_000_000)
+        )
+        var session = makeGuidedKeptSession(sessionID: ledgerSessionID, timestamp: createdAt)
+        session.config.createdAt = createdAt
+        session.config.updatedAt = createdAt
+        let legacySession = GuidedCaptureKeptSession(
+            sessionID: ledgerSessionID,
+            config: session.config,
+            deckProfileRawValue: session.deckProfileRawValue,
+            cameraProfileRawValue: session.cameraProfileRawValue,
+            watchWristRawValue: session.watchWristRawValue,
+            platform: session.platform,
+            sessionName: session.sessionName,
+            calibrationData: nil,
+            takes: [
+                makeLegacyAbsoluteTake(
+                    sessionID: ledgerSessionID,
+                    takeNumber: 1,
+                    bpm: 95,
+                    legacyContainerURL: legacyContainerURL,
+                    baseName: strangerArtifacts.baseName
+                )
+            ],
+            updatedAt: createdAt
+        )
+        try writeLegacyAbsoluteLedger(to: storageURL, session: legacySession)
+        let originalLedgerData = try Data(contentsOf: storageURL)
+
+        let store = try GuidedCaptureKeptSessionStore(
+            storageURL: storageURL,
+            containerLocator: currentContainer.locator
+        )
+        XCTAssertEqual(
+            store.lastRebaseReport.rejections["\(ledgerSessionID):take-001"],
+            .sidecarIdentityMismatch
+        )
+        XCTAssertTrue(store.lastRebaseReport.rebasedRecordingIDs.isEmpty)
+        XCTAssertEqual(store.session(id: ledgerSessionID)?.takes.count, 1)
+        XCTAssertEqual(
+            try Data(contentsOf: storageURL),
+            originalLedgerData,
+            "A refused rebase must leave the ledger exactly as it was."
+        )
+        XCTAssertTrue(
+            FileManager.default.fileExists(atPath: strangerArtifacts.mediaURL.path),
+            "The other session's capture must be left untouched."
+        )
+    }
+
+    /// 5. Two takes may never rebase onto the same file. Ambiguous evidence
+    /// rejects both rather than letting the first match win.
+    @MainActor
+    func testLegacyRebaseRejectsAmbiguousDuplicateBasename() throws {
+        let root = try makeTemporaryDirectory()
+        let currentContainer = try makeSimulatedAppContainer(in: root, named: "ContainerCurrent")
+        let legacyContainerURL = root.appendingPathComponent("ContainerOld", isDirectory: true)
+        let storageURL = root.appendingPathComponent("ledger/kept-sessions.json")
+        let sessionID = "slice-f-ambiguous"
+        let createdAt = Date(timeIntervalSince1970: 1_730_000_000.372)
+
+        let firstArtifacts = try writeSimulatedCapture(
+            in: currentContainer,
+            sessionID: sessionID,
+            takeNumber: 1,
+            bpm: 95,
+            createdAt: Date(timeIntervalSince1970: 1_730_000_000),
+            includeWatchMotion: true
+        )
+        let secondArtifacts = try writeSimulatedCapture(
+            in: currentContainer,
+            sessionID: sessionID,
+            takeNumber: 2,
+            bpm: 95,
+            createdAt: Date(timeIntervalSince1970: 1_730_000_000),
+            includeWatchMotion: true
+        )
+        // Make both sidecars claim the SAME Watch capture file, so both takes
+        // otherwise validate but resolve onto one shared artifact.
+        let sharedWatchFileName = try XCTUnwrap(firstArtifacts.watchMotionURL?.lastPathComponent)
+        let sharedWatchCaptureID = try XCTUnwrap(
+            WatchMotionCaptureCodec.decoder.decode(
+                WatchMotionCaptureSession.self,
+                from: try Data(contentsOf: XCTUnwrap(firstArtifacts.watchMotionURL))
+            ).id
+        )
+        try linkWatchCapture(
+            fileName: sharedWatchFileName,
+            captureID: sharedWatchCaptureID,
+            inSidecarAt: secondArtifacts.sidecarURL
+        )
+
+        var session = makeGuidedKeptSession(sessionID: sessionID, timestamp: createdAt)
+        session.config.createdAt = createdAt
+        session.config.updatedAt = createdAt
+        let legacySession = GuidedCaptureKeptSession(
+            sessionID: sessionID,
+            config: session.config,
+            deckProfileRawValue: session.deckProfileRawValue,
+            cameraProfileRawValue: session.cameraProfileRawValue,
+            watchWristRawValue: session.watchWristRawValue,
+            platform: session.platform,
+            sessionName: session.sessionName,
+            calibrationData: nil,
+            takes: [
+                makeLegacyAbsoluteTake(
+                    sessionID: sessionID,
+                    takeNumber: 1,
+                    bpm: 95,
+                    legacyContainerURL: legacyContainerURL,
+                    baseName: firstArtifacts.baseName,
+                    legacyWatchMotionFileName: sharedWatchFileName
+                ),
+                makeLegacyAbsoluteTake(
+                    sessionID: sessionID,
+                    takeNumber: 2,
+                    bpm: 95,
+                    legacyContainerURL: legacyContainerURL,
+                    baseName: secondArtifacts.baseName,
+                    legacyWatchMotionFileName: sharedWatchFileName
+                )
+            ],
+            updatedAt: createdAt
+        )
+        try writeLegacyAbsoluteLedger(to: storageURL, session: legacySession)
+        let originalLedgerData = try Data(contentsOf: storageURL)
+
+        let store = try GuidedCaptureKeptSessionStore(
+            storageURL: storageURL,
+            containerLocator: currentContainer.locator
+        )
+        XCTAssertTrue(store.lastRebaseReport.rebasedRecordingIDs.isEmpty)
+        XCTAssertEqual(
+            store.lastRebaseReport.rejections["\(sessionID):take-001"],
+            .duplicateResolvedPath
+        )
+        XCTAssertEqual(
+            store.lastRebaseReport.rejections["\(sessionID):take-002"],
+            .duplicateResolvedPath
+        )
+        XCTAssertEqual(store.session(id: sessionID)?.takes.count, 2)
+        XCTAssertEqual(try Data(contentsOf: storageURL), originalLedgerData)
+    }
+
+    /// 6. A stored path that walks out of its directory is never interpreted.
+    func testLegacyRebaseRejectsPathTraversal() {
+        let traversingURL = URL(
+            string: "file:///ContainerOld/Documents/CompanionCaptures/../../Documents/CompanionCaptures/x.mov"
+        )!
+        XCTAssertEqual(
+            GuidedCaptureLedgerRebase.derivedReference(for: .absolute(traversingURL), kind: .media),
+            .rejected(.pathTraversal)
+        )
+        XCTAssertEqual(
+            GuidedCaptureLedgerRebase.derivedReference(
+                for: .containerRelative(root: .documents, path: "CompanionCaptures/../../etc/passwd"),
+                kind: .media
+            ),
+            .rejected(.pathTraversal)
+        )
+        XCTAssertFalse(
+            CaptureArtifactReference.isSafeRelativePath("CompanionCaptures/../x.mov")
+        )
+        XCTAssertFalse(CaptureArtifactReference.isSafeRelativePath("/CompanionCaptures/x.mov"))
+        XCTAssertFalse(CaptureArtifactReference.isSafeRelativePath(""))
+
+        // A path naming its container root twice is genuinely unknowable.
+        let ambiguousURL = URL(
+            string: "file:///ContainerOld/Documents/inner/Documents/CompanionCaptures/x.mov"
+        )!
+        XCTAssertEqual(
+            GuidedCaptureLedgerRebase.derivedReference(for: .absolute(ambiguousURL), kind: .media),
+            .rejected(.ambiguousContainerRoot)
+        )
+
+        // Inside the container but not in a capture directory this kind owns.
+        let foreignURL = URL(string: "file:///ContainerOld/Documents/Inbox/x.mov")!
+        XCTAssertEqual(
+            GuidedCaptureLedgerRebase.derivedReference(for: .absolute(foreignURL), kind: .media),
+            .rejected(.unknownCaptureLocation)
+        )
+    }
+
+    /// 7. A genuinely missing capture is not papered over: the take stays in the
+    /// ledger, Export keeps failing with a real reason, and the same operation
+    /// succeeds once the file is actually back.
+    @MainActor
+    func testGenuinelyMissingArtifactStaysVisibleAndRetryable() throws {
+        let root = try makeTemporaryDirectory()
+        let currentContainer = try makeSimulatedAppContainer(in: root, named: "ContainerCurrent")
+        let legacyContainerURL = root.appendingPathComponent("ContainerOld", isDirectory: true)
+        let storageURL = root.appendingPathComponent("ledger/kept-sessions.json")
+        let sessionID = "slice-f-missing"
+        let createdAt = Date(timeIntervalSince1970: 1_730_000_000.372)
+
+        let artifacts = try writeSimulatedCapture(
+            in: currentContainer,
+            sessionID: sessionID,
+            takeNumber: 1,
+            bpm: 95,
+            createdAt: Date(timeIntervalSince1970: 1_730_000_000)
+        )
+        let quarantinedMediaURL = root.appendingPathComponent("held-aside.mov")
+        try FileManager.default.moveItem(at: artifacts.mediaURL, to: quarantinedMediaURL)
+
+        var session = makeGuidedKeptSession(sessionID: sessionID, timestamp: createdAt)
+        session.config.createdAt = createdAt
+        session.config.updatedAt = createdAt
+        let legacySession = GuidedCaptureKeptSession(
+            sessionID: sessionID,
+            config: session.config,
+            deckProfileRawValue: session.deckProfileRawValue,
+            cameraProfileRawValue: session.cameraProfileRawValue,
+            watchWristRawValue: session.watchWristRawValue,
+            platform: session.platform,
+            sessionName: session.sessionName,
+            calibrationData: nil,
+            takes: [
+                makeLegacyAbsoluteTake(
+                    sessionID: sessionID,
+                    takeNumber: 1,
+                    bpm: 95,
+                    legacyContainerURL: legacyContainerURL,
+                    baseName: artifacts.baseName
+                )
+            ],
+            updatedAt: createdAt
+        )
+        try writeLegacyAbsoluteLedger(to: storageURL, session: legacySession)
+        let originalLedgerData = try Data(contentsOf: storageURL)
+
+        let blockedStore = try GuidedCaptureKeptSessionStore(
+            storageURL: storageURL,
+            containerLocator: currentContainer.locator
+        )
+        XCTAssertEqual(
+            blockedStore.lastRebaseReport.rejections["\(sessionID):take-001"],
+            .artifactMissing
+        )
+        XCTAssertEqual(blockedStore.session(id: sessionID)?.takes.count, 1)
+        XCTAssertEqual(
+            try Data(contentsOf: storageURL),
+            originalLedgerData,
+            "A missing capture must not cause the ledger to be rewritten."
+        )
+
+        let blockedSession = try XCTUnwrap(blockedStore.session(id: sessionID))
+        let blockedPackage = try makeExportPackage(
+            from: blockedSession,
+            locator: currentContainer.locator
+        )
+        let builder = SessionArchiveBuilder()
+        let report = try XCTUnwrap(
+            builder.validationReport(for: .package(blockedPackage)),
+            "Export must still refuse a session whose media is genuinely gone."
+        )
+        XCTAssertEqual(report.suggestedError, .missingRequiredFiles)
+        XCTAssertTrue(report.issues.contains { $0.localizedCaseInsensitiveContains("missing") })
+
+        // Retry after the capture is genuinely restored.
+        try FileManager.default.moveItem(at: quarantinedMediaURL, to: artifacts.mediaURL)
+        let retriedStore = try GuidedCaptureKeptSessionStore(
+            storageURL: storageURL,
+            containerLocator: currentContainer.locator
+        )
+        XCTAssertEqual(
+            retriedStore.lastRebaseReport.rebasedRecordingIDs,
+            ["\(sessionID):take-001"]
+        )
+        let retriedSession = try XCTUnwrap(retriedStore.session(id: sessionID))
+        let retriedPackage = try makeExportPackage(
+            from: retriedSession,
+            locator: currentContainer.locator
+        )
+        XCTAssertNil(builder.validationReport(for: .package(retriedPackage)))
+        let archiveDirectory = root.appendingPathComponent("archives", isDirectory: true)
+        try FileManager.default.createDirectory(at: archiveDirectory, withIntermediateDirectories: true)
+        let result = try builder.createArchive(
+            from: try builder.preparePackage(from: .package(retriedPackage)),
+            options: SessionExportOptions(mixMode: .scratchOnly),
+            in: archiveDirectory
+        )
+        XCTAssertGreaterThan(result.archiveSizeBytes, 0)
+    }
+
+    /// 8. Watch/motion lives under Application Support, not Documents, and must
+    /// relocate on its own root.
+    @MainActor
+    func testWatchMotionReferenceRelocatesWithTheTake() throws {
+        let root = try makeTemporaryDirectory()
+        let containerA = try makeSimulatedAppContainer(in: root, named: "ContainerA")
+        let containerB = try makeSimulatedAppContainer(in: root, named: "ContainerB")
+        let storageURL = root.appendingPathComponent("ledger/kept-sessions.json")
+        let sessionID = "slice-f-watch"
+        let createdAt = Date(timeIntervalSince1970: 1_730_000_000.372)
+
+        let artifacts = try writeSimulatedCapture(
+            in: containerA,
+            sessionID: sessionID,
+            takeNumber: 1,
+            bpm: 95,
+            createdAt: Date(timeIntervalSince1970: 1_730_000_000),
+            includeWatchMotion: true
+        )
+        var session = makeGuidedKeptSession(sessionID: sessionID, timestamp: createdAt)
+        session.config.createdAt = createdAt
+        session.config.updatedAt = createdAt
+
+        let writer = try GuidedCaptureKeptSessionStore(
+            storageURL: storageURL,
+            containerLocator: containerA.locator
+        )
+        _ = try writer.keep(
+            makeKeptTake(
+                from: artifacts,
+                sessionID: sessionID,
+                takeNumber: 1,
+                bpm: 95,
+                locator: containerA.locator
+            ),
+            in: session
+        )
+        let keptWatchReference = try XCTUnwrap(
+            writer.session(id: sessionID)?.takes.first?.sourceWatchMotion
+        )
+        XCTAssertEqual(
+            keptWatchReference,
+            .containerRelative(
+                root: .applicationSupport,
+                path: "WatchMotionCaptures/\(artifacts.baseName)_watch.json"
+            )
+        )
+
+        try relocateCaptures(from: containerA, to: containerB)
+
+        let reopened = try GuidedCaptureKeptSessionStore(
+            storageURL: storageURL,
+            containerLocator: containerB.locator
+        )
+        let relocatedWatchURL = try XCTUnwrap(
+            reopened.session(id: sessionID)?.takes.first?.sourceWatchMotionURL(in: containerB.locator)
+        )
+        XCTAssertTrue(relocatedWatchURL.path.hasPrefix(containerB.rootURL.path))
+        XCTAssertTrue(FileManager.default.fileExists(atPath: relocatedWatchURL.path))
+
+        // The same relocation, arriving as a legacy absolute ledger, is repaired
+        // against the sidecar's linked Watch file name rather than by guessing.
+        let legacyStorageURL = root.appendingPathComponent("ledger/legacy-kept-sessions.json")
+        let legacySession = GuidedCaptureKeptSession(
+            sessionID: sessionID,
+            config: session.config,
+            deckProfileRawValue: session.deckProfileRawValue,
+            cameraProfileRawValue: session.cameraProfileRawValue,
+            watchWristRawValue: session.watchWristRawValue,
+            platform: session.platform,
+            sessionName: session.sessionName,
+            calibrationData: nil,
+            takes: [
+                makeLegacyAbsoluteTake(
+                    sessionID: sessionID,
+                    takeNumber: 1,
+                    bpm: 95,
+                    legacyContainerURL: root.appendingPathComponent("ContainerOld", isDirectory: true),
+                    baseName: artifacts.baseName,
+                    legacyWatchMotionFileName: "\(artifacts.baseName)_watch.json"
+                )
+            ],
+            updatedAt: createdAt
+        )
+        try writeLegacyAbsoluteLedger(to: legacyStorageURL, session: legacySession)
+        let migratedStore = try GuidedCaptureKeptSessionStore(
+            storageURL: legacyStorageURL,
+            containerLocator: containerB.locator
+        )
+        XCTAssertEqual(
+            migratedStore.session(id: sessionID)?.takes.first?.sourceWatchMotion,
+            keptWatchReference
+        )
+    }
+
+    /// 9. The durable form is enforced on write: a fresh ledger can never
+    /// contain an absolute app-container path again.
+    @MainActor
+    func testFreshLedgerNeverPersistsAnAbsoluteContainerPath() throws {
+        let root = try makeTemporaryDirectory()
+        let container = try makeSimulatedAppContainer(in: root, named: "ContainerA")
+        let storageURL = root.appendingPathComponent("ledger/kept-sessions.json")
+        let sessionID = "slice-f-durable-form"
+        let createdAt = Date(timeIntervalSince1970: 1_730_000_000.372)
+
+        let artifacts = try writeSimulatedCapture(
+            in: container,
+            sessionID: sessionID,
+            takeNumber: 1,
+            bpm: 95,
+            createdAt: Date(timeIntervalSince1970: 1_730_000_000),
+            includeWatchMotion: true
+        )
+        var session = makeGuidedKeptSession(sessionID: sessionID, timestamp: createdAt)
+        session.config.createdAt = createdAt
+        session.config.updatedAt = createdAt
+
+        let store = try GuidedCaptureKeptSessionStore(
+            storageURL: storageURL,
+            containerLocator: container.locator
+        )
+        _ = try store.keep(
+            makeKeptTake(
+                from: artifacts,
+                sessionID: sessionID,
+                takeNumber: 1,
+                bpm: 95,
+                locator: container.locator
+            ),
+            in: session
+        )
+
+        let ledgerText = try String(contentsOf: storageURL, encoding: .utf8)
+        XCTAssertFalse(
+            ledgerText.contains(container.rootURL.path),
+            "A fresh ledger must not name the app container it was written in."
+        )
+        XCTAssertFalse(ledgerText.contains("file://"))
+        XCTAssertTrue(ledgerText.contains("\"containerRoot\""))
+        XCTAssertTrue(ledgerText.contains("\"relativePath\""))
+
+        // Writing an absolute container path is refused outright, so the defect
+        // cannot be reintroduced by a future caller that bypasses the locator.
+        let smuggledTake = GuidedCaptureKeptTake(
+            sessionID: sessionID,
+            takeID: "take-002",
+            takeNumber: 2,
+            bpm: 95,
+            sourceMedia: .absolute(artifacts.mediaURL),
+            sourceSidecar: .absolute(artifacts.sidecarURL),
+            sourceAudio: .absolute(artifacts.audioURL),
+            sourceWatchMotion: nil,
+            drillName: "Full capture",
+            duration: 1,
+            quality: "kept",
+            comboTagged: false,
+            audioPresent: true,
+            motionPresent: false,
+            syncStatus: "not_requested",
+            recordingStatus: "completed",
+            verbalSlateUsed: nil,
+            syncClapUsed: nil,
+            note: "Ready to keep"
+        )
+        XCTAssertThrowsError(try store.keep(smuggledTake, in: session)) { error in
+            XCTAssertEqual(
+                error as? GuidedCaptureKeptSessionStoreError,
+                .containerOwnedAbsoluteSourceURL(
+                    sessionID: sessionID,
+                    takeID: "take-002",
+                    field: "media"
+                )
+            )
+        }
+        XCTAssertEqual(
+            try String(contentsOf: storageURL, encoding: .utf8),
+            ledgerText,
+            "A refused write must leave the ledger byte-identical."
+        )
+    }
 }

@@ -559,6 +559,7 @@ struct SamplePositionWaveformView: View {
                         drawWaveform(
                             waveform,
                             snapshot: snapshot,
+                            emptyStateText: emptyStateText,
                             in: &context,
                             size: size
                         )
@@ -587,6 +588,9 @@ struct SamplePositionWaveformView: View {
     }
 
     private func statusText(for snapshot: PlatterSamplePlayheadSnapshot?) -> String {
+        if !playbackEngine.audioOwnershipMode.allowsLocalScratchPlayback {
+            return "SERATO AUDIO"
+        }
         guard let snapshot else { return "LOAD AHHH" }
         switch snapshot.region {
         case .unloaded:
@@ -601,6 +605,10 @@ struct SamplePositionWaveformView: View {
         case .start, .middle, .end:
             return String(format: "LIVE · %.2f s", max(0, snapshot.positionSeconds))
         }
+    }
+
+    private var emptyStateText: String {
+        "LOAD AHHH TO SEE SAMPLE POSITION"
     }
 
     private func statusColor(for snapshot: PlatterSamplePlayheadSnapshot?) -> Color {
@@ -632,6 +640,7 @@ struct SamplePositionWaveformView: View {
     private func drawWaveform(
         _ waveform: PlatterSampleWaveform?,
         snapshot: PlatterSamplePlayheadSnapshot?,
+        emptyStateText: String,
         in context: inout GraphicsContext,
         size: CGSize
     ) {
@@ -648,7 +657,7 @@ struct SamplePositionWaveformView: View {
         )
 
         guard let waveform, !waveform.amplitudes.isEmpty else {
-            let emptyText = Text("LOAD AHHH TO SEE SAMPLE POSITION")
+            let emptyText = Text(emptyStateText)
                 .font(ScratchLabDesign.Typo.statusPill)
                 .foregroundColor(ScratchLabDesign.Sem.textSecondary)
             context.draw(

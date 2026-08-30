@@ -1,5 +1,6 @@
 import SwiftUI
 import AVFoundation
+import AVKit
 import UIKit
 import Combine
 
@@ -20,6 +21,7 @@ struct CompanionCameraView: View {
     /// if any — set when scratch capture starts and consumed once the take
     /// finishes (see `beginLinkedRecording`/`handleFinishedRecording`).
     @State private var pendingScratchAudioURL: URL?
+    @State private var isShowingSavedTakes = false
 
     @EnvironmentObject private var audioEngine: AudioEngine
     @EnvironmentObject private var practiceBeatStore: PracticeBeatStore
@@ -111,6 +113,14 @@ struct CompanionCameraView: View {
             )
             .presentationDetents([.large])
             .presentationDragIndicator(.visible)
+        }
+        .sheet(isPresented: $isShowingSavedTakes) {
+            if let keptSession = captureStore.activeKeptSession {
+                SavedTakesView(
+                    session: keptSession,
+                    containerLocator: captureStore.keptSessionContainerLocator
+                )
+            }
         }
         .background(
             SessionSharePresenter(
@@ -225,6 +235,7 @@ struct CompanionCameraView: View {
                     notes: notesBinding,
                     scratches: scratches,
                     sessionListPresentation: captureStore.sessionListPresentation,
+                    keptTakeCount: captureStore.keptTakeCount,
                     validationMessage: captureStore.sessionSetup.firstValidationMessage,
                     onOpenSession: { sessionID in
                         captureStore.openSession(id: sessionID)
@@ -233,6 +244,12 @@ struct CompanionCameraView: View {
                     onStartNewSession: {
                         captureStore.startNewSession()
                         refreshReadiness()
+                    },
+                    onExportSession: {
+                        captureStore.openSessionExport()
+                    },
+                    onReviewSavedTakes: {
+                        isShowingSavedTakes = true
                     },
                     onContinue: {
                         captureStore.continueFromSessionSetup()
@@ -410,6 +427,7 @@ struct CompanionCameraView: View {
                     notationBPM: Double(captureStore.sessionSetup.bpmValue ?? CaptureClickTrackDefaults.defaultTimedBPM),
                     showsNotationBeatGrid: captureStore.sessionSetup.clickEnabled,
                     warningText: recordingWarningText,
+                    keptTakeCount: captureStore.keptTakeCount,
                     onStart: {
                         startTake()
                     },
@@ -419,6 +437,9 @@ struct CompanionCameraView: View {
                     onRecheck: {
                         captureStore.flowState = .systemCheck
                         runSystemCheck()
+                    },
+                    onExportSession: {
+                        captureStore.openSessionExport()
                     },
                     onBack: {
                         dismiss()
@@ -441,15 +462,19 @@ struct CompanionCameraView: View {
                             captureStore.toggleComboTag()
                         },
                         onKeep: {
-                            captureStore.keepTake()
+                            captureStore.keepTake(
+                                watchMotionURL: linkedWatchMotionURL(for: review),
+                                platform: currentPlatformName
+                            )
                         },
                         onKeepAndNext: {
-                            captureStore.keepAndNext()
+                            captureStore.keepAndNext(
+                                watchMotionURL: linkedWatchMotionURL(for: review),
+                                platform: currentPlatformName
+                            )
                         },
                         onRetry: {
-                            captureStore.retryTake { summary in
-                                broadcaster.discardRecording(summary)
-                            }
+                            captureStore.retryTake()
                         },
                         onDiscard: {
                             captureStore.discardTake { summary in
@@ -470,7 +495,7 @@ struct CompanionCameraView: View {
             ) {
                 SessionCompleteView(
                     sessionName: currentSessionPackage?.metadata.sessionName ?? "ScratchLab Session",
-                    takeCount: currentSessionPackage?.takes.count ?? captureStore.keptReviews.count,
+                    takeCount: currentSessionPackage?.takes.count ?? captureStore.keptTakeCount,
                     uploadAvailable: sessionUploadManager.isUploadAvailable,
                     uploadAvailabilityText: sessionUploadManager.availabilityMessage,
                     uploadJob: sessionUploadManager.job(for: currentSessionPackage?.metadata.sessionID),
@@ -482,8 +507,10 @@ struct CompanionCameraView: View {
                             sessionUploadManager.retry(localSessionID: localSessionID)
                         }
                     },
-                    canShare: !captureStore.keptReviews.isEmpty,
+                    canShare: captureStore.canExportKeptSession,
                     isExporting: sessionExportCoordinator.isPreparing,
+                    canRetryExport: sessionExportCoordinator.canRetry,
+                    exportWasCancelled: sessionExportCoordinator.wasCancelled,
                     exportStatusText: sessionExportCoordinator.statusMessage,
                     exportBlockingIssues: sessionExportCoordinator.validationReport?.issues ?? [],
                     exportSummaryText: sessionExportCoordinator.lastResult.map { "\($0.displayName) · \($0.formattedArchiveSize)" },
@@ -494,6 +521,9 @@ struct CompanionCameraView: View {
                         : nil,
                     onShareSession: {
                         shareCurrentSession(currentSessionPackage)
+                    },
+                    onReviewSavedTakes: {
+                        isShowingSavedTakes = true
                     },
                     onNextTake: {
                         captureStore.prepareNextTake()
@@ -988,7 +1018,7 @@ struct CompanionCameraView: View {
         }
         if scratchAudioURL == nil {
             captureStore.reportTakeArtifactIssue(
-                "The take video was saved, but the rendered AHHH audio file is missing. Retake before export."
+                "The take video was saved, but its ScratchLab audio file is missing. Retake before export."
             )
         }
 
@@ -1274,102 +1304,112 @@ struct CompanionCameraView: View {
         )
     }
 
-    private func makeSessionExportPackage() -> SessionExportPackage? {
-        guard !captureStore.keptReviews.isEmpty else { return nil }
+    private func linkedWatchMotionURL(for review: CaptureReview) -> URL? {
+        watchMotionCaptureStore.linkedCapture(
+            sessionID: review.summary.sidecar.sessionID,
+            takeID: review.summary.sidecar.takeID
+        )?.fileURL
+    }
 
-        let sessionName = captureStore.sessionSetup.sessionName(defaultAppName: "ScratchLab")
-        let calibrationData = try? JSONEncoder().encode(captureStore.calibrationProfile)
-        let totalDurationSeconds = captureStore.keptReviews.reduce(0) { $0 + $1.duration }
-        let sidecars = captureStore.keptReviews.map(\.summary.sidecar)
-        guard let seedSidecar = captureStore.keptReviews.first?.summary.sidecar else { return nil }
-        let earliestTakeDate = sidecars.map(\.startedAt).min() ?? captureStore.sessionStartedAt
-        let latestTakeDate = sidecars.map { $0.endedAt ?? $0.startedAt }.max() ?? captureStore.sessionStartedAt
-        let deviceInfo = captureStore.keptReviews.first.map { review in
+    private func makeSessionExportPackage() -> SessionExportPackage? {
+        guard let keptSession = captureStore.activeKeptSession,
+              !keptSession.takes.isEmpty else { return nil }
+
+        // Every stored location is resolved against the container this launch
+        // is actually running in; the ledger never holds an absolute one.
+        let containerLocator = captureStore.keptSessionContainerLocator
+        let sidecarDecoder = JSONDecoder()
+        sidecarDecoder.dateDecodingStrategy = .iso8601
+        let decodedSidecars = keptSession.takes.compactMap { take -> CaptureCore.LocalRecordingSidecar? in
+            guard let data = try? Data(contentsOf: take.sourceSidecarURL(in: containerLocator)) else { return nil }
+            return try? sidecarDecoder.decode(CaptureCore.LocalRecordingSidecar.self, from: data)
+        }
+        let seedSidecar = decodedSidecars.first
+        let totalDurationSeconds = keptSession.takes.reduce(0) { $0 + $1.duration }
+        let config: CaptureSessionConfig = {
+            guard let seedSidecar else { return keptSession.config }
+            let config = SessionExportMetadataResolver.mergedConfig(
+                preferredConfig: keptSession.config,
+                seedSidecar: seedSidecar,
+                sidecars: decodedSidecars,
+                fallbackSessionID: keptSession.sessionID,
+                createdAt: keptSession.config.createdAt,
+                updatedAt: keptSession.config.updatedAt,
+                takeCount: keptSession.takes.count,
+                totalDurationSeconds: totalDurationSeconds
+            )
+            return config
+        }()
+        let deviceInfo = seedSidecar.map { sidecar in
             SessionExportDeviceInfo(
-                sourceDeviceName: review.summary.sidecar.sourceDeviceName,
-                appSurface: review.summary.sidecar.appSurface,
-                cameraPosition: review.summary.sidecar.cameraPosition,
-                audioInputName: review.summary.sidecar.audioInputName,
-                videoDeviceUniqueID: review.summary.sidecar.videoDeviceUniqueID,
-                videoDeviceName: review.summary.sidecar.videoDeviceName,
-                audioDeviceUniqueID: review.summary.sidecar.audioDeviceUniqueID,
-                audioDeviceName: review.summary.sidecar.audioDeviceName
+                sourceDeviceName: sidecar.sourceDeviceName,
+                appSurface: sidecar.appSurface,
+                cameraPosition: sidecar.cameraPosition,
+                audioInputName: sidecar.audioInputName,
+                videoDeviceUniqueID: sidecar.videoDeviceUniqueID,
+                videoDeviceName: sidecar.videoDeviceName,
+                audioDeviceUniqueID: sidecar.audioDeviceUniqueID,
+                audioDeviceName: sidecar.audioDeviceName
             )
         }
 
-        let config = SessionExportMetadataResolver.mergedConfig(
-            preferredConfig: captureStore.sessionSetup.config,
-            seedSidecar: seedSidecar,
-            sidecars: sidecars,
-            fallbackSessionID: seedSidecar.sessionID,
-            createdAt: earliestTakeDate,
-            updatedAt: latestTakeDate,
-            takeCount: captureStore.keptReviews.count,
-            totalDurationSeconds: totalDurationSeconds
-        )
-
         let metadata = SessionExportMetadata(
             config: config,
-            workflow: "guided_capture",
-            platform: currentPlatformName,
-            sessionName: sessionName,
+            workflow: keptSession.workflow,
+            platform: keptSession.platform,
+            sessionName: keptSession.sessionName,
             totalDurationSeconds: totalDurationSeconds,
-            deckProfile: captureStore.sessionDraft.deckProfile.rawValue,
-            cameraProfile: captureStore.sessionDraft.cameraProfile.rawValue,
-            watchWrist: captureStore.sessionDraft.watchWrist.rawValue,
+            deckProfile: keptSession.deckProfileRawValue,
+            cameraProfile: keptSession.cameraProfileRawValue,
+            watchWrist: keptSession.watchWristRawValue,
             deviceInfo: deviceInfo
         )
 
-        let takes = captureStore.keptReviews.map { review in
+        let takes = keptSession.takes.map { keptTake in
             let linkedWatchCapture = watchMotionCaptureStore.linkedCapture(
-                sessionID: review.summary.sidecar.sessionID,
-                takeID: review.summary.sidecar.takeID
+                sessionID: keptTake.sessionID,
+                takeID: keptTake.takeID
             )
-            // Resolve from the take's persisted sidecar notation — the same
-            // input `SessionExportCoordinator`'s recovery path uses — so a
-            // live-exported take and a recovered one resolve identically.
-            // Controller platter evidence counts here even with no Watch.
-            let exportMotionEvidence = CaptureMotionEvidenceResolver.resolve(
-                detectedNotation: review.summary.sidecar.detectedNotation,
-                watchCaptureLinked: linkedWatchCapture != nil
-            )
-            // Prefer the take's own live-rendered scratch capture; if it
-            // never started or failed, `audioArtifactURL: nil` falls back to
-            // the existing camera-audio-derived source exactly as before.
-            let scratchAudioURL: URL? = {
-                guard let url = review.scratchAudioURL,
-                      FileManager.default.fileExists(atPath: url.path) else { return nil }
-                return url
+            let sourceWatchMotionURL = keptTake.sourceWatchMotionURL(in: containerLocator)
+            let restoredWatchSession: WatchMotionCaptureSession? = {
+                if let linkedWatchCapture { return linkedWatchCapture.session }
+                guard let sourceWatchMotionURL,
+                      let data = try? Data(contentsOf: sourceWatchMotionURL) else { return nil }
+                return try? WatchMotionCaptureCodec.decoder.decode(
+                    WatchMotionCaptureSession.self,
+                    from: data
+                )
             }()
             return SessionExportTake(
-                takeID: review.summary.sidecar.takeID,
-                takeNumber: review.summary.sidecar.appLocalTakeNumber,
-                bpm: review.summary.sidecar.sessionConfig?.bpm ?? config.bpm ?? 0,
-                mediaURL: review.summary.mediaURL,
-                audioArtifactURL: scratchAudioURL,
-                sidecarURL: review.summary.sidecarURL,
-                watchCaptureSession: linkedWatchCapture?.session,
-                drillName: review.drillName,
-                duration: review.duration,
-                quality: review.quality?.title,
-                comboTagged: review.isComboTagged,
-                audioPresent: review.audioPresent,
-                motionPresent: exportMotionEvidence.motionPresent,
-                syncStatus: review.syncStatus,
-                recordingStatus: review.summary.sidecar.recordingStatus,
-                verbalSlateUsed: nil,
-                syncClapUsed: nil,
-                note: review.operatorMessage,
-                captureTiming: review.summary.sidecar.captureTiming,
-                motionSources: exportMotionEvidence.motionSources,
-                faderMappingSource: exportMotionEvidence.faderMappingSource
+                takeID: keptTake.takeID,
+                takeNumber: keptTake.takeNumber,
+                bpm: keptTake.bpm,
+                mediaURL: keptTake.sourceMediaURL(in: containerLocator),
+                audioArtifactURL: keptTake.sourceAudioURL(in: containerLocator),
+                sidecarURL: keptTake.sourceSidecarURL(in: containerLocator),
+                watchCaptureSession: restoredWatchSession,
+                drillName: keptTake.drillName,
+                duration: keptTake.duration,
+                quality: keptTake.quality,
+                comboTagged: keptTake.comboTagged,
+                audioPresent: keptTake.audioPresent,
+                motionPresent: keptTake.motionPresent,
+                syncStatus: keptTake.syncStatus,
+                recordingStatus: keptTake.recordingStatus,
+                verbalSlateUsed: keptTake.verbalSlateUsed,
+                syncClapUsed: keptTake.syncClapUsed,
+                note: keptTake.note,
+                captureTiming: keptTake.captureTiming,
+                motionSources: keptTake.motionSources,
+                faderMappingSource: keptTake.faderMappingSource,
+                sourceWatchMotionURL: sourceWatchMotionURL
             )
         }
 
         return SessionExportPackage(
             metadata: metadata,
             takes: takes,
-            calibrationData: calibrationData
+            calibrationData: keptSession.calibrationData
         )
     }
 
@@ -1791,6 +1831,7 @@ private final class GuidedCaptureStore: ObservableObject {
     @Published var motionSkipped = false
     @Published var showDrillChangeConfirmation = false
     @Published private(set) var keptReviews: [CaptureReview] = []
+    @Published private(set) var keptSessionPersistenceError: String?
 
     let sessionSetup = SessionSetupViewModel(surface: .iosCompanion)
 
@@ -1801,6 +1842,7 @@ private final class GuidedCaptureStore: ObservableObject {
     private let sessionOpenHistoryStore = SessionOpenHistoryStore(
         defaultsKey: "guidedCapture.sessionLastOpenedAt"
     )
+    private let keptSessionStore: GuidedCaptureKeptSessionStore?
     private var didBootstrap = false
     private var needsNewSessionIdentity = false
     private var cancellables: Set<AnyCancellable> = []
@@ -1820,10 +1862,21 @@ private final class GuidedCaptureStore: ObservableObject {
 
     init(
         finalizationBudget: CaptureFinalizationBudget = .default,
-        finalizationClock: CaptureFinalizationClock = .system
+        finalizationClock: CaptureFinalizationClock = .system,
+        keptSessionStore: GuidedCaptureKeptSessionStore? = nil
     ) {
         self.finalization = CaptureFinalizationMachine(budget: finalizationBudget)
         self.finalizationClock = finalizationClock
+        if let keptSessionStore {
+            self.keptSessionStore = keptSessionStore
+        } else {
+            do {
+                self.keptSessionStore = try GuidedCaptureKeptSessionStore()
+            } catch {
+                self.keptSessionStore = nil
+                self.keptSessionPersistenceError = error.localizedDescription
+            }
+        }
         sessionSetup.objectWillChange
             .sink { [weak self] _ in
                 self?.objectWillChange.send()
@@ -1835,6 +1888,31 @@ private final class GuidedCaptureStore: ObservableObject {
                 self?.objectWillChange.send()
             }
             .store(in: &cancellables)
+
+        self.keptSessionStore?.objectWillChange
+            .sink { [weak self] _ in
+                self?.objectWillChange.send()
+            }
+            .store(in: &cancellables)
+    }
+
+    var activeKeptSession: GuidedCaptureKeptSession? {
+        keptSessionStore?.session(id: sessionSetup.config.sessionID)
+    }
+
+    /// The container roots kept-take locations resolve against. Falls back to
+    /// the live container when the ledger itself could not be opened, so the
+    /// export path still names real paths in its failure messages.
+    var keptSessionContainerLocator: CaptureContainerLocator {
+        keptSessionStore?.containerLocator ?? .current()
+    }
+
+    var keptTakeCount: Int {
+        activeKeptSession?.takes.count ?? 0
+    }
+
+    var canExportKeptSession: Bool {
+        keptTakeCount > 0
     }
 
     var canBeginCapture: Bool {
@@ -1858,9 +1936,12 @@ private final class GuidedCaptureStore: ObservableObject {
     }
 
     var sessionListPresentation: SessionListPresentationModel<CaptureSessionConfig> {
-        var sessions = [sessionSetup.config]
+        var sessions = keptSessionStore?.sessions.map(\.config) ?? []
+        if !sessions.contains(where: { $0.sessionID == sessionSetup.config.sessionID }) {
+            sessions.append(sessionSetup.config)
+        }
         if let persistedSessionDraft,
-           persistedSessionDraft.config.sessionID != sessionSetup.config.sessionID {
+           !sessions.contains(where: { $0.sessionID == persistedSessionDraft.config.sessionID }) {
             sessions.append(persistedSessionDraft.config)
         }
 
@@ -1881,6 +1962,10 @@ private final class GuidedCaptureStore: ObservableObject {
             sessionSetup.applyPersistedConfig(persistedDraft.config)
             hasStoredSessionDefaults = true
             sessionOpenHistoryStore.updateLastOpenedAt(sessionID: persistedDraft.config.sessionID)
+        } else if let mostRecentKeptSession = keptSessionStore?.sessions.first {
+            applyKeptSession(mostRecentKeptSession)
+            hasStoredSessionDefaults = true
+            sessionOpenHistoryStore.updateLastOpenedAt(sessionID: mostRecentKeptSession.sessionID)
         } else {
             sessionSetup.performerName = performerName
             sessionSetup.scratchTypeID = defaultDrillID
@@ -1891,16 +1976,22 @@ private final class GuidedCaptureStore: ObservableObject {
             defaultScratchType: CaptureSessionScratchType(rawValue: defaultDrillID) ?? .babyScratch
         )
 
-        if let storedCalibration = loadCalibration() {
+        if activeKeptSession == nil, let storedCalibration = loadCalibration() {
             calibrationProfile = storedCalibration
             hasStoredCalibration = true
             isCalibrationConfirmed = defaults.bool(forKey: calibrationConfirmedKey)
-        } else {
+        } else if activeKeptSession == nil {
             calibrationProfile = CaptureCalibrationProfile.defaultProfile(for: sessionDraft.deckProfile)
         }
 
         sessionDraft.config = sessionSetup.config
         flowState = .sessionSetup
+        if let keptSessionPersistenceError {
+            showBanner(
+                message: "Saved sessions unavailable: \(keptSessionPersistenceError)",
+                tone: .warning
+            )
+        }
     }
 
     func openSession(id: String) {
@@ -1909,14 +2000,18 @@ private final class GuidedCaptureStore: ObservableObject {
             return
         }
 
-        guard let persistedSessionDraft,
-              persistedSessionDraft.config.sessionID == id else {
-            return
-        }
+        if let keptSession = keptSessionStore?.session(id: id) {
+            applyKeptSession(keptSession)
+        } else {
+            guard let persistedSessionDraft,
+                  persistedSessionDraft.config.sessionID == id else {
+                return
+            }
 
-        sessionDraft = persistedSessionDraft
-        sessionSetup.applyPersistedConfig(persistedSessionDraft.config)
-        sessionDraft.config = sessionSetup.config
+            sessionDraft = persistedSessionDraft
+            sessionSetup.applyPersistedConfig(persistedSessionDraft.config)
+            sessionDraft.config = sessionSetup.config
+        }
         needsNewSessionIdentity = false
         sessionOpenHistoryStore.updateLastOpenedAt(sessionID: id)
     }
@@ -2216,6 +2311,24 @@ private final class GuidedCaptureStore: ObservableObject {
             applyAudioPresence(audioPresent, to: &keptReview)
             keptReviews[index] = keptReview
         }
+
+        if keptSessionStore?.sessions.contains(where: {
+            $0.takes.contains { $0.recordingID == recordingID }
+        }) == true {
+            do {
+                try keptSessionStore?.updateAudioPresence(
+                    audioPresent,
+                    forRecordingID: recordingID
+                )
+                keptSessionPersistenceError = nil
+            } catch {
+                keptSessionPersistenceError = error.localizedDescription
+                showBanner(
+                    message: "Saved take metadata needs retry: \(error.localizedDescription)",
+                    tone: .warning
+                )
+            }
+        }
     }
 
     private func applyAudioPresence(_ audioPresent: Bool, to review: inout CaptureReview) {
@@ -2264,14 +2377,20 @@ private final class GuidedCaptureStore: ObservableObject {
         self.review = review
     }
 
-    func keepTake() {
-        appendCurrentReviewIfNeeded()
+    func keepTake(watchMotionURL: URL?, platform: String) {
+        guard recordCurrentReviewAsKept(
+            watchMotionURL: watchMotionURL,
+            platform: platform
+        ) else { return }
         showBanner(message: "Take \(formattedCurrentTakeNumber) saved", tone: .success)
         flowState = .sessionComplete
     }
 
-    func keepAndNext() {
-        appendCurrentReviewIfNeeded()
+    func keepAndNext(watchMotionURL: URL?, platform: String) {
+        guard recordCurrentReviewAsKept(
+            watchMotionURL: watchMotionURL,
+            platform: platform
+        ) else { return }
         showBanner(message: "Take \(formattedCurrentTakeNumber) saved", tone: .success)
         review = nil
         activeTake = nil
@@ -2288,13 +2407,10 @@ private final class GuidedCaptureStore: ObservableObject {
         flowState = .ready
     }
 
-    func retryTake(onDiscard: (CompanionCameraBroadcaster.RecordingSummary) -> Void) {
-        if let summary = review?.summary {
-            onDiscard(summary)
-        }
+    func retryTake() {
         review = nil
         activeTake = nil
-        showBanner(message: "Ready for another pass", tone: .warning)
+        showBanner(message: "Previous take preserved · ready for another pass", tone: .warning)
         flowState = .ready
     }
 
@@ -2302,6 +2418,14 @@ private final class GuidedCaptureStore: ObservableObject {
         review = nil
         activeTake = nil
         flowState = .ready
+    }
+
+    func openSessionExport() {
+        guard canExportKeptSession else {
+            showBanner(message: "Keep at least one take before exporting", tone: .warning)
+            return
+        }
+        flowState = .sessionComplete
     }
 
     func requestDrillChange() {
@@ -2367,18 +2491,120 @@ private final class GuidedCaptureStore: ObservableObject {
         return try? JSONDecoder().decode(CaptureCalibrationProfile.self, from: data)
     }
 
-    private func appendCurrentReviewIfNeeded() {
-        guard let review else { return }
-        guard !keptReviews.contains(where: { $0.summary.id == review.summary.id }) else { return }
-        keptReviews.append(review)
-        let updatedAt = review.summary.sidecar.endedAt ?? review.summary.sidecar.startedAt
-        let totalDurationSeconds = keptReviews.reduce(0) { $0 + $1.duration }
-        sessionSetup.applyCapturedTakeMetrics(
-            takeCount: keptReviews.count,
-            totalDurationSeconds: totalDurationSeconds,
-            updatedAt: updatedAt
+    private func applyKeptSession(_ keptSession: GuidedCaptureKeptSession) {
+        let deckProfile = CaptureDeckProfile(rawValue: keptSession.deckProfileRawValue) ?? .battle
+        let cameraProfile = CaptureCameraProfile(rawValue: keptSession.cameraProfileRawValue) ?? .rear
+        let watchWrist = CaptureWrist(rawValue: keptSession.watchWristRawValue) ?? .right
+        let restoredDraft = CaptureSessionDraft(
+            config: keptSession.config,
+            deckProfile: deckProfile,
+            cameraProfile: cameraProfile,
+            watchWrist: watchWrist
         )
+        sessionDraft = restoredDraft
+        persistedSessionDraft = restoredDraft
+        sessionSetup.applyPersistedConfig(keptSession.config)
         sessionDraft.config = sessionSetup.config
+        keptReviews.removeAll()
+
+        if let calibrationData = keptSession.calibrationData,
+           let restoredCalibration = try? JSONDecoder().decode(
+               CaptureCalibrationProfile.self,
+               from: calibrationData
+           ) {
+            calibrationProfile = restoredCalibration
+            hasStoredCalibration = true
+            isCalibrationConfirmed = true
+        } else {
+            calibrationProfile = CaptureCalibrationProfile.defaultProfile(for: deckProfile)
+            hasStoredCalibration = false
+            isCalibrationConfirmed = false
+        }
+    }
+
+    @discardableResult
+    private func recordCurrentReviewAsKept(
+        watchMotionURL: URL?,
+        platform: String
+    ) -> Bool {
+        guard let review else { return false }
+        guard let keptSessionStore else {
+            let message = keptSessionPersistenceError ?? "The kept-session ledger is unavailable."
+            showBanner(message: "Take not saved: \(message)", tone: .warning)
+            return false
+        }
+
+        let existingTakes = keptSessionStore
+            .session(id: review.summary.sidecar.sessionID)?
+            .takes ?? []
+        let isAlreadyKept = existingTakes.contains { $0.takeID == review.summary.sidecar.takeID }
+        let resultingTakeCount = existingTakes.count + (isAlreadyKept ? 0 : 1)
+        let resultingDuration = existingTakes.reduce(0) { $0 + $1.duration }
+            + (isAlreadyKept ? 0 : review.duration)
+        let updatedAt = review.summary.sidecar.endedAt ?? review.summary.sidecar.startedAt
+
+        var updatedConfig = sessionSetup.config
+        updatedConfig.takeCount = resultingTakeCount
+        updatedConfig.takeDurationSeconds = resultingDuration
+        updatedConfig.updatedAt = max(updatedConfig.updatedAt, updatedAt)
+
+        let calibrationData = try? JSONEncoder().encode(calibrationProfile)
+        let keptSession = GuidedCaptureKeptSession(
+            sessionID: review.summary.sidecar.sessionID,
+            config: updatedConfig,
+            deckProfileRawValue: sessionDraft.deckProfile.rawValue,
+            cameraProfileRawValue: sessionDraft.cameraProfile.rawValue,
+            watchWristRawValue: sessionDraft.watchWrist.rawValue,
+            platform: platform,
+            sessionName: sessionSetup.sessionName(defaultAppName: "ScratchLab"),
+            calibrationData: calibrationData
+        )
+        let keptTake = GuidedCaptureKeptTake(
+            sessionID: review.summary.sidecar.sessionID,
+            takeID: review.summary.sidecar.takeID,
+            takeNumber: review.summary.sidecar.appLocalTakeNumber,
+            bpm: review.summary.sidecar.sessionConfig?.bpm ?? updatedConfig.bpm ?? 0,
+            sourceMediaURL: review.summary.mediaURL,
+            sourceSidecarURL: review.summary.sidecarURL,
+            sourceAudioURL: review.scratchAudioURL,
+            sourceWatchMotionURL: watchMotionURL,
+            drillName: review.drillName,
+            duration: review.duration,
+            quality: review.quality?.title,
+            comboTagged: review.isComboTagged,
+            audioPresent: review.audioPresent,
+            motionPresent: review.motionPresent,
+            syncStatus: review.syncStatus,
+            recordingStatus: review.summary.sidecar.recordingStatus,
+            verbalSlateUsed: nil,
+            syncClapUsed: nil,
+            note: review.operatorMessage,
+            captureTiming: review.summary.sidecar.captureTiming,
+            motionSources: review.motionEvidence.motionSources,
+            faderMappingSource: review.motionEvidence.faderMappingSource,
+            containerLocator: keptSessionStore.containerLocator
+        )
+
+        do {
+            let persistedSession = try keptSessionStore.keep(keptTake, in: keptSession)
+            keptSessionPersistenceError = nil
+            if !keptReviews.contains(where: { $0.summary.id == review.summary.id }) {
+                keptReviews.append(review)
+            }
+            sessionSetup.applyCapturedTakeMetrics(
+                takeCount: persistedSession.takes.count,
+                totalDurationSeconds: persistedSession.takes.reduce(0) { $0 + $1.duration },
+                updatedAt: persistedSession.updatedAt ?? updatedAt
+            )
+            sessionDraft.config = sessionSetup.config
+            persistDraft()
+            sessionOpenHistoryStore.updateLastOpenedAt(sessionID: persistedSession.sessionID)
+            return true
+        } catch {
+            keptSessionPersistenceError = error.localizedDescription
+            showBanner(message: "Take not saved: \(error.localizedDescription)", tone: .warning)
+            return false
+        }
     }
 
     func prepareSessionForRecordingIfNeeded() {
@@ -2473,9 +2699,12 @@ private struct SessionSetupView: View {
 
     let scratches: [Scratch]
     let sessionListPresentation: SessionListPresentationModel<CaptureSessionConfig>
+    let keptTakeCount: Int
     let validationMessage: String?
     let onOpenSession: (String) -> Void
     let onStartNewSession: () -> Void
+    let onExportSession: () -> Void
+    let onReviewSavedTakes: () -> Void
     let onContinue: () -> Void
 
     @State private var activePicker: ActivePicker?
@@ -2573,6 +2802,17 @@ private struct SessionSetupView: View {
                                 detail: sessionDetail(for: activeSession.session),
                                 actionLabel: nil
                             )
+
+                            if keptTakeCount > 0 {
+                                CaptureSecondaryButton(
+                                    title: "Review (keptTakeCount) Saved Take\(keptTakeCount == 1 ? "" : "s")",
+                                    action: onReviewSavedTakes
+                                )
+                                CaptureSecondaryButton(
+                                    title: "Export / Share \(keptTakeCount) Kept Take\(keptTakeCount == 1 ? "" : "s")",
+                                    action: onExportSession
+                                )
+                            }
                         }
                     }
                 }
@@ -2890,6 +3130,11 @@ private struct SessionSetupView: View {
                     isShowingSessionBrowser = true
                 }
                 .scratchLabSecondaryButton(fillsWidth: true)
+
+                if keptTakeCount > 0 {
+                    Button("Review Saved Takes", action: onReviewSavedTakes)
+                        .scratchLabSecondaryButton(fillsWidth: true)
+                }
             }
         }
     }
@@ -2923,6 +3168,15 @@ private struct SessionSetupView: View {
                 isShowingSessionBrowser = true
             }
             .scratchLabTertiaryButton()
+
+            if keptTakeCount > 0 {
+                Button("Review \(keptTakeCount)", action: onReviewSavedTakes)
+                    .scratchLabSecondaryButton(fillsWidth: false)
+                    .accessibilityLabel("Review \(keptTakeCount) saved take\(keptTakeCount == 1 ? "" : "s")")
+                Button("Export \(keptTakeCount)", action: onExportSession)
+                    .scratchLabSecondaryButton(fillsWidth: false)
+                    .accessibilityLabel("Export or share \(keptTakeCount) kept take\(keptTakeCount == 1 ? "" : "s")")
+            }
 
             Button("New", action: onStartNewSession)
                 .scratchLabTertiaryButton()
@@ -4326,9 +4580,11 @@ private struct CaptureHubView: View {
     let notationBPM: Double
     let showsNotationBeatGrid: Bool
     let warningText: String?
+    let keptTakeCount: Int
     let onStart: () -> Void
     let onStop: () -> Void
     let onRecheck: () -> Void
+    let onExportSession: () -> Void
     let onBack: () -> Void
     let onHardwareSetup: () -> Void
 
@@ -4359,6 +4615,13 @@ private struct CaptureHubView: View {
                             }
 
                             CaptureSecondaryButton(title: "Recheck Setup", action: onRecheck)
+
+                            if keptTakeCount > 0 {
+                                CaptureSecondaryButton(
+                                    title: "Export / Share \(keptTakeCount) Kept Take\(keptTakeCount == 1 ? "" : "s")",
+                                    action: onExportSession
+                                )
+                            }
                         }
                     }
                     .frame(maxWidth: .infinity, alignment: .leading)
@@ -4405,7 +4668,8 @@ private struct CaptureHubView: View {
                 bpm: notationBPM,
                 showsBeatGrid: showsNotationBeatGrid
             )
-            .padding(.horizontal, max(ScratchLabDesign.Spacing.lg, proxy.safeAreaInsets.leading + 8))
+            .padding(.leading, max(ScratchLabDesign.Spacing.lg, proxy.safeAreaInsets.leading + 8))
+            .padding(.trailing, max(ScratchLabDesign.Spacing.lg, proxy.safeAreaInsets.trailing + 8))
             .padding(.top, max(ScratchLabDesign.Spacing.sm, proxy.safeAreaInsets.top + 8) + 96)
             .padding(.bottom, max(ScratchLabDesign.Spacing.sm, proxy.safeAreaInsets.bottom + 8) + 108)
             .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -4413,7 +4677,8 @@ private struct CaptureHubView: View {
 
             SamplePositionWaveformView()
                 .frame(height: 108)
-                .padding(.horizontal, max(ScratchLabDesign.Spacing.lg, proxy.safeAreaInsets.leading + 8))
+                .padding(.leading, max(ScratchLabDesign.Spacing.lg, proxy.safeAreaInsets.leading + 8))
+                .padding(.trailing, max(ScratchLabDesign.Spacing.lg, proxy.safeAreaInsets.trailing + 8))
                 .padding(.bottom, max(ScratchLabDesign.Spacing.sm, proxy.safeAreaInsets.bottom + 8))
                 .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottom)
 
@@ -4422,33 +4687,9 @@ private struct CaptureHubView: View {
             }
 
             VStack(spacing: ScratchLabDesign.Spacing.sm) {
-                HStack(alignment: .center, spacing: ScratchLabDesign.Spacing.sm) {
-                    landscapeNavigationButton(
-                        title: "Back",
-                        systemImage: "chevron.left",
-                        action: onBack
-                    )
-
-                    landscapeSessionSummary
-                        .frame(maxWidth: 360, alignment: .leading)
-
-                    Spacer(minLength: ScratchLabDesign.Spacing.sm)
-
-                    if flowState == .ready {
-                        Button("Recheck", action: onRecheck)
-                            .buttonStyle(.bordered)
-                            .buttonBorderShape(.capsule)
-                            .tint(ScratchLabDesign.Sem.textPrimary)
-                    }
-
-                    primaryActionButton
-                        .frame(width: 164)
-
-                    landscapeNavigationButton(
-                        title: "Hardware Setup",
-                        systemImage: "slider.horizontal.3",
-                        action: onHardwareSetup
-                    )
+                ViewThatFits(in: .horizontal) {
+                    landscapeToolbar(compact: false)
+                    landscapeToolbar(compact: true)
                 }
 
                 if flowState == .recording || flowState == .saving {
@@ -4465,12 +4706,66 @@ private struct CaptureHubView: View {
                     }
                 }
             }
-            .padding(.horizontal, max(ScratchLabDesign.Spacing.lg, proxy.safeAreaInsets.leading + 8))
+            .padding(.leading, max(ScratchLabDesign.Spacing.lg, proxy.safeAreaInsets.leading + 8))
+            .padding(.trailing, max(ScratchLabDesign.Spacing.lg, proxy.safeAreaInsets.trailing + 8))
             .padding(.top, max(ScratchLabDesign.Spacing.sm, proxy.safeAreaInsets.top + 8))
             .frame(maxHeight: .infinity, alignment: .top)
         }
         .frame(width: proxy.size.width, height: proxy.size.height)
         .ignoresSafeArea()
+    }
+
+    private func landscapeToolbar(compact: Bool) -> some View {
+        HStack(alignment: .center, spacing: ScratchLabDesign.Spacing.sm) {
+            landscapeNavigationButton(
+                title: "Back",
+                systemImage: "chevron.left",
+                action: onBack
+            )
+
+            if compact {
+                Text(workspaceTitle)
+                    .font(ScratchLabDesign.Typo.controlValue)
+                    .foregroundStyle(ScratchLabDesign.Sem.textPrimary)
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.8)
+            } else {
+                landscapeSessionSummary
+                    .frame(maxWidth: 360, alignment: .leading)
+            }
+
+            Spacer(minLength: ScratchLabDesign.Spacing.sm)
+
+            if flowState == .ready {
+                if keptTakeCount > 0 {
+                    Button("Export \(keptTakeCount)", action: onExportSession)
+                        .buttonStyle(.borderedProminent)
+                        .buttonBorderShape(.capsule)
+                }
+
+                if compact {
+                    landscapeNavigationButton(
+                        title: "Recheck Setup",
+                        systemImage: "arrow.clockwise",
+                        action: onRecheck
+                    )
+                } else {
+                    Button("Recheck", action: onRecheck)
+                        .buttonStyle(.bordered)
+                        .buttonBorderShape(.capsule)
+                        .tint(ScratchLabDesign.Sem.textPrimary)
+                }
+            }
+
+            primaryActionButton
+                .frame(width: compact ? 148 : 164)
+
+            landscapeNavigationButton(
+                title: "Hardware Setup",
+                systemImage: "slider.horizontal.3",
+                action: onHardwareSetup
+            )
+        }
     }
 
     private func landscapeNavigationButton(
@@ -4898,7 +5193,8 @@ private struct CaptureCameraMonitorView: View {
                 bpm: notationBPM,
                 showsBeatGrid: showsNotationBeatGrid
             )
-            .padding(.horizontal, max(ScratchLabDesign.Spacing.lg, proxy.safeAreaInsets.leading + 8))
+            .padding(.leading, max(ScratchLabDesign.Spacing.lg, proxy.safeAreaInsets.leading + 8))
+            .padding(.trailing, max(ScratchLabDesign.Spacing.lg, proxy.safeAreaInsets.trailing + 8))
             .padding(.top, max(ScratchLabDesign.Spacing.sm, proxy.safeAreaInsets.top + 8) + 52)
             .padding(.bottom, max(ScratchLabDesign.Spacing.sm, proxy.safeAreaInsets.bottom + 8) + 108)
             .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -4906,7 +5202,8 @@ private struct CaptureCameraMonitorView: View {
 
             SamplePositionWaveformView()
                 .frame(height: 108)
-                .padding(.horizontal, max(ScratchLabDesign.Spacing.lg, proxy.safeAreaInsets.leading + 8))
+                .padding(.leading, max(ScratchLabDesign.Spacing.lg, proxy.safeAreaInsets.leading + 8))
+                .padding(.trailing, max(ScratchLabDesign.Spacing.lg, proxy.safeAreaInsets.trailing + 8))
                 .padding(.bottom, max(ScratchLabDesign.Spacing.sm, proxy.safeAreaInsets.bottom + 8))
                 .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottom)
 
@@ -4931,7 +5228,8 @@ private struct CaptureCameraMonitorView: View {
 
                 landscapeCaptureControl
             }
-            .padding(.horizontal, max(ScratchLabDesign.Spacing.lg, proxy.safeAreaInsets.leading + 8))
+            .padding(.leading, max(ScratchLabDesign.Spacing.lg, proxy.safeAreaInsets.leading + 8))
+            .padding(.trailing, max(ScratchLabDesign.Spacing.lg, proxy.safeAreaInsets.trailing + 8))
             .padding(.top, max(ScratchLabDesign.Spacing.sm, proxy.safeAreaInsets.top + 8))
             .frame(maxHeight: .infinity, alignment: .top)
         }
@@ -5302,48 +5600,52 @@ private struct TakeReviewView: View {
 
                 landscapeDetails
                     .frame(width: min(270, proxy.size.width * 0.32))
+                    .frame(maxHeight: .infinity, alignment: .top)
 
                 landscapeActions
                     .frame(width: min(180, proxy.size.width * 0.22))
             }
+            .frame(maxHeight: .infinity, alignment: .top)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
     }
 
     private var landscapeDetails: some View {
-        VStack(alignment: .leading, spacing: ScratchLabDesign.Spacing.sm) {
-            LazyVGrid(
-                columns: [GridItem(.flexible()), GridItem(.flexible())],
-                alignment: .leading,
-                spacing: ScratchLabDesign.Spacing.sm
-            ) {
-                CaptureReviewDetailBlock(label: "Take", value: String(review.summary.sidecar.takeID.prefix(8)))
-                CaptureReviewDetailBlock(label: "Scratch", value: review.drillName)
-                CaptureReviewDetailBlock(label: "Duration", value: formatDuration(review.duration))
-                CaptureReviewDetailBlock(label: "Sync", value: review.syncStatus)
-                ForEach(review.evidenceRows) { row in
-                    CaptureReviewDetailBlock(label: row.label, value: row.value)
-                }
-            }
-
-            Divider().overlay(ScratchLabDesign.Border.default)
-
-            LazyVGrid(columns: qualityColumns, spacing: ScratchLabDesign.Spacing.xs) {
-                ForEach(CaptureQualityTag.allCases) { quality in
-                    Chip(quality.title, isSelected: review.quality == quality) {
-                        onSelectQuality(quality)
+        ScrollView(.vertical, showsIndicators: true) {
+            VStack(alignment: .leading, spacing: ScratchLabDesign.Spacing.sm) {
+                LazyVGrid(
+                    columns: [GridItem(.flexible()), GridItem(.flexible())],
+                    alignment: .leading,
+                    spacing: ScratchLabDesign.Spacing.sm
+                ) {
+                    CaptureReviewDetailBlock(label: "Take", value: String(review.summary.sidecar.takeID.prefix(8)))
+                    CaptureReviewDetailBlock(label: "Scratch", value: review.drillName)
+                    CaptureReviewDetailBlock(label: "Duration", value: formatDuration(review.duration))
+                    CaptureReviewDetailBlock(label: "Sync", value: review.syncStatus)
+                    ForEach(review.evidenceRows) { row in
+                        CaptureReviewDetailBlock(label: row.label, value: row.value)
                     }
-                    .frame(maxWidth: .infinity)
+                }
+
+                Divider().overlay(ScratchLabDesign.Border.default)
+
+                LazyVGrid(columns: qualityColumns, spacing: ScratchLabDesign.Spacing.xs) {
+                    ForEach(CaptureQualityTag.allCases) { quality in
+                        Chip(quality.title, isSelected: review.quality == quality) {
+                            onSelectQuality(quality)
+                        }
+                        .frame(maxWidth: .infinity)
+                    }
+                }
+
+                Button(action: onToggleCombo) {
+                    Label("Combo", systemImage: review.isComboTagged ? "checkmark.square.fill" : "square")
+                        .font(ScratchLabDesign.Typo.controlValue)
+                        .foregroundStyle(ScratchLabDesign.Sem.textPrimary)
                 }
             }
-
-            Button(action: onToggleCombo) {
-                Label("Combo", systemImage: review.isComboTagged ? "checkmark.square.fill" : "square")
-                    .font(ScratchLabDesign.Typo.controlValue)
-                    .foregroundStyle(ScratchLabDesign.Sem.textPrimary)
-            }
+            .padding(12)
         }
-        .padding(12)
         .background(
             ScratchLabDesign.Surface.surface,
             in: RoundedRectangle(cornerRadius: ScratchLabDesign.Radius.control, style: .continuous)
@@ -5517,6 +5819,8 @@ private struct SessionCompleteView: View {
     let onRetryUpload: () -> Void
     let canShare: Bool
     let isExporting: Bool
+    let canRetryExport: Bool
+    let exportWasCancelled: Bool
     let exportStatusText: String?
     let exportBlockingIssues: [String]
     let exportSummaryText: String?
@@ -5524,6 +5828,7 @@ private struct SessionCompleteView: View {
     @Binding var exportMixMode: ExportMixMode
     let timingWarningText: String?
     let onShareSession: () -> Void
+    let onReviewSavedTakes: () -> Void
     let onNextTake: () -> Void
     let onChangeDrill: () -> Void
     let onRecheckSetup: () -> Void
@@ -5673,7 +5978,7 @@ private struct SessionCompleteView: View {
                                 .fixedSize(horizontal: false, vertical: true)
                         }
 
-                        Button(isExporting ? "Preparing…" : "Share Session", action: onShareSession)
+                        Button(exportActionTitle, action: onShareSession)
                             .scratchLabPrimaryButton(fillsWidth: true)
                             .disabled(isExporting || !canShare)
                             .accessibilityHint(canShare
@@ -5681,6 +5986,12 @@ private struct SessionCompleteView: View {
                                 : "Keep at least one take before sharing")
                     }
                 }
+
+                CaptureSecondaryButton(
+                    title: "Review Saved Take\(takeCount == 1 ? "" : "s")",
+                    action: onReviewSavedTakes
+                )
+                .disabled(takeCount == 0)
 
                 Button("Next Take", action: onNextTake)
                     .scratchLabPrimaryButton(fillsWidth: true)
@@ -5744,6 +6055,9 @@ private struct SessionCompleteView: View {
 
             Button("Next Take", action: onNextTake)
                 .scratchLabPrimaryButton(fillsWidth: true)
+            Button("Review Saved Takes", action: onReviewSavedTakes)
+                .scratchLabSecondaryButton(fillsWidth: true)
+                .disabled(takeCount == 0)
             Button("Change Scratch", action: onChangeDrill)
                 .scratchLabSecondaryButton(fillsWidth: true)
             Button("Recheck Setup", action: onRecheckSetup)
@@ -5875,7 +6189,7 @@ private struct SessionCompleteView: View {
 
             Spacer(minLength: 0)
 
-            Button(isExporting ? "Preparing…" : "Share Session", action: onShareSession)
+            Button(exportActionTitle, action: onShareSession)
                 .scratchLabPrimaryButton(fillsWidth: true)
                 .disabled(isExporting || !canShare)
                 .accessibilityHint(canShare
@@ -5892,6 +6206,13 @@ private struct SessionCompleteView: View {
             RoundedRectangle(cornerRadius: ScratchLabDesign.Radius.control, style: .continuous)
                 .stroke(ScratchLabDesign.Border.default, lineWidth: 1)
         }
+    }
+
+    private var exportActionTitle: String {
+        if isExporting { return "Preparing…" }
+        if canRetryExport { return "Retry Export" }
+        if exportWasCancelled { return "Share Again" }
+        return "Share Session"
     }
 }
 
@@ -6366,6 +6687,185 @@ private struct CaptureDetailRow: View {
                 .foregroundStyle(ScratchLabDesign.Sem.textPrimary)
                 .multilineTextAlignment(.trailing)
         }
+    }
+}
+
+/// Production saved-take browser. It is backed only by the active durable
+/// ledger session, so navigating here cannot invent, detach, or rediscover
+/// captures outside the operator's Keep decisions.
+private struct SavedTakesView: View {
+    let session: GuidedCaptureKeptSession
+    let containerLocator: CaptureContainerLocator
+
+    @Environment(\.dismiss) private var dismiss
+
+    var body: some View {
+        NavigationStack {
+            List(session.takes) { take in
+                NavigationLink {
+                    SavedTakeDetailLoaderView(
+                        take: take,
+                        containerLocator: containerLocator
+                    )
+                } label: {
+                    VStack(alignment: .leading, spacing: 5) {
+                        Text("Take \(take.takeNumber)")
+                            .font(ScratchLabDesign.Typo.controlValue)
+                        Text("\(take.drillName ?? session.config.scratchType?.title ?? "Unknown Scratch") · \(take.bpm) BPM · \(formatDuration(take.duration))")
+                            .font(ScratchLabDesign.Typo.label)
+                            .foregroundStyle(ScratchLabDesign.Sem.textSecondary)
+                        Text(take.recordingStatus == "completed" ? "Saved and ready to validate" : "Recording incomplete")
+                            .font(ScratchLabDesign.Typo.caption)
+                            .foregroundStyle(
+                                take.recordingStatus == "completed"
+                                    ? ScratchLabDesign.Sem.textSuccess
+                                    : ScratchLabDesign.Sem.textError
+                            )
+                    }
+                    .padding(.vertical, 4)
+                }
+            }
+            .scrollContentBackground(.hidden)
+            .background(ScratchLabDesign.Surface.applicationBackground)
+            .navigationTitle("Saved Takes")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .topBarTrailing) {
+                    Button("Done") { dismiss() }
+                }
+            }
+        }
+        .presentationDragIndicator(.visible)
+    }
+}
+
+private struct SavedTakeDetailLoaderView: View {
+    let take: GuidedCaptureKeptTake
+    let containerLocator: CaptureContainerLocator
+
+    @State private var detail: GuidedCaptureSavedTakeDetail?
+    @State private var failureMessage: String?
+    @State private var loadAttempt = 0
+
+    var body: some View {
+        Group {
+            if let detail {
+                SavedTakeDetailView(detail: detail)
+            } else if let failureMessage {
+                ContentUnavailableView {
+                    Label("Take Unavailable", systemImage: "exclamationmark.triangle")
+                } description: {
+                    Text(failureMessage)
+                } actions: {
+                    Button("Retry") { loadAttempt += 1 }
+                        .buttonStyle(.borderedProminent)
+                }
+            } else {
+                ProgressView("Validating saved take…")
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+            }
+        }
+        .background(ScratchLabDesign.Surface.applicationBackground)
+        .navigationTitle("Take \(take.takeNumber)")
+        .navigationBarTitleDisplayMode(.inline)
+        .task(id: loadAttempt) {
+            detail = nil
+            failureMessage = nil
+            do {
+                detail = try await Task.detached(priority: .userInitiated) {
+                    try GuidedCaptureSavedTakeDetail.load(
+                        take: take,
+                        containerLocator: containerLocator
+                    )
+                }.value
+            } catch {
+                failureMessage = error.localizedDescription
+            }
+        }
+    }
+}
+
+private struct SavedTakeDetailView: View {
+    let detail: GuidedCaptureSavedTakeDetail
+
+    @State private var player: AVPlayer
+
+    init(detail: GuidedCaptureSavedTakeDetail) {
+        self.detail = detail
+        self._player = State(initialValue: AVPlayer(url: detail.mediaURL))
+    }
+
+    var body: some View {
+        ScrollView(showsIndicators: false) {
+            VStack(alignment: .leading, spacing: ScratchLabDesign.Spacing.cardSection) {
+                VideoPlayer(player: player)
+                    .aspectRatio(16.0 / 9.0, contentMode: .fit)
+                    .clipShape(
+                        RoundedRectangle(
+                            cornerRadius: ScratchLabDesign.Radius.control,
+                            style: .continuous
+                        )
+                    )
+                    .accessibilityLabel("Playback for saved take \(detail.take.takeNumber)")
+
+                CaptureCard {
+                    VStack(alignment: .leading, spacing: ScratchLabDesign.Spacing.md) {
+                        HStack {
+                            Text("Saved Notation")
+                                .font(ScratchLabDesign.Typo.sectionTitle)
+                                .foregroundStyle(ScratchLabDesign.Sem.textPrimary)
+                            Spacer()
+                            Text("\(detail.presentationEvents.count) strokes")
+                                .font(ScratchLabDesign.Typo.technical)
+                                .foregroundStyle(ScratchLabDesign.Sem.textSecondary)
+                        }
+
+                        if detail.presentationEvents.isEmpty {
+                            Text("No saved movement notation is present for this take.")
+                                .font(ScratchLabDesign.Typo.pageSubtitle)
+                                .foregroundStyle(ScratchLabDesign.Sem.textSecondary)
+                                .frame(maxWidth: .infinity, minHeight: 120, alignment: .center)
+                        } else {
+                            ScratchPhraseChartView(
+                                source: .captured(detail.presentationEvents),
+                                bpm: Double(detail.take.bpm),
+                                capturedWindow: 0...max(detail.presentationDuration, 0.1)
+                            )
+                            .frame(minHeight: 220)
+                            .clipShape(
+                                RoundedRectangle(
+                                    cornerRadius: ScratchLabDesign.Radius.control,
+                                    style: .continuous
+                                )
+                            )
+                            .accessibilityLabel(
+                                "Saved notation with \(detail.presentationEvents.count) movement strokes"
+                            )
+                        }
+                    }
+                }
+
+                CaptureCard {
+                    VStack(spacing: ScratchLabDesign.Spacing.md) {
+                        CaptureDetailRow(label: "Take", value: "\(detail.take.takeNumber)")
+                        CaptureDetailRow(label: "Scratch", value: detail.take.drillName ?? "Not recorded")
+                        CaptureDetailRow(label: "Tempo", value: "\(detail.take.bpm) BPM")
+                        CaptureDetailRow(label: "Duration", value: formatDuration(detail.take.duration))
+                        CaptureDetailRow(label: "Recording", value: "Completed")
+                        CaptureDetailRow(
+                            label: "Notation source",
+                            value: detail.sidecar.detectedNotation?.notationSource ?? "None"
+                        )
+                        CaptureDetailRow(
+                            label: "Fader events",
+                            value: "\(detail.sidecar.detectedNotation?.faderEvents.count ?? 0)"
+                        )
+                    }
+                }
+            }
+            .padding(ScratchLabDesign.Spacing.lg)
+        }
+        .onDisappear { player.pause() }
     }
 }
 
