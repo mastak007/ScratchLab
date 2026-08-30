@@ -11,7 +11,7 @@
 - Focused verification passed twice for `testCanonicalExportManifestParity`, `testRoutineCaptureExportAcceptsRecordedBPMSubset`, `testSessionExportDuplicatesMonoIntoPlayableStereo`, `testSessionExportProjectsAudibleRanePairToPlayableStereo`, and `testSessionExportRejectsMissingAudioArtifact`.
 - Full verification: fixtures 47/47; configured gate 377 XCTest cases per repetition with exactly the established 11 failing invocations / 9 unique names and no new ownership/export failure; Swift Testing 366/366 per repetition. Isolated macOS, iOS Simulator (including embedded Watch validation), and Watch Simulator builds succeeded. Initial concurrent iOS/Watch attempts hit only Xcode's shared build-database lock; sequential reruns passed.
 - Remaining risk: physical RANE AHHH output, cyan playhead audible boundary alignment, compact-landscape Capture/Review behavior, Watch relay association, and end-to-end export are not software-test substitutes and remain manual RC checks. Retired External Serato cases are superseded.
-- Karl authorized validation, commit, and push with "proceed and dont stop until were clean." At this log point the batch is validated but not yet committed or pushed.
+- Publication: Karl explicitly authorized `git@github-mastak007:mastak007/ScratchLab.git` after the destination/payload warning. The validated 27-file batch was committed as `b9afd4671afd263e7b3409075b6a34320f88b91a` (`Finalize capture reliability and standalone audio`) and pushed to `origin/feature/ios-capture-camera-ux`. This documentation-only closure follows separately; physical RC remains open.
 
 ## 2026-08-31 (cross-session Review/export identity failure)
 

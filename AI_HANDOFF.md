@@ -10,7 +10,7 @@
 - Isolated `ScratchLabDesktop` macOS, `ScratchLab` iOS Simulator (including embedded Watch validation), and `ScratchLabWatch` Watch Simulator builds all succeeded. The earlier iOS/Watch attempt failed only because concurrent Xcode processes contended for the shared build database; sequential reruns succeeded.
 - Diff accounting: local `HEAD` is nine commits ahead of `origin/feature/ios-capture-camera-ux`. The full branch delta is 73 files, 37,527 insertions, and 14,676 deletions; the actual unstaged worktree before this change was 28 files, 8,654 insertions, and 1,812 deletions. Do not reset or squash this history blindly.
 - Physical RC is still required on the exact candidate: prove standalone local AHHH through the RANE; cyan playhead audible alignment through `BEFORE START` and `PAST END` without wrapping; compact-landscape Capture/Review reachability, scrolling, and fixed actions; Watch relay association; and successful end-to-end export. The retired External Serato switch/silence cases are no longer release requirements.
-- Karl explicitly authorized validation, commit, and push with "proceed and dont stop until were clean." At this record point changes are validated but not yet committed or pushed.
+- Publication: Karl explicitly authorized the destination after review; the validated 27-file batch was committed as `b9afd4671afd263e7b3409075b6a34320f88b91a` (`Finalize capture reliability and standalone audio`) and pushed to `origin/feature/ios-capture-camera-ux`. A documentation-only closure commit follows this record. Physical RC remains open and is not implied by publication.
 
 ## 2026-08-31 (latest) — RANE audio captured; Review/export crossed session identities
 
