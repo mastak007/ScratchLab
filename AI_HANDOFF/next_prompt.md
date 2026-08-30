@@ -1,4 +1,12 @@
-## Current continuation - standalone-only audio and export reliability validated; physical RC next
+## Current continuation - Review latest-take and upfader notation fix validated; physical retest next
+
+Physical session `8ad16543-5165-41e8-993d-1d00c1ce5fd8` retained healthy notation: take 1 has 33 movement events; take 2 has 71. The live Review window showed stale Take 1 while take 2 was newest. Take 2 captured 561 mapped crossfader CC8 events and derived 18 fader events, but its 125 CC28 channel-1 events were raw/unmapped despite a complete saved RANE mapping. Two ScratchLab binaries were running, including stale `build/CodexProducts-ios-save-tests`.
+
+Source now rescans completed captures whenever Review is entered, persists crossfader/left-upfader/right-upfader identities from the active mapping, and derives each mapped fader stream independently into truthful Review notation. New tests passed 2/2 twice; surrounding regressions passed 49/49 per configured repetition; macOS, iOS Simulator with embedded Watch, and Watch Simulator builds succeeded. Existing sidecars were not mutated.
+
+Next action is one fresh physical take after closing every ScratchLab process and launching only the validated product. Move platter, crossfader, and right upfader through clear on/off cuts. Review must select the new take, show platter notation, and show crossfader and `rightUpfader` evidence. Preserve the old sidecars as failure evidence.
+
+## Prior continuation - standalone-only audio and export reliability validated; physical RC next
 
 Karl explicitly removed the `External Serato` product choice because it confused users. Source now exposes standalone local AHHH only, defaults to `scratchLabStandalone`, migrates the legacy persisted `externalSerato` raw value, and removes ownership selectors/copy on iOS and macOS. Earlier handoff entries requiring External Serato smoke are historical and superseded. Preserve audio scheduling, RANE routing, signed/unwrapped sample-position projection, and the 5 ms cue tolerance.
 

@@ -12623,9 +12623,10 @@ extension CaptureReliabilityPhase1CoreTests {
         }
     }
 
-    /// Upfader samples are raw evidence, never notation: they must not be
-    /// mistaken for crossfader samples by the fader derivation.
-    func testUpfaderEvidenceIsNotDerivedAsCrossfaderNotation() {
+    /// Physical RC requirement: an upfader can perform the audible cut, so its
+    /// mapped on/off movement must survive into Review notation under its own
+    /// control identity rather than being dropped or mislabeled crossfader.
+    func testMappedRightUpfaderCreatesItsOwnCutNotation() {
         let events = [
             CaptureCore.RawMixerMIDIEvent(
                 timestamp: 1000.0, takeRelativeTime: 0.10, deviceName: "Rane ONE MKII",
@@ -12639,7 +12640,11 @@ extension CaptureReliabilityPhase1CoreTests {
             )
         ]
 
-        XCTAssertTrue(CaptureCore.deriveDetectedNotationFaderEvents(from: events).isEmpty)
+        let derived = CaptureCore.deriveDetectedNotationFaderEvents(from: events)
+        XCTAssertEqual(derived.count, 1)
+        XCTAssertEqual(derived.first?.eventKind, .cut)
+        XCTAssertEqual(derived.first?.control, "rightUpfader")
+        XCTAssertEqual(derived.first?.source, "midi")
     }
 
 

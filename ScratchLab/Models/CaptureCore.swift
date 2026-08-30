@@ -685,7 +685,11 @@ enum CaptureMotionEvidenceResolver {
         guard let detectedNotation else { return nil }
         let sources = Set(
             detectedNotation.mixerMidiEvents
-                .filter { $0.mappedControl == "crossfader" }
+                .filter {
+                    $0.mappedControl == "crossfader"
+                        || $0.mappedControl == "leftUpfader"
+                        || $0.mappedControl == "rightUpfader"
+                }
                 .compactMap(\.mappingSource)
         )
         if sources.contains(.learned) { return .learned }
@@ -8553,6 +8557,25 @@ enum CaptureCore {
     static func deriveDetectedNotationFaderEvents(
         from mixerMidiEvents: [RawMixerMIDIEvent]
     ) -> [DetectedNotationFaderEvent] {
+        ["crossfader", "leftUpfader", "rightUpfader"]
+            .flatMap { mappedControl in
+                deriveDetectedNotationFaderEvents(
+                    from: mixerMidiEvents,
+                    mappedControl: mappedControl
+                )
+            }
+            .sorted { lhs, rhs in
+                if lhs.startTime == rhs.startTime {
+                    return lhs.control < rhs.control
+                }
+                return lhs.startTime < rhs.startTime
+            }
+    }
+
+    private static func deriveDetectedNotationFaderEvents(
+        from mixerMidiEvents: [RawMixerMIDIEvent],
+        mappedControl: String
+    ) -> [DetectedNotationFaderEvent] {
         struct PrimitiveEvent {
             let startTime: Double
             let endTime: Double
@@ -8580,7 +8603,7 @@ enum CaptureCore {
         let minimumConfidence = 0.75
 
         let crossfaderEvents = mixerMidiEvents
-            .filter { $0.mappedControl == "crossfader" }
+            .filter { $0.mappedControl == mappedControl }
             .sorted { lhs, rhs in
                 if lhs.takeRelativeTime == rhs.takeRelativeTime {
                     return lhs.timestamp < rhs.timestamp
@@ -8678,7 +8701,7 @@ enum CaptureCore {
                 startTime: startTime,
                 endTime: endTime,
                 eventKind: eventKind,
-                control: "crossfader",
+                control: mappedControl,
                 fromValue: min(1, max(0, fromValue)),
                 toValue: min(1, max(0, toValue)),
                 source: "midi",

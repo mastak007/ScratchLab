@@ -8985,6 +8985,24 @@ final class MacCaptureEngine: NSObject, ObservableObject {
     ///
     /// Called from the real CoreMIDI packet-parsing loop for every incoming
     /// CC message; also callable directly from tests as a seam.
+    func mappedMixerControlForCC(channel: Int, controller: Int) -> String? {
+        guard let mapping = currentMIDIDeviceMapping else { return nil }
+        for action in [
+            MIDISemanticAction.crossfader,
+            .leftUpfader,
+            .rightUpfader
+        ] {
+            guard let control = mapping.control(for: action),
+                  control.messageType == .controlChange,
+                  control.channel == channel,
+                  control.controlNumber == controller else {
+                continue
+            }
+            return action.rawValue
+        }
+        return nil
+    }
+
     func evaluateUserMixerGainForCC(channel: Int, controller: Int, value: Int) {
         guard let mapping = currentMIDIDeviceMapping else { return }
         if let leftUpfader = mapping.control(for: .leftUpfader),
@@ -9836,7 +9854,10 @@ final class MacCaptureEngine: NSObject, ObservableObject {
             evaluateCurveCaptureForCC(channel: channel, controller: controller, value: value)
             evaluateUserMixerGainForCC(channel: channel, controller: controller, value: value)
 
-            let mappedControl: String? = (currentMapping?.channel == channel && currentMapping?.controller == controller) ? "crossfader" : nil
+            let mappedControl = mappedMixerControlForCC(channel: channel, controller: controller)
+                ?? ((currentMapping?.channel == channel && currentMapping?.controller == controller)
+                    ? MIDISemanticAction.crossfader.rawValue
+                    : nil)
             if mappedControl == "crossfader" {
                 ScratchLabPerformanceSignpost.event("FaderMap", count: value)
             }

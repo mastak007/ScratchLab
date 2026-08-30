@@ -1050,6 +1050,13 @@ struct MacAnalyzerView: View {
             if resolvedTab == .capture {
                 captureEngine.refreshDevices()
                 captureEngine.autoSelectCaptureAudioDeviceIfNeeded()
+            } else if resolvedTab == .review {
+                // Another ScratchLab process can finalize a take into the shared
+                // capture directory without publishing this instance's
+                // `lastRoutineRecordingURL`. Review must therefore reconcile
+                // from disk on entry instead of trusting stale in-memory state.
+                captureEngine.rescanRoutineCaptures()
+                loadReviewMetadataForCurrentTake()
             }
             guard resolvedTab != .practice else { return }
             babyScratchDemo.stop()

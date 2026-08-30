@@ -269,6 +269,30 @@ final class MIDIUserMixerGainTests: XCTestCase {
             "crossfader hard right must produce full scratch gain")
     }
 
+    func testMappedMixerControlClassificationIncludesCrossfaderAndBothUpfaders() {
+        let engine = MacCaptureEngine(autoRefreshDevices: false)
+        var mapping = MIDIDeviceMapping(deviceIdentifier: "test-device", deviceName: "Rane ONE MKII")
+        mapping.upsert(MIDILearnedControl(
+            action: .crossfader, messageType: .controlChange,
+            channel: 15, controlNumber: 8
+        ))
+        mapping.upsert(MIDILearnedControl(
+            action: .leftUpfader, messageType: .controlChange,
+            channel: 0, controlNumber: 28, deck: 0
+        ))
+        mapping.upsert(MIDILearnedControl(
+            action: .rightUpfader, messageType: .controlChange,
+            channel: 1, controlNumber: 28, deck: 1
+        ))
+        engine.testOnly_setDeviceMapping(mapping)
+
+        XCTAssertEqual(engine.mappedMixerControlForCC(channel: 15, controller: 8), "crossfader")
+        XCTAssertEqual(engine.mappedMixerControlForCC(channel: 0, controller: 28), "leftUpfader")
+        XCTAssertEqual(engine.mappedMixerControlForCC(channel: 1, controller: 28), "rightUpfader")
+        XCTAssertNil(engine.mappedMixerControlForCC(channel: 1, controller: 6))
+        XCTAssertNil(engine.mappedMixerControlForCC(channel: 0, controller: 8))
+    }
+
     // MARK: - Regression #13: mappings survive relaunch (persistence round trip)
 
     func testRightUpfaderAndCrossfaderMappingsSurviveRoundTripPersistence() throws {

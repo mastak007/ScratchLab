@@ -1,5 +1,14 @@
 # DEV_LOG
 
+## 2026-08-31 (Review latest-take and upfader notation physical defect)
+
+- Root cause: the live Review UI displayed Take 1 while Take 2 was newest, amplified by two simultaneously running ScratchLab binaries, one from stale `build/CodexProducts-ios-save-tests`. Separately, the CoreMIDI loop persisted mapped identity only for its legacy crossfader path, even though it evaluated the complete learned mapping for gain; shared fader derivation then accepted only `crossfader`. RANE CC28 could therefore be captured but never classified or rendered as upfader notation.
+- Physical evidence: session `8ad16543-5165-41e8-993d-1d00c1ce5fd8`; take 1 completed with 33 movement events, 11 audio events, and zero fader events; take 2 completed with 71 movement events, 5 audio events, 14,565 raw mixer events, 561 mapped CC8 events producing 18 fader events (4 cuts), and 125 CC28 channel-1 events spanning 0...127 but carrying no mapped control. The complete RANE mapping file was last modified at 06:04:28, before both takes.
+- Files changed: `ScratchLabDesktop/Views/MacAnalyzerView.swift`, `ScratchLabDesktop/Services/MacCaptureEngine.swift`, `ScratchLab/Models/CaptureCore.swift`, `ScratchLabDesktopTests/MIDIUserMixerGainTests.swift`, `ScratchLabDesktopTests/CaptureReliabilityPhase1Tests.swift`, plus workflow records.
+- Implementation: Review tab entry synchronously calls `rescanRoutineCaptures()` before metadata load. `mappedMixerControlForCC` resolves exact learned CC addresses for crossfader and both upfaders, while retaining same-event legacy crossfader-learn fallback. Fader derivation now runs independently per mapped control and merges chronologically, preserving truthful `control` labels and avoiding interleaved-stream corruption.
+- Verification: new classifier and upfader-cut regressions passed 2/2 twice. The surrounding selection/derivation set plus all 40 `MIDIUserMixerGainTests` passed 49/49 in each configured repetition. macOS test build succeeded; isolated iOS Simulator with embedded Watch validation and standalone Watch Simulator builds succeeded; `git diff --check` passed before record updates.
+- Existing sidecars remain byte-untouched. Physical approval is open until one fresh take from a single validated app process shows the newest take, platter notation, crossfader cuts, and right-upfader cuts in Review.
+
 ## 2026-08-31 (standalone-only product and export reliability validated)
 
 - Root cause: the two-owner choice made setup ambiguous and left users on a mode that intentionally suppressed local AHHH, which looked like broken RANE playback. Karl explicitly chose a standalone-only ScratchLab product.

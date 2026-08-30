@@ -1,5 +1,14 @@
 # AI Handoff
 
+## 2026-08-31 (latest) - stale Review take and missing upfader notation fixed; physical retest pending
+
+- Physical session `8ad16543-5165-41e8-993d-1d00c1ce5fd8` proved capture data was not lost. Take 1 persisted 33 movement events and 8,911 raw CC6 events; take 2 persisted 71 movement events, 14,565 mixer MIDI events, 561 mapped crossfader CC8 events, and 18 derived fader events (4 cuts). Review was visibly showing `Take 1` while `take-002` was the newest completed take.
+- Take 2 also persisted 125 RANE CC28 channel-1 events spanning 0...127, but every event had `mappedControl: nil` despite the complete 11-control `midi_1737453891.json` mapping existing before both takes. Root cause: the CoreMIDI packet loop persisted only the legacy crossfader classification; shared notation derivation also filtered only `crossfader`, so upfader evidence could never reach Review notation.
+- Source fix: entering Review now rescans completed captures before loading metadata; the CoreMIDI path persists exact active-mapping identities for `crossfader`, `leftUpfader`, and `rightUpfader`; shared fader derivation processes each mapped control independently and labels its events with the truthful control identity. Unmapped MIDI remains ignored. Renderer/audio scheduling, platter projection, RANE routing, and cue tolerance are unchanged.
+- Environment finding: two ScratchLab processes were running simultaneously: current DerivedData product PID 39593 and stale `build/CodexProducts-ios-save-tests` PID 40234. This can leave one window showing another process's stale in-memory take. Both must be closed before launching only the validated product.
+- Verification: two new focused regressions passed 2/2 twice; surrounding latest-take, fader-derivation, and all 40 `MIDIUserMixerGainTests` passed 49/49 in each configured repetition; macOS test build, isolated iOS Simulator with embedded Watch validation, and standalone Watch Simulator builds succeeded; `git diff --check` passed before record updates.
+- Existing sidecars were inspected read-only and not repaired. Physical retest remains required: record one fresh take, open Review and confirm it names that newest take, platter notation is visible, and crossfader plus right-upfader on/off cuts appear under their own identities.
+
 ## 2026-08-31 (latest) - Standalone-only audio and export reliability validated; physical RC remains
 
 - Karl explicitly retired the `External Serato` product mode because the ownership choice confused users. This supersedes earlier workflow instructions that required External Serato as the safe default or as a physical RC case.
