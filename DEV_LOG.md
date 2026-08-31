@@ -3614,3 +3614,11 @@ Nothing staged, committed, or pushed. HEAD remains `7761c09f`. The other 24 pre-
 - Bumped `CFBundleVersion` from 18 to 19 for iOS, macOS, and Watch targets. Marketing version remains 1.0.1.
 - Verification: 47 capture-pipeline fixture tests passed. Focused AVFoundation source-policy test passed. Focused equal-duration export test passed with all stems at 4,800 frames. Release iOS + embedded Watch archive succeeded and Xcode store validation passed. App Store Connect export succeeded at `build/AppStore-1.0.1-19/ScratchLab.ipa`.
 - Release risk: the full `pre_release_check.sh` desktop XCTest run was interrupted after exposing the AVFoundation source-policy failure; that failure was fixed and rerun successfully, but the complete desktop suite was not rerun to completion in this release pass.
+
+## 2026-08-31 - Default routine take length is 64 seconds
+
+- Replaced the macOS capture UI's hard-coded 60-second labels with a shared `RoutineCaptureDefaults` policy set to 64 seconds.
+- Applied the same policy to `AVCaptureMovieFileOutput.maxRecordedDuration`, so the displayed length is now enforced by the recorder.
+- Preserved `CaptureSessionConfig.takeDurationSeconds` as accumulated captured-session evidence rather than misusing it for the planned per-take limit.
+- Added regression coverage for the shared value, UI wiring, and recorder wiring.
+- Validation was not run in this task because the requested scope was implementation and commit only.

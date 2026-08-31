@@ -4013,7 +4013,7 @@ struct MacAnalyzerView: View {
                 }
                 VStack(alignment: .leading, spacing: 5) {
                     captureFigmaFieldLabel("Take length")
-                    Text("60 seconds")
+                    Text(RoutineCaptureDefaults.defaultTakeLengthLabel)
                         .font(.system(size: 14))
                         .padding(.horizontal, 12)
                         .frame(maxWidth: .infinity, minHeight: 40, alignment: .leading)
@@ -4155,7 +4155,7 @@ struct MacAnalyzerView: View {
                 captureFigmaCompactSummaryRow("Session", captureFigmaSessionLabel)
                 captureFigmaCompactSummaryRow("Technique", routineSessionSetup.scratchType?.title ?? "Auto Detect")
                 captureFigmaCompactSummaryRow("Mode", selectedCaptureTimingMode.title)
-                captureFigmaCompactSummaryRow("Length", "60 seconds")
+                captureFigmaCompactSummaryRow("Length", RoutineCaptureDefaults.defaultTakeLengthLabel)
             }
 
             Label(

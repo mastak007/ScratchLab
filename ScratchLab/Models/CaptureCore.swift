@@ -1270,6 +1270,14 @@ enum CaptureMotionEvidencePresenter {
     }
 }
 
+enum RoutineCaptureDefaults {
+    static let defaultTakeLengthSeconds: Double = 64
+
+    static var defaultTakeLengthLabel: String {
+        "\(Int(defaultTakeLengthSeconds)) seconds"
+    }
+}
+
 struct CaptureSessionConfig: Codable, Equatable, Sendable {
     var performerName: String
     var bpm: Int?

@@ -6391,6 +6391,25 @@ final class CaptureReliabilityPhase1CoreTests: XCTestCase {
         XCTAssertNil(MacCaptureEngine.routineCaptureFailureDescription(for: stoppedNormally))
     }
 
+    func testRoutineCaptureDefaultTakeLengthIs64SecondsAndWiredToMacCapture() throws {
+        XCTAssertEqual(RoutineCaptureDefaults.defaultTakeLengthSeconds, 64)
+        XCTAssertEqual(RoutineCaptureDefaults.defaultTakeLengthLabel, "64 seconds")
+
+        let projectRoot = projectRootURL()
+        let engineSource = try String(
+            contentsOf: projectRoot.appendingPathComponent("ScratchLabDesktop/Services/MacCaptureEngine.swift"),
+            encoding: .utf8
+        )
+        let viewSource = try String(
+            contentsOf: projectRoot.appendingPathComponent("ScratchLabDesktop/Views/MacAnalyzerView.swift"),
+            encoding: .utf8
+        )
+
+        XCTAssertTrue(engineSource.contains("RoutineCaptureDefaults.defaultTakeLengthSeconds"))
+        XCTAssertTrue(viewSource.contains("RoutineCaptureDefaults.defaultTakeLengthLabel"))
+        XCTAssertFalse(viewSource.contains("\"60 seconds\""))
+    }
+
     func testRoutineCaptureRealAVFoundationFailureRemainsFatal() {
         let failed = NSError(
             domain: AVFoundationErrorDomain,

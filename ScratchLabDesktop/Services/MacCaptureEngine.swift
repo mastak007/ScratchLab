@@ -4469,6 +4469,10 @@ final class MacCaptureEngine: NSObject, ObservableObject {
                 // debugLastROI intentionally left alone — it will be
                 // updated on the next analyzed frame.
                 #endif
+                self.movieOutput.maxRecordedDuration = CMTime(
+                    seconds: RoutineCaptureDefaults.defaultTakeLengthSeconds,
+                    preferredTimescale: 600
+                )
                 self.movieOutput.startRecording(to: preparedRecording.mediaURL, recordingDelegate: self)
             } catch {
                 self.scratchPlaybackController.cancelRoutineOutputCapture()
