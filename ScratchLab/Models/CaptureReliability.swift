@@ -527,6 +527,12 @@ enum MultichannelSignalProbe {
         let programLikelihood: Float
 
         var label: String { pair.label }
+
+        /// The one channel carrying program audio when its partner does not.
+        /// Non-nil means "usable, but not real stereo".
+        var soleProgramChannel: ChannelStats? {
+            MultichannelSignalProbe.soleProgramChannel(left: left, right: right)
+        }
     }
 
     struct Snapshot: Equatable, Sendable {
@@ -545,7 +551,15 @@ enum MultichannelSignalProbe {
                 channelCount, sampleRate, frameCount
             ))
             if let recommendedPair {
-                lines.append("recommended program pair: CH \(recommendedPair.label)")
+                if let live = pairs.first(where: { $0.pair == recommendedPair })?.soleProgramChannel {
+                    let side = live.channelIndex == recommendedPair.leftChannel ? "left" : "right"
+                    lines.append(
+                        "recommended program pair: CH \(recommendedPair.label)"
+                            + " (\(side) channel only — the other carries no program audio)"
+                    )
+                } else {
+                    lines.append("recommended program pair: CH \(recommendedPair.label)")
+                }
             } else {
                 lines.append("recommended program pair: (none — no pair looks like program audio)")
             }
@@ -735,7 +749,67 @@ enum MultichannelSignalProbe {
         return Float(max(-1, min(1, result)))
     }
 
+    /// A half-live pair is usable but never as good as real stereo, so it is
+    /// capped below what a genuine stereo pair can score.
+    static let monoRecoveredLikelihoodCeiling: Float = 0.75
+
+    /// The one channel carrying program audio when its partner does not.
+    ///
+    /// A pair like this is still usable — `SessionExportAudioProjection` writes
+    /// the live channel to both sides rather than shipping the dead one — so it
+    /// must be recommendable. It is not real stereo, so it must only ever beat
+    /// "nothing at all", never a genuine pair.
+    static func soleProgramChannel(left: ChannelStats, right: ChannelStats) -> ChannelStats? {
+        // A non-finite sample anywhere makes the pair untrustworthy: NaN would
+        // propagate straight into the exported stem.
+        guard !left.hasNonFiniteSamples, !right.hasNonFiniteSamples else { return nil }
+        let leftIsProgram = left.kind == .program
+        let rightIsProgram = right.kind == .program
+        guard leftIsProgram != rightIsProgram else { return nil }
+        let live = leftIsProgram ? left : right
+        let partner = leftIsProgram ? right : left
+        switch partner.kind {
+        case .silent, .dcHeavy, .dataOrControl, .noiseOnly:
+            return live
+        case .program, .weakSignal:
+            // A merely quiet partner is still a stereo pair, not a dead one.
+            return nil
+        }
+    }
+
+    /// Scores a pair carrying program audio on exactly one channel.
+    ///
+    /// Pair-level scoring alone subtracts for the dead partner and then
+    /// multiplies the whole pair down, so a live channel beside a DC-frozen one
+    /// scored ~0.04 and the probe reported "no pair looks like program audio"
+    /// while that channel *was* the performance. Measured on a RANE ONE MKII
+    /// (2026-08-31), CH 13/14: L frozen at +0.66995, R program at -4.8 dBFS.
+    static func monoRecoveredProgramLikelihood(
+        left: ChannelStats,
+        right: ChannelStats
+    ) -> Float {
+        guard let live = soleProgramChannel(left: left, right: right) else { return 0 }
+        var score: Float = 0.60
+        if live.rmsDBFS <= -3 && live.rmsDBFS >= -55 { score += 0.10 }
+        // Clipping is a level warning, not evidence against program audio — a
+        // scratch performance touching full scale is ordinary.
+        if live.isClipping { score *= 0.85 }
+        return max(0, min(monoRecoveredLikelihoodCeiling, score))
+    }
+
     static func programLikelihood(
+        left: ChannelStats,
+        right: ChannelStats,
+        correlation: Float
+    ) -> Float {
+        max(
+            stereoProgramLikelihood(left: left, right: right, correlation: correlation),
+            monoRecoveredProgramLikelihood(left: left, right: right)
+        )
+    }
+
+    /// Scores a pair as real stereo program audio: both channels must earn it.
+    static func stereoProgramLikelihood(
         left: ChannelStats,
         right: ChannelStats,
         correlation: Float

@@ -666,6 +666,7 @@ enum SessionExportValidationReason: String, Equatable, Sendable {
     case stagedReplayDocumentMismatch
     case stagedDocumentIdentityMismatch
     case platterMotionWithoutRecordedMovement
+    case capturedAudioHasNoDynamicChannelPair
 
     var detailText: String {
         switch self {
@@ -683,6 +684,8 @@ enum SessionExportValidationReason: String, Equatable, Sendable {
             return "Export blocked: a generated manifest named a different session or take set than this export."
         case .platterMotionWithoutRecordedMovement:
             return "Export blocked: a take claims platter motion but its notation recorded no movement events."
+        case .capturedAudioHasNoDynamicChannelPair:
+            return "Export blocked: no dynamic audio was captured in any channel pair — every pair was silent or a constant DC signal, so no scratch stem could be written."
         }
     }
 }
@@ -1446,11 +1449,233 @@ final class SessionExportCoordinator: ObservableObject {
     #endif
 }
 
+/// Projects a multichannel capture down to a playable stereo stem.
+///
+/// Two hardware truths drive every rule here, both measured on session
+/// 20435e68 (macOS, "Rane ONE MKII"):
+///
+/// 1. A DVS interface presents control, status, and programme lines side by
+///    side, and a dead control line reads as a **constant**: high absolute
+///    value, no movement. Total signal energy cannot separate it from
+///    programme audio — a channel frozen at -0.70 carries more sum-of-squares
+///    energy (0.49/sample) than a scratch performance at 0.56 RMS
+///    (0.31/sample). Ranking is therefore on the AC component (deviation about
+///    a channel's own mean), never on raw level.
+///
+/// 2. A capture can be *effectively mono*: one live channel beside exact
+///    zeros, and that live channel may sit on a large DC offset. Take-02's
+///    programme channel measured dc=-0.695 against acRMS=0.564. That channel
+///    is **recoverable** — it is the performance — so a rule that rejects it
+///    for having more DC than AC throws away the only usable audio. Only the
+///    absence of AC content marks a channel dead.
 enum SessionExportAudioProjection {
-    private static let analysisStride = 32
     private static let chunkFrameCount: AVAudioFrameCount = 16_384
 
-    static func writePlayableStereo(from sourceURL: URL, to destinationURL: URL) throws {
+    // MARK: - Validity thresholds
+
+    /// What a channel must look like to count as real captured audio.
+    ///
+    /// Absolute float-sample thresholds, not ratios of the loudest channel:
+    /// "the best of a bad set" must still be able to fail.
+    enum SignalValidity {
+        /// AC RMS (~-80 dBFS) below which a channel carries no usable audio.
+        /// This is the *only* liveness test — a channel is dead when it does
+        /// not move, whatever its DC offset.
+        static let minimumChannelACRMS: Double = 0.000_1
+        /// |DC| (~-60 dBFS) below which an offset is not worth naming.
+        static let dcOffsetFloor: Double = 0.001
+        /// |DC| (~-40 dBFS) above which the offset is removed from the written
+        /// stem. A -0.70 offset destroys headroom and thumps on playback; the
+        /// raw take-02 channel already peaked past full scale because of it.
+        static let dcRemovalThreshold: Double = 0.01
+    }
+
+    // MARK: - Measurements
+
+    /// Per-channel signal shape, measured over every frame of the source.
+    struct ChannelStatistics: Equatable, Sendable {
+        let channelIndex: Int
+        /// Mean sample value — the channel's DC offset.
+        let dcOffset: Double
+        let rms: Double
+        /// RMS of the signal about its own mean. This, not `rms`, is what
+        /// distinguishes audio from a constant.
+        let acRMS: Double
+
+        var variance: Double { acRMS * acRMS }
+
+        /// The channel carries real content. The single liveness test.
+        var isDynamic: Bool { acRMS >= SignalValidity.minimumChannelACRMS }
+
+        /// A constant line: no movement, parked at some value. Unusable.
+        var isDCFrozen: Bool {
+            !isDynamic && abs(dcOffset) > SignalValidity.dcOffsetFloor
+        }
+
+        /// Live, but riding an offset large enough to spoil the stem.
+        var requiresDCRemoval: Bool {
+            isDynamic && abs(dcOffset) > SignalValidity.dcRemovalThreshold
+        }
+
+        var debugSummary: String {
+            let flags: String
+            if isDCFrozen {
+                flags = "DC-FROZEN"
+            } else if !isDynamic {
+                flags = "SILENT"
+            } else if requiresDCRemoval {
+                flags = "live,dc-offset"
+            } else {
+                flags = "live"
+            }
+            return String(
+                format: "ch%02d dc=%+.6f rms=%.6f acRMS=%.6f var=%.8f %@",
+                channelIndex, dcOffset, rms, acRMS, variance, flags
+            )
+        }
+    }
+
+    /// Why a channel pair cannot be used as the exported stem.
+    ///
+    /// A closed vocabulary of check names only — never file paths, performer
+    /// names, or any other capture content — so it is safe to log.
+    enum PairRejection: String, Equatable, Sendable {
+        /// The pair names a channel the source does not have.
+        case outOfRange
+        /// Neither channel carries dynamic audio (silent, frozen, or both).
+        case noDynamicChannel
+
+        var detailText: String {
+            switch self {
+            case .outOfRange:
+                return "names a channel this capture does not have"
+            case .noDynamicChannel:
+                return "carries no dynamic audio on either channel"
+            }
+        }
+    }
+
+    /// One candidate pair with the AC energy it was ranked by.
+    struct PairEnergy: Equatable, Sendable {
+        let firstChannelIndex: Int
+        let secondChannelIndex: Int?
+        /// Summed variance of the pair's channels. DC contributes nothing.
+        let acEnergy: Double
+        let rejection: PairRejection?
+
+        var isUsable: Bool { rejection == nil }
+
+        var debugSummary: String {
+            let pair = secondChannelIndex.map { "\(firstChannelIndex)/\($0)" } ?? "\(firstChannelIndex)"
+            let verdict = rejection.map { "REJECTED(\($0.rawValue))" } ?? "usable"
+            return String(format: "pair %@ acEnergy=%.8f %@", pair, acEnergy, verdict)
+        }
+    }
+
+    /// How the exported pair was arrived at.
+    enum PairSelectionOutcome: Equatable, Sendable {
+        /// The hardware-profile hint was measured and held up.
+        case preferredPairAccepted
+        /// The hint was measured, failed, and a scanned pair replaced it.
+        case fallbackAfterRejectedPreferredPair(PairRejection)
+        /// No hint was supplied; the strongest usable pair was scanned for.
+        case strongestPairWithoutPreference
+
+        var usedFallback: Bool {
+            if case .fallbackAfterRejectedPreferredPair = self { return true }
+            return false
+        }
+
+        var summary: String {
+            switch self {
+            case .preferredPairAccepted:
+                return "preferred-pair-accepted"
+            case let .fallbackAfterRejectedPreferredPair(rejection):
+                return "pair-selection-fallback-used(preferred-pair-\(rejection.rawValue))"
+            case .strongestPairWithoutPreference:
+                return "strongest-pair-no-preference"
+            }
+        }
+    }
+
+    /// Everything the selection decided and why, for deterministic logging
+    /// and for tests to assert on without re-deriving it.
+    struct SelectionDiagnostics: Equatable, Sendable {
+        let sourceChannelCount: Int
+        let sourceFrameCount: Int64
+        let preferredPair: AudioHardwareRouteState.StereoPair?
+        let outcome: PairSelectionOutcome
+        /// Source channel written to output left / right. They are equal when
+        /// the pair had only one live channel.
+        let leftSourceChannelIndex: Int
+        let rightSourceChannelIndex: Int
+        /// The selected pair before mono-recovery, for provenance.
+        let selectedFirstChannelIndex: Int
+        let selectedSecondChannelIndex: Int?
+        /// The pair had a dead partner, so the live channel was sent to both
+        /// sides instead of exporting a half-silent (or DC-frozen) stem.
+        let duplicatedLiveChannel: Bool
+        /// DC removed from output left / right, 0 when none was removed.
+        let removedDCOffsets: [Double]
+        /// Strongest AC energy first; ties broken by channel index.
+        let pairEnergyRanking: [PairEnergy]
+        let sourceStatistics: [ChannelStatistics]
+        /// The two channels as actually written: index 0 = left, 1 = right.
+        let selectedOutputStatistics: [ChannelStatistics]
+
+        var usedFallback: Bool { outcome.usedFallback }
+
+        var debugSummary: String {
+            let preferredText = preferredPair
+                .map { "\($0.firstChannelIndex)/\($0.secondChannelIndex)" } ?? "none"
+            let selectedText = selectedSecondChannelIndex
+                .map { "\(selectedFirstChannelIndex)/\($0)" } ?? "\(selectedFirstChannelIndex) (mono)"
+            var lines = [
+                "[AUDIO-EXPORT-PROJECTION] sourceChannels=\(sourceChannelCount) sourceFrames=\(sourceFrameCount)",
+                "  preferredPair=\(preferredText) outcome=\(outcome.summary) fallback=\(usedFallback)",
+                "  selectedPair=\(selectedText)",
+                "  wrote left=ch\(leftSourceChannelIndex) right=ch\(rightSourceChannelIndex) "
+                    + "duplicatedLiveChannel=\(duplicatedLiveChannel)",
+                String(
+                    format: "  removedDCOffset left=%+.6f right=%+.6f",
+                    removedDCOffsets.first ?? 0,
+                    removedDCOffsets.count > 1 ? removedDCOffsets[1] : 0
+                ),
+                "  pairEnergyRanking (AC, strongest first):",
+            ]
+            lines.append(contentsOf: pairEnergyRanking.map { "    \($0.debugSummary)" })
+            lines.append("  source channels:")
+            lines.append(contentsOf: sourceStatistics.map { "    \($0.debugSummary)" })
+            lines.append("  selected output:")
+            lines.append(contentsOf: selectedOutputStatistics.map { "    \($0.debugSummary)" })
+            return lines.joined(separator: "\n")
+        }
+    }
+
+    // MARK: - Projection
+
+    /// Writes `sourceURL`'s best usable channel pair to `destinationURL` as
+    /// playable stereo.
+    ///
+    /// `preferredPair` is a **hint only**. It comes from a device-name
+    /// hardware profile, which knows nothing about how this particular take
+    /// was patched, so it is measured like any other candidate and discarded
+    /// when it does not hold up.
+    ///
+    /// Three guardrails stand between a capture and a stem:
+    /// - a pair is usable only if a channel in it actually moves;
+    /// - if the pair's partner is dead, the live channel is written to both
+    ///   sides, so a frozen or silent channel is never exported;
+    /// - a large DC offset is removed from what is written.
+    ///
+    /// When nothing in the source moves this throws rather than writing an
+    /// unusable stem — a silent fallback here is what shipped DC-only stems.
+    @discardableResult
+    static func writePlayableStereo(
+        from sourceURL: URL,
+        to destinationURL: URL,
+        preferredPair: AudioHardwareRouteState.StereoPair? = nil
+    ) throws -> SelectionDiagnostics {
         guard FileManager.default.fileExists(atPath: sourceURL.path) else {
             throw SessionExportError.missingRequiredFiles
         }
@@ -1467,10 +1692,16 @@ enum SessionExportAudioProjection {
             throw SessionExportError.unableToPrepareExport
         }
 
-        let selectedPair = try strongestContiguousPair(
+        let statistics = try channelStatistics(
             in: sourceFile,
             channelCount: channelCount,
             sourceFormat: sourceFormat
+        )
+        let diagnostics = try selectPair(
+            channelCount: channelCount,
+            sourceFrameCount: sourceFile.length,
+            statistics: statistics,
+            preferredPair: preferredPair
         )
         sourceFile.framePosition = 0
 
@@ -1496,6 +1727,10 @@ enum SessionExportAudioProjection {
             throw SessionExportError.unableToPrepareExport
         }
 
+        let leftIndex = diagnostics.leftSourceChannelIndex
+        let rightIndex = diagnostics.rightSourceChannelIndex
+        let leftOffset = Float(diagnostics.removedDCOffsets[0])
+        let rightOffset = Float(diagnostics.removedDCOffsets[1])
         while sourceFile.framePosition < sourceFile.length {
             sourceBuffer.frameLength = 0
             try sourceFile.read(into: sourceBuffer, frameCount: chunkFrameCount)
@@ -1506,26 +1741,47 @@ enum SessionExportAudioProjection {
                 break
             }
             stereoBuffer.frameLength = sourceBuffer.frameLength
-            let rightIndex = selectedPair.1 ?? selectedPair.0
-            stereoChannels[0].update(from: sourceChannels[selectedPair.0], count: frameCount)
-            stereoChannels[1].update(from: sourceChannels[rightIndex], count: frameCount)
+            if leftOffset == 0 {
+                stereoChannels[0].update(from: sourceChannels[leftIndex], count: frameCount)
+            } else {
+                for frame in 0..<frameCount {
+                    stereoChannels[0][frame] = sourceChannels[leftIndex][frame] - leftOffset
+                }
+            }
+            if rightOffset == 0 {
+                stereoChannels[1].update(from: sourceChannels[rightIndex], count: frameCount)
+            } else {
+                for frame in 0..<frameCount {
+                    stereoChannels[1][frame] = sourceChannels[rightIndex][frame] - rightOffset
+                }
+            }
             try destinationFile.write(from: stereoBuffer)
         }
+        return diagnostics
     }
 
-    private static func strongestContiguousPair(
+    // MARK: - Analysis
+
+    /// Measures every channel over every frame.
+    ///
+    /// Deliberately not strided: a strided read can land on one phase of a
+    /// periodic waveform and report a real signal as a constant, and variance
+    /// is now the value the export is gated on. The extra arithmetic is
+    /// negligible beside the file read that was already happening.
+    private static func channelStatistics(
         in sourceFile: AVAudioFile,
         channelCount: Int,
         sourceFormat: AVAudioFormat
-    ) throws -> (Int, Int?) {
-        guard channelCount > 1 else { return (0, nil) }
+    ) throws -> [ChannelStatistics] {
         guard let buffer = AVAudioPCMBuffer(
             pcmFormat: sourceFormat,
             frameCapacity: chunkFrameCount
         ) else {
             throw SessionExportError.unableToPrepareExport
         }
-        var energy = [Double](repeating: 0, count: channelCount)
+        var sums = [Double](repeating: 0, count: channelCount)
+        var squareSums = [Double](repeating: 0, count: channelCount)
+        var analysedFrames = 0
         sourceFile.framePosition = 0
         while sourceFile.framePosition < sourceFile.length {
             buffer.frameLength = 0
@@ -1533,22 +1789,195 @@ enum SessionExportAudioProjection {
             let frameCount = Int(buffer.frameLength)
             guard frameCount > 0, let channels = buffer.floatChannelData else { break }
             for channel in 0..<channelCount {
-                var frame = 0
-                while frame < frameCount {
-                    let sample = Double(channels[channel][frame])
-                    energy[channel] += sample * sample
-                    frame += analysisStride
+                let samples = channels[channel]
+                var sum = 0.0
+                var squareSum = 0.0
+                for frame in 0..<frameCount {
+                    let sample = Double(samples[frame])
+                    sum += sample
+                    squareSum += sample * sample
                 }
+                sums[channel] += sum
+                squareSums[channel] += squareSum
             }
+            analysedFrames += frameCount
         }
-
-        let pairStarts = stride(from: 0, to: channelCount - 1, by: 2)
-        guard let strongestStart = pairStarts.max(by: {
-            energy[$0] + energy[$0 + 1] < energy[$1] + energy[$1 + 1]
-        }) else {
+        guard analysedFrames > 0 else {
             throw SessionExportError.unableToPrepareExport
         }
-        return (strongestStart, strongestStart + 1)
+
+        let frames = Double(analysedFrames)
+        return (0..<channelCount).map { channel in
+            let mean = sums[channel] / frames
+            let meanSquare = squareSums[channel] / frames
+            // Clamped: the E[x²]-E[x]² identity can land microscopically
+            // below zero on a constant channel.
+            let variance = max(0, meanSquare - (mean * mean))
+            return ChannelStatistics(
+                channelIndex: channel,
+                dcOffset: mean,
+                rms: meanSquare.squareRoot(),
+                acRMS: variance.squareRoot()
+            )
+        }
+    }
+
+    private static func rejection(
+        first: Int,
+        second: Int?,
+        statistics: [ChannelStatistics],
+        channelCount: Int
+    ) -> PairRejection? {
+        guard first >= 0, first < channelCount else { return .outOfRange }
+        if let second, second < 0 || second >= channelCount { return .outOfRange }
+        var members = [statistics[first]]
+        if let second { members.append(statistics[second]) }
+        // Liveness is the only gate. A dead partner does not condemn the pair:
+        // the live channel is recovered to both sides at write time.
+        guard members.contains(where: { $0.isDynamic }) else { return .noDynamicChannel }
+        return nil
+    }
+
+    /// Contiguous candidate pairs, strongest AC energy first.
+    private static func rankedPairCandidates(
+        channelCount: Int,
+        statistics: [ChannelStatistics]
+    ) -> [PairEnergy] {
+        let starts: [Int] = channelCount > 1
+            ? Array(stride(from: 0, to: channelCount - 1, by: 2))
+            : [0]
+        let candidates = starts.map { start -> PairEnergy in
+            let second = channelCount > 1 ? start + 1 : nil
+            let energy = statistics[start].variance
+                + (second.map { statistics[$0].variance } ?? 0)
+            return PairEnergy(
+                firstChannelIndex: start,
+                secondChannelIndex: second,
+                acEnergy: energy,
+                rejection: rejection(
+                    first: start,
+                    second: second,
+                    statistics: statistics,
+                    channelCount: channelCount
+                )
+            )
+        }
+        return candidates.sorted {
+            $0.acEnergy == $1.acEnergy
+                ? $0.firstChannelIndex < $1.firstChannelIndex
+                : $0.acEnergy > $1.acEnergy
+        }
+    }
+
+    private static func selectPair(
+        channelCount: Int,
+        sourceFrameCount: AVAudioFramePosition,
+        statistics: [ChannelStatistics],
+        preferredPair: AudioHardwareRouteState.StereoPair?
+    ) throws -> SelectionDiagnostics {
+        let ranking = rankedPairCandidates(channelCount: channelCount, statistics: statistics)
+
+        func diagnostics(
+            first: Int,
+            second: Int?,
+            outcome: PairSelectionOutcome
+        ) -> SelectionDiagnostics {
+            // Mono recovery: never export a dead channel next to a live one.
+            // Whichever channel of the pair actually moves is written to both
+            // sides, which is what makes a DC-frozen or silent partner
+            // harmless instead of ruinous.
+            let firstIsLive = statistics[first].isDynamic
+            let secondIsLive = second.map { statistics[$0].isDynamic } ?? false
+            let left: Int
+            let right: Int
+            let duplicated: Bool
+            switch (firstIsLive, secondIsLive) {
+            case (true, true):
+                left = first
+                right = second ?? first
+                duplicated = false
+            case (false, true):
+                left = second ?? first
+                right = second ?? first
+                duplicated = true
+            default:
+                left = first
+                right = first
+                duplicated = second != nil || channelCount > 1
+            }
+
+            let leftOffset = statistics[left].requiresDCRemoval ? statistics[left].dcOffset : 0
+            let rightOffset = statistics[right].requiresDCRemoval ? statistics[right].dcOffset : 0
+
+            func writtenStatistics(outputIndex: Int, source: Int, removed: Double) -> ChannelStatistics {
+                let dc = statistics[source].dcOffset - removed
+                let ac = statistics[source].acRMS
+                return ChannelStatistics(
+                    channelIndex: outputIndex,
+                    dcOffset: dc,
+                    rms: ((ac * ac) + (dc * dc)).squareRoot(),
+                    acRMS: ac
+                )
+            }
+
+            return SelectionDiagnostics(
+                sourceChannelCount: channelCount,
+                sourceFrameCount: Int64(sourceFrameCount),
+                preferredPair: preferredPair,
+                outcome: outcome,
+                leftSourceChannelIndex: left,
+                rightSourceChannelIndex: right,
+                selectedFirstChannelIndex: first,
+                selectedSecondChannelIndex: second,
+                duplicatedLiveChannel: duplicated,
+                removedDCOffsets: [leftOffset, rightOffset],
+                pairEnergyRanking: ranking,
+                sourceStatistics: statistics,
+                selectedOutputStatistics: [
+                    writtenStatistics(outputIndex: 0, source: left, removed: leftOffset),
+                    writtenStatistics(outputIndex: 1, source: right, removed: rightOffset),
+                ]
+            )
+        }
+
+        func strongestUsable() throws -> PairEnergy {
+            guard let best = ranking.first(where: { $0.isUsable }) else {
+                throw SessionExportValidationFailure(
+                    .capturedAudioHasNoDynamicChannelPair,
+                    exportError: .unableToPrepareExport
+                )
+            }
+            return best
+        }
+
+        if let preferredPair {
+            let preferredSecond: Int? = channelCount > 1 ? preferredPair.secondChannelIndex : nil
+            if let rejection = rejection(
+                first: preferredPair.firstChannelIndex,
+                second: preferredSecond,
+                statistics: statistics,
+                channelCount: channelCount
+            ) {
+                let best = try strongestUsable()
+                return diagnostics(
+                    first: best.firstChannelIndex,
+                    second: best.secondChannelIndex,
+                    outcome: .fallbackAfterRejectedPreferredPair(rejection)
+                )
+            }
+            return diagnostics(
+                first: preferredPair.firstChannelIndex,
+                second: preferredSecond,
+                outcome: .preferredPairAccepted
+            )
+        }
+
+        let best = try strongestUsable()
+        return diagnostics(
+            first: best.firstChannelIndex,
+            second: best.secondChannelIndex,
+            outcome: .strongestPairWithoutPreference
+        )
     }
 }
 
@@ -2285,21 +2714,31 @@ struct SessionArchiveBuilder: Sendable {
                 at: audioURL.deletingLastPathComponent(),
                 withIntermediateDirectories: true
             )
-            try SessionExportAudioProjection.writePlayableStereo(
+            // Throws when no pair carries dynamic audio, which also stops the
+            // beat_only / scratch_with_beat renders below: those stems are
+            // only ever derived from a scratch stem that passed this check.
+            let audioProjection = try SessionExportAudioProjection.writePlayableStereo(
                 from: audioArtifactURL,
-                to: audioURL
+                to: audioURL,
+                preferredPair: RoutineCaptureAudioHardwareProfile.preferredProgramStereoPair(
+                    forDeviceName: takeContext.sidecar.audioDeviceName
+                )
             )
             #if DEBUG
+            print("[AUDIO-CAPTURE-DEBUG] take=\(takeContext.sidecar.takeID)")
+            print(audioProjection.debugSummary)
             if let exportedFile = try? AVAudioFile(forReading: audioURL) {
                 print("[AUDIO-CAPTURE-DEBUG] exported scratch frames=\(exportedFile.length)")
             }
+            #else
+            _ = audioProjection
             #endif
             if takeContext.stemAvailability["beat_only"] == "available"
                 || takeContext.stemAvailability["scratch_with_beat"] == "available" {
                 let beatBuffer = try renderedBeatStemBuffer(
                     for: takeContext.take,
                     captureMetadata: takeContext.captureMetadata,
-                    scratchAudioURL: audioArtifactURL
+                    scratchAudioURL: audioURL
                 )
                 if let beatOnlyFileName = takeContext.beatOnlyFileName {
                     let beatOnlyURL = stagedSessionURL
@@ -2312,7 +2751,7 @@ struct SessionArchiveBuilder: Sendable {
                         .appendingPathComponent("audio", isDirectory: true)
                         .appendingPathComponent(scratchWithBeatFileName)
                     let mixedBuffer = try mixedScratchWithTimingBuffer(
-                        scratchURL: audioArtifactURL,
+                        scratchURL: audioURL,
                         timingBuffer: beatBuffer
                     )
                     try writeAudioBuffer(mixedBuffer, to: scratchWithBeatURL)
@@ -3429,6 +3868,7 @@ struct SessionArchiveBuilder: Sendable {
             let stem = url.deletingPathExtension().lastPathComponent
             let debugCompanionSuffixes = [
                 "raw_platter_debug",
+                "raw_platter_timeline",
                 "movement_trace",
                 "movement_diagnostics",
             ]
@@ -3861,6 +4301,10 @@ struct SessionArchiveBuilder: Sendable {
         if issues.isEmpty {
             do {
                 _ = try canonicalPreview(for: package)
+            } catch let failure as SessionExportValidationFailure {
+                // Name the check that rejected it (e.g. no dynamic audio in any
+                // channel pair) rather than the generic message below.
+                issues.append(failure.reason.detailText)
             } catch let error as SessionExportError {
                 issues.append(error.userMessage)
             } catch {
@@ -4516,10 +4960,21 @@ struct SessionArchiveBuilder: Sendable {
             .appendingPathComponent(UUID().uuidString)
             .appendingPathExtension("wav")
         defer { try? FileManager.default.removeItem(at: projectedAudioURL) }
-        try SessionExportAudioProjection.writePlayableStereo(
+        // Same gate as `stagePackage`: an invalid scratch stem throws here and
+        // the beat stems below are never derived from it.
+        let audioProjection = try SessionExportAudioProjection.writePlayableStereo(
             from: audioArtifactURL,
-            to: projectedAudioURL
+            to: projectedAudioURL,
+            preferredPair: RoutineCaptureAudioHardwareProfile.preferredProgramStereoPair(
+                forDeviceName: context.sidecar.audioDeviceName
+            )
         )
+        #if DEBUG
+        print("[AUDIO-CAPTURE-DEBUG] take=\(context.sidecar.takeID) canonical artifacts")
+        print(audioProjection.debugSummary)
+        #else
+        _ = audioProjection
+        #endif
         let scratchArtifact = try artifactRecord(
             source: "scratch_only",
             fileURL: projectedAudioURL,
@@ -4532,7 +4987,7 @@ struct SessionArchiveBuilder: Sendable {
             let beatBuffer = try renderedBeatStemBuffer(
                 for: context.take,
                 captureMetadata: context.captureMetadata,
-                scratchAudioURL: audioArtifactURL
+                scratchAudioURL: projectedAudioURL
             )
             artifacts["beat_only"] = try generatedAudioArtifactRecord(
                 source: "beat_only",
@@ -4542,7 +4997,7 @@ struct SessionArchiveBuilder: Sendable {
             )
             if let scratchWithBeatFileName = context.scratchWithBeatFileName {
                 let mixedBuffer = try mixedScratchWithTimingBuffer(
-                    scratchURL: audioArtifactURL,
+                    scratchURL: projectedAudioURL,
                     timingBuffer: beatBuffer
                 )
                 artifacts["scratch_with_beat"] = try generatedAudioArtifactRecord(

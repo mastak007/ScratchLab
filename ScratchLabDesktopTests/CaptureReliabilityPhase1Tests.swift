@@ -2688,7 +2688,7 @@ final class CaptureReliabilityPhase1CoreTests: XCTestCase {
         let directory = try makeTemporaryDirectory()
         let sourceURL = directory.appendingPathComponent("rane-14-channel.caf")
         let destinationURL = directory.appendingPathComponent("scratch-only-stereo.wav")
-        let frameCount = 512
+        let frameCount = 4_800
         let channelCount = 14
         let channelLayout = try XCTUnwrap(
             AVAudioChannelLayout(
@@ -2709,11 +2709,14 @@ final class CaptureReliabilityPhase1CoreTests: XCTestCase {
         for channel in 0..<channelCount {
             channels[channel].initialize(repeating: 0, count: frameCount)
         }
+        // Real captured audio moves. Constant fixtures cannot tell a
+        // programme channel from a DC-locked control line, which is what let
+        // DC-only stems ship unnoticed.
         for frame in 0..<frameCount {
             channels[0][frame] = 0.000_01
             channels[1][frame] = -0.000_01
-            channels[12][frame] = 0.25
-            channels[13][frame] = -0.50
+            channels[12][frame] = Self.dynamicSample(frame: frame, amplitude: 0.25)
+            channels[13][frame] = Self.dynamicSample(frame: frame, amplitude: -0.50)
         }
         do {
             let sourceFile = try AVAudioFile(
@@ -2741,8 +2744,133 @@ final class CaptureReliabilityPhase1CoreTests: XCTestCase {
         )
         try exportedFile.read(into: exportedBuffer)
         let exportedChannels = try XCTUnwrap(exportedBuffer.floatChannelData)
-        XCTAssertEqual(exportedChannels[0][100], 0.25, accuracy: 0.000_1)
-        XCTAssertEqual(exportedChannels[1][100], -0.50, accuracy: 0.000_1)
+        XCTAssertEqual(
+            exportedChannels[0][100],
+            Self.dynamicSample(frame: 100, amplitude: 0.25),
+            accuracy: 0.000_1
+        )
+        XCTAssertEqual(
+            exportedChannels[1][100],
+            Self.dynamicSample(frame: 100, amplitude: -0.50),
+            accuracy: 0.000_1
+        )
+    }
+
+    func testSessionExportPrefersKnownRaneMasterPairOverLouderDVSChannels() throws {
+        let directory = try makeTemporaryDirectory()
+        let sourceURL = directory.appendingPathComponent("rane-profile-14-channel.caf")
+        let destinationURL = directory.appendingPathComponent("scratch-only-stereo.wav")
+        let frameCount = 4_800
+        let channelCount = 14
+        let channelLayout = try XCTUnwrap(
+            AVAudioChannelLayout(
+                layoutTag: kAudioChannelLayoutTag_DiscreteInOrder | AudioChannelLayoutTag(channelCount)
+            )
+        )
+        let format = AVAudioFormat(
+            commonFormat: .pcmFormatFloat32,
+            sampleRate: 48_000,
+            interleaved: false,
+            channelLayout: channelLayout
+        )
+        let buffer = try XCTUnwrap(
+            AVAudioPCMBuffer(pcmFormat: format, frameCapacity: AVAudioFrameCount(frameCount))
+        )
+        let channels = try XCTUnwrap(buffer.floatChannelData)
+        buffer.frameLength = AVAudioFrameCount(frameCount)
+        for channel in 0..<channelCount {
+            channels[channel].initialize(repeating: 0, count: frameCount)
+        }
+        // Both pairs carry real audio; the DVS pair is the louder one, so the
+        // hint has to win on merit rather than by skipping the measurement.
+        for frame in 0..<frameCount {
+            channels[2][frame] = Self.dynamicSample(frame: frame, amplitude: -0.90)
+            channels[3][frame] = Self.dynamicSample(frame: frame, amplitude: 0.80)
+            channels[12][frame] = Self.dynamicSample(frame: frame, amplitude: 0.20)
+            channels[13][frame] = Self.dynamicSample(frame: frame, amplitude: -0.25)
+        }
+        do {
+            let sourceFile = try AVAudioFile(
+                forWriting: sourceURL,
+                settings: format.settings,
+                commonFormat: .pcmFormatFloat32,
+                interleaved: false
+            )
+            try sourceFile.write(from: buffer)
+        }
+
+        try SessionExportAudioProjection.writePlayableStereo(
+            from: sourceURL,
+            to: destinationURL,
+            preferredPair: RoutineCaptureAudioHardwareProfile.preferredProgramStereoPair(
+                forDeviceName: "Rane ONE MKII"
+            )
+        )
+
+        let exportedFile = try AVAudioFile(forReading: destinationURL)
+        let exportedBuffer = try XCTUnwrap(
+            AVAudioPCMBuffer(
+                pcmFormat: exportedFile.processingFormat,
+                frameCapacity: AVAudioFrameCount(frameCount)
+            )
+        )
+        try exportedFile.read(into: exportedBuffer)
+        let exportedChannels = try XCTUnwrap(exportedBuffer.floatChannelData)
+        XCTAssertEqual(
+            exportedChannels[0][100],
+            Self.dynamicSample(frame: 100, amplitude: 0.20),
+            accuracy: 0.000_1
+        )
+        XCTAssertEqual(
+            exportedChannels[1][100],
+            Self.dynamicSample(frame: 100, amplitude: -0.25),
+            accuracy: 0.000_1
+        )
+    }
+
+    func testRoutineExportProjectsRaneMultichannelAudioBeforeStemRendering() throws {
+        let root = try makeTemporaryDirectory()
+        let sessionID = "routine-rane-stereo-stems"
+        let videoURL = try makeLocalRecordingTake(
+            in: root,
+            sessionID: sessionID,
+            takeNumber: 1,
+            bpm: 95,
+            createdAt: Date(timeIntervalSince1970: 1_710_001_125),
+            useRealMedia: true
+        )
+        let audioURL = videoURL.deletingPathExtension().appendingPathExtension("wav")
+        try FileManager.default.removeItem(at: audioURL)
+
+        let frameCount = 1_024
+        let channelCount = 14
+        var samples = [Int32](repeating: 0, count: frameCount * channelCount)
+        for frame in 0..<frameCount {
+            samples[(frame * channelCount) + 12] = Self.dynamicInt32Sample(frame: frame, amplitude: 0.25)
+            samples[(frame * channelCount) + 13] = Self.dynamicInt32Sample(frame: frame, amplitude: -0.50)
+        }
+        let sampleBuffer = try makeInterleavedInt32SampleBuffer(
+            samples: samples,
+            channelCount: channelCount,
+            sampleRate: 48_000
+        )
+        let diagnostics = MacCaptureEngine.writeRoutineAudioSampleBufferForTesting(
+            sampleBuffer,
+            to: audioURL
+        )
+        XCTAssertNil(diagnostics.lastErrorMessage)
+
+        let builder = SessionArchiveBuilder()
+        let source = SessionExportSource.localRecordingSession(
+            lastRecordingURL: videoURL,
+            sessionName: "RANE Routine",
+            config: nil
+        )
+        XCTAssertNil(builder.validationReport(for: source))
+
+        let package = try builder.preparePackage(from: source)
+        let preview = try builder.canonicalPreview(for: package)
+        XCTAssertFalse(preview.manifestData.isEmpty)
     }
 
     func testSessionExportDuplicatesMonoIntoPlayableStereo() throws {
@@ -2757,12 +2885,15 @@ final class CaptureReliabilityPhase1CoreTests: XCTestCase {
                 interleaved: false
             )
         )
+        let frameCount = 4_800
         let buffer = try XCTUnwrap(
-            AVAudioPCMBuffer(pcmFormat: format, frameCapacity: 32)
+            AVAudioPCMBuffer(pcmFormat: format, frameCapacity: AVAudioFrameCount(frameCount))
         )
-        buffer.frameLength = 32
+        buffer.frameLength = AVAudioFrameCount(frameCount)
         let sourceChannels = try XCTUnwrap(buffer.floatChannelData)
-        sourceChannels[0].initialize(repeating: 0.125, count: 32)
+        for frame in 0..<frameCount {
+            sourceChannels[0][frame] = Self.dynamicSample(frame: frame, amplitude: 0.125)
+        }
         do {
             let sourceFile = try AVAudioFile(
                 forWriting: sourceURL,
@@ -2781,12 +2912,16 @@ final class CaptureReliabilityPhase1CoreTests: XCTestCase {
         let exportedFile = try AVAudioFile(forReading: destinationURL)
         XCTAssertEqual(exportedFile.processingFormat.channelCount, 2)
         let exportedBuffer = try XCTUnwrap(
-            AVAudioPCMBuffer(pcmFormat: exportedFile.processingFormat, frameCapacity: 32)
+            AVAudioPCMBuffer(
+                pcmFormat: exportedFile.processingFormat,
+                frameCapacity: AVAudioFrameCount(frameCount)
+            )
         )
         try exportedFile.read(into: exportedBuffer)
         let exportedChannels = try XCTUnwrap(exportedBuffer.floatChannelData)
-        XCTAssertEqual(exportedChannels[0][10], 0.125, accuracy: 0.000_1)
-        XCTAssertEqual(exportedChannels[1][10], 0.125, accuracy: 0.000_1)
+        let expected = Self.dynamicSample(frame: 10, amplitude: 0.125)
+        XCTAssertEqual(exportedChannels[0][10], expected, accuracy: 0.000_1)
+        XCTAssertEqual(exportedChannels[1][10], expected, accuracy: 0.000_1)
     }
 
     private func makeNonInterleavedFloatSampleBuffer(
@@ -3161,6 +3296,45 @@ final class CaptureReliabilityPhase1CoreTests: XCTestCase {
 
         XCTAssertEqual(decision.device?.uniqueID, "serato",
                        "explicit user selection must always win, even with skipSeratoPriority")
+        XCTAssertEqual(decision.priority, .explicitUserSelection)
+    }
+
+    func testDebugAudioSelectionPrefersRaneHardwareOverSystemDefaultMicrophone() {
+        let devices = [
+            MacCaptureEngine.AudioInputDeviceChoice(uniqueID: "mic", name: "MacBook Pro Microphone"),
+            MacCaptureEngine.AudioInputDeviceChoice(uniqueID: "rane", name: "Rane Seventy-Two"),
+            MacCaptureEngine.AudioInputDeviceChoice(uniqueID: "serato", name: "Serato Virtual Audio")
+        ]
+
+        let decision = MacCaptureEngine.preferredCaptureAudioDevice(
+            from: devices,
+            explicitSelectionUniqueID: nil,
+            previousSelectionUniqueID: "mic",
+            systemDefaultUniqueID: "mic",
+            skipSeratoPriority: true,
+            preferRaneHardware: true
+        )
+
+        XCTAssertEqual(decision.device?.uniqueID, "rane")
+        XCTAssertEqual(decision.priority, .raneHardware)
+    }
+
+    func testDebugAudioSelectionPreservesExplicitMicrophoneOverRaneHardware() {
+        let devices = [
+            MacCaptureEngine.AudioInputDeviceChoice(uniqueID: "mic", name: "MacBook Pro Microphone"),
+            MacCaptureEngine.AudioInputDeviceChoice(uniqueID: "rane", name: "RANE ONE MKII")
+        ]
+
+        let decision = MacCaptureEngine.preferredCaptureAudioDevice(
+            from: devices,
+            explicitSelectionUniqueID: "mic",
+            previousSelectionUniqueID: "mic",
+            systemDefaultUniqueID: "mic",
+            skipSeratoPriority: true,
+            preferRaneHardware: true
+        )
+
+        XCTAssertEqual(decision.device?.uniqueID, "mic")
         XCTAssertEqual(decision.priority, .explicitUserSelection)
     }
 
@@ -4081,6 +4255,7 @@ final class CaptureReliabilityPhase1CoreTests: XCTestCase {
         let dispatcherURL = projectRootURL().appendingPathComponent("ScratchLab/MIDI/iOSMIDIManager.swift")
         let macTrackerURL = projectRootURL().appendingPathComponent("ScratchLabDesktop/Services/LivePerformedNotationTracker.swift")
         let macAnalyzerURL = projectRootURL().appendingPathComponent("ScratchLabDesktop/Views/MacAnalyzerView.swift")
+        let macPlaybackURL = projectRootURL().appendingPathComponent("ScratchLabDesktop/Services/ScratchSamplePlaybackController.swift")
         let waveformURL = projectRootURL().appendingPathComponent("ScratchLab/Views/ScratchMotionLane.swift")
         let practiceURL = projectRootURL().appendingPathComponent("ScratchLab/Views/PracticeModeView.swift")
         let captureURL = projectRootURL().appendingPathComponent("ScratchLab/Views/CompanionCameraView.swift")
@@ -4091,6 +4266,7 @@ final class CaptureReliabilityPhase1CoreTests: XCTestCase {
         let dispatcherSource = try String(contentsOf: dispatcherURL, encoding: .utf8)
         let macTrackerSource = try String(contentsOf: macTrackerURL, encoding: .utf8)
         let macAnalyzerSource = try String(contentsOf: macAnalyzerURL, encoding: .utf8)
+        let macPlaybackSource = try String(contentsOf: macPlaybackURL, encoding: .utf8)
         let waveformSource = try String(contentsOf: waveformURL, encoding: .utf8)
         let practiceSource = try String(contentsOf: practiceURL, encoding: .utf8)
         let captureSource = try String(contentsOf: captureURL, encoding: .utf8)
@@ -4120,6 +4296,11 @@ final class CaptureReliabilityPhase1CoreTests: XCTestCase {
         XCTAssertFalse(macAnalyzerSource.contains("canvasHeight: 118"))
         XCTAssertTrue(macTrackerSource.contains(".frame(maxWidth: .infinity, maxHeight: .infinity)"))
         XCTAssertTrue(macAnalyzerSource.contains("LivePerformedNotationCard("))
+        XCTAssertTrue(macAnalyzerSource.contains("MacSamplePositionWaveformView("))
+        XCTAssertTrue(macAnalyzerSource.contains("PlatterSamplePositionProjection.resolve("))
+        XCTAssertTrue(macPlaybackSource.contains("struct PlaybackWaveformSnapshot"))
+        XCTAssertTrue(macPlaybackSource.contains("makePlaybackWaveform("))
+        XCTAssertTrue(macPlaybackSource.contains("unwrappedFramePosition"))
         XCTAssertTrue(waveformSource.contains("struct SamplePositionWaveformView"))
         XCTAssertTrue(waveformSource.contains("SAMPLE POSITION"))
         XCTAssertTrue(waveformSource.contains("Text(\"START\")"))
@@ -6096,13 +6277,32 @@ final class CaptureReliabilityPhase1CoreTests: XCTestCase {
         let otherSessionID = "other-session"
         let selectedRecordingDate = Date(timeIntervalSince1970: 1_720_000_000)
         let otherRecordingDate = Date(timeIntervalSince1970: 1_720_000_100)
+        let selectedMovement = CaptureCore.DetectedNotationRecordMovementEvent(
+            startTime: 0.1,
+            endTime: 0.4,
+            startPosition: 0.2,
+            endPosition: 0.7,
+            direction: "forward",
+            movementKind: .normalPush,
+            speed: 1.6,
+            confidence: 0.9,
+            source: "controller"
+        )
+        let selectedNotation = MacCaptureEngine.RoutineNotationFusionEngine().snapshot(
+            audioSnapshot: ScratchAudioNotationSnapshot(audioEvents: [], confidence: nil),
+            motionEvents: [selectedMovement],
+            detectedLabel: "Baby Scratch",
+            labelSource: "detected",
+            labelConfidence: 0.9
+        )
 
         let selectedRecordingURL = try makeLocalRecordingTake(
             in: root,
             sessionID: selectedSessionID,
             takeNumber: 1,
             bpm: 90,
-            createdAt: selectedRecordingDate
+            createdAt: selectedRecordingDate,
+            detectedNotation: selectedNotation
         )
         let otherRecordingURL = try makeLocalRecordingTake(
             in: root,
@@ -6121,6 +6321,12 @@ final class CaptureReliabilityPhase1CoreTests: XCTestCase {
         XCTAssertEqual(selectedSnapshot.mediaURL, selectedRecordingURL)
         XCTAssertEqual(selectedSnapshot.sessionID, selectedSessionID)
         XCTAssertEqual(selectedSnapshot.takeID, "take-001")
+        let restoredMovements = try XCTUnwrap(selectedSnapshot.detectedNotation?.recordMovementEvents)
+        XCTAssertEqual(restoredMovements.count, 1)
+        XCTAssertEqual(restoredMovements.first?.startTime, selectedMovement.startTime)
+        XCTAssertEqual(restoredMovements.first?.endTime, selectedMovement.endTime)
+        XCTAssertEqual(restoredMovements.first?.direction, selectedMovement.direction)
+        XCTAssertEqual(restoredMovements.first?.movementKind, selectedMovement.movementKind)
 
         let latestSnapshot = try XCTUnwrap(MacCaptureEngine.latestCompletedRoutineCapture(in: root))
         XCTAssertEqual(latestSnapshot.mediaURL, otherRecordingURL)
@@ -6427,7 +6633,7 @@ final class CaptureReliabilityPhase1CoreTests: XCTestCase {
             mediaURL: URL(fileURLWithPath: "/tmp/routine.mov"),
             sidecarURL: URL(fileURLWithPath: "/tmp/routine.json")
         )
-        let sidecar = CaptureCore.LocalRecordingSidecar.recording(
+        var sidecar = CaptureCore.LocalRecordingSidecar.recording(
             sessionID: config.sessionID,
             sessionConfig: config,
             takeIdentity: CaptureCore.LocalRecordingNaming.takeIdentity(sessionID: config.sessionID, takeNumber: 1),
@@ -9365,6 +9571,604 @@ extension CaptureReliabilityPhase1CoreTests {
 
 }
 
+// MARK: - Export audio projection: channel-pair validity
+
+/// Covers the defect behind session 20435e68 (macOS, "Rane ONE MKII"), where
+/// the exported `scratch_only` stem's left channel was a frozen DC value
+/// (take-002 measured dc=-0.6996 with variance exactly 0) while the right
+/// channel carried the real performance, and `scratch_with_beat` inherited it.
+extension CaptureReliabilityPhase1CoreTests {
+
+    /// A deterministic dynamic tone. 437 Hz at 48 kHz has a period of ~109.8
+    /// frames, so it stays dynamic under any block or stride the analyser uses.
+    static func dynamicSample(
+        frame: Int,
+        amplitude: Float,
+        hertz: Double = 437,
+        sampleRate: Double = 48_000
+    ) -> Float {
+        amplitude * Float(sin(2.0 * Double.pi * hertz * Double(frame) / sampleRate))
+    }
+
+    static func dynamicInt32Sample(frame: Int, amplitude: Float) -> Int32 {
+        Int32(Double(dynamicSample(frame: frame, amplitude: amplitude)) * Double(Int32.max))
+    }
+
+    /// Writes a discrete multichannel float source. `fill` returns the sample
+    /// for a given channel and frame.
+    func writeMultichannelFloatSource(
+        at url: URL,
+        channelCount: Int,
+        frameCount: Int,
+        sampleRate: Double = 48_000,
+        fill: (_ channel: Int, _ frame: Int) -> Float
+    ) throws {
+        let channelLayout = try XCTUnwrap(
+            AVAudioChannelLayout(
+                layoutTag: kAudioChannelLayoutTag_DiscreteInOrder | AudioChannelLayoutTag(channelCount)
+            )
+        )
+        let format = AVAudioFormat(
+            commonFormat: .pcmFormatFloat32,
+            sampleRate: sampleRate,
+            interleaved: false,
+            channelLayout: channelLayout
+        )
+        let buffer = try XCTUnwrap(
+            AVAudioPCMBuffer(pcmFormat: format, frameCapacity: AVAudioFrameCount(frameCount))
+        )
+        buffer.frameLength = AVAudioFrameCount(frameCount)
+        let channels = try XCTUnwrap(buffer.floatChannelData)
+        for channel in 0..<channelCount {
+            for frame in 0..<frameCount {
+                channels[channel][frame] = fill(channel, frame)
+            }
+        }
+        let file = try AVAudioFile(
+            forWriting: url,
+            settings: format.settings,
+            commonFormat: .pcmFormatFloat32,
+            interleaved: false
+        )
+        try file.write(from: buffer)
+    }
+
+    /// Per-channel DC offset and AC RMS of a written file, measured the same
+    /// way the export does, so assertions are about the artifact on disk.
+    func measuredChannelSignal(at url: URL) throws -> [(dcOffset: Double, acRMS: Double)] {
+        let file = try AVAudioFile(forReading: url, commonFormat: .pcmFormatFloat32, interleaved: false)
+        let channelCount = Int(file.processingFormat.channelCount)
+        let frameCount = Int(file.length)
+        let buffer = try XCTUnwrap(
+            AVAudioPCMBuffer(
+                pcmFormat: file.processingFormat,
+                frameCapacity: AVAudioFrameCount(frameCount)
+            )
+        )
+        try file.read(into: buffer)
+        let channels = try XCTUnwrap(buffer.floatChannelData)
+        let frames = Int(buffer.frameLength)
+        XCTAssertGreaterThan(frames, 0)
+        return (0..<channelCount).map { channel in
+            var sum = 0.0
+            var squareSum = 0.0
+            for frame in 0..<frames {
+                let sample = Double(channels[channel][frame])
+                sum += sample
+                squareSum += sample * sample
+            }
+            let mean = sum / Double(frames)
+            let variance = max(0, (squareSum / Double(frames)) - (mean * mean))
+            return (dcOffset: mean, acRMS: variance.squareRoot())
+        }
+    }
+
+    /// The shipped take-002 shape: hardware-profile pair 12/13 where the left
+    /// channel is frozen and the right carries the performance. The frozen
+    /// channel must never reach the stem; the live one is recovered to both
+    /// sides rather than the whole pair being thrown away.
+    func testProjectionRecoversLiveChannelWhenPreferredPairPartnerIsDCFrozen() throws {
+        let directory = try makeTemporaryDirectory()
+        let sourceURL = directory.appendingPathComponent("rane-dc-frozen-partner.caf")
+        let destinationURL = directory.appendingPathComponent("scratch-only-stereo.wav")
+
+        try writeMultichannelFloatSource(
+            at: sourceURL,
+            channelCount: 14,
+            frameCount: 4_800
+        ) { channel, frame in
+            switch channel {
+            case 12: return -0.699_631
+            case 13: return Self.dynamicSample(frame: frame, amplitude: 0.80)
+            default: return 0
+            }
+        }
+
+        let diagnostics = try SessionExportAudioProjection.writePlayableStereo(
+            from: sourceURL,
+            to: destinationURL,
+            preferredPair: RoutineCaptureAudioHardwareProfile.preferredProgramStereoPair(
+                forDeviceName: "Rane ONE MKII"
+            )
+        )
+
+        XCTAssertEqual(diagnostics.sourceChannelCount, 14)
+        XCTAssertTrue(diagnostics.duplicatedLiveChannel)
+        XCTAssertEqual(diagnostics.leftSourceChannelIndex, 13)
+        XCTAssertEqual(diagnostics.rightSourceChannelIndex, 13)
+        XCTAssertTrue(
+            diagnostics.sourceStatistics[12].isDCFrozen,
+            "Channel 12 is a constant and must be classified as frozen."
+        )
+        XCTAssertFalse(diagnostics.sourceStatistics[12].isDynamic)
+
+        let written = try measuredChannelSignal(at: destinationURL)
+        XCTAssertEqual(written.count, 2)
+        for (index, channel) in written.enumerated() {
+            XCTAssertGreaterThan(
+                channel.acRMS,
+                SessionExportAudioProjection.SignalValidity.minimumChannelACRMS,
+                "Exported channel \(index) must carry dynamics, never the frozen line."
+            )
+            XCTAssertNotEqual(
+                channel.dcOffset,
+                -0.699_631,
+                accuracy: 0.001,
+                "The frozen channel's value must not appear in the stem."
+            )
+        }
+    }
+
+    /// The real take-01 / take-02 shape: an 8-channel capture with exactly one
+    /// live channel and exact zeros elsewhere, the live channel riding a large
+    /// DC offset. Both output channels must carry the performance.
+    func testProjectionRecoversEffectivelyMonoCaptureWithLargeDCOffset() throws {
+        let directory = try makeTemporaryDirectory()
+        let sourceURL = directory.appendingPathComponent("effectively-mono-8ch.caf")
+        let destinationURL = directory.appendingPathComponent("scratch-only-stereo.wav")
+        let dcOffset: Float = -0.695_422
+
+        try writeMultichannelFloatSource(
+            at: sourceURL,
+            channelCount: 8,
+            frameCount: 4_800
+        ) { channel, frame in
+            channel == 2
+                ? dcOffset + Self.dynamicSample(frame: frame, amplitude: 0.56)
+                : 0
+        }
+
+        let diagnostics = try SessionExportAudioProjection.writePlayableStereo(
+            from: sourceURL,
+            to: destinationURL,
+            preferredPair: RoutineCaptureAudioHardwareProfile.preferredProgramStereoPair(
+                forDeviceName: "Rane ONE MKII"
+            )
+        )
+
+        // The 12/13 hint cannot apply to an 8-channel capture.
+        XCTAssertEqual(
+            diagnostics.outcome,
+            .fallbackAfterRejectedPreferredPair(.outOfRange)
+        )
+        XCTAssertEqual(diagnostics.selectedFirstChannelIndex, 2)
+        XCTAssertTrue(
+            diagnostics.duplicatedLiveChannel,
+            "A live channel beside a dead partner must be sent to both sides."
+        )
+        XCTAssertEqual(diagnostics.leftSourceChannelIndex, 2)
+        XCTAssertEqual(diagnostics.rightSourceChannelIndex, 2)
+
+        // The channel has more DC than AC and is still the performance: it must
+        // be kept, not rejected.
+        let live = diagnostics.sourceStatistics[2]
+        XCTAssertTrue(live.isDynamic)
+        XCTAssertGreaterThan(abs(live.dcOffset), live.acRMS)
+        XCTAssertTrue(live.requiresDCRemoval)
+
+        let written = try measuredChannelSignal(at: destinationURL)
+        XCTAssertEqual(written.count, 2)
+        for (index, channel) in written.enumerated() {
+            XCTAssertGreaterThan(
+                channel.acRMS,
+                0.1,
+                "Exported channel \(index) must carry the performance, not silence."
+            )
+            XCTAssertLessThan(
+                abs(channel.dcOffset),
+                SessionExportAudioProjection.SignalValidity.dcRemovalThreshold,
+                "Exported channel \(index) must have its DC offset removed."
+            )
+        }
+    }
+
+    /// The live RANE ONE MKII probe (2026-08-31), reproduced exactly:
+    /// 14 channels, CH13 (index 12) frozen at **+0.66995**, CH14 (index 13)
+    /// program at -4.8 dBFS RMS / -0.0 dBFS peak / DC +0.00110, everything else
+    /// at or below the -89.6 dBFS noise floor.
+    ///
+    /// The frozen value is *positive* here and was **-0.699631** in the shipped
+    /// session, so selection must key on absent AC content and never on the DC
+    /// value or its sign.
+    func testProjectionRecoversProgrammeFromMeasuredRaneDeviceShape() throws {
+        let directory = try makeTemporaryDirectory()
+        let sourceURL = directory.appendingPathComponent("measured-rane-14ch.caf")
+        let destinationURL = directory.appendingPathComponent("scratch-only-stereo.wav")
+        let frameCount = 24_000
+
+        try writeMultichannelFloatSource(
+            at: sourceURL,
+            channelCount: 14,
+            frameCount: frameCount
+        ) { channel, frame in
+            switch channel {
+            case 0: return Self.dynamicSample(frame: frame, amplitude: 2.19e-6, hertz: 997)
+            case 1: return Self.dynamicSample(frame: frame, amplitude: 2.19e-6, hertz: 1_103)
+            case 2: return Self.dynamicSample(frame: frame, amplitude: 3.24e-5, hertz: 997)
+            case 3: return Self.dynamicSample(frame: frame, amplitude: 3.31e-5, hertz: 1_103)
+            case 4: return Self.dynamicSample(frame: frame, amplitude: 1.11e-6, hertz: 997)
+            case 5: return Self.dynamicSample(frame: frame, amplitude: 1.12e-6, hertz: 1_103)
+            case 12: return 0.669_95
+            case 13: return 0.001_10 + Self.dynamicSample(frame: frame, amplitude: 0.812)
+            default: return 0
+            }
+        }
+
+        let diagnostics = try SessionExportAudioProjection.writePlayableStereo(
+            from: sourceURL,
+            to: destinationURL,
+            preferredPair: RoutineCaptureAudioHardwareProfile.preferredProgramStereoPair(
+                forDeviceName: "Rane ONE MKII"
+            )
+        )
+
+        XCTAssertEqual(diagnostics.sourceChannelCount, 14)
+        // The hint is right about the pair; it is wrong about the left channel.
+        XCTAssertEqual(diagnostics.outcome, .preferredPairAccepted)
+        XCTAssertTrue(diagnostics.duplicatedLiveChannel)
+        XCTAssertEqual(diagnostics.leftSourceChannelIndex, 13)
+        XCTAssertEqual(diagnostics.rightSourceChannelIndex, 13)
+
+        // A *positive* frozen channel must classify exactly like the negative one.
+        let frozen = diagnostics.sourceStatistics[12]
+        XCTAssertTrue(frozen.isDCFrozen)
+        XCTAssertFalse(frozen.isDynamic)
+        XCTAssertGreaterThan(frozen.dcOffset, 0, "This session's dead line is parked positive.")
+
+        // The programme channel's small offset is below the removal threshold,
+        // so its audio passes through untouched.
+        XCTAssertEqual(diagnostics.removedDCOffsets, [0, 0])
+
+        // The near-noise-floor channels must read as silent, not as programme.
+        for channel in [0, 1, 2, 3, 4, 5] {
+            XCTAssertFalse(
+                diagnostics.sourceStatistics[channel].isDynamic,
+                "Channel \(channel) sits below the noise floor and must not count as audio."
+            )
+        }
+
+        let written = try measuredChannelSignal(at: destinationURL)
+        XCTAssertEqual(written.count, 2)
+        for (index, channel) in written.enumerated() {
+            XCTAssertEqual(
+                channel.acRMS, 0.574, accuracy: 0.02,
+                "Exported channel \(index) must carry the -4.8 dBFS performance."
+            )
+            XCTAssertLessThan(
+                abs(channel.dcOffset), 0.01,
+                "Exported channel \(index) must not carry the frozen pedestal."
+            )
+        }
+    }
+
+    /// A healthy stereo pair keeps both distinct channels and is left alone.
+    func testProjectionKeepsBothChannelsOfAHealthyStereoPair() throws {
+        let directory = try makeTemporaryDirectory()
+        let sourceURL = directory.appendingPathComponent("healthy-stereo-14ch.caf")
+        let destinationURL = directory.appendingPathComponent("scratch-only-stereo.wav")
+
+        try writeMultichannelFloatSource(
+            at: sourceURL,
+            channelCount: 14,
+            frameCount: 4_800
+        ) { channel, frame in
+            switch channel {
+            case 12: return Self.dynamicSample(frame: frame, amplitude: 0.42)
+            case 13: return Self.dynamicSample(frame: frame, amplitude: -0.37)
+            default: return 0
+            }
+        }
+
+        let diagnostics = try SessionExportAudioProjection.writePlayableStereo(
+            from: sourceURL,
+            to: destinationURL,
+            preferredPair: RoutineCaptureAudioHardwareProfile.preferredProgramStereoPair(
+                forDeviceName: "Rane ONE MKII"
+            )
+        )
+
+        XCTAssertEqual(diagnostics.outcome, .preferredPairAccepted)
+        XCTAssertFalse(diagnostics.duplicatedLiveChannel)
+        XCTAssertEqual(diagnostics.leftSourceChannelIndex, 12)
+        XCTAssertEqual(diagnostics.rightSourceChannelIndex, 13)
+        XCTAssertEqual(diagnostics.removedDCOffsets, [0, 0], "A clean pair must pass through untouched.")
+
+        let exportedFile = try AVAudioFile(forReading: destinationURL)
+        let exportedBuffer = try XCTUnwrap(
+            AVAudioPCMBuffer(pcmFormat: exportedFile.processingFormat, frameCapacity: 4_800)
+        )
+        try exportedFile.read(into: exportedBuffer)
+        let exportedChannels = try XCTUnwrap(exportedBuffer.floatChannelData)
+        XCTAssertEqual(
+            exportedChannels[0][100],
+            Self.dynamicSample(frame: 100, amplitude: 0.42),
+            accuracy: 0.000_1
+        )
+        XCTAssertEqual(
+            exportedChannels[1][100],
+            Self.dynamicSample(frame: 100, amplitude: -0.37),
+            accuracy: 0.000_1
+        )
+    }
+
+    func testProjectionFailsExplicitlyWhenNoChannelPairCarriesDynamicAudio() throws {
+        let directory = try makeTemporaryDirectory()
+        let sourceURL = directory.appendingPathComponent("rane-dc-only.caf")
+        let destinationURL = directory.appendingPathComponent("scratch-only-stereo.wav")
+
+        // Every pair is either silent or a constant: nothing here is playable.
+        try writeMultichannelFloatSource(
+            at: sourceURL,
+            channelCount: 14,
+            frameCount: 4_800
+        ) { channel, _ in
+            switch channel {
+            case 12: return -0.699_631
+            case 13: return 0.552_100
+            default: return 0
+            }
+        }
+
+        XCTAssertThrowsError(
+            try SessionExportAudioProjection.writePlayableStereo(
+                from: sourceURL,
+                to: destinationURL,
+                preferredPair: RoutineCaptureAudioHardwareProfile.preferredProgramStereoPair(
+                    forDeviceName: "Rane ONE MKII"
+                )
+            )
+        ) { error in
+            let failure = error as? SessionExportValidationFailure
+            XCTAssertEqual(failure?.reason, .capturedAudioHasNoDynamicChannelPair)
+            XCTAssertEqual(failure?.exportError, .unableToPrepareExport)
+            XCTAssertTrue(
+                failure?.reason.detailText.contains("no dynamic audio") ?? false,
+                "The operator needs the reason named, not a generic export failure."
+            )
+        }
+
+        XCTAssertFalse(
+            FileManager.default.fileExists(atPath: destinationURL.path),
+            "A rejected projection must not leave a stem behind that looks like a success."
+        )
+    }
+
+    func testProjectionCannotSilentlySucceedOnSilentOrDCOnlySources() throws {
+        let directory = try makeTemporaryDirectory()
+
+        // Regression guard: for every degenerate source shape, the projection
+        // must throw. It must never write a file and report success.
+        let cases: [(name: String, fill: (Int, Int) -> Float)] = [
+            ("all-silent", { _, _ in 0 }),
+            ("all-dc", { channel, _ in Float(channel + 1) * 0.05 }),
+            ("dc-preferred-pair-only", { channel, _ in
+                channel == 12 ? -0.70 : (channel == 13 ? 0.55 : 0)
+            }),
+        ]
+
+        for testCase in cases {
+            let sourceURL = directory.appendingPathComponent("\(testCase.name).caf")
+            let destinationURL = directory.appendingPathComponent("\(testCase.name)-stereo.wav")
+            try writeMultichannelFloatSource(
+                at: sourceURL,
+                channelCount: 14,
+                frameCount: 2_400,
+                fill: testCase.fill
+            )
+
+            XCTAssertThrowsError(
+                try SessionExportAudioProjection.writePlayableStereo(
+                    from: sourceURL,
+                    to: destinationURL
+                ),
+                "\(testCase.name) must not project to a playable stem."
+            ) { error in
+                XCTAssertEqual(
+                    (error as? SessionExportValidationFailure)?.reason,
+                    .capturedAudioHasNoDynamicChannelPair,
+                    "\(testCase.name) should name the audio check that rejected it."
+                )
+            }
+            XCTAssertFalse(
+                FileManager.default.fileExists(atPath: destinationURL.path),
+                "\(testCase.name) must not leave a stem on disk."
+            )
+        }
+    }
+
+    func testProjectionKeepsValidPreferredPairAndReportsNoFallback() throws {
+        let directory = try makeTemporaryDirectory()
+        let sourceURL = directory.appendingPathComponent("rane-valid-preferred.caf")
+        let destinationURL = directory.appendingPathComponent("scratch-only-stereo.wav")
+
+        try writeMultichannelFloatSource(
+            at: sourceURL,
+            channelCount: 14,
+            frameCount: 4_800
+        ) { channel, frame in
+            switch channel {
+            case 12: return Self.dynamicSample(frame: frame, amplitude: 0.42)
+            case 13: return Self.dynamicSample(frame: frame, amplitude: -0.37)
+            default: return 0
+            }
+        }
+
+        let diagnostics = try SessionExportAudioProjection.writePlayableStereo(
+            from: sourceURL,
+            to: destinationURL,
+            preferredPair: RoutineCaptureAudioHardwareProfile.preferredProgramStereoPair(
+                forDeviceName: "Rane ONE MKII"
+            )
+        )
+
+        XCTAssertEqual(diagnostics.outcome, .preferredPairAccepted)
+        XCTAssertFalse(diagnostics.usedFallback)
+        XCTAssertEqual(diagnostics.selectedFirstChannelIndex, 12)
+        XCTAssertEqual(diagnostics.selectedSecondChannelIndex, 13)
+        XCTAssertTrue(
+            diagnostics.debugSummary.contains("sourceChannels=14"),
+            "Diagnostics must record the source channel count."
+        )
+        XCTAssertTrue(diagnostics.debugSummary.contains("preferredPair=12/13"))
+        XCTAssertTrue(diagnostics.debugSummary.contains("pairEnergyRanking"))
+    }
+
+    func testRoutineExportKeepsDynamicScratchStemAndGeneratesBeatStems() throws {
+        let root = try makeTemporaryDirectory()
+        let sessionID = "routine-rane-valid-stems"
+        let videoURL = try makeLocalRecordingTake(
+            in: root,
+            sessionID: sessionID,
+            takeNumber: 1,
+            bpm: 95,
+            createdAt: Date(timeIntervalSince1970: 1_710_001_125),
+            useRealMedia: true
+        )
+        let audioURL = videoURL.deletingPathExtension().appendingPathExtension("wav")
+        try FileManager.default.removeItem(at: audioURL)
+        try writeMultichannelFloatSource(
+            at: audioURL,
+            channelCount: 14,
+            frameCount: 4_800
+        ) { channel, frame in
+            switch channel {
+            case 12: return Self.dynamicSample(frame: frame, amplitude: 0.35)
+            case 13: return Self.dynamicSample(frame: frame, amplitude: -0.45)
+            default: return 0
+            }
+        }
+
+        let builder = SessionArchiveBuilder()
+        let source = SessionExportSource.localRecordingSession(
+            lastRecordingURL: videoURL,
+            sessionName: "RANE Routine",
+            config: nil
+        )
+        XCTAssertNil(builder.validationReport(for: source))
+
+        let archiveDirectory = root.appendingPathComponent("archives", isDirectory: true)
+        try FileManager.default.createDirectory(at: archiveDirectory, withIntermediateDirectories: true)
+        let result = try builder.createArchive(
+            from: try builder.preparePackage(from: source),
+            options: SessionExportOptions(mixMode: .scratchOnly),
+            in: archiveDirectory
+        )
+        let archiveRoot = try unzipArchive(
+            result.archiveURL,
+            to: root.appendingPathComponent("unzipped", isDirectory: true)
+        )
+        let audioDirectory = archiveRoot.appendingPathComponent("audio", isDirectory: true)
+        let stems = try FileManager.default
+            .contentsOfDirectory(atPath: audioDirectory.path)
+            .sorted()
+
+        let scratchOnly = try XCTUnwrap(stems.first(where: { $0.contains("scratch_only") }))
+        XCTAssertTrue(stems.contains(where: { $0.contains("beat_only") }))
+        XCTAssertTrue(stems.contains(where: { $0.contains("scratch_with_beat") }))
+
+        for stem in stems {
+            let measured = try measuredChannelSignal(
+                at: audioDirectory.appendingPathComponent(stem)
+            )
+            for (index, channel) in measured.enumerated() {
+                XCTAssertGreaterThan(
+                    channel.acRMS,
+                    SessionExportAudioProjection.SignalValidity.minimumChannelACRMS,
+                    "\(stem) channel \(index) must carry dynamics."
+                )
+                XCTAssertLessThan(
+                    abs(channel.dcOffset),
+                    channel.acRMS,
+                    "\(stem) channel \(index) must not be DC-dominated."
+                )
+            }
+        }
+        XCTAssertFalse(scratchOnly.isEmpty)
+    }
+
+    func testRoutineExportEmitsNoStemsWhenCapturedScratchAudioIsDCOnly() throws {
+        let root = try makeTemporaryDirectory()
+        let sessionID = "routine-rane-dc-only-stems"
+        let videoURL = try makeLocalRecordingTake(
+            in: root,
+            sessionID: sessionID,
+            takeNumber: 1,
+            bpm: 95,
+            createdAt: Date(timeIntervalSince1970: 1_710_001_125),
+            useRealMedia: true
+        )
+        let audioURL = videoURL.deletingPathExtension().appendingPathExtension("wav")
+        try FileManager.default.removeItem(at: audioURL)
+        try writeMultichannelFloatSource(
+            at: audioURL,
+            channelCount: 14,
+            frameCount: 4_800
+        ) { channel, _ in
+            switch channel {
+            case 12: return -0.699_631
+            case 13: return 0.552_100
+            default: return 0
+            }
+        }
+
+        let builder = SessionArchiveBuilder()
+        let source = SessionExportSource.localRecordingSession(
+            lastRecordingURL: videoURL,
+            sessionName: "RANE Routine",
+            config: nil
+        )
+
+        // The invalid scratch stem must be named, and must stop the export
+        // before beat_only / scratch_with_beat are derived from it.
+        let report = builder.validationReport(for: source)
+        XCTAssertTrue(
+            report?.issues.contains(where: { $0.contains("no dynamic audio") }) ?? false,
+            "Validation must name the audio check, got: \(String(describing: report?.issues))"
+        )
+
+        let archiveDirectory = root.appendingPathComponent("archives", isDirectory: true)
+        try FileManager.default.createDirectory(at: archiveDirectory, withIntermediateDirectories: true)
+        // `preparePackage` runs the validation gate first, so the boundary
+        // error is the coarse operator one; the specific reason travels in the
+        // report asserted above, which is what the UI shows.
+        XCTAssertThrowsError(
+            try builder.createArchive(
+                from: try builder.preparePackage(from: source),
+                options: SessionExportOptions(mixMode: .scratchOnly),
+                in: archiveDirectory
+            )
+        ) { error in
+            XCTAssertEqual(error as? SessionExportError, .invalidSessionMetadata)
+        }
+
+        let produced = (try? FileManager.default.contentsOfDirectory(atPath: archiveDirectory.path)) ?? []
+        XCTAssertTrue(
+            produced.filter { $0.hasSuffix(".zip") }.isEmpty,
+            "No archive may be produced from an invalid scratch stem."
+        )
+    }
+}
+
 final class CaptureRecoveryPhase2CoreTests: XCTestCase {
     func testInterruptedRecordingIsRecoveredOnRelaunch() throws {
         let root = try makeTemporaryDirectory()
@@ -9663,6 +10467,29 @@ final class CaptureRecoveryPhase2CoreTests: XCTestCase {
 
         XCTAssertTrue(report.issues.contains(where: { $0.code == .quarantinedUnlinkedWatchCapture }))
         XCTAssertTrue(FileManager.default.fileExists(atPath: watchRoot.appendingPathComponent("Quarantine/orphan-watch.json").path))
+    }
+
+    func testLocalRecordingSidecarDiscoveryIgnoresRawPlatterTimelineCompanion() throws {
+        let root = try makeTemporaryDirectory()
+        let sessionID = "timeline-companion-session"
+        let sidecarBaseName = CaptureCore.LocalRecordingNaming.baseName(
+            sessionID: sessionID,
+            takeNumber: 1,
+            roleLabel: "routine"
+        )
+        let sidecarURL = root.appendingPathComponent(sidecarBaseName).appendingPathExtension("json")
+        let timelineURL = root
+            .appendingPathComponent("\(sidecarBaseName)_raw_platter_timeline")
+            .appendingPathExtension("json")
+        try Data("sidecar".utf8).write(to: sidecarURL, options: .atomic)
+        try Data("timeline".utf8).write(to: timelineURL, options: .atomic)
+
+        let discoveredURLs = try SessionArchiveBuilder().matchingLocalRecordingSidecarURLs(
+            in: root,
+            seedSessionID: sessionID
+        )
+
+        XCTAssertEqual(discoveredURLs, [sidecarURL])
     }
 
     func testLocalRecordingSessionValidationReportsInterruptedTake() throws {
@@ -11696,7 +12523,8 @@ extension CaptureReliabilityPhase1CoreTests {
         beatEngineMode: BeatEngineMode = .clickTrack,
         timingPrintedToRecording: TimingPrintedToRecordingState = .unknown,
         captureTiming: CaptureTimingMetadata? = nil,
-        useRealMedia: Bool = false
+        useRealMedia: Bool = false,
+        detectedNotation: CaptureCore.DetectedNotationSnapshot? = nil
     ) throws -> URL {
         let baseName = CaptureCore.LocalRecordingNaming.baseName(
             sessionID: sessionID,
@@ -11725,7 +12553,8 @@ extension CaptureReliabilityPhase1CoreTests {
             captureMode: captureMode,
             beatEngineMode: beatEngineMode,
             timingPrintedToRecording: timingPrintedToRecording,
-            captureTiming: captureTiming
+            captureTiming: captureTiming,
+            detectedNotation: detectedNotation
         )
         return videoURL
     }
@@ -11797,8 +12626,17 @@ extension CaptureReliabilityPhase1CoreTests {
             throw SessionExportError.unableToPrepareExport
         }
 
+        // A real take carries dynamic audio. Silence here made every export
+        // test pass against a stem that could never be played, which is how a
+        // DC/silent scratch stem reached a shipped session.
         buffer.frameLength = 1_024
-        channelData[0].initialize(repeating: 0, count: Int(buffer.frameLength))
+        for frame in 0..<Int(buffer.frameLength) {
+            channelData[0][frame] = Self.dynamicSample(
+                frame: frame,
+                amplitude: 0.25,
+                sampleRate: 44_100
+            )
+        }
 
         let file = try AVAudioFile(forWriting: url, settings: format.settings)
         try file.write(from: buffer)
@@ -11903,7 +12741,8 @@ extension CaptureReliabilityPhase1CoreTests {
         captureMode: CaptureSessionCaptureMode = .timedClick,
         beatEngineMode: BeatEngineMode = .clickTrack,
         timingPrintedToRecording: TimingPrintedToRecordingState = .unknown,
-        captureTiming: CaptureTimingMetadata? = nil
+        captureTiming: CaptureTimingMetadata? = nil,
+        detectedNotation: CaptureCore.DetectedNotationSnapshot? = nil
     ) throws {
         var config = CaptureSessionConfig(
             performerName: performerName,
@@ -11922,7 +12761,7 @@ extension CaptureReliabilityPhase1CoreTests {
             updatedAt: createdAt
         )
         config.applyCapturedTakeMetrics(takeCount: 3, totalDurationSeconds: 3, updatedAt: createdAt)
-        let sidecar = CaptureCore.LocalRecordingSidecar.recording(
+        var sidecar = CaptureCore.LocalRecordingSidecar.recording(
             sessionID: sessionID,
             sessionConfig: config,
             takeIdentity: takeIdentity,
@@ -11942,6 +12781,12 @@ extension CaptureReliabilityPhase1CoreTests {
             mediaFileName: mediaURL.lastPathComponent,
             captureErrorDescription: nil
         )
+        if let detectedNotation {
+            sidecar = sidecar.withDetectedNotation(
+                detectedNotation,
+                recordedAt: createdAt.addingTimeInterval(1)
+            )
+        }
         try sidecar.encodedData().write(to: sidecarURL, options: .atomic)
     }
 
@@ -16356,6 +17201,101 @@ final class MultichannelSignalProbeTests: XCTestCase {
         XCTAssertEqual(snapshot.channels[13].kind, .dataOrControl)
         XCTAssertEqual(snapshot.channels[2].kind, .silent)
         XCTAssertTrue(snapshot.reportText.contains("CH 1/2"))
+    }
+
+    /// The live RANE ONE MKII probe (2026-08-31): CH 13/14 has a frozen left
+    /// channel at +0.66995 and real program audio on the right at -4.8 dBFS.
+    /// The probe used to score this 0.04 and report "no pair looks like program
+    /// audio" — while that channel was the performance.
+    private func measuredRaneDeviceChannels(frames: Int) -> [[Float]] {
+        var channels = Array(repeating: [Float](repeating: 0, count: frames), count: 14)
+        channels[0] = sine(997, frames: frames, amplitude: 2.19e-6)    // -113.2 dBFS
+        channels[1] = sine(1_103, frames: frames, amplitude: 2.19e-6)
+        channels[2] = sine(997, frames: frames, amplitude: 3.24e-5)    //  -89.8 dBFS
+        channels[3] = sine(1_103, frames: frames, amplitude: 3.31e-5)
+        channels[4] = sine(997, frames: frames, amplitude: 1.11e-6)    // -119.1 dBFS
+        channels[5] = sine(1_103, frames: frames, amplitude: 1.12e-6)
+        channels[12] = [Float](repeating: 0.669_95, count: frames)     // frozen
+        var program = sine(437, frames: frames, amplitude: 0.812)      //  -4.8 dBFS
+        for index in stride(from: 0, to: frames, by: 1_000) {
+            program[index] = 1.0                                       //  -0.0 dBFS peak
+        }
+        channels[13] = program.map { $0 + 0.001_10 }
+        return channels
+    }
+
+    func testRecommendsHalfLivePairWhenOnlyOneChannelCarriesProgramAudio() throws {
+        let frames = 24_000
+        let snapshot = try XCTUnwrap(
+            MultichannelSignalProbe.analyze(
+                planarChannels: measuredRaneDeviceChannels(frames: frames),
+                sampleRate: 48_000
+            )
+        )
+
+        // Channel classification must match what the device reported.
+        XCTAssertEqual(snapshot.channels[12].kind, .dcHeavy)
+        XCTAssertEqual(snapshot.channels[13].kind, .program)
+        XCTAssertTrue(snapshot.channels[13].isClipping)
+        XCTAssertEqual(snapshot.channels[2].kind, .silent)
+
+        let pair1314 = try XCTUnwrap(snapshot.pairs.first { $0.label == "13/14" })
+        XCTAssertGreaterThan(
+            pair1314.programLikelihood, 0.5,
+            "A live program channel beside a frozen one must still be recommendable."
+        )
+        XCTAssertLessThanOrEqual(
+            pair1314.programLikelihood,
+            MultichannelSignalProbe.monoRecoveredLikelihoodCeiling,
+            "A half-live pair must never score as high as real stereo."
+        )
+        XCTAssertEqual(
+            pair1314.soleProgramChannel?.channelIndex, 13,
+            "The right channel is the recoverable one."
+        )
+        XCTAssertEqual(snapshot.recommendedPair, CaptureAudioProgramPair(startChannel: 12))
+
+        // The operator must be told it is one channel, not a stereo pair.
+        XCTAssertTrue(snapshot.reportText.contains("CH 13/14"))
+        XCTAssertTrue(
+            snapshot.reportText.contains("right channel only"),
+            "Report must not imply a healthy stereo pair. Got:\n\(snapshot.reportText)"
+        )
+    }
+
+    func testRealStereoPairOutranksHalfLivePair() throws {
+        let frames = 24_000
+        var channels = measuredRaneDeviceChannels(frames: frames)
+        // Give CH 1/2 genuine decorrelated stereo program audio.
+        channels[0] = sine(220, frames: frames, amplitude: 0.3)
+        channels[1] = sine(220, frames: frames, amplitude: 0.3, phase: 0.6)
+
+        let snapshot = try XCTUnwrap(
+            MultichannelSignalProbe.analyze(planarChannels: channels, sampleRate: 48_000)
+        )
+        let stereo = try XCTUnwrap(snapshot.pairs.first { $0.label == "1/2" })
+        let halfLive = try XCTUnwrap(snapshot.pairs.first { $0.label == "13/14" })
+
+        XCTAssertGreaterThan(stereo.programLikelihood, halfLive.programLikelihood)
+        XCTAssertEqual(snapshot.recommendedPair, CaptureAudioProgramPair(startChannel: 0))
+        XCTAssertNil(stereo.soleProgramChannel, "A real stereo pair is not a mono recovery.")
+        XCTAssertFalse(snapshot.reportText.contains("channel only"))
+    }
+
+    func testQuietPartnerIsStereoNotMonoRecovery() throws {
+        let frames = 12_000
+        var channels = Array(repeating: [Float](repeating: 0, count: frames), count: 2)
+        channels[0] = sine(440, frames: frames, amplitude: 0.30)
+        channels[1] = sine(440, frames: frames, amplitude: 0.015, phase: 0.4)  // weakSignal
+
+        let snapshot = try XCTUnwrap(
+            MultichannelSignalProbe.analyze(planarChannels: channels, sampleRate: 48_000)
+        )
+        XCTAssertEqual(snapshot.channels[1].kind, .weakSignal)
+        XCTAssertNil(
+            snapshot.pairs.first?.soleProgramChannel,
+            "A quiet partner is a stereo pair, not a dead channel to recover from."
+        )
     }
 
     func testNonFiniteChannelNeverRecommended() throws {
