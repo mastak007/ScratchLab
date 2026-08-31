@@ -619,6 +619,105 @@ final class CaptureReadinessTests: XCTestCase {
         XCTAssertNotEqual(derived, .ready, "DVS ready must not read as capture ready")
     }
 
+    // MARK: - Stale DVS state must not gate capture
+
+    /// The exact contradictory state reported from the running app: timecode
+    /// input had been enabled and its signal never became ready, the operator
+    /// then selected Rane ONE MKII audio and it went READY — and Start
+    /// recording stayed disabled with "DVS input is enabled but not ready",
+    /// while the same panel offered "Use Serato Audio" (proving Serato was
+    /// *not* the selected input) and exposed no way to disable DVS.
+    func testStaleEnabledDVSDoesNotBlockWhenNormalAudioIsSelectedAndReady() {
+        // DVS left enabled from an earlier attempt, still with no signal.
+        // The selected capture input is Rane ONE MKII, not Serato/DVS.
+        let lane = CaptureLaneReadiness.dvs(
+            .noSignal,
+            modeEnabled: true,
+            isDVSSourceSelected: false
+        )
+        XCTAssertFalse(lane.isRequired, "DVS is optional unless its source is selected.")
+        XCTAssertFalse(lane.isBlocking, "Stale DVS state must not gate recording.")
+
+        var lanes = CaptureLanes()
+        lanes.audio = .audio(isAvailable: true)
+        lanes.dvsTimecode = lane
+        XCTAssertTrue(lanes.blockingLanes.isEmpty)
+        XCTAssertTrue(lanes.isReady)
+        XCTAssertEqual(
+            CaptureReadiness.derive(
+                CaptureReadinessInput(hasSession: true, isMetadataComplete: true, lanes: lanes)
+            ),
+            .ready,
+            "Rane audio ready + camera optional must unlock recording."
+        )
+    }
+
+    /// Requirement 9: DVS that is genuinely selected and genuinely unready
+    /// must still block. The fix must not simply disarm the lane.
+    func testSelectedButUnreadyDVSStillBlocksRecording() {
+        for signal in [DVSSignalState.noSignal, .weak, .clipped, .channelFault, .carrierDetected] {
+            let lane = CaptureLaneReadiness.dvs(
+                signal,
+                modeEnabled: true,
+                isDVSSourceSelected: true
+            )
+            XCTAssertTrue(lane.isRequired, "\(signal) — selected DVS is required.")
+            XCTAssertTrue(lane.isBlocking, "\(signal) — selected but unready DVS must block.")
+
+            var lanes = CaptureLanes()
+            lanes.audio = .audio(isAvailable: true)
+            lanes.dvsTimecode = lane
+            XCTAssertEqual(lanes.blockingLanes, [.dvsTimecode])
+            XCTAssertNotEqual(
+                CaptureReadiness.derive(
+                    CaptureReadinessInput(hasSession: true, isMetadataComplete: true, lanes: lanes)
+                ),
+                .ready,
+                "\(signal) — must not read as ready."
+            )
+        }
+    }
+
+    /// Selected DVS that is actually usable is required and satisfied.
+    func testSelectedAndUsableDVSIsRequiredAndNotBlocking() {
+        let lane = CaptureLaneReadiness.dvs(.usable, modeEnabled: true, isDVSSourceSelected: true)
+        XCTAssertTrue(lane.isRequired)
+        XCTAssertTrue(lane.isUsable)
+        XCTAssertFalse(lane.isBlocking)
+    }
+
+    /// Requirement 4: changing the audio source must flip the gate straight
+    /// away, with no other input changing.
+    func testChangingAudioSourceFlipsDVSGateImmediately() {
+        func lanes(isDVSSourceSelected: Bool) -> CaptureLanes {
+            var lanes = CaptureLanes()
+            lanes.audio = .audio(isAvailable: true)
+            lanes.dvsTimecode = .dvs(
+                .noSignal,
+                modeEnabled: true,
+                isDVSSourceSelected: isDVSSourceSelected
+            )
+            return lanes
+        }
+        // Serato/DVS selected but dead -> blocked.
+        XCTAssertEqual(lanes(isDVSSourceSelected: true).blockingLanes, [.dvsTimecode])
+        // Operator switches to Rane ONE MKII -> unblocked, same instant.
+        XCTAssertTrue(lanes(isDVSSourceSelected: false).blockingLanes.isEmpty)
+    }
+
+    /// Turning timecode input off must keep DVS optional however it is routed.
+    func testDisabledTimecodeModeIsNeverRequired() {
+        for selected in [true, false] {
+            XCTAssertFalse(
+                CaptureLaneReadiness.isDVSRequired(modeEnabled: false, isDVSSourceSelected: selected),
+                "Disabled timecode input can never gate recording."
+            )
+        }
+        XCTAssertTrue(
+            CaptureLaneReadiness.isDVSRequired(modeEnabled: true, isDVSSourceSelected: true)
+        )
+    }
+
     // MARK: - Presentation-state derivation
 
     func testNoSessionIsSetupRequired() {

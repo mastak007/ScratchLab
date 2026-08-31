@@ -1,3 +1,5 @@
+- [ ] Physically verify standalone macOS AHHH capture, review-video audio, and sample-aligned export stems. The canonical stereo WAV is captured from ScratchLab's post-mixer output starting with the real movie-recording callback; finalization replaces the MOV's multichannel RANE track with onboard stereo; generated beat and mixed stems derive their exact duration from the captured scratch WAV. Confirm one fresh take has audible AHHH in Review and equal scratch/beat/mixed frame counts. Release gate remains pending.
+
 - [x] Validate the standalone-only audio product change (2026-08-31). Karl explicitly retired `External Serato`; source now defaults/migrates to local ScratchLab AHHH and removes ownership selectors/copy. Five focused export contracts passed twice; fixtures passed 47/47; the configured gate matched the exact established 11-invocation/9-name baseline with 366/366 Swift Testing cases per repetition; isolated macOS, iOS Simulator, and Watch Simulator builds succeeded. Earlier External Serato RC tasks below are superseded historical evidence, not current release requirements.
 - [x] Organize and publish the existing branch with explicit approval (2026-08-31). The validated 27-file worktree batch was committed as `b9afd4671afd263e7b3409075b6a34320f88b91a` and pushed to `origin/feature/ios-capture-camera-ux` after Karl explicitly authorized the reviewed GitHub destination. No reset or squash was used.
 
@@ -86,8 +88,8 @@
 
 - [ ] macOS notation should fill the entire camera view (2026-08-30, Karl request, not started)
 
-- [ ] macOS AHHH sample playhead display, matching iOS (2026-08-30, Karl request, not started)
-  - Karl's steer: Figma first, then wire code. iOS equivalent is `PlatterSamplePositionProjection` with BEFORE START / PAST END.
+- [x] macOS AHHH sample playhead display, matching iOS (2026-08-31)
+  - Implemented from Figma component set `457:3817` in the canonical `CodexProducts-macos-launch` Debug app: immutable PCM waveform, cue origin, cyan played region/playhead, START/MID/END, and Unloaded/Ready/Live/BEFORE START/PAST END states. Signed/unwrapped DVS/MIDI accumulation feeds the unchanged `PlatterSamplePositionProjection`; renderer/audio scheduling remain unchanged. Focused contract/projection tests passed 26/26 twice and the unloaded canonical UI was visually checked. Audible physical boundary alignment remains part of the top physical RC task.
 
 - [ ] Upfader notation lane — architect slice, not started (2026-08-30)
   - Spans capture + canonical model + renderer. Renderer changes conflict with the current "renderer unchanged" invariant; needs ChatGPT design first.

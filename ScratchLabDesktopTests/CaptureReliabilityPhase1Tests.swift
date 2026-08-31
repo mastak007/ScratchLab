@@ -3389,6 +3389,51 @@ final class CaptureReliabilityPhase1CoreTests: XCTestCase {
         XCTAssertTrue(source.contains("Button(\"Use Serato Audio\")"))
     }
 
+    /// The panel and the recording gate must reach their DVS verdict through
+    /// one shared property. They previously derived it separately, which is
+    /// how the gate could say "DVS enabled but not ready" while the panel
+    /// showed Rane audio READY and offered "Use Serato Audio".
+    func testDVSRecordingGateAndReadinessPanelShareOneLaneValue() throws {
+        let sourceURL = projectRootURL().appendingPathComponent("ScratchLabDesktop/Views/MacAnalyzerView.swift")
+        let source = try String(contentsOf: sourceURL, encoding: .utf8)
+
+        XCTAssertTrue(
+            source.contains("private var dvsTimecodeLane: CaptureLaneReadiness"),
+            "The single DVS lane value must exist."
+        )
+        XCTAssertTrue(
+            source.contains("if dvsTimecodeLane.isBlocking {"),
+            "The recording gate must read the shared lane."
+        )
+        XCTAssertTrue(
+            source.contains("dvsTimecode: dvsTimecodeLane,"),
+            "The readiness panel must read the same shared lane."
+        )
+        XCTAssertTrue(
+            source.contains("isDVSSourceSelected: captureEngine.isSeratoAudioSelected"),
+            "DVS requirement must key off the selected audio input."
+        )
+        XCTAssertFalse(
+            source.contains("return \"DVS input is enabled but not ready"),
+            "The old message pointed at a Disable DVS control that does not exist."
+        )
+        XCTAssertFalse(
+            source.contains("required: dvsTimecodeMode != .disabled"),
+            "Mode alone must no longer decide that DVS is required."
+        )
+    }
+
+    /// `isSeratoAudioSelected` is the exact inverse condition of the button
+    /// that offers the switch, so the two can never disagree.
+    func testEngineExposesSeratoSelectedAsInverseOfUseSeratoOffer() throws {
+        let sourceURL = projectRootURL().appendingPathComponent("ScratchLabDesktop/Services/MacCaptureEngine.swift")
+        let source = try String(contentsOf: sourceURL, encoding: .utf8)
+
+        XCTAssertTrue(source.contains("var isSeratoAudioSelected: Bool"))
+        XCTAssertTrue(source.contains("return seratoDevice.uniqueID == selectedAudioDeviceUniqueID"))
+        XCTAssertTrue(source.contains("return seratoDevice.uniqueID != selectedAudioDeviceUniqueID"))
+    }
+
     func testRoutineRecordingMetadataUsesSelectedAudioDeviceNameAndUniqueID() throws {
         let sourceURL = projectRootURL().appendingPathComponent("ScratchLabDesktop/Services/MacCaptureEngine.swift")
         let source = try String(contentsOf: sourceURL, encoding: .utf8)
@@ -9722,6 +9767,53 @@ extension CaptureReliabilityPhase1CoreTests {
     /// The real take-01 / take-02 shape: an 8-channel capture with exactly one
     /// live channel and exact zeros elsewhere, the live channel riding a large
     /// DC offset. Both output channels must carry the performance.
+    func testRoutineProgramAudioRoutingPersistsExplicitPairPerDevice() throws {
+        let suiteName = "ScratchLab.ProgramAudioRouting.\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suiteName))
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+
+        let selectedPair = try XCTUnwrap(
+            AudioHardwareRouteState.StereoPair(
+                firstChannelIndex: 2,
+                secondChannelIndex: 3
+            )
+        )
+        RoutineCaptureAudioRoutingSelectionStore.remember(
+            selectedPair,
+            forDeviceUniqueID: "rane-device-a",
+            defaults: defaults
+        )
+
+        XCTAssertEqual(
+            RoutineCaptureAudioRoutingSelectionStore.rememberedStereoPair(
+                forDeviceUniqueID: "rane-device-a",
+                defaults: defaults
+            ),
+            selectedPair
+        )
+        XCTAssertEqual(
+            RoutineCaptureAudioHardwareProfile.preferredProgramStereoPair(
+                forDeviceName: "Rane ONE MKII",
+                deviceUniqueID: "rane-device-a",
+                defaults: defaults
+            ),
+            selectedPair,
+            "An explicit operator route must win over the RANE 13/14 first-use default."
+        )
+        XCTAssertEqual(
+            RoutineCaptureAudioHardwareProfile.preferredProgramStereoPair(
+                forDeviceName: "Rane ONE MKII",
+                deviceUniqueID: "rane-device-b",
+                defaults: defaults
+            ),
+            AudioHardwareRouteState.StereoPair(
+                firstChannelIndex: 12,
+                secondChannelIndex: 13
+            ),
+            "A different RANE device must keep its own measured first-use default."
+        )
+    }
+
     func testProjectionRecoversEffectivelyMonoCaptureWithLargeDCOffset() throws {
         let directory = try makeTemporaryDirectory()
         let sourceURL = directory.appendingPathComponent("effectively-mono-8ch.caf")
@@ -10036,6 +10128,7 @@ extension CaptureReliabilityPhase1CoreTests {
     func testRoutineExportKeepsDynamicScratchStemAndGeneratesBeatStems() throws {
         let root = try makeTemporaryDirectory()
         let sessionID = "routine-rane-valid-stems"
+        let capturedFrameCount = 4_800
         let videoURL = try makeLocalRecordingTake(
             in: root,
             sessionID: sessionID,
@@ -10049,7 +10142,7 @@ extension CaptureReliabilityPhase1CoreTests {
         try writeMultichannelFloatSource(
             at: audioURL,
             channelCount: 14,
-            frameCount: 4_800
+            frameCount: capturedFrameCount
         ) { channel, frame in
             switch channel {
             case 12: return Self.dynamicSample(frame: frame, amplitude: 0.35)
@@ -10087,9 +10180,14 @@ extension CaptureReliabilityPhase1CoreTests {
         XCTAssertTrue(stems.contains(where: { $0.contains("scratch_with_beat") }))
 
         for stem in stems {
-            let measured = try measuredChannelSignal(
-                at: audioDirectory.appendingPathComponent(stem)
+            let stemURL = audioDirectory.appendingPathComponent(stem)
+            let stemFile = try AVAudioFile(forReading: stemURL)
+            XCTAssertEqual(
+                stemFile.length,
+                AVAudioFramePosition(capturedFrameCount),
+                "\(stem) must match the canonical captured scratch length."
             )
+            let measured = try measuredChannelSignal(at: stemURL)
             for (index, channel) in measured.enumerated() {
                 XCTAssertGreaterThan(
                     channel.acRMS,

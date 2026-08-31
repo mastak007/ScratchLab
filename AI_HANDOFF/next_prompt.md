@@ -1,3 +1,11 @@
+## Current continuation - use only canonical macOS app; physical waveform/Review smoke next
+
+Use only `/Users/karlwatson/Downloads/ScratchLab/build/CodexProducts-macos-launch/Debug/ScratchLab.app`; it contains the current Review restoration, RANE-over-auto-mic Debug selection, mapped fader notation, and macOS AHHH sample-position waveform. Do not open another DerivedData or `CodexProducts-*` app.
+
+Canonical UI verification already proves persisted session `0d2274b5-4b32-434b-ab18-ec931cae8e91` take 2 restores Baby Scratch and 33 strokes in Review. The macOS Capture preview now renders Figma component set `457:3817` at the camera bottom. Its PCM waveform is immutable per load, while the cyan playhead uses signed/unwrapped DVS or MIDI accumulation through the existing `PlatterSamplePositionProjection`; audio rendering/scheduling and the 5 ms cue tolerance were not changed. Figma documents iOS/macOS parity.
+
+Focused RANE selection/Review restoration tests passed 3/3 twice. Waveform contract/projection tests passed 26/26 twice. The canonical macOS build succeeded and was visually checked in unloaded state. Next perform one physical RANE take: load AHHH, confirm the waveform appears, scratch across cue into `BEFORE START` and past the sample into `PAST END`, confirm audible/cyan alignment without wrapping, then stop, verify newest-take platter/crossfader/upfader notation in Review, and export. Record exact pass/fail evidence before any further production edit.
+
 ## Current continuation - Review latest-take and upfader notation fix validated; physical retest next
 
 Physical session `8ad16543-5165-41e8-993d-1d00c1ce5fd8` retained healthy notation: take 1 has 33 movement events; take 2 has 71. The live Review window showed stale Take 1 while take 2 was newest. Take 2 captured 561 mapped crossfader CC8 events and derived 18 fader events, but its 125 CC28 channel-1 events were raw/unmapped despite a complete saved RANE mapping. Two ScratchLab binaries were running, including stale `build/CodexProducts-ios-save-tests`.
@@ -419,3 +427,9 @@ ScratchLab remains multiplatform (macOS + iOS/iPadOS + watchOS). The 2026-08-12 
 
 iOS Debug build (`CODE_SIGNING_ALLOWED=NO`) + macOS build + macOS `build-for-testing` + `python3 scripts/test_capture_pipeline.py` (expect 47/47) + `git diff --check`.
 `scripts/build.sh all` currently stops on five pre-existing dirty-WIP test failures (`testGuidedCaptureLandscapeHidesHelperTextDuringPreRoll`, `testGuidedCaptureSystemCheckScrollsOnSmallScreens`, `testLevelSelectSourceUsesSafeAreaAwareScrollableHeaderLayout`, `testPracticeSetupDoesNotRenderCoachCard`, `testRaneOneMkiiDebugPresetHasSetupNoteOtherPresetsDoNot`) — that is the current WIP baseline, not a regression.
+
+## Immediate continuation (2026-08-31 standalone output capture)
+
+Build the macOS target and fix only compile errors introduced by the post-mixer routine capture and automatic review-MOV audio replacement. Then load onboard AHHH, record a fresh RANE-controlled take, and verify the new `Onboard AHHH output` meter responds while `Hardware input signal` remains diagnostic-only. Review must play the scratch in sync, the MOV must contain one stereo audio track rather than the old multichannel RANE track, and exported scratch WAV must be audible on both sides. Do not return to RANE 13/14 routing; standalone AHHH no longer uses that input as its canonical source.
+
+Release continuation: build 1.0.1 (19) has an exported IPA at `build/AppStore-1.0.1-19/ScratchLab.ipa`. Before submission, rerun the complete desktop XCTest plan and make one fresh Rane take, then verify scratch-only, beat-only, scratch-with-beat, and review video durations match the actual captured take.

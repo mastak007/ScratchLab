@@ -55,7 +55,7 @@
 	<key>CFBundleShortVersionString</key>
 	<string>$(MARKETING_VERSION)</string>
 	<key>CFBundleVersion</key>
-	<string>$(CURRENT_PROJECT_VERSION)</string>
+	<string>19</string>
 	<key>MinimumOSVersion</key>
 	<string>$(WATCHOS_DEPLOYMENT_TARGET)</string>
 	<key>WKApplication</key>

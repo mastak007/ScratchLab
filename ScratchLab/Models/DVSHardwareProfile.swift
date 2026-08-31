@@ -48,6 +48,88 @@ enum DVSHardwareProfile {
     }
 }
 
+/// Known-good program-audio input pairs for routine capture/export.
+/// This is deliberately separate from `DVSHardwareProfile`: the RANE DVS
+/// control-vinyl input is 3/4, while the audible master program return is
+/// input 13/14. Mixing those roles exports control signal instead of the
+/// isolated audible scratch performance.
+enum RoutineCaptureAudioHardwareProfile {
+    static func preferredProgramStereoPair(
+        forDeviceName deviceName: String?,
+        deviceUniqueID: String? = nil,
+        defaults: UserDefaults = .standard
+    ) -> AudioHardwareRouteState.StereoPair? {
+        if let deviceUniqueID,
+           let remembered = RoutineCaptureAudioRoutingSelectionStore.rememberedStereoPair(
+                forDeviceUniqueID: deviceUniqueID,
+                defaults: defaults
+           ) {
+            return remembered
+        }
+        guard let deviceName,
+              RanePlaybackRoutingPolicy.matchesRaneRoute(portName: deviceName) else {
+            return nil
+        }
+        return AudioHardwareRouteState.StereoPair(
+            firstChannelIndex: 12,
+            secondChannelIndex: 13
+        )
+    }
+}
+
+/// Persists the operator-selected routine-capture programme pair per Core
+/// Audio device. This is deliberately separate from the DVS pair: DVS/control
+/// input and audible AHHH programme audio are different routes on RANE
+/// hardware and must never overwrite one another.
+enum RoutineCaptureAudioRoutingSelectionStore {
+    private struct StoredPair: Codable {
+        let firstChannelIndex: Int
+        let secondChannelIndex: Int
+    }
+
+    private static let storageKey = "scratchlab.routineCapture.programStereoPairs.v1"
+
+    static func rememberedStereoPair(
+        forDeviceUniqueID deviceUniqueID: String,
+        defaults: UserDefaults = .standard
+    ) -> AudioHardwareRouteState.StereoPair? {
+        let normalizedID = deviceUniqueID.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !normalizedID.isEmpty,
+              let stored = load(defaults: defaults)[normalizedID] else {
+            return nil
+        }
+        return AudioHardwareRouteState.StereoPair(
+            firstChannelIndex: stored.firstChannelIndex,
+            secondChannelIndex: stored.secondChannelIndex
+        )
+    }
+
+    static func remember(
+        _ pair: AudioHardwareRouteState.StereoPair,
+        forDeviceUniqueID deviceUniqueID: String,
+        defaults: UserDefaults = .standard
+    ) {
+        let normalizedID = deviceUniqueID.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !normalizedID.isEmpty else { return }
+
+        var selections = load(defaults: defaults)
+        selections[normalizedID] = StoredPair(
+            firstChannelIndex: pair.firstChannelIndex,
+            secondChannelIndex: pair.secondChannelIndex
+        )
+        guard let data = try? JSONEncoder().encode(selections) else { return }
+        defaults.set(data, forKey: storageKey)
+    }
+
+    private static func load(defaults: UserDefaults) -> [String: StoredPair] {
+        guard let data = defaults.data(forKey: storageKey),
+              let selections = try? JSONDecoder().decode([String: StoredPair].self, from: data) else {
+            return [:]
+        }
+        return selections
+    }
+}
+
 // MARK: - RANE playback output routing
 
 /// Where ScratchLab's rendered scratch audio must land on a RANE ONE route.

@@ -9660,6 +9660,40 @@ struct CaptureLaneReadiness: Equatable, Sendable {
         CaptureLaneReadiness(isRequired: required, isUsable: signal.isReady)
     }
 
+    /// Whether the DVS/timecode lane may gate recording at all.
+    ///
+    /// DVS is optional. Enabling timecode input is not by itself a
+    /// requirement to record: the operator must *also* have the DVS/Serato
+    /// source selected as the capture input. A timecode pipeline left in a
+    /// non-disabled mode after the operator returns to an ordinary input
+    /// (Rane ONE MKII) is stale state, and its signal health stays
+    /// `.noSignal` because no timecode is arriving — which would block
+    /// capture forever with nothing on screen to switch off.
+    ///
+    /// Shared on purpose: the Input readiness panel and the recording gate
+    /// must both reach their verdict through this one rule, so they cannot
+    /// contradict each other.
+    static func isDVSRequired(modeEnabled: Bool, isDVSSourceSelected: Bool) -> Bool {
+        modeEnabled && isDVSSourceSelected
+    }
+
+    /// DVS lane derived from the two facts that actually decide it: whether
+    /// timecode input is switched on, and whether the DVS/Serato source is
+    /// the selected capture input.
+    static func dvs(
+        _ signal: DVSSignalState,
+        modeEnabled: Bool,
+        isDVSSourceSelected: Bool
+    ) -> CaptureLaneReadiness {
+        dvs(
+            signal,
+            required: isDVSRequired(
+                modeEnabled: modeEnabled,
+                isDVSSourceSelected: isDVSSourceSelected
+            )
+        )
+    }
+
     /// Controller lane — only `ControllerMappingState.dvsPlusMidiReady` (the
     /// true combined-ready state) is usable. `midiLearned` / `platterReady` /
     /// `controllerDetected` are NOT combined-ready.

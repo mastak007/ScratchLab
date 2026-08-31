@@ -2721,7 +2721,8 @@ struct SessionArchiveBuilder: Sendable {
                 from: audioArtifactURL,
                 to: audioURL,
                 preferredPair: RoutineCaptureAudioHardwareProfile.preferredProgramStereoPair(
-                    forDeviceName: takeContext.sidecar.audioDeviceName
+                    forDeviceName: takeContext.sidecar.audioDeviceName,
+                    deviceUniqueID: takeContext.sidecar.audioDeviceUniqueID
                 )
             )
             #if DEBUG
@@ -3597,10 +3598,15 @@ struct SessionArchiveBuilder: Sendable {
     ) throws -> AVAudioPCMBuffer {
         let scratchAudioFile = try AVAudioFile(forReading: scratchAudioURL)
         let scratchFormat = scratchAudioFile.processingFormat
+        guard scratchAudioFile.length > 0, scratchFormat.sampleRate > 0 else {
+            throw SessionExportError.invalidSessionMetadata
+        }
+        let capturedDurationSeconds =
+            Double(scratchAudioFile.length) / scratchFormat.sampleRate
         return try ScratchLabBeatEngine.renderedTimingBuffer(
             mode: BeatEngineMode(rawValue: captureMetadata.beatEngineMode) ?? .silent,
             bpm: captureMetadata.bpm ?? CaptureClickTrackDefaults.defaultTimedBPM,
-            durationSeconds: max(0, take.duration),
+            durationSeconds: capturedDurationSeconds,
             countInBeats: captureMetadata.countInBeats,
             beatsPerBar: captureMetadata.beatsPerBar,
             clickStartHostTime: captureMetadata.clickStartHostTime,
@@ -3726,10 +3732,12 @@ struct SessionArchiveBuilder: Sendable {
             throw SessionExportError.invalidSessionMetadata
         }
         let scratchFormat = scratchAudioFile.processingFormat
+        let capturedDurationSeconds =
+            Double(scratchAudioFile.length) / scratchFormat.sampleRate
         return try ScratchLabBeatEngine.renderedTimingBuffer(
             mode: BeatEngineMode(rawValue: captureMetadata.beatEngineMode) ?? .silent,
             bpm: captureValues.canonicalBPM ?? CaptureClickTrackDefaults.defaultTimedBPM,
-            durationSeconds: max(0, take.duration),
+            durationSeconds: capturedDurationSeconds,
             countInBeats: captureMetadata.countInBeats,
             beatsPerBar: captureMetadata.beatsPerBar,
             clickStartHostTime: captureMetadata.clickStartHostTime,
@@ -4966,7 +4974,8 @@ struct SessionArchiveBuilder: Sendable {
             from: audioArtifactURL,
             to: projectedAudioURL,
             preferredPair: RoutineCaptureAudioHardwareProfile.preferredProgramStereoPair(
-                forDeviceName: context.sidecar.audioDeviceName
+                forDeviceName: context.sidecar.audioDeviceName,
+                deviceUniqueID: context.sidecar.audioDeviceUniqueID
             )
         )
         #if DEBUG

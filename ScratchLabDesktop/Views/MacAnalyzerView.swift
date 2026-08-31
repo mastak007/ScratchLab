@@ -581,13 +581,11 @@ struct MacAnalyzerView: View {
     }
 
     @AppStorage(MacWorkspaceRouting.workspaceTabStorageKey) private var workspaceTabRaw = WorkspaceTab.practice.rawValue
-#if DEBUG
     /// Input-scope channel count of the currently-selected capture audio device.
-    /// Drives whether the Rane Channel-Map Diagnostic card is offered on the
-    /// Capture screen (only useful for multichannel interfaces). Refreshed on
-    /// appear and whenever the audio device selection or device list changes.
+    /// Drives production programme-pair routing and, in DEBUG, the Rane
+    /// Channel-Map Diagnostic. Refreshed whenever the device route changes.
     @State private var selectedAudioInputChannelCount = 0
-#endif
+    @State private var selectedProgramStereoPair: AudioHardwareRouteState.StereoPair?
     @AppStorage("scratchlab.mac.stageLayout") private var stageLayoutRaw = StageLayout.desktopDeck.rawValue
     @AppStorage("scratchlab.mac.practiceDuration") private var practiceDurationRaw = PracticeDuration.fiveMinutes.rawValue
     @AppStorage("scratchlab.mac.liveInputEnabled") private var liveInputEnabled = false
@@ -4330,7 +4328,8 @@ struct MacAnalyzerView: View {
                     }
                 }
                 .padding(.horizontal, 14)
-                .padding(.vertical, 10)
+                .padding(.top, 10)
+                .padding(.bottom, 118)
                 .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
                 .background {
                     LinearGradient(
@@ -4340,6 +4339,16 @@ struct MacAnalyzerView: View {
                     )
                     .allowsHitTesting(false)
                 }
+                .allowsHitTesting(false)
+
+                MacSamplePositionWaveformView(
+                    waveform: captureEngine.playbackWaveformSnapshot,
+                    position: captureEngine.playbackPositionSnapshot
+                )
+                .frame(height: 108)
+                .padding(.horizontal, 14)
+                .padding(.bottom, 8)
+                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottom)
                 .allowsHitTesting(false)
             }
             .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
@@ -6120,8 +6129,8 @@ struct MacAnalyzerView: View {
         if captureEngine.selectedVideoDevice == nil {
             return "Choose an available camera under Input readiness before recording."
         }
-        if dvsTimecodeMode != .disabled, !dvsSignalState.isReady {
-            return "DVS input is enabled but not ready. Restore its signal or disable DVS under Input readiness."
+        if dvsTimecodeLane.isBlocking {
+            return "Serato/DVS is the selected audio input but its timecode signal is not ready. Restore the timecode signal, or choose another audio input under Input readiness."
         }
         return routineMetadataStatusMessage
     }
@@ -6975,6 +6984,22 @@ struct MacAnalyzerView: View {
         ))
     }
 
+    /// The single DVS lane value. Both the Input readiness panel and the
+    /// recording gate read this property, so they cannot contradict each
+    /// other — the state that produced "DVS input is enabled but not ready"
+    /// while the panel showed Rane audio READY and offered "Use Serato Audio".
+    ///
+    /// DVS stays optional: it gates recording only when timecode input is on
+    /// *and* the DVS/Serato source is the selected input (see
+    /// `CaptureLaneReadiness.isDVSRequired`).
+    private var dvsTimecodeLane: CaptureLaneReadiness {
+        .dvs(
+            dvsSignalState,
+            modeEnabled: dvsTimecodeMode != .disabled,
+            isDVSSourceSelected: captureEngine.isSeratoAudioSelected
+        )
+    }
+
     /// Maps the real timecode signal health onto the reusable semantic state.
     private var dvsSignalState: DVSSignalState {
         switch dvsTimecodeSignalHealth {
@@ -7516,10 +7541,11 @@ struct MacAnalyzerView: View {
                 || !captureEngine.availableMIDISources.isEmpty,
             lanes: CaptureLanes(
                 audio: .audio(isAvailable: captureEngine.isSelectedAudioInputAvailable),
-                // DVS is a blocking lane only while timecode input mode is
-                // active (default `.disabled`); ready only when the real
+                // DVS blocks only when timecode input is on AND the
+                // DVS/Serato source is the selected input; ready only when
                 // signal health is `.usable` (carrier-detected is NOT usable).
-                dvsTimecode: .dvs(dvsSignalState, required: dvsTimecodeMode != .disabled),
+                // Same property the recording gate reads — one verdict.
+                dvsTimecode: dvsTimecodeLane,
                 // Platter has no dedicated readiness owner yet — optional today.
                 platter: .notRequired,
                 // MIDI/controller input is optional today — no "required" owner.
@@ -7939,6 +7965,42 @@ struct MacAnalyzerView: View {
                             // Virtual audio device — No signal" copy.
                         }
 
+                        if selectedAudioInputChannelCount >= 2 {
+                            VStack(alignment: .leading, spacing: 8) {
+                                Text("Program audio routing")
+                                    .font(.system(size: 13, weight: .semibold))
+
+                                LazyVGrid(
+                                    columns: [GridItem(.adaptive(minimum: 58), spacing: 8)],
+                                    alignment: .leading,
+                                    spacing: 8
+                                ) {
+                                    ForEach(
+                                        AudioHardwareRouteState.StereoPair.contiguousPairs(
+                                            channelCount: selectedAudioInputChannelCount
+                                        )
+                                    ) { pair in
+                                        Button(pair.displayName) {
+                                            selectProgramStereoPair(pair)
+                                        }
+                                        .buttonStyle(.bordered)
+                                        .controlSize(.small)
+                                        .tint(
+                                            selectedProgramStereoPair == pair
+                                                ? ScratchLabDesign.Sem.accent
+                                                : ScratchLabDesign.Sem.textSecondary
+                                        )
+                                        .accessibilityLabel("Use input channels \(pair.displayName) for program audio")
+                                    }
+                                }
+
+                                Text("Choose the pair carrying the audible AHHH. This controls scratch audio capture/export and is separate from MIDI and DVS control input.")
+                                    .font(.system(size: 11, weight: .medium))
+                                    .foregroundStyle(.secondary)
+                                    .fixedSize(horizontal: false, vertical: true)
+                            }
+                        }
+
                         VStack(alignment: .leading, spacing: 6) {
                             Text("Camera source")
                                 .font(.system(size: 13, weight: .semibold))
@@ -7997,7 +8059,6 @@ struct MacAnalyzerView: View {
 #endif
         }
         .scratchLabCard()
-#if DEBUG
         .onAppear { refreshSelectedAudioInputChannelCount() }
         .onChange(of: captureEngine.selectedAudioDeviceUniqueID) { _, _ in
             refreshSelectedAudioInputChannelCount()
@@ -8005,14 +8066,49 @@ struct MacAnalyzerView: View {
         .onChange(of: captureEngine.availableAudioDevices.count) { _, _ in
             refreshSelectedAudioInputChannelCount()
         }
-#endif
     }
 
-#if DEBUG
     private func refreshSelectedAudioInputChannelCount() {
-        selectedAudioInputChannelCount = Self.audioInputChannelCount(
-            forDeviceUID: captureEngine.selectedAudioDeviceUniqueID
+        let deviceUniqueID = captureEngine.selectedAudioDeviceUniqueID
+        let channelCount = Self.audioInputChannelCount(forDeviceUID: deviceUniqueID)
+        let availablePairs = AudioHardwareRouteState.StereoPair.contiguousPairs(
+            channelCount: channelCount
         )
+        let remembered = RoutineCaptureAudioRoutingSelectionStore.rememberedStereoPair(
+            forDeviceUniqueID: deviceUniqueID
+        )
+        let hardwareDefault = RoutineCaptureAudioHardwareProfile.preferredProgramStereoPair(
+            forDeviceName: captureEngine.selectedAudioDeviceName
+        )
+        let resolved = AudioHardwareRouteState.StereoPair.resolveSelection(
+            availablePairs: availablePairs,
+            remembered: remembered,
+            preferredDefault: hardwareDefault
+        )
+
+        selectedAudioInputChannelCount = channelCount
+        selectedProgramStereoPair = resolved
+        if let resolved, remembered != resolved {
+            RoutineCaptureAudioRoutingSelectionStore.remember(
+                resolved,
+                forDeviceUniqueID: deviceUniqueID
+            )
+        }
+    }
+
+    private func selectProgramStereoPair(_ pair: AudioHardwareRouteState.StereoPair) {
+        guard !captureEngine.isRoutineRecording,
+              routineCountInBeat == nil,
+              AudioHardwareRouteState.StereoPair.contiguousPairs(
+                channelCount: selectedAudioInputChannelCount
+              ).contains(pair) else {
+            return
+        }
+        RoutineCaptureAudioRoutingSelectionStore.remember(
+            pair,
+            forDeviceUniqueID: captureEngine.selectedAudioDeviceUniqueID
+        )
+        selectedProgramStereoPair = pair
     }
 
     /// Sum of input-scope channels the CoreAudio device with `uid` exposes.
@@ -8076,7 +8172,6 @@ struct MacAnalyzerView: View {
         }
         return 0
     }
-#endif
 
     private var midiMonitorCard: some View {
         VStack(alignment: .leading, spacing: 14) {
@@ -11284,7 +11379,28 @@ struct MacAnalyzerView: View {
 
             VStack(alignment: .leading, spacing: 8) {
                 HStack {
-                    Text("Signal")
+                    Circle()
+                        .fill(captureEngine.onboardOutputMeterColor)
+                        .frame(width: 10, height: 10)
+                    Text("Onboard AHHH output")
+                        .font(.subheadline.weight(.semibold))
+                    Spacer()
+                    Text(captureEngine.formattedOnboardOutputPercent)
+                        .font(.system(size: 12, weight: .bold, design: .monospaced))
+                        .foregroundStyle(.secondary)
+                }
+
+                ProgressView(value: Double(captureEngine.currentOnboardOutputLevel))
+                    .tint(captureEngine.onboardOutputMeterColor)
+
+                Text(captureEngine.onboardOutputCaptureStatus)
+                    .font(.system(size: 12, weight: .semibold))
+                    .foregroundStyle(.secondary)
+
+                Divider()
+
+                HStack {
+                    Text("Hardware input signal")
                         .font(.subheadline.weight(.semibold))
                     Spacer()
                     Text(captureEngine.formattedAudioSignalPercent)
@@ -11306,7 +11422,7 @@ struct MacAnalyzerView: View {
                     .foregroundStyle(.secondary)
                     .textSelection(.enabled)
 
-                Text("ScratchLab works best when your deck audio is routed here.")
+                Text("This hardware-input meter is diagnostic only. Standalone takes record the onboard AHHH output shown above.")
                     .font(.system(size: 12, weight: .medium))
                     .foregroundStyle(.secondary)
             }
@@ -12373,6 +12489,159 @@ struct MacAnalyzerView: View {
             Slider(value: value, in: range)
         }
         .disabled(captureEngine.calibrationLocked)
+    }
+}
+
+private struct MacSamplePositionWaveformView: View {
+    let waveform: ScratchSamplePlaybackController.PlaybackWaveformSnapshot?
+    let position: ScratchSamplePlaybackController.PlaybackPositionSnapshot?
+
+    private var projection: PlatterSamplePositionProjection? {
+        guard let waveform,
+              waveform.sampleRate > 0,
+              waveform.contentFrameCount > 0,
+              position?.loadedSampleID == waveform.sampleID,
+              let framePosition = position?.unwrappedFramePosition else {
+            return nil
+        }
+        return PlatterSamplePositionProjection.resolve(
+            framePosition: framePosition,
+            contentFrameCount: waveform.contentFrameCount,
+            sampleRate: waveform.sampleRate
+        )
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: ScratchLabDesign.Spacing.xxs) {
+            HStack(spacing: ScratchLabDesign.Spacing.sm) {
+                Text("\(waveform?.displayName ?? "AHHH") SAMPLE POSITION")
+                    .font(ScratchLabDesign.Typo.statusPill)
+                    .foregroundStyle(ScratchLabDesign.Sem.accent)
+                Spacer(minLength: ScratchLabDesign.Spacing.sm)
+                Text(statusText)
+                    .font(ScratchLabDesign.Typo.statusPill)
+                    .foregroundStyle(statusColor)
+                    .monospacedDigit()
+            }
+
+            GeometryReader { geometry in
+                Canvas { context, size in
+                    drawWaveform(in: &context, size: size)
+                }
+                .frame(width: geometry.size.width, height: geometry.size.height)
+            }
+
+            HStack {
+                Text("START")
+                Spacer()
+                Text("MID")
+                Spacer()
+                Text("END")
+            }
+            .font(ScratchLabDesign.Typo.statusPill)
+            .foregroundStyle(ScratchLabDesign.Sem.textSecondary)
+        }
+        .padding(.horizontal, ScratchLabDesign.Spacing.md)
+        .padding(.vertical, ScratchLabDesign.Spacing.sm)
+        .background(Color.black.opacity(0.28), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+        .shadow(color: .black.opacity(0.9), radius: 2, x: 0, y: 1)
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(accessibilityLabel)
+    }
+
+    private var statusText: String {
+        guard let waveform, let projection else { return "LOAD AHHH" }
+        switch projection.region {
+        case .unloaded:
+            return "LOAD AHHH"
+        case .cue:
+            return "READY · CUE 0.00"
+        case .beforeStart:
+            return String(format: "BEFORE START · %.2f s", projection.positionSeconds)
+        case .pastEnd:
+            return String(format: "PAST END · +%.2f s", max(0, projection.positionSeconds - waveform.duration))
+        case .start, .middle, .end:
+            return String(format: "LIVE · %.2f s", max(0, projection.positionSeconds))
+        }
+    }
+
+    private var statusColor: Color {
+        switch projection?.region {
+        case .beforeStart, .pastEnd:
+            return ScratchLabDesign.Sem.warning
+        default:
+            return ScratchLabDesign.Sem.textSecondary
+        }
+    }
+
+    private var accessibilityLabel: String {
+        guard let waveform, let projection else {
+            return "AHHH sample position unavailable. Load AHHH to show the playhead."
+        }
+        let location: String
+        switch projection.region {
+        case .unloaded: location = "unloaded"
+        case .cue: location = "at the cue origin"
+        case .start: location = "in the start of the sample"
+        case .middle: location = "in the middle of the sample"
+        case .end: location = "in the end of the sample"
+        case .beforeStart: location = "before the cue origin"
+        case .pastEnd: location = "past the end of the audible sample"
+        }
+        return "\(waveform.displayName) playhead \(location), \(String(format: "%.2f", projection.positionSeconds)) seconds."
+    }
+
+    private func drawWaveform(in context: inout GraphicsContext, size: CGSize) {
+        guard size.width > 0, size.height > 0 else { return }
+        let centerY = size.height / 2
+        var axis = Path()
+        axis.move(to: CGPoint(x: 0, y: centerY))
+        axis.addLine(to: CGPoint(x: size.width, y: centerY))
+        context.stroke(axis, with: .color(ScratchLabDesign.Notation.lineNeutral), lineWidth: 1)
+
+        guard let waveform, !waveform.amplitudes.isEmpty else {
+            context.draw(
+                Text("LOAD AHHH TO SEE SAMPLE POSITION")
+                    .font(ScratchLabDesign.Typo.statusPill)
+                    .foregroundColor(ScratchLabDesign.Sem.textSecondary),
+                at: CGPoint(x: size.width / 2, y: max(7, centerY - 9)),
+                anchor: .center
+            )
+            return
+        }
+
+        let count = waveform.amplitudes.count
+        let step = size.width / CGFloat(count)
+        let barWidth = min(max(step * 0.58, 1.5), 5)
+        let playheadX = CGFloat(projection?.progress ?? 0) * max(0, size.width - 2) + 1
+        var baseBars = Path()
+        var playedBars = Path()
+        for (index, amplitude) in waveform.amplitudes.enumerated() {
+            let x = CGFloat(index) * step + (step - barWidth) / 2
+            let barHeight = max(1.5, CGFloat(amplitude) * size.height * 0.82)
+            let rect = CGRect(x: x, y: centerY - barHeight / 2, width: barWidth, height: barHeight)
+            baseBars.addRoundedRect(in: rect, cornerSize: CGSize(width: 1, height: 1))
+            if x + barWidth / 2 <= playheadX {
+                playedBars.addRoundedRect(in: rect, cornerSize: CGSize(width: 1, height: 1))
+            }
+        }
+        context.fill(baseBars, with: .color(ScratchLabDesign.Notation.targetTrace))
+        context.fill(playedBars, with: .color(ScratchLabDesign.Notation.performanceTrace))
+
+        var cueOrigin = Path()
+        cueOrigin.move(to: CGPoint(x: 1, y: 0))
+        cueOrigin.addLine(to: CGPoint(x: 1, y: size.height))
+        context.stroke(cueOrigin, with: .color(ScratchLabDesign.Notation.targetTrace), lineWidth: 1.5)
+
+        if let projection {
+            var playhead = Path()
+            playhead.move(to: CGPoint(x: playheadX, y: 0))
+            playhead.addLine(to: CGPoint(x: playheadX, y: size.height))
+            let color = projection.region == .beforeStart || projection.region == .pastEnd
+                ? ScratchLabDesign.Sem.warning
+                : ScratchLabDesign.Notation.performanceTrace
+            context.stroke(playhead, with: .color(color), lineWidth: 2)
+        }
     }
 }
 

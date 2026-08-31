@@ -38,6 +38,248 @@ final class ScratchSamplePlaybackController {
     private let playerNode = AVAudioPlayerNode()
     private let varispeedNode = AVAudioUnitVarispeed()
 
+    // MARK: - Production routine output capture
+
+    /// Standalone AHHH is rendered inside this engine, so the canonical take
+    /// must be captured here rather than from an unrelated Core Audio input.
+    /// The render callback only writes into a preallocated mono ring. File I/O
+    /// and notation analysis happen after the tap is removed.
+    private var routineOutputCaptureRingFrames = 0
+    private var routineOutputCaptureRing: UnsafeMutablePointer<Float>?
+    private var routineOutputCaptureWriteFrames = 0
+    private var routineOutputCaptureArmed = false
+    private var routineOutputCaptureRate: Double = 44_100
+    private var routineOutputCaptureDestinationURL: URL?
+    private var routineOutputMeterFrames = 0
+    private let routineOutputCaptureExportQueue = DispatchQueue(
+        label: "com.scratchlab.controller.routineOutputCapture",
+        qos: .utility
+    )
+    var routineOutputLevelHandler: ((Float) -> Void)?
+
+    enum RoutineOutputCaptureError: LocalizedError {
+        case playbackEngineNotRunning
+        case captureAlreadyArmed
+        case anotherMixerTapIsActive
+        case invalidMixerFormat
+        case emptyCapture
+
+        var errorDescription: String? {
+            switch self {
+            case .playbackEngineNotRunning:
+                return "Load the onboard AHHH before recording so ScratchLab can capture its output."
+            case .captureAlreadyArmed:
+                return "ScratchLab's onboard output recorder is already active."
+            case .anotherMixerTapIsActive:
+                return "ScratchLab cannot record onboard output while another output diagnostic is active."
+            case .invalidMixerFormat:
+                return "ScratchLab could not prepare the onboard AHHH recording format."
+            case .emptyCapture:
+                return "The onboard AHHH recording contained no audio frames."
+            }
+        }
+    }
+
+    enum RoutineOutputCaptureFinalizeOutcome {
+        case exported(url: URL, frames: Int, sampleRate: Double, samples: [Float])
+        case empty
+        case notArmed
+        case error(Error)
+    }
+
+    /// Arms a bounded production capture of the actual post-fader/post-mixer
+    /// signal sent to the Mac output. Three minutes covers the longest current
+    /// routine while bounding memory to roughly 35 MB at 48 kHz mono.
+    func beginRoutineOutputCapture(
+        destinationURL: URL,
+        maximumDurationSeconds: TimeInterval = 180
+    ) throws {
+        var capturedError: Error?
+        audioQueue.sync {
+            guard engineStarted else {
+                capturedError = RoutineOutputCaptureError.playbackEngineNotRunning
+                return
+            }
+            guard !routineOutputCaptureArmed else {
+                capturedError = RoutineOutputCaptureError.captureAlreadyArmed
+                return
+            }
+#if DEBUG
+            guard !outputCaptureArmed else {
+                capturedError = RoutineOutputCaptureError.anotherMixerTapIsActive
+                return
+            }
+#endif
+            let mixerFormat = engine.mainMixerNode.outputFormat(forBus: 0)
+            let sampleRate = mixerFormat.sampleRate
+            let capacity = Int(sampleRate * max(1, maximumDurationSeconds))
+            guard sampleRate > 0,
+                  capacity > 0,
+                  let tapFormat = AVAudioFormat(
+                    standardFormatWithSampleRate: sampleRate,
+                    channels: 2
+                  ) else {
+                capturedError = RoutineOutputCaptureError.invalidMixerFormat
+                return
+            }
+
+            let ring = UnsafeMutablePointer<Float>.allocate(capacity: capacity)
+            ring.initialize(repeating: 0, count: capacity)
+            routineOutputCaptureRingFrames = capacity
+            routineOutputCaptureRing = ring
+            routineOutputCaptureWriteFrames = 0
+            routineOutputCaptureRate = sampleRate
+            routineOutputCaptureDestinationURL = destinationURL
+            routineOutputMeterFrames = 0
+
+            engine.mainMixerNode.installTap(
+                onBus: 0,
+                bufferSize: 1024,
+                format: tapFormat
+            ) { [weak self] buffer, _ in
+                guard let self,
+                      let ring = self.routineOutputCaptureRing,
+                      let channels = buffer.floatChannelData else { return }
+                let frameCount = Int(buffer.frameLength)
+                guard frameCount > 0 else { return }
+                let capacity = self.routineOutputCaptureRingFrames
+                let left = channels[0]
+                let right = buffer.format.channelCount > 1 ? channels[1] : nil
+                var index = self.routineOutputCaptureWriteFrames % capacity
+                var peak: Float = 0
+
+                for frame in 0..<frameCount {
+                    let sample = right.map { (left[frame] + $0[frame]) * 0.5 } ?? left[frame]
+                    ring[index] = sample
+                    peak = max(peak, abs(sample))
+                    index += 1
+                    if index == capacity { index = 0 }
+                }
+                self.routineOutputCaptureWriteFrames += frameCount
+                self.routineOutputMeterFrames += frameCount
+                if self.routineOutputMeterFrames >= Int(sampleRate / 20) {
+                    self.routineOutputMeterFrames = 0
+                    self.routineOutputLevelHandler?(min(max(peak, 0), 1))
+                }
+            }
+            routineOutputCaptureArmed = true
+        }
+        if let capturedError { throw capturedError }
+    }
+
+    func cancelRoutineOutputCapture() {
+        audioQueue.async { [weak self] in
+            guard let self, self.routineOutputCaptureArmed else { return }
+            self.routineOutputCaptureArmed = false
+            self.engine.mainMixerNode.removeTap(onBus: 0)
+            self.routineOutputCaptureRing?.deallocate()
+            self.routineOutputCaptureRing = nil
+            self.routineOutputCaptureDestinationURL = nil
+            self.routineOutputLevelHandler?(0)
+        }
+    }
+
+    func finishRoutineOutputCapture(
+        completion: @escaping (RoutineOutputCaptureFinalizeOutcome) -> Void
+    ) {
+        audioQueue.async { [weak self] in
+            guard let self,
+                  self.routineOutputCaptureArmed,
+                  let ring = self.routineOutputCaptureRing,
+                  let destinationURL = self.routineOutputCaptureDestinationURL else {
+                completion(.notArmed)
+                return
+            }
+
+            self.routineOutputCaptureArmed = false
+            self.engine.mainMixerNode.removeTap(onBus: 0)
+            let written = self.routineOutputCaptureWriteFrames
+            let capacity = self.routineOutputCaptureRingFrames
+            self.routineOutputCaptureRing = nil
+            self.routineOutputCaptureDestinationURL = nil
+            self.routineOutputLevelHandler?(0)
+
+            guard written > 0, capacity > 0 else {
+                ring.deallocate()
+                completion(.empty)
+                return
+            }
+
+            let samples = Self.orderedRoutineOutputSamples(
+                ring: ring,
+                capacity: capacity,
+                written: written
+            )
+            ring.deallocate()
+            let sampleRate = self.routineOutputCaptureRate
+            self.routineOutputCaptureExportQueue.async {
+                do {
+                    try Self.writeRoutineOutputWAV(
+                        samples,
+                        sampleRate: sampleRate,
+                        destinationURL: destinationURL
+                    )
+                    completion(.exported(
+                        url: destinationURL,
+                        frames: samples.count,
+                        sampleRate: sampleRate,
+                        samples: samples
+                    ))
+                } catch {
+                    completion(.error(error))
+                }
+            }
+        }
+    }
+
+    private static func orderedRoutineOutputSamples(
+        ring: UnsafePointer<Float>,
+        capacity: Int,
+        written: Int
+    ) -> [Float] {
+        let count = min(written, capacity)
+        let start = written >= capacity ? written % capacity : 0
+        return (0..<count).map { ring[(start + $0) % capacity] }
+    }
+
+    private static func writeRoutineOutputWAV(
+        _ samples: [Float],
+        sampleRate: Double,
+        destinationURL: URL
+    ) throws {
+        guard !samples.isEmpty else { throw RoutineOutputCaptureError.emptyCapture }
+        try FileManager.default.createDirectory(
+            at: destinationURL.deletingLastPathComponent(),
+            withIntermediateDirectories: true
+        )
+        try? FileManager.default.removeItem(at: destinationURL)
+        guard let format = AVAudioFormat(
+            commonFormat: .pcmFormatFloat32,
+            sampleRate: sampleRate,
+            channels: 2,
+            interleaved: false
+        ),
+        let buffer = AVAudioPCMBuffer(
+            pcmFormat: format,
+            frameCapacity: AVAudioFrameCount(samples.count)
+        ),
+        let destinations = buffer.floatChannelData else {
+            throw RoutineOutputCaptureError.invalidMixerFormat
+        }
+        buffer.frameLength = AVAudioFrameCount(samples.count)
+        samples.withUnsafeBufferPointer { source in
+            destinations[0].update(from: source.baseAddress!, count: samples.count)
+            destinations[1].update(from: source.baseAddress!, count: samples.count)
+        }
+        let file = try AVAudioFile(
+            forWriting: destinationURL,
+            settings: format.settings,
+            commonFormat: .pcmFormatFloat32,
+            interleaved: false
+        )
+        try file.write(from: buffer)
+    }
+
     // MARK: - Continuous DVS renderer (2026-08-09 static/burst fix)
 
     /// Continuous-render replacement for the DVS 60 Hz short-grain
@@ -449,6 +691,7 @@ final class ScratchSamplePlaybackController {
 
     private(set) var loadedSampleID: String?
     private var forwardBuffer: AVAudioPCMBuffer?
+    private var playbackWaveformSnapshot: PlaybackWaveformSnapshot?
     private(set) var totalFrames: Int = 0
     private var lastScheduledSteps: Double = 0
     private var lastScheduledDirection: ScratchPlatterDirection?
@@ -1746,6 +1989,12 @@ final class ScratchSamplePlaybackController {
         hotCueLoopFrames = availableFramesAfterOnset >= hotCueRevolutionFrames
             ? hotCueRevolutionFrames
             : availableFramesAfterOnset
+        playbackWaveformSnapshot = Self.makePlaybackWaveform(
+            from: buffer,
+            sampleID: sampleID,
+            cueStartFrame: hotCueOnsetFrame,
+            contentFrameCount: max(0, totalFrames - hotCueOnsetFrame)
+        )
         // Cue-start-alignment fix (2026-08-14): the controller's own
         // position bookkeeping starts at the onset too, not file frame 0 —
         // see the matching `initialPhase:` passed to `installSample` below,
@@ -3013,6 +3262,7 @@ final class ScratchSamplePlaybackController {
             self.playerNode.stop()
             self.playerNode.volume = 1.0
             self.forwardBuffer = nil
+            self.playbackWaveformSnapshot = nil
             self.loadedSampleID = nil
             self.totalFrames = 0
             self.lastScheduledSteps = 0
@@ -3308,11 +3558,25 @@ final class ScratchSamplePlaybackController {
     /// Lightweight read-position snapshot for a live UI track. Distinct from
     /// `DVSPlaybackDiagnostics` (scheduling/rate oriented) — this is the raw
     /// read-head position, polled by the UI at ~25 Hz for smooth tracking.
+    struct PlaybackWaveformSnapshot: Equatable, Sendable {
+        let sampleID: String
+        let displayName: String
+        let amplitudes: [Float]
+        let sampleRate: Double
+        let contentFrameCount: Int
+
+        var duration: TimeInterval {
+            guard sampleRate > 0 else { return 0 }
+            return Double(contentFrameCount) / sampleRate
+        }
+    }
+
     struct PlaybackPositionSnapshot: Equatable {
         let loadedSampleID: String?
         let currentSampleFrame: Int
         let totalFrames: Int
         let dvsLoopFrames: Double
+        let unwrappedFramePosition: Double
 
         /// Normalised read position in `[0, 1]` across the effective loop span
         /// (`max(dvsLoopFrames, totalFrames)`, matching `continuousLoopFrames`).
@@ -3330,13 +3594,91 @@ final class ScratchSamplePlaybackController {
     /// no I/O.
     func currentPlaybackPositionSnapshot() -> PlaybackPositionSnapshot {
         audioQueue.sync {
-            PlaybackPositionSnapshot(
+            let unwrappedFramePosition: Double
+            if dvsOwnershipActive {
+                unwrappedFramePosition = dvsAccumulatedSteps * framesPerStep
+            } else if midiUsesContinuousRenderer {
+                unwrappedFramePosition = midiContinuousAccumulatedSteps * midiFramesPerStep
+            } else {
+                unwrappedFramePosition = midiAccumulatedSteps * framesPerStep
+            }
+            return PlaybackPositionSnapshot(
                 loadedSampleID: loadedSampleID,
                 currentSampleFrame: currentSampleFrame,
                 totalFrames: totalFrames,
-                dvsLoopFrames: dvsLoopFrames
+                dvsLoopFrames: dvsLoopFrames,
+                unwrappedFramePosition: unwrappedFramePosition
             )
         }
+    }
+
+    /// Immutable PCM overview for UI presentation. The array is rebuilt only
+    /// when a sample loads and is read independently from the 25 Hz playhead
+    /// snapshot, so display refreshes never republish waveform bins.
+    func currentPlaybackWaveformSnapshot() -> PlaybackWaveformSnapshot? {
+        audioQueue.sync { playbackWaveformSnapshot }
+    }
+
+    private static func makePlaybackWaveform(
+        from buffer: AVAudioPCMBuffer,
+        sampleID: String,
+        cueStartFrame: Int,
+        contentFrameCount: Int,
+        binCount: Int = 128
+    ) -> PlaybackWaveformSnapshot {
+        let safeCueStart = min(max(cueStartFrame, 0), Int(buffer.frameLength))
+        let safeContentFrames = min(
+            max(contentFrameCount, 0),
+            max(0, Int(buffer.frameLength) - safeCueStart)
+        )
+        let sampleRate = buffer.format.sampleRate
+        let displayName = sampleID == "dvs_ahhh" || sampleID == "ahhh"
+            ? "AHHH"
+            : sampleID.uppercased()
+        guard safeContentFrames > 0,
+              binCount > 0,
+              let channels = buffer.floatChannelData else {
+            return PlaybackWaveformSnapshot(
+                sampleID: sampleID,
+                displayName: displayName,
+                amplitudes: [],
+                sampleRate: sampleRate,
+                contentFrameCount: safeContentFrames
+            )
+        }
+
+        let channelCount = max(1, Int(buffer.format.channelCount))
+        var amplitudes = [Float](repeating: 0, count: binCount)
+        for bin in 0..<binCount {
+            let localStart = bin * safeContentFrames / binCount
+            let localEnd = max(localStart + 1, (bin + 1) * safeContentFrames / binCount)
+            var peak: Float = 0
+            var sumSquares: Double = 0
+            var sampleCount = 0
+            for channelIndex in 0..<channelCount {
+                let channel = channels[channelIndex]
+                for localFrame in localStart..<min(localEnd, safeContentFrames) {
+                    let value = channel[safeCueStart + localFrame]
+                    peak = max(peak, abs(value))
+                    sumSquares += Double(value * value)
+                    sampleCount += 1
+                }
+            }
+            let rms = sampleCount > 0
+                ? Float((sumSquares / Double(sampleCount)).squareRoot())
+                : 0
+            amplitudes[bin] = max(peak * 0.65, rms * 1.6)
+        }
+
+        let normalizationPeak = max(amplitudes.max() ?? 0, Float.leastNonzeroMagnitude)
+        amplitudes = amplitudes.map { min(max($0 / normalizationPeak, 0), 1) }
+        return PlaybackWaveformSnapshot(
+            sampleID: sampleID,
+            displayName: displayName,
+            amplitudes: amplitudes,
+            sampleRate: sampleRate,
+            contentFrameCount: safeContentFrames
+        )
     }
 
     // MARK: - Position → frame mapping

@@ -1,5 +1,15 @@
 # AI Handoff
 
+## 2026-08-31 (latest) - canonical macOS Review restored; RANE startup and AHHH waveform implemented
+
+- The only macOS Debug product to use is `/Users/karlwatson/Downloads/ScratchLab/build/CodexProducts-macos-launch/Debug/ScratchLab.app`. It was rebuilt from current source and launched as PID 50940; `ScratchLab.debug.dylib` was timestamped 2026-08-31 08:15:18. Older `build/CodexProducts-*` folders remain untouched build artifacts.
+- Persisted session `0d2274b5-4b32-434b-ab18-ec931cae8e91` take 2 contained 33 movement events, 2 audio events, detected Baby Scratch, and 255 trace observations while Review displayed zero. Root cause: completed-take restore discarded decoded `detectedNotation`, then an asynchronous artifact refresh could overwrite the fallback with nil. Restore now carries the selected sidecar's notation and refresh cannot erase it. Canonical UI verification shows Take 2, Baby Scratch, 33 strokes, comparison notation, and Export.
+- Debug automatic audio selection now prefers any connected RANE hardware after an explicit user choice but before stale/default Mac microphone state. Explicit user selection still wins; Release selection behavior is unchanged.
+- macOS Capture now implements Figma `SamplePositionWaveform` component set `457:3817`: immutable 128-bin PCM AHHH waveform, cue origin, cyan played region/playhead, START/MID/END labels, and Unloaded/Ready/Live/Before Start/Past End status. The existing 25 Hz UI poll reads a signed, unwrapped frame position from the same DVS/MIDI accumulators already driving audio; `PlatterSamplePositionProjection` and its 5 ms cue tolerance remain authoritative for presentation. Renderer and scheduling code are unchanged.
+- Figma component description now records iOS/macOS Capture parity and the immutable-waveform/signed-playhead contract.
+- Verification: RANE selection + Review restore focused tests passed 3/3 twice. macOS waveform contract + projection tests passed 26/26 twice. Canonical macOS build succeeded. Visual canonical check shows the unloaded waveform lane cleanly occupying the camera bottom with live notation reserved above it; Review still restores 33 strokes after the waveform build.
+- Physical check still required: with RANE connected, load AHHH, start one short take, verify the cyan playhead remains audibly aligned while moving through cue into `BEFORE START` and beyond the sample into `PAST END`, then verify the new take's notation/fader evidence in Review and export it.
+
 ## 2026-08-31 (latest) - stale Review take and missing upfader notation fixed; physical retest pending
 
 - Physical session `8ad16543-5165-41e8-993d-1d00c1ce5fd8` proved capture data was not lost. Take 1 persisted 33 movement events and 8,911 raw CC6 events; take 2 persisted 71 movement events, 14,565 mixer MIDI events, 561 mapped crossfader CC8 events, and 18 derived fader events (4 cuts). Review was visibly showing `Take 1` while `take-002` was the newest completed take.
@@ -2753,6 +2763,10 @@ Possible future slices (each its own approval, **not in scope now**):
 - No signing / bundle ID / entitlements / `Info.plist` /
   `PrivacyInfo.xcprivacy` / `Copy Bundle Resources` changes.
 - No `Co-Authored-By` trailers.
+
+## 2026-08-31 continuation: standalone AHHH recording source corrected
+
+The macOS canonical routine WAV now comes from `ScratchSamplePlaybackController`'s post-mixer output, not the RANE hardware input. Capture starts from the movie's real start callback. `MacCaptureEngine` waits for the stereo WAV, replaces the MOV's hardware audio with it, and feeds notation from the same samples before making the take ready. Capture shows distinct onboard-output and hardware-input meters. No validation has been run; build and physically record/review/export one take before closing `TASKS.md:1`.
 - **Do not stage or commit anything — including this `AI_HANDOFF.md`
   update — without Karl's explicit approval after review.**
 
@@ -4445,3 +4459,12 @@ inside a Copy Bundle Resources phase. Audit-only - do not modify the project.
 - Do not touch the dirty checkout at `/Users/karlwatson/Downloads/ScratchLab`.
 - Do not commit. Do not push.
 - No `Co-Authored-By` trailers.
+
+## 2026-08-31 release handoff
+
+- App Store artifact: `build/AppStore-1.0.1-19/ScratchLab.ipa`.
+- Archive: `build/ScratchLab-1.0.1-19.xcarchive`.
+- Bundle/version/build: `com.machelpnz.scratchlab`, 1.0.1 (19).
+- Signed archive and App Store Connect export both succeeded.
+- Stem rendering now uses actual canonical scratch frames, not planned take duration; focused regression proved all three stems are equal length.
+- Remaining verification: rerun the complete desktop XCTest plan and capture/export one fresh physical Rane take to confirm equal stem lengths in field hardware output.
