@@ -256,6 +256,53 @@ Dataset-quality rules:
 - mixed captures can still be useful for review or demo workflows, but should be filtered out of ML training unless intentionally included
 - timing should be reconstructed from metadata where possible instead of treating printed click or beat audio as ground truth
 
+## Take Boundary And Duration
+
+A routine take has exactly one boundary, and it is the media.
+
+- The take's clock starts when `AVCaptureFileOutput` reports `didStartRecordingTo`, not when `startRecording(to:)` was issued. Camera and writer startup is measurable (about 0.9 s on a warm MacBook Pro camera, longer cold) and must never be charged against the requested take length.
+- The requested take length is enforced primarily by `AVCaptureMovieFileOutput.maxRecordedDuration`, which is measured in recorded media time. A wall-clock backstop is armed from the confirmed media start as a second line of defence.
+- Recording duration, controller/MIDI timing, movement timing, platter telemetry, and the onboard audio tap all use that same confirmed media-start epoch. Anything observed before it is dropped, never clamped to zero.
+- Finalization (muxing the onboard audio into the movie, writing sidecars) happens *after* the boundary and is not part of the take.
+
+Two distinct duration fields are exported, and they must not be conflated:
+
+| Field | Meaning |
+| --- | --- |
+| `plannedTakeDurationSeconds` | The take length the operator requested. Never overwritten by a measurement. |
+| `totalDurationSeconds` | The **actual playable** duration, measured from the captured audio. |
+
+Configs written before `plannedTakeDurationSeconds` existed carry only `takeDurationSeconds`, which at the time was the operator's requested length. Those decode with the stored value migrated into `plannedTakeDurationSeconds` so a legacy session keeps its request. The old field was overloaded — export also wrote the measured aggregate back into it — so for legacy data the two meanings cannot be told apart; retaining the stored value is the documented choice, and it is re-validated against the take-length range before it can bound a take.
+
+A wall-clock span from sidecar `startedAt` to `endedAt` is not a take duration — it also contains startup and finalization — and is used only as a fallback when a take's audio artifact cannot be read.
+
+## Session Date And Time Zone Policy
+
+There is exactly one calendar date per session, and one rule for producing it.
+
+- **A session's date is the capture device's local calendar date at session start.**
+- That single value appears, identically, in:
+  - the export folder name (`session_YYYY_MM_DD_...`)
+  - `manifests/session_manifest.json` → `date`
+  - every manifest take's `date`
+- Absolute instants — `createdAt`, `generatedAt`, audit-trail timestamps — stay UTC ISO-8601 and are deliberately **not** required to fall on the same calendar day. A 08:04 NZ session is 20:04 UTC the previous day; both statements are true.
+
+The zone is **persisted**, not inferred. `CaptureSessionConfig.sessionTimeZoneIdentifier` is stamped with the capture device's IANA zone when the session identity is created, travels in the sidecar and in `session_metadata.json`, and is what the export reads. Deriving the date from the exporting machine's current zone would re-date a session exported after travel or a DST change. A legacy session with no recorded zone is dated in **UTC** — the UTC calendar day of `createdAt`. That fallback is deliberately not the exporting device's zone: a legacy session carries no evidence of where it was captured, so the only defensible date is a reproducible one. Re-exporting the same legacy session on another machine, after travel, or across a DST boundary yields the identical folder name and manifest date, and it matches the date pre-policy exports already wrote, so recovering an old session never silently re-dates it.
+
+`CaptureCanonicalFormatting.sessionDateString(_:timeZoneIdentifier:)` and `sessionFolderDateString(_:timeZoneIdentifier:)` are the only two formatters allowed to produce a session date. `validate_session.py` fails a session whose folder date, manifest date, and take dates do not agree.
+
+## Generated Audio Levels
+
+Audio ScratchLab renders itself (the timing/beat stem, and the scratch + timing mix) is held to a headroom policy:
+
+- generated stems (`beat_only`, `timing.wav`) peak at or below **-1 dBFS**
+- the scratch + timing mix peaks at or below **-0.1 dBFS** and never reaches full scale
+- overshoot is corrected with a single linear attenuation across the whole buffer, never by clamping individual samples — hard clipping is audible, irreversible, and makes a stem that no longer represents the pattern
+- attenuation only; a quiet pattern is never boosted
+- because the correction is a pure gain, `scratch_only`, `beat_only`, and `scratch_with_beat` keep **identical exact frame counts** and stay sample-aligned
+
+**The captured recording is never turned down to make room for generated audio.** In the mix the scratch runs at unity and headroom is found by lowering the *timing* stem: the largest gain no greater than the nominal 0.55 for which `|scratch + gain x timing| <= ceiling` holds at every frame, solved exactly in one pass. The mix ceiling sits just inside full scale rather than at -1 dBFS precisely because a hot capture (the regression fixture peaks at -0.234 dBFS) would otherwise force an attenuation of the recording. Only when the captured scratch alone exceeds the ceiling is the whole mix attenuated, and the applied mix gain is reported so that case is visible rather than silent.
+
 ## Take Numbering
 
 - take numbering restarts within each BPM set

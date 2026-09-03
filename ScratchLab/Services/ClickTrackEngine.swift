@@ -204,10 +204,15 @@ final class ClickTrackEngine: ObservableObject {
         durationSeconds: Double,
         sampleRate: Double,
         channelCount: AVAudioChannelCount,
-        startBeatIndex: Int
+        startBeatIndex: Int,
+        exactFrameCount: AVAudioFrameCount? = nil
     ) throws -> AVAudioPCMBuffer {
         let bpm = CaptureClickTrackDefaults.clampedBPM(requestedBPM)
-        let totalFrameCount = max(1, Int(ceil(max(0, durationSeconds) * sampleRate)))
+        let totalFrameCount = max(
+            1,
+            exactFrameCount.map(Int.init)
+                ?? Int(ceil(max(0, durationSeconds) * sampleRate))
+        )
         guard let format = AVAudioFormat(
             standardFormatWithSampleRate: sampleRate,
             channels: channelCount

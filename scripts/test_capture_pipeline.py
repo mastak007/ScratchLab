@@ -1,18 +1,21 @@
 #!/usr/bin/env python3
 from __future__ import annotations
 
+import array
 import csv
 import json
 import os
 import shutil
+import struct
 import subprocess
 import sys
 import tempfile
 import unittest
 import wave
 from pathlib import Path
+from unittest import mock
 
-from capture_pipeline_common import ALLOWED_BPMS, SCRATCH_TYPE, SEGMENT_COUNT, TAKE_LOG_COLUMNS, default_manifest
+from capture_pipeline_common import ALLOWED_BPMS, SCRATCH_TYPE, SEGMENT_COUNT, TAKE_LOG_COLUMNS, build_artifact_record, default_manifest
 
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
@@ -530,6 +533,87 @@ class CapturePipelineFixtureTests(unittest.TestCase):
         self.assertEqual(validate_result.returncode, 0)
         self.assert_report_contains("Status: PASS")
 
+    def test_validate_accepts_manifest_declared_95_bpm_app_export(self) -> None:
+        self.create_session()
+        (self.session_dir / "95bpm").mkdir()
+        video_path = self.session_dir / "video" / "DJFIXTURE_baby_095_take02_camA.mov"
+        audio_path = self.session_dir / "audio" / "DJFIXTURE_baby_095_take02_scratch_only.wav"
+        notation_path = self.session_dir / "notation" / "take-002_detected_notation.json"
+        shutil.copyfile(FIXTURES_DIR / "camA_stub.mov", video_path)
+        self.write_wav_fixture(audio_path)
+        notation_path.write_text(
+            json.dumps(
+                {
+                    "schemaVersion": "scratchlab_detected_notation_v1",
+                    "sessionID": "session-95",
+                    "takeID": "take-002",
+                    "scratchType": "baby_scratch",
+                    "notationSource": "unavailable",
+                    "recordMovementEvents": [],
+                    "audioEvents": [],
+                    "faderEvents": [],
+                    "mixerMidiEvents": [],
+                }
+            ),
+            encoding="utf-8",
+        )
+        video_relative = str(video_path.relative_to(self.session_dir))
+        audio_relative = str(audio_path.relative_to(self.session_dir))
+        with mock.patch.dict(os.environ, {"PATH": self.env["PATH"]}):
+            video_artifact = build_artifact_record(self.session_dir, video_path, "camA")
+            serato_artifact = build_artifact_record(self.session_dir, audio_path, "serato")
+            scratch_artifact = build_artifact_record(self.session_dir, audio_path, "scratch_only")
+        self.write_manifest(
+            {
+                "spec_version": "capture_spec_v1",
+                "dj_name": DJ_NAME,
+                "dj_token": DJ_TOKEN,
+                "date": SESSION_DATE,
+                "scratch_type": SCRATCH_TYPE,
+                "allowed_bpms": [95],
+                "segment_count": SEGMENT_COUNT,
+                "verbal_slate_required": False,
+                "sync_clap_required": False,
+                "session_root": self.session_dir.name,
+                "notes": "",
+                "takes": [
+                    {
+                        "dj_name": DJ_NAME,
+                        "date": SESSION_DATE,
+                        "scratch_type": SCRATCH_TYPE,
+                        "bpm": 95,
+                        "take_number": 2,
+                        "segment_count": SEGMENT_COUNT,
+                        "camera_id": "camA",
+                        "audio_source": "scratchlab_output",
+                        "watch_source": "none",
+                        "verbal_slate_used": False,
+                        "sync_clap_used": False,
+                        "notes": "",
+                        "files": {
+                            "camA": video_relative,
+                            "serato": audio_relative,
+                            "scratch_only": audio_relative,
+                            "notation": str(notation_path.relative_to(self.session_dir)),
+                        },
+                        "artifacts": {
+                            "camA": video_artifact,
+                            "serato": serato_artifact,
+                            "scratch_only": scratch_artifact,
+                        },
+                    }
+                ],
+            }
+        )
+        self.write_take_log_rows(
+            [f"95,2,{video_relative},,{audio_relative},,false,false,"]
+        )
+
+        validate_result = self.run_script("validate_session.py", self.session_dir)
+        self.assertEqual(validate_result.returncode, 0)
+        self.assert_report_contains("Status: PASS")
+        self.assert_report_contains("- 95 BPM: 1 valid take(s), 1 renamed take(s)")
+
     def test_validate_accepts_midi_fader_events_when_present(self) -> None:
         self.create_session()
         self.stage_raw_media()
@@ -635,7 +719,7 @@ class CapturePipelineFixtureTests(unittest.TestCase):
         self.assertNotEqual(validate_result.returncode, 0)
         self.assert_report_contains("Status: FAIL")
         self.assert_report_contains(
-            "take log line 2: Raw source paths must stay inside the session raw/ folder: ../outside_audio.wav"
+            "take log line 2: Take log media paths must stay inside the session folder: ../outside_audio.wav"
         )
 
     def test_validate_fixture_fails_when_manifest_is_missing(self) -> None:
@@ -939,6 +1023,278 @@ class CapturePipelineFixtureTests(unittest.TestCase):
         self.assert_report_contains("Status: FAIL")
         self.assert_report_contains(
             "70 BPM take 01: stem_availability marks scratch_only as available but files.scratch_only is missing."
+        )
+
+
+class AppExportValidationTests(unittest.TestCase):
+    """Regressions for the shape a real ScratchLab macOS export produces.
+
+    Modelled on session_2026_09_04_h_baby_scratch_95_bpm: IEEE Float32 stems
+    with JUNK/FLLR header padding, canonical `video/` + `audio/` take-log
+    paths, optional slate/clap, and frame-identical stems.
+    """
+
+    maxDiff = None
+
+    DJ_NAME = "h"
+    DJ_TOKEN = "H"
+    BPM = 95
+    SESSION_DATE = "2026-09-04"
+    FOLDER_DATE = "2026_09_04"
+    FRAME_COUNT = 44100
+
+    def setUp(self) -> None:
+        self.temporary_directory = tempfile.TemporaryDirectory()
+        self.temp_root = Path(self.temporary_directory.name)
+        self.session_dir = self.temp_root / f"session_{self.FOLDER_DATE}_h_baby_scratch_95_bpm"
+        self.manifest_path = self.session_dir / "manifests" / "session_manifest.json"
+        self.take_log_path = self.session_dir / "manifests" / "take_log.csv"
+        self.validation_report_path = self.session_dir / "manifests" / "validation_report.txt"
+
+        self.env = os.environ.copy()
+        self.ffprobe_bin_dir = self.temp_root / "bin"
+        self.ffprobe_bin_dir.mkdir(parents=True, exist_ok=True)
+        ffprobe_target = self.ffprobe_bin_dir / "ffprobe"
+        shutil.copyfile(FIXTURES_DIR / "ffprobe_stub.py", ffprobe_target)
+        ffprobe_target.chmod(0o755)
+        self.env["PATH"] = f"{self.ffprobe_bin_dir}{os.pathsep}{self.env.get('PATH', '')}"
+
+    def tearDown(self) -> None:
+        self.temporary_directory.cleanup()
+
+    # -- fixture construction ------------------------------------------------
+
+    def write_float32_wav(self, path: Path, *, frame_count: int, peak: float) -> None:
+        """Write a two-channel IEEE Float32 WAV with a JUNK/FLLR header area.
+
+        Mirrors what AVAudioFile emits: format tag 3, and padding chunks
+        between `fmt ` and `data` that a naive reader walks straight past.
+        """
+        path.parent.mkdir(parents=True, exist_ok=True)
+        channels = 2
+        sample_rate = 44100
+        block_align = channels * 4
+
+        samples = array.array("f", [0.0] * (frame_count * channels))
+        for frame in range(frame_count):
+            value = peak if frame % 2 == 0 else -peak * 0.5
+            samples[frame * channels] = value
+            samples[frame * channels + 1] = value
+        payload = samples.tobytes()
+
+        fmt_chunk = struct.pack(
+            "<HHIIHH", 3, channels, sample_rate, sample_rate * block_align, block_align, 32
+        )
+        junk = b"JUNK" + struct.pack("<I", 28) + (b"\x00" * 28)
+        fllr = b"FLLR" + struct.pack("<I", 64) + (b"\x00" * 64)
+        body = (
+            b"WAVE"
+            + junk
+            + b"fmt " + struct.pack("<I", len(fmt_chunk)) + fmt_chunk
+            + fllr
+            + b"data" + struct.pack("<I", len(payload)) + payload
+        )
+        path.write_bytes(b"RIFF" + struct.pack("<I", len(body)) + body)
+
+    def artifact(self, path: Path, source: str) -> dict[str, object]:
+        with mock.patch.dict(os.environ, {"PATH": self.env["PATH"]}):
+            return build_artifact_record(self.session_dir, path, source)
+
+    def build_export(
+        self,
+        *,
+        beat_peak: float = 0.5,
+        mixed_peak: float = 0.8,
+        beat_frame_count: int | None = None,
+        manifest_date: str | None = None,
+        verbal_slate_required: bool = False,
+        sync_clap_required: bool = False,
+    ) -> None:
+        for directory in ("raw", "audio", "video", "watch", "notation", "manifests", f"{self.BPM}bpm"):
+            (self.session_dir / directory).mkdir(parents=True, exist_ok=True)
+
+        stem = f"{self.DJ_TOKEN}_baby_{self.BPM:03d}_take01"
+        video_path = self.session_dir / "video" / f"{stem}_camA.mov"
+        shutil.copyfile(FIXTURES_DIR / "camA_stub.mov", video_path)
+
+        scratch_path = self.session_dir / "audio" / f"{stem}_scratch_only.wav"
+        beat_path = self.session_dir / "audio" / f"{stem}_beat_only.wav"
+        mixed_path = self.session_dir / "audio" / f"{stem}_scratch_with_beat.wav"
+        self.write_float32_wav(scratch_path, frame_count=self.FRAME_COUNT, peak=0.7)
+        self.write_float32_wav(
+            beat_path,
+            frame_count=beat_frame_count if beat_frame_count is not None else self.FRAME_COUNT,
+            peak=beat_peak,
+        )
+        self.write_float32_wav(mixed_path, frame_count=self.FRAME_COUNT, peak=mixed_peak)
+
+        notation_path = self.session_dir / "notation" / "take-001_detected_notation.json"
+        notation_path.write_text(
+            json.dumps(
+                {
+                    "schemaVersion": "scratchlab_detected_notation_v1",
+                    "sessionID": "fixture-session",
+                    "takeID": "take-001",
+                    "scratchType": "baby_scratch",
+                    "notationSource": "detected",
+                    "recordMovementEvents": [],
+                    "audioEvents": [],
+                    "faderEvents": [],
+                    "mixerMidiEvents": [],
+                }
+            ),
+            encoding="utf-8",
+        )
+
+        def relative(path: Path) -> str:
+            return str(path.relative_to(self.session_dir))
+
+        session_date = manifest_date or self.SESSION_DATE
+        manifest = {
+            "spec_version": "capture_spec_v1",
+            "dj_name": self.DJ_NAME,
+            "dj_token": self.DJ_TOKEN,
+            "date": session_date,
+            "scratch_type": SCRATCH_TYPE,
+            "allowed_bpms": [self.BPM],
+            "segment_count": SEGMENT_COUNT,
+            "verbal_slate_required": verbal_slate_required,
+            "sync_clap_required": sync_clap_required,
+            "session_root": self.session_dir.name,
+            "notes": "",
+            "takes": [
+                {
+                    "dj_name": self.DJ_NAME,
+                    "date": session_date,
+                    "scratch_type": SCRATCH_TYPE,
+                    "bpm": self.BPM,
+                    "take_number": 1,
+                    "segment_count": SEGMENT_COUNT,
+                    "camera_id": "camA",
+                    "audio_source": "scratchlab_output",
+                    "watch_source": "none",
+                    "verbal_slate_used": False,
+                    "sync_clap_used": False,
+                    "notes": "",
+                    "stem_availability": {
+                        "scratch_only": "available",
+                        "beat_only": "available",
+                        "scratch_with_beat": "available",
+                    },
+                    "files": {
+                        "camA": relative(video_path),
+                        "serato": relative(scratch_path),
+                        "scratch_only": relative(scratch_path),
+                        "beat_only": relative(beat_path),
+                        "scratch_with_beat": relative(mixed_path),
+                        "notation": relative(notation_path),
+                    },
+                    "artifacts": {
+                        "camA": self.artifact(video_path, "camA"),
+                        "serato": self.artifact(scratch_path, "serato"),
+                        "scratch_only": self.artifact(scratch_path, "scratch_only"),
+                        "beat_only": self.artifact(beat_path, "beat_only"),
+                        "scratch_with_beat": self.artifact(mixed_path, "scratch_with_beat"),
+                    },
+                }
+            ],
+        }
+        self.manifest_path.write_text(f"{json.dumps(manifest, indent=2)}\n", encoding="utf-8")
+        self.take_log_path.write_text(
+            "\n".join(
+                [
+                    ",".join(TAKE_LOG_COLUMNS),
+                    f'"{self.BPM}","1","{relative(video_path)}","","{relative(scratch_path)}","","false","false",""',
+                ]
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+
+    # -- helpers -------------------------------------------------------------
+
+    def run_validate(self, *, expect_success: bool, env: dict[str, str] | None = None) -> str:
+        result = subprocess.run(
+            [sys.executable, str(SCRIPTS_DIR / "validate_session.py"), str(self.session_dir)],
+            cwd=REPO_ROOT,
+            env=env or self.env,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        if expect_success:
+            self.assertEqual(
+                result.returncode, 0, f"stdout:\n{result.stdout}\nstderr:\n{result.stderr}"
+            )
+        else:
+            self.assertNotEqual(result.returncode, 0)
+        return self.validation_report_path.read_text(encoding="utf-8")
+
+    # -- tests ---------------------------------------------------------------
+
+    def test_validate_accepts_float32_app_export(self) -> None:
+        self.build_export()
+        report = self.run_validate(expect_success=True)
+        self.assertIn("Status: PASS", report)
+        self.assertNotIn("is not a readable WAV file", report)
+
+    def test_validate_reads_float32_wav_without_ffprobe(self) -> None:
+        self.build_export()
+        env = self.env.copy()
+        # Make ffprobe refuse WAV input so only the RIFF fallback can answer,
+        # while video probing (which genuinely needs ffprobe) still works.
+        env["FFPROBE_STUB_FAIL_WAV"] = "1"
+        report = self.run_validate(expect_success=True, env=env)
+        self.assertIn("Status: PASS", report)
+        self.assertNotIn("is not a readable WAV file", report)
+
+    def test_canonical_take_log_paths_are_not_rerooted_under_raw(self) -> None:
+        self.build_export()
+        report = self.run_validate(expect_success=True)
+        self.assertNotIn("/raw/video/", report)
+        self.assertNotIn("/raw/audio/", report)
+        self.assertNotIn("take log source file is missing", report)
+
+    def test_optional_slate_and_clap_do_not_warn(self) -> None:
+        self.build_export()
+        report = self.run_validate(expect_success=True)
+        self.assertNotIn("verbal_slate_used is false.", report)
+        self.assertNotIn("sync_clap_used is false.", report)
+
+    def test_required_slate_and_clap_still_warn_when_unused(self) -> None:
+        self.build_export(verbal_slate_required=True, sync_clap_required=True)
+        report = self.run_validate(expect_success=True)
+        self.assertIn("verbal_slate_used is false.", report)
+        self.assertIn("sync_clap_used is false.", report)
+
+    def test_validate_rejects_beat_stem_above_full_scale(self) -> None:
+        self.build_export(beat_peak=1.218279)
+        report = self.run_validate(expect_success=False)
+        self.assertIn("beat_only peaks at 1.218279", report)
+        self.assertIn("above full scale", report)
+
+    def test_validate_rejects_generated_stem_without_headroom(self) -> None:
+        # 0.99 is inside full scale but leaves less than 1 dB of headroom.
+        self.build_export(beat_peak=0.99)
+        report = self.run_validate(expect_success=False)
+        self.assertIn("above the -1.0 dBFS headroom ceiling", report)
+
+    def test_validate_rejects_mixed_stem_at_or_above_full_scale(self) -> None:
+        self.build_export(mixed_peak=1.5)
+        report = self.run_validate(expect_success=False)
+        self.assertIn("scratch_with_beat peaks at 1.500000", report)
+
+    def test_validate_rejects_stem_frame_count_drift(self) -> None:
+        self.build_export(beat_frame_count=self.FRAME_COUNT - 1)
+        report = self.run_validate(expect_success=False)
+        self.assertIn("audio stem frame counts differ", report)
+
+    def test_validate_rejects_folder_and_manifest_date_disagreement(self) -> None:
+        self.build_export(manifest_date="2026-09-03")
+        report = self.run_validate(expect_success=False)
+        self.assertIn(
+            "Session folder date 2026-09-04 does not match manifest date 2026-09-03",
+            report,
         )
 
 

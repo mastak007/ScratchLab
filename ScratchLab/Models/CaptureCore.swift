@@ -1273,8 +1273,99 @@ enum CaptureMotionEvidencePresenter {
 enum RoutineCaptureDefaults {
     static let defaultTakeLengthSeconds: Double = 64
 
+    /// Guard rails for an operator-supplied take length. Anything outside this
+    /// range is treated as unset rather than silently truncating a take.
+    static let minimumTakeLengthSeconds: Double = 1
+    static let maximumTakeLengthSeconds: Double = 600
+
     static var defaultTakeLengthLabel: String {
         "\(Int(defaultTakeLengthSeconds)) seconds"
+    }
+
+    /// The take length the operator asked for.
+    ///
+    /// `plannedTakeDurationSeconds` is authoritative when present. It is never
+    /// written by a measurement, so a finished session cannot shorten the next
+    /// one.
+    ///
+    /// When it is absent the config predates the field, and back then
+    /// `takeDurationSeconds` was the only duration and carried the operator's
+    /// request — so a legacy session keeps its requested length rather than
+    /// silently reverting to the default. That old field was overloaded (export
+    /// also wrote the measured aggregate into it), so for legacy data the two
+    /// meanings genuinely cannot be told apart; honouring the stored value is
+    /// the documented choice. Every capture that goes through the current UI
+    /// stamps `plannedTakeDurationSeconds` explicitly, so this fallback only
+    /// ever applies to pre-existing records.
+    static func requestedTakeLengthSeconds(for config: CaptureSessionConfig?) -> Double {
+        let requested = config?.plannedTakeDurationSeconds ?? config?.takeDurationSeconds
+        guard let requested,
+              requested.isFinite,
+              requested >= minimumTakeLengthSeconds,
+              requested <= maximumTakeLengthSeconds else {
+            return defaultTakeLengthSeconds
+        }
+        return requested
+    }
+}
+
+/// Take-boundary arithmetic for a routine recording.
+///
+/// Kept free of AVFoundation so the boundary rules can be exercised directly:
+/// the whole point of the fix is that a slow camera/writer start must not
+/// shorten the recorded media, and that is a property of these functions, not
+/// of the capture session.
+enum RoutineTakeTimeline {
+    /// Take-relative time for an absolute host time, or `nil` when the instant
+    /// falls before media start.
+    ///
+    /// Returning `nil` (rather than clamping to zero) is deliberate: a
+    /// controller or hand-tracking event observed during writer startup did not
+    /// happen inside the media and must be dropped, not stacked onto frame 0.
+    static func takeRelativeTime(
+        hostTime: Double,
+        mediaStartHostTime: Double
+    ) -> Double? {
+        guard mediaStartHostTime > 0, hostTime.isFinite, mediaStartHostTime.isFinite else {
+            return nil
+        }
+        let relative = hostTime - mediaStartHostTime
+        return relative < 0 ? nil : relative
+    }
+
+    /// Host time at which the wall-clock backstop stop should fire.
+    ///
+    /// Anchored to the confirmed media start, so the interval it produces is
+    /// `requestedDurationSeconds + graceSeconds` no matter how long
+    /// `startRecording(to:)` took to yield its first sample buffer.
+    static func scheduledStopHostTime(
+        mediaStartHostTime: Double,
+        requestedDurationSeconds: Double,
+        graceSeconds: Double
+    ) -> Double {
+        mediaStartHostTime + max(0, requestedDurationSeconds) + max(0, graceSeconds)
+    }
+
+    /// Seconds the backstop should wait, measured from the confirmed media
+    /// start rather than from the moment recording was requested.
+    static func stopDelaySeconds(
+        requestedDurationSeconds: Double,
+        graceSeconds: Double
+    ) -> Double {
+        max(0, requestedDurationSeconds) + max(0, graceSeconds)
+    }
+
+    /// Whether a requested take was satisfied by the media that came back.
+    ///
+    /// `tolerance` covers ordinary frame/packet quantisation; anything larger
+    /// means the take really was cut short and must not be labelled complete.
+    static func mediaSatisfiesRequest(
+        requestedDurationSeconds: Double,
+        actualMediaDurationSeconds: Double,
+        toleranceSeconds: Double = 0.5
+    ) -> Bool {
+        guard requestedDurationSeconds > 0, actualMediaDurationSeconds.isFinite else { return false }
+        return actualMediaDurationSeconds >= requestedDurationSeconds - max(0, toleranceSeconds)
     }
 }
 
@@ -1293,7 +1384,20 @@ struct CaptureSessionConfig: Codable, Equatable, Sendable {
     var swingAmount: Double
     var engineVersion: String
     var timingPrintedToRecording: TimingPrintedToRecordingState
+    /// Measured playable duration across the session's takes, written at export
+    /// time from the captured media. Never the operator's request.
     var takeDurationSeconds: Double?
+    /// The take length the operator asked for, in seconds. Stays put across
+    /// takes and is never overwritten by a measurement.
+    var plannedTakeDurationSeconds: Double?
+    /// IANA identifier of the capture device's time zone, stamped when the
+    /// session identity is created.
+    ///
+    /// The session's calendar date is derived from `createdAt` in *this* zone,
+    /// not in whatever zone the exporting machine happens to be in later. A
+    /// session captured in Auckland and exported after a flight to London must
+    /// still be dated the day it was actually recorded.
+    var sessionTimeZoneIdentifier: String?
     var takeCount: Int
     var handedness: CaptureSessionHandedness?
     var notes: String
@@ -1321,6 +1425,8 @@ struct CaptureSessionConfig: Codable, Equatable, Sendable {
         case clickVersion
         case timingPrintedToRecording
         case takeDurationSeconds
+        case plannedTakeDurationSeconds
+        case sessionTimeZoneIdentifier
         case takeCount
         case handedness
         case notes
@@ -1345,6 +1451,8 @@ struct CaptureSessionConfig: Codable, Equatable, Sendable {
         engineVersion: String = CaptureBeatEngineDefaults.engineVersion,
         timingPrintedToRecording: TimingPrintedToRecordingState = .unknown,
         takeDurationSeconds: Double? = nil,
+        plannedTakeDurationSeconds: Double? = nil,
+        sessionTimeZoneIdentifier: String? = TimeZone.current.identifier,
         takeCount: Int = 0,
         handedness: CaptureSessionHandedness? = .right,
         notes: String = "",
@@ -1367,6 +1475,8 @@ struct CaptureSessionConfig: Codable, Equatable, Sendable {
         self.engineVersion = engineVersion
         self.timingPrintedToRecording = timingPrintedToRecording
         self.takeDurationSeconds = takeDurationSeconds
+        self.plannedTakeDurationSeconds = plannedTakeDurationSeconds
+        self.sessionTimeZoneIdentifier = sessionTimeZoneIdentifier
         self.takeCount = takeCount
         self.handedness = handedness
         self.notes = notes
@@ -1389,7 +1499,9 @@ struct CaptureSessionConfig: Codable, Equatable, Sendable {
         createdAt: Date,
         updatedAt: Date,
         takeCount: Int,
-        takeDurationSeconds: Double?
+        takeDurationSeconds: Double?,
+        plannedTakeDurationSeconds: Double? = RoutineCaptureDefaults.defaultTakeLengthSeconds,
+        sessionTimeZoneIdentifier: String? = TimeZone.current.identifier
     ) -> CaptureSessionConfig {
         CaptureSessionConfig(
             performerName: "",
@@ -1398,6 +1510,8 @@ struct CaptureSessionConfig: Codable, Equatable, Sendable {
             drillMode: .fullCapture,
             captureMode: .timedClick,
             takeDurationSeconds: takeDurationSeconds,
+            plannedTakeDurationSeconds: plannedTakeDurationSeconds,
+            sessionTimeZoneIdentifier: sessionTimeZoneIdentifier,
             takeCount: takeCount,
             handedness: .right,
             notes: "",
@@ -1417,6 +1531,10 @@ struct CaptureSessionConfig: Codable, Equatable, Sendable {
         updatedAt = now
         takeCount = 0
         takeDurationSeconds = nil
+        // A new session identity re-stamps the zone its date will be read in.
+        // `plannedTakeDurationSeconds` is a setting, not a measurement, so it
+        // deliberately survives.
+        sessionTimeZoneIdentifier = timeZone.identifier
     }
 
     mutating func applyCapturedTakeMetrics(
@@ -1531,6 +1649,23 @@ struct CaptureSessionConfig: Codable, Equatable, Sendable {
             timingPrintedToRecording = captureMode == .calibrationNoClick ? .notPrinted : .unknown
         }
         takeDurationSeconds = try container.decodeIfPresent(Double.self, forKey: .takeDurationSeconds)
+        // Decoded faithfully: absent stays absent. Migrating the legacy
+        // `takeDurationSeconds` into this field *here* would make a decoded
+        // config unequal to the in-memory config it was written from, which
+        // silently breaks every idempotency check that compares a reloaded
+        // record to an incoming one. The legacy fallback lives at the point of
+        // use instead — see `RoutineCaptureDefaults.requestedTakeLengthSeconds`.
+        plannedTakeDurationSeconds = try container.decodeIfPresent(
+            Double.self,
+            forKey: .plannedTakeDurationSeconds
+        )
+        // Absent on legacy configs. `nil` means "no zone was recorded", and the
+        // export falls back to the exporting device's zone rather than
+        // inventing one.
+        sessionTimeZoneIdentifier = try container.decodeIfPresent(
+            String.self,
+            forKey: .sessionTimeZoneIdentifier
+        )
         takeCount = try container.decodeIfPresent(Int.self, forKey: .takeCount) ?? 0
         if let handednessValue = try container.decodeIfPresent(String.self, forKey: .handedness)?
             .trimmingCharacters(in: .whitespacesAndNewlines),
@@ -1568,6 +1703,8 @@ struct CaptureSessionConfig: Codable, Equatable, Sendable {
         try container.encode(clickVersion, forKey: .clickVersion)
         try container.encode(timingPrintedToRecording.rawValue, forKey: .timingPrintedToRecording)
         try container.encodeIfPresent(takeDurationSeconds, forKey: .takeDurationSeconds)
+        try container.encodeIfPresent(plannedTakeDurationSeconds, forKey: .plannedTakeDurationSeconds)
+        try container.encodeIfPresent(sessionTimeZoneIdentifier, forKey: .sessionTimeZoneIdentifier)
         try container.encode(takeCount, forKey: .takeCount)
         try container.encodeIfPresent(handedness?.rawValue, forKey: .handedness)
         try container.encode(notes, forKey: .notes)

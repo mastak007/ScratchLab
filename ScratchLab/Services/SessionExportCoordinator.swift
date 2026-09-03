@@ -48,7 +48,16 @@ struct SessionExportMetadata: Codable, Equatable, Sendable {
     let timingPrintedToRecording: String
     let handedness: String?
     let takeCount: Int
+    /// Measured playable duration across every take in the export.
     let totalDurationSeconds: Double
+    /// The take length the operator asked for, when one was recorded. Kept
+    /// separate from `totalDurationSeconds` so a shortfall between what was
+    /// requested and what was captured stays visible instead of being papered
+    /// over by one ambiguous number.
+    let plannedTakeDurationSeconds: Double?
+    /// IANA zone the session's calendar date is read in, persisted at session
+    /// creation. See `CaptureCanonicalFormatting`'s session date policy.
+    let sessionTimeZoneIdentifier: String?
     let deckProfile: String?
     let cameraProfile: String?
     let watchWrist: String?
@@ -82,6 +91,8 @@ struct SessionExportMetadata: Codable, Equatable, Sendable {
         handedness: String? = nil,
         takeCount: Int,
         totalDurationSeconds: Double,
+        plannedTakeDurationSeconds: Double? = nil,
+        sessionTimeZoneIdentifier: String? = nil,
         deckProfile: String? = nil,
         cameraProfile: String? = nil,
         watchWrist: String? = nil,
@@ -115,6 +126,8 @@ struct SessionExportMetadata: Codable, Equatable, Sendable {
         self.handedness = handedness
         self.takeCount = takeCount
         self.totalDurationSeconds = totalDurationSeconds
+        self.plannedTakeDurationSeconds = plannedTakeDurationSeconds
+        self.sessionTimeZoneIdentifier = sessionTimeZoneIdentifier
         self.deckProfile = deckProfile
         self.cameraProfile = cameraProfile
         self.watchWrist = watchWrist
@@ -162,6 +175,8 @@ extension SessionExportMetadata {
             handedness: config.normalizedHandedness,
             takeCount: config.takeCount,
             totalDurationSeconds: totalDurationSeconds ?? config.takeDurationSeconds ?? 0,
+            plannedTakeDurationSeconds: config.plannedTakeDurationSeconds,
+            sessionTimeZoneIdentifier: config.sessionTimeZoneIdentifier,
             deckProfile: deckProfile,
             cameraProfile: cameraProfile,
             watchWrist: watchWrist,
@@ -514,6 +529,107 @@ struct SessionExportMixerMidiEvent: Codable, Equatable, Sendable {
     let mappedControl: String?
 }
 
+enum SessionExportEvidenceBounds {
+    static func boundedSnapshot(
+        _ snapshot: CaptureCore.DetectedNotationSnapshot,
+        to duration: TimeInterval
+    ) -> CaptureCore.DetectedNotationSnapshot {
+        guard duration.isFinite, duration >= 0 else { return snapshot }
+
+        let movementEvents = snapshot.recordMovementEvents.compactMap { event -> CaptureCore.DetectedNotationRecordMovementEvent? in
+            guard let interval = boundedInterval(
+                start: event.startTime,
+                end: event.endTime,
+                duration: duration
+            ) else { return nil }
+            let sourceDuration = event.endTime - event.startTime
+            let startFraction = sourceDuration > 0 ? (interval.start - event.startTime) / sourceDuration : 0
+            let endFraction = sourceDuration > 0 ? (interval.end - event.startTime) / sourceDuration : 1
+            let positionDelta = event.endPosition - event.startPosition
+            return CaptureCore.DetectedNotationRecordMovementEvent(
+                startTime: interval.start,
+                endTime: interval.end,
+                startPosition: event.startPosition + (positionDelta * startFraction),
+                endPosition: event.startPosition + (positionDelta * endFraction),
+                direction: event.direction,
+                movementKind: event.movementKind,
+                speed: event.speed,
+                confidence: event.confidence,
+                source: event.source
+            )
+        }
+        let audioEvents = snapshot.audioEvents.compactMap { event -> CaptureCore.DetectedNotationAudioEvent? in
+            guard let interval = boundedInterval(
+                start: event.startTime,
+                end: event.endTime,
+                duration: duration
+            ) else { return nil }
+            return CaptureCore.DetectedNotationAudioEvent(
+                startTime: interval.start,
+                endTime: interval.end,
+                duration: interval.end - interval.start,
+                peakLevel: event.peakLevel,
+                rmsLevel: event.rmsLevel,
+                confidence: event.confidence,
+                eventKind: event.eventKind,
+                source: event.source
+            )
+        }
+        let faderEvents = snapshot.faderEvents.compactMap { event -> CaptureCore.DetectedNotationFaderEvent? in
+            guard let interval = boundedInterval(
+                start: event.startTime,
+                end: event.endTime,
+                duration: duration
+            ) else { return nil }
+            let sourceDuration = event.endTime - event.startTime
+            let startFraction = sourceDuration > 0 ? (interval.start - event.startTime) / sourceDuration : 0
+            let endFraction = sourceDuration > 0 ? (interval.end - event.startTime) / sourceDuration : 1
+            let valueDelta = event.toValue - event.fromValue
+            return CaptureCore.DetectedNotationFaderEvent(
+                startTime: interval.start,
+                endTime: interval.end,
+                eventKind: event.eventKind,
+                control: event.control,
+                fromValue: event.fromValue + (valueDelta * startFraction),
+                toValue: event.fromValue + (valueDelta * endFraction),
+                source: event.source,
+                confidence: event.confidence
+            )
+        }
+        let mixerMidiEvents = snapshot.mixerMidiEvents.filter {
+            $0.takeRelativeTime.isFinite
+                && $0.takeRelativeTime >= 0
+                && $0.takeRelativeTime <= duration
+        }
+
+        return CaptureCore.DetectedNotationSnapshot(
+            notationSource: snapshot.notationSource,
+            notationConfidence: snapshot.notationConfidence,
+            detectedLabel: snapshot.detectedLabel,
+            labelSource: snapshot.labelSource,
+            labelConfidence: snapshot.labelConfidence,
+            detectionSources: snapshot.detectionSources,
+            recordMovementEvents: movementEvents,
+            audioEvents: audioEvents,
+            faderEvents: faderEvents,
+            mixerMidiEvents: mixerMidiEvents,
+            capturedAt: snapshot.capturedAt
+        )
+    }
+
+    private static func boundedInterval(
+        start: TimeInterval,
+        end: TimeInterval,
+        duration: TimeInterval
+    ) -> (start: TimeInterval, end: TimeInterval)? {
+        guard start.isFinite, end.isFinite, end > start else { return nil }
+        let boundedStart = max(0, start)
+        let boundedEnd = min(duration, end)
+        guard boundedEnd > boundedStart else { return nil }
+        return (boundedStart, boundedEnd)
+    }
+}
+
 struct SessionExportNotationBeatGrid: Codable, Equatable, Sendable {
     let bpm: Int
     let beatsPerBar: Int
@@ -665,6 +781,8 @@ enum SessionExportValidationReason: String, Equatable, Sendable {
     case stagedReviewDocumentMismatch
     case stagedReplayDocumentMismatch
     case stagedDocumentIdentityMismatch
+    case stagedCanonicalArtifactMismatch
+    case stagedGeneratedAudioMismatch
     case platterMotionWithoutRecordedMovement
     case capturedAudioHasNoDynamicChannelPair
 
@@ -682,6 +800,10 @@ enum SessionExportValidationReason: String, Equatable, Sendable {
             return "Export blocked: manifests/session_replay.json did not match the session it was generated from."
         case .stagedDocumentIdentityMismatch:
             return "Export blocked: a generated manifest named a different session or take set than this export."
+        case .stagedCanonicalArtifactMismatch:
+            return "Export blocked: a staged canonical media artifact did not match its manifest hash."
+        case .stagedGeneratedAudioMismatch:
+            return "Export blocked: a staged generated audio artifact did not match the rendered source."
         case .platterMotionWithoutRecordedMovement:
             return "Export blocked: a take claims platter motion but its notation recorded no movement events."
         case .capturedAudioHasNoDynamicChannelPair:
@@ -2289,7 +2411,6 @@ struct SessionArchiveBuilder: Sendable {
             .appendingPathComponent("verify-\(UUID().uuidString)", isDirectory: true)
         let signpostID = ScratchLabPerformanceSignpost.begin("ExportZIP")
         defer { ScratchLabPerformanceSignpost.end("ExportZIP", signpostID) }
-
         do {
             if fileManager.fileExists(atPath: archiveURL.path) {
                 try fileManager.removeItem(at: archiveURL)
@@ -2374,6 +2495,35 @@ struct SessionArchiveBuilder: Sendable {
         return SessionExportMetadataDocument(session: hydratedPackage.metadata, takes: takes)
     }
 
+    /// Playable duration of a take, measured from the captured audio itself.
+    ///
+    /// The wall-clock span between sidecar `startedAt` and `endedAt` is not a
+    /// take duration: it also contains camera/writer startup before the first
+    /// media sample and mux/finalization after the last one. Reporting that as
+    /// the take length labels a 19.2 s recording as a 24 s completed take.
+    static func playableMediaDurationSeconds(audioArtifactURL: URL?) -> TimeInterval? {
+        guard let audioArtifactURL,
+              let audioFile = try? AVAudioFile(forReading: audioArtifactURL),
+              audioFile.length > 0,
+              audioFile.processingFormat.sampleRate > 0 else {
+            return nil
+        }
+        return Double(audioFile.length) / audioFile.processingFormat.sampleRate
+    }
+
+    private func capturedMediaDuration(for take: SessionExportTake) -> TimeInterval? {
+        Self.playableMediaDurationSeconds(audioArtifactURL: take.audioArtifactURL)
+    }
+
+    private func exportBoundedSnapshot(
+        for take: SessionExportTake,
+        sidecar: CaptureCore.LocalRecordingSidecar
+    ) -> CaptureCore.DetectedNotationSnapshot? {
+        guard let snapshot = sidecar.detectedNotation else { return nil }
+        let duration = capturedMediaDuration(for: take) ?? max(0, take.duration)
+        return SessionExportEvidenceBounds.boundedSnapshot(snapshot, to: duration)
+    }
+
     func reviewDocument(
         for package: SessionExportPackage,
         generatedAt: Date = Date()
@@ -2381,8 +2531,9 @@ struct SessionArchiveBuilder: Sendable {
         let takes = package.takes.map { take -> SessionExportReviewTake in
             let sidecar = try? decodeSidecar(at: take.sidecarURL)
             let report: SessionQualityReport? = {
-                guard let snapshot = sidecar?.detectedNotation else { return nil }
-                let duration = snapshot.capturedEvidenceEndTime ?? take.duration
+                guard let sidecar,
+                      let snapshot = exportBoundedSnapshot(for: take, sidecar: sidecar) else { return nil }
+                let duration = capturedMediaDuration(for: take) ?? max(0, take.duration)
                 return SessionQualityAnalyzer.analyze(
                     snapshot: snapshot,
                     takeDuration: duration,
@@ -2410,8 +2561,9 @@ struct SessionArchiveBuilder: Sendable {
         let takes = package.takes.map { take -> SessionExportReplayTake in
             let sidecar = try? decodeSidecar(at: take.sidecarURL)
             let timeline: SessionReplayTimeline? = {
-                guard let snapshot = sidecar?.detectedNotation else { return nil }
-                let duration = snapshot.capturedEvidenceEndTime ?? take.duration
+                guard let sidecar,
+                      let snapshot = exportBoundedSnapshot(for: take, sidecar: sidecar) else { return nil }
+                let duration = capturedMediaDuration(for: take) ?? max(0, take.duration)
                 return SessionReplayTimeline.build(
                     from: snapshot,
                     takeDuration: duration
@@ -2634,10 +2786,15 @@ struct SessionArchiveBuilder: Sendable {
                     throw SessionExportError.missingRequiredFiles
                 }
 
-                let duration = max(
+                // Actual playable duration. The wall-clock span is only a
+                // fallback for a take whose audio artifact cannot be read.
+                let wallClockSpan = max(
                     0,
                     (sidecar.endedAt ?? sidecar.startedAt).timeIntervalSince(sidecar.startedAt)
                 )
+                let duration = Self.playableMediaDurationSeconds(
+                    audioArtifactURL: audioArtifactURL
+                ) ?? wallClockSpan
                 let linkedWatchArtifact = self.resolveLinkedWatchCaptureArtifact(for: sidecar)
                 // Same resolver and same persisted sidecar notation the live
                 // capture path uses, so a recovered take and a live-exported
@@ -2873,6 +3030,7 @@ struct SessionArchiveBuilder: Sendable {
 
         try stageExportMixArtifacts(
             package,
+            context: context,
             options: options,
             at: stagedSessionURL,
             fileManager: fileManager
@@ -2962,7 +3120,7 @@ struct SessionArchiveBuilder: Sendable {
                 )
                 guard bytes == artifact.bytes,
                       try sha256Hex(at: artifactURL) == artifact.sha256 else {
-                    throw SessionExportError.unableToPrepareExport
+                    throw SessionExportValidationFailure(.stagedCanonicalArtifactMismatch)
                 }
             }
 
@@ -3051,15 +3209,17 @@ struct SessionArchiveBuilder: Sendable {
             }
 
             if options.mixMode != .scratchOnly {
-                guard let sourceAudioURL = take.audioArtifactURL else {
+                guard take.audioArtifactURL != nil else {
                     throw SessionExportError.missingRequiredFiles
                 }
+                let canonicalScratchURL = stagedSessionURL
+                    .appendingPathComponent(takeContext.scratchOnlyRelativePath)
                 let timingBuffer = try renderedExportTimingBuffer(
                     for: take,
                     captureMetadata: takeContext.captureMetadata,
                     sidecar: takeContext.sidecar,
                     packageMetadata: package.metadata,
-                    scratchAudioURL: sourceAudioURL
+                    scratchAudioURL: canonicalScratchURL
                 )
                 if let timingFile = exportPaths.timingFile {
                     try validateGeneratedAudioBuffer(
@@ -3074,7 +3234,7 @@ struct SessionArchiveBuilder: Sendable {
                     switch options.mixMode {
                     case .scratchWithTiming:
                         let mixedBuffer = try mixedScratchWithTimingBuffer(
-                            scratchURL: sourceAudioURL,
+                            scratchURL: canonicalScratchURL,
                             timingBuffer: timingBuffer
                         )
                         try validateGeneratedAudioBuffer(
@@ -3089,11 +3249,11 @@ struct SessionArchiveBuilder: Sendable {
                             fileManager: fileManager,
                             missingError: .missingRequiredFiles
                         ) == nonemptyFileSize(
-                            at: sourceAudioURL,
+                            at: canonicalScratchURL,
                             fileManager: fileManager,
                             missingError: .missingRequiredFiles
                         ),
-                        try sha256Hex(at: scratchURL) == sha256Hex(at: sourceAudioURL) else {
+                        try sha256Hex(at: scratchURL) == sha256Hex(at: canonicalScratchURL) else {
                             throw SessionExportError.unableToPrepareExport
                         }
                     case .scratchOnly, .timingOnly:
@@ -3285,7 +3445,7 @@ struct SessionArchiveBuilder: Sendable {
         )
         guard actualBytes == expected.bytes,
               try sha256Hex(at: stagedURL) == expected.sha256 else {
-            throw SessionExportError.unableToPrepareExport
+            throw SessionExportValidationFailure(.stagedGeneratedAudioMismatch)
         }
     }
 
@@ -3474,7 +3634,7 @@ struct SessionArchiveBuilder: Sendable {
             }
         }
 
-        let detectedNotation = sidecar.detectedNotation
+        let detectedNotation = exportBoundedSnapshot(for: take, sidecar: sidecar)
         let detectedMovementEvents = (detectedNotation?.recordMovementEvents ?? []).map {
             SessionExportRecordMovementEvent(from: $0)
         }
@@ -3657,7 +3817,8 @@ struct SessionArchiveBuilder: Sendable {
             clickStartHostTime: captureMetadata.clickStartHostTime,
             recordingStartHostTime: captureMetadata.recordingStartHostTime,
             sampleRate: scratchFormat.sampleRate,
-            channelCount: scratchFormat.channelCount
+            channelCount: scratchFormat.channelCount,
+            exactFrameCount: AVAudioFrameCount(clamping: scratchAudioFile.length)
         )
     }
 
@@ -3684,26 +3845,28 @@ struct SessionArchiveBuilder: Sendable {
 
     private func stageExportMixArtifacts(
         _ package: SessionExportPackage,
+        context: CanonicalSessionContext,
         options: SessionExportOptions,
         at stagedSessionURL: URL,
         fileManager: FileManager
     ) throws {
         guard options.mixMode != .scratchOnly else { return }
 
-        for take in package.takes {
+        for takeContext in context.takes {
+            let take = takeContext.take
             guard let scratchAudioURL = take.audioArtifactURL else {
                 throw SessionExportError.missingRequiredFiles
             }
+            let canonicalScratchURL = stagedSessionURL
+                .appendingPathComponent(takeContext.scratchOnlyRelativePath)
 
-            let sidecar = try decodeSidecar(at: take.sidecarURL)
-            let captureMetadata = try resolvedTakeCaptureMetadata(for: take, packageMetadata: package.metadata)
             let artifactPaths = exportArtifactPaths(for: take, options: options)
             let timingBuffer = try renderedExportTimingBuffer(
                 for: take,
-                captureMetadata: captureMetadata,
-                sidecar: sidecar,
+                captureMetadata: takeContext.captureMetadata,
+                sidecar: takeContext.sidecar,
                 packageMetadata: package.metadata,
-                scratchAudioURL: scratchAudioURL
+                scratchAudioURL: canonicalScratchURL
             )
 
             if let timingFile = artifactPaths.timingFile {
@@ -3726,7 +3889,7 @@ struct SessionArchiveBuilder: Sendable {
                         withIntermediateDirectories: true
                     )
                     let mixedBuffer = try mixedScratchWithTimingBuffer(
-                        scratchURL: scratchAudioURL,
+                        scratchURL: canonicalScratchURL,
                         timingBuffer: timingBuffer
                     )
                     try writeAudioBuffer(mixedBuffer, to: scratchURL)
@@ -3754,7 +3917,7 @@ struct SessionArchiveBuilder: Sendable {
                     if fileManager.fileExists(atPath: scratchURL.path) {
                         try fileManager.removeItem(at: scratchURL)
                     }
-                    try fileManager.copyItem(at: scratchAudioURL, to: scratchURL)
+                    try fileManager.copyItem(at: canonicalScratchURL, to: scratchURL)
                 }
             }
         }
@@ -3788,7 +3951,8 @@ struct SessionArchiveBuilder: Sendable {
             clickStartHostTime: captureMetadata.clickStartHostTime,
             recordingStartHostTime: captureMetadata.recordingStartHostTime,
             sampleRate: scratchFormat.sampleRate,
-            channelCount: scratchFormat.channelCount
+            channelCount: scratchFormat.channelCount,
+            exactFrameCount: AVAudioFrameCount(clamping: scratchAudioFile.length)
         )
     }
 
@@ -3849,9 +4013,77 @@ struct SessionArchiveBuilder: Sendable {
         }
         try scratchFile.read(into: scratchBuffer)
 
-        guard let mixedBuffer = AVAudioPCMBuffer(
+        return try Self.mixScratchWithTiming(
+            scratchBuffer: scratchBuffer,
+            timingBuffer: timingBuffer
+        ).buffer
+    }
+
+    /// Outcome of mixing a captured scratch stem with a rendered timing stem.
+    struct ScratchTimingMixResult {
+        let buffer: AVAudioPCMBuffer
+        /// Gain applied to the *generated* timing stem inside the mix.
+        let timingGain: Float
+        /// Gain applied to the finished mix, and therefore to the captured
+        /// scratch. `1.0` means the recording was passed through untouched,
+        /// which is the expected result.
+        let mixGain: Float
+    }
+
+    /// Largest timing-stem gain, no greater than `baseGain`, for which
+    /// `scratch + gain * timing` stays inside `ceiling` at every frame.
+    ///
+    /// Returns `nil` when no non-negative gain works, which can only happen if
+    /// the captured scratch already exceeds the ceiling on its own.
+    ///
+    /// Per frame the binding constraint is `|s + g*t| <= C`, i.e.
+    /// `g <= (C - s*sign(t)) / |t|`; the minimum of those bounds is exact, so
+    /// this is a single pass with no search and no dynamics.
+    static func resolvedTimingMixGain(
+        scratchChannels: UnsafePointer<UnsafeMutablePointer<Float>>,
+        timingChannels: UnsafePointer<UnsafeMutablePointer<Float>>,
+        channelCount: Int,
+        timingChannelCount: Int,
+        frameCount: Int,
+        ceiling: Float,
+        baseGain: Float
+    ) -> Float? {
+        var gain = baseGain
+        for channel in 0..<channelCount {
+            let scratch = scratchChannels[channel]
+            let timing = timingChannels[min(channel, timingChannelCount - 1)]
+            for frame in 0..<frameCount {
+                let timingSample = timing[frame]
+                guard timingSample != 0 else { continue }
+                let scratchSample = scratch[frame]
+                let signedScratch = timingSample > 0 ? scratchSample : -scratchSample
+                let bound = (ceiling - signedScratch) / abs(timingSample)
+                if bound < gain { gain = bound }
+                if gain < 0 { return nil }
+            }
+        }
+        return gain
+    }
+
+    /// Sums a captured scratch buffer with a rendered timing stem.
+    ///
+    /// Requires frame-identical inputs — the export renders the timing stem at
+    /// the scratch file's exact length precisely so the stems stay sample
+    /// aligned — and produces a mix that is inside full scale without clipping.
+    ///
+    /// The captured scratch is held at unity. Headroom for the mix is found by
+    /// lowering the *generated* timing stem, never the recording; the whole mix
+    /// is only attenuated in the one case where the scratch alone is already
+    /// over the ceiling, and the returned `mixGain` reports when that happened.
+    static func mixScratchWithTiming(
+        scratchBuffer: AVAudioPCMBuffer,
+        timingBuffer: AVAudioPCMBuffer
+    ) throws -> ScratchTimingMixResult {
+        let scratchFormat = scratchBuffer.format
+        guard scratchBuffer.frameLength == timingBuffer.frameLength,
+              let mixedBuffer = AVAudioPCMBuffer(
             pcmFormat: scratchFormat,
-            frameCapacity: max(scratchBuffer.frameCapacity, timingBuffer.frameCapacity)
+            frameCapacity: scratchBuffer.frameCapacity
         ),
         let mixedChannels = mixedBuffer.floatChannelData,
         let scratchChannels = scratchBuffer.floatChannelData,
@@ -3859,29 +4091,55 @@ struct SessionArchiveBuilder: Sendable {
             throw SessionExportError.unableToPrepareExport
         }
 
-        let frameCount = max(Int(scratchBuffer.frameLength), Int(timingBuffer.frameLength))
+        let frameCount = Int(scratchBuffer.frameLength)
+        let channelCount = Int(scratchFormat.channelCount)
+        let timingChannelCount = Int(timingBuffer.format.channelCount)
         mixedBuffer.frameLength = AVAudioFrameCount(frameCount)
-        for channel in 0..<Int(scratchFormat.channelCount) {
+        for channel in 0..<channelCount {
             mixedChannels[channel].initialize(repeating: 0, count: frameCount)
         }
 
+        let ceiling = ScratchLabBeatEngine.GeneratedAudioHeadroom.amplitude(
+            forDBFS: ScratchLabBeatEngine.GeneratedAudioHeadroom.mixCeilingDBFS
+        )
+        let resolvedGain = Self.resolvedTimingMixGain(
+            scratchChannels: scratchChannels,
+            timingChannels: timingChannels,
+            channelCount: channelCount,
+            timingChannelCount: timingChannelCount,
+            frameCount: frameCount,
+            ceiling: ceiling,
+            baseGain: timingMixGain
+        )
+        let timingGain = max(0, resolvedGain ?? 0)
+
         for frame in 0..<frameCount {
-            for channel in 0..<Int(scratchFormat.channelCount) {
-                let scratchSample = frame < Int(scratchBuffer.frameLength)
-                    ? scratchChannels[channel][frame]
-                    : 0
-                let timingSample = frame < Int(timingBuffer.frameLength)
-                    ? timingChannels[min(channel, Int(timingBuffer.format.channelCount) - 1)][frame]
-                    : 0
-                mixedChannels[channel][frame] = max(
-                    -1,
-                    min(1, scratchSample + (timingSample * 0.55))
-                )
+            for channel in 0..<channelCount {
+                let scratchSample = scratchChannels[channel][frame]
+                let timingSample = timingChannels[min(channel, timingChannelCount - 1)][frame]
+                // Sum unclamped. The old `min(1, max(-1, ...))` here was hard
+                // clipping: it flattened every overshoot to exactly +/-1.0 and
+                // baked that distortion into the exported stem.
+                mixedChannels[channel][frame] = scratchSample + (timingSample * timingGain)
             }
         }
 
-        return mixedBuffer
+        // Only reachable when the captured scratch alone is over the ceiling,
+        // in which case there is no gain on the generated stem that can help.
+        let mixGain = ScratchLabBeatEngine.GeneratedAudioHeadroom.applyCeiling(
+            ScratchLabBeatEngine.GeneratedAudioHeadroom.mixCeilingDBFS,
+            to: mixedBuffer
+        )
+
+        return ScratchTimingMixResult(
+            buffer: mixedBuffer,
+            timingGain: timingGain,
+            mixGain: mixGain
+        )
     }
+
+    /// Level the rendered timing stem sits at underneath the captured scratch.
+    static let timingMixGain: Float = 0.55
 
     private func writeAudioBuffer(_ buffer: AVAudioPCMBuffer, to url: URL) throws {
         let file = try AVAudioFile(
@@ -4482,22 +4740,19 @@ struct SessionArchiveBuilder: Sendable {
     }
 
     private func archiveFolderName(for metadata: SessionExportMetadata) -> String {
-        let formatter = DateFormatter()
-        formatter.calendar = Calendar(identifier: .gregorian)
-        formatter.dateFormat = "yyyy_MM_dd"
-        let dateString = formatter.string(from: metadata.createdAt)
-        let sanitizedSessionName = sanitizedArchiveLabel(for: metadata, allowedBPMs: nil)
-        return "session_\(dateString)_\(sanitizedSessionName)"
+        archiveFolderName(for: metadata, allowedBPMs: nil)
     }
 
     private func archiveFolderName(
         for metadata: SessionExportMetadata,
-        allowedBPMs: [Int]
+        allowedBPMs: [Int]?
     ) -> String {
-        let formatter = DateFormatter()
-        formatter.calendar = Calendar(identifier: .gregorian)
-        formatter.dateFormat = "yyyy_MM_dd"
-        let dateString = formatter.string(from: metadata.createdAt)
+        // Same helper as the manifest `date`, so the folder and the manifest
+        // can never disagree about which calendar day this session is.
+        let dateString = CaptureCanonicalFormatting.sessionFolderDateString(
+            metadata.createdAt,
+            timeZoneIdentifier: metadata.sessionTimeZoneIdentifier
+        )
         let sanitizedSessionName = sanitizedArchiveLabel(for: metadata, allowedBPMs: allowedBPMs)
         return "session_\(dateString)_\(sanitizedSessionName)"
     }
@@ -4692,7 +4947,10 @@ struct SessionArchiveBuilder: Sendable {
         }
         let resolvedScratchTypeToken = exportScratchTypeToken ?? CaptureCanonicalRules.scratchTypeName
 
-        let dateString = CaptureCanonicalFormatting.sessionDateString(package.metadata.createdAt)
+        let dateString = CaptureCanonicalFormatting.sessionDateString(
+            package.metadata.createdAt,
+            timeZoneIdentifier: package.metadata.sessionTimeZoneIdentifier
+        )
         let fileManager = FileManager.default
         var seenTakeIDs = Set<String>()
         var seenTakeNumbers = Set<Int>()
@@ -4897,7 +5155,7 @@ struct SessionArchiveBuilder: Sendable {
                 takeNumber: context.take.takeNumber,
                 segmentCount: CaptureCanonicalRules.segmentCount,
                 cameraID: "camA",
-                audioSource: "serato",
+                audioSource: "scratchlab_output",
                 watchSource: context.watchFileName == nil ? "none" : "watch",
                 verbalSlateUsed: context.verbalSlateUsed,
                 syncClapUsed: context.syncClapUsed,
@@ -4916,8 +5174,8 @@ struct SessionArchiveBuilder: Sendable {
             scratchType: resolvedScratchTypeToken,
             allowedBPMs: manifestAllowedBPMs,
             segmentCount: CaptureCanonicalRules.segmentCount,
-            verbalSlateRequired: true,
-            syncClapRequired: true,
+            verbalSlateRequired: false,
+            syncClapRequired: false,
             sessionRoot: sessionRootName,
             notes: package.metadata.notes ?? "",
             takes: manifestTakes

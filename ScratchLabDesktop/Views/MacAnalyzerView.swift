@@ -4541,12 +4541,19 @@ struct MacAnalyzerView: View {
     }
 
     private var selectedAudioLooksMic: Bool {
-        guard let selectedAudioDevice else { return false }
-        let lowercasedName = selectedAudioDevice.localizedName.lowercased()
-        return lowercasedName.contains("mic")
-            || lowercasedName.contains("microphone")
-            || lowercasedName.contains("built-in")
-            || lowercasedName.contains("internal")
+        captureEngine.selectedAudioInputCaptureSuitability?.isMicrophonePath == true
+    }
+
+    private var builtInMicrophoneBlocksRoutineStart: Bool {
+        MacCaptureEngine.shouldBlockRoutineCapture(
+            audioInputSuitability: captureEngine.selectedAudioInputCaptureSuitability,
+            captureMode: routineSessionSetup.captureMode,
+            beatEngineMode: routineSessionSetup.beatEngineMode
+        )
+    }
+
+    private var selectedAudioCaptureReady: Bool {
+        captureEngine.isSelectedAudioInputAvailable && !builtInMicrophoneBlocksRoutineStart
     }
 
     private var mixerStatusValue: String {
@@ -5244,7 +5251,7 @@ struct MacAnalyzerView: View {
     /// is recording the button is the Stop control and must stay enabled.
     private var routineStartDisabled: Bool {
         if captureEngine.isRoutineRecording { return false }
-        return !captureEngine.isSelectedAudioInputAvailable
+        return !selectedAudioCaptureReady
     }
 
     private var routineMetadataStatusMessage: String? {
@@ -6195,6 +6202,9 @@ struct MacAnalyzerView: View {
         if !captureEngine.isSelectedAudioInputAvailable {
             return "Choose an available audio input under Input readiness before recording."
         }
+        if builtInMicrophoneBlocksRoutineStart {
+            return MacCaptureEngine.isolatedCaptureBuiltInMicrophoneMessage
+        }
         if captureEngine.selectedVideoDevice == nil {
             return "Choose an available camera under Input readiness before recording."
         }
@@ -6346,6 +6356,12 @@ struct MacAnalyzerView: View {
         }
         if config.captureMode == .timedClick, config.bpm == nil {
             config.bpm = CaptureClickTrackDefaults.defaultTimedBPM
+        }
+        // The requested take length the Capture panel advertises. Recorded
+        // explicitly so the export can state what was asked for alongside what
+        // was actually captured.
+        if config.plannedTakeDurationSeconds == nil {
+            config.plannedTakeDurationSeconds = RoutineCaptureDefaults.defaultTakeLengthSeconds
         }
         config.updatedAt = now
         return config
@@ -7042,7 +7058,7 @@ struct MacAnalyzerView: View {
             hasSession: selectedRoutineSession != nil,
             isRecording: captureEngine.isRoutineRecording || captureEngine.cxlIsRecording,
             hasAnyAudioDevice: !captureEngine.availableAudioDevices.isEmpty,
-            isSelectedAudioAvailable: captureEngine.isSelectedAudioInputAvailable,
+            isSelectedAudioAvailable: selectedAudioCaptureReady,
             isDVSEnabled: dvsTimecodeMode != .disabled,
             dvsSignalHealth: dvsTimecodeSignalHealth,
             hasMIDIController: selectedMixerMIDIDeviceName != nil,
@@ -7240,7 +7256,7 @@ struct MacAnalyzerView: View {
                 // Truthful: green + real name only when the selected input
                 // is actually present. A selected-but-missing device reads
                 // "Unavailable" (amber) instead of falsely showing a name.
-                let audioReady = hasAudioDevice && captureEngine.isSelectedAudioInputAvailable
+                let audioReady = hasAudioDevice && selectedAudioCaptureReady
                 StatusBadge(
                     title: "Audio",
                     value: audioReady
@@ -7609,7 +7625,7 @@ struct MacAnalyzerView: View {
             hasDetectedHardware: !captureEngine.availableAudioDevices.isEmpty
                 || !captureEngine.availableMIDISources.isEmpty,
             lanes: CaptureLanes(
-                audio: .audio(isAvailable: captureEngine.isSelectedAudioInputAvailable),
+                audio: .audio(isAvailable: selectedAudioCaptureReady),
                 // DVS blocks only when timecode input is on AND the
                 // DVS/Serato source is the selected input; ready only when
                 // signal health is `.usable` (carrier-detected is NOT usable).
@@ -7957,7 +7973,7 @@ struct MacAnalyzerView: View {
             VStack(alignment: .leading, spacing: 4) {
                 InputReadinessRow(
                     title: "Audio",
-                    state: captureEngine.isSelectedAudioInputAvailable ? .ready : .setupRequired,
+                    state: selectedAudioCaptureReady ? .ready : .setupRequired,
                     detail: captureEngine.selectedAudioDeviceStatusLine
                 )
                 InputReadinessRow(

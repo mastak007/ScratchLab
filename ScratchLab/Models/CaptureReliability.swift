@@ -315,13 +315,81 @@ enum CaptureCanonicalFormatting {
         return filtered.isEmpty ? nil : filtered
     }
 
-    static func sessionDateString(_ date: Date) -> String {
+    /// Session date policy — the single source of truth for every calendar
+    /// date ScratchLab writes into an export.
+    ///
+    /// A session's date is the **capture device's local calendar date** at
+    /// session start. It appears, identically, in:
+    ///   - the export folder name (`session_YYYY_MM_DD_...`)
+    ///   - `session_manifest.json` `date`
+    ///   - every manifest take's `date`
+    ///
+    /// Absolute instants (`createdAt`, `generatedAt`, audit timestamps) stay
+    /// UTC ISO-8601 and are deliberately *not* required to fall on the same
+    /// calendar day — a 08:04 NZ session is 20:04 UTC the previous day, and
+    /// both statements are true. Formatting the folder with the device zone
+    /// while formatting the manifest in UTC is what produced the split
+    /// `2026_09_04` / `2026-09-03` pair.
+    ///
+    /// The zone comes from `CaptureSessionConfig.sessionTimeZoneIdentifier`,
+    /// persisted when the session identity was created — never from the
+    /// exporting machine's current zone, which would re-date a session that is
+    /// exported after travel or a DST change.
+    /// Fallback for a legacy session that recorded no zone: **UTC**.
+    ///
+    /// Deliberately not the exporting machine's zone. A legacy session has no
+    /// evidence of where it was captured, so the only defensible date is one
+    /// that is reproducible: the UTC calendar day of `createdAt`. Re-exporting
+    /// the same legacy session on a different machine, after travel, or across
+    /// a DST boundary produces the identical folder name and manifest date.
+    /// This is also the date pre-policy exports already wrote for the manifest,
+    /// so recovering an old session does not silently re-date it.
+    ///
+    /// A session that *does* carry a zone is always dated in that zone; this
+    /// value is never consulted for one.
+    static let fallbackSessionCalendarTimeZone = TimeZone(secondsFromGMT: 0) ?? .gmt
+
+    /// Resolves the zone a session's calendar date must be read in.
+    static func sessionCalendarTimeZone(identifier: String?) -> TimeZone {
+        guard let identifier, let zone = TimeZone(identifier: identifier) else {
+            return fallbackSessionCalendarTimeZone
+        }
+        return zone
+    }
+
+    private static func sessionDateFormatter(
+        dateFormat: String,
+        timeZone: TimeZone
+    ) -> DateFormatter {
         let formatter = DateFormatter()
         formatter.calendar = Calendar(identifier: .gregorian)
         formatter.locale = Locale(identifier: "en_US_POSIX")
-        formatter.timeZone = TimeZone(secondsFromGMT: 0)
-        formatter.dateFormat = "yyyy-MM-dd"
-        return formatter.string(from: date)
+        formatter.timeZone = timeZone
+        formatter.dateFormat = dateFormat
+        return formatter
+    }
+
+    /// `yyyy-MM-dd` for manifests and take records.
+    static func sessionDateString(
+        _ date: Date,
+        timeZoneIdentifier: String?
+    ) -> String {
+        sessionDateFormatter(
+            dateFormat: "yyyy-MM-dd",
+            timeZone: sessionCalendarTimeZone(identifier: timeZoneIdentifier)
+        ).string(from: date)
+    }
+
+    /// `yyyy_MM_dd` for the session folder name. Same instant, same zone, same
+    /// calendar day as `sessionDateString`.
+    static func sessionFolderDateString(
+        _ date: Date,
+        timeZoneIdentifier: String?
+    ) -> String {
+        sessionDateFormatter(
+            dateFormat: "yyyy_MM_dd",
+            timeZone: sessionCalendarTimeZone(identifier: timeZoneIdentifier)
+        ).string(from: date)
     }
 
     static func bpmToken(_ bpm: Int) -> String {

@@ -1,3 +1,16 @@
+- [x] Fix the export side of the `session_2026_09_04_h_baby_scratch_95_bpm` audit (2026-09-04). Proven by rebuilding that fixture through `SessionArchiveBuilder.preparePackage` + `createArchive`: `totalDurationSeconds` is the measured playable duration (19.2 s) and `plannedTakeDurationSeconds` records the 24 s request separately; the session date comes from a persisted `sessionTimeZoneIdentifier` so folder, manifest, and take dates agree; generated stems are attenuated to -1 dBFS and the mix to -0.1 dBFS with the captured scratch passed through at unity (0 samples at full scale, was 480 and 50); all three stems keep 846,720 frames; `validate_session.py` reports PASS with zero warnings and errors. Validator also now reads IEEE Float32 WAVs, resolves take-log paths as written, and honours optional slate/clap.
+- [x] Fix the capture-side take boundary in `MacCaptureEngine` (2026-09-04). Take-relative zero is `didStartRecordingTo` for movement, platter, MIDI, and the onboard audio tap; `maxRecordedDuration` follows the requested take length in media time instead of a hardcoded 64 s; a wall-clock backstop is armed only from the confirmed media start. Covered by unit regressions over `RoutineTakeTimeline` and the notation builder's epoch rebase. NOT proven against hardware — see the physical task below.
+
+- [ ] Physically verify a 24-second timed take on the fixed macOS recorder with the Rane ONE MKII. This is the only evidence that a new capture records the requested duration; the rebuilt archive proves export correctness, not capture behaviour. The acceptance report must state:
+  - requested take duration
+  - audio duration and frame count
+  - video duration and frame count
+  - movement, MIDI, audio, and fader event maxima
+  - Watch source
+  - frame count of every stem (`scratch_only`, `beat_only`, `scratch_with_beat`)
+  - peak level of every stem, in dBFS, with the count of samples at or above full scale
+  - `validate_session.py` result for the exported archive
+
 - [x] Implement the Figma Watch Relay flow on iPhone (2026-09-01). The iPhone now acts only as the Watch-to-Mac relay, presents truthful Waiting/Ready/Active/Interrupted states from live connectivity and authoritative Mac take context, batches the existing 100 Hz Watch samples without replacing durable transfer, rejects stale session/take data, and records interruptions in Mac sidecar diagnostics. Ten relay regressions and the 59-test focused suite passed; iOS, macOS, and watchOS builds succeeded. Physical three-device RC remains covered by the open release-candidate task below.
 
 - [ ] Physically verify standalone macOS AHHH capture, review-video audio, and sample-aligned export stems. The canonical stereo WAV is captured from ScratchLab's post-mixer output starting with the real movie-recording callback; finalization replaces the MOV's multichannel RANE track with onboard stereo; generated beat and mixed stems derive their exact duration from the captured scratch WAV. Confirm one fresh take has audible AHHH in Review and equal scratch/beat/mixed frame counts. Release gate remains pending.
@@ -10,7 +23,7 @@
 - [x] Validate cross-session and multichannel export fixes: Review mixed `72b7923d...` evidence with `82223c61...` config and failed canonical artifact validation. Source uses UI config only for matching session IDs, clears stale Review state, and projects the audible RANE pair to playable stereo. Focused export tests passed twice and the full configured gate added no failure.
 - [ ] Retest RANE hardware meters separately. ScratchLab WAV evidence proves channels 13/14 carry program audio even while channel/master LEDs were dark; determine Serato/RANE routing or hardware-meter expectations without treating LEDs as capture proof.
 
-- [ ] Block or loudly warn an isolated direct-input capture when macOS audio input is the built-in microphone. FTR archive `82223c61-938e-421e-9f5f-ae29d47106c8` captured TV/room sound from `BuiltInMicrophoneDevice` and is not training-quality isolated scratch.
+- [x] Block or loudly warn an isolated direct-input capture when macOS audio input is the built-in microphone. FTR archive `82223c61-938e-421e-9f5f-ae29d47106c8` captured TV/room sound from `BuiltInMicrophoneDevice` and is not training-quality isolated scratch.
 - [ ] Re-run isolated-scratch physical take with `Rane ONE MKII` selected, no-click/beat disabled, and a preflight proving the meter ignores TV/room sound but responds to platter program audio.
 
 - [x] Fix macOS normal-stop finalization falsely blocking export and recover the affected healthy take (2026-08-31). `MacCaptureEngine` now accepts only AVFoundation's documented successful-finish marker; three permanent focused tests passed 3/3 twice. Session `0c813395-28b1-42d6-9061-e2399c312a1f` passed MOV/WAV validation and real package/archive creation twice after audit-preserving sidecar recovery.

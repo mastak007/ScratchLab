@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import argparse
+import re
 import sys
 from pathlib import Path
 from typing import Any
@@ -19,12 +20,15 @@ from capture_pipeline_common import (
     parse_bool,
     parse_bpm,
     parse_take_number,
+    audio_peak_sample,
+    peak_dbfs,
     read_json,
     read_take_log,
-    resolve_raw_path,
+    resolve_take_log_media_path,
     scan_renamed_media,
     sanitize_dj_token,
     session_file_paths,
+    validate_date_string,
 )
 
 
@@ -48,6 +52,14 @@ MIN_PRIMARY_MEDIA_DURATION_SECONDS = 0.5
 MAX_PRIMARY_AV_DURATION_DELTA_SECONDS = 0.5
 MAX_VIDEO_PROBE_DURATION_DELTA_SECONDS = 0.25
 MAX_VIDEO_PROBE_FRAME_RATE_DELTA_FPS = 0.001
+# Generated and mixed stems must stay inside full scale. `scratch_only` is the
+# captured signal and is only reported, never rewritten, so it is held to plain
+# full scale; the stems ScratchLab renders itself are held to a real headroom
+# target so a later integer conversion cannot clip.
+MAX_STEM_PEAK_SAMPLE = 1.0
+GENERATED_STEM_PEAK_CEILING_DBFS = -1.0
+GENERATED_STEM_SOURCES = ("beat_only",)
+FULL_SCALE_STEM_SOURCES = ("scratch_only", "beat_only", "scratch_with_beat", "serato")
 OPTIONAL_MANIFEST_FILE_SOURCES = {"notation", "scratch_only", "raw_original"}
 OPTIONAL_MANIFEST_ARTIFACT_SOURCES = {"scratch_only", "raw_original"}
 
@@ -107,6 +119,7 @@ def validate_notation_document(
     take_label: str,
     errors: list[str],
     warnings: list[str],
+    media_duration: float | None = None,
 ) -> None:
     if not isinstance(notation_payload, dict):
         errors.append(f"{take_label}: notation file must contain a JSON object.")
@@ -123,6 +136,28 @@ def validate_notation_document(
     for field in ("recordMovementEvents", "faderEvents", "mixerMidiEvents"):
         if not isinstance(notation_payload.get(field), list):
             errors.append(f"{take_label}: notation JSON field {field} must be an array.")
+
+    if media_duration is not None:
+        tolerance = 0.001
+        for field in ("recordMovementEvents", "audioEvents", "faderEvents"):
+            for index, event in enumerate(notation_payload.get(field, [])):
+                if not isinstance(event, dict):
+                    continue
+                end_time = event.get("endTime")
+                if isinstance(end_time, (int, float)) and float(end_time) > media_duration + tolerance:
+                    errors.append(
+                        f"{take_label}: {field}[{index}] ends at {float(end_time):.6f}s,"
+                        f" beyond scratch media duration {media_duration:.6f}s."
+                    )
+        for index, event in enumerate(notation_payload.get("mixerMidiEvents", [])):
+            if not isinstance(event, dict):
+                continue
+            event_time = event.get("takeRelativeTime")
+            if isinstance(event_time, (int, float)) and float(event_time) > media_duration + tolerance:
+                errors.append(
+                    f"{take_label}: mixerMidiEvents[{index}] occurs at {float(event_time):.6f}s,"
+                    f" beyond scratch media duration {media_duration:.6f}s."
+                )
 
     for index, event in enumerate(notation_payload.get("faderEvents", [])):
         if not isinstance(event, dict):
@@ -164,7 +199,7 @@ def validate_take_media_sanity(
     session_dir: Path,
     grouped: dict[str, dict[str, Any]],
     errors: list[str],
-) -> None:
+) -> dict[str, float]:
     durations: dict[str, float] = {}
 
     for source in ("camA", "serato"):
@@ -198,13 +233,14 @@ def validate_take_media_sanity(
     cam_a_duration = durations.get("camA")
     serato_duration = durations.get("serato")
     if cam_a_duration is None or serato_duration is None:
-        return
+        return durations
 
     duration_delta = abs(cam_a_duration - serato_duration)
     if duration_delta > MAX_PRIMARY_AV_DURATION_DELTA_SECONDS:
         errors.append(
             f"{take_label}: camA and serato durations differ by {duration_delta:.3f}s ({cam_a_duration:.3f}s vs {serato_duration:.3f}s; max {MAX_PRIMARY_AV_DURATION_DELTA_SECONDS:.3f}s)."
         )
+    return durations
 
 
 def validate_manifest(
@@ -214,6 +250,7 @@ def validate_manifest(
     grouped_files: dict[tuple[int, int], dict[str, dict[str, Any]]],
     errors: list[str],
     warnings: list[str],
+    allowed_bpms: tuple[int, ...],
 ) -> None:
     if manifest_data.get("scratch_type") != SCRATCH_TYPE:
         errors.append("Manifest scratch_type must be 'baby'.")
@@ -232,7 +269,7 @@ def validate_manifest(
             continue
 
         try:
-            bpm = parse_bpm(str(take.get("bpm", "")))
+            bpm = parse_bpm(str(take.get("bpm", "")), allowed_bpms)
             take_number = parse_take_number(str(take.get("take_number", "")))
             verbal_slate_used = parse_bool(
                 str(take.get("verbal_slate_used", "")),
@@ -251,13 +288,13 @@ def validate_manifest(
             errors.append(f"{take_label}: manifest scratch_type must be 'baby'.")
         if int(take.get("segment_count", 0) or 0) != SEGMENT_COUNT:
             errors.append(f"{take_label}: manifest segment_count must be 3.")
-        if take.get("audio_source") != "serato":
-            errors.append(f"{take_label}: manifest audio_source must be 'serato'.")
+        if take.get("audio_source") not in {"serato", "scratchlab_output"}:
+            errors.append(f"{take_label}: manifest audio_source must identify a supported capture source.")
         if take.get("watch_source") not in {"watch", "none"}:
             errors.append(f"{take_label}: manifest watch_source must be 'watch' or 'none'.")
-        if not verbal_slate_used:
+        if manifest_data.get("verbal_slate_required") is True and not verbal_slate_used:
             warnings.append(f"{take_label}: verbal_slate_used is false.")
-        if not sync_clap_used:
+        if manifest_data.get("sync_clap_required") is True and not sync_clap_used:
             warnings.append(f"{take_label}: sync_clap_used is false.")
 
         grouped = grouped_files.get((bpm, take_number))
@@ -265,7 +302,7 @@ def validate_manifest(
             warnings.append(f"{take_label}: manifest entry has no renamed files.")
             continue
 
-        validate_take_media_sanity(
+        media_durations = validate_take_media_sanity(
             take_label,
             session_dir=session_dir,
             grouped=grouped,
@@ -336,6 +373,7 @@ def validate_manifest(
                             take_label=take_label,
                             errors=errors,
                             warnings=warnings,
+                            media_duration=media_durations.get("serato"),
                         )
 
         artifacts = take.get("artifacts")
@@ -396,6 +434,27 @@ def validate_manifest(
                     f"{take_label}: artifact probe metadata for {source} does not match the file on disk."
                 )
 
+            if source in FULL_SCALE_STEM_SOURCES:
+                try:
+                    peak_sample = audio_peak_sample(artifact_path)
+                except ValueError as exc:
+                    errors.append(f"{take_label}: could not measure {source} peak level: {exc}")
+                else:
+                    measured_dbfs = peak_dbfs(peak_sample)
+                    if peak_sample > MAX_STEM_PEAK_SAMPLE:
+                        errors.append(
+                            f"{take_label}: {source} peaks at {peak_sample:.6f}"
+                            f" ({measured_dbfs:+.6f} dBFS), above full scale."
+                        )
+                    elif (
+                        source in GENERATED_STEM_SOURCES
+                        and measured_dbfs > GENERATED_STEM_PEAK_CEILING_DBFS
+                    ):
+                        errors.append(
+                            f"{take_label}: generated stem {source} peaks at {measured_dbfs:+.6f} dBFS,"
+                            f" above the {GENERATED_STEM_PEAK_CEILING_DBFS:+.1f} dBFS headroom ceiling."
+                        )
+
         stem_availability = take.get("stem_availability")
         if stem_availability is not None:
             if not isinstance(stem_availability, dict):
@@ -426,6 +485,76 @@ def validate_manifest(
                                 f" but the file is missing on disk: {stem_path}"
                             )
 
+        available_stem_frames = {
+            stem: artifact.get("probe", {}).get("frame_count")
+            for stem, artifact in artifacts.items()
+            if stem in {"scratch_only", "beat_only", "scratch_with_beat"}
+            and isinstance(artifact, dict)
+            and isinstance(artifact.get("probe"), dict)
+            and isinstance(artifact.get("probe", {}).get("frame_count"), int)
+        }
+        if len(set(available_stem_frames.values())) > 1:
+            detail = ", ".join(f"{stem}={frames}" for stem, frames in sorted(available_stem_frames.items()))
+            errors.append(f"{take_label}: audio stem frame counts differ: {detail}.")
+
+
+SESSION_FOLDER_DATE_PATTERN = re.compile(r"^session_(?P<date>\d{4}_\d{2}_\d{2})_")
+
+
+def session_folder_date(session_dir: Path) -> str | None:
+    """Return the calendar date encoded in a `session_YYYY_MM_DD_...` folder."""
+    match = SESSION_FOLDER_DATE_PATTERN.match(session_dir.name)
+    if match is None:
+        return None
+    return match.group("date").replace("_", "-")
+
+
+def validate_session_dates(
+    session_dir: Path,
+    manifest_data: dict[str, Any],
+    *,
+    errors: list[str],
+) -> None:
+    """Enforce the single session-date policy.
+
+    Policy (documented in docs/capture_spec_v1.md): a session's calendar date is
+    the capture device's LOCAL date at session start. The session folder name,
+    `session_manifest.json.date`, and every take's `date` all carry that one
+    value. Absolute instants (`createdAt`, `generatedAt`) stay UTC ISO-8601 and
+    are deliberately not required to share the calendar day.
+    """
+    manifest_date = manifest_data.get("date")
+    folder_date = session_folder_date(session_dir)
+
+    if not isinstance(manifest_date, str) or not manifest_date:
+        errors.append("Manifest date must be a YYYY-MM-DD string.")
+        manifest_date = None
+    else:
+        try:
+            validate_date_string(manifest_date)
+        except ValueError as exc:
+            errors.append(f"Manifest date is invalid: {exc}")
+            manifest_date = None
+
+    if folder_date is not None and manifest_date is not None and folder_date != manifest_date:
+        errors.append(
+            f"Session folder date {folder_date} does not match manifest date {manifest_date};"
+            " both must be the capture device's local session date."
+        )
+
+    takes = manifest_data.get("takes")
+    if not isinstance(takes, list) or manifest_date is None:
+        return
+    for index, take in enumerate(takes):
+        if not isinstance(take, dict):
+            continue
+        take_date = take.get("date")
+        if take_date != manifest_date:
+            errors.append(
+                f"manifest take {index + 1}: date {take_date!r} does not match session date"
+                f" {manifest_date!r}."
+            )
+
 
 def validate_take_log(
     take_rows: list[dict[str, str]],
@@ -435,6 +564,9 @@ def validate_take_log(
     grouped_files: dict[tuple[int, int], dict[str, dict[str, Any]]],
     errors: list[str],
     warnings: list[str],
+    allowed_bpms: tuple[int, ...],
+    verbal_slate_required: bool,
+    sync_clap_required: bool,
 ) -> set[tuple[int, int]]:
     seen_take_keys: set[tuple[int, int]] = set()
 
@@ -442,7 +574,7 @@ def validate_take_log(
         label = f"take log line {line_number}"
 
         try:
-            bpm = parse_bpm(row["bpm"])
+            bpm = parse_bpm(row["bpm"], allowed_bpms)
             take_number = parse_take_number(row["take_number"])
             verbal_slate_used = parse_bool(row["verbal_slate_used"], field_name="verbal_slate_used")
             sync_clap_used = parse_bool(row["sync_clap_used"], field_name="sync_clap_used")
@@ -456,9 +588,9 @@ def validate_take_log(
             continue
         seen_take_keys.add(take_key)
 
-        if not verbal_slate_used:
+        if verbal_slate_required and not verbal_slate_used:
             warnings.append(f"{label}: verbal_slate_used is false.")
-        if not sync_clap_used:
+        if sync_clap_required and not sync_clap_used:
             warnings.append(f"{label}: sync_clap_used is false.")
 
         grouped = grouped_files.get(take_key, {})
@@ -471,17 +603,17 @@ def validate_take_log(
                 continue
 
             try:
-                raw_path = resolve_raw_path(session_dir, raw_value)
+                source_path = resolve_take_log_media_path(session_dir, raw_value)
             except ValueError as exc:
                 errors.append(f"{label}: {exc}")
                 continue
-            if raw_path.exists():
+            if source_path.exists():
                 try:
-                    normalize_extension(source, raw_path)
+                    normalize_extension(source, source_path)
                 except ValueError as exc:
                     errors.append(f"{label}: {exc}")
             else:
-                warnings.append(f"{label}: raw source file is missing: {raw_path}")
+                warnings.append(f"{label}: take log source file is missing: {source_path}")
 
             expected_name = build_standard_filename(dj_token, bpm, take_number, source)
             if source not in grouped:
@@ -497,6 +629,7 @@ def build_report_lines(
     valid_take_counts: dict[int, int],
     warnings: list[str],
     errors: list[str],
+    allowed_bpms: tuple[int, ...],
 ) -> list[str]:
     lines = [
         "Scratch Capture Validation Report",
@@ -506,7 +639,7 @@ def build_report_lines(
         "Summary:",
     ]
 
-    for bpm in ALLOWED_BPMS:
+    for bpm in allowed_bpms:
         total = len([key for key in grouped_files if key[0] == bpm])
         valid = valid_take_counts.get(bpm, 0)
         lines.append(f"- {bpm} BPM: {valid} valid take(s), {total} renamed take(s)")
@@ -534,10 +667,6 @@ def main() -> int:
     warnings: list[str] = []
     errors: list[str] = []
 
-    for directory_name in REQUIRED_DIRECTORIES:
-        if not (session_dir / directory_name).exists():
-            errors.append(f"Missing required directory: {directory_name}/")
-
     manifest_data: dict[str, Any] = {}
     if paths["manifest"].exists():
         try:
@@ -550,6 +679,27 @@ def main() -> int:
             errors.append(f"Could not read manifest: {exc}")
     else:
         errors.append("Missing manifest file: manifests/session_manifest.json")
+
+    raw_allowed_bpms = manifest_data.get("allowed_bpms")
+    if isinstance(raw_allowed_bpms, list) and raw_allowed_bpms:
+        parsed_allowed_bpms = [value for value in raw_allowed_bpms if isinstance(value, int) and not isinstance(value, bool) and 1 <= value <= 999]
+        if len(parsed_allowed_bpms) != len(raw_allowed_bpms) or len(set(parsed_allowed_bpms)) != len(parsed_allowed_bpms):
+            errors.append("Manifest allowed_bpms must contain unique whole-number BPM values from 1 through 999.")
+            allowed_bpms = ALLOWED_BPMS
+        else:
+            allowed_bpms = tuple(sorted(parsed_allowed_bpms))
+    else:
+        errors.append("Manifest allowed_bpms must be a non-empty list.")
+        allowed_bpms = ALLOWED_BPMS
+
+    static_directories = tuple(name for name in REQUIRED_DIRECTORIES if not name.endswith("bpm"))
+    for directory_name in (*static_directories, *(f"{bpm}bpm" for bpm in allowed_bpms)):
+        if not (session_dir / directory_name).exists():
+            errors.append(f"Missing required directory: {directory_name}/")
+
+    verbal_slate_required = manifest_data.get("verbal_slate_required") is True
+    sync_clap_required = manifest_data.get("sync_clap_required") is True
+    validate_session_dates(session_dir, manifest_data, errors=errors)
 
     take_rows: list[dict[str, str]] = []
     if paths["take_log"].exists():
@@ -583,7 +733,7 @@ def main() -> int:
         dj_token = ""
 
     valid_take_counts: dict[int, int] = {}
-    for bpm in ALLOWED_BPMS:
+    for bpm in allowed_bpms:
         take_numbers = sorted(key[1] for key in grouped_files if key[0] == bpm)
         if not take_numbers:
             errors.append(f"Missing BPM set: {bpm} BPM has no renamed takes.")
@@ -619,6 +769,7 @@ def main() -> int:
             grouped_files=grouped_files,
             errors=errors,
             warnings=warnings,
+            allowed_bpms=allowed_bpms,
         )
 
     take_log_keys: set[tuple[int, int]] = set()
@@ -630,6 +781,9 @@ def main() -> int:
             grouped_files=grouped_files,
             errors=errors,
             warnings=warnings,
+            allowed_bpms=allowed_bpms,
+            verbal_slate_required=verbal_slate_required,
+            sync_clap_required=sync_clap_required,
         )
 
     missing_from_take_log = sorted(set(grouped_files) - take_log_keys)
@@ -644,6 +798,7 @@ def main() -> int:
         valid_take_counts=valid_take_counts,
         warnings=warnings,
         errors=errors,
+        allowed_bpms=allowed_bpms,
     )
     paths["validation_report"].parent.mkdir(parents=True, exist_ok=True)
     paths["validation_report"].write_text("\n".join(report_lines) + "\n", encoding="utf-8")

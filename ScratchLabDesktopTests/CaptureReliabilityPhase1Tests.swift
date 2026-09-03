@@ -3134,6 +3134,86 @@ final class CaptureReliabilityPhase1CoreTests: XCTestCase {
         }
     }
 
+    func testAudioInputCaptureSuitabilityRecognizesBuiltInMicrophoneUIDAndNames() {
+        let choices = [
+            MacCaptureEngine.AudioInputDeviceChoice(uniqueID: "BuiltInMicrophoneDevice", name: "Audio Input"),
+            MacCaptureEngine.AudioInputDeviceChoice(uniqueID: "mic-1", name: "Built-in Microphone"),
+            MacCaptureEngine.AudioInputDeviceChoice(uniqueID: "mic-2", name: "Internal Microphone"),
+            MacCaptureEngine.AudioInputDeviceChoice(uniqueID: "mic-3", name: "MacBook Pro Microphone")
+        ]
+
+        XCTAssertTrue(choices.allSatisfy {
+            MacCaptureEngine.audioInputCaptureSuitability(for: $0) == .builtInMicrophone
+        })
+    }
+
+    func testAudioInputCaptureSuitabilityDoesNotBlockRoutedOrExternalInputs() {
+        let routedChoices = [
+            MacCaptureEngine.AudioInputDeviceChoice(uniqueID: "rane", name: "RANE ONE MKII"),
+            MacCaptureEngine.AudioInputDeviceChoice(uniqueID: "loopback", name: "BlackHole 2ch"),
+            MacCaptureEngine.AudioInputDeviceChoice(uniqueID: "interface", name: "USB Audio Codec"),
+            MacCaptureEngine.AudioInputDeviceChoice(uniqueID: "virtual", name: "Serato Virtual Audio")
+        ]
+
+        XCTAssertTrue(routedChoices.allSatisfy {
+            MacCaptureEngine.audioInputCaptureSuitability(for: $0) == .routedAudio
+        })
+
+        let externalMicrophone = MacCaptureEngine.AudioInputDeviceChoice(
+            uniqueID: "usb-podcast-mic",
+            name: "USB Podcast Microphone"
+        )
+        let externalSuitability = MacCaptureEngine.audioInputCaptureSuitability(for: externalMicrophone)
+        XCTAssertEqual(externalSuitability, .otherMicrophone)
+        XCTAssertTrue(externalSuitability.isMicrophonePath)
+        XCTAssertFalse(externalSuitability.blocksIsolatedNoBeatCapture)
+    }
+
+    func testBuiltInMicrophoneBlocksOnlyIsolatedNoBeatRoutineCapture() {
+        let suitability = MacCaptureEngine.AudioInputCaptureSuitability.builtInMicrophone
+
+        XCTAssertTrue(MacCaptureEngine.shouldBlockRoutineCapture(
+            audioInputSuitability: suitability,
+            captureMode: .calibrationNoClick,
+            beatEngineMode: .silent
+        ))
+        XCTAssertFalse(MacCaptureEngine.shouldBlockRoutineCapture(
+            audioInputSuitability: suitability,
+            captureMode: .timedClick,
+            beatEngineMode: .clickTrack
+        ))
+        XCTAssertFalse(MacCaptureEngine.shouldBlockRoutineCapture(
+            audioInputSuitability: .routedAudio,
+            captureMode: .calibrationNoClick,
+            beatEngineMode: .silent
+        ))
+    }
+
+    func testRoutineCaptureBuiltInMicrophoneGuardPrecedesRecordingPublication() throws {
+        let projectRoot = projectRootURL()
+        let engineSource = try String(
+            contentsOf: projectRoot.appendingPathComponent("ScratchLabDesktop/Services/MacCaptureEngine.swift"),
+            encoding: .utf8
+        )
+        let viewSource = try String(
+            contentsOf: projectRoot.appendingPathComponent("ScratchLabDesktop/Views/MacAnalyzerView.swift"),
+            encoding: .utf8
+        )
+
+        let startTail = engineSource[try XCTUnwrap(
+            engineSource.range(of: "func startRoutineRecording(captureTiming:")
+        ).lowerBound...]
+        let guardRange = try XCTUnwrap(startTail.range(of: "Self.shouldBlockRoutineCapture("))
+        let publishRange = try XCTUnwrap(startTail.range(of: "self.isRoutineRecording = true"))
+
+        XCTAssertLessThan(guardRange.lowerBound, publishRange.lowerBound)
+        XCTAssertTrue(viewSource.contains("return !selectedAudioCaptureReady"))
+        XCTAssertTrue(viewSource.contains("if captureEngine.isRoutineRecording { return false }"))
+        XCTAssertTrue(viewSource.contains("if builtInMicrophoneBlocksRoutineStart"))
+        XCTAssertTrue(viewSource.contains("captureEngine.selectedAudioInputCaptureSuitability"))
+        XCTAssertFalse(viewSource.contains("let lowercasedName = selectedAudioDevice.localizedName.lowercased()"))
+    }
+
     func testPreferredCaptureAudioDeviceSelectsExactSeratoVirtualAudioOverMicrophone() {
         let devices = [
             MacCaptureEngine.AudioInputDeviceChoice(uniqueID: "mic", name: "Built-in Microphone"),
@@ -12745,8 +12825,9 @@ extension CaptureReliabilityPhase1CoreTests {
     }
 
     func writeTestWAV(at url: URL) throws {
+        let frameCount: AVAudioFrameCount = 44_100
         guard let format = AVAudioFormat(standardFormatWithSampleRate: 44_100, channels: 1),
-              let buffer = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: 1_024),
+              let buffer = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: frameCount),
               let channelData = buffer.floatChannelData else {
             throw SessionExportError.unableToPrepareExport
         }
@@ -12754,7 +12835,7 @@ extension CaptureReliabilityPhase1CoreTests {
         // A real take carries dynamic audio. Silence here made every export
         // test pass against a stem that could never be played, which is how a
         // DC/silent scratch stem reached a shipped session.
-        buffer.frameLength = 1_024
+        buffer.frameLength = frameCount
         for frame in 0..<Int(buffer.frameLength) {
             channelData[0][frame] = Self.dynamicSample(
                 frame: frame,
@@ -12803,7 +12884,7 @@ extension CaptureReliabilityPhase1CoreTests {
         }
         writer.startSession(atSourceTime: .zero)
 
-        for frameIndex in 0..<3 {
+        for frameIndex in 0..<30 {
             while !input.isReadyForMoreMediaData {
                 Thread.sleep(forTimeInterval: 0.01)
             }
@@ -17458,6 +17539,74 @@ final class AnchorJointNameMappingTests: XCTestCase {
 
 final class SessionExportRoundTripTests: XCTestCase {
 
+    func testTimingRenderAndExportEvidenceUseExactMediaBounds() throws {
+        let exactFrameCount: AVAudioFrameCount = 1_018_710
+        let timing = try ScratchLabBeatEngine.renderedTimingBuffer(
+            mode: .boomBapTrainer,
+            bpm: 95,
+            durationSeconds: 23.1,
+            countInBeats: 4,
+            beatsPerBar: 4,
+            clickStartHostTime: nil,
+            recordingStartHostTime: nil,
+            sampleRate: 44_100,
+            channelCount: 2,
+            exactFrameCount: exactFrameCount
+        )
+        XCTAssertEqual(timing.frameLength, exactFrameCount)
+
+        let snapshot = CaptureCore.DetectedNotationSnapshot(
+            notationSource: "detected",
+            notationConfidence: 0.9,
+            detectedLabel: "Baby Scratch",
+            labelSource: "detected",
+            labelConfidence: 0.8,
+            detectionSources: ["controller", "audio"],
+            recordMovementEvents: [
+                .init(
+                    startTime: 1.5, endTime: 2.5,
+                    startPosition: 0.1, endPosition: 0.9,
+                    direction: "forward", movementKind: .normalPush,
+                    speed: 0.8, confidence: 0.95, source: "controller"
+                ),
+                .init(
+                    startTime: 2.2, endTime: 2.8,
+                    startPosition: 0.9, endPosition: 0.2,
+                    direction: "backward", movementKind: .normalPull,
+                    speed: 1.1, confidence: 0.9, source: "controller"
+                )
+            ],
+            audioEvents: [
+                .init(
+                    startTime: 1.8, endTime: 2.4, duration: 0.6,
+                    peakLevel: 0.8, rmsLevel: 0.3, confidence: 0.9,
+                    eventKind: "scratch", source: "audio"
+                )
+            ],
+            faderEvents: [],
+            mixerMidiEvents: [
+                .init(
+                    timestamp: 10, takeRelativeTime: 1.9,
+                    deviceName: "Rane ONE MKII", channel: 1, controller: 6,
+                    value: 64, normalizedValue: 64.0 / 127.0, mappedControl: nil
+                ),
+                .init(
+                    timestamp: 11, takeRelativeTime: 2.1,
+                    deviceName: "Rane ONE MKII", channel: 1, controller: 6,
+                    value: 65, normalizedValue: 65.0 / 127.0, mappedControl: nil
+                )
+            ],
+            capturedAt: Date()
+        )
+        let bounded = SessionExportEvidenceBounds.boundedSnapshot(snapshot, to: 2.0)
+        XCTAssertEqual(bounded.recordMovementEvents.count, 1)
+        XCTAssertEqual(bounded.recordMovementEvents[0].endTime, 2.0, accuracy: 1e-9)
+        XCTAssertEqual(bounded.audioEvents[0].endTime, 2.0, accuracy: 1e-9)
+        XCTAssertEqual(bounded.audioEvents[0].duration, 0.2, accuracy: 1e-9)
+        XCTAssertEqual(bounded.mixerMidiEvents.map(\.takeRelativeTime), [1.9])
+        XCTAssertLessThanOrEqual(bounded.capturedEvidenceEndTime ?? .infinity, 2.0)
+    }
+
     @MainActor
     func testRealReviewLoaderAndExportMappingRoundTrip() throws {
         // Build a controller snapshot through the real fusion.
@@ -20352,6 +20501,830 @@ extension CaptureReliabilityPhase1CoreTests {
             try String(contentsOf: storageURL, encoding: .utf8),
             ledgerText,
             "A refused write must leave the ledger byte-identical."
+        )
+    }
+}
+
+/// Capture-boundary regressions for session_2026_09_04_h_baby_scratch_95_bpm.
+///
+/// That export declared a 24 s take, shipped 19.20 s of audio and 19.37 s of
+/// video, and anchored movement/MIDI to the moment recording was *requested*
+/// rather than the moment AVFoundation confirmed media was being written.
+final class RoutineTakeBoundaryTests: XCTestCase {
+
+    // MARK: - Requested take length is never a stale measurement
+
+    func testRequestedTakeLengthIgnoresMeasuredTakeDuration() {
+        var config = CaptureSessionConfig.routineCapture(
+            sessionID: "session-boundary",
+            createdAt: Date(),
+            updatedAt: Date(),
+            takeCount: 1,
+            takeDurationSeconds: nil
+        )
+        XCTAssertEqual(
+            config.plannedTakeDurationSeconds,
+            RoutineCaptureDefaults.defaultTakeLengthSeconds,
+            "A routine config states its requested length explicitly."
+        )
+
+        // `takeDurationSeconds` is the measured aggregate an earlier export
+        // wrote back. With an explicit request present it must be ignored.
+        config.takeDurationSeconds = 19.2
+        XCTAssertEqual(
+            RoutineCaptureDefaults.requestedTakeLengthSeconds(for: config),
+            RoutineCaptureDefaults.defaultTakeLengthSeconds
+        )
+
+        config.plannedTakeDurationSeconds = 24
+        XCTAssertEqual(RoutineCaptureDefaults.requestedTakeLengthSeconds(for: config), 24)
+        XCTAssertEqual(config.takeDurationSeconds, 19.2, "The measurement must survive untouched.")
+    }
+
+    func testRequestedTakeLengthRejectsOutOfRangeAndMissingConfig() {
+        XCTAssertEqual(
+            RoutineCaptureDefaults.requestedTakeLengthSeconds(for: nil),
+            RoutineCaptureDefaults.defaultTakeLengthSeconds
+        )
+        for invalid: Double in [0, -24, .nan, .infinity, 100_000] {
+            var config = CaptureSessionConfig()
+            config.plannedTakeDurationSeconds = invalid
+            config.takeDurationSeconds = nil
+            XCTAssertEqual(
+                RoutineCaptureDefaults.requestedTakeLengthSeconds(for: config),
+                RoutineCaptureDefaults.defaultTakeLengthSeconds,
+                "\(invalid) must fall back to the default take length."
+            )
+        }
+    }
+
+    func testPlannedTakeDurationSurvivesEncodingRoundTrip() throws {
+        var config = CaptureSessionConfig()
+        config.plannedTakeDurationSeconds = 24
+        config.takeDurationSeconds = 19.2
+        let data = try JSONEncoder().encode(config)
+        let decoded = try JSONDecoder().decode(CaptureSessionConfig.self, from: data)
+        XCTAssertEqual(decoded.plannedTakeDurationSeconds, 24)
+        XCTAssertEqual(decoded.takeDurationSeconds, 19.2)
+    }
+
+    // MARK: - Delayed AVFoundation startup
+
+    func testStopDelayIsIndependentOfWriterStartupLatency() {
+        let requested: Double = 24
+        let grace: Double = 0.75
+        let requestHostTime: Double = 1_000
+
+        // 0.88 s is the startup latency measured in the regression fixture;
+        // 4.8 s is a deliberately pathological cold start.
+        for latency: Double in [0, 0.05, 0.88, 4.8] {
+            let mediaStart = requestHostTime + latency
+            let stopHostTime = RoutineTakeTimeline.scheduledStopHostTime(
+                mediaStartHostTime: mediaStart,
+                requestedDurationSeconds: requested,
+                graceSeconds: grace
+            )
+            XCTAssertEqual(
+                stopHostTime - mediaStart,
+                requested + grace,
+                accuracy: 1e-9,
+                "Startup latency of \(latency)s must not be charged against the take."
+            )
+            XCTAssertEqual(
+                RoutineTakeTimeline.stopDelaySeconds(
+                    requestedDurationSeconds: requested,
+                    graceSeconds: grace
+                ),
+                requested + grace,
+                accuracy: 1e-9
+            )
+        }
+    }
+
+    func testTwentyFourSecondRequestYieldsTwentyFourSecondsOfMedia() {
+        let requested: Double = 24
+        let mediaStart: Double = 2_000.88
+        let stopHostTime = RoutineTakeTimeline.scheduledStopHostTime(
+            mediaStartHostTime: mediaStart,
+            requestedDurationSeconds: requested,
+            graceSeconds: 0
+        )
+        XCTAssertEqual(stopHostTime - mediaStart, 24, accuracy: 1e-9)
+
+        // The fixture's 19.2 s of audio against a 24 s request is a shortfall,
+        // not a completed take.
+        XCTAssertFalse(
+            RoutineTakeTimeline.mediaSatisfiesRequest(
+                requestedDurationSeconds: 24,
+                actualMediaDurationSeconds: 19.2
+            )
+        )
+        XCTAssertTrue(
+            RoutineTakeTimeline.mediaSatisfiesRequest(
+                requestedDurationSeconds: 24,
+                actualMediaDurationSeconds: 23.97
+            ),
+            "Ordinary frame/packet quantisation must still count as satisfied."
+        )
+    }
+
+    func testTakeRelativeTimeDropsEverythingBeforeConfirmedMediaStart() {
+        let mediaStart: Double = 5_000
+
+        XCTAssertNil(
+            RoutineTakeTimeline.takeRelativeTime(hostTime: 4_999.5, mediaStartHostTime: mediaStart),
+            "Pre-roll traffic is not in the media and must be dropped, not clamped to zero."
+        )
+        XCTAssertEqual(
+            RoutineTakeTimeline.takeRelativeTime(hostTime: mediaStart, mediaStartHostTime: mediaStart),
+            0
+        )
+        XCTAssertEqual(
+            RoutineTakeTimeline.takeRelativeTime(hostTime: mediaStart + 12.5, mediaStartHostTime: mediaStart),
+            12.5
+        )
+        XCTAssertNil(
+            RoutineTakeTimeline.takeRelativeTime(hostTime: 5_001, mediaStartHostTime: 0),
+            "No confirmed media start means no take timeline."
+        )
+    }
+
+    // MARK: - Movement builder rebases onto the confirmed epoch
+
+    func testNotationBuilderRebaseDiscardsPreRollMovement() throws {
+        let requestHostTime: Double = 10_000
+        let builder = MacCaptureEngine.RoutineDetectedNotationBuilder(startedAt: requestHostTime)
+
+        // A complete stroke observed while the writer was still starting up.
+        builder.recordObservation(state: .movingRight, position: 0.10, confidence: 0.9, now: requestHostTime + 0.10)
+        builder.recordObservation(state: .movingRight, position: 0.40, confidence: 0.9, now: requestHostTime + 0.30)
+        builder.recordObservation(state: .movingLeft, position: 0.40, confidence: 0.9, now: requestHostTime + 0.50)
+        XCTAssertFalse(
+            builder.movementEvents(now: requestHostTime + 0.60).isEmpty,
+            "Precondition: the pre-roll observations did produce events."
+        )
+
+        let mediaStart = requestHostTime + 0.88
+        builder.rebaseEpoch(to: mediaStart)
+        XCTAssertTrue(
+            builder.movementEvents(now: mediaStart).isEmpty,
+            "Pre-roll movement is not in the media and must not survive the rebase."
+        )
+
+        builder.recordObservation(state: .movingRight, position: 0.10, confidence: 0.9, now: mediaStart + 0.20)
+        builder.recordObservation(state: .movingRight, position: 0.45, confidence: 0.9, now: mediaStart + 0.40)
+        builder.recordObservation(state: .movingLeft, position: 0.45, confidence: 0.9, now: mediaStart + 0.60)
+        let events = builder.movementEvents(now: mediaStart + 0.70)
+        let first = try XCTUnwrap(events.first)
+        XCTAssertEqual(first.startTime, 0.20, accuracy: 0.001, "Times must be relative to media start.")
+        XCTAssertEqual(first.endTime, 0.40, accuracy: 0.001)
+    }
+}
+
+/// Level policy for the audio ScratchLab generates during export.
+final class GeneratedAudioHeadroomTests: XCTestCase {
+    private func makeBuffer(peak: Float, frameCount: AVAudioFrameCount = 512) throws -> AVAudioPCMBuffer {
+        let format = try XCTUnwrap(AVAudioFormat(standardFormatWithSampleRate: 44_100, channels: 2))
+        let buffer = try XCTUnwrap(AVAudioPCMBuffer(pcmFormat: format, frameCapacity: frameCount))
+        buffer.frameLength = frameCount
+        let channels = try XCTUnwrap(buffer.floatChannelData)
+        for channel in 0..<Int(format.channelCount) {
+            for frame in 0..<Int(frameCount) {
+                channels[channel][frame] = frame % 2 == 0 ? peak : -peak * 0.25
+            }
+        }
+        return buffer
+    }
+
+    func testCeilingAttenuatesAnOvershootingBufferWithoutClipping() throws {
+        // 1.218279 is the beat_only peak the regression fixture shipped.
+        let buffer = try makeBuffer(peak: 1.218279)
+        let gain = ScratchLabBeatEngine.GeneratedAudioHeadroom.applyCeiling(-1.0, to: buffer)
+        let peak = ScratchLabBeatEngine.GeneratedAudioHeadroom.peakAmplitude(of: buffer)
+
+        XCTAssertLessThan(gain, 1)
+        XCTAssertEqual(
+            peak,
+            ScratchLabBeatEngine.GeneratedAudioHeadroom.amplitude(forDBFS: -1.0),
+            accuracy: 1e-5
+        )
+        XCTAssertLessThan(peak, 1, "The stem must sit inside full scale.")
+
+        // A pure gain, so the waveform's shape survives: no sample was flattened
+        // onto the ceiling the way a hard clamp would flatten it.
+        let channels = try XCTUnwrap(buffer.floatChannelData)
+        let flattened = (0..<Int(buffer.frameLength)).filter { abs(channels[0][$0]) >= 1.0 }
+        XCTAssertTrue(flattened.isEmpty)
+        XCTAssertEqual(channels[0][1] / channels[0][0], -0.25, accuracy: 1e-5)
+    }
+
+    func testCeilingLeavesAQuietBufferAlone() throws {
+        let buffer = try makeBuffer(peak: 0.2)
+        let gain = ScratchLabBeatEngine.GeneratedAudioHeadroom.applyCeiling(-1.0, to: buffer)
+        XCTAssertEqual(gain, 1, "Attenuation only — a quiet pattern is never boosted.")
+        XCTAssertEqual(
+            ScratchLabBeatEngine.GeneratedAudioHeadroom.peakAmplitude(of: buffer),
+            0.2,
+            accuracy: 1e-6
+        )
+    }
+
+    func testRenderedBeatStemStaysBelowTheHeadroomCeiling() throws {
+        let sampleRate: Double = 44_100
+        let frameCount = AVAudioFrameCount(sampleRate * 4)
+        let buffer = try ScratchLabBeatEngine.renderedTimingBuffer(
+            mode: .boomBapTrainer,
+            bpm: 95,
+            durationSeconds: 4,
+            countInBeats: CaptureClickTrackDefaults.countInBeats,
+            beatsPerBar: CaptureClickTrackDefaults.beatsPerBar,
+            clickStartHostTime: nil,
+            recordingStartHostTime: nil,
+            sampleRate: sampleRate,
+            channelCount: 2,
+            exactFrameCount: frameCount
+        )
+        XCTAssertEqual(buffer.frameLength, frameCount, "Headroom is a gain; it must not change length.")
+
+        let peak = ScratchLabBeatEngine.GeneratedAudioHeadroom.peakAmplitude(of: buffer)
+        XCTAssertGreaterThan(peak, 0, "Precondition: the pattern actually rendered audio.")
+        let ceiling = ScratchLabBeatEngine.GeneratedAudioHeadroom.amplitude(forDBFS: -1.0)
+        XCTAssertLessThanOrEqual(peak, ceiling + 1e-5)
+    }
+
+    func testRenderedBeatStemMatchesTheExactRequestedFrameCount() throws {
+        // Frame-identical stems are what keeps scratch_only / beat_only /
+        // scratch_with_beat sample-aligned in the export.
+        for frames in [846_720, 44_100, 12_345] {
+            let buffer = try ScratchLabBeatEngine.renderedTimingBuffer(
+                mode: .boomBapTrainer,
+                bpm: 95,
+                durationSeconds: 0.001,
+                countInBeats: CaptureClickTrackDefaults.countInBeats,
+                beatsPerBar: CaptureClickTrackDefaults.beatsPerBar,
+                clickStartHostTime: nil,
+                recordingStartHostTime: nil,
+                sampleRate: 44_100,
+                channelCount: 2,
+                exactFrameCount: AVAudioFrameCount(frames)
+            )
+            XCTAssertEqual(Int(buffer.frameLength), frames)
+        }
+    }
+}
+
+/// Re-exports the audio stems of a real capture archive through the current
+/// export code and reports the resulting frame counts, peaks, and hashes.
+///
+/// Opt-in: set `SCRATCHLAB_FIXTURE_SESSION` to an extracted session folder
+/// (for example the unzipped `session_2026_09_04_h_baby_scratch_95_bpm`). The
+/// repository cannot carry a 49 MB archive, so this stays skipped by default
+/// rather than silently passing on missing input.
+final class FixtureStemReExportTests: XCTestCase {
+    private struct StemReport {
+        let name: String
+        let frameCount: AVAudioFramePosition
+        let sampleRate: Double
+        let peak: Float
+        let peakDBFS: Double
+        let samplesAtOrAboveFullScale: Int
+    }
+
+    private func report(for name: String, buffer: AVAudioPCMBuffer) -> StemReport {
+        let peak = ScratchLabBeatEngine.GeneratedAudioHeadroom.peakAmplitude(of: buffer)
+        var clipped = 0
+        if let channels = buffer.floatChannelData {
+            for channel in 0..<Int(buffer.format.channelCount) {
+                for frame in 0..<Int(buffer.frameLength) where abs(channels[channel][frame]) >= 1 {
+                    clipped += 1
+                }
+            }
+        }
+        return StemReport(
+            name: name,
+            frameCount: AVAudioFramePosition(buffer.frameLength),
+            sampleRate: buffer.format.sampleRate,
+            peak: peak,
+            peakDBFS: peak > 0 ? 20 * log10(Double(peak)) : -.infinity,
+            samplesAtOrAboveFullScale: clipped
+        )
+    }
+
+    func testReExportedFixtureStemsAreFrameAlignedAndInsideFullScale() throws {
+        guard let sessionPath = ProcessInfo.processInfo.environment["SCRATCHLAB_FIXTURE_SESSION"] else {
+            throw XCTSkip("Set SCRATCHLAB_FIXTURE_SESSION to an extracted session folder to run this.")
+        }
+        let sessionURL = URL(fileURLWithPath: sessionPath, isDirectory: true)
+        let scratchURL = sessionURL
+            .appendingPathComponent("audio/H_baby_095_take01_scratch_only.wav")
+        guard FileManager.default.fileExists(atPath: scratchURL.path) else {
+            throw XCTSkip("Fixture scratch stem not found at \(scratchURL.path)")
+        }
+
+        let scratchFile = try AVAudioFile(forReading: scratchURL)
+        let scratchBuffer = try XCTUnwrap(
+            AVAudioPCMBuffer(
+                pcmFormat: scratchFile.processingFormat,
+                frameCapacity: AVAudioFrameCount(scratchFile.length)
+            )
+        )
+        try scratchFile.read(into: scratchBuffer)
+
+        // The fixture's own capture metadata, so the stem is regenerated on the
+        // same grid the take was recorded against.
+        let beatBuffer = try ScratchLabBeatEngine.renderedTimingBuffer(
+            mode: .boomBapTrainer,
+            bpm: 95,
+            durationSeconds: Double(scratchFile.length) / scratchFile.processingFormat.sampleRate,
+            countInBeats: 4,
+            beatsPerBar: 4,
+            clickStartHostTime: 9_721_072_525_951,
+            recordingStartHostTime: 9_721_133_157_529,
+            sampleRate: scratchFile.processingFormat.sampleRate,
+            channelCount: scratchFile.processingFormat.channelCount,
+            exactFrameCount: AVAudioFrameCount(clamping: scratchFile.length)
+        )
+        let mixResult = try SessionArchiveBuilder.mixScratchWithTiming(
+            scratchBuffer: scratchBuffer,
+            timingBuffer: beatBuffer
+        )
+        let mixedBuffer = mixResult.buffer
+        print(
+            "FIXTURE_MIX_GAINS timingGain=\(mixResult.timingGain)"
+            + " mixGain=\(mixResult.mixGain)"
+            + " capturedScratchAttenuatedBy=\(20 * log10(Double(mixResult.mixGain))) dB"
+        )
+        XCTAssertEqual(
+            mixResult.mixGain,
+            1,
+            "The captured scratch must pass through the mix at unity."
+        )
+
+        let reports = [
+            report(for: "scratch_only", buffer: scratchBuffer),
+            report(for: "beat_only", buffer: beatBuffer),
+            report(for: "scratch_with_beat", buffer: mixedBuffer)
+        ]
+        for stem in reports {
+            print(
+                "FIXTURE_STEM \(stem.name)"
+                + " frames=\(stem.frameCount)"
+                + " sampleRate=\(stem.sampleRate)"
+                + " peak=\(stem.peak)"
+                + " peakDBFS=\(stem.peakDBFS)"
+                + " atOrAboveFullScale=\(stem.samplesAtOrAboveFullScale)"
+            )
+        }
+
+        if let outputPath = ProcessInfo.processInfo.environment["SCRATCHLAB_FIXTURE_OUTPUT"] {
+            // The test host is sandboxed, so an arbitrary destination may be
+            // refused; fall back to the container's temp directory and print
+            // wherever the stems actually landed.
+            var outputURL = URL(fileURLWithPath: outputPath, isDirectory: true)
+            do {
+                try FileManager.default.createDirectory(at: outputURL, withIntermediateDirectories: true)
+            } catch {
+                outputURL = FileManager.default.temporaryDirectory
+                    .appendingPathComponent("scratchlab-fixture-reexport", isDirectory: true)
+                try FileManager.default.createDirectory(at: outputURL, withIntermediateDirectories: true)
+            }
+            for (name, buffer) in [
+                ("H_baby_095_take01_beat_only.wav", beatBuffer),
+                ("H_baby_095_take01_scratch_with_beat.wav", mixedBuffer)
+            ] {
+                let url = outputURL.appendingPathComponent(name)
+                try? FileManager.default.removeItem(at: url)
+                let file = try AVAudioFile(
+                    forWriting: url,
+                    settings: buffer.format.settings,
+                    commonFormat: buffer.format.commonFormat,
+                    interleaved: buffer.format.isInterleaved
+                )
+                try file.write(from: buffer)
+                print("FIXTURE_STEM_WRITTEN \(url.path)")
+            }
+        }
+
+        let frameCounts = Set(reports.map(\.frameCount))
+        XCTAssertEqual(frameCounts.count, 1, "Every stem must have the identical exact frame count.")
+
+        let ceiling = ScratchLabBeatEngine.GeneratedAudioHeadroom.amplitude(forDBFS: -1)
+        let beat = try XCTUnwrap(reports.first { $0.name == "beat_only" })
+        XCTAssertLessThanOrEqual(beat.peak, ceiling + 1e-5, "beat_only must keep 1 dB of headroom.")
+        XCTAssertEqual(beat.samplesAtOrAboveFullScale, 0)
+
+        let mixed = try XCTUnwrap(reports.first { $0.name == "scratch_with_beat" })
+        XCTAssertLessThan(mixed.peak, 1, "The mix must stay inside full scale.")
+        XCTAssertEqual(mixed.samplesAtOrAboveFullScale, 0, "No sample may be clamped onto the rail.")
+    }
+}
+
+/// Rebuilds the regression fixture into a complete session archive using the
+/// production export path — `SessionArchiveBuilder.preparePackage` followed by
+/// `createArchive` — so the manifest, take log, notation, stems, and folder
+/// name are all produced by the app rather than patched by hand.
+///
+/// Opt-in via `SCRATCHLAB_FIXTURE_SESSION` (extracted session folder) and
+/// `SCRATCHLAB_ARCHIVE_OUTPUT` (where to leave the .zip).
+final class FixtureArchiveReExportTests: XCTestCase {
+
+    private func decodeFixtureNotation(at url: URL) throws -> CaptureCore.DetectedNotationSnapshot {
+        // The exported notation document omits the sidecar-only absolute
+        // `timestamp` on MIDI events, so those are read through a shim.
+        struct ExportedMidiEvent: Decodable {
+            let takeRelativeTime: Double
+            let deviceName: String
+            let channel: Int
+            let controller: Int
+            let value: Int
+            let normalizedValue: Double
+            let mappedControl: String?
+        }
+        struct Payload: Decodable {
+            let recordMovementEvents: [CaptureCore.DetectedNotationRecordMovementEvent]
+            let audioEvents: [CaptureCore.DetectedNotationAudioEvent]
+            let faderEvents: [CaptureCore.DetectedNotationFaderEvent]
+            let mixerMidiEvents: [ExportedMidiEvent]
+            let notationConfidence: Double?
+            let labelConfidence: Double?
+        }
+        let payload = try JSONDecoder().decode(Payload.self, from: Data(contentsOf: url))
+        let midiEvents = payload.mixerMidiEvents.map { event in
+            CaptureCore.RawMixerMIDIEvent(
+                timestamp: event.takeRelativeTime,
+                takeRelativeTime: event.takeRelativeTime,
+                deviceName: event.deviceName,
+                channel: event.channel,
+                controller: event.controller,
+                value: event.value,
+                normalizedValue: event.normalizedValue,
+                mappedControl: event.mappedControl
+            )
+        }
+        return CaptureCore.DetectedNotationSnapshot(
+            notationSource: "detected",
+            notationConfidence: payload.notationConfidence,
+            detectedLabel: "Baby Scratch",
+            labelSource: "detected",
+            labelConfidence: payload.labelConfidence,
+            detectionSources: ["audio", "controller"],
+            recordMovementEvents: payload.recordMovementEvents,
+            audioEvents: payload.audioEvents,
+            faderEvents: payload.faderEvents,
+            mixerMidiEvents: midiEvents,
+            capturedAt: Date(timeIntervalSince1970: 1_788_465_875)
+        )
+    }
+
+    func testFixtureRebuiltThroughCreateArchivePassesTheCanonicalValidator() throws {
+        guard let sessionPath = ProcessInfo.processInfo.environment["SCRATCHLAB_FIXTURE_SESSION"],
+              let outputPath = ProcessInfo.processInfo.environment["SCRATCHLAB_ARCHIVE_OUTPUT"] else {
+            throw XCTSkip("Set SCRATCHLAB_FIXTURE_SESSION and SCRATCHLAB_ARCHIVE_OUTPUT to run this.")
+        }
+        let fixtureURL = URL(fileURLWithPath: sessionPath, isDirectory: true)
+        let sourceMovie = fixtureURL.appendingPathComponent("video/H_baby_095_take01_camA.mov")
+        let sourceAudio = fixtureURL.appendingPathComponent("audio/H_baby_095_take01_scratch_only.wav")
+        let sourceNotation = fixtureURL.appendingPathComponent("notation/take-001_detected_notation.json")
+        guard FileManager.default.fileExists(atPath: sourceMovie.path) else {
+            throw XCTSkip("Fixture media not found at \(sourceMovie.path)")
+        }
+
+        let fileManager = FileManager.default
+        let stagingRoot = fileManager.temporaryDirectory
+            .appendingPathComponent("scratchlab-fixture-archive-\(UUID().uuidString)", isDirectory: true)
+        try fileManager.createDirectory(at: stagingRoot, withIntermediateDirectories: true)
+        defer { try? fileManager.removeItem(at: stagingRoot) }
+
+        // The fixture's own session identity and capture settings.
+        let sessionID = "f8a91511-9452-4951-895a-bfd198425b4e"
+        let createdAt = Date(timeIntervalSince1970: 1_788_465_875) // 2026-09-03T20:04:35Z
+        var config = CaptureSessionConfig(
+            performerName: "h",
+            bpm: 95,
+            scratchType: .babyScratch,
+            drillMode: .fullCapture,
+            captureMode: .timedClick,
+            beatEngineMode: .boomBapTrainer,
+            timingPrintedToRecording: .unknown,
+            takeDurationSeconds: nil,
+            plannedTakeDurationSeconds: 24,
+            sessionTimeZoneIdentifier: "Pacific/Auckland",
+            takeCount: 1,
+            handedness: .right,
+            notes: "",
+            sessionID: sessionID,
+            createdAt: createdAt,
+            updatedAt: createdAt
+        )
+        config.clickAccentPattern = CaptureClickTrackDefaults.clickAccentPattern
+
+        let takeIdentity = CaptureCore.LocalRecordingNaming.takeIdentity(sessionID: sessionID, takeNumber: 1)
+        let files = try CaptureCore.LocalRecordingFiles.make(
+            in: stagingRoot,
+            sessionID: sessionID,
+            takeNumber: takeIdentity.takeNumber,
+            roleLabel: "routine",
+            mediaExtension: "mov",
+            fileManager: fileManager
+        )
+        try fileManager.copyItem(at: sourceMovie, to: files.mediaURL)
+        let stagedAudioURL = files.mediaURL.deletingPathExtension().appendingPathExtension("wav")
+        try fileManager.copyItem(at: sourceAudio, to: stagedAudioURL)
+
+        let audioFile = try AVAudioFile(forReading: stagedAudioURL)
+        let mediaDuration = Double(audioFile.length) / audioFile.processingFormat.sampleRate
+
+        let sidecar = CaptureCore.LocalRecordingSidecar.recording(
+            sessionID: sessionID,
+            sessionConfig: config,
+            takeIdentity: takeIdentity,
+            files: files,
+            recordingRole: "routine_capture",
+            platform: "macOS",
+            appSurface: "ScratchLab Routine Recorder",
+            sourceDeviceName: "DJ",
+            audioInputName: "Rane ONE MKII",
+            videoDeviceUniqueID: "6C707041-05AC-0010-0001-000000000001",
+            videoDeviceName: "MacBook Pro Camera",
+            audioDeviceUniqueID: "AppleUSBAudioEngine:Rane:Rane ONE MKII:A:1,2",
+            audioDeviceName: "Rane ONE MKII",
+            captureTiming: CaptureTimingMetadata(
+                clickStartHostTime: 9_721_072_525_951,
+                recordingStartHostTime: 9_721_133_157_529
+            ),
+            startedAt: createdAt
+        )
+        .finalized(
+            endedAt: createdAt.addingTimeInterval(mediaDuration),
+            mediaFileName: files.mediaURL.lastPathComponent,
+            captureErrorDescription: nil
+        )
+        .withDetectedNotation(try decodeFixtureNotation(at: sourceNotation))
+        try sidecar.encodedData().write(to: files.sidecarURL, options: .atomic)
+
+        // Production export path: no hand-written manifest, take log, or stems.
+        let builder = SessionArchiveBuilder()
+        let package = try builder.preparePackage(
+            from: .localRecordingSession(
+                lastRecordingURL: files.mediaURL,
+                sessionName: "h Baby Scratch 95 BPM",
+                config: config
+            )
+        )
+        print("ARCHIVE_METADATA plannedTakeDurationSeconds=\(String(describing: package.metadata.plannedTakeDurationSeconds))"
+            + " totalDurationSeconds=\(package.metadata.totalDurationSeconds)"
+            + " sessionTimeZoneIdentifier=\(String(describing: package.metadata.sessionTimeZoneIdentifier))")
+
+        let archiveDirectory = stagingRoot.appendingPathComponent("archives", isDirectory: true)
+        try fileManager.createDirectory(at: archiveDirectory, withIntermediateDirectories: true)
+        let result = try builder.createArchive(
+            from: package,
+            options: SessionExportOptions(mixMode: .stemsFolder),
+            in: archiveDirectory
+        )
+
+        var destination = URL(fileURLWithPath: outputPath, isDirectory: true)
+        do {
+            try fileManager.createDirectory(at: destination, withIntermediateDirectories: true)
+        } catch {
+            destination = fileManager.temporaryDirectory
+                .appendingPathComponent("scratchlab-fixture-archive-out", isDirectory: true)
+            try fileManager.createDirectory(at: destination, withIntermediateDirectories: true)
+        }
+        let finalURL = destination.appendingPathComponent(result.archiveURL.lastPathComponent)
+        try? fileManager.removeItem(at: finalURL)
+        try fileManager.copyItem(at: result.archiveURL, to: finalURL)
+        print("ARCHIVE_WRITTEN \(finalURL.path) bytes=\(result.archiveSizeBytes)")
+
+        XCTAssertEqual(
+            package.metadata.totalDurationSeconds,
+            mediaDuration,
+            accuracy: 1e-9,
+            "totalDurationSeconds must be the measured playable duration."
+        )
+        XCTAssertEqual(package.metadata.plannedTakeDurationSeconds, 24)
+    }
+}
+
+/// Backward compatibility and date-policy regressions.
+final class CaptureConfigMigrationTests: XCTestCase {
+
+    private func decodeConfig(_ json: String) throws -> CaptureSessionConfig {
+        try JSONDecoder().decode(CaptureSessionConfig.self, from: Data(json.utf8))
+    }
+
+    func testLegacyConfigWithOnlyTakeDurationKeepsItsRequestedDuration() throws {
+        // Written before `plannedTakeDurationSeconds` existed: the one duration
+        // field was the operator's requested take length.
+        let legacy = """
+        {
+          "performerName": "h",
+          "captureMode": "timed_click",
+          "takeDurationSeconds": 24,
+          "takeCount": 0,
+          "notes": "",
+          "sessionID": "legacy-session"
+        }
+        """
+        let config = try decodeConfig(legacy)
+        XCTAssertEqual(config.takeDurationSeconds, 24)
+        XCTAssertNil(
+            config.plannedTakeDurationSeconds,
+            "Decoding must be faithful: absent stays absent, so a decoded record still equals the record it was written from."
+        )
+        XCTAssertEqual(
+            RoutineCaptureDefaults.requestedTakeLengthSeconds(for: config),
+            24,
+            "A legacy config must not lose its requested duration."
+        )
+    }
+
+    func testDecodingALegacyConfigDoesNotChangeItsValue() throws {
+        // Regression: a decode-time migration made a reloaded config unequal to
+        // the one it was written from, which silently broke idempotent
+        // re-writes of durable ledgers.
+        var original = CaptureSessionConfig(sessionID: "round-trip")
+        original.takeDurationSeconds = 1
+        let encoded = try JSONEncoder().encode(original)
+        let decoded = try JSONDecoder().decode(CaptureSessionConfig.self, from: encoded)
+        XCTAssertEqual(decoded, original)
+        XCTAssertEqual(try JSONEncoder().encode(decoded), encoded)
+    }
+
+    func testLegacyConfigWithNoDurationFallsBackToTheDefault() throws {
+        let config = try decodeConfig("""
+        {"performerName": "h", "captureMode": "timed_click", "takeCount": 0, "notes": "", "sessionID": "legacy-2"}
+        """)
+        XCTAssertNil(config.plannedTakeDurationSeconds)
+        XCTAssertEqual(
+            RoutineCaptureDefaults.requestedTakeLengthSeconds(for: config),
+            RoutineCaptureDefaults.defaultTakeLengthSeconds
+        )
+    }
+
+    func testExplicitPlannedDurationWinsOverLegacyTakeDuration() throws {
+        let config = try decodeConfig("""
+        {
+          "performerName": "h", "captureMode": "timed_click", "takeCount": 1, "notes": "",
+          "sessionID": "modern", "takeDurationSeconds": 19.2, "plannedTakeDurationSeconds": 24
+        }
+        """)
+        XCTAssertEqual(config.plannedTakeDurationSeconds, 24)
+        XCTAssertEqual(config.takeDurationSeconds, 19.2)
+        XCTAssertEqual(RoutineCaptureDefaults.requestedTakeLengthSeconds(for: config), 24)
+    }
+
+    func testLegacyConfigWithNoTimeZoneDecodesAsAbsent() throws {
+        let config = try decodeConfig("""
+        {"performerName": "h", "captureMode": "timed_click", "takeCount": 0, "notes": "", "sessionID": "legacy-3"}
+        """)
+        XCTAssertNil(
+            config.sessionTimeZoneIdentifier,
+            "Absent must stay absent; the export falls back rather than inventing a zone."
+        )
+    }
+
+    func testSessionTimeZoneIsStampedAndSurvivesEncoding() throws {
+        var config = CaptureSessionConfig(sessionID: "tz-session")
+        XCTAssertEqual(config.sessionTimeZoneIdentifier, TimeZone.current.identifier)
+
+        config.sessionTimeZoneIdentifier = "Pacific/Auckland"
+        let decoded = try JSONDecoder().decode(
+            CaptureSessionConfig.self,
+            from: JSONEncoder().encode(config)
+        )
+        XCTAssertEqual(decoded.sessionTimeZoneIdentifier, "Pacific/Auckland")
+    }
+
+    func testRefreshingSessionIdentityStampsTheSuppliedZoneAndKeepsThePlan() {
+        var config = CaptureSessionConfig(sessionID: "old-session")
+        config.plannedTakeDurationSeconds = 24
+        config.takeDurationSeconds = 19.2
+        config.refreshSessionIdentity(
+            surface: .macRoutine,
+            now: Date(),
+            timeZone: TimeZone(identifier: "Pacific/Auckland")!
+        )
+        XCTAssertEqual(config.sessionTimeZoneIdentifier, "Pacific/Auckland")
+        XCTAssertEqual(config.plannedTakeDurationSeconds, 24, "A setting survives a new session identity.")
+        XCTAssertNil(config.takeDurationSeconds, "A measurement does not.")
+    }
+
+    func testSessionDateUsesThePersistedZoneNotTheExportingMachine() {
+        // 2026-09-03T20:04:35Z is 2026-09-04 in Auckland and still 2026-09-03
+        // in UTC and London. The session's own zone decides.
+        let createdAt = Date(timeIntervalSince1970: 1_788_465_875)
+
+        XCTAssertEqual(
+            CaptureCanonicalFormatting.sessionDateString(createdAt, timeZoneIdentifier: "Pacific/Auckland"),
+            "2026-09-04"
+        )
+        XCTAssertEqual(
+            CaptureCanonicalFormatting.sessionFolderDateString(createdAt, timeZoneIdentifier: "Pacific/Auckland"),
+            "2026_09_04",
+            "The folder and the manifest must agree on the calendar day."
+        )
+        XCTAssertEqual(
+            CaptureCanonicalFormatting.sessionDateString(createdAt, timeZoneIdentifier: "Europe/London"),
+            "2026-09-03",
+            "A different persisted zone is a different — but still self-consistent — day."
+        )
+        XCTAssertEqual(
+            CaptureCanonicalFormatting.sessionCalendarTimeZone(identifier: "Not/AZone"),
+            CaptureCanonicalFormatting.fallbackSessionCalendarTimeZone,
+            "An unusable identifier falls back rather than throwing away the date."
+        )
+    }
+
+    func testLegacySessionWithoutAZoneIsDatedDeterministicallyInUTC() {
+        let createdAt = Date(timeIntervalSince1970: 1_788_465_875) // 2026-09-03T20:04:35Z
+
+        XCTAssertEqual(
+            CaptureCanonicalFormatting.fallbackSessionCalendarTimeZone.secondsFromGMT(),
+            0,
+            "The legacy fallback must be UTC, not whatever zone the exporter happens to be in."
+        )
+        XCTAssertEqual(
+            CaptureCanonicalFormatting.sessionDateString(createdAt, timeZoneIdentifier: nil),
+            "2026-09-03"
+        )
+        XCTAssertEqual(
+            CaptureCanonicalFormatting.sessionFolderDateString(createdAt, timeZoneIdentifier: nil),
+            "2026_09_03",
+            "Folder and manifest still agree; a legacy session is just dated in UTC."
+        )
+        XCTAssertEqual(
+            CaptureCanonicalFormatting.sessionCalendarTimeZone(identifier: nil),
+            CaptureCanonicalFormatting.sessionCalendarTimeZone(identifier: "Not/AZone"),
+            "Missing and unusable both resolve to the same reproducible zone."
+        )
+    }
+}
+
+/// The scratch + timing mix must not attenuate the captured recording.
+final class ScratchTimingMixLevelTests: XCTestCase {
+    private func buffer(
+        frames: Int,
+        _ sample: (Int) -> Float
+    ) throws -> AVAudioPCMBuffer {
+        let format = try XCTUnwrap(AVAudioFormat(standardFormatWithSampleRate: 44_100, channels: 2))
+        let buffer = try XCTUnwrap(
+            AVAudioPCMBuffer(pcmFormat: format, frameCapacity: AVAudioFrameCount(frames))
+        )
+        buffer.frameLength = AVAudioFrameCount(frames)
+        let channels = try XCTUnwrap(buffer.floatChannelData)
+        for channel in 0..<Int(format.channelCount) {
+            for frame in 0..<frames {
+                channels[channel][frame] = sample(frame)
+            }
+        }
+        return buffer
+    }
+
+    func testHotCaptureIsPassedThroughAtUnityAndOnlyTheBeatIsReduced() throws {
+        // 0.973443 is the fixture's captured scratch peak — already above the
+        // -1 dBFS generated-stem ceiling, which is exactly the case where a
+        // whole-mix attenuation would quietly turn the recording down.
+        let scratch = try buffer(frames: 256) { $0 % 2 == 0 ? 0.973443 : -0.4 }
+        let timing = try buffer(frames: 256) { $0 % 2 == 0 ? 0.891251 : -0.2 }
+
+        let result = try SessionArchiveBuilder.mixScratchWithTiming(
+            scratchBuffer: scratch,
+            timingBuffer: timing
+        )
+        XCTAssertEqual(result.mixGain, 1, "The captured scratch must not be attenuated.")
+        XCTAssertLessThan(result.timingGain, SessionArchiveBuilder.timingMixGain)
+        XCTAssertGreaterThan(result.timingGain, 0, "The beat must still be audible in the mix.")
+
+        let peak = ScratchLabBeatEngine.GeneratedAudioHeadroom.peakAmplitude(of: result.buffer)
+        let ceiling = ScratchLabBeatEngine.GeneratedAudioHeadroom.amplitude(
+            forDBFS: ScratchLabBeatEngine.GeneratedAudioHeadroom.mixCeilingDBFS
+        )
+        XCTAssertLessThanOrEqual(peak, ceiling + 1e-5)
+        XCTAssertLessThan(peak, 1)
+    }
+
+    func testQuietMaterialKeepsTheFullTimingMixGain() throws {
+        let scratch = try buffer(frames: 256) { $0 % 2 == 0 ? 0.2 : -0.1 }
+        let timing = try buffer(frames: 256) { $0 % 2 == 0 ? 0.3 : -0.1 }
+
+        let result = try SessionArchiveBuilder.mixScratchWithTiming(
+            scratchBuffer: scratch,
+            timingBuffer: timing
+        )
+        XCTAssertEqual(result.timingGain, SessionArchiveBuilder.timingMixGain, accuracy: 1e-6)
+        XCTAssertEqual(result.mixGain, 1)
+    }
+
+    func testMixRefusesFrameMismatchedInputs() throws {
+        let scratch = try buffer(frames: 256) { _ in 0.5 }
+        let timing = try buffer(frames: 255) { _ in 0.5 }
+        XCTAssertThrowsError(
+            try SessionArchiveBuilder.mixScratchWithTiming(
+                scratchBuffer: scratch,
+                timingBuffer: timing
+            ),
+            "Frame-identical stems are the whole point; a mismatch must fail loudly."
         )
     }
 }

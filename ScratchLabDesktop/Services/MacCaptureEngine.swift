@@ -659,6 +659,18 @@ final class MacCaptureEngine: NSObject, ObservableObject {
         let name: String
     }
 
+    enum AudioInputCaptureSuitability: Equatable {
+        case routedAudio
+        case builtInMicrophone
+        case otherMicrophone
+
+        var isMicrophonePath: Bool { self != .routedAudio }
+        var blocksIsolatedNoBeatCapture: Bool { self == .builtInMicrophone }
+    }
+
+    static let isolatedCaptureBuiltInMicrophoneMessage =
+        "Built-in microphone captures room audio. Select a routed deck or audio-interface input before recording an isolated take."
+
     enum AudioSelectionPriority: Equatable {
         case exactSeratoVirtualAudio
         case seratoLike
@@ -1384,7 +1396,9 @@ final class MacCaptureEngine: NSObject, ObservableObject {
             var peakConfidence: Double
         }
 
-        private let startedAt: CFTimeInterval
+        /// Take-relative zero. Re-stamped by `rebaseEpoch(to:)` once
+        /// AVFoundation confirms media is being written.
+        private var startedAt: CFTimeInterval
         private var activeMovement: ActiveMovement?
         private var events: [CaptureCore.DetectedNotationRecordMovementEvent] = []
         private let debugSession: RoutineMovementDebugSession?
@@ -1398,6 +1412,16 @@ final class MacCaptureEngine: NSObject, ObservableObject {
             self.startedAt = startedAt
             self.debugSession = debugSession
             self.traceRecorder = traceRecorder
+        }
+
+        /// Moves take-relative zero to the confirmed media-start epoch and
+        /// discards anything observed before it. Pre-roll hand motion happened
+        /// while the writer was still spinning up, so it is not in the media
+        /// and must not appear in the take timeline.
+        func rebaseEpoch(to hostTime: CFTimeInterval) {
+            startedAt = hostTime
+            activeMovement = nil
+            events.removeAll(keepingCapacity: true)
         }
 
         func recordObservation(
@@ -3097,6 +3121,15 @@ final class MacCaptureEngine: NSObject, ObservableObject {
         return seratoDevice.uniqueID == selectedAudioDeviceUniqueID
     }
 
+    var selectedAudioInputCaptureSuitability: AudioInputCaptureSuitability? {
+        guard let selectedDevice = availableAudioDevices.first(where: {
+            $0.uniqueID == selectedAudioDeviceUniqueID
+        }) else {
+            return nil
+        }
+        return Self.audioInputCaptureSuitability(for: Self.audioChoice(from: selectedDevice))
+    }
+
     var selectedAudioDeviceName: String {
         let selectedName = availableAudioDevices
             .first(where: { $0.uniqueID == selectedAudioDeviceUniqueID })?
@@ -3726,6 +3759,109 @@ final class MacCaptureEngine: NSObject, ObservableObject {
     /// Host-time anchor captured at recording start, used to produce
     /// take-relative trace timestamps.
     private var movementTraceRecordingStartHostTime: Double = 0
+
+    /// Single confirmed media-start epoch for the active routine take.
+    ///
+    /// `AVCaptureMovieFileOutput.startRecording(to:)` returns long before the
+    /// first sample buffer is written — on a cold camera the gap is close to a
+    /// second. Anchoring the take timeline at the *request* therefore offsets
+    /// every movement, platter, and MIDI event from the media by that gap, and
+    /// makes the "recording duration" include camera and writer startup. This
+    /// is stamped once, in `didStartRecordingTo`, and every take-relative clock
+    /// is rebased onto it.
+    private let routineMediaEpochLock = NSLock()
+    private var routineMediaStartHostTimeStorage: CFTimeInterval = 0
+    private var routineRequestedTakeDurationSecondsStorage = RoutineCaptureDefaults.defaultTakeLengthSeconds
+    private var routineTimedStopWorkItem: DispatchWorkItem?
+
+    /// Wall-clock slack allowed past the requested length before the backstop
+    /// stop fires. `AVCaptureMovieFileOutput.maxRecordedDuration` is the primary
+    /// bound and is measured in recorded media time, so it should always win.
+    private static let routineTimedStopGraceSeconds: Double = 0.75
+
+    /// Confirmed media-start epoch, or 0 when no take is being written.
+    var routineMediaStartHostTime: CFTimeInterval {
+        routineMediaEpochLock.lock()
+        defer { routineMediaEpochLock.unlock() }
+        return routineMediaStartHostTimeStorage
+    }
+
+    /// Take length requested for the active take, in seconds.
+    var routineRequestedTakeDurationSeconds: Double {
+        routineMediaEpochLock.lock()
+        defer { routineMediaEpochLock.unlock() }
+        return routineRequestedTakeDurationSecondsStorage
+    }
+
+    private func armRoutineTakeDuration(_ seconds: Double) {
+        routineMediaEpochLock.lock()
+        routineRequestedTakeDurationSecondsStorage = seconds
+        routineMediaStartHostTimeStorage = 0
+        routineMediaEpochLock.unlock()
+    }
+
+    /// Stamps the confirmed media-start epoch and returns it together with the
+    /// requested take length.
+    private func beginRoutineMediaEpoch(
+        at hostTime: CFTimeInterval
+    ) -> (mediaStart: CFTimeInterval, requestedDuration: Double) {
+        routineMediaEpochLock.lock()
+        routineMediaStartHostTimeStorage = hostTime
+        let requested = routineRequestedTakeDurationSecondsStorage
+        routineMediaEpochLock.unlock()
+        return (hostTime, requested)
+    }
+
+    private func endRoutineMediaEpoch() {
+        routineMediaEpochLock.lock()
+        routineMediaStartHostTimeStorage = 0
+        let pendingStop = routineTimedStopWorkItem
+        routineTimedStopWorkItem = nil
+        routineMediaEpochLock.unlock()
+        pendingStop?.cancel()
+    }
+
+    /// Rebases every take-relative clock onto the confirmed media-start epoch
+    /// and schedules the backstop stop. Called from `didStartRecordingTo` only.
+    private func beginRoutineTakeTimelines(at mediaStartHostTime: CFTimeInterval) {
+        beginMIDIRecordingWindow(at: mediaStartHostTime)
+
+        platterRecorderLock.lock()
+        platterRecordingStartTime = mediaStartHostTime
+        platterPositionRecorder.startRecording(at: 0)
+        platterRecorderLock.unlock()
+
+        activeRoutineDetectedNotationBuilder?.rebaseEpoch(to: mediaStartHostTime)
+
+        #if DEBUG
+        movementTraceRecordingStartHostTime = mediaStartHostTime
+        movementTraceRecorder.startRecording(at: mediaStartHostTime)
+        #endif
+    }
+
+    /// Backstop for the requested take length, armed only once media is
+    /// confirmed. `maxRecordedDuration` normally ends the take first; this
+    /// covers the case where AVFoundation never reaches that bound.
+    private func scheduleRoutineTimedStop(
+        mediaStartHostTime: CFTimeInterval,
+        requestedDurationSeconds: Double
+    ) {
+        let deadline = RoutineTakeTimeline.stopDelaySeconds(
+            requestedDurationSeconds: requestedDurationSeconds,
+            graceSeconds: Self.routineTimedStopGraceSeconds
+        )
+        let workItem = DispatchWorkItem { [weak self] in
+            guard let self else { return }
+            guard self.routineMediaStartHostTime == mediaStartHostTime else { return }
+            guard self.movieOutput.isRecording else { return }
+            self.stopRoutineRecording()
+        }
+        routineMediaEpochLock.lock()
+        routineTimedStopWorkItem?.cancel()
+        routineTimedStopWorkItem = workItem
+        routineMediaEpochLock.unlock()
+        sessionQueue.asyncAfter(deadline: .now() + deadline, execute: workItem)
+    }
     /// Frozen at take finalization; drained by the export companion writer so a
     /// later take cannot overwrite the trace/diagnostics of an earlier one.
     private(set) var lastMovementTraceExport: MovementTraceExport?
@@ -4324,6 +4460,24 @@ final class MacCaptureEngine: NSObject, ObservableObject {
         // to start a new take (and re-open the admission gate) until it completes.
         guard !isRoutineFinalizationPending else { return }
 
+        let selectedAudioChoice = availableAudioDevices
+            .first(where: { $0.uniqueID == selectedAudioDeviceUniqueID })
+            .map { Self.audioChoice(from: $0) }
+        let selectedAudioSuitability = selectedAudioChoice.map {
+            Self.audioInputCaptureSuitability(for: $0)
+        }
+        if let config = recordingSessionConfig,
+           Self.shouldBlockRoutineCapture(
+               audioInputSuitability: selectedAudioSuitability,
+               captureMode: config.captureMode,
+               beatEngineMode: config.beatEngineMode
+           ) {
+            Task { @MainActor in
+                self.routineRecordingStatus = Self.isolatedCaptureBuiltInMicrophoneMessage
+            }
+            return
+        }
+
         // Reset the shared camera processor (cadence phase, held anchor, and
         // accumulated angle/direction) so a prior take cannot leak into this one.
         cameraProcessor.reset()
@@ -4333,6 +4487,12 @@ final class MacCaptureEngine: NSObject, ObservableObject {
         let selectedAudioID = selectedAudioDeviceUniqueID
         let audioDevices = availableAudioDevices
         let videoDevices = availableVideoDevices
+        // The requested take length is resolved here but consumed only from
+        // `didStartRecordingTo`. Camera and writer startup must not eat into it.
+        let requestedTakeDurationSeconds = RoutineCaptureDefaults.requestedTakeLengthSeconds(
+            for: recordingSessionConfig
+        )
+        armRoutineTakeDuration(requestedTakeDurationSeconds)
 
         Task { @MainActor in
             self.isRoutineRecording = true
@@ -4416,11 +4576,11 @@ final class MacCaptureEngine: NSObject, ObservableObject {
                 let movementDebugSession = RoutineMovementDebugSession(handPoseInterval: self.routineRecordingHandPoseInterval)
                 self.activeRoutineMovementDebugSession = movementDebugSession
                 self.publishRoutineMovementDiagnostics(movementDebugSession.snapshot())
-                // Arm the per-observation movement trace for this take. Started
-                // here (before movieOutput) so the first observation lands with a
-                // take-relative time near zero; the prior take's trace is dropped.
-                self.movementTraceRecordingStartHostTime = CACurrentMediaTime()
-                self.movementTraceRecorder.startRecording(at: self.movementTraceRecordingStartHostTime)
+                // Clear the prior take's trace. The epoch is deliberately left
+                // at zero until `didStartRecordingTo` re-arms the recorder with
+                // the confirmed media-start host time.
+                self.movementTraceRecordingStartHostTime = 0
+                self.movementTraceRecorder.startRecording(at: 0)
                 self.activeRoutineDetectedNotationBuilder = RoutineDetectedNotationBuilder(
                     debugSession: movementDebugSession,
                     traceRecorder: self.movementTraceRecorder
@@ -4441,16 +4601,15 @@ final class MacCaptureEngine: NSObject, ObservableObject {
                     self.routineRecordingStatus = "Starting routine recording"
                 }
                 self.openMIDIInputForRecording()
-                // Phase 3.1 — arm the raw-platter recorder just before
-                // movieOutput starts, so the first hand-tracker sample
-                // after this point lands in the buffer with a
-                // take-relative time near zero. The clear+start pair
-                // also discards any stale timeline from a previous
-                // take.
+                // Phase 3.1 — discard any stale timeline from a previous take.
+                // The recorder is deliberately left *disarmed* until
+                // `didStartRecordingTo`: samples observed while the writer is
+                // still starting are not in the media, and `observe(...)`
+                // silently ignores calls outside an active recording.
                 self.platterRecorderLock.lock()
                 self.lastDrainedPlatterPositionTimeline = nil
-                self.platterRecordingStartTime = CACurrentMediaTime()
-                self.platterPositionRecorder.startRecording(at: 0)
+                self.platterRecordingStartTime = 0
+                _ = self.platterPositionRecorder.finishRecording(at: 0)
                 self.platterRecorderLock.unlock()
                 #if DEBUG
                 self.timecodeNotationLock.lock()
@@ -4485,8 +4644,13 @@ final class MacCaptureEngine: NSObject, ObservableObject {
                 // debugLastROI intentionally left alone — it will be
                 // updated on the next analyzed frame.
                 #endif
+                // Measured in recorded media time, so camera/writer startup
+                // cannot consume any of the requested take length. This is the
+                // primary take boundary; the wall-clock backstop armed in
+                // `didStartRecordingTo` only covers the case where AVFoundation
+                // never reaches it.
                 self.movieOutput.maxRecordedDuration = CMTime(
-                    seconds: RoutineCaptureDefaults.defaultTakeLengthSeconds,
+                    seconds: requestedTakeDurationSeconds,
                     preferredTimescale: 600
                 )
                 self.movieOutput.startRecording(to: preparedRecording.mediaURL, recordingDelegate: self)
@@ -4512,6 +4676,7 @@ final class MacCaptureEngine: NSObject, ObservableObject {
                 return
             }
             Task { @MainActor in
+                self.isRoutineRecording = false
                 self.routineRecordingStatus = "Finishing routine recording"
                 if let sidecar = self.activeRoutineRecordingSidecar {
                     self.upsertRoutineTakeArtifactStatus(
@@ -4519,6 +4684,7 @@ final class MacCaptureEngine: NSObject, ObservableObject {
                     )
                 }
             }
+            self.closeMIDIRecordingWindow()
             self.movieOutput.stopRecording()
         }
     }
@@ -5529,6 +5695,45 @@ final class MacCaptureEngine: NSObject, ObservableObject {
 
     private static func audioChoice(from device: AVCaptureDevice) -> AudioInputDeviceChoice {
         AudioInputDeviceChoice(uniqueID: device.uniqueID, name: device.localizedName)
+    }
+
+    static func audioInputCaptureSuitability(
+        for device: AudioInputDeviceChoice
+    ) -> AudioInputCaptureSuitability {
+        let normalizedID = device.uniqueID
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .lowercased()
+        let normalizedName = device.name
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .lowercased()
+        let nameIdentifiesMicrophone = normalizedName.contains("microphone")
+            || normalizedName == "mic"
+            || normalizedName.hasPrefix("mic ")
+            || normalizedName.contains(" mic ")
+            || normalizedName.hasSuffix(" mic")
+        let nameIdentifiesBuiltInHardware = normalizedName.contains("built-in")
+            || normalizedName.contains("built in")
+            || normalizedName.contains("internal")
+            || normalizedName.contains("macbook")
+
+        if normalizedID == "builtinmicrophonedevice"
+            || (nameIdentifiesMicrophone && nameIdentifiesBuiltInHardware) {
+            return .builtInMicrophone
+        }
+        if nameIdentifiesMicrophone {
+            return .otherMicrophone
+        }
+        return .routedAudio
+    }
+
+    static func shouldBlockRoutineCapture(
+        audioInputSuitability: AudioInputCaptureSuitability?,
+        captureMode: CaptureSessionCaptureMode,
+        beatEngineMode: BeatEngineMode
+    ) -> Bool {
+        audioInputSuitability?.blocksIsolatedNoBeatCapture == true
+            && captureMode == .calibrationNoClick
+            && beatEngineMode == .silent
     }
 
     private static func isExactSeratoVirtualAudioDeviceName(_ name: String) -> Bool {
@@ -9814,12 +10019,27 @@ final class MacCaptureEngine: NSObject, ObservableObject {
     private func openMIDIInputForRecording() {
         midiCaptureLock.lock()
         capturedMidiCCEvents = []
-        midiRecordingStartTime = CACurrentMediaTime()
+        // The port is armed before AVFoundation confirms that media is being
+        // written. Keep the capture epoch closed until didStartRecording so
+        // pre-roll controller traffic cannot enter the take timeline.
+        midiRecordingStartTime = 0
         #if DEBUG
         debugMidiEventsCapturedThisTake = 0
         #endif
         midiCaptureLock.unlock()
         reconnectSelectedMIDIInput()
+    }
+
+    private func beginMIDIRecordingWindow(at hostTime: CFTimeInterval) {
+        midiCaptureLock.lock()
+        midiRecordingStartTime = hostTime
+        midiCaptureLock.unlock()
+    }
+
+    private func closeMIDIRecordingWindow() {
+        midiCaptureLock.lock()
+        midiRecordingStartTime = 0
+        midiCaptureLock.unlock()
     }
 
     private func closeMIDIInput() {
@@ -10354,11 +10574,17 @@ final class MacCaptureEngine: NSObject, ObservableObject {
         }
 
         let startTime = recordingStartTime ?? midiRecordingStartTime
-        guard startTime > 0 else { return }
+        // Zero until `didStartRecordingTo`, and `takeRelativeTime` refuses any
+        // instant before it, so controller traffic from the count-in and from
+        // writer startup never enters the take timeline.
+        guard let takeRelativeTime = RoutineTakeTimeline.takeRelativeTime(
+            hostTime: timestamp,
+            mediaStartHostTime: startTime
+        ) else { return }
 
         let event = CaptureCore.RawMixerMIDIEvent(
             timestamp: timestamp,
-            takeRelativeTime: max(0, timestamp - startTime),
+            takeRelativeTime: takeRelativeTime,
             deviceName: sourceName,
             channel: channel,
             controller: controller,
@@ -11248,6 +11474,12 @@ extension MacCaptureEngine: AVCaptureVideoDataOutputSampleBufferDelegate, AVCapt
 
 extension MacCaptureEngine: AVCaptureFileOutputRecordingDelegate {
     nonisolated func fileOutput(_ output: AVCaptureFileOutput, didStartRecordingTo fileURL: URL, from connections: [AVCaptureConnection]) {
+        // AVFoundation has confirmed the first sample buffer is being written.
+        // This — not `startRecording(to:)` — is take-relative zero for every
+        // capture source, and the instant the requested take length starts
+        // counting down.
+        let epoch = beginRoutineMediaEpoch(at: CACurrentMediaTime())
+        beginRoutineTakeTimelines(at: epoch.mediaStart)
         if let audioURL = pendingRoutineOutputAudioURL {
             do {
                 try scratchPlaybackController.beginRoutineOutputCapture(
@@ -11255,6 +11487,7 @@ extension MacCaptureEngine: AVCaptureFileOutputRecordingDelegate {
                 )
             } catch {
                 pendingRoutineOutputAudioURL = nil
+                endRoutineMediaEpoch()
                 let message = error.localizedDescription
                 Task { @MainActor in
                     self.reportRoutineRecordingIssue(message)
@@ -11263,6 +11496,10 @@ extension MacCaptureEngine: AVCaptureFileOutputRecordingDelegate {
                 return
             }
         }
+        scheduleRoutineTimedStop(
+            mediaStartHostTime: epoch.mediaStart,
+            requestedDurationSeconds: epoch.requestedDuration
+        )
         Task { @MainActor in
             self.isRoutineRecording = true
             self.routineRecordingStatus = "Recording \(fileURL.lastPathComponent)"
@@ -11270,6 +11507,11 @@ extension MacCaptureEngine: AVCaptureFileOutputRecordingDelegate {
     }
 
     nonisolated func fileOutput(_ output: AVCaptureFileOutput, didFinishRecordingTo outputFileURL: URL, from connections: [AVCaptureConnection], error: Error?) {
+        // One authoritative boundary: the media file has finished, so the take
+        // timeline closes here for MIDI, movement, platter, and the onboard
+        // audio tap alike.
+        endRoutineMediaEpoch()
+        closeMIDIRecordingWindow()
         pendingRoutineOutputAudioURL = nil
         audioQueue.sync {
             let snapshot = self.activeRoutineAudioCaptureWriter?.diagnosticsSnapshot()

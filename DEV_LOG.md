@@ -3710,3 +3710,87 @@ Nothing staged, committed, or pushed. HEAD remains `7761c09f`. The other 24 pre-
 - Fix (this commit): removed only lines 877-880 of `WatchMotionCaptureStore.swift` (the four extraneous braces). File is now 876 lines and brace-balanced (147/147); `git diff` for the file is exactly four deletions of a bare `}`. No other source change.
 - Re-validation after the fix: iOS Simulator build `** BUILD SUCCEEDED **` (incremental `/tmp` DerivedData); watchOS target build `** BUILD SUCCEEDED **` via `xcodebuild -target ScratchLabWatch -sdk watchos CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO build` (the `scripts/build.sh` method); focused Watch-artifact/export invariant `** TEST SUCCEEDED **` - `testAcknowledgedWatchCaptureCannotSilentlyExportWithoutArtifact`, `testUnlinkedWatchCaptureIsQuarantined`, `testWatchCaptureIsLinkedDuringReconciliation`, and `SessionExportRoundTripTests` all passed (0 failures).
 - Scope: this commit contains only the four-brace deletion and this log entry. It does not amend `5d93f14d`. Not pushed. Consolidation is not declared closed; recovery Trash batches (S1, S3ab) were not emptied and worktree cleanup stage S4 was not run.
+
+## 2026-09-04 - Block isolated built-in-microphone routine capture
+
+- Selected task: prevent isolated/no-beat macOS routine capture from starting when the selected input is the built-in microphone.
+- Root cause: built-in-microphone detection existed only as a view-local warning heuristic; neither capture readiness nor `MacCaptureEngine.startRoutineRecording` enforced it.
+- Files changed: `ScratchLabDesktop/Services/MacCaptureEngine.swift`, `ScratchLabDesktop/Views/MacAnalyzerView.swift`, `ScratchLabDesktopTests/CaptureReliabilityPhase1Tests.swift`, `TASKS.md`, and `DEV_LOG.md`.
+- Implemented: added one engine-owned input-suitability classifier, fail-closed isolated/no-beat readiness and corrective copy, and an engine-level guard before routine-recording state publication. Timed click/beat capture and routed or external inputs remain allowed, and Stop remains available for an active recording.
+- Verification: the required pre-edit `./scripts/build.sh` baseline passed. Four focused regression tests passed in both configured runs (8 executions total, 0 failures, 0 skips). `python3 scripts/test_capture_pipeline.py` passed 47/47. Post-change `./scripts/build.sh` passed 3,232 XCTest executions with 49 skips and 0 failures; macOS, iOS, and Watch builds all succeeded.
+- Follow-up: no code follow-up is required for this slice; a physical built-in-input UI check is optional confirmation, not a completion gate.
+
+## 2026-09-04 - Anchor the routine take boundary on confirmed media start; fix export levels, durations, dates, and the canonical validator
+
+- Selected task: audit and fix capture/export against the real archive `session_2026_09_04_h_baby_scratch_95_bpm` (49 MB, one take, `f8a91511-9452-4951-895a-bfd198425b4e`).
+- This entry replaces a draft appended earlier in the same uncommitted session. That draft was written before the final verification run and described three policies that were subsequently changed after review: a -1 dBFS mix ceiling that attenuated the captured scratch, a session date derived from the exporting machine's current time zone, and a fixture "re-export" whose manifest and date were patched by hand rather than produced by the app. Nothing was committed at any point; the numbers below are from the final tree only.
+
+### What the fixture actually showed
+
+- Traced timing from the fixture's own evidence, not from its manifest. `debug/take-1_movement_trace.json` gives `recordingStartHostTime = 405047.2542529168` and `finalizationHostTime = 405071.36508108344` (span 24.1108 s); `debug/take-1_raw_platter_debug.json` gives `endTime = 24.11985762498807`. Camera presentation times run to `405067.50092` (epoch + 20.2467 s) and the movie is 19.36895 s, so the writer took about 0.88 s from `startRecording(to:)` to its first written sample, and finalization (onboard-audio mux + sidecar write) consumed the remaining ~3.87 s.
+- Correction to the reported hypothesis: there was no timed-stop countdown in the macOS recorder at all. The only duration bound was `movieOutput.maxRecordedDuration`, hardcoded to `RoutineCaptureDefaults.defaultTakeLengthSeconds` (64 s), so the requested length was never enforced and the take ended when the operator stopped it.
+- Root cause of the "24 second" label: `SessionArchiveBuilder.preparePackage` derived each take's `duration` from `sidecar.endedAt - sidecar.startedAt`. That wall-clock span includes writer startup before the first media sample and mux/finalization after the last one, and both timestamps persist at whole-second ISO-8601 precision, which is why the 24.1198 s span serialised as exactly `24`. It was never a measurement of playable media.
+- Root cause of the timing offset: movement, platter, and MIDI epochs were stamped just before `movieOutput.startRecording(to:)`, roughly 0.88 s ahead of the media.
+
+### Capture side
+
+- `RoutineDetectedNotationBuilder.startedAt`, `platterRecordingStartTime`, and `movementTraceRecordingStartHostTime` are left unarmed at request time and rebased in `didStartRecordingTo` onto one confirmed media-start epoch. `RoutineTakeTimeline.takeRelativeTime` drops any instant before it instead of clamping to zero, and `RoutineDetectedNotationBuilder.rebaseEpoch(to:)` discards pre-roll strokes.
+- `maxRecordedDuration` now follows `RoutineCaptureDefaults.requestedTakeLengthSeconds(for:)`. It is measured in recorded media time, so startup cannot be charged against it. A wall-clock backstop is armed only from the confirmed media start.
+- `didFinishRecordingTo` is the single close for MIDI, movement, platter, and the onboard audio tap.
+
+### Planned versus actual duration
+
+- Added `CaptureSessionConfig.plannedTakeDurationSeconds` (the request, never overwritten) and `SessionExportMetadata.plannedTakeDurationSeconds`. `totalDurationSeconds` is now the measured playable duration read from the captured audio, with the wall-clock span kept only as a fallback for an unreadable artifact.
+- Backward compatibility: `plannedTakeDurationSeconds` decodes faithfully (absent stays absent) and the legacy fallback to `takeDurationSeconds` lives in `requestedTakeLengthSeconds(for:)`, at the point of use. An earlier attempt migrated on decode and was reverted: it made a decoded config unequal to the config it was written from, which broke `GuidedCaptureKeptSessionStore`'s idempotency check and caused `testGuidedKeptLedgerSingleTakeReloadIsDurableAndIdempotent` to fail (the ledger was rewritten with a 10 s later `updatedAt`, same byte count, different bytes). Decoding must not mutate data.
+- The legacy field was overloaded (export also wrote the measured aggregate into it), so for legacy data the two meanings genuinely cannot be told apart. Honouring the stored value is the documented choice, re-validated against the take-length range. Every capture through the current UI stamps `plannedTakeDurationSeconds` explicitly, so the fallback only applies to pre-existing records.
+
+### Generated audio levels
+
+- The export summed beat voices with no headroom (`beat_only` peaked at 1.218279, +1.714933 dBFS, 480 samples at or above full scale) and the mix hard clamped with `max(-1, min(1, ...))` (50 samples pinned to exactly +/-1.0).
+- Added `ScratchLabBeatEngine.GeneratedAudioHeadroom`: one attenuate-only linear gain, never a per-sample clamp. Generated stems are held to -1 dBFS.
+- The captured recording is never turned down to make room for generated audio. In `mixScratchWithTiming` the scratch runs at unity and headroom is found by lowering only the timing stem: the largest gain no greater than the nominal 0.55 for which `|scratch + gain * timing| <= ceiling` holds at every frame, solved exactly in one pass. The mix ceiling is -0.1 dBFS rather than -1 dBFS precisely because the fixture's captured scratch peaks at -0.234 dBFS and a -1 dBFS ceiling would have forced a ~0.77 dB attenuation of the recording. Only if the scratch alone exceeds the ceiling is the whole mix attenuated, and the applied `mixGain` is returned so that case is visible.
+
+### Session date and time zone
+
+- Documented in `docs/capture_spec_v1.md`. A session's date is the capture device's local calendar date at session start, used identically by the folder name, `session_manifest.json` `date`, and every take `date`; absolute instants stay UTC ISO-8601.
+- The zone is persisted, not inferred: `CaptureSessionConfig.sessionTimeZoneIdentifier` is stamped when the session identity is created and is what export reads. Deriving from the exporting machine's zone would re-date a session exported after travel or a DST change.
+- A legacy session with no recorded zone is dated in UTC. That fallback is deliberate and deterministic: such a session carries no evidence of where it was captured, so the only defensible date is a reproducible one, and UTC also matches what pre-policy exports already wrote for the manifest.
+- `CaptureCanonicalFormatting.sessionDateString` was UTC while `archiveFolderName` used an unconfigured local `DateFormatter`, which produced the `2026_09_04` / `2026-09-03` split. Both now go through one helper pair.
+
+### Canonical validator
+
+- `probe_audio_metadata` no longer uses stdlib `wave` (which rejects WAVE_FORMAT_IEEE_FLOAT). It prefers ffprobe and falls back to a new RIFF chunk walker handling format tags 1/3/0xFFFE, JUNK/FLLR padding, and odd-size alignment.
+- Take-log media paths resolve as written relative to the session root; `raw/` is tried only for a bare filename with no directory component, the legacy staging convention.
+- Slate/clap warnings are gated on the manifest `*_required` flags on the take-log side as well as the manifest side.
+- Added generated-stem peak enforcement and a folder/manifest/take date-consistency check.
+
+### Files changed
+
+`ScratchLab/Models/CaptureCore.swift`, `ScratchLab/Models/CaptureReliability.swift`, `ScratchLab/Services/ScratchLabBeatEngine.swift`, `ScratchLab/Services/SessionExportCoordinator.swift`, `ScratchLabDesktop/Services/MacCaptureEngine.swift`, `ScratchLabDesktop/Views/MacAnalyzerView.swift`, `ScratchLabDesktopTests/CaptureReliabilityPhase1Tests.swift`, `scripts/capture_pipeline_common.py`, `scripts/validate_session.py`, `scripts/test_capture_pipeline.py`, `scripts/fixtures/capture_pipeline/ffprobe_stub.py`, `docs/capture_spec_v1.md`, `TASKS.md`, `DEV_LOG.md`. `ScratchLab/Services/ClickTrackEngine.swift` and `ScratchLabDesktopTests/SessionReplayDocumentTests.swift` were already dirty before this task and were not touched.
+
+### Verification (final tree)
+
+- `./scripts/build.sh` exit code **0**. Capture-pipeline fixtures 58/58 OK (was 48/48; ten new app-export regressions). XCTest plan `** TEST SUCCEEDED **`: both configured runs executed **3,258 tests, 51 skipped, 0 failures (0 unexpected)**, 270.99 s and 270.70 s. iOS, macOS, and watchOS builds each `** BUILD SUCCEEDED **`.
+- New Swift suites: `RoutineTakeBoundaryTests` (7), `GeneratedAudioHeadroomTests` (4), `CaptureConfigMigrationTests` (9), `ScratchTimingMixLevelTests` (3). The two fixture-driven suites (`FixtureStemReExportTests`, `FixtureArchiveReExportTests`) skip unless `SCRATCHLAB_FIXTURE_SESSION` is set, since the 49 MB archive cannot live in the repository.
+
+### Fixture rebuild through the production export path
+
+- The fixture was rebuilt with `SessionArchiveBuilder.preparePackage` followed by `createArchive` — no hand-written manifest, take log, notation, stems, or folder name. Output `session_2026_09_04_h_baby_scratch_95_bpm.zip`, 36,163,330 bytes.
+- Export metadata: `plannedTakeDurationSeconds = 24`, `totalDurationSeconds = 19.2`, `sessionTimeZoneIdentifier = Pacific/Auckland`. Folder date `2026_09_04` = manifest `date` `2026-09-04` = take `date` `2026-09-04`; `createdAt` remains `2026-09-03T20:04:35Z`. `audio_source = scratchlab_output`, `watch_source = none`, `faderEvents` 0 — absent evidence still recorded as absent.
+- Stems, all 846,720 frames at 44,100 Hz (19.2 s):
+
+  | stem | peak | dBFS | samples >= full scale | sha256 (first 16) |
+  | --- | --- | --- | --- | --- |
+  | `scratch_only` | 0.973443 | -0.233790 | 0 | `a1b7f92875028a58` |
+  | `beat_only` | 0.891251 | -1.000000 | 0 | `b0c5a8d83e3c971f` |
+  | `scratch_with_beat` | 0.988553 | -0.100000 | 0 | `a270e2576c51dd5f` |
+  | `stems/take_001/scratch.wav` | 0.973443 | -0.233790 | 0 | `a1b7f92875028a58` |
+  | `stems/take_001/timing.wav` | 0.891251 | -1.000000 | 0 | `b0c5a8d83e3c971f` |
+
+- Applied gains: timing stem 0.313467 (from the nominal 0.55); mix gain 1.0, i.e. the captured scratch was attenuated by 0.000 dB. As shipped, `beat_only` was 1.218279 (+1.714933 dBFS, 480 samples at or above full scale) and `scratch_with_beat` was 1.000000 (0.000000 dBFS, 50 clamped samples).
+- Video `camA` unchanged: 19.36895 s, 581 frames, 29.9965 fps, sha256 `26b4c1928abf4448...`. Event maxima: `recordMovementEvents` 38 events to 19.171802 s, `mixerMidiEvents` 13,366 to 19.171802 s, `audioEvents` 27 to 19.200000 s, `faderEvents` 0.
+- `python3 scripts/validate_session.py` on the unzipped archive: **Status: PASS**, exit 0, zero warnings and zero errors. The archive as shipped produced FAIL with four warnings and five errors.
+
+### Not verified
+
+- No hardware take has been recorded since the change. The rebuilt archive proves export correctness; it does not prove that a new capture now records the requested duration. "A 24 second request yields about 24 seconds of playable media" rests on the boundary arithmetic and its unit regressions only. The fixture's own 4.8 s shortfall was an unenforced take length plus a wall-clock duration label, not a countdown racing AVFoundation. The physical Rane ONE MKII take remains an open, unchecked task in `TASKS.md`, with its required acceptance report listed there.
