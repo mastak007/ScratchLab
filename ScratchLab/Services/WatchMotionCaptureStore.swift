@@ -874,7 +874,3 @@ extension WatchMotionCaptureStore: WCSessionDelegate {
         handleLiveMotionMessageData(messageData, replyHandler: replyHandler)
     }
 }
-            }
-        }
-    }
-}
