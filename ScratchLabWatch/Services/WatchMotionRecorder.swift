@@ -31,6 +31,9 @@ final class WatchMotionRecorder: NSObject, ObservableObject {
     private var activeAcknowledgedAt: Date?
     private var firstSampleCoreMotionTimestamp: TimeInterval?
     private var collectedSamples: [WatchMotionSample] = []
+    private var activeCaptureID: UUID?
+    private var relayedSampleCount = 0
+    private var liveBatchSequence = 0
     private var elapsedTimer: Timer?
 
     // File names (not full paths — persisted files can move directories
@@ -64,6 +67,10 @@ final class WatchMotionRecorder: NSObject, ObservableObject {
         return String(format: "%02d:%02d", minutes, seconds)
     }
 
+    var isMotionCaptureAvailable: Bool {
+        motionManager.isDeviceMotionAvailable
+    }
+
     func startCapture(commandPayload: WatchCaptureCommandPayload? = nil, acknowledgedAt: Date? = nil) {
         guard motionManager.isDeviceMotionAvailable else {
             transferStatus = "Motion capture is unavailable on this watch."
@@ -74,9 +81,12 @@ final class WatchMotionRecorder: NSObject, ObservableObject {
         captureStartDate = startedAt
         activeCommandPayload = commandPayload
         activeAcknowledgedAt = acknowledgedAt
+        activeCaptureID = UUID()
         sampleLock.lock()
         firstSampleCoreMotionTimestamp = nil
         collectedSamples = []
+        relayedSampleCount = 0
+        liveBatchSequence = 0
         sampleLock.unlock()
         isRecording = true
         sampleCount = 0
@@ -129,6 +139,8 @@ final class WatchMotionRecorder: NSObject, ObservableObject {
             let count = self.collectedSamples.count
             self.sampleLock.unlock()
 
+            self.relayPendingLiveBatchesIfPossible()
+
             if count.isMultiple(of: 8) {
                 DispatchQueue.main.async {
                     self.sampleCount = count
@@ -164,6 +176,8 @@ final class WatchMotionRecorder: NSObject, ObservableObject {
             return
         }
 
+        relayPendingLiveBatchesIfPossible(isFinal: true, endedAt: endedAt)
+
         let timingMetadata = WatchMotionTimingMetadata.make(
             from: finishedSamples,
             requestedSampleInterval: 1.0 / sampleRateHz,
@@ -172,7 +186,7 @@ final class WatchMotionRecorder: NSObject, ObservableObject {
         elapsedTime = timingMetadata?.sensorDuration ?? wallClockDuration
 
         let captureSession = WatchMotionCaptureSession(
-            id: UUID(),
+            id: activeCaptureID ?? UUID(),
             sessionID: activeCommandPayload?.sessionID ?? "",
             takeID: activeCommandPayload?.takeID,
             commandID: activeCommandPayload?.commandID,
@@ -203,12 +217,19 @@ final class WatchMotionRecorder: NSObject, ObservableObject {
 
         activeCommandPayload = nil
         activeAcknowledgedAt = nil
+        activeCaptureID = nil
     }
 
     /// Asks the paired iPhone to run its real guided-capture Start/Stop action.
     /// The watch motion recorder then starts/stops only when the iPhone sends
     /// its existing linked-capture command with the authoritative take ID.
     func requestPairedPhoneCapture(_ command: PhoneCaptureCommandPayload.Command) {
+        guard command != .start || isMotionCaptureAvailable else {
+            isPhoneCaptureCommandPending = false
+            transferStatus = "Motion capture is unavailable on this watch."
+            return
+        }
+
         guard let watchSession,
               watchSession.activationState == .activated,
               watchSession.isCompanionAppInstalled,
@@ -291,6 +312,149 @@ final class WatchMotionRecorder: NSObject, ObservableObject {
             transferStatus = "Install ScratchLab on your paired device to receive watch captures."
         } else if !isRecording && sampleCount == 0 {
             transferStatus = "Ready"
+        }
+    }
+
+    private func relayPendingLiveBatchesIfPossible(isFinal: Bool = false, endedAt: Date? = nil) {
+        guard let watchSession,
+              watchSession.activationState == .activated,
+              watchSession.isReachable,
+              let payload = activeCommandPayload,
+              let context = WatchRelayTakeContext(payload: payload),
+              let captureID = activeCaptureID,
+              let startedAt = captureStartDate else { return }
+
+        let maximumBatchSize = 20
+        var sentFinalPacket = false
+
+        while true {
+            sampleLock.lock()
+            let pendingCount = collectedSamples.count - relayedSampleCount
+            let shouldSendSamples = pendingCount >= maximumBatchSize || (isFinal && pendingCount > 0)
+            guard shouldSendSamples else {
+                sampleLock.unlock()
+                break
+            }
+            let count = min(maximumBatchSize, pendingCount)
+            let range = relayedSampleCount..<(relayedSampleCount + count)
+            let samples = Array(collectedSamples[range])
+            relayedSampleCount += count
+            let isLastPacket = isFinal && relayedSampleCount == collectedSamples.count
+            let sequence = liveBatchSequence
+            liveBatchSequence += 1
+            sampleLock.unlock()
+
+            sendLiveBatch(
+                samples: samples,
+                sequence: sequence,
+                isFinal: isLastPacket,
+                endedAt: isLastPacket ? endedAt : nil,
+                captureID: captureID,
+                context: context,
+                payload: payload,
+                startedAt: startedAt,
+                session: watchSession
+            )
+            sentFinalPacket = sentFinalPacket || isLastPacket
+        }
+
+        if isFinal && !sentFinalPacket {
+            sampleLock.lock()
+            let sequence = liveBatchSequence
+            liveBatchSequence += 1
+            sampleLock.unlock()
+            sendLiveBatch(
+                samples: [],
+                sequence: sequence,
+                isFinal: true,
+                endedAt: endedAt,
+                captureID: captureID,
+                context: context,
+                payload: payload,
+                startedAt: startedAt,
+                session: watchSession
+            )
+        }
+    }
+
+    private func sendLiveBatch(
+        samples: [WatchMotionSample],
+        sequence: Int,
+        isFinal: Bool,
+        endedAt: Date?,
+        captureID: UUID,
+        context: WatchRelayTakeContext,
+        payload: WatchCaptureCommandPayload,
+        startedAt: Date,
+        session: WCSession
+    ) {
+        let batch = WatchMotionRelayBatch(
+            captureID: captureID,
+            context: context,
+            commandID: payload.commandID,
+            requestedAt: payload.requestedAt,
+            acknowledgedAt: activeAcknowledgedAt,
+            sourceDeviceName: WKInterfaceDevice.current().name,
+            appVersion: appVersionString,
+            sampleRateHz: sampleRateHz,
+            startedAt: startedAt,
+            endedAt: endedAt,
+            sequence: sequence,
+            isFinal: isFinal,
+            samples: samples
+        )
+        guard let data = try? WatchMotionCaptureCodec.encoder.encode(batch) else { return }
+        sendEncodedLiveBatch(data, batch: batch, session: session, attempt: 0)
+    }
+
+    private func sendEncodedLiveBatch(
+        _ data: Data,
+        batch: WatchMotionRelayBatch,
+        session: WCSession,
+        attempt: Int
+    ) {
+        session.sendMessageData(data, replyHandler: { [weak self] replyData in
+            DispatchQueue.main.async {
+                guard let self else { return }
+                let acknowledgement = try? WatchMotionCaptureCodec.decoder.decode(
+                    WatchMotionRelayAcknowledgement.self,
+                    from: replyData
+                )
+                guard acknowledgement?.accepts(batch) == true else {
+                    self.retryLiveBatch(data, batch: batch, session: session, attempt: attempt)
+                    return
+                }
+                self.log("live batch \(batch.sequence) acknowledged")
+            }
+        }, errorHandler: { [weak self] error in
+            DispatchQueue.main.async {
+                guard let self else { return }
+                self.log("live batch \(batch.sequence) relay failed: \(error.localizedDescription)")
+                self.retryLiveBatch(data, batch: batch, session: session, attempt: attempt)
+            }
+        })
+    }
+
+    private func retryLiveBatch(
+        _ data: Data,
+        batch: WatchMotionRelayBatch,
+        session: WCSession,
+        attempt: Int
+    ) {
+        let nextAttempt = attempt + 1
+        guard nextAttempt <= 8 else {
+            log("live batch \(batch.sequence) exhausted immediate retries; durable file transfer remains queued")
+            return
+        }
+
+        let delay = min(0.15 * Double(nextAttempt), 0.75)
+        DispatchQueue.main.asyncAfter(deadline: .now() + delay) { [weak self] in
+            guard let self else { return }
+            guard session.activationState == .activated, session.isReachable else {
+                self.retryLiveBatch(data, batch: batch, session: session, attempt: nextAttempt)
+                return
+            }
+            self.sendEncodedLiveBatch(data, batch: batch, session: session, attempt: nextAttempt)
         }
     }
 
@@ -413,6 +577,8 @@ extension WatchMotionRecorder: WCSessionDelegate {
             command: command,
             sessionID: message["sessionID"] as? String ?? "",
             takeID: (takeIDText?.isEmpty == true) ? nil : takeIDText,
+            takeNumber: message["takeNumber"] as? Int,
+            watchWrist: message["watchWrist"] as? String,
             requestedAt: requestedAt
         )
     }

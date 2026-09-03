@@ -3,6 +3,7 @@
 // Main application entry point
 
 import SwiftUI
+import Combine
 #if canImport(UIKit)
 import UIKit
 #endif
@@ -67,6 +68,7 @@ private struct RootContainerView: View {
     @StateObject private var sessionUploadManager = SessionUploadManager()
     @AppStorage("localNetworkRationaleAccepted") private var localNetworkRationaleAccepted = false
     @AppStorage(MIDISelectionSettings.selectedSourceIDKey) private var selectedMIDISourceID = ""
+    private let watchRelayHeartbeat = Timer.publish(every: 2, on: .main, in: .common).autoconnect()
 
     init() {
         let transportState = TransportState()
@@ -111,8 +113,18 @@ private struct RootContainerView: View {
                 configureMIDILearnDevice()
             }
             .onChange(of: companionRelayBroadcaster.connectedPeerNames) { _, peers in
-                guard !peers.isEmpty else { return }
-                syncWatchStateWithMac()
+                watchMotionCaptureStore.updateMacConnection(isConnected: !peers.isEmpty)
+                if !peers.isEmpty {
+                    syncWatchStateWithMac()
+                }
+            }
+            .onReceive(watchRelayHeartbeat) { _ in
+                watchMotionCaptureStore.sendRelayHeartbeat()
+                companionRelayBroadcaster.sendWatchAvailability(
+                    isPaired: watchMotionCaptureStore.isWatchPaired,
+                    isInstalled: watchMotionCaptureStore.isWatchAppInstalled,
+                    isReachable: watchMotionCaptureStore.isWatchReachable
+                )
             }
             .onChange(of: scenePhase) { _, newPhase in
                 guard newPhase == .active else {
@@ -180,9 +192,18 @@ private struct RootContainerView: View {
                 isReachable: isReachable
             )
         }
+        watchMotionCaptureStore.onLiveMotionBatch = { batch in
+            companionRelayBroadcaster.sendWatchMotionBatch(batch)
+        }
+        watchMotionCaptureStore.onRelayLifecycle = { event, context, detail in
+            companionRelayBroadcaster.sendWatchRelayLifecycle(event, context: context, detail: detail)
+        }
         companionRelayBroadcaster.onWatchCaptureAcknowledged = { id in
             watchMotionCaptureStore.markAcknowledgedByMac(id)
         }
+        watchMotionCaptureStore.updateMacConnection(
+            isConnected: !companionRelayBroadcaster.connectedPeerNames.isEmpty
+        )
     }
 
     private func refreshWatchCapturePipelineIfNeeded() {
@@ -213,7 +234,9 @@ private struct RootContainerView: View {
         case .start:
             watchMotionCaptureStore.requestRemoteCaptureStart(
                 sessionID: command.payload.sessionID,
-                takeID: command.payload.takeID ?? ""
+                takeID: command.payload.takeID ?? "",
+                takeNumber: command.payload.takeNumber,
+                watchWrist: command.payload.watchWrist
             ) { reply in
                 companionRelayBroadcaster.sendWatchControlStatus(reply)
             }

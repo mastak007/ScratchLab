@@ -744,6 +744,8 @@ struct TakeArtifactStatusSnapshot: Equatable, Sendable, Identifiable {
     let takeNumber: Int
     let bpm: Int?
     let targetLabel: String?
+    let sessionConfig: CaptureSessionConfig?
+    let startedAt: Date?
     let audioSourceURL: URL?
     let videoSourceURL: URL?
     let audioExists: Bool
@@ -756,7 +758,50 @@ struct TakeArtifactStatusSnapshot: Equatable, Sendable, Identifiable {
     let detectedLabel: String?
     let labelConfidence: Double?
 
+    init(
+        takeID: String,
+        takeNumber: Int,
+        bpm: Int?,
+        targetLabel: String?,
+        sessionConfig: CaptureSessionConfig? = nil,
+        startedAt: Date? = nil,
+        audioSourceURL: URL?,
+        videoSourceURL: URL?,
+        audioExists: Bool,
+        videoExists: Bool,
+        audioBytes: Int64,
+        videoBytes: Int64,
+        finalizedAt: Date?,
+        readiness: TakeArtifactReadiness,
+        detectedNotation: CaptureCore.DetectedNotationSnapshot?,
+        detectedLabel: String?,
+        labelConfidence: Double?
+    ) {
+        self.takeID = takeID
+        self.takeNumber = takeNumber
+        self.bpm = bpm
+        self.targetLabel = targetLabel
+        self.sessionConfig = sessionConfig
+        self.startedAt = startedAt
+        self.audioSourceURL = audioSourceURL
+        self.videoSourceURL = videoSourceURL
+        self.audioExists = audioExists
+        self.videoExists = videoExists
+        self.audioBytes = audioBytes
+        self.videoBytes = videoBytes
+        self.finalizedAt = finalizedAt
+        self.readiness = readiness
+        self.detectedNotation = detectedNotation
+        self.detectedLabel = detectedLabel
+        self.labelConfidence = labelConfidence
+    }
+
     var id: String { takeID }
+
+    var recordedDuration: TimeInterval? {
+        guard let startedAt, let finalizedAt else { return nil }
+        return max(0, finalizedAt.timeIntervalSince(startedAt))
+    }
 }
 
 enum ArtifactPreflight {
@@ -3975,6 +4020,8 @@ struct SessionArchiveBuilder: Sendable {
         let targetLabel = sidecar.sessionConfig?.scratchType.flatMap {
             $0 == .unknown ? nil : $0.title
         }
+        let sessionConfig = sidecar.sessionConfig
+        let startedAt = sidecar.startedAt
 
         if sidecar.recordingStatus == "recording" {
             return TakeArtifactStatusSnapshot(
@@ -3982,6 +4029,8 @@ struct SessionArchiveBuilder: Sendable {
                 takeNumber: sidecar.appLocalTakeNumber,
                 bpm: bpm,
                 targetLabel: targetLabel,
+                sessionConfig: sessionConfig,
+                startedAt: startedAt,
                 audioSourceURL: audioURL,
                 videoSourceURL: mediaURL,
                 audioExists: fileManager.fileExists(atPath: audioURL.path),
@@ -4002,6 +4051,8 @@ struct SessionArchiveBuilder: Sendable {
                 takeNumber: sidecar.appLocalTakeNumber,
                 bpm: bpm,
                 targetLabel: targetLabel,
+                sessionConfig: sessionConfig,
+                startedAt: startedAt,
                 audioSourceURL: audioURL,
                 videoSourceURL: mediaURL,
                 audioExists: fileManager.fileExists(atPath: audioURL.path),
@@ -4027,6 +4078,8 @@ struct SessionArchiveBuilder: Sendable {
                 takeNumber: sidecar.appLocalTakeNumber,
                 bpm: bpm,
                 targetLabel: targetLabel,
+                sessionConfig: sessionConfig,
+                startedAt: startedAt,
                 audioSourceURL: audioURL,
                 videoSourceURL: mediaURL,
                 audioExists: fileManager.fileExists(atPath: audioURL.path),
@@ -4046,6 +4099,8 @@ struct SessionArchiveBuilder: Sendable {
                 takeNumber: sidecar.appLocalTakeNumber,
                 bpm: bpm,
                 targetLabel: targetLabel,
+                sessionConfig: sessionConfig,
+                startedAt: startedAt,
                 audioSourceURL: audioURL,
                 videoSourceURL: mediaURL,
                 audioExists: fileManager.fileExists(atPath: audioURL.path),
@@ -4073,6 +4128,8 @@ struct SessionArchiveBuilder: Sendable {
                     takeNumber: sidecar.appLocalTakeNumber,
                     bpm: bpm,
                     targetLabel: targetLabel,
+                    sessionConfig: sessionConfig,
+                    startedAt: startedAt,
                     audioSourceURL: audioURL,
                     videoSourceURL: mediaURL,
                     audioExists: false,
@@ -4099,6 +4156,8 @@ struct SessionArchiveBuilder: Sendable {
                 takeNumber: sidecar.appLocalTakeNumber,
                 bpm: bpm,
                 targetLabel: targetLabel,
+                sessionConfig: sessionConfig,
+                startedAt: startedAt,
                 audioSourceURL: audioURL,
                 videoSourceURL: mediaURL,
                 audioExists: audioCheck.exists,
@@ -4118,6 +4177,8 @@ struct SessionArchiveBuilder: Sendable {
                 takeNumber: sidecar.appLocalTakeNumber,
                 bpm: bpm,
                 targetLabel: targetLabel,
+                sessionConfig: sessionConfig,
+                startedAt: startedAt,
                 audioSourceURL: audioURL,
                 videoSourceURL: mediaURL,
                 audioExists: true,
@@ -4137,6 +4198,8 @@ struct SessionArchiveBuilder: Sendable {
             takeNumber: sidecar.appLocalTakeNumber,
             bpm: bpm,
             targetLabel: targetLabel,
+            sessionConfig: sessionConfig,
+            startedAt: startedAt,
             audioSourceURL: audioURL,
             videoSourceURL: mediaURL,
             audioExists: true,
@@ -4708,6 +4771,10 @@ struct SessionArchiveBuilder: Sendable {
                 sessionID: package.metadata.sessionID,
                 fileManager: fileManager
             )
+            if take.syncStatus == CaptureWatchSyncState.acknowledged.rawValue,
+               take.watchCaptureSession == nil {
+                throw SessionExportError.missingRequiredFiles
+            }
             // A watch file is required only when the sidecar names one or the
             // take's motion claim actually rests on the Watch. Controller
             // platter evidence is motion in its own right and has no watch

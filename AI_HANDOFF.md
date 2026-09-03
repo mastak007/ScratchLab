@@ -4468,3 +4468,24 @@ inside a Copy Bundle Resources phase. Audit-only - do not modify the project.
 - Signed archive and App Store Connect export both succeeded.
 - Stem rendering now uses actual canonical scratch frames, not planned take duration; focused regression proved all three stems are equal length.
 - Remaining verification: rerun the complete desktop XCTest plan and capture/export one fresh physical Rane take to confirm equal stem lengths in field hardware output.
+
+
+## 2026-08-31 - App Store Connect build 20 uploaded
+
+- Source branch: `feature/ios-capture-camera-ux`; HEAD is `9fbbd65c`, plus uncommitted release-warning fixes and the build-number bump.
+- Uploaded: ScratchLab 1.0.1 (20), bundle `com.machelpnz.scratchlab`, team `2DDKGL33BU`, with Watch build 20.
+- Archive: `build/ScratchLab-1.0.1-20.xcarchive`.
+- App Store Connect accepted the upload and reported the package is processing.
+- Release audit fixed SwiftUI representable publication timing, migrated the macOS movie muxer to async AVAsset export, removed the reported non-Sendable finalization captures, and repaired the stale onboard-output source contract.
+- Full desktop validation still has the established 11 unrelated layout, DVS playback, and profile-contract failures. No release-delta test is failing.
+- Nothing from this release-warning/upload pass was committed or pushed. Do not upload build 20 again; use build 21 for any changed binary.
+
+## 2026-09-04 Watch relay/export handoff
+
+- Live Watch packets now require an exact acknowledgement and retry on rejection or transport error.
+- iPhone and macOS accept packets matching the pending take context, closing the start-reply race.
+- An acknowledged Watch request can no longer be downgraded to `notRequested` by a later stop reply.
+- Export now fails loudly if Watch capture was acknowledged but no Watch artifact is linked.
+- The supplied ZIP contains no Watch payload; it must be replaced by a newly recorded take after updated apps are installed.
+- No cleanup was performed. The user declined deletion, so all build data and worktrees remain preserved.
+- Build and tests remain outstanding because the local approval backend rejected the Xcode process before launch.

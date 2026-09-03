@@ -194,15 +194,26 @@ final class TimecodePrototypeProfileTests: XCTestCase {
     /// pair 3/4" or "if forward sounds swapped, trust your ears" — this
     /// keeps that reproducible from the app itself rather than requiring a
     /// search through hardware-session history.
-    func testRaneOneMkiiDebugPresetHasSetupNoteOtherPresetsDoNot() {
-        XCTAssertNotNil(
-            TimecodeControlPreset.raneOneMkiiDebug.setupNote,
+    func testHardwareDebugPresetSetupNotesRemainVendorScoped() throws {
+        let raneNote = try XCTUnwrap(TimecodeControlPreset.raneOneMkiiDebug.setupNote)
+        XCTAssertTrue(
+            raneNote.contains("Rane ONE MKII"),
             "The validated Rane hardware setup must remain discoverable from the preset itself"
         )
-        for preset in TimecodeControlPreset.allCases where preset != .raneOneMkiiDebug {
+
+        let traktorNote = try XCTUnwrap(TimecodeControlPreset.nativeInstrumentsTraktorDebug.setupNote)
+        XCTAssertTrue(traktorNote.contains("Native Instruments Traktor"))
+        XCTAssertFalse(traktorNote.contains("Rane ONE MKII"))
+
+        let presetsWithoutHardwareNotes: [TimecodeControlPreset] = [
+            .scratchLabPrototype,
+            .genericDVS,
+            .manual
+        ]
+        for preset in presetsWithoutHardwareNotes {
             XCTAssertNil(
                 preset.setupNote,
-                "\(preset) should not carry the Rane-specific physical setup note"
+                "\(preset) should not carry hardware-specific setup guidance"
             )
         }
     }

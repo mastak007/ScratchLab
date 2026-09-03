@@ -462,16 +462,26 @@ struct CompanionCameraView: View {
                             captureStore.toggleComboTag()
                         },
                         onKeep: {
-                            captureStore.keepTake(
-                                watchMotionURL: linkedWatchMotionURL(for: review),
-                                platform: currentPlatformName
-                            )
+                            let watchMotionURL = linkedWatchMotionURL(for: review)
+                            let platform = currentPlatformName
+                            Task { @MainActor in
+                                await Task.yield()
+                                captureStore.keepTake(
+                                    watchMotionURL: watchMotionURL,
+                                    platform: platform
+                                )
+                            }
                         },
                         onKeepAndNext: {
-                            captureStore.keepAndNext(
-                                watchMotionURL: linkedWatchMotionURL(for: review),
-                                platform: currentPlatformName
-                            )
+                            let watchMotionURL = linkedWatchMotionURL(for: review)
+                            let platform = currentPlatformName
+                            Task { @MainActor in
+                                await Task.yield()
+                                captureStore.keepAndNext(
+                                    watchMotionURL: watchMotionURL,
+                                    platform: platform
+                                )
+                            }
                         },
                         onRetry: {
                             captureStore.retryTake()
@@ -1126,7 +1136,9 @@ struct CompanionCameraView: View {
         if watchMotionCaptureStore.isWatchReachable || hasRecentMotionImport {
             return "Motion Active"
         }
-        return captureStore.sessionSetup.drillMode.motionOptional ? "Motion Optional" : "Motion Missing"
+        return captureStore.sessionSetup.drillMode.motionOptional
+            ? "Watch Optional · Recording Continues"
+            : "Motion Missing"
     }
 
     private var captureHealthText: String {
@@ -1724,6 +1736,9 @@ private enum CaptureReadinessValidator {
         } else if context.motionConnected || context.hasRecentMotionImport {
             motionStatus = .ready
             motionDetail = "Motion ready"
+        } else if context.motionOptional {
+            motionStatus = .ready
+            motionDetail = "Watch optional; recording continues without watch"
         } else {
             motionStatus = .warning
             motionDetail = "Motion not connected"

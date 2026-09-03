@@ -9515,15 +9515,21 @@ enum CaptureCore {
 
         func withWatchSync(_ reply: WatchCaptureControlReply) -> LocalRecordingSidecar {
             var updated = self
-            updated.watchSyncState = reply.syncState
-            updated.watchCommandID = reply.commandID
-            updated.watchRequestedAt = updated.watchRequestedAt ?? reply.acknowledgedAt
-            updated.watchAcknowledgedAt = reply.acknowledgedAt
+            let preservesAcknowledgedCapture = updated.watchSyncState == .acknowledged
+                && reply.syncState == .notRequested
+            if !preservesAcknowledgedCapture {
+                updated.watchSyncState = reply.syncState
+                updated.watchCommandID = reply.commandID
+                updated.watchRequestedAt = updated.watchRequestedAt ?? reply.acknowledgedAt
+                updated.watchAcknowledgedAt = reply.acknowledgedAt
+            }
             updated.auditTrail.append(
                 CaptureAuditEvent(
                     timestamp: reply.acknowledgedAt ?? Date(),
                     category: "watch_sync",
-                    detail: "Watch sync state set to \(reply.syncState.rawValue)."
+                    detail: preservesAcknowledgedCapture
+                        ? "Watch stop acknowledged; linked motion remains required."
+                        : "Watch sync state set to \(reply.syncState.rawValue)."
                 )
             )
             return updated
@@ -9552,6 +9558,22 @@ enum CaptureCore {
                 CaptureAuditEvent(
                     category: "watch_linked",
                     detail: "Linked watch capture \(fileName) to \(takeID)."
+                )
+            )
+            return updated
+        }
+
+        func withWatchRelayInterruption(
+            _ detail: String,
+            recordedAt: Date = Date()
+        ) -> LocalRecordingSidecar {
+            var updated = self
+            updated.watchSyncState = .failed
+            updated.auditTrail.append(
+                CaptureAuditEvent(
+                    timestamp: recordedAt,
+                    category: "watch_relay_interrupted",
+                    detail: detail
                 )
             )
             return updated

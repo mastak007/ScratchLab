@@ -28,6 +28,17 @@ final class WatchMotionCaptureStore: NSObject, ObservableObject {
     @Published private(set) var isWatchReachable = false
     @Published private(set) var remoteCaptureState: RemoteCaptureState = .idle
     @Published private(set) var macAcknowledgedCaptureIDs: Set<UUID> = []
+    @Published private(set) var isMacConnected = false
+    @Published private(set) var activeRelayContext: WatchRelayTakeContext?
+    private var pendingRelayContext: WatchRelayTakeContext?
+    /// The Watch sends its final motion batch asynchronously, so its stop reply can arrive
+    /// first. Keep only that exact take authorized for a short drain window rather than
+    /// dropping the final batch after `activeRelayContext` is cleared.
+    private var recentlyEndedRelayContext: WatchRelayTakeContext?
+    private var finalLiveRelayContext: WatchRelayTakeContext?
+    @Published private(set) var relayInterruptionReason: String?
+    @Published private(set) var hadRequiredRelayConnections = false
+    @Published private(set) var latestLiveMotionBatchAt: Date?
 
     var onImportedCapture: ((ImportedWatchMotionCapture) -> Void)?
     /// Handles Start/Stop Take requests initiated on Apple Watch. The iPhone
@@ -37,6 +48,18 @@ final class WatchMotionCaptureStore: NSObject, ObservableObject {
     /// (isPaired, isInstalled, isReachable) — fired whenever the local WCSession's view of the
     /// watch changes, so the Mac bridge can relay a fresh snapshot over MultipeerConnectivity.
     var onAvailabilityChange: ((Bool, Bool, Bool) -> Void)?
+    var onLiveMotionBatch: ((WatchMotionRelayBatch) -> Void)?
+    var onRelayLifecycle: ((WatchRelayLifecycleEvent, WatchRelayTakeContext?, String?) -> Void)?
+
+    var relayState: WatchRelayFlowState {
+        WatchRelayStateResolver.resolve(
+            isWatchReachable: isWatchReachable,
+            isMacConnected: isMacConnected,
+            activeContext: activeRelayContext,
+            hadRequiredConnections: hadRequiredRelayConnections,
+            interruptionReason: relayInterruptionReason
+        )
+    }
 
     private let fileManager = FileManager.default
     private let processingQueue = DispatchQueue(label: "com.scratchlab.watch-motion-import")
@@ -172,16 +195,22 @@ final class WatchMotionCaptureStore: NSObject, ObservableObject {
     func requestRemoteCaptureStart(
         sessionID: String,
         takeID: String,
+        takeNumber: Int? = nil,
+        watchWrist: String? = nil,
         commandID: String = UUID().uuidString.lowercased(),
         completion: @escaping (WatchCaptureControlReply) -> Void
     ) {
+        let payload = WatchCaptureCommandPayload(
+            commandID: commandID,
+            command: .start,
+            sessionID: sessionID,
+            takeID: takeID,
+            takeNumber: takeNumber,
+            watchWrist: watchWrist
+        )
+        pendingRelayContext = WatchRelayTakeContext(payload: payload)
         requestRemoteCaptureCommand(
-            WatchCaptureCommandPayload(
-                commandID: commandID,
-                command: .start,
-                sessionID: sessionID,
-                takeID: takeID
-            ),
+            payload,
             completion: completion
         )
     }
@@ -201,6 +230,33 @@ final class WatchMotionCaptureStore: NSObject, ObservableObject {
             ),
             completion: completion
         )
+    }
+
+    func updateMacConnection(isConnected: Bool) {
+        let wasConnected = isMacConnected
+        isMacConnected = isConnected
+        reconcileRelayHealth(
+            lostConnectionDetail: wasConnected && !isConnected ? "Mac connection was lost." : nil
+        )
+        guard isConnected else { return }
+        onRelayLifecycle?(wasConnected ? .reconnect : .hello, activeRelayContext, nil)
+        publishReadyLifecycleIfNeeded()
+    }
+
+    func retryRelayConnection() {
+        activateIfNeeded()
+        relayInterruptionReason = nil
+        reconcileRelayHealth(lostConnectionDetail: nil)
+        onAvailabilityChange?(isWatchPaired, isWatchAppInstalled, isWatchReachable)
+        if isMacConnected {
+            onRelayLifecycle?(.reconnect, activeRelayContext, nil)
+            publishReadyLifecycleIfNeeded()
+        }
+    }
+
+    func sendRelayHeartbeat() {
+        guard isMacConnected else { return }
+        onRelayLifecycle?(.heartbeat, activeRelayContext, nil)
     }
 
     private func loadStoredSessions() {
@@ -259,6 +315,12 @@ final class WatchMotionCaptureStore: NSObject, ObservableObject {
         print("[WATCH-DEBUG] watch session state paired=\(isWatchPaired) installed=\(isWatchAppInstalled) reachable=\(isWatchReachable)")
         #endif
         onAvailabilityChange?(isWatchPaired, isWatchAppInstalled, isWatchReachable)
+        reconcileRelayHealth(
+            lostConnectionDetail: !isWatchReachable && activeRelayContext != nil
+                ? "Apple Watch connection was lost during the active take."
+                : nil
+        )
+        publishReadyLifecycleIfNeeded()
 
         if !session.isPaired {
             connectionSummary = "Pair your watch with this device to capture wrist motion."
@@ -360,14 +422,18 @@ final class WatchMotionCaptureStore: NSObject, ObservableObject {
 
         remoteCaptureState = .requested
         let formatter = ISO8601DateFormatter()
-        let message: [String: Any] = [
+        var message: [String: Any] = [
             "kind": WatchCaptureCommandPayload.packetKind,
             "commandID": payload.commandID,
             "command": payload.command.rawValue,
             "sessionID": payload.sessionID,
             "takeID": payload.takeID ?? "",
+            "watchWrist": payload.watchWrist ?? "",
             "requestedAt": formatter.string(from: payload.requestedAt)
         ]
+        if let takeNumber = payload.takeNumber {
+            message["takeNumber"] = takeNumber
+        }
         watchSession.sendMessage(message, replyHandler: { reply in
             let syncState = CaptureWatchSyncState(rawValue: reply["syncState"] as? String ?? "")
                 ?? Self.legacySyncState(for: reply["status"] as? String)
@@ -386,23 +452,85 @@ final class WatchMotionCaptureStore: NSObject, ObservableObject {
 
             DispatchQueue.main.async {
                 self.remoteCaptureState = Self.remoteState(for: controlReply)
+                self.applyRelayControlResult(payload: payload, reply: controlReply)
                 completion(controlReply)
             }
         }, errorHandler: { error in
             let detail = error.localizedDescription
             DispatchQueue.main.async {
                 self.remoteCaptureState = .failed(detail)
-                completion(
-                    WatchCaptureControlReply(
+                let reply = WatchCaptureControlReply(
                         commandID: payload.commandID,
                         sessionID: payload.sessionID,
                         takeID: payload.takeID,
                         syncState: .failed,
                         detail: detail
                     )
-                )
+                self.applyRelayControlResult(payload: payload, reply: reply)
+                completion(reply)
             }
         })
+    }
+
+    private func applyRelayControlResult(
+        payload: WatchCaptureCommandPayload,
+        reply: WatchCaptureControlReply
+    ) {
+        switch payload.command {
+        case .start:
+            if reply.syncState == .acknowledged, let context = WatchRelayTakeContext(payload: payload) {
+                pendingRelayContext = nil
+                recentlyEndedRelayContext = nil
+                finalLiveRelayContext = nil
+                activeRelayContext = context
+                relayInterruptionReason = nil
+                hadRequiredRelayConnections = true
+                onRelayLifecycle?(.takeBegin, context, nil)
+            } else if reply.syncState != .requested {
+                pendingRelayContext = nil
+                let detail = reply.detail ?? "Watch motion capture did not acknowledge."
+                relayInterruptionReason = detail
+                onRelayLifecycle?(.error, WatchRelayTakeContext(payload: payload), detail)
+            }
+        case .stop:
+            if reply.syncState == .notRequested {
+                pendingRelayContext = nil
+                let completedContext = activeRelayContext
+                if let completedContext, finalLiveRelayContext != completedContext {
+                    recentlyEndedRelayContext = completedContext
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 5) { [weak self] in
+                        guard self?.recentlyEndedRelayContext == completedContext else { return }
+                        self?.recentlyEndedRelayContext = nil
+                    }
+                } else {
+                    recentlyEndedRelayContext = nil
+                }
+                onRelayLifecycle?(.takeEnd, completedContext, nil)
+                activeRelayContext = nil
+                relayInterruptionReason = nil
+                publishReadyLifecycleIfNeeded()
+            } else if reply.syncState != .requested {
+                let detail = reply.detail ?? "Watch motion capture did not stop cleanly."
+                relayInterruptionReason = detail
+                onRelayLifecycle?(.error, activeRelayContext, detail)
+            }
+        }
+    }
+
+    private func reconcileRelayHealth(lostConnectionDetail: String?) {
+        let hasRequiredConnections = isMacConnected && isWatchReachable
+        if hasRequiredConnections {
+            hadRequiredRelayConnections = true
+            relayInterruptionReason = nil
+        } else if let lostConnectionDetail, hadRequiredRelayConnections || activeRelayContext != nil {
+            relayInterruptionReason = lostConnectionDetail
+            onRelayLifecycle?(.error, activeRelayContext, lostConnectionDetail)
+        }
+    }
+
+    private func publishReadyLifecycleIfNeeded() {
+        guard isMacConnected, isWatchReachable, activeRelayContext == nil else { return }
+        onRelayLifecycle?(.relayReady, nil, nil)
     }
 
     private static func remoteState(for reply: WatchCaptureControlReply) -> RemoteCaptureState {
@@ -692,5 +820,61 @@ extension WatchMotionCaptureStore: WCSessionDelegate {
         print("[WATCH-DEBUG] iPhone received watch file name=\(file.fileURL.lastPathComponent)")
         #endif
         importTransferredFile(file)
+    }
+
+    private func handleLiveMotionMessageData(
+        _ messageData: Data,
+        replyHandler: ((Data) -> Void)?
+    ) {
+        guard let batch = try? WatchMotionCaptureCodec.decoder.decode(
+            WatchMotionRelayBatch.self,
+            from: messageData
+        ) else {
+            replyHandler?(Data())
+            return
+        }
+
+        DispatchQueue.main.async {
+            let isAuthorized = batch.kind == WatchMotionRelayBatch.packetKind
+                && (batch.context == self.activeRelayContext
+                    || batch.context == self.pendingRelayContext
+                    || batch.context == self.recentlyEndedRelayContext)
+
+            if isAuthorized {
+                self.latestLiveMotionBatchAt = Date()
+                self.onLiveMotionBatch?(batch)
+                if batch.isFinal {
+                    self.finalLiveRelayContext = batch.context
+                    if self.recentlyEndedRelayContext == batch.context {
+                        self.recentlyEndedRelayContext = nil
+                    }
+                }
+            } else {
+                self.lastImportStatus = "Rejected stale or unknown Watch motion for \(batch.context.takeID)."
+            }
+
+            let acknowledgement = WatchMotionRelayAcknowledgement(
+                batch: batch,
+                accepted: isAuthorized
+            )
+            let acknowledgementData = (try? WatchMotionCaptureCodec.encoder.encode(acknowledgement)) ?? Data()
+            replyHandler?(acknowledgementData)
+        }
+    }
+
+    func session(_ session: WCSession, didReceiveMessageData messageData: Data) {
+        handleLiveMotionMessageData(messageData, replyHandler: nil)
+    }
+
+    func session(
+        _ session: WCSession,
+        didReceiveMessageData messageData: Data,
+        replyHandler: @escaping (Data) -> Void
+    ) {
+        handleLiveMotionMessageData(messageData, replyHandler: replyHandler)
+    }
+}
+            }
+        }
     }
 }

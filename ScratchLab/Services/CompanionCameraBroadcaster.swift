@@ -174,7 +174,7 @@ final class CompanionCameraBroadcaster: NSObject, ObservableObject {
     private lazy var session = MCSession(peer: peerID, securityIdentity: nil, encryptionPreference: .required)
     private lazy var advertiser = MCNearbyServiceAdvertiser(
         peer: peerID,
-        discoveryInfo: ["role": "camera"],
+        discoveryInfo: ["role": "companion"],
         serviceType: serviceType
     )
 
@@ -359,6 +359,36 @@ final class CompanionCameraBroadcaster: NSObject, ObservableObject {
                     self.connectionStatus = "Unable to relay watch motion to Mac. Check connection."
                 }
             }
+        }
+    }
+
+    func sendWatchMotionBatch(_ batch: WatchMotionRelayBatch) {
+        captureQueue.async {
+            guard !self.session.connectedPeers.isEmpty,
+                  let encoded = try? PropertyListEncoder().encode(batch) else { return }
+            do {
+                // Five small batches per second is low enough for reliable delivery, and a
+                // missing sequence prevents the Mac assembler from producing an exportable
+                // Watch artifact. Capture integrity is more important than shaving latency.
+                try self.session.send(encoded, toPeers: self.session.connectedPeers, with: .reliable)
+            } catch {
+                DispatchQueue.main.async {
+                    self.connectionStatus = "Live watch motion relay was interrupted."
+                }
+            }
+        }
+    }
+
+    func sendWatchRelayLifecycle(
+        _ event: WatchRelayLifecycleEvent,
+        context: WatchRelayTakeContext?,
+        detail: String?
+    ) {
+        captureQueue.async {
+            guard !self.session.connectedPeers.isEmpty else { return }
+            let packet = WatchRelayLifecyclePacket(event: event, context: context, detail: detail)
+            guard let encoded = try? PropertyListEncoder().encode(packet) else { return }
+            try? self.session.send(encoded, toPeers: self.session.connectedPeers, with: .reliable)
         }
     }
 
@@ -1087,14 +1117,18 @@ extension CompanionCameraBroadcaster: MCSessionDelegate {
             self.connectedPeerNames = session.connectedPeers.map(\.displayName).sorted()
             switch state {
             case .connected:
-                self.connectionStatus = "Streaming \(self.selectedCameraPosition.title.lowercased()) camera to \(peerID.displayName)"
+                self.connectionStatus = self.isRunning
+                    ? "Streaming \(self.selectedCameraPosition.title.lowercased()) camera to \(peerID.displayName)"
+                    : "Watch relay connected to \(peerID.displayName)"
             case .connecting:
                 self.connectionStatus = "Connecting to \(peerID.displayName)"
             case .notConnected:
                 self.isBroadcasting = false
                 self.connectionStatus = self.connectedPeerNames.isEmpty
                     ? "Searching for nearby ScratchLab"
-                    : "Streaming \(self.selectedCameraPosition.title.lowercased()) camera to \(self.connectedPeerNames.joined(separator: ", "))"
+                    : (self.isRunning
+                        ? "Streaming \(self.selectedCameraPosition.title.lowercased()) camera to \(self.connectedPeerNames.joined(separator: ", "))"
+                        : "Watch relay connected to \(self.connectedPeerNames.joined(separator: ", "))")
             @unknown default:
                 self.connectionStatus = "Connection state changed"
             }

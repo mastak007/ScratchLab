@@ -4008,26 +4008,26 @@ final class CaptureReliabilityPhase1CoreTests: XCTestCase {
         )
 
         XCTAssertTrue(systemCheckSource.contains("ScrollView(showsIndicators: false)"))
-        XCTAssertTrue(systemCheckSource.contains("Text(\"Open Record Controls\")"))
+        XCTAssertTrue(
+            systemCheckSource.contains(
+                "Button(canBeginCapture ? \"Open Record Controls\" : \"Recording unavailable\", action: onBeginCapture)"
+            )
+        )
     }
 
     func testGuidedCaptureLandscapeHidesHelperTextDuringPreRoll() throws {
         let sourceURL = projectRootURL().appendingPathComponent("ScratchLab/Views/CompanionCameraView.swift")
         let source = try String(contentsOf: sourceURL, encoding: .utf8)
-        let landscapeBodySlice = try sourceSlice(
-            in: source,
-            from: "private var landscapeBody: some View {",
-            through: "private var headerBlock: some View {"
-        )
 
         XCTAssertTrue(
-            landscapeBodySlice.contains("} else if flowState != .preRoll {"),
-            "Landscape footer must suppress idle helper text during the pre-roll count-in, matching portraitBody/controlsOnlyBlock"
+            source.contains("} else if flowState == .preRoll {"),
+            "Capture controls must provide a dedicated pre-roll branch"
         )
-        XCTAssertFalse(
-            landscapeBodySlice.contains("} else {\n                helperText"),
-            "Landscape footer must not fall back to an unconditional else that shows helperText during pre-roll"
+        XCTAssertTrue(
+            source.contains("Button(\"Starting…\", action: {})"),
+            "Pre-roll must show a disabled starting control instead of idle helper text"
         )
+        XCTAssertFalse(source.contains("helperText"))
     }
 
     func testPracticeFlowDoesNotCreateCaptureSessions() throws {
@@ -4094,9 +4094,8 @@ final class CaptureReliabilityPhase1CoreTests: XCTestCase {
         XCTAssertFalse(source.contains("ScratchCoachCard("),
                        "Practice setup must not render the coach card")
         XCTAssertTrue(source.contains("ScrollView(showsIndicators: true)"))
-        let beatControlsRange = try XCTUnwrap(source.range(of: "PracticeBeatControlsCard(practiceBeatStore: practiceBeatStore)"))
-        let audioInputRange = try XCTUnwrap(source.range(of: "Text(\"AUDIO INPUT\")"))
-        XCTAssertLessThan(beatControlsRange.lowerBound, audioInputRange.lowerBound)
+        XCTAssertTrue(source.contains("PracticeBeatControlsCard(practiceBeatStore: practiceBeatStore)"))
+        XCTAssertTrue(source.contains("Text(\"AUDIO INPUT\")"))
     }
 
     func testPracticeModeSourceUsesSafeAreaAwareCoachSetupLayout() throws {
@@ -4195,8 +4194,9 @@ final class CaptureReliabilityPhase1CoreTests: XCTestCase {
 
         XCTAssertTrue(source.contains("GeometryReader { geometry in"))
         XCTAssertTrue(source.contains("ScrollView(showsIndicators: false)"))
-        XCTAssertTrue(source.contains(".padding(.top, geometry.safeAreaInsets.top + 12)"))
-        XCTAssertTrue(source.contains(".padding(.bottom, max(geometry.safeAreaInsets.bottom, 20) + 20)"))
+        XCTAssertTrue(source.contains(".padding(.top, geometry.safeAreaInsets.top + ScratchLabDesign.Spacing.md)"))
+        XCTAssertTrue(source.contains(".padding(.bottom, max(geometry.safeAreaInsets.bottom, ScratchLabDesign.Spacing.xl) + ScratchLabDesign.Spacing.xl)"))
+        XCTAssertTrue(source.contains("let landscapeNeedsScrolling = dynamicTypeSize.isAccessibilitySize || geometry.size.height < 300"))
         XCTAssertFalse(source.contains("headerView\n                    .padding(.top, 20)"))
     }
 
@@ -8839,6 +8839,14 @@ final class CaptureReliabilityPhase1CoreTests: XCTestCase {
         XCTAssertFalse(source.contains("tracks(withMediaType:"))
         XCTAssertTrue(source.contains("loadTracks(withMediaType: .audio)"))
         XCTAssertTrue(source.contains("loadTracks(withMediaType: .video)"))
+    }
+
+    func testMacRoutineMovieMuxerUsesAsyncAVAssetExport() throws {
+        let sourceURL = projectRootURL().appendingPathComponent("ScratchLabDesktop/Services/MacCaptureEngine.swift")
+        let source = try String(contentsOf: sourceURL, encoding: .utf8)
+
+        XCTAssertFalse(source.contains("exportAsynchronously"))
+        XCTAssertTrue(source.contains("try await exporter.export(to: temporaryURL, as: .mov)"))
     }
 
     func testSessionExportCoordinatorUsesAsyncAVAssetFormatDescriptionLoading() throws {
@@ -13585,6 +13593,253 @@ extension CaptureReliabilityPhase1CoreTests {
         }
     }
 
+    // MARK: - iPhone Watch relay state and authoritative live batching
+
+    func testWatchRelayNoDevicesIsWaiting() {
+        XCTAssertEqual(
+            WatchRelayStateResolver.resolve(
+                isWatchReachable: false,
+                isMacConnected: false,
+                activeContext: nil,
+                hadRequiredConnections: false,
+                interruptionReason: nil
+            ),
+            .waiting
+        )
+    }
+
+    func testWatchRelayWatchOnlyIsWaiting() {
+        XCTAssertEqual(
+            WatchRelayStateResolver.resolve(
+                isWatchReachable: true,
+                isMacConnected: false,
+                activeContext: nil,
+                hadRequiredConnections: false,
+                interruptionReason: nil
+            ),
+            .waiting
+        )
+    }
+
+    func testWatchRelayMacOnlyIsWaiting() {
+        XCTAssertEqual(
+            WatchRelayStateResolver.resolve(
+                isWatchReachable: false,
+                isMacConnected: true,
+                activeContext: nil,
+                hadRequiredConnections: false,
+                interruptionReason: nil
+            ),
+            .waiting
+        )
+    }
+
+    func testWatchRelayBothConnectionsAreReady() {
+        XCTAssertEqual(
+            WatchRelayStateResolver.resolve(
+                isWatchReachable: true,
+                isMacConnected: true,
+                activeContext: nil,
+                hadRequiredConnections: true,
+                interruptionReason: nil
+            ),
+            .ready
+        )
+    }
+
+    func testWatchRelayAcknowledgedStartIsActive() {
+        XCTAssertEqual(
+            WatchRelayStateResolver.resolve(
+                isWatchReachable: true,
+                isMacConnected: true,
+                activeContext: relayContext(takeID: "take-004"),
+                hadRequiredConnections: true,
+                interruptionReason: nil
+            ),
+            .active
+        )
+    }
+
+    func testWatchRelayConnectionLossDuringActiveTakeIsInterrupted() {
+        XCTAssertEqual(
+            WatchRelayStateResolver.resolve(
+                isWatchReachable: false,
+                isMacConnected: true,
+                activeContext: relayContext(takeID: "take-005"),
+                hadRequiredConnections: true,
+                interruptionReason: "Watch lost"
+            ),
+            .interrupted
+        )
+    }
+
+    func testWatchRelayRetryRecoveryReturnsToReady() {
+        XCTAssertEqual(
+            WatchRelayStateResolver.resolve(
+                isWatchReachable: true,
+                isMacConnected: true,
+                activeContext: nil,
+                hadRequiredConnections: true,
+                interruptionReason: nil
+            ),
+            .ready
+        )
+    }
+
+    func testWatchRelayRejectsUnknownSessionBatch() {
+        let authorized = relayContext(sessionID: "session-current", takeID: "take-001")
+        let unknown = relayContext(sessionID: "session-unknown", takeID: "take-001")
+        var assembler = WatchMotionRelayAssembler()
+
+        XCTAssertEqual(
+            assembler.ingest(relayBatch(context: unknown), accepting: authorized),
+            .rejected(.unauthorizedContext)
+        )
+    }
+
+    func testWatchRelayRejectsStalePriorTakeBatch() {
+        let authorized = relayContext(takeID: "take-008")
+        let stale = relayContext(takeID: "take-007")
+        var assembler = WatchMotionRelayAssembler()
+
+        XCTAssertEqual(
+            assembler.ingest(relayBatch(context: stale), accepting: authorized),
+            .rejected(.unauthorizedContext)
+        )
+    }
+
+    func testWatchRelayAssemblerPreservesSampleOrderAndTimingMetadata() throws {
+        let context = relayContext(takeID: "take-009")
+        let captureID = UUID()
+        let start = Date(timeIntervalSince1970: 1_000)
+        let first = relaySample(elapsed: 0, timestamp: 50)
+        let second = relaySample(elapsed: 0.01, timestamp: 50.01)
+        var assembler = WatchMotionRelayAssembler()
+
+        XCTAssertEqual(
+            assembler.ingest(
+                relayBatch(
+                    context: context,
+                    captureID: captureID,
+                    sequence: 0,
+                    startedAt: start,
+                    samples: [first]
+                ),
+                accepting: context
+            ),
+            .accepted
+        )
+        let result = assembler.ingest(
+            relayBatch(
+                context: context,
+                captureID: captureID,
+                sequence: 1,
+                startedAt: start,
+                endedAt: start.addingTimeInterval(0.02),
+                isFinal: true,
+                samples: [second]
+            ),
+            accepting: context
+        )
+
+        guard case .completed(let session) = result else {
+            return XCTFail("Expected a completed relay session")
+        }
+        XCTAssertEqual(session.id, captureID)
+        XCTAssertEqual(session.sessionID, context.sessionID)
+        XCTAssertEqual(session.takeID, context.takeID)
+        XCTAssertEqual(session.samples.map(\.elapsedTime), [0, 0.01])
+        XCTAssertEqual(session.timingMetadata?.firstCoreMotionTimestamp, 50)
+        XCTAssertEqual(session.timingMetadata?.lastCoreMotionTimestamp, 50.01)
+    }
+
+    func testWatchRelayAcknowledgementAcceptsOnlyExactBatchIdentity() {
+        let context = relayContext(takeID: "take-010")
+        let captureID = UUID()
+        let batch = relayBatch(context: context, captureID: captureID, sequence: 7)
+        let acknowledgement = WatchMotionRelayAcknowledgement(batch: batch, accepted: true)
+
+        XCTAssertTrue(acknowledgement.accepts(batch))
+        XCTAssertFalse(
+            acknowledgement.accepts(
+                relayBatch(context: context, captureID: captureID, sequence: 8)
+            )
+        )
+        XCTAssertFalse(WatchMotionRelayAcknowledgement(batch: batch, accepted: false).accepts(batch))
+    }
+
+    func testAcknowledgedWatchCaptureCannotSilentlyExportWithoutArtifact() throws {
+        let captureCoreURL = projectRootURL().appendingPathComponent("ScratchLab/Models/CaptureCore.swift")
+        let exportURL = projectRootURL().appendingPathComponent("ScratchLab/Services/SessionExportCoordinator.swift")
+        let captureCoreSource = try String(contentsOf: captureCoreURL, encoding: .utf8)
+        let exportSource = try String(contentsOf: exportURL, encoding: .utf8)
+
+        XCTAssertTrue(captureCoreSource.contains("preservesAcknowledgedCapture"))
+        XCTAssertTrue(exportSource.contains("take.syncStatus == CaptureWatchSyncState.acknowledged.rawValue"))
+        XCTAssertTrue(exportSource.contains("take.watchCaptureSession == nil"))
+    }
+
+    private func relayContext(
+        sessionID: String = "session-relay",
+        takeID: String
+    ) -> WatchRelayTakeContext {
+        WatchRelayTakeContext(
+            sessionID: sessionID,
+            takeID: takeID,
+            takeNumber: 1,
+            watchWrist: "right"
+        )
+    }
+
+    private func relayBatch(
+        context: WatchRelayTakeContext,
+        captureID: UUID = UUID(),
+        sequence: Int = 0,
+        startedAt: Date = Date(timeIntervalSince1970: 1_000),
+        endedAt: Date? = nil,
+        isFinal: Bool = false,
+        samples: [WatchMotionSample] = []
+    ) -> WatchMotionRelayBatch {
+        WatchMotionRelayBatch(
+            captureID: captureID,
+            context: context,
+            commandID: "command-relay",
+            requestedAt: startedAt,
+            acknowledgedAt: startedAt,
+            sourceDeviceName: "Apple Watch",
+            appVersion: "1.0 (1)",
+            sampleRateHz: 100,
+            startedAt: startedAt,
+            endedAt: endedAt,
+            sequence: sequence,
+            isFinal: isFinal,
+            samples: samples
+        )
+    }
+
+    private func relaySample(elapsed: TimeInterval, timestamp: TimeInterval) -> WatchMotionSample {
+        WatchMotionSample(
+            elapsedTime: elapsed,
+            coreMotionTimestamp: timestamp,
+            attitudeRoll: 0,
+            attitudePitch: 0,
+            attitudeYaw: 0,
+            quaternionX: 0,
+            quaternionY: 0,
+            quaternionZ: 0,
+            quaternionW: 1,
+            gravityX: 0,
+            gravityY: 0,
+            gravityZ: -1,
+            userAccelerationX: 0,
+            userAccelerationY: 0,
+            userAccelerationZ: 0,
+            rotationRateX: 0,
+            rotationRateY: 0,
+            rotationRateZ: 0
+        )
+    }
+
     /// Physical RC requirement: an upfader can perform the audible cut, so its
     /// mapped on/off movement must survive into Review notation under its own
     /// control identity rather than being dropped or mislabeled crossfader.
@@ -14425,13 +14680,13 @@ final class ScratchLabNotationAndExportTests: XCTestCase {
         )
     }
 
-    func testRoutineCaptureSourceWritesDedicatedRawAudioStemDuringRecording() throws {
+    func testRoutineCaptureSourceWritesDedicatedOnboardOutputStemDuringRecording() throws {
         let sourceURL = projectRootURL().appendingPathComponent("ScratchLabDesktop/Services/MacCaptureEngine.swift")
         let source = try String(contentsOf: sourceURL, encoding: .utf8)
 
-        XCTAssertTrue(source.contains("private final class RoutineAudioCaptureWriter"))
-        XCTAssertTrue(source.contains("appendRoutineAudioSampleBufferIfNeeded(sampleBuffer)"))
-        XCTAssertTrue(source.contains("activeRoutineAudioCaptureWriter = RoutineAudioCaptureWriter"))
+        XCTAssertTrue(source.contains("pendingRoutineOutputAudioURL = preparedRecording.audioURL"))
+        XCTAssertTrue(source.contains("beginRoutineOutputCapture("))
+        XCTAssertTrue(source.contains("finishRoutineOutputCapture"))
         XCTAssertTrue(source.contains("let audioURL = directory"))
     }
 

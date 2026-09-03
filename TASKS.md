@@ -1,3 +1,5 @@
+- [x] Implement the Figma Watch Relay flow on iPhone (2026-09-01). The iPhone now acts only as the Watch-to-Mac relay, presents truthful Waiting/Ready/Active/Interrupted states from live connectivity and authoritative Mac take context, batches the existing 100 Hz Watch samples without replacing durable transfer, rejects stale session/take data, and records interruptions in Mac sidecar diagnostics. Ten relay regressions and the 59-test focused suite passed; iOS, macOS, and watchOS builds succeeded. Physical three-device RC remains covered by the open release-candidate task below.
+
 - [ ] Physically verify standalone macOS AHHH capture, review-video audio, and sample-aligned export stems. The canonical stereo WAV is captured from ScratchLab's post-mixer output starting with the real movie-recording callback; finalization replaces the MOV's multichannel RANE track with onboard stereo; generated beat and mixed stems derive their exact duration from the captured scratch WAV. Confirm one fresh take has audible AHHH in Review and equal scratch/beat/mixed frame counts. Release gate remains pending.
 
 - [x] Validate the standalone-only audio product change (2026-08-31). Karl explicitly retired `External Serato`; source now defaults/migrates to local ScratchLab AHHH and removes ownership selectors/copy. Five focused export contracts passed twice; fixtures passed 47/47; the configured gate matched the exact established 11-invocation/9-name baseline with 366/366 Swift Testing cases per repetition; isolated macOS, iOS Simulator, and Watch Simulator builds succeeded. Earlier External Serato RC tasks below are superseded historical evidence, not current release requirements.
@@ -2093,3 +2095,12 @@ Companion to the planning amendment landed in `AI_CONTEXT.md`, `docs/current_arc
   - Reconciliation (docs only): this record + the SUPERSEDED banner above; a new 2026-08-29 entry in `DEV_LOG.md`; `AI_HANDOFF.md` BLOCKER → RESOLVED; the `AI_HANDOFF/next_prompt.md` stop-gate cleared. No Swift, project-graph, scheme, or WIP change.
 - [x] Fix physical Review selecting a stale take and dropping mapped upfader notation (2026-08-31). Session `8ad16543...` proved take 2 had 71 movement events and 18 crossfader events while Review showed Take 1; 125 CC28 events were stored unmapped. Review now rescans on entry, CoreMIDI persists all three mapped fader identities, and shared derivation emits independently labeled crossfader/left-upfader/right-upfader events. Focused tests passed twice, surrounding regressions passed 49/49 per repetition, and macOS/iOS/Watch builds succeeded.
 - [ ] Physically retest the Review/fader fix with only one validated macOS ScratchLab process: record a fresh take with platter, crossfader, and right-upfader cuts; verify Review selects that newest take and visibly shows platter plus both fader controls.
+- [x] Audit the shipping app against Figma and ASC static requirements; align the implementation map and Watch relay states, and add the Watch motion privacy purpose string (2026-09-03).
+
+## App Store Connect readiness - 2026-09-03
+- [x] Resolve remaining iOS and macOS App Store Connect blockers and stage corrected 1.0.1 builds for review.
+- [ ] Submit the staged iOS and macOS review items only after explicit owner confirmation.
+
+- [ ] Verify and close the Watch relay/export reliability fix on physical hardware.
+  - Implementation added exact ACK/retry delivery, pending-context race handling, acknowledged-intent preservation, and fail-loud export validation.
+  - Remaining: build iOS/macOS/Watch targets, install iPhone and Watch apps, capture a new take, and verify the exported Watch CSV and manifest source.

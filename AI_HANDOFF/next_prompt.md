@@ -433,3 +433,9 @@ iOS Debug build (`CODE_SIGNING_ALLOWED=NO`) + macOS build + macOS `build-for-tes
 Build the macOS target and fix only compile errors introduced by the post-mixer routine capture and automatic review-MOV audio replacement. Then load onboard AHHH, record a fresh RANE-controlled take, and verify the new `Onboard AHHH output` meter responds while `Hardware input signal` remains diagnostic-only. Review must play the scratch in sync, the MOV must contain one stereo audio track rather than the old multichannel RANE track, and exported scratch WAV must be audible on both sides. Do not return to RANE 13/14 routing; standalone AHHH no longer uses that input as its canonical source.
 
 Release continuation: build 1.0.1 (19) has an exported IPA at `build/AppStore-1.0.1-19/ScratchLab.ipa`. Before submission, rerun the complete desktop XCTest plan and make one fresh Rane take, then verify scratch-only, beat-only, scratch-with-beat, and review video durations match the actual captured take.
+
+## App Store build 20 continuation
+
+ScratchLab 1.0.1 build 20 was uploaded successfully from `feature/ios-capture-camera-ux` at HEAD `9fbbd65c` plus uncommitted release-warning fixes and the build-number bump. Confirm processing in App Store Connect and inspect any Apple warnings. Do not upload build 20 again; use build 21 for any changed binary. Commit or push only with Karl's explicit approval.
+
+Continue the Watch relay/export fix from 2026-09-04. Do not delete any worktree, duplicate, archive, screenshot, or generated build data unless the user gives new explicit approval. First build the macOS and generic iOS schemes, confirming the Watch target compiles. Then install the updated iPhone and Watch apps, run a physical Mac+iPhone+Watch take, export it, and verify that the manifest reports a Watch source and that `watch/` contains the motion CSV. Preserve all unrelated dirty changes. The prior supplied ZIP has an empty `watch/` directory and cannot be repaired.

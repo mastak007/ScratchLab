@@ -5,8 +5,9 @@
 // Loads bundled WAVs into PCM buffers; maps accumulated platter steps to
 // sample position; schedules short audio segments for forward/backward scratch.
 //
-// Owned by MacCaptureEngine. Output = system default audio device.
-// No MIDI routing. No scoring. No Rane audio device routing.
+// Owned by MacCaptureEngine. Output follows connected Rane hardware when
+// available, otherwise it falls back to the system default audio device.
+// No MIDI LED messages. No scoring.
 //
 // Thread model: load, ensureLoadedForDVSDrive, pausePlayback, resumePlayback,
 // unload, and setCrossfader are safe to call from any thread, including the
@@ -16,7 +17,9 @@
 // runSynchronouslyOnAudioQueue), serialized with the async work above, so the
 // caller blocks for a bounded scheduling operation instead of racing it.
 
+import AudioToolbox
 import AVFoundation
+import CoreAudio
 import Foundation
 import Synchronization
 
@@ -37,6 +40,24 @@ final class ScratchSamplePlaybackController {
     private let engine = AVAudioEngine()
     private let playerNode = AVAudioPlayerNode()
     private let varispeedNode = AVAudioUnitVarispeed()
+    private let scratchOutputMixerNode = AVAudioMixerNode()
+    private let raneOutputMixerNode = AVAudioMixerNode()
+    private let macMonitorEngine = AVAudioEngine()
+    private let macMonitorPlayerNode = AVAudioPlayerNode()
+    private let macMonitorQueue = DispatchQueue(
+        label: "com.machelpnz.scratchlab.mac-output-monitor",
+        qos: .userInteractive
+    )
+    private var macMonitorOutputDeviceID: AudioDeviceID?
+    private var macMonitorFormat: AVAudioFormat?
+    private var macMonitorEngineStarted = false
+    private var macMonitorTapInstalled = false
+    private var macMonitorPendingBufferCount = 0
+    private let macMonitorMaximumPendingBufferCount = 12
+    private var requestedOutputDeviceID: AudioDeviceID?
+    private var requestedOutputDeviceName = "System Default"
+    private var activeOutputDeviceID: AudioDeviceID?
+    private var activeOutputDeviceName = "System Default"
 
     // MARK: - Production routine output capture
 
@@ -1677,16 +1698,39 @@ final class ScratchSamplePlaybackController {
         self.schedulingClock = schedulingClock
         self.sampleResourceRoot = sampleResourceRoot
         audioQueue.setSpecific(key: audioQueueKey, value: ())
+        macMonitorOutputDeviceID = Self.defaultOutputDeviceID()
         engine.attach(playerNode)
         engine.attach(varispeedNode)
+        engine.attach(scratchOutputMixerNode)
+        engine.attach(raneOutputMixerNode)
         engine.connect(playerNode, to: varispeedNode, format: nil)
-        engine.connect(varispeedNode, to: engine.mainMixerNode, format: nil)
+        engine.connect(varispeedNode, to: scratchOutputMixerNode, format: nil)
         engine.attach(dvsContinuousRenderer.node)
-        engine.connect(dvsContinuousRenderer.node, to: engine.mainMixerNode, format: nil)
+        engine.connect(dvsContinuousRenderer.node, to: scratchOutputMixerNode, format: nil)
+        engine.connect(scratchOutputMixerNode, to: engine.mainMixerNode, format: nil)
+        engine.disconnectNodeOutput(engine.mainMixerNode)
+        engine.connect(engine.mainMixerNode, to: raneOutputMixerNode, format: nil)
+        raneOutputMixerNode.pan = 0.0
+        engine.connect(raneOutputMixerNode, to: engine.outputNode, format: nil)
+        macMonitorEngine.attach(macMonitorPlayerNode)
 #if DEBUG
         dvsGrainRingPreallocate()
         OutputCaptureDiagnosticsControl.shared.register(self)
 #endif
+    }
+
+    /// Routes ScratchLab's standalone scratch audio to the physical controller
+    /// selected by `MacCaptureEngine`. Passing nil restores the current macOS
+    /// default output. The change is serialized with all other engine work and
+    /// deferred while a canonical routine-output capture tap is active.
+    func setPreferredOutputDevice(deviceID: AudioDeviceID?, deviceName: String?) {
+        audioQueue.async { [weak self] in
+            guard let self else { return }
+            self.requestedOutputDeviceID = deviceID
+            let trimmedDeviceName = deviceName?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            self.requestedOutputDeviceName = trimmedDeviceName.isEmpty ? "System Default" : trimmedDeviceName
+            self.applyRequestedOutputDeviceIfNeeded()
+        }
     }
 
     deinit {
@@ -1703,7 +1747,249 @@ final class ScratchSamplePlaybackController {
 
     // MARK: - Engine start/stop (audioQueue or deinit only)
 
+    private func applyRequestedOutputDeviceIfNeeded() {
+        guard let requestedOutputDeviceID,
+              requestedOutputDeviceID != kAudioObjectUnknown,
+              requestedOutputDeviceID != activeOutputDeviceID else {
+            return
+        }
+
+        // Keep the primary engine on the Mac default output for direct, low-latency
+        // monitoring. The secondary engine mirrors the signal to the Rane hardware.
+        macMonitorOutputDeviceID = requestedOutputDeviceID
+        activeOutputDeviceID = requestedOutputDeviceID
+        activeOutputDeviceName = requestedOutputDeviceName
+
+        macMonitorQueue.async { [weak self] in
+            guard let self else { return }
+            self.macMonitorPlayerNode.stop()
+            self.macMonitorEngine.stop()
+            self.macMonitorFormat = nil
+            self.macMonitorPendingBufferCount = 0
+        }
+    }/// Maps the stereo scratch mix to Rane USB outputs 3/4. Core Audio uses
+    /// zero-based destination indices, so indices 2/3 feed physical mixer Channel 2.
+    private static func applyRaneChannel2ChannelMap(
+    to audioUnit: AudioUnit?,
+    deviceID: AudioDeviceID,
+    sourceChannelCount: AVAudioChannelCount
+) -> OSStatus {
+    guard let audioUnit else { return -50 }
+
+    let destinationChannelCount = outputChannelCount(for: deviceID)
+    guard destinationChannelCount >= 4 else { return -50 }
+
+    var channelMap = Array(repeating: Int32(-1), count: destinationChannelCount)
+    channelMap[2] = 0
+    channelMap[3] = sourceChannelCount > 1 ? 1 : 0
+
+    return channelMap.withUnsafeMutableBytes { bytes in
+        AudioUnitSetProperty(
+            audioUnit,
+            kAudioOutputUnitProperty_ChannelMap,
+            kAudioUnitScope_Input,
+            0,
+            bytes.baseAddress,
+            UInt32(bytes.count)
+        )
+    }
+}
+
+    private static func outputChannelCount(for deviceID: AudioDeviceID) -> Int {
+    var address = AudioObjectPropertyAddress(
+        mSelector: kAudioDevicePropertyStreamConfiguration,
+        mScope: kAudioDevicePropertyScopeOutput,
+        mElement: kAudioObjectPropertyElementMain
+    )
+    var propertySize: UInt32 = 0
+    guard AudioObjectGetPropertyDataSize(
+        deviceID,
+        &address,
+        0,
+        nil,
+        &propertySize
+    ) == noErr,
+    propertySize >= MemoryLayout<AudioBufferList>.size else {
+        return 0
+    }
+
+    let rawBuffer = UnsafeMutableRawPointer.allocate(
+        byteCount: Int(propertySize),
+        alignment: MemoryLayout<AudioBufferList>.alignment
+    )
+    defer { rawBuffer.deallocate() }
+
+    guard AudioObjectGetPropertyData(
+        deviceID,
+        &address,
+        0,
+        nil,
+        &propertySize,
+        rawBuffer
+    ) == noErr else {
+        return 0
+    }
+
+    let bufferList = rawBuffer.assumingMemoryBound(to: AudioBufferList.self)
+    return UnsafeMutableAudioBufferListPointer(bufferList).reduce(0) {
+        $0 + Int($1.mNumberChannels)
+    }
+}
+
+    private static func defaultOutputDeviceID() -> AudioDeviceID? {
+        var address = AudioObjectPropertyAddress(
+            mSelector: kAudioHardwarePropertyDefaultOutputDevice,
+            mScope: kAudioObjectPropertyScopeGlobal,
+            mElement: kAudioObjectPropertyElementMain
+        )
+        var deviceID = AudioDeviceID(kAudioObjectUnknown)
+        var size = UInt32(MemoryLayout<AudioDeviceID>.size)
+        let status = AudioObjectGetPropertyData(
+            AudioObjectID(kAudioObjectSystemObject),
+            &address,
+            0,
+            nil,
+            &size,
+            &deviceID
+        )
+        guard status == noErr, deviceID != AudioDeviceID(kAudioObjectUnknown) else { return nil }
+        return deviceID
+    }
+
+    private func installMacMonitorTapIfNeeded() {
+        guard !macMonitorTapInstalled else { return }
+        let format = scratchOutputMixerNode.outputFormat(forBus: 0)
+        guard format.sampleRate > 0, format.channelCount > 0 else { return }
+
+        scratchOutputMixerNode.installTap(
+            onBus: 0,
+            bufferSize: 128,
+            format: format
+        ) { [weak self] buffer, _ in
+            self?.enqueueMacMonitorBuffer(buffer)
+        }
+        macMonitorTapInstalled = true
+    }
+
+    private func removeMacMonitorTapIfNeeded() {
+        guard macMonitorTapInstalled else { return }
+        scratchOutputMixerNode.removeTap(onBus: 0)
+        macMonitorTapInstalled = false
+    }
+
+    private func enqueueMacMonitorBuffer(_ sourceBuffer: AVAudioPCMBuffer) {
+        guard let copiedBuffer = AVAudioPCMBuffer(
+            pcmFormat: sourceBuffer.format,
+            frameCapacity: sourceBuffer.frameLength
+        ) else { return }
+        copiedBuffer.frameLength = sourceBuffer.frameLength
+
+        let sourceBuffers = UnsafeMutableAudioBufferListPointer(sourceBuffer.mutableAudioBufferList)
+        let destinationBuffers = UnsafeMutableAudioBufferListPointer(copiedBuffer.mutableAudioBufferList)
+        for index in 0..<min(sourceBuffers.count, destinationBuffers.count) {
+            guard let sourceData = sourceBuffers[index].mData,
+                  let destinationData = destinationBuffers[index].mData else { continue }
+            let byteCount = min(
+                Int(sourceBuffers[index].mDataByteSize),
+                Int(destinationBuffers[index].mDataByteSize)
+            )
+            memcpy(destinationData, sourceData, byteCount)
+            destinationBuffers[index].mDataByteSize = UInt32(byteCount)
+        }
+
+        macMonitorQueue.async { [weak self] in
+            guard let self,
+                  self.macMonitorPendingBufferCount < self.macMonitorMaximumPendingBufferCount,
+                  self.prepareMacMonitorIfNeeded(for: copiedBuffer.format) else { return }
+
+            self.macMonitorPendingBufferCount += 1
+            self.macMonitorPlayerNode.scheduleBuffer(
+                copiedBuffer,
+                completionCallbackType: .dataPlayedBack
+            ) { [weak self] _ in
+                self?.macMonitorQueue.async { [weak self] in
+                    guard let self else { return }
+                    self.macMonitorPendingBufferCount = max(0, self.macMonitorPendingBufferCount - 1)
+                }
+            }
+            if !self.macMonitorPlayerNode.isPlaying {
+                self.macMonitorPlayerNode.play()
+            }
+        }
+    }
+
+    private func prepareMacMonitorIfNeeded(for format: AVAudioFormat) -> Bool {
+        let formatChanged = macMonitorFormat.map {
+            $0.sampleRate != format.sampleRate
+                || $0.channelCount != format.channelCount
+                || $0.commonFormat != format.commonFormat
+                || $0.isInterleaved != format.isInterleaved
+        } ?? true
+
+        if formatChanged {
+            macMonitorPlayerNode.stop()
+            macMonitorEngine.stop()
+            macMonitorEngine.disconnectNodeOutput(macMonitorPlayerNode)
+            macMonitorEngine.connect(macMonitorPlayerNode, to: macMonitorEngine.mainMixerNode, format: format)
+            macMonitorFormat = format
+            macMonitorEngineStarted = false
+            macMonitorPendingBufferCount = 0
+        }
+
+        guard !macMonitorEngineStarted else { return true }
+
+        if let outputDeviceID = macMonitorOutputDeviceID,
+           let audioUnit = macMonitorEngine.outputNode.audioUnit {
+            var mutableDeviceID = outputDeviceID
+            let status = AudioUnitSetProperty(
+                audioUnit,
+                kAudioOutputUnitProperty_CurrentDevice,
+                kAudioUnitScope_Global,
+                0,
+                &mutableDeviceID,
+                UInt32(MemoryLayout<AudioDeviceID>.size)
+            )
+            if status != noErr {
+                print("[ScratchSamplePlaybackController] Mac monitor output route failed: \(status)")
+            }
+        }
+
+        guard let raneOutputDeviceID = macMonitorOutputDeviceID else {
+            return false
+        }
+
+        do {
+            macMonitorEngine.prepare()
+            let channelMapStatus = Self.applyRaneChannel2ChannelMap(
+                to: macMonitorEngine.outputNode.audioUnit,
+                deviceID: raneOutputDeviceID,
+                sourceChannelCount: macMonitorFormat?.channelCount ?? 2
+            )
+            guard channelMapStatus == noErr else {
+                NSLog("ScratchLab: Rane Channel 2 output map failed with status %d", channelMapStatus)
+                return false
+            }
+            try macMonitorEngine.start()
+            macMonitorEngineStarted = true
+            return true
+        } catch {
+            print("[ScratchSamplePlaybackController] Mac monitor failed to start: \(error)")
+            return false
+        }
+    }
+
+    private func stopMacMonitor() {
+        macMonitorQueue.async { [weak self] in
+            guard let self else { return }
+            self.macMonitorPlayerNode.stop()
+            self.macMonitorEngine.stop()
+            self.macMonitorEngineStarted = false
+            self.macMonitorPendingBufferCount = 0
+        }
+    }
+
     private func ensureEngineRunning() {
+        applyRequestedOutputDeviceIfNeeded()
         engineLock.lock()
         defer { engineLock.unlock() }
         guard !engineStarted else { return }
@@ -1711,10 +1997,11 @@ final class ScratchSamplePlaybackController {
             try engine.start()
             engineStarted = true
             playerNode.play()
+            installMacMonitorTapIfNeeded()
 #if DEBUG
             installOutputCaptureTap(envGated: true)
 #endif
-            print("[ScratchSamplePlaybackController] engine started, output = system default")
+            print("[ScratchSamplePlaybackController] engine started, output = \(activeOutputDeviceName)")
         } catch {
             print("[ScratchSamplePlaybackController] engine start failed: \(error)")
         }
@@ -1738,6 +2025,8 @@ final class ScratchSamplePlaybackController {
 #if DEBUG
         finishOutputCaptureIfArmed()
 #endif
+        removeMacMonitorTapIfNeeded()
+        stopMacMonitor()
         guard engineStarted else { return }
         playerNode.stop()
         playerNode.volume = 1.0

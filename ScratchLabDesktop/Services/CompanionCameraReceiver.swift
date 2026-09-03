@@ -47,6 +47,15 @@ final class RelayedWatchCaptureStore: ObservableObject {
     @Published private(set) var watchIsInstalled = false
     @Published private(set) var watchIsReachable = false
     @Published private(set) var watchAvailabilityUpdatedAt: Date?
+    @Published private(set) var relayState: WatchRelayFlowState = .waiting
+    @Published private(set) var activeTakeContext: WatchRelayTakeContext?
+    @Published private(set) var lastHeartbeatAt: Date?
+    @Published private(set) var lastInterruption: WatchRelayInterruption?
+
+    private var isCompanionConnected = false
+    private var pendingTakeContext: WatchRelayTakeContext?
+    private var endingTakeContext: WatchRelayTakeContext?
+    private var liveAssembler = WatchMotionRelayAssembler()
 
     var watchAvailabilitySummary: String {
         guard watchAvailabilityUpdatedAt != nil else {
@@ -62,6 +71,19 @@ final class RelayedWatchCaptureStore: ObservableObject {
             return "Watch status: paired, installed, and reachable through the iPhone."
         }
         return "Watch status: paired and installed, but not currently reachable through the iPhone."
+    }
+
+    var relayStatusText: String {
+        switch relayState {
+        case .waiting:
+            return "Watch relay is waiting for the required connections."
+        case .ready:
+            return "Watch relay is ready for a Mac-authorized take."
+        case .active:
+            return "Watch relay is active for \(activeTakeContext?.takeID ?? "the current take")."
+        case .interrupted:
+            return lastInterruption?.detail ?? "Watch relay was interrupted."
+        }
     }
 
     /// Semantic readiness of the Apple Watch input, as macOS can actually know it.
@@ -161,6 +183,22 @@ final class RelayedWatchCaptureStore: ObservableObject {
         watchIsInstalled = isInstalled
         watchIsReachable = isReachable
         watchAvailabilityUpdatedAt = Date()
+        if activeTakeContext != nil, !isReachable {
+            markInterrupted("Apple Watch reachability was lost during the active take.")
+        } else {
+            resolveIdleRelayState()
+        }
+    }
+
+    @MainActor
+    func notePeerConnection(isConnected: Bool) {
+        let wasConnected = isCompanionConnected
+        isCompanionConnected = isConnected
+        if wasConnected, !isConnected, activeTakeContext != nil || endingTakeContext != nil {
+            markInterrupted("The iPhone relay connection was lost during the active take.")
+        } else {
+            resolveIdleRelayState()
+        }
     }
 
     private let fileManager = FileManager.default
@@ -181,7 +219,10 @@ final class RelayedWatchCaptureStore: ObservableObject {
     }
 
     @MainActor
-    func noteRequestedStart() {
+    func noteRequestedStart(context: WatchRelayTakeContext) {
+        pendingTakeContext = context
+        endingTakeContext = nil
+        liveAssembler.reset()
         remoteControlState = .starting
     }
 
@@ -199,13 +240,123 @@ final class RelayedWatchCaptureStore: ObservableObject {
             remoteControlState = .starting
         case .acknowledged:
             remoteControlState = .acknowledged
+            if let pendingTakeContext,
+               pendingTakeContext.sessionID == reply.sessionID,
+               pendingTakeContext.takeID == reply.takeID {
+                activeTakeContext = pendingTakeContext
+                self.pendingTakeContext = nil
+                relayState = .active
+            }
         case .timedOut:
             remoteControlState = .timedOut(reply.detail ?? "Watch motion start timed out.")
+            markInterrupted(reply.detail ?? "Watch motion start timed out.", context: pendingTakeContext)
         case .unavailable:
             remoteControlState = .unavailable(reply.detail ?? "Watch motion capture is unavailable.")
+            markInterrupted(reply.detail ?? "Watch motion capture is unavailable.", context: pendingTakeContext)
         case .failed:
             remoteControlState = .failed(reply.detail ?? "Watch motion capture failed to start.")
+            markInterrupted(reply.detail ?? "Watch motion capture failed to start.", context: activeTakeContext ?? pendingTakeContext)
         }
+    }
+
+    @MainActor
+    func noteRelayLifecycle(_ packet: WatchRelayLifecyclePacket) {
+        guard packet.kind == WatchRelayLifecyclePacket.packetKind else { return }
+        lastHeartbeatAt = packet.sentAt
+
+        switch packet.event {
+        case .hello, .reconnect:
+            if let context = packet.context,
+               context == activeTakeContext || context == pendingTakeContext || context == endingTakeContext {
+                activeTakeContext = context
+                relayState = .active
+            } else {
+                resolveIdleRelayState()
+            }
+        case .relayReady:
+            guard activeTakeContext == nil else { return }
+            resolveIdleRelayState()
+        case .takeBegin:
+            guard let context = packet.context, context == pendingTakeContext || context == activeTakeContext else {
+                return
+            }
+            activeTakeContext = context
+            pendingTakeContext = nil
+            relayState = .active
+        case .takeEnd:
+            guard let context = packet.context, context == activeTakeContext || context == endingTakeContext else {
+                return
+            }
+            endingTakeContext = context
+            activeTakeContext = nil
+            resolveIdleRelayState()
+        case .heartbeat:
+            if let context = packet.context {
+                guard context == activeTakeContext || context == endingTakeContext else { return }
+                if activeTakeContext != nil {
+                    relayState = .active
+                }
+            } else {
+                resolveIdleRelayState()
+            }
+        case .error:
+            let context = packet.context
+            guard context == nil || context == activeTakeContext || context == endingTakeContext || context == pendingTakeContext else {
+                return
+            }
+            markInterrupted(packet.detail ?? "The watch relay reported an interruption.", context: context)
+        }
+    }
+
+    @MainActor
+    func receiveLiveMotionBatch(_ batch: WatchMotionRelayBatch, sourcePeerName: String?) {
+        guard let authorizedContext = activeTakeContext ?? endingTakeContext ?? pendingTakeContext else {
+            lastImportStatus = "Rejected live watch motion without an active Mac take."
+            return
+        }
+
+        switch liveAssembler.ingest(batch, accepting: authorizedContext) {
+        case .accepted:
+            lastImportStatus = "Receiving live watch motion for \(authorizedContext.takeID)."
+        case .rejected:
+            lastImportStatus = "Rejected stale or unknown live watch motion for \(batch.context.takeID)."
+        case .completed(let session):
+            importRelayedSession(
+                session,
+                suggestedFileName: "scratch-motion-live-\(session.id.uuidString).json",
+                sourcePeerName: sourcePeerName
+            )
+            liveAssembler.reset()
+            endingTakeContext = nil
+            resolveIdleRelayState()
+        }
+    }
+
+    @MainActor
+    func evaluateHeartbeatTimeout(now: Date = Date(), maximumAge: TimeInterval = 5) {
+        guard activeTakeContext != nil,
+              let lastHeartbeatAt,
+              now.timeIntervalSince(lastHeartbeatAt) > maximumAge else { return }
+        markInterrupted("The iPhone relay heartbeat stopped during the active take.")
+    }
+
+    @MainActor
+    private func resolveIdleRelayState() {
+        if activeTakeContext != nil {
+            relayState = isCompanionConnected && watchIsReachable ? .active : .interrupted
+        } else if isCompanionConnected && watchIsReachable {
+            relayState = .ready
+        } else if relayState != .interrupted {
+            relayState = .waiting
+        }
+    }
+
+    @MainActor
+    private func markInterrupted(_ detail: String, context: WatchRelayTakeContext? = nil) {
+        let resolvedContext = context ?? activeTakeContext ?? endingTakeContext ?? pendingTakeContext
+        guard relayState != .interrupted || lastInterruption?.detail != detail else { return }
+        relayState = .interrupted
+        lastInterruption = WatchRelayInterruption(context: resolvedContext, detail: detail)
     }
 
     func linkedCapture(sessionID: String, takeID: String) -> RelayedWatchMotionCapture? {
@@ -287,8 +438,13 @@ final class RelayedWatchCaptureStore: ObservableObject {
         sourcePeerName: String?
     ) throws -> RelayedWatchMotionCapture {
         try fileManager.createDirectory(at: captureDirectoryURL, withIntermediateDirectories: true)
-        let fileName = sanitizedFileName(suggestedFileName ?? "scratch-motion-\(captureSession.id.uuidString).json")
-        let destinationURL = captureDirectoryURL.appendingPathComponent(fileName)
+        let destinationURL: URL
+        if let existingCapture = importedSessions.first(where: { $0.id == captureSession.id }) {
+            destinationURL = existingCapture.fileURL
+        } else {
+            let fileName = sanitizedFileName(suggestedFileName ?? "scratch-motion-\(captureSession.id.uuidString).json")
+            destinationURL = captureDirectoryURL.appendingPathComponent(fileName)
+        }
         let data = try WatchMotionCaptureCodec.encoder.encode(captureSession)
         try data.write(to: destinationURL, options: Data.WritingOptions.atomic)
         return RelayedWatchMotionCapture(fileURL: destinationURL, session: captureSession, sourcePeerName: sourcePeerName)
@@ -399,6 +555,7 @@ final class CompanionCameraReceiver: NSObject, ObservableObject {
     private var latestRenderedFrameTimestamp: TimeInterval = 0
     private var lastPublishedWallClockTime: TimeInterval = 0
     private let watchCommandCoordinator = WatchCaptureCommandCoordinator()
+    private var watchHealthTimer: DispatchSourceTimer?
 
     init(relayedWatchCaptureStore: RelayedWatchCaptureStore, autoStartBrowsing: Bool = true) {
         self.relayedWatchCaptureStore = relayedWatchCaptureStore
@@ -407,21 +564,36 @@ final class CompanionCameraReceiver: NSObject, ObservableObject {
         browser.delegate = self
         if autoStartBrowsing {
             browser.startBrowsingForPeers()
+            startWatchHealthTimer()
         }
+    }
+
+    deinit {
+        watchHealthTimer?.cancel()
     }
 
     @MainActor
     func requestWatchCaptureStart(
         sessionID: String,
         takeID: String,
+        takeNumber: Int? = nil,
+        watchWrist: String? = nil,
         timeoutSeconds: TimeInterval = 3
     ) async -> WatchCaptureControlReply {
-        relayedWatchCaptureStore.noteRequestedStart()
         let payload = WatchCaptureCommandPayload(
             command: .start,
             sessionID: sessionID,
-            takeID: takeID
+            takeID: takeID,
+            takeNumber: takeNumber,
+            watchWrist: watchWrist
         )
+        let context = WatchRelayTakeContext(
+            sessionID: sessionID,
+            takeID: takeID,
+            takeNumber: takeNumber,
+            watchWrist: watchWrist
+        )
+        relayedWatchCaptureStore.noteRequestedStart(context: context)
 
         guard !session.connectedPeers.isEmpty else {
             let reply = WatchCaptureControlReply(
@@ -485,10 +657,13 @@ final class CompanionCameraReceiver: NSObject, ObservableObject {
     @MainActor
     func requestWatchCaptureStop(sessionID: String, takeID: String?) {
         relayedWatchCaptureStore.noteRequestedStop()
+        let context = relayedWatchCaptureStore.activeTakeContext
         let payload = WatchCaptureCommandPayload(
             command: .stop,
             sessionID: sessionID,
-            takeID: takeID
+            takeID: takeID ?? context?.takeID,
+            takeNumber: context?.takeNumber,
+            watchWrist: context?.watchWrist
         )
         if !sendWatchControlCommand(payload) {
             relayedWatchCaptureStore.noteRemoteControlStatus(
@@ -517,6 +692,22 @@ final class CompanionCameraReceiver: NSObject, ObservableObject {
         frameStore.image = nil
         frameStore.cameraPosition = "Unknown"
         connectionStatus = "Searching for companion device"
+        Task { @MainActor in
+            self.relayedWatchCaptureStore.notePeerConnection(isConnected: false)
+        }
+    }
+
+    private func startWatchHealthTimer() {
+        let timer = DispatchSource.makeTimerSource(queue: .main)
+        timer.schedule(deadline: .now() + 2, repeating: 2)
+        timer.setEventHandler { [weak self] in
+            guard let self else { return }
+            Task { @MainActor in
+                self.relayedWatchCaptureStore.evaluateHeartbeatTimeout()
+            }
+        }
+        timer.resume()
+        watchHealthTimer = timer
     }
 }
 
@@ -554,6 +745,7 @@ extension CompanionCameraReceiver: MCSessionDelegate {
     func session(_ session: MCSession, peer peerID: MCPeerID, didChange state: MCSessionState) {
         DispatchQueue.main.async {
             self.connectedPeerNames = session.connectedPeers.map(\.displayName).sorted()
+            self.relayedWatchCaptureStore.notePeerConnection(isConnected: !self.connectedPeerNames.isEmpty)
             switch state {
             case .connected:
                 self.connectionStatus = "Receiving companion feed from \(peerID.displayName)"
@@ -576,6 +768,25 @@ extension CompanionCameraReceiver: MCSessionDelegate {
     }
 
     func session(_ session: MCSession, didReceive data: Data, fromPeer peerID: MCPeerID) {
+        if let lifecyclePacket = try? decoder.decode(WatchRelayLifecyclePacket.self, from: data),
+           lifecyclePacket.kind == WatchRelayLifecyclePacket.packetKind {
+            Task { @MainActor in
+                self.relayedWatchCaptureStore.noteRelayLifecycle(lifecyclePacket)
+            }
+            return
+        }
+
+        if let motionBatch = try? decoder.decode(WatchMotionRelayBatch.self, from: data),
+           motionBatch.kind == WatchMotionRelayBatch.packetKind {
+            Task { @MainActor in
+                self.relayedWatchCaptureStore.receiveLiveMotionBatch(
+                    motionBatch,
+                    sourcePeerName: peerID.displayName
+                )
+            }
+            return
+        }
+
         if let relayPacket = try? decoder.decode(WatchCaptureRelayPacket.self, from: data),
            relayPacket.isWatchCaptureRelay {
             Task { @MainActor in

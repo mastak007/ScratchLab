@@ -55,9 +55,11 @@
 	<key>CFBundleShortVersionString</key>
 	<string>$(MARKETING_VERSION)</string>
 	<key>CFBundleVersion</key>
-	<string>19</string>
+	<string>$(CURRENT_PROJECT_VERSION)</string>
 	<key>MinimumOSVersion</key>
 	<string>$(WATCHOS_DEPLOYMENT_TARGET)</string>
+	<key>NSMotionUsageDescription</key>
+	<string>ScratchLab uses Apple Watch motion data to capture wrist movement during scratch training takes.</string>
 	<key>WKApplication</key>
 	<true/>
 	<key>WKCompanionAppBundleIdentifier</key>

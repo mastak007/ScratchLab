@@ -1019,6 +1019,12 @@ struct MacAnalyzerView: View {
             synchronizeSelectedRoutineSession()
             practiceLiveNotationTracker = nil
         }
+        .modifier(
+            WatchRelayInterruptionObserver(
+                relayStore: relayedWatchCaptureStore,
+                captureEngine: captureEngine
+            )
+        )
         .onDisappear {
             beatEngine.stop()
             babyScratchDemo.stop()
@@ -1128,6 +1134,18 @@ struct MacAnalyzerView: View {
             dvsUIRefreshTick += 1
         }
 #endif
+    }
+
+    private struct WatchRelayInterruptionObserver: ViewModifier {
+        @ObservedObject var relayStore: RelayedWatchCaptureStore
+        let captureEngine: MacCaptureEngine
+
+        func body(content: Content) -> some View {
+            content.onChange(of: relayStore.lastInterruption) { _, interruption in
+                guard let interruption else { return }
+                captureEngine.recordWatchRelayInterruption(interruption)
+            }
+        }
     }
 
     @ViewBuilder
@@ -1820,12 +1838,14 @@ struct MacAnalyzerView: View {
     private var practiceFigmaAchievement: some View {
         HStack(spacing: 16) {
             VStack(alignment: .leading, spacing: 5) {
-                Text(practiceCoordinator.currentResult == nil ? "No result yet" : "Attempt complete")
+                Text(practiceCoordinator.hasFinishedAttempt ? "Attempt complete" : "No result yet")
                     .font(.system(size: 15, weight: .bold))
                     .foregroundStyle(ScratchLabDesign.Sem.textPrimary)
-                Text(practiceCoordinator.currentResult == nil
-                     ? "Complete an attempt to create a result."
-                     : "Your latest assessed Baby Scratch cycle.")
+                Text(practiceCoordinator.currentResult != nil
+                     ? "Your latest assessed Baby Scratch cycle."
+                     : (practiceCoordinator.hasFinishedAttempt
+                        ? "The take finished without scorable motion evidence."
+                        : "Complete an attempt to create a result."))
                     .font(.system(size: 11))
                     .foregroundStyle(ScratchLabDesign.Sem.textSecondary)
             }
@@ -2389,6 +2409,21 @@ struct MacAnalyzerView: View {
                 reviewFigmaMetric("Signal confidence", reviewConfidenceLabel)
                 reviewFigmaMetric("Strokes", "\(reviewStrokeCount)")
                 reviewFigmaMetric("Fader events", "\(reviewFaderEventCount)")
+            }
+
+            HStack(spacing: 12) {
+                reviewFigmaMetric("Session", reviewSessionName)
+                reviewFigmaMetric("BPM", reviewBPMDetailLabel)
+                reviewFigmaMetric("Mode", reviewModeLabel)
+                reviewFigmaMetric("Duration", reviewDurationLabel)
+            }
+
+            if let reviewArtifactIdentitySummary {
+                Label(reviewArtifactIdentitySummary, systemImage: "checkmark.seal")
+                    .font(.system(size: 11, weight: .medium, design: .monospaced))
+                    .foregroundStyle(ScratchLabDesign.Sem.textSecondary)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
             }
 
             HStack(alignment: .bottom, spacing: 10) {
@@ -3842,7 +3877,7 @@ struct MacAnalyzerView: View {
 
     private var captureFigmaSessionLabel: String {
         if captureReadiness == .complete {
-            return "Take \(String(format: "%03d", max(visibleTakeCount, 1))) · Saved"
+            return "\(lastRoutineTakeDisplayName) · Saved"
         }
         let name = routineSessionSetup.performerName.trimmingCharacters(in: .whitespacesAndNewlines)
         return name.isEmpty ? "Untitled session" : name
@@ -5178,6 +5213,9 @@ struct MacAnalyzerView: View {
     }
 
     private var lastRoutineTakeDisplayName: String {
+        if let takeNumber = currentRoutineArtifactStatus?.takeNumber {
+            return "Take \(String(format: "%03d", takeNumber))"
+        }
         guard let lastRoutineRecordingURL = captureEngine.lastRoutineRecordingURL else {
             return fallbackTakeDisplayName()
         }
@@ -5315,7 +5353,8 @@ struct MacAnalyzerView: View {
     }
 
     private var reviewTakeID: String {
-        captureEngine.lastRoutineRecordingURL?
+        currentRoutineArtifactStatus?.takeID
+            ?? captureEngine.lastRoutineRecordingURL?
             .deletingPathExtension()
             .lastPathComponent
             ?? selectedRoutineSession?.id
@@ -5431,6 +5470,36 @@ struct MacAnalyzerView: View {
 
     private var currentRoutineArtifactStatus: TakeArtifactStatusSnapshot? {
         captureEngine.routineTakeArtifactStatuses.last
+    }
+
+    private var currentRoutineReviewConfig: CaptureSessionConfig? {
+        currentRoutineArtifactStatus?.sessionConfig ?? matchingLastRoutineExportConfig
+    }
+
+    private var reviewSessionName: String {
+        currentRoutineReviewConfig?.normalizedPerformerName ?? "Untitled Session"
+    }
+
+    private var reviewBPMDetailLabel: String {
+        let bpm = currentRoutineReviewConfig?.bpm ?? currentRoutineArtifactStatus?.bpm
+        return bpm.map { "\($0) BPM" } ?? "—"
+    }
+
+    private var reviewModeLabel: String {
+        guard let config = currentRoutineReviewConfig else { return "—" }
+        return config.drillMode?.title ?? config.captureMode.title
+    }
+
+    private var reviewDurationLabel: String {
+        guard let duration = currentRoutineArtifactStatus?.recordedDuration else { return "—" }
+        return String(format: "%.1f s", duration)
+    }
+
+    private var reviewArtifactIdentitySummary: String? {
+        guard let status = currentRoutineArtifactStatus,
+              let mediaURL = status.videoSourceURL else { return nil }
+        let sidecarURL = CaptureCore.LocalRecordingFiles.sidecarURL(forMediaURL: mediaURL)
+        return "\(status.takeID) · \(mediaURL.lastPathComponent) · \(sidecarURL.lastPathComponent)"
     }
 
     private var currentRoutineNotationSnapshot: CaptureCore.DetectedNotationSnapshot? {
@@ -10231,10 +10300,10 @@ struct MacAnalyzerView: View {
                 practiceScoredAttemptUnavailableMessage = nil
             } else {
                 // Never fabricate a result from thin evidence — but never
-                // leave the loop silently stuck in "Copying" either.
+                // send a completed attempt back to Watch/Ready either.
                 practiceScoredAttemptUnavailableMessage =
                     "That take didn't capture usable movement evidence — try again with clearer motion in view."
-                practiceCoordinator.abortAttempt()
+                practiceCoordinator.completeUnavailableAttempt()
             }
         }
     }
@@ -10283,6 +10352,27 @@ struct MacAnalyzerView: View {
 
         case .result(let result):
             practiceScoredAttemptResultView(result)
+        case .unavailable:
+            practiceUnavailableAttemptResultView
+        }
+    }
+
+    private var practiceUnavailableAttemptResultView: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Label("No scorable motion captured", systemImage: "exclamationmark.triangle.fill")
+                .font(.headline)
+                .foregroundStyle(ScratchLabDesign.Sem.warning)
+            Text(practiceScoredAttemptUnavailableMessage
+                 ?? "The take completed, but there was not enough movement evidence to calculate a score.")
+                .font(.system(size: 12, weight: .medium))
+                .foregroundStyle(ScratchLabDesign.Sem.textSecondary)
+                .fixedSize(horizontal: false, vertical: true)
+            HStack(spacing: 10) {
+                Button("Retry") { retryPracticeScoredAttempt() }
+                    .buttonStyle(.bordered)
+                Button("Open Review") { workspaceTab = .review }
+                    .scratchLabPrimaryButton()
+            }
         }
     }
 
@@ -11302,7 +11392,9 @@ struct MacAnalyzerView: View {
             let takeIdentity = try captureEngine.reserveNextRoutineTakeIdentity()
             let reply = await companionReceiver.requestWatchCaptureStart(
                 sessionID: takeIdentity.sessionID,
-                takeID: takeIdentity.takeID
+                takeID: takeIdentity.takeID,
+                takeNumber: takeIdentity.takeNumber,
+                watchWrist: resolvedConfig.normalizedHandedness
             )
             captureEngine.applyPendingWatchReply(reply)
             if reply.syncState != .acknowledged {

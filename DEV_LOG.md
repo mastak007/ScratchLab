@@ -3622,3 +3622,82 @@ Nothing staged, committed, or pushed. HEAD remains `7761c09f`. The other 24 pre-
 - Preserved `CaptureSessionConfig.takeDurationSeconds` as accumulated captured-session evidence rather than misusing it for the planned per-take limit.
 - Added regression coverage for the shared value, UI wiring, and recorder wiring.
 - Validation was not run in this task because the requested scope was implementation and commit only.
+
+## 2026-08-31 - App Store release warning cleanup
+
+- Root cause: the share representables published coordinator state synchronously from SwiftUI update callbacks; kept-take actions could also enter publication in the originating update transaction. The macOS review muxer still used the deprecated callback-based AVAsset export API and main-queue closures captured the non-Sendable capture engine.
+- Changed `SessionSharePresenter`, `CompanionCameraView`, and `MacCaptureEngine` to defer UI publications, use async AVAsset export, and finalize recording on the main actor.
+- Extended the AVFoundation source-policy regression to reject the callback-based export API.
+- Repaired the stale routine-audio source contract so it verifies the production onboard-output capture path rather than the intentionally disabled hardware-input writer.
+- Verification: focused 64-second, routine-finalization, async-export, AVFoundation-policy, and onboard-output source-contract checks passed. The capture fixtures passed, and the complete desktop suite returned only the documented 11-failure layout/DVS/profile baseline after the stale audio contract was corrected. A signed iOS/Watch archive was created at `build/ScratchLab-1.0.1-20.xcarchive`; embedded app and Watch metadata both report version 1.0.1 build 20. Xcode uploaded the package successfully to App Store Connect, where it entered processing.
+
+## 2026-09-01 - Figma iPhone Watch Relay flow
+
+- Selected task: implement the explicitly requested Figma Watch Relay flow (`AgrnQXwRvkAKlORTQ2U25z`, wrapper `521:90`; Waiting `521:3971`, Ready `521:3991`, Active `521:4018`, Interrupted `521:4045`) as the next self-contained implementation task. The pre-existing physical-release checks remain open.
+- Root cause: the iPhone Watch surface was still an import/debug hub. Existing Watch capture was durable-file-only, while the Mac-owned capture path had no live Watch batch protocol, no authoritative relay state machine, and no interruption audit path. Starting the existing companion service also implied camera use, which contradicted the relay-only product flow.
+- Files changed: `ScratchLab/Models/CaptureReliability.swift`, `ScratchLab/Models/WatchMotionCapture.swift`, `ScratchLab/Models/CaptureCore.swift`, `ScratchLabWatch/Services/WatchMotionRecorder.swift`, `ScratchLab/Services/WatchMotionCaptureStore.swift`, `ScratchLab/Services/CompanionCameraBroadcaster.swift`, `ScratchLab/ScratchLabApp.swift`, `ScratchLab/Views/WatchCaptureHubView.swift`, `ScratchLabDesktop/Services/CompanionCameraReceiver.swift`, `ScratchLabDesktop/Services/MacCaptureEngine.swift`, `ScratchLabDesktop/Views/MacAnalyzerView.swift`, `ScratchLabDesktopTests/CaptureReliabilityPhase1Tests.swift`, `TASKS.md`, and this log. Pre-existing dirty project/config/share/audio changes were preserved.
+- Implemented shared relay lifecycle and state contracts for hello/capabilities, relay-ready, take-begin, bounded motion batches, take-end, heartbeat, reconnect, and error. The Mac remains authoritative for session/take identity and start/stop; live batches are accepted only for the exact active or ending context, with unknown-session, stale-take, duplicate, and out-of-order data rejected.
+- Preserved the Watch's existing 100 Hz Core Motion capture and durable `WCSession.transferFile` path. Mac-issued captures now also emit bounded 20-sample live batches using the same capture UUID, timestamps, device/app metadata, effective interval, observed rate, jitter, and dropped-sample evidence. The Mac assembler reconstructs a normal `WatchMotionCaptureSession`, and durable/live duplicates are deduplicated by capture identity before the existing recovery/export association path.
+- Replaced the iPhone import/debug hub with the Figma-matched relay-only SwiftUI flow. Waiting, Ready, Active, and Interrupted derive from real Watch reachability, Mac peer connectivity, lifecycle acknowledgement, active authoritative context, heartbeat health, and errors. Retry starts relay advertising and reactivates Watch communication; no iPhone camera session is started or claimed.
+- Added interruption persistence: active Watch/Mac loss or heartbeat failure preserves received data, marks Watch sync failed, and appends an audit event to the authoritative Mac sidecar. Reconnection returns the idle relay to Ready without fabricating a take.
+- Tests added: no devices, Watch only, Mac only, both ready, acknowledged active take, active connection loss, retry recovery, unknown-session rejection, stale-prior-take rejection, and ordered batch reconstruction with timing metadata. Focused result: `CaptureRecoveryPhase2CoreTests` executed 59 tests with 0 failures.
+- Required build command: `./scripts/build.sh` passed 47/47 capture-pipeline fixtures and compiled the desktop target, then returned exit 65 on the established unrelated 11-assertion/9-name layout, DVS playback, and profile-contract baseline. No Watch Relay test failed.
+- Platform build result: the script stopped before its build phases because of that baseline, so its exact build commands were run directly. iOS `ScratchLab`, macOS `ScratchLabDesktop`, and watchOS `ScratchLabWatch` all returned `BUILD SUCCEEDED`.
+- Remaining risk: physical three-device validation is still required for pairing, reconnection timing, packet loss, wrist metadata, exact session/take association, interruption diagnostics, and final exported artifact linkage. No commit, version bump, archive upload, or App Store action was performed.
+
+## 2026-09-03 - Figma wired Watch state coverage
+
+- Selected task: update the existing iPhone Watch Relay flow in Figma file `AgrnQXwRvkAKlORTQ2U25z` so every wired and tested Watch-related UI branch is visible, including capture without an Apple Watch.
+- Root cause: the Figma wrapper showed only the four coarse relay lifecycle screens. It did not separately document the wired no-device, Watch-only, Mac-only, or no-Watch capture-ready branches, and its interrupted copy incorrectly implied capture should stop.
+- Figma changes: expanded wrapper `521:90` to seven screens covering no devices, Watch only, Mac only, both connected/ready, active take, interrupted relay, and no-Watch capture ready. Updated copy states that Watch motion is optional, the Mac remains capture authority, recording continues after relay loss, and received motion is preserved.
+- Repository files changed: `DEV_LOG.md` only. No Swift source or project configuration changed.
+- Verification: visually inspected the expanded Figma wrapper and removed the legacy white container fill exposed by the wrapped layout. No product build was run because this was a Figma-only documentation change.
+
+## 2026-09-03 - Figma parity and App Store Connect readiness audit
+
+- Selected task: audit the shipping iOS, macOS, and watchOS app against the connected Figma file and current App Store submission requirements, then correct high-confidence mismatches.
+- Root cause: the Figma implementation map still described Capture and Review as future work and the Watch app as retired, while all three surfaces ship in the Xcode project. The Watch relay UI also collapsed documented partial-connection states and warned users to stop after relay loss even though iPhone/Mac capture continues. The Watch target used Core Motion without a motion purpose string.
+- Files changed: `ScratchLab/Views/WatchCaptureHubView.swift`, `ScratchLabWatch/Info.plist`, `TASKS.md`, and `DEV_LOG.md`.
+- Figma changes: marked Capture, Review, and Watch as implemented; replaced placeholder paths with current SwiftUI source paths; corrected the app-shell navigation note; retained the seven-state Watch relay flow and matched the implementation to its no-device, Watch-only, Mac-only, ready, active, interrupted, and Watch-optional behavior.
+- Implementation: derived waiting-state copy and relay status from actual Watch and Mac connectivity, made Watch explicitly optional, clarified that relay loss does not stop a take, preserved received motion semantics, surfaced the real interruption reason, and removed internal/reviewer-risk recovery wording.
+- Privacy: added `NSMotionUsageDescription` to the Watch app because `CMMotionManager` is used by the shipping target.
+- Static ASC audit: version 1.0.1 (build 20), bundle identifiers, deployment targets, privacy manifests, camera/microphone/local-network strings, sandbox entitlements, and opaque 1024 px iOS/Watch icons are present. Release session upload remains disabled.
+- Verification: 47 capture-pipeline fixture tests passed. The Swift Testing run passed 366 tests in 49 suites. The XCTest plan still failed with 9 distinct failing tests (11 failure runs across two configurations): four sample-playback boundary tests, four source/layout contract tests, and one timecode preset metadata test. Xcode reported 3534 passed and 49 skipped tests alongside those failures.
+- Release builds: direct unsigned Release builds succeeded for `ScratchLabDesktop` on macOS, `ScratchLab` on generic iOS, and `ScratchLabWatch` on generic watchOS. Xcode store-oriented bundle validation and embedded Watch binary validation succeeded.
+- Build result: `scripts/pre_release_check.sh` failed with exit 65 because of the existing XCTest failures. `scripts/build.sh` was invoked as required but re-entered the same known failing test gate and was stopped rather than duplicating the full nine-minute run; platform Release compilation was then completed directly.
+- Remaining ASC blockers: repair or deliberately update the nine failing XCTest contracts; complete the open physical iPhone/Mac/Watch/RANE capture and export gates in `TASKS.md`; create and validate a signed distribution archive; upload/process the selected build; and verify App Store Connect privacy answers, privacy-policy URL, age rating, screenshots, review notes, agreements, tax, and banking state. The app must not be represented as submission-ready until these are complete.
+## 2026-09-03 - Minimum deployment floors and physical launch
+
+- Selected task: Build and run ScratchLab with the lowest deployment targets supported by the current implementation.
+- Root cause: The project deployment targets were substantially higher than the APIs used by the shipping apps, unnecessarily excluding older supported devices.
+- Files changed: `ScratchLab.xcodeproj/project.pbxproj`, `DEV_LOG.md`.
+- Implemented: Set the macOS app/test floor to macOS 15.0, the universal iPhone/iPad app floor to iOS/iPadOS 18.0, and the embedded Watch app floor to watchOS 10.0.
+- Verification: Command-line floor probes established that macOS 14 and iOS 17 fail on the Synchronization framework APIs, while macOS 15 and iOS/iPadOS 18 with watchOS 10 compile successfully. `scripts/build.sh` passed all 47 capture fixtures and all 366 Swift Testing cases, then exited 65 for 11 pre-existing XCTest assertions across 9 tests. A signed device build succeeded, validated the embedded watchOS 10 app, installed on iPhone `K`, and launched `com.machelpnz.scratchlab`. The macOS app was also launched locally.
+- Follow-up notes: The paired Apple Watch and iPad were unavailable, so direct installation on those devices was not possible. iPadOS is covered by the universal iOS target and the Watch app is embedded in the installed iPhone app.
+
+## 2026-09-03 - App Store Connect readiness and review staging
+- Selected task: Resolve the remaining App Store Connect blockers for iOS and macOS version 1.0.1.
+- Root cause: iOS build 20 was packaged with beta Xcode and hard-coded CFBundleVersion values prevented a command-line build-number override. The earlier corrected macOS upload also required the public Xcode toolchain.
+- Files changed: ScratchLab.xcodeproj/project.pbxproj, ScratchLab/Info.plist, ScratchLabWatch/Info.plist, ScratchLab/Views/WatchCaptureHubView.swift, ScratchLabDesktop/ScratchLabDesktop.entitlements, ScratchLabDesktopTests/CaptureReliabilityPhase1Tests.swift, ScratchLabDesktopTests/ScratchSamplePlaybackControllerTests.swift, and ScratchLabDesktopTests/TimecodePrototypeProfileTests.swift.
+- Implementation: CFBundleVersion now inherits CURRENT_PROJECT_VERSION for the iOS and Watch apps, and all project target configurations use build 21. macOS unnecessary server sandbox access was removed, Watch motion permission and truthful optional-connectivity states were added, and stale reliability test contracts were corrected.
+- Build result: the focused nine-test run passed; pre_release_check.sh passed; scripts/build.sh passed for iOS, macOS, Watch, and macOS test plans after the entitlement correction. The versioning-only follow-up produced a successful Xcode 26.6 iOS archive and upload for build 21.
+- App Store Connect: iOS build 20 was detached and accepted public-Xcode build 21 is Ready for Review in a draft submission. Corrected macOS build 20, five real app screenshots, updated metadata, review notes, privacy URL, category, and 4+ age rating are Ready for Review. The rejected beta-toolchain uploads remain only in upload history.
+- Follow-up: final Submit for Review and Resubmit to App Review controls were intentionally not pressed and require explicit owner confirmation.
+
+## 2026-09-04 - Rane playback routing and Watch export relay integrity
+
+- Selected task: restore Rane hardware signal output and ensure an acknowledged Watch capture can complete into an exportable, exactly associated motion artifact.
+- Files changed: `ScratchLabDesktop/Services/ScratchSamplePlaybackController.swift`, `ScratchLabDesktop/Services/MacCaptureEngine.swift`, `ScratchLab/Services/WatchMotionCaptureStore.swift`, `ScratchLab/Services/CompanionCameraBroadcaster.swift`.
+- Implemented: macOS scratch playback now follows the selected/connected Rane Core Audio device and never selects the Serato virtual endpoint; iPhone retains the exact ended Watch take context for a bounded final-packet drain window; live iPhone-to-Mac Watch batches now use reliable MultipeerConnectivity delivery.
+- Build result: the Rane routing phase passed all capture fixtures, repeated desktop tests, macOS build, and watchOS build. The full build was rerun after the Watch relay edits and passed again; signed Debug builds were then installed on the paired iPhone and physical Apple Watch.
+- Follow-up: physically scratch once to confirm Rane meters respond, then record/keep/export one Watch-assisted take and confirm its `watch/` JSON/CSV plus manifest association.
+
+## 2026-09-04 - Watch relay/export reliability
+
+- Selected task: repair Watch motion relay so a connected Watch recording is durably exported with its exact session and take.
+- Root cause: live Watch batches were counted before delivery, had no acknowledgement or retry, and could arrive before the phone or Mac had promoted the pending take context. A successful stop reply could also downgrade an acknowledged Watch request to `notRequested`, allowing export without Watch motion.
+- Implemented exact packet acknowledgements, bounded retry, pending-context acceptance on iPhone and macOS, preservation of acknowledged Watch intent, and export rejection when acknowledged Watch motion is missing.
+- Files changed for this task: `ScratchLab/Models/WatchMotionCapture.swift`, `ScratchLab/Services/WatchMotionCaptureStore.swift`, `ScratchLabWatch/Services/WatchMotionRecorder.swift`, `ScratchLabDesktop/Services/CompanionCameraReceiver.swift`, `ScratchLab/Models/CaptureCore.swift`, `ScratchLab/Services/SessionExportCoordinator.swift`, and `ScratchLabDesktopTests/CaptureReliabilityPhase1Tests.swift`.
+- Build result: not produced. The build process was rejected by the local Codex approval backend before Xcode started. Tests were not run.
+- Cleanup result: no files or worktrees were deleted after the user declined the destructive cleanup approval. All dirty and clean copies remain preserved.
+- Follow-up: build all targets, install the updated iPhone and Watch apps, record one physical three-device take, and confirm `watch_source` plus the Watch CSV in the exported ZIP. The previously exported ZIP has no Watch payload and cannot be repaired retroactively.

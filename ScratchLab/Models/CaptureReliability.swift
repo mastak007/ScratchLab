@@ -100,6 +100,8 @@ struct WatchCaptureCommandPayload: Codable, Equatable, Sendable {
     let command: Command
     let sessionID: String
     let takeID: String?
+    let takeNumber: Int?
+    let watchWrist: String?
     let requestedAt: Date
 
     init(
@@ -107,6 +109,8 @@ struct WatchCaptureCommandPayload: Codable, Equatable, Sendable {
         command: Command,
         sessionID: String,
         takeID: String?,
+        takeNumber: Int? = nil,
+        watchWrist: String? = nil,
         requestedAt: Date = Date()
     ) {
         self.kind = Self.packetKind
@@ -114,7 +118,117 @@ struct WatchCaptureCommandPayload: Codable, Equatable, Sendable {
         self.command = command
         self.sessionID = sessionID
         self.takeID = takeID
+        self.takeNumber = takeNumber
+        self.watchWrist = watchWrist
         self.requestedAt = requestedAt
+    }
+}
+
+enum WatchRelayFlowState: String, Codable, Equatable, Sendable {
+    case waiting
+    case ready
+    case active
+    case interrupted
+}
+
+struct WatchRelayTakeContext: Codable, Equatable, Sendable {
+    let sessionID: String
+    let takeID: String
+    let takeNumber: Int?
+    let watchWrist: String?
+
+    init(sessionID: String, takeID: String, takeNumber: Int? = nil, watchWrist: String? = nil) {
+        self.sessionID = sessionID
+        self.takeID = takeID
+        self.takeNumber = takeNumber
+        self.watchWrist = watchWrist
+    }
+
+    init?(payload: WatchCaptureCommandPayload) {
+        guard let takeID = payload.takeID, !payload.sessionID.isEmpty, !takeID.isEmpty else { return nil }
+        self.init(
+            sessionID: payload.sessionID,
+            takeID: takeID,
+            takeNumber: payload.takeNumber,
+            watchWrist: payload.watchWrist
+        )
+    }
+}
+
+enum WatchRelayLifecycleEvent: String, Codable, Equatable, Sendable {
+    case hello
+    case relayReady = "relay_ready"
+    case takeBegin = "take_begin"
+    case takeEnd = "take_end"
+    case heartbeat
+    case error
+    case reconnect
+}
+
+struct WatchRelayLifecyclePacket: Codable, Equatable, Sendable {
+    static let packetKind = "watch_relay_lifecycle_v1"
+    static let capabilities = ["live_motion_batch_v1", "durable_watch_file_v1", "mac_authoritative_take_v1"]
+
+    let kind: String
+    let event: WatchRelayLifecycleEvent
+    let context: WatchRelayTakeContext?
+    let detail: String?
+    let capabilities: [String]
+    let sentAt: Date
+
+    init(
+        event: WatchRelayLifecycleEvent,
+        context: WatchRelayTakeContext? = nil,
+        detail: String? = nil,
+        capabilities: [String] = WatchRelayLifecyclePacket.capabilities,
+        sentAt: Date = Date()
+    ) {
+        self.kind = Self.packetKind
+        self.event = event
+        self.context = context
+        self.detail = detail
+        self.capabilities = capabilities
+        self.sentAt = sentAt
+    }
+}
+
+struct WatchRelayInterruption: Identifiable, Codable, Equatable, Sendable {
+    let id: UUID
+    let context: WatchRelayTakeContext?
+    let detail: String
+    let occurredAt: Date
+
+    init(
+        id: UUID = UUID(),
+        context: WatchRelayTakeContext?,
+        detail: String,
+        occurredAt: Date = Date()
+    ) {
+        self.id = id
+        self.context = context
+        self.detail = detail
+        self.occurredAt = occurredAt
+    }
+}
+
+enum WatchRelayStateResolver {
+    static func resolve(
+        isWatchReachable: Bool,
+        isMacConnected: Bool,
+        activeContext: WatchRelayTakeContext?,
+        hadRequiredConnections: Bool,
+        interruptionReason: String?
+    ) -> WatchRelayFlowState {
+        if interruptionReason != nil {
+            return .interrupted
+        }
+        if activeContext != nil {
+            return isWatchReachable && isMacConnected ? .active : .interrupted
+        }
+        if isWatchReachable && isMacConnected {
+            return .ready
+        }
+        return hadRequiredConnections ? .interrupted : .waiting
     }
 }
 

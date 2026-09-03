@@ -1273,88 +1273,71 @@ final class MacCaptureEngine: NSObject, ObservableObject {
 
         static func replaceAudioTrack(
             videoURL: URL,
-            onboardAudioURL: URL,
-            completion: @escaping (Result<Void, Error>) -> Void
-        ) {
+            onboardAudioURL: URL
+        ) async throws {
             let videoAsset = AVURLAsset(url: videoURL)
             let audioAsset = AVURLAsset(url: onboardAudioURL)
-            Task {
-                do {
-                    guard let sourceVideoTrack = try await videoAsset.loadTracks(withMediaType: .video).first else {
-                        completion(.failure(MuxError.missingVideoTrack))
-                        return
-                    }
-                    guard let sourceAudioTrack = try await audioAsset.loadTracks(withMediaType: .audio).first else {
-                        completion(.failure(MuxError.missingAudioTrack))
-                        return
-                    }
+            guard let sourceVideoTrack = try await videoAsset.loadTracks(withMediaType: .video).first else {
+                throw MuxError.missingVideoTrack
+            }
+            guard let sourceAudioTrack = try await audioAsset.loadTracks(withMediaType: .audio).first else {
+                throw MuxError.missingAudioTrack
+            }
 
-                    let composition = AVMutableComposition()
-                    guard let compositionVideo = composition.addMutableTrack(
-                        withMediaType: .video,
-                        preferredTrackID: kCMPersistentTrackID_Invalid
-                    ),
-                    let audioTrack = composition.addMutableTrack(
-                        withMediaType: .audio,
-                        preferredTrackID: kCMPersistentTrackID_Invalid
-                    ) else {
-                        completion(.failure(MuxError.unableToCreateCompositionTrack))
-                        return
-                    }
+            let composition = AVMutableComposition()
+            guard let compositionVideo = composition.addMutableTrack(
+                withMediaType: .video,
+                preferredTrackID: kCMPersistentTrackID_Invalid
+            ),
+            let audioTrack = composition.addMutableTrack(
+                withMediaType: .audio,
+                preferredTrackID: kCMPersistentTrackID_Invalid
+            ) else {
+                throw MuxError.unableToCreateCompositionTrack
+            }
 
-                    let videoDuration = try await videoAsset.load(.duration)
-                    let audioDuration = CMTimeMinimum(
-                        try await audioAsset.load(.duration),
-                        videoDuration
-                    )
-                    let preferredTransform = try await sourceVideoTrack.load(.preferredTransform)
+            let videoDuration = try await videoAsset.load(.duration)
+            let audioDuration = CMTimeMinimum(
+                try await audioAsset.load(.duration),
+                videoDuration
+            )
+            let preferredTransform = try await sourceVideoTrack.load(.preferredTransform)
                 try compositionVideo.insertTimeRange(
-                    CMTimeRange(start: .zero, duration: videoDuration),
-                    of: sourceVideoTrack,
-                    at: .zero
-                )
-                    compositionVideo.preferredTransform = preferredTransform
-                try audioTrack.insertTimeRange(
-                    CMTimeRange(start: .zero, duration: audioDuration),
-                    of: sourceAudioTrack,
-                    at: .zero
-                )
+                CMTimeRange(start: .zero, duration: videoDuration),
+                of: sourceVideoTrack,
+                at: .zero
+            )
+            compositionVideo.preferredTransform = preferredTransform
+            try audioTrack.insertTimeRange(
+                CMTimeRange(start: .zero, duration: audioDuration),
+                of: sourceAudioTrack,
+                at: .zero
+            )
 
-                    guard let exporter = AVAssetExportSession(
-                        asset: composition,
-                        presetName: AVAssetExportPresetHighestQuality
-                    ) else {
-                        completion(.failure(MuxError.unableToCreateExporter))
-                        return
-                    }
+            guard let exporter = AVAssetExportSession(
+                asset: composition,
+                presetName: AVAssetExportPresetHighestQuality
+            ) else {
+                throw MuxError.unableToCreateExporter
+            }
 
-                    let temporaryURL = videoURL.deletingLastPathComponent()
-                        .appendingPathComponent(".\(UUID().uuidString)-onboard-audio.mov")
-                    try? FileManager.default.removeItem(at: temporaryURL)
-                    exporter.outputURL = temporaryURL
-                    exporter.outputFileType = .mov
-                    exporter.shouldOptimizeForNetworkUse = true
-                    exporter.exportAsynchronously {
-                        guard exporter.status == .completed else {
-                            try? FileManager.default.removeItem(at: temporaryURL)
-                            completion(.failure(MuxError.exportFailed(
-                                exporter.error?.localizedDescription ?? "unknown export error"
-                            )))
-                            return
-                        }
-                        do {
-                            try FileManager.default.removeItem(at: videoURL)
-                            try FileManager.default.moveItem(at: temporaryURL, to: videoURL)
-                            completion(.success(()))
-                        } catch {
-                            try? FileManager.default.removeItem(at: temporaryURL)
-                            completion(.failure(error))
-                        }
-                    }
-                } catch {
-                    completion(.failure(error))
-                    return
-                }
+            let temporaryURL = videoURL.deletingLastPathComponent()
+                .appendingPathComponent(".\(UUID().uuidString)-onboard-audio.mov")
+            try? FileManager.default.removeItem(at: temporaryURL)
+            exporter.shouldOptimizeForNetworkUse = true
+            do {
+                try await exporter.export(to: temporaryURL, as: .mov)
+            } catch {
+                try? FileManager.default.removeItem(at: temporaryURL)
+                throw MuxError.exportFailed(error.localizedDescription)
+            }
+
+            do {
+                try FileManager.default.removeItem(at: videoURL)
+                try FileManager.default.moveItem(at: temporaryURL, to: videoURL)
+            } catch {
+                try? FileManager.default.removeItem(at: temporaryURL)
+                throw error
             }
         }
     }
@@ -2904,6 +2887,7 @@ final class MacCaptureEngine: NSObject, ObservableObject {
             UserDefaults.standard.set(hasExplicitUserAudioSelection, forKey: ScratchLabDesktopDefaultsKey.selectedAudioDeviceWasExplicit)
             syncDirectCaptureStatus(using: availableAudioDevices)
             resetAudioSignalLevel()
+            syncScratchPlaybackOutputRoute()
             guard oldValue != selectedAudioDeviceUniqueID, isRunning else { return }
             reconfigureSession()
         }
@@ -3384,6 +3368,38 @@ final class MacCaptureEngine: NSObject, ObservableObject {
 
     func applyPendingWatchReply(_ reply: WatchCaptureControlReply?) {
         pendingWatchReply = reply
+    }
+
+    @MainActor
+    func recordWatchRelayInterruption(_ interruption: WatchRelayInterruption) {
+        guard let context = interruption.context else { return }
+        if var sidecar = activeRoutineRecordingSidecar,
+           sidecar.sessionID == context.sessionID,
+           sidecar.takeID == context.takeID,
+           let sidecarURL = activeRoutineRecordingSidecarURL {
+            sidecar = sidecar.withWatchRelayInterruption(
+                interruption.detail,
+                recordedAt: interruption.occurredAt
+            )
+            do {
+                try writeRoutineRecordingSidecar(sidecar, to: sidecarURL)
+                activeRoutineRecordingSidecar = sidecar
+            } catch {
+                reportRoutineRecordingIssue("Watch relay interruption could not be saved to the take diagnostics.")
+            }
+            return
+        }
+
+        guard pendingRoutineTakeIdentity?.sessionID == context.sessionID,
+              pendingRoutineTakeIdentity?.takeID == context.takeID else { return }
+        pendingWatchReply = WatchCaptureControlReply(
+            commandID: pendingWatchReply?.commandID ?? "watch-relay-interruption",
+            sessionID: context.sessionID,
+            takeID: context.takeID,
+            syncState: .failed,
+            detail: interruption.detail,
+            acknowledgedAt: interruption.occurredAt
+        )
     }
 
     @MainActor
@@ -4531,6 +4547,7 @@ final class MacCaptureEngine: NSObject, ObservableObject {
         refreshMIDISources()
 
         refreshAudioInputSelection(using: audioDevices)
+        syncScratchPlaybackOutputRoute(using: audioDevices)
 
         if !videoDevices.contains(where: { $0.uniqueID == selectedVideoDeviceUniqueID }) {
             selectedVideoDeviceUniqueID = videoDevices.first?.uniqueID ?? ""
@@ -4723,6 +4740,34 @@ final class MacCaptureEngine: NSObject, ObservableObject {
         pendingAudioSelectionOrigin = origin
         selectedAudioDeviceUniqueID = uniqueID
         pendingAudioSelectionOrigin = .automatic
+    }
+
+    /// Standalone scratch audio must leave through the real Rane interface so
+    /// the controller's hardware signal meters represent the sound ScratchLab
+    /// is producing. Never bind playback to a Serato virtual endpoint. The
+    /// system default remains the fail-safe when no physical Rane is present.
+    private func syncScratchPlaybackOutputRoute(using audioDevices: [AVCaptureDevice]? = nil) {
+        let devices = audioDevices ?? availableAudioDevices
+        let selectedRane = devices.first(where: {
+            $0.uniqueID == selectedAudioDeviceUniqueID
+                && Self.isRaneHardwareDeviceName($0.localizedName)
+        })
+        let raneDevice = selectedRane
+            ?? devices.first(where: { Self.isRaneHardwareDeviceName($0.localizedName) })
+
+        guard let raneDevice,
+              let deviceID = Self.audioDeviceID(forUID: raneDevice.uniqueID) else {
+            scratchPlaybackController.setPreferredOutputDevice(
+                deviceID: nil,
+                deviceName: "System Default"
+            )
+            return
+        }
+
+        scratchPlaybackController.setPreferredOutputDevice(
+            deviceID: deviceID,
+            deviceName: raneDevice.localizedName
+        )
     }
 
     private func refreshAudioInputSelection(
@@ -6322,6 +6367,8 @@ final class MacCaptureEngine: NSObject, ObservableObject {
             targetLabel: sidecar.sessionConfig?.scratchType.flatMap {
                 $0 == .unknown ? nil : $0.title
             },
+            sessionConfig: sidecar.sessionConfig,
+            startedAt: sidecar.startedAt,
             audioSourceURL: audioURL,
             videoSourceURL: mediaURL,
             audioExists: audioExists,
@@ -11240,24 +11287,20 @@ extension MacCaptureEngine: AVCaptureFileOutputRecordingDelegate {
                 )
                 Task { @MainActor in
                     self.onboardOutputCaptureStatus = "Captured \(frames) onboard AHHH frames for this take."
-                }
-                RoutineReviewMovieMuxer.replaceAudioTrack(
-                    videoURL: outputFileURL,
-                    onboardAudioURL: audioURL
-                ) { muxResult in
                     let muxError: Error?
-                    switch muxResult {
-                    case .success:
+                    do {
+                        try await RoutineReviewMovieMuxer.replaceAudioTrack(
+                            videoURL: outputFileURL,
+                            onboardAudioURL: audioURL
+                        )
                         muxError = nil
-                    case let .failure(error):
+                    } catch {
                         muxError = error
                     }
-                    DispatchQueue.main.async {
-                        self.finalizeRoutineRecording(
-                            outputFileURL: outputFileURL,
-                            error: error ?? muxError
-                        )
-                    }
+                    self.finalizeRoutineRecording(
+                        outputFileURL: outputFileURL,
+                        error: error ?? muxError
+                    )
                 }
                 return
             case .empty:
@@ -11268,7 +11311,7 @@ extension MacCaptureEngine: AVCaptureFileOutputRecordingDelegate {
                 finalError = error ?? captureError
             }
 
-            DispatchQueue.main.async {
+            Task { @MainActor in
                 // finalizeRoutineRecording returns immediately and schedules
                 // its second half through the admission gate.
                 self.finalizeRoutineRecording(

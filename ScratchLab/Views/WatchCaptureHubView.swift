@@ -2,187 +2,254 @@ import SwiftUI
 
 struct WatchCaptureHubView: View {
     @EnvironmentObject private var watchMotionCaptureStore: WatchMotionCaptureStore
+    @EnvironmentObject private var broadcaster: CompanionCameraBroadcaster
+    @AppStorage("localNetworkRationaleAccepted") private var localNetworkRationaleAccepted = false
 
     var body: some View {
-        ZStack {
-            BackgroundView()
+        ScrollView {
+            VStack(alignment: .leading, spacing: 18) {
+                Text("SCRATCHLAB COMPANION")
+                    .font(.system(size: 12, weight: .semibold))
+                    .foregroundStyle(ScratchLabDesign.Sem.textAccent)
 
-            ScrollView {
-                VStack(alignment: .leading, spacing: 20) {
-                    headerCard
-                    workflowCard
-                    sessionsCard
-                }
-                .padding(20)
+                Text(presentation.title)
+                    .font(ScratchLabDesign.Typo.display)
+                    .foregroundStyle(ScratchLabDesign.Sem.textPrimary)
+
+                Text(presentation.subtitle)
+                    .font(ScratchLabDesign.Typo.bodyDefault)
+                    .foregroundStyle(ScratchLabDesign.Sem.textSecondary)
+                    .fixedSize(horizontal: false, vertical: true)
+
+                stateContent
             }
+            .padding(.horizontal, 32)
+            .padding(.top, 34)
+            .padding(.bottom, 34)
+            .frame(maxWidth: .infinity, alignment: .leading)
         }
-        .navigationTitle("Watch Capture")
+        .background(ScratchLabDesign.Surface.canvas.ignoresSafeArea())
+        .navigationTitle("")
         .navigationBarTitleDisplayMode(.inline)
         .onAppear {
             watchMotionCaptureStore.activateIfNeeded()
-        }
-    }
-
-    private var headerCard: some View {
-        VStack(alignment: .leading, spacing: 14) {
-            Text("Watch Capture")
-                .font(ScratchLabDesign.Typo.pageTitle)
-                .foregroundColor(ScratchLabDesign.Sem.textPrimary)
-
-            Text(watchMotionCaptureStore.connectionSummary)
-                .font(ScratchLabDesign.Typo.pageSubtitle)
-                .foregroundColor(ScratchLabDesign.Sem.textSecondary)
-
-            VStack(alignment: .leading, spacing: 8) {
-                statusRow(
-                    label: "Paired Watch",
-                    value: watchMotionCaptureStore.isWatchPaired ? "Yes" : "No",
-                    isPositive: watchMotionCaptureStore.isWatchPaired
-                )
-                statusRow(
-                    label: "Watch App Installed",
-                    value: watchMotionCaptureStore.isWatchAppInstalled ? "Yes" : "No",
-                    isPositive: watchMotionCaptureStore.isWatchAppInstalled
-                )
-                statusRow(
-                    label: "Reachable Right Now",
-                    value: watchMotionCaptureStore.isWatchReachable ? "Yes" : "No",
-                    isPositive: watchMotionCaptureStore.isWatchReachable
-                )
-                statusRow(label: "Import Status", value: watchMotionCaptureStore.lastImportStatus, isPositive: nil)
+            if localNetworkRationaleAccepted {
+                broadcaster.startRelayAdvertisingIfNeeded()
             }
+            watchMotionCaptureStore.updateMacConnection(isConnected: !broadcaster.connectedPeerNames.isEmpty)
         }
-        .scratchLabCard(.selected)
     }
 
-    private var workflowCard: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            Text("Quick flow")
-                .font(ScratchLabDesign.Typo.cardHeading)
-                .foregroundColor(ScratchLabDesign.Sem.textPrimary)
-
-            Text("1. Open ScratchLab on the watch and paired device.")
-                .font(ScratchLabDesign.Typo.body)
-                .foregroundColor(ScratchLabDesign.Sem.textSecondary)
-
-            Text("2. Tap Start on the watch, perform the take, then tap Stop.")
-                .font(ScratchLabDesign.Typo.body)
-                .foregroundColor(ScratchLabDesign.Sem.textSecondary)
-
-            Text("3. Keep the watch app open until the transfer finishes.")
-                .font(ScratchLabDesign.Typo.body)
-                .foregroundColor(ScratchLabDesign.Sem.textSecondary)
-
-            Text("4. Export JSON or CSV here when you need to share the motion log.")
-                .font(ScratchLabDesign.Typo.body)
-                .foregroundColor(ScratchLabDesign.Sem.textSecondary)
-        }
-        .scratchLabCard(.standard)
-    }
-
-    private var sessionsCard: some View {
-        VStack(alignment: .leading, spacing: 14) {
-            Text("Imported Sessions")
-                .font(ScratchLabDesign.Typo.cardHeading)
-                .foregroundColor(ScratchLabDesign.Sem.textPrimary)
-
-            if watchMotionCaptureStore.importedSessions.isEmpty {
-                Text("No motion sessions have been imported yet.")
-                    .font(ScratchLabDesign.Typo.pageSubtitle)
-                    .foregroundColor(ScratchLabDesign.Sem.textSecondary)
-                    .padding(.vertical, 12)
-            } else {
-                ForEach(watchMotionCaptureStore.importedSessions) { capture in
-                    WatchCaptureSessionCard(capture: capture)
-                        .environmentObject(watchMotionCaptureStore)
-                }
+    @ViewBuilder
+    private var stateContent: some View {
+        switch presentation.state {
+        case .waiting:
+            waitingStateContent
+        case .ready:
+            relayStatusCard(title: "Apple Watch", badge: .connected, detail: "Watch motion source detected.")
+            relayStatusCard(title: "Mac ScratchLab", badge: .connected, detail: "Mac capture host detected.")
+            relayStatusCard(title: "Motion Relay", badge: .ready, detail: "Ready. Recording can proceed without watch if needed.")
+            relayPath("WATCH → iPHONE → MAC")
+            footer("Watch is optional; the Mac remains the capture authority.")
+        case .active:
+            relayStatusCard(title: "Apple Watch", badge: .connected, detail: "Receiving wrist motion.")
+            relayStatusCard(title: "Mac ScratchLab", badge: .connected, detail: "Connected to active capture host.")
+            relayStatusCard(title: "Motion Relay", badge: .active, detail: "Relaying watch motion for the active take.")
+            if let context = watchMotionCaptureStore.activeRelayContext {
+                relayPath("SESSION: \(context.sessionID)\nTAKE: \(context.takeID)\nWRIST: \(context.watchWrist?.uppercased() ?? "NOT SET")")
             }
-        }
-        .scratchLabCard(.standard)
-    }
-
-    private func statusRow(label: String, value: String, isPositive: Bool?) -> some View {
-        HStack(alignment: .top) {
-            Text(label)
-                .font(ScratchLabDesign.Typo.metricLabel)
-                .foregroundColor(ScratchLabDesign.Sem.textAccent)
-                .frame(width: 124, alignment: .leading)
-
-            Text(value)
-                .font(ScratchLabDesign.Typo.bodySecondary)
-                .foregroundColor(statusRowValueColor(isPositive: isPositive))
-        }
-    }
-
-    /// `isPositive == nil` is a free-text status (e.g. Import Status), which
-    /// stays neutral text rather than being force-fit into success/muted —
-    /// only the three genuine yes/no connectivity facts get a semantic tint,
-    /// and even "Yes" only reaches `Sem.info` ("connected"), never
-    /// `Sem.success`, since pairing/installation/reachability are connection
-    /// facts, not proof the watch is ready to capture.
-    private func statusRowValueColor(isPositive: Bool?) -> Color {
-        switch isPositive {
-        case true:  return ScratchLabDesign.Sem.info
-        case false: return ScratchLabDesign.Sem.textTertiary
-        case nil:   return ScratchLabDesign.Sem.textSecondary
-        }
-    }
-}
-
-private struct WatchCaptureSessionCard: View {
-    @EnvironmentObject private var watchMotionCaptureStore: WatchMotionCaptureStore
-
-    let capture: ImportedWatchMotionCapture
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            Text(dateFormatter.string(from: capture.session.startedAt))
-                .font(ScratchLabDesign.Typo.title3)
-                .foregroundColor(ScratchLabDesign.Sem.textPrimary)
-
-            Text("Motion: \(capture.session.sampleCount) • \(durationString(capture.session.duration))")
-                .font(ScratchLabDesign.Typo.bodySecondary)
-                .foregroundColor(ScratchLabDesign.Sem.textSecondary)
-
-            HStack(spacing: 12) {
-                ShareLink(item: watchMotionCaptureStore.jsonExportURL(for: capture)) {
-                    exportBadge(title: "Share JSON", color: ScratchLabDesign.Sem.accent)
-                }
-
-                if let csvURL = watchMotionCaptureStore.csvExportURL(for: capture) {
-                    ShareLink(item: csvURL) {
-                        exportBadge(title: "Share CSV", color: ScratchLabDesign.Sem.success)
-                    }
-                }
+            footer("If the relay drops, the take continues and received motion is preserved.")
+        case .interrupted:
+            relayStatusCard(
+                title: "Connection",
+                badge: .failed,
+                detail: watchMotionCaptureStore.relayInterruptionReason
+                    ?? "Watch or Mac relay connection was lost."
+            )
+            Button("Retry Connection") {
+                localNetworkRationaleAccepted = true
+                broadcaster.startRelayAdvertisingIfNeeded()
+                watchMotionCaptureStore.retryRelayConnection()
             }
+            .font(ScratchLabDesign.Typo.buttonPrimary)
+            .foregroundStyle(ScratchLabDesign.Sem.textOnAccent)
+            .frame(width: 160, height: 44)
+            .background(ScratchLabDesign.Sem.accent, in: RoundedRectangle(cornerRadius: ScratchLabDesign.Radius.control))
+            .buttonStyle(.plain)
+
+            Text("Retry the relay when ready. Do not restart the take just for missing Watch motion.")
+                .font(ScratchLabDesign.Typo.bodySmall)
+                .foregroundStyle(ScratchLabDesign.Sem.textSecondary)
+                .fixedSize(horizontal: false, vertical: true)
+
+            Text("WATCH OPTIONAL · CAPTURE CONTINUES")
+                .font(.system(size: 12, weight: .semibold))
+                .foregroundStyle(ScratchLabDesign.Sem.textPrimary)
         }
-        .padding(ScratchLabDesign.Card.padding)
+    }
+
+    @ViewBuilder
+    private var waitingStateContent: some View {
+        let watchConnected = watchMotionCaptureStore.isWatchReachable
+        let macConnected = !broadcaster.connectedPeerNames.isEmpty
+
+        relayStatusCard(
+            title: "Apple Watch",
+            badge: watchConnected ? .connected : .waiting,
+            detail: watchConnected
+                ? "Watch motion source detected."
+                : "No Apple Watch connected."
+        )
+        relayStatusCard(
+            title: "Mac ScratchLab",
+            badge: macConnected ? .connected : .waiting,
+            detail: macConnected
+                ? "Mac capture host detected."
+                : "Waiting for ScratchLab Capture on the Mac."
+        )
+        if watchConnected != macConnected {
+            relayStatusCard(
+                title: "Motion Relay",
+                badge: .waiting,
+                detail: watchConnected
+                    ? "Waiting for Mac capture authority."
+                    : "Watch motion is unavailable; capture remains available."
+            )
+        }
+        relayPath(presentation.waitingRoute)
+        footer(presentation.waitingFooter)
+    }
+
+    private var presentation: RelayPresentation {
+        RelayPresentation(
+            state: watchMotionCaptureStore.relayState,
+            isWatchConnected: watchMotionCaptureStore.isWatchReachable,
+            isMacConnected: !broadcaster.connectedPeerNames.isEmpty
+        )
+    }
+
+    private func relayStatusCard(title: String, badge: RelayBadge, detail: String) -> some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack {
+                Text(title)
+                    .font(.system(size: 14, weight: .semibold))
+                    .foregroundStyle(ScratchLabDesign.Sem.textPrimary)
+                Spacer()
+                badgeView(badge)
+            }
+            Text(detail)
+                .font(.system(size: 12))
+                .foregroundStyle(ScratchLabDesign.Sem.textSecondary)
+        }
+        .padding(14)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(ScratchLabDesign.Surface.surface, in: RoundedRectangle(cornerRadius: ScratchLabDesign.Radius.card, style: .continuous))
+        .background(ScratchLabDesign.Surface.surface, in: RoundedRectangle(cornerRadius: 12))
+        .overlay(RoundedRectangle(cornerRadius: 12).stroke(ScratchLabDesign.Border.default, lineWidth: 1))
     }
 
-    private var dateFormatter: DateFormatter {
-        let formatter = DateFormatter()
-        formatter.dateStyle = .medium
-        formatter.timeStyle = .medium
-        return formatter
-    }
-
-    private func durationString(_ duration: TimeInterval) -> String {
-        let minutes = Int(duration) / 60
-        let seconds = Int(duration) % 60
-        if minutes > 0 {
-            return "\(minutes)m \(seconds)s"
+    private func badgeView(_ badge: RelayBadge) -> some View {
+        HStack(spacing: 6) {
+            Circle().fill(badge.color).frame(width: 6, height: 6)
+            Text(badge.label)
+                .font(ScratchLabDesign.Typo.statusPill)
+                .foregroundStyle(badge.color)
         }
-        return "\(seconds)s"
+        .padding(.horizontal, 10)
+        .padding(.vertical, 6)
+        .background(ScratchLabDesign.Surface.surface, in: Capsule())
+        .overlay(Capsule().stroke(badge.color, lineWidth: 1))
     }
 
-    private func exportBadge(title: String, color: Color) -> some View {
-        Text(title)
-            .font(ScratchLabDesign.Typo.chipLabel)
-            .foregroundColor(ScratchLabDesign.Sem.textOnAccent)
-            .padding(.horizontal, 12)
-            .padding(.vertical, 8)
-            .background(color, in: RoundedRectangle(cornerRadius: ScratchLabDesign.Radius.control, style: .continuous))
+    private func relayPath(_ text: String) -> some View {
+        Text(text)
+            .font(.system(size: 12, weight: .medium, design: .monospaced))
+            .foregroundStyle(ScratchLabDesign.Sem.textSecondary)
+            .lineLimit(3)
+            .truncationMode(.middle)
+    }
+
+    private func footer(_ text: String) -> some View {
+        Text(text)
+            .font(.system(size: 12))
+            .foregroundStyle(ScratchLabDesign.Sem.textSecondary)
+    }
+
+    private struct RelayPresentation {
+        let state: WatchRelayFlowState
+        let isWatchConnected: Bool
+        let isMacConnected: Bool
+
+        var title: String {
+            switch state {
+            case .waiting:
+                switch (isWatchConnected, isMacConnected) {
+                case (true, false): return "Waiting for Mac"
+                case (false, true): return "Watch Optional"
+                default: return "Watch Relay"
+                }
+            case .ready: return "Relay Ready"
+            case .active: return "Take in Progress"
+            case .interrupted: return "Relay Interrupted"
+            }
+        }
+
+        var subtitle: String {
+            switch state {
+            case .waiting:
+                switch (isWatchConnected, isMacConnected) {
+                case (true, false):
+                    return "Apple Watch is connected. Waiting for ScratchLab Capture on the Mac."
+                case (false, true):
+                    return "The Mac capture host is connected. A DJ can start and complete a take without an Apple Watch."
+                default:
+                    return "Watch optional. Capturing can continue without watch motion."
+                }
+            case .ready:
+                return "Everything is connected. Leave the iPhone unlocked with this screen open during capture."
+            case .active:
+                return "Motion is being relayed to the active ScratchLab take on the Mac."
+            case .interrupted:
+                return "Watch motion relay was interrupted. The Mac capture continues and received motion is preserved."
+            }
+        }
+
+        var waitingRoute: String {
+            switch (isWatchConnected, isMacConnected) {
+            case (true, false): return "WATCH → iPHONE → MAC (WAITING)"
+            case (false, true): return "MAC CAPTURE READY · WATCH OPTIONAL"
+            default: return "WATCH (OPTIONAL) → iPHONE → MAC"
+            }
+        }
+
+        var waitingFooter: String {
+            switch (isWatchConnected, isMacConnected) {
+            case (true, false): return "The Mac can still capture without this Watch relay."
+            case (false, true): return "Recording remains available; only wrist motion is absent."
+            default: return "No camera recording happens on this iPhone."
+            }
+        }
+    }
+
+    private enum RelayBadge {
+        case waiting, connected, ready, active, failed
+
+        var label: String {
+            switch self {
+            case .waiting: return "WAITING"
+            case .connected: return "CONNECTED"
+            case .ready: return "READY"
+            case .active: return "ACTIVE"
+            case .failed: return "FAILED"
+            }
+        }
+
+        var color: Color {
+            switch self {
+            case .waiting: return ScratchLabDesign.Sem.textWarning
+            case .connected: return ScratchLabDesign.Sem.textAccent
+            case .ready: return ScratchLabDesign.Sem.textStatusReady
+            case .active, .failed: return ScratchLabDesign.Sem.textError
+            }
+        }
     }
 }

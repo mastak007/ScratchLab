@@ -76,10 +76,10 @@ struct WatchCaptureView: View {
 
     private var statusCard: some View {
         VStack(alignment: .leading, spacing: 6) {
-            Text(recorder.isRecording ? "Recording" : "Ready")
+            Text(captureStatusTitle)
                 .font(.caption.weight(.semibold))
-                .foregroundStyle(recorder.isRecording ? ScratchLabCoreColor.danger : ScratchLabCoreColor.success)
-                .accessibilityLabel(recorder.isRecording ? "Status: Recording" : "Status: Ready")
+                .foregroundStyle(captureStatusColor)
+                .accessibilityLabel("Status: \(captureStatusTitle)")
 
             Text(recorder.transferStatus)
                 .font(.caption2)
@@ -122,6 +122,9 @@ struct WatchCaptureView: View {
 
     private var captureButtonTitle: String {
         guard recorder.isPhoneCaptureCommandPending else {
+            if !recorder.isMotionCaptureAvailable {
+                return "Motion Unavailable"
+            }
             if !canSendCaptureCommand {
                 return "Open iPhone Capture"
             }
@@ -135,12 +138,27 @@ struct WatchCaptureView: View {
     /// stopping remains available so an already-running local Watch take can
     /// still be ended safely if the live connection drops.
     private var canSendCaptureCommand: Bool {
-        recorder.isRecording || recorder.isPhoneReachable
+        recorder.isRecording || (recorder.isMotionCaptureAvailable && recorder.isPhoneReachable)
+    }
+
+    private var captureStatusTitle: String {
+        if recorder.isRecording { return "Recording" }
+        return recorder.isMotionCaptureAvailable ? "Ready" : "Unavailable"
+    }
+
+    private var captureStatusColor: Color {
+        if recorder.isRecording { return ScratchLabCoreColor.danger }
+        return recorder.isMotionCaptureAvailable
+            ? ScratchLabCoreColor.success
+            : ScratchLabCoreColor.warning
     }
 
     private var captureButtonAccessibilityLabel: String {
         if recorder.isRecording {
             return "Stop Take, recording in progress"
+        }
+        if !recorder.isMotionCaptureAvailable {
+            return "Watch motion capture is unavailable"
         }
         if !recorder.isPhoneReachable {
             return "Open Capture on iPhone and wait for Transfer Connected"
@@ -149,7 +167,10 @@ struct WatchCaptureView: View {
     }
 
     private var watchInstruction: String {
-        recorder.isPhoneReachable
+        if !recorder.isMotionCaptureAvailable {
+            return "Motion is unavailable on this watch. Use a physical Apple Watch to capture movement."
+        }
+        return recorder.isPhoneReachable
             ? "Keep the watch app open during recording."
             : "Open Capture on iPhone. Start Take becomes available when Transfer says Connected."
     }
