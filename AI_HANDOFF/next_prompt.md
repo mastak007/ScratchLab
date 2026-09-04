@@ -1,3 +1,45 @@
+## Current continuation - Watch stop is DONE; decide what to commit
+
+Do not re-open the watch stop path or the overrun measurement. Both are fixed and hardware-verified: `session_2026_09_04_ppop_baby_scratch_95_bpm` validates PASS with zero warnings, `watchStopOutcome: stopped`, overrun 0 s, and the whole handshake inside one second.
+
+The tree has ~20 modified files and **nothing is committed**. First action is to agree with Karl what to commit and on which branch (currently `feature/ios-capture-camera-ux`). The 2026-09-04 DEV_LOG entries list every file and why it changed. Do not commit or push without explicit approval, and no `Co-Authored-By` trailers.
+
+If a fresh capture ever regresses: the root cause last time was the relay minting a fresh `commandID` instead of forwarding the Mac's, so no reply matched the awaited command. Check the ID being awaited before theorising about latency. `watchStopRelayReceivedAt` now distinguishes "the phone never heard it" (no receipt) from "the watch never answered" (receipt present).
+
+Open, in priority order:
+1. `TimecodeRealtimeIngressRingTests.testConcurrentSPSCStressAccountsForEveryAttempt` is flaky and makes `scripts/build.sh` non-deterministic. Either the SPSC ring drops a published slot under contention (a real defect) or the test's accounting is wrong under load. Determine which before trusting the gate.
+2. `ScratchLabWatch` has no `PrivacyInfo.xcprivacy`. Needs a file reference plus a Copy Bundle Resources entry in `project.pbxproj` - separate approval. Not a blocker today: no required-reason API is used in that target.
+3. The remaining ASC items are all manual App Store Connect checks, listed in the audit section of the 2026-09-04 records - versioning against the existing app record, signing/profiles, the privacy questionnaire matching the empty `NSPrivacyCollectedDataTypes`, export compliance, watch app listing and screenshots, background-audio justification, and Mac App Store vs Developer ID distribution.
+
+## Current continuation - Watch stop is fixed and hardware-confirmed; chase the relay ack latency next
+
+Do not re-open the stop path. Session `1ce25396-…` proved it works: the Watch stopped in the same second the Mac asked (stop dispatched 03:39:30Z, Watch `endedAt` 03:39:30Z), and Karl confirmed he did not touch the Watch. The fail-closed ownership rule in `CaptureWatchStopPolicy.startMayHaveLeftWatchRecording(_:)` is what made that happen, because the start handshake had come back `failed`.
+
+The open defect is **acknowledgement latency in the Mac -> iPhone -> Watch relay, roughly 5 s each way**. The Watch acknowledged the start at 03:39:15Z and it had not reached the Mac by 03:39:17Z; the Watch stopped at 03:39:30Z and the ack had not arrived by 03:39:35Z. Consequences per take: a spurious `watchSyncState: failed`, a spurious `watchStopOutcome: timedOut`, and about 3 s of needless watch lead-in caused by the Mac blocking on the start await.
+
+Find where the time goes **before** changing any timeout. Widening `CaptureWatchStopPolicy` bounds without knowing the cause would hide the defect rather than fix it, and would also widen the validator's overrun thresholds, which are derived from it. Measure, do not assume: WCSession reachability when the Watch screen sleeps mid-take (likely, and the standard answer is an `HKWorkoutSession` to keep the app alive - that is a real design decision, not a tweak); the iPhone relay's SwiftUI `onChange` dispatch of `pendingWatchControlCommand`; and MultipeerConnectivity send latency Mac to iPhone. Instrument each boundary and get one measured run before proposing a fix.
+
+Also worth one fresh export: the four alignment instants (`takeStartedAt`, `takeStopRequestedAt`, `watchCaptureStartedAt`, `watchCaptureEndedAt`) were added after the last capture, so no archive carries them yet. A new take should validate PASS with a lead-in warning and no overrun line.
+
+Unchanged and still outstanding: the flaky `TimecodeRealtimeIngressRingTests.testConcurrentSPSCStressAccountsForEveryAttempt` makes `scripts/build.sh` non-deterministic, and the two App Store Connect Info.plist blockers (`CFBundleVersion` literal `20`, missing `NSAudioCaptureUsageDescription`) still need Karl's approval before anyone edits them.
+
+## Current continuation - Mac Stop -> Watch stop landed in code; hardware proof is the next action
+
+The Mac's Watch stop is fixed in source and unit-covered but **not proven on hardware**. Do not start new capture work until the physical run below is recorded.
+
+What changed: `MacCaptureEngine` now owns the Watch stop instead of the Stop button. It grants ownership only on an acknowledged start with a complete `TakeIdentity`, dispatches exactly once per take keyed `sessionID:takeID`, and asks from every terminal path - `stopRoutineRecording`, `finalizeRoutineRecording` (which covers AVFoundation ending the take itself at `maxRecordedDuration`), `cancelPendingRoutineReservation`, and every abandoned-start guard. `CompanionCameraReceiver.requestWatchCaptureStop` is now `async` with acknowledgement, a 2.0 s timeout and one retry (`CaptureWatchStopPolicy`, 4.0 s ceiling). The Watch's handler is one `resolveControlCommand` driven by the pure `WatchMotionStopCommandResolver`: idempotent, and it refuses a stop naming a session or take it is not recording. Outcomes export as `watchStopOutcome` / `watchStopDetail` / `watchMotionTransferState`; `watch_source` and `watchSyncState` were not overloaded. `validate_session.py` now fails a Watch capture running more than 4.0 s past the take audio (warns past 2.0 s).
+
+Do this next, in order:
+
+1. Record one fresh Mac + Watch take. Press Stop on the **Mac only** - do not touch the Watch.
+2. Export it and report, verbatim: the take audio duration; the Watch CSV's largest `elapsed_time`; the difference between them; `stopReason`, `watchSyncState`, `watchStopOutcome`, `watchStopDetail`, `watchMotionTransferState` from `manifests/session_metadata.json`; `watch_source` from the canonical manifest; and `validate_session.py`'s status with its full warning and error lists.
+3. Pass requires: the Watch stopped on its own, the overrun is under 4.0 s, `watchStopOutcome` is `stopped`, `watchMotionTransferState` is `completed`, and the validator passes with no watch-overrun line.
+4. Then once each, as separate takes: stop with the Watch out of range (expect `unreachable` or `timedOut` **and** a visible degraded status on the Mac - silent success is a failure), and cancel a count-in (expect the Watch to stop on its own).
+
+Do not hand-edit any archive. If a run fails, keep the raw Watch CSV intact as evidence - the validator reports the overrun, it never truncates it.
+
+Also outstanding, not actioned: the App Store Connect audit found two confirmed repository blockers, both Info.plist edits that `SOUL.md` puts behind explicit approval. `ScratchLabDesktop/Info.plist` hardcodes `CFBundleVersion` to `20` while `CURRENT_PROJECT_VERSION` is `21` for every target (iOS and macOS share bundle ID `com.machelpnz.scratchlab`, so they are one ASC record); the fix is `$(CURRENT_PROJECT_VERSION)`. And the same file has no `NSAudioCaptureUsageDescription`, which the `AudioHardwareCreateProcessTap` Direct Capture path in `MacCaptureEngine.swift:5105` needs. Ask Karl before touching either.
+
 ## Current continuation - use only canonical macOS app; physical waveform/Review smoke next
 
 Use only `/Users/karlwatson/Downloads/ScratchLab/build/CodexProducts-macos-launch/Debug/ScratchLab.app`; it contains the current Review restoration, RANE-over-auto-mic Debug selection, mapped fader notation, and macOS AHHH sample-position waveform. Do not open another DerivedData or `CodexProducts-*` app.

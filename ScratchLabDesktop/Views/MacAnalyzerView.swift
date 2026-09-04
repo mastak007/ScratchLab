@@ -1025,6 +1025,12 @@ struct MacAnalyzerView: View {
                 captureEngine: captureEngine
             )
         )
+        .modifier(
+            WatchStopDispatchInstaller(
+                captureEngine: captureEngine,
+                companionReceiver: companionReceiver
+            )
+        )
         .onDisappear {
             beatEngine.stop()
             babyScratchDemo.stop()
@@ -1134,6 +1140,26 @@ struct MacAnalyzerView: View {
             dvsUIRefreshTick += 1
         }
 #endif
+    }
+
+    /// Gives the capture engine the one way it can stop a Watch capture.
+    ///
+    /// The engine decides *when* a stop is owed — every terminal path for a
+    /// take, not only the Stop button — and this supplies the transport.
+    private struct WatchStopDispatchInstaller: ViewModifier {
+        let captureEngine: MacCaptureEngine
+        let companionReceiver: CompanionCameraReceiver
+
+        func body(content: Content) -> some View {
+            content.onAppear {
+                captureEngine.watchStopRequestHandler = { identity in
+                    await companionReceiver.requestWatchCaptureStop(
+                        sessionID: identity.sessionID,
+                        takeID: identity.takeID
+                    )
+                }
+            }
+        }
     }
 
     private struct WatchRelayInterruptionObserver: ViewModifier {
@@ -4048,7 +4074,7 @@ struct MacAnalyzerView: View {
                 }
                 VStack(alignment: .leading, spacing: 5) {
                     captureFigmaFieldLabel("Take length")
-                    Text(RoutineCaptureDefaults.defaultTakeLengthLabel)
+                    Text(RoutineCaptureDefaults.maximumTakeDurationLabel)
                         .font(.system(size: 14))
                         .padding(.horizontal, 12)
                         .frame(maxWidth: .infinity, minHeight: 40, alignment: .leading)
@@ -4190,7 +4216,7 @@ struct MacAnalyzerView: View {
                 captureFigmaCompactSummaryRow("Session", captureFigmaSessionLabel)
                 captureFigmaCompactSummaryRow("Technique", routineSessionSetup.scratchType?.title ?? "Auto Detect")
                 captureFigmaCompactSummaryRow("Mode", selectedCaptureTimingMode.title)
-                captureFigmaCompactSummaryRow("Length", RoutineCaptureDefaults.defaultTakeLengthLabel)
+                captureFigmaCompactSummaryRow("Take length", RoutineCaptureDefaults.maximumTakeDurationLabel)
             }
 
             Label(
@@ -6357,11 +6383,13 @@ struct MacAnalyzerView: View {
         if config.captureMode == .timedClick, config.bpm == nil {
             config.bpm = CaptureClickTrackDefaults.defaultTimedBPM
         }
-        // The requested take length the Capture panel advertises. Recorded
-        // explicitly so the export can state what was asked for alongside what
-        // was actually captured.
-        if config.plannedTakeDurationSeconds == nil {
-            config.plannedTakeDurationSeconds = RoutineCaptureDefaults.defaultTakeLengthSeconds
+        // The Capture panel has no take-duration control, so there is nothing
+        // the operator planned: the take runs until they press Stop. Record the
+        // recorder's safety cap as a cap. Writing it into
+        // `plannedTakeDurationSeconds` made a manually stopped 16.7 s take read
+        // as a 64 s take that fell 47 s short.
+        if config.maximumTakeDurationSeconds == nil {
+            config.maximumTakeDurationSeconds = RoutineCaptureDefaults.defaultMaximumTakeDurationSeconds
         }
         config.updatedAt = now
         return config
@@ -11368,13 +11396,11 @@ struct MacAnalyzerView: View {
         practiceBeatStore.handleRecordingFlowStarted()
 
         if routineCountInBeat != nil {
-            let cancelledTakeIdentity = captureEngine.cancelPendingRoutineReservation()
+            // `cancelPendingRoutineReservation` requests the matching Watch
+            // stop itself, with the reserved take's own identity.
+            _ = captureEngine.cancelPendingRoutineReservation()
             beatEngine.stop()
             routineCountInBeat = nil
-            companionReceiver.requestWatchCaptureStop(
-                sessionID: cancelledTakeIdentity?.sessionID ?? routineSessionSetup.config.sessionID,
-                takeID: cancelledTakeIdentity?.takeID
-            )
             captureEngine.reportRoutineRecordingIssue("Count-in cancelled.")
             return
         }
@@ -11396,10 +11422,10 @@ struct MacAnalyzerView: View {
 
         if captureEngine.isRoutineRecording {
             beatEngine.stop()
-            companionReceiver.requestWatchCaptureStop(
-                sessionID: routineSessionSetup.config.sessionID,
-                takeID: nil
-            )
+            // `stopRoutineRecording` requests the Watch stop for the take that
+            // is actually recording. Requesting it here as well would use the
+            // session-setup config's ID and no take ID, which is not the
+            // identity the Watch was started with.
             captureEngine.toggleRoutineRecording()
             return
         }
@@ -11458,13 +11484,9 @@ struct MacAnalyzerView: View {
                 )
             )
         } catch {
-            let cancelledTakeIdentity = captureEngine.cancelPendingRoutineReservation()
+            _ = captureEngine.cancelPendingRoutineReservation()
             beatEngine.stop()
             routineCountInBeat = nil
-            companionReceiver.requestWatchCaptureStop(
-                sessionID: cancelledTakeIdentity?.sessionID ?? routineSessionSetup.config.sessionID,
-                takeID: cancelledTakeIdentity?.takeID
-            )
             captureEngine.reportRoutineRecordingIssue(error.localizedDescription)
         }
     }

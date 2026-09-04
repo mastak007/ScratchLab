@@ -620,60 +620,150 @@ final class CompanionCameraReceiver: NSObject, ObservableObject {
             return reply
         }
 
-        return await withTaskGroup(of: WatchCaptureControlReply.self) { group in
+        let reply = await awaitWatchControlReply(
+            for: payload,
+            timeoutSeconds: timeoutSeconds,
+            timeoutDetail: "Watch start did not acknowledge within \(Int(timeoutSeconds)) seconds.",
+            timeoutStopOutcome: nil
+        )
+        relayedWatchCaptureStore.noteRemoteControlStatus(reply)
+        return reply
+    }
+
+    /// Asks the Watch to stop the capture named by `sessionID`/`takeID` and
+    /// waits, within a bound, for it to say what happened.
+    ///
+    /// Previously this was fire-and-forget: the Mac sent a stop and reported
+    /// success regardless of whether the command reached the relay, reached the
+    /// Watch, or was acted on. A Watch that never got the command kept
+    /// recording — for 18.5 s past the end of a take, in the BVB capture — and
+    /// nothing in the export said so.
+    ///
+    /// Bounded on purpose. `CaptureWatchStopPolicy` caps one attempt and the
+    /// total number of attempts, so media finalization can never be blocked
+    /// indefinitely by a Watch that is off the wrist. When the bound is reached
+    /// the degraded outcome is returned and recorded — never smoothed into
+    /// success.
+    ///
+    /// - Returns: the resolved reply. `stopOutcome` is always populated.
+    @MainActor
+    @discardableResult
+    func requestWatchCaptureStop(
+        sessionID: String,
+        takeID: String?,
+        timeoutSeconds: TimeInterval = CaptureWatchStopPolicy.acknowledgementTimeoutSeconds,
+        maximumAttempts: Int = CaptureWatchStopPolicy.maximumAttempts
+    ) async -> WatchCaptureControlReply {
+        relayedWatchCaptureStore.noteRequestedStop()
+        let context = relayedWatchCaptureStore.activeTakeContext
+        let resolvedTakeID = takeID ?? context?.takeID
+        var lastReply: WatchCaptureControlReply?
+
+        for attempt in 1...max(1, maximumAttempts) {
+            let payload = WatchCaptureCommandPayload(
+                command: .stop,
+                sessionID: sessionID,
+                takeID: resolvedTakeID,
+                takeNumber: context?.takeNumber,
+                watchWrist: context?.watchWrist
+            )
+
+            guard !session.connectedPeers.isEmpty else {
+                let reply = WatchCaptureControlReply(
+                    commandID: payload.commandID,
+                    sessionID: sessionID,
+                    takeID: resolvedTakeID,
+                    syncState: .unavailable,
+                    detail: "No companion device is connected, so the watch could not be told to stop.",
+                    stopOutcome: .unreachable
+                )
+                relayedWatchCaptureStore.noteRemoteControlStatus(reply)
+                return reply
+            }
+
+            guard sendWatchControlCommand(payload) else {
+                let reply = WatchCaptureControlReply(
+                    commandID: payload.commandID,
+                    sessionID: sessionID,
+                    takeID: resolvedTakeID,
+                    syncState: .failed,
+                    detail: "ScratchLab couldn't send the watch stop command to the companion device.",
+                    stopOutcome: .failed
+                )
+                relayedWatchCaptureStore.noteRemoteControlStatus(reply)
+                return reply
+            }
+
+            let reply = await awaitWatchControlReply(
+                for: payload,
+                timeoutSeconds: timeoutSeconds,
+                timeoutDetail: "Watch stop was not acknowledged within \(Int(timeoutSeconds)) seconds.",
+                timeoutStopOutcome: .timedOut
+            )
+            lastReply = reply
+
+            let outcome = CaptureWatchStopPolicy.outcome(for: reply)
+            // Only a timeout is worth resending: unreachable, rejected and
+            // failed are answers, not silence, and repeating the command cannot
+            // change them.
+            if outcome != .timedOut || attempt == max(1, maximumAttempts) {
+                relayedWatchCaptureStore.noteRemoteControlStatus(reply)
+                return reply
+            }
+        }
+
+        let fallback = lastReply ?? WatchCaptureControlReply(
+            commandID: UUID().uuidString.lowercased(),
+            sessionID: sessionID,
+            takeID: resolvedTakeID,
+            syncState: .timedOut,
+            detail: "Watch stop was not acknowledged.",
+            stopOutcome: .timedOut
+        )
+        relayedWatchCaptureStore.noteRemoteControlStatus(fallback)
+        return fallback
+    }
+
+    /// Races the command coordinator against a bounded timeout. Shared by the
+    /// start and stop paths so both resolve exactly once.
+    private func awaitWatchControlReply(
+        for payload: WatchCaptureCommandPayload,
+        timeoutSeconds: TimeInterval,
+        timeoutDetail: String,
+        timeoutStopOutcome: CaptureWatchStopOutcome?
+    ) async -> WatchCaptureControlReply {
+        await withTaskGroup(of: WatchCaptureControlReply.self) { group in
             group.addTask {
                 await self.watchCommandCoordinator.begin(command: payload)
             }
             group.addTask {
-                let nanoseconds = UInt64(timeoutSeconds * 1_000_000_000)
-                try? await Task.sleep(nanoseconds: nanoseconds)
+                try? await Task.sleep(nanoseconds: UInt64(timeoutSeconds * 1_000_000_000))
                 return self.watchCommandCoordinator.timeout(commandID: payload.commandID)
                     ?? WatchCaptureControlReply(
                         commandID: payload.commandID,
-                        sessionID: sessionID,
-                        takeID: takeID,
+                        sessionID: payload.sessionID,
+                        takeID: payload.takeID,
                         syncState: .timedOut,
-                        detail: "Watch start did not acknowledge within \(Int(timeoutSeconds)) seconds."
+                        detail: timeoutDetail,
+                        stopOutcome: timeoutStopOutcome
                     )
             }
 
             guard let reply = await group.next() else {
                 return WatchCaptureControlReply(
                     commandID: payload.commandID,
-                    sessionID: sessionID,
-                    takeID: takeID,
+                    sessionID: payload.sessionID,
+                    takeID: payload.takeID,
                     syncState: .failed,
-                    detail: "Watch start failed before a reply was received."
+                    detail: "The watch command failed before a reply was received.",
+                    stopOutcome: timeoutStopOutcome == nil ? nil : .failed
                 )
             }
             group.cancelAll()
-            await MainActor.run {
-                self.relayedWatchCaptureStore.noteRemoteControlStatus(reply)
-            }
-            return reply
-        }
-    }
-
-    @MainActor
-    func requestWatchCaptureStop(sessionID: String, takeID: String?) {
-        relayedWatchCaptureStore.noteRequestedStop()
-        let context = relayedWatchCaptureStore.activeTakeContext
-        let payload = WatchCaptureCommandPayload(
-            command: .stop,
-            sessionID: sessionID,
-            takeID: takeID ?? context?.takeID,
-            takeNumber: context?.takeNumber,
-            watchWrist: context?.watchWrist
-        )
-        if !sendWatchControlCommand(payload) {
-            relayedWatchCaptureStore.noteRemoteControlStatus(
-                WatchCaptureControlReply(
-                    commandID: payload.commandID,
-                    sessionID: sessionID,
-                    takeID: takeID,
-                    syncState: .failed,
-                    detail: "ScratchLab couldn't send the watch stop command to the companion device."
-                )
+            // A timeout with no receipt means the relay never heard the
+            // command; a timeout with one means the watch did not answer.
+            return reply.withRelayReceipt(
+                self.watchCommandCoordinator.receipt(for: payload.commandID)
             )
         }
     }

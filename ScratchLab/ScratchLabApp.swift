@@ -102,10 +102,6 @@ private struct RootContainerView: View {
                 syncWatchStateWithMac()
                 sessionUploadManager.refresh()
             }
-            .onChange(of: companionRelayBroadcaster.pendingWatchControlCommand) { _, command in
-                guard let command else { return }
-                handleRemoteWatchControlCommand(command)
-            }
             .onChange(of: midiManager.sources) { _, _ in
                 configureMIDILearnDevice()
             }
@@ -201,6 +197,9 @@ private struct RootContainerView: View {
         companionRelayBroadcaster.onWatchCaptureAcknowledged = { id in
             watchMotionCaptureStore.markAcknowledgedByMac(id)
         }
+        companionRelayBroadcaster.onWatchControlCommand = { payload in
+            handleRemoteWatchControlCommand(payload)
+        }
         watchMotionCaptureStore.updateMacConnection(
             isConnected: !companionRelayBroadcaster.connectedPeerNames.isEmpty
         )
@@ -229,30 +228,38 @@ private struct RootContainerView: View {
         }
     }
 
-    private func handleRemoteWatchControlCommand(_ command: CompanionCameraBroadcaster.WatchControlCommandEvent) {
-        switch command.payload.command {
+    /// Runs the Mac's control command against the watch and relays the answer.
+    ///
+    /// Called directly by the broadcaster the moment the command lands, so it
+    /// does not depend on a SwiftUI view being updated. The command's own
+    /// `commandID` is carried through, so the reply the Mac is waiting on is the
+    /// one it gets back.
+    private func handleRemoteWatchControlCommand(_ payload: WatchCaptureCommandPayload) {
+        switch payload.command {
         case .start:
             watchMotionCaptureStore.requestRemoteCaptureStart(
-                sessionID: command.payload.sessionID,
-                takeID: command.payload.takeID ?? "",
-                takeNumber: command.payload.takeNumber,
-                watchWrist: command.payload.watchWrist
+                sessionID: payload.sessionID,
+                takeID: payload.takeID ?? "",
+                takeNumber: payload.takeNumber,
+                watchWrist: payload.watchWrist,
+                commandID: payload.commandID
             ) { reply in
                 companionRelayBroadcaster.sendWatchControlStatus(reply)
             }
         case .stop:
             watchMotionCaptureStore.requestRemoteCaptureStop(
-                sessionID: command.payload.sessionID,
-                takeID: command.payload.takeID
+                sessionID: payload.sessionID,
+                takeID: payload.takeID,
+                commandID: payload.commandID
             ) { reply in
                 companionRelayBroadcaster.sendWatchControlStatus(reply)
             }
         @unknown default:
             companionRelayBroadcaster.sendWatchControlStatus(
                 WatchCaptureControlReply(
-                    commandID: command.payload.commandID,
-                    sessionID: command.payload.sessionID,
-                    takeID: command.payload.takeID,
+                    commandID: payload.commandID,
+                    sessionID: payload.sessionID,
+                    takeID: payload.takeID,
                     syncState: .failed,
                     detail: "Unknown watch motion control command."
                 )

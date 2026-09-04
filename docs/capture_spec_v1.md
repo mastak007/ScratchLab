@@ -138,6 +138,56 @@ When the Mac initiates watch capture through the iPhone relay, treat the take as
 
 If no watch is used, the take is still valid for MVP.
 
+### Ending a Mac-initiated watch capture
+
+A take that owns an acknowledged watch capture must end that capture. This is the Mac's obligation on **every** terminal path for the take — the Stop button, the timed backstop, AVFoundation reaching `maxRecordedDuration`, a capture error, and a cancelled count-in — not only the Stop button.
+
+Rules:
+
+- The stop names the take's real `sessionID` and `takeID`, the same identity the start used.
+- Exactly one stop is dispatched per take, however many terminal paths run.
+- The watch handler is idempotent: a repeated stop performs no second finalize.
+- The watch refuses a stop naming a session or take it is not recording, and says so.
+- The handshake is bounded. One acknowledgement attempt waits 2.0 s and a single retry is permitted, so the whole handshake cannot exceed 4.0 s. Media finalization is never blocked on it.
+- The outcome is recorded, never smoothed into success.
+
+`watchStopOutcome` (per take, in `manifests/session_metadata.json`) carries that outcome:
+
+| Value | Meaning |
+| --- | --- |
+| `notRequested` | This take never owned an acknowledged watch capture. |
+| `sent` | The command left the Mac; no reply resolved. |
+| `unreachable` | The relay or watch could not be reached. |
+| `timedOut` | Sent, and nothing came back inside the bound. |
+| `identityRejected` | The watch refused: it is recording a different take. |
+| `stopped` | The watch confirmed it stopped and finalized its file. |
+| `failed` | The watch or relay reported an explicit failure. |
+
+`watchMotionTransferState` is separate and answers a different question — `notApplicable`, `pending`, or `completed` — because a confirmed stop does not prove the file arrived, and an arrived file does not prove the stop was timely.
+
+These are deliberately **not** folded into `watch_source` (a two-valued dataset field) or into `watchSyncState` (which describes the *start* handshake). Collapsing them is what let a watch run 18.494 s past the end of a take while the export read as clean.
+
+### Watch/take alignment
+
+The watch's window and the take's window do not share a start. The watch begins as soon as the start handshake resolves; media begins after the count-in and camera startup. A take can therefore hold *more* watch motion than media without the watch having overrun anything.
+
+Four instants make the two answerable separately, exported per take in `manifests/session_metadata.json`:
+
+| Field | Meaning |
+| --- | --- |
+| `takeStartedAt` | when the take's media recording was allocated |
+| `takeStopRequestedAt` | when the Mac dispatched the watch stop — the authoritative end of the media window |
+| `watchCaptureStartedAt` | when the linked watch capture began, by the watch's clock |
+| `watchCaptureEndedAt` | when it ended, by the watch's clock |
+
+**Overrun** is `watchCaptureEndedAt − takeStopRequestedAt`. Beyond 2.0 s — one acknowledgement window — warns; beyond 4.0 s — longer than the handshake can honestly take — is an error.
+
+**Lead-in** is `takeStartedAt − watchCaptureStartedAt`. Beyond 3.0 s it warns. Motion through the count-in is wanted, so a lead-in is not a defect in itself, but a long one means the start handshake stalled.
+
+Comparing bare *durations* answers neither question. Session `1ce25396-…` recorded 15.411 s of motion against a 10.000 s take and stopped in the same second the Mac asked — the whole 5.411 s was lead-in, and a duration comparison reported it as overrun. An archive written before these instants existed therefore gets a warning that names the difference and says a late stop cannot be told apart from an early start; it is never reported as an overrun.
+
+The raw watch CSV is never truncated or rewritten to satisfy any of this: the overrun is reported, every captured sample preserved.
+
 ## Session Folder Layout
 
 Each session lives under:
@@ -269,10 +319,26 @@ Two distinct duration fields are exported, and they must not be conflated:
 
 | Field | Meaning |
 | --- | --- |
-| `plannedTakeDurationSeconds` | The take length the operator requested. Never overwritten by a measurement. |
+| `plannedTakeDurationSeconds` | The take duration the operator **explicitly selected**. `nil` for an open-ended take. Never a default, a cap, or a measurement. |
+| `maximumTakeDurationSeconds` | The safety cap the take ran under. Not an intent. |
 | `totalDurationSeconds` | The **actual playable** duration, measured from the captured audio. |
+| `stopReason` (per take) | Why the take ended. |
 
-Configs written before `plannedTakeDurationSeconds` existed carry only `takeDurationSeconds`, which at the time was the operator's requested length. Those decode with the stored value migrated into `plannedTakeDurationSeconds` so a legacy session keeps its request. The old field was overloaded — export also wrote the measured aggregate back into it — so for legacy data the two meanings cannot be told apart; retaining the stored value is the documented choice, and it is re-validated against the take-length range before it can bound a take.
+The macOS Capture panel has no take-duration control — it displays the cap as static text — so routine takes are open-ended and report `plannedTakeDurationSeconds = nil`. Writing the 64 s cap into that field made a manually stopped 16.7 s take read as a 64 s take that fell 47 s short.
+
+`stopReason` is one of:
+
+| Value | Meaning |
+| --- | --- |
+| `manual` | The operator pressed Stop. |
+| `planned_duration_reached` | An explicitly selected take duration elapsed. |
+| `interrupted` | The capture session or its device was interrupted. |
+| `capture_error` | Capture failed; the take was ended to preserve what existed. |
+| `media_limit` | The safety cap was reached with no planned duration set. |
+
+Absent means "not recorded" — never an inferred `manual`. `validate_session.py` compares planned against actual **only** when `stopReason` is `planned_duration_reached`, because that is the only reason asserting a chosen duration elapsed.
+
+Configs written before this split carry only `takeDurationSeconds`. Decoding stays faithful — absent fields stay absent, so a reloaded config still equals the one it was written from — and the legacy value is resolved at the point of use by `RoutineCaptureDefaults.maximumTakeDurationSeconds(for:)`. It contributes as the **cap**, not as a plan: it did bound the take, but the old field was overloaded (export also wrote the measured aggregate into it), so it is not evidence that anyone chose it. `plannedTakeDurationSeconds(for:)` has no fallback at all — an absent plan is a fact about the take, not a gap to fill.
 
 A wall-clock span from sidecar `startedAt` to `endedAt` is not a take duration — it also contains startup and finalization — and is used only as a fallback when a take's audio artifact cannot be read.
 

@@ -1270,42 +1270,87 @@ enum CaptureMotionEvidencePresenter {
     }
 }
 
+/// Why a routine take stopped.
+///
+/// Recorded per take so nothing downstream has to infer intent from a duration.
+/// A take that ran 16.7 s under a 64 s safety cap is a complete manual take,
+/// not a take that fell 47 s short of a plan.
+enum CaptureStopReason: String, Codable, CaseIterable, Sendable {
+    /// The operator pressed Stop.
+    case manual
+    /// An explicitly selected take duration elapsed.
+    case plannedDurationReached = "planned_duration_reached"
+    /// The capture session or its device was interrupted.
+    case interrupted
+    /// Capture failed and the take was ended to preserve what existed.
+    case captureError = "capture_error"
+    /// The recorder's safety cap was reached with no planned duration set.
+    case mediaLimit = "media_limit"
+
+    var isCompleteTake: Bool {
+        self == .manual || self == .plannedDurationReached || self == .mediaLimit
+    }
+}
+
 enum RoutineCaptureDefaults {
-    static let defaultTakeLengthSeconds: Double = 64
+    /// Safety cap on an unbounded routine take, in seconds.
+    ///
+    /// This is a **maximum**, not a plan. The macOS Capture panel has no take
+    /// duration control — it renders this number as static text — so an
+    /// operator never selects it and it must never be persisted as
+    /// `plannedTakeDurationSeconds`. Doing so made a manually stopped 16.7 s
+    /// take read as a 64 s take that came up 47 s short.
+    static let defaultMaximumTakeDurationSeconds: Double = 64
 
     /// Guard rails for an operator-supplied take length. Anything outside this
     /// range is treated as unset rather than silently truncating a take.
     static let minimumTakeLengthSeconds: Double = 1
     static let maximumTakeLengthSeconds: Double = 600
 
-    static var defaultTakeLengthLabel: String {
-        "\(Int(defaultTakeLengthSeconds)) seconds"
+    static var maximumTakeDurationLabel: String {
+        "Max \(Int(defaultMaximumTakeDurationSeconds)) seconds"
     }
 
-    /// The take length the operator asked for.
-    ///
-    /// `plannedTakeDurationSeconds` is authoritative when present. It is never
-    /// written by a measurement, so a finished session cannot shorten the next
-    /// one.
-    ///
-    /// When it is absent the config predates the field, and back then
-    /// `takeDurationSeconds` was the only duration and carried the operator's
-    /// request — so a legacy session keeps its requested length rather than
-    /// silently reverting to the default. That old field was overloaded (export
-    /// also wrote the measured aggregate into it), so for legacy data the two
-    /// meanings genuinely cannot be told apart; honouring the stored value is
-    /// the documented choice. Every capture that goes through the current UI
-    /// stamps `plannedTakeDurationSeconds` explicitly, so this fallback only
-    /// ever applies to pre-existing records.
-    static func requestedTakeLengthSeconds(for config: CaptureSessionConfig?) -> Double {
-        let requested = config?.plannedTakeDurationSeconds ?? config?.takeDurationSeconds
-        guard let requested,
-              requested.isFinite,
-              requested >= minimumTakeLengthSeconds,
-              requested <= maximumTakeLengthSeconds else {
-            return defaultTakeLengthSeconds
+    private static func validated(_ value: Double?) -> Double? {
+        guard let value,
+              value.isFinite,
+              value >= minimumTakeLengthSeconds,
+              value <= maximumTakeLengthSeconds else {
+            return nil
         }
-        return requested
+        return value
+    }
+
+    /// The take duration the operator explicitly selected, or `nil` for an
+    /// open-ended take.
+    ///
+    /// Deliberately has no fallback. A cap, a default, and a measurement are
+    /// all things this must not report as a plan — an absent plan is a fact
+    /// about the take, not a gap to be filled.
+    static func plannedTakeDurationSeconds(for config: CaptureSessionConfig?) -> Double? {
+        validated(config?.plannedTakeDurationSeconds)
+    }
+
+    /// The longest the recorder will let a take run, in seconds.
+    ///
+    /// An explicit plan bounds the take when one exists. Otherwise the stored
+    /// cap applies, then the default.
+    ///
+    /// A config written before this field existed contributes its legacy
+    /// `takeDurationSeconds` here rather than as a plan: that value did bound
+    /// the take, but the old field was overloaded (export also wrote the
+    /// measured aggregate into it), so it is not evidence that anyone chose it.
+    static func maximumTakeDurationSeconds(for config: CaptureSessionConfig?) -> Double {
+        validated(config?.plannedTakeDurationSeconds)
+            ?? validated(config?.maximumTakeDurationSeconds)
+            ?? validated(config?.takeDurationSeconds)
+            ?? defaultMaximumTakeDurationSeconds
+    }
+
+    /// Why a take that reached its bound stopped: an elapsed plan when the
+    /// operator set one, otherwise the recorder's own cap.
+    static func stopReasonForBoundReached(for config: CaptureSessionConfig?) -> CaptureStopReason {
+        plannedTakeDurationSeconds(for: config) == nil ? .mediaLimit : .plannedDurationReached
     }
 }
 
@@ -1387,9 +1432,17 @@ struct CaptureSessionConfig: Codable, Equatable, Sendable {
     /// Measured playable duration across the session's takes, written at export
     /// time from the captured media. Never the operator's request.
     var takeDurationSeconds: Double?
-    /// The take length the operator asked for, in seconds. Stays put across
-    /// takes and is never overwritten by a measurement.
+    /// The take duration the operator explicitly selected, in seconds, or
+    /// `nil` for an open-ended take that the operator stops by hand.
+    ///
+    /// Only ever set from a real user choice. A default, a safety cap, and a
+    /// measurement are all excluded — see `maximumTakeDurationSeconds`.
     var plannedTakeDurationSeconds: Double?
+    /// The longest this session's takes are allowed to run, in seconds.
+    ///
+    /// A safety cap, not an intent. Present on open-ended takes precisely
+    /// because those have no planned duration to report.
+    var maximumTakeDurationSeconds: Double?
     /// IANA identifier of the capture device's time zone, stamped when the
     /// session identity is created.
     ///
@@ -1426,6 +1479,7 @@ struct CaptureSessionConfig: Codable, Equatable, Sendable {
         case timingPrintedToRecording
         case takeDurationSeconds
         case plannedTakeDurationSeconds
+        case maximumTakeDurationSeconds
         case sessionTimeZoneIdentifier
         case takeCount
         case handedness
@@ -1452,6 +1506,7 @@ struct CaptureSessionConfig: Codable, Equatable, Sendable {
         timingPrintedToRecording: TimingPrintedToRecordingState = .unknown,
         takeDurationSeconds: Double? = nil,
         plannedTakeDurationSeconds: Double? = nil,
+        maximumTakeDurationSeconds: Double? = nil,
         sessionTimeZoneIdentifier: String? = TimeZone.current.identifier,
         takeCount: Int = 0,
         handedness: CaptureSessionHandedness? = .right,
@@ -1476,6 +1531,7 @@ struct CaptureSessionConfig: Codable, Equatable, Sendable {
         self.timingPrintedToRecording = timingPrintedToRecording
         self.takeDurationSeconds = takeDurationSeconds
         self.plannedTakeDurationSeconds = plannedTakeDurationSeconds
+        self.maximumTakeDurationSeconds = maximumTakeDurationSeconds
         self.sessionTimeZoneIdentifier = sessionTimeZoneIdentifier
         self.takeCount = takeCount
         self.handedness = handedness
@@ -1500,7 +1556,10 @@ struct CaptureSessionConfig: Codable, Equatable, Sendable {
         updatedAt: Date,
         takeCount: Int,
         takeDurationSeconds: Double?,
-        plannedTakeDurationSeconds: Double? = RoutineCaptureDefaults.defaultTakeLengthSeconds,
+        // Open-ended by default: the routine recorder has no duration control,
+        // so there is no plan to record — only the cap that bounds the take.
+        plannedTakeDurationSeconds: Double? = nil,
+        maximumTakeDurationSeconds: Double? = RoutineCaptureDefaults.defaultMaximumTakeDurationSeconds,
         sessionTimeZoneIdentifier: String? = TimeZone.current.identifier
     ) -> CaptureSessionConfig {
         CaptureSessionConfig(
@@ -1511,6 +1570,7 @@ struct CaptureSessionConfig: Codable, Equatable, Sendable {
             captureMode: .timedClick,
             takeDurationSeconds: takeDurationSeconds,
             plannedTakeDurationSeconds: plannedTakeDurationSeconds,
+            maximumTakeDurationSeconds: maximumTakeDurationSeconds,
             sessionTimeZoneIdentifier: sessionTimeZoneIdentifier,
             takeCount: takeCount,
             handedness: .right,
@@ -1654,10 +1714,17 @@ struct CaptureSessionConfig: Codable, Equatable, Sendable {
         // config unequal to the in-memory config it was written from, which
         // silently breaks every idempotency check that compares a reloaded
         // record to an incoming one. The legacy fallback lives at the point of
-        // use instead — see `RoutineCaptureDefaults.requestedTakeLengthSeconds`.
+        // use instead — see `RoutineCaptureDefaults.maximumTakeDurationSeconds`.
         plannedTakeDurationSeconds = try container.decodeIfPresent(
             Double.self,
             forKey: .plannedTakeDurationSeconds
+        )
+        // Absent on configs written before the plan/cap split. Left absent:
+        // `RoutineCaptureDefaults.maximumTakeDurationSeconds(for:)` resolves
+        // the effective cap without rewriting the stored record.
+        maximumTakeDurationSeconds = try container.decodeIfPresent(
+            Double.self,
+            forKey: .maximumTakeDurationSeconds
         )
         // Absent on legacy configs. `nil` means "no zone was recorded", and the
         // export falls back to the exporting device's zone rather than
@@ -1704,6 +1771,7 @@ struct CaptureSessionConfig: Codable, Equatable, Sendable {
         try container.encode(timingPrintedToRecording.rawValue, forKey: .timingPrintedToRecording)
         try container.encodeIfPresent(takeDurationSeconds, forKey: .takeDurationSeconds)
         try container.encodeIfPresent(plannedTakeDurationSeconds, forKey: .plannedTakeDurationSeconds)
+        try container.encodeIfPresent(maximumTakeDurationSeconds, forKey: .maximumTakeDurationSeconds)
         try container.encodeIfPresent(sessionTimeZoneIdentifier, forKey: .sessionTimeZoneIdentifier)
         try container.encode(takeCount, forKey: .takeCount)
         try container.encodeIfPresent(handedness?.rawValue, forKey: .handedness)
@@ -9492,6 +9560,11 @@ enum CaptureCore {
         let startedAt: Date
         var endedAt: Date?
         var recordingStatus: String
+        /// Why this take stopped, as a `CaptureStopReason` raw value.
+        ///
+        /// Optional so sidecars written before stop reasons existed decode as
+        /// `nil` — meaning "not recorded", never "manual".
+        var stopReason: String?
         var mediaFileName: String
         let sidecarFileName: String
         var errorDescription: String?
@@ -9499,6 +9572,13 @@ enum CaptureCore {
         var watchCommandID: String?
         var watchRequestedAt: Date?
         var watchAcknowledgedAt: Date?
+        /// The Watch **stop** handshake for this take.
+        ///
+        /// Optional so every sidecar written before stop diagnostics existed
+        /// still decodes as "not recorded" rather than failing or claiming a
+        /// stop that was never attempted. `watchSyncState` above continues to
+        /// describe only the start handshake.
+        var watchStopDiagnostics: CaptureWatchStopDiagnostics?
         var linkedMotionCaptureID: UUID?
         var linkedMotionFileName: String?
         var reviewDecision: CaptureReviewDecision?
@@ -9526,6 +9606,7 @@ enum CaptureCore {
             startedAt: Date,
             endedAt: Date? = nil,
             recordingStatus: String,
+            stopReason: String? = nil,
             mediaFileName: String,
             sidecarFileName: String,
             errorDescription: String? = nil,
@@ -9533,6 +9614,7 @@ enum CaptureCore {
             watchCommandID: String? = nil,
             watchRequestedAt: Date? = nil,
             watchAcknowledgedAt: Date? = nil,
+            watchStopDiagnostics: CaptureWatchStopDiagnostics? = nil,
             linkedMotionCaptureID: UUID? = nil,
             linkedMotionFileName: String? = nil,
             reviewDecision: CaptureReviewDecision? = nil,
@@ -9559,6 +9641,7 @@ enum CaptureCore {
             self.startedAt = startedAt
             self.endedAt = endedAt
             self.recordingStatus = recordingStatus
+            self.stopReason = stopReason
             self.mediaFileName = mediaFileName
             self.sidecarFileName = sidecarFileName
             self.errorDescription = errorDescription
@@ -9566,6 +9649,7 @@ enum CaptureCore {
             self.watchCommandID = watchCommandID
             self.watchRequestedAt = watchRequestedAt
             self.watchAcknowledgedAt = watchAcknowledgedAt
+            self.watchStopDiagnostics = watchStopDiagnostics
             self.linkedMotionCaptureID = linkedMotionCaptureID
             self.linkedMotionFileName = linkedMotionFileName
             self.reviewDecision = reviewDecision
@@ -9620,6 +9704,7 @@ enum CaptureCore {
                 captureTiming: captureTiming,
                 startedAt: startedAt,
                 recordingStatus: "recording",
+                stopReason: nil,
                 mediaFileName: files.mediaURL.lastPathComponent,
                 sidecarFileName: files.sidecarURL.lastPathComponent,
                 auditTrail: [takeEvent]
@@ -9633,18 +9718,23 @@ enum CaptureCore {
         func finalized(
             endedAt: Date = Date(),
             mediaFileName: String,
-            captureErrorDescription: String?
+            captureErrorDescription: String?,
+            stopReason: CaptureStopReason? = nil
         ) -> LocalRecordingSidecar {
             var finalized = self
             finalized.endedAt = endedAt
             finalized.mediaFileName = mediaFileName
             finalized.recordingStatus = captureErrorDescription == nil ? "completed" : "failed"
             finalized.errorDescription = captureErrorDescription
+            let resolvedStopReason = stopReason
+                ?? (captureErrorDescription == nil ? nil : CaptureStopReason.captureError)
+            finalized.stopReason = resolvedStopReason?.rawValue
             finalized.auditTrail.append(
                 CaptureAuditEvent(
                     timestamp: endedAt,
                     category: captureErrorDescription == nil ? "recording_completed" : "recording_failed",
-                    detail: captureErrorDescription ?? "Recording completed successfully."
+                    detail: captureErrorDescription
+                        ?? "Recording completed successfully (\(resolvedStopReason?.rawValue ?? "stop reason not recorded"))."
                 )
             )
             return finalized
@@ -9664,9 +9754,36 @@ enum CaptureCore {
                 CaptureAuditEvent(
                     timestamp: reply.acknowledgedAt ?? Date(),
                     category: "watch_sync",
+                    // The reply's own words are the only record of *why* a
+                    // start failed. Dropping them left `watchSyncState: failed`
+                    // with no recoverable reason, which is what made the first
+                    // hardware failure need a second run to diagnose.
                     detail: preservesAcknowledgedCapture
                         ? "Watch stop acknowledged; linked motion remains required."
-                        : "Watch sync state set to \(reply.syncState.rawValue)."
+                        : "Watch sync state set to \(reply.syncState.rawValue)"
+                            + (reply.detail.map { ": \($0)" } ?? ".")
+                )
+            )
+            return updated
+        }
+
+        /// Records the outcome of this take's Watch-stop handshake.
+        ///
+        /// Only ever writes the stop-diagnostics field and one audit entry, so
+        /// it can be applied to a freshly re-read on-disk sidecar without
+        /// disturbing a Watch association that arrived in the meantime.
+        func withWatchStopDiagnostics(
+            _ diagnostics: CaptureWatchStopDiagnostics,
+            recordedAt: Date = Date()
+        ) -> LocalRecordingSidecar {
+            var updated = self
+            updated.watchStopDiagnostics = diagnostics
+            updated.auditTrail.append(
+                CaptureAuditEvent(
+                    timestamp: diagnostics.resolvedAt ?? recordedAt,
+                    category: "watch_stop",
+                    detail: "Watch stop outcome \(diagnostics.outcome.rawValue)"
+                        + (diagnostics.detail.map { ": \($0)" } ?? ".")
                 )
             )
             return updated
@@ -9714,6 +9831,71 @@ enum CaptureCore {
                 )
             )
             return updated
+        }
+
+        /// Adopts a Watch link discovered elsewhere on disk, without ever
+        /// letting a stale snapshot overwrite a real one.
+        ///
+        /// Routine finalization holds an in-memory sidecar captured at take
+        /// start — before a relayed Watch capture has necessarily finished
+        /// arriving. Relay reconciliation can attach a valid link to the
+        /// on-disk sidecar file in that window; finalization then writes its
+        /// stale in-memory copy back over it, silently erasing the link. This
+        /// is the merge that closes that race: called with the current
+        /// on-disk sidecar immediately before finalization writes, so a link
+        /// that arrived after this snapshot was taken is adopted instead of
+        /// clobbered.
+        ///
+        /// A no-op unless `self` has no link, `onDisk` does, and both refer to
+        /// the same session/take — it only ever adds a link, never removes or
+        /// replaces one already present, and never touches an unrelated take.
+        func mergingLatestWatchAssociation(
+            from onDisk: LocalRecordingSidecar,
+            recordedAt: Date = Date()
+        ) -> LocalRecordingSidecar {
+            guard onDisk.sessionID == sessionID, onDisk.takeID == takeID else { return self }
+            guard linkedMotionFileName == nil, let fileName = onDisk.linkedMotionFileName else { return self }
+
+            let priorSyncState = watchSyncState
+            var merged = self
+            merged.linkedMotionCaptureID = onDisk.linkedMotionCaptureID
+            merged.linkedMotionFileName = fileName
+            // A validated link means Watch motion was actually captured and
+            // matched to this take; that supersedes whatever the take's own
+            // acknowledgement handshake reported (e.g. `timedOut`) before the
+            // relay import completed.
+            merged.watchSyncState = .acknowledged
+            if merged.watchAcknowledgedAt == nil {
+                merged.watchAcknowledgedAt = onDisk.watchAcknowledgedAt
+            }
+            // Adopting a link is also the moment the motion transfer completed.
+            // Never invent a stop record here — only refine one that exists, so
+            // a take whose stop was never requested keeps saying so.
+            merged.watchStopDiagnostics = (merged.watchStopDiagnostics ?? onDisk.watchStopDiagnostics)
+                .map { existing in
+                    CaptureWatchStopDiagnostics(
+                        outcome: existing.outcome,
+                        sessionID: existing.sessionID,
+                        takeID: existing.takeID,
+                        commandID: existing.commandID,
+                        detail: existing.detail,
+                        requestedAt: existing.requestedAt,
+                        resolvedAt: existing.resolvedAt,
+                        watchHandledAt: existing.watchHandledAt,
+                        relayReceivedAt: existing.relayReceivedAt,
+                        attemptCount: existing.attemptCount,
+                        motionTransferState: .completed
+                    )
+                }
+            merged.auditTrail.append(
+                CaptureAuditEvent(
+                    timestamp: recordedAt,
+                    category: "watch_reconciled",
+                    detail: "Adopted watch link \(fileName) found on disk during finalization,"
+                        + " superseding stale \(priorSyncState.rawValue) state."
+                )
+            )
+            return merged
         }
 
         func reviewed(

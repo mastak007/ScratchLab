@@ -3401,6 +3401,245 @@ final class MacCaptureEngine: NSObject, ObservableObject {
 
     func applyPendingWatchReply(_ reply: WatchCaptureControlReply?) {
         pendingWatchReply = reply
+
+        // A take owns a Watch capture whenever the start handshake may have
+        // left one running — not only when it was acknowledged.
+        //
+        // Gating this on `.acknowledged` alone was fail-open in the dangerous
+        // direction: a start whose reply came back `failed` or `timedOut` can
+        // still have started Core Motion on the wrist, with only the answer
+        // lost. The Mac then owned nothing, sent no stop, and the Watch ran
+        // until the operator stopped it by hand — exactly the take that
+        // exported `watchSyncState: failed` with `watchStopOutcome:
+        // notRequested`. `startMayHaveLeftWatchRecording` states the
+        // fail-closed rule; a stop for a capture that never started is
+        // harmless.
+        guard let reply,
+              CaptureWatchStopPolicy.startMayHaveLeftWatchRecording(reply.syncState),
+              let identity = resolvedWatchTakeIdentity(for: reply) else {
+            noteWatchCaptureOwnership(nil)
+            return
+        }
+        noteWatchCaptureOwnership(identity)
+    }
+
+    /// The identity a Watch stop for this reply must name.
+    ///
+    /// Prefers the reply's own session/take, because that is what the Watch was
+    /// told. A synthesized failure may carry an incomplete identity, so the
+    /// reserved take identity is the fallback — without one there is nothing
+    /// safe to name and no stop is armed.
+    private func resolvedWatchTakeIdentity(
+        for reply: WatchCaptureControlReply
+    ) -> TakeIdentity? {
+        let pending = pendingRoutineTakeIdentity
+        let sessionID = reply.sessionID.isEmpty ? (pending?.sessionID ?? "") : reply.sessionID
+        let takeID = (reply.takeID?.isEmpty == false ? reply.takeID : nil) ?? pending?.takeID ?? ""
+        guard !sessionID.isEmpty, !takeID.isEmpty else { return nil }
+        return TakeIdentity(
+            sessionID: sessionID,
+            takeID: takeID,
+            takeNumber: pending?.takeNumber ?? 0
+        )
+    }
+
+    // MARK: - Watch stop ownership
+
+    /// Sends a Watch stop for one take and resolves what happened.
+    ///
+    /// Injected by the desktop app so this engine owns *when* a stop is
+    /// required — every terminal path for a take, not just the Stop button —
+    /// without knowing anything about MultipeerConnectivity or
+    /// WatchConnectivity. `nil` means no relay is wired up, which is recorded
+    /// as an unreachable stop rather than passed over in silence.
+    var watchStopRequestHandler: ((TakeIdentity) async -> WatchCaptureControlReply)?
+
+    /// The take whose Watch capture this engine believes is still running.
+    private var watchOwnedTakeIdentityStorage: TakeIdentity?
+    /// `sessionID:takeID` keys a stop has already been dispatched for. This is
+    /// what makes "exactly once" true even though several terminal paths can
+    /// run for the same take (button, timed backstop, AVFoundation's own
+    /// maximum-duration end, and finalization).
+    private var dispatchedWatchStopKeys: [String] = []
+    private let watchStopLock = NSLock()
+    private static let maximumRememberedWatchStopKeys = 32
+
+    private func noteWatchCaptureOwnership(_ identity: TakeIdentity?) {
+        watchStopLock.lock()
+        watchOwnedTakeIdentityStorage = identity
+        watchStopLock.unlock()
+    }
+
+    /// The take this engine would stop on the Watch right now, if any.
+    var watchOwnedTakeIdentity: TakeIdentity? {
+        watchStopLock.lock()
+        defer { watchStopLock.unlock() }
+        return watchOwnedTakeIdentityStorage
+    }
+
+    /// Requests a Watch stop for the owned take, at most once per take.
+    ///
+    /// Returns immediately. The handshake runs on a detached task and its
+    /// outcome is merged into that take's on-disk sidecar when it resolves, so
+    /// media finalization is never blocked waiting on a watch. A second call
+    /// for the same take — the timed backstop firing just after the button, say
+    /// — is a no-op and returns `nil`.
+    ///
+    /// - Returns: the identity a stop was dispatched for, or `nil` when there
+    ///   was nothing to stop or a stop was already sent for this take.
+    @discardableResult
+    func requestWatchStopIfNeeded(reason: CaptureStopReason?) -> TakeIdentity? {
+        watchStopLock.lock()
+        guard let identity = watchOwnedTakeIdentityStorage else {
+            watchStopLock.unlock()
+            return nil
+        }
+        let key = "\(identity.sessionID):\(identity.takeID)"
+        guard !dispatchedWatchStopKeys.contains(key) else {
+            watchStopLock.unlock()
+            return nil
+        }
+        dispatchedWatchStopKeys.append(key)
+        while dispatchedWatchStopKeys.count > Self.maximumRememberedWatchStopKeys {
+            dispatchedWatchStopKeys.removeFirst()
+        }
+        watchOwnedTakeIdentityStorage = nil
+        watchStopLock.unlock()
+
+        let requestedAt = Date()
+        let inFlight = CaptureWatchStopDiagnostics(
+            outcome: .sent,
+            sessionID: identity.sessionID,
+            takeID: identity.takeID,
+            detail: reason.map { "Stop dispatched for \($0.rawValue) stop." },
+            requestedAt: requestedAt,
+            attemptCount: 1,
+            motionTransferState: .pending
+        )
+        persistWatchStopDiagnostics(inFlight, for: identity)
+
+        guard let handler = watchStopRequestHandler else {
+            persistWatchStopDiagnostics(
+                CaptureWatchStopDiagnostics(
+                    outcome: .unreachable,
+                    sessionID: identity.sessionID,
+                    takeID: identity.takeID,
+                    detail: "No companion relay is connected, so the watch could not be told to stop.",
+                    requestedAt: requestedAt,
+                    resolvedAt: Date(),
+                    attemptCount: 0,
+                    motionTransferState: .pending
+                ),
+                for: identity
+            )
+            return identity
+        }
+
+        Task { [weak self] in
+            let reply = await handler(identity)
+            guard let self else { return }
+            let outcome = CaptureWatchStopPolicy.outcome(for: reply)
+            self.persistWatchStopDiagnostics(
+                CaptureWatchStopDiagnostics(
+                    outcome: outcome,
+                    sessionID: identity.sessionID,
+                    takeID: identity.takeID,
+                    commandID: reply.commandID,
+                    detail: reply.detail,
+                    requestedAt: requestedAt,
+                    // When this Mac finished with the command, always — a
+                    // timeout resolves here too, and dating that from the
+                    // Watch's clock would hide how long the wait actually was.
+                    resolvedAt: Date(),
+                    watchHandledAt: reply.acknowledgedAt,
+                    relayReceivedAt: reply.relayReceivedAt,
+                    attemptCount: 1,
+                    motionTransferState: outcome.isStopConfirmed ? .pending : .notApplicable
+                ),
+                for: identity
+            )
+            if outcome.isDegraded {
+                await MainActor.run {
+                    self.routineRecordingStatus = reply.detail
+                        ?? "The Apple Watch did not confirm it stopped recording for this take."
+                }
+            }
+        }
+        return identity
+    }
+
+    /// Merges a stop outcome into the take's sidecar on disk.
+    ///
+    /// Always re-reads the current file first and only writes the
+    /// stop-diagnostics field, so a Watch association that landed in the
+    /// meantime — the write-back race closed by
+    /// `mergingLatestWatchAssociation` — is preserved rather than clobbered.
+    private func persistWatchStopDiagnostics(
+        _ diagnostics: CaptureWatchStopDiagnostics,
+        for identity: TakeIdentity
+    ) {
+        guard let sidecarURL = routineSidecarURL(for: identity),
+              let data = try? Data(contentsOf: sidecarURL),
+              let onDisk = try? Self.routineSidecarDecoder.decode(
+                  CaptureCore.LocalRecordingSidecar.self,
+                  from: data
+              ),
+              onDisk.sessionID == identity.sessionID,
+              onDisk.takeID == identity.takeID else {
+            return
+        }
+
+        var updated = onDisk.withWatchStopDiagnostics(diagnostics)
+        // A link already present means the motion artifact arrived; say so
+        // rather than leaving the transfer state stuck at `pending`.
+        if onDisk.linkedMotionFileName != nil, var refined = updated.watchStopDiagnostics {
+            refined = CaptureWatchStopDiagnostics(
+                outcome: refined.outcome,
+                sessionID: refined.sessionID,
+                takeID: refined.takeID,
+                commandID: refined.commandID,
+                detail: refined.detail,
+                requestedAt: refined.requestedAt,
+                resolvedAt: refined.resolvedAt,
+                watchHandledAt: refined.watchHandledAt,
+                relayReceivedAt: refined.relayReceivedAt,
+                attemptCount: refined.attemptCount,
+                motionTransferState: .completed
+            )
+            updated.watchStopDiagnostics = refined
+        }
+
+        try? writeRoutineRecordingSidecar(updated, to: sidecarURL)
+        if activeRoutineRecordingSidecarURL == sidecarURL {
+            activeRoutineRecordingSidecar = updated
+        }
+    }
+
+    /// Locates the on-disk sidecar for a take, preferring the active one.
+    private func routineSidecarURL(for identity: TakeIdentity) -> URL? {
+        if let activeURL = activeRoutineRecordingSidecarURL,
+           activeRoutineRecordingSidecar?.sessionID == identity.sessionID,
+           activeRoutineRecordingSidecar?.takeID == identity.takeID {
+            return activeURL
+        }
+        guard let directory = try? recordingsDirectoryURL(),
+              let entries = try? FileManager.default.contentsOfDirectory(
+                  at: directory,
+                  includingPropertiesForKeys: nil,
+                  options: [.skipsHiddenFiles]
+              ) else {
+            return nil
+        }
+        return entries
+            .filter { $0.pathExtension.lowercased() == "json" }
+            .first { url in
+                guard let data = try? Data(contentsOf: url),
+                      let sidecar = try? Self.routineSidecarDecoder.decode(
+                          CaptureCore.LocalRecordingSidecar.self,
+                          from: data
+                      ) else { return false }
+                return sidecar.sessionID == identity.sessionID && sidecar.takeID == identity.takeID
+            }
     }
 
     @MainActor
@@ -3438,6 +3677,10 @@ final class MacCaptureEngine: NSObject, ObservableObject {
     @MainActor
     func cancelPendingRoutineReservation() -> TakeIdentity? {
         let pendingIdentity = pendingRoutineTakeIdentity
+        // A cancelled count-in still leaves an acknowledged Watch capture
+        // running. Stop it before the reservation is dropped, or nothing else
+        // ever will.
+        requestWatchStopIfNeeded(reason: .interrupted)
         pendingRoutineTakeIdentity = nil
         pendingWatchReply = nil
         return pendingIdentity
@@ -3771,7 +4014,16 @@ final class MacCaptureEngine: NSObject, ObservableObject {
     /// is rebased onto it.
     private let routineMediaEpochLock = NSLock()
     private var routineMediaStartHostTimeStorage: CFTimeInterval = 0
-    private var routineRequestedTakeDurationSecondsStorage = RoutineCaptureDefaults.defaultTakeLengthSeconds
+    /// Longest the active take may run. A safety cap unless the operator chose
+    /// a duration, in which case it is that duration.
+    private var routineMaximumTakeDurationSecondsStorage = RoutineCaptureDefaults.defaultMaximumTakeDurationSeconds
+    /// The operator's explicitly chosen take duration, or `nil` for an
+    /// open-ended take. Decides whether reaching the bound is
+    /// `plannedDurationReached` or `mediaLimit`.
+    private var routinePlannedTakeDurationSecondsStorage: Double?
+    /// Why the active take is ending, recorded at the stop call site so
+    /// finalization does not have to guess.
+    private var routineStopReasonStorage: CaptureStopReason?
     private var routineTimedStopWorkItem: DispatchWorkItem?
 
     /// Wall-clock slack allowed past the requested length before the backstop
@@ -3786,30 +4038,77 @@ final class MacCaptureEngine: NSObject, ObservableObject {
         return routineMediaStartHostTimeStorage
     }
 
-    /// Take length requested for the active take, in seconds.
-    var routineRequestedTakeDurationSeconds: Double {
+    /// Longest the active take may run, in seconds.
+    var routineMaximumTakeDurationSeconds: Double {
         routineMediaEpochLock.lock()
         defer { routineMediaEpochLock.unlock() }
-        return routineRequestedTakeDurationSecondsStorage
+        return routineMaximumTakeDurationSecondsStorage
     }
 
-    private func armRoutineTakeDuration(_ seconds: Double) {
+    /// Operator-selected take duration for the active take, or `nil` when the
+    /// take is open-ended.
+    var routinePlannedTakeDurationSeconds: Double? {
         routineMediaEpochLock.lock()
-        routineRequestedTakeDurationSecondsStorage = seconds
+        defer { routineMediaEpochLock.unlock() }
+        return routinePlannedTakeDurationSecondsStorage
+    }
+
+    private func armRoutineTakeDuration(
+        maximumSeconds: Double,
+        plannedSeconds: Double?
+    ) {
+        routineMediaEpochLock.lock()
+        routineMaximumTakeDurationSecondsStorage = maximumSeconds
+        routinePlannedTakeDurationSecondsStorage = plannedSeconds
+        routineStopReasonStorage = nil
         routineMediaStartHostTimeStorage = 0
         routineMediaEpochLock.unlock()
+    }
+
+    /// Records why the active take is stopping. First reason wins: the site
+    /// that actually initiated the stop is the truthful one, and later
+    /// bookkeeping must not overwrite it.
+    private func noteRoutineStopReason(_ reason: CaptureStopReason) {
+        routineMediaEpochLock.lock()
+        if routineStopReasonStorage == nil {
+            routineStopReasonStorage = reason
+        }
+        routineMediaEpochLock.unlock()
+    }
+
+    /// Resolves the stop reason for a finished take.
+    ///
+    /// AVFoundation's own maximum-duration marker outranks whatever the app
+    /// recorded, because that path ends the take without going through
+    /// `stopRoutineRecording`.
+    private func resolvedRoutineStopReason(
+        captureError: Error?,
+        captureErrorDescription: String?
+    ) -> CaptureStopReason {
+        routineMediaEpochLock.lock()
+        let noted = routineStopReasonStorage
+        let planned = routinePlannedTakeDurationSecondsStorage
+        routineMediaEpochLock.unlock()
+
+        if let nsError = captureError as NSError?,
+           nsError.domain == AVFoundationErrorDomain,
+           nsError.code == AVError.maximumDurationReached.rawValue {
+            return planned == nil ? .mediaLimit : .plannedDurationReached
+        }
+        if captureErrorDescription != nil { return .captureError }
+        return noted ?? .manual
     }
 
     /// Stamps the confirmed media-start epoch and returns it together with the
     /// requested take length.
     private func beginRoutineMediaEpoch(
         at hostTime: CFTimeInterval
-    ) -> (mediaStart: CFTimeInterval, requestedDuration: Double) {
+    ) -> (mediaStart: CFTimeInterval, maximumDuration: Double) {
         routineMediaEpochLock.lock()
         routineMediaStartHostTimeStorage = hostTime
-        let requested = routineRequestedTakeDurationSecondsStorage
+        let maximum = routineMaximumTakeDurationSecondsStorage
         routineMediaEpochLock.unlock()
-        return (hostTime, requested)
+        return (hostTime, maximum)
     }
 
     private func endRoutineMediaEpoch() {
@@ -3844,17 +4143,21 @@ final class MacCaptureEngine: NSObject, ObservableObject {
     /// covers the case where AVFoundation never reaches that bound.
     private func scheduleRoutineTimedStop(
         mediaStartHostTime: CFTimeInterval,
-        requestedDurationSeconds: Double
+        maximumDurationSeconds: Double
     ) {
         let deadline = RoutineTakeTimeline.stopDelaySeconds(
-            requestedDurationSeconds: requestedDurationSeconds,
+            requestedDurationSeconds: maximumDurationSeconds,
             graceSeconds: Self.routineTimedStopGraceSeconds
         )
         let workItem = DispatchWorkItem { [weak self] in
             guard let self else { return }
             guard self.routineMediaStartHostTime == mediaStartHostTime else { return }
             guard self.movieOutput.isRecording else { return }
-            self.stopRoutineRecording()
+            // Reaching the bound is a planned stop only when the operator
+            // actually chose the duration; otherwise it is the safety cap.
+            self.stopRoutineRecording(
+                reason: self.routinePlannedTakeDurationSeconds == nil ? .mediaLimit : .plannedDurationReached
+            )
         }
         routineMediaEpochLock.lock()
         routineTimedStopWorkItem?.cancel()
@@ -4458,7 +4761,12 @@ final class MacCaptureEngine: NSObject, ObservableObject {
     func startRoutineRecording(captureTiming: CaptureTimingMetadata? = nil) {
         // A prior take's asynchronous finalization may still be pending; refuse
         // to start a new take (and re-open the admission gate) until it completes.
-        guard !isRoutineFinalizationPending else { return }
+        guard !isRoutineFinalizationPending else {
+            // The watch may already have acknowledged a start for the take this
+            // refusal abandons. Nothing downstream would ever stop it.
+            requestWatchStopIfNeeded(reason: .interrupted)
+            return
+        }
 
         let selectedAudioChoice = availableAudioDevices
             .first(where: { $0.uniqueID == selectedAudioDeviceUniqueID })
@@ -4472,6 +4780,7 @@ final class MacCaptureEngine: NSObject, ObservableObject {
                captureMode: config.captureMode,
                beatEngineMode: config.beatEngineMode
            ) {
+            requestWatchStopIfNeeded(reason: .interrupted)
             Task { @MainActor in
                 self.routineRecordingStatus = Self.isolatedCaptureBuiltInMicrophoneMessage
             }
@@ -4487,12 +4796,20 @@ final class MacCaptureEngine: NSObject, ObservableObject {
         let selectedAudioID = selectedAudioDeviceUniqueID
         let audioDevices = availableAudioDevices
         let videoDevices = availableVideoDevices
-        // The requested take length is resolved here but consumed only from
-        // `didStartRecordingTo`. Camera and writer startup must not eat into it.
-        let requestedTakeDurationSeconds = RoutineCaptureDefaults.requestedTakeLengthSeconds(
+        // Resolved here but consumed only from `didStartRecordingTo`: camera
+        // and writer startup must not eat into the take. The plan and the cap
+        // are tracked apart so a take that runs to the bound can say which one
+        // it hit.
+        let plannedTakeDurationSeconds = RoutineCaptureDefaults.plannedTakeDurationSeconds(
             for: recordingSessionConfig
         )
-        armRoutineTakeDuration(requestedTakeDurationSeconds)
+        let maximumTakeDurationSeconds = RoutineCaptureDefaults.maximumTakeDurationSeconds(
+            for: recordingSessionConfig
+        )
+        armRoutineTakeDuration(
+            maximumSeconds: maximumTakeDurationSeconds,
+            plannedSeconds: plannedTakeDurationSeconds
+        )
 
         Task { @MainActor in
             self.isRoutineRecording = true
@@ -4502,6 +4819,7 @@ final class MacCaptureEngine: NSObject, ObservableObject {
         sessionQueue.async {
             guard !self.movieOutput.isRecording else { return }
             guard !selectedVideoID.isEmpty else {
+                self.requestWatchStopIfNeeded(reason: .interrupted)
                 Task { @MainActor in
                     self.isRoutineRecording = false
                     self.routineRecordingStatus = RoutineRecordingError.missingVideo.errorDescription ?? "Unable to start recording."
@@ -4509,6 +4827,7 @@ final class MacCaptureEngine: NSObject, ObservableObject {
                 return
             }
             guard !selectedAudioID.isEmpty else {
+                self.requestWatchStopIfNeeded(reason: .interrupted)
                 Task { @MainActor in
                     self.isRoutineRecording = false
                     self.routineRecordingStatus = RoutineRecordingError.missingAudio.errorDescription ?? "Unable to start recording."
@@ -4516,6 +4835,7 @@ final class MacCaptureEngine: NSObject, ObservableObject {
                 return
             }
             guard videoDevices.contains(where: { $0.uniqueID == selectedVideoID }) else {
+                self.requestWatchStopIfNeeded(reason: .interrupted)
                 Task { @MainActor in
                     self.isRoutineRecording = false
                     self.routineRecordingStatus = RoutineRecordingError.selectedVideoUnavailable.errorDescription ?? "Unable to start recording."
@@ -4523,6 +4843,7 @@ final class MacCaptureEngine: NSObject, ObservableObject {
                 return
             }
             guard audioDevices.contains(where: { $0.uniqueID == selectedAudioID }) else {
+                self.requestWatchStopIfNeeded(reason: .interrupted)
                 Task { @MainActor in
                     self.isRoutineRecording = false
                     self.routineRecordingStatus = RoutineRecordingError.selectedAudioUnavailable.errorDescription ?? "Unable to start recording."
@@ -4645,18 +4966,19 @@ final class MacCaptureEngine: NSObject, ObservableObject {
                 // updated on the next analyzed frame.
                 #endif
                 // Measured in recorded media time, so camera/writer startup
-                // cannot consume any of the requested take length. This is the
-                // primary take boundary; the wall-clock backstop armed in
+                // cannot consume any of the take. This is the primary take
+                // boundary; the wall-clock backstop armed in
                 // `didStartRecordingTo` only covers the case where AVFoundation
                 // never reaches it.
                 self.movieOutput.maxRecordedDuration = CMTime(
-                    seconds: requestedTakeDurationSeconds,
+                    seconds: maximumTakeDurationSeconds,
                     preferredTimescale: 600
                 )
                 self.movieOutput.startRecording(to: preparedRecording.mediaURL, recordingDelegate: self)
             } catch {
                 self.scratchPlaybackController.cancelRoutineOutputCapture()
                 self.reconnectSelectedMIDIInput()
+                self.requestWatchStopIfNeeded(reason: .interrupted)
                 let message = (error as? LocalizedError)?.errorDescription
                     ?? error.localizedDescription
                 Task { @MainActor in
@@ -4667,7 +4989,12 @@ final class MacCaptureEngine: NSObject, ObservableObject {
         }
     }
 
-    func stopRoutineRecording() {
+    func stopRoutineRecording(reason: CaptureStopReason = .manual) {
+        noteRoutineStopReason(reason)
+        // Dispatched before the media stop so the Watch is told as early as
+        // possible; it is bounded and asynchronous, so it never delays the
+        // recorder. Idempotent, so finalization asking again costs nothing.
+        requestWatchStopIfNeeded(reason: reason)
         sessionQueue.async {
             guard self.movieOutput.isRecording else {
                 Task { @MainActor in
@@ -6128,7 +6455,16 @@ final class MacCaptureEngine: NSObject, ObservableObject {
     /// captures the take's state, and schedules the second half via
     /// `group.notify(queue: finalizationQueue)`.
     private func finalizeRoutineRecording(outputFileURL: URL, error: Error?) {
+        // Backstop for every terminal path that does not go through
+        // `stopRoutineRecording` — most importantly AVFoundation ending the
+        // take itself at `maxRecordedDuration`, and any capture error. A stop
+        // already dispatched for this take is not sent twice.
+        requestWatchStopIfNeeded(reason: nil)
         let captureErrorDescription = Self.routineCaptureFailureDescription(for: error)
+        let stopReason = resolvedRoutineStopReason(
+            captureError: error,
+            captureErrorDescription: captureErrorDescription
+        )
 
         guard let sidecar = activeRoutineRecordingSidecar else {
             let message = captureErrorDescription != nil
@@ -6174,6 +6510,7 @@ final class MacCaptureEngine: NSObject, ObservableObject {
             self?.completeRoutineFinalization(
                 outputFileURL: outputFileURL,
                 captureErrorDescription: captureErrorDescription,
+                stopReason: stopReason,
                 sidecar: sidecar,
                 sidecarURL: sidecarURL,
                 builder: builder,
@@ -6191,6 +6528,7 @@ final class MacCaptureEngine: NSObject, ObservableObject {
     private func completeRoutineFinalization(
         outputFileURL: URL,
         captureErrorDescription: String?,
+        stopReason: CaptureStopReason,
         sidecar: CaptureCore.LocalRecordingSidecar,
         sidecarURL: URL,
         builder: RoutineDetectedNotationBuilder?,
@@ -6302,9 +6640,23 @@ final class MacCaptureEngine: NSObject, ObservableObject {
         writeReplayDiagnosticsToDisk(diag: replayDiagnostics)
         #endif
 
+        // Relay reconciliation can attach a valid Watch link to the on-disk
+        // sidecar any time after this take started — including after this
+        // in-memory snapshot was captured but before the write below. Adopt
+        // that link instead of overwriting it with the stale unlinked/timedOut
+        // state this snapshot carries.
+        if let onDiskData = try? Data(contentsOf: sidecarURL),
+           let onDiskSidecar = try? Self.routineSidecarDecoder.decode(
+               CaptureCore.LocalRecordingSidecar.self,
+               from: onDiskData
+           ) {
+            sidecar = sidecar.mergingLatestWatchAssociation(from: onDiskSidecar)
+        }
+
         sidecar = sidecar.finalized(
             mediaFileName: outputFileURL.lastPathComponent,
-            captureErrorDescription: captureErrorDescription
+            captureErrorDescription: captureErrorDescription,
+            stopReason: stopReason
         )
         .withDetectedNotation(notationSnapshot)
 
@@ -11487,6 +11839,7 @@ extension MacCaptureEngine: AVCaptureFileOutputRecordingDelegate {
                 )
             } catch {
                 pendingRoutineOutputAudioURL = nil
+                noteRoutineStopReason(.captureError)
                 endRoutineMediaEpoch()
                 let message = error.localizedDescription
                 Task { @MainActor in
@@ -11498,7 +11851,7 @@ extension MacCaptureEngine: AVCaptureFileOutputRecordingDelegate {
         }
         scheduleRoutineTimedStop(
             mediaStartHostTime: epoch.mediaStart,
-            requestedDurationSeconds: epoch.requestedDuration
+            maximumDurationSeconds: epoch.maximumDuration
         )
         Task { @MainActor in
             self.isRoutineRecording = true

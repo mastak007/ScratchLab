@@ -3837,6 +3837,78 @@ final class CaptureReliabilityPhase1CoreTests: XCTestCase {
         )
     }
 
+    /// App Store Connect submission blockers found in the 2026-09-04 audit.
+    func testAllPlatformsShipTheSameBuildNumber() throws {
+        // iOS and macOS share `com.machelpnz.scratchlab`, so they are one ASC
+        // record. The macOS plist hardcoded `20` while every target's
+        // CURRENT_PROJECT_VERSION was 21, which both desynchronised the pair
+        // and stopped the macOS build number tracking the project at all.
+        for path in [
+            "ScratchLab/Info.plist",
+            "ScratchLabDesktop/Info.plist",
+            "ScratchLabWatch/Info.plist"
+        ] {
+            let plist = try String(
+                contentsOf: projectRootURL().appendingPathComponent(path),
+                encoding: .utf8
+            )
+            XCTAssertTrue(
+                plist.contains("<key>CFBundleVersion</key>\n\t<string>$(CURRENT_PROJECT_VERSION)</string>"),
+                "\(path) must take its build number from the project, not a literal."
+            )
+        }
+    }
+
+    func testMacDeclaresAUsageDescriptionForTheAudioProcessTap() throws {
+        // `MacCaptureEngine` creates a Core Audio process tap to capture the
+        // DJ app's output. That is TCC-gated on macOS 14.4+ and needs a usage
+        // description, or Direct Capture cannot obtain permission.
+        let engine = try String(
+            contentsOf: projectRootURL()
+                .appendingPathComponent("ScratchLabDesktop/Services/MacCaptureEngine.swift"),
+            encoding: .utf8
+        )
+        guard engine.contains("AudioHardwareCreateProcessTap") else {
+            return  // No tap, no requirement.
+        }
+        let plist = try String(
+            contentsOf: projectRootURL().appendingPathComponent("ScratchLabDesktop/Info.plist"),
+            encoding: .utf8
+        )
+        XCTAssertTrue(
+            plist.contains("<key>NSAudioCaptureUsageDescription</key>"),
+            "A process tap without NSAudioCaptureUsageDescription cannot be granted permission."
+        )
+    }
+
+    func testWatchDoesNotDeclareIconFilesItDoesNotShip() throws {
+        // The plist listed 11 `AppIcon…` filenames; the asset catalog's real
+        // names are `watch-appLauncher-38mm@2x` and friends, and the built
+        // bundle contains no such PNGs — only a compiled Assets.car. Stale
+        // declarations like these draw upload validation warnings.
+        let plist = try String(
+            contentsOf: projectRootURL().appendingPathComponent("ScratchLabWatch/Info.plist"),
+            encoding: .utf8
+        )
+        XCTAssertFalse(
+            plist.contains("CFBundleIconFiles"),
+            "The watch icon comes from the asset catalog via CFBundleIconName."
+        )
+        XCTAssertTrue(plist.contains("<key>CFBundleIconName</key>"))
+    }
+
+    func testIOSDoesNotDeclareTheInvalidApplicationCategoryKey() throws {
+        let plist = try String(
+            contentsOf: projectRootURL().appendingPathComponent("ScratchLab/Info.plist"),
+            encoding: .utf8
+        )
+        XCTAssertFalse(
+            plist.contains("<key>LSApplicationCategory</key>"),
+            "LSApplicationCategory is not a real key; LSApplicationCategoryType is."
+        )
+        XCTAssertTrue(plist.contains("<key>LSApplicationCategoryType</key>"))
+    }
+
     func testMainMenuViewDoesNotContainPlaceholderStubs() throws {
         let sourceURL = projectRootURL().appendingPathComponent("ScratchLab/Views/MainMenuView.swift")
         let source = try String(contentsOf: sourceURL, encoding: .utf8)
@@ -6472,8 +6544,12 @@ final class CaptureReliabilityPhase1CoreTests: XCTestCase {
     }
 
     func testRoutineCaptureDefaultTakeLengthIs64SecondsAndWiredToMacCapture() throws {
-        XCTAssertEqual(RoutineCaptureDefaults.defaultTakeLengthSeconds, 64)
-        XCTAssertEqual(RoutineCaptureDefaults.defaultTakeLengthLabel, "64 seconds")
+        XCTAssertEqual(RoutineCaptureDefaults.defaultMaximumTakeDurationSeconds, 64)
+        XCTAssertEqual(
+            RoutineCaptureDefaults.maximumTakeDurationLabel,
+            "Max 64 seconds",
+            "The panel must read as a cap; it has no duration control to plan with."
+        )
 
         let projectRoot = projectRootURL()
         let engineSource = try String(
@@ -6485,8 +6561,16 @@ final class CaptureReliabilityPhase1CoreTests: XCTestCase {
             encoding: .utf8
         )
 
-        XCTAssertTrue(engineSource.contains("RoutineCaptureDefaults.defaultTakeLengthSeconds"))
-        XCTAssertTrue(viewSource.contains("RoutineCaptureDefaults.defaultTakeLengthLabel"))
+        // The cap must reach AVFoundation, and the panel must present it as a
+        // cap. Neither may route through `plannedTakeDurationSeconds`: writing
+        // the cap there is what made a manually stopped take look truncated.
+        XCTAssertTrue(engineSource.contains("RoutineCaptureDefaults.maximumTakeDurationSeconds("))
+        XCTAssertTrue(engineSource.contains("maxRecordedDuration"))
+        XCTAssertTrue(viewSource.contains("RoutineCaptureDefaults.maximumTakeDurationLabel"))
+        XCTAssertFalse(
+            viewSource.contains("config.plannedTakeDurationSeconds = RoutineCaptureDefaults"),
+            "A default must never be persisted as an operator-selected plan."
+        )
         XCTAssertFalse(viewSource.contains("\"60 seconds\""))
     }
 
@@ -20512,9 +20596,9 @@ extension CaptureReliabilityPhase1CoreTests {
 /// rather than the moment AVFoundation confirmed media was being written.
 final class RoutineTakeBoundaryTests: XCTestCase {
 
-    // MARK: - Requested take length is never a stale measurement
+    // MARK: - The take bound is never a stale measurement
 
-    func testRequestedTakeLengthIgnoresMeasuredTakeDuration() {
+    func testTakeBoundIgnoresMeasuredTakeDurationOnceASettingExists() {
         var config = CaptureSessionConfig.routineCapture(
             sessionID: "session-boundary",
             createdAt: Date(),
@@ -20522,40 +20606,18 @@ final class RoutineTakeBoundaryTests: XCTestCase {
             takeCount: 1,
             takeDurationSeconds: nil
         )
-        XCTAssertEqual(
-            config.plannedTakeDurationSeconds,
-            RoutineCaptureDefaults.defaultTakeLengthSeconds,
-            "A routine config states its requested length explicitly."
-        )
 
         // `takeDurationSeconds` is the measured aggregate an earlier export
-        // wrote back. With an explicit request present it must be ignored.
+        // wrote back. The stored cap outranks it.
         config.takeDurationSeconds = 19.2
         XCTAssertEqual(
-            RoutineCaptureDefaults.requestedTakeLengthSeconds(for: config),
-            RoutineCaptureDefaults.defaultTakeLengthSeconds
+            RoutineCaptureDefaults.maximumTakeDurationSeconds(for: config),
+            RoutineCaptureDefaults.defaultMaximumTakeDurationSeconds
         )
 
         config.plannedTakeDurationSeconds = 24
-        XCTAssertEqual(RoutineCaptureDefaults.requestedTakeLengthSeconds(for: config), 24)
+        XCTAssertEqual(RoutineCaptureDefaults.maximumTakeDurationSeconds(for: config), 24)
         XCTAssertEqual(config.takeDurationSeconds, 19.2, "The measurement must survive untouched.")
-    }
-
-    func testRequestedTakeLengthRejectsOutOfRangeAndMissingConfig() {
-        XCTAssertEqual(
-            RoutineCaptureDefaults.requestedTakeLengthSeconds(for: nil),
-            RoutineCaptureDefaults.defaultTakeLengthSeconds
-        )
-        for invalid: Double in [0, -24, .nan, .infinity, 100_000] {
-            var config = CaptureSessionConfig()
-            config.plannedTakeDurationSeconds = invalid
-            config.takeDurationSeconds = nil
-            XCTAssertEqual(
-                RoutineCaptureDefaults.requestedTakeLengthSeconds(for: config),
-                RoutineCaptureDefaults.defaultTakeLengthSeconds,
-                "\(invalid) must fall back to the default take length."
-            )
-        }
     }
 
     func testPlannedTakeDurationSurvivesEncodingRoundTrip() throws {
@@ -21008,6 +21070,7 @@ final class FixtureArchiveReExportTests: XCTestCase {
             timingPrintedToRecording: .unknown,
             takeDurationSeconds: nil,
             plannedTakeDurationSeconds: 24,
+            maximumTakeDurationSeconds: 64,
             sessionTimeZoneIdentifier: "Pacific/Auckland",
             takeCount: 1,
             handedness: .right,
@@ -21057,7 +21120,8 @@ final class FixtureArchiveReExportTests: XCTestCase {
         .finalized(
             endedAt: createdAt.addingTimeInterval(mediaDuration),
             mediaFileName: files.mediaURL.lastPathComponent,
-            captureErrorDescription: nil
+            captureErrorDescription: nil,
+            stopReason: .manual
         )
         .withDetectedNotation(try decodeFixtureNotation(at: sourceNotation))
         try sidecar.encodedData().write(to: files.sidecarURL, options: .atomic)
@@ -21072,8 +21136,26 @@ final class FixtureArchiveReExportTests: XCTestCase {
             )
         )
         print("ARCHIVE_METADATA plannedTakeDurationSeconds=\(String(describing: package.metadata.plannedTakeDurationSeconds))"
+            + " maximumTakeDurationSeconds=\(String(describing: package.metadata.maximumTakeDurationSeconds))"
             + " totalDurationSeconds=\(package.metadata.totalDurationSeconds)"
             + " sessionTimeZoneIdentifier=\(String(describing: package.metadata.sessionTimeZoneIdentifier))")
+
+        let document = try builder.metadataDocument(for: package)
+        let exportedTake = try XCTUnwrap(document.takes.first)
+        print("ARCHIVE_TAKE stopReason=\(String(describing: exportedTake.stopReason))"
+            + " planned=\(String(describing: exportedTake.plannedTakeDurationSeconds))"
+            + " maximum=\(String(describing: exportedTake.maximumTakeDurationSeconds))"
+            + " actual=\(String(describing: exportedTake.actualTakeDurationSeconds))")
+        XCTAssertEqual(exportedTake.stopReason, CaptureStopReason.manual.rawValue)
+        // Watch absence must state its reason rather than vanish into
+        // `watch_source: none`.
+        XCTAssertEqual(exportedTake.watchSyncState, CaptureWatchSyncState.notRequested.rawValue)
+        XCTAssertNil(exportedTake.watchLinkedMotionFileName)
+        XCTAssertFalse(exportedTake.watchMotionExported)
+        XCTAssertEqual(exportedTake.plannedTakeDurationSeconds, 24)
+        XCTAssertEqual(exportedTake.maximumTakeDurationSeconds, 64)
+        XCTAssertEqual(try XCTUnwrap(exportedTake.actualTakeDurationSeconds), mediaDuration, accuracy: 1e-9)
+        XCTAssertEqual(package.metadata.maximumTakeDurationSeconds, 64)
 
         let archiveDirectory = stagingRoot.appendingPathComponent("archives", isDirectory: true)
         try fileManager.createDirectory(at: archiveDirectory, withIntermediateDirectories: true)
@@ -21132,10 +21214,14 @@ final class CaptureConfigMigrationTests: XCTestCase {
             config.plannedTakeDurationSeconds,
             "Decoding must be faithful: absent stays absent, so a decoded record still equals the record it was written from."
         )
+        XCTAssertNil(
+            RoutineCaptureDefaults.plannedTakeDurationSeconds(for: config),
+            "A legacy duration is not evidence that anyone chose it."
+        )
         XCTAssertEqual(
-            RoutineCaptureDefaults.requestedTakeLengthSeconds(for: config),
+            RoutineCaptureDefaults.maximumTakeDurationSeconds(for: config),
             24,
-            "A legacy config must not lose its requested duration."
+            "It still bounded the take, so it must not be lost."
         )
     }
 
@@ -21143,12 +21229,10 @@ final class CaptureConfigMigrationTests: XCTestCase {
         // Regression: a decode-time migration made a reloaded config unequal to
         // the one it was written from, which silently broke idempotent
         // re-writes of durable ledgers.
-        var original = CaptureSessionConfig(sessionID: "round-trip")
+        let fixed = Date(timeIntervalSinceReferenceDate: 800_000_000)
+        var original = CaptureSessionConfig(sessionID: "round-trip", createdAt: fixed, updatedAt: fixed)
         original.takeDurationSeconds = 1
-        let encoded = try JSONEncoder().encode(original)
-        let decoded = try JSONDecoder().decode(CaptureSessionConfig.self, from: encoded)
-        XCTAssertEqual(decoded, original)
-        XCTAssertEqual(try JSONEncoder().encode(decoded), encoded)
+        try assertEncodingIsStableUnderDecoding(original)
     }
 
     func testLegacyConfigWithNoDurationFallsBackToTheDefault() throws {
@@ -21157,8 +21241,8 @@ final class CaptureConfigMigrationTests: XCTestCase {
         """)
         XCTAssertNil(config.plannedTakeDurationSeconds)
         XCTAssertEqual(
-            RoutineCaptureDefaults.requestedTakeLengthSeconds(for: config),
-            RoutineCaptureDefaults.defaultTakeLengthSeconds
+            RoutineCaptureDefaults.maximumTakeDurationSeconds(for: config),
+            RoutineCaptureDefaults.defaultMaximumTakeDurationSeconds
         )
     }
 
@@ -21171,7 +21255,8 @@ final class CaptureConfigMigrationTests: XCTestCase {
         """)
         XCTAssertEqual(config.plannedTakeDurationSeconds, 24)
         XCTAssertEqual(config.takeDurationSeconds, 19.2)
-        XCTAssertEqual(RoutineCaptureDefaults.requestedTakeLengthSeconds(for: config), 24)
+        XCTAssertEqual(RoutineCaptureDefaults.plannedTakeDurationSeconds(for: config), 24)
+        XCTAssertEqual(RoutineCaptureDefaults.maximumTakeDurationSeconds(for: config), 24)
     }
 
     func testLegacyConfigWithNoTimeZoneDecodesAsAbsent() throws {
@@ -21325,6 +21410,1389 @@ final class ScratchTimingMixLevelTests: XCTestCase {
                 timingBuffer: timing
             ),
             "Frame-identical stems are the whole point; a mismatch must fail loudly."
+        )
+    }
+}
+
+/// A safety cap is not a plan.
+///
+/// Regression for `session_2026_09_04_kk_baby_scratch_95_bpm`, which reported
+/// `plannedTakeDurationSeconds = 64` for a take the operator stopped by hand
+/// after 16.7 s. The macOS Capture panel has no duration control, so 64 was
+/// only ever `RoutineCaptureDefaults.defaultMaximumTakeDurationSeconds`.
+final class RoutineTakeDurationSemanticsTests: XCTestCase {
+
+    private func decodeConfig(_ json: String) throws -> CaptureSessionConfig {
+        try JSONDecoder().decode(CaptureSessionConfig.self, from: Data(json.utf8))
+    }
+
+    // MARK: - Plan versus cap
+
+    func testRoutineCaptureIsOpenEndedWithACapAndNoPlan() {
+        let config = CaptureSessionConfig.routineCapture(
+            sessionID: "kk-session",
+            createdAt: Date(),
+            updatedAt: Date(),
+            takeCount: 1,
+            takeDurationSeconds: nil
+        )
+        XCTAssertNil(
+            config.plannedTakeDurationSeconds,
+            "No duration control exists, so nothing was planned."
+        )
+        XCTAssertEqual(
+            config.maximumTakeDurationSeconds,
+            RoutineCaptureDefaults.defaultMaximumTakeDurationSeconds
+        )
+        XCTAssertNil(RoutineCaptureDefaults.plannedTakeDurationSeconds(for: config))
+        XCTAssertEqual(RoutineCaptureDefaults.maximumTakeDurationSeconds(for: config), 64)
+    }
+
+    func testAnExplicitPlanBoundsTheTakeAndIsReportedAsAPlan() {
+        var config = CaptureSessionConfig(sessionID: "planned")
+        config.maximumTakeDurationSeconds = 64
+        config.plannedTakeDurationSeconds = 30
+
+        XCTAssertEqual(RoutineCaptureDefaults.plannedTakeDurationSeconds(for: config), 30)
+        XCTAssertEqual(
+            RoutineCaptureDefaults.maximumTakeDurationSeconds(for: config),
+            30,
+            "A chosen duration bounds the take ahead of the cap."
+        )
+    }
+
+    func testOutOfRangeValuesAreTreatedAsUnset() {
+        for invalid: Double in [0, -1, .nan, .infinity, 100_000] {
+            var config = CaptureSessionConfig(sessionID: "invalid")
+            config.plannedTakeDurationSeconds = invalid
+            config.maximumTakeDurationSeconds = invalid
+            config.takeDurationSeconds = nil
+            XCTAssertNil(
+                RoutineCaptureDefaults.plannedTakeDurationSeconds(for: config),
+                "\(invalid) is not a usable plan."
+            )
+            XCTAssertEqual(
+                RoutineCaptureDefaults.maximumTakeDurationSeconds(for: config),
+                RoutineCaptureDefaults.defaultMaximumTakeDurationSeconds
+            )
+        }
+        XCTAssertNil(RoutineCaptureDefaults.plannedTakeDurationSeconds(for: nil))
+        XCTAssertEqual(
+            RoutineCaptureDefaults.maximumTakeDurationSeconds(for: nil),
+            RoutineCaptureDefaults.defaultMaximumTakeDurationSeconds
+        )
+    }
+
+    func testReachingTheBoundIsAMediaLimitUnlessADurationWasChosen() {
+        var openEnded = CaptureSessionConfig(sessionID: "open")
+        openEnded.maximumTakeDurationSeconds = 64
+        XCTAssertEqual(RoutineCaptureDefaults.stopReasonForBoundReached(for: openEnded), .mediaLimit)
+
+        var planned = openEnded
+        planned.plannedTakeDurationSeconds = 24
+        XCTAssertEqual(
+            RoutineCaptureDefaults.stopReasonForBoundReached(for: planned),
+            .plannedDurationReached
+        )
+    }
+
+    // MARK: - Migration
+
+    func testLegacyDurationBecomesACapNotAPlan() throws {
+        // Written before the plan/cap split: one overloaded duration field.
+        let config = try decodeConfig("""
+        {
+          "performerName": "kk", "captureMode": "timed_click", "takeCount": 1, "notes": "",
+          "sessionID": "legacy-kk", "takeDurationSeconds": 64
+        }
+        """)
+        XCTAssertNil(config.plannedTakeDurationSeconds)
+        XCTAssertNil(config.maximumTakeDurationSeconds)
+        XCTAssertNil(
+            RoutineCaptureDefaults.plannedTakeDurationSeconds(for: config),
+            "A legacy duration is not evidence that anyone chose it."
+        )
+        XCTAssertEqual(
+            RoutineCaptureDefaults.maximumTakeDurationSeconds(for: config),
+            64,
+            "It still bounded the take, so it survives as the cap."
+        )
+    }
+
+    func testDecodingIsFaithfulAndRoundTripsUnchanged() throws {
+        // Fixed instants: `Date()` serialises as a full-precision Double whose
+        // decimal form does not reliably survive decode/re-encode, which would
+        // make this a flaky byte comparison rather than a decoding assertion.
+        let fixed = Date(timeIntervalSinceReferenceDate: 800_000_000)
+        var original = CaptureSessionConfig(sessionID: "round-trip", createdAt: fixed, updatedAt: fixed)
+        original.maximumTakeDurationSeconds = 64
+        try assertEncodingIsStableUnderDecoding(original)
+    }
+
+    func testMaximumSurvivesEncodingAndAbsentStaysAbsent() throws {
+        let legacy = try decodeConfig("""
+        {"performerName": "kk", "captureMode": "timed_click", "takeCount": 0, "notes": "", "sessionID": "legacy-2"}
+        """)
+        XCTAssertNil(legacy.maximumTakeDurationSeconds)
+        XCTAssertNil(legacy.plannedTakeDurationSeconds)
+
+        var configured = legacy
+        configured.maximumTakeDurationSeconds = 90
+        let decoded = try JSONDecoder().decode(
+            CaptureSessionConfig.self,
+            from: JSONEncoder().encode(configured)
+        )
+        XCTAssertEqual(decoded.maximumTakeDurationSeconds, 90)
+        XCTAssertNil(decoded.plannedTakeDurationSeconds)
+    }
+
+    // MARK: - Stop reason on the sidecar
+
+    private func makeSidecar() -> CaptureCore.LocalRecordingSidecar {
+        CaptureCore.LocalRecordingSidecar.recording(
+            sessionID: "kk-session",
+            sessionConfig: nil,
+            takeIdentity: CaptureCore.LocalRecordingNaming.takeIdentity(
+                sessionID: "kk-session",
+                takeNumber: 1
+            ),
+            files: CaptureCore.LocalRecordingFiles(
+                baseName: "kk_take01",
+                mediaURL: URL(fileURLWithPath: "/tmp/kk_take01.mov"),
+                sidecarURL: URL(fileURLWithPath: "/tmp/kk_take01.json")
+            ),
+            recordingRole: "routine_capture",
+            platform: "macOS",
+            appSurface: "ScratchLab Routine Recorder",
+            sourceDeviceName: "DJ",
+            startedAt: Date()
+        )
+    }
+
+    func testSidecarRecordsTheStopReasonItIsGiven() {
+        for reason in CaptureStopReason.allCases {
+            let finalized = makeSidecar().finalized(
+                mediaFileName: "kk_take01.mov",
+                captureErrorDescription: nil,
+                stopReason: reason
+            )
+            XCTAssertEqual(finalized.stopReason, reason.rawValue)
+        }
+    }
+
+    func testAnUnrecordedStopReasonStaysNilRatherThanBecomingManual() {
+        let finalized = makeSidecar().finalized(
+            mediaFileName: "kk_take01.mov",
+            captureErrorDescription: nil
+        )
+        XCTAssertNil(
+            finalized.stopReason,
+            "Absent must mean 'not recorded', never an inferred manual stop."
+        )
+    }
+
+    func testACaptureFailureRecordsCaptureError() {
+        let finalized = makeSidecar().finalized(
+            mediaFileName: "kk_take01.mov",
+            captureErrorDescription: "writer died"
+        )
+        XCTAssertEqual(finalized.stopReason, CaptureStopReason.captureError.rawValue)
+        XCTAssertEqual(finalized.recordingStatus, "failed")
+    }
+
+    func testStopReasonSurvivesSidecarEncoding() throws {
+        let finalized = makeSidecar().finalized(
+            mediaFileName: "kk_take01.mov",
+            captureErrorDescription: nil,
+            stopReason: .manual
+        )
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .iso8601
+        let decoded = try decoder.decode(
+            CaptureCore.LocalRecordingSidecar.self,
+            from: finalized.encodedData()
+        )
+        XCTAssertEqual(decoded.stopReason, "manual")
+    }
+
+    func testLegacySidecarWithoutAStopReasonDecodes() throws {
+        var finalized = makeSidecar().finalized(
+            mediaFileName: "kk_take01.mov",
+            captureErrorDescription: nil,
+            stopReason: .manual
+        )
+        finalized.stopReason = nil
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .iso8601
+        let decoded = try decoder.decode(
+            CaptureCore.LocalRecordingSidecar.self,
+            from: finalized.encodedData()
+        )
+        XCTAssertNil(decoded.stopReason)
+    }
+}
+
+/// The exported session metadata must not present a cap as a plan.
+final class SessionExportDurationMetadataTests: XCTestCase {
+
+    func testOpenEndedSessionExportsACapAndNoPlan() {
+        let config = CaptureSessionConfig.routineCapture(
+            sessionID: "kk-session",
+            createdAt: Date(),
+            updatedAt: Date(),
+            takeCount: 1,
+            takeDurationSeconds: 16.7
+        )
+        let metadata = SessionExportMetadata(
+            config: config,
+            workflow: "routine_capture",
+            platform: "macOS",
+            sessionName: "kk Baby Scratch 95 BPM",
+            totalDurationSeconds: 16.7
+        )
+        XCTAssertNil(
+            metadata.plannedTakeDurationSeconds,
+            "A manually stopped take has no planned duration to report."
+        )
+        XCTAssertEqual(metadata.maximumTakeDurationSeconds, 64)
+        XCTAssertEqual(
+            metadata.totalDurationSeconds,
+            16.7,
+            "Measured playable duration is unchanged by any of this."
+        )
+    }
+
+    func testPlannedSessionExportsBothPlanAndCap() {
+        var config = CaptureSessionConfig.routineCapture(
+            sessionID: "planned-session",
+            createdAt: Date(),
+            updatedAt: Date(),
+            takeCount: 1,
+            takeDurationSeconds: 23.98
+        )
+        config.plannedTakeDurationSeconds = 24
+        let metadata = SessionExportMetadata(
+            config: config,
+            workflow: "routine_capture",
+            platform: "macOS",
+            sessionName: "Planned",
+            totalDurationSeconds: 23.98
+        )
+        XCTAssertEqual(metadata.plannedTakeDurationSeconds, 24)
+        XCTAssertEqual(metadata.maximumTakeDurationSeconds, 64)
+        XCTAssertEqual(metadata.totalDurationSeconds, 23.98)
+    }
+
+    func testAnOutOfRangePlanIsNotExportedAsAPlan() {
+        var config = CaptureSessionConfig(sessionID: "bad-plan")
+        config.plannedTakeDurationSeconds = 0
+        let metadata = SessionExportMetadata(
+            config: config,
+            workflow: "routine_capture",
+            platform: "macOS",
+            sessionName: "Bad plan",
+            totalDurationSeconds: 5
+        )
+        XCTAssertNil(metadata.plannedTakeDurationSeconds)
+    }
+}
+
+/// Asserts a config survives a decode/re-encode cycle unchanged, in value and
+/// in serialised form.
+///
+/// `.sortedKeys` is required: Foundation does not guarantee a stable key order
+/// between `JSONEncoder` instances, so an unsorted byte comparison fails
+/// intermittently with the same byte count and reordered keys — noise that has
+/// nothing to do with the decoding contract under test.
+func assertEncodingIsStableUnderDecoding(
+    _ original: CaptureSessionConfig,
+    file: StaticString = #filePath,
+    line: UInt = #line
+) throws {
+    let encoder = JSONEncoder()
+    encoder.outputFormatting = [.sortedKeys]
+    let encoded = try encoder.encode(original)
+    let decoded = try JSONDecoder().decode(CaptureSessionConfig.self, from: encoded)
+    XCTAssertEqual(decoded, original, file: file, line: line)
+    XCTAssertEqual(
+        String(data: try encoder.encode(decoded), encoding: .utf8),
+        String(data: encoded, encoding: .utf8),
+        file: file,
+        line: line
+    )
+}
+
+/// The export must preserve *why* Watch motion is absent.
+final class WatchSyncStateExportTests: XCTestCase {
+
+    func testEveryDegradedSyncStateIsDistinguishableFromNotRequested() {
+        // `watch_source` in the canonical manifest is `none` for all of these.
+        // The app-side metadata is what keeps them apart.
+        let degraded: [CaptureWatchSyncState] = [.requested, .timedOut, .unavailable, .failed]
+        for state in degraded {
+            XCTAssertFalse(state.isSynchronized, "\(state.rawValue) must never read as synchronised.")
+            XCTAssertNotEqual(state.rawValue, CaptureWatchSyncState.notRequested.rawValue)
+        }
+        XCTAssertTrue(CaptureWatchSyncState.acknowledged.isSynchronized)
+        XCTAssertFalse(CaptureWatchSyncState.notRequested.isSynchronized)
+    }
+
+    func testTimedOutSidecarReportsItsStateAndCarriesNoLink() throws {
+        // Reproduces the BBBB sidecar: acknowledgement timed out, so nothing
+        // was linked onto the routine sidecar even though motion existed.
+        let sidecar = CaptureCore.LocalRecordingSidecar.recording(
+            sessionID: "9f75b6da-5b4b-4a7a-b234-465be2ce0128",
+            sessionConfig: nil,
+            takeIdentity: CaptureCore.LocalRecordingNaming.takeIdentity(
+                sessionID: "9f75b6da-5b4b-4a7a-b234-465be2ce0128",
+                takeNumber: 1
+            ),
+            files: CaptureCore.LocalRecordingFiles(
+                baseName: "bbbb_take01",
+                mediaURL: URL(fileURLWithPath: "/tmp/bbbb_take01.mov"),
+                sidecarURL: URL(fileURLWithPath: "/tmp/bbbb_take01.json")
+            ),
+            recordingRole: "mac_routine_capture",
+            platform: "macOS",
+            appSurface: "ScratchLab Routine Recorder",
+            sourceDeviceName: "DJ",
+            startedAt: Date()
+        )
+        .withWatchSync(
+            WatchCaptureControlReply(
+                commandID: "093164e2-0851-473e-b506-c09568e2a24c",
+                sessionID: "9f75b6da-5b4b-4a7a-b234-465be2ce0128",
+                takeID: "take-001",
+                syncState: .timedOut,
+                detail: "Watch motion did not acknowledge."
+            )
+        )
+
+        XCTAssertEqual(sidecar.watchSyncState, .timedOut)
+        XCTAssertNil(sidecar.linkedMotionFileName)
+        XCTAssertFalse(
+            sidecar.watchSyncState.isSynchronized,
+            "A timed-out take must not be reported as Watch-synchronised."
+        )
+
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .iso8601
+        let decoded = try decoder.decode(
+            CaptureCore.LocalRecordingSidecar.self,
+            from: sidecar.encodedData()
+        )
+        XCTAssertEqual(decoded.watchSyncState, .timedOut)
+        XCTAssertEqual(decoded.watchCommandID, "093164e2-0851-473e-b506-c09568e2a24c")
+    }
+}
+
+/// Regression for the BBBB write-back race: relay reconciliation linked a
+/// valid Watch capture to the on-disk sidecar at 00:08:39Z; routine
+/// finalization then wrote its stale in-memory snapshot (still `timedOut`,
+/// still unlinked, captured at take start) back over it at 00:08:40Z, erasing
+/// the link. `mergingLatestWatchAssociation(from:)` is what finalization now
+/// calls, immediately before it writes, to adopt a link found on disk instead
+/// of clobbering it.
+final class RoutineFinalizationWatchMergeTests: XCTestCase {
+    private func makeSidecar(
+        sessionID: String = "9f75b6da-5b4b-4a7a-b234-465be2ce0128",
+        takeID takeNumber: Int = 1
+    ) -> CaptureCore.LocalRecordingSidecar {
+        CaptureCore.LocalRecordingSidecar.recording(
+            sessionID: sessionID,
+            sessionConfig: nil,
+            takeIdentity: CaptureCore.LocalRecordingNaming.takeIdentity(
+                sessionID: sessionID,
+                takeNumber: takeNumber
+            ),
+            files: CaptureCore.LocalRecordingFiles(
+                baseName: "bbbb_take01",
+                mediaURL: URL(fileURLWithPath: "/tmp/bbbb_take01.mov"),
+                sidecarURL: URL(fileURLWithPath: "/tmp/bbbb_take01.json")
+            ),
+            recordingRole: "mac_routine_capture",
+            platform: "macOS",
+            appSurface: "ScratchLab Routine Recorder",
+            sourceDeviceName: "DJ",
+            startedAt: Date()
+        )
+    }
+
+    func testFinalizationAdoptsALinkThatArrivedAfterItsInMemorySnapshot() {
+        // The in-memory sidecar finalization is about to write: still carries
+        // the take's own acknowledgement handshake, which timed out.
+        let staleInMemory = makeSidecar()
+            .withWatchSync(
+                WatchCaptureControlReply(
+                    commandID: "093164e2-0851-473e-b506-c09568e2a24c",
+                    sessionID: "9f75b6da-5b4b-4a7a-b234-465be2ce0128",
+                    takeID: "take-001",
+                    syncState: .timedOut,
+                    detail: "Watch motion did not acknowledge."
+                )
+            )
+        XCTAssertNil(staleInMemory.linkedMotionFileName, "Precondition: nothing linked yet.")
+
+        // The on-disk sidecar, updated by relay reconciliation in the window
+        // between the in-memory snapshot and this write — the real BBBB
+        // artifact's identity.
+        let motionCaptureID = UUID(uuidString: "3A9DC9A3-9399-4999-B869-0237F36DA99C")!
+        let onDiskAfterReconciliation = staleInMemory.linkingWatchCapture(
+            id: motionCaptureID,
+            fileName: "scratch-motion-live-3A9DC9A3-9399-4999-B869-0237F36DA99C.json"
+        )
+
+        let merged = staleInMemory.mergingLatestWatchAssociation(from: onDiskAfterReconciliation)
+
+        XCTAssertEqual(
+            merged.linkedMotionFileName,
+            "scratch-motion-live-3A9DC9A3-9399-4999-B869-0237F36DA99C.json",
+            "A link that arrived after the snapshot was taken must be adopted, not lost."
+        )
+        XCTAssertEqual(merged.linkedMotionCaptureID, motionCaptureID)
+        XCTAssertEqual(
+            merged.watchSyncState,
+            .acknowledged,
+            "Motion that was actually captured and matched supersedes a stale handshake timeout."
+        )
+        XCTAssertTrue(
+            merged.auditTrail.contains { $0.category == "watch_reconciled" },
+            "The adoption must be recorded, not silent."
+        )
+    }
+
+    func testAnAlreadyLinkedSidecarIsNeverOverwritten() {
+        // If finalization's own snapshot already carries a link (the normal,
+        // non-racing case), a differing on-disk state must never replace it.
+        let alreadyLinked = makeSidecar().linkingWatchCapture(
+            id: UUID(uuidString: "11111111-1111-1111-1111-111111111111")!,
+            fileName: "original-link.json"
+        )
+        let onDiskWithADifferentLink = makeSidecar().linkingWatchCapture(
+            id: UUID(uuidString: "22222222-2222-2222-2222-222222222222")!,
+            fileName: "different-link.json"
+        )
+
+        let merged = alreadyLinked.mergingLatestWatchAssociation(from: onDiskWithADifferentLink)
+
+        XCTAssertEqual(merged.linkedMotionFileName, "original-link.json")
+        XCTAssertEqual(merged, alreadyLinked, "No-op: an existing link is authoritative over anything on disk.")
+    }
+
+    func testMismatchedSessionOrTakeIsNeverMerged() {
+        let thisTake = makeSidecar(takeID: 1)
+        let anotherTakesOnDiskFile = makeSidecar(takeID: 2).linkingWatchCapture(
+            id: UUID(),
+            fileName: "belongs-to-take-two.json"
+        )
+
+        let merged = thisTake.mergingLatestWatchAssociation(from: anotherTakesOnDiskFile)
+
+        XCTAssertNil(merged.linkedMotionFileName, "A different take's link must never cross over.")
+        XCTAssertEqual(merged, thisTake)
+    }
+}
+
+// MARK: - Watch stop: the Mac must end the Watch capture it started
+//
+// BVB regression (2026-09-04). A 19.4 s macOS take exported cleanly with
+// `stopReason: manual`, `watch_source: watch`, a linked motion file and a
+// canonical validator PASS — while the Watch CSV ran to 37.894 s, because the
+// operator had to stop the Watch by hand 18.494 s later.
+//
+// The Mac's Watch stop was owned by the Stop button in `MacAnalyzerView` and
+// was fire-and-forget: it carried the session-setup config's ID and no take ID,
+// awaited no acknowledgement, retried nothing, and recorded no outcome. Every
+// other terminal path for a take — the timed backstop, AVFoundation's own
+// `maxRecordedDuration` end, a capture error, a cancelled count-in — requested
+// no Watch stop at all.
+//
+// These cover the fix: `MacCaptureEngine` owns the stop, dispatches it exactly
+// once per take with the take's real identity, and records what came back.
+
+/// The engine owns *when* a Watch stop is owed.
+final class MacWatchStopDispatchTests: XCTestCase {
+    private let sessionID = "9f75b6da-5b4b-4a7a-b234-465be2ce0128"
+
+    private func acknowledgedStart(
+        sessionID: String,
+        takeID: String
+    ) -> WatchCaptureControlReply {
+        WatchCaptureControlReply(
+            commandID: UUID().uuidString.lowercased(),
+            sessionID: sessionID,
+            takeID: takeID,
+            syncState: .acknowledged,
+            detail: "Watch motion capture started.",
+            acknowledgedAt: Date()
+        )
+    }
+
+    private func stoppedReply(for identity: TakeIdentity) -> WatchCaptureControlReply {
+        WatchCaptureControlReply(
+            commandID: UUID().uuidString.lowercased(),
+            sessionID: identity.sessionID,
+            takeID: identity.takeID,
+            syncState: .notRequested,
+            detail: "Watch motion capture stopped.",
+            acknowledgedAt: Date(),
+            stopOutcome: .stopped
+        )
+    }
+
+    @MainActor
+    func testManualStopDispatchesAWatchStopForTheRecordingTakeIdentity() {
+        let engine = MacCaptureEngine(autoRefreshDevices: false)
+        engine.applyPendingWatchReply(acknowledgedStart(sessionID: sessionID, takeID: "take-001"))
+
+        let dispatched = expectation(description: "watch stop dispatched")
+        let recorded = UncheckedBox<[TakeIdentity]>([])
+        engine.watchStopRequestHandler = { identity in
+            recorded.value.append(identity)
+            dispatched.fulfill()
+            return self.stoppedReply(for: identity)
+        }
+
+        engine.stopRoutineRecording(reason: .manual)
+
+        wait(for: [dispatched], timeout: 2)
+        XCTAssertEqual(recorded.value.count, 1)
+        XCTAssertEqual(recorded.value.first?.sessionID, sessionID)
+        XCTAssertEqual(
+            recorded.value.first?.takeID,
+            "take-001",
+            "The stop must name the take the Watch was started with, not a session-level guess."
+        )
+    }
+
+    @MainActor
+    func testDuplicateStopRequestsForOneTakeSendExactlyOneWatchStop() {
+        // The real overlap: the Stop button and the timed backstop can both
+        // fire, and finalization asks again afterwards.
+        let engine = MacCaptureEngine(autoRefreshDevices: false)
+        engine.applyPendingWatchReply(acknowledgedStart(sessionID: sessionID, takeID: "take-002"))
+
+        let dispatched = expectation(description: "watch stop dispatched")
+        let callCount = UncheckedBox<Int>(0)
+        engine.watchStopRequestHandler = { identity in
+            callCount.value += 1
+            dispatched.fulfill()
+            return self.stoppedReply(for: identity)
+        }
+
+        XCTAssertNotNil(engine.requestWatchStopIfNeeded(reason: .manual))
+        XCTAssertNil(
+            engine.requestWatchStopIfNeeded(reason: .plannedDurationReached),
+            "A second terminal path for the same take must not send a second stop."
+        )
+        XCTAssertNil(engine.requestWatchStopIfNeeded(reason: nil))
+
+        wait(for: [dispatched], timeout: 2)
+        XCTAssertEqual(callCount.value, 1)
+    }
+
+    /// Hardware regression, session `4ee15cc0-…` take-001 (2026-09-04).
+    ///
+    /// The start handshake came back `failed` while the Watch was in fact
+    /// recording. Ownership was gated on `.acknowledged`, so the Mac decided it
+    /// owned nothing, sent no stop, and the take exported `watchSyncState:
+    /// failed` with `watchStopOutcome: notRequested` while the operator stopped
+    /// the Watch by hand. A degraded reply is not evidence the Watch did not
+    /// start.
+    @MainActor
+    func testAFailedStartHandshakeStillOwnsAndStopsTheWatch() {
+        let engine = MacCaptureEngine(autoRefreshDevices: false)
+        engine.applyPendingWatchReply(
+            WatchCaptureControlReply(
+                commandID: "eac9f34a-2cfc-455d-8e73-6b14bc7dba5f",
+                sessionID: sessionID,
+                takeID: "take-001",
+                syncState: .failed,
+                detail: "Watch motion capture failed to start.",
+                acknowledgedAt: Date()
+            )
+        )
+
+        XCTAssertEqual(
+            engine.watchOwnedTakeIdentity?.takeID,
+            "take-001",
+            "A failed start reply must still arm the stop — the watch may be recording."
+        )
+
+        let dispatched = expectation(description: "watch stop dispatched")
+        let recorded = UncheckedBox<TakeIdentity?>(nil)
+        engine.watchStopRequestHandler = { identity in
+            recorded.value = identity
+            dispatched.fulfill()
+            return self.stoppedReply(for: identity)
+        }
+        engine.stopRoutineRecording(reason: .manual)
+
+        wait(for: [dispatched], timeout: 2)
+        XCTAssertEqual(recorded.value?.sessionID, sessionID)
+        XCTAssertEqual(recorded.value?.takeID, "take-001")
+    }
+
+    @MainActor
+    func testATimedOutStartStillOwnsTheWatch() {
+        let engine = MacCaptureEngine(autoRefreshDevices: false)
+        engine.applyPendingWatchReply(
+            WatchCaptureControlReply(
+                commandID: "c1",
+                sessionID: sessionID,
+                takeID: "take-003",
+                syncState: .timedOut,
+                detail: "Watch motion start timed out."
+            )
+        )
+        XCTAssertEqual(
+            engine.watchOwnedTakeIdentity?.takeID,
+            "take-003",
+            "Silence is not proof the watch did not start."
+        )
+    }
+
+    @MainActor
+    func testAnUnavailableStartOwnsNothing() {
+        // The one safe negative: the command demonstrably never reached a
+        // recorder, so there is nothing to stop and nothing to report.
+        let engine = MacCaptureEngine(autoRefreshDevices: false)
+        engine.applyPendingWatchReply(
+            WatchCaptureControlReply(
+                commandID: "c1",
+                sessionID: sessionID,
+                takeID: "take-004",
+                syncState: .unavailable,
+                detail: "Open ScratchLab on the watch so this device can control motion capture."
+            )
+        )
+        engine.watchStopRequestHandler = { _ in
+            XCTFail("An unavailable start must not request a stop.")
+            return WatchCaptureControlReply(
+                commandID: "unused",
+                sessionID: self.sessionID,
+                takeID: "take-004",
+                syncState: .failed,
+                detail: nil
+            )
+        }
+
+        XCTAssertNil(engine.watchOwnedTakeIdentity)
+        XCTAssertNil(engine.requestWatchStopIfNeeded(reason: .manual))
+    }
+
+    @MainActor
+    func testAnUnacknowledgedRestartReleasesOwnershipOfTheEarlierTake() {
+        let engine = MacCaptureEngine(autoRefreshDevices: false)
+        engine.applyPendingWatchReply(acknowledgedStart(sessionID: sessionID, takeID: "take-004"))
+        XCTAssertEqual(engine.watchOwnedTakeIdentity?.takeID, "take-004")
+
+        engine.applyPendingWatchReply(nil)
+        XCTAssertNil(
+            engine.watchOwnedTakeIdentity,
+            "Ownership must never outlive the acknowledgement that granted it."
+        )
+    }
+
+    @MainActor
+    func testCancellingAReservationStopsTheAcknowledgedWatchCapture() {
+        // A cancelled count-in leaves Core Motion running on the wrist. Nothing
+        // else in the app would ever stop it.
+        let engine = MacCaptureEngine(autoRefreshDevices: false)
+        engine.applyPendingWatchReply(acknowledgedStart(sessionID: sessionID, takeID: "take-005"))
+
+        let dispatched = expectation(description: "watch stop dispatched")
+        let recorded = UncheckedBox<TakeIdentity?>(nil)
+        engine.watchStopRequestHandler = { identity in
+            recorded.value = identity
+            dispatched.fulfill()
+            return self.stoppedReply(for: identity)
+        }
+
+        _ = engine.cancelPendingRoutineReservation()
+
+        wait(for: [dispatched], timeout: 2)
+        XCTAssertEqual(recorded.value?.takeID, "take-005")
+    }
+
+    @MainActor
+    func testAMissingRelayIsReportedRatherThanTreatedAsSuccess() {
+        let engine = MacCaptureEngine(autoRefreshDevices: false)
+        engine.applyPendingWatchReply(acknowledgedStart(sessionID: sessionID, takeID: "take-006"))
+        engine.watchStopRequestHandler = nil
+
+        // Still counted as dispatched-and-degraded, never silently skipped.
+        XCTAssertNotNil(engine.requestWatchStopIfNeeded(reason: .manual))
+        XCTAssertNil(engine.watchOwnedTakeIdentity)
+    }
+
+    /// AVFoundation ends a take at `maxRecordedDuration` without ever calling
+    /// `stopRoutineRecording`, so finalization has to ask too. Verified against
+    /// the source because that path cannot be driven without a live capture
+    /// session.
+    func testEveryTerminalRoutinePathAsksForAWatchStop() throws {
+        let source = try String(
+            contentsOf: URL(fileURLWithPath: #filePath)
+                .deletingLastPathComponent()
+                .deletingLastPathComponent()
+                .appendingPathComponent("ScratchLabDesktop/Services/MacCaptureEngine.swift"),
+            encoding: .utf8
+        )
+        XCTAssertTrue(
+            source.contains("noteRoutineStopReason(reason)\n        // Dispatched before the media stop"),
+            "stopRoutineRecording must request the watch stop."
+        )
+        XCTAssertTrue(
+            source.contains("requestWatchStopIfNeeded(reason: nil)\n        let captureErrorDescription"),
+            "finalizeRoutineRecording must request the watch stop for paths that bypass stopRoutineRecording."
+        )
+        XCTAssertTrue(
+            source.contains("requestWatchStopIfNeeded(reason: .interrupted)"),
+            "cancelPendingRoutineReservation must request the watch stop."
+        )
+        XCTAssertGreaterThanOrEqual(
+            source.components(separatedBy: "requestWatchStopIfNeeded(reason: .interrupted)").count - 1,
+            6,
+            "Every abandoned-start path must release a watch capture the take already owns:"
+                + " cancelled reservation, refused start, and each device guard."
+        )
+    }
+
+    /// The view must not race the engine with a second, differently-identified
+    /// stop.
+    func testTheStopButtonNoLongerSendsItsOwnUnidentifiedWatchStop() throws {
+        let source = try String(
+            contentsOf: URL(fileURLWithPath: #filePath)
+                .deletingLastPathComponent()
+                .deletingLastPathComponent()
+                .appendingPathComponent("ScratchLabDesktop/Views/MacAnalyzerView.swift"),
+            encoding: .utf8
+        )
+        XCTAssertEqual(
+            source.components(separatedBy: "requestWatchCaptureStop(").count - 1,
+            1,
+            "The view may reference the stop transport exactly once — to install it."
+        )
+        XCTAssertTrue(
+            source.contains("captureEngine.watchStopRequestHandler = { identity in"),
+            "The view must install the engine's stop transport."
+        )
+        XCTAssertTrue(
+            source.contains("takeID: identity.takeID"),
+            "The installed transport must carry the take's own identity."
+        )
+        XCTAssertFalse(
+            source.contains("sessionID: routineSessionSetup.config.sessionID,\n                takeID: nil"),
+            "The session-level, take-less stop that could not match the started capture is gone."
+        )
+    }
+}
+
+/// A tiny mutable box for values captured by an escaping test handler.
+private final class UncheckedBox<Value>: @unchecked Sendable {
+    var value: Value
+    init(_ value: Value) { self.value = value }
+}
+
+/// The Watch's own decision table: idempotent, identity-scoped, honest.
+final class WatchMotionStopCommandResolverTests: XCTestCase {
+    private func command(
+        _ kind: WatchCaptureCommandPayload.Command,
+        commandID: String = "cmd-1",
+        sessionID: String = "session-a",
+        takeID: String? = "take-001"
+    ) -> WatchCaptureCommandPayload {
+        WatchCaptureCommandPayload(
+            commandID: commandID,
+            command: kind,
+            sessionID: sessionID,
+            takeID: takeID
+        )
+    }
+
+    func testAStopForTheRunningCaptureStopsIt() {
+        let active = command(.start)
+        let decision = WatchMotionStopCommandResolver.decide(
+            payload: command(.stop, commandID: "stop-1"),
+            isRecording: true,
+            activeCommand: active,
+            resolvedStopCommandIDs: []
+        )
+        XCTAssertEqual(decision, .stop)
+        XCTAssertEqual(decision.outcome, .stopped)
+        XCTAssertEqual(
+            decision.syncState,
+            .notRequested,
+            "The shipped wire contract for a handled stop is unchanged."
+        )
+    }
+
+    func testARepeatedStopCommandIsHarmless() {
+        let decision = WatchMotionStopCommandResolver.decide(
+            payload: command(.stop, commandID: "stop-1"),
+            isRecording: true,
+            activeCommand: command(.start),
+            resolvedStopCommandIDs: ["stop-1"]
+        )
+        guard case .alreadyStopped = decision else {
+            return XCTFail("A duplicate stop must not finalize the capture a second time.")
+        }
+        XCTAssertEqual(decision.outcome, .stopped)
+    }
+
+    func testAStopWhileNotRecordingIsHarmless() {
+        let decision = WatchMotionStopCommandResolver.decide(
+            payload: command(.stop),
+            isRecording: false,
+            activeCommand: nil,
+            resolvedStopCommandIDs: []
+        )
+        guard case .alreadyStopped = decision else {
+            return XCTFail("Stopping an idle watch is a no-op, not an error.")
+        }
+        XCTAssertEqual(decision.outcome, .stopped)
+    }
+
+    func testAStaleSessionCannotStopTheRunningCapture() {
+        let decision = WatchMotionStopCommandResolver.decide(
+            payload: command(.stop, sessionID: "session-b"),
+            isRecording: true,
+            activeCommand: command(.start, sessionID: "session-a"),
+            resolvedStopCommandIDs: []
+        )
+        guard case let .rejectIdentity(detail) = decision else {
+            return XCTFail("A stop for another session must never end this capture.")
+        }
+        XCTAssertTrue(detail.contains("session-b"))
+        XCTAssertEqual(decision.outcome, .identityRejected)
+        XCTAssertEqual(decision.syncState, .failed)
+    }
+
+    func testAStaleTakeCannotStopTheRunningCapture() {
+        let decision = WatchMotionStopCommandResolver.decide(
+            payload: command(.stop, takeID: "take-009"),
+            isRecording: true,
+            activeCommand: command(.start, takeID: "take-001"),
+            resolvedStopCommandIDs: []
+        )
+        guard case let .rejectIdentity(detail) = decision else {
+            return XCTFail("A stop for another take must never end this capture.")
+        }
+        XCTAssertTrue(detail.contains("take-009"))
+        XCTAssertEqual(decision.outcome, .identityRejected)
+    }
+
+    func testAStopWithoutAnIdentityStillStopsALocalCapture() {
+        // A watch-side stop, or a peer that predates identity-scoped stops.
+        // Refusing it would strand a running capture, which is the bug.
+        let decision = WatchMotionStopCommandResolver.decide(
+            payload: command(.stop, sessionID: "", takeID: nil),
+            isRecording: true,
+            activeCommand: command(.start),
+            resolvedStopCommandIDs: []
+        )
+        XCTAssertEqual(decision, .stop)
+    }
+
+    func testACaptureStartedLocallyIsStoppable() {
+        let decision = WatchMotionStopCommandResolver.decide(
+            payload: command(.stop),
+            isRecording: true,
+            activeCommand: nil,
+            resolvedStopCommandIDs: []
+        )
+        XCTAssertEqual(decision, .stop)
+    }
+}
+
+/// Stop outcomes must stay distinguishable end to end.
+final class CaptureWatchStopOutcomeTests: XCTestCase {
+    private func reply(
+        _ syncState: CaptureWatchSyncState,
+        stopOutcome: CaptureWatchStopOutcome? = nil
+    ) -> WatchCaptureControlReply {
+        WatchCaptureControlReply(
+            commandID: "cmd",
+            sessionID: "session-a",
+            takeID: "take-001",
+            syncState: syncState,
+            detail: nil,
+            stopOutcome: stopOutcome
+        )
+    }
+
+    func testEveryStateTheAuditRequiresIsRepresentable() {
+        // stop not requested / sent / unreachable / timed out / identity
+        // rejected / acknowledged-stopped, plus transfer pending vs completed.
+        let outcomes = Set(
+            [
+                CaptureWatchStopOutcome.notRequested,
+                .sent,
+                .unreachable,
+                .timedOut,
+                .identityRejected,
+                .stopped,
+                .failed
+            ].map(\.rawValue)
+        )
+        XCTAssertEqual(outcomes.count, 7, "Each state must be its own value, not a collapsed alias.")
+        XCTAssertNotEqual(
+            CaptureWatchStopOutcome.notRequested.rawValue,
+            CaptureWatchStopOutcome.stopped.rawValue,
+            "\"never asked\" and \"stopped on request\" must never read the same."
+        )
+    }
+
+    func testOnlyAConfirmedStopIsTreatedAsSuccess() {
+        XCTAssertTrue(CaptureWatchStopOutcome.stopped.isStopConfirmed)
+        for degraded: CaptureWatchStopOutcome in [.sent, .unreachable, .timedOut, .identityRejected, .failed] {
+            XCTAssertFalse(degraded.isStopConfirmed, "\(degraded.rawValue) does not prove the watch stopped.")
+            XCTAssertTrue(degraded.isDegraded)
+        }
+    }
+
+    func testAnExplicitWatchReportedOutcomeWins() {
+        XCTAssertEqual(
+            CaptureWatchStopPolicy.outcome(for: reply(.failed, stopOutcome: .identityRejected)),
+            .identityRejected
+        )
+    }
+
+    func testALegacyReplyWithoutAStopOutcomeIsStillClassified() {
+        // The shipped Watch answered a handled stop with `notRequested`.
+        XCTAssertEqual(CaptureWatchStopPolicy.outcome(for: reply(.notRequested)), .stopped)
+        XCTAssertEqual(CaptureWatchStopPolicy.outcome(for: reply(.acknowledged)), .stopped)
+        XCTAssertEqual(CaptureWatchStopPolicy.outcome(for: reply(.timedOut)), .timedOut)
+        XCTAssertEqual(CaptureWatchStopPolicy.outcome(for: reply(.unavailable)), .unreachable)
+        XCTAssertEqual(CaptureWatchStopPolicy.outcome(for: reply(.failed)), .failed)
+    }
+
+    func testOnlyADemonstrablyUndeliveredStartOwnsNothing() {
+        for state: CaptureWatchSyncState in [.acknowledged, .requested, .failed, .timedOut] {
+            XCTAssertTrue(
+                CaptureWatchStopPolicy.startMayHaveLeftWatchRecording(state),
+                "\(state.rawValue) leaves a watch that may be recording; it must arm the stop."
+            )
+        }
+        for state: CaptureWatchSyncState in [.unavailable, .notRequested] {
+            XCTAssertFalse(
+                CaptureWatchStopPolicy.startMayHaveLeftWatchRecording(state),
+                "\(state.rawValue) means nothing reached a recorder."
+            )
+        }
+    }
+
+    /// Relay-latency regression (2026-09-04). Session `1ce25396-…` stopped the
+    /// watch in the same second it was asked and still reported `timedOut`,
+    /// because the acknowledgement crossed two serializations on the way back:
+    /// the watch replied only after encoding and writing a 1.26 MB motion file,
+    /// and the iPhone relayed that reply on the same serial queue as the camera
+    /// sample-buffer delegate.
+    func testTheStopAcknowledgementIsNotGatedBehindFileWorkOrCameraFrames() throws {
+        let root = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+        let watch = try String(
+            contentsOf: root.appendingPathComponent("ScratchLabWatch/Services/WatchMotionRecorder.swift"),
+            encoding: .utf8
+        )
+        // The relay stop path takes only the fast half before replying.
+        XCTAssertTrue(
+            watch.contains("let stopped = beginStop()"),
+            "The relay stop must stop Core Motion without finalizing first."
+        )
+        XCTAssertTrue(
+            watch.contains("DispatchQueue.main.async { self.finalizeStoppedCapture(stopped) }"),
+            "Finalization must run after the acknowledgement, not before it."
+        )
+        XCTAssertFalse(
+            watch.contains("rememberResolvedStopCommand(payload.commandID)\n                stopCapture()"),
+            "The relay stop path must not call the synchronous finalize-then-reply form."
+        )
+
+        let broadcaster = try String(
+            contentsOf: root.appendingPathComponent("ScratchLab/Services/CompanionCameraBroadcaster.swift"),
+            encoding: .utf8
+        )
+        XCTAssertTrue(
+            broadcaster.contains("private let controlQueue = DispatchQueue"),
+            "Control-plane sends need a queue of their own."
+        )
+        XCTAssertTrue(
+            broadcaster.contains("setSampleBufferDelegate(self, queue: captureQueue)"),
+            "Precondition: captureQueue is the video sample-buffer queue."
+        )
+        // The watch status relay must not sit behind camera frames.
+        let statusBody = broadcaster.components(separatedBy: "func sendWatchControlStatus")[1]
+        XCTAssertTrue(
+            statusBody.prefix(400).contains("controlQueue.async"),
+            "sendWatchControlStatus must not dispatch onto the camera queue."
+        )
+    }
+
+    func testStopDiagnosticsCanAttributeLatencyToADirection() {
+        // A `timedOut` stop is only actionable once you can say which leg was
+        // slow, so the watch's own handling instant is recorded alongside the
+        // Mac's dispatch and resolve instants.
+        let requested = Date()
+        let handled = requested.addingTimeInterval(0.4)
+        let resolved = requested.addingTimeInterval(4.0)
+        let diagnostics = CaptureWatchStopDiagnostics(
+            outcome: .timedOut,
+            requestedAt: requested,
+            resolvedAt: resolved,
+            watchHandledAt: handled
+        )
+        XCTAssertEqual(
+            diagnostics.watchHandledAt?.timeIntervalSince(requested) ?? -1,
+            0.4,
+            accuracy: 0.001,
+            "Forward leg must be recoverable."
+        )
+        XCTAssertEqual(
+            (diagnostics.resolvedAt ?? requested).timeIntervalSince(handled),
+            3.6,
+            accuracy: 0.001,
+            "Return leg must be recoverable."
+        )
+    }
+
+    /// THE root cause of every timed-out handshake (2026-09-04).
+    ///
+    /// `WatchMotionCaptureStore.requestRemoteCaptureStart/Stop` default their
+    /// `commandID` to a fresh UUID. The iPhone relay called them without
+    /// passing the Mac's command ID through, so the watch replied under an ID
+    /// the Mac had never issued. `resolve` found nothing pending, the await was
+    /// never resumed, and the Mac timed out every single time — no matter how
+    /// fast the watch answered. Session `1ce25396-…` is the proof: the watch
+    /// stopped in the same second it was asked and the Mac still recorded
+    /// `timedOut`.
+    func testAReplyUnderADifferentCommandIDNeverResolvesTheCommand() {
+        let coordinator = WatchCaptureCommandCoordinator()
+        let payload = WatchCaptureCommandPayload(
+            command: .stop,
+            sessionID: "session-a",
+            takeID: "take-001"
+        )
+
+        let mismatched = WatchCaptureControlReply(
+            commandID: "a-fresh-id-the-mac-never-issued",
+            sessionID: "session-a",
+            takeID: "take-001",
+            syncState: .notRequested,
+            detail: "Watch motion capture stopped.",
+            acknowledgedAt: Date(),
+            stopOutcome: .stopped
+        )
+        _ = coordinator.resolve(mismatched)
+
+        XCTAssertTrue(
+            coordinator.hasOrphanedReply(for: mismatched.commandID),
+            "A reply nobody awaited must be recorded, not silently swallowed."
+        )
+        XCTAssertNil(
+            coordinator.finalizedReply(for: payload.commandID),
+            "The command the Mac is actually waiting on stays unanswered."
+        )
+    }
+
+    /// The fix: the relay must carry the Mac's command ID through.
+    func testTheRelayCarriesTheMacsCommandIDThroughToTheWatch() throws {
+        let source = try String(
+            contentsOf: URL(fileURLWithPath: #filePath)
+                .deletingLastPathComponent()
+                .deletingLastPathComponent()
+                .appendingPathComponent("ScratchLab/ScratchLabApp.swift"),
+            encoding: .utf8
+        )
+        // Both request call sites must forward the Mac's own ID. (The
+        // `@unknown default` branch also names it, when it builds a reply.)
+        let startCall = source.components(separatedBy: "requestRemoteCaptureStart(")[1]
+        let stopCall = source.components(separatedBy: "requestRemoteCaptureStop(")[1]
+        XCTAssertTrue(
+            startCall.prefix(400).contains("commandID: payload.commandID"),
+            "Start must forward the Mac's own command ID."
+        )
+        XCTAssertTrue(
+            stopCall.prefix(400).contains("commandID: payload.commandID"),
+            "Stop must forward the Mac's own command ID."
+        )
+        XCTAssertFalse(
+            source.contains(".onChange(of: companionRelayBroadcaster.pendingWatchControlCommand)"),
+            "Control commands must not be delivered through a view update."
+        )
+        XCTAssertTrue(
+            source.contains("companionRelayBroadcaster.onWatchControlCommand = { payload in"),
+            "Delivery must be a direct callback, like every sibling relay concern."
+        )
+    }
+
+    /// A receipt says the relay has the command; it is not the watch's answer.
+    func testARelayReceiptDoesNotFinalizeTheCommand() {
+        let coordinator = WatchCaptureCommandCoordinator()
+        let payload = WatchCaptureCommandPayload(
+            command: .stop,
+            sessionID: "session-a",
+            takeID: "take-001"
+        )
+        let receiptAt = Date()
+        let resolved = coordinator.resolve(
+            WatchCaptureControlReply(
+                commandID: payload.commandID,
+                sessionID: payload.sessionID,
+                takeID: payload.takeID,
+                syncState: .requested,
+                detail: "Relay received the command and is forwarding it to the watch.",
+                acknowledgedAt: receiptAt
+            )
+        )
+        XCTAssertNil(resolved, "A receipt must not answer for the watch.")
+        XCTAssertEqual(coordinator.receipt(for: payload.commandID), receiptAt)
+        XCTAssertNil(
+            coordinator.finalizedReply(for: payload.commandID),
+            "The command must still be waiting for the watch's real reply."
+        )
+    }
+
+    func testTheStopHandshakeIsBounded() {
+        XCTAssertGreaterThan(CaptureWatchStopPolicy.acknowledgementTimeoutSeconds, 0)
+        XCTAssertGreaterThanOrEqual(CaptureWatchStopPolicy.maximumAttempts, 1)
+        XCTAssertLessThanOrEqual(
+            CaptureWatchStopPolicy.maximumHandshakeSeconds,
+            5,
+            "Media finalization must never wait long on a watch that is off the wrist."
+        )
+    }
+
+    func testAnUnansweredStopResolvesAsTimedOutRatherThanStopped() {
+        let coordinator = WatchCaptureCommandCoordinator()
+        let payload = WatchCaptureCommandPayload(
+            command: .stop,
+            sessionID: "session-a",
+            takeID: "take-001"
+        )
+        let timedOut = coordinator.timeout(commandID: payload.commandID)
+        XCTAssertNil(timedOut, "An unknown command has nothing to time out.")
+
+        let pending = expectation(description: "stop resolves")
+        Task {
+            let reply = await coordinator.begin(command: payload)
+            XCTAssertEqual(reply.syncState, .timedOut)
+            XCTAssertEqual(reply.stopOutcome, .timedOut)
+            XCTAssertEqual(reply.detail, "Watch motion stop timed out.")
+            pending.fulfill()
+        }
+        // Give `begin` a moment to register before timing it out.
+        let registered = expectation(description: "registered")
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) {
+            _ = coordinator.timeout(commandID: payload.commandID)
+            registered.fulfill()
+        }
+        wait(for: [registered, pending], timeout: 3)
+    }
+
+    func testTheReplyStillDecodesWhenAPeerSendsNoStopOutcome() throws {
+        // Wire compatibility with a Watch or relay that predates the field.
+        let legacy = """
+        {
+          "kind": "watch_motion_control_status_v2",
+          "commandID": "cmd",
+          "sessionID": "session-a",
+          "takeID": "take-001",
+          "syncState": "notRequested",
+          "detail": "Watch motion capture was already stopped."
+        }
+        """
+        let decoded = try JSONDecoder().decode(
+            WatchCaptureControlReply.self,
+            from: Data(legacy.utf8)
+        )
+        XCTAssertNil(decoded.stopOutcome)
+        XCTAssertEqual(CaptureWatchStopPolicy.outcome(for: decoded), .stopped)
+    }
+}
+
+/// The take sidecar has to carry the stop evidence into the export without
+/// disturbing the association merge that fixed the earlier write-back race.
+final class WatchStopDiagnosticsSidecarTests: XCTestCase {
+    private let sessionID = "9f75b6da-5b4b-4a7a-b234-465be2ce0128"
+
+    private func makeSidecar() -> CaptureCore.LocalRecordingSidecar {
+        CaptureCore.LocalRecordingSidecar.recording(
+            sessionID: sessionID,
+            sessionConfig: nil,
+            takeIdentity: CaptureCore.LocalRecordingNaming.takeIdentity(
+                sessionID: sessionID,
+                takeNumber: 1
+            ),
+            files: CaptureCore.LocalRecordingFiles(
+                baseName: "bvb_take01",
+                mediaURL: URL(fileURLWithPath: "/tmp/bvb_take01.mov"),
+                sidecarURL: URL(fileURLWithPath: "/tmp/bvb_take01.json")
+            ),
+            recordingRole: "mac_routine_capture",
+            platform: "macOS",
+            appSurface: "ScratchLab Routine Recorder",
+            sourceDeviceName: "DJ",
+            startedAt: Date()
+        )
+    }
+
+    func testAFailedStartRecordsWhyItFailed() {
+        // `watchSyncState: failed` with no recoverable reason is what made the
+        // first hardware failure need a second run to diagnose.
+        let sidecar = makeSidecar().withWatchSync(
+            WatchCaptureControlReply(
+                commandID: "eac9f34a-2cfc-455d-8e73-6b14bc7dba5f",
+                sessionID: sessionID,
+                takeID: "take-001",
+                syncState: .failed,
+                detail: "Watch motion capture failed to start.",
+                acknowledgedAt: Date()
+            )
+        )
+        let event = sidecar.auditTrail.last { $0.category == "watch_sync" }
+        XCTAssertEqual(
+            event?.detail,
+            "Watch sync state set to failed: Watch motion capture failed to start."
+        )
+    }
+
+    func testATakeWithNoStopDiagnosticsReadsAsNotRequested() throws {
+        let sidecar = makeSidecar()
+        XCTAssertNil(sidecar.watchStopDiagnostics)
+
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .iso8601
+        let decoded = try decoder.decode(
+            CaptureCore.LocalRecordingSidecar.self,
+            from: sidecar.encodedData()
+        )
+        XCTAssertNil(
+            decoded.watchStopDiagnostics,
+            "A sidecar written before stop diagnostics existed must decode, not fail."
+        )
+    }
+
+    func testAStopOutcomeRoundTripsAndIsAudited() throws {
+        let resolvedAt = Date()
+        let sidecar = makeSidecar().withWatchStopDiagnostics(
+            CaptureWatchStopDiagnostics(
+                outcome: .timedOut,
+                sessionID: sessionID,
+                takeID: "take-001",
+                commandID: "cmd-1",
+                detail: "Watch stop was not acknowledged within 2 seconds.",
+                requestedAt: resolvedAt,
+                resolvedAt: resolvedAt,
+                attemptCount: 1,
+                motionTransferState: .pending
+            )
+        )
+
+        XCTAssertEqual(sidecar.watchStopDiagnostics?.outcome, .timedOut)
+        XCTAssertTrue(
+            sidecar.auditTrail.contains { $0.category == "watch_stop" },
+            "A degraded stop must be recorded, not silent."
+        )
+
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .iso8601
+        let decoded = try decoder.decode(
+            CaptureCore.LocalRecordingSidecar.self,
+            from: sidecar.encodedData()
+        )
+        XCTAssertEqual(decoded.watchStopDiagnostics?.outcome, .timedOut)
+        XCTAssertEqual(decoded.watchStopDiagnostics?.attemptCount, 1)
+        XCTAssertEqual(decoded.watchStopDiagnostics?.motionTransferState, .pending)
+    }
+
+    func testALateWatchAssociationStillSurvivesFinalization() {
+        // The earlier write-back fix, re-asserted with stop diagnostics in
+        // play: recording a stop outcome must not cost the take its link.
+        let staleInMemory = makeSidecar().withWatchStopDiagnostics(
+            CaptureWatchStopDiagnostics(
+                outcome: .timedOut,
+                sessionID: sessionID,
+                takeID: "take-001",
+                detail: "Watch stop was not acknowledged.",
+                attemptCount: 2,
+                motionTransferState: .pending
+            )
+        )
+        XCTAssertNil(staleInMemory.linkedMotionFileName)
+
+        let motionCaptureID = UUID(uuidString: "3A9DC9A3-9399-4999-B869-0237F36DA99C")!
+        let onDisk = makeSidecar().linkingWatchCapture(
+            id: motionCaptureID,
+            fileName: "scratch-motion-live-3A9DC9A3.json"
+        )
+
+        let merged = staleInMemory.mergingLatestWatchAssociation(from: onDisk)
+
+        XCTAssertEqual(merged.linkedMotionFileName, "scratch-motion-live-3A9DC9A3.json")
+        XCTAssertEqual(merged.watchSyncState, .acknowledged)
+        XCTAssertEqual(
+            merged.watchStopDiagnostics?.outcome,
+            .timedOut,
+            "An arriving motion file proves the capture existed, not that the stop was timely."
+        )
+        XCTAssertEqual(
+            merged.watchStopDiagnostics?.motionTransferState,
+            .completed,
+            "The link is the transfer completing."
+        )
+    }
+
+    func testMergingNeverInventsAStopThatWasNeverRequested() {
+        let noStopRecorded = makeSidecar()
+        let onDisk = makeSidecar().linkingWatchCapture(
+            id: UUID(),
+            fileName: "linked.json"
+        )
+
+        let merged = noStopRecorded.mergingLatestWatchAssociation(from: onDisk)
+
+        XCTAssertEqual(merged.linkedMotionFileName, "linked.json")
+        XCTAssertNil(
+            merged.watchStopDiagnostics,
+            "Adopting a link must not fabricate a stop handshake that never happened."
+        )
+    }
+
+    func testTheExportCarriesTheStopOutcomeSeparatelyFromWatchSource() throws {
+        let source = try String(
+            contentsOf: URL(fileURLWithPath: #filePath)
+                .deletingLastPathComponent()
+                .deletingLastPathComponent()
+                .appendingPathComponent("ScratchLab/Services/SessionExportCoordinator.swift"),
+            encoding: .utf8
+        )
+        XCTAssertTrue(source.contains("let watchStopOutcome: String"))
+        XCTAssertTrue(source.contains("let watchMotionTransferState: String"))
+        // The four instants that let a reader tell a late stop from an early
+        // start. Without them a 5.411 s lead-in reads as 5.411 s of overrun.
+        for field in [
+            "let takeStartedAt: Date?",
+            "let takeStopRequestedAt: Date?",
+            "let watchCaptureStartedAt: Date?",
+            "let watchCaptureEndedAt: Date?"
+        ] {
+            XCTAssertTrue(source.contains(field), "Export must carry \(field)")
+        }
+        XCTAssertTrue(
+            source.contains("takeStopRequestedAt: sidecar.watchStopDiagnostics?.requestedAt"),
+            "The media window's end is the instant the stop was dispatched."
+        )
+        XCTAssertTrue(
+            source.contains("watchCaptureEndedAt: take.watchCaptureSession?.endedAt"),
+            "The watch's end must come from the watch's own record."
+        )
+        XCTAssertTrue(source.contains("let watchStopHandledAt: Date?"))
+        XCTAssertTrue(source.contains("let watchStopResolvedAt: Date?"))
+        XCTAssertTrue(
+            source.contains("watchSource: context.watchFileName == nil ? \"none\" : \"watch\""),
+            "The canonical manifest's watch_source stays two-valued and unoverloaded."
         )
     }
 }

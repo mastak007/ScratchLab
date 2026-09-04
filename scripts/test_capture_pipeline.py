@@ -15,7 +15,16 @@ import wave
 from pathlib import Path
 from unittest import mock
 
-from capture_pipeline_common import ALLOWED_BPMS, SCRATCH_TYPE, SEGMENT_COUNT, TAKE_LOG_COLUMNS, build_artifact_record, default_manifest
+from capture_pipeline_common import (
+    ALLOWED_BPMS,
+    MIN_WATCH_DATA_ROWS,
+    SCRATCH_TYPE,
+    SEGMENT_COUNT,
+    TAKE_LOG_COLUMNS,
+    WATCH_CSV_HEADER,
+    build_artifact_record,
+    default_manifest,
+)
 
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
@@ -1109,6 +1118,7 @@ class AppExportValidationTests(unittest.TestCase):
         manifest_date: str | None = None,
         verbal_slate_required: bool = False,
         sync_clap_required: bool = False,
+        watch_duration_seconds: float | None = None,
     ) -> None:
         for directory in ("raw", "audio", "video", "watch", "notation", "manifests", f"{self.BPM}bpm"):
             (self.session_dir / directory).mkdir(parents=True, exist_ok=True)
@@ -1146,6 +1156,11 @@ class AppExportValidationTests(unittest.TestCase):
             encoding="utf-8",
         )
 
+        watch_path: Path | None = None
+        if watch_duration_seconds is not None:
+            watch_path = self.session_dir / "watch" / f"{stem}_watch.csv"
+            self.write_watch_csv(watch_path, duration_seconds=watch_duration_seconds)
+
         def relative(path: Path) -> str:
             return str(path.relative_to(self.session_dir))
 
@@ -1172,7 +1187,7 @@ class AppExportValidationTests(unittest.TestCase):
                     "segment_count": SEGMENT_COUNT,
                     "camera_id": "camA",
                     "audio_source": "scratchlab_output",
-                    "watch_source": "none",
+                    "watch_source": "none" if watch_path is None else "watch",
                     "verbal_slate_used": False,
                     "sync_clap_used": False,
                     "notes": "",
@@ -1199,17 +1214,40 @@ class AppExportValidationTests(unittest.TestCase):
                 }
             ],
         }
+        if watch_path is not None:
+            take = manifest["takes"][0]
+            take["files"]["watch"] = relative(watch_path)
+            take["artifacts"]["watch"] = self.artifact(watch_path, "watch")
+
         self.manifest_path.write_text(f"{json.dumps(manifest, indent=2)}\n", encoding="utf-8")
+        watch_cell = relative(watch_path) if watch_path is not None else ""
         self.take_log_path.write_text(
             "\n".join(
                 [
                     ",".join(TAKE_LOG_COLUMNS),
-                    f'"{self.BPM}","1","{relative(video_path)}","","{relative(scratch_path)}","","false","false",""',
+                    f'"{self.BPM}","1","{relative(video_path)}","","{relative(scratch_path)}","{watch_cell}","false","false",""',
                 ]
             )
             + "\n",
             encoding="utf-8",
         )
+
+    def write_watch_csv(self, path: Path, *, duration_seconds: float) -> None:
+        """Write a canonical-header Watch motion CSV spanning `duration_seconds`.
+
+        Sampled at 100 Hz like the real recorder, so `elapsed_time` runs from
+        0.0 to `duration_seconds`.
+        """
+        path.parent.mkdir(parents=True, exist_ok=True)
+        sample_count = max(MIN_WATCH_DATA_ROWS, int(round(duration_seconds * 100)) + 1)
+        step = duration_seconds / (sample_count - 1)
+        rows = [",".join(WATCH_CSV_HEADER)]
+        for index in range(sample_count):
+            elapsed = index * step
+            rows.append(
+                ",".join([repr(round(elapsed, 6)), repr(round(elapsed, 6))] + ["0.0"] * 16)
+            )
+        path.write_text("\n".join(rows) + "\n", encoding="utf-8")
 
     # -- helpers -------------------------------------------------------------
 
@@ -1288,6 +1326,344 @@ class AppExportValidationTests(unittest.TestCase):
         self.build_export(beat_frame_count=self.FRAME_COUNT - 1)
         report = self.run_validate(expect_success=False)
         self.assertIn("audio stem frame counts differ", report)
+
+    # -- the watch must stop when the take stops -----------------------------
+    #
+    # BVB regression (2026-09-04): a 19.4 s take whose Watch CSV ran to
+    # 37.894 s because the Mac's Stop never reached the Watch.
+    #
+    # The quantity is the gap between the two *ends*, not the difference of the
+    # two durations. Session `1ce25396-…` proved why: 15.411 s of motion against
+    # a 10.000 s take, yet the Watch stopped in the same second it was asked to.
+    # The whole 5.411 s was a lead-in, and a duration comparison called it an
+    # overrun.
+
+    TAKE_START = "2026-09-04T03:39:20Z"
+    TAKE_STOP = "2026-09-04T03:39:30Z"
+
+    def alignment(
+        self,
+        *,
+        watch_start: str,
+        watch_end: str,
+        take_start: str | None = None,
+        take_stop: str | None = None,
+    ) -> dict[str, object]:
+        return {
+            "takeStartedAt": take_start or self.TAKE_START,
+            "takeStopRequestedAt": take_stop or self.TAKE_STOP,
+            "watchCaptureStartedAt": watch_start,
+            "watchCaptureEndedAt": watch_end,
+        }
+
+    def test_watch_that_kept_recording_after_the_take_is_rejected(self) -> None:
+        # The BVB shape: stopped 18.494 s after the stop was requested.
+        self.build_export(watch_duration_seconds=19.494)
+        self.write_session_metadata(
+            self.alignment(
+                watch_start="2026-09-04T03:39:20Z",
+                watch_end="2026-09-04T03:39:48.494Z",
+            )
+        )
+        report = self.run_validate(expect_success=False)
+        self.assertIn("watch motion stopped 18.494s after the take's stop was requested", report)
+        self.assertIn("kept recording after the take ended", report)
+
+    def test_a_long_lead_in_is_not_an_overrun(self) -> None:
+        # Session `1ce25396-…` exactly: 5.411 s longer than the take, but it
+        # stopped on time. This must pass.
+        self.build_export(watch_duration_seconds=15.411)
+        self.write_session_metadata(
+            self.alignment(
+                watch_start="2026-09-04T03:39:15Z",
+                watch_end=self.TAKE_STOP,
+            )
+        )
+        report = self.run_validate(expect_success=True)
+        self.assertIn("Status: PASS", report)
+        self.assertNotIn("kept recording after the take ended", report)
+        # The lead-in is still surfaced, because it points at a stalling start.
+        self.assertIn("began 5.000s before the take's media", report)
+
+    def test_a_short_lead_in_is_silent(self) -> None:
+        self.build_export(watch_duration_seconds=11.0)
+        self.write_session_metadata(
+            self.alignment(
+                watch_start="2026-09-04T03:39:19Z",
+                watch_end=self.TAKE_STOP,
+            )
+        )
+        report = self.run_validate(expect_success=True)
+        self.assertIn("Status: PASS", report)
+        self.assertNotIn("before the take's media", report)
+
+    def test_watch_stop_within_finalization_latency_is_accepted(self) -> None:
+        self.build_export(watch_duration_seconds=11.5)
+        self.write_session_metadata(
+            self.alignment(
+                watch_start="2026-09-04T03:39:20Z",
+                watch_end="2026-09-04T03:39:31.5Z",
+            )
+        )
+        report = self.run_validate(expect_success=True)
+        self.assertIn("Status: PASS", report)
+        self.assertNotIn("after the take's stop was requested", report)
+
+    def test_watch_stop_at_the_error_boundary_warns_but_passes(self) -> None:
+        # Exactly the full bounded handshake: slow, still explicable.
+        self.build_export(watch_duration_seconds=14.0)
+        self.write_session_metadata(
+            self.alignment(
+                watch_start="2026-09-04T03:39:20Z",
+                watch_end="2026-09-04T03:39:34Z",
+            )
+        )
+        report = self.run_validate(expect_success=True)
+        self.assertIn("Status: PASS", report)
+        self.assertIn("slower than a healthy acknowledgement", report)
+
+    def test_watch_stop_past_the_handshake_bound_is_rejected(self) -> None:
+        self.build_export(watch_duration_seconds=15.0)
+        self.write_session_metadata(
+            self.alignment(
+                watch_start="2026-09-04T03:39:20Z",
+                watch_end="2026-09-04T03:39:35Z",
+            )
+        )
+        report = self.run_validate(expect_success=False)
+        self.assertIn("kept recording after the take ended", report)
+
+    def test_an_archive_without_alignment_never_asserts_an_overrun(self) -> None:
+        # Every export written before the alignment instants existed. The
+        # difference is real but unattributable, and must not be reported as a
+        # late stop.
+        self.build_export(watch_duration_seconds=19.494)
+        report = self.run_validate(expect_success=True)
+        self.assertIn("Status: PASS", report)
+        self.assertIn("records no watch/take alignment", report)
+        self.assertNotIn("kept recording after the take ended", report)
+
+    def test_watch_overrun_check_preserves_every_captured_sample(self) -> None:
+        # The bug is reported, never hidden by editing the evidence.
+        self.build_export(watch_duration_seconds=19.494)
+        self.write_session_metadata(
+            self.alignment(
+                watch_start="2026-09-04T03:39:20Z",
+                watch_end="2026-09-04T03:39:48.494Z",
+            )
+        )
+        watch_path = next((self.session_dir / "watch").glob("*_watch.csv"))
+        before = watch_path.read_bytes()
+        self.run_validate(expect_success=False)
+        self.assertEqual(watch_path.read_bytes(), before)
+
+    def test_session_without_a_watch_is_unaffected(self) -> None:
+        self.build_export()
+        report = self.run_validate(expect_success=True)
+        self.assertIn("Status: PASS", report)
+        self.assertNotIn("watch motion", report)
+
+    # -- exported watch stop diagnostics -------------------------------------
+
+    def test_degraded_watch_stop_outcome_survives_into_session_metadata(self) -> None:
+        # `watch_source` cannot say why motion is absent or late; these fields
+        # can, and the validator must not choke on them.
+        self.build_export()
+        self.write_session_metadata(
+            {
+                "stopReason": "manual",
+                "actualTakeDurationSeconds": 1.0,
+                "watchSyncState": "acknowledged",
+                "watchLinkedMotionFileName": "scratch-motion-live-1.json",
+                "watchMotionExported": True,
+                "watchStopOutcome": "timedOut",
+                "watchStopDetail": "Watch stop was not acknowledged within 2 seconds.",
+                "watchMotionTransferState": "completed",
+            }
+        )
+        report = self.run_validate(expect_success=True)
+        self.assertIn("Status: PASS", report)
+
+    # -- stop reason gates the planned/actual duration check -----------------
+
+    def write_session_metadata(self, take: dict[str, object]) -> None:
+        (self.session_dir / "manifests" / "session_metadata.json").write_text(
+            json.dumps(
+                {
+                    "session": {"sessionID": "fixture-session", "totalDurationSeconds": 16.7},
+                    "takes": [{"takeID": "take-001", "takeNumber": 1, **take}],
+                },
+                indent=2,
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+
+    def test_manual_stop_under_a_cap_is_not_a_duration_shortfall(self) -> None:
+        # The kk regression: 16.70 s of media under a 64 s safety cap, stopped
+        # by hand. Nothing was planned, so nothing came up short.
+        self.build_export()
+        self.write_session_metadata(
+            {
+                "stopReason": "manual",
+                "plannedTakeDurationSeconds": None,
+                "maximumTakeDurationSeconds": 64,
+                "actualTakeDurationSeconds": 16.7,
+            }
+        )
+        report = self.run_validate(expect_success=True)
+        self.assertIn("Status: PASS", report)
+        self.assertNotIn("planned", report.lower())
+
+    def test_media_limit_stop_is_not_a_duration_shortfall(self) -> None:
+        self.build_export()
+        self.write_session_metadata(
+            {
+                "stopReason": "media_limit",
+                "maximumTakeDurationSeconds": 64,
+                "actualTakeDurationSeconds": 64.0,
+            }
+        )
+        report = self.run_validate(expect_success=True)
+        self.assertIn("Status: PASS", report)
+
+    def test_planned_duration_reached_flags_a_real_shortfall(self) -> None:
+        self.build_export()
+        self.write_session_metadata(
+            {
+                "stopReason": "planned_duration_reached",
+                "plannedTakeDurationSeconds": 24,
+                "maximumTakeDurationSeconds": 64,
+                "actualTakeDurationSeconds": 16.7,
+            }
+        )
+        report = self.run_validate(expect_success=False)
+        self.assertIn("planned 24.000s but captured 16.700s", report)
+
+    def test_planned_duration_reached_accepts_frame_tolerance(self) -> None:
+        self.build_export()
+        self.write_session_metadata(
+            {
+                "stopReason": "planned_duration_reached",
+                "plannedTakeDurationSeconds": 24,
+                "actualTakeDurationSeconds": 23.98,
+            }
+        )
+        report = self.run_validate(expect_success=True)
+        self.assertIn("Status: PASS", report)
+
+    def test_planned_duration_reached_without_a_plan_is_an_error(self) -> None:
+        self.build_export()
+        self.write_session_metadata(
+            {"stopReason": "planned_duration_reached", "actualTakeDurationSeconds": 16.7}
+        )
+        report = self.run_validate(expect_success=False)
+        self.assertIn("no plannedTakeDurationSeconds is recorded", report)
+
+    def test_unknown_stop_reason_is_rejected(self) -> None:
+        self.build_export()
+        self.write_session_metadata({"stopReason": "gave_up", "actualTakeDurationSeconds": 16.7})
+        report = self.run_validate(expect_success=False)
+        self.assertIn("stopReason 'gave_up' is not one of", report)
+
+    def test_missing_stop_reason_warns_without_failing(self) -> None:
+        # Takes recorded before stop reasons existed must still validate.
+        self.build_export()
+        self.write_session_metadata({"actualTakeDurationSeconds": 16.7})
+        report = self.run_validate(expect_success=True)
+        self.assertIn("Status: PASS", report)
+        self.assertIn("no stopReason recorded", report)
+
+    def test_a_plan_that_did_not_elapse_warns_rather_than_failing(self) -> None:
+        self.build_export()
+        self.write_session_metadata(
+            {
+                "stopReason": "manual",
+                "plannedTakeDurationSeconds": 24,
+                "actualTakeDurationSeconds": 16.7,
+            }
+        )
+        report = self.run_validate(expect_success=True)
+        self.assertIn("Status: PASS", report)
+        self.assertIn("the planned duration did not elapse", report)
+
+    # -- Watch sync state stays truthful ------------------------------------
+
+    def test_timed_out_watch_is_reported_not_silently_absent(self) -> None:
+        # The BBBB regression: 2,346 samples captured and matched, but the
+        # routine sidecar kept `timedOut` and no link, so the manifest said
+        # `none` and nothing said why.
+        self.build_export()
+        self.write_session_metadata(
+            {
+                "stopReason": "manual",
+                "actualTakeDurationSeconds": 16.5,
+                "watchSyncState": "timedOut",
+                "watchLinkedMotionFileName": None,
+                "watchMotionExported": False,
+            }
+        )
+        report = self.run_validate(expect_success=True)
+        self.assertIn("Status: PASS", report)
+        self.assertIn("sync state is 'timedOut'", report)
+        self.assertIn("not Watch-synchronised", report)
+
+    def test_not_requested_watch_does_not_warn(self) -> None:
+        self.build_export()
+        self.write_session_metadata(
+            {
+                "stopReason": "manual",
+                "actualTakeDurationSeconds": 16.5,
+                "watchSyncState": "notRequested",
+                "watchMotionExported": False,
+            }
+        )
+        report = self.run_validate(expect_success=True)
+        self.assertIn("Status: PASS", report)
+        self.assertNotIn("not Watch-synchronised", report)
+
+    def test_linked_watch_motion_that_did_not_export_is_an_error(self) -> None:
+        self.build_export()
+        self.write_session_metadata(
+            {
+                "stopReason": "manual",
+                "actualTakeDurationSeconds": 16.5,
+                "watchSyncState": "acknowledged",
+                "watchLinkedMotionFileName": "scratch-motion-live-ABC.json",
+                "watchMotionExported": False,
+            }
+        )
+        report = self.run_validate(expect_success=False)
+        self.assertIn("but it was not exported", report)
+
+    def test_acknowledged_watch_without_a_link_is_an_error(self) -> None:
+        self.build_export()
+        self.write_session_metadata(
+            {
+                "stopReason": "manual",
+                "actualTakeDurationSeconds": 16.5,
+                "watchSyncState": "acknowledged",
+                "watchLinkedMotionFileName": None,
+                "watchMotionExported": False,
+            }
+        )
+        report = self.run_validate(expect_success=False)
+        self.assertIn("no Watch motion is linked", report)
+
+    def test_unknown_watch_sync_state_is_rejected(self) -> None:
+        self.build_export()
+        self.write_session_metadata(
+            {"stopReason": "manual", "actualTakeDurationSeconds": 16.5, "watchSyncState": "vibes"}
+        )
+        report = self.run_validate(expect_success=False)
+        self.assertIn("watchSyncState 'vibes' is not one of", report)
+
+    def test_missing_watch_sync_state_is_silent_for_legacy_exports(self) -> None:
+        self.build_export()
+        self.write_session_metadata({"stopReason": "manual", "actualTakeDurationSeconds": 16.5})
+        report = self.run_validate(expect_success=True)
+        self.assertIn("Status: PASS", report)
+        self.assertNotIn("watchSyncState", report)
 
     def test_validate_rejects_folder_and_manifest_date_disagreement(self) -> None:
         self.build_export(manifest_date="2026-09-03")

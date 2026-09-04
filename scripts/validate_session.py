@@ -2,8 +2,10 @@
 from __future__ import annotations
 
 import argparse
+import csv
 import re
 import sys
+from datetime import datetime
 from pathlib import Path
 from typing import Any
 
@@ -243,6 +245,208 @@ def validate_take_media_sanity(
     return durations
 
 
+
+# How far past the end of the canonical take a Watch capture may legitimately
+# run before it stops being finalization latency and starts being a Watch that
+# never got the stop.
+#
+# The Watch's Core Motion stop lands after the Mac's media stop: the command
+# crosses MultipeerConnectivity to the iPhone, WatchConnectivity to the Watch,
+# and the Watch then finalizes its motion file. `CaptureWatchStopPolicy` in the
+# app bounds one acknowledgement attempt at 2.0 s and permits a single retry, so
+# the whole handshake cannot honestly exceed 4.0 s.
+#
+#   * over 2.0 s — one acknowledgement window — is a warning: slower than a
+#     healthy stop, still explicable.
+#   * over 4.0 s — longer than the handshake can possibly take — is an error:
+#     the Watch kept recording after the take ended.
+#
+# The raw Watch CSV is never truncated or rewritten to satisfy this. The
+# overrun is reported; every captured sample is preserved.
+WATCH_OVERRUN_WARNING_SECONDS = 2.0
+WATCH_OVERRUN_ERROR_SECONDS = 4.0
+
+# How far ahead of the take's media the Watch may start before it is worth
+# saying so. The Watch begins when the start handshake resolves, so a count-in
+# plus camera startup legitimately puts it a couple of seconds early; much more
+# than that means the start handshake stalled.
+WATCH_LEAD_IN_WARNING_SECONDS = 3.0
+
+
+def parse_iso8601(value: Any) -> datetime | None:
+    """Parse an ISO-8601 instant as written by the app's exporter, or None."""
+    if not isinstance(value, str) or not value:
+        return None
+    try:
+        return datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+
+
+def watch_capture_duration_seconds(path: Path) -> float | None:
+    """Largest `elapsed_time` in a Watch motion CSV, or None if unreadable.
+
+    Read-only: the file on disk is the raw capture record and must survive
+    validation byte-for-byte.
+    """
+    try:
+        with path.open(newline="", encoding="utf-8") as handle:
+            reader = csv.DictReader(handle)
+            if reader.fieldnames is None or "elapsed_time" not in reader.fieldnames:
+                return None
+            maximum: float | None = None
+            for row in reader:
+                raw = (row.get("elapsed_time") or "").strip()
+                if not raw:
+                    continue
+                try:
+                    value = float(raw)
+                except ValueError:
+                    continue
+                if maximum is None or value > maximum:
+                    maximum = value
+            return maximum
+    except OSError:
+        return None
+
+
+def load_take_alignment(session_dir: Path) -> dict[int, dict[str, Any]]:
+    """Per-take watch/take alignment instants from app-side metadata.
+
+    `manifests/session_metadata.json` is optional — a session staged by the
+    canonical scripts has none — so an empty mapping is a normal result, not an
+    error.
+    """
+    path = session_dir / "manifests" / "session_metadata.json"
+    if not path.exists():
+        return {}
+    try:
+        payload = read_json(path)
+    except Exception:  # pragma: no cover - defensive path
+        return {}
+    if not isinstance(payload, dict):
+        return {}
+    takes = payload.get("takes")
+    if not isinstance(takes, list):
+        return {}
+
+    alignment: dict[int, dict[str, Any]] = {}
+    for take in takes:
+        if not isinstance(take, dict):
+            continue
+        number = take.get("takeNumber")
+        if isinstance(number, int):
+            alignment[number] = take
+    return alignment
+
+
+def validate_take_watch_duration(
+    take_label: str,
+    *,
+    session_dir: Path,
+    grouped: dict[str, dict[str, Any]],
+    media_durations: dict[str, float],
+    alignment: dict[str, Any] | None,
+    errors: list[str],
+    warnings: list[str],
+) -> None:
+    """Report a Watch capture that ran past the end of the take.
+
+    The BVB regression (2026-09-04): a take whose Watch kept recording because
+    the Mac's Stop never reached it.
+
+    The quantity that matters is the gap between when the Watch **stopped** and
+    when the take's media **stopped** — not the difference between the two
+    durations. Those are different questions, because the Watch's window and
+    the take's window do not share a start: the Watch begins as soon as the
+    start handshake resolves, while media begins after the count-in and camera
+    startup. Session `1ce25396-…` recorded 15.411 s of motion against a 10.000 s
+    take and stopped in the same second the Mac asked it to — the whole 5.411 s
+    was a *lead-in*, and comparing durations reported it as an overrun.
+
+    So: when the archive carries the alignment instants, compare the ends. When
+    it does not (any export written before those fields existed), say plainly
+    that the two cannot be told apart rather than asserting the worse one.
+    """
+    record = grouped.get("watch")
+    if not record:
+        return
+
+    watch_duration = watch_capture_duration_seconds(Path(record["path"]))
+    if watch_duration is None:
+        warnings.append(f"{take_label}: watch motion CSV has no readable elapsed_time column.")
+        return
+
+    watch_end = parse_iso8601((alignment or {}).get("watchCaptureEndedAt"))
+    take_stop = parse_iso8601((alignment or {}).get("takeStopRequestedAt"))
+
+    if watch_end is not None and take_stop is not None:
+        overrun = (watch_end - take_stop).total_seconds()
+        report_watch_lead_in(take_label, alignment=alignment or {}, warnings=warnings)
+        if overrun <= WATCH_OVERRUN_WARNING_SECONDS:
+            return
+        message = (
+            f"{take_label}: watch motion stopped {overrun:.3f}s after the take's"
+            f" stop was requested"
+        )
+        if overrun > WATCH_OVERRUN_ERROR_SECONDS:
+            errors.append(
+                f"{message} (max {WATCH_OVERRUN_ERROR_SECONDS:.3f}s). The watch"
+                " kept recording after the take ended."
+            )
+        else:
+            warnings.append(
+                f"{message} (over {WATCH_OVERRUN_WARNING_SECONDS:.3f}s). Watch"
+                " stop was slower than a healthy acknowledgement."
+            )
+        return
+
+    # No alignment recorded. A duration difference is real, but it cannot be
+    # attributed to either end of the take, so it is never reported as an
+    # overrun.
+    take_duration = media_durations.get("serato")
+    if take_duration is None:
+        take_duration = media_durations.get("camA")
+    if take_duration is None:
+        return
+
+    excess = watch_duration - float(take_duration)
+    if excess <= WATCH_OVERRUN_WARNING_SECONDS:
+        return
+    warnings.append(
+        f"{take_label}: watch motion window is {excess:.3f}s longer than the take"
+        f" ({watch_duration:.3f}s against {float(take_duration):.3f}s). This archive"
+        " records no watch/take alignment, so a late stop cannot be told apart"
+        " from an early start."
+    )
+
+
+def report_watch_lead_in(
+    take_label: str,
+    *,
+    alignment: dict[str, Any],
+    warnings: list[str],
+) -> None:
+    """Surface a Watch that began well before the take's media did.
+
+    Not a defect in itself — motion through the count-in is wanted — but a large
+    lead-in means the start handshake is stalling, and it is the number that was
+    previously being misread as overrun.
+    """
+    watch_start = parse_iso8601(alignment.get("watchCaptureStartedAt"))
+    take_start = parse_iso8601(alignment.get("takeStartedAt"))
+    if watch_start is None or take_start is None:
+        return
+    lead_in = (take_start - watch_start).total_seconds()
+    if lead_in > WATCH_LEAD_IN_WARNING_SECONDS:
+        warnings.append(
+            f"{take_label}: watch motion began {lead_in:.3f}s before the take's media"
+            f" (over {WATCH_LEAD_IN_WARNING_SECONDS:.3f}s). Motion through the count-in"
+            " is expected; a lead-in this long usually means the watch start"
+            " handshake stalled."
+        )
+
+
 def validate_manifest(
     manifest_data: dict[str, Any],
     *,
@@ -252,6 +456,7 @@ def validate_manifest(
     warnings: list[str],
     allowed_bpms: tuple[int, ...],
 ) -> None:
+    take_alignment = load_take_alignment(session_dir)
     if manifest_data.get("scratch_type") != SCRATCH_TYPE:
         errors.append("Manifest scratch_type must be 'baby'.")
     if manifest_data.get("segment_count") != SEGMENT_COUNT:
@@ -314,6 +519,16 @@ def validate_manifest(
             errors.append(
                 f"{take_label}: manifest camera_id is {take.get('camera_id')!r}, expected {expected_camera!r}."
             )
+
+        validate_take_watch_duration(
+            take_label,
+            session_dir=session_dir,
+            grouped=grouped,
+            media_durations=media_durations,
+            alignment=take_alignment.get(take_number),
+            errors=errors,
+            warnings=warnings,
+        )
 
         expected_watch = "watch" if "watch" in grouped else "none"
         if take.get("watch_source") != expected_watch:
@@ -556,6 +771,144 @@ def validate_session_dates(
             )
 
 
+DEGRADED_WATCH_SYNC_STATES = {"requested", "timedOut", "unavailable", "failed"}
+KNOWN_WATCH_SYNC_STATES = {"notRequested", "acknowledged"} | DEGRADED_WATCH_SYNC_STATES
+PLANNED_DURATION_TOLERANCE_SECONDS = 0.5
+STOP_REASON_PLANNED_DURATION_REACHED = "planned_duration_reached"
+KNOWN_STOP_REASONS = {
+    "manual",
+    STOP_REASON_PLANNED_DURATION_REACHED,
+    "interrupted",
+    "capture_error",
+    "media_limit",
+}
+
+
+def validate_take_watch_state(
+    take: dict[str, Any],
+    *,
+    label: str,
+    errors: list[str],
+    warnings: list[str],
+) -> None:
+    """Keep Watch absence honest and catch motion that was linked but lost.
+
+    `watch_source` in the canonical manifest is a two-valued dataset field, so
+    it cannot distinguish "no Watch was requested" from "a Watch acknowledged
+    and its motion went missing". The app-side metadata carries the real sync
+    state; this reads it so a degraded take says so out loud instead of looking
+    identical to a session recorded without a Watch.
+    """
+    sync_state = take.get("watchSyncState")
+    linked = take.get("watchLinkedMotionFileName")
+    exported = take.get("watchMotionExported")
+
+    if sync_state is None:
+        return
+    if sync_state not in KNOWN_WATCH_SYNC_STATES:
+        errors.append(
+            f"{label}: watchSyncState {sync_state!r} is not one of"
+            f" {', '.join(sorted(KNOWN_WATCH_SYNC_STATES))}."
+        )
+        return
+
+    # Motion the sidecar claims to own must reach the archive. Anything else is
+    # evidence quietly dropped between capture and export.
+    if linked and exported is False:
+        errors.append(
+            f"{label}: sidecar links Watch motion {linked!r} but it was not exported."
+        )
+    if sync_state == "acknowledged" and not linked:
+        errors.append(
+            f"{label}: watchSyncState is 'acknowledged' but no Watch motion is linked;"
+            " a synchronised take must carry its motion or say why it does not."
+        )
+    if sync_state in DEGRADED_WATCH_SYNC_STATES:
+        warnings.append(
+            f"{label}: Watch motion is absent because sync state is {sync_state!r}"
+            " — this take is not Watch-synchronised."
+        )
+
+
+def validate_take_stop_reasons(
+    session_dir: Path,
+    *,
+    errors: list[str],
+    warnings: list[str],
+) -> None:
+    """Check planned-versus-actual duration only where a plan was in force.
+
+    A take that ran 16.7 s under a 64 s safety cap and was stopped by hand is a
+    complete take, not a 47 s shortfall. Only `planned_duration_reached` asserts
+    that a chosen duration elapsed, so only that reason makes the two numbers
+    comparable.
+
+    `manifests/session_metadata.json` is app-side metadata and is optional; a
+    session staged by the canonical scripts has no such file and is unaffected.
+    """
+    metadata_path = session_dir / "manifests" / "session_metadata.json"
+    if not metadata_path.exists():
+        return
+
+    try:
+        payload = read_json(metadata_path)
+    except Exception as exc:  # pragma: no cover - defensive path
+        errors.append(f"Could not read session_metadata.json: {exc}")
+        return
+    if not isinstance(payload, dict):
+        errors.append("session_metadata.json must contain a JSON object.")
+        return
+
+    takes = payload.get("takes")
+    if not isinstance(takes, list):
+        return
+
+    for take in takes:
+        if not isinstance(take, dict):
+            continue
+        label = f"session_metadata take {take.get('takeID') or take.get('takeNumber') or '?'}"
+
+        stop_reason = take.get("stopReason")
+        if stop_reason is None:
+            warnings.append(f"{label}: no stopReason recorded.")
+        elif stop_reason not in KNOWN_STOP_REASONS:
+            errors.append(
+                f"{label}: stopReason {stop_reason!r} is not one of"
+                f" {', '.join(sorted(KNOWN_STOP_REASONS))}."
+            )
+
+        validate_take_watch_state(take, label=label, errors=errors, warnings=warnings)
+
+        planned = take.get("plannedTakeDurationSeconds")
+        actual = take.get("actualTakeDurationSeconds")
+
+        if stop_reason != STOP_REASON_PLANNED_DURATION_REACHED:
+            # A cap is not a plan. Flagging here is what made a manually
+            # stopped take look truncated.
+            if planned is not None and stop_reason is not None:
+                warnings.append(
+                    f"{label}: plannedTakeDurationSeconds is set but the take stopped"
+                    f" via {stop_reason!r}; the planned duration did not elapse."
+                )
+            continue
+
+        if not isinstance(planned, (int, float)):
+            errors.append(
+                f"{label}: stopReason is {STOP_REASON_PLANNED_DURATION_REACHED!r}"
+                " but no plannedTakeDurationSeconds is recorded."
+            )
+            continue
+        if not isinstance(actual, (int, float)):
+            errors.append(f"{label}: no actualTakeDurationSeconds recorded to compare against.")
+            continue
+        if abs(float(actual) - float(planned)) > PLANNED_DURATION_TOLERANCE_SECONDS:
+            errors.append(
+                f"{label}: planned {float(planned):.3f}s but captured"
+                f" {float(actual):.3f}s after {STOP_REASON_PLANNED_DURATION_REACHED}"
+                f" (max {PLANNED_DURATION_TOLERANCE_SECONDS:.3f}s)."
+            )
+
+
 def validate_take_log(
     take_rows: list[dict[str, str]],
     *,
@@ -700,6 +1053,7 @@ def main() -> int:
     verbal_slate_required = manifest_data.get("verbal_slate_required") is True
     sync_clap_required = manifest_data.get("sync_clap_required") is True
     validate_session_dates(session_dir, manifest_data, errors=errors)
+    validate_take_stop_reasons(session_dir, errors=errors, warnings=warnings)
 
     take_rows: list[dict[str, str]] = []
     if paths["take_log"].exists():

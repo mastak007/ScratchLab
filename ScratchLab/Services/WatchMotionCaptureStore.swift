@@ -356,7 +356,8 @@ final class WatchMotionCaptureStore: NSObject, ObservableObject {
                     sessionID: payload.sessionID,
                     takeID: payload.takeID,
                     syncState: .unavailable,
-                    detail: detail
+                    detail: detail,
+                    stopOutcome: payload.command == .stop ? .unreachable : nil
                 )
             )
             return
@@ -374,7 +375,8 @@ final class WatchMotionCaptureStore: NSObject, ObservableObject {
                         sessionID: payload.sessionID,
                         takeID: payload.takeID,
                         syncState: .unavailable,
-                        detail: detail
+                        detail: detail,
+                        stopOutcome: payload.command == .stop ? .unreachable : nil
                     )
                 )
                 return
@@ -399,7 +401,8 @@ final class WatchMotionCaptureStore: NSObject, ObservableObject {
                     sessionID: payload.sessionID,
                     takeID: payload.takeID,
                     syncState: .unavailable,
-                    detail: detail
+                    detail: detail,
+                    stopOutcome: payload.command == .stop ? .unreachable : nil
                 )
             )
             return
@@ -414,7 +417,8 @@ final class WatchMotionCaptureStore: NSObject, ObservableObject {
                     sessionID: payload.sessionID,
                     takeID: payload.takeID,
                     syncState: .unavailable,
-                    detail: detail
+                    detail: detail,
+                    stopOutcome: payload.command == .stop ? .unreachable : nil
                 )
             )
             return
@@ -441,13 +445,19 @@ final class WatchMotionCaptureStore: NSObject, ObservableObject {
             let detail = reply["detail"] as? String
             let acknowledgedAt = formatter.date(from: reply["acknowledgedAt"] as? String ?? "")
             let takeID = (reply["takeID"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines)
+            // Additive key from a Watch that knows about stop outcomes. A
+            // Watch that does not send it leaves this `nil`, and the Mac
+            // derives the outcome from `syncState` instead.
+            let reportedStopOutcome = (reply["stopOutcome"] as? String)
+                .flatMap(CaptureWatchStopOutcome.init(rawValue:))
             let controlReply = WatchCaptureControlReply(
                 commandID: reply["commandID"] as? String ?? payload.commandID,
                 sessionID: reply["sessionID"] as? String ?? payload.sessionID,
                 takeID: (takeID?.isEmpty == true) ? nil : takeID,
                 syncState: syncState,
                 detail: detail,
-                acknowledgedAt: acknowledgedAt
+                acknowledgedAt: acknowledgedAt,
+                stopOutcome: payload.command == .stop ? reportedStopOutcome : nil
             )
 
             DispatchQueue.main.async {
@@ -464,7 +474,8 @@ final class WatchMotionCaptureStore: NSObject, ObservableObject {
                         sessionID: payload.sessionID,
                         takeID: payload.takeID,
                         syncState: .failed,
-                        detail: detail
+                        detail: detail,
+                        stopOutcome: payload.command == .stop ? .failed : nil
                     )
                 self.applyRelayControlResult(payload: payload, reply: reply)
                 completion(reply)

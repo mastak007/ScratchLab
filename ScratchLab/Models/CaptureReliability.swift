@@ -261,6 +261,185 @@ struct PhoneCaptureCommandPayload: Codable, Equatable, Sendable {
     }
 }
 
+/// Why a Mac-initiated Watch **stop** ended the way it did.
+///
+/// Deliberately separate from `CaptureWatchSyncState`, which describes the
+/// *start* handshake and is what `watch_source` and the sidecar's
+/// `watchSyncState` already carry. Overloading either of those would collapse
+/// "the Watch was never asked to stop" into "the Watch stopped", which is the
+/// exact ambiguity that let a Watch run 18.5 s past the end of a take while the
+/// export still read as clean.
+enum CaptureWatchStopOutcome: String, Codable, Equatable, Sendable {
+    /// No stop was requested, because this take never owned an active Watch
+    /// capture.
+    case notRequested
+    /// The command left the Mac but no reply has been resolved yet.
+    case sent
+    /// The relay or the Watch could not be reached at all.
+    case unreachable
+    /// The command was sent and nothing came back inside the bounded window.
+    case timedOut
+    /// The Watch received the command but refused it: the session/take it names
+    /// is not the capture the Watch is actually running.
+    case identityRejected
+    /// The Watch confirmed it stopped Core Motion and finalized its file.
+    case stopped
+    /// The Watch (or the relay) reported an explicit failure.
+    case failed
+
+    /// The only outcome that proves the Watch is no longer recording this take.
+    var isStopConfirmed: Bool { self == .stopped }
+
+    /// Outcomes that mean the Watch may still be recording. These must never be
+    /// reported to the operator as success.
+    var isDegraded: Bool {
+        switch self {
+        case .stopped: return false
+        case .notRequested: return false
+        case .sent, .unreachable, .timedOut, .identityRejected, .failed: return true
+        }
+    }
+}
+
+/// Where the Watch's motion artifact for a take has got to. Kept apart from the
+/// stop outcome because a confirmed stop does not by itself mean the file has
+/// arrived, and a file that has arrived does not prove the stop was timely.
+enum CaptureWatchMotionTransferState: String, Codable, Equatable, Sendable {
+    /// No Watch capture was linked to this take.
+    case notApplicable
+    /// The Watch stopped and handed a file to WatchConnectivity; it has not
+    /// been linked to this take yet.
+    case pending
+    /// A motion artifact is linked to this take.
+    case completed
+}
+
+/// The exported record of one take's Watch-stop handshake.
+///
+/// Written into the take sidecar and surfaced in `session_metadata.json` so a
+/// reader can tell "no Watch" from "the Watch was asked and never answered"
+/// without inspecting logs.
+struct CaptureWatchStopDiagnostics: Codable, Equatable, Sendable {
+    let outcome: CaptureWatchStopOutcome
+    let sessionID: String?
+    let takeID: String?
+    let commandID: String?
+    let detail: String?
+    let requestedAt: Date?
+    let resolvedAt: Date?
+    /// When the Watch itself handled the stop, by its own clock.
+    ///
+    /// With `requestedAt` and `resolvedAt` this splits the round trip into its
+    /// two legs: `watchHandledAt - requestedAt` is how long the command took to
+    /// reach the Watch, `resolvedAt - watchHandledAt` is how long the
+    /// acknowledgement took to come back. Without it a slow handshake cannot be
+    /// attributed to either direction. `nil` when no reply arrived.
+    let watchHandledAt: Date?
+    /// When the iPhone relay confirmed it had the command.
+    ///
+    /// A timeout with no receipt means the relay never heard the command at
+    /// all; a timeout with a receipt means the relay heard it and the watch did
+    /// not answer. `timedOut` alone cannot tell those apart, and telling them
+    /// apart is the difference between looking at the phone and the watch.
+    let relayReceivedAt: Date?
+    /// How many times the Mac sent the stop command for this take. `1` is the
+    /// normal case; `2` means the bounded retry fired.
+    let attemptCount: Int
+    let motionTransferState: CaptureWatchMotionTransferState
+
+    init(
+        outcome: CaptureWatchStopOutcome,
+        sessionID: String? = nil,
+        takeID: String? = nil,
+        commandID: String? = nil,
+        detail: String? = nil,
+        requestedAt: Date? = nil,
+        resolvedAt: Date? = nil,
+        watchHandledAt: Date? = nil,
+        relayReceivedAt: Date? = nil,
+        attemptCount: Int = 0,
+        motionTransferState: CaptureWatchMotionTransferState = .notApplicable
+    ) {
+        self.outcome = outcome
+        self.sessionID = sessionID
+        self.takeID = takeID
+        self.commandID = commandID
+        self.detail = detail
+        self.requestedAt = requestedAt
+        self.resolvedAt = resolvedAt
+        self.watchHandledAt = watchHandledAt
+        self.relayReceivedAt = relayReceivedAt
+        self.attemptCount = attemptCount
+        self.motionTransferState = motionTransferState
+    }
+
+    static let notRequested = CaptureWatchStopDiagnostics(outcome: .notRequested)
+}
+
+/// The one place the Mac's Watch-stop timing policy is stated.
+///
+/// Bounded on purpose: media finalization must never wait indefinitely on a
+/// device that may be off the wrist, so the Mac sends, waits, retries once, and
+/// then records the degraded outcome instead of reporting success.
+enum CaptureWatchStopPolicy {
+    /// How long one stop attempt may wait for the Watch to answer.
+    static let acknowledgementTimeoutSeconds: TimeInterval = 2.0
+    /// Total attempts, including the first. One retry covers a single dropped
+    /// relay message without unbounded stalling.
+    static let maximumAttempts = 2
+
+    /// The worst-case wall time the stop handshake can consume.
+    static var maximumHandshakeSeconds: TimeInterval {
+        acknowledgementTimeoutSeconds * Double(maximumAttempts)
+    }
+
+    /// Whether a start handshake that ended in `syncState` may have left a
+    /// Watch capture running that the Mac is now responsible for stopping.
+    ///
+    /// Fail-closed on purpose. Only `acknowledged` proves the Watch started,
+    /// but a degraded *reply* is not evidence the Watch did **not** start: the
+    /// command can reach the wrist and Core Motion can begin while the answer
+    /// is lost, arrives late, or comes back as a failure. Treating those as
+    /// "nothing to stop" is what left a Watch recording past the end of a take
+    /// with `watchStopOutcome: notRequested` — the Mac had simply decided it
+    /// owned nothing.
+    ///
+    /// The two safe negatives are the ones where the command demonstrably never
+    /// reached a recorder: `unavailable` (no peer, watch app not installed or
+    /// not reachable, motion unavailable) and `notRequested` (no start was made
+    /// at all). A stop sent for a capture that never started is harmless — the
+    /// Watch's handler answers `alreadyStopped` and does no work.
+    static func startMayHaveLeftWatchRecording(_ syncState: CaptureWatchSyncState) -> Bool {
+        switch syncState {
+        case .acknowledged, .requested, .failed, .timedOut:
+            return true
+        case .unavailable, .notRequested:
+            return false
+        }
+    }
+
+    /// Maps a resolved control reply onto a stop outcome.
+    ///
+    /// The Watch reports its own outcome in `stopOutcome` where it can; this is
+    /// the fallback for a reply that predates that field or was synthesized by
+    /// the relay, and it is what keeps a legacy `notRequested` acknowledgement
+    /// (the Watch's historical "I stopped" answer) from reading as "never
+    /// asked".
+    static func outcome(for reply: WatchCaptureControlReply) -> CaptureWatchStopOutcome {
+        if let reported = reply.stopOutcome { return reported }
+        switch reply.syncState {
+        case .notRequested, .acknowledged:
+            return .stopped
+        case .timedOut:
+            return .timedOut
+        case .unavailable:
+            return .unreachable
+        case .requested, .failed:
+            return .failed
+        }
+    }
+}
+
 struct WatchCaptureControlReply: Codable, Equatable, Sendable {
     static let packetKind = "watch_motion_control_status_v2"
 
@@ -271,6 +450,15 @@ struct WatchCaptureControlReply: Codable, Equatable, Sendable {
     let syncState: CaptureWatchSyncState
     let detail: String?
     let acknowledgedAt: Date?
+    /// When the relay confirmed it had the command. Filled in locally on the
+    /// Mac from `WatchCaptureCommandCoordinator`, never sent over the wire.
+    var relayReceivedAt: Date?
+    /// Set only for replies to a `stop` command, and only by peers that know
+    /// about stop outcomes. Optional so a reply written by an older Watch or
+    /// relay still decodes; `CaptureWatchStopPolicy.outcome(for:)` supplies the
+    /// fallback in that case. `syncState` keeps its existing meaning and wire
+    /// values untouched.
+    let stopOutcome: CaptureWatchStopOutcome?
 
     init(
         commandID: String,
@@ -278,7 +466,8 @@ struct WatchCaptureControlReply: Codable, Equatable, Sendable {
         takeID: String?,
         syncState: CaptureWatchSyncState,
         detail: String?,
-        acknowledgedAt: Date? = nil
+        acknowledgedAt: Date? = nil,
+        stopOutcome: CaptureWatchStopOutcome? = nil
     ) {
         self.kind = Self.packetKind
         self.commandID = commandID
@@ -287,6 +476,118 @@ struct WatchCaptureControlReply: Codable, Equatable, Sendable {
         self.syncState = syncState
         self.detail = detail
         self.acknowledgedAt = acknowledgedAt
+        self.stopOutcome = stopOutcome
+    }
+
+    /// A copy stamped with when the relay confirmed receipt.
+    func withRelayReceipt(_ receivedAt: Date?) -> WatchCaptureControlReply {
+        var updated = self
+        updated.relayReceivedAt = receivedAt
+        return updated
+    }
+}
+
+/// The Watch's decision table for an incoming `stop` command.
+///
+/// Pure so the Watch's behaviour is testable off-device: `WatchMotionRecorder`
+/// owns Core Motion and file handling, this owns *whether* to touch them.
+///
+/// Three properties it must guarantee:
+///   * **Idempotent** — a repeated stop for a command already resolved, or for
+///     a device that is not recording, does no work and is not an error.
+///   * **Identity-scoped** — a stop naming a different session/take than the
+///     capture actually running is refused, never allowed to end someone else's
+///     take.
+///   * **Honest** — every branch names its outcome, and only `.stop` claims the
+///     capture was stopped by this command.
+enum WatchMotionStopCommandResolver {
+    enum Decision: Equatable {
+        /// Stop Core Motion, finalize the file, start the transfer.
+        case stop
+        /// Nothing to do; the capture is already stopped (or this exact command
+        /// was already handled).
+        case alreadyStopped(detail: String)
+        /// Refuse: the command names a capture this device is not running.
+        case rejectIdentity(detail: String)
+
+        var outcome: CaptureWatchStopOutcome {
+            switch self {
+            case .stop, .alreadyStopped: return .stopped
+            case .rejectIdentity: return .identityRejected
+            }
+        }
+
+        /// The legacy `syncState` to put on the wire. Unchanged from the
+        /// shipped contract: a handled stop has always answered `notRequested`
+        /// (meaning "this take no longer has a Watch capture running"), and the
+        /// Mac's `withWatchSync` relies on that to avoid downgrading an
+        /// acknowledged start.
+        var syncState: CaptureWatchSyncState {
+            switch self {
+            case .stop, .alreadyStopped: return .notRequested
+            case .rejectIdentity: return .failed
+            }
+        }
+    }
+
+    /// - Parameters:
+    ///   - payload: the incoming stop command.
+    ///   - isRecording: whether Core Motion is currently collecting samples.
+    ///   - activeCommand: the command that started the running capture, if any.
+    ///   - resolvedStopCommandIDs: stop commands this device has already acted on.
+    static func decide(
+        payload: WatchCaptureCommandPayload,
+        isRecording: Bool,
+        activeCommand: WatchCaptureCommandPayload?,
+        resolvedStopCommandIDs: Set<String>
+    ) -> Decision {
+        guard payload.command == .stop else {
+            return .alreadyStopped(detail: "Not a stop command.")
+        }
+        if resolvedStopCommandIDs.contains(payload.commandID) {
+            return .alreadyStopped(detail: "Duplicate stop command; watch motion capture was already stopped.")
+        }
+        guard isRecording else {
+            return .alreadyStopped(detail: "Watch motion capture was already stopped.")
+        }
+        if let mismatch = identityMismatchDetail(payload: payload, activeCommand: activeCommand) {
+            return .rejectIdentity(detail: mismatch)
+        }
+        return .stop
+    }
+
+    /// Non-nil when both sides name an identity and those identities differ.
+    ///
+    /// A command with no identity (a local Watch-UI stop, or a legacy peer) is
+    /// allowed through: refusing it would strand a running capture. A capture
+    /// started locally with no command payload likewise cannot be identity-
+    /// checked, and is stoppable.
+    private static func identityMismatchDetail(
+        payload: WatchCaptureCommandPayload,
+        activeCommand: WatchCaptureCommandPayload?
+    ) -> String? {
+        guard let activeCommand else { return nil }
+
+        let requestedSession = payload.sessionID.trimmed
+        let activeSession = activeCommand.sessionID.trimmed
+        if let requestedSession, let activeSession, requestedSession != activeSession {
+            return "Stop names session \(requestedSession) but this watch is recording \(activeSession)."
+        }
+
+        let requestedTake = payload.takeID?.trimmed
+        let activeTake = activeCommand.takeID?.trimmed
+        if let requestedTake, let activeTake, requestedTake != activeTake {
+            return "Stop names take \(requestedTake) but this watch is recording \(activeTake)."
+        }
+        return nil
+    }
+}
+
+private extension String {
+    /// Whitespace-trimmed, or `nil` when there is nothing left to compare.
+    var trimmed: String? {
+        let value = trimmingCharacters(in: .whitespacesAndNewlines)
+        return value.isEmpty ? nil : value
     }
 }
 
@@ -492,6 +793,16 @@ final class WatchCaptureCommandCoordinator: @unchecked Sendable {
     private let stateLock = NSLock()
     private var pendingCommands: [String: PendingCommand] = [:]
     private var finalizedReplies: [String: WatchCaptureControlReply] = [:]
+    /// When the relay confirmed it had each command, keyed by command ID.
+    private var receipts: [String: Date] = [:]
+    /// Commands a reply arrived for that nobody was waiting on.
+    ///
+    /// This is the shape of a real defect, not a curiosity: the relay used to
+    /// mint a fresh command ID instead of carrying the Mac's through, so every
+    /// reply landed here, no await was ever resumed, and both handshakes timed
+    /// out no matter how quickly the watch answered. Recorded so that failure
+    /// mode is visible instead of silent.
+    private var orphanedReplyCommandIDs: Set<String> = []
 
     func begin(command: WatchCaptureCommandPayload) async -> WatchCaptureControlReply {
         if let finalized = finalizedReply(for: command.commandID) {
@@ -514,9 +825,20 @@ final class WatchCaptureCommandCoordinator: @unchecked Sendable {
         }
     }
 
+    /// Applies a reply to its command.
+    ///
+    /// `requested` is a **receipt**, not an answer: it says the relay has the
+    /// command and is forwarding it. It is recorded and deliberately does not
+    /// finalize the await, so the command keeps waiting for the watch's real
+    /// response.
     func resolve(_ reply: WatchCaptureControlReply) -> WatchCaptureControlReply? {
         stateLock.lock()
         defer { stateLock.unlock() }
+
+        if reply.syncState == .requested {
+            receipts[reply.commandID] = reply.acknowledgedAt ?? Date()
+            return nil
+        }
 
         if let finalized = finalizedReplies[reply.commandID] {
             if finalized.syncState == .timedOut && reply.syncState == .acknowledged {
@@ -526,13 +848,17 @@ final class WatchCaptureCommandCoordinator: @unchecked Sendable {
                     takeID: reply.takeID,
                     syncState: .timedOut,
                     detail: "Watch acknowledged too late; take remains degraded.",
-                    acknowledgedAt: finalized.acknowledgedAt
+                    acknowledgedAt: finalized.acknowledgedAt,
+                    stopOutcome: finalized.stopOutcome
                 )
             }
             return nil
         }
 
         guard let pending = pendingCommands.removeValue(forKey: reply.commandID) else {
+            // Nobody is waiting on this ID. Either the command already timed
+            // out, or something upstream changed the ID in flight.
+            orphanedReplyCommandIDs.insert(reply.commandID)
             finalizedReplies[reply.commandID] = reply
             return reply
         }
@@ -554,13 +880,17 @@ final class WatchCaptureCommandCoordinator: @unchecked Sendable {
             return finalizedReplies[commandID]
         }
 
+        let isStop = pending.command.command == .stop
         let timeoutReply = WatchCaptureControlReply(
             commandID: pending.command.commandID,
             sessionID: pending.command.sessionID,
             takeID: pending.command.takeID,
             syncState: .timedOut,
-            detail: "Watch motion start timed out.",
-            acknowledgedAt: nil
+            detail: isStop
+                ? "Watch motion stop timed out."
+                : "Watch motion start timed out.",
+            acknowledgedAt: nil,
+            stopOutcome: isStop ? .timedOut : nil
         )
         finalizedReplies[commandID] = timeoutReply
         pending.continuation.resume(returning: timeoutReply)
@@ -571,6 +901,24 @@ final class WatchCaptureCommandCoordinator: @unchecked Sendable {
         stateLock.lock()
         defer { stateLock.unlock() }
         return finalizedReplies[commandID]
+    }
+
+    /// When the relay confirmed it had this command, if it ever did.
+    ///
+    /// A timeout with no receipt means the relay never heard the command; a
+    /// timeout with one means the relay heard it and the watch did not answer.
+    /// An unqualified `timedOut` cannot tell those apart.
+    func receipt(for commandID: String) -> Date? {
+        stateLock.lock()
+        defer { stateLock.unlock() }
+        return receipts[commandID]
+    }
+
+    /// True when a reply arrived for a command nobody was awaiting.
+    func hasOrphanedReply(for commandID: String) -> Bool {
+        stateLock.lock()
+        defer { stateLock.unlock() }
+        return orphanedReplyCommandIDs.contains(commandID)
     }
 }
 

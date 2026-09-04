@@ -44,6 +44,22 @@ final class WatchMotionRecorder: NSObject, ObservableObject {
     // still genuinely in flight.
     private var outstandingFileTransfers: Set<String> = []
 
+    // Stop commands this device has already acted on. Makes a repeated stop —
+    // from a Mac retry, or a relay that delivered twice — a no-op instead of a
+    // second finalize/transfer of the same capture. Bounded so a long session
+    // cannot grow it without limit.
+    private var resolvedStopCommandIDs: Set<String> = []
+    private var resolvedStopCommandOrder: [String] = []
+    private static let maximumRememberedStopCommands = 32
+
+    private func rememberResolvedStopCommand(_ commandID: String) {
+        guard resolvedStopCommandIDs.insert(commandID).inserted else { return }
+        resolvedStopCommandOrder.append(commandID)
+        while resolvedStopCommandOrder.count > Self.maximumRememberedStopCommands {
+            resolvedStopCommandIDs.remove(resolvedStopCommandOrder.removeFirst())
+        }
+    }
+
     private var watchSession: WCSession? {
         guard WCSession.isSupported() else { return nil }
         return WCSession.default
@@ -152,8 +168,41 @@ final class WatchMotionRecorder: NSObject, ObservableObject {
         startElapsedTimer()
     }
 
+    /// Everything `finalizeStoppedCapture` needs, captured while stopping.
+    ///
+    /// Exists so the fast half of a stop can be separated from the slow half.
+    private struct StoppedCapture {
+        let captureID: UUID
+        let command: WatchCaptureCommandPayload?
+        let acknowledgedAt: Date?
+        let samples: [WatchMotionSample]
+        let startedAt: Date
+        let endedAt: Date
+        let wallClockDuration: TimeInterval
+    }
+
+    /// Stops the capture and finalizes it, synchronously.
+    ///
+    /// This is the watch-UI entry point. The relay's stop path deliberately
+    /// does not use it — see `resolveControlCommand`.
     func stopCapture() {
-        guard isRecording else { return }
+        guard let stopped = beginStop() else { return }
+        finalizeStoppedCapture(stopped)
+    }
+
+    /// The fast half of a stop: Core Motion is stopped and the samples are
+    /// taken, and nothing else.
+    ///
+    /// This is all a stop acknowledgement should ever wait for. Finalization —
+    /// building the session, encoding a multi-megabyte JSON and writing it —
+    /// used to run before the reply was sent, which put file I/O on the
+    /// acknowledgement path and is why the Mac's stop handshake timed out even
+    /// though the watch had already stopped recording.
+    ///
+    /// Returns `nil` when nothing was recording, which is what keeps a repeated
+    /// stop harmless.
+    private func beginStop() -> StoppedCapture? {
+        guard isRecording else { return nil }
 
         isRecording = false
         motionManager.stopDeviceMotionUpdates()
@@ -170,38 +219,59 @@ final class WatchMotionRecorder: NSObject, ObservableObject {
 
         sampleCount = finishedSamples.count
 
-        guard !finishedSamples.isEmpty else {
-            elapsedTime = wallClockDuration
+        let stopped = StoppedCapture(
+            captureID: activeCaptureID ?? UUID(),
+            command: activeCommandPayload,
+            acknowledgedAt: activeAcknowledgedAt,
+            samples: finishedSamples,
+            startedAt: startedAt,
+            endedAt: endedAt,
+            wallClockDuration: wallClockDuration
+        )
+
+        activeCommandPayload = nil
+        activeAcknowledgedAt = nil
+        activeCaptureID = nil
+        return stopped
+    }
+
+    /// The slow half: relay any pending live batches, build the session,
+    /// persist it, and queue the existing transfer. Safe to run after the stop
+    /// has already been acknowledged — none of it changes whether the watch is
+    /// recording.
+    private func finalizeStoppedCapture(_ stopped: StoppedCapture) {
+        guard !stopped.samples.isEmpty else {
+            elapsedTime = stopped.wallClockDuration
             transferStatus = "No motion captured."
             return
         }
 
-        relayPendingLiveBatchesIfPossible(isFinal: true, endedAt: endedAt)
+        relayPendingLiveBatchesIfPossible(isFinal: true, endedAt: stopped.endedAt)
 
         let timingMetadata = WatchMotionTimingMetadata.make(
-            from: finishedSamples,
+            from: stopped.samples,
             requestedSampleInterval: 1.0 / sampleRateHz,
-            wallClockDuration: wallClockDuration
+            wallClockDuration: stopped.wallClockDuration
         )
-        elapsedTime = timingMetadata?.sensorDuration ?? wallClockDuration
+        elapsedTime = timingMetadata?.sensorDuration ?? stopped.wallClockDuration
 
         let captureSession = WatchMotionCaptureSession(
-            id: activeCaptureID ?? UUID(),
-            sessionID: activeCommandPayload?.sessionID ?? "",
-            takeID: activeCommandPayload?.takeID,
-            commandID: activeCommandPayload?.commandID,
-            requestedAt: activeCommandPayload?.requestedAt ?? startedAt,
-            acknowledgedAt: activeAcknowledgedAt,
-            syncState: activeCommandPayload == nil ? .notRequested : .acknowledged,
+            id: stopped.captureID,
+            sessionID: stopped.command?.sessionID ?? "",
+            takeID: stopped.command?.takeID,
+            commandID: stopped.command?.commandID,
+            requestedAt: stopped.command?.requestedAt ?? stopped.startedAt,
+            acknowledgedAt: stopped.acknowledgedAt,
+            syncState: stopped.command == nil ? .notRequested : .acknowledged,
             sourceDeviceName: WKInterfaceDevice.current().name,
             sampleRateHz: sampleRateHz,
-            startedAt: startedAt,
-            endedAt: endedAt,
-            deviceRecordedAtStart: startedAt,
-            deviceRecordedAtEnd: endedAt,
+            startedAt: stopped.startedAt,
+            endedAt: stopped.endedAt,
+            deviceRecordedAtStart: stopped.startedAt,
+            deviceRecordedAtEnd: stopped.endedAt,
             appVersion: appVersionString,
             timingMetadata: timingMetadata,
-            samples: finishedSamples
+            samples: stopped.samples
         )
 
         #if DEBUG
@@ -214,10 +284,6 @@ final class WatchMotionRecorder: NSObject, ObservableObject {
         } catch {
             transferStatus = "Unable to save the motion session."
         }
-
-        activeCommandPayload = nil
-        activeAcknowledgedAt = nil
-        activeCaptureID = nil
     }
 
     /// Asks the paired iPhone to run its real guided-capture Start/Stop action.
@@ -586,10 +652,11 @@ extension WatchMotionRecorder: WCSessionDelegate {
     private func makeReply(
         for payload: WatchCaptureCommandPayload,
         syncState: CaptureWatchSyncState,
-        detail: String?
+        detail: String?,
+        stopOutcome: CaptureWatchStopOutcome? = nil
     ) -> [String: Any] {
         let formatter = ISO8601DateFormatter()
-        return [
+        var reply: [String: Any] = [
             "commandID": payload.commandID,
             "sessionID": payload.sessionID,
             "takeID": payload.takeID ?? "",
@@ -597,6 +664,92 @@ extension WatchMotionRecorder: WCSessionDelegate {
             "detail": detail ?? "",
             "acknowledgedAt": formatter.string(from: Date())
         ]
+        // Additive key. Peers that predate stop outcomes ignore it and fall
+        // back to `syncState`.
+        if let stopOutcome {
+            reply["stopOutcome"] = stopOutcome.rawValue
+        }
+        return reply
+    }
+
+    /// The single implementation behind both `didReceiveMessage` overloads.
+    ///
+    /// Applies `WatchMotionStopCommandResolver`'s decision, performs at most
+    /// one Core Motion stop and one finalize per command, and returns the reply
+    /// dictionary to send back. Must be called on the main queue.
+    private func resolveControlCommand(_ payload: WatchCaptureCommandPayload) -> [String: Any] {
+        isPhoneCaptureCommandPending = false
+
+        switch payload.command {
+        case .start:
+            guard !isRecording else {
+                return makeReply(
+                    for: payload,
+                    syncState: .acknowledged,
+                    detail: "Watch motion capture is already recording."
+                )
+            }
+            guard motionManager.isDeviceMotionAvailable else {
+                return makeReply(
+                    for: payload,
+                    syncState: .unavailable,
+                    detail: "Motion capture is unavailable on this watch."
+                )
+            }
+            startCapture(commandPayload: payload, acknowledgedAt: Date())
+            return makeReply(
+                for: payload,
+                syncState: isRecording ? .acknowledged : .failed,
+                detail: transferStatus
+            )
+
+        case .stop:
+            let decision = WatchMotionStopCommandResolver.decide(
+                payload: payload,
+                isRecording: isRecording,
+                activeCommand: activeCommandPayload,
+                resolvedStopCommandIDs: resolvedStopCommandIDs
+            )
+            switch decision {
+            case .stop:
+                // Recorded first so a command delivered twice cannot stop twice.
+                rememberResolvedStopCommand(payload.commandID)
+                // Core Motion stops here, and the reply goes out immediately
+                // after. Finalization — encoding and writing a multi-megabyte
+                // motion file — runs on the next main-queue turn, because the
+                // Mac needs to know the watch stopped, not that the file was
+                // written. Doing it the other way round put file I/O on the
+                // acknowledgement path and timed out the handshake.
+                let stopped = beginStop()
+                if let stopped {
+                    DispatchQueue.main.async { self.finalizeStoppedCapture(stopped) }
+                }
+                return makeReply(
+                    for: payload,
+                    syncState: decision.syncState,
+                    detail: "Watch motion capture stopped.",
+                    stopOutcome: decision.outcome
+                )
+            case let .alreadyStopped(detail):
+                rememberResolvedStopCommand(payload.commandID)
+                return makeReply(
+                    for: payload,
+                    syncState: decision.syncState,
+                    detail: detail,
+                    stopOutcome: decision.outcome
+                )
+            case let .rejectIdentity(detail):
+                // Deliberately does NOT remember the command: it was refused,
+                // not handled, and the sender is told exactly why.
+                log("stop rejected: \(detail)")
+                return makeReply(
+                    for: payload,
+                    syncState: decision.syncState,
+                    detail: detail,
+                    stopOutcome: decision.outcome
+                )
+            }
+        }
     }
 
     func session(_ session: WCSession, activationDidCompleteWith activationState: WCSessionActivationState, error: Error?) {
@@ -629,37 +782,9 @@ extension WatchMotionRecorder: WCSessionDelegate {
         guard let payload = decodeCommandPayload(from: message) else { return }
 
         DispatchQueue.main.async {
-            self.isPhoneCaptureCommandPending = false
-            let reply: (CaptureWatchSyncState, String?) -> Void = { syncState, detail in
-                if session.isReachable {
-                    session.sendMessage(
-                        self.makeReply(for: payload, syncState: syncState, detail: detail),
-                        replyHandler: nil,
-                        errorHandler: nil
-                    )
-                }
-            }
-
-            switch payload.command {
-            case .start:
-                guard !self.isRecording else {
-                    reply(.acknowledged, "Watch motion capture is already recording.")
-                    return
-                }
-                guard self.motionManager.isDeviceMotionAvailable else {
-                    reply(.unavailable, "Motion capture is unavailable on this watch.")
-                    return
-                }
-                self.startCapture(commandPayload: payload, acknowledgedAt: Date())
-                reply(self.isRecording ? .acknowledged : .failed, self.transferStatus)
-            case .stop:
-                guard self.isRecording else {
-                    reply(.notRequested, "Watch motion capture was already stopped.")
-                    return
-                }
-                self.stopCapture()
-                reply(.notRequested, self.transferStatus)
-            }
+            let reply = self.resolveControlCommand(payload)
+            guard session.isReachable else { return }
+            session.sendMessage(reply, replyHandler: nil, errorHandler: nil)
         }
     }
 
@@ -670,27 +795,7 @@ extension WatchMotionRecorder: WCSessionDelegate {
         }
 
         DispatchQueue.main.async {
-            self.isPhoneCaptureCommandPending = false
-            switch payload.command {
-            case .start:
-                guard !self.isRecording else {
-                    replyHandler(self.makeReply(for: payload, syncState: .acknowledged, detail: "Watch motion capture is already recording."))
-                    return
-                }
-                guard self.motionManager.isDeviceMotionAvailable else {
-                    replyHandler(self.makeReply(for: payload, syncState: .unavailable, detail: "Motion capture is unavailable on this watch."))
-                    return
-                }
-                self.startCapture(commandPayload: payload, acknowledgedAt: Date())
-                replyHandler(self.makeReply(for: payload, syncState: self.isRecording ? .acknowledged : .failed, detail: self.transferStatus))
-            case .stop:
-                guard self.isRecording else {
-                    replyHandler(self.makeReply(for: payload, syncState: .notRequested, detail: "Watch motion capture was already stopped."))
-                    return
-                }
-                self.stopCapture()
-                replyHandler(self.makeReply(for: payload, syncState: .notRequested, detail: self.transferStatus))
-            }
+            replyHandler(self.resolveControlCommand(payload))
         }
     }
 

@@ -55,6 +55,12 @@ struct SessionExportMetadata: Codable, Equatable, Sendable {
     /// requested and what was captured stays visible instead of being papered
     /// over by one ambiguous number.
     let plannedTakeDurationSeconds: Double?
+    /// The longest a take in this session was allowed to run.
+    ///
+    /// A safety cap, not an intent. Recorded separately from
+    /// `plannedTakeDurationSeconds` so an open-ended take can state its bound
+    /// without claiming anyone planned it.
+    let maximumTakeDurationSeconds: Double?
     /// IANA zone the session's calendar date is read in, persisted at session
     /// creation. See `CaptureCanonicalFormatting`'s session date policy.
     let sessionTimeZoneIdentifier: String?
@@ -92,6 +98,7 @@ struct SessionExportMetadata: Codable, Equatable, Sendable {
         takeCount: Int,
         totalDurationSeconds: Double,
         plannedTakeDurationSeconds: Double? = nil,
+        maximumTakeDurationSeconds: Double? = nil,
         sessionTimeZoneIdentifier: String? = nil,
         deckProfile: String? = nil,
         cameraProfile: String? = nil,
@@ -127,6 +134,7 @@ struct SessionExportMetadata: Codable, Equatable, Sendable {
         self.takeCount = takeCount
         self.totalDurationSeconds = totalDurationSeconds
         self.plannedTakeDurationSeconds = plannedTakeDurationSeconds
+        self.maximumTakeDurationSeconds = maximumTakeDurationSeconds
         self.sessionTimeZoneIdentifier = sessionTimeZoneIdentifier
         self.deckProfile = deckProfile
         self.cameraProfile = cameraProfile
@@ -175,7 +183,8 @@ extension SessionExportMetadata {
             handedness: config.normalizedHandedness,
             takeCount: config.takeCount,
             totalDurationSeconds: totalDurationSeconds ?? config.takeDurationSeconds ?? 0,
-            plannedTakeDurationSeconds: config.plannedTakeDurationSeconds,
+            plannedTakeDurationSeconds: RoutineCaptureDefaults.plannedTakeDurationSeconds(for: config),
+            maximumTakeDurationSeconds: config.maximumTakeDurationSeconds,
             sessionTimeZoneIdentifier: config.sessionTimeZoneIdentifier,
             deckProfile: deckProfile,
             cameraProfile: cameraProfile,
@@ -315,6 +324,71 @@ struct SessionExportTakeCaptureMetadata: Codable, Equatable, Sendable {
     let labelSource: String
     let labelConfidence: Double?
     let notationConfidence: Double?
+    /// Why this take stopped: a `CaptureStopReason` raw value, or `nil` for a
+    /// take recorded before stop reasons were captured.
+    let stopReason: String?
+    /// The duration the operator explicitly selected for this take, or `nil`
+    /// for an open-ended take stopped by hand.
+    let plannedTakeDurationSeconds: Double?
+    /// The cap this take ran under. Not an intent.
+    let maximumTakeDurationSeconds: Double?
+    /// Measured playable duration of this take's media.
+    let actualTakeDurationSeconds: Double?
+    /// The take's Watch sync state, verbatim from the sidecar.
+    ///
+    /// The canonical manifest's `watch_source` is a two-valued dataset field
+    /// (`watch` / `none`) and cannot say *why* motion is absent. It collapses
+    /// `notRequested`, `timedOut`, `unavailable`, and `failed` into one
+    /// indistinguishable "none", which is exactly the degraded-state
+    /// mislabelling `AI_CONTEXT.md` forbids. This preserves the distinction
+    /// without changing that contract.
+    let watchSyncState: String?
+    /// The motion artifact this take's sidecar links, if any.
+    let watchLinkedMotionFileName: String?
+    /// Whether that artifact actually reached the archive.
+    ///
+    /// A take whose sidecar links motion that did not export is a real defect,
+    /// and stating both halves separately is what makes it visible.
+    let watchMotionExported: Bool
+    /// What happened when the Mac asked the Watch to stop for this take: a
+    /// `CaptureWatchStopOutcome` raw value.
+    ///
+    /// Distinct from `watchSyncState` (the *start* handshake) and from
+    /// `watch_source` (a two-valued dataset field). Without it, a Watch that
+    /// kept recording past the end of the take is indistinguishable from one
+    /// that stopped on cue.
+    let watchStopOutcome: String
+    /// The Watch's or relay's own words about that outcome, when there were any.
+    let watchStopDetail: String?
+    /// Where the Watch's motion artifact for this take got to: a
+    /// `CaptureWatchMotionTransferState` raw value.
+    let watchMotionTransferState: String
+    /// When this take's media recording was allocated.
+    ///
+    /// The Watch's window and the take's window do not share a start. Without
+    /// both, a reader comparing bare *durations* cannot tell a Watch that began
+    /// early from a Watch that ran late — which is exactly how a 5.411 s
+    /// lead-in was misreported as 5.411 s of overrun. These four instants are
+    /// what make the two answerable separately.
+    let takeStartedAt: Date?
+    /// When the Mac dispatched the Watch stop for this take: the authoritative
+    /// end of the take's media window. `nil` when no stop was requested.
+    let takeStopRequestedAt: Date?
+    /// When the linked Watch capture began, by the Watch's own clock.
+    let watchCaptureStartedAt: Date?
+    /// When the linked Watch capture ended, by the Watch's own clock. Compared
+    /// against `takeStopRequestedAt`, this is the real overrun.
+    let watchCaptureEndedAt: Date?
+    /// When the Watch handled the stop, by its own clock, and when the Mac
+    /// finished waiting.
+    ///
+    /// These split the stop handshake into its two legs. A stop that reads
+    /// `timedOut` is only actionable once you can say which direction was slow.
+    let watchStopHandledAt: Date?
+    let watchStopResolvedAt: Date?
+    /// When the iPhone relay confirmed it had the stop command. Absent on a
+    /// timeout means the relay never heard it.
+    let watchStopRelayReceivedAt: Date?
 }
 
 struct SessionExportMetadataDocument: Codable, Equatable, Sendable {
@@ -3586,8 +3660,45 @@ struct SessionArchiveBuilder: Sendable {
             notationSource: notationExport.document.notationSource.rawValue,
             labelSource: notationExport.document.labelSource.rawValue,
             labelConfidence: notationExport.document.labelConfidence,
-            notationConfidence: notationExport.document.notationConfidence
+            notationConfidence: notationExport.document.notationConfidence,
+            stopReason: sidecar.stopReason,
+            plannedTakeDurationSeconds: RoutineCaptureDefaults.plannedTakeDurationSeconds(
+                for: SessionExportMetadataResolver.validatedSessionConfig(from: sidecar)
+            ),
+            maximumTakeDurationSeconds: SessionExportMetadataResolver
+                .validatedSessionConfig(from: sidecar)?.maximumTakeDurationSeconds,
+            actualTakeDurationSeconds: Self.playableMediaDurationSeconds(
+                audioArtifactURL: take.audioArtifactURL
+            ) ?? take.duration,
+            watchSyncState: sidecar.watchSyncState.rawValue,
+            watchLinkedMotionFileName: sidecar.linkedMotionFileName,
+            watchMotionExported: take.sourceWatchMotionURL != nil,
+            watchStopOutcome: (sidecar.watchStopDiagnostics?.outcome
+                ?? .notRequested).rawValue,
+            watchStopDetail: sidecar.watchStopDiagnostics?.detail,
+            watchMotionTransferState: resolvedWatchMotionTransferState(
+                for: take,
+                sidecar: sidecar
+            ).rawValue,
+            takeStartedAt: sidecar.startedAt,
+            takeStopRequestedAt: sidecar.watchStopDiagnostics?.requestedAt,
+            watchCaptureStartedAt: take.watchCaptureSession?.startedAt,
+            watchCaptureEndedAt: take.watchCaptureSession?.endedAt,
+            watchStopHandledAt: sidecar.watchStopDiagnostics?.watchHandledAt,
+            watchStopResolvedAt: sidecar.watchStopDiagnostics?.resolvedAt,
+            watchStopRelayReceivedAt: sidecar.watchStopDiagnostics?.relayReceivedAt
         )
+    }
+
+    /// The archive is the last word on where a take's motion ended up: a file
+    /// that reached it is `completed` whatever the sidecar recorded mid-flight.
+    private func resolvedWatchMotionTransferState(
+        for take: SessionExportTake,
+        sidecar: CaptureCore.LocalRecordingSidecar
+    ) -> CaptureWatchMotionTransferState {
+        if take.sourceWatchMotionURL != nil { return .completed }
+        if sidecar.linkedMotionFileName != nil { return .pending }
+        return sidecar.watchStopDiagnostics?.motionTransferState ?? .notApplicable
     }
 
     private func notationFileName(for takeNumber: Int) -> String {

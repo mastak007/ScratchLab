@@ -153,6 +153,16 @@ final class CompanionCameraBroadcaster: NSObject, ObservableObject {
     @Published private(set) var isStorageReady = true
     @Published private(set) var nextTakeNumberPreview = 1
     @Published private(set) var pendingWatchControlCommand: WatchControlCommandEvent?
+    /// Delivers a Mac control command straight to the relay, without waiting
+    /// for a SwiftUI view to notice `pendingWatchControlCommand` changed.
+    ///
+    /// Every other relay concern here is already a direct closure. This one was
+    /// the exception, routed through an `.onChange` in the app's view body, so
+    /// capture control depended on the view-update cycle: a take whose command
+    /// arrived while that view was not updating forwarded nothing, and the Mac
+    /// saw an unexplained timeout in both directions with no watch motion at
+    /// all. Delivery must not depend on rendering.
+    var onWatchControlCommand: ((WatchCaptureCommandPayload) -> Void)?
     var onWatchCaptureAcknowledged: ((UUID) -> Void)?
     var recordingSessionID = CaptureCore.LocalRecordingNaming.sessionID() {
         didSet {
@@ -179,6 +189,15 @@ final class CompanionCameraBroadcaster: NSObject, ObservableObject {
     )
 
     private let captureQueue = DispatchQueue(label: "scratchlab.companion.capture")
+    /// Control-plane sends to the Mac: watch status, availability, relay
+    /// lifecycle.
+    ///
+    /// Deliberately NOT `captureQueue`. That queue is also the video output's
+    /// sample-buffer delegate queue, so anything dispatched to it waits behind
+    /// every camera frame. Relaying the watch's stop acknowledgement on it put
+    /// that acknowledgement behind the video pipeline and is why the Mac's stop
+    /// handshake timed out while the watch had in fact already stopped.
+    private let controlQueue = DispatchQueue(label: "scratchlab.companion.control")
     private let videoOutput = AVCaptureVideoDataOutput()
     private let movieOutput = AVCaptureMovieFileOutput()
     private let ciContext = CIContext()
@@ -384,7 +403,7 @@ final class CompanionCameraBroadcaster: NSObject, ObservableObject {
         context: WatchRelayTakeContext?,
         detail: String?
     ) {
-        captureQueue.async {
+        controlQueue.async {
             guard !self.session.connectedPeers.isEmpty else { return }
             let packet = WatchRelayLifecyclePacket(event: event, context: context, detail: detail)
             guard let encoded = try? PropertyListEncoder().encode(packet) else { return }
@@ -435,7 +454,7 @@ final class CompanionCameraBroadcaster: NSObject, ObservableObject {
     /// Relays the local WCSession's live view of the watch (paired / installed / reachable) to
     /// the Mac, so macOS never has to (and never does) infer reachability merely from pairing.
     func sendWatchAvailability(isPaired: Bool, isInstalled: Bool, isReachable: Bool) {
-        captureQueue.async {
+        controlQueue.async {
             guard !self.session.connectedPeers.isEmpty else { return }
             let packet = WatchAvailabilityPacket(isPaired: isPaired, isInstalled: isInstalled, isReachable: isReachable)
             guard let encoded = try? PropertyListEncoder().encode(packet) else { return }
@@ -455,7 +474,7 @@ final class CompanionCameraBroadcaster: NSObject, ObservableObject {
     }
 
     func sendWatchControlStatus(_ reply: WatchCaptureControlReply) {
-        captureQueue.async {
+        controlQueue.async {
             guard !self.session.connectedPeers.isEmpty else { return }
             let packet = WatchControlStatusPacket(reply: reply)
             guard let encoded = try? PropertyListEncoder().encode(packet) else { return }
@@ -1139,10 +1158,27 @@ extension CompanionCameraBroadcaster: MCSessionDelegate {
         if let commandPacket = try? PropertyListDecoder().decode(WatchControlCommandPacket.self, from: data),
            commandPacket.payload.kind == WatchCaptureCommandPayload.packetKind {
             DispatchQueue.main.async {
+                // Tell the Mac the relay has the command before doing anything
+                // with it. A stop that later times out can then say whether the
+                // phone never heard it or the watch never answered — states an
+                // unqualified `timedOut` cannot tell apart.
+                self.sendWatchControlStatus(
+                    WatchCaptureControlReply(
+                        commandID: commandPacket.payload.commandID,
+                        sessionID: commandPacket.payload.sessionID,
+                        takeID: commandPacket.payload.takeID,
+                        syncState: .requested,
+                        detail: "Relay received the command and is forwarding it to the watch.",
+                        acknowledgedAt: Date()
+                    )
+                )
+                // Published for the UI and for debugging only; delivery is the
+                // closure's job.
                 self.pendingWatchControlCommand = WatchControlCommandEvent(
                     payload: commandPacket.payload,
                     requestedAt: Date()
                 )
+                self.onWatchControlCommand?(commandPacket.payload)
             }
             return
         }
