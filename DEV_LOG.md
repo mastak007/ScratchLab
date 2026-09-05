@@ -4148,3 +4148,31 @@ Affected platform builds passed: `ScratchLab` on `generic/platform=iOS` and `Scr
 ### Preservation
 
 All 661 primary files and all 93 protected evidence files match the saved baselines. Primary remains `feature/ios-capture-camera-ux` at `d3ecf2a6` with an unchanged empty index; receipt branch intact; candidate index empty before and after staging; `git diff --check` passes. Among protected files only `project.pbxproj` changed, by membership only. Takes 001-006 and the documented historical metadata mutations are untouched. No reference was approved, installed, packaged for distribution or published, no training was enabled, and no detector output was treated as human ground truth.
+
+## 2026-09-05 - Boundary 5 committed: capture and Watch evidence correlated before approval
+
+### Scope and exact extraction
+
+Candidate `/private/tmp/scratchlab-refauth-baseline.iYmLZU/worktree`, branch `checkpoint/reference-authoring-baseline`, parent `c57738a`. Copied whole from the primary and byte-compared: `ScratchLab/Models/Reference/ReferenceAuthoringSession.swift`, `ScratchLabDesktop/Services/ReferenceAuthoringCaptureBridge.swift`, `ScratchLabDesktopTests/ReferenceAuthoringSessionTests.swift` and `ScratchLabDesktopTests/ReferenceAuthoringCaptureBridgeTests.swift`.
+
+`MacCaptureEngine.swift` was rebuilt from the pristine base with the union of the Boundary 1, Boundary 3 and Boundary 5 hunks, which is all 39 hunks the primary has for that file. The diff against the previous commit is the 32 C-owned changes, `+412/-15`: the recording ledger, token and finalization work at old anchors 650, 3029, 3808, the 4753-4989 block, 6457-6735 and 11832, plus the C-owned portions of 10790 (the `persistedCrossfaderMappingSnapshot` read-only mirror at new 11140-11150 and the live CC observability at new 11175-11252) and of 10812 (the unconditional live observation call at new 11291-11298). `MacCaptureEngine.swift` is therefore fully consumed after this commit: 4 hunks in Boundary 1, 6 in Boundary 3 and 29 here.
+
+`CaptureReliabilityPhase1Tests.swift`: hunks 3202 and 3204 update `testRoutineCaptureBuiltInMicrophoneGuardPrecedesRecordingPublication` to match on the function NAME `func startRoutineRecording(` rather than a formatting of its parameter list, so wrapping the signature across lines can no longer turn a guard-ordering assertion into an XCTUnwrap failure. Hunk 14151 adds the four take-scoped crossfader cases to `extension CaptureReliabilityPhase1CoreTests`: `testALiveCrossfaderCCDuringAnActiveTakeReachesTheTakeScopedBuffer`, `testLiveObservationAndTakeScopedCaptureCannotDisagreeAboutAnAddress`, `testCrossfaderEventsAreNotCapturedBeforeTheTakeWindowOpens` and `testTheTakeScopedSnapshotIsNonDestructive`. The inherited 290-line `WatchMotionCaptureStoreStagingTests` block at hunk 22196 was not re-extracted; it is already in the base.
+
+`project.pbxproj` was rebuilt from the pristine base with the union of the Boundary 3, 4 and 5 membership lines. This resolved the one structural hazard noted earlier without special handling: `REFAU0FREF0009 /* ReferenceAuthoringSession.swift */` belongs to this boundary but sits inside the `Reference` group object Boundary 4 created, and rebuilding from base placed it correctly inside that group rather than stranding it at an old anchor. No removals, and none of the six `CURRENT_PROJECT_VERSION` hunks; build number remains 21 in all six places.
+
+Dependency check: `ReferenceAuthoringSession.swift` references no Boundary 6 type. `ReferenceAuthoringCaptureBridge.swift` names `ReferenceAuthoringViewModel` once, at line 33, inside a comment only, so it carries no view-model dependency and compiles without Boundary 6.
+
+### Preserved semantics
+
+The four extracted files are byte-identical to the audited primary, so the safety contract is exactly the audited one: identity is reserved before the Watch is started; Watch acknowledgement is required before Mac recording; correlated stop and finalization use the same take identity; the engine keeps sole stop authority; Watch evidence states stay truthful; pending transfer and identity mismatch both remain blocking; approval revalidates domain state and cannot be bypassed by a direct call; nothing installs, publishes or enables training; and no timeout extension substitutes for a missing transfer. The 37 session tests and 36 bridge tests are the audited coverage of those rules and all passed. D5 session reuse was not encountered as a correctness dependency and remains documented and unfixed, as instructed.
+
+### Commands and results
+
+`build-for-testing` passed. Focused, executed once: `test-without-building` with `-only-testing:` for `ReferenceAuthoringSessionTests`, `ReferenceAuthoringCaptureBridgeTests`, `MacWatchStopDispatchTests`, `RoutineFinalizationWatchMergeTests`, `WatchMotionCaptureStoreStagingTests` and `CaptureReliabilityPhase1CoreTests`, the last of which carries both the microphone source assertion and the four take-scoped MIDI cases. Per configuration 523 passed, 0 failed, 0 skipped, under both `Test Scheme Action` and `Configuration 2`; 1,046 executions in total. That reconciles as core 419 (415 plus the four new take-scoped cases), bridge 36, session 37, Watch stop dispatch 10, receipt staging 18 and finalization merge 3. Log `../logs/b5-verify.log`, bundle `../results/b5-focused.xcresult`.
+
+Affected platform builds passed: `ScratchLab` on `generic/platform=iOS` and `ScratchLabDesktop` on `platform=macOS`. The watch target is unaffected. Under the revised verification plan the serial `scripts/build.sh all` gate and the explicit Debug and universal Release checks run once against the complete six-commit branch after Boundary 6.
+
+### Preservation
+
+All 661 primary files and all 93 protected evidence files match the saved baselines. Primary remains `feature/ios-capture-camera-ux` at `d3ecf2a6` with an unchanged empty index; receipt branch intact; `git diff --check` passes. Among protected files only `project.pbxproj` changed, by membership only. Takes 001-006 and the documented historical metadata mutations are untouched. No Take 007 was recorded, no reference was approved, installed or published, no training was enabled, and no detector output was treated as human ground truth.

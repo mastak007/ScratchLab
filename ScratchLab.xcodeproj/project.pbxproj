@@ -613,6 +613,11 @@
 		REFIO0MAC0001 /* ReferencePackageIO.swift in Sources */ = {isa = PBXBuildFile; fileRef = REFIO0FREF0001 /* ReferencePackageIO.swift */; };
 		XFCALT0TST0001 /* CrossfaderCalibrationTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = XFCALT0FREF0001 /* CrossfaderCalibrationTests.swift */; };
 		REFAUT0TST0001 /* ReferenceAuthoringTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = REFAUT0FREF0001 /* ReferenceAuthoringTests.swift */; };
+		REFAU0IOS0009 /* ReferenceAuthoringSession.swift in Sources */ = {isa = PBXBuildFile; fileRef = REFAU0FREF0009 /* ReferenceAuthoringSession.swift */; };
+		REFAU0MAC0009 /* ReferenceAuthoringSession.swift in Sources */ = {isa = PBXBuildFile; fileRef = REFAU0FREF0009 /* ReferenceAuthoringSession.swift */; };
+		REFAUST0TST0001 /* ReferenceAuthoringSessionTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = REFAUST0FREF0001 /* ReferenceAuthoringSessionTests.swift */; };
+		REFBRG0MAC0001 /* ReferenceAuthoringCaptureBridge.swift in Sources */ = {isa = PBXBuildFile; fileRef = REFBRG0FREF0001 /* ReferenceAuthoringCaptureBridge.swift */; };
+		REFBRGT0TST0001 /* ReferenceAuthoringCaptureBridgeTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = REFBRGT0FREF0001 /* ReferenceAuthoringCaptureBridgeTests.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -1088,6 +1093,10 @@
 		REFIO0FREF0001 /* ReferencePackageIO.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ReferencePackageIO.swift; sourceTree = "<group>"; };
 		XFCALT0FREF0001 /* CrossfaderCalibrationTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CrossfaderCalibrationTests.swift; sourceTree = "<group>"; };
 		REFAUT0FREF0001 /* ReferenceAuthoringTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ReferenceAuthoringTests.swift; sourceTree = "<group>"; };
+		REFAU0FREF0009 /* ReferenceAuthoringSession.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ReferenceAuthoringSession.swift; sourceTree = "<group>"; };
+		REFAUST0FREF0001 /* ReferenceAuthoringSessionTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ReferenceAuthoringSessionTests.swift; sourceTree = "<group>"; };
+		REFBRG0FREF0001 /* ReferenceAuthoringCaptureBridge.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ReferenceAuthoringCaptureBridge.swift; sourceTree = "<group>"; };
+		REFBRGT0FREF0001 /* ReferenceAuthoringCaptureBridgeTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ReferenceAuthoringCaptureBridgeTests.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFileSystemSynchronizedRootGroup section */
@@ -1132,6 +1141,8 @@
 		2010DD0010DD0010DD0010DD /* ScratchLabDesktopTests */ = {
 			isa = PBXGroup;
 			children = (
+				REFBRGT0FREF0001 /* ReferenceAuthoringCaptureBridgeTests.swift */,
+				REFAUST0FREF0001 /* ReferenceAuthoringSessionTests.swift */,
 				REFAUT0FREF0001 /* ReferenceAuthoringTests.swift */,
 				XFCALT0FREF0001 /* CrossfaderCalibrationTests.swift */,
 				2010BB0010BB0010BB0010BB /* CaptureReliabilityPhase1Tests.swift */,
@@ -1625,6 +1636,7 @@
 		B5000003 /* Services */ = {
 			isa = PBXGroup;
 			children = (
+				REFBRG0FREF0001 /* ReferenceAuthoringCaptureBridge.swift */,
 				B2000005 /* MacCaptureEngine.swift */,
 				TRIR0000000TRIR0FILEPROD /* TimecodeRealtimeIngressRing.swift */,
 				SBPA0001FREF /* ScratchBankPadAudioPlayer.swift */,
@@ -1855,6 +1867,7 @@
 		REFAU0GRP0001 /* Reference */ = {
 			isa = PBXGroup;
 			children = (
+				REFAU0FREF0009 /* ReferenceAuthoringSession.swift */,
 				REFAU0FREF0008 /* LegacyReferenceInventory.swift */,
 				REFAU0FREF0007 /* ReferenceCapturePreflight.swift */,
 				REFAU0FREF0006 /* CallAndResponseSchedule.swift */,
@@ -2065,6 +2078,8 @@
 		4137724FB3900E509AAF6EDF /* Sources */ = {
 			isa = PBXSourcesBuildPhase;
 			files = (
+				REFBRG0MAC0001 /* ReferenceAuthoringCaptureBridge.swift in Sources */,
+				REFAU0MAC0009 /* ReferenceAuthoringSession.swift in Sources */,
 				REFIO0MAC0001 /* ReferencePackageIO.swift in Sources */,
 				REFAU0MAC0008 /* LegacyReferenceInventory.swift in Sources */,
 				REFAU0MAC0007 /* ReferenceCapturePreflight.swift in Sources */,
@@ -2305,6 +2320,7 @@
 		A6000002 /* Sources */ = {
 			isa = PBXSourcesBuildPhase;
 			files = (
+				REFAU0IOS0009 /* ReferenceAuthoringSession.swift in Sources */,
 				REFIO0IOS0001 /* ReferencePackageIO.swift in Sources */,
 				REFAU0IOS0008 /* LegacyReferenceInventory.swift in Sources */,
 				REFAU0IOS0007 /* ReferenceCapturePreflight.swift in Sources */,
@@ -2505,6 +2521,8 @@
 		F9TESTSRC10AA0010AA10AA /* Sources */ = {
 			isa = PBXSourcesBuildPhase;
 			files = (
+				REFBRGT0TST0001 /* ReferenceAuthoringCaptureBridgeTests.swift in Sources */,
+				REFAUST0TST0001 /* ReferenceAuthoringSessionTests.swift in Sources */,
 				REFAUT0TST0001 /* ReferenceAuthoringTests.swift in Sources */,
 				XFCALT0TST0001 /* CrossfaderCalibrationTests.swift in Sources */,
 				SLCORE00000000000000BF04 /* ScratchAnalysisBridgeTests.swift in Sources */,

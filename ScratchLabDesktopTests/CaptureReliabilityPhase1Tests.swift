@@ -3200,8 +3200,12 @@ final class CaptureReliabilityPhase1CoreTests: XCTestCase {
             encoding: .utf8
         )
 
+        // Matched on the function NAME, not on a formatting of its parameter
+        // list. The literal used to include `(captureTiming:`, so wrapping the
+        // signature across lines silently turned this guard-ordering assertion
+        // into an XCTUnwrap failure instead of a coverage report.
         let startTail = engineSource[try XCTUnwrap(
-            engineSource.range(of: "func startRoutineRecording(captureTiming:")
+            engineSource.range(of: "func startRoutineRecording(")
         ).lowerBound...]
         let guardRange = try XCTUnwrap(startTail.range(of: "Self.shouldBlockRoutineCapture("))
         let publishRange = try XCTUnwrap(startTail.range(of: "self.isRoutineRecording = true"))
@@ -14147,6 +14151,107 @@ extension CaptureReliabilityPhase1CoreTests {
         XCTAssertEqual(engine.midiLearnState, .learned(MacCaptureEngine.CrossfaderCCMapping(channel: 1, controller: 11)))
         XCTAssertEqual(engine.midiLearnFeedback, "Learned Xfader: CC11 Ch2")
         XCTAssertEqual(engine.lastMIDIEventSummary, "Received CC11 Ch2 Value64")
+    }
+
+    // MARK: - Take-scoped crossfader capture (2026-09-04 hardware smoke)
+    //
+    // Take 41949897…_take002 recorded 3,889 MIDI events, every one of them
+    // channel 1 / CC6 (platter), and zero on the learned crossfader address
+    // (channel 15 / CC8). The live preflight row showed a non-zero crossfader
+    // count at the same time, which read as "the crossfader is working".
+    //
+    // These cases pin down that there is no software path that can keep the
+    // platter and drop the crossfader: both go through the SAME function, and
+    // the only gate between the live counter and the take buffer is the
+    // recording window, which is address-blind.
+
+    func testALiveCrossfaderCCDuringAnActiveTakeReachesTheTakeScopedBuffer() {
+        let engine = MacCaptureEngine(autoRefreshDevices: false)
+        engine.beginLiveMIDICapture()
+        defer { engine.endLiveMIDICaptureIfIdle() }
+        let start = CACurrentMediaTime()
+
+        // Platter and crossfader interleaved, exactly as the packet loop
+        // delivers them.
+        engine.recordReceivedMIDICCEvent(
+            sourceName: "Rane ONE MKII", channel: 1, controller: 6, value: 51,
+            timestamp: start + 0.001, recordingStartTime: start
+        )
+        engine.recordReceivedMIDICCEvent(
+            sourceName: "Rane ONE MKII", channel: 15, controller: 8, value: 12,
+            mappedControl: "crossfader",
+            timestamp: start + 0.002, recordingStartTime: start
+        )
+
+        let captured = engine.capturedMidiCCEventsSnapshot()
+        XCTAssertEqual(captured.count, 2)
+        XCTAssertTrue(
+            captured.contains { $0.channel == 15 && $0.controller == 8 && $0.mappedControl == "crossfader" },
+            "A crossfader CC received during an active take must reach the take-scoped buffer."
+        )
+        XCTAssertTrue(captured.contains { $0.channel == 1 && $0.controller == 6 })
+    }
+
+    func testLiveObservationAndTakeScopedCaptureCannotDisagreeAboutAnAddress() {
+        let engine = MacCaptureEngine(autoRefreshDevices: false)
+        engine.beginLiveMIDICapture()
+        defer { engine.endLiveMIDICaptureIfIdle() }
+        let start = CACurrentMediaTime()
+
+        for index in 0..<5 {
+            engine.recordReceivedMIDICCEvent(
+                sourceName: "Rane ONE MKII", channel: 15, controller: 8, value: 10 + index,
+                mappedControl: "crossfader",
+                timestamp: start + 0.001 * Double(index + 1), recordingStartTime: start
+            )
+        }
+
+        let observation = engine.latestCCObservation(channel: 15, controller: 8)
+        let takeScoped = engine.capturedMidiCCEventsSnapshot()
+            .filter { $0.channel == 15 && $0.controller == 8 }
+        XCTAssertEqual(observation?.eventCount, 5)
+        XCTAssertEqual(
+            takeScoped.count, 5,
+            "The live counter and the take buffer are filled from the same call; they cannot diverge while a take is open."
+        )
+        // Both paths address the control the same 0-based way. The UI's
+        // "Ch16" is a 1-based rendering of this same channel 15.
+        XCTAssertEqual(observation?.channel, 15)
+        XCTAssertEqual(takeScoped.first?.channel, 15)
+    }
+
+    func testCrossfaderEventsAreNotCapturedBeforeTheTakeWindowOpens() {
+        let engine = MacCaptureEngine(autoRefreshDevices: false)
+        // No `beginLiveMIDICapture()` — no recording window is open.
+        engine.recordReceivedMIDICCEvent(
+            sourceName: "Rane ONE MKII", channel: 15, controller: 8, value: 12,
+            mappedControl: "crossfader"
+        )
+        XCTAssertTrue(
+            engine.capturedMidiCCEventsSnapshot().isEmpty,
+            "Traffic outside a take must not enter the take timeline."
+        )
+        XCTAssertEqual(
+            engine.latestCCObservation(channel: 15, controller: 8)?.eventCount, 1,
+            "The app-lifetime observation is still recorded — which is exactly why it is not evidence about a take."
+        )
+    }
+
+    func testTheTakeScopedSnapshotIsNonDestructive() {
+        let engine = MacCaptureEngine(autoRefreshDevices: false)
+        engine.beginLiveMIDICapture()
+        defer { engine.endLiveMIDICaptureIfIdle() }
+        let start = CACurrentMediaTime()
+        engine.recordReceivedMIDICCEvent(
+            sourceName: "Rane ONE MKII", channel: 15, controller: 8, value: 12,
+            mappedControl: "crossfader",
+            timestamp: start + 0.001, recordingStartTime: start
+        )
+        XCTAssertEqual(engine.capturedMidiCCEventsSnapshot().count, 1)
+        XCTAssertEqual(
+            engine.capturedMidiCCEventsSnapshot().count, 1,
+            "Reading the buffer for the live UI must not consume the events finalization still has to extract."
+        )
     }
 
     func testClearCrossfaderMappingRemovesMapping() {

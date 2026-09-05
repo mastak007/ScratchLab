@@ -1,5 +1,19 @@
 # AI Handoff
 
+## 2026-09-05 - Boundary 5 of 6 committed: capture/Watch correlation and approval safety
+
+Supersedes the Boundary 4 entry below for current status. Candidate `/private/tmp/scratchlab-refauth-baseline.iYmLZU/worktree`, branch `checkpoint/reference-authoring-baseline`. Boundaries 1 to 5 are committed; only Boundary 6 remains.
+
+- Boundary 5 subject: `feat(reference): correlate capture and Watch evidence before approval`. Four files copied whole and byte-compared, the 32 C-owned engine changes, three `CaptureReliabilityPhase1Tests.swift` hunks, and C-owned `project.pbxproj` membership.
+- `MacCaptureEngine.swift` is now FULLY consumed: all 39 primary hunks are committed, 4 in Boundary 1, 6 in Boundary 3 and 29 here. No engine work remains for Boundary 6.
+- Rebuilding `project.pbxproj` from the pristine base with the union of Boundary 3, 4 and 5 membership placed `REFAU0FREF0009` correctly inside the `Reference` group, so the structural hazard flagged earlier needed no special handling. Union-from-base is the method for any file an earlier boundary already changed.
+- The inherited 290-line `WatchMotionCaptureStoreStagingTests` block was not re-extracted.
+- Focused 523 per configuration, 1,046 executions, zero failures and zero skips: core 419, bridge 36, session 37, Watch stop dispatch 10, receipt staging 18, finalization merge 3. Affected builds iOS and macOS passed.
+- Semantics are the audited ones by byte-identical extraction. D5 session reuse was not an unavoidable correctness dependency and remains documented and unfixed.
+- Boundary 6 remains: `ReferenceAuthoringViewModel.swift`, `ReferenceAuthoringView.swift`, `ReferenceAuthoringViewModelTests.swift`, the `LivePerformedNotationTracker.swift` and its test changes, `MacCameraPreviewViewTests.swift` changes, the four `MacAnalyzerView.swift` DEBUG-route hunks (521, 535, 549, 3744), the route test at hunk 12009, and D-owned `project.pbxproj` membership (new-side lines 621-623, 1103-1105, 1150, 1610, 1623, 1645-1652, 2098-2099, 2543).
+- After Boundary 6 is assembled: one serial `scripts/build.sh all`, an explicit macOS Debug build, an explicit unsigned universal macOS Release build, proof that the route symbol is present in Debug and absent from Release, and `git diff --check`.
+- Preservation unchanged: 661 primary files, 93 protected evidence files, empty indexes, intact receipt branch, build number 21.
+
 ## 2026-09-05 - Boundary 4 of 6 committed: reference foundation and package I/O
 
 Supersedes the Boundary 3 entry below for current status. Candidate `/private/tmp/scratchlab-refauth-baseline.iYmLZU/worktree`, branch `checkpoint/reference-authoring-baseline`. Boundaries 1 to 4 are committed; two remain.
