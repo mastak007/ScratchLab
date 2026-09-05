@@ -6500,7 +6500,8 @@ extension ScratchNotation {
     /// relative to the same recording/pattern origin. Seconds are never snapped
     /// to beats. Beat-authored targets need no tempo until materialization.
     /// Positions are signed and unwrapped; negative values and overshoot survive.
-    /// This model has no renderer, detector, export or eligibility consumer.
+    /// Presentation can read these records; the model owns no rendering,
+    /// detector, export or eligibility behavior.
     ///
     /// IDs are supplied by the producer and serialized verbatim, never minted
     /// during decoding or computed from editable times. Arrays retain evidence
@@ -6697,7 +6698,11 @@ extension ScratchNotation {
         }
 
         func validationIssues() -> [String] {
-            var issues = motionValidationIssues()
+            motionValidationIssues() + faderValidationIssues()
+        }
+
+        func faderValidationIssues() -> [String] {
+            var issues: [String] = []
             var ids = Set([id] + subdivisions.map(\.id) + internalHolds.map(\.id))
             for (index, interval) in faderIntervals.enumerated() {
                 if interval.id.isEmpty || !ids.insert(interval.id).inserted { issues.append("fader interval ID must be unique and nonempty") }
@@ -6721,7 +6726,8 @@ extension ScratchNotation {
             return issues
         }
 
-        private func motionValidationIssues() -> [String] {
+        /// Shared with presentation so fader faults cannot invalidate platter evidence.
+        func motionValidationIssues() -> [String] {
             var issues = Self.evidenceIssues(evidence, platter: true)
             let ids = [id] + subdivisions.map(\.id) + internalHolds.map(\.id)
             if ids.contains(where: \.isEmpty) || Set(ids).count != ids.count { issues.append("gesture/motion IDs must be unique and nonempty") }
@@ -6773,7 +6779,7 @@ extension ScratchNotation {
             span.startTime.isFinite && span.endTime.isFinite && span.startTime >= 0 && span.endTime > span.startTime
         }
 
-        private static func evidenceIssues(_ evidence: Evidence, platter: Bool) -> [String] {
+        static func evidenceIssues(_ evidence: Evidence, platter: Bool) -> [String] {
             let observation = evidence.observation
             var issues: [String] = []
             if evidence.provenance == .unknown { issues.append("unknown provenance cannot establish a state") }

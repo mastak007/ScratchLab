@@ -1141,7 +1141,7 @@ struct ScratchMotionRendererTests {
                 != ScratchMotionRenderer.Style.target.backwardColor)
     }
 
-    @Test("Holds draw no line — no visible centre spine across the lane")
+    @Test("Legacy padding holds stay hidden; canonical observed holds draw a line")
     func holdsRenderNoCentreSpine() throws {
         let source = try rendererSource()
         // The geometry still produces hold segments (lead-in, inter-stroke
@@ -1151,12 +1151,22 @@ struct ScratchMotionRendererTests {
         // visually splitting the chart into two notation half-lanes
         // flanking a centre spine.
         //
-        // The notation-line loop now filters out holds before drawing.
+        // The renderer consumes the evidence-aware policy, preserving the
+        // legacy padding rule while allowing real canonical platter holds.
         let lineLoop = try sliceBetween(source,
             from: "// 2. The notation line",
             to: "// 3.")
-        #expect(lineLoop.contains("where !item.segment.isHold"))
-        // No alternate hold-drawing branch remains.
+        #expect(lineLoop.contains("where item.segment.drawsLine"))
+        let padding = MotionSegment(kind: .hold, startTime: 0, endTime: 1,
+            startPosition: 0.5, endPosition: 0.5, speed: .medium, isGhost: false)
+        #expect(!padding.drawsLine)
+        for evidenceStyle in [MotionSegment.EvidenceStyle.open, .closed, .unknownFader] {
+            var observed = padding
+            observed.evidenceStyle = evidenceStyle
+            #expect(observed.drawsLine)
+            #expect(observed.startPosition == observed.endPosition)
+        }
+        // No separate hold renderer or legacy hold-only tuning was added.
         #expect(!lineLoop.contains("if item.segment.isHold"))
         // The renderer no longer needs the hold-only opacity / width-scale
         // tuning constants that drove the old centre baseline.
@@ -1179,6 +1189,9 @@ struct ScratchMotionRendererTests {
         // The dedupe machinery from the new every-junction logic is in place.
         #expect(block.contains("junctionTimeEpsilon"))
         #expect(block.contains("junctionPositionEpsilon"))
+        // Canonical platter holds/curve points must not acquire the legacy
+        // junction discs; fader glyphs live in the independent fader lane.
+        #expect(block.contains("$0.segment.evidenceStyle == .legacy"))
         // Each segment contributes both endpoints — start times AND end
         // times are visited, so apexes, centre entries / exits and hold
         // endpoints all get a mark.

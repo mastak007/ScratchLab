@@ -131,6 +131,11 @@ struct ScratchNotationPanel: View {
         case .target: return "\(laneTitle) — target reference notation"
         case .performedPlatter: return "\(laneTitle) — measured performance"
         case .captured: return "\(laneTitle) — captured evidence"
+        case .canonical(let records, let layer, let frame):
+            let geometry = ScratchStrokeGeometry.canonicalGeometry(records: records, layer: layer, frame: frame)
+            let unknown = !geometry.missingMotion.isEmpty || geometry.fader.contains { $0.state == nil }
+                || geometry.hasUnplacedEvidence
+            return "\(laneTitle) — canonical motion and fader evidence\(unknown ? "; unknown or missing evidence" : "")"
         case .empty(let message): return "Notation unavailable — \(message)"
         }
     }

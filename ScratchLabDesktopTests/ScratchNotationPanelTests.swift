@@ -10,6 +10,7 @@
 // pure function (`ScratchStrokeGeometry.turnaroundAnchors`).
 
 import CoreGraphics
+import SwiftUI
 import XCTest
 @testable import ScratchLab
 
@@ -1213,5 +1214,356 @@ final class PrivacyAndPermissionRegressionTests: XCTestCase {
                       "SessionUploadConfiguration.current() must gate its Release branch with #if !DEBUG")
         XCTAssertTrue(source.contains("apiBaseURL: nil"),
                       "the Release branch must return apiBaseURL: nil (upload unavailable)")
+    }
+}
+
+// Canonical renderer snapshots use the exact projected line segments consumed
+// by Canvas, following this file's deterministic geometry testing convention.
+final class CanonicalTearRendererTests: XCTestCase {
+    private typealias Record = ScratchNotation.GestureRecord
+    private typealias Geometry = ScratchStrokeGeometry.CanonicalGeometry
+    private typealias Frame = ScratchStrokeGeometry.CanonicalFrame
+
+    private var motionEvidence: Record.Evidence {
+        .init(provenance: .measured, observation: .init(source: .platterTimeline,
+            confidence: 1, reason: "Deterministic curve fixture"))
+    }
+    private var faderEvidence: Record.Evidence {
+        .init(provenance: .measured, observation: .init(source: .crossfaderRaw,
+            confidence: 1, reason: "Deterministic fader fixture"))
+    }
+    private func frame(time: ClosedRange<Double> = 0...8, position: ClosedRange<Double> = 0...4,
+                       bpm: Double = 120) throws -> Frame {
+        try XCTUnwrap(Frame(timeRange: time, positionRange: position,
+                            coordinateSpace: .samplePosition, beatsPerMinute: bpm))
+    }
+    private func tear(_ weights: [Double] = [1, 1], direction: ScratchNotationDirection = .forward,
+                      domain: ScratchNotationTimingDomain = .seconds,
+                      faderState: ScratchNotationFaderState = .open) -> Record {
+        var subdivisions: [Record.Subdivision] = []
+        var holds: [Record.TearHold] = []
+        var time = 0.0
+        let sign = direction == .forward ? 1.0 : -1.0
+        for (index, weight) in weights.enumerated() {
+            let position = Double(index) * sign
+            let curve = Record.MotionCurve(points: [.init(time: time, position: position),
+                .init(time: time + weight, position: position + sign)], evidence: motionEvidence)
+            subdivisions.append(.init(id: "move-\(index)", span: .init(startTime: time, endTime: time + weight),
+                evidence: motionEvidence, measuredCurve: curve, targetCurve: curve, authoredDurationWeight: weight))
+            time += weight
+            if index < weights.count - 1 {
+                holds.append(.init(id: "hold-\(index)", span: .init(startTime: time, endTime: time + 0.25),
+                    label: .init(derived: .stationary), evidence: motionEvidence, position: position + sign))
+                time += 0.25
+            }
+        }
+        return Record(id: "tear-fixture", direction: direction, timingDomain: domain,
+            coordinateSpace: .samplePosition, evidence: motionEvidence,
+            subdivisions: subdivisions, internalHolds: holds,
+            faderIntervals: [.init(id: "fader", span: .init(startTime: 0, endTime: time),
+                                  state: faderState, evidence: faderEvidence)])
+    }
+    private func replacing(_ record: Record, subdivisions: [Record.Subdivision]? = nil,
+                           holds: [Record.TearHold]? = nil, intervals: [Record.FaderSpan]? = nil,
+                           edges: [Record.FaderTransition]? = nil) -> Record {
+        .init(id: record.id, direction: record.direction, timingDomain: record.timingDomain,
+              coordinateSpace: record.coordinateSpace, evidence: record.evidence,
+              subdivisions: subdivisions ?? record.subdivisions, internalHolds: holds ?? record.internalHolds,
+              faderTransitions: edges ?? record.faderTransitions, faderIntervals: intervals ?? record.faderIntervals)
+    }
+    private func geometry(_ record: Record, layer: ScratchStrokeGeometry.CanonicalLayer = .performance,
+                          in frame: Frame? = nil) throws -> Geometry {
+        ScratchStrokeGeometry.canonicalGeometry(records: [record], layer: layer, frame: try frame ?? self.frame())
+    }
+    private func snapshot(_ path: MotionPath, time: ClosedRange<Double> = 0...8,
+                          width: CGFloat = 800) -> [[Double]] {
+        let viewport = LaneViewport(size: CGSize(width: width, height: 100), now: time.lowerBound,
+            axis: .horizontal, actionLineFraction: 0, secondsAhead: time.upperBound - time.lowerBound)
+        return ScratchMotionRenderer.projectedSegments(path, viewport: viewport)
+            .filter { $0.segment.drawsLine }.map { item in
+                [item.a.x, item.a.y, item.b.x, item.b.y].map { (Double($0) * 1e6).rounded() / 1e6 }
+            }
+    }
+
+    func testOneTwoAndThreeTearCoordinateSnapshots() throws {
+        let snapshots: [[[Double]]] = [
+            [[0,88,100,69], [100,69,125,69], [125,69,225,50]],
+            [[0,88,100,69], [100,69,125,69], [125,69,225,50], [225,50,250,50], [250,50,350,31]],
+            [[0,88,100,69], [100,69,125,69], [125,69,225,50], [225,50,250,50],
+             [250,50,350,31], [350,31,375,31], [375,31,475,12]]
+        ]
+        for count in 1...3 {
+            let record = tear(Array(repeating: 1, count: count + 1))
+            XCTAssertTrue(record.validationIssues().isEmpty)
+            for layer in [ScratchStrokeGeometry.CanonicalLayer.target, .performance] {
+                let result = try geometry(record, layer: layer)
+                XCTAssertEqual(snapshot(result.motion), snapshots[count - 1])
+                XCTAssertEqual(result.motion.segments.filter(\.isHold).count, count)
+                XCTAssertTrue(result.faderEdges.isEmpty, "a tear hold never creates a fader glyph")
+                XCTAssertEqual(result, try geometry(record, layer: layer))
+            }
+        }
+    }
+
+    func testIrregularRatiosRetainActualTimingAndSlope() throws {
+        let result = try geometry(tear([0.5, 1.5, 0.75]))
+        XCTAssertEqual(snapshot(result.motion), [[0,88,50,69], [50,69,75,69],
+            [75,69,225,50], [225,50,250,50], [250,50,325,31]])
+        XCTAssertEqual(result.motion.segments.filter { !$0.isHold }.map(\.duration), [0.5, 1.5, 0.75])
+    }
+
+    func testBackwardTearsFallAndHoldsStayHorizontal() throws {
+        let result = try geometry(tear([1, 1], direction: .backward), in: frame(position: -4...0))
+        XCTAssertEqual(snapshot(result.motion), [[0,12,100,31], [100,31,125,31], [125,31,225,50]])
+    }
+
+    func testLocalCurveSpeedSurvivesWithoutSpeedBucketGeometry() throws {
+        let record = tear([1])
+        let curve = Record.MotionCurve(points: [.init(time: 0, position: 0),
+            .init(time: 0.2, position: 0.8), .init(time: 1, position: 1)], evidence: motionEvidence)
+        let subdivision = Record.Subdivision(id: "move", span: .init(startTime: 0, endTime: 1),
+            evidence: motionEvidence, measuredCurve: curve, targetCurve: curve)
+        let result = try geometry(replacing(record, subdivisions: [subdivision]))
+        XCTAssertEqual(snapshot(result.motion), [[0,88,20,72.8], [20,72.8,100,69]])
+    }
+
+    func testHoldAndClickAreIndependentEvenWhenClickFallsInsideHold() throws {
+        let record = tear()
+        let intervals: [Record.FaderSpan] = [
+            .init(id: "open1", span: .init(startTime: 0, endTime: 1.1), state: .open, evidence: faderEvidence),
+            .init(id: "close", span: .init(startTime: 1.1, endTime: 1.15), state: .closed, evidence: faderEvidence),
+            .init(id: "open2", span: .init(startTime: 1.15, endTime: 2.25), state: .open, evidence: faderEvidence)
+        ]
+        let edges: [Record.FaderTransition] = [
+            .init(id: "click-down", time: 1.1, state: .closed, evidence: faderEvidence),
+            .init(id: "click-up", time: 1.15, state: .open, evidence: faderEvidence)
+        ]
+        let result = try geometry(replacing(record, intervals: intervals, edges: edges))
+        XCTAssertEqual(result.faderEdges.map(\.time), [1.1, 1.15])
+        let holds = result.motion.segments.filter(\.isHold)
+        XCTAssertEqual(holds.map(\.evidenceStyle), [.open, .closed, .open])
+        XCTAssertTrue(holds.allSatisfy { $0.drawsLine && $0.startPosition == $0.endPosition })
+        XCTAssertEqual(holds.reduce(0) { $0 + $1.duration }, 0.25, accuracy: 1e-12)
+        XCTAssertTrue(try geometry(replacing(record, intervals: intervals)).faderEdges.isEmpty,
+                      "rail state boundaries alone do not claim a click")
+    }
+
+    func testMeasuredLocalPlateauPreservesZeroSlopeWithoutInventingAClick() throws {
+        let record = tear([1])
+        let curve = Record.MotionCurve(points: [.init(time: 0, position: 0),
+            .init(time: 0.4, position: 0.5), .init(time: 0.5, position: 0.5),
+            .init(time: 1, position: 1)], evidence: motionEvidence)
+        let sub = Record.Subdivision(id: "move", span: .init(startTime: 0, endTime: 1),
+            evidence: motionEvidence, measuredCurve: curve)
+        let result = try geometry(replacing(record, subdivisions: [sub]))
+        XCTAssertEqual(snapshot(result.motion), [[0,88,40,78.5], [40,78.5,50,78.5], [50,78.5,100,69]])
+        XCTAssertTrue(result.faderEdges.isEmpty)
+    }
+
+    func testFaderEdgesDoNotFillMissingIntervalsAndUseTheSameBeatMapping() throws {
+        let record = replacing(tear([1], domain: .beats), intervals: [], edges: [
+            .init(id: "close", time: 0.2, state: .closed, evidence: faderEvidence),
+            .init(id: "open", time: 0.4, state: .open, evidence: faderEvidence)])
+        let result = try geometry(record)
+        XCTAssertEqual(result.faderEdges.map(\.time), [0.1, 0.2])
+        XCTAssertTrue(result.fader.allSatisfy { $0.state == nil })
+        XCTAssertTrue(result.motion.segments.allSatisfy { $0.evidenceStyle == .unknownFader })
+    }
+
+    func testGhostAndGhostHoldUseClosedStylingInBothTraceIdentities() throws {
+        let open = try geometry(tear())
+        let closed = try geometry(tear(faderState: .closed))
+        XCTAssertEqual(snapshot(open.motion), snapshot(closed.motion))
+        XCTAssertTrue(closed.motion.segments.allSatisfy { $0.evidenceStyle == .closed && !$0.isGhost })
+        XCTAssertTrue(closed.faderEdges.isEmpty, "extended closure is not a click")
+        for style in [ScratchMotionRenderer.Style.target, .performance] {
+            for segment in closed.motion.segments {
+                let appearance = ScratchMotionRenderer.lineAppearance(for: segment, style: style)
+                XCTAssertEqual(appearance.dash, [4, 3])
+                XCTAssertEqual(appearance.opacity, 0.45)
+                XCTAssertEqual(appearance.width, style.lineWidth)
+            }
+        }
+        XCTAssertEqual(ScratchMotionRenderer.Style.target.color, ScratchLabDesign.Notation.targetTrace)
+        XCTAssertEqual(ScratchMotionRenderer.Style.performance.color, ScratchLabDesign.Notation.performanceTrace)
+    }
+
+    func testMissingFaderIsExplicitAndDoesNotInventOpenOrClosed() throws {
+        let result = try geometry(replacing(tear(), intervals: []))
+        XCTAssertTrue(result.motion.segments.allSatisfy { $0.evidenceStyle == .unknownFader })
+        XCTAssertEqual(result.fader, [.init(range: 0...8, state: nil)])
+        XCTAssertTrue(result.faderEdges.isEmpty)
+        let appearance = ScratchMotionRenderer.lineAppearance(for: try XCTUnwrap(result.motion.segments.first), style: .target)
+        XCTAssertEqual(appearance.dash, [1, 3])
+    }
+
+    func testPlatterEvidenceCannotMintAFaderClick() throws {
+        let record = replacing(tear(), edges: [
+            .init(id: "phantom", time: 1, state: .closed, evidence: motionEvidence)])
+        let result = try geometry(record)
+        XCTAssertFalse(result.motion.isEmpty)
+        XCTAssertTrue(result.faderEdges.isEmpty)
+        XCTAssertTrue(result.hasUnplacedEvidence)
+        XCTAssertTrue(result.fader.allSatisfy { $0.state == nil })
+    }
+
+    func testMissingTargetCurveNeverFallsBackToPerformance() throws {
+        let record = tear([1])
+        let sub = record.subdivisions[0]
+        let onlyMeasured = Record.Subdivision(id: sub.id, span: sub.span, evidence: sub.evidence,
+                                               measuredCurve: sub.measuredCurve)
+        let input = replacing(record, subdivisions: [onlyMeasured])
+        XCTAssertFalse(try geometry(input).motion.isEmpty)
+        let target = try geometry(input, layer: .target)
+        XCTAssertTrue(target.motion.isEmpty)
+        XCTAssertEqual(target.missingMotion, [0...8])
+        let onlyTarget = Record.Subdivision(id: sub.id, span: sub.span, evidence: sub.evidence,
+                                             targetCurve: sub.targetCurve)
+        XCTAssertTrue(try geometry(replacing(record, subdivisions: [onlyTarget])).motion.isEmpty)
+    }
+
+    func testMissingHoldPositionIsAGapNotAZeroPositionOrClick() throws {
+        let record = tear()
+        let hold = record.internalHolds[0]
+        let missing = Record.TearHold(id: hold.id, span: hold.span, label: hold.label,
+                                      evidence: hold.evidence, position: nil)
+        let result = try geometry(replacing(record, holds: [missing]))
+        XCTAssertEqual(result.missingMotion, [1...1.25, 2.25...8])
+        XCTAssertFalse(result.motion.segments.contains(where: \.isHold))
+        XCTAssertTrue(result.faderEdges.isEmpty)
+    }
+
+    func testObservedHoldPositionIsNotSnappedToAdjacentCurveEndpoints() throws {
+        let record = tear(), hold = record.internalHolds[0]
+        let observed = Record.TearHold(id: hold.id, span: hold.span, label: hold.label,
+            evidence: hold.evidence, position: 1.125)
+        let result = try geometry(replacing(record, holds: [observed]))
+        XCTAssertEqual(snapshot(result.motion), [[0,88,100,69], [100,66.625,125,66.625], [125,69,225,50]])
+        XCTAssertTrue(result.faderEdges.isEmpty)
+    }
+
+    func testUnknownOrReleasedHoldDoesNotProduceValidMotion() throws {
+        for state in [ScratchNotationMotionState.unknown, .released] {
+            let record = tear(), hold = record.internalHolds[0]
+            let unknown = Record.TearHold(id: hold.id, span: hold.span, label: .init(derived: state),
+                                          evidence: hold.evidence, position: hold.position)
+            let result = try geometry(replacing(record, holds: [unknown]))
+            XCTAssertTrue(result.motion.isEmpty)
+            XCTAssertEqual(result.missingMotion, [0...8])
+            XCTAssertEqual(result.fader.first?.state, .open, "independent fader evidence survives")
+        }
+    }
+
+    func testNonFiniteContradictoryAndFlatMovingCurvesAreUnknown() throws {
+        for position in [Double.nan, .infinity, -1, 0] {
+            let record = tear([1])
+            let curve = Record.MotionCurve(points: [.init(time: 0, position: 0),
+                .init(time: 1, position: position)], evidence: motionEvidence)
+            let sub = Record.Subdivision(id: "move", span: .init(startTime: 0, endTime: 1),
+                evidence: motionEvidence, measuredCurve: curve)
+            let result = try geometry(replacing(record, subdivisions: [sub]))
+            XCTAssertTrue(result.motion.isEmpty)
+            XCTAssertEqual(result.missingMotion, [0...8])
+        }
+    }
+
+    func testOverlappingMotionAndFaderEvidenceRemainUnknown() throws {
+        let record = tear()
+        let result = ScratchStrokeGeometry.canonicalGeometry(records: [record, record], layer: .performance, frame: try frame())
+        XCTAssertTrue(result.motion.isEmpty)
+        XCTAssertEqual(result.missingMotion, [0...8])
+        XCTAssertTrue(result.fader.allSatisfy { $0.state == nil })
+    }
+
+    func testBeatsAndSecondsShareGridCoordinatesWithoutSnapping() throws {
+        let beats = tear([1, 1], domain: .beats)
+        let seconds = tear([1, 1])
+        // At 60 bpm beats and seconds coincide, including the quarter-unit hold.
+        let shared = try frame(time: 0.5...4, bpm: 60)
+        let target = try geometry(beats, layer: .target, in: shared)
+        let performance = try geometry(seconds, in: shared)
+        XCTAssertEqual(target, performance)
+        XCTAssertEqual(snapshot(target.motion, time: 0.5...4, width: 350).first, [0,78.5,50,69])
+        // At 120 bpm beat coordinates halve; seconds evidence remains verbatim.
+        let fast = try geometry(beats, in: frame())
+        XCTAssertEqual(fast.motion.segments.map(\.startTime), [0, 0.5, 0.625])
+        XCTAssertEqual(try geometry(seconds).motion.segments.map(\.startTime), [0, 1, 1.25])
+    }
+
+    func testFaderBoundaryInterpolatesCurveWithoutChangingSlope() throws {
+        let record = tear([1])
+        let intervals: [Record.FaderSpan] = [
+            .init(id: "a", span: .init(startTime: 0, endTime: 0.25), state: .open, evidence: faderEvidence),
+            .init(id: "b", span: .init(startTime: 0.25, endTime: 1), state: .closed, evidence: faderEvidence)]
+        let result = try geometry(replacing(record, intervals: intervals))
+        XCTAssertEqual(snapshot(result.motion), [[0,88,25,83.25], [25,83.25,100,69]])
+        XCTAssertEqual(result.motion.segments.map(\.evidenceStyle), [.open, .closed])
+    }
+
+    func testOutOfFramePositionsAreNotClampedIntoFalseHolds() throws {
+        let result = try geometry(tear([1]), in: frame(position: 0...0.25))
+        XCTAssertEqual(snapshot(result.motion), [[0,88,100,-216]])
+        XCTAssertFalse(result.motion.segments[0].isHold)
+    }
+
+    func testInvalidOrMismatchedFrameNeverInventsGeometry() throws {
+        XCTAssertNil(Frame(timeRange: 0...0, positionRange: 0...1, coordinateSpace: .samplePosition, beatsPerMinute: 120))
+        XCTAssertNil(Frame(timeRange: 0...1, positionRange: 0...0, coordinateSpace: .samplePosition, beatsPerMinute: 120))
+        XCTAssertNil(Frame(timeRange: 0...1, positionRange: 0...1, coordinateSpace: .samplePosition, beatsPerMinute: .nan))
+        let mismatch = try XCTUnwrap(Frame(timeRange: 0...8, positionRange: 0...4,
+                                           coordinateSpace: .platterRevolutions, beatsPerMinute: 120))
+        XCTAssertTrue(try geometry(tear(), in: mismatch).motion.isEmpty)
+    }
+
+    func testEmptyRecordsRenderBothEvidenceLanesUnknown() throws {
+        let result = ScratchStrokeGeometry.canonicalGeometry(records: [], layer: .target, frame: try frame())
+        XCTAssertTrue(result.motion.isEmpty)
+        XCTAssertEqual(result.missingMotion, [0...8])
+        XCTAssertEqual(result.fader, [.init(range: 0...8, state: nil)])
+    }
+
+    func testCanonicalSourceUsesExistingPanelAndCanvas() throws {
+        let shared = try frame()
+        for layer in [ScratchStrokeGeometry.CanonicalLayer.target, .performance] {
+            let source = ScratchPhraseChartView.ChartSource.canonical([tear()], layer: layer, frame: shared)
+            let panel = ScratchNotationPanel(lane: layer == .target ? .target : .performance,
+                presentation: .standard, source: source)
+            _ = panel.body
+            _ = ScratchPhraseChartView(source: source).body
+        }
+    }
+
+    func testLegacyBabyChirpAndTransformerGeometryAndStyleSnapshots() throws {
+        // Representative existing seconds-domain inputs, not new registry targets.
+        let edgeSets: [[ScratchNotation.FaderEvent]] = [[],
+            [.init(time: 0, state: .open), .init(time: 0.45, state: .closed), .init(time: 0.55, state: .open)],
+            [.init(time: 0, state: .closed), .init(time: 0.2, state: .open), .init(time: 0.3, state: .closed),
+             .init(time: 0.5, state: .open), .init(time: 0.6, state: .closed), .init(time: 0.8, state: .open)]
+        ]
+        for (name, edges) in zip(["baby_scratch", "chirp", "transformer"], edgeSets) {
+            let notation = ScratchNotation(version: 1, scratchID: name, demoStart: 0, demoEnd: 1,
+                phraseStart: 0, phraseEnd: 1, timingBasis: "seconds", strokes: [
+                    .init(startTime: 0, endTime: 0.5, direction: .forward, speedClassification: .medium, faderState: .open),
+                    .init(startTime: 0.5, endTime: 1, direction: .backward, speedClassification: .medium, faderState: .open)
+                ], faderEvents: edges)
+            let path = ScratchStrokeGeometry.motionPath(for: LaneContent(notation: notation))
+            XCTAssertEqual(snapshot(path, time: 0...1, width: 100), [[0,88,50,12], [50,12,100,88]], name)
+            XCTAssertTrue(path.segments.allSatisfy { $0.evidenceStyle == .legacy })
+            for style in [ScratchMotionRenderer.Style.target, .performance] {
+                for segment in path.segments {
+                    let appearance = ScratchMotionRenderer.lineAppearance(for: segment, style: style)
+                    XCTAssertEqual(appearance.dash, [])
+                    XCTAssertEqual(appearance.opacity, 1)
+                    XCTAssertEqual(appearance.width, style.lineWidth)
+                }
+            }
+            let spans = notation.faderAuthoritySpans(documentEnd: 1)
+            if edges.isEmpty {
+                XCTAssertTrue(spans.allSatisfy { $0.state == .open })
+            } else {
+                XCTAssertEqual(spans.map(\.startTime), edges.map(\.time))
+                XCTAssertEqual(spans.map(\.state), edges.map(\.state))
+            }
+        }
     }
 }

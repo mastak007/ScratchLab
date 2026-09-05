@@ -1,3 +1,15 @@
+# Current continuation - Prompt 4 checkpoint; Prompt 5 preflight only
+
+This record accompanies the single authorized checkpoint `feat(notation): render canonical tear motion and fader evidence`, parent `366f4c250f30db445210809f93062dd0898d892e`, on `feature/ttm-tear-notation-alignment`. After successful commit, expect a clean worktree/index. The latest checkpoint instruction supersedes the implementation turn's no-commit text for this one commit only. No push or next implementation slice is authorized.
+
+The canonical renderer implementation and 23 deterministic tests are complete. Final macOS arm64 test build and focused 18 suites passed: 180 declarations / 398 expanded executions, zero failures/skips/runtime warnings, both configurations. Full serial `scripts/build.sh all` passed: Python 82; native 8,178 passes / 112 skips / 0 failures, two main-thread runtime warnings; iOS, macOS and watchOS builds passed. At checkpoint, all seven source/test hashes match those results, all eleven complete diffs are isolated, and all eleven protected project/configuration files match the parent. Bundles were re-read and match the saved summaries; no source changes or redundant test reruns. Exact commands, bundles, summaries and audit proofs remain in ignored `build/prompt4`; see the latest DEV_LOG entry. Initial failed evidence remains preserved. Canonical producer wiring, physical CXL and GPU bitmap verification remain outside this slice.
+
+## Prompt 5 — read-only preflight and specification check only
+
+Work only in `/Users/karlwatson/Downloads/ScratchLab-TTM`. Read `AGENTS.md`, `SOUL.md`, `PROFILE.md`, `AI_CONTEXT.md`, the relevant `TASKS.md`/`DEV_LOG.md` entries and both handoff files. Run `git status --short --branch` and `git log -1`; verify the Prompt 4 checkpoint and report any dirty files without changing them. Review Prompt 4's exact verification evidence and remaining risks. Locate an explicit user-supplied Prompt 5 implementation brief; if none is present, report that it is missing and stop after the read-only report. Do not infer Prompt 5's scope. No implementation, detector/capture/export/training/navigation changes, protected-file edits, commit or push are authorized by this preflight prompt.
+
+---
+
 ## Current continuation - Prompt 3 checkpoint; Prompt 4 preflight only
 
 This record accompanies the single authorized checkpoint `feat(notation): segment calibrated platter motion for tear candidates`, parent `0521b1ef4ee4ee77f21fa52a1da4188f92e18a50`, on `feature/ttm-tear-notation-alignment`. It supersedes earlier no-commit text for this checkpoint only. After successful commit, expect a clean worktree/index. No push or next implementation slice is authorized.

@@ -3,16 +3,11 @@ import SwiftUI
 // Static full-phrase notation chart — all strokes visible at once.
 // Replaces ScratchNotationCanvasView in non-animated contexts (capture, review).
 //
-// The TARGET case routes its strokes through the shared `ScratchMotionRenderer`
-// and `ScratchStrokeGeometry` — the same renderer the iOS practice lane uses —
-// so a Baby Scratch reference shown in macOS Review reads in exactly the same
-// visual language as the iOS lane: cyan forward push and hot pink backward
-// pull, deflect-and-return tent ramps with apex nodes on each rail, and a
-// dashed rest line between strokes. macOS-specific affordances (beat-number
-// labels, PLATTER/FADER lane labels, directional chevrons, OPEN/CLOSED binary
-// fader rails with transition markers, and the optional playhead) live around
-// the shared renderer's record-lane output. The CAPTURED / EMPTY cases are
-// unchanged.
+// Shared iOS/macOS target/performance chart. Legacy strokes and lossless
+// canonical curves both route through ScratchStrokeGeometry / MotionPath /
+// ScratchMotionRenderer. This view supplies the musical grid, separate
+// platter/fader lanes, bone target/cyan performance styling and playhead.
+// Canonical records require an explicit shared time and position frame.
 
 struct ScratchPhraseChartView: View {
 
@@ -26,6 +21,11 @@ struct ScratchPhraseChartView: View {
         /// in the performed accent style — the learner-facing MY PERFORMANCE
         /// row of the stacked comparison.
         case performedPlatter([CaptureCore.DetectedNotationRecordMovementEvent])
+        /// Lossless canonical curves in an explicit shared comparison frame.
+        /// Both layers use the existing MotionPath / ScratchMotionRenderer.
+        case canonical([ScratchNotation.GestureRecord],
+                       layer: ScratchStrokeGeometry.CanonicalLayer,
+                       frame: ScratchStrokeGeometry.CanonicalFrame)
         case empty(String)
     }
 
@@ -107,6 +107,8 @@ struct ScratchPhraseChartView: View {
             ScratchLabPerformanceSignpost.event("CapturedNotationRender", count: events.count)
         case .performedPlatter(let events):
             ScratchLabPerformanceSignpost.event("PerformedPlatterRender", count: events.count)
+        case .canonical:
+            break
         case .empty:
             break
         }
@@ -116,6 +118,8 @@ struct ScratchPhraseChartView: View {
             case .target(let notation):           drawTarget(ctx: ctx, size: size, notation: notation)
             case .captured(let events):           drawCaptured(ctx: ctx, size: size, events: events)
             case .performedPlatter(let events):   drawPerformedPlatter(ctx: ctx, size: size, events: events)
+            case .canonical(let records, let layer, let frame):
+                drawCanonical(ctx: ctx, size: size, records: records, layer: layer, frame: frame)
             case .empty(let message):             drawEmpty(ctx: ctx, size: size, message: message)
             }
         }
@@ -123,6 +127,100 @@ struct ScratchPhraseChartView: View {
     }
 
     // MARK: - Target (ScratchNotation)
+
+    private func drawCanonical(ctx: GraphicsContext, size: CGSize,
+                               records: [ScratchNotation.GestureRecord],
+                               layer: ScratchStrokeGeometry.CanonicalLayer,
+                               frame: ScratchStrokeGeometry.CanonicalFrame) {
+        let geometry = ScratchStrokeGeometry.canonicalGeometry(records: records, layer: layer, frame: frame)
+        let start = frame.timeRange.lowerBound
+        let duration = frame.timeRange.upperBound - start
+        let pps = size.width / CGFloat(duration)
+        let platterHeight = size.height * (1 - faderLaneFraction)
+        let style: ScratchMotionRenderer.Style = layer == .target ? .target : .performance
+        drawBeatGrid(ctx: ctx, size: size, startTime: start, duration: duration, pps: pps,
+                     labelBottomY: platterHeight - 2, beatsPerMinute: frame.beatsPerMinute)
+        let viewport = LaneViewport(size: CGSize(width: size.width, height: platterHeight),
+                                    now: start, axis: .horizontal, actionLineFraction: 0,
+                                    secondsAhead: duration)
+        var platterContext = ctx
+        platterContext.clip(to: Path(CGRect(origin: .zero, size: viewport.size)))
+        ScratchMotionRenderer.draw(geometry.motion, in: platterContext, viewport: viewport, style: style)
+        drawUnknownIntervals(geometry.missingMotion, label: "MOTION UNKNOWN", ctx: platterContext,
+                             start: start, pps: pps, top: 16, height: max(0, platterHeight - 30))
+        ctx.draw(Text("PLATTER").font(.system(size: 10, weight: .bold, design: .monospaced))
+            .foregroundStyle(Color(white: 0.42)), at: CGPoint(x: 4, y: 3), anchor: .topLeading)
+        drawLaneDivider(ctx: ctx, size: size, y: platterHeight)
+
+        let faderHeight = size.height - platterHeight
+        let openY = platterHeight + faderHeight * 0.15
+        let closedY = platterHeight + faderHeight * 0.88
+        for y in [openY, closedY] {
+            var guide = Path()
+            guide.move(to: CGPoint(x: 0, y: y)); guide.addLine(to: CGPoint(x: size.width, y: y))
+            ctx.stroke(guide, with: .color(Color(white: 0.28).opacity(0.16)), lineWidth: 0.5)
+        }
+        for interval in geometry.fader {
+            guard let state = interval.state else { continue }
+            let y = state == .open ? openY : closedY
+            var rail = Path()
+            rail.move(to: CGPoint(x: CGFloat(interval.range.lowerBound - start) * pps, y: y))
+            rail.addLine(to: CGPoint(x: CGFloat(interval.range.upperBound - start) * pps, y: y))
+            ctx.stroke(rail, with: .color(style.color.opacity(0.78)), lineWidth: 2.5)
+        }
+        drawUnknownIntervals(geometry.fader.filter { $0.state == nil }.map(\.range),
+                             label: "FADER UNKNOWN", ctx: ctx, start: start, pps: pps,
+                             top: openY, height: closedY - openY)
+        // Fader glyphs come ONLY from explicit supported fader transitions.
+        // A hold, reversal or two differently coloured rails cannot mint one.
+        for edge in geometry.faderEdges {
+            let x = CGFloat(edge.time - start) * pps
+            let y = edge.state == .open ? openY : closedY
+            var tick = Path()
+            tick.move(to: CGPoint(x: x, y: openY)); tick.addLine(to: CGPoint(x: x, y: closedY))
+            ctx.stroke(tick, with: .color(style.color.opacity(0.5)), lineWidth: 1.2)
+            var diamond = Path()
+            diamond.move(to: CGPoint(x: x, y: y - 2.5))
+            diamond.addLine(to: CGPoint(x: x + 2.5, y: y))
+            diamond.addLine(to: CGPoint(x: x, y: y + 2.5))
+            diamond.addLine(to: CGPoint(x: x - 2.5, y: y))
+            diamond.closeSubpath()
+            ctx.fill(diamond, with: .color(style.color.opacity(0.65)))
+        }
+        ctx.draw(Text("FADER").font(.system(size: 8.5, weight: .bold, design: .monospaced))
+            .foregroundStyle(Color(white: 0.40)), at: CGPoint(x: 4, y: platterHeight), anchor: .bottomLeading)
+        for (label, y, anchor) in [("OPEN", openY + 1, UnitPoint.topLeading),
+                                   ("CLOSED", closedY - 1, UnitPoint.bottomLeading)] {
+            ctx.draw(Text(label).font(.system(size: 7.5, weight: .medium, design: .monospaced))
+                .foregroundStyle(Color(white: 0.32)), at: CGPoint(x: 4, y: y), anchor: anchor)
+        }
+        if geometry.hasUnplacedEvidence {
+            ctx.draw(Text("UNPLACED / INVALID EVIDENCE").font(.system(size: 9, design: .monospaced))
+                .foregroundStyle(Color(white: 0.65)), at: CGPoint(x: size.width - 4, y: 3), anchor: .topTrailing)
+        }
+        if showPlayhead {
+            drawPlayhead(ctx: ctx, size: size, x: CGFloat(playheadTime - start) * pps)
+        }
+    }
+
+    /// Unknown spans are shaded bands with a question mark, never a line at a
+    /// made-up platter position or fader rail. Narrow gaps remain visible.
+    private func drawUnknownIntervals(_ ranges: [ClosedRange<Double>], label: String,
+                                      ctx: GraphicsContext, start: Double, pps: CGFloat,
+                                      top: CGFloat, height: CGFloat) {
+        for range in ranges {
+            let x = CGFloat(range.lowerBound - start) * pps
+            let width = CGFloat(range.upperBound - range.lowerBound) * pps
+            let rect = CGRect(x: x, y: top, width: width, height: height)
+            ctx.fill(Path(rect), with: .color(Color.gray.opacity(0.12)))
+            ctx.stroke(Path(rect), with: .color(Color.gray.opacity(0.4)),
+                       style: StrokeStyle(lineWidth: 0.5, dash: [2, 3]))
+            if width >= 8 {
+                ctx.draw(Text(width >= 100 ? label : "?").font(.system(size: 8, design: .monospaced))
+                    .foregroundStyle(Color(white: 0.6)), at: CGPoint(x: rect.midX, y: rect.midY))
+            }
+        }
+    }
 
     private func drawTarget(ctx: GraphicsContext, size: CGSize, notation: ScratchNotation) {
         let full = max(notation.timelineDuration, 0.1)
@@ -620,9 +718,9 @@ struct ScratchPhraseChartView: View {
     private func drawBeatGrid(ctx: GraphicsContext, size: CGSize,
                               startTime: Double = 0,
                               duration: Double, pps: CGFloat,
-                              labelBottomY: CGFloat) {
+                              labelBottomY: CGFloat, beatsPerMinute: Double? = nil) {
         guard showBeatGrid else { return }
-        let beatInterval = 60.0 / max(bpm, 1)
+        let beatInterval = 60.0 / (beatsPerMinute ?? max(bpm, 1))
         let subdivInterval = beatInterval / 2  // eighth-note subdivision
 
         // Width-aware density. Subdivisions only appear when a beat is wide
