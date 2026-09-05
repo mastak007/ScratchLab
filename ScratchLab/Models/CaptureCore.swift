@@ -6484,6 +6484,316 @@ extension ScratchNotation {
     static let babyScratchGesturePattern: GesturePattern? = babyScratchCycle.gesturePattern()
 }
 
+// MARK: - Lossless tear gesture records
+
+/// Interpretation provenance is independent of the sensor/source in
+/// `ScratchNotationEvidence`. Inference never acquires a new sensor capability.
+enum ScratchNotationProvenance: String, Codable, Equatable, Sendable, CaseIterable {
+    case authored, measured, inferred, manuallyCorrected, unknown
+}
+
+extension ScratchNotation {
+    /// A persisted description of ONE same-direction gesture. Reversals,
+    /// releases and unobserved motion terminate a gesture (Prompt 1).
+    ///
+    /// All times, including curve points and fader edges, use `timingDomain`
+    /// relative to the same recording/pattern origin. Seconds are never snapped
+    /// to beats. Beat-authored targets need no tempo until materialization.
+    /// Positions are signed and unwrapped; negative values and overshoot survive.
+    /// This model has no renderer, detector, export or eligibility consumer.
+    ///
+    /// IDs are supplied by the producer and serialized verbatim, never minted
+    /// during decoding or computed from editable times. Arrays retain evidence
+    /// order. Valid records require chronological order (simultaneous fader
+    /// transitions use ID order). Decoding preserves malformed evidence too;
+    /// validation reports it without sorting, clamping or discarding samples.
+    struct GestureRecord: Codable, Equatable, Sendable, Identifiable {
+        enum CoordinateSpace: String, Codable, Equatable, Sendable {
+            /// Fraction of source-sample duration from its cue, not clamped 0...1.
+            case samplePosition
+            /// Signed platter displacement in revolutions from the recording origin.
+            case platterRevolutions
+        }
+
+        struct Evidence: Codable, Equatable, Sendable {
+            let provenance: ScratchNotationProvenance
+            let observation: ScratchNotationEvidence
+        }
+
+        /// Half-open interval in the record's declared timing domain.
+        struct TimeSpan: Codable, Equatable, Sendable {
+            let startTime: Double
+            let endTime: Double
+            var duration: Double { endTime - startTime }
+            func contains(_ time: Double) -> Bool { time >= startTime && time < endTime }
+        }
+
+        struct CurvePoint: Codable, Equatable, Sendable {
+            let time: Double
+            let position: Double
+        }
+
+        /// Sampled geometry only: no forced analytic curve family, fitting,
+        /// interpolation, normalization or resampling. Endpoints explicitly
+        /// record start/end position or displacement in `coordinateSpace`.
+        struct MotionCurve: Codable, Equatable, Sendable {
+            let points: [CurvePoint]
+            let evidence: Evidence
+            var startPosition: Double? { points.first?.position }
+            var endPosition: Double? { points.last?.position }
+        }
+
+        struct Subdivision: Codable, Equatable, Sendable, Identifiable {
+            let id: String
+            let span: TimeSpan
+            let evidence: Evidence
+            let measuredCurve: MotionCurve?
+            let targetCurve: MotionCurve?
+            /// Relative authored MOVING-duration weight (e.g. 1:2:1).
+            /// Holds are excluded. Stored per ID so edits cannot shift weights
+            /// onto a different subdivision. Nil means no authored constraint.
+            let authoredDurationWeight: Double?
+
+            init(id: String, span: TimeSpan, evidence: Evidence,
+                 measuredCurve: MotionCurve? = nil, targetCurve: MotionCurve? = nil,
+                 authoredDurationWeight: Double? = nil) {
+                self.id = id
+                self.span = span
+                self.evidence = evidence
+                self.measuredCurve = measuredCurve
+                self.targetCurve = targetCurve
+                self.authoredDurationWeight = authoredDurationWeight
+            }
+        }
+
+        struct TearHold: Codable, Equatable, Sendable, Identifiable {
+            let id: String
+            let span: TimeSpan
+            /// The original label survives a manual correction, just as in
+            /// Prompt 1. Only an effective stationary label can be a tear hold.
+            let label: ScratchNotationMotionLabel
+            let evidence: Evidence
+            /// Nil means position was not observed; never default to cue/zero.
+            let position: Double?
+        }
+
+        struct FaderTransition: Codable, Equatable, Sendable, Identifiable {
+            let id: String
+            let time: Double
+            let state: ScratchNotationFaderState
+            let evidence: Evidence
+        }
+
+        struct FaderSpan: Codable, Equatable, Sendable, Identifiable {
+            let id: String
+            let span: TimeSpan
+            let state: ScratchNotationFaderState
+            let evidence: Evidence
+        }
+
+        enum Audibility: String, Equatable, Sendable {
+            case audible, silent, unknown
+        }
+
+        /// Derived, never serialized as another source of truth. "Audible"
+        /// describes motion/fader mechanics, not proof of non-silent audio PCM.
+        struct ClassifiedInterval: Equatable, Sendable {
+            let span: TimeSpan
+            let state: ScratchNotationCorrelatedState
+            var audibility: Audibility {
+                switch state {
+                case .sounding, .releasedSounding: return .audible
+                case .hold, .ghost, .ghostHold, .releasedMuted: return .silent
+                case .unknown: return .unknown
+                }
+            }
+        }
+
+        let id: String
+        let direction: ScratchNotationDirection
+        let timingDomain: ScratchNotationTimingDomain
+        let coordinateSpace: CoordinateSpace
+        let evidence: Evidence
+        let subdivisions: [Subdivision]
+        let internalHolds: [TearHold]
+        /// Independent observations. Edges do NOT fill uncovered intervals:
+        /// only bounded spans establish sustained state, as in Prompt 1.
+        let faderTransitions: [FaderTransition]
+        let faderIntervals: [FaderSpan]
+
+        init(id: String, direction: ScratchNotationDirection,
+             timingDomain: ScratchNotationTimingDomain, coordinateSpace: CoordinateSpace,
+             evidence: Evidence, subdivisions: [Subdivision], internalHolds: [TearHold] = [],
+             faderTransitions: [FaderTransition] = [], faderIntervals: [FaderSpan] = []) {
+            self.id = id
+            self.direction = direction
+            self.timingDomain = timingDomain
+            self.coordinateSpace = coordinateSpace
+            self.evidence = evidence
+            self.subdivisions = subdivisions
+            self.internalHolds = internalHolds
+            self.faderTransitions = faderTransitions
+            self.faderIntervals = faderIntervals
+        }
+
+        /// No stored "tear2" assertion: two bounded pauses and three motion
+        /// slices derive it, regardless of their unequal lengths or curves.
+        /// Fader data cannot change the platter's technique label.
+        var tearLabel: String? {
+            guard motionValidationIssues().isEmpty, !internalHolds.isEmpty else { return nil }
+            return "tear\(internalHolds.count)"
+        }
+
+        /// Optional target weights, in subdivision order, without normalization.
+        var authoredSubdivisionRatio: [Double]? {
+            guard !subdivisions.isEmpty,
+                  subdivisions.allSatisfy({ $0.authoredDurationWeight != nil }) else { return nil }
+            return subdivisions.compactMap(\.authoredDurationWeight)
+        }
+
+        /// Actual moving-duration fractions, excluding holds. Available only
+        /// for measured seconds-domain boundaries; authored/inferred/unknown
+        /// boundaries must never masquerade as measurements. Raw durations
+        /// remain persisted, so no rounding or cached ratio loses information.
+        var measuredSubdivisionRatio: [Double]? {
+            guard timingDomain == .seconds, motionValidationIssues().isEmpty,
+                  subdivisions.allSatisfy({ $0.evidence.provenance == .measured }) else { return nil }
+            let total = subdivisions.reduce(0) { $0 + $1.span.duration }
+            guard total.isFinite, total > 0 else { return nil }
+            return subdivisions.map { $0.span.duration / total }
+        }
+
+        /// Boundaries from BOTH independent streams partition the gesture.
+        /// Conflicting, malformed or unsupported evidence stays unknown.
+        /// No fader event or interval is created from a stationary platter.
+        var classifiedIntervals: [ClassifiedInterval] {
+            guard let first = subdivisions.first, let last = subdivisions.last,
+                  first.span.startTime.isFinite, last.span.endTime.isFinite,
+                  last.span.endTime > first.span.startTime else { return [] }
+            let start = first.span.startTime
+            let end = last.span.endTime
+            var boundaries = subdivisions.flatMap { [$0.span.startTime, $0.span.endTime] }
+            boundaries += internalHolds.flatMap { [$0.span.startTime, $0.span.endTime] }
+            boundaries += faderIntervals.flatMap { [$0.span.startTime, $0.span.endTime] }
+            boundaries += faderTransitions.map(\.time)
+            boundaries = Array(Set(boundaries.filter { $0.isFinite && $0 >= start && $0 <= end })).sorted()
+            let validMotion = motionValidationIssues().isEmpty
+            return zip(boundaries, boundaries.dropFirst()).map { lower, upper in
+                let time = lower + (upper - lower) / 2
+                let motion: ScratchNotationMotionState
+                if !validMotion { motion = .unknown }
+                else if subdivisions.contains(where: { $0.span.contains(time) }) {
+                    motion = .init(direction: direction)
+                } else if internalHolds.contains(where: { $0.span.contains(time) }) {
+                    motion = .stationary
+                } else { motion = .unknown }
+                let covering = faderIntervals.filter { $0.span.contains(time) }
+                let fader = covering.count == 1 && Self.validSpan(covering[0].span)
+                    && Self.evidenceIssues(covering[0].evidence, platter: false).isEmpty
+                    ? covering[0].state : nil
+                return ClassifiedInterval(span: .init(startTime: lower, endTime: upper),
+                    state: .correlate(motion: motion, fader: fader))
+            }
+        }
+
+        func validationIssues() -> [String] {
+            var issues = motionValidationIssues()
+            var ids = Set([id] + subdivisions.map(\.id) + internalHolds.map(\.id))
+            for (index, interval) in faderIntervals.enumerated() {
+                if interval.id.isEmpty || !ids.insert(interval.id).inserted { issues.append("fader interval ID must be unique and nonempty") }
+                if !Self.validSpan(interval.span) { issues.append("fader interval must be finite and bounded") }
+                if index > 0, interval.span.startTime < faderIntervals[index - 1].span.endTime {
+                    issues.append("fader intervals must be ordered and nonoverlapping")
+                }
+                issues += Self.evidenceIssues(interval.evidence, platter: false)
+            }
+            for (index, edge) in faderTransitions.enumerated() {
+                if edge.id.isEmpty || !ids.insert(edge.id).inserted { issues.append("fader transition ID must be unique and nonempty") }
+                if !edge.time.isFinite || edge.time < 0 { issues.append("fader transition time must be finite and nonnegative") }
+                if index > 0 {
+                    let previous = faderTransitions[index - 1]
+                    if edge.time < previous.time || (edge.time == previous.time && edge.id <= previous.id) {
+                        issues.append("fader transitions must be ordered by time then ID")
+                    }
+                }
+                issues += Self.evidenceIssues(edge.evidence, platter: false)
+            }
+            return issues
+        }
+
+        private func motionValidationIssues() -> [String] {
+            var issues = Self.evidenceIssues(evidence, platter: true)
+            let ids = [id] + subdivisions.map(\.id) + internalHolds.map(\.id)
+            if ids.contains(where: \.isEmpty) || Set(ids).count != ids.count { issues.append("gesture/motion IDs must be unique and nonempty") }
+            if subdivisions.isEmpty || subdivisions.count != internalHolds.count + 1 {
+                issues.append("N bounded internal holds require N+1 motion subdivisions")
+            }
+            for (index, subdivision) in subdivisions.enumerated() {
+                if !Self.validSpan(subdivision.span) { issues.append("subdivision must be finite and bounded") }
+                issues += Self.evidenceIssues(subdivision.evidence, platter: true)
+                if let weight = subdivision.authoredDurationWeight, !weight.isFinite || weight <= 0 {
+                    issues.append("authored duration weight must be finite and positive")
+                }
+                for curve in [subdivision.measuredCurve, subdivision.targetCurve].compactMap({ $0 }) {
+                    issues += Self.evidenceIssues(curve.evidence, platter: true)
+                    if curve.points.count < 2 || curve.points.first?.time != subdivision.span.startTime
+                        || curve.points.last?.time != subdivision.span.endTime {
+                        issues.append("curve must retain both subdivision endpoints")
+                    }
+                    for (pointIndex, point) in curve.points.enumerated() {
+                        if !point.time.isFinite || !point.position.isFinite { issues.append("curve points must be finite") }
+                        if pointIndex > 0, point.time <= curve.points[pointIndex - 1].time {
+                            issues.append("curve point times must strictly increase")
+                        }
+                    }
+                }
+                if let curve = subdivision.measuredCurve, curve.evidence.provenance == .authored {
+                    issues.append("authored curve cannot be a measured curve")
+                }
+                if index > 0, subdivision.span.startTime <= subdivisions[index - 1].span.endTime {
+                    issues.append("subdivisions must be ordered with bounded holds between them")
+                }
+            }
+            for (index, hold) in internalHolds.enumerated() {
+                if !Self.validSpan(hold.span) || hold.label.effective != .stationary {
+                    issues.append("tear hold must be a bounded stationary interval")
+                }
+                if let position = hold.position, !position.isFinite { issues.append("hold position must be finite") }
+                issues += Self.evidenceIssues(hold.evidence, platter: true)
+                if index + 1 < subdivisions.count,
+                   (hold.span.startTime != subdivisions[index].span.endTime
+                    || hold.span.endTime != subdivisions[index + 1].span.startTime) {
+                    issues.append("tear hold must exactly join its surrounding same-direction subdivisions")
+                }
+            }
+            return issues
+        }
+
+        private static func validSpan(_ span: TimeSpan) -> Bool {
+            span.startTime.isFinite && span.endTime.isFinite && span.startTime >= 0 && span.endTime > span.startTime
+        }
+
+        private static func evidenceIssues(_ evidence: Evidence, platter: Bool) -> [String] {
+            let observation = evidence.observation
+            var issues: [String] = []
+            if evidence.provenance == .unknown { issues.append("unknown provenance cannot establish a state") }
+            if evidence.provenance == .measured,
+               ![.platterTimeline, .watchMotion, .crossfaderRaw].contains(observation.source) {
+                issues.append("measured provenance requires a measurement source")
+            }
+            if !observation.confidence.isFinite || !(0...1).contains(observation.confidence) {
+                issues.append("evidence confidence must be finite and within 0...1")
+            }
+            if observation.reason.isEmpty { issues.append("evidence reason must not be empty") }
+            if let count = observation.rawSampleCount, count < 0 { issues.append("raw sample count must be nonnegative") }
+            if !(platter ? observation.source.canEstablishPlatterMotion : observation.source.canEstablishFaderState) {
+                issues.append("evidence source cannot establish \(platter ? "platter" : "fader") state")
+            }
+            return issues
+        }
+    }
+}
+
 extension ScratchNotation {
     static func detectedPreview(
         scratchID: String,

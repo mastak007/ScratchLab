@@ -1,5 +1,24 @@
 # AI Handoff
 
+## 2026-09-05 - Prompt 2 checkpoint verified; single narrow commit authorized
+
+This record accompanies `feat(notation): add lossless canonical tear gesture records`, whose parent is `57398919d508d1b94c206510aac12efed83a6478`, on `feature/ttm-tear-notation-alignment`. Work only in `/Users/karlwatson/Downloads/ScratchLab-TTM`. The current checkpoint request expressly authorizes this one commit; earlier no-commit text below is historical. No push or next implementation slice is authorized.
+
+- All six slice diffs were read completely. There was no unrelated dirty baseline work; the index was empty. Model and tests remain exactly the already-tested +310/+369 additive lines. Only the four required workflow documents were updated for this checkpoint.
+- All 11 protected project/scheme/test-plan/plist/privacy/entitlement blobs match the parent. No project membership, scheme, resource, raw capture, bundled reference, schema version, renderer, detector, UI or eligibility change.
+- Reconfirmed saved exact focused verification for unchanged source: macOS arm64 `ScratchLabDesktop` build-for-testing PASS; the exact 15 `ScratchLabDesktopTests` selectors PASS, 124 tests / 286 expanded executions across both configurations, zero failures/skips. Evidence and source hashes are in the latest DEV_LOG entry and `build/prompt2`. Broad/platform/hardware gates remain deferred under the focused-only scope.
+- No raw capture deleted/rewritten, no recording/reference made valid/canonical/approved/training-eligible, no detector inference labeled human ground truth, no ScratchBook GPL material copied, and no unrelated work included in the commit boundary.
+- Next numbered step is Prompt 3 PREFLIGHT ONLY. Its implementation brief has not been supplied. Use the exact continuation below; do not invent or start that slice. After this checkpoint succeeds, expect a clean worktree/index and verify the one-commit parent/subject before any future work.
+
+## 2026-09-05 - TTM Prompt 2 complete, uncommitted
+
+Supersedes older status below. Work only in `/Users/karlwatson/Downloads/ScratchLab-TTM`, branch `feature/ttm-tear-notation-alignment`; HEAD remains `57398919d508d1b94c206510aac12efed83a6478` (Prompt 1). Starting worktree/index were clean; index remains empty. No other worktree was accessed.
+
+- Prompt 2 adds only `ScratchNotation.GestureRecord` and `ScratchNotationProvenance` (310 additive model lines) plus 21 test declarations (369 appended test lines). The record preserves stable IDs, seconds/beats, explicit coordinate units, arbitrary measured/target curves, bounded stationary holds, authored duration weights, derived measured moving-duration ratios, independent fader intervals/edges, confidence/provenance and derived interval audibility. `tear2` is derived from structure. Existing Prompt 1 code is untouched.
+- Final macOS `build-for-testing` passed. The focused 15-suite selection passed: 124 tests, 143 parameter-expanded runs per configuration / 286 total, zero failures/skips, both configurations. New suites cover 34 expanded cases per configuration. Logs/bundles live in this worktree's `build/prompt2`; exact commands and the initial Xcode sandbox failure are in the newest DEV_LOG entry.
+- Full batch/iOS/watchOS/hardware gates were not run under this focused-only instruction. No renderer/detector/UI/capture/export/eligibility wiring or schema/project/resource/signing/build-number change. No staging, commit, push, deployment, ordinary app launch or hardware capture.
+- Prompt 2 is complete; stop. Do not start another slice or commit without a new explicit instruction. Six intended dirty files: model, canonical test file, TASKS, DEV_LOG, this handoff and next_prompt.
+
 ## 2026-09-05 - TTM Prompt 1 committed: tear-capable canonical notation semantics
 
 Supersedes the reference-authoring blocks below for current status. Worktree `/Users/karlwatson/Downloads/ScratchLab-TTM`, branch `feature/ttm-tear-notation-alignment`, parent `3316fe0`. Prompt 1 is committed. Prompt 2 has NOT been started.

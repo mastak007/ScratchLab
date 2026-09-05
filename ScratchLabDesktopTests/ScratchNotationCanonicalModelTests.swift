@@ -1401,3 +1401,372 @@ struct BabyScratchTearCompatibilityTests {
         #expect(empty.gesturePattern() == nil)
     }
 }
+
+// MARK: - Prompt 2: lossless gesture records (no app consumer)
+
+private typealias TearRecord = ScratchNotation.GestureRecord
+
+private func recordEvidence(_ provenance: ScratchNotationProvenance = .measured,
+                            source: ScratchNotationEvidenceSource = .platterTimeline) -> TearRecord.Evidence {
+    .init(provenance: provenance,
+          observation: .init(source: source, confidence: 0.87, reason: "fixture_observation", rawSampleCount: 17))
+}
+
+private func losslessTearFixture() -> TearRecord {
+    let evidence = recordEvidence()
+    let authored = recordEvidence(.authored, source: .authored)
+    let spans: [TearRecord.TimeSpan] = [
+        .init(startTime: 0.125, endTime: 0.375),
+        .init(startTime: 0.5, endTime: 1),
+        .init(startTime: 1.25, endTime: 2)
+    ]
+    let subdivisions = spans.enumerated().map { index, span in
+        let start = Double(index) - 0.4
+        return TearRecord.Subdivision(
+            id: "motion-\(index)", span: span, evidence: evidence,
+            measuredCurve: .init(points: [
+                .init(time: span.startTime, position: start),
+                .init(time: span.startTime + span.duration * 0.13, position: start + 0.09),
+                .init(time: span.startTime + span.duration * 0.67, position: start + 0.83),
+                .init(time: span.endTime, position: start + 1)
+            ], evidence: evidence),
+            targetCurve: .init(points: [
+                .init(time: span.startTime, position: start),
+                .init(time: span.endTime, position: start + 1)
+            ], evidence: authored), authoredDurationWeight: [1, 2, 1][index])
+    }
+    return .init(id: "gesture-stable", direction: .forward, timingDomain: .seconds,
+                 coordinateSpace: .samplePosition, evidence: evidence, subdivisions: subdivisions,
+                 internalHolds: [
+                    .init(id: "pause-a", span: .init(startTime: 0.375, endTime: 0.5),
+                          label: .init(derived: .stationary), evidence: evidence, position: 0.6),
+                    .init(id: "pause-b", span: .init(startTime: 1, endTime: 1.25),
+                          label: .init(derived: .stationary), evidence: evidence, position: 1.6)
+                 ], faderTransitions: [
+                    .init(id: "edge-close", time: 0.625, state: .closed,
+                          evidence: recordEvidence(source: .crossfaderRaw)),
+                    .init(id: "edge-open", time: 1.125, state: .open,
+                          evidence: recordEvidence(source: .crossfaderRaw))
+                 ], faderIntervals: [
+                    .init(id: "fader-a", span: .init(startTime: 0.125, endTime: 0.625), state: .open,
+                          evidence: recordEvidence(source: .crossfaderRaw)),
+                    .init(id: "fader-b", span: .init(startTime: 0.625, endTime: 1.125), state: .closed,
+                          evidence: recordEvidence(source: .crossfaderRaw)),
+                    .init(id: "fader-c", span: .init(startTime: 1.125, endTime: 2), state: .open,
+                          evidence: recordEvidence(source: .crossfaderRaw))
+                 ])
+}
+
+private func recordJSON(_ record: TearRecord) throws -> [String: Any] {
+    try #require(JSONSerialization.jsonObject(with: JSONEncoder().encode(record)) as? [String: Any])
+}
+
+private func decodeRecord(_ json: [String: Any]) throws -> TearRecord {
+    try JSONDecoder().decode(TearRecord.self, from: JSONSerialization.data(withJSONObject: json))
+}
+
+@Suite("Lossless canonical tear records")
+struct TearGestureRecordTests {
+    @Test("Captured curves, authored curves, identities and evidence round-trip exactly")
+    func capturedRoundTrip() throws {
+        let original = losslessTearFixture()
+        #expect(original.validationIssues().isEmpty)
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = .sortedKeys
+        let data = try encoder.encode(original)
+        let decoded = try JSONDecoder().decode(TearRecord.self, from: data)
+        #expect(decoded == original)
+        #expect(try encoder.encode(decoded) == data)
+        #expect(decoded.subdivisions.map(\.id) == ["motion-0", "motion-1", "motion-2"])
+        #expect(decoded.subdivisions[0].measuredCurve?.startPosition == -0.4)
+        #expect(decoded.subdivisions[2].measuredCurve?.endPosition == 2.6)
+        #expect(decoded.subdivisions[0].measuredCurve?.points.count == 4)
+        #expect(decoded.tearLabel == "tear2")
+        #expect(decoded.authoredSubdivisionRatio == [1, 2, 1])
+        #expect(decoded.measuredSubdivisionRatio == [1.0 / 6, 1.0 / 3, 0.5])
+        #expect(decoded.classifiedIntervals == original.classifiedIntervals)
+        let json = try recordJSON(decoded)
+        #expect(json["tearLabel"] == nil)
+        #expect(json["measuredSubdivisionRatio"] == nil)
+        #expect(json["classifiedIntervals"] == nil)
+        #expect(json["version"] == nil)
+    }
+
+    @Test("Tempo-free authored targets retain arbitrary curves and do not claim measured ratios")
+    func authoredRoundTrip() throws {
+        let evidence = recordEvidence(.authored, source: .authored)
+        let record = TearRecord(id: "target-gesture", direction: .backward, timingDomain: .beats,
+            coordinateSpace: .platterRevolutions, evidence: evidence,
+            subdivisions: [.init(id: "target-motion", span: .init(startTime: 0, endTime: 0.75), evidence: evidence,
+                targetCurve: .init(points: [.init(time: 0, position: 3), .init(time: 0.18, position: 2.27),
+                                          .init(time: 0.75, position: -0.5)], evidence: evidence))])
+        let decoded = try decodeRecord(recordJSON(record))
+        #expect(decoded == record)
+        #expect(decoded.validationIssues().isEmpty)
+        #expect(decoded.measuredSubdivisionRatio == nil)
+        #expect(decoded.authoredSubdivisionRatio == nil)
+        #expect(decoded.tearLabel == nil)
+    }
+
+    @Test("Fader boundaries partition moving and stationary intervals independently")
+    func intervalClassification() {
+        let record = losslessTearFixture()
+        #expect(record.classifiedIntervals.map(\.state) == [.sounding, .hold, .sounding, .ghost, .ghostHold, .hold, .sounding])
+        #expect(record.classifiedIntervals.map(\.audibility) == [.audible, .silent, .audible, .silent, .silent, .silent, .audible])
+        #expect(record.classifiedIntervals[3].span == .init(startTime: 0.625, endTime: 1))
+    }
+
+    @Test("Edges alone never extend fader evidence or create phantom clicks")
+    func absentFaderIntervalsStayUnknown() throws {
+        var json = try recordJSON(losslessTearFixture())
+        json["faderIntervals"] = []
+        let record = try decodeRecord(json)
+        #expect(record.validationIssues().isEmpty)
+        #expect(record.classifiedIntervals.allSatisfy { $0.audibility == .unknown })
+        #expect(record.tearLabel == "tear2")
+        #expect(record.faderTransitions.count == 2)
+    }
+
+    @Test("Fader gaps remain unknown without affecting the tear count")
+    func faderGap() throws {
+        var json = try recordJSON(losslessTearFixture())
+        var intervals = try #require(json["faderIntervals"] as? [[String: Any]])
+        intervals.remove(at: 1)
+        json["faderIntervals"] = intervals
+        let record = try decodeRecord(json)
+        #expect(record.validationIssues().isEmpty)
+        #expect(record.classifiedIntervals.map(\.state) == [.sounding, .hold, .sounding, .unknown, .unknown, .hold, .sounding])
+        #expect(record.tearLabel == "tear2")
+    }
+
+    @Test("Every provenance value and its raw observation survive Codable", arguments: ScratchNotationProvenance.allCases)
+    func provenanceRoundTrip(_ provenance: ScratchNotationProvenance) throws {
+        let evidence = recordEvidence(provenance)
+        let data = try JSONEncoder().encode(evidence)
+        #expect(try JSONDecoder().decode(TearRecord.Evidence.self, from: data) == evidence)
+    }
+
+    @Test("Manual correction preserves derived label and measured evidence")
+    func manualCorrection() throws {
+        var json = try recordJSON(losslessTearFixture())
+        var holds = try #require(json["internalHolds"] as? [[String: Any]])
+        holds[0]["label"] = ["derived": "unknown", "correction": "stationary"]
+        json["internalHolds"] = holds
+        let record = try decodeRecord(json)
+        #expect(record.validationIssues().isEmpty)
+        #expect(record.tearLabel == "tear2")
+        #expect(record.internalHolds[0].label.derived == .unknown)
+        #expect(record.internalHolds[0].label.isCorrected)
+        #expect(record.internalHolds[0].evidence == losslessTearFixture().internalHolds[0].evidence)
+        #expect(try decodeRecord(recordJSON(record)) == record)
+    }
+
+    @Test("Release, unknown and travelling intervals cannot be counted as stationary holds",
+          arguments: ["released", "unknown", "forward", "backward"])
+    func nonStationaryHold(_ state: String) throws {
+        var json = try recordJSON(losslessTearFixture())
+        var holds = try #require(json["internalHolds"] as? [[String: Any]])
+        holds[0]["label"] = ["derived": state]
+        json["internalHolds"] = holds
+        let record = try decodeRecord(json)
+        #expect(!record.validationIssues().isEmpty)
+        #expect(record.tearLabel == nil)
+        #expect(record.classifiedIntervals.allSatisfy { $0.audibility == .unknown })
+    }
+
+    @Test("Malformed bounds and missing holds are retained but cannot assert a tear",
+          arguments: ["zeroWidth", "missingHold", "unboundedHold", "unordered", "duplicateID"])
+    func malformedMotion(_ variant: String) throws {
+        var json = try recordJSON(losslessTearFixture())
+        var subdivisions = try #require(json["subdivisions"] as? [[String: Any]])
+        var holds = try #require(json["internalHolds"] as? [[String: Any]])
+        switch variant {
+        case "zeroWidth": holds[0]["span"] = ["startTime": 0.375, "endTime": 0.375]
+        case "missingHold": holds.removeLast()
+        case "unboundedHold": holds[1]["span"] = ["startTime": 1.0, "endTime": 4.0]
+        case "unordered": subdivisions.swapAt(0, 1)
+        default: subdivisions[0]["id"] = "motion-1"
+        }
+        json["subdivisions"] = subdivisions
+        json["internalHolds"] = holds
+        let record = try decodeRecord(json)
+        #expect(!record.validationIssues().isEmpty)
+        #expect(record.tearLabel == nil)
+        #expect(try decodeRecord(recordJSON(record)) == record)
+    }
+
+    @Test("Unsupported fader provenance cannot create an audible assertion")
+    func phantomFaderGuard() throws {
+        var json = try recordJSON(losslessTearFixture())
+        var intervals = try #require(json["faderIntervals"] as? [[String: Any]])
+        let motion = try #require(json["evidence"] as? [String: Any])
+        for index in intervals.indices { intervals[index]["evidence"] = motion }
+        json["faderIntervals"] = intervals
+        let record = try decodeRecord(json)
+        #expect(!record.validationIssues().isEmpty)
+        #expect(record.classifiedIntervals.allSatisfy { $0.audibility == .unknown })
+        #expect(record.tearLabel == "tear2")
+    }
+
+    @Test("Simultaneous transitions have stable ID ordering without losing edges")
+    func transitionOrdering() throws {
+        var json = try recordJSON(losslessTearFixture())
+        var edges = try #require(json["faderTransitions"] as? [[String: Any]])
+        edges[1]["time"] = edges[0]["time"]
+        json["faderTransitions"] = edges
+        let record = try decodeRecord(json)
+        #expect(record.validationIssues().isEmpty)
+        #expect(try decodeRecord(recordJSON(record)).faderTransitions.map(\.id) == ["edge-close", "edge-open"])
+        json["faderTransitions"] = Array(edges.reversed())
+        #expect(try !decodeRecord(json).validationIssues().isEmpty)
+    }
+
+    @Test("Malformed confidence survives decode for validation instead of being clamped")
+    func malformedConfidencePreserved() throws {
+        var json = try recordJSON(losslessTearFixture())
+        var evidence = try #require(json["evidence"] as? [String: Any])
+        var observation = try #require(evidence["observation"] as? [String: Any])
+        observation["confidence"] = 7.5
+        evidence["observation"] = observation
+        json["evidence"] = evidence
+        let record = try decodeRecord(json)
+        #expect(record.evidence.observation.confidence == 7.5)
+        #expect(!record.validationIssues().isEmpty)
+        #expect(record.tearLabel == nil)
+        #expect(try decodeRecord(recordJSON(record)) == record)
+    }
+
+    @Test("Unknown curve data stays absent rather than inventing endpoint positions")
+    func missingOptionalCurveFields() throws {
+        var json = try recordJSON(losslessTearFixture())
+        var subdivisions = try #require(json["subdivisions"] as? [[String: Any]])
+        for index in subdivisions.indices {
+            subdivisions[index].removeValue(forKey: "measuredCurve")
+            subdivisions[index].removeValue(forKey: "targetCurve")
+            subdivisions[index].removeValue(forKey: "authoredDurationWeight")
+        }
+        json["subdivisions"] = subdivisions
+        let record = try decodeRecord(json)
+        #expect(record.validationIssues().isEmpty)
+        #expect(record.subdivisions.allSatisfy { $0.measuredCurve == nil && $0.targetCurve == nil })
+        #expect(record.authoredSubdivisionRatio == nil)
+        #expect(record.measuredSubdivisionRatio == [1.0 / 6, 1.0 / 3, 0.5])
+    }
+
+    @Test("Inferred, corrected and unknown timing is retained without claiming a measured ratio",
+          arguments: [ScratchNotationProvenance.inferred, .manuallyCorrected, .unknown])
+    func unmeasuredTiming(_ provenance: ScratchNotationProvenance) throws {
+        var json = try recordJSON(losslessTearFixture())
+        var subdivisions = try #require(json["subdivisions"] as? [[String: Any]])
+        var evidence = try #require(subdivisions[0]["evidence"] as? [String: Any])
+        evidence["provenance"] = provenance.rawValue
+        subdivisions[0]["evidence"] = evidence
+        json["subdivisions"] = subdivisions
+        let record = try decodeRecord(json)
+        #expect(record.measuredSubdivisionRatio == nil)
+        #expect(try decodeRecord(recordJSON(record)) == record)
+        if provenance == .unknown {
+            #expect(record.tearLabel == nil)
+            #expect(record.classifiedIntervals.allSatisfy { $0.audibility == .unknown })
+        } else {
+            #expect(record.validationIssues().isEmpty)
+            #expect(record.tearLabel == "tear2")
+        }
+    }
+
+    @Test("An authored source cannot masquerade as measured timing")
+    func authoredIsNotMeasured() throws {
+        var json = try recordJSON(losslessTearFixture())
+        var evidence = try #require(json["evidence"] as? [String: Any])
+        var observation = try #require(evidence["observation"] as? [String: Any])
+        observation["source"] = "authored"
+        evidence["observation"] = observation
+        json["evidence"] = evidence
+        let record = try decodeRecord(json)
+        #expect(!record.validationIssues().isEmpty)
+        #expect(record.measuredSubdivisionRatio == nil)
+    }
+
+    @Test("Malformed fader spans stay unknown even when their numeric bounds cover motion")
+    func malformedFaderSpan() throws {
+        var json = try recordJSON(losslessTearFixture())
+        var intervals = try #require(json["faderIntervals"] as? [[String: Any]])
+        intervals[0]["span"] = ["startTime": -1, "endTime": 0.625]
+        json["faderIntervals"] = intervals
+        let record = try decodeRecord(json)
+        #expect(!record.validationIssues().isEmpty)
+        #expect(record.classifiedIntervals.first?.audibility == .unknown)
+        #expect(record.tearLabel == "tear2")
+    }
+
+    @Test("Unordered curve samples are retained exactly and reported rather than sorted")
+    func malformedCurvePreserved() throws {
+        var json = try recordJSON(losslessTearFixture())
+        var subdivisions = try #require(json["subdivisions"] as? [[String: Any]])
+        var curve = try #require(subdivisions[0]["measuredCurve"] as? [String: Any])
+        var points = try #require(curve["points"] as? [[String: Any]])
+        points.swapAt(1, 2)
+        curve["points"] = points
+        subdivisions[0]["measuredCurve"] = curve
+        json["subdivisions"] = subdivisions
+        let record = try decodeRecord(json)
+        #expect(!record.validationIssues().isEmpty)
+        #expect(try decodeRecord(recordJSON(record)) == record)
+        #expect(record.subdivisions[0].measuredCurve?.points.count == 4)
+    }
+
+    @Test("Editing timing never regenerates identities or changes unrelated observations")
+    func stableIDsAfterTimingEdit() throws {
+        let original = losslessTearFixture()
+        var json = try recordJSON(original)
+        var edges = try #require(json["faderTransitions"] as? [[String: Any]])
+        edges[0]["time"] = 0.7
+        json["faderTransitions"] = edges
+        let record = try decodeRecord(json)
+        #expect(record.id == original.id)
+        #expect(record.faderTransitions.map(\.id) == original.faderTransitions.map(\.id))
+        #expect(record.subdivisions == original.subdivisions)
+        #expect(record.internalHolds == original.internalHolds)
+        #expect(record.faderIntervals == original.faderIntervals)
+    }
+}
+
+@Suite("Tear record backward compatibility")
+struct TearGestureRecordCompatibilityTests {
+    @Test("Legacy seconds notation needs no gesture fields and preserves its schema")
+    func legacySecondsPayload() throws {
+        let json = #"{"version":1,"scratchID":"baby_scratch","demoStart":0,"demoEnd":1,"timingBasis":"legacy_seconds","strokes":[{"startTime":0,"endTime":0.5,"direction":"forward","speedClassification":"medium","faderState":"open"},{"startTime":0.5,"endTime":1,"direction":"backward","speedClassification":"medium","faderState":"open"}]}"#
+        let notation = try decodeNotation(fromJSON: json)
+        #expect(notation.version == 1)
+        #expect(notation.strokes.count == 2)
+        #expect(notation.faderEvents.isEmpty)
+        let encoded = try JSONEncoder().encode(notation)
+        #expect(try JSONDecoder().decode(ScratchNotation.self, from: encoded) == notation)
+        let object = try #require(JSONSerialization.jsonObject(with: encoded) as? [String: Any])
+        #expect(object["gestures"] == nil)
+        #expect(object["gestureRecords"] == nil)
+    }
+
+    @Test("Prompt 1 payload still decodes without IDs, curves or new provenance")
+    func promptOnePayload() throws {
+        let json = #"{"version":1,"scratchID":"baby_scratch","timingBasis":"beat_canonical_test","motionSegments":[{"span":{"startBeat":0,"endBeat":0.5},"label":{"derived":"forward"},"evidence":{"source":"authored","confidence":1,"reason":"stroke"}},{"span":{"startBeat":0.5,"endBeat":1},"label":{"derived":"backward"},"evidence":{"source":"authored","confidence":1,"reason":"stroke"}}],"faderIntervals":[{"span":{"startBeat":0,"endBeat":1},"state":"open","evidence":{"source":"authored","confidence":1,"reason":"open"}}],"faderClicks":[]}"#
+        let pattern = try JSONDecoder().decode(ScratchNotation.GesturePattern.self, from: Data(json.utf8))
+        #expect(pattern.validationIssues().isEmpty)
+        #expect(pattern.gestures.count == 2)
+        #expect(pattern.tears.isEmpty)
+        #expect(pattern.reversalBeats == [0.5])
+        #expect(pattern.correlatedState(atBeat: 0.75) == .sounding)
+        #expect(try JSONDecoder().decode(ScratchNotation.GesturePattern.self, from: JSONEncoder().encode(pattern)) == pattern)
+    }
+
+    @Test("Creating a rich record never changes Baby Scratch or technique registry eligibility")
+    func babyRemainsUnchanged() throws {
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = .sortedKeys
+        let before = try encoder.encode(ScratchNotation.babyScratchCycle)
+        _ = losslessTearFixture().classifiedIntervals
+        #expect(try encoder.encode(ScratchNotation.babyScratchCycle) == before)
+        #expect(ScratchNotation.babyScratchGesturePattern?.gestures.map(\.tearHoldCount) == [0, 0])
+        #expect(ScratchNotation.canonicalBeatPattern(forScratchID: "tear2") == nil)
+    }
+}
