@@ -4204,3 +4204,46 @@ The single skip is `testTake003RealStreamIsNotFlattenedByTheLivePath`, which thr
 ### Preservation
 
 All 661 primary files and all 93 protected evidence files match the saved baselines. Primary remains `feature/ios-capture-camera-ux` at `d3ecf2a6` with an unchanged empty index; receipt branch intact; `git diff --check` passes. Among protected files only `project.pbxproj` changed, by membership only. Takes 001-006 and the documented historical metadata mutations are untouched. Opening the authoring screen starts no capture and persists nothing; nothing was deployed, launched, recorded, approved, installed, published or made training-eligible.
+
+## 2026-09-05 - TTM Prompt 1 committed: tear-capable canonical notation semantics
+
+### Scope
+
+Worktree `/Users/karlwatson/Downloads/ScratchLab-TTM`, branch `feature/ttm-tear-notation-alignment`, parent `3316fe0` (the verified Prompt 0 baseline; the hard CaptureCore calibration prerequisite is `579ace6`). Exactly two files changed, purely additive: 785 insertions to `ScratchLab/Models/CaptureCore.swift` and 746 to `ScratchLabDesktopTests/ScratchNotationCanonicalModelTests.swift`, 1,531 total with zero deletions, delivered as two single append-only hunks. Because no existing line was touched, no existing behaviour, resource or test could be altered.
+
+The canonical types were extended rather than forked. `ScratchNotationDirection`, `ScratchNotationFaderState`, `ScratchFaderEventKind`, `ScratchMovementKind`, `ScratchNotation` and `ScratchNotation.BeatPattern` all keep their existing shapes and Codable payloads; the new layer sits beside them and bridges into them.
+
+### What was defined
+
+- `ScratchNotationMotionState`: forward, backward, stationary, released, unknown. `ScratchNotationDirection` keeps meaning travel polarity only and lifts losslessly. `.released` reports `travelDirection == nil` and `isStationary == false`, so free playback is motion and can never be counted as a hold. `ScratchMovementKind.motionState` is the single bridge from the capture vocabulary.
+- `ScratchNotationFaderClickKind` with `init?(faderEventKind:)` returning nil for `.open`/`.closed`, so sustained state cannot be coerced into a click.
+- `ScratchNotationEvidenceSource` and `ScratchNotationEvidence` (source, confidence, required reason, optional raw sample count). Capability is a property of the source: `platterTimeline` and `watchMotion` report `canEstablishFaderState == false`, `crossfaderRaw` reports `canEstablishPlatterMotion == false`, and `unknown` establishes neither.
+- `ScratchNotationMotionLabel`: derived plus optional correction. The correction wins, the derivation survives, and the evidence record is never rewritten.
+- `ScratchNotationCorrelatedState`: sounding, hold, ghost, ghostHold, releasedSounding, releasedMuted, unknown.
+- Nested under `ScratchNotation`: `BeatSpan`, `PlatterMotionSegment`, `FaderInterval`, `FaderClick`, `PlatterGesture`, and the tempo-free beat-authored `GesturePattern` with a pure `validationIssues()`. Plus `BeatPattern.gesturePattern()` and `ScratchNotation.babyScratchGesturePattern`.
+
+### Invariants established
+
+- Platter and fader are independent streams synchronized only by the beat axis. `validationIssues()` contains no cross-stream rule by design.
+- A tear is one same-direction gesture containing one or more bounded stationary intervals. N internal tear holds produce N+1 subdivisions by construction, not by assertion: each confirmed hold closes exactly one subdivision and one final subdivision is appended.
+- A direction reversal is not a tear hold. Opposite-direction travel terminates the gesture, and `reversalBeats` names instantaneous turnarounds separately.
+- A click is not a tear hold. Clicks exist only in `faderClicks`, and a motion segment must be a bounded interval, so no instant can enter the platter stream.
+- A zero-velocity platter interval never creates a phantom click. The guard is structural: a click backed by platter provenance fails validation, so platter evidence has no path to minting fader evidence.
+- Hold (stationary/open), ghost (travelling/closed) and ghost-hold (stationary/closed) are distinct, alongside sounding, releasedSounding and releasedMuted.
+- Missing evidence remains unknown. An uncovered instant yields `faderState(atBeat:) == nil` and correlates to `.unknown`, never to implicitly open or closed - the same authority rule `ScratchNotation.faderEvents` already states.
+- The platter stream is contiguous and total from beat 0, so an unobserved region must be stated as `.unknown` rather than left as a silent gap. Fader gaps are legal and mean unknown; abutting fader intervals may not repeat a state.
+- Decoding stays tolerant and strictness lives in `validationIssues()`, matching the existing `ScratchNotation` doctrine. A decoded confidence of 7.5 survives decoding and is reported by validation.
+
+### Baby Scratch preserved
+
+`babyScratchGesturePattern` is forward, turnaround, backward with the fader open throughout: motion states `[.forward, .backward]` over `[0, 0.5]` and `[0.5, 1.0]`, a single coalesced open interval `[0, 1.0]`, no clicks, `reversalBeats == [0.5]`, two gestures each with zero tear holds and one subdivision, `.sounding` at both quarter points, and `durationBeats == 1.0`. A separate test proves the lift is non-destructive: `ScratchNotation.babyScratchCycle` compares equal before and after.
+
+### Commands and results
+
+`build-for-testing` for `ScratchLabDesktop` on macOS succeeded. `test-without-building` over the six new suites - `TearMotionVocabularyTests`, `TearEvidenceAndLabelTests`, `TearGestureDerivationTests`, `TearStreamCorrelationTests`, `TearPatternValidationTests`, `BabyScratchTearCompatibilityTests` - ran 46 tests in 6 suites, all passed, zero failures and zero skips. The existing canonical regression set - `BabyScratchCycleTests`, `ScratchNotationTimingAuthorityTests`, `ScratchNotationLegacyRegressionTests`, `CanonicalTechniqueRegistryTests`, `CanonicalPlayheadTests`, `RegistryDrivenComparisonSurfaceTests`, `ScratchNotationFaderEventTests` - ran 57 tests in 7 suites and passed in both configurations, 114 executions, zero failures. `xcodebuild -scheme ScratchLab -destination generic/platform=iOS build` succeeded.
+
+Affected platform builds only. The Watch target is genuinely unaffected: `CaptureCore.swift` is a member of the `ScratchLabDesktop` and `ScratchLab` sources phases and is not a member of `ScratchLabWatch`, so watchOS was not rebuilt. One serial `scripts/build.sh all` remains deferred to the end of the TTM batch, per the multi-boundary pacing rule.
+
+### Preservation
+
+No `project.pbxproj`, scheme, entitlement, plist or build-number change; build remains 21. No new file was created, so no project membership was needed. No renderer, detector, capture adapter, export or training wiring was added; the new layer has no consumer anywhere in the app. No existing test was weakened, disabled or removed. `git diff --check` passes. The dirty primary worktree at `/Users/karlwatson/Downloads/ScratchLab` was not written to and remains `feature/ios-capture-camera-ux` at `d3ecf2a6`. Nothing was pushed, merged, deployed, launched, recorded, approved, published or made training-eligible. Prompt 2 was not started.

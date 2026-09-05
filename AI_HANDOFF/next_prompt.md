@@ -1,3 +1,15 @@
+## Current continuation - TTM Prompt 1 committed; Prompt 2 not started
+
+Supersedes the continuation blocks below. Worktree `/Users/karlwatson/Downloads/ScratchLab-TTM`, branch `feature/ttm-tear-notation-alignment`, Prompt 1 parent `3316fe0`.
+
+1. Re-read the repository instructions and the newest `DEV_LOG.md` / `AI_HANDOFF.md` entries. Confirm the branch, HEAD, an empty index and a clean worktree before editing anything. Never write to the primary worktree at `/Users/karlwatson/Downloads/ScratchLab`.
+2. Prompt 1 landed the canonical tear semantics layer only: `ScratchNotationMotionState`, `ScratchNotationFaderClickKind`, `ScratchNotationEvidenceSource`, `ScratchNotationEvidence`, `ScratchNotationMotionLabel`, `ScratchNotationCorrelatedState`, the `ScratchMovementKind` bridge, and `ScratchNotation.BeatSpan` / `PlatterMotionSegment` / `FaderInterval` / `FaderClick` / `PlatterGesture` / `GesturePattern`, plus `BeatPattern.gesturePattern()` and `babyScratchGesturePattern`. All of it is in `ScratchLab/Models/CaptureCore.swift`; the tests are appended to `ScratchLabDesktopTests/ScratchNotationCanonicalModelTests.swift`.
+3. Known gaps deliberately left for later prompts, none of which are authorized yet: nothing consumes `GesturePattern` (no adapter, renderer, capture path, detector or export); there is no capture-side producer turning a decoded platter timeline into motion segments, including the zero-velocity threshold that separates `.stationary` from `.unknown`; `canonicalBeatPatterns` still holds only `babyScratchCycle`, so `baby_scratch` remains the only safe-to-author technique; `BeatPattern.gesturePattern()` reads an authored inter-stroke gap as `.stationary` because the authored schema cannot express a release; there is no `FaderClick` derivation from `FaderEvent` edge pairs, since deciding "short enough to be a click" is a threshold policy needing evidence; `GesturePattern` is tempo-free by type and carries no `speedClassification`.
+4. Remaining verification for this batch, to run ONCE against the complete TTM branch and not per slice: one serial `PATH=../bin:$PATH ./scripts/build.sh all`, plus the explicit macOS Debug and unsigned universal macOS Release legs if any later slice introduces conditional compilation, and `git diff --check`.
+5. Do not push, merge, cherry-pick, rebase or integrate this branch. Integration is Karl's decision and is not authorized here.
+6. Do not deploy, launch the ordinary app, record a take, approve, install or publish a reference, or enable training.
+7. Do not start Prompt 2 without an explicit instruction naming it.
+
 ## Current continuation - all six boundaries committed; final gate is the remaining step
 
 Supersedes the continuation blocks below. Candidate `/private/tmp/scratchlab-refauth-baseline.iYmLZU/worktree`, branch `checkpoint/reference-authoring-baseline`, base `add70a08668e512c95e467871613f577a30523f1`.

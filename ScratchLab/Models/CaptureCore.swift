@@ -5699,6 +5699,791 @@ enum BabyScratchPolarity {
     }
 }
 
+// MARK: - Tear-capable canonical notation semantics
+
+/// The canonical PLATTER-motion vocabulary for tear-capable notation.
+///
+/// `ScratchNotationDirection` deliberately keeps its two cases: it names
+/// travel POLARITY and nothing else, and every existing stroke, adapter and
+/// renderer keeps using it unchanged. This type is the strictly larger
+/// observation vocabulary the tear layer needs, and it can express states a
+/// polarity never could:
+///
+/// - `.forward` / `.backward` — the platter is travelling under the hand.
+/// - `.stationary` — a TRUE zero-velocity hold: the platter is stopped and
+///   held. This is the only state a tear hold may be built from.
+/// - `.released` — the hand let go and the platter is free-running at
+///   playback speed. It is MOVING, so it is never a hold, never a tear hold,
+///   and never part of a gesture's travel.
+/// - `.unknown` — evidence was insufficient. It is never silently coerced
+///   into any other case; it terminates a gesture rather than joining one.
+///
+/// Nothing in this enum describes the fader. The two streams are independent
+/// and share only the beat axis — see `ScratchNotation.GesturePattern`.
+enum ScratchNotationMotionState: String, Codable, Equatable, Sendable, CaseIterable {
+    case forward
+    case backward
+    case stationary
+    case released
+    case unknown
+
+    init(direction: ScratchNotationDirection) {
+        switch direction {
+        case .forward:  self = .forward
+        case .backward: self = .backward
+        }
+    }
+
+    /// Travel polarity, or `nil` for every state that is not hand-driven
+    /// travel. `.released` is moving but carries no gesture polarity, so it
+    /// reports `nil` too — a released platter must never be read as a stroke.
+    var travelDirection: ScratchNotationDirection? {
+        switch self {
+        case .forward:  return .forward
+        case .backward: return .backward
+        case .stationary, .released, .unknown: return nil
+        }
+    }
+
+    /// True only for hand-driven travel — the motion a gesture is made of.
+    var isTravel: Bool { travelDirection != nil }
+
+    /// True zero-velocity only. `.released` is excluded by construction, so
+    /// free playback can never be counted as a hold.
+    var isStationary: Bool { self == .stationary }
+}
+
+extension ScratchMovementKind {
+    /// The tear-layer motion state this capture-side movement kind observes.
+    /// Bridging in exactly one place keeps the detected/capture vocabulary
+    /// and the canonical vocabulary from drifting apart.
+    var motionState: ScratchNotationMotionState {
+        switch self {
+        case .fastPush, .normalPush, .slowDrag:      return .forward
+        case .fastPull, .normalPull, .slowPullDrag:  return .backward
+        case .hold:                                  return .stationary
+        case .releaseNormalPlayback:                 return .released
+        }
+    }
+}
+
+/// Instantaneous / very short FADER evidence.
+///
+/// A click is NOT a bounded fader interval and is never widened into one.
+/// The two live in separate channels precisely so a transform click inside an
+/// otherwise-open span cannot be mistaken for a closed interval, and so a
+/// closed interval can never be counted as a click.
+enum ScratchNotationFaderClickKind: String, Codable, Equatable, Sendable, CaseIterable {
+    case cut
+    case pulse
+    case transformPulse
+    case flareClick
+    case unknown
+
+    /// Bridges the existing capture vocabulary. `.open` and `.closed`
+    /// describe sustained interval state, not a click, so they map to `nil`
+    /// rather than being coerced into a click kind.
+    init?(faderEventKind: ScratchFaderEventKind) {
+        switch faderEventKind {
+        case .cut:            self = .cut
+        case .pulse:          self = .pulse
+        case .transformPulse: self = .transformPulse
+        case .flareClick:     self = .flareClick
+        case .unknown:        self = .unknown
+        case .open, .closed:  return nil
+        }
+    }
+}
+
+/// Where a raw observation came from.
+///
+/// Capability is a property of the SOURCE, which is how the "a zero-velocity
+/// platter interval must never create a phantom click" rule is enforced
+/// structurally rather than by convention: no platter-only source can
+/// establish fader state, so platter evidence has no path to minting a click
+/// or a closed interval. `.unknown` establishes nothing — an observation must
+/// name a real provenance, and "we do not know what the platter did" is
+/// expressed by `ScratchNotationMotionState.unknown` carried on a real
+/// source, not by erasing the source.
+enum ScratchNotationEvidenceSource: String, Codable, Equatable, Sendable, CaseIterable {
+    case authored
+    case platterTimeline
+    case crossfaderRaw
+    case audioOnset
+    case watchMotion
+    case manualCorrection
+    case unknown
+
+    var canEstablishPlatterMotion: Bool {
+        switch self {
+        case .authored, .platterTimeline, .watchMotion, .manualCorrection: return true
+        case .crossfaderRaw, .audioOnset, .unknown: return false
+        }
+    }
+
+    var canEstablishFaderState: Bool {
+        switch self {
+        case .authored, .crossfaderRaw, .manualCorrection: return true
+        case .platterTimeline, .watchMotion, .audioOnset, .unknown: return false
+        }
+    }
+}
+
+/// Raw, uninterpreted provenance for one observation, preserved verbatim
+/// alongside every derived label.
+///
+/// Evidence is never rewritten by interpretation: a correction changes the
+/// LABEL (`ScratchNotationMotionLabel`), never this record, so the original
+/// observation and the disagreement with it both stay auditable.
+///
+/// The memberwise initializer clamps `confidence` into `0...1`, but decoding
+/// deliberately does not — this type follows the same doctrine as
+/// `ScratchNotation` itself, where decoding stays tolerant and strictness
+/// lives in `validationIssues()`.
+struct ScratchNotationEvidence: Codable, Equatable, Sendable {
+    let source: ScratchNotationEvidenceSource
+    /// Detector/authoring confidence in `[0, 1]`.
+    let confidence: Double
+    /// Machine-readable reason for the observation (for example
+    /// `"cc6_steps=0_over_118ms"`). Required: an observation with no stated
+    /// reason is a validation issue, never a silent default.
+    let reason: String
+    /// Count of raw samples backing the observation, when the producer knows
+    /// it. Never inferred.
+    let rawSampleCount: Int?
+
+    init(source: ScratchNotationEvidenceSource,
+         confidence: Double,
+         reason: String,
+         rawSampleCount: Int? = nil) {
+        self.source = source
+        self.confidence = confidence.isFinite ? min(1, max(0, confidence)) : 0
+        self.reason = reason
+        self.rawSampleCount = rawSampleCount
+    }
+
+    /// Provenance for hand-authored target notation.
+    static func authored(_ reason: String) -> ScratchNotationEvidence {
+        ScratchNotationEvidence(source: .authored, confidence: 1, reason: reason)
+    }
+}
+
+/// A DERIVED motion label plus its optional human correction.
+///
+/// Labels are derived, correctable annotations — never raw evidence. The
+/// derived value is retained after a correction so the disagreement between
+/// what was inferred and what a reviewer asserted remains inspectable.
+struct ScratchNotationMotionLabel: Codable, Equatable, Sendable {
+    let derived: ScratchNotationMotionState
+    let correction: ScratchNotationMotionState?
+
+    init(derived: ScratchNotationMotionState,
+         correction: ScratchNotationMotionState? = nil) {
+        self.derived = derived
+        self.correction = correction
+    }
+
+    /// The label every consumer must read. A correction always wins.
+    var effective: ScratchNotationMotionState { correction ?? derived }
+
+    /// True only when a correction actually disagrees with the derivation.
+    var isCorrected: Bool {
+        guard let correction else { return false }
+        return correction != derived
+    }
+}
+
+/// The derived correlation of the two independent streams at one instant.
+///
+/// This is the only place the platter stream and the fader stream are read
+/// together, and it is derived — neither stream is modified by it.
+enum ScratchNotationCorrelatedState: String, Codable, Equatable, Sendable, CaseIterable {
+    /// Travelling with the fader open — the audible scratch.
+    case sounding
+    /// Stationary with the fader open.
+    case hold
+    /// Travelling with the fader closed — a ghost (silent) move.
+    case ghost
+    /// Stationary with the fader closed.
+    case ghostHold
+    /// Released free playback with the fader open.
+    case releasedSounding
+    /// Released free playback with the fader closed.
+    case releasedMuted
+    /// Either stream had no usable observation at that instant. NEVER a
+    /// default: an absent fader interval means unknown, never implicitly
+    /// open or closed — the same authority rule `ScratchNotation.faderEvents`
+    /// already states.
+    case unknown
+
+    /// `fader == nil` means "no fader observation covers this instant".
+    static func correlate(motion: ScratchNotationMotionState,
+                          fader: ScratchNotationFaderState?) -> ScratchNotationCorrelatedState {
+        guard let fader else { return .unknown }
+        switch (motion, fader) {
+        case (.forward, .open), (.backward, .open):     return .sounding
+        case (.forward, .closed), (.backward, .closed): return .ghost
+        case (.stationary, .open):                      return .hold
+        case (.stationary, .closed):                    return .ghostHold
+        case (.released, .open):                        return .releasedSounding
+        case (.released, .closed):                      return .releasedMuted
+        case (.unknown, _):                             return .unknown
+        }
+    }
+}
+
+extension ScratchNotation {
+
+    /// A half-open beat span `[startBeat, endBeat)`, in fractional beats from
+    /// the pattern origin — the same beat convention the rest of the
+    /// canonical layer uses.
+    struct BeatSpan: Codable, Equatable, Sendable {
+        let startBeat: Double
+        let endBeat: Double
+
+        init(startBeat: Double, endBeat: Double) {
+            self.startBeat = startBeat
+            self.endBeat = endBeat
+        }
+
+        var durationBeats: Double { max(0, endBeat - startBeat) }
+
+        /// Half-open containment, so abutting spans never both claim the
+        /// shared boundary beat.
+        func contains(_ beat: Double) -> Bool {
+            beat >= startBeat && beat < endBeat
+        }
+    }
+
+    /// One bounded PLATTER observation. A motion segment is always an
+    /// interval, never an instant — instantaneous evidence belongs to the
+    /// fader click channel, which is what keeps "a click is not a tear hold"
+    /// true at the type level.
+    struct PlatterMotionSegment: Codable, Equatable, Sendable {
+        let span: BeatSpan
+        let label: ScratchNotationMotionLabel
+        let evidence: ScratchNotationEvidence
+
+        init(span: BeatSpan,
+             label: ScratchNotationMotionLabel,
+             evidence: ScratchNotationEvidence) {
+            self.span = span
+            self.label = label
+            self.evidence = evidence
+        }
+
+        init(startBeat: Double,
+             endBeat: Double,
+             state: ScratchNotationMotionState,
+             evidence: ScratchNotationEvidence) {
+            self.init(span: BeatSpan(startBeat: startBeat, endBeat: endBeat),
+                      label: ScratchNotationMotionLabel(derived: state),
+                      evidence: evidence)
+        }
+
+        /// The effective (correction-aware) state — what every consumer reads.
+        var state: ScratchNotationMotionState { label.effective }
+        var startBeat: Double { span.startBeat }
+        var endBeat: Double { span.endBeat }
+        var durationBeats: Double { span.durationBeats }
+    }
+
+    /// One bounded FADER observation. Bounded by definition: an
+    /// instantaneous fader event is a `FaderClick`, never a zero-width
+    /// interval.
+    ///
+    /// Unlike the platter stream, gaps between intervals are LEGAL and mean
+    /// "no fader observation here" — never implicitly open or closed.
+    struct FaderInterval: Codable, Equatable, Sendable {
+        let span: BeatSpan
+        let state: ScratchNotationFaderState
+        let evidence: ScratchNotationEvidence
+
+        init(span: BeatSpan,
+             state: ScratchNotationFaderState,
+             evidence: ScratchNotationEvidence) {
+            self.span = span
+            self.state = state
+            self.evidence = evidence
+        }
+
+        init(startBeat: Double,
+             endBeat: Double,
+             state: ScratchNotationFaderState,
+             evidence: ScratchNotationEvidence) {
+            self.init(span: BeatSpan(startBeat: startBeat, endBeat: endBeat),
+                      state: state,
+                      evidence: evidence)
+        }
+
+        var startBeat: Double { span.startBeat }
+        var endBeat: Double { span.endBeat }
+        var durationBeats: Double { span.durationBeats }
+    }
+
+    /// Instantaneous / very short fader evidence, positioned on the beat
+    /// axis. `widthBeats` records a measured width when the producer knows
+    /// one; it is metadata only and never promotes the click into a
+    /// `FaderInterval`.
+    struct FaderClick: Codable, Equatable, Sendable {
+        let beat: Double
+        let kind: ScratchNotationFaderClickKind
+        let widthBeats: Double?
+        let evidence: ScratchNotationEvidence
+
+        init(beat: Double,
+             kind: ScratchNotationFaderClickKind,
+             widthBeats: Double? = nil,
+             evidence: ScratchNotationEvidence) {
+            self.beat = beat
+            self.kind = kind
+            self.widthBeats = widthBeats
+            self.evidence = evidence
+        }
+    }
+
+    /// A maximal run of SAME-DIRECTION travel together with the bounded
+    /// stationary intervals inside it.
+    ///
+    /// This is the canonical definition of a tear: one same-direction gesture
+    /// containing one or more bounded stationary intervals. `N` internal tear
+    /// holds always produce `N + 1` motion subdivisions — an invariant
+    /// guaranteed by construction, not merely asserted.
+    ///
+    /// Deliberately excluded from `internalHolds`:
+    /// - A direction REVERSAL (the Baby turnaround). It ends the gesture; the
+    ///   opposite-direction travel starts a new one.
+    /// - A stationary interval that is not bounded by same-direction travel
+    ///   on BOTH sides (a leading or trailing pause, including one that sits
+    ///   just before a reversal).
+    /// - A fader CLICK. Clicks are not in this stream at all.
+    /// - A `.released` interval. Free playback is motion, not a hold.
+    struct PlatterGesture: Equatable, Sendable {
+        let direction: ScratchNotationDirection
+        /// First travel start to last travel end — leading/trailing
+        /// stationary intervals are outside the gesture.
+        let span: BeatSpan
+        /// Travel subdivisions in order. Always `internalHolds.count + 1`.
+        let subdivisions: [BeatSpan]
+        /// The bounded stationary intervals between the subdivisions.
+        let internalHolds: [BeatSpan]
+
+        var tearHoldCount: Int { internalHolds.count }
+        var subdivisionCount: Int { subdivisions.count }
+        /// A gesture is a tear exactly when it contains at least one internal
+        /// tear hold.
+        var isTear: Bool { !internalHolds.isEmpty }
+    }
+
+    /// The tempo-free, beat-domain canonical pattern for tear-capable motion.
+    ///
+    /// Two INDEPENDENT streams synchronized only by the shared beat axis:
+    ///
+    /// - `motionSegments` — the platter. Contiguous and total over its span:
+    ///   every instant the pattern covers carries an explicit state, and an
+    ///   unobserved region is stated as `.unknown` rather than left as a gap.
+    /// - `faderIntervals` + `faderClicks` — the fader. Gaps are legal and
+    ///   mean unknown; sustained state and instantaneous clicks are separate
+    ///   channels and are never interconvertible.
+    ///
+    /// Neither stream constrains the other. There is no cross-stream ordering
+    /// rule in `validationIssues()` by design: a fader edge may freely share a
+    /// beat with a stroke boundary, a ghost move needs the fader closed while
+    /// the platter travels, and a platter observation can never produce fader
+    /// evidence (see `ScratchNotationEvidenceSource`).
+    ///
+    /// Tempo-free by type, exactly like `ScratchNotation.BeatPattern`: no
+    /// seconds appear anywhere, so a pattern cannot reach seconds-domain
+    /// consumers without a tempo being chosen first.
+    struct GesturePattern: Codable, Equatable, Sendable {
+
+        /// Tolerance for beat-axis continuity and ordering comparisons.
+        static let beatContinuityTolerance: Double = 1e-9
+
+        let version: Int
+        let scratchID: String
+        /// Must carry `ScratchNotation.beatAuthoredTimingBasisPrefix`, so a
+        /// pattern can never claim seconds authorship.
+        let timingBasis: String
+        let beatsPerBar: Int?
+        let motionSegments: [PlatterMotionSegment]
+        let faderIntervals: [FaderInterval]
+        let faderClicks: [FaderClick]
+
+        init(version: Int,
+             scratchID: String,
+             timingBasis: String,
+             beatsPerBar: Int? = nil,
+             motionSegments: [PlatterMotionSegment],
+             faderIntervals: [FaderInterval] = [],
+             faderClicks: [FaderClick] = []) {
+            self.version = version
+            self.scratchID = scratchID
+            self.timingBasis = timingBasis
+            self.beatsPerBar = beatsPerBar
+            self.motionSegments = motionSegments
+            self.faderIntervals = faderIntervals
+            self.faderClicks = faderClicks
+        }
+
+        /// Total span in beats — the union of BOTH streams, since fader
+        /// evidence is independent of platter boundaries and may extend past
+        /// the last motion segment.
+        var durationBeats: Double {
+            max(max(motionSegments.map(\.endBeat).max() ?? 0,
+                    faderIntervals.map(\.endBeat).max() ?? 0),
+                faderClicks.map(\.beat).max() ?? 0)
+        }
+
+        // MARK: Stream reads
+
+        /// Effective platter state at `beat`, or `nil` when no motion segment
+        /// covers it.
+        func motionState(atBeat beat: Double) -> ScratchNotationMotionState? {
+            motionSegments.first { $0.span.contains(beat) }?.state
+        }
+
+        /// Fader state at `beat`, or `nil` when no interval covers it.
+        /// `nil` means UNKNOWN and must never be read as open or closed.
+        /// Clicks are deliberately not consulted: a click is an instant, not
+        /// a sustained state.
+        func faderState(atBeat beat: Double) -> ScratchNotationFaderState? {
+            faderIntervals.first { $0.span.contains(beat) }?.state
+        }
+
+        /// Derived correlation of the two streams at `beat`. An uncovered
+        /// platter instant correlates to `.unknown`, never to a hold.
+        func correlatedState(atBeat beat: Double) -> ScratchNotationCorrelatedState {
+            guard let motion = motionState(atBeat: beat) else { return .unknown }
+            return ScratchNotationCorrelatedState.correlate(motion: motion,
+                                                            fader: faderState(atBeat: beat))
+        }
+
+        // MARK: Derived gestures
+
+        /// Beats at which travel polarity flips with NO intervening
+        /// stationary interval — the Baby turnaround. A reversal is a
+        /// boundary between two gestures and is never a tear hold.
+        var reversalBeats: [Double] {
+            guard motionSegments.count > 1 else { return [] }
+            var beats: [Double] = []
+            for index in 1..<motionSegments.count {
+                let previous = motionSegments[index - 1]
+                let current = motionSegments[index]
+                guard let previousDirection = previous.state.travelDirection,
+                      let currentDirection = current.state.travelDirection,
+                      previousDirection != currentDirection else { continue }
+                beats.append(previous.endBeat)
+            }
+            return beats
+        }
+
+        /// Maximal same-direction gestures, in order.
+        ///
+        /// A gesture accumulates same-direction travel and any stationary
+        /// intervals between that travel. It ends at a reversal, a
+        /// `.released` interval, an `.unknown` interval, or the end of the
+        /// stream. A stationary run is promoted to an internal tear hold only
+        /// once same-direction travel resumes after it, which is what makes
+        /// `subdivisions.count == internalHolds.count + 1` hold by
+        /// construction.
+        var gestures: [PlatterGesture] {
+            var result: [PlatterGesture] = []
+            var index = 0
+            while index < motionSegments.count {
+                guard let direction = motionSegments[index].state.travelDirection else {
+                    index += 1
+                    continue
+                }
+
+                var subdivisions: [BeatSpan] = []
+                var internalHolds: [BeatSpan] = []
+                var currentTravel: BeatSpan?
+                var pendingHold: BeatSpan?
+                var cursor = index
+
+                while cursor < motionSegments.count {
+                    let segment = motionSegments[cursor]
+                    if segment.state.travelDirection == direction {
+                        if let hold = pendingHold {
+                            // Same-direction travel resumed after a
+                            // stationary run: the run is bounded on both
+                            // sides, so it is an internal tear hold and it
+                            // closes the current subdivision.
+                            if let travel = currentTravel { subdivisions.append(travel) }
+                            internalHolds.append(hold)
+                            currentTravel = nil
+                            pendingHold = nil
+                        }
+                        currentTravel = BeatSpan(startBeat: currentTravel?.startBeat ?? segment.startBeat,
+                                                 endBeat: segment.endBeat)
+                        cursor += 1
+                        continue
+                    }
+                    if segment.state.isStationary {
+                        pendingHold = BeatSpan(startBeat: pendingHold?.startBeat ?? segment.startBeat,
+                                               endBeat: segment.endBeat)
+                        cursor += 1
+                        continue
+                    }
+                    // Reversal, release or unknown — the gesture ends here and
+                    // this segment is left for the next iteration.
+                    break
+                }
+
+                if let travel = currentTravel { subdivisions.append(travel) }
+                // A trailing stationary run is intentionally dropped: it is
+                // not bounded by same-direction travel on both sides, so it is
+                // not a tear hold and it is not part of the gesture's span.
+                if let first = subdivisions.first, let last = subdivisions.last {
+                    result.append(PlatterGesture(
+                        direction: direction,
+                        span: BeatSpan(startBeat: first.startBeat, endBeat: last.endBeat),
+                        subdivisions: subdivisions,
+                        internalHolds: internalHolds
+                    ))
+                }
+                index = max(cursor, index + 1)
+            }
+            return result
+        }
+
+        /// Every gesture that qualifies as a tear.
+        var tears: [PlatterGesture] { gestures.filter(\.isTear) }
+
+        // MARK: Validation
+
+        /// Pure invariant check, deliberately separate from decoding — the
+        /// same doctrine `ScratchNotation.validationIssues()` follows.
+        /// Returns an ordered list of human-readable issues; empty means
+        /// valid.
+        func validationIssues() -> [String] {
+            var issues: [String] = []
+            let tolerance = Self.beatContinuityTolerance
+
+            if !timingBasis.hasPrefix(ScratchNotation.beatAuthoredTimingBasisPrefix) {
+                issues.append("timingBasis '\(timingBasis)' does not declare beat authorship")
+            }
+            if let beatsPerBar, beatsPerBar <= 0 {
+                issues.append("beatsPerBar must be > 0, got \(beatsPerBar)")
+            }
+
+            // Platter stream: contiguous and total, so no instant is silently
+            // undescribed. An unobserved region must be stated as `.unknown`.
+            for (index, segment) in motionSegments.enumerated() {
+                let name = "motionSegment \(index)"
+                if !segment.startBeat.isFinite || !segment.endBeat.isFinite {
+                    issues.append("\(name): startBeat/endBeat must be finite")
+                    continue
+                }
+                if segment.startBeat < 0 {
+                    issues.append("\(name): startBeat must be >= 0, got \(segment.startBeat)")
+                }
+                if segment.endBeat <= segment.startBeat {
+                    issues.append("\(name): must be a bounded interval — endBeat must exceed startBeat (an instantaneous observation is a fader click, never a motion segment)")
+                }
+                if index == 0, segment.startBeat != 0 {
+                    issues.append("motionSegment 0: the platter stream must begin at beat 0, got \(segment.startBeat)")
+                }
+                if index > 0 {
+                    let previous = motionSegments[index - 1]
+                    if segment.startBeat < previous.endBeat - tolerance {
+                        issues.append("\(name): overlaps motionSegment \(index - 1)")
+                    } else if segment.startBeat > previous.endBeat + tolerance {
+                        issues.append("\(name): leaves a gap after motionSegment \(index - 1) — the platter stream must be contiguous (state an unobserved region as .unknown)")
+                    }
+                    if segment.state == previous.state {
+                        issues.append("\(name): adjacent motion segments must not repeat the same state")
+                    }
+                }
+                issues.append(contentsOf: Self.evidenceIssues(segment.evidence,
+                                                              named: name,
+                                                              requiresPlatterCapability: true))
+            }
+
+            // Fader stream: ordered and non-overlapping, but gaps are LEGAL
+            // and mean unknown.
+            for (index, interval) in faderIntervals.enumerated() {
+                let name = "faderInterval \(index)"
+                if !interval.startBeat.isFinite || !interval.endBeat.isFinite {
+                    issues.append("\(name): startBeat/endBeat must be finite")
+                    continue
+                }
+                if interval.startBeat < 0 {
+                    issues.append("\(name): startBeat must be >= 0, got \(interval.startBeat)")
+                }
+                if interval.endBeat <= interval.startBeat {
+                    issues.append("\(name): must be a bounded interval — endBeat must exceed startBeat (an instantaneous fader observation is a click, never an interval)")
+                }
+                if index > 0 {
+                    let previous = faderIntervals[index - 1]
+                    if interval.startBeat < previous.endBeat - tolerance {
+                        issues.append("\(name): overlaps faderInterval \(index - 1)")
+                    } else if abs(interval.startBeat - previous.endBeat) <= tolerance,
+                              interval.state == previous.state {
+                        issues.append("\(name): abutting fader intervals must not repeat the same state")
+                    }
+                }
+                issues.append(contentsOf: Self.evidenceIssues(interval.evidence,
+                                                              named: name,
+                                                              requiresPlatterCapability: false))
+            }
+
+            for (index, click) in faderClicks.enumerated() {
+                let name = "faderClick \(index)"
+                if !click.beat.isFinite {
+                    issues.append("\(name): beat must be finite")
+                    continue
+                }
+                if click.beat < 0 {
+                    issues.append("\(name): beat must be >= 0, got \(click.beat)")
+                }
+                if let widthBeats = click.widthBeats, !widthBeats.isFinite || widthBeats <= 0 {
+                    issues.append("\(name): widthBeats, when present, must be finite and > 0, got \(widthBeats)")
+                }
+                if index > 0, click.beat <= faderClicks[index - 1].beat {
+                    issues.append("\(name): beat must strictly increase over faderClick \(index - 1)")
+                }
+                // The phantom-click guard: a click may only come from a
+                // source that can actually observe the fader, so no platter
+                // interval — zero-velocity or otherwise — can mint one.
+                issues.append(contentsOf: Self.evidenceIssues(click.evidence,
+                                                              named: name,
+                                                              requiresPlatterCapability: false))
+            }
+
+            return issues
+        }
+
+        private static func evidenceIssues(_ evidence: ScratchNotationEvidence,
+                                           named name: String,
+                                           requiresPlatterCapability: Bool) -> [String] {
+            var issues: [String] = []
+            if !evidence.confidence.isFinite || evidence.confidence < 0 || evidence.confidence > 1 {
+                issues.append("\(name): evidence confidence must be finite and within 0...1, got \(evidence.confidence)")
+            }
+            if evidence.reason.isEmpty {
+                issues.append("\(name): evidence reason must not be empty")
+            }
+            if let rawSampleCount = evidence.rawSampleCount, rawSampleCount < 0 {
+                issues.append("\(name): evidence rawSampleCount must be >= 0, got \(rawSampleCount)")
+            }
+            if requiresPlatterCapability {
+                if !evidence.source.canEstablishPlatterMotion {
+                    issues.append("\(name): evidence source '\(evidence.source.rawValue)' cannot establish platter motion")
+                }
+            } else if !evidence.source.canEstablishFaderState {
+                issues.append("\(name): evidence source '\(evidence.source.rawValue)' cannot establish fader state")
+            }
+            return issues
+        }
+    }
+}
+
+extension ScratchNotation.BeatPattern {
+
+    /// Reason recorded on the stationary segments this lift materializes from
+    /// the authored schema's implicit inter-stroke gaps.
+    static let authoredGapEvidenceReason = "authored_inter_stroke_gap"
+    /// Reason recorded on the travel segments lifted from authored strokes.
+    static let authoredStrokeEvidenceReason = "authored_stroke"
+    /// Reason recorded on the fader intervals lifted from authored state.
+    static let authoredFaderEvidenceReason = "authored_fader_state"
+
+    /// Lifts this authored pattern into the tear-capable canonical form,
+    /// making explicit what the authored schema only implies.
+    ///
+    /// - Each stroke becomes a travel `PlatterMotionSegment`.
+    /// - Each GAP between strokes (and any gap before the first stroke)
+    ///   becomes an explicit `.stationary` segment. This is exactly the
+    ///   reading `ScratchNotation` already documents — "a stationary/hold
+    ///   region is the implicit gap between one stroke's end and the next
+    ///   stroke's start" — now stated rather than implied, which is what lets
+    ///   a tear be counted at all. A gap is never read as `.released`: the
+    ///   authored schema cannot express a release and inventing one would be
+    ///   a guess.
+    /// - Fader: when `faderEvents` is non-empty it is authoritative and its
+    ///   edges become intervals (the last edge runs to the pattern end). When
+    ///   it is empty, per-stroke `faderState` is the sole description, so each
+    ///   stroke contributes an interval over its OWN span and abutting equal
+    ///   states coalesce. Gaps get NO fader interval — per-stroke state
+    ///   describes strokes only, and an absent interval means unknown, never
+    ///   implicitly open.
+    /// - No clicks are produced. The authored schema has no click channel,
+    ///   and a stationary platter interval must never mint one.
+    ///
+    /// Returns `nil` when the pattern has no strokes, mirroring the "no
+    /// canonical target notation" convention used elsewhere in this layer.
+    func gesturePattern() -> ScratchNotation.GesturePattern? {
+        guard !strokes.isEmpty else { return nil }
+
+        let strokeEvidence = ScratchNotationEvidence.authored(Self.authoredStrokeEvidenceReason)
+        let gapEvidence = ScratchNotationEvidence.authored(Self.authoredGapEvidenceReason)
+        let faderEvidence = ScratchNotationEvidence.authored(Self.authoredFaderEvidenceReason)
+
+        var motionSegments: [ScratchNotation.PlatterMotionSegment] = []
+        var cursor = 0.0
+        for stroke in strokes {
+            if stroke.startBeat > cursor {
+                motionSegments.append(.init(startBeat: cursor,
+                                            endBeat: stroke.startBeat,
+                                            state: .stationary,
+                                            evidence: gapEvidence))
+            }
+            motionSegments.append(.init(startBeat: stroke.startBeat,
+                                        endBeat: stroke.endBeat,
+                                        state: ScratchNotationMotionState(direction: stroke.direction),
+                                        evidence: strokeEvidence))
+            cursor = max(cursor, stroke.endBeat)
+        }
+
+        var faderIntervals: [ScratchNotation.FaderInterval] = []
+        if faderEvents.isEmpty {
+            // Per-stroke state only — it describes strokes, never gaps.
+            for stroke in strokes {
+                if let last = faderIntervals.last,
+                   last.state == stroke.faderState,
+                   last.endBeat == stroke.startBeat {
+                    faderIntervals[faderIntervals.count - 1] = .init(startBeat: last.startBeat,
+                                                                     endBeat: stroke.endBeat,
+                                                                     state: last.state,
+                                                                     evidence: faderEvidence)
+                } else {
+                    faderIntervals.append(.init(startBeat: stroke.startBeat,
+                                                endBeat: stroke.endBeat,
+                                                state: stroke.faderState,
+                                                evidence: faderEvidence))
+                }
+            }
+        } else {
+            let horizon = max(durationBeats, faderEvents.map(\.beat).max() ?? 0)
+            for (index, event) in faderEvents.enumerated() {
+                let end = index + 1 < faderEvents.count ? faderEvents[index + 1].beat : horizon
+                guard end > event.beat else { continue }
+                faderIntervals.append(.init(startBeat: event.beat,
+                                            endBeat: end,
+                                            state: event.state,
+                                            evidence: faderEvidence))
+            }
+        }
+
+        return ScratchNotation.GesturePattern(version: version,
+                                              scratchID: scratchID,
+                                              timingBasis: timingBasis,
+                                              beatsPerBar: beatsPerBar,
+                                              motionSegments: motionSegments,
+                                              faderIntervals: faderIntervals,
+                                              faderClicks: [])
+    }
+}
+
+extension ScratchNotation {
+    /// The canonical Baby Scratch cycle in tear-capable form: forward,
+    /// turnaround, backward, fader open throughout — two gestures, no tear
+    /// holds, one reversal at the half beat.
+    static let babyScratchGesturePattern: GesturePattern? = babyScratchCycle.gesturePattern()
+}
+
 extension ScratchNotation {
     static func detectedPreview(
         scratchID: String,

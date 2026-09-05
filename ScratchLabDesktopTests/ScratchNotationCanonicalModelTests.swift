@@ -655,3 +655,749 @@ struct RegistryDrivenComparisonSurfaceTests {
         #expect(chart.contains("var comparisonOverlay: ScratchComparisonOverlay? = nil"))
     }
 }
+
+// MARK: - Tear-capable canonical semantics
+
+private let tearTimingBasis = "beat_canonical_tear_tests_v1"
+
+private func platterEvidence(_ reason: String = "test_platter",
+                             confidence: Double = 0.9) -> ScratchNotationEvidence {
+    ScratchNotationEvidence(source: .platterTimeline, confidence: confidence, reason: reason)
+}
+
+private func faderEvidence(_ reason: String = "test_fader",
+                           confidence: Double = 0.9) -> ScratchNotationEvidence {
+    ScratchNotationEvidence(source: .crossfaderRaw, confidence: confidence, reason: reason)
+}
+
+private func motion(_ start: Double,
+                    _ end: Double,
+                    _ state: ScratchNotationMotionState,
+                    evidence: ScratchNotationEvidence = platterEvidence())
+-> ScratchNotation.PlatterMotionSegment {
+    .init(startBeat: start, endBeat: end, state: state, evidence: evidence)
+}
+
+private func fader(_ start: Double,
+                   _ end: Double,
+                   _ state: ScratchNotationFaderState,
+                   evidence: ScratchNotationEvidence = faderEvidence())
+-> ScratchNotation.FaderInterval {
+    .init(startBeat: start, endBeat: end, state: state, evidence: evidence)
+}
+
+private func gesturePattern(
+    motionSegments: [ScratchNotation.PlatterMotionSegment],
+    faderIntervals: [ScratchNotation.FaderInterval] = [],
+    faderClicks: [ScratchNotation.FaderClick] = [],
+    timingBasis: String = tearTimingBasis
+) -> ScratchNotation.GesturePattern {
+    .init(version: 1,
+          scratchID: "tear_tests",
+          timingBasis: timingBasis,
+          beatsPerBar: nil,
+          motionSegments: motionSegments,
+          faderIntervals: faderIntervals,
+          faderClicks: faderClicks)
+}
+
+@Suite("Tear motion vocabulary")
+struct TearMotionVocabularyTests {
+
+    @Test("Travel polarity is reported only for hand-driven travel")
+    func travelPolarityIsOnlyForTravel() {
+        #expect(ScratchNotationMotionState.forward.travelDirection == .forward)
+        #expect(ScratchNotationMotionState.backward.travelDirection == .backward)
+        #expect(ScratchNotationMotionState.stationary.travelDirection == nil)
+        #expect(ScratchNotationMotionState.released.travelDirection == nil)
+        #expect(ScratchNotationMotionState.unknown.travelDirection == nil)
+    }
+
+    @Test("Released free playback is motion, never a stationary hold")
+    func releasedIsNotStationary() {
+        #expect(ScratchNotationMotionState.released.isStationary == false)
+        #expect(ScratchNotationMotionState.released.isTravel == false)
+        #expect(ScratchNotationMotionState.stationary.isStationary)
+        #expect(ScratchNotationMotionState.unknown.isStationary == false)
+    }
+
+    @Test("Direction lifts into the larger motion vocabulary without loss")
+    func directionLiftsLosslessly() {
+        for direction in [ScratchNotationDirection.forward, .backward] {
+            let state = ScratchNotationMotionState(direction: direction)
+            #expect(state.travelDirection == direction)
+        }
+    }
+
+    @Test("Capture movement kinds bridge to exactly one motion state each")
+    func movementKindBridge() {
+        #expect(ScratchMovementKind.fastPush.motionState == .forward)
+        #expect(ScratchMovementKind.normalPush.motionState == .forward)
+        #expect(ScratchMovementKind.slowDrag.motionState == .forward)
+        #expect(ScratchMovementKind.fastPull.motionState == .backward)
+        #expect(ScratchMovementKind.normalPull.motionState == .backward)
+        #expect(ScratchMovementKind.slowPullDrag.motionState == .backward)
+        #expect(ScratchMovementKind.hold.motionState == .stationary)
+        #expect(ScratchMovementKind.releaseNormalPlayback.motionState == .released)
+    }
+
+    @Test("Sustained fader states never map to a click kind")
+    func sustainedFaderStatesAreNotClicks() {
+        #expect(ScratchNotationFaderClickKind(faderEventKind: .open) == nil)
+        #expect(ScratchNotationFaderClickKind(faderEventKind: .closed) == nil)
+        #expect(ScratchNotationFaderClickKind(faderEventKind: .cut) == .cut)
+        #expect(ScratchNotationFaderClickKind(faderEventKind: .flareClick) == .flareClick)
+        #expect(ScratchNotationFaderClickKind(faderEventKind: .transformPulse) == .transformPulse)
+        #expect(ScratchNotationFaderClickKind(faderEventKind: .pulse) == .pulse)
+        #expect(ScratchNotationFaderClickKind(faderEventKind: .unknown) == .unknown)
+    }
+
+    @Test("No platter-only source can establish fader state, and vice versa")
+    func evidenceSourceCapabilitiesAreDisjointWhereItMatters() {
+        #expect(ScratchNotationEvidenceSource.platterTimeline.canEstablishPlatterMotion)
+        #expect(ScratchNotationEvidenceSource.platterTimeline.canEstablishFaderState == false)
+        #expect(ScratchNotationEvidenceSource.watchMotion.canEstablishFaderState == false)
+        #expect(ScratchNotationEvidenceSource.crossfaderRaw.canEstablishFaderState)
+        #expect(ScratchNotationEvidenceSource.crossfaderRaw.canEstablishPlatterMotion == false)
+        #expect(ScratchNotationEvidenceSource.audioOnset.canEstablishPlatterMotion == false)
+        #expect(ScratchNotationEvidenceSource.audioOnset.canEstablishFaderState == false)
+        // Unknown provenance establishes nothing; "we do not know what the
+        // platter did" is a motion STATE, not an erased source.
+        #expect(ScratchNotationEvidenceSource.unknown.canEstablishPlatterMotion == false)
+        #expect(ScratchNotationEvidenceSource.unknown.canEstablishFaderState == false)
+    }
+}
+
+@Suite("Evidence and correctable labels")
+struct TearEvidenceAndLabelTests {
+
+    @Test("A correction wins over the derivation and both stay inspectable")
+    func correctionWinsAndDerivationSurvives() {
+        let label = ScratchNotationMotionLabel(derived: .unknown, correction: .stationary)
+        #expect(label.effective == .stationary)
+        #expect(label.derived == .unknown)
+        #expect(label.isCorrected)
+
+        let agreeing = ScratchNotationMotionLabel(derived: .forward, correction: .forward)
+        #expect(agreeing.effective == .forward)
+        #expect(agreeing.isCorrected == false)
+
+        let uncorrected = ScratchNotationMotionLabel(derived: .forward)
+        #expect(uncorrected.effective == .forward)
+        #expect(uncorrected.isCorrected == false)
+    }
+
+    @Test("Correcting a label never rewrites the raw evidence it sits on")
+    func correctionDoesNotRewriteEvidence() {
+        let evidence = ScratchNotationEvidence(source: .platterTimeline,
+                                               confidence: 0.31,
+                                               reason: "cc6_steps=0_over_118ms",
+                                               rawSampleCount: 12)
+        let segment = ScratchNotation.PlatterMotionSegment(
+            span: .init(startBeat: 0, endBeat: 1),
+            label: .init(derived: .unknown, correction: .stationary),
+            evidence: evidence
+        )
+        #expect(segment.state == .stationary)
+        #expect(segment.label.derived == .unknown)
+        #expect(segment.evidence == evidence)
+        #expect(segment.evidence.confidence == 0.31)
+        #expect(segment.evidence.reason == "cc6_steps=0_over_118ms")
+        #expect(segment.evidence.rawSampleCount == 12)
+    }
+
+    @Test("The memberwise initializer clamps confidence into 0...1")
+    func memberwiseInitClampsConfidence() {
+        #expect(ScratchNotationEvidence(source: .authored, confidence: 4, reason: "r").confidence == 1)
+        #expect(ScratchNotationEvidence(source: .authored, confidence: -3, reason: "r").confidence == 0)
+        #expect(ScratchNotationEvidence(source: .authored, confidence: .nan, reason: "r").confidence == 0)
+    }
+
+    @Test("Decoding stays tolerant; validation reports the out-of-range confidence")
+    func decodingIsTolerantAndValidationIsStrict() throws {
+        let json = """
+        {
+          "version": 1,
+          "scratchID": "tear_tests",
+          "timingBasis": "\(tearTimingBasis)",
+          "motionSegments": [
+            {
+              "span": {"startBeat": 0, "endBeat": 1},
+              "label": {"derived": "forward"},
+              "evidence": {"source": "platterTimeline", "confidence": 7.5, "reason": "decoded"}
+            }
+          ],
+          "faderIntervals": [],
+          "faderClicks": []
+        }
+        """
+        let pattern = try JSONDecoder().decode(ScratchNotation.GesturePattern.self,
+                                               from: Data(json.utf8))
+        #expect(pattern.motionSegments.first?.evidence.confidence == 7.5)
+        let issues = pattern.validationIssues()
+        #expect(issues.contains { $0.contains("confidence must be finite and within 0...1") })
+    }
+
+    @Test("An empty evidence reason is a validation issue, not a silent default")
+    func emptyReasonIsAnIssue() {
+        let pattern = gesturePattern(motionSegments: [
+            motion(0, 1, .forward, evidence: platterEvidence(""))
+        ])
+        #expect(pattern.validationIssues().contains { $0.contains("evidence reason must not be empty") })
+    }
+}
+
+@Suite("Tear gesture derivation")
+struct TearGestureDerivationTests {
+
+    @Test("One internal hold yields one tear with two subdivisions")
+    func oneHoldYieldsTwoSubdivisions() throws {
+        let pattern = gesturePattern(motionSegments: [
+            motion(0, 0.25, .forward),
+            motion(0.25, 0.375, .stationary),
+            motion(0.375, 0.75, .forward)
+        ])
+        #expect(pattern.validationIssues().isEmpty)
+        let gestures = pattern.gestures
+        #expect(gestures.count == 1)
+        let tear = try #require(gestures.first)
+        #expect(tear.direction == .forward)
+        #expect(tear.isTear)
+        #expect(tear.tearHoldCount == 1)
+        #expect(tear.subdivisionCount == 2)
+        #expect(tear.internalHolds == [.init(startBeat: 0.25, endBeat: 0.375)])
+        #expect(tear.subdivisions == [.init(startBeat: 0, endBeat: 0.25),
+                                      .init(startBeat: 0.375, endBeat: 0.75)])
+        #expect(tear.span == .init(startBeat: 0, endBeat: 0.75))
+        #expect(pattern.tears.count == 1)
+    }
+
+    @Test("N internal tear holds always produce N+1 subdivisions")
+    func nHoldsProduceNPlusOneSubdivisions() throws {
+        for holdCount in 0...4 {
+            var segments: [ScratchNotation.PlatterMotionSegment] = []
+            var beat = 0.0
+            for index in 0...holdCount {
+                segments.append(motion(beat, beat + 0.25, .forward))
+                beat += 0.25
+                if index < holdCount {
+                    segments.append(motion(beat, beat + 0.125, .stationary))
+                    beat += 0.125
+                }
+            }
+            let pattern = gesturePattern(motionSegments: segments)
+            #expect(pattern.validationIssues().isEmpty)
+            #expect(pattern.gestures.count == 1)
+            let gesture = try #require(pattern.gestures.first)
+            #expect(gesture.tearHoldCount == holdCount)
+            #expect(gesture.subdivisionCount == holdCount + 1)
+            #expect(gesture.isTear == (holdCount > 0))
+        }
+    }
+
+    @Test("A direction reversal is not a tear hold")
+    func reversalIsNotATearHold() {
+        let pattern = gesturePattern(motionSegments: [
+            motion(0, 0.5, .forward),
+            motion(0.5, 1.0, .backward)
+        ])
+        #expect(pattern.validationIssues().isEmpty)
+        let gestures = pattern.gestures
+        #expect(gestures.count == 2)
+        #expect(gestures.allSatisfy { $0.tearHoldCount == 0 })
+        #expect(gestures.allSatisfy { $0.subdivisionCount == 1 })
+        #expect(gestures.allSatisfy { $0.isTear == false })
+        #expect(gestures.map(\.direction) == [.forward, .backward])
+        #expect(pattern.reversalBeats == [0.5])
+        #expect(pattern.tears.isEmpty)
+    }
+
+    @Test("A stationary interval that precedes a reversal is not a tear hold")
+    func holdBeforeReversalIsNotATearHold() {
+        let pattern = gesturePattern(motionSegments: [
+            motion(0, 0.5, .forward),
+            motion(0.5, 0.75, .stationary),
+            motion(0.75, 1.25, .backward)
+        ])
+        #expect(pattern.validationIssues().isEmpty)
+        let gestures = pattern.gestures
+        #expect(gestures.count == 2)
+        #expect(gestures.allSatisfy { $0.tearHoldCount == 0 })
+        #expect(gestures.map(\.span) == [.init(startBeat: 0, endBeat: 0.5),
+                                         .init(startBeat: 0.75, endBeat: 1.25)])
+        // The turnaround here is separated by a stationary interval, so it is
+        // not an instantaneous reversal.
+        #expect(pattern.reversalBeats.isEmpty)
+    }
+
+    @Test("A released interval ends the gesture and is never a tear hold")
+    func releaseIsNotATearHold() {
+        let pattern = gesturePattern(motionSegments: [
+            motion(0, 0.5, .forward),
+            motion(0.5, 1.5, .released),
+            motion(1.5, 2.0, .forward)
+        ])
+        #expect(pattern.validationIssues().isEmpty)
+        let gestures = pattern.gestures
+        #expect(gestures.count == 2)
+        #expect(gestures.allSatisfy { $0.direction == .forward })
+        #expect(gestures.allSatisfy { $0.tearHoldCount == 0 })
+        #expect(gestures.allSatisfy { $0.subdivisionCount == 1 })
+        #expect(pattern.tears.isEmpty)
+    }
+
+    @Test("Unknown motion ends the gesture rather than joining it")
+    func unknownMotionEndsTheGesture() {
+        let pattern = gesturePattern(motionSegments: [
+            motion(0, 0.5, .forward),
+            motion(0.5, 0.75, .unknown),
+            motion(0.75, 1.25, .forward)
+        ])
+        #expect(pattern.validationIssues().isEmpty)
+        let gestures = pattern.gestures
+        #expect(gestures.count == 2)
+        #expect(gestures.allSatisfy { $0.tearHoldCount == 0 })
+        #expect(pattern.tears.isEmpty)
+    }
+
+    @Test("Leading and trailing stationary intervals are not tear holds")
+    func boundaryHoldsAreNotTearHolds() throws {
+        let pattern = gesturePattern(motionSegments: [
+            motion(0, 0.25, .stationary),
+            motion(0.25, 0.75, .forward),
+            motion(0.75, 1.0, .stationary)
+        ])
+        #expect(pattern.validationIssues().isEmpty)
+        let gestures = pattern.gestures
+        #expect(gestures.count == 1)
+        let gesture = try #require(gestures.first)
+        #expect(gesture.tearHoldCount == 0)
+        #expect(gesture.subdivisionCount == 1)
+        #expect(gesture.span == .init(startBeat: 0.25, endBeat: 0.75))
+    }
+
+    @Test("A fader click inside a travel span does not subdivide the gesture")
+    func clickIsNotATearHold() throws {
+        let pattern = gesturePattern(
+            motionSegments: [motion(0, 1.0, .forward)],
+            faderIntervals: [fader(0, 1.0, .open)],
+            faderClicks: [.init(beat: 0.5, kind: .transformPulse, evidence: faderEvidence())]
+        )
+        #expect(pattern.validationIssues().isEmpty)
+        let gestures = pattern.gestures
+        #expect(gestures.count == 1)
+        let gesture = try #require(gestures.first)
+        #expect(gesture.tearHoldCount == 0)
+        #expect(gesture.subdivisionCount == 1)
+        #expect(gesture.isTear == false)
+        // The click is real fader evidence, and it changes no platter state.
+        #expect(pattern.faderClicks.count == 1)
+        #expect(pattern.correlatedState(atBeat: 0.5) == .sounding)
+    }
+
+    @Test("A stream with no travel produces no gestures")
+    func stationaryOnlyStreamHasNoGestures() {
+        let pattern = gesturePattern(motionSegments: [motion(0, 1.0, .stationary)])
+        #expect(pattern.validationIssues().isEmpty)
+        #expect(pattern.gestures.isEmpty)
+        #expect(pattern.tears.isEmpty)
+    }
+}
+
+@Suite("Stream correlation: hold, ghost and ghost-hold")
+struct TearStreamCorrelationTests {
+
+    @Test("The nine correlations are distinct and never conflated")
+    func correlationGrid() {
+        typealias State = ScratchNotationCorrelatedState
+        #expect(State.correlate(motion: .forward, fader: .open) == .sounding)
+        #expect(State.correlate(motion: .backward, fader: .open) == .sounding)
+        #expect(State.correlate(motion: .forward, fader: .closed) == .ghost)
+        #expect(State.correlate(motion: .backward, fader: .closed) == .ghost)
+        #expect(State.correlate(motion: .stationary, fader: .open) == .hold)
+        #expect(State.correlate(motion: .stationary, fader: .closed) == .ghostHold)
+        #expect(State.correlate(motion: .released, fader: .open) == .releasedSounding)
+        #expect(State.correlate(motion: .released, fader: .closed) == .releasedMuted)
+        #expect(State.correlate(motion: .unknown, fader: .open) == .unknown)
+        #expect(State.correlate(motion: .unknown, fader: .closed) == .unknown)
+    }
+
+    @Test("An absent fader observation is unknown, never implicitly open or closed")
+    func absentFaderIsUnknown() {
+        for motionState in ScratchNotationMotionState.allCases {
+            #expect(ScratchNotationCorrelatedState.correlate(motion: motionState, fader: nil) == .unknown)
+        }
+        let pattern = gesturePattern(motionSegments: [motion(0, 1.0, .stationary)])
+        #expect(pattern.faderState(atBeat: 0.5) == nil)
+        #expect(pattern.correlatedState(atBeat: 0.5) == .unknown)
+    }
+
+    @Test("Hold, ghost and ghost-hold are read off the two independent streams")
+    func holdGhostAndGhostHoldAreDistinguished() {
+        let pattern = gesturePattern(
+            motionSegments: [
+                motion(0, 1.0, .forward),
+                motion(1.0, 2.0, .stationary),
+                motion(2.0, 3.0, .backward),
+                motion(3.0, 4.0, .stationary)
+            ],
+            faderIntervals: [
+                fader(0, 2.0, .open),
+                fader(2.0, 4.0, .closed)
+            ]
+        )
+        #expect(pattern.validationIssues().isEmpty)
+        #expect(pattern.correlatedState(atBeat: 0.5) == .sounding)
+        #expect(pattern.correlatedState(atBeat: 1.5) == .hold)
+        #expect(pattern.correlatedState(atBeat: 2.5) == .ghost)
+        #expect(pattern.correlatedState(atBeat: 3.5) == .ghostHold)
+    }
+
+    @Test("Fader edges need not align with platter boundaries")
+    func streamsAreIndependentlyTimed() {
+        let pattern = gesturePattern(
+            motionSegments: [
+                motion(0, 1.0, .forward),
+                motion(1.0, 2.0, .stationary)
+            ],
+            faderIntervals: [
+                fader(0, 0.75, .open),
+                fader(0.75, 2.0, .closed)
+            ]
+        )
+        #expect(pattern.validationIssues().isEmpty)
+        #expect(pattern.correlatedState(atBeat: 0.5) == .sounding)
+        #expect(pattern.correlatedState(atBeat: 0.9) == .ghost)
+        #expect(pattern.correlatedState(atBeat: 1.5) == .ghostHold)
+    }
+
+    @Test("A zero-velocity platter interval never creates a phantom click")
+    func zeroVelocityCreatesNoPhantomClick() {
+        let pattern = gesturePattern(motionSegments: [
+            motion(0, 0.25, .forward),
+            motion(0.25, 0.5, .stationary, evidence: ScratchNotationEvidence(
+                source: .platterTimeline,
+                confidence: 0.95,
+                reason: "cc6_steps=0_over_118ms",
+                rawSampleCount: 0
+            )),
+            motion(0.5, 1.0, .forward)
+        ])
+        #expect(pattern.validationIssues().isEmpty)
+        // The hold is a real tear hold on the platter stream…
+        #expect(pattern.gestures.first?.tearHoldCount == 1)
+        // …and it contributes nothing whatsoever to the fader stream.
+        #expect(pattern.faderClicks.isEmpty)
+        #expect(pattern.faderIntervals.isEmpty)
+        #expect(pattern.faderState(atBeat: 0.375) == nil)
+        #expect(pattern.correlatedState(atBeat: 0.375) == .unknown)
+    }
+
+    @Test("Platter provenance cannot back a fader click")
+    func platterSourcedClickIsRejected() {
+        let pattern = gesturePattern(
+            motionSegments: [motion(0, 1.0, .stationary)],
+            faderClicks: [.init(beat: 0.5,
+                                kind: .cut,
+                                evidence: platterEvidence("derived_from_zero_velocity"))]
+        )
+        #expect(pattern.validationIssues().contains {
+            $0.contains("faderClick 0") && $0.contains("cannot establish fader state")
+        })
+    }
+
+    @Test("Fader provenance cannot back a platter motion segment")
+    func faderSourcedMotionIsRejected() {
+        let pattern = gesturePattern(motionSegments: [
+            motion(0, 1.0, .stationary, evidence: faderEvidence("crossfader_only"))
+        ])
+        #expect(pattern.validationIssues().contains {
+            $0.contains("motionSegment 0") && $0.contains("cannot establish platter motion")
+        })
+    }
+}
+
+@Suite("Tear pattern validation")
+struct TearPatternValidationTests {
+
+    @Test("A well-formed tear pattern reports no issues")
+    func wellFormedPatternIsValid() {
+        let pattern = gesturePattern(
+            motionSegments: [
+                motion(0, 0.25, .forward),
+                motion(0.25, 0.375, .stationary),
+                motion(0.375, 0.75, .forward)
+            ],
+            faderIntervals: [fader(0, 0.75, .open)],
+            faderClicks: [.init(beat: 0.375, kind: .cut, widthBeats: 0.01, evidence: faderEvidence())]
+        )
+        #expect(pattern.validationIssues().isEmpty)
+        #expect(pattern.durationBeats == 0.75)
+    }
+
+    @Test("The platter stream must begin at beat 0")
+    func platterStreamMustStartAtZero() {
+        let pattern = gesturePattern(motionSegments: [motion(0.25, 1.0, .forward)])
+        #expect(pattern.validationIssues().contains { $0.contains("must begin at beat 0") })
+    }
+
+    @Test("The platter stream must be contiguous — no undeclared gaps")
+    func platterStreamMustBeContiguous() {
+        let pattern = gesturePattern(motionSegments: [
+            motion(0, 0.25, .forward),
+            motion(0.5, 1.0, .forward)
+        ])
+        #expect(pattern.validationIssues().contains { $0.contains("leaves a gap after motionSegment 0") })
+    }
+
+    @Test("Overlapping platter segments are illegal")
+    func platterSegmentsMayNotOverlap() {
+        let pattern = gesturePattern(motionSegments: [
+            motion(0, 0.5, .forward),
+            motion(0.25, 1.0, .backward)
+        ])
+        #expect(pattern.validationIssues().contains { $0.contains("overlaps motionSegment 0") })
+    }
+
+    @Test("Unsorted platter segments surface as an overlap, never as a silent reorder")
+    func unsortedPlatterSegmentsAreIllegal() {
+        let pattern = gesturePattern(motionSegments: [
+            motion(0, 1.0, .forward),
+            motion(0.0, 0.5, .backward)
+        ])
+        #expect(pattern.validationIssues().contains { $0.contains("overlaps motionSegment 0") })
+    }
+
+    @Test("Adjacent platter segments may not repeat the same state")
+    func adjacentPlatterStatesMayNotRepeat() {
+        let pattern = gesturePattern(motionSegments: [
+            motion(0, 0.5, .forward),
+            motion(0.5, 1.0, .forward)
+        ])
+        #expect(pattern.validationIssues().contains {
+            $0.contains("adjacent motion segments must not repeat the same state")
+        })
+    }
+
+    @Test("An instantaneous platter segment is illegal — instants belong to the click channel")
+    func instantaneousPlatterSegmentIsIllegal() {
+        let pattern = gesturePattern(motionSegments: [motion(0, 0, .stationary)])
+        #expect(pattern.validationIssues().contains {
+            $0.contains("motionSegment 0") && $0.contains("must be a bounded interval")
+        })
+    }
+
+    @Test("An instantaneous fader interval is illegal — it would be a click")
+    func instantaneousFaderIntervalIsIllegal() {
+        let pattern = gesturePattern(
+            motionSegments: [motion(0, 1.0, .forward)],
+            faderIntervals: [fader(0.5, 0.5, .closed)]
+        )
+        #expect(pattern.validationIssues().contains {
+            $0.contains("faderInterval 0") && $0.contains("must be a bounded interval")
+        })
+    }
+
+    @Test("Overlapping fader intervals are illegal, but gaps are legal")
+    func faderIntervalsMayGapButNotOverlap() {
+        let overlapping = gesturePattern(
+            motionSegments: [motion(0, 2.0, .forward)],
+            faderIntervals: [fader(0, 1.0, .open), fader(0.5, 2.0, .closed)]
+        )
+        #expect(overlapping.validationIssues().contains { $0.contains("overlaps faderInterval 0") })
+
+        let gapped = gesturePattern(
+            motionSegments: [motion(0, 2.0, .forward)],
+            faderIntervals: [fader(0, 0.5, .open), fader(1.0, 2.0, .open)]
+        )
+        #expect(gapped.validationIssues().isEmpty)
+        #expect(gapped.faderState(atBeat: 0.75) == nil)
+        #expect(gapped.correlatedState(atBeat: 0.75) == .unknown)
+
+        // Abutting is different from gapped: touching intervals must carry
+        // different states, or they are one interval written twice.
+        let abutting = gesturePattern(
+            motionSegments: [motion(0, 2.0, .forward)],
+            faderIntervals: [fader(0, 1.0, .open), fader(1.0, 2.0, .open)]
+        )
+        #expect(abutting.validationIssues().contains {
+            $0.contains("abutting fader intervals must not repeat the same state")
+        })
+    }
+
+    @Test("Fader clicks must be finite, non-negative and strictly increasing")
+    func faderClickOrdering() {
+        let unordered = gesturePattern(
+            motionSegments: [motion(0, 2.0, .forward)],
+            faderClicks: [.init(beat: 1.0, kind: .cut, evidence: faderEvidence()),
+                          .init(beat: 1.0, kind: .cut, evidence: faderEvidence())]
+        )
+        #expect(unordered.validationIssues().contains { $0.contains("must strictly increase") })
+
+        let negative = gesturePattern(
+            motionSegments: [motion(0, 2.0, .forward)],
+            faderClicks: [.init(beat: -0.5, kind: .cut, evidence: faderEvidence())]
+        )
+        #expect(negative.validationIssues().contains { $0.contains("beat must be >= 0") })
+
+        let nonFinite = gesturePattern(
+            motionSegments: [motion(0, 2.0, .forward)],
+            faderClicks: [.init(beat: .infinity, kind: .cut, evidence: faderEvidence())]
+        )
+        #expect(nonFinite.validationIssues().contains { $0.contains("beat must be finite") })
+    }
+
+    @Test("A click width, when stated, must be a positive finite measurement")
+    func clickWidthMustBePositive() {
+        let pattern = gesturePattern(
+            motionSegments: [motion(0, 2.0, .forward)],
+            faderClicks: [.init(beat: 1.0, kind: .cut, widthBeats: 0, evidence: faderEvidence())]
+        )
+        #expect(pattern.validationIssues().contains { $0.contains("widthBeats") })
+    }
+
+    @Test("A pattern may not claim seconds authorship")
+    func timingBasisMustDeclareBeatAuthorship() {
+        let pattern = gesturePattern(motionSegments: [motion(0, 1.0, .forward)],
+                                     timingBasis: "detected_capture")
+        #expect(pattern.validationIssues().contains { $0.contains("does not declare beat authorship") })
+    }
+
+    @Test("Non-finite platter bounds are reported without cascading")
+    func nonFiniteBoundsAreReported() {
+        let pattern = gesturePattern(motionSegments: [motion(0, .nan, .forward)])
+        let issues = pattern.validationIssues()
+        #expect(issues.contains { $0.contains("motionSegment 0: startBeat/endBeat must be finite") })
+        #expect(issues.count == 1)
+    }
+
+    @Test("beatsPerBar, when present, must be positive")
+    func beatsPerBarMustBePositive() {
+        let pattern = ScratchNotation.GesturePattern(version: 1,
+                                                     scratchID: "tear_tests",
+                                                     timingBasis: tearTimingBasis,
+                                                     beatsPerBar: 0,
+                                                     motionSegments: [motion(0, 1.0, .forward)])
+        #expect(pattern.validationIssues().contains { $0.contains("beatsPerBar must be > 0") })
+    }
+}
+
+@Suite("Baby Scratch under the tear-capable model")
+struct BabyScratchTearCompatibilityTests {
+
+    @Test("Baby remains forward, turnaround, backward with the fader open throughout")
+    func babyIsUnchanged() throws {
+        let pattern = try #require(ScratchNotation.babyScratchGesturePattern)
+        #expect(pattern.validationIssues().isEmpty)
+        #expect(pattern.scratchID == CaptureSessionScratchType.babyScratch.rawValue)
+        #expect(pattern.timingBasis == ScratchNotation.babyScratchCycle.timingBasis)
+
+        #expect(pattern.motionSegments.map(\.state) == [.forward, .backward])
+        #expect(pattern.motionSegments.map(\.startBeat) == [0.0, 0.5])
+        #expect(pattern.motionSegments.map(\.endBeat) == [0.5, 1.0])
+
+        // Fader open throughout, as one coalesced interval — never two.
+        #expect(pattern.faderIntervals.count == 1)
+        #expect(pattern.faderIntervals.first?.state == .open)
+        #expect(pattern.faderIntervals.first?.span == ScratchNotation.BeatSpan(startBeat: 0, endBeat: 1.0))
+        #expect(pattern.faderClicks.isEmpty)
+
+        // The turnaround is an instantaneous reversal, not a tear hold.
+        #expect(pattern.reversalBeats == [0.5])
+        #expect(pattern.gestures.count == 2)
+        #expect(pattern.gestures.map(\.direction) == [.forward, .backward])
+        #expect(pattern.gestures.allSatisfy { $0.tearHoldCount == 0 })
+        #expect(pattern.gestures.allSatisfy { $0.subdivisionCount == 1 })
+        #expect(pattern.tears.isEmpty)
+
+        #expect(pattern.correlatedState(atBeat: 0.25) == .sounding)
+        #expect(pattern.correlatedState(atBeat: 0.75) == .sounding)
+        #expect(pattern.durationBeats == 1.0)
+    }
+
+    @Test("Lifting an authored pattern leaves the authored cycle untouched")
+    func liftIsNonDestructive() {
+        let before = ScratchNotation.babyScratchCycle
+        _ = before.gesturePattern()
+        #expect(ScratchNotation.babyScratchCycle == before)
+        #expect(ScratchNotation.babyScratchCycle.strokes.count == 2)
+        #expect(ScratchNotation.babyScratchCycle.faderEvents.isEmpty)
+        #expect(ScratchNotation.babyScratchCycle.validationIssues().isEmpty)
+    }
+
+    @Test("An authored inter-stroke gap becomes an explicit stationary interval")
+    func authoredGapBecomesStationary() throws {
+        let authored = ScratchNotation.BeatPattern(
+            version: 1,
+            scratchID: "tear_lift",
+            timingBasis: tearTimingBasis,
+            beatsPerBar: nil,
+            strokes: [
+                .init(startBeat: 0, endBeat: 0.25,
+                      direction: .forward, speedClassification: .medium, faderState: .open),
+                .init(startBeat: 0.5, endBeat: 0.75,
+                      direction: .forward, speedClassification: .medium, faderState: .open)
+            ]
+        )
+        #expect(authored.validationIssues().isEmpty)
+        let pattern = try #require(authored.gesturePattern())
+        #expect(pattern.validationIssues().isEmpty)
+        #expect(pattern.motionSegments.map(\.state) == [.forward, .stationary, .forward])
+        #expect(pattern.motionSegments[1].span == .init(startBeat: 0.25, endBeat: 0.5))
+        #expect(pattern.motionSegments[1].evidence.source == .authored)
+        #expect(pattern.motionSegments[1].evidence.reason
+                == ScratchNotation.BeatPattern.authoredGapEvidenceReason)
+
+        // The gap is a tear hold: one same-direction gesture, two subdivisions.
+        let gesture = try #require(pattern.gestures.first)
+        #expect(pattern.gestures.count == 1)
+        #expect(gesture.isTear)
+        #expect(gesture.tearHoldCount == 1)
+        #expect(gesture.subdivisionCount == 2)
+
+        // Per-stroke fader state describes strokes only — the gap is unknown,
+        // never implicitly open.
+        #expect(pattern.faderIntervals.count == 2)
+        #expect(pattern.faderState(atBeat: 0.375) == nil)
+        #expect(pattern.correlatedState(atBeat: 0.375) == .unknown)
+        #expect(pattern.correlatedState(atBeat: 0.1) == .sounding)
+    }
+
+    @Test("Authored fader edges are authoritative when present")
+    func authoredFaderEdgesWin() throws {
+        let authored = ScratchNotation.BeatPattern(
+            version: 1,
+            scratchID: "tear_lift_ghost",
+            timingBasis: tearTimingBasis,
+            beatsPerBar: nil,
+            strokes: [
+                .init(startBeat: 0, endBeat: 0.5,
+                      direction: .forward, speedClassification: .medium, faderState: .open),
+                .init(startBeat: 0.5, endBeat: 1.0,
+                      direction: .backward, speedClassification: .medium, faderState: .open)
+            ],
+            faderEvents: [
+                .init(beat: 0, state: .open),
+                .init(beat: 0.5, state: .closed)
+            ]
+        )
+        #expect(authored.validationIssues().isEmpty)
+        let pattern = try #require(authored.gesturePattern())
+        #expect(pattern.validationIssues().isEmpty)
+        #expect(pattern.faderIntervals.map(\.state) == [.open, .closed])
+        // The backward stroke says `.open`, the authoritative edge stream says
+        // `.closed` — the edge stream wins, so this reads as a ghost.
+        #expect(pattern.correlatedState(atBeat: 0.25) == .sounding)
+        #expect(pattern.correlatedState(atBeat: 0.75) == .ghost)
+    }
+
+    @Test("A stroke-less pattern lifts to nil rather than an empty guess")
+    func strokelessPatternLiftsToNil() {
+        let empty = ScratchNotation.BeatPattern(version: 1,
+                                                scratchID: "tear_empty",
+                                                timingBasis: tearTimingBasis,
+                                                beatsPerBar: nil,
+                                                strokes: [])
+        #expect(empty.gesturePattern() == nil)
+    }
+}

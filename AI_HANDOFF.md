@@ -1,5 +1,18 @@
 # AI Handoff
 
+## 2026-09-05 - TTM Prompt 1 committed: tear-capable canonical notation semantics
+
+Supersedes the reference-authoring blocks below for current status. Worktree `/Users/karlwatson/Downloads/ScratchLab-TTM`, branch `feature/ttm-tear-notation-alignment`, parent `3316fe0`. Prompt 1 is committed. Prompt 2 has NOT been started.
+
+- Scope was one slice: canonical semantics and invariants for tear-capable motion. Two files, purely additive, 1,531 insertions and zero deletions in two append-only hunks: `ScratchLab/Models/CaptureCore.swift` (+785) and `ScratchLabDesktopTests/ScratchNotationCanonicalModelTests.swift` (+746).
+- The canonical types were extended, not forked. `ScratchNotationDirection`, `ScratchNotationFaderState`, `ScratchFaderEventKind`, `ScratchMovementKind`, `ScratchNotation` and `BeatPattern` keep their existing shapes and Codable payloads.
+- Invariants pinned: platter and fader are independent streams with no cross-stream validation rule; N internal tear holds give N+1 subdivisions by construction; reversal, release, unknown and click are each excluded from tear holds; hold, ghost and ghost-hold are distinct; absent fader evidence is unknown and never implicitly open or closed; a click backed by platter provenance fails validation, so a zero-velocity interval cannot mint one; a correction changes only the label and never the raw evidence or the derived value.
+- Baby Scratch is unchanged: forward, turnaround at beat 0.5, backward, one coalesced open fader interval, two gestures with zero tear holds, and the authored `babyScratchCycle` compares equal before and after the lift.
+- Verification: 46 new tests in 6 suites passed; the 57 existing canonical regressions in 7 suites passed in both configurations; macOS `build-for-testing` and iOS `build` succeeded. The Watch target is unaffected because `CaptureCore.swift` is a member of `ScratchLabDesktop` and `ScratchLab` only, so watchOS was not rebuilt.
+- One serial `scripts/build.sh all` is deferred to the end of the TTM batch, along with the explicit Debug and unsigned universal Release legs if the batch ever introduces conditional compilation.
+- Nothing else changed: no `project.pbxproj`, scheme, entitlement, plist or build-number change (build remains 21), and no renderer, detector, capture adapter, export or training wiring. No existing test was weakened or removed.
+- The dirty primary worktree at `/Users/karlwatson/Downloads/ScratchLab` was not written to and remains `feature/ios-capture-camera-ux` at `d3ecf2a6`. No push, merge, deployment, recording, approval, publication or training action occurred.
+
 ## 2026-09-05 - Boundary 6 of 6 committed: all six boundaries on checkpoint/reference-authoring-baseline
 
 Supersedes the Boundary 5 entry below. Candidate `/private/tmp/scratchlab-refauth-baseline.iYmLZU/worktree`, branch `checkpoint/reference-authoring-baseline`, base `add70a08668e512c95e467871613f577a30523f1`. All six boundaries are committed.
