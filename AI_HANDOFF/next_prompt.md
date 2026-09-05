@@ -1,3 +1,14 @@
+## Current continuation - Receipt-only candidate verified; await explicit commit approval
+
+This entry governs the isolated candidate and supersedes the historical continuation blocks retained below. Candidate: /private/tmp/scratchlab-receipt-candidate.Bs1CNx/worktree, detached at d3ecf2a69bde57f7d6ac681b6dbdd37347c83e97. Do not follow older unrelated tasks as current authority.
+
+1. Re-read repository instructions and the current receipt candidate entry in AI_HANDOFF.md and DEV_LOG.md; inspect both worktrees and indexes.
+2. Stay inside the audited two-service/290-line-test boundary. No project, scheme, build-number or new membership changes; stop for any outside dependency.
+3. Next safe scope is read-only final receipt-commit review, not another implementation or automatic test run. Preserve original full.xcresult/full-build-gate.log: the configuration-1 failure was a Dock-mediated external SIGTERM; initiating actor and preceding UI unresponsiveness are unresolved. No assertion, exception, test timeout or host memory kill was established. Do not delete/relabel that failed run or pull earlier export work into this candidate.
+4. Reuse verified unchanged-code results: focused 244 passed; five controlled exact-selector executions each 1 passed / 0 failed / 0 skipped; fresh full-sigterm-validation gate exit 0, Python 82 passed, native 7,320 passed / 110 skipped / 0 failed expanded executions. iOS, standalone macOS and watchOS builds all ran and passed. Two main-thread warnings remain. All commands/bundles and historical failure are recorded in DEV_LOG. Take 006 hardware evidence remains dirty-primary build 22, not this undeployed build-21 candidate.
+5. Verify the exact seven-file diff, protected files, both empty indexes and primary/evidence checksums before presenting the proposed subject "fix(watch): stage received motion files before async import". Candidate is software-ready, but this prompt does NOT authorize staging, branching, committing or pushing. Obtain Karl's explicit approval for any such next action. Do not begin TTM/Tear against the still-mixed primary worktree. If further tests are explicitly authorized, rebuild and verify the unique sandboxed test host first: the final standalone Mac build left a normal-identity product, which must not be launched as a test host.
+6. Preserve Takes 001-006, all historical metadata mutations and both old phone motion files. No restoration, Take 007, recording, TTM implementation, reference approval/publication/installation or training action is authorized.
+
 ## Current continuation - Watch stop is DONE; decide what to commit
 
 Do not re-open the watch stop path or the overrun measurement. Both are fixed and hardware-verified: `session_2026_09_04_ppop_baby_scratch_95_bpm` validates PASS with zero warnings, `watchStopOutcome: stopped`, overrun 0 s, and the whole handshake inside one second.
