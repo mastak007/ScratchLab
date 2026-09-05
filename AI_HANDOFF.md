@@ -1,5 +1,17 @@
 # AI Handoff
 
+## Current continuation - Prompt 3 checkpoint; Prompt 4 preflight only
+
+This record accompanies the single authorized checkpoint `feat(notation): segment calibrated platter motion for tear candidates`, parent `0521b1ef4ee4ee77f21fa52a1da4188f92e18a50`, on `feature/ttm-tear-notation-alignment`. It supersedes earlier no-commit text for this checkpoint only. After successful commit, expect a clean worktree/index. No push or next implementation slice is authorized.
+
+All six complete diffs were reviewed and contain only this slice. The implementation began from a clean worktree; the index was empty at checkpoint start. Source/test hashes match the verified build and focused results. All 11 protected project/scheme/test-plan/plist/privacy/entitlement files match the parent. The checkpoint changes only four required workflow records after verification; no source/test code changed. Evidence: `build/prompt3/checkpoint-audit.json` and `checkpoint-commands.txt`.
+
+Verified without rerunning unchanged code: macOS `build-for-testing` PASS; the exact 17 selectors on `ScratchLabDesktopTests`, `platform=macOS,arch=arm64`, passed 147 declarations / 398 expanded executions in both configurations, zero failures/skips/runtime warnings. Full `scripts/build.sh all` PASS: 82 Python tests; 8,132 native passes / 112 skips / 0 failures, two main-thread runtime warnings; iOS, macOS and watchOS builds passed (iOS/watchOS unsigned). Bundles: `build-fixed.xcresult`, `focused.xcresult`, `full-tests.xcresult` under `build/prompt3`. The full gate is additional evidence, not a replacement for the focused selectors.
+
+No raw capture was deleted or rewritten; no existing recording or bundled reference became valid, canonical, approved or training-eligible; no detector inference was presented as human ground truth; no ScratchBook GPL source/code/data was copied; no unrelated work belongs to the commit. Calibration remains synthetic and no app consumer, UI/capture/export wiring, fader decision input or scratch naming was added. Physical CXL parameters and false-positive limits remain documented in DEV_LOG.
+
+Exact next numbered prompt is in `AI_HANDOFF/next_prompt.md`: Prompt 4 preflight and specification check only.
+
 ## 2026-09-05 - Prompt 2 checkpoint verified; single narrow commit authorized
 
 This record accompanies `feat(notation): add lossless canonical tear gesture records`, whose parent is `57398919d508d1b94c206510aac12efed83a6478`, on `feature/ttm-tear-notation-alignment`. Work only in `/Users/karlwatson/Downloads/ScratchLab-TTM`. The current checkpoint request expressly authorizes this one commit; earlier no-commit text below is historical. No push or next implementation slice is authorized.

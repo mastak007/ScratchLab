@@ -1731,6 +1731,368 @@ struct TearGestureRecordTests {
     }
 }
 
+// Synthetic physical evidence only. Fixture speeds are calibrated revolutions/s;
+// sample positions can be tested using an explicit, equivalent unit conversion.
+private typealias MotionSegmenter = PlatterMotionSegmenter
+
+private func motionCalibration(sign: Double = 1, origin: Double = 0, scale: Double = 1,
+                               basis: MotionSegmenter.Calibration.Basis = .physicalPlatterDisplacement)
+    -> MotionSegmenter.Calibration {
+    .init(basis: basis, reference: "synthetic-calibration", inputOrigin: origin,
+          unitsPerInputUnit: scale, forwardSign: sign)
+}
+
+private func motionFixture(_ legs: [(Double, Double)], rate: Double = 200) -> [MotionSegmenter.Sample] {
+    let duration = legs.reduce(0) { $0 + $1.0 }
+    var times = (0...Int((duration * rate).rounded(.down))).map { Double($0) / rate }
+    if duration - times.last! > 1e-9 { times.append(duration) }
+    return times.map { time in
+        var remaining = time
+        var position = 0.0
+        for (duration, speed) in legs {
+            let elapsed = min(max(remaining, 0), duration)
+            position += elapsed * speed
+            remaining -= elapsed
+        }
+        return .init(time: time, position: position)
+    }
+}
+
+private func segmentMotion(_ legs: [(Double, Double)], rate: Double = 200,
+                           configuration: MotionSegmenter.Configuration = .init()) -> MotionSegmenter.Result {
+    MotionSegmenter.segment(motionFixture(legs, rate: rate), calibration: motionCalibration(),
+                            configuration: configuration)
+}
+
+@Suite("Calibrated platter motion synthetic fixtures")
+struct PlatterMotionSegmenterTests {
+    @Test("Baby turnarounds never become same-direction tears", arguments: [100.0, 200, 400], [0.0, 0.06])
+    func babyTurnaround(rate: Double, stop: Double) throws {
+        let result = segmentMotion([(0.3, 0.8), (stop, 0), (0.3, -0.8)], rate: rate)
+        #expect(result.gestures.map(\.direction) == [.forward, .backward])
+        #expect(result.gestures.allSatisfy { !$0.isTearCandidate })
+        let reversal = try #require(result.reversals.first)
+        #expect(result.reversals.count == 1)
+        #expect(abs(reversal.span.startTime - 0.3) < 1e-9)
+        #expect(abs(reversal.span.endTime - (0.3 + stop)) < 1e-9)
+    }
+
+    @Test("One, two and three tears across rates, directions, speeds and hold lengths",
+          arguments: [100.0, 200, 400], [-1.0, 1])
+    func tearMatrix(rate: Double, sign: Double) throws {
+        for count in 1...3 {
+            for speed in [0.12, 0.8, 1.6] {
+                for hold in [0.04, 0.07, 0.12] {
+                    var legs: [(Double, Double)] = [(0.2, sign * speed)]
+                    for _ in 0..<count { legs += [(hold, 0), (0.2, sign * speed)] }
+                    let result = segmentMotion(legs, rate: rate)
+                    let gesture = try #require(result.gestures.first)
+                    #expect(result.gestures.count == 1)
+                    #expect(gesture.direction == (sign > 0 ? .forward : .backward))
+                    #expect(gesture.isTearCandidate)
+                    #expect(gesture.tearHolds.count == count)
+                    #expect(gesture.subdivisions.count == count + 1)
+                    #expect(gesture.confidence == .supported)
+                    #expect(result.reversals.isEmpty)
+                    let ratios = try #require(gesture.measuredSubdivisionRatios)
+                    #expect(ratios.allSatisfy { abs($0 - 1 / Double(count + 1)) < 1e-9 })
+                    for (index, interval) in gesture.tearHolds.enumerated() {
+                        let expected = 0.2 + Double(index) * (0.2 + hold)
+                        #expect(abs(interval.span.startTime - expected) < 1e-9)
+                        #expect(abs(interval.span.endTime - expected - hold) < 1e-9)
+                        #expect(interval.boundaryResolutionSeconds <= 1 / rate + 1e-9)
+                    }
+                }
+            }
+        }
+    }
+
+    @Test("Unequal subdivisions preserve moving-duration ratios and measured geometry")
+    func unequalSubdivisions() throws {
+        let result = segmentMotion([(0.12, 0.4), (0.08, 0), (0.24, 0.8), (0.12, 0), (0.36, 0.3)])
+        let gesture = try #require(result.gestures.first)
+        let ratios = try #require(gesture.measuredSubdivisionRatios)
+        #expect(ratios.count == 3)
+        for (value, expected) in zip(ratios, [1.0 / 6, 2.0 / 6, 3.0 / 6]) {
+            #expect(abs(value - expected) < 1e-9)
+        }
+        #expect(abs(gesture.span.duration - 0.92) < 1e-9)
+        #expect(abs(gesture.subdivisions.last!.points.last!.position - 0.348) < 1e-9)
+        #expect(gesture.subdivisions[0].points.count == 25)
+    }
+
+    @Test("Off-grid pause boundaries are within one sample interval, without snapping",
+          arguments: [100.0, 200, 400], [-1.0, 1])
+    func boundaryResolution(rate: Double, sign: Double) throws {
+        for start in [0.201, 0.203, 0.207, 0.213] {
+            let result = segmentMotion([(start, sign * 0.8), (0.073, 0), (0.217, sign * 0.8)], rate: rate)
+            let hold = try #require(result.gestures.first?.tearHolds.first)
+            #expect(abs(hold.span.startTime - start) <= 1 / rate + 1e-9)
+            #expect(abs(hold.span.endTime - start - 0.073) <= 1 / rate + 1e-9)
+            #expect(hold.boundaryResolutionSeconds <= 1 / rate + 1e-9)
+        }
+    }
+
+    @Test("Slow drag stays moving; prolonged sub-threshold drift stays uncertain")
+    func slowDrag() throws {
+        let slow = segmentMotion([(0.4, 0.09), (0.4, 0.03), (0.4, 0.09)])
+        #expect(slow.gestures.count == 1)
+        #expect(slow.gestures[0].tearHolds.isEmpty)
+        #expect(slow.confidence == .low)
+        #expect(slow.reasons.contains(.hysteresisBand))
+        #expect(slow.gestures[0].measuredSubdivisionRatios == nil)
+        let drift = segmentMotion([(0.2, 0.4), (0.5, 0.01), (0.2, 0.4)])
+        #expect(drift.segments.map(\.state) == [.forward, .unknown, .forward])
+        #expect(drift.reasons.contains(.stationaryDrift))
+        #expect(drift.gestures.allSatisfy { !$0.isTearCandidate })
+    }
+
+    @Test("Intentional long hold survives and leading/trailing stationary spans are not tears")
+    func longHold() throws {
+        let result = segmentMotion([(0.2, 0), (0.2, 0.6), (2.0, 0), (0.2, 0.6), (0.2, 0)])
+        let gesture = try #require(result.gestures.first)
+        #expect(result.gestures.count == 1)
+        #expect(gesture.tearHolds.count == 1)
+        #expect(abs(gesture.tearHolds[0].span.duration - 2) < 1e-9)
+        #expect(abs(gesture.span.startTime - 0.2) < 1e-9)
+        #expect(abs(gesture.span.endTime - 2.6) < 1e-9)
+    }
+
+    @Test("Near-zero jitter and bounded spikes cannot invent travel or extra holds")
+    func nearZeroJitter() throws {
+        let tiny = (0...200).map { i in
+            MotionSegmenter.Sample(time: Double(i) / 200, position: i.isMultiple(of: 2) ? 0 : 0.00004)
+        }
+        let result = MotionSegmenter.segment(tiny, calibration: motionCalibration(), configuration: .init())
+        #expect(result.segments.map(\.state) == [.stationary])
+        #expect(result.gestures.isEmpty)
+        // One paired high-speed spike inside an otherwise real hold.
+        var samples = motionFixture([(0.2, 0.6), (0.12, 0), (0.2, 0.6)])
+        samples[50] = .init(time: samples[50].time, position: samples[50].position + 0.00045)
+        let spike = MotionSegmenter.segment(samples, calibration: motionCalibration(), configuration: .init())
+        // Opposite one-edge bursts are ambiguous, never extra tear subdivisions.
+        #expect(spike.gestures.allSatisfy { $0.tearHolds.count <= 1 })
+        #expect(spike.confidence != .supported)
+    }
+
+    @Test("Quick real reversal stays separate; sub-minimum reversal is unknown")
+    func quickReversal() throws {
+        let quick = segmentMotion([(0.2, 0.5), (0.04, -0.5), (0.2, 0.5)])
+        #expect(quick.gestures.map(\.direction) == [.forward, .backward, .forward])
+        #expect(quick.reversals.count == 2)
+        #expect(quick.gestures.allSatisfy { !$0.isTearCandidate })
+        let tooQuick = segmentMotion([(0.2, 0.5), (0.015, -0.5), (0.2, 0.5)])
+        #expect(tooQuick.segments.map(\.state) == [.forward, .unknown, .forward])
+        #expect(tooQuick.reasons.contains(.belowMinimumMovingDuration))
+        #expect(tooQuick.gestures.allSatisfy { !$0.isTearCandidate })
+    }
+
+    @Test("Continuous free-running revolutions never wrap into reversals or tears",
+          arguments: [-1.0, 1])
+    func freeRunningRevolutions(sign: Double) throws {
+        let result = segmentMotion([(12, sign * 5.0 / 9)])
+        #expect(result.gestures.count == 1)
+        #expect(result.gestures[0].tearHolds.isEmpty)
+        #expect(result.reversals.isEmpty)
+        #expect(abs(result.segments[0].points.last!.position - sign * 20 / 3) < 1e-9)
+        #expect(result.reasons.contains(.handContactUnobserved))
+    }
+}
+
+@Suite("Platter segmenter quality and parameter boundaries")
+struct PlatterMotionSegmenterQualityTests {
+    @Test("Exact minimum hold and movement durations are inclusive", arguments: [0.039, 0.04, 0.041])
+    func minimumDurations(duration: Double) throws {
+        let result = segmentMotion([(0.1, 0.5), (duration, 0), (0.1, 0.5)], rate: 1000)
+        #expect(result.gestures.contains(where: \.isTearCandidate) == (duration >= 0.04))
+        if duration < 0.04 { #expect(result.reasons.contains(.belowMinimumHoldDuration)) }
+        let moving = segmentMotion([(duration, 0.5)], rate: 1000)
+        #expect(moving.gestures.isEmpty == (duration < 0.04))
+    }
+
+    @Test("Repair duration boundary is inclusive and cannot consume a valid short hold",
+          arguments: [0.019, 0.02, 0.021, 0.04])
+    func repairDuration(duration: Double) throws {
+        let result = segmentMotion([(0.1, 0.5), (duration, 0), (0.1, 0.5)], rate: 1000)
+        #expect(result.reasons.contains(.mergedJitter) == (duration <= 0.02))
+        #expect(result.gestures.contains(where: \.isTearCandidate) == (duration >= 0.04))
+        if duration <= 0.02 {
+            #expect(result.gestures.count == 1)
+            #expect(result.gestures[0].measuredSubdivisionRatios == nil)
+            #expect(result.gestures[0].confidence == .low)
+        }
+    }
+
+    @Test("Jitter excursion limit prevents erasing a real small reversal",
+          arguments: [0.00049, 0.0005, 0.00051])
+    func jitterExcursion(excursion: Double) {
+        let result = segmentMotion([(0.1, 0.5), (0.005, -excursion / 0.005), (0.1, 0.5)], rate: 1000)
+        #expect(result.reasons.contains(.mergedJitter) == (excursion <= 0.0005))
+        #expect(result.gestures.allSatisfy { !$0.isTearCandidate })
+    }
+
+    @Test("Speed thresholds and hysteresis are explicit", arguments: [0.07999, 0.08, 0.08001])
+    func movingThreshold(speed: Double) {
+        let initial = segmentMotion([(0.2, speed)])
+        #expect(initial.gestures.isEmpty == (speed < 0.08))
+        let sustained = segmentMotion([(0.1, 0.5), (0.2, speed)])
+        #expect(sustained.gestures.count == 1)
+        #expect(sustained.gestures[0].tearHolds.isEmpty)
+    }
+
+    @Test("Stationary threshold is inclusive; hysteresis-band holds stay unknown",
+          arguments: [0.01999, 0.02, 0.02001])
+    func stationaryThreshold(speed: Double) {
+        var c = MotionSegmenter.Configuration()
+        c.maximumStationaryExcursion = 0.01
+        let result = segmentMotion([(0.1, 0.5), (0.05, speed), (0.1, 0.5)], rate: 1000, configuration: c)
+        #expect(result.gestures.contains(where: \.isTearCandidate) == (speed <= 0.02))
+        let bandAfterStop = segmentMotion([(0.1, 0.5), (0.04, 0), (0.05, 0.03), (0.1, 0.5)],
+                                         rate: 1000, configuration: c)
+        #expect(bandAfterStop.reasons.contains(.ambiguousMotion))
+        #expect(bandAfterStop.gestures.allSatisfy { !$0.isTearCandidate })
+    }
+
+    @Test("A bounded dropped event can join sustained travel only with low confidence")
+    func shortDropout() throws {
+        let samples = motionFixture([(0.4, 0.5)], rate: 100).enumerated()
+            .filter { $0.offset != 20 }.map(\.element)
+        let result = MotionSegmenter.segment(samples, calibration: motionCalibration(), configuration: .init())
+        #expect(result.gestures.count == 1)
+        #expect(result.reasons.contains(.bridgedDropout))
+        #expect(result.reasons.contains(.insufficientSampleRate))
+        #expect(result.confidence == .low)
+        #expect(result.gestures[0].measuredSubdivisionRatios == nil)
+        #expect(result.gestures[0].tearHolds.isEmpty)
+        #expect(result.segments[0].points.count == samples.count)
+    }
+
+    @Test("Dropouts within holds and across a reversal stay unknown")
+    func unsafeDropouts() {
+        for middleSpeed in [0.0, -0.5] {
+            let source = motionFixture([(0.2, 0.5), (0.1, middleSpeed), (0.2, 0.5)], rate: 100)
+            let samples = source.filter { $0.time < 0.2 || $0.time > 0.3 }
+            let result = MotionSegmenter.segment(samples, calibration: motionCalibration(), configuration: .init())
+            #expect(result.segments.contains { $0.state == .unknown })
+            #expect(result.reasons.contains(.sampleGap))
+            #expect(!result.reasons.contains(.bridgedDropout))
+            #expect(result.gestures.allSatisfy { !$0.isTearCandidate && $0.confidence == .low })
+        }
+        let source = motionFixture([(0.2, 0.5), (0.1, 0), (0.2, 0.5)], rate: 100)
+        let shortGapInHold = source.enumerated().filter { $0.offset != 25 }.map(\.element)
+        let result = MotionSegmenter.segment(shortGapInHold, calibration: motionCalibration(), configuration: .init())
+        #expect(!result.reasons.contains(.bridgedDropout))
+        #expect(result.gestures.allSatisfy { !$0.isTearCandidate })
+    }
+
+    @Test("Sparse samples cannot establish either motion or a hold", arguments: [25.0, 50, 99, 100, 101])
+    func sampleRateBoundary(rate: Double) {
+        let result = segmentMotion([(0.4, 0.5), (0.2, 0), (0.4, 0.5)], rate: rate)
+        if rate < 100 {
+            #expect(result.confidence == .unknown)
+            #expect(result.gestures.isEmpty)
+            #expect(result.reasons.contains(.insufficientSampleRate))
+        } else { #expect(result.gestures.contains { $0.isTearCandidate }) }
+    }
+
+    @Test("Sample gap and repair limits are pinned independently", arguments: [0.049, 0.05, 0.051])
+    func gapBoundary(gap: Double) {
+        let result = MotionSegmenter.segment([.init(time: 0, position: 0), .init(time: gap, position: 0)],
+                                            calibration: motionCalibration(), configuration: .init())
+        #expect(result.confidence == .unknown)
+        #expect(result.reasons.contains(.sampleGap) == (gap > 0.05))
+        #expect(result.reasons.contains(.insufficientSampleRate) == (gap <= 0.05))
+    }
+
+    @Test("Duplicate/backward/nonfinite clocks and evidence are rejected without sorting")
+    func malformedEvidence() {
+        for times in [[0.0, 0], [0.2, 0.1], [-0.1, 0], [0, .nan], [0, .infinity]] {
+            let result = MotionSegmenter.segment(times.map { .init(time: $0, position: 0) },
+                                                 calibration: motionCalibration(), configuration: .init())
+            #expect(result.confidence == .unknown)
+            #expect(result.gestures.isEmpty)
+            #expect(result.reasons.contains(.clockDiscontinuity) || result.reasons.contains(.nonfiniteEvidence))
+        }
+        for position in [Double.nan, .infinity] {
+            let result = MotionSegmenter.segment([.init(time: 0, position: 0), .init(time: 0.1, position: position)],
+                                                 calibration: motionCalibration(), configuration: .init())
+            #expect(result.reasons == [.nonfiniteEvidence])
+        }
+        for count in [0, 1] {
+            let result = MotionSegmenter.segment(Array(repeating: .init(time: 0, position: 0), count: count),
+                                                 calibration: motionCalibration(), configuration: .init())
+            #expect(result.reasons == [.insufficientSamples])
+        }
+    }
+
+    @Test("Low input confidence and implausible jumps are not repaired into tears")
+    func badMeasurements() {
+        var samples = motionFixture([(0.2, 0.5), (0.1, 0), (0.2, 0.5)])
+        samples[50].confidence = 0.2
+        let low = MotionSegmenter.segment(samples, calibration: motionCalibration(), configuration: .init())
+        #expect(low.reasons.contains(.lowInputConfidence))
+        #expect(low.gestures.allSatisfy { !$0.isTearCandidate })
+        samples[50] = .init(time: samples[50].time, position: 10)
+        let jump = MotionSegmenter.segment(samples, calibration: motionCalibration(), configuration: .init())
+        #expect(jump.reasons.contains(.implausibleSpeed))
+        #expect(jump.gestures.allSatisfy { !$0.isTearCandidate })
+    }
+
+    @Test("Calibration is explicit, signed, unclamped and independent of arbitrary input origin")
+    func coordinates() throws {
+        let samples = motionFixture([(0.2, -0.5), (0.08, 0), (0.2, -0.5)])
+        let baseline = MotionSegmenter.segment(samples, calibration: motionCalibration(), configuration: .init())
+        let transformed = samples.map { MotionSegmenter.Sample(time: $0.time, position: 1234 - $0.position * 100) }
+        let scaled = MotionSegmenter.segment(transformed, calibration: motionCalibration(sign: -1, origin: 1234, scale: 0.01),
+                                             configuration: .init())
+        #expect(scaled.segments.map(\.state) == baseline.segments.map(\.state))
+        #expect(scaled.gestures.map(\.measuredSubdivisionRatios) == baseline.gestures.map(\.measuredSubdivisionRatios))
+        for (lhs, rhs) in zip(scaled.segments.flatMap(\.points), baseline.segments.flatMap(\.points)) {
+            #expect(lhs.time == rhs.time)
+            #expect(abs(lhs.position - rhs.position) < 1e-9)
+        }
+        let samplePosition = MotionSegmenter.segment(samples, calibration: motionCalibration(basis: .samplePosition),
+                                                     configuration: .init())
+        #expect(samplePosition.coordinateSpace == .samplePosition)
+        #expect(samplePosition.segments.last!.points.last!.position < 0)
+        let raw = MotionSegmenter.segment(samples, calibration: motionCalibration(basis: .rawMotorPhase), configuration: .init())
+        #expect(raw.reasons == [.unsupportedMotorPhase])
+        #expect(raw.coordinateSpace == nil)
+        #expect(raw.gestures.isEmpty)
+    }
+
+    @Test("Invalid parameters and calibration fail closed")
+    func invalidParameters() {
+        let source = motionFixture([(0.2, 0.5)])
+        for invalid in [0.0, -1, Double.nan, .infinity] {
+            var c = MotionSegmenter.Configuration()
+            c.movingSpeed = invalid
+            #expect(MotionSegmenter.segment(source, calibration: motionCalibration(), configuration: c).reasons == [.invalidConfiguration])
+            #expect(MotionSegmenter.segment(source, calibration: motionCalibration(scale: invalid), configuration: .init()).reasons == [.invalidCalibration])
+        }
+        var c = MotionSegmenter.Configuration()
+        c.maximumRepairDuration = c.minimumHoldDuration
+        #expect(MotionSegmenter.segment(source, calibration: motionCalibration(), configuration: c).reasons == [.invalidConfiguration])
+        #expect(MotionSegmenter.segment(source, calibration: motionCalibration(sign: 0), configuration: .init()).reasons == [.invalidCalibration])
+    }
+
+    @Test("Deterministic output retains total ordered coverage and does not alter canonical registry")
+    func determinismAndCoverage() throws {
+        let before = ScratchNotation.babyScratchGesturePattern
+        let source = motionFixture([(0.2, 0.5), (0.06, 0), (0.2, 0.5), (0.1, -0.5)])
+        let first = MotionSegmenter.segment(source, calibration: motionCalibration(), configuration: .init())
+        #expect(first == MotionSegmenter.segment(source, calibration: motionCalibration(), configuration: .init()))
+        #expect(first.segments.first?.span.startTime == source.first?.time)
+        #expect(first.segments.last?.span.endTime == source.last?.time)
+        for (left, right) in zip(first.segments, first.segments.dropFirst()) {
+            #expect(left.span.endTime == right.span.startTime)
+            #expect(left.points.last == right.points.first)
+        }
+        #expect(ScratchNotation.babyScratchGesturePattern == before)
+        #expect(ScratchNotation.canonicalBeatPattern(forScratchID: "tear2") == nil)
+    }
+}
+
 @Suite("Tear record backward compatibility")
 struct TearGestureRecordCompatibilityTests {
     @Test("Legacy seconds notation needs no gesture fields and preserves its schema")

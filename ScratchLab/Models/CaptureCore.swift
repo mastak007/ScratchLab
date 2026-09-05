@@ -6794,6 +6794,333 @@ extension ScratchNotation {
     }
 }
 
+// MARK: - Offline calibrated platter-motion segmentation
+
+/// Pure kinematic evidence analysis. No fader, scratch name, clock, I/O or app
+/// consumer. In particular, movement alone cannot establish hand contact or
+/// distinguish free playback from a hand moving at the same speed.
+enum PlatterMotionSegmenter {
+    typealias TimeSpan = ScratchNotation.GestureRecord.TimeSpan
+    typealias Point = ScratchNotation.GestureRecord.CurvePoint
+
+    struct Sample: Equatable, Sendable {
+        let time: Double
+        let position: Double
+        var confidence: Double = 1
+    }
+
+    struct Calibration: Equatable, Sendable {
+        enum Basis: Equatable, Sendable {
+            case physicalPlatterDisplacement, samplePosition, rawMotorPhase
+        }
+        let basis: Basis
+        /// An explicit, externally established calibration reference. This
+        /// segmenter cannot verify calibration or recover it from raw phase.
+        let reference: String
+        let inputOrigin: Double
+        /// Positive conversion to revolutions or fractions of sample duration.
+        let unitsPerInputUnit: Double
+        /// Exactly +1 or -1; positive output always means forward.
+        let forwardSign: Double
+
+        var coordinateSpace: ScratchNotation.GestureRecord.CoordinateSpace? {
+            switch basis {
+            case .physicalPlatterDisplacement: return .platterRevolutions
+            case .samplePosition: return .samplePosition
+            case .rawMotorPhase: return nil
+            }
+        }
+    }
+
+    /// Values below are synthetic-fixture starting points, NOT CXL calibration.
+    /// Callers must explicitly supply a configuration in the calibration's
+    /// output units (units/sec for speed, units for excursion, seconds for time).
+    struct Configuration: Equatable, Sendable {
+        var movingSpeed: Double = 0.08
+        var stationarySpeed: Double = 0.02
+        var minimumMovingDuration: Double = 0.04
+        var minimumHoldDuration: Double = 0.04
+        var maximumRepairDuration: Double = 0.02
+        var maximumJitterExcursion: Double = 0.0005
+        var maximumStationaryExcursion: Double = 0.001
+        var minimumSampleRate: Double = 100
+        var maximumSampleGap: Double = 0.05
+        var maximumPlausibleSpeed: Double = 8
+        var minimumSampleConfidence: Double = 0.8
+
+        fileprivate var isValid: Bool {
+            let positive = [movingSpeed, minimumMovingDuration, minimumHoldDuration,
+                            maximumStationaryExcursion, minimumSampleRate,
+                            maximumSampleGap, maximumPlausibleSpeed]
+            let nonnegative = [stationarySpeed, maximumRepairDuration, maximumJitterExcursion]
+            return positive.allSatisfy { $0.isFinite && $0 > 0 }
+                && nonnegative.allSatisfy { $0.isFinite && $0 >= 0 }
+                && stationarySpeed < movingSpeed && movingSpeed < maximumPlausibleSpeed
+                && maximumRepairDuration < min(minimumMovingDuration, minimumHoldDuration)
+                && maximumJitterExcursion <= maximumStationaryExcursion
+                && maximumSampleGap >= 1 / minimumSampleRate
+                && minimumSampleConfidence.isFinite && (0...1).contains(minimumSampleConfidence)
+        }
+    }
+
+    /// Observed direction, not the canonical model's assertion of hand-driven
+    /// travel. There is deliberately no inferred `released` state.
+    enum State: Equatable, Sendable {
+        case forward, backward, stationary, unknown
+        var direction: ScratchNotationDirection? {
+            switch self {
+            case .forward: return .forward
+            case .backward: return .backward
+            case .stationary, .unknown: return nil
+            }
+        }
+    }
+
+    /// Confidence in the kinematic segmentation under the supplied parameters;
+    /// not a calibrated probability or confidence in a named technique.
+    enum Confidence: Int, Equatable, Sendable {
+        case unknown, low, supported
+    }
+
+    enum Reason: String, CaseIterable, Equatable, Sendable {
+        case invalidConfiguration, invalidCalibration, unsupportedMotorPhase
+        case insufficientSamples, nonfiniteEvidence, clockDiscontinuity
+        case insufficientSampleRate, sampleGap, lowInputConfidence, implausibleSpeed
+        case hysteresisBand, ambiguousMotion, belowMinimumMovingDuration, belowMinimumHoldDuration
+        case stationaryDrift, mergedJitter, bridgedDropout, interruptedEvidence
+        case observedMovement, observedStationary, sameDirectionPauseResume, directionReversal
+        case handContactUnobserved
+    }
+
+    struct Segment: Equatable, Sendable {
+        let span: TimeSpan
+        let state: State
+        /// Original calibrated points, including both interval endpoints.
+        let points: [Point]
+        let confidence: Confidence
+        let reasons: [Reason]
+        /// Largest sample-pair duration incident to either boundary. This is
+        /// sampling resolution, not a guarantee about a gradual threshold crossing.
+        let boundaryResolutionSeconds: Double
+    }
+
+    struct Gesture: Equatable, Sendable {
+        let direction: ScratchNotationDirection
+        let subdivisions: [Segment]
+        let tearHolds: [Segment]
+        let confidence: Confidence
+        let reasons: [Reason]
+        var isTearCandidate: Bool { !tearHolds.isEmpty }
+        var span: TimeSpan {
+            .init(startTime: subdivisions[0].span.startTime, endTime: subdivisions.last!.span.endTime)
+        }
+        /// Fractions of observed MOVING durations, excluding holds. Repaired or
+        /// ambiguous evidence does not claim an exact measured ratio.
+        var measuredSubdivisionRatios: [Double]? {
+            guard confidence == .supported else { return nil }
+            let total = subdivisions.reduce(0) { $0 + $1.span.duration }
+            return subdivisions.map { $0.span.duration / total }
+        }
+    }
+
+    struct Reversal: Equatable, Sendable {
+        /// Direct turnaround: zero-width boundary. A stop before opposite
+        /// travel: the whole stationary interval, not a fabricated instant.
+        let span: TimeSpan
+        let from: ScratchNotationDirection
+        let to: ScratchNotationDirection
+    }
+
+    struct Result: Equatable, Sendable {
+        let coordinateSpace: ScratchNotation.GestureRecord.CoordinateSpace?
+        let segments: [Segment]
+        let gestures: [Gesture]
+        let reversals: [Reversal]
+        let confidence: Confidence
+        let reasons: [Reason]
+    }
+
+    private struct Run {
+        var first: Int
+        var end: Int // exclusive edge index; also the final point index
+        var state: State
+        var reasons: [Reason]
+    }
+
+    /// Timestamp order is evidence: never sort, unwrap, clamp, rebase time,
+    /// normalize to observed extrema, or fill a gap with stationary samples.
+    /// Boundaries are the original sample times bounding pair-average speeds.
+    /// Duration/speed comparisons allow 1e-9 for floating-point arithmetic only.
+    static func segment(_ samples: [Sample], calibration: Calibration,
+                        configuration c: Configuration) -> Result {
+        func rejected(_ reason: Reason) -> Result {
+            Result(coordinateSpace: calibration.coordinateSpace, segments: [], gestures: [],
+                   reversals: [], confidence: .unknown, reasons: [reason])
+        }
+        guard c.isValid else { return rejected(.invalidConfiguration) }
+        guard calibration.basis != .rawMotorPhase else { return rejected(.unsupportedMotorPhase) }
+        guard !calibration.reference.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+              calibration.inputOrigin.isFinite, calibration.unitsPerInputUnit.isFinite,
+              calibration.unitsPerInputUnit > 0, abs(calibration.forwardSign) == 1 else {
+            return rejected(.invalidCalibration)
+        }
+        guard samples.count >= 2 else { return rejected(.insufficientSamples) }
+        guard samples.allSatisfy({ $0.time.isFinite && $0.position.isFinite && $0.confidence.isFinite }) else {
+            return rejected(.nonfiniteEvidence)
+        }
+        guard samples[0].time >= 0,
+              zip(samples, samples.dropFirst()).allSatisfy({ $1.time > $0.time }) else {
+            return rejected(.clockDiscontinuity)
+        }
+        let points = samples.map {
+            Point(time: $0.time, position: ($0.position - calibration.inputOrigin)
+                  * calibration.unitsPerInputUnit * calibration.forwardSign)
+        }
+        guard points.allSatisfy({ $0.position.isFinite }) else { return rejected(.nonfiniteEvidence) }
+        var runs: [Run] = []
+        var previous: State = .unknown
+        for i in 0..<(points.count - 1) {
+            let dt = points[i + 1].time - points[i].time
+            let speed = (points[i + 1].position - points[i].position) / dt
+            var state: State = .unknown
+            var reasons: [Reason] = []
+            if dt > c.maximumSampleGap + epsilon { reasons = [.sampleGap] }
+            else if dt > 1 / c.minimumSampleRate + epsilon { reasons = [.insufficientSampleRate] }
+            else if !speed.isFinite || abs(speed) > c.maximumPlausibleSpeed + epsilon { reasons = [.implausibleSpeed] }
+            else if [samples[i].confidence, samples[i + 1].confidence].contains(where: {
+                !(c.minimumSampleConfidence...1).contains($0)
+            }) { reasons = [.lowInputConfidence] }
+            else if abs(speed) <= c.stationarySpeed + epsilon { state = .stationary }
+            else if abs(speed) + epsilon >= c.movingSpeed { state = speed > 0 ? .forward : .backward }
+            else {
+                let sign: State = speed > 0 ? .forward : .backward
+                state = previous == .stationary || previous == sign ? previous : .unknown
+                reasons = [.hysteresisBand]
+            }
+            append(Run(first: i, end: i + 1, state: state, reasons: reasons), to: &runs)
+            previous = state
+        }
+
+        func duration(_ run: Run) -> Double { points[run.end].time - points[run.first].time }
+        func excursion(_ run: Run) -> Double {
+            let positions = points[run.first...run.end].map(\.position)
+            return positions.max()! - positions.min()!
+        }
+        func sufficientlyLong(_ run: Run) -> Bool {
+            run.state != .unknown && duration(run) + epsilon >=
+                (run.state == .stationary ? c.minimumHoldDuration : c.minimumMovingDuration)
+        }
+
+        // A repair needs independently sustained matching neighbors. Never
+        // consume a minimum-length intentional hold, or cascade short bursts
+        // into evidence of sustained motion. Preserve raw points and a low flag.
+        var i = 1
+        while i + 1 < runs.count {
+            let left = runs[i - 1], middle = runs[i], right = runs[i + 1]
+            var repair: Reason?
+            if left.state == right.state, sufficientlyLong(left), sufficientlyLong(right),
+               duration(middle) <= c.maximumRepairDuration + epsilon {
+                if middle.state != .unknown, excursion(middle) <= c.maximumJitterExcursion + epsilon {
+                    repair = .mergedJitter
+                } else if middle.state == .unknown, middle.reasons == [.insufficientSampleRate],
+                          let direction = left.state.direction {
+                    let speed = (points[middle.end].position - points[middle.first].position) / duration(middle)
+                    let sampleConfidenceOK = samples[middle.first...middle.end].allSatisfy {
+                        (c.minimumSampleConfidence...1).contains($0.confidence)
+                    }
+                    if sampleConfidenceOK, abs(speed) + epsilon >= c.movingSpeed,
+                       abs(speed) <= c.maximumPlausibleSpeed + epsilon,
+                       (speed > 0) == (direction == .forward) {
+                        repair = .bridgedDropout
+                    }
+                }
+            }
+            if let repair {
+                runs.replaceSubrange((i - 1)...(i + 1), with: [Run(first: left.first, end: right.end,
+                    state: left.state, reasons: ordered(left.reasons + middle.reasons + right.reasons + [repair]))])
+                i = max(1, i - 1)
+            } else { i += 1 }
+        }
+
+        var qualified: [Run] = []
+        for var run in runs {
+            if run.state == .stationary {
+                if duration(run) + epsilon < c.minimumHoldDuration {
+                    run.state = .unknown; run.reasons.append(.belowMinimumHoldDuration)
+                } else if excursion(run) > c.maximumStationaryExcursion + epsilon {
+                    run.state = .unknown; run.reasons.append(.stationaryDrift)
+                } else if run.reasons.contains(.hysteresisBand) {
+                    // Hysteresis prevents chatter, but threshold-band drift
+                    // cannot establish a tear hold, even with little net travel.
+                    run.state = .unknown; run.reasons.append(.ambiguousMotion)
+                }
+            } else if run.state.direction != nil, duration(run) + epsilon < c.minimumMovingDuration {
+                run.state = .unknown; run.reasons.append(.belowMinimumMovingDuration)
+            }
+            append(run, to: &qualified)
+        }
+        let segments = qualified.map { run in
+            let confidence: Confidence = run.state == .unknown ? .unknown : (run.reasons.isEmpty ? .supported : .low)
+            let base: Reason = run.state == .stationary ? .observedStationary
+                : (run.state == .unknown ? .ambiguousMotion : .observedMovement)
+            let incidentEdges = [run.first - 1, run.first, run.end - 1, run.end]
+                .filter { $0 >= 0 && $0 + 1 < points.count }
+            return Segment(span: .init(startTime: points[run.first].time, endTime: points[run.end].time),
+                state: run.state, points: Array(points[run.first...run.end]), confidence: confidence,
+                reasons: ordered(run.reasons + [base]), boundaryResolutionSeconds: incidentEdges.map {
+                    points[$0 + 1].time - points[$0].time
+                }.max()!)
+        }
+        var gestures: [Gesture] = []
+        var reversals: [Reversal] = []
+        i = 0
+        while i < segments.count {
+            guard let direction = segments[i].state.direction else { i += 1; continue }
+            let first = i
+            var subdivisions = [segments[i]]
+            var holds: [Segment] = []
+            while i + 2 < segments.count, segments[i + 1].state == .stationary,
+                  segments[i + 2].state.direction == direction {
+                holds.append(segments[i + 1]); subdivisions.append(segments[i + 2]); i += 2
+            }
+            let all = subdivisions + holds
+            let interrupted = (first > 0 && segments[first - 1].state == .unknown)
+                || (i + 1 < segments.count && segments[i + 1].state == .unknown)
+            let confidence: Confidence = interrupted || all.contains { $0.confidence != .supported } ? .low : .supported
+            gestures.append(Gesture(direction: direction, subdivisions: subdivisions, tearHolds: holds,
+                confidence: confidence, reasons: ordered(all.flatMap(\.reasons) + [.handContactUnobserved]
+                    + (holds.isEmpty ? [] : [.sameDirectionPauseResume])
+                    + (interrupted ? [.interruptedEvidence] : []))))
+            let next = i + 1 < segments.count && segments[i + 1].state == .stationary ? i + 2 : i + 1
+            if next < segments.count, let other = segments[next].state.direction, other != direction {
+                reversals.append(Reversal(span: .init(startTime: segments[i].span.endTime,
+                    endTime: segments[next].span.startTime), from: direction, to: other))
+            }
+            i += 1
+        }
+        let confidence: Confidence = segments.allSatisfy { $0.state == .unknown } ? .unknown
+            : (segments.contains { $0.confidence != .supported } ? .low : .supported)
+        return Result(coordinateSpace: calibration.coordinateSpace, segments: segments, gestures: gestures,
+            reversals: reversals, confidence: confidence,
+            reasons: ordered(segments.flatMap(\.reasons) + [.handContactUnobserved]
+                + (reversals.isEmpty ? [] : [.directionReversal])
+                + (gestures.contains(where: \.isTearCandidate) ? [.sameDirectionPauseResume] : [])))
+    }
+
+    private static let epsilon = 1e-9
+
+    private static func ordered(_ reasons: [Reason]) -> [Reason] {
+        Reason.allCases.filter { reasons.contains($0) }
+    }
+
+    private static func append(_ run: Run, to runs: inout [Run]) {
+        if let last = runs.last, last.state == run.state {
+            runs[runs.count - 1].end = run.end
+            runs[runs.count - 1].reasons = ordered(last.reasons + run.reasons)
+        } else { runs.append(run) }
+    }
+}
+
 extension ScratchNotation {
     static func detectedPreview(
         scratchID: String,
