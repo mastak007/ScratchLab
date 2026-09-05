@@ -2,6 +2,231 @@ import Foundation
 import Testing
 @testable import ScratchLab
 
+#if DEBUG
+@Suite("Internal authored canonical tear templates")
+struct AuthoredTearTemplateTests {
+    typealias Template = ScratchNotation.TearTemplate
+    private typealias Record = ScratchNotation.GestureRecord
+
+    private func template(id: String = "test.tear.v1", form: Template.Form = .forward,
+                          holds: Int = 1, ratio: [Double] = [1, 1],
+                          duration: Double = 1, holdDuration: Double = 0.0625) -> Template {
+        .init(id: id, form: form, holdCount: holds, subdivisionRatio: ratio,
+              gestureDurationBeats: duration, holdDurationBeats: holdDuration)
+    }
+
+    private func replacing(_ record: Record, direction: ScratchNotationDirection? = nil,
+                           subdivisions: [Record.Subdivision]? = nil, holds: [Record.TearHold]? = nil,
+                           fader: [Record.FaderSpan]? = nil, edges: [Record.FaderTransition]? = nil) -> Record {
+        .init(id: record.id, direction: direction ?? record.direction, timingDomain: record.timingDomain,
+              coordinateSpace: record.coordinateSpace, evidence: record.evidence,
+              subdivisions: subdivisions ?? record.subdivisions, internalHolds: holds ?? record.internalHolds,
+              faderTransitions: edges ?? record.faderTransitions, faderIntervals: fader ?? record.faderIntervals)
+    }
+
+    @Test("Catalog has exactly the versioned directional/orbit equal/unequal tear family")
+    func catalogBoundary() {
+        var expected = Set<String>()
+        for count in 1...3 {
+            for form in ["forward", "backward", "forward-backward"] {
+                for rhythm in ["equal", "unequal"] {
+                    expected.insert("scratchlab.tear.\(count).\(form).\(rhythm).v1")
+                }
+            }
+        }
+        let actual = ScratchNotation.internalCanonicalTearTemplates.map(\.id)
+        #expect(actual.count == 18)
+        #expect(Set(actual) == expected)
+        let unequalRatios = [1: [1.0, 2.0], 2: [1.0, 2.0, 1.0], 3: [1.0, 2.0, 2.0, 1.0]]
+        for template in ScratchNotation.internalCanonicalTearTemplates {
+            let expectedRatio = template.id.contains(".unequal.")
+                ? unequalRatios[template.holdCount] : Array(repeating: 1.0, count: template.holdCount + 1)
+            #expect(template.subdivisionRatio == expectedRatio)
+            #expect(template.gestureDurationBeats == 1)
+            #expect(template.holdDurationBeats == 0.0625)
+        }
+        #expect(ScratchNotation.internalCanonicalGestureRecords(forTemplateID: "tear") == nil)
+        #expect(ScratchNotation.internalCanonicalGestureRecords(forTemplateID: "orbit") == nil)
+        #expect(ScratchNotation.internalCanonicalGestureRecords(forTemplateID: "scratchlab.tear.4.forward.equal.v1") == nil)
+    }
+
+    @Test("All templates expand into continuous authored beat records", arguments: ScratchNotation.internalCanonicalTearTemplates)
+    func everyTemplate(_ template: Template) throws {
+        #expect(template.validationIssues().isEmpty)
+        let records = try #require(ScratchNotation.internalCanonicalGestureRecords(forTemplateID: template.id))
+        #expect(records == template.expanded())
+        #expect(template.expansionValidationIssues(records).isEmpty)
+        #expect(records.map(\.direction) == template.form.directions)
+        #expect(records.first?.subdivisions.first?.span.startTime == 0)
+        #expect(records.last?.subdivisions.last?.span.endTime == template.durationBeats)
+        var totalDuration = 0.0
+        for (index, record) in records.enumerated() {
+            #expect(record.id == "\(template.id)/gesture/\(index)")
+            #expect(record.validationIssues().isEmpty)
+            #expect(record.tearLabel == "tear\(template.holdCount)")
+            #expect(record.subdivisions.count == template.holdCount + 1)
+            #expect(record.internalHolds.count == template.holdCount)
+            #expect(record.timingDomain == .beats)
+            #expect(record.measuredSubdivisionRatio == nil)
+            #expect(record.authoredSubdivisionRatio == template.subdivisionRatio)
+            #expect(record.evidence.provenance == .authored)
+            #expect(record.evidence.observation.source == .authored)
+            #expect(record.evidence.observation.rawSampleCount == nil)
+            #expect(record.faderTransitions.isEmpty)
+            #expect(record.faderIntervals.count == 1)
+            #expect(record.faderIntervals[0].state == .open)
+            #expect(record.classifiedIntervals.allSatisfy { $0.state == .sounding || $0.state == .hold })
+            let movingTime = record.subdivisions.reduce(0) { $0 + $1.span.duration }
+            let ratioSum = template.subdivisionRatio.reduce(0, +)
+            for (sliceIndex, slice) in record.subdivisions.enumerated() {
+                #expect(slice.id == "\(record.id)/motion/\(sliceIndex)")
+                #expect(slice.measuredCurve == nil)
+                #expect(approximatelyEqual(slice.span.duration / movingTime, template.subdivisionRatio[sliceIndex] / ratioSum))
+                let curve = try #require(slice.targetCurve)
+                let sign = record.direction == .forward ? 1.0 : -1.0
+                #expect((try #require(curve.endPosition) - #require(curve.startPosition)) * sign > 0)
+                if sliceIndex < template.holdCount {
+                    let hold = record.internalHolds[sliceIndex]
+                    #expect(hold.id == "\(record.id)/hold/\(sliceIndex)")
+                    #expect(hold.label.effective == .stationary)
+                    #expect(hold.span.startTime == slice.span.endTime)
+                    #expect(hold.span.endTime == record.subdivisions[sliceIndex + 1].span.startTime)
+                    #expect(hold.position == curve.endPosition)
+                    #expect(hold.position == record.subdivisions[sliceIndex + 1].targetCurve?.startPosition)
+                    #expect(approximatelyEqual(hold.span.duration, 1.0 / 16))
+                }
+            }
+            totalDuration += movingTime + record.internalHolds.reduce(0) { $0 + $1.span.duration }
+            if index > 0 {
+                #expect(records[index - 1].subdivisions.last?.span.endTime == record.subdivisions.first?.span.startTime)
+                #expect(records[index - 1].subdivisions.last?.targetCurve?.endPosition == record.subdivisions.first?.targetCurve?.startPosition)
+            }
+        }
+        #expect(approximatelyEqual(totalDuration, template.durationBeats))
+    }
+
+    @Test("Unequal two-tear target has exact 1:2:1 moving times and explicit holds")
+    func unequalSnapshot() throws {
+        let records = try #require(ScratchNotation.internalCanonicalGestureRecords(
+            forTemplateID: "scratchlab.tear.2.forward-backward.unequal.v1"))
+        #expect(records.flatMap { $0.subdivisions.map { [$0.span.startTime, $0.span.endTime] } } == [
+            [0, 0.21875], [0.28125, 0.71875], [0.78125, 1],
+            [1, 1.21875], [1.28125, 1.71875], [1.78125, 2]
+        ])
+        #expect(records.flatMap { $0.internalHolds.map { [$0.span.startTime, $0.span.endTime] } } == [
+            [0.21875, 0.28125], [0.71875, 0.78125], [1.21875, 1.28125], [1.71875, 1.78125]
+        ])
+        #expect(records[0].subdivisions.first?.targetCurve?.startPosition == 0)
+        #expect(records[0].subdivisions.last?.targetCurve?.endPosition == 1)
+        #expect(records[1].subdivisions.first?.targetCurve?.startPosition == 1)
+        #expect(records[1].subdivisions.last?.targetCurve?.endPosition == 0)
+    }
+
+    @Test("Expansion and record serialization are deterministic", arguments: ScratchNotation.internalCanonicalTearTemplates)
+    func deterministic(_ template: Template) throws {
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.sortedKeys]
+        let first = try #require(template.expanded())
+        let bytes = try encoder.encode(first)
+        #expect(bytes == (try encoder.encode(#require(template.expanded()))))
+        #expect(try JSONDecoder().decode([Record].self, from: bytes) == first)
+        let retimed = self.template(id: template.id, form: template.form, holds: template.holdCount,
+            ratio: template.subdivisionRatio, duration: 2, holdDuration: 0.125)
+        let slower = try #require(retimed.expanded())
+        #expect(first.map(\.id) == slower.map(\.id))
+        #expect(first.flatMap { $0.subdivisions.map(\.id) } == slower.flatMap { $0.subdivisions.map(\.id) })
+        #expect(first.flatMap { $0.internalHolds.map(\.id) } == slower.flatMap { $0.internalHolds.map(\.id) })
+    }
+
+    @Test("Bad ratios, counts, durations and IDs fail without partial expansion")
+    func malformedDefinitions() {
+        let invalid = [
+            template(id: ""), template(holds: 0), template(holds: 4), template(holds: Int.max),
+            template(ratio: []), template(ratio: [1]), template(ratio: [1, 1, 1]),
+            template(ratio: [0, 1]), template(ratio: [-1, 2]), template(ratio: [.nan, 1]),
+            template(ratio: [.infinity, 1]), template(ratio: [.greatestFiniteMagnitude, .greatestFiniteMagnitude]),
+            template(duration: 0), template(duration: -1), template(duration: .nan), template(duration: .infinity),
+            template(form: .forwardBackward, duration: .greatestFiniteMagnitude),
+            template(holdDuration: 0), template(holdDuration: -1), template(holdDuration: .nan),
+            template(holdDuration: .infinity), template(holdDuration: 1), template(holdDuration: 2)
+        ]
+        for candidate in invalid {
+            #expect(!candidate.validationIssues().isEmpty)
+            #expect(candidate.expanded() == nil)
+        }
+        #expect(template(ratio: [.leastNonzeroMagnitude, .greatestFiniteMagnitude]).expanded() == nil)
+        #expect(template(holdDuration: .leastNonzeroMagnitude).expanded() == nil)
+    }
+
+    @Test("Authoring validation rejects broken direction, continuity, ratios, count and fader")
+    func invalidExpansions() throws {
+        let template = template()
+        let record = try #require(template.expanded()?.first)
+        let slice = record.subdivisions[0]
+        let curve = try #require(slice.targetCurve)
+        let hold = record.internalHolds[0]
+        let reversedCurve = Record.MotionCurve(points: [
+            .init(time: slice.span.startTime, position: 0.5), .init(time: slice.span.endTime, position: 0)
+        ], evidence: curve.evidence)
+        let badCurve = Record.Subdivision(id: slice.id, span: slice.span, evidence: slice.evidence,
+            targetCurve: reversedCurve, authoredDurationWeight: 1)
+        let badWeight = Record.Subdivision(id: slice.id, span: slice.span, evidence: slice.evidence,
+            targetCurve: curve, authoredDurationWeight: 2)
+        let badHold = Record.TearHold(id: hold.id, span: hold.span, label: hold.label, evidence: hold.evidence, position: 0.9)
+        let gap = Record.TearHold(id: hold.id, span: .init(startTime: hold.span.startTime + 0.01, endTime: hold.span.endTime),
+            label: hold.label, evidence: hold.evidence, position: hold.position)
+        let closed = Record.FaderSpan(id: "closed", span: record.faderIntervals[0].span, state: .closed, evidence: record.evidence)
+        let invalid = [
+            replacing(record, direction: .backward), replacing(record, subdivisions: [badCurve, record.subdivisions[1]]),
+            replacing(record, subdivisions: [badWeight, record.subdivisions[1]]), replacing(record, holds: [badHold]),
+            replacing(record, holds: [gap]), replacing(record, holds: []), replacing(record, fader: []),
+            replacing(record, fader: [closed]), replacing(record, edges: [
+                .init(id: "click", time: 0.5, state: .closed, evidence: record.evidence)
+            ])
+        ]
+        for candidate in invalid { #expect(!template.expansionValidationIssues([candidate]).isEmpty) }
+        #expect(!template.expansionValidationIssues([]).isEmpty)
+        #expect(!template.expansionValidationIssues([record, record]).isEmpty)
+        // Valid records can still violate this template's total/ratio contract.
+        let longer = try #require(self.template(duration: 2).expanded())
+        #expect(!template.expansionValidationIssues(longer).isEmpty)
+        let unequal = try #require(self.template(ratio: [1, 2]).expanded())
+        #expect(!template.expansionValidationIssues(unequal).isEmpty)
+    }
+
+    @Test("Factory output renders through the shared target path at selected tempos", arguments: [60.0, 120.0, 173.0])
+    func sharedRenderer(_ bpm: Double) throws {
+        let records = try #require(ScratchNotation.internalCanonicalGestureRecords(
+            forTemplateID: "scratchlab.tear.3.forward-backward.unequal.v1"))
+        let frame = try #require(ScratchStrokeGeometry.CanonicalFrame(timeRange: 0...(2 * 60 / bpm),
+            positionRange: 0...1, coordinateSpace: .samplePosition, beatsPerMinute: bpm))
+        let result = ScratchStrokeGeometry.canonicalGeometry(records: records, layer: .target, frame: frame)
+        #expect(result.missingMotion.isEmpty)
+        #expect(!result.hasUnplacedEvidence)
+        #expect(result.faderEdges.isEmpty)
+        #expect(result.fader.allSatisfy { $0.state == .open })
+        #expect(result.motion.segments.count == 14)
+        let performance = ScratchStrokeGeometry.canonicalGeometry(records: records, layer: .performance, frame: frame)
+        #expect(performance.missingMotion.count > 0)
+    }
+
+    @Test("Internal targets do not promote curriculum techniques or captured references")
+    func productionBoundary() {
+        #expect(ScratchNotation.canonicalBeatPatterns.map(\.scratchID) == ["baby_scratch"])
+        #expect(ScratchNotation.canonicalBeatPattern(forScratchID: "tear") == nil)
+        #expect(ScratchNotation.canonicalBeatPattern(forScratchID: "orbit") == nil)
+        for template in ScratchNotation.internalCanonicalTearTemplates {
+            #expect(ScratchNotation.canonicalBeatPattern(forScratchID: template.id) == nil)
+        }
+        #expect(ScratchLibrary.shared.allScratches.count == 20)
+        #expect(ScratchLibrary.shared.comboScratches.count == 5)
+        #expect(ScratchLibrary.shared.scratch(byID: "tear")?.faderRequired == false)
+        #expect(ScratchLibrary.shared.scratch(byID: "orbit")?.faderRequired == true)
+        #expect(ReferenceTechnique.minimumRequiredSet.filter(\.hasVerifiedTargetSemantics).map(\.id) == ["baby_scratch"])
+    }
+}
+#endif
+
 // MARK: - Shared helpers
 
 /// Repo root, derived from this test file's path — same pattern as the

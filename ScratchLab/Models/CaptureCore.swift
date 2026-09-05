@@ -5668,6 +5668,29 @@ extension ScratchNotation {
     static func canonicalBeatPattern(forScratchID scratchID: String) -> BeatPattern? {
         canonicalBeatPatterns.first { $0.scratchID == scratchID }
     }
+
+    #if DEBUG
+    /// Authored teaching examples, not captured/verified technique references.
+    /// Explicit template IDs keep these out of production scratch-ID lookup,
+    /// reference eligibility and learner progression. "orbit" remains a flare.
+    static let internalCanonicalTearTemplates: [TearTemplate] = [
+        (1, "equal", [1.0, 1.0]), (1, "unequal", [1.0, 2.0]),
+        (2, "equal", [1.0, 1.0, 1.0]), (2, "unequal", [1.0, 2.0, 1.0]),
+        (3, "equal", [1.0, 1.0, 1.0, 1.0]), (3, "unequal", [1.0, 2.0, 2.0, 1.0])
+    ].flatMap { holds, rhythm, ratio in
+        TearTemplate.Form.allCases.map { form in
+            TearTemplate(id: "scratchlab.tear.\(holds).\(form.rawValue).\(rhythm).v1",
+                         form: form, holdCount: holds, subdivisionRatio: ratio,
+                         gestureDurationBeats: 1, holdDurationBeats: 1.0 / 16)
+        }
+    }
+
+    /// Target-side factory using the same lossless records as the shared chart.
+    /// There is deliberately no default template for a curriculum scratch ID.
+    static func internalCanonicalGestureRecords(forTemplateID id: String) -> [GestureRecord]? {
+        internalCanonicalTearTemplates.first { $0.id == id }?.expanded()
+    }
+    #endif
 }
 
 /// Frame-anchored direction polarity for Baby Scratch.
@@ -6799,6 +6822,185 @@ extension ScratchNotation {
         }
     }
 }
+
+#if DEBUG
+extension ScratchNotation {
+    /// ScratchLab-authored, finite plain-tear teaching vocabulary. No formula
+    /// parser, external catalog data, measured curves or reference lifecycle.
+    /// Each direction occupies one authored beat span. Ratios describe MOVING
+    /// durations only; every hold has its own positive musical duration.
+    struct TearTemplate: Equatable, Sendable, Identifiable {
+        enum Form: String, CaseIterable, Sendable {
+            case forward, backward
+            case forwardBackward = "forward-backward"
+
+            var directions: [ScratchNotationDirection] {
+                switch self {
+                case .forward: return [.forward]
+                case .backward: return [.backward]
+                case .forwardBackward: return [.forward, .backward]
+                }
+            }
+        }
+
+        let id: String
+        let form: Form
+        let holdCount: Int
+        let subdivisionRatio: [Double]
+        let gestureDurationBeats: Double
+        let holdDurationBeats: Double
+
+        var durationBeats: Double { gestureDurationBeats * Double(form.directions.count) }
+
+        func validationIssues() -> [String] {
+            var issues: [String] = []
+            if id.isEmpty { issues.append("template ID must be nonempty") }
+            if !(1...3).contains(holdCount) { issues.append("plain tear templates require 1...3 holds") }
+            if subdivisionRatio.count - 1 != holdCount {
+                issues.append("N holds require N+1 authored motion weights")
+            }
+            let sum = subdivisionRatio.reduce(0, +)
+            if !sum.isFinite || sum <= 0 || subdivisionRatio.contains(where: { !$0.isFinite || $0 <= 0 }) {
+                issues.append("motion ratios must be finite and positive")
+            }
+            if !gestureDurationBeats.isFinite || gestureDurationBeats <= 0 || !durationBeats.isFinite {
+                issues.append("template duration must be finite and positive")
+            }
+            let holdTotal = Double(holdCount) * holdDurationBeats
+            if !holdDurationBeats.isFinite || holdDurationBeats <= 0
+                || !holdTotal.isFinite || holdTotal >= gestureDurationBeats {
+                issues.append("bounded holds must leave positive moving time")
+            }
+            return issues
+        }
+
+        /// Pure expansion from beat zero. IDs depend only on the versioned
+        /// template ID and semantic indices, never on tempo, time or UUIDs.
+        /// Equal distance per slice is an authored target choice, not a
+        /// reconstruction of measured platter travel. Backward starts at 1;
+        /// the orbit reverses continuously at 1 and returns to 0.
+        func expanded() -> [GestureRecord]? {
+            guard validationIssues().isEmpty else { return nil }
+            let evidence = GestureRecord.Evidence(provenance: .authored,
+                observation: .authored("scratchlab_internal_teaching_template:\(id)"))
+            let movingDuration = gestureDurationBeats - Double(holdCount) * holdDurationBeats
+            let weightSum = subdivisionRatio.reduce(0, +)
+            let records = form.directions.enumerated().map { gestureIndex, direction in
+                let gestureID = "\(id)/gesture/\(gestureIndex)"
+                let start = Double(gestureIndex) * gestureDurationBeats
+                let end = Double(gestureIndex + 1) * gestureDurationBeats
+                var cursor = start
+                var subdivisions: [GestureRecord.Subdivision] = []
+                var holds: [GestureRecord.TearHold] = []
+                func position(_ boundary: Int) -> Double {
+                    let fraction = Double(boundary) / Double(subdivisionRatio.count)
+                    return direction == .forward ? fraction : 1 - fraction
+                }
+                for (index, weight) in subdivisionRatio.enumerated() {
+                    let motionEnd = index == holdCount ? end : cursor + movingDuration * (weight / weightSum)
+                    subdivisions.append(.init(id: "\(gestureID)/motion/\(index)",
+                        span: .init(startTime: cursor, endTime: motionEnd), evidence: evidence,
+                        targetCurve: .init(points: [
+                            .init(time: cursor, position: position(index)),
+                            .init(time: motionEnd, position: position(index + 1))
+                        ], evidence: evidence), authoredDurationWeight: weight))
+                    cursor = motionEnd
+                    if index < holdCount {
+                        let holdEnd = cursor + holdDurationBeats
+                        holds.append(.init(id: "\(gestureID)/hold/\(index)",
+                            span: .init(startTime: cursor, endTime: holdEnd),
+                            label: .init(derived: .stationary), evidence: evidence,
+                            position: position(index + 1)))
+                        cursor = holdEnd
+                    }
+                }
+                return GestureRecord(id: gestureID, direction: direction, timingDomain: .beats,
+                    coordinateSpace: .samplePosition, evidence: evidence,
+                    subdivisions: subdivisions, internalHolds: holds,
+                    faderIntervals: [.init(id: "\(gestureID)/fader/open",
+                        span: .init(startTime: start, endTime: end), state: .open, evidence: evidence)])
+            }
+            // Reject unrepresentable floating-point spans as well as structural
+            // errors; do not clamp, repair or return a partial target.
+            return expansionValidationIssues(records).isEmpty ? records : nil
+        }
+
+        /// Stricter target-authoring checks supplement lossless-record checks:
+        /// the latter intentionally retain contradictory captured evidence.
+        func expansionValidationIssues(_ records: [GestureRecord]) -> [String] {
+            var issues = validationIssues()
+            guard issues.isEmpty else { return issues }
+            guard records.count == form.directions.count else { return ["template gesture count mismatch"] }
+            let weightSum = subdivisionRatio.reduce(0, +)
+            let movingDuration = gestureDurationBeats - Double(holdCount) * holdDurationBeats
+            func close(_ lhs: Double, _ rhs: Double) -> Bool {
+                lhs.isFinite && rhs.isFinite && abs(lhs - rhs) <= 1e-9 * max(abs(rhs), 1)
+            }
+            var ids = Set<String>()
+            for (index, record) in records.enumerated() {
+                issues += record.validationIssues()
+                let allIDs = [record.id] + record.subdivisions.map(\.id) + record.internalHolds.map(\.id)
+                    + record.faderIntervals.map(\.id) + record.faderTransitions.map(\.id)
+                if allIDs.contains(where: { !ids.insert($0).inserted }) { issues.append("template event IDs must be unique") }
+                if record.direction != form.directions[index] || record.timingDomain != .beats
+                    || record.coordinateSpace != .samplePosition || record.evidence.provenance != .authored {
+                    issues.append("template must retain authored beat-domain direction and coordinates")
+                }
+                guard record.subdivisions.count == holdCount + 1, record.internalHolds.count == holdCount else {
+                    issues.append("template hold/subdivision count mismatch")
+                    continue
+                }
+                let start = Double(index) * gestureDurationBeats
+                let end = Double(index + 1) * gestureDurationBeats
+                if record.subdivisions.first?.span.startTime != start || record.subdivisions.last?.span.endTime != end {
+                    issues.append("template gestures must cover their full beat span continuously")
+                }
+                if record.authoredSubdivisionRatio != subdivisionRatio { issues.append("authored motion ratio mismatch") }
+                for (sliceIndex, slice) in record.subdivisions.enumerated() {
+                    if !close(slice.span.duration / movingDuration, subdivisionRatio[sliceIndex] / weightSum) {
+                        issues.append("expanded motion duration ratio mismatch")
+                    }
+                    guard slice.measuredCurve == nil, slice.evidence.provenance == .authored,
+                          let curve = slice.targetCurve, curve.evidence.provenance == .authored,
+                          curve.points.count >= 2 else {
+                        issues.append("template motion requires authored target curves only")
+                        continue
+                    }
+                    let sign = record.direction == .forward ? 1.0 : -1.0
+                    if zip(curve.points, curve.points.dropFirst()).contains(where: { ($1.position - $0.position) * sign <= 0 }) {
+                        issues.append("target curve must travel in the gesture direction")
+                    }
+                    let fraction = Double(sliceIndex) / Double(holdCount + 1)
+                    let nextFraction = Double(sliceIndex + 1) / Double(holdCount + 1)
+                    if !close(curve.startPosition ?? .nan, record.direction == .forward ? fraction : 1 - fraction)
+                        || !close(curve.endPosition ?? .nan, record.direction == .forward ? nextFraction : 1 - nextFraction) {
+                        issues.append("template target positions must remain continuous")
+                    }
+                    if sliceIndex < holdCount {
+                        let hold = record.internalHolds[sliceIndex]
+                        if !close(hold.span.duration, holdDurationBeats) || hold.evidence.provenance != .authored
+                            || hold.position != curve.endPosition
+                            || hold.position != record.subdivisions[sliceIndex + 1].targetCurve?.startPosition {
+                            issues.append("hold must preserve duration and adjoining target position")
+                        }
+                    }
+                }
+                if !record.faderTransitions.isEmpty || record.faderIntervals.count != 1
+                    || record.faderIntervals.first?.state != .open
+                    || record.faderIntervals.first?.span != .init(startTime: start, endTime: end)
+                    || record.faderIntervals.first?.evidence.provenance != .authored {
+                    issues.append("plain tears require explicit authored open fader throughout, without clicks")
+                }
+                if index > 0,
+                   records[index - 1].subdivisions.last?.targetCurve?.endPosition != record.subdivisions.first?.targetCurve?.startPosition {
+                    issues.append("orbit reversal must preserve position")
+                }
+            }
+            return issues
+        }
+    }
+}
+#endif
 
 // MARK: - Offline calibrated platter-motion segmentation
 
