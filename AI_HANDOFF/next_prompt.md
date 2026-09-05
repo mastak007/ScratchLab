@@ -1,3 +1,16 @@
+## Current continuation - Boundary 1 committed; Boundary 2 is next
+
+This entry supersedes the historical continuation blocks retained below. Candidate: `/private/tmp/scratchlab-refauth-baseline.iYmLZU/worktree`, branch `checkpoint/reference-authoring-baseline`, base `add70a08668e512c95e467871613f577a30523f1`. Boundary 1 of six is committed; the receipt repair is inherited from the base.
+
+1. Re-read `AGENTS.md`, `SOUL.md`, `PROFILE.md`, `AI_CONTEXT.md`, `TASKS.md` and this candidate's newest `DEV_LOG.md`/`AI_HANDOFF.md` entries. Inspect both worktrees, both indexes and HEADs first. Never write to the primary worktree.
+2. Next scope is Boundary 2 only: `refactor(export): add reusable artifact error descriptions`. Extract solely `ScratchLab/Services/SessionExportCoordinator.swift` hunk old 911, the self-contained insertion at new lines 912-1029 defining `SessionExportArtifactRejection` and `SessionExportFailureText`. The other 21 export hunks stay excluded; do not import call-site or error-propagation changes.
+3. The helper has no existing test reference anywhere in the primary, so focused direct coverage must be added. Add it at the end of `ScratchLabDesktopTests/CaptureReliabilityPhase1Tests.swift`, which already has target membership, so no `project.pbxproj` change is required. Append only; inserting before line 22196 would break old-side coordinates for later boundaries. Do not weaken existing tests.
+4. Verify with the relevant `CaptureReliabilityPhase1CoreTests` export regressions, `SessionExportRoundTripTests` and the new helper tests, then the serial `scripts/build.sh all` gate, then explicit unsigned universal macOS Release if conditional compilation is involved.
+5. Use `apply-hunks.rb` for extraction, never `git apply --unidiff-zero`. Reuse the existing wrapper, sandbox profile and host `com.machelpnz.scratchlab.refauth-iymlzu`; never a production identity.
+6. Only `MIDILearnEngineTests/testCalibrationIsolatedBetweenDevices` failing with `Optional(0)` vs `Optional(5)` at `MIDILearnEngineTests.swift:561` is an authorized known flake, and only when every other test passes, all platform builds pass and no differing signature appears. Do not modify, skip or quarantine it. Any other failure, crash, preservation mismatch or unexpected dependency is blocking: stop and report.
+7. Before committing, re-verify all 661 primary files, all 93 protected evidence files, empty indexes, unchanged primary HEAD/branch, intact receipt branch, unchanged protected settings and build number 21, and `git diff --check`. Stage exactly the authorized paths, inspect the complete staged diff, and stop on any extra hunk or path.
+8. Do not push, merge, cherry-pick, deploy, launch the ordinary app, record Take 007, approve, install or publish a reference, enable training, or begin TTM/Tear. Boundaries 3 to 6 follow sequentially under the same rules.
+
 ## Current continuation - Receipt-only candidate verified; await explicit commit approval
 
 This entry governs the isolated candidate and supersedes the historical continuation blocks retained below. Candidate: /private/tmp/scratchlab-receipt-candidate.Bs1CNx/worktree, detached at d3ecf2a69bde57f7d6ac681b6dbdd37347c83e97. Do not follow older unrelated tasks as current authority.

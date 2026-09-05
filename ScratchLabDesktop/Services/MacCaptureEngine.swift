@@ -4002,6 +4002,7 @@ final class MacCaptureEngine: NSObject, ObservableObject {
     /// Host-time anchor captured at recording start, used to produce
     /// take-relative trace timestamps.
     private var movementTraceRecordingStartHostTime: Double = 0
+    #endif
 
     /// Single confirmed media-start epoch for the active routine take.
     ///
@@ -4165,6 +4166,7 @@ final class MacCaptureEngine: NSObject, ObservableObject {
         routineMediaEpochLock.unlock()
         sessionQueue.asyncAfter(deadline: .now() + deadline, execute: workItem)
     }
+    #if DEBUG
     /// Frozen at take finalization; drained by the export companion writer so a
     /// later take cannot overwrite the trace/diagnostics of an earlier one.
     private(set) var lastMovementTraceExport: MovementTraceExport?
@@ -5366,6 +5368,53 @@ final class MacCaptureEngine: NSObject, ObservableObject {
         return uid?.takeRetainedValue() as String?
     }
 
+    private static func audioDeviceID(forUID requestedUID: String) -> AudioDeviceID? {
+        var devicesAddress = AudioObjectPropertyAddress(
+            mSelector: kAudioHardwarePropertyDevices,
+            mScope: kAudioObjectPropertyScopeGlobal,
+            mElement: kAudioObjectPropertyElementMain
+        )
+        var dataSize: UInt32 = 0
+        guard AudioObjectGetPropertyDataSize(
+            AudioObjectID(kAudioObjectSystemObject),
+            &devicesAddress,
+            0,
+            nil,
+            &dataSize
+        ) == noErr else { return nil }
+        let count = Int(dataSize) / MemoryLayout<AudioDeviceID>.size
+        var devices = Array(repeating: AudioDeviceID(0), count: count)
+        guard AudioObjectGetPropertyData(
+            AudioObjectID(kAudioObjectSystemObject),
+            &devicesAddress,
+            0,
+            nil,
+            &dataSize,
+            &devices
+        ) == noErr else { return nil }
+
+        return devices.first { deviceID in
+            var uidAddress = AudioObjectPropertyAddress(
+                mSelector: kAudioDevicePropertyDeviceUID,
+                mScope: kAudioObjectPropertyScopeGlobal,
+                mElement: kAudioObjectPropertyElementMain
+            )
+            var uidSize = UInt32(MemoryLayout<Unmanaged<CFString>?>.size)
+            var uid: Unmanaged<CFString>?
+            let status = withUnsafeMutableBytes(of: &uid) { ptr in
+                AudioObjectGetPropertyData(
+                    deviceID,
+                    &uidAddress,
+                    0,
+                    nil,
+                    &uidSize,
+                    ptr.baseAddress!
+                )
+            }
+            return status == noErr && (uid?.takeRetainedValue() as String?) == requestedUID
+        }
+    }
+
 #if ENABLE_TIMECODE_LIVE_TAP
     /// Starts (or rebinds) the DEBUG DVS input path to the explicitly
     /// selected capture device, using an `AVAudioSinkNode` connected as the
@@ -5848,53 +5897,6 @@ final class MacCaptureEngine: NSObject, ObservableObject {
             to: TimecodeCMSampleBufferAdapter.captureDeviceDebugInfo,
             diagnostic: diagnostic
         )
-    }
-
-    private static func audioDeviceID(forUID requestedUID: String) -> AudioDeviceID? {
-        var devicesAddress = AudioObjectPropertyAddress(
-            mSelector: kAudioHardwarePropertyDevices,
-            mScope: kAudioObjectPropertyScopeGlobal,
-            mElement: kAudioObjectPropertyElementMain
-        )
-        var dataSize: UInt32 = 0
-        guard AudioObjectGetPropertyDataSize(
-            AudioObjectID(kAudioObjectSystemObject),
-            &devicesAddress,
-            0,
-            nil,
-            &dataSize
-        ) == noErr else { return nil }
-        let count = Int(dataSize) / MemoryLayout<AudioDeviceID>.size
-        var devices = Array(repeating: AudioDeviceID(0), count: count)
-        guard AudioObjectGetPropertyData(
-            AudioObjectID(kAudioObjectSystemObject),
-            &devicesAddress,
-            0,
-            nil,
-            &dataSize,
-            &devices
-        ) == noErr else { return nil }
-
-        return devices.first { deviceID in
-            var uidAddress = AudioObjectPropertyAddress(
-                mSelector: kAudioDevicePropertyDeviceUID,
-                mScope: kAudioObjectPropertyScopeGlobal,
-                mElement: kAudioObjectPropertyElementMain
-            )
-            var uidSize = UInt32(MemoryLayout<Unmanaged<CFString>?>.size)
-            var uid: Unmanaged<CFString>?
-            let status = withUnsafeMutableBytes(of: &uid) { ptr in
-                AudioObjectGetPropertyData(
-                    deviceID,
-                    &uidAddress,
-                    0,
-                    nil,
-                    &uidSize,
-                    ptr.baseAddress!
-                )
-            }
-            return status == noErr && (uid?.takeRetainedValue() as String?) == requestedUID
-        }
     }
 
     /// Read-only query of the properties that actually govern the frame
