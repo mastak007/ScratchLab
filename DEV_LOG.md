@@ -4116,3 +4116,35 @@ Affected platform builds, both passed: `ScratchLab` on `generic/platform=iOS` an
 ### Preservation
 
 All 661 primary files and all 93 protected evidence files match the saved baselines. Primary remains `feature/ios-capture-camera-ux` at `d3ecf2a6` with an unchanged empty index; receipt branch intact; candidate index empty before and after staging; `git diff --check` passes. Among protected files only `project.pbxproj` changed, by membership only. Takes 001-006 and the documented historical metadata mutations are untouched. No reference was approved, installed, packaged or published, no training was enabled, no capture was recorded, and no detector output was treated as human ground truth.
+
+## 2026-09-05 - Boundary 4 committed: reference authoring evidence and package foundation
+
+### Scope and exact extraction
+
+Candidate `/private/tmp/scratchlab-refauth-baseline.iYmLZU/worktree`, branch `checkpoint/reference-authoring-baseline`, parent `579ace6`. Copied whole from the primary and byte-compared against it: `ReferenceTechnique.swift`, `ReferenceTake.swift`, `ReferenceValidation.swift`, `ReferenceRegistry.swift`, `ReferencePackage.swift`, `CallAndResponseSchedule.swift`, `LegacyReferenceInventory.swift` and `ReferenceCapturePreflight.swift` under `ScratchLab/Models/Reference/`, plus `ScratchLab/Services/ReferencePackageIO.swift` and `ScratchLabDesktopTests/ReferenceAuthoringTests.swift`.
+
+Deliberately not included: `ReferenceAuthoringSession.swift`, `ReferenceAuthoringCaptureBridge.swift`, the view model and view, the DEBUG route, live notation, and every ledger and live-observability engine change. `ScratchLab/Models/Reference/` therefore holds exactly the eight foundation files after this commit.
+
+Dependency check before extraction: none of the ten files references `ReferenceAuthoringSession`, the capture bridge, the view model or the view. `ReferenceCapturePreflight.swift` names `MacCaptureEngine` once, at line 108, inside a doc comment only; it imports Foundation alone and has no engine dependency. `ReferencePackageIO.swift` imports CryptoKit and Foundation and uses `SessionExportFailureText.describe`, which Boundary 2 already committed. This is why the export helper landed first.
+
+`project.pbxproj`: A-owned membership only. The file was rebuilt from the pristine base with the union of the Boundary 3 and Boundary 4 membership lines, because Boundary 3 had already changed it. Line 1887, `REFAU0FREF0009 /* ReferenceAuthoringSession.swift */`, was skipped: it belongs to Boundary 5 even though it sits inside the `Reference` group object this boundary creates. No removals, no scheme, entitlement or plist change, and none of the six `CURRENT_PROJECT_VERSION` hunks. Build number remains 21 in all six places.
+
+### Added coverage
+
+`ReferencePackageIO` had no test reference anywhere in the primary, so package write, read and verify round-trip coverage was added: an 11-test `ReferencePackageIORoundTripTests` class appended to the end of `CaptureReliabilityPhase1Tests.swift`. Each test works inside its own `FileManager.default.temporaryDirectory` subdirectory created in `setUp` and removed in `tearDown`; nothing touches Application Support, a real capture folder or any installed package location. The audited `ReferenceAuthoringTests.swift` was not edited.
+
+The tests pin: manifest round trip through `writePackage` and `readManifest`; artifacts landing at their declared package paths with recorded SHA-256 and byte counts; `measureArtifacts` agreeing with the manifest; `verify` accepting an intact package; `verify` rejecting a tampered artifact, an absent artifact and a directory with no manifest; refusal of an incomplete package naming every missing required role; refusal of a complete but `draft` package; refusal when a declared source file is absent; and that writing creates nothing outside the parent directory it was given.
+
+A first fixture used two artifacts in `draft` state and every write failed. The cause was not the extraction: `writePackage` validates the manifest before writing anything, and rejected the package for the seven missing required roles and for its unapproved state. That refusal is the truthful-validation contract this boundary is supposed to preserve, so the fixture was corrected to carry all nine required roles with `lifecycleState` `approvedCanonical`, and the refusal behaviour was kept and pinned by two dedicated tests rather than worked around. `ReferencePackageManifest.requiredArtifactRoles` is the nine roles referenceAudio, fullTakeAudio, takeSidecar, rawMIDI, platterTimeline, crossfaderRaw, crossfaderCalibrated, notationEvidence and validationReport; `referenceVideo` is optional. A package is accepted only in `approved_canonical` or `published` state.
+
+Validation remains truthful and unchanged by this commit: cut-requiring techniques still require crossfader evidence, Baby and open-fader techniques still require proven continuously-open evidence, unknown open state still blocks, withdrawn and invalid references stay unavailable, no detector result becomes human ground truth, and writing a package installs nothing, publishes nothing and enables no training.
+
+### Commands and results
+
+`build-for-testing` passed. Focused, executed once after the fixture correction: `test-without-building` with `-only-testing:` for `ReferenceAuthoringTests`, `ReferencePackageIORoundTripTests` and `CrossfaderCalibrationTests`. Per configuration 127 passed, 0 failed, 0 skipped, on My Mac arm64 under both `Test Scheme Action` and `Configuration 2`; 254 executions in total. Suite sizes 67, 11 and 49. Log `../logs/b4-verify-2.log`, bundle `../results/b4-focused-2.xcresult`.
+
+Affected platform builds passed: `ScratchLab` on `generic/platform=iOS` and `ScratchLabDesktop` on `platform=macOS`, both run with this boundary's production sources already in place. The only change after those builds was to the test target. Under the revised verification plan the serial `scripts/build.sh all` gate and the explicit Debug and universal Release checks run once against the complete six-commit branch after Boundary 6.
+
+### Preservation
+
+All 661 primary files and all 93 protected evidence files match the saved baselines. Primary remains `feature/ios-capture-camera-ux` at `d3ecf2a6` with an unchanged empty index; receipt branch intact; candidate index empty before and after staging; `git diff --check` passes. Among protected files only `project.pbxproj` changed, by membership only. Takes 001-006 and the documented historical metadata mutations are untouched. No reference was approved, installed, packaged for distribution or published, no training was enabled, and no detector output was treated as human ground truth.

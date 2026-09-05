@@ -1,3 +1,17 @@
+## Current continuation - Boundaries 1 to 4 committed; Boundary 5 is next
+
+Supersedes the continuation blocks below. Candidate `/private/tmp/scratchlab-refauth-baseline.iYmLZU/worktree`, branch `checkpoint/reference-authoring-baseline`.
+
+1. Re-read the repository instructions and this candidate's newest `DEV_LOG.md`/`AI_HANDOFF.md` entries. Inspect both worktrees, indexes and HEADs. Never write to the primary worktree.
+2. Boundary 5 only: `feat(reference): correlate capture and Watch evidence before approval`. Extract `ReferenceAuthoringSession.swift`, `ReferenceAuthoringCaptureBridge.swift`, `ReferenceAuthoringSessionTests.swift` and `ReferenceAuthoringCaptureBridgeTests.swift`.
+3. Engine hunks, C-owned: 650, 3029, 3808, 4753, 4761, 4764, 4768, 4782, 4787, 4820, 4821, 4825, 4829, 4833, 4837, 4841, 4845, 4849, 4881, 4983, 4989, 6457, 6478, 6520, 6538, 6709, 6733, 6735, 11832; plus the C-owned portions of 10790 (new 11140-11150 learned-mapping snapshot and new 11175-11252 live CC observability) and 10812 (new 11291-11298 unconditional live observation call). Rebuild the engine from the pristine base with the union of Boundary 1, 3 and 5 hunks.
+4. `CaptureReliabilityPhase1Tests.swift`: hunks 3202 and 3204 (multiline-signature assertion) and 14151 (four take-scoped MIDI tests). Do not re-extract the inherited 290-line receipt tests at 22196. Old-side coordinates 3202/3204/14151 are still valid because the file is identical to the primary base through line 22196 and every later addition has been appended at the end.
+5. `project.pbxproj`, C-owned new-side lines: hunk 587 lines 616-620; hunk 1047 lines 1099-1102; hunk 1091 lines 1151-1152; hunk 1580 line 1656; hunk 1993 lines 2100-2101; hunk 2220 line 2342; hunk 2407 lines 2544-2545. Line 1887 must be inserted content-anchored inside the existing `Reference` group, not at its old anchor.
+6. Preserve the safety semantics: reserve identity before Watch start; require Watch acknowledgement before Mac recording; correlated stop and finalization use the same take identity; the engine retains sole stop authority; Watch evidence states stay truthful; pending transfer and identity mismatch both remain blocking; approval revalidates domain state and cannot be bypassed by a direct call; nothing installs, publishes or enables training; no timeout extension substitutes for a missing transfer. D5 session reuse stays documented and unfixed unless it is an unavoidable correctness dependency, in which case stop for Karl.
+7. Verify with `ReferenceAuthoringSessionTests`, `ReferenceAuthoringCaptureBridgeTests`, `MacWatchStopDispatchTests`, `RoutineFinalizationWatchMergeTests`, the receipt-staging regressions, the microphone source assertion and the four exact take-scoped MIDI selectors, plus affected platform builds only.
+8. Use `apply-hunks.rb`; never `git apply --unidiff-zero`. Only `MIDILearnEngineTests/testCalibrationIsolatedBetweenDevices` failing with `Optional(0)` vs `Optional(5)` at `MIDILearnEngineTests.swift:561` is an authorized known flake. Any other failure, extraction ambiguity, preservation mismatch or unexpected dependency is blocking.
+9. Do not push, merge, deploy, record Take 007, approve, install or publish a reference, enable training, or begin TTM/Tear.
+
 ## Current continuation - Boundaries 1 to 3 committed; Boundary 4 is next
 
 Supersedes the continuation blocks below. Candidate `/private/tmp/scratchlab-refauth-baseline.iYmLZU/worktree`, branch `checkpoint/reference-authoring-baseline`. The CaptureCore checkpoint is reached.

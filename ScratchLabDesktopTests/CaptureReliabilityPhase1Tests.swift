@@ -23450,3 +23450,327 @@ final class CaptureCoreCalibratedCrossfaderTests: XCTestCase {
         XCTAssertEqual(events.first?.toValue, 0.0)
     }
 }
+
+/// Write, read and verify coverage for `ReferencePackageIO`.
+///
+/// `ReferenceAuthoringTests` covers the reference models, validation and
+/// registry, but never touches `ReferencePackageIO`, so nothing else in the
+/// suite exercises the package on disk. Every test here works inside its own
+/// temporary directory, created in `setUp` and removed in `tearDown`; nothing
+/// reads or writes Application Support, a real capture folder, or any
+/// installed package location. Writing a package is a local file operation
+/// only: it installs nothing, publishes nothing and enables no training.
+///
+/// The fixture carries all nine required artifact roles and an approved
+/// lifecycle state because `writePackage` validates the manifest before it
+/// writes anything. That refusal is a contract in its own right and is pinned
+/// by its own tests below rather than worked around.
+final class ReferencePackageIORoundTripTests: XCTestCase {
+
+    private var root: URL!
+
+    override func setUpWithError() throws {
+        try super.setUpWithError()
+        root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("ReferencePackageIOTests-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+    }
+
+    override func tearDownWithError() throws {
+        if let root, FileManager.default.fileExists(atPath: root.path) {
+            try FileManager.default.removeItem(at: root)
+        }
+        root = nil
+        try super.tearDownWithError()
+    }
+
+    // MARK: - Fixtures
+
+    private static let calibration = CrossfaderCalibration(
+        address: CrossfaderMIDIAddress(
+            deviceIdentifier: "Rane ONE MKII",
+            deviceName: "Rane ONE MKII",
+            channel: 15,
+            controller: 8
+        ),
+        fullLeftRawValue: 0,
+        centerRawValue: 52,
+        fullRightRawValue: 104,
+        openEnd: .left,
+        activeDeck: .rightDeck,
+        calibratedAt: Date(timeIntervalSince1970: 1_788_000_000)
+    )
+
+    private static let deviceInfo = ReferenceDeviceInfo(
+        platform: "macOS",
+        appVersion: "1.0.1",
+        controllerName: "Rane ONE MKII",
+        controllerIdentifier: "Rane ONE MKII",
+        audioDeviceName: "Rane ONE MKII",
+        videoDeviceName: "Studio Camera",
+        watchLinked: true
+    )
+
+    private func makeMetadata(
+        lifecycleState: ReferenceLifecycleState = .approvedCanonical
+    ) -> ReferenceTakeMetadata {
+        ReferenceTakeMetadata(
+            referenceTakeID: "ref-take-io-0001",
+            authoringSessionID: "auth-io-0001",
+            takeNumber: 1,
+            operatorName: "Karl",
+            technique: .babyScratch,
+            pattern: ReferencePatternIdentity(id: "quarter_notes", name: "Quarter notes", phraseBars: 1),
+            bpm: 95,
+            startingPlatterDirection: .forward,
+            faderVariant: .faderOpenThroughout,
+            referenceVersion: 1,
+            crossfaderCalibration: Self.calibration,
+            deviceInfo: Self.deviceInfo,
+            recordedAt: Date(timeIntervalSince1970: 1_788_000_100),
+            lifecycleState: lifecycleState
+        )
+    }
+
+    private func makeManifest(
+        artifacts: [ReferenceArtifactRecord],
+        lifecycleState: ReferenceLifecycleState = .approvedCanonical
+    ) -> ReferencePackageManifest {
+        let metadata = makeMetadata(lifecycleState: lifecycleState)
+        return ReferencePackageManifest(
+            referenceID: "baby_scratch__quarter_notes",
+            referenceVersion: 1,
+            packageBuiltAt: Date(timeIntervalSince1970: 1_788_000_200),
+            metadata: metadata,
+            boundaries: ReferencePhraseBoundaries.nominal(for: metadata),
+            selectedRepetitionIndex: 0,
+            publishedPhraseStartSeconds: 2.526315789473684,
+            publishedPhraseEndSeconds: 5.052631578947368,
+            publishedPhraseBeats: 4,
+            approval: ReferenceReviewDecision(
+                outcome: .approved,
+                decidedBy: "Karl",
+                decidedAt: Date(timeIntervalSince1970: 1_788_000_150),
+                selectedRepetitionIndex: 0
+            ),
+            validation: ReferenceValidationRecord(
+                report: ReferenceValidationReport(
+                    findings: [],
+                    evaluatedAt: Date(timeIntervalSince1970: 1_788_000_150)
+                )
+            ),
+            artifacts: artifacts
+        )
+    }
+
+    /// One input per required role. The take sidecar is copied from a file so
+    /// both supported input kinds - bytes and a source URL - are exercised.
+    private func requiredInputs() throws -> [ReferencePackageInput] {
+        let sidecarSource = root.appendingPathComponent("source-sidecar.json")
+        try Self.bytes(for: .takeSidecar).write(to: sidecarSource)
+
+        return ReferencePackageManifest.requiredArtifactRoles.map { role in
+            role == .takeSidecar
+                ? ReferencePackageInput(role: role, packagePath: Self.path(for: role), sourceURL: sidecarSource)
+                : ReferencePackageInput(role: role, packagePath: Self.path(for: role), data: Self.bytes(for: role))
+        }
+    }
+
+    private static func path(for role: ReferenceArtifactRecord.Role) -> String {
+        switch role {
+        case .referenceAudio: return "audio/reference.wav"
+        case .fullTakeAudio: return "audio/full-take.wav"
+        case .takeSidecar: return "take/sidecar.json"
+        case .rawMIDI: return "midi/raw.json"
+        case .platterTimeline: return "motion/platter-timeline.json"
+        case .crossfaderRaw: return "midi/crossfader-raw.json"
+        case .crossfaderCalibrated: return "midi/crossfader-calibrated.json"
+        case .notationEvidence: return "notation/evidence.json"
+        case .validationReport: return "validation/report.json"
+        case .referenceVideo: return "video/reference.mov"
+        }
+    }
+
+    private static func bytes(for role: ReferenceArtifactRecord.Role) -> Data {
+        Data("scratchlab-fixture-bytes-for-\(role.rawValue)".utf8)
+    }
+
+    @discardableResult
+    private func writeFixturePackage(
+        lifecycleState: ReferenceLifecycleState = .approvedCanonical
+    ) throws -> URL {
+        try ReferencePackageIO.writePackage(
+            inputs: try requiredInputs(),
+            parentDirectory: root,
+            packageDirectoryName: "baby_scratch__quarter_notes_v1",
+            makeManifest: { self.makeManifest(artifacts: $0, lifecycleState: lifecycleState) }
+        )
+    }
+
+    // MARK: - Write then read
+
+    func testWritingAPackageThenReadingItsManifestRoundTrips() throws {
+        let packageURL = try writeFixturePackage()
+
+        let manifest = try ReferencePackageIO.readManifest(atPackageURL: packageURL)
+
+        XCTAssertEqual(manifest.schemaVersion, ReferencePackageManifest.currentSchemaVersion)
+        XCTAssertEqual(manifest.referenceID, "baby_scratch__quarter_notes")
+        XCTAssertEqual(manifest.referenceVersion, 1)
+        XCTAssertEqual(manifest.metadata, makeMetadata())
+        XCTAssertEqual(manifest.approval.outcome, .approved)
+        XCTAssertEqual(
+            Set(manifest.artifacts.map(\.role)),
+            Set(ReferencePackageManifest.requiredArtifactRoles)
+        )
+    }
+
+    func testWrittenArtifactsLandAtTheirPackagePathsWithRecordedHashes() throws {
+        let packageURL = try writeFixturePackage()
+        let manifest = try ReferencePackageIO.readManifest(atPackageURL: packageURL)
+
+        for role in ReferencePackageManifest.requiredArtifactRoles {
+            let record = try XCTUnwrap(manifest.artifacts.first { $0.role == role }, "\(role)")
+            XCTAssertEqual(record.path, Self.path(for: role))
+            let onDisk = try Data(contentsOf: packageURL.appendingPathComponent(record.path))
+            XCTAssertEqual(onDisk, Self.bytes(for: role), record.path)
+            XCTAssertEqual(record.sha256, ReferencePackageIO.sha256Hex(Self.bytes(for: role)), record.path)
+            XCTAssertEqual(record.byteCount, Int64(Self.bytes(for: role).count), record.path)
+        }
+    }
+
+    func testMeasuredArtifactsAgreeWithTheRecordedManifest() throws {
+        let packageURL = try writeFixturePackage()
+        let manifest = try ReferencePackageIO.readManifest(atPackageURL: packageURL)
+
+        let measured = ReferencePackageIO.measureArtifacts(manifest: manifest, packageURL: packageURL)
+
+        for record in manifest.artifacts {
+            let actual = try XCTUnwrap(measured[record.path], "No measurement for \(record.path)")
+            XCTAssertEqual(actual.sha256, record.sha256, record.path)
+            XCTAssertEqual(actual.byteCount, record.byteCount, record.path)
+        }
+    }
+
+    // MARK: - Verify
+
+    func testVerifyAcceptsAnIntactPackage() throws {
+        let packageURL = try writeFixturePackage()
+
+        XCTAssertEqual(ReferencePackageIO.verify(packageURL: packageURL), [])
+    }
+
+    func testVerifyRejectsATamperedArtifact() throws {
+        let packageURL = try writeFixturePackage()
+        try Data("tampered".utf8).write(to: packageURL.appendingPathComponent("audio/reference.wav"))
+
+        let issues = ReferencePackageIO.verify(packageURL: packageURL)
+
+        XCTAssertFalse(issues.isEmpty, "Rewritten bytes must not verify against the recorded digest.")
+        XCTAssertTrue(
+            issues.contains { $0.contains("audio/reference.wav") },
+            "The rejection must name the artifact. Got: \(issues)"
+        )
+    }
+
+    func testVerifyRejectsAMissingArtifact() throws {
+        let packageURL = try writeFixturePackage()
+        try FileManager.default.removeItem(at: packageURL.appendingPathComponent("take/sidecar.json"))
+
+        let issues = ReferencePackageIO.verify(packageURL: packageURL)
+
+        XCTAssertFalse(issues.isEmpty)
+        XCTAssertTrue(
+            issues.contains { $0.contains("take/sidecar.json") },
+            "The rejection must name the absent artifact. Got: \(issues)"
+        )
+    }
+
+    func testVerifyRejectsADirectoryWithNoManifest() throws {
+        let empty = root.appendingPathComponent("no-manifest", isDirectory: true)
+        try FileManager.default.createDirectory(at: empty, withIntermediateDirectories: true)
+
+        XCTAssertFalse(
+            ReferencePackageIO.verify(packageURL: empty).isEmpty,
+            "A directory without a manifest is not a package."
+        )
+    }
+
+    // MARK: - Refusals, and containment
+
+    func testAnIncompletePackageIsRefusedAndNamesEveryMissingRole() throws {
+        XCTAssertThrowsError(
+            try ReferencePackageIO.writePackage(
+                inputs: [
+                    ReferencePackageInput(
+                        role: .referenceAudio,
+                        packagePath: Self.path(for: .referenceAudio),
+                        data: Self.bytes(for: .referenceAudio)
+                    )
+                ],
+                parentDirectory: root,
+                packageDirectoryName: "incomplete_v1",
+                makeManifest: { self.makeManifest(artifacts: $0) }
+            )
+        ) { error in
+            guard case ReferencePackageIOError.packageRejected(let issues) = error else {
+                return XCTFail("Expected packageRejected, got \(error)")
+            }
+            for role in ReferencePackageManifest.requiredArtifactRoles where role != .referenceAudio {
+                XCTAssertTrue(
+                    issues.contains { $0.contains(role.rawValue) },
+                    "Missing role \(role.rawValue) must be named. Got: \(issues)"
+                )
+            }
+        }
+    }
+
+    func testADraftPackageIsRefusedEvenWhenEveryArtifactIsPresent() throws {
+        XCTAssertThrowsError(try writeFixturePackage(lifecycleState: .draft)) { error in
+            guard case ReferencePackageIOError.packageRejected(let issues) = error else {
+                return XCTFail("Expected packageRejected, got \(error)")
+            }
+            XCTAssertTrue(
+                issues.contains { $0.contains("draft") },
+                "An unapproved package must be refused by state, not written. Got: \(issues)"
+            )
+        }
+    }
+
+    func testAMissingSourceArtifactIsRejected() throws {
+        let absent = root.appendingPathComponent("not-there.wav")
+        var inputs = try requiredInputs()
+        inputs[0] = ReferencePackageInput(
+            role: .referenceAudio,
+            packagePath: Self.path(for: .referenceAudio),
+            sourceURL: absent
+        )
+
+        XCTAssertThrowsError(
+            try ReferencePackageIO.writePackage(
+                inputs: inputs,
+                parentDirectory: root,
+                packageDirectoryName: "rejected_v1",
+                makeManifest: { self.makeManifest(artifacts: $0) }
+            )
+        ) { error in
+            guard case ReferencePackageIOError.sourceArtifactMissing(let role, _) = error else {
+                return XCTFail("Expected sourceArtifactMissing, got \(error)")
+            }
+            XCTAssertEqual(role, ReferenceArtifactRecord.Role.referenceAudio.rawValue)
+        }
+    }
+
+    func testWritingAPackageStaysInsideTheGivenParentDirectory() throws {
+        let packageURL = try writeFixturePackage()
+
+        XCTAssertEqual(packageURL.deletingLastPathComponent().standardizedFileURL, root.standardizedFileURL)
+        XCTAssertEqual(packageURL.lastPathComponent, "baby_scratch__quarter_notes_v1")
+
+        let entries = try FileManager.default.contentsOfDirectory(atPath: root.path).sorted()
+        XCTAssertEqual(
+            entries, ["baby_scratch__quarter_notes_v1", "source-sidecar.json"],
+            "Writing a package must create nothing outside the parent directory it was given."
+        )
+    }
+}

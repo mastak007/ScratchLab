@@ -593,7 +593,26 @@
 		XFCAL0MAC0003 /* CrossfaderStateDeriver.swift in Sources */ = {isa = PBXBuildFile; fileRef = XFCAL0FREF0003 /* CrossfaderStateDeriver.swift */; };
 		XFCAL0IOS0004 /* CrossfaderCalibrationStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = XFCAL0FREF0004 /* CrossfaderCalibrationStore.swift */; };
 		XFCAL0MAC0004 /* CrossfaderCalibrationStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = XFCAL0FREF0004 /* CrossfaderCalibrationStore.swift */; };
+		REFAU0IOS0001 /* ReferenceTechnique.swift in Sources */ = {isa = PBXBuildFile; fileRef = REFAU0FREF0001 /* ReferenceTechnique.swift */; };
+		REFAU0MAC0001 /* ReferenceTechnique.swift in Sources */ = {isa = PBXBuildFile; fileRef = REFAU0FREF0001 /* ReferenceTechnique.swift */; };
+		REFAU0IOS0002 /* ReferenceTake.swift in Sources */ = {isa = PBXBuildFile; fileRef = REFAU0FREF0002 /* ReferenceTake.swift */; };
+		REFAU0MAC0002 /* ReferenceTake.swift in Sources */ = {isa = PBXBuildFile; fileRef = REFAU0FREF0002 /* ReferenceTake.swift */; };
+		REFAU0IOS0003 /* ReferenceValidation.swift in Sources */ = {isa = PBXBuildFile; fileRef = REFAU0FREF0003 /* ReferenceValidation.swift */; };
+		REFAU0MAC0003 /* ReferenceValidation.swift in Sources */ = {isa = PBXBuildFile; fileRef = REFAU0FREF0003 /* ReferenceValidation.swift */; };
+		REFAU0IOS0004 /* ReferenceRegistry.swift in Sources */ = {isa = PBXBuildFile; fileRef = REFAU0FREF0004 /* ReferenceRegistry.swift */; };
+		REFAU0MAC0004 /* ReferenceRegistry.swift in Sources */ = {isa = PBXBuildFile; fileRef = REFAU0FREF0004 /* ReferenceRegistry.swift */; };
+		REFAU0IOS0005 /* ReferencePackage.swift in Sources */ = {isa = PBXBuildFile; fileRef = REFAU0FREF0005 /* ReferencePackage.swift */; };
+		REFAU0MAC0005 /* ReferencePackage.swift in Sources */ = {isa = PBXBuildFile; fileRef = REFAU0FREF0005 /* ReferencePackage.swift */; };
+		REFAU0IOS0006 /* CallAndResponseSchedule.swift in Sources */ = {isa = PBXBuildFile; fileRef = REFAU0FREF0006 /* CallAndResponseSchedule.swift */; };
+		REFAU0MAC0006 /* CallAndResponseSchedule.swift in Sources */ = {isa = PBXBuildFile; fileRef = REFAU0FREF0006 /* CallAndResponseSchedule.swift */; };
+		REFAU0IOS0007 /* ReferenceCapturePreflight.swift in Sources */ = {isa = PBXBuildFile; fileRef = REFAU0FREF0007 /* ReferenceCapturePreflight.swift */; };
+		REFAU0MAC0007 /* ReferenceCapturePreflight.swift in Sources */ = {isa = PBXBuildFile; fileRef = REFAU0FREF0007 /* ReferenceCapturePreflight.swift */; };
+		REFAU0IOS0008 /* LegacyReferenceInventory.swift in Sources */ = {isa = PBXBuildFile; fileRef = REFAU0FREF0008 /* LegacyReferenceInventory.swift */; };
+		REFAU0MAC0008 /* LegacyReferenceInventory.swift in Sources */ = {isa = PBXBuildFile; fileRef = REFAU0FREF0008 /* LegacyReferenceInventory.swift */; };
+		REFIO0IOS0001 /* ReferencePackageIO.swift in Sources */ = {isa = PBXBuildFile; fileRef = REFIO0FREF0001 /* ReferencePackageIO.swift */; };
+		REFIO0MAC0001 /* ReferencePackageIO.swift in Sources */ = {isa = PBXBuildFile; fileRef = REFIO0FREF0001 /* ReferencePackageIO.swift */; };
 		XFCALT0TST0001 /* CrossfaderCalibrationTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = XFCALT0FREF0001 /* CrossfaderCalibrationTests.swift */; };
+		REFAUT0TST0001 /* ReferenceAuthoringTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = REFAUT0FREF0001 /* ReferenceAuthoringTests.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -1058,7 +1077,17 @@
 		XFCAL0FREF0002 /* CrossfaderCalibrationSweep.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CrossfaderCalibrationSweep.swift; sourceTree = "<group>"; };
 		XFCAL0FREF0003 /* CrossfaderStateDeriver.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CrossfaderStateDeriver.swift; sourceTree = "<group>"; };
 		XFCAL0FREF0004 /* CrossfaderCalibrationStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CrossfaderCalibrationStore.swift; sourceTree = "<group>"; };
+		REFAU0FREF0001 /* ReferenceTechnique.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ReferenceTechnique.swift; sourceTree = "<group>"; };
+		REFAU0FREF0002 /* ReferenceTake.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ReferenceTake.swift; sourceTree = "<group>"; };
+		REFAU0FREF0003 /* ReferenceValidation.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ReferenceValidation.swift; sourceTree = "<group>"; };
+		REFAU0FREF0004 /* ReferenceRegistry.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ReferenceRegistry.swift; sourceTree = "<group>"; };
+		REFAU0FREF0005 /* ReferencePackage.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ReferencePackage.swift; sourceTree = "<group>"; };
+		REFAU0FREF0006 /* CallAndResponseSchedule.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CallAndResponseSchedule.swift; sourceTree = "<group>"; };
+		REFAU0FREF0007 /* ReferenceCapturePreflight.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ReferenceCapturePreflight.swift; sourceTree = "<group>"; };
+		REFAU0FREF0008 /* LegacyReferenceInventory.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LegacyReferenceInventory.swift; sourceTree = "<group>"; };
+		REFIO0FREF0001 /* ReferencePackageIO.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ReferencePackageIO.swift; sourceTree = "<group>"; };
 		XFCALT0FREF0001 /* CrossfaderCalibrationTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CrossfaderCalibrationTests.swift; sourceTree = "<group>"; };
+		REFAUT0FREF0001 /* ReferenceAuthoringTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ReferenceAuthoringTests.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFileSystemSynchronizedRootGroup section */
@@ -1103,6 +1132,7 @@
 		2010DD0010DD0010DD0010DD /* ScratchLabDesktopTests */ = {
 			isa = PBXGroup;
 			children = (
+				REFAUT0FREF0001 /* ReferenceAuthoringTests.swift */,
 				XFCALT0FREF0001 /* CrossfaderCalibrationTests.swift */,
 				2010BB0010BB0010BB0010BB /* CaptureReliabilityPhase1Tests.swift */,
 				7D1A2B3C4E5F00037D1A2B3C /* HandDirectionTrackerTests.swift */,
@@ -1397,6 +1427,7 @@
 		A5000005 /* Models */ = {
 			isa = PBXGroup;
 			children = (
+				REFAU0GRP0001 /* Reference */,
 				A2000005 /* Scratch.swift */,
 				A2000006 /* GameState.swift */,
 				D1C0A002A1B2C3D4E5F60701 /* CaptureCore.swift */,
@@ -1509,6 +1540,7 @@
 		A5000008 /* Services */ = {
 			isa = PBXGroup;
 			children = (
+				REFIO0FREF0001 /* ReferencePackageIO.swift */,
 				A2000011 /* ProgressManager.swift */,
 				A2000025 /* CompanionCameraBroadcaster.swift */,
 				C71F1101A1B2C3D4E5F60711 /* ClickTrackEngine.swift */,
@@ -1820,6 +1852,21 @@
 			path = Calibration;
 			sourceTree = "<group>";
 		};
+		REFAU0GRP0001 /* Reference */ = {
+			isa = PBXGroup;
+			children = (
+				REFAU0FREF0008 /* LegacyReferenceInventory.swift */,
+				REFAU0FREF0007 /* ReferenceCapturePreflight.swift */,
+				REFAU0FREF0006 /* CallAndResponseSchedule.swift */,
+				REFAU0FREF0005 /* ReferencePackage.swift */,
+				REFAU0FREF0004 /* ReferenceRegistry.swift */,
+				REFAU0FREF0003 /* ReferenceValidation.swift */,
+				REFAU0FREF0002 /* ReferenceTake.swift */,
+				REFAU0FREF0001 /* ReferenceTechnique.swift */,
+			);
+			path = Reference;
+			sourceTree = "<group>";
+		};
 /* End PBXGroup section */
 
 /* Begin PBXNativeTarget section */
@@ -2018,6 +2065,15 @@
 		4137724FB3900E509AAF6EDF /* Sources */ = {
 			isa = PBXSourcesBuildPhase;
 			files = (
+				REFIO0MAC0001 /* ReferencePackageIO.swift in Sources */,
+				REFAU0MAC0008 /* LegacyReferenceInventory.swift in Sources */,
+				REFAU0MAC0007 /* ReferenceCapturePreflight.swift in Sources */,
+				REFAU0MAC0006 /* CallAndResponseSchedule.swift in Sources */,
+				REFAU0MAC0005 /* ReferencePackage.swift in Sources */,
+				REFAU0MAC0004 /* ReferenceRegistry.swift in Sources */,
+				REFAU0MAC0003 /* ReferenceValidation.swift in Sources */,
+				REFAU0MAC0002 /* ReferenceTake.swift in Sources */,
+				REFAU0MAC0001 /* ReferenceTechnique.swift in Sources */,
 				XFCAL0MAC0004 /* CrossfaderCalibrationStore.swift in Sources */,
 				XFCAL0MAC0003 /* CrossfaderStateDeriver.swift in Sources */,
 				XFCAL0MAC0002 /* CrossfaderCalibrationSweep.swift in Sources */,
@@ -2249,6 +2305,15 @@
 		A6000002 /* Sources */ = {
 			isa = PBXSourcesBuildPhase;
 			files = (
+				REFIO0IOS0001 /* ReferencePackageIO.swift in Sources */,
+				REFAU0IOS0008 /* LegacyReferenceInventory.swift in Sources */,
+				REFAU0IOS0007 /* ReferenceCapturePreflight.swift in Sources */,
+				REFAU0IOS0006 /* CallAndResponseSchedule.swift in Sources */,
+				REFAU0IOS0005 /* ReferencePackage.swift in Sources */,
+				REFAU0IOS0004 /* ReferenceRegistry.swift in Sources */,
+				REFAU0IOS0003 /* ReferenceValidation.swift in Sources */,
+				REFAU0IOS0002 /* ReferenceTake.swift in Sources */,
+				REFAU0IOS0001 /* ReferenceTechnique.swift in Sources */,
 				XFCAL0IOS0004 /* CrossfaderCalibrationStore.swift in Sources */,
 				XFCAL0IOS0003 /* CrossfaderStateDeriver.swift in Sources */,
 				XFCAL0IOS0002 /* CrossfaderCalibrationSweep.swift in Sources */,
@@ -2440,6 +2505,7 @@
 		F9TESTSRC10AA0010AA10AA /* Sources */ = {
 			isa = PBXSourcesBuildPhase;
 			files = (
+				REFAUT0TST0001 /* ReferenceAuthoringTests.swift in Sources */,
 				XFCALT0TST0001 /* CrossfaderCalibrationTests.swift in Sources */,
 				SLCORE00000000000000BF04 /* ScratchAnalysisBridgeTests.swift in Sources */,
 				SLCORE00000000000000BF06 /* ScratchAnalysisFixtureDecodeTests.swift in Sources */,

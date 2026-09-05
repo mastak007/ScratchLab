@@ -1,5 +1,18 @@
 # AI Handoff
 
+## 2026-09-05 - Boundary 4 of 6 committed: reference foundation and package I/O
+
+Supersedes the Boundary 3 entry below for current status. Candidate `/private/tmp/scratchlab-refauth-baseline.iYmLZU/worktree`, branch `checkpoint/reference-authoring-baseline`. Boundaries 1 to 4 are committed; two remain.
+
+- Boundary 4 subject: `feat(reference): add authoring evidence and package foundation`. Ten files copied whole and byte-compared, plus A-owned `project.pbxproj` membership and 11 new package-I/O tests.
+- `ScratchLab/Models/Reference/` holds exactly the eight foundation files. `ReferenceAuthoringSession.swift`, the capture bridge, the view model and view, the DEBUG route and live notation are all still absent, as intended.
+- `ReferencePackageIO` depends on `SessionExportFailureText` from Boundary 2. `ReferenceCapturePreflight` names `MacCaptureEngine` only in a doc comment and has no engine dependency.
+- `project.pbxproj` line 1887 (`REFAU0FREF0009`) was skipped and is Boundary 5's, but it sits inside the `Reference` group object this boundary created. Boundary 5 must insert it content-anchored inside that group, after `REFAU0GRP0001 /* Reference */ = {` and its `children = (`, not at the old hunk anchor, or it lands outside the group and breaks the file.
+- Package contract learned and pinned: `writePackage` validates before writing. `requiredArtifactRoles` is nine roles (referenceAudio, fullTakeAudio, takeSidecar, rawMIDI, platterTimeline, crossfaderRaw, crossfaderCalibrated, notationEvidence, validationReport); `referenceVideo` is optional; and only `approved_canonical` or `published` is accepted. Two tests pin the incomplete-package and draft-package refusals.
+- Focused 127 per configuration (254 executions), zero failures, zero skips: `ReferenceAuthoringTests` 67, `CrossfaderCalibrationTests` 49, `ReferencePackageIORoundTripTests` 11. Affected builds iOS and macOS passed.
+- Revised verification plan in force: focused tests plus affected platform builds per boundary; one serial `scripts/build.sh all`, the explicit Debug and universal Release builds and the DEBUG-route exclusion proof run once against the complete branch after Boundary 6.
+- Preservation unchanged: 661 primary files, 93 protected evidence files, empty indexes, intact receipt branch, build number 21, `git diff --check` passes.
+
 ## 2026-09-05 - Boundary 3 of 6 committed: CaptureCore checkpoint reached
 
 Supersedes the Boundary 2 entry below for current status. Candidate `/private/tmp/scratchlab-refauth-baseline.iYmLZU/worktree`, branch `checkpoint/reference-authoring-baseline`. Boundaries 1 to 3 are committed; three remain.
