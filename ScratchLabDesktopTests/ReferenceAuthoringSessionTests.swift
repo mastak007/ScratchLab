@@ -1174,6 +1174,46 @@ final class ReferenceTearSegmentationReviewTests: XCTestCase {
         XCTAssertTrue(candidate.hasAmbiguousEvidence)
     }
 
+    func testAddingADuplicateHoldCoalescesInsteadOfDoubleCounting() {
+        var review = review()
+        let candidateID = review.candidates[0].id
+        let existing = review.candidates[0].boundaries[0]
+
+        let added = review.addBoundary(
+            toCandidate: candidateID,
+            span: existing.span,
+            kind: .hold,
+            evidenceQuality: .clear,
+            correction: correction("duplicate")
+        )
+        XCTAssertEqual(added, existing.id, "an exact duplicate coalesces into the boundary already there")
+        let candidate = review.candidate(id: candidateID)!
+        XCTAssertEqual(candidate.boundaries.count, 2, "a duplicate must not add a second boundary")
+        XCTAssertEqual(candidate.countedTearHoldCount, 2, "the platter hold count must not double")
+        XCTAssertEqual(
+            candidate.boundaries.first { $0.id == existing.id }?.corrections.count, 1,
+            "the duplicate correction is folded into the existing boundary's provenance"
+        )
+    }
+
+    func testAddingAHoldOutsideTheGestureIsRefused() {
+        var review = review()
+        let candidateID = review.candidates[0].id
+        let before = review.candidates[0].boundaries.count
+
+        // candidate[0] is the backward gesture spanning 0.00–0.95; a hold at
+        // 1.10–1.20 lies inside the following forward gesture instead.
+        let added = review.addBoundary(
+            toCandidate: candidateID,
+            span: ReferenceTearTimeSpan(startTime: 1.10, endTime: 1.20),
+            kind: .hold,
+            evidenceQuality: .clear,
+            correction: correction("outside")
+        )
+        XCTAssertNil(added, "a hold outside the gesture is refused, never clamped into it")
+        XCTAssertEqual(review.candidate(id: candidateID)!.boundaries.count, before)
+    }
+
     func testMovingABoundaryKeepsTheProposalAndTheEditedSpanSideBySide() {
         var review = review()
         let candidateID = review.candidates[0].id
@@ -1193,6 +1233,25 @@ final class ReferenceTearSegmentationReviewTests: XCTestCase {
         XCTAssertEqual(boundary.proposal?.span, proposedSpan)
         XCTAssertTrue(boundary.differsFromProposal)
         XCTAssertEqual(review.rawMovementEvents, twoTearMovementEvents())
+    }
+
+    func testMovingAHoldOutsideTheGestureIsRefused() {
+        var review = review()
+        let candidateID = review.candidates[0].id
+        let boundaryID = review.candidates[0].boundaries[0].id
+        let originalSpan = review.candidates[0].boundaries[0].span
+
+        XCTAssertFalse(
+            review.moveBoundary(
+                inCandidate: candidateID,
+                boundaryID: boundaryID,
+                to: ReferenceTearTimeSpan(startTime: 1.10, endTime: 1.20),
+                correction: correction("outside")
+            ),
+            "a hold moved outside the gesture is refused, never clamped"
+        )
+        let boundary = review.candidate(id: candidateID)!.boundaries.first { $0.id == boundaryID }!
+        XCTAssertEqual(boundary.span, originalSpan, "the refused move leaves the hold exactly where it was")
     }
 
     func testCorrectionProvenanceIsManualAndValidates() {
@@ -1458,5 +1517,341 @@ final class ReferenceTearSegmentationReviewTests: XCTestCase {
             session.takes[0].tearReview.candidates[0].manualClassification, nil,
             "a refused correction changes nothing on the retained take"
         )
+    }
+}
+
+// MARK: - Phase 1 root-cause proof (Take 007 real-hardware segmentation failure)
+
+/// Reproduces, with a small synthetic fixture, the exact failure mode Take 007
+/// exposed on real hardware: legitimate but noisy direction alternation at a
+/// gesture boundary (turnaround jitter, hand tremor, mechanical backlash)
+/// produces one `DetectedNotationRecordMovementEvent` per micro-run — each of
+/// which already cleared `decodePlatterCore`'s own noise gates upstream — and
+/// `ReferenceTearSegmentationReviewBuilder` currently promotes EVERY
+/// direction change between temporally-adjacent decoded runs into a real
+/// reversal with no minimum sustained-opposite-direction requirement. This is
+/// the "first incorrect boundary": the reversal-detection loop in
+/// `ReferenceTearSegmentationReviewBuilder.build` (ReferenceTake.swift, the
+/// unconditional `reversals.append` over every direction-differing
+/// consecutive pair), which cascades directly into `makeCandidates` ending a
+/// gesture at every such reversal.
+final class ReferenceTearSegmentationChatterRootCauseTests: XCTestCase {
+
+    private func movement(
+        _ startTime: Double,
+        _ endTime: Double,
+        _ direction: String,
+        confidence: Double = 0.9
+    ) -> CaptureCore.DetectedNotationRecordMovementEvent {
+        CaptureCore.DetectedNotationRecordMovementEvent(
+            startTime: startTime,
+            endTime: endTime,
+            startPosition: 0,
+            endPosition: direction == "forward" ? 1 : 0,
+            direction: direction,
+            movementKind: direction == "forward" ? .normalPush : .normalPull,
+            speed: 1,
+            confidence: confidence,
+            source: "controller"
+        )
+    }
+
+    /// One physical Baby Scratch: a sustained forward stroke, a noisy
+    /// turnaround (six short alternating runs — each individually a
+    /// plausible decodePlatterCore-gated run, none longer than 60 ms, none
+    /// shorter than decodePlatterCore's own 80 ms floor would even allow if
+    /// this were raw MIDI — here they stand in for already-decoded evidence),
+    /// then a sustained backward stroke. Physically this is ONE reversal.
+    private func noisyBabyScratchMovementEvents() -> [CaptureCore.DetectedNotationRecordMovementEvent] {
+        var events: [CaptureCore.DetectedNotationRecordMovementEvent] = [
+            movement(0.00, 1.00, "forward")
+        ]
+        // Six alternating micro-runs sharing boundaries exactly as
+        // decodePlatterCore emits them (one run's endTime is the next run's
+        // startTime — no gap, matching a continuous MIDI stream broken only
+        // by sign flips).
+        let chatterStarts = stride(from: 1.00, to: 1.36, by: 0.06)
+        var direction = "backward"
+        for start in chatterStarts {
+            events.append(movement(start, start + 0.06, direction))
+            direction = direction == "backward" ? "forward" : "backward"
+        }
+        let lastChatterEnd = events.last!.endTime
+        events.append(movement(lastChatterEnd, lastChatterEnd + 1.00, "backward"))
+        return events
+    }
+
+    /// PROOF: before any repair, this physically-one-reversal take produces
+    /// far more gestures and reversals than exist in reality — the same
+    /// shape Take 007 exhibited (approximately one gesture per raw event
+    /// through the noisy region).
+    /// The regression this whole repair exists for. BEFORE the fix, this
+    /// fixture produced 8 gestures / 7 reversals from 9 raw events (proven
+    /// empirically before the repair landed) — the same near-1:1 shape Take
+    /// 007 exposed (83 raw events -> 81 gestures, 80 reversals). AFTER the
+    /// fix: physical reality is 2 gestures, 1 reversal, and every raw event
+    /// is still cited from `rawMovementEvents` and from a segment.
+    func testNoisyBabyScratchWithSignChatterCollapsesToTwoGesturesOneReversal() {
+        let events = noisyBabyScratchMovementEvents()
+        let review = ReferenceTearSegmentationReviewBuilder.build(
+            referenceTakeID: "root-cause-proof",
+            movementEvents: events,
+            derivation: nil
+        )
+
+        XCTAssertEqual(review.rawMovementEvents.count, events.count, "raw evidence must never be filtered")
+        XCTAssertEqual(review.segments.filter { $0.movementEventIndex != nil }.count, events.count,
+            "every raw event must still surface as its own inspectable segment")
+        XCTAssertEqual(review.candidates.count, 2, "a Baby fixture must not produce approximately one gesture per raw event")
+        XCTAssertEqual(review.reversals.count, 1)
+        XCTAssertEqual(review.candidates[0].direction, .forward)
+        XCTAssertEqual(review.candidates[1].direction, .backward)
+        XCTAssertTrue(
+            review.segments.contains { $0.reasons.contains(.mergedDirectionChatter) },
+            "the absorbed chatter runs must say so, not disappear silently"
+        )
+        XCTAssertTrue(review.reasons.contains(.mergedDirectionChatter))
+    }
+
+    /// A clean Baby Scratch (no chatter at all) must be completely unaffected
+    /// by the repair — it has no run short enough to be chatter-eligible.
+    func testCleanBabyScratchIsUnaffectedByChatterRepair() {
+        let events = [movement(0.0, 1.0, "forward"), movement(1.0, 2.0, "backward")]
+        let review = ReferenceTearSegmentationReviewBuilder.build(
+            referenceTakeID: "clean-baby", movementEvents: events, derivation: nil
+        )
+        XCTAssertEqual(review.candidates.count, 2)
+        XCTAssertEqual(review.reversals.count, 1)
+        XCTAssertFalse(review.reasons.contains(.mergedDirectionChatter))
+    }
+
+    /// A short INTENTIONAL hold (a real, gap-derived stationary interval)
+    /// sitting right next to turnaround jitter must survive as a hold — the
+    /// repair targets opposite-direction TRAVEL chatter only, never a
+    /// stationary gap, however short.
+    func testShortIntentionalHoldBesideReversalJitterIsPreserved() {
+        var events = [movement(0.0, 1.0, "backward")]
+        // A genuine 90 ms hold: a real time gap between two same-direction
+        // backward runs, bounding a tear hold exactly as `decodePlatterCore`
+        // would report it (a gap in telemetry, not a measured deceleration).
+        events.append(movement(1.09, 1.50, "backward"))
+        // Turnaround jitter immediately after, then the real backward-to-
+        // forward reversal.
+        events.append(movement(1.50, 1.56, "forward"))
+        events.append(movement(1.56, 1.62, "backward"))
+        events.append(movement(1.62, 2.60, "forward"))
+        let review = ReferenceTearSegmentationReviewBuilder.build(
+            referenceTakeID: "hold-beside-jitter", movementEvents: events, derivation: nil
+        )
+        XCTAssertEqual(review.candidates.count, 2, "one backward gesture (with its hold), one forward gesture")
+        let tear = review.candidates[0]
+        XCTAssertEqual(tear.direction, .backward)
+        XCTAssertEqual(tear.boundaries.count, 1, "the genuine gap-derived hold must survive, uncounted as chatter")
+        XCTAssertEqual(tear.countedTearHoldCount, 1)
+        XCTAssertEqual(review.candidates[1].direction, .forward)
+        XCTAssertEqual(review.reversals.count, 1)
+    }
+
+    /// A same-direction pause beside absorbed chatter: a gap between a
+    /// sustained run and a brief opposite run that repair then folds back
+    /// into the same gesture. The gap is a same-direction pause (a hold), not
+    /// a reversal, and the whole thing stays one gesture.
+    func testSameDirectionPauseBesideAbsorbedChatterStaysOneGestureWithAHold() {
+        let events = [
+            movement(0.0, 1.0, "backward"),
+            movement(1.10, 1.16, "forward"), // 60 ms chatter, after a gap
+            movement(1.16, 2.0, "backward")
+        ]
+        let review = ReferenceTearSegmentationReviewBuilder.build(
+            referenceTakeID: "pause-beside-chatter", movementEvents: events, derivation: nil
+        )
+        XCTAssertEqual(review.candidates.count, 1, "the chatter must not split a same-direction pause into two gestures")
+        XCTAssertEqual(review.candidates[0].direction, .backward)
+        XCTAssertEqual(review.candidates[0].countedTearHoldCount, 1, "the gap is a same-direction hold, not a reversal")
+        XCTAssertEqual(review.reversals.count, 0)
+        XCTAssertTrue(review.reasons.contains(.mergedDirectionChatter))
+    }
+
+    /// 1/2/3-tears (clean, no chatter) must still report their exact hold
+    /// counts — the repair must never invent or remove a genuine hold.
+    func test123TearsAreUnaffectedByChatterRepair() {
+        func tearEvents(holdCount: Int) -> [CaptureCore.DetectedNotationRecordMovementEvent] {
+            var events: [CaptureCore.DetectedNotationRecordMovementEvent] = []
+            var t = 0.0
+            for i in 0...holdCount {
+                events.append(movement(t, t + 0.4, "backward"))
+                t += 0.4
+                if i < holdCount {
+                    // Gap-derived hold, not a travel event.
+                    t += 0.15
+                }
+            }
+            events.append(movement(t, t + 1.0, "forward"))
+            return events
+        }
+        for holdCount in 1...3 {
+            let review = ReferenceTearSegmentationReviewBuilder.build(
+                referenceTakeID: "tear-\(holdCount)", movementEvents: tearEvents(holdCount: holdCount), derivation: nil
+            )
+            XCTAssertEqual(review.candidates.count, 2, "holdCount \(holdCount)")
+            XCTAssertEqual(review.candidates[0].countedTearHoldCount, holdCount, "holdCount \(holdCount)")
+            XCTAssertEqual(
+                review.candidates[0].proposedClassification.assertedTearHoldCount, holdCount,
+                "holdCount \(holdCount)"
+            )
+        }
+    }
+
+    /// Unequal subdivisions (a real tear whose moving slices have different
+    /// durations) must be unaffected — duration asymmetry between REAL
+    /// travel runs, both well above the sustained threshold, is not chatter.
+    func testUnequalSubdivisionsAreUnaffectedByChatterRepair() {
+        let events = [
+            movement(0.0, 0.30, "backward"),
+            movement(0.45, 1.80, "backward"),
+            movement(1.80, 2.20, "forward")
+        ]
+        let review = ReferenceTearSegmentationReviewBuilder.build(
+            referenceTakeID: "unequal-subdivisions", movementEvents: events, derivation: nil
+        )
+        XCTAssertEqual(review.candidates.count, 2)
+        XCTAssertEqual(review.candidates[0].countedTearHoldCount, 1)
+        XCTAssertEqual(review.candidates[0].motionSegmentIndices.count, 3)
+    }
+
+    /// A slow drag: one long, low-speed, single-direction run. Nothing to
+    /// merge — must pass through completely unchanged.
+    func testSlowDragIsUnaffectedByChatterRepair() {
+        let events = [movement(0.0, 4.0, "forward", confidence: 0.95)]
+        let review = ReferenceTearSegmentationReviewBuilder.build(
+            referenceTakeID: "slow-drag", movementEvents: events, derivation: nil
+        )
+        XCTAssertEqual(review.candidates.count, 1)
+        XCTAssertTrue(review.candidates[0].boundaries.isEmpty)
+        XCTAssertFalse(review.reasons.contains(.mergedDirectionChatter))
+    }
+
+    /// Duplicate/zero-duration timestamps are already rejected as malformed
+    /// upstream of the repair; the repair must not change that or crash on
+    /// the remaining valid events.
+    func testDuplicateTimestampsAreRejectedNotFedToTheRepair() {
+        let events = [
+            movement(0.0, 1.0, "forward"),
+            movement(1.0, 1.0, "backward"), // zero-duration: malformed, dropped
+            movement(1.0, 2.0, "backward")
+        ]
+        let review = ReferenceTearSegmentationReviewBuilder.build(
+            referenceTakeID: "duplicate-timestamps", movementEvents: events, derivation: nil
+        )
+        XCTAssertTrue(review.reasons.contains(.malformedMovementEvent))
+        XCTAssertEqual(review.candidates.count, 2)
+    }
+
+    /// A dropped event leaves a genuine time gap, read as a stationary
+    /// interval exactly as before — the repair must not touch gap handling.
+    func testDroppedEventsStillProduceAGapDerivedStationaryInterval() {
+        let events = [movement(0.0, 1.0, "forward"), movement(1.30, 2.0, "forward")]
+        let review = ReferenceTearSegmentationReviewBuilder.build(
+            referenceTakeID: "dropped-event", movementEvents: events, derivation: nil
+        )
+        XCTAssertEqual(review.candidates.count, 1)
+        XCTAssertEqual(review.candidates[0].boundaries.count, 1)
+        XCTAssertTrue(
+            review.candidates[0].boundaries[0].proposal?.reasons.contains(.gapDerivedStationaryInterval) ?? false
+        )
+    }
+
+    /// Quantized positions must not affect direction/duration-based repair:
+    /// the repair reads only `event.direction`/timestamps, never re-derives
+    /// sign from `startPosition`/`endPosition`.
+    func testQuantizedPositionsDoNotAffectChatterRepair() {
+        let coarse = CaptureCore.DetectedNotationRecordMovementEvent(
+            startTime: 0.0, endTime: 1.0, startPosition: 0.0, endPosition: 0.0,
+            direction: "forward", movementKind: .normalPush, speed: 1, confidence: 0.9, source: "controller"
+        )
+        let review = ReferenceTearSegmentationReviewBuilder.build(
+            referenceTakeID: "quantized", movementEvents: [coarse], derivation: nil
+        )
+        XCTAssertEqual(review.candidates.count, 1)
+        XCTAssertEqual(review.candidates[0].direction, .forward)
+    }
+
+    /// A quick but GENUINE reversal — a single short opposite-direction run,
+    /// well above `minimumSustainedTravelDuration`, with no surrounding
+    /// chatter — must still register as its own real reversal, never merged
+    /// away. This is the required counterpart to the chatter test: short
+    /// duration alone is never sufficient to call something chatter.
+    func testQuickGenuineReversalIsNeverMergedAway() {
+        let events = [
+            movement(0.0, 1.0, "forward"),
+            movement(1.0, 1.35, "backward"), // 350 ms: above the sustained floor, not chatter
+            movement(1.35, 2.5, "forward")
+        ]
+        let review = ReferenceTearSegmentationReviewBuilder.build(
+            referenceTakeID: "quick-genuine-reversal", movementEvents: events, derivation: nil
+        )
+        XCTAssertEqual(review.candidates.count, 3, "the quick middle reversal is real and must stand on its own")
+        XCTAssertEqual(review.reversals.count, 2)
+        XCTAssertEqual(review.candidates[1].direction, .backward)
+        XCTAssertFalse(review.reasons.contains(.mergedDirectionChatter))
+    }
+
+    /// A long single-direction run spanning what would be several platter
+    /// revolutions in calibrated units. The repair never reads absolute
+    /// position/revolution counts, only direction and duration, so a
+    /// free-running multi-revolution run cannot shift or split under it.
+    func testFreeRunningMultiRevolutionTravelIsUnaffected() {
+        let events = [movement(0.0, 8.0, "forward", confidence: 0.9)]
+        let review = ReferenceTearSegmentationReviewBuilder.build(
+            referenceTakeID: "free-running", movementEvents: events, derivation: nil
+        )
+        XCTAssertEqual(review.candidates.count, 1)
+        XCTAssertEqual(review.candidates[0].span.startTime, 0.0)
+        XCTAssertEqual(review.candidates[0].span.endTime, 8.0)
+    }
+
+    /// A single isolated opposing delta — one short opposite-direction run
+    /// between two sustained same-direction runs — must not establish a
+    /// reversal on its own. This is the single-delta sibling of the
+    /// multi-delta chatter test: sustained opposite evidence, not one sign
+    /// flip, is what ends a gesture.
+    func testIsolatedOpposingDeltaIsAbsorbedNotAReversal() {
+        let events = [
+            movement(0.0, 1.0, "forward"),
+            movement(1.0, 1.04, "backward"), // 40 ms: isolated, not sustained
+            movement(1.04, 2.0, "forward")
+        ]
+        let review = ReferenceTearSegmentationReviewBuilder.build(
+            referenceTakeID: "isolated-opposing-delta", movementEvents: events, derivation: nil
+        )
+        XCTAssertEqual(review.candidates.count, 1, "one isolated opposing delta must not end the gesture")
+        XCTAssertEqual(review.candidates[0].direction, .forward)
+        XCTAssertEqual(review.reversals.count, 0)
+        XCTAssertTrue(review.reasons.contains(.mergedDirectionChatter))
+    }
+
+    /// A clock discontinuity — a large, unexplained time jump between two
+    /// runs — is read as an ABSENCE of telemetry, never as a confident
+    /// measured hold, and the chatter repair never fabricates a reversal
+    /// across it.
+    func testClockDiscontinuityStaysGapDerivedUnknownAndUnmerged() {
+        // A 4 s recording gap between two backward runs, then a real
+        // backward-to-forward reversal.
+        let events = [
+            movement(0.0, 0.5, "backward"),
+            movement(4.5, 5.0, "backward"),
+            movement(5.0, 6.0, "forward")
+        ]
+        let review = ReferenceTearSegmentationReviewBuilder.build(
+            referenceTakeID: "clock-discontinuity", movementEvents: events, derivation: nil
+        )
+        XCTAssertEqual(review.candidates.count, 2)
+        let hold = review.candidates[0].boundaries.first
+        XCTAssertNotNil(hold)
+        XCTAssertTrue(
+            hold?.proposal?.reasons.contains(.gapDerivedStationaryInterval) ?? false,
+            "a clock-discontinuous gap must stay an unknown absence of telemetry"
+        )
+        XCTAssertEqual(review.reversals.count, 1, "the repair must not fabricate a reversal across the gap")
     }
 }

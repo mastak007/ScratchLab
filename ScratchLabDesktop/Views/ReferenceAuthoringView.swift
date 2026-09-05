@@ -18,6 +18,10 @@ struct ReferenceAuthoringView: View {
     /// Framing panel starts open — it is the thing being watched during a
     /// take — and can be folded away while configuring.
     @State private var isShowingFramingPanel = true
+    /// The single tear candidate whose edit controls are expanded. At most
+    /// one is ever expanded, and none by default, so a noisy take never
+    /// renders dozens of open cards.
+    @State private var selectedTearCandidateID: String?
 
     /// Minimum height the live-notation card is guaranteed.
     ///
@@ -561,6 +565,8 @@ struct ReferenceAuthoringView: View {
                 Text(reason).font(.caption).foregroundStyle(.orange)
             }
 
+            tearOverviewChart(review)
+            tearAggregateCounts(review)
             tearEvidenceSummary(review)
 
             if review.candidates.isEmpty {
@@ -569,7 +575,7 @@ struct ReferenceAuthoringView: View {
                     .foregroundStyle(.secondary)
             } else {
                 ForEach(review.candidates) { candidate in
-                    tearCandidateRow(candidate, review: review)
+                    tearCandidateCard(candidate, review: review)
                 }
             }
 
@@ -592,9 +598,67 @@ struct ReferenceAuthoringView: View {
         .frame(maxWidth: .infinity, alignment: .leading)
     }
 
+    /// A compact timeline of the corrected segmentation, drawn before the
+    /// gesture cards so the operator sees the whole take at a glance.
+    private func tearOverviewChart(_ review: ReferenceTearSegmentationReview) -> some View {
+        TearReviewTimelineChart(review: review)
+    }
+
+    /// The four counts the operator needs to size a take up at a glance:
+    /// gestures, physical reversals, surviving holds and still-unknown
+    /// candidates.
+    private func tearAggregateCounts(_ review: ReferenceTearSegmentationReview) -> some View {
+        HStack(spacing: 18) {
+            tearCount(review.candidates.count, "gesture")
+            tearCount(review.reversals.count, "reversal")
+            tearCount(review.totalCountedTearHoldCount, "hold")
+            tearCount(review.unknownCandidateCount, "unknown candidate")
+        }
+        .font(.callout.monospacedDigit())
+        .foregroundStyle(.secondary)
+    }
+
+    private func tearCount(_ count: Int, _ singular: String) -> some View {
+        Text("\(count) \(count == 1 ? singular : singular + "s")")
+    }
+
+    /// One gesture, collapsed to its headline by default and expanded only
+    /// while it is the selected candidate. This keeps a noisy take from
+    /// rendering dozens of open cards.
+    private func tearCandidateCard(
+        _ candidate: ReferenceTearCandidate,
+        review: ReferenceTearSegmentationReview
+    ) -> some View {
+        DisclosureGroup(isExpanded: tearCandidateExpandedBinding(for: candidate)) {
+            tearCandidateRow(candidate, review: review)
+        } label: {
+            HStack(spacing: 8) {
+                Text(ReferenceAuthoringViewModel.tearCandidateHeadline(candidate))
+                    .font(.callout.weight(.semibold))
+                Spacer()
+                if candidate.classificationDisagreesWithBoundaryCount {
+                    Image(systemName: "exclamationmark.triangle.fill")
+                        .foregroundStyle(.orange)
+                        .help("The reading in force disagrees with the surviving hold count.")
+                }
+            }
+        }
+    }
+
+    private func tearCandidateExpandedBinding(
+        for candidate: ReferenceTearCandidate
+    ) -> Binding<Bool> {
+        Binding(
+            get: { selectedTearCandidateID == candidate.id },
+            set: { isExpanded in
+                selectedTearCandidateID = isExpanded ? candidate.id : nil
+            }
+        )
+    }
+
     /// Raw motion, derived intervals, reversals and fader evidence, stated as
-    /// counts and spans. Deliberately textual: this slice makes the evidence
-    /// inspectable, it does not draw a new chart.
+    /// counts and spans. Textual detail that sits beside the overview chart
+    /// (drawn separately by `tearOverviewChart`).
     private func tearEvidenceSummary(_ review: ReferenceTearSegmentationReview) -> some View {
         VStack(alignment: .leading, spacing: 3) {
             Text("Raw platter movement events: \(review.rawMovementEvents.count)")
@@ -1021,3 +1085,101 @@ struct LiveNotationDiagnosticsRow: View {
     }
 }
 #endif
+
+/// A qualitative timeline of one take's corrected tear segmentation.
+///
+/// The y-axis encodes only DIRECTION (forward above the midline, backward
+/// below) and presence (hold on the midline, unknown region shaded) — never
+/// an absolute platter position. This review's coordinates are normalised
+/// over the take's own range (`.uncalibratedPlatterCoordinates`) and must not
+/// be drawn as if calibrated. Genuine holds are horizontal spans; reversal
+/// markers come from the repaired reversal list, so they represent physical
+/// gesture reversals and never raw-event chatter. Fader state is drawn on its
+/// own lane below the platter lane, and no click is drawn here at all.
+struct TearReviewTimelineChart: View {
+    let review: ReferenceTearSegmentationReview
+
+    private var endTime: Double {
+        let segmentsEnd = review.segments.map(\.span.endTime).max() ?? 0
+        let faderEnd = review.faderIntervals.map(\.endTime).max() ?? 0
+        return max(segmentsEnd, faderEnd)
+    }
+
+    var body: some View {
+        let duration = max(endTime, 1e-9)
+        Canvas { context, size in
+            let x = { (time: Double) -> CGFloat in
+                CGFloat(time / duration) * size.width
+            }
+            let midY = size.height * 0.40
+            let travelHeight = size.height * 0.16
+
+            for segment in review.segments {
+                let rectWidth = max(x(segment.span.endTime) - x(segment.span.startTime), 1.5)
+                switch segment.state {
+                case .forward:
+                    let rect = CGRect(
+                        x: x(segment.span.startTime),
+                        y: midY - travelHeight,
+                        width: rectWidth,
+                        height: travelHeight
+                    )
+                    context.fill(Path(rect), with: .color(.blue.opacity(0.7)))
+                case .backward:
+                    let rect = CGRect(
+                        x: x(segment.span.startTime),
+                        y: midY,
+                        width: rectWidth,
+                        height: travelHeight
+                    )
+                    context.fill(Path(rect), with: .color(.red.opacity(0.7)))
+                case .stationary:
+                    let rect = CGRect(
+                        x: x(segment.span.startTime),
+                        y: midY - 2,
+                        width: rectWidth,
+                        height: 4
+                    )
+                    context.fill(Path(rect), with: .color(.secondary))
+                case .unknown, .released:
+                    let rect = CGRect(
+                        x: x(segment.span.startTime),
+                        y: midY - travelHeight,
+                        width: rectWidth,
+                        height: travelHeight * 2
+                    )
+                    context.fill(Path(rect), with: .color(.gray.opacity(0.35)))
+                }
+            }
+
+            for reversal in review.reversals {
+                let lineX = x(reversal.span.startTime)
+                var path = Path()
+                path.move(to: CGPoint(x: lineX, y: midY - travelHeight - 2))
+                path.addLine(to: CGPoint(x: lineX, y: midY + travelHeight + 2))
+                context.stroke(path, with: .color(.orange), lineWidth: 1.5)
+            }
+
+            let faderY = size.height * 0.82
+            let faderHeight = size.height * 0.12
+            for interval in review.faderIntervals {
+                let color: Color
+                switch interval.state {
+                case .open: color = .green.opacity(0.6)
+                case .closed: color = .purple.opacity(0.6)
+                case .transitioning: color = .yellow.opacity(0.6)
+                }
+                let rect = CGRect(
+                    x: x(interval.startTime),
+                    y: faderY,
+                    width: max(x(interval.endTime) - x(interval.startTime), 1.5),
+                    height: faderHeight
+                )
+                context.fill(Path(rect), with: .color(color))
+            }
+        }
+        .frame(height: 110)
+        .background(Color(nsColor: .textBackgroundColor).opacity(0.35))
+        .clipShape(RoundedRectangle(cornerRadius: 6))
+    }
+}

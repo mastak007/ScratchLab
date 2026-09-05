@@ -589,6 +589,7 @@ enum ReferenceTearReviewReason: String, CaseIterable, Codable, Equatable, Sendab
     case shortStationaryInterval
     case directionReversal
     case contiguousSameDirectionRuns
+    case mergedDirectionChatter
     case lowMovementConfidence
     case coincidentFaderClick
     case faderOpenThroughout
@@ -618,6 +619,8 @@ enum ReferenceTearReviewReason: String, CaseIterable, Codable, Equatable, Sendab
             return "travel polarity flipped here, which ends a gesture and is never a tear hold"
         case .contiguousSameDirectionRuns:
             return "two same-direction runs abut with no separating interval, so nothing is claimed between them"
+        case .mergedDirectionChatter:
+            return "a brief opposite-direction run sandwiched between two sustained same-direction runs was attributed to the surrounding gesture rather than treated as a real reversal"
         case .lowMovementConfidence:
             return "at least one movement event backing this region reported low decoder confidence"
         case .coincidentFaderClick:
@@ -927,7 +930,20 @@ struct ReferenceTearCandidate: Equatable, Sendable, Identifiable {
         kind: ReferenceTearBoundaryKind,
         evidenceQuality: ReferenceTearEvidenceQuality,
         correction: ReferenceTearCorrection
-    ) -> String {
+    ) -> String? {
+        // A hold placed outside the gesture it claims to be part of is
+        // refused, never clamped into the gesture.
+        guard span.startTime >= self.span.startTime, span.endTime <= self.span.endTime else {
+            return nil
+        }
+        // An exact duplicate of an existing boundary is COALESCED, not added
+        // again: re-adding the same hold must not double-count the same
+        // platter interval. The new correction is folded into the existing
+        // boundary's provenance, so nothing the operator did is lost.
+        if let duplicate = boundaries.firstIndex(where: { $0.span == span }) {
+            boundaries[duplicate].apply(correction)
+            return boundaries[duplicate].id
+        }
         let boundaryID = "\(id)-added-\(String(format: "%03d", addedBoundaryCount))"
         addedBoundaryCount += 1
         boundaries.append(
@@ -1130,8 +1146,12 @@ struct ReferenceTearSegmentationReview: Equatable, Sendable {
         correction: ReferenceTearCorrection
     ) -> Bool {
         guard Self.isUsableSpan(span) else { return false }
-        return mutateCandidate(id: candidateID) {
-            $0.mutateBoundary(id: boundaryID) { $0.move(to: span, correction: correction) }
+        return mutateCandidate(id: candidateID) { candidate in
+            // A hold moved outside the gesture it belongs to is refused,
+            // never clamped — the same rule as adding one there.
+            guard span.startTime >= candidate.span.startTime,
+                  span.endTime <= candidate.span.endTime else { return false }
+            return candidate.mutateBoundary(id: boundaryID) { $0.move(to: span, correction: correction) }
         }
     }
 
@@ -1247,15 +1267,31 @@ struct ReferenceTearReviewConfiguration: Equatable, Sendable {
     var lowMovementConfidence: Double = 0.75
     /// Times closer than this are the same instant.
     var timeTolerance: Double = 1e-6
+    /// A travel run must reach this duration, in a direction opposite the
+    /// gesture currently in force, before it is confirmed as a REAL
+    /// reversal. Below it, an opposite-direction run is attributed to the
+    /// surrounding gesture as sign chatter instead of ending it.
+    ///
+    /// Real hardware turnaround jitter and hand tremor routinely clear
+    /// `decodePlatterCore`'s own noise gates (independently short and
+    /// independently sustained enough to be reported at all) while still
+    /// being far shorter than any deliberate technique-level direction
+    /// change — this is the threshold that tells the two apart at the
+    /// review layer, one level coarser than the raw decoder's own gates.
+    /// PROVISIONAL, on the same terms as `CrossfaderStateDeriver`'s
+    /// defaults: a generic default, not derived from any recorded take.
+    var reversalConfirmationDuration: Double = 0.25
 
     init(
         ambiguousStationaryDuration: Double = 0.12,
         lowMovementConfidence: Double = 0.75,
-        timeTolerance: Double = 1e-6
+        timeTolerance: Double = 1e-6,
+        reversalConfirmationDuration: Double = 0.25
     ) {
         self.ambiguousStationaryDuration = ambiguousStationaryDuration
         self.lowMovementConfidence = lowMovementConfidence
         self.timeTolerance = timeTolerance
+        self.reversalConfirmationDuration = reversalConfirmationDuration
     }
 }
 
@@ -1275,6 +1311,16 @@ struct ReferenceTearReviewConfiguration: Equatable, Sendable {
 /// the take does not carry. Every review it produces therefore states
 /// `.uncalibratedPlatterCoordinates`, and no absolute travel is claimed.
 enum ReferenceTearSegmentationReviewBuilder {
+
+    /// One usable decoded travel run, in evidence order by time. Carries the
+    /// original event index so every derived segment or repaired group can
+    /// still cite the exact raw event it came from.
+    private struct Travel {
+        let eventIndex: Int
+        let span: ReferenceTearTimeSpan
+        let direction: ScratchNotationDirection
+        let confidence: Double
+    }
 
     static func build(
         for evidence: ReferenceTakeEvidence,
@@ -1308,12 +1354,6 @@ enum ReferenceTearSegmentationReviewBuilder {
         // Usable travel, in evidence order by time. The raw array is retained
         // untouched; this is a view over it that carries each entry's original
         // index so every derived segment can cite the event it came from.
-        struct Travel {
-            let eventIndex: Int
-            let span: ReferenceTearTimeSpan
-            let direction: ScratchNotationDirection
-            let confidence: Double
-        }
         var travels: [Travel] = []
         var sawMalformed = false
         for (index, event) in movementEvents.enumerated() {
@@ -1339,10 +1379,36 @@ enum ReferenceTearSegmentationReviewBuilder {
         }
         if sawMalformed { reviewReasons.append(.malformedMovementEvent) }
 
+        // Sign-chatter repair: which CONFIRMED direction each travel run
+        // belongs to, once brief opposite-direction runs sandwiched between
+        // two sustained same-direction neighbors are attributed to the
+        // surrounding gesture rather than treated as real reversals. This
+        // never touches `travels` itself or the segments built from it below
+        // — every raw run is still reported at its own measured direction;
+        // only the REVERSAL and GESTURE decisions read the confirmed group.
+        let groups = mergeDirectionChatter(travels: travels, configuration: configuration)
+        var travelPositionToGroup: [Int: Int] = [:]
+        for (groupIndex, group) in groups.enumerated() {
+            for travelPosition in group.travelPositions {
+                travelPositionToGroup[travelPosition] = groupIndex
+            }
+        }
+        let chatterTravelPositions: Set<Int> = Set(
+            groups.enumerated().flatMap { groupIndex, group -> [Int] in
+                group.travelPositions.filter { travels[$0].direction != group.direction }
+            }
+        )
+
         // Interleave the travel runs with the intervals between them. An
         // interval is stationary only when it is a real, positive-width gap in
         // the platter telemetry; abutting or overlapping runs claim nothing.
         var segments: [ReferenceTearMotionSegment] = []
+        // The CONFIRMED gesture direction a travel segment was ultimately
+        // attributed to, keyed by final segment index — set only for travel
+        // segments whose own raw direction was overridden by chatter repair.
+        // A travel segment absent from this map simply keeps its own raw
+        // direction as its confirmed direction (the common case).
+        var segmentGroupDirection: [Int: ScratchNotationDirection] = [:]
         var sawOverlap = false
         for (position, travel) in travels.enumerated() {
             if position > 0 {
@@ -1356,7 +1422,12 @@ enum ReferenceTearSegmentationReviewBuilder {
                         endTime: travel.span.startTime
                     )
                     var reasons: [ReferenceTearReviewReason] = [.gapDerivedStationaryInterval]
-                    if previous.direction == travel.direction {
+                    // Whether this gap separates two confirmed directions, or
+                    // sits inside one confirmed gesture. Uses the CONFIRMED
+                    // group rather than the raw run direction, so a gap beside
+                    // an absorbed chatter run still reads as a same-direction
+                    // pause (a hold), not a reversal.
+                    if travelPositionToGroup[position - 1] == travelPositionToGroup[position] {
                         reasons.append(.boundedStationaryInterval)
                     } else {
                         reasons.append(.directionReversal)
@@ -1387,6 +1458,12 @@ enum ReferenceTearSegmentationReviewBuilder {
             if travel.confidence <= configuration.lowMovementConfidence {
                 reasons.append(.lowMovementConfidence)
             }
+            if chatterTravelPositions.contains(position) {
+                reasons.append(.mergedDirectionChatter)
+                if let groupIndex = travelPositionToGroup[position] {
+                    segmentGroupDirection[segments.count] = groups[groupIndex].direction
+                }
+            }
             segments.append(
                 ReferenceTearMotionSegment(
                     index: segments.count,
@@ -1399,22 +1476,25 @@ enum ReferenceTearSegmentationReviewBuilder {
             )
         }
         if sawOverlap { reviewReasons.append(.overlappingMovementEvents) }
+        if !chatterTravelPositions.isEmpty { reviewReasons.append(.mergedDirectionChatter) }
 
-        // Reversals. A stop before opposite travel spans the whole stationary
-        // interval; a direct turnaround is the zero-width shared instant.
+        // Reversals — one per CONFIRMED direction change between adjacent
+        // groups, not per raw direction-differing travel pair. A stop before
+        // opposite travel spans the whole stationary interval; a direct
+        // turnaround is the zero-width shared instant.
         var reversals: [ReferenceTearReversal] = []
-        for (position, travel) in travels.enumerated() where position > 0 {
-            let previous = travels[position - 1]
-            guard previous.direction != travel.direction else { continue }
+        for (position, group) in groups.enumerated() where position > 0 {
+            let previous = groups[position - 1]
+            guard previous.direction != group.direction else { continue }
             reversals.append(
                 ReferenceTearReversal(
                     index: reversals.count,
                     span: ReferenceTearTimeSpan(
-                        startTime: previous.span.endTime,
-                        endTime: max(previous.span.endTime, travel.span.startTime)
+                        startTime: previous.endTime,
+                        endTime: max(previous.endTime, group.startTime)
                     ),
                     from: previous.direction,
-                    to: travel.direction
+                    to: group.direction
                 )
             )
         }
@@ -1425,6 +1505,7 @@ enum ReferenceTearSegmentationReviewBuilder {
 
         let candidates = makeCandidates(
             segments: segments,
+            segmentGroupDirection: segmentGroupDirection,
             faderIntervals: faderIntervals,
             faderClicks: faderClicks,
             configuration: configuration
@@ -1457,8 +1538,90 @@ enum ReferenceTearSegmentationReviewBuilder {
     /// stream, and a leading or trailing stationary interval is left outside
     /// it — the same shape `ScratchNotation.PlatterGesture` defines, so a
     /// reviewed candidate and a canonical gesture agree on what a tear is.
+    // MARK: Sign-chatter repair
+
+    /// A run of one or more consecutive `travels` positions confirmed to
+    /// belong to the same physical gesture direction, after absorbing any
+    /// brief opposite-direction chatter sandwiched inside it.
+    private struct DirectionGroup {
+        var direction: ScratchNotationDirection
+        var startTime: Double
+        var endTime: Double
+        /// Original positions into the sorted `travels` array, in order.
+        /// Never reordered, never dropped — a chatter member's position is
+        /// retained here exactly like an anchor member's, which is what lets
+        /// every raw travel segment still be cited from its gesture.
+        var travelPositions: [Int]
+        var duration: Double { endTime - startTime }
+    }
+
+    /// Confirmed per-gesture direction groups over the sorted travel runs.
+    ///
+    /// A single forward sweep with hysteresis on the CONFIRMED direction,
+    /// directly analogous to `PlatterMotionSegmenter`'s own hysteresis band
+    /// on this same problem class (`state = previous == sign ? previous :
+    /// .unknown` — a reading below the moving threshold never overrides an
+    /// established state), applied here to whole already-decoded travel runs
+    /// rather than raw per-sample speeds:
+    ///
+    /// The confirmed direction starts as the first run's direction. Each
+    /// subsequent run either matches it (trivially extends the current
+    /// group), or opposes it — and an opposing run only overrides the
+    /// confirmed direction once it reaches `reversalConfirmationDuration` on
+    /// its own; a shorter opposing run is folded into the CURRENT group
+    /// without changing its direction, exactly like a same-direction run.
+    /// This is why a run's neighbors on both sides need not already be
+    /// "established": chatter is measured against the confirmed direction in
+    /// force, not against its immediate neighbors, so an unbroken run of
+    /// short alternating jitter between two real strokes collapses to
+    /// exactly one reversal regardless of how many times it flips sign.
+    ///
+    /// A short run at the very START of the take has no confirmed direction
+    /// yet to be measured against; it seeds the first group as-is, and only
+    /// a later sustained-or-longer run can end up overriding it as a
+    /// reversal. Unknown evidence is not fabricated — this can leave a short
+    /// leading group, which is reported plainly rather than guessed into
+    /// whichever side looks more likely.
+    private static func mergeDirectionChatter(
+        travels: [Travel],
+        configuration: ReferenceTearReviewConfiguration
+    ) -> [DirectionGroup] {
+        guard let first = travels.first else { return [] }
+        var groups: [DirectionGroup] = [
+            DirectionGroup(
+                direction: first.direction,
+                startTime: first.span.startTime,
+                endTime: first.span.endTime,
+                travelPositions: [0]
+            )
+        ]
+        for position in 1..<travels.count {
+            let travel = travels[position]
+            let confirmed = groups[groups.count - 1]
+            if travel.direction == confirmed.direction
+                || travel.span.duration + configuration.timeTolerance < configuration.reversalConfirmationDuration {
+                // Same direction, or opposite but not yet sustained enough to
+                // confirm a real reversal: absorbed into the current group.
+                groups[groups.count - 1].endTime = travel.span.endTime
+                groups[groups.count - 1].travelPositions.append(position)
+            } else {
+                // Opposite direction AND sustained: a real, confirmed reversal.
+                groups.append(
+                    DirectionGroup(
+                        direction: travel.direction,
+                        startTime: travel.span.startTime,
+                        endTime: travel.span.endTime,
+                        travelPositions: [position]
+                    )
+                )
+            }
+        }
+        return groups
+    }
+
     private static func makeCandidates(
         segments: [ReferenceTearMotionSegment],
+        segmentGroupDirection: [Int: ScratchNotationDirection],
         faderIntervals: [CrossfaderStateInterval],
         faderClicks: [CrossfaderSemanticEvent],
         configuration: ReferenceTearReviewConfiguration
@@ -1476,7 +1639,13 @@ enum ReferenceTearSegmentationReviewBuilder {
             var pendingHold: Int?
             while cursor < segments.count {
                 let segment = segments[cursor]
-                if segment.state.travelDirection == direction {
+                // A travel segment continues THIS gesture when its own raw
+                // direction matches (the ordinary case, including resuming
+                // after a genuine gap-derived hold), OR when it is a brief
+                // opposite-direction chatter run that repair attributed to a
+                // group whose CONFIRMED direction matches this gesture.
+                if segment.state.travelDirection == direction
+                    || segmentGroupDirection[cursor] == direction {
                     if let hold = pendingHold {
                         holdIndices.append(hold)
                         pendingHold = nil
