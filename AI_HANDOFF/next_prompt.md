@@ -1,3 +1,16 @@
+## Current continuation - Boundaries 1 and 2 committed; Boundary 3 is next
+
+Supersedes the continuation blocks below. Candidate `/private/tmp/scratchlab-refauth-baseline.iYmLZU/worktree`, branch `checkpoint/reference-authoring-baseline`.
+
+1. Re-read the repository instructions and this candidate's newest `DEV_LOG.md`/`AI_HANDOFF.md` entries. Inspect both worktrees, indexes and HEADs. Never write to the primary worktree.
+2. Boundary 3 only: `feat(capture): preserve calibrated crossfader evidence`. This is the hard CaptureCore checkpoint required before TTM Prompt 1. Extract the four calibration sources under `ScratchLab/Models/ControllerInput/Calibration/`, all eight `CaptureCore.swift` hunks (8588, 8595, 8606, 8616, 8828, 8851, 8875, 8896), the calibration-owned engine hunks `4252,4439,10790:11102-11139+11151-11174,10811,10812:11279-11290,10945`, the whole `CrossfaderCalibrationTests.swift`, and calibration-only `project.pbxproj` membership.
+3. Exclude the ledger, live-observability and reference-authoring engine code, the learned-mapping snapshot at new 11140-11150, the live CC observability at new 11175-11252, the unconditional live observation call at new 11291-11298, and all six `CURRENT_PROJECT_VERSION` 21 to 22 hunks. `project.pbxproj` membership lines are interleaved and must be split at line level, not hunk level.
+4. Close the three still-open coverage gaps: `RawMixerMIDIEvent` calibrated-field Codable round trip, all-calibrated derivation through `CaptureCore.deriveDetectedNotationFaderEvents`, and mixed calibrated/un-calibrated fallback to `normalizedValue`. Append them at the end of `CaptureReliabilityPhase1Tests.swift`; do not edit the audited `CrossfaderCalibrationTests.swift`. The other six named gaps are already covered.
+5. Verify with `CrossfaderCalibrationTests` plus the mapped-fader and round-trip tests in `CaptureReliabilityPhase1CoreTests`, then the serial gate, then platform builds and universal macOS Release.
+6. Use `apply-hunks.rb`; never `git apply --unidiff-zero`. Reuse the wrapper, sandbox profile and host `com.machelpnz.scratchlab.refauth-iymlzu`.
+7. Only `MIDILearnEngineTests/testCalibrationIsolatedBetweenDevices` failing with `Optional(0)` vs `Optional(5)` at `MIDILearnEngineTests.swift:561` is an authorized known flake, and only when everything else passes with no differing signature. Do not modify, skip or quarantine it. Any other failure or preservation mismatch is blocking.
+8. Do not push, merge, deploy, record Take 007, approve, install or publish a reference, enable training, or begin TTM/Tear.
+
 ## Current continuation - Boundary 1 committed; Boundary 2 is next
 
 This entry supersedes the historical continuation blocks retained below. Candidate: `/private/tmp/scratchlab-refauth-baseline.iYmLZU/worktree`, branch `checkpoint/reference-authoring-baseline`, base `add70a08668e512c95e467871613f577a30523f1`. Boundary 1 of six is committed; the receipt repair is inherited from the base.

@@ -23086,3 +23086,194 @@ final class WatchStopDiagnosticsSidecarTests: XCTestCase {
         )
     }
 }
+
+/// Direct coverage for the shared export-failure text helper.
+///
+/// The helper has no call sites in this commit - the export coordinator's own
+/// call sites, `ReferencePackageIO` and `ReferenceAuthoringCaptureBridge` all
+/// arrive later - so nothing else in the suite exercises it. These tests pin
+/// the behaviour the helper exists to provide: a rejection that already knows
+/// which artifact failed must reach the operator with that knowledge intact,
+/// instead of being flattened into one of the two generic export sentences.
+final class SessionExportFailureTextTests: XCTestCase {
+
+    private struct StubKey: CodingKey {
+        let stringValue: String
+        var intValue: Int? { nil }
+        init(_ stringValue: String) { self.stringValue = stringValue }
+        init?(stringValue: String) { self.stringValue = stringValue }
+        init?(intValue: Int) { return nil }
+    }
+
+    private struct UnrecognisedFailure: Error {}
+
+    // MARK: - SessionExportArtifactRejection
+
+    func testArtifactRejectionCarriesItsIssueAndErrorIntoTheValidationReport() {
+        let rejection = SessionExportArtifactRejection(
+            issue: "Export blocked: take-002-camA.mov is zero bytes.",
+            exportError: .missingRequiredFiles
+        )
+
+        let report = rejection.validationReport
+
+        XCTAssertEqual(report.suggestedError, .missingRequiredFiles)
+        XCTAssertEqual(report.issues, ["Export blocked: take-002-camA.mov is zero bytes."])
+    }
+
+    // MARK: - issue(for:while:)
+
+    func testIssueForArtifactRejectionKeepsTheArtifactSentenceInsteadOfTheCoarseMessage() {
+        let issue = "Export blocked: take-002-camA.mov is zero bytes."
+        let rejection = SessionExportArtifactRejection(issue: issue, exportError: .missingRequiredFiles)
+
+        let text = SessionExportFailureText.issue(for: rejection, while: "validating the canonical export")
+
+        XCTAssertEqual(text, issue, "A rejection that names the artifact must reach the operator unchanged.")
+        XCTAssertNotEqual(
+            text,
+            SessionExportError.missingRequiredFiles.userMessage,
+            "Naming the artifact must not collapse back into the generic missing-files sentence."
+        )
+    }
+
+    func testIssueForValidationFailureReturnsTheSpecificReasonDetail() {
+        let failure = SessionExportValidationFailure(.stagedDocumentUnreadable)
+
+        XCTAssertEqual(
+            SessionExportFailureText.issue(for: failure, while: "validating the canonical export"),
+            SessionExportValidationReason.stagedDocumentUnreadable.detailText
+        )
+    }
+
+    func testIssueForBareExportErrorFallsBackToItsExistingUserMessage() {
+        XCTAssertEqual(
+            SessionExportFailureText.issue(for: SessionExportError.unableToCreateArchive, while: "building the archive"),
+            SessionExportError.unableToCreateArchive.userMessage,
+            "Coarse export errors keep the wording the export UI already shows."
+        )
+    }
+
+    func testIssueForUnrecognisedErrorNamesTheActivityThatWasBlocked() {
+        let text = SessionExportFailureText.issue(for: UnrecognisedFailure(), while: "staging the archive")
+
+        XCTAssertTrue(
+            text.hasPrefix("Export blocked while staging the archive: "),
+            "An unrecognised error still has to say what was being attempted. Got: \(text)"
+        )
+    }
+
+    // MARK: - Sidecar issues
+
+    func testUnreadableSidecarIssueNamesTheFileAndTheFieldThatFailed() {
+        let error = DecodingError.keyNotFound(
+            StubKey("sampleRate"),
+            DecodingError.Context(codingPath: [StubKey("take"), StubKey("audio")], debugDescription: "")
+        )
+
+        let text = SessionExportFailureText.unreadableSidecarIssue(error, fileName: "take-001.json")
+
+        XCTAssertTrue(text.contains("take-001.json"), "Got: \(text)")
+        XCTAssertTrue(text.contains("take.audio.sampleRate"), "The failing field path must be named. Got: \(text)")
+        XCTAssertFalse(
+            text.contains("is missing from the capture folder"),
+            "A file that exists but will not decode must not be reported as absent."
+        )
+    }
+
+    func testMissingSidecarIssueNamesTheFileThatIsAbsent() {
+        let text = SessionExportFailureText.missingSidecarIssue(fileName: "take-003.json")
+
+        XCTAssertEqual(text, "Export blocked: take-003.json is missing from the capture folder.")
+    }
+
+    func testSidecarIssueTextCarriesNoFilesystemPath() {
+        let error = DecodingError.dataCorrupted(
+            DecodingError.Context(codingPath: [], debugDescription: "Unexpected end of file.")
+        )
+
+        let text = SessionExportFailureText.unreadableSidecarIssue(error, fileName: "take-001.json")
+
+        XCTAssertFalse(text.contains("/"), "Only the file name may appear, never a path. Got: \(text)")
+    }
+
+    // MARK: - describe(_:)
+
+    func testDescribeNamesTheMissingFieldPathForAKeyNotFoundFailure() {
+        let error = DecodingError.keyNotFound(
+            StubKey("bpm"),
+            DecodingError.Context(codingPath: [StubKey("session")], debugDescription: "")
+        )
+
+        XCTAssertEqual(SessionExportFailureText.describe(error), "Required field 'session.bpm' is missing.")
+    }
+
+    func testDescribeNamesTheFieldForATypeMismatch() {
+        let error = DecodingError.typeMismatch(
+            Int.self,
+            DecodingError.Context(codingPath: [StubKey("session"), StubKey("bpm")], debugDescription: "")
+        )
+
+        let text = SessionExportFailureText.describe(error)
+
+        XCTAssertTrue(text.hasPrefix("Field 'session.bpm' is not a"), "Got: \(text)")
+    }
+
+    func testDescribeNamesTheFieldForAValueNotFoundFailure() {
+        let error = DecodingError.valueNotFound(
+            String.self,
+            DecodingError.Context(codingPath: [StubKey("session"), StubKey("performer")], debugDescription: "")
+        )
+
+        let text = SessionExportFailureText.describe(error)
+
+        XCTAssertTrue(text.hasPrefix("Field 'session.performer' holds no"), "Got: \(text)")
+    }
+
+    func testDescribeReportsInvalidJSONWhenTheCorruptionHasNoFieldPath() {
+        let error = DecodingError.dataCorrupted(
+            DecodingError.Context(codingPath: [], debugDescription: "Unexpected end of file.")
+        )
+
+        XCTAssertEqual(
+            SessionExportFailureText.describe(error),
+            "The file is not valid JSON. Unexpected end of file."
+        )
+    }
+
+    func testDescribeNamesTheFieldWhenCorruptionHasAPath() {
+        let error = DecodingError.dataCorrupted(
+            DecodingError.Context(codingPath: [StubKey("takes")], debugDescription: "Bad date.")
+        )
+
+        XCTAssertEqual(
+            SessionExportFailureText.describe(error),
+            "Field 'takes' could not be decoded. Bad date."
+        )
+    }
+
+    func testDescribeNamesTheFieldForAnEncodingFailure() {
+        let error = EncodingError.invalidValue(
+            Double.nan,
+            EncodingError.Context(codingPath: [StubKey("takes"), StubKey("duration")], debugDescription: "")
+        )
+
+        XCTAssertEqual(
+            SessionExportFailureText.describe(error),
+            "Field 'takes.duration' held a value that cannot be encoded."
+        )
+    }
+
+    func testDescribeFallsBackToDomainAndCodeForFoundationErrors() {
+        let error = NSError(
+            domain: "NSCocoaErrorDomain",
+            code: 640,
+            userInfo: [NSLocalizedDescriptionKey: "The volume is out of space."]
+        )
+
+        XCTAssertEqual(
+            SessionExportFailureText.describe(error),
+            "The volume is out of space. (NSCocoaErrorDomain 640)"
+        )
+    }
+}

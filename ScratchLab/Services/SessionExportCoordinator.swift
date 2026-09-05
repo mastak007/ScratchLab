@@ -909,6 +909,124 @@ struct SessionExportValidationFailure: Error, Equatable, Sendable {
     }
 }
 
+/// A rejection that already carries the operator-facing sentence naming the
+/// artifact or field that failed.
+///
+/// `exportError` keeps the coarse retry/cancel semantics the export UI already
+/// switches on; `issue` is what the operator actually reads. Use this wherever
+/// a check knows *which* artifact it rejected - throwing a bare
+/// `SessionExportError` there throws that knowledge away.
+struct SessionExportArtifactRejection: Error, Equatable, Sendable {
+    let issue: String
+    let exportError: SessionExportError
+
+    init(issue: String, exportError: SessionExportError) {
+        self.issue = issue
+        self.exportError = exportError
+    }
+
+    var validationReport: SessionValidationReport {
+        SessionValidationReport(suggestedError: exportError, issues: [issue])
+    }
+}
+
+/// Renders any error raised while building or validating the canonical export
+/// into a message that names the artifact or field that was rejected.
+///
+/// Export used to funnel three genuinely different outcomes into the same two
+/// sentences: "This session is missing required files." and "ScratchLab could
+/// not validate the canonical export artifacts." Neither names the take, the
+/// artifact, or the check, so a session whose `.mov`, `.wav` and `.json` are
+/// all present and non-empty reported as if files were absent. Validation is
+/// unchanged - every check that rejected before still rejects. Only what the
+/// operator is told changed.
+///
+/// What may appear in the text: check names, artifact *file names*
+/// (`lastPathComponent` only, never a full path), take numbers, coding-key
+/// paths from a decode failure, and the underlying framework error. What may
+/// never appear: performer names, notes, or any other capture content.
+enum SessionExportFailureText {
+
+    /// The single entry point every catch-all in validation and export uses.
+    static func issue(for error: Error, while activity: String) -> String {
+        if let rejection = error as? SessionExportArtifactRejection {
+            return rejection.issue
+        }
+        if let failure = error as? SessionExportValidationFailure {
+            return failure.reason.detailText
+        }
+        if let exportError = error as? SessionExportError {
+            return exportError.userMessage
+        }
+        return "Export blocked while \(activity): \(describe(error))"
+    }
+
+    /// Why a sidecar that exists on disk could not be read back.
+    ///
+    /// `try?` on the sidecar decode is what turned a schema mismatch into
+    /// "This session is missing required files." The file is right there; the
+    /// operator needs the field that failed, not a claim that it is absent.
+    static func unreadableSidecarIssue(_ error: Error, fileName: String) -> String {
+        "Export blocked: ScratchLab could not read \(fileName). \(describe(error))"
+    }
+
+    static func missingSidecarIssue(fileName: String) -> String {
+        "Export blocked: \(fileName) is missing from the capture folder."
+    }
+
+    /// Human-readable detail for an error raised by Foundation, AVFoundation
+    /// or `Codable`, in that order of specificity.
+    static func describe(_ error: Error) -> String {
+        if let decodingError = error as? DecodingError {
+            return describeDecoding(decodingError)
+        }
+        if let encodingError = error as? EncodingError {
+            return describeEncoding(encodingError)
+        }
+        if let localized = error as? LocalizedError, let description = localized.errorDescription {
+            return description
+        }
+        let nsError = error as NSError
+        let base = nsError.localizedDescription
+        return "\(base) (\(nsError.domain) \(nsError.code))"
+    }
+
+    private static func describeDecoding(_ error: DecodingError) -> String {
+        switch error {
+        case .keyNotFound(let key, let context):
+            return "Required field '\(codingPath(context.codingPath, appending: key))' is missing."
+        case .typeMismatch(let type, let context):
+            return "Field '\(codingPath(context.codingPath))' is not a \(type)."
+        case .valueNotFound(let type, let context):
+            return "Field '\(codingPath(context.codingPath))' holds no \(type) value."
+        case .dataCorrupted(let context):
+            let path = codingPath(context.codingPath)
+            if path.isEmpty {
+                return "The file is not valid JSON. \(context.debugDescription)"
+            }
+            return "Field '\(path)' could not be decoded. \(context.debugDescription)"
+        @unknown default:
+            return "The file could not be decoded."
+        }
+    }
+
+    private static func describeEncoding(_ error: EncodingError) -> String {
+        switch error {
+        case .invalidValue(_, let context):
+            let path = codingPath(context.codingPath)
+            return path.isEmpty
+                ? "A generated document held a value that cannot be encoded."
+                : "Field '\(path)' held a value that cannot be encoded."
+        @unknown default:
+            return "A generated document could not be encoded."
+        }
+    }
+
+    private static func codingPath(_ path: [CodingKey], appending key: CodingKey? = nil) -> String {
+        (path + (key.map { [$0] } ?? [])).map(\.stringValue).joined(separator: ".")
+    }
+}
+
 enum TakeArtifactReadiness: Equatable, Sendable {
     case recording
     case finalizing

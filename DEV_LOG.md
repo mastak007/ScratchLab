@@ -4052,3 +4052,31 @@ An earlier full-gate run of this identical Boundary 1 source failed once on `Scr
 ### Preservation
 
 All 661 primary tracked and untracked regular files match `primary-audit-baseline.json`, and all 93 protected evidence files match `protected-evidence-baseline.json`, verified before and after this boundary. Primary remains `feature/ios-capture-camera-ux` at `d3ecf2a69bde57f7d6ac681b6dbdd37347c83e97` with an empty index whose bytes are unchanged (SHA-256 `01319bef1a1ebdc50e35731eda2f09f990340a1f407ef2d9b60f6c5f603d1a1f`). Receipt branch `fix/watch-receipt-staging` remains at `add70a08668e512c95e467871613f577a30523f1`. Protected project settings, schemes, entitlements, plists and build numbers are unchanged from candidate HEAD. `git diff --check` passes. Takes 001-006, all Watch and relay artifacts and the documented historical metadata mutations are untouched; no recording was deleted, rewritten or promoted to valid, canonical, approved or training-eligible; detector output was not treated as human ground truth; no ScratchBook GPL source, code or data was copied.
+
+## 2026-09-05 - Boundary 2 committed: reusable export artifact error descriptions
+
+### Scope and exact extraction
+
+Candidate `/private/tmp/scratchlab-refauth-baseline.iYmLZU/worktree`, branch `checkpoint/reference-authoring-baseline`, parent `0501bfbb2985ddca58652e9f3f85ab5a5f49ba2a`. Extracted exactly one hunk from the primary's diff against `d3ecf2a69bde57f7d6ac681b6dbdd37347c83e97`: `ScratchLab/Services/SessionExportCoordinator.swift` old anchor 911, a 118-line pure insertion occupying new lines 912-1029. It defines `SessionExportArtifactRejection`, which pairs the operator-facing sentence naming the rejected artifact with the coarse `SessionExportError` the export UI already switches on, and `SessionExportFailureText`, which renders any error raised while building or validating the canonical export into a message that names the artifact or field rejected.
+
+The other 21 hunks in that file - the export call sites and error-propagation changes - were not extracted and remain outside this branch. No validation behaviour changed: every check that rejected before still rejects, and only the text the operator is told changed.
+
+Dependency check before extraction: the helper references `SessionExportError.userMessage`, `SessionValidationReport(suggestedError:issues:)` and `SessionExportValidationFailure.reason.detailText`. All three already exist at the candidate base (`SessionExportError.userMessage` at line 821), so none of the excluded hunks is required and the boundary compiles standalone. Its later consumers are `ScratchLab/Services/ReferencePackageIO.swift` (Boundary 4) and `ScratchLabDesktop/Services/ReferenceAuthoringCaptureBridge.swift` (Boundary 5), which is why the helper lands first.
+
+### Added coverage
+
+The helper has no test reference anywhere in the primary dirty tree, so it could not be proven through an already-owned exact test and direct coverage was added. Fifteen tests in a new `SessionExportFailureTextTests` class were appended to the end of `ScratchLabDesktopTests/CaptureReliabilityPhase1Tests.swift`, which is already a member of the test target, so no `project.pbxproj` change was required. Appending at the end of the file is deliberate: inserting before line 22196 would shift the old-side coordinates that Boundaries 5 and 6 rely on. No existing test was modified or weakened.
+
+The tests pin: the rejection carrying its issue and error into `validationReport`; `issue(for:while:)` returning the artifact sentence rather than collapsing to the generic `missingRequiredFiles` message; validation failures returning the specific reason detail; bare export errors keeping their existing user message; unrecognised errors still naming the blocked activity; unreadable-sidecar text naming both the file and the failing field path while never reporting a present file as absent; missing-sidecar text; the privacy contract that only a file name and never a path appears; and `describe` for `keyNotFound`, `typeMismatch`, `valueNotFound`, corrupted data with and without a field path, `EncodingError.invalidValue`, and the Foundation domain-and-code fallback.
+
+### Commands and results
+
+Focused, executed once: `test-without-building` with `-only-testing:` for `SessionExportFailureTextTests`, `SessionExportRoundTripTests` and the whole `CaptureReliabilityPhase1CoreTests` class, which carries the export regressions. Per configuration 432 executed, 432 passed, 0 failed; 864 executions across both configurations. Suite sizes: new helper tests 15, round trip 2, core 415. Log `../logs/b2-focused.log`, bundle `../results/b2-focused.xcresult`.
+
+Serial `PATH=../bin:$PATH ./scripts/build.sh all`, exit 0. Python capture fixtures 82 passed; full native plan passed under both configurations with 3,350 XCTest cases each, 55 skipped and 0 failures, which is exactly the previous 3,335 plus the 15 added tests; Swift Testing 366 in 49 suites passed; iOS, macOS and unsigned watchOS builds passed. Zero failing cases in the whole run. Log `../logs/b2-full-gate.log`, bundle `../results/b2-full.xcresult`.
+
+The extracted helper and the added tests contain no `#if`, `#else` or `#endif`, so no conditional compilation is involved and the brief's conditional universal Release leg did not apply. The Boundary 1 universal Release result stands unaffected; build number remains 21.
+
+### Preservation
+
+All 661 primary files and all 93 protected evidence files match the saved baselines. Primary remains `feature/ios-capture-camera-ux` at `d3ecf2a6` with an unchanged empty index; receipt branch intact; protected project settings, schemes, entitlements, plists and build numbers unchanged; `git diff --check` passes. Takes 001-006 and the documented historical metadata mutations are untouched. Nothing was installed, published, approved or made training-eligible, and no detector output was treated as human ground truth.

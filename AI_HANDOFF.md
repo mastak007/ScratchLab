@@ -1,5 +1,18 @@
 # AI Handoff
 
+## 2026-09-05 - Boundary 2 of 6 committed on checkpoint/reference-authoring-baseline
+
+Supersedes the Boundary 1 entry below for current status. Candidate `/private/tmp/scratchlab-refauth-baseline.iYmLZU/worktree`, branch `checkpoint/reference-authoring-baseline`. Boundaries 1 and 2 are committed; four remain.
+
+- Boundary 2 subject: `refactor(export): add reusable artifact error descriptions`. Files: `ScratchLab/Services/SessionExportCoordinator.swift`, `ScratchLabDesktopTests/CaptureReliabilityPhase1Tests.swift`, and the four workflow documents.
+- Extracted only hunk old 911, the 118-line self-contained insertion at new 912-1029 defining `SessionExportArtifactRejection` and `SessionExportFailureText`. The other 21 export hunks remain excluded. Validation behaviour is unchanged; only operator-facing text changed.
+- Verified standalone: the helper's three dependencies (`SessionExportError.userMessage`, `SessionValidationReport`, `SessionExportValidationFailure.reason.detailText`) all pre-exist at the base, so no excluded hunk is required.
+- The helper had no test reference anywhere in the primary, so 15 direct tests (`SessionExportFailureTextTests`) were appended to the end of `CaptureReliabilityPhase1Tests.swift`. That file already has target membership, so no `project.pbxproj` change was needed. Appending at the end preserves the old-side coordinates Boundaries 5 and 6 depend on. No existing test was weakened.
+- Focused 432 per configuration (864 total), zero failures. Serial gate exit 0: Python 82; XCTest 3,350 per configuration, 55 skipped, 0 failed; Swift Testing 366; iOS, macOS and watchOS builds passed. No conditional compilation, so no separate Release leg applied.
+- Boundary 3 is next and is the hard CaptureCore checkpoint required before TTM. It needs the four calibration sources, all eight `CaptureCore.swift` hunks, six calibration-owned engine hunks including sub-hunk splits of 10790 and 10812, the whole `CrossfaderCalibrationTests.swift`, and calibration-only `project.pbxproj` membership with the six build-number hunks excluded.
+- Coverage-gap survey for Boundary 3: orientations, the D4 arm boundary, retry clearing/unarming, stale and pre-arm sample rejection, the 0/0/126 invalid centre and the 0/69/126 valid sweep are already covered by the 48 tests in `CrossfaderCalibrationTests.swift`. Still open and to be closed in Boundary 3: the `RawMixerMIDIEvent` calibrated-field Codable round trip, all-calibrated derivation, and mixed calibrated/un-calibrated fallback. Those fields are referenced only by `ReferenceAuthoringCaptureBridgeTests.swift`, which belongs to Boundary 5.
+- Preservation unchanged: 661 primary files, 93 protected evidence files, empty indexes, intact receipt branch, protected settings and build number 21, `git diff --check` passes.
+
 ## 2026-09-05 - Boundary 1 of 6 committed on checkpoint/reference-authoring-baseline
 
 This entry governs `/private/tmp/scratchlab-refauth-baseline.iYmLZU/worktree`, branch `checkpoint/reference-authoring-baseline`, base `add70a08668e512c95e467871613f577a30523f1`. It supersedes the receipt-candidate status retained below; the receipt repair is already committed in the base. Five further boundaries remain in this batch.
