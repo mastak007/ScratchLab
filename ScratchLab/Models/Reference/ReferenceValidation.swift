@@ -340,6 +340,17 @@ struct ReferenceTakeEvidence: Equatable, Sendable {
     let observedCrossfaderAddress: CrossfaderMIDIAddress?
     /// Count of recorded platter movement events.
     let platterMovementEventCount: Int
+    /// The recorded platter movement events themselves, exactly as the
+    /// finalized sidecar carries them.
+    ///
+    /// Retained beside the count because tear-segmentation review has to show
+    /// the operator the motion, not a number. Nothing derives a second
+    /// platter decode from these: they are the output of
+    /// `CaptureCore.derivePlatterMovementEvents` as written at finalization,
+    /// and every review over them is a pure grouping of that evidence.
+    /// Defaults to empty so a take measured before this field existed decodes
+    /// and validates unchanged.
+    let platterMovementEvents: [CaptureCore.DetectedNotationRecordMovementEvent]
     /// The derivation produced from the raw samples and the calibration.
     /// `nil` when derivation could not run (unusable calibration).
     let derivation: CrossfaderDerivation?
@@ -360,7 +371,8 @@ struct ReferenceTakeEvidence: Equatable, Sendable {
         observedCrossfaderAddress: CrossfaderMIDIAddress?,
         platterMovementEventCount: Int,
         derivation: CrossfaderDerivation?,
-        watchEvidence: ReferenceWatchEvidence = .missing(syncState: "notRequested")
+        watchEvidence: ReferenceWatchEvidence = .missing(syncState: "notRequested"),
+        platterMovementEvents: [CaptureCore.DetectedNotationRecordMovementEvent] = []
     ) {
         self.watchEvidence = watchEvidence
         self.metadata = metadata
@@ -372,6 +384,7 @@ struct ReferenceTakeEvidence: Equatable, Sendable {
         self.crossfaderRawSamples = crossfaderRawSamples
         self.observedCrossfaderAddress = observedCrossfaderAddress
         self.platterMovementEventCount = platterMovementEventCount
+        self.platterMovementEvents = platterMovementEvents
         self.derivation = derivation
     }
 }

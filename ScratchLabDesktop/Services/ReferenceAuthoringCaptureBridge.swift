@@ -634,6 +634,10 @@ final class ReferenceAuthoringCaptureBridge {
         let detectedNotation = sidecar.detectedNotation
         let mixerMidiEvents = detectedNotation?.mixerMidiEvents ?? []
         let crossfaderEvents = mixerMidiEvents.filter { $0.mappedControl == "crossfader" }
+        // Read once and handed through both as a count and in full. Tear
+        // review needs the events themselves; nothing here re-decodes the
+        // platter, so the count can never disagree with the evidence.
+        let platterMovementEvents = detectedNotation?.recordMovementEvents ?? []
 
         return .success(
             ReferenceRecordedTakeArtifacts(
@@ -643,12 +647,13 @@ final class ReferenceAuthoringCaptureBridge {
                 actualMediaFileName: mediaURL.lastPathComponent,
                 crossfaderRawSamples: crossfaderPositionSamples(from: crossfaderEvents),
                 observedCrossfaderAddress: observedCrossfaderAddress(from: crossfaderEvents),
-                platterMovementEventCount: detectedNotation?.recordMovementEvents.count ?? 0,
+                platterMovementEventCount: platterMovementEvents.count,
                 recordedAt: sidecar.endedAt ?? sidecar.startedAt,
                 autoDetectedTechnique: autoDetectedTechnique(
                     fromDetectedLabel: detectedNotation?.effectiveDetectedLabel
                 ),
-                watchEvidence: watchEvidence(in: sidecar, expectedIdentity: expectedIdentity)
+                watchEvidence: watchEvidence(in: sidecar, expectedIdentity: expectedIdentity),
+                platterMovementEvents: platterMovementEvents
             )
         )
     }

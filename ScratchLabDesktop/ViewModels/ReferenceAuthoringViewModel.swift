@@ -276,6 +276,132 @@ final class ReferenceAuthoringWorker: @unchecked Sendable {
         }
     }
 
+    // MARK: - Tear segmentation review
+    //
+    // Every entry point below runs the correction on the SERIAL WORKER, the
+    // sole owner of the session, exactly like every other mutation on this
+    // type. None of them approves, validates, publishes or installs anything.
+
+    func classifyTearCandidate(
+        _ candidateID: String,
+        as classification: ReferenceTearClassification,
+        notes: String
+    ) async -> ReferenceAuthoringWorkerUpdate {
+        await enqueue { worker in
+            let applied = worker.session.classifyTearCandidate(
+                candidateID,
+                as: classification,
+                notes: notes
+            )
+            return worker.makeUpdate(errorMessage: applied ? nil : Self.tearCorrectionRefused)
+        }
+    }
+
+    func addTearBoundary(
+        candidateID: String,
+        startTime: Double,
+        endTime: Double,
+        kind: ReferenceTearBoundaryKind,
+        evidenceQuality: ReferenceTearEvidenceQuality,
+        notes: String
+    ) async -> ReferenceAuthoringWorkerUpdate {
+        await enqueue { worker in
+            let applied = worker.session.addTearBoundary(
+                toCandidate: candidateID,
+                startTime: startTime,
+                endTime: endTime,
+                kind: kind,
+                evidenceQuality: evidenceQuality,
+                notes: notes
+            )
+            return worker.makeUpdate(
+                errorMessage: applied
+                    ? nil
+                    : "That tear boundary could not be added: a boundary must be a bounded interval inside a take under review."
+            )
+        }
+    }
+
+    func moveTearBoundary(
+        candidateID: String,
+        boundaryID: String,
+        startTime: Double,
+        endTime: Double,
+        notes: String
+    ) async -> ReferenceAuthoringWorkerUpdate {
+        await enqueue { worker in
+            let applied = worker.session.moveTearBoundary(
+                inCandidate: candidateID,
+                boundaryID: boundaryID,
+                startTime: startTime,
+                endTime: endTime,
+                notes: notes
+            )
+            return worker.makeUpdate(errorMessage: applied ? nil : Self.tearCorrectionRefused)
+        }
+    }
+
+    func setTearBoundaryKind(
+        candidateID: String,
+        boundaryID: String,
+        kind: ReferenceTearBoundaryKind,
+        notes: String
+    ) async -> ReferenceAuthoringWorkerUpdate {
+        await enqueue { worker in
+            let applied = worker.session.setTearBoundaryKind(
+                inCandidate: candidateID,
+                boundaryID: boundaryID,
+                to: kind,
+                notes: notes
+            )
+            return worker.makeUpdate(errorMessage: applied ? nil : Self.tearCorrectionRefused)
+        }
+    }
+
+    func setTearBoundaryEvidenceQuality(
+        candidateID: String,
+        boundaryID: String,
+        quality: ReferenceTearEvidenceQuality,
+        notes: String
+    ) async -> ReferenceAuthoringWorkerUpdate {
+        await enqueue { worker in
+            let applied = worker.session.setTearBoundaryEvidenceQuality(
+                inCandidate: candidateID,
+                boundaryID: boundaryID,
+                to: quality,
+                notes: notes
+            )
+            return worker.makeUpdate(errorMessage: applied ? nil : Self.tearCorrectionRefused)
+        }
+    }
+
+    func setTearBoundaryRemoved(
+        candidateID: String,
+        boundaryID: String,
+        removed: Bool,
+        notes: String
+    ) async -> ReferenceAuthoringWorkerUpdate {
+        await enqueue { worker in
+            let applied = worker.session.setTearBoundaryRemoved(
+                inCandidate: candidateID,
+                boundaryID: boundaryID,
+                removed: removed,
+                notes: notes
+            )
+            return worker.makeUpdate(errorMessage: applied ? nil : Self.tearCorrectionRefused)
+        }
+    }
+
+    func setTearReviewNotes(_ notes: String) async -> ReferenceAuthoringWorkerUpdate {
+        await enqueue { worker in
+            let applied = worker.session.setTearReviewNotes(notes)
+            return worker.makeUpdate(errorMessage: applied ? nil : Self.tearCorrectionRefused)
+        }
+    }
+
+    static let tearCorrectionRefused =
+        "That tear correction was not applied: no matching candidate or boundary in the take under review."
+
     /// Poll the finalized take's Watch evidence once and attach it if it has
     /// moved. Returns the resulting state so the caller can stop when terminal.
     func refreshWatchEvidenceOnce() async -> (update: ReferenceAuthoringWorkerUpdate, isTerminal: Bool) {
@@ -776,6 +902,225 @@ final class ReferenceAuthoringViewModel: ObservableObject {
             apply(update)
             visibleMessage = update.errorMessage ?? "Approved canonical draft. Not installed for training."
         }
+    }
+
+    // MARK: - Tear segmentation review
+
+    /// Notes carried on the NEXT tear correction, and committed as the
+    /// review's own notes by `commitTearReviewNotes()`.
+    @Published var tearReviewNotes = ""
+
+    /// The tear review for the take on screen, or `nil` when there is none.
+    /// Read-only: every change goes through the worker.
+    var tearReview: ReferenceTearSegmentationReview? { reviewedTake?.tearReview }
+
+    /// Why the tear review cannot be corrected right now, or `nil`.
+    ///
+    /// Deliberately says nothing about approval: correcting a tear review has
+    /// never been able to approve a take, and this screen must not imply that
+    /// finishing it will.
+    var tearReviewBlockReason: String? {
+        if isWorking { return "An operation is still running." }
+        guard reviewedTake != nil else { return "No take is under review." }
+        guard case .reviewing = session.phase else {
+            return "This take is no longer under review, so its tear segmentation is read-only."
+        }
+        return nil
+    }
+
+    var canCorrectTearReview: Bool { tearReviewBlockReason == nil }
+
+    func classifyTearCandidate(_ candidateID: String, as classification: ReferenceTearClassification) {
+        runTearCorrection { worker, notes in
+            await worker.classifyTearCandidate(candidateID, as: classification, notes: notes)
+        }
+    }
+
+    func addTearBoundary(
+        toCandidate candidateID: String,
+        startTime: Double,
+        endTime: Double,
+        kind: ReferenceTearBoundaryKind = .hold,
+        evidenceQuality: ReferenceTearEvidenceQuality = .clear
+    ) {
+        runTearCorrection { worker, notes in
+            await worker.addTearBoundary(
+                candidateID: candidateID,
+                startTime: startTime,
+                endTime: endTime,
+                kind: kind,
+                evidenceQuality: evidenceQuality,
+                notes: notes
+            )
+        }
+    }
+
+    func moveTearBoundary(
+        inCandidate candidateID: String,
+        boundaryID: String,
+        startTime: Double,
+        endTime: Double
+    ) {
+        runTearCorrection { worker, notes in
+            await worker.moveTearBoundary(
+                candidateID: candidateID,
+                boundaryID: boundaryID,
+                startTime: startTime,
+                endTime: endTime,
+                notes: notes
+            )
+        }
+    }
+
+    func setTearBoundaryKind(
+        inCandidate candidateID: String,
+        boundaryID: String,
+        to kind: ReferenceTearBoundaryKind
+    ) {
+        runTearCorrection { worker, notes in
+            await worker.setTearBoundaryKind(
+                candidateID: candidateID,
+                boundaryID: boundaryID,
+                kind: kind,
+                notes: notes
+            )
+        }
+    }
+
+    func setTearBoundaryEvidenceQuality(
+        inCandidate candidateID: String,
+        boundaryID: String,
+        to quality: ReferenceTearEvidenceQuality
+    ) {
+        runTearCorrection { worker, notes in
+            await worker.setTearBoundaryEvidenceQuality(
+                candidateID: candidateID,
+                boundaryID: boundaryID,
+                quality: quality,
+                notes: notes
+            )
+        }
+    }
+
+    func setTearBoundaryRemoved(
+        inCandidate candidateID: String,
+        boundaryID: String,
+        removed: Bool
+    ) {
+        runTearCorrection { worker, notes in
+            await worker.setTearBoundaryRemoved(
+                candidateID: candidateID,
+                boundaryID: boundaryID,
+                removed: removed,
+                notes: notes
+            )
+        }
+    }
+
+    func commitTearReviewNotes() {
+        runTearCorrection { worker, notes in
+            await worker.setTearReviewNotes(notes)
+        }
+    }
+
+    /// The ONE path every tear correction takes. Runs on the worker, applies
+    /// the published state on the main actor, and never touches approval.
+    private func runTearCorrection(
+        _ operation: @escaping @Sendable (ReferenceAuthoringWorker, String) async -> ReferenceAuthoringWorkerUpdate
+    ) {
+        guard canCorrectTearReview else {
+            visibleMessage = tearReviewBlockReason
+            return
+        }
+        visibleMessage = nil
+        let notes = tearReviewNotes
+        Task { [weak self] in
+            guard let self else { return }
+            let update = await operation(worker, notes)
+            apply(update)
+            if update.errorMessage == nil {
+                visibleMessage = "Tear correction recorded. This does not approve or install anything."
+            }
+        }
+    }
+
+    // MARK: Tear review presentation
+
+    /// ISO-8601 so a recorded correction instant is unambiguous in the UI and
+    /// in a test, independent of locale and time zone.
+    static let tearCorrectionTimestampFormatter: ISO8601DateFormatter = {
+        let formatter = ISO8601DateFormatter()
+        formatter.timeZone = TimeZone(secondsFromGMT: 0)
+        formatter.formatOptions = [.withInternetDateTime]
+        return formatter
+    }()
+
+    static func tearReviewStatusText(_ review: ReferenceTearSegmentationReview?) -> String {
+        guard let review else { return "No take is under review." }
+        guard review.hasMotionEvidence else {
+            return "No platter motion was recorded for this take, so there is nothing to segment."
+        }
+        guard !review.candidates.isEmpty else {
+            return "No same-direction gesture was found in this take's recorded motion."
+        }
+        var parts = [
+            "\(review.candidates.count) gesture\(review.candidates.count == 1 ? "" : "s")",
+            "\(review.totalCountedTearHoldCount) counted platter hold\(review.totalCountedTearHoldCount == 1 ? "" : "s")",
+            "\(review.correctedCandidateCount) corrected"
+        ]
+        if review.ambiguousCandidateCount > 0 {
+            parts.append("\(review.ambiguousCandidateCount) with ambiguous evidence")
+        }
+        // Stated on every render. Reviewing tear segmentation is inspection,
+        // not sign-off, and the screen must never imply otherwise.
+        parts.append("approves nothing")
+        return parts.joined(separator: " · ")
+    }
+
+    static func tearCandidateHeadline(_ candidate: ReferenceTearCandidate) -> String {
+        var text = "Gesture \(candidate.gestureIndex + 1) · \(candidate.direction.rawValue)"
+        text += " · proposed \(candidate.proposedClassification.displayName)"
+        if let confidence = candidate.proposedConfidence {
+            text += String(format: " (confidence %.2f)", confidence)
+        } else {
+            text += " (confidence unknown)"
+        }
+        if let manual = candidate.manualClassification {
+            text += " · operator \(manual.displayName)"
+        }
+        return text
+    }
+
+    static func tearBoundaryHeadline(_ boundary: ReferenceTearBoundary) -> String {
+        var text = String(
+            format: "%.3f–%.3f s · %@ · %@",
+            boundary.span.startTime,
+            boundary.span.endTime,
+            boundary.kind.displayName,
+            boundary.evidenceQuality.displayName
+        )
+        text += " · \(boundary.origin.displayName)"
+        if boundary.isRemoved { text += " · struck out (retained)" }
+        if !boundary.countsAsTearHold && !boundary.isRemoved { text += " · not counted" }
+        return text
+    }
+
+    static func tearCorrectionSummary(_ correction: ReferenceTearCorrection) -> String {
+        var text = "Corrected by \(correction.correctedBy)"
+        text += " at \(tearCorrectionTimestampFormatter.string(from: correction.correctedAt))"
+        let notes = correction.notes.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !notes.isEmpty { text += " — \(notes)" }
+        return text
+    }
+
+    /// Says when the reading in force and the surviving boundaries disagree.
+    /// Reported, never reconciled: the two are separate operator assertions.
+    static func tearDisagreementText(_ candidate: ReferenceTearCandidate) -> String? {
+        guard candidate.classificationDisagreesWithBoundaryCount else { return nil }
+        return "\(candidate.effectiveClassification.displayName) does not match the "
+            + "\(candidate.countedTearHoldCount) counted platter hold"
+            + "\(candidate.countedTearHoldCount == 1 ? "" : "s")"
+            + " (\(candidate.boundarySupportedClassification.displayName))."
     }
 
     func stopPolling() {

@@ -830,3 +830,633 @@ final class ReferenceAuthoringSessionTests: XCTestCase {
         )
     }
 }
+
+// MARK: - Tear segmentation review
+
+/// Pure tests for inspecting and correcting one take's tear segmentation.
+///
+/// Nothing here claims a take is valid reference material, and every test
+/// that corrects anything also asserts the take stayed un-approved: this
+/// review layer exists to record disagreement with the automatic pass, not to
+/// sign a take off.
+final class ReferenceTearSegmentationReviewTests: XCTestCase {
+
+    private let calibration = CrossfaderCalibration(
+        address: CrossfaderMIDIAddress(
+            deviceIdentifier: "Rane ONE MKII",
+            deviceName: "Rane ONE MKII",
+            channel: 15,
+            controller: 8
+        ),
+        fullLeftRawValue: 0,
+        centerRawValue: 52,
+        fullRightRawValue: 104,
+        openEnd: .left,
+        activeDeck: .rightDeck,
+        calibratedAt: Date(timeIntervalSince1970: 1_788_000_000)
+    )
+
+    private let correctedAt = Date(timeIntervalSince1970: 1_788_001_000)
+
+    // MARK: Fixtures
+
+    private func movement(
+        _ startTime: Double,
+        _ endTime: Double,
+        _ direction: String,
+        confidence: Double = 0.9
+    ) -> CaptureCore.DetectedNotationRecordMovementEvent {
+        CaptureCore.DetectedNotationRecordMovementEvent(
+            startTime: startTime,
+            endTime: endTime,
+            startPosition: 0,
+            endPosition: 1,
+            direction: direction,
+            movementKind: direction == "forward" ? .normalPush : .normalPull,
+            speed: 1,
+            confidence: confidence,
+            source: "controller"
+        )
+    }
+
+    /// Backward travel interrupted by two bounded stationary intervals, then a
+    /// reversal into one forward run: a 2-tear candidate followed by a
+    /// non-tear gesture.
+    private func twoTearMovementEvents() -> [CaptureCore.DetectedNotationRecordMovementEvent] {
+        [
+            movement(0.00, 0.20, "backward"),
+            movement(0.35, 0.55, "backward"),
+            movement(0.75, 0.95, "backward"),
+            movement(1.10, 1.40, "forward", confidence: 0.7)
+        ]
+    }
+
+    private func openFaderDerivation(
+        clicks: [CrossfaderSemanticEvent] = []
+    ) -> CrossfaderDerivation {
+        CrossfaderDerivation(
+            intervals: [
+                CrossfaderStateInterval(
+                    state: .open,
+                    startTime: 0,
+                    endTime: 2,
+                    startPosition: 1,
+                    endPosition: 1
+                )
+            ],
+            events: clicks
+        )
+    }
+
+    private func review(
+        movementEvents: [CaptureCore.DetectedNotationRecordMovementEvent]? = nil,
+        derivation: CrossfaderDerivation? = nil
+    ) -> ReferenceTearSegmentationReview {
+        ReferenceTearSegmentationReviewBuilder.build(
+            referenceTakeID: "auth-0001-take-001",
+            movementEvents: movementEvents ?? twoTearMovementEvents(),
+            derivation: derivation ?? openFaderDerivation()
+        )
+    }
+
+    private func correction(_ reason: String, notes: String = "") -> ReferenceTearCorrection {
+        ReferenceTearCorrection(
+            correctedBy: "Karl",
+            correctedAt: correctedAt,
+            notes: notes,
+            reason: reason
+        )
+    }
+
+    // MARK: The automatic pass
+
+    func testTheAutomaticPassGroupsBoundedStationaryIntervalsIntoATearCandidate() {
+        let review = review()
+
+        XCTAssertEqual(review.candidates.count, 2)
+        let tear = review.candidates[0]
+        XCTAssertEqual(tear.direction, .backward)
+        XCTAssertEqual(tear.proposedClassification, .tear2)
+        XCTAssertEqual(tear.boundaries.count, 2)
+        XCTAssertEqual(tear.countedTearHoldCount, 2)
+        XCTAssertEqual(tear.effectiveClassification.derivedStructure, .tear2Candidate)
+        XCTAssertEqual(tear.proposedConfidence, 0.9)
+
+        let plain = review.candidates[1]
+        XCTAssertEqual(plain.direction, .forward)
+        XCTAssertEqual(plain.proposedClassification, .nonTear)
+        XCTAssertTrue(plain.boundaries.isEmpty)
+        XCTAssertNil(
+            plain.effectiveClassification.derivedStructure,
+            "non-tear is not a structure the canonical vocabulary names"
+        )
+    }
+
+    func testStationaryIntervalsReversalsAndFaderEvidenceAreAllInspectable() {
+        let review = review()
+
+        XCTAssertEqual(review.travelIntervals.count, 4)
+        // Two bounded tear holds plus the stop before the reversal.
+        XCTAssertEqual(review.stationaryIntervals.count, 3)
+        XCTAssertEqual(review.reversals.count, 1)
+        XCTAssertEqual(review.reversals[0].from, .backward)
+        XCTAssertEqual(review.reversals[0].to, .forward)
+        XCTAssertEqual(review.reversals[0].span.startTime, 0.95, accuracy: 1e-9)
+        XCTAssertEqual(review.reversals[0].span.endTime, 1.10, accuracy: 1e-9)
+        XCTAssertFalse(review.reversals[0].isDirectTurnaround)
+        XCTAssertEqual(review.faderIntervals.count, 1)
+        XCTAssertEqual(review.faderReading(over: review.candidates[0].span), .open)
+
+        // Travel carries the decoder's own confidence; a stationary interval
+        // inferred from an absence of telemetry carries none.
+        XCTAssertEqual(review.travelIntervals.first?.confidence, 0.9)
+        XCTAssertNil(review.stationaryIntervals.first?.confidence)
+        XCTAssertTrue(
+            review.stationaryIntervals.allSatisfy {
+                $0.reasons.contains(.gapDerivedStationaryInterval)
+            }
+        )
+        XCTAssertTrue(
+            review.segments.contains {
+                $0.confidence == 0.7 && $0.reasons.contains(.lowMovementConfidence)
+            },
+            "a low-confidence movement event must be flagged, not smoothed away"
+        )
+    }
+
+    func testTheReviewStatesThatItsPlatterCoordinatesAreNotCalibrated() {
+        XCTAssertTrue(review().reasons.contains(.uncalibratedPlatterCoordinates))
+    }
+
+    func testRawMovementEventsAreRetainedVerbatimIncludingOnesTooMalformedToSegment() {
+        var events = twoTearMovementEvents()
+        events.append(movement(2.0, 2.0, "forward"))
+        let review = review(movementEvents: events)
+
+        XCTAssertEqual(review.rawMovementEvents, events, "raw evidence is never filtered or repaired")
+        XCTAssertTrue(review.reasons.contains(.malformedMovementEvent))
+        XCTAssertEqual(review.travelIntervals.count, 4, "a zero-width event cannot become a travel interval")
+    }
+
+    func testAFaderClickOverAStationaryIntervalIsCitedButNeverProposedAsTheBoundaryKind() {
+        let click = CrossfaderSemanticEvent(
+            kind: .cut,
+            startTime: 0.25,
+            endTime: 0.28,
+            fromPosition: 1,
+            toPosition: 0
+        )
+        let review = review(derivation: openFaderDerivation(clicks: [click]))
+        let boundary = review.candidates[0].boundaries[0]
+
+        XCTAssertEqual(boundary.kind, .hold, "the tear hold count derives from the platter stream alone")
+        XCTAssertEqual(boundary.evidenceQuality, .ambiguous)
+        XCTAssertEqual(boundary.proposal?.reasons.contains(.coincidentFaderClick), true)
+        XCTAssertEqual(
+            review.candidates[0].proposedClassification, .tear2,
+            "a coincident click may not raise or lower the platter hold count"
+        )
+        XCTAssertTrue(review.candidates[0].hasAmbiguousEvidence)
+        XCTAssertEqual(review.faderClicks(over: boundary.span).count, 1)
+    }
+
+    func testAHoldCountOutsideTheSupportedVocabularyIsUnknownNotTheNearestTear() {
+        let events = [
+            movement(0.0, 0.2, "backward"),
+            movement(0.4, 0.6, "backward"),
+            movement(0.8, 1.0, "backward"),
+            movement(1.2, 1.4, "backward"),
+            movement(1.6, 1.8, "backward")
+        ]
+        let review = review(movementEvents: events)
+
+        XCTAssertEqual(review.candidates.count, 1)
+        XCTAssertEqual(review.candidates[0].boundaries.count, 4)
+        XCTAssertEqual(review.candidates[0].proposedClassification, .unknown)
+        XCTAssertNil(review.candidates[0].effectiveClassification.assertedTearHoldCount)
+        XCTAssertTrue(review.candidates[0].proposalReasons.contains(.holdCountOutsideSupportedRange))
+    }
+
+    func testATakeWithNoPlatterMotionSaysSoInsteadOfProposingAnything() {
+        let review = review(movementEvents: [], derivation: nil)
+        XCTAssertFalse(review.hasMotionEvidence)
+        XCTAssertTrue(review.candidates.isEmpty)
+        XCTAssertTrue(review.reasons.contains(.noMotionEvidence))
+    }
+
+    func testAnUnobservedFaderIsUnknownAndNeverImplicitlyOpen() {
+        let review = review(derivation: CrossfaderDerivation(intervals: [], events: []))
+        XCTAssertEqual(review.faderReading(over: review.candidates[0].span), .unobserved)
+        XCTAssertTrue(review.reasons.contains(.faderUnobserved))
+        XCTAssertEqual(
+            review.candidates[0].boundaries[0].evidenceQuality, .ambiguous,
+            "a boundary with no fader observation over it is not clean evidence"
+        )
+    }
+
+    // MARK: Corrections through the review value
+
+    func testClassifyingACandidateRetainsTheAutomaticProposalBesideIt() {
+        var review = review()
+        let candidateID = review.candidates[0].id
+
+        XCTAssertTrue(
+            review.classifyCandidate(id: candidateID, as: .tear1, correction: correction("test"))
+        )
+        let candidate = review.candidate(id: candidateID)!
+        XCTAssertEqual(candidate.manualClassification, .tear1)
+        XCTAssertEqual(candidate.effectiveClassification, .tear1)
+        XCTAssertEqual(
+            candidate.proposedClassification, .tear2,
+            "the machine's reading survives the operator disagreeing with it"
+        )
+        XCTAssertTrue(candidate.isManuallyClassified)
+    }
+
+    func testAClassificationDisagreeingWithTheBoundaryCountIsReportedNotReconciled() {
+        var review = review()
+        let candidateID = review.candidates[0].id
+        review.classifyCandidate(id: candidateID, as: .tear1, correction: correction("test"))
+
+        let candidate = review.candidate(id: candidateID)!
+        XCTAssertTrue(candidate.classificationDisagreesWithBoundaryCount)
+        XCTAssertEqual(candidate.countedTearHoldCount, 2, "the boundaries were not silently deleted to match")
+        XCTAssertEqual(candidate.boundarySupportedClassification, .tear2)
+        XCTAssertEqual(candidate.effectiveClassification, .tear1, "the operator's reading still wins")
+    }
+
+    func testNamingABoundaryAFaderClickStopsItCountingWithoutDeletingIt() {
+        var review = review()
+        let candidateID = review.candidates[0].id
+        let boundaryID = review.candidates[0].boundaries[0].id
+
+        XCTAssertTrue(
+            review.setBoundaryKind(
+                inCandidate: candidateID,
+                boundaryID: boundaryID,
+                to: .faderClick,
+                correction: correction("test")
+            )
+        )
+        let candidate = review.candidate(id: candidateID)!
+        let boundary = candidate.boundaries.first { $0.id == boundaryID }!
+        XCTAssertEqual(boundary.kind, .faderClick)
+        XCTAssertFalse(boundary.countsAsTearHold)
+        XCTAssertEqual(boundary.proposal?.kind, .hold, "the proposal is retained verbatim")
+        XCTAssertEqual(candidate.boundaries.count, 2, "nothing was deleted")
+        XCTAssertEqual(candidate.countedTearHoldCount, 1)
+        XCTAssertEqual(candidate.boundarySupportedClassification, .tear1)
+    }
+
+    func testRemovingABoundaryIsAFlagAndIsReversible() {
+        var review = review()
+        let candidateID = review.candidates[0].id
+        let boundaryID = review.candidates[0].boundaries[1].id
+
+        review.setBoundaryRemoved(
+            inCandidate: candidateID,
+            boundaryID: boundaryID,
+            removed: true,
+            correction: correction("test")
+        )
+        var boundary = review.candidate(id: candidateID)!.boundaries.first { $0.id == boundaryID }!
+        XCTAssertTrue(boundary.isRemoved)
+        XCTAssertFalse(boundary.countsAsTearHold)
+        XCTAssertEqual(review.candidate(id: candidateID)!.countedTearHoldCount, 1)
+        XCTAssertEqual(review.candidate(id: candidateID)!.boundaries.count, 2)
+        XCTAssertEqual(
+            review.rawMovementEvents.count, 4,
+            "striking a boundary out must never delete raw motion evidence"
+        )
+
+        review.setBoundaryRemoved(
+            inCandidate: candidateID,
+            boundaryID: boundaryID,
+            removed: false,
+            correction: correction("test")
+        )
+        boundary = review.candidate(id: candidateID)!.boundaries.first { $0.id == boundaryID }!
+        XCTAssertFalse(boundary.isRemoved)
+        XCTAssertEqual(boundary.corrections.count, 2, "both decisions are kept, not overwritten")
+    }
+
+    func testAddingABoundaryIsRefusedForAnUnusableSpanAndAcceptedOtherwise() {
+        var review = review()
+        let candidateID = review.candidates[1].id
+
+        XCTAssertNil(
+            review.addBoundary(
+                toCandidate: candidateID,
+                span: ReferenceTearTimeSpan(startTime: 1.2, endTime: 1.2),
+                kind: .hold,
+                evidenceQuality: .clear,
+                correction: correction("test")
+            ),
+            "a zero-width boundary is refused, never clamped into existence"
+        )
+        XCTAssertTrue(review.candidate(id: candidateID)!.boundaries.isEmpty)
+
+        let added = review.addBoundary(
+            toCandidate: candidateID,
+            span: ReferenceTearTimeSpan(startTime: 1.20, endTime: 1.25),
+            kind: .hold,
+            evidenceQuality: .ambiguous,
+            correction: correction("test", notes: "pause I can hear but the decoder missed")
+        )
+        let candidate = review.candidate(id: candidateID)!
+        XCTAssertNotNil(added)
+        XCTAssertEqual(candidate.boundaries.count, 1)
+        XCTAssertEqual(candidate.boundaries[0].origin, .operatorAdded)
+        XCTAssertNil(candidate.boundaries[0].proposal, "the machine proposed nothing here")
+        XCTAssertTrue(candidate.boundaries[0].differsFromProposal)
+        XCTAssertEqual(candidate.countedTearHoldCount, 1)
+        XCTAssertEqual(candidate.boundarySupportedClassification, .tear1)
+        XCTAssertTrue(candidate.hasAmbiguousEvidence)
+    }
+
+    func testMovingABoundaryKeepsTheProposalAndTheEditedSpanSideBySide() {
+        var review = review()
+        let candidateID = review.candidates[0].id
+        let boundaryID = review.candidates[0].boundaries[0].id
+        let proposedSpan = review.candidates[0].boundaries[0].span
+
+        XCTAssertTrue(
+            review.moveBoundary(
+                inCandidate: candidateID,
+                boundaryID: boundaryID,
+                to: ReferenceTearTimeSpan(startTime: 0.22, endTime: 0.33),
+                correction: correction("test")
+            )
+        )
+        let boundary = review.candidate(id: candidateID)!.boundaries.first { $0.id == boundaryID }!
+        XCTAssertEqual(boundary.span.startTime, 0.22, accuracy: 1e-9)
+        XCTAssertEqual(boundary.proposal?.span, proposedSpan)
+        XCTAssertTrue(boundary.differsFromProposal)
+        XCTAssertEqual(review.rawMovementEvents, twoTearMovementEvents())
+    }
+
+    func testCorrectionProvenanceIsManualAndValidates() {
+        let correction = correction("boundary_moved", notes: "second pause is fader work")
+        XCTAssertEqual(correction.correctedBy, "Karl")
+        XCTAssertEqual(correction.correctedAt, correctedAt)
+        XCTAssertEqual(correction.notes, "second pause is fader work")
+        XCTAssertEqual(correction.evidence.provenance, .manuallyCorrected)
+        XCTAssertEqual(correction.evidence.observation.source, .manualCorrection)
+        XCTAssertTrue(correction.validationIssues().isEmpty, "\(correction.validationIssues())")
+    }
+
+    func testAnUnknownCandidateOrBoundaryIsRefusedRatherThanSilentlyIgnored() {
+        var review = review()
+        XCTAssertFalse(review.classifyCandidate(id: "nope", as: .tear1, correction: correction("test")))
+        XCTAssertFalse(
+            review.setBoundaryKind(
+                inCandidate: review.candidates[0].id,
+                boundaryID: "nope",
+                to: .faderClick,
+                correction: correction("test")
+            )
+        )
+    }
+
+    // MARK: Corrections through the session
+
+    private func reviewingSession(
+        movementEvents: [CaptureCore.DetectedNotationRecordMovementEvent]? = nil,
+        derivation: CrossfaderDerivation? = nil
+    ) -> ReferenceAuthoringSession {
+        var session = ReferenceAuthoringSession(authoringSessionID: "auth-0001", operatorName: "Karl")
+        session.selectTechnique(.babyScratch)
+        session.selectPattern(
+            ReferencePatternIdentity(id: "quarter_notes", name: "Quarter notes", phraseBars: 1),
+            bpm: 95
+        )
+        session.declareVariant(
+            startingDirection: .forward,
+            faderVariant: .faderOpenThroughout,
+            handedness: .right
+        )
+        session.confirmedCalibration = calibration
+        session.phase = .readyToRecord
+
+        let events = movementEvents ?? twoTearMovementEvents()
+        let hooks = ReferenceAuthoringRecordingHooks(
+            startRecording: { .success(()) },
+            stopRecording: { .success(self.artifacts(movementEvents: events)) },
+            currentPreflightSnapshot: { self.passingSnapshot() },
+            latestCalibrationObservation: { nil }
+        )
+        _ = session.beginRecording(using: hooks)
+        _ = session.finishRecording(using: hooks)
+        return session
+    }
+
+    private func passingSnapshot() -> ReferencePreflightSnapshot {
+        ReferencePreflightSnapshot(
+            controllerName: "Rane ONE MKII",
+            controllerIdentifier: "Rane ONE MKII",
+            observedCrossfaderAddress: calibration.address,
+            latestCrossfaderRawValue: 1,
+            calibration: calibration,
+            crossfaderEventCount: 40,
+            platterEventCount: 100,
+            platterIsMoving: true,
+            audioInputPeakLevel: 0.5,
+            audioDeviceName: "Rane ONE MKII",
+            watchIsReachable: true,
+            watchMotionIsStreaming: true,
+            cameraDeviceName: "Studio Camera",
+            cameraIsActive: true,
+            crossfaderSecondsSinceLastMessage: 0.1
+        )
+    }
+
+    private func artifacts(
+        movementEvents: [CaptureCore.DetectedNotationRecordMovementEvent]
+    ) -> ReferenceRecordedTakeArtifacts {
+        let samples: [CrossfaderPositionSample] = (0..<800).map { index in
+            CrossfaderPositionSample(
+                takeRelativeTime: Double(index) * 0.001,
+                rawValue: 1,
+                normalizedPosition: 1
+            )
+        }
+        return ReferenceRecordedTakeArtifacts(
+            audio: ReferenceArtifactMeasurement(
+                fileName: "reference.wav",
+                exists: true,
+                byteCount: 500_000,
+                peakLevel: 0.8,
+                frameCount: 100_000
+            ),
+            video: nil,
+            sidecar: ReferenceArtifactMeasurement(fileName: "take.json", exists: true, byteCount: 2_048),
+            actualMediaFileName: nil,
+            crossfaderRawSamples: samples,
+            observedCrossfaderAddress: calibration.address,
+            platterMovementEventCount: movementEvents.count,
+            recordedAt: Date(timeIntervalSince1970: 1_788_000_500),
+            autoDetectedTechnique: nil,
+            watchEvidence: .linked(motionFileName: "watch-motion.json"),
+            platterMovementEvents: movementEvents
+        )
+    }
+
+    func testFinishingATakeBuildsItsTearReviewFromThatTakesOwnEvidence() {
+        let session = reviewingSession()
+        let review = session.tearReviewForTakeInReview
+
+        XCTAssertEqual(review?.referenceTakeID, "auth-0001-take-001")
+        XCTAssertEqual(review?.rawMovementEvents, twoTearMovementEvents())
+        XCTAssertEqual(review?.candidates.count, 2)
+        XCTAssertEqual(review?.candidates.first?.proposedClassification, .tear2)
+    }
+
+    func testTheSessionRecordsWhoCorrectedWhatAndWhen() {
+        var session = reviewingSession()
+        let candidateID = session.tearReviewForTakeInReview!.candidates[0].id
+        let boundaryID = session.tearReviewForTakeInReview!.candidates[0].boundaries[1].id
+        let now = Date(timeIntervalSince1970: 1_788_002_000)
+
+        XCTAssertTrue(
+            session.classifyTearCandidate(
+                candidateID,
+                as: .tear1,
+                notes: "second pause is a fader cut, not a platter hold",
+                now: now
+            )
+        )
+        XCTAssertTrue(
+            session.setTearBoundaryKind(
+                inCandidate: candidateID,
+                boundaryID: boundaryID,
+                to: .faderClick,
+                notes: "cut, not a hold",
+                now: now
+            )
+        )
+
+        let candidate = session.tearReviewForTakeInReview!.candidate(id: candidateID)!
+        let classification = candidate.latestClassificationCorrection!
+        XCTAssertEqual(classification.correctedBy, "Karl")
+        XCTAssertEqual(classification.correctedAt, now)
+        XCTAssertEqual(classification.notes, "second pause is a fader cut, not a platter hold")
+        XCTAssertEqual(classification.evidence.provenance, .manuallyCorrected)
+
+        let boundary = candidate.boundaries.first { $0.id == boundaryID }!
+        XCTAssertEqual(boundary.latestCorrection?.notes, "cut, not a hold")
+        XCTAssertEqual(candidate.countedTearHoldCount, 1)
+        XCTAssertEqual(candidate.effectiveClassification, .tear1)
+        XCTAssertFalse(
+            candidate.classificationDisagreesWithBoundaryCount,
+            "one counted hold and a 1-tear reading agree"
+        )
+    }
+
+    func testTheSessionCanAddMoveAndRemoveBoundariesWithoutTouchingRawMotion() {
+        var session = reviewingSession()
+        let candidateID = session.tearReviewForTakeInReview!.candidates[1].id
+
+        XCTAssertTrue(
+            session.addTearBoundary(
+                toCandidate: candidateID,
+                startTime: 1.20,
+                endTime: 1.25,
+                notes: "missed pause"
+            )
+        )
+        let addedID = session.tearReviewForTakeInReview!.candidate(id: candidateID)!.boundaries[0].id
+        XCTAssertTrue(
+            session.moveTearBoundary(
+                inCandidate: candidateID,
+                boundaryID: addedID,
+                startTime: 1.22,
+                endTime: 1.28
+            )
+        )
+        XCTAssertTrue(
+            session.setTearBoundaryEvidenceQuality(
+                inCandidate: candidateID,
+                boundaryID: addedID,
+                to: .ambiguous
+            )
+        )
+        XCTAssertTrue(
+            session.setTearBoundaryRemoved(
+                inCandidate: candidateID,
+                boundaryID: addedID,
+                removed: true
+            )
+        )
+
+        let review = session.tearReviewForTakeInReview!
+        let boundary = review.candidate(id: candidateID)!.boundaries[0]
+        XCTAssertEqual(boundary.span.startTime, 1.22, accuracy: 1e-9)
+        XCTAssertTrue(boundary.isRemoved)
+        XCTAssertEqual(boundary.evidenceQuality, .ambiguous)
+        XCTAssertEqual(boundary.corrections.count, 4, "every correction is appended, never overwritten")
+        XCTAssertEqual(review.rawMovementEvents, twoTearMovementEvents())
+        XCTAssertEqual(
+            session.takeInReview?.evidence.platterMovementEvents,
+            twoTearMovementEvents(),
+            "the take's own evidence is never rewritten by a review correction"
+        )
+    }
+
+    func testTearReviewNotesAreRetainedWithProvenance() {
+        var session = reviewingSession()
+        let now = Date(timeIntervalSince1970: 1_788_003_000)
+        XCTAssertTrue(session.setTearReviewNotes("Third pass; second gesture still unclear.", now: now))
+
+        let review = session.tearReviewForTakeInReview!
+        XCTAssertEqual(review.notes, "Third pass; second gesture still unclear.")
+        XCTAssertEqual(review.noteCorrections.last?.correctedAt, now)
+        XCTAssertEqual(review.noteCorrections.last?.correctedBy, "Karl")
+    }
+
+    /// The safety property this whole layer is built around.
+    func testNoTearCorrectionApprovesValidatesOrPublishesTheTake() throws {
+        var session = reviewingSession()
+        let before = try XCTUnwrap(session.takeInReview)
+        let approvalBlockedBefore = session.approvalBlockReason()
+        let candidateID = session.tearReviewForTakeInReview!.candidates[0].id
+        let boundaryID = session.tearReviewForTakeInReview!.candidates[0].boundaries[0].id
+
+        session.classifyTearCandidate(candidateID, as: .tear2)
+        session.setTearBoundaryKind(inCandidate: candidateID, boundaryID: boundaryID, to: .faderClick)
+        session.setTearBoundaryEvidenceQuality(inCandidate: candidateID, boundaryID: boundaryID, to: .ambiguous)
+        session.setTearBoundaryRemoved(inCandidate: candidateID, boundaryID: boundaryID, removed: true)
+        session.addTearBoundary(toCandidate: candidateID, startTime: 0.21, endTime: 0.30)
+        session.setTearReviewNotes("reviewed")
+        session.classifyTearCandidate(session.tearReviewForTakeInReview!.candidates[1].id, as: .nonTear)
+
+        let after = try XCTUnwrap(session.takeInReview)
+        XCTAssertTrue(
+            after.tearReview.everyCandidateHasAnOperatorReading,
+            "the fixture must actually complete the review, or this test proves nothing"
+        )
+        XCTAssertEqual(after.evidence.metadata.lifecycleState, .draft)
+        XCTAssertNil(after.evidence.metadata.reviewDecision)
+        XCTAssertEqual(after.latestValidation, before.latestValidation, "no correction re-runs validation")
+        XCTAssertEqual(
+            session.approvalBlockReason(), approvalBlockedBefore,
+            "a completed tear review must not move the approval gate in either direction"
+        )
+        XCTAssertNil(session.takeReadyForPublication(takeIndex: 0))
+        XCTAssertEqual(after.evidence.boundaries, before.evidence.boundaries)
+    }
+
+    func testTearCorrectionsAreRefusedWhenNoTakeIsInReview() {
+        var session = reviewingSession()
+        let candidateID = session.tearReviewForTakeInReview!.candidates[0].id
+        session.retake()
+
+        XCTAssertNil(session.tearReviewForTakeInReview)
+        XCTAssertFalse(session.classifyTearCandidate(candidateID, as: .tear1))
+        XCTAssertFalse(session.addTearBoundary(toCandidate: candidateID, startTime: 0.1, endTime: 0.2))
+        XCTAssertFalse(session.setTearReviewNotes("no take"))
+        XCTAssertEqual(
+            session.takes[0].tearReview.candidates[0].manualClassification, nil,
+            "a refused correction changes nothing on the retained take"
+        )
+    }
+}

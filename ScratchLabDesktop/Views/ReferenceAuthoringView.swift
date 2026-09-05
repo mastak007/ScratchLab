@@ -505,6 +505,9 @@ struct ReferenceAuthoringView: View {
                         repetitionRow(boundary, take: take)
                     }
 
+                    Divider()
+                    tearSegmentationSection(take)
+
                     TextField("Approval or rejection notes", text: $viewModel.reviewNotes, axis: .vertical)
                         .lineLimit(2...4)
 
@@ -534,6 +537,300 @@ struct ReferenceAuthoringView: View {
                 .padding(.top, 4)
             }
         }
+    }
+
+    // MARK: - Tear segmentation review
+
+    /// Inspect and correct one take's tear segmentation.
+    ///
+    /// Read-and-correct only. Nothing in this subtree approves a take,
+    /// publishes a package, installs a reference or makes anything eligible
+    /// for training — the status line says so on every render, because a
+    /// screen that looks like a sign-off is how a draft becomes canonical by
+    /// accident.
+    @ViewBuilder
+    private func tearSegmentationSection(_ take: ReferenceAuthoringTake) -> some View {
+        let review = take.tearReview
+        VStack(alignment: .leading, spacing: 10) {
+            Text("Tear segmentation review").font(.headline)
+            Text(ReferenceAuthoringViewModel.tearReviewStatusText(review))
+                .font(.caption)
+                .foregroundStyle(.secondary)
+
+            if let reason = viewModel.tearReviewBlockReason {
+                Text(reason).font(.caption).foregroundStyle(.orange)
+            }
+
+            tearEvidenceSummary(review)
+
+            if review.candidates.isEmpty {
+                Text("No tear candidate to correct.")
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
+            } else {
+                ForEach(review.candidates) { candidate in
+                    tearCandidateRow(candidate, review: review)
+                }
+            }
+
+            TextField(
+                "Tear review notes (attached to the next correction)",
+                text: $viewModel.tearReviewNotes,
+                axis: .vertical
+            )
+            .lineLimit(1...3)
+            HStack {
+                Button("Save Tear Review Notes") { viewModel.commitTearReviewNotes() }
+                    .disabled(!viewModel.canCorrectTearReview)
+                if !review.notes.isEmpty {
+                    Text("Saved notes: \(review.notes)")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    /// Raw motion, derived intervals, reversals and fader evidence, stated as
+    /// counts and spans. Deliberately textual: this slice makes the evidence
+    /// inspectable, it does not draw a new chart.
+    private func tearEvidenceSummary(_ review: ReferenceTearSegmentationReview) -> some View {
+        VStack(alignment: .leading, spacing: 3) {
+            Text("Raw platter movement events: \(review.rawMovementEvents.count)")
+            Text("Derived intervals: \(review.travelIntervals.count) travel · \(review.stationaryIntervals.count) stationary · \(review.reversals.count) direction reversal\(review.reversals.count == 1 ? "" : "s")")
+            Text("Fader evidence: \(review.faderIntervals.count) state interval\(review.faderIntervals.count == 1 ? "" : "s") · \(review.faderClicks.count) click\(review.faderClicks.count == 1 ? "" : "s")")
+            ForEach(Array(review.reasons.enumerated()), id: \.offset) { _, reason in
+                Text("• \(reason.detail)")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+            DisclosureGroup("Derived intervals in detail") {
+                VStack(alignment: .leading, spacing: 2) {
+                    ForEach(review.segments) { segment in
+                        Text(tearSegmentLine(segment))
+                            .font(.caption.monospaced())
+                            .foregroundStyle(.secondary)
+                    }
+                    ForEach(review.reversals) { reversal in
+                        Text(String(
+                            format: "reversal  %.3f–%.3f s  %@ → %@",
+                            reversal.span.startTime,
+                            reversal.span.endTime,
+                            reversal.from.rawValue,
+                            reversal.to.rawValue
+                        ))
+                        .font(.caption.monospaced())
+                        .foregroundStyle(.secondary)
+                    }
+                    ForEach(Array(review.faderIntervals.enumerated()), id: \.offset) { _, interval in
+                        Text(String(
+                            format: "fader     %.3f–%.3f s  %@",
+                            interval.startTime,
+                            interval.endTime,
+                            interval.state.rawValue
+                        ))
+                        .font(.caption.monospaced())
+                        .foregroundStyle(.secondary)
+                    }
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+            }
+        }
+        .font(.callout)
+        .textSelection(.enabled)
+    }
+
+    private func tearSegmentLine(_ segment: ReferenceTearMotionSegment) -> String {
+        let confidence = segment.confidence.map { String(format: "%.2f", $0) } ?? "—"
+        return String(
+            format: "%@ %.3f–%.3f s  conf %@",
+            segment.state.rawValue.padding(toLength: 10, withPad: " ", startingAt: 0),
+            segment.span.startTime,
+            segment.span.endTime,
+            confidence
+        )
+    }
+
+    private func tearCandidateRow(
+        _ candidate: ReferenceTearCandidate,
+        review: ReferenceTearSegmentationReview
+    ) -> some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text(ReferenceAuthoringViewModel.tearCandidateHeadline(candidate))
+                .font(.callout.weight(.semibold))
+
+            Picker("Reading", selection: tearClassificationBinding(for: candidate)) {
+                ForEach(ReferenceTearClassification.allCases) { option in
+                    Text(option.displayName).tag(option)
+                }
+            }
+            .pickerStyle(.segmented)
+            .disabled(!viewModel.canCorrectTearReview)
+
+            if let disagreement = ReferenceAuthoringViewModel.tearDisagreementText(candidate) {
+                Text(disagreement).font(.caption).foregroundStyle(.orange)
+            }
+            if let correction = candidate.latestClassificationCorrection {
+                Text(ReferenceAuthoringViewModel.tearCorrectionSummary(correction))
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+
+            if candidate.boundaries.isEmpty {
+                Text("No tear boundary proposed inside this gesture.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            } else {
+                ForEach(candidate.boundaries) { boundary in
+                    tearBoundaryRow(boundary, candidate: candidate)
+                }
+            }
+
+            Button("Add Tear Boundary") {
+                viewModel.addTearBoundary(
+                    toCandidate: candidate.id,
+                    startTime: candidate.span.startTime,
+                    endTime: min(
+                        candidate.span.endTime,
+                        candidate.span.startTime + Self.addedTearBoundaryDuration
+                    )
+                )
+            }
+            .disabled(!viewModel.canCorrectTearReview)
+        }
+        .padding(10)
+        .background(Color(nsColor: .controlBackgroundColor))
+        .clipShape(RoundedRectangle(cornerRadius: 8))
+    }
+
+    /// Width of a freshly added boundary, before the operator nudges it.
+    /// A starting point, never a measurement.
+    private static let addedTearBoundaryDuration: Double = 0.05
+    private static let tearBoundaryNudge: Double = 0.01
+
+    private func tearBoundaryRow(
+        _ boundary: ReferenceTearBoundary,
+        candidate: ReferenceTearCandidate
+    ) -> some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Text(ReferenceAuthoringViewModel.tearBoundaryHeadline(boundary))
+                .font(.caption.weight(.medium))
+                .foregroundStyle(boundary.isRemoved ? Color.secondary : Color.primary)
+            if let proposal = boundary.proposal, boundary.differsFromProposal {
+                Text(String(
+                    format: "Proposed %.3f–%.3f s · %@ · %@",
+                    proposal.span.startTime,
+                    proposal.span.endTime,
+                    proposal.kind.displayName,
+                    proposal.evidenceQuality.displayName
+                ))
+                .font(.caption2)
+                .foregroundStyle(.secondary)
+            }
+            if let correction = boundary.latestCorrection {
+                Text(ReferenceAuthoringViewModel.tearCorrectionSummary(correction))
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+            }
+            HStack(spacing: 8) {
+                Picker("", selection: tearBoundaryKindBinding(boundary, candidate: candidate)) {
+                    ForEach(ReferenceTearBoundaryKind.allCases) { kind in
+                        Text(kind.displayName).tag(kind)
+                    }
+                }
+                .labelsHidden()
+                .frame(width: 150)
+                Toggle("Ambiguous", isOn: tearBoundaryAmbiguityBinding(boundary, candidate: candidate))
+                    .toggleStyle(.checkbox)
+                Button(boundary.isRemoved ? "Restore" : "Remove") {
+                    viewModel.setTearBoundaryRemoved(
+                        inCandidate: candidate.id,
+                        boundaryID: boundary.id,
+                        removed: !boundary.isRemoved
+                    )
+                }
+                Spacer()
+            }
+            .disabled(!viewModel.canCorrectTearReview)
+            HStack(spacing: 8) {
+                Stepper(
+                    "Start \(boundary.span.startTime, specifier: "%.3f") s",
+                    onIncrement: { moveTearBoundary(boundary, candidate: candidate, startDelta: Self.tearBoundaryNudge) },
+                    onDecrement: { moveTearBoundary(boundary, candidate: candidate, startDelta: -Self.tearBoundaryNudge) }
+                )
+                Stepper(
+                    "End \(boundary.span.endTime, specifier: "%.3f") s",
+                    onIncrement: { moveTearBoundary(boundary, candidate: candidate, endDelta: Self.tearBoundaryNudge) },
+                    onDecrement: { moveTearBoundary(boundary, candidate: candidate, endDelta: -Self.tearBoundaryNudge) }
+                )
+            }
+            .disabled(!viewModel.canCorrectTearReview)
+        }
+        .padding(8)
+        .background(Color(nsColor: .textBackgroundColor).opacity(0.4))
+        .clipShape(RoundedRectangle(cornerRadius: 6))
+    }
+
+    private func moveTearBoundary(
+        _ boundary: ReferenceTearBoundary,
+        candidate: ReferenceTearCandidate,
+        startDelta: Double = 0,
+        endDelta: Double = 0
+    ) {
+        guard let live = viewModel.tearReview?
+            .candidate(id: candidate.id)?
+            .boundaries.first(where: { $0.id == boundary.id }) else { return }
+        viewModel.moveTearBoundary(
+            inCandidate: candidate.id,
+            boundaryID: boundary.id,
+            startTime: live.span.startTime + startDelta,
+            endTime: live.span.endTime + endDelta
+        )
+    }
+
+    private func tearClassificationBinding(
+        for candidate: ReferenceTearCandidate
+    ) -> Binding<ReferenceTearClassification> {
+        Binding(
+            get: {
+                viewModel.tearReview?.candidate(id: candidate.id)?.effectiveClassification
+                    ?? candidate.effectiveClassification
+            },
+            set: { viewModel.classifyTearCandidate(candidate.id, as: $0) }
+        )
+    }
+
+    private func tearBoundaryKindBinding(
+        _ boundary: ReferenceTearBoundary,
+        candidate: ReferenceTearCandidate
+    ) -> Binding<ReferenceTearBoundaryKind> {
+        Binding(
+            get: { boundary.kind },
+            set: {
+                viewModel.setTearBoundaryKind(
+                    inCandidate: candidate.id,
+                    boundaryID: boundary.id,
+                    to: $0
+                )
+            }
+        )
+    }
+
+    private func tearBoundaryAmbiguityBinding(
+        _ boundary: ReferenceTearBoundary,
+        candidate: ReferenceTearCandidate
+    ) -> Binding<Bool> {
+        Binding(
+            get: { boundary.evidenceQuality.isAmbiguous },
+            set: {
+                viewModel.setTearBoundaryEvidenceQuality(
+                    inCandidate: candidate.id,
+                    boundaryID: boundary.id,
+                    to: $0 ? .ambiguous : .clear
+                )
+            }
+        )
     }
 
     private func evidenceSummary(_ take: ReferenceAuthoringTake) -> some View {

@@ -85,6 +85,10 @@ struct ReferenceRecordedTakeArtifacts: Equatable, Sendable {
     let crossfaderRawSamples: [CrossfaderPositionSample]
     let observedCrossfaderAddress: CrossfaderMIDIAddress?
     let platterMovementEventCount: Int
+    /// The recorded platter movement events themselves. Handed through
+    /// untouched so tear-segmentation review can show the operator the motion
+    /// rather than a count; see `ReferenceTakeEvidence.platterMovementEvents`.
+    let platterMovementEvents: [CaptureCore.DetectedNotationRecordMovementEvent]
     let recordedAt: Date
     /// What automatic detection believed the technique was, if it ran.
     /// ADVISORY ONLY — see the file header. `nil` when detection did not run
@@ -111,7 +115,8 @@ struct ReferenceRecordedTakeArtifacts: Equatable, Sendable {
         autoDetectedTechnique: ReferenceTechnique?,
         watchEvidence: ReferenceWatchEvidence = .missing(
             syncState: CaptureWatchSyncState.notRequested.rawValue
-        )
+        ),
+        platterMovementEvents: [CaptureCore.DetectedNotationRecordMovementEvent] = []
     ) {
         self.audio = audio
         self.video = video
@@ -120,6 +125,7 @@ struct ReferenceRecordedTakeArtifacts: Equatable, Sendable {
         self.crossfaderRawSamples = crossfaderRawSamples
         self.observedCrossfaderAddress = observedCrossfaderAddress
         self.platterMovementEventCount = platterMovementEventCount
+        self.platterMovementEvents = platterMovementEvents
         self.recordedAt = recordedAt
         self.autoDetectedTechnique = autoDetectedTechnique
         self.watchEvidence = watchEvidence
@@ -455,7 +461,8 @@ struct ReferenceAuthoringSession: Equatable, Sendable {
             observedCrossfaderAddress: artifacts.observedCrossfaderAddress,
             platterMovementEventCount: artifacts.platterMovementEventCount,
             derivation: derivation,
-            watchEvidence: artifacts.watchEvidence
+            watchEvidence: artifacts.watchEvidence,
+            platterMovementEvents: artifacts.platterMovementEvents
         )
 
         let report = ReferenceValidator.validate(evidence, expectation: expectation, now: now)
@@ -463,7 +470,11 @@ struct ReferenceAuthoringSession: Equatable, Sendable {
         let take = ReferenceAuthoringTake(
             evidence: evidence,
             autoDetectedTechnique: artifacts.autoDetectedTechnique,
-            latestValidation: report
+            latestValidation: report,
+            // The automatic tear pass runs once, here, from the take's own
+            // recorded evidence. It proposes; it approves nothing. See
+            // `ReferenceTearSegmentationReview`.
+            tearReview: ReferenceTearSegmentationReviewBuilder.build(for: evidence)
         )
         takes.append(take)
         let index = takes.count - 1
@@ -517,6 +528,215 @@ struct ReferenceAuthoringSession: Equatable, Sendable {
         guard !takes[takeIndex].evidence.watchEvidence.isLinked || watchEvidence.isLinked else { return }
         takes[takeIndex].applyWatchEvidence(watchEvidence)
         revalidateTakeInReview(expectation: expectation, now: now)
+    }
+
+    // MARK: Step 8: tear segmentation review
+    //
+    // Inspection and correction of the take's tear segmentation. EVERY
+    // mutator below is additive provenance over the automatic proposal: it
+    // records who changed what, when and why, it never rewrites the proposal
+    // or the raw movement events, and it never advances a lifecycle state,
+    // writes a review decision, or affects `approvalBlockReason`. A fully
+    // corrected take is exactly as un-approved as an untouched one.
+
+    /// The tear review for the take currently in review, or `nil` when no
+    /// take is in review.
+    var tearReviewForTakeInReview: ReferenceTearSegmentationReview? {
+        takeInReview?.tearReview
+    }
+
+    /// Record the operator's reading of one candidate.
+    ///
+    /// The machine's proposal is retained beside it; a reading is never
+    /// "corrected away".
+    @discardableResult
+    mutating func classifyTearCandidate(
+        _ candidateID: String,
+        as classification: ReferenceTearClassification,
+        notes: String = "",
+        now: Date = Date()
+    ) -> Bool {
+        let correction = tearCorrection(
+            reason: "classified_\(candidateID)_as_\(classification.rawValue)",
+            notes: notes,
+            now: now
+        )
+        return mutateTearReview { review in
+            review.classifyCandidate(id: candidateID, as: classification, correction: correction)
+        }
+    }
+
+    /// Add a tear boundary the automatic pass did not propose.
+    ///
+    /// Refuses a non-finite, inverted or zero-width span. Adding never
+    /// touches the raw movement events, and removing one later only flags it.
+    @discardableResult
+    mutating func addTearBoundary(
+        toCandidate candidateID: String,
+        startTime: Double,
+        endTime: Double,
+        kind: ReferenceTearBoundaryKind = .hold,
+        evidenceQuality: ReferenceTearEvidenceQuality = .clear,
+        notes: String = "",
+        now: Date = Date()
+    ) -> Bool {
+        let span = ReferenceTearTimeSpan(
+            startTime: min(startTime, endTime),
+            endTime: max(startTime, endTime)
+        )
+        let correction = tearCorrection(
+            reason: "added_boundary_to_\(candidateID)",
+            notes: notes,
+            now: now
+        )
+        return mutateTearReview { review in
+            review.addBoundary(
+                toCandidate: candidateID,
+                span: span,
+                kind: kind,
+                evidenceQuality: evidenceQuality,
+                correction: correction
+            ) != nil
+        }
+    }
+
+    /// Move an existing boundary. The proposal it started from is retained,
+    /// so the move stays visible as a disagreement.
+    @discardableResult
+    mutating func moveTearBoundary(
+        inCandidate candidateID: String,
+        boundaryID: String,
+        startTime: Double,
+        endTime: Double,
+        notes: String = "",
+        now: Date = Date()
+    ) -> Bool {
+        let span = ReferenceTearTimeSpan(
+            startTime: min(startTime, endTime),
+            endTime: max(startTime, endTime)
+        )
+        let correction = tearCorrection(
+            reason: "moved_boundary_\(boundaryID)",
+            notes: notes,
+            now: now
+        )
+        return mutateTearReview { review in
+            review.moveBoundary(
+                inCandidate: candidateID,
+                boundaryID: boundaryID,
+                to: span,
+                correction: correction
+            )
+        }
+    }
+
+    /// Say whether a boundary is a platter hold or fader work. Naming it a
+    /// click stops it counting toward the tear hold count without deleting
+    /// anything.
+    @discardableResult
+    mutating func setTearBoundaryKind(
+        inCandidate candidateID: String,
+        boundaryID: String,
+        to kind: ReferenceTearBoundaryKind,
+        notes: String = "",
+        now: Date = Date()
+    ) -> Bool {
+        let correction = tearCorrection(
+            reason: "boundary_\(boundaryID)_kind_\(kind.rawValue)",
+            notes: notes,
+            now: now
+        )
+        return mutateTearReview { review in
+            review.setBoundaryKind(
+                inCandidate: candidateID,
+                boundaryID: boundaryID,
+                to: kind,
+                correction: correction
+            )
+        }
+    }
+
+    /// Mark a boundary's evidence clear or ambiguous. Ambiguity is recorded,
+    /// not resolved: the boundary keeps counting exactly as its kind says.
+    @discardableResult
+    mutating func setTearBoundaryEvidenceQuality(
+        inCandidate candidateID: String,
+        boundaryID: String,
+        to quality: ReferenceTearEvidenceQuality,
+        notes: String = "",
+        now: Date = Date()
+    ) -> Bool {
+        let correction = tearCorrection(
+            reason: "boundary_\(boundaryID)_evidence_\(quality.rawValue)",
+            notes: notes,
+            now: now
+        )
+        return mutateTearReview { review in
+            review.setBoundaryEvidenceQuality(
+                inCandidate: candidateID,
+                boundaryID: boundaryID,
+                to: quality,
+                correction: correction
+            )
+        }
+    }
+
+    /// Strike a boundary out, or restore it. NOTHING is deleted: the record,
+    /// its automatic proposal and its correction history all survive, and the
+    /// take's raw movement events are untouched either way.
+    @discardableResult
+    mutating func setTearBoundaryRemoved(
+        inCandidate candidateID: String,
+        boundaryID: String,
+        removed: Bool,
+        notes: String = "",
+        now: Date = Date()
+    ) -> Bool {
+        let correction = tearCorrection(
+            reason: "boundary_\(boundaryID)_" + (removed ? "removed" : "restored"),
+            notes: notes,
+            now: now
+        )
+        return mutateTearReview { review in
+            review.setBoundaryRemoved(
+                inCandidate: candidateID,
+                boundaryID: boundaryID,
+                removed: removed,
+                correction: correction
+            )
+        }
+    }
+
+    @discardableResult
+    mutating func setTearReviewNotes(_ notes: String, now: Date = Date()) -> Bool {
+        let correction = tearCorrection(reason: "review_notes", notes: notes, now: now)
+        return mutateTearReview { review in
+            review.setNotes(notes, correction: correction)
+            return true
+        }
+    }
+
+    private func tearCorrection(reason: String, notes: String, now: Date) -> ReferenceTearCorrection {
+        ReferenceTearCorrection(
+            correctedBy: operatorName,
+            correctedAt: now,
+            notes: notes,
+            reason: reason
+        )
+    }
+
+    /// The single seam every tear correction goes through. Guarded on
+    /// `.reviewing` exactly like the repetition-boundary mutators, so a
+    /// correction can never be applied to a take that is not in review.
+    private mutating func mutateTearReview(
+        _ body: (inout ReferenceTearSegmentationReview) -> Bool
+    ) -> Bool {
+        guard case .reviewing(let takeIndex) = phase, takes.indices.contains(takeIndex) else { return false }
+        var review = takes[takeIndex].tearReview
+        let changed = body(&review)
+        guard changed else { return false }
+        takes[takeIndex].tearReview = review
+        return true
     }
 
     /// Re-run validation against the take's current boundaries. Call after
@@ -680,17 +900,27 @@ struct ReferenceAuthoringTake: Equatable, Sendable, Identifiable {
     /// written into `evidence.metadata.technique`.
     let autoDetectedTechnique: ReferenceTechnique?
     fileprivate(set) var latestValidation: ReferenceValidationReport
+    /// Tear-segmentation review for this take: the automatic proposal plus
+    /// every operator correction made against it.
+    ///
+    /// Read by the review UI and by nothing else. `ReferenceValidator` does
+    /// not consult it, no lifecycle transition depends on it, and correcting
+    /// it can neither approve this take nor make it available to training.
+    fileprivate(set) var tearReview: ReferenceTearSegmentationReview
 
     var id: String { evidence.metadata.referenceTakeID }
 
     init(
         evidence: ReferenceTakeEvidence,
         autoDetectedTechnique: ReferenceTechnique?,
-        latestValidation: ReferenceValidationReport
+        latestValidation: ReferenceValidationReport,
+        tearReview: ReferenceTearSegmentationReview? = nil
     ) {
         self.evidence = evidence
         self.autoDetectedTechnique = autoDetectedTechnique
         self.latestValidation = latestValidation
+        self.tearReview = tearReview
+            ?? ReferenceTearSegmentationReviewBuilder.build(for: evidence)
     }
 
     /// `true` when auto-detection disagrees with CXL's selected technique.
