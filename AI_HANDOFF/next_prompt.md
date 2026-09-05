@@ -1,3 +1,14 @@
+## Current continuation - all six boundaries committed; final gate is the remaining step
+
+Supersedes the continuation blocks below. Candidate `/private/tmp/scratchlab-refauth-baseline.iYmLZU/worktree`, branch `checkpoint/reference-authoring-baseline`, base `add70a08668e512c95e467871613f577a30523f1`.
+
+1. Re-read the repository instructions and this candidate's newest `DEV_LOG.md`/`AI_HANDOFF.md` entries. Inspect both worktrees, indexes and HEADs. Never write to the primary worktree.
+2. Remaining verification, run once against the complete six-commit branch: serial `PATH=../bin:$PATH ./scripts/build.sh all`; an explicit macOS Debug build; an explicit unsigned universal macOS Release build with `ARCHS='arm64 x86_64' ONLY_ACTIVE_ARCH=NO`; proof that `referenceAuthoringHardwareTest` is present in the Debug binary and absent from the Release binary; and `git diff --check`.
+3. Only `MIDILearnEngineTests/testCalibrationIsolatedBetweenDevices` failing with `Optional(0)` vs `Optional(5)` at `MIDILearnEngineTests.swift:561` is an authorized known flake, and only when every other test passes, all platform builds pass and no differing signature appears. Any other failure is blocking: stop and report.
+4. Integration is Karl's decision and is not authorized here. Do not push, merge, cherry-pick, rebase or integrate the branch into the primary.
+5. Do not deploy, launch the ordinary app, record Take 007, approve, install or publish a reference, enable training, or begin TTM/Tear.
+6. TTM Prompt 1's hard prerequisite, the CaptureCore calibration checkpoint, is commit `579ace6`. `CaptureCore.swift` has no remaining uncommitted primary hunks.
+
 ## Current continuation - Boundaries 1 to 5 committed; Boundary 6 is last
 
 Supersedes the continuation blocks below. Candidate `/private/tmp/scratchlab-refauth-baseline.iYmLZU/worktree`, branch `checkpoint/reference-authoring-baseline`.

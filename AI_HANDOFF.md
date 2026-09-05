@@ -1,5 +1,17 @@
 # AI Handoff
 
+## 2026-09-05 - Boundary 6 of 6 committed: all six boundaries on checkpoint/reference-authoring-baseline
+
+Supersedes the Boundary 5 entry below. Candidate `/private/tmp/scratchlab-refauth-baseline.iYmLZU/worktree`, branch `checkpoint/reference-authoring-baseline`, base `add70a08668e512c95e467871613f577a30523f1`. All six boundaries are committed.
+
+- Boundary 6 subject: `feat(reference): add debug authoring workflow and live notation`. Seven files copied whole and byte-compared, `CaptureReliabilityPhase1Tests.swift` hunk 12009, and the D-owned `project.pbxproj` membership that completes the file.
+- `project.pbxproj` membership is now exactly complete and was verified line by line against the primary: 140 lines, none missing, none extra, six `CURRENT_PROJECT_VERSION` hunks still excluded, build number still 21.
+- `MacCaptureEngine.swift` was fully consumed at Boundary 5; `CaptureCore.swift` at Boundary 3; `MacAnalyzerView.swift` and the tracker here.
+- Route is DEBUG-only with the exact label `CXL Reference Authoring — Hardware Test`. Notation minimum height 180, camera preview maximum height 360 with 16:9. Only the view's diagnostics ROW is DEBUG-guarded; the tracker has no `#if DEBUG` and its diagnostics computation compiles in Release.
+- Boundary 6 focused: 261 passed per configuration, 1 skipped, 0 failed. The skip is `testTake003RealStreamIsNotFlattenedByTheLivePath`, a pre-existing `XCTSkip` when the take-003 artifact is absent.
+- Remaining work for this batch: one serial `scripts/build.sh all` against the complete branch, an explicit macOS Debug build, an explicit unsigned universal macOS Release build, proof the route case is present in Debug and absent from Release, and `git diff --check`.
+- Preservation unchanged throughout: 661 primary files, 93 protected evidence files, empty indexes, intact receipt branch, build number 21.
+
 ## 2026-09-05 - Boundary 5 of 6 committed: capture/Watch correlation and approval safety
 
 Supersedes the Boundary 4 entry below for current status. Candidate `/private/tmp/scratchlab-refauth-baseline.iYmLZU/worktree`, branch `checkpoint/reference-authoring-baseline`. Boundaries 1 to 5 are committed; only Boundary 6 remains.

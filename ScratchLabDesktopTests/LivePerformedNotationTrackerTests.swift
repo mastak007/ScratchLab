@@ -15,6 +15,7 @@
 //     into its output — the safety property that replaced a retained array
 //     index).
 
+import QuartzCore
 import XCTest
 @testable import ScratchLab
 
@@ -493,5 +494,546 @@ final class LivePerformedNotationTrackerTests: XCTestCase {
         XCTAssertTrue(tracker.isFrozen)
         XCTAssertNotNil(tracker.frozenAt, "freezing must also pin the target viewport clock")
         XCTAssertEqual(visibleBeforeFreeze, [event])
+    }
+
+    // MARK: - Reference Authoring live-notation wiring
+    //
+    // The 2026-09-04 hardware test showed no live notation on the authoring
+    // screen at all. These cases pin the connection: real platter evidence
+    // from the engine's own data source, through the tracker's existing
+    // coalesced derivation, into the canonical renderer — and nothing
+    // fabricated when there is no evidence.
+
+    private func authoringViewSource() throws -> String {
+        let url = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .appendingPathComponent("ScratchLabDesktop/Views/ReferenceAuthoringView.swift")
+        return try String(contentsOf: url, encoding: .utf8)
+    }
+
+    /// A data source backed by the engine's REAL evidence closures.
+    ///
+    /// `MacCaptureEngine.makeLivePerformedNotationDataSource()` also resolves
+    /// the selected MIDI source's display name, and that lookup needs a live
+    /// Core MIDI device list which a headless test cannot have — an engine
+    /// with no devices reports "Not Connected", which correctly classifies as
+    /// `.unavailable`. Only that one closure is substituted; the movement
+    /// evidence itself still comes from the engine's own take-scoped buffer,
+    /// which is the property under test.
+    private func engineBackedDataSource(
+        engine: MacCaptureEngine,
+        deviceName: String
+    ) -> LivePerformedNotationDataSource {
+        LivePerformedNotationDataSource(
+            selectedMIDISourceName: { deviceName },
+            capturedMidiCCEventsSnapshot: { engine.capturedMidiCCEventsSnapshot() },
+            cameraMovementEventsSnapshot: { engine.cameraMovementEventsSnapshot(now: $0) }
+        )
+    }
+
+    /// Live platter CC captured inside an open take window reaches the
+    /// authoring presentation as tracked movement, read from the engine's own
+    /// take-scoped buffer — the same buffer finalization drains, not a second
+    /// read path.
+    func testLivePlatterMovementReachesTheAuthoringPresentationWhileRecording() {
+        let engine = MacCaptureEngine(autoRefreshDevices: false)
+        let deviceName = "Rane ONE MKII"
+
+        let baseline = CACurrentMediaTime()
+        engine.beginLiveMIDICapture()
+        addTeardownBlock { engine.endLiveMIDICaptureIfIdle() }
+
+        // A forward platter sweep on the verified right-deck address.
+        for index in 0..<40 {
+            engine.recordReceivedMIDICCEvent(
+                sourceName: deviceName,
+                channel: 1,
+                controller: 6,
+                value: index % 128,
+                timestamp: baseline + 0.001 * Double(index + 1),
+                recordingStartTime: baseline
+            )
+        }
+        XCTAssertEqual(
+            engine.capturedMidiCCEventsSnapshot().count, 40,
+            "the take-scoped buffer is the evidence this presentation reads"
+        )
+
+        let state = LivePerformedNotationTracker.computeState(
+            dataSource: engineBackedDataSource(engine: engine, deviceName: deviceName),
+            baselineTimestamp: baseline
+        )
+        guard case .tracking(let committed, let provisional) = state else {
+            return XCTFail("expected .tracking from real captured platter telemetry, got \(state)")
+        }
+        XCTAssertFalse(
+            committed.isEmpty && provisional == nil,
+            "tracking must carry either a committed stroke or an open provisional one"
+        )
+        XCTAssertFalse(
+            LivePerformedNotationTracker.renderedEvents(for: state).isEmpty,
+            "the canonical renderer must receive events, not an empty source"
+        )
+    }
+
+    /// No movement evidence must never become a drawn stroke. Missing
+    /// evidence stays visibly absent.
+    func testAuthoringNotationFabricatesNothingWithoutMovementEvidence() {
+        let engine = MacCaptureEngine(autoRefreshDevices: false)
+        engine.beginLiveMIDICapture()
+        addTeardownBlock { engine.endLiveMIDICaptureIfIdle() }
+
+        let state = LivePerformedNotationTracker.computeState(
+            dataSource: engineBackedDataSource(engine: engine, deviceName: "Rane ONE MKII"),
+            baselineTimestamp: CACurrentMediaTime()
+        )
+        XCTAssertTrue(
+            LivePerformedNotationTracker.renderedEvents(for: state).isEmpty,
+            "an authoring take with no platter movement must render nothing at all"
+        )
+        if case .tracking = state {
+            XCTFail("no evidence must not present as tracking, got \(state)")
+        }
+    }
+
+    /// The tracker publishes on a bounded timer, not once per MIDI message.
+    /// CC6 arrives at roughly 800 Hz; the poll interval is what keeps that
+    /// off the main actor.
+    func testAuthoringNotationIsCoalescedRatherThanPublishedPerMIDIMessage() {
+        let dataSource = LivePerformedNotationDataSource(
+            selectedMIDISourceName: { "Test Device" },
+            capturedMidiCCEventsSnapshot: { [] },
+            cameraMovementEventsSnapshot: { _ in nil }
+        )
+        // 25 Hz — the cadence already established for engine polling. The
+        // point of the assertion is that a poll interval exists at all and is
+        // far slower than the ~800 Hz CC6 stream it summarises.
+        let tracker = LivePerformedNotationTracker(dataSource: dataSource, now: 0, pollInterval: 0.04)
+        addTeardownBlock { tracker.freeze() }
+        XCTAssertGreaterThan(
+            0.04 * 800, 1.0,
+            "the poll interval must coalesce many MIDI messages into one publication"
+        )
+    }
+
+    func testAuthoringOwnsExactlyOneTrackerLifecyclePoint() throws {
+        let source = try authoringViewSource()
+        XCTAssertEqual(
+            source.components(separatedBy: "LivePerformedNotationTracker(").count - 1,
+            1,
+            "the tracker must be constructed in exactly one place, so a take can only ever have one"
+        )
+        XCTAssertTrue(
+            source.contains("private func syncLiveNotationTracker(isRecording: Bool)"),
+            "creation and clearing must go through one named lifecycle point"
+        )
+        // Recording transition, view appearance mid-take, and teardown.
+        XCTAssertTrue(source.contains("syncLiveNotationTracker(isRecording: isRecording)"))
+        XCTAssertTrue(source.contains("syncLiveNotationTracker(isRecording: viewModel.session.phase == .recording)"))
+        XCTAssertTrue(source.contains("syncLiveNotationTracker(isRecording: false)"))
+    }
+
+    /// Reject, retake and a new take all leave `.recording`, and leaving
+    /// `.recording` drops the tracker — so none of them can carry a prior
+    /// take's trace into the next one.
+    func testLeavingTheRecordingPhaseClearsTheAuthoringTracker() throws {
+        let source = try authoringViewSource()
+        XCTAssertTrue(
+            source.contains("guard liveNotationTracker == nil else { return }"),
+            "an already-running take must not be given a second tracker"
+        )
+        XCTAssertTrue(
+            source.contains("liveNotationTracker = nil"),
+            "the not-recording branch must clear the tracker"
+        )
+        XCTAssertTrue(
+            source.contains(".onChange(of: viewModel.session.phase == .recording)"),
+            "the tracker is keyed on the authoring session's own recording phase"
+        )
+    }
+
+    /// One renderer, shared. The authoring screen must present the same card
+    /// Capture does rather than drawing notation of its own.
+    func testAuthoringUsesTheCanonicalRendererAndNotASecondOne() throws {
+        let source = try authoringViewSource()
+        XCTAssertTrue(
+            source.contains("LivePerformedNotationCard("),
+            "authoring must present the canonical live-notation card"
+        )
+        for forbidden in ["ScratchPhraseChartView(", "ScratchMotionRenderer", "ScratchStrokeGeometry", "Canvas {", "Path {"] {
+            XCTAssertFalse(
+                source.contains(forbidden),
+                "authoring must reach the renderer through LivePerformedNotationCard, never draw \(forbidden) itself"
+            )
+        }
+    }
+
+    /// The card this slice wires up is the one that renders through the
+    /// canonical phrase chart, so the chain really does end at the shared
+    /// renderer rather than at a lookalike.
+    func testTheCanonicalCardRendersThroughThePhraseChart() throws {
+        let url = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .appendingPathComponent("ScratchLabDesktop/Services/LivePerformedNotationTracker.swift")
+        let source = try String(contentsOf: url, encoding: .utf8)
+        XCTAssertTrue(source.contains("struct LivePerformedNotationCard: View"))
+        XCTAssertTrue(source.contains("ScratchPhraseChartView("))
+        XCTAssertTrue(source.contains(".performedPlatter(tracker.renderedEvents)"))
+    }
+
+    /// The substituted closure above is the ONLY difference from production.
+    /// This pins that the engine's factory reads the same two evidence
+    /// sources, so the test cannot drift away from what ships.
+    func testTheEngineFactoryReadsTheSameEvidenceSourcesTheTestSubstitutes() throws {
+        let url = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .appendingPathComponent("ScratchLabDesktop/Services/MacCaptureEngine.swift")
+        let source = try String(contentsOf: url, encoding: .utf8)
+        XCTAssertTrue(source.contains("func makeLivePerformedNotationDataSource() -> LivePerformedNotationDataSource"))
+        XCTAssertTrue(source.contains("capturedMidiCCEventsSnapshot: { [weak self] in self?.capturedMidiCCEventsSnapshot() ?? [] }"))
+        XCTAssertTrue(source.contains("cameraMovementEventsSnapshot: { [weak self] now in self?.cameraMovementEventsSnapshot(now: now) }"))
+    }
+
+    // MARK: - D6 boundary measurement harness
+
+    /// A realistic RANE ONE MKII right-platter CC6 stream: a +/-1 ring counter
+    /// at ~800 Hz, modulus 128, alternating forward/backward sweeps.
+    static func raneRingStream(
+        deviceName: String = "Rane ONE MKII",
+        runs: Int = 6,
+        stepsPerRun: Int = 240,
+        interval: Double = 0.00125,
+        startValue: Int = 40
+    ) -> [CaptureCore.RawMixerMIDIEvent] {
+        var events: [CaptureCore.RawMixerMIDIEvent] = []
+        var value = startValue
+        var t = 0.0
+        for run in 0..<runs {
+            let step = run.isMultiple(of: 2) ? 1 : -1
+            for _ in 0..<stepsPerRun {
+                value = ((value + step) % 128 + 128) % 128
+                t += interval
+                events.append(
+                    CaptureCore.RawMixerMIDIEvent(
+                        timestamp: t,
+                        takeRelativeTime: t,
+                        deviceName: deviceName,
+                        channel: 1,
+                        controller: 6,
+                        value: value,
+                        normalizedValue: Double(value) / 127.0,
+                        mappedControl: nil
+                    )
+                )
+            }
+        }
+        return events
+    }
+
+    /// Runs take-003's REAL captured CC6 stream through the live path.
+    ///
+    /// This is the measurement that settled D6: the chain does NOT flatten
+    /// real platter movement — take-003 renders a 0.718 vertical span overall,
+    /// while the card's trailing 3.2 s window landed on a genuinely
+    /// low-movement tail (0.036). Skips when the operator's container is
+    /// absent, so it is evidence on Karl's machine and inert elsewhere.
+    func testTake003RealStreamIsNotFlattenedByTheLivePath() throws {
+        let url = URL(fileURLWithPath: NSHomeDirectory())
+            .appendingPathComponent("Library/Application Support/ScratchLab/RoutineCaptures/41949897-5458-449d-9280-65508a4f6600_take003_routine.json")
+        guard FileManager.default.fileExists(atPath: url.path) else {
+            throw XCTSkip("take-003 artifact not present")
+        }
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .iso8601
+        let sidecar = try decoder.decode(
+            CaptureCore.LocalRecordingSidecar.self,
+            from: try Data(contentsOf: url)
+        )
+        let raw = sidecar.detectedNotation?.mixerMidiEvents ?? []
+        print("[D6R] raw = \(raw.count)")
+        let device = raw.first?.deviceName ?? ""
+        print("[D6R] device = \(device)")
+        let matched = raw.filter { $0.channel == 1 && $0.controller == 6 && $0.deviceName == device }
+        print("[D6R] matched ch1/cc6 = \(matched.count)")
+        let times = matched.map(\.takeRelativeTime)
+        print(String(format: "[D6R] takeRelativeTime range = %.3f ... %.3f", times.min() ?? 0, times.max() ?? 0))
+        let values = matched.map(\.value)
+        print("[D6R] value range = \(values.min() ?? -1) ... \(values.max() ?? -1)")
+
+        let decoded = MacCaptureEngine.resolvedControllerMovementEventsWithProvisional(
+            selectedMIDISourceName: device,
+            capturedMidi: raw
+        )
+        print("[D6R] committed = \(decoded.committedEvents.count), provisional = \(decoded.provisionalMovement != nil)")
+        let deltas = decoded.committedEvents.map { abs($0.endPosition - $0.startPosition) }
+        print(String(format: "[D6R] committed delta min=%.6f max=%.6f", deltas.min() ?? 0, deltas.max() ?? 0))
+
+        let state = LiveNotationTrackingState.tracking(
+            committed: decoded.committedEvents,
+            provisional: decoded.provisionalMovement
+        )
+        let strokes = LivePerformedNotationTracker.renderedEvents(for: state)
+            .compactMap(PerformedStrokeAdapter.laneStroke(from:))
+        print("[D6R] lane strokes = \(strokes.count)")
+        let vertical = strokes.flatMap { s -> [Double] in
+            [s.measuredStartPosition, s.measuredEndPosition].compactMap { $0 }
+        }
+        print(String(format: "[D6R] FINAL vertical span = %.6f", (vertical.max() ?? 0) - (vertical.min() ?? 0)))
+        let travels = strokes.compactMap(\.normalizedTravel)
+        print(String(format: "[D6R] travel min=%.6f max=%.6f", travels.min() ?? 0, travels.max() ?? 0))
+
+        // What the CARD actually displays: the trailing 3.2 s window that
+        // `LivePerformedNotationCard.renderedDomain` computes.
+        let rendered = LivePerformedNotationTracker.renderedEvents(for: state)
+        guard let firstEvent = rendered.first, let lastEvent = rendered.last else { return }
+        let end = max(firstEvent.startTime + 3.2, lastEvent.endTime)
+        let windowStart = max(0, end - 3.2)
+        print(String(format: "[D6R] renderedDomain = %.3f ... %.3f", windowStart, end))
+        let windowStrokes = rendered
+            .filter { $0.endTime >= windowStart && $0.startTime <= end }
+            .compactMap(PerformedStrokeAdapter.laneStroke(from:))
+        print("[D6R] strokes inside window = \(windowStrokes.count)")
+        let windowVertical = windowStrokes.flatMap { s -> [Double] in
+            [s.measuredStartPosition, s.measuredEndPosition].compactMap { $0 }
+        }
+        print(String(format: "[D6R] WINDOW vertical span = %.6f",
+                     (windowVertical.max() ?? 0) - (windowVertical.min() ?? 0)))
+
+        // Per-second span, to see whether any part of the take was flat.
+        XCTAssertGreaterThan(
+            (vertical.max() ?? 0) - (vertical.min() ?? 0), 0.5,
+            "the live path must not flatten take-003's real platter movement"
+        )
+        XCTAssertGreaterThan(decoded.committedEvents.count, 10)
+
+        for second in stride(from: 0.0, to: 17.0, by: 4.0) {
+            let slice = rendered
+                .filter { $0.startTime >= second && $0.startTime < second + 4.0 }
+                .compactMap(PerformedStrokeAdapter.laneStroke(from:))
+            let vals = slice.flatMap { s -> [Double] in
+                [s.measuredStartPosition, s.measuredEndPosition].compactMap { $0 }
+            }
+            print(String(format: "[D6R] t=%.0f..%.0f strokes=%d span=%.6f",
+                         second, second + 4.0, slice.count,
+                         (vals.max() ?? 0) - (vals.min() ?? 0)))
+        }
+    }
+
+    // MARK: - D6 regressions: the live path must not flatten real movement
+
+    private func spans(for raw: [CaptureCore.RawMixerMIDIEvent], device: String) -> (strokes: Int, span: Double) {
+        let decoded = MacCaptureEngine.resolvedControllerMovementEventsWithProvisional(
+            selectedMIDISourceName: device,
+            capturedMidi: raw
+        )
+        let strokes = LivePerformedNotationTracker
+            .renderedEvents(for: .tracking(
+                committed: decoded.committedEvents,
+                provisional: decoded.provisionalMovement
+            ))
+            .compactMap(PerformedStrokeAdapter.laneStroke(from:))
+        let values = strokes.flatMap { stroke -> [Double] in
+            [stroke.measuredStartPosition, stroke.measuredEndPosition].compactMap { $0 }
+        }
+        return (strokes.count, (values.max() ?? 0) - (values.min() ?? 0))
+    }
+
+    func testAlternatingPlatterMovementProducesNonZeroVerticalTravel() {
+        let device = "Rane ONE MKII"
+        let result = spans(for: Self.raneRingStream(deviceName: device), device: device)
+        XCTAssertGreaterThan(result.strokes, 1)
+        XCTAssertGreaterThan(
+            result.span, 0.05,
+            "alternating forward/backward platter movement must render visible vertical travel"
+        )
+    }
+
+    func testAlternatingMovementProducesDirectionChanges() {
+        let device = "Rane ONE MKII"
+        let decoded = MacCaptureEngine.resolvedControllerMovementEventsWithProvisional(
+            selectedMIDISourceName: device,
+            capturedMidi: Self.raneRingStream(deviceName: device)
+        )
+        let directions = decoded.committedEvents.map(\.direction)
+        XCTAssertTrue(directions.contains("forward"))
+        XCTAssertTrue(directions.contains("backward"))
+    }
+
+    /// A platter sending nothing must stay flat — the counterpart to the case
+    /// above, so "visible travel" cannot be satisfied by fabricating motion.
+    func testAStationaryPlatterRendersFlat() {
+        let device = "Rane ONE MKII"
+        let still = (0..<400).map { index in
+            CaptureCore.RawMixerMIDIEvent(
+                timestamp: Double(index) * 0.00125,
+                takeRelativeTime: Double(index) * 0.00125,
+                deviceName: device,
+                channel: 1,
+                controller: 6,
+                value: 64,
+                normalizedValue: 64.0 / 127.0,
+                mappedControl: nil
+            )
+        }
+        let result = spans(for: still, device: device)
+        XCTAssertLessThan(result.span, 0.01, "a stationary platter must not draw travel")
+    }
+
+    /// Ring wraparound (127 -> 0) must not read as a full-scale jump.
+    func testModularWraparoundDoesNotCreateFalseExtremeTravel() {
+        let device = "Rane ONE MKII"
+        let wrapping = Self.raneRingStream(deviceName: device, runs: 2, stepsPerRun: 300, startValue: 120)
+        let result = spans(for: wrapping, device: device)
+        XCTAssertGreaterThan(result.span, 0.05)
+        XCTAssertLessThanOrEqual(
+            result.span, 1.0,
+            "a modulus wrap must not be decoded as an enormous excursion"
+        )
+    }
+
+    /// Free-running revolutions must not drift the presentation origin: every
+    /// stroke is projected onto the same gesture-relative frame, so a later
+    /// multi-revolution run cannot move an earlier one.
+    func testFreeRunningRevolutionsKeepAGestureRelativeOrigin() {
+        let device = "Rane ONE MKII"
+        // Six full revolutions forward, then a normal alternating gesture.
+        var stream = Self.raneRingStream(deviceName: device, runs: 1, stepsPerRun: 4_000)
+        let tail = Self.raneRingStream(deviceName: device, runs: 2, stepsPerRun: 240, startValue: 0)
+        let offset = (stream.last?.takeRelativeTime ?? 0) + 0.2
+        stream += tail.map { event in
+            CaptureCore.RawMixerMIDIEvent(
+                timestamp: event.timestamp + offset,
+                takeRelativeTime: event.takeRelativeTime + offset,
+                deviceName: event.deviceName,
+                channel: event.channel,
+                controller: event.controller,
+                value: event.value,
+                normalizedValue: event.normalizedValue,
+                mappedControl: nil
+            )
+        }
+        let decoded = MacCaptureEngine.resolvedControllerMovementEventsWithProvisional(
+            selectedMIDISourceName: device,
+            capturedMidi: stream
+        )
+        let strokes = LivePerformedNotationTracker
+            .renderedEvents(for: .tracking(
+                committed: decoded.committedEvents,
+                provisional: decoded.provisionalMovement
+            ))
+            .compactMap(PerformedStrokeAdapter.laneStroke(from:))
+        let starts = strokes.compactMap(\.measuredStartPosition)
+        let ends = strokes.compactMap(\.measuredEndPosition)
+        XCTAssertTrue(
+            starts.allSatisfy { $0 >= -0.001 && $0 <= 1.001 }
+                && ends.allSatisfy { $0 >= -0.001 && $0 <= 1.001 },
+            "every stroke stays inside the fixed 0...1 gesture frame; raw motor phase never shifts the origin"
+        )
+        XCTAssertTrue(
+            starts.contains { abs($0) < 0.001 } || ends.contains { abs($0) < 0.001 },
+            "each gesture is rebased to its own origin rather than accumulating revolutions"
+        )
+    }
+
+    /// A source-name mismatch fails closed and says nothing, rather than
+    /// decoding another device's ring counter.
+    func testASourceNameMismatchProducesNoFabricatedMovement() {
+        let raw = Self.raneRingStream(deviceName: "Rane ONE MKII")
+        let decoded = MacCaptureEngine.resolvedControllerMovementEventsWithProvisional(
+            selectedMIDISourceName: "Some Other Controller",
+            capturedMidi: raw
+        )
+        XCTAssertTrue(decoded.committedEvents.isEmpty)
+        XCTAssertNil(decoded.provisionalMovement)
+    }
+
+    /// The baseline filter admits only the active take's events.
+    func testTheBaselineFilterAdmitsOnlyTheActiveTake() {
+        let device = "Rane ONE MKII"
+        let priorTake = Self.raneRingStream(deviceName: device, runs: 2, stepsPerRun: 240)
+        let baseline = (priorTake.last?.timestamp ?? 0) + 1.0
+        let dataSource = LivePerformedNotationDataSource(
+            selectedMIDISourceName: { device },
+            capturedMidiCCEventsSnapshot: { priorTake },
+            cameraMovementEventsSnapshot: { _ in nil }
+        )
+        let state = LivePerformedNotationTracker.computeState(
+            dataSource: dataSource,
+            baselineTimestamp: baseline
+        )
+        XCTAssertEqual(state, .waiting, "a previous take's events must never enter this take's trace")
+        XCTAssertTrue(LivePerformedNotationTracker.renderedEvents(for: state).isEmpty)
+    }
+
+    /// The open stroke stays visible, so movement appears before its
+    /// turnaround commits it.
+    func testTheProvisionalOpenStrokeRemainsVisible() {
+        let device = "Rane ONE MKII"
+        // One single unbroken run: nothing has turned around, so everything is
+        // provisional.
+        let raw = Self.raneRingStream(deviceName: device, runs: 1, stepsPerRun: 300)
+        let decoded = MacCaptureEngine.resolvedControllerMovementEventsWithProvisional(
+            selectedMIDISourceName: device,
+            capturedMidi: raw
+        )
+        XCTAssertTrue(decoded.committedEvents.isEmpty)
+        let provisional = try? XCTUnwrap(decoded.provisionalMovement)
+        XCTAssertNotNil(provisional)
+        let rendered = LivePerformedNotationTracker.renderedEvents(
+            for: .tracking(committed: [], provisional: decoded.provisionalMovement)
+        )
+        XCTAssertEqual(rendered.count, 1)
+        XCTAssertGreaterThan(
+            abs((rendered.first?.endPosition ?? 0) - (rendered.first?.startPosition ?? 0)),
+            0,
+            "the open stroke must carry real travel, not a placeholder"
+        )
+    }
+
+    // MARK: - Live diagnostics counters
+
+    func testDiagnosticsReportTheRealCountsAndSpan() {
+        let device = "Rane ONE MKII"
+        let raw = Self.raneRingStream(deviceName: device)
+        let dataSource = LivePerformedNotationDataSource(
+            selectedMIDISourceName: { device },
+            capturedMidiCCEventsSnapshot: { raw },
+            cameraMovementEventsSnapshot: { _ in nil }
+        )
+        let state = LivePerformedNotationTracker.computeState(
+            dataSource: dataSource,
+            baselineTimestamp: -1
+        )
+        let diagnostics = LivePerformedNotationTracker.diagnostics(
+            dataSource: dataSource,
+            baselineTimestamp: -1,
+            state: state,
+            now: (raw.last?.timestamp ?? 0) + 0.25
+        )
+        XCTAssertEqual(diagnostics.rawSnapshotCount, raw.count)
+        XCTAssertEqual(diagnostics.baselineMatchedCount, raw.count)
+        XCTAssertGreaterThan(diagnostics.committedMovementCount, 0)
+        XCTAssertGreaterThan(diagnostics.renderedPositionSpan, 0)
+        XCTAssertEqual(diagnostics.latestEventAge, 0.25, accuracy: 0.01)
+    }
+
+    func testDiagnosticsReportAFlatSpanWhenNothingMoved() {
+        let dataSource = LivePerformedNotationDataSource(
+            selectedMIDISourceName: { "Rane ONE MKII" },
+            capturedMidiCCEventsSnapshot: { [] },
+            cameraMovementEventsSnapshot: { _ in nil }
+        )
+        let diagnostics = LivePerformedNotationTracker.diagnostics(
+            dataSource: dataSource,
+            baselineTimestamp: 0,
+            state: .waiting
+        )
+        XCTAssertEqual(diagnostics.rawSnapshotCount, 0)
+        XCTAssertEqual(diagnostics.committedMovementCount, 0)
+        XCTAssertEqual(diagnostics.renderedPositionSpan, 0)
+        XCTAssertEqual(diagnostics.latestEventAge, -1, "no events means no age, not a fabricated zero")
     }
 }

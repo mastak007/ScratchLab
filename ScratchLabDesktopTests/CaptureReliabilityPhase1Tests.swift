@@ -12011,6 +12011,36 @@ final class CaptureRecoveryPhase2CoreTests: XCTestCase {
         )
     }
 
+    func testMacReferenceAuthoringHardwareRouteIsDebugOnly() throws {
+        let sourceURL = projectRootURL().appendingPathComponent("ScratchLabDesktop/Views/MacAnalyzerView.swift")
+        let source = try String(contentsOf: sourceURL, encoding: .utf8)
+
+        XCTAssertTrue(
+            source.contains(
+                "#if DEBUG\n        case referenceAuthoringHardwareTest\n        case captureDetails"
+            ),
+            "The reference-authoring hardware-test section must remain inside the AdvancedSection DEBUG gate"
+        )
+        XCTAssertTrue(
+            source.contains(
+                "#if DEBUG\n            case .referenceAuthoringHardwareTest: return \"CXL Reference Authoring — Hardware Test\""
+            ),
+            "The hardware-test label must remain inside the AdvancedSection DEBUG gate"
+        )
+        XCTAssertTrue(
+            source.contains(
+                "#if DEBUG\n            case .referenceAuthoringHardwareTest: return \"wrench.and.screwdriver\""
+            ),
+            "The hardware-test icon mapping must remain inside the AdvancedSection DEBUG gate"
+        )
+        XCTAssertTrue(
+            source.contains(
+                "#if DEBUG\n        case .referenceAuthoringHardwareTest:\n            ReferenceAuthoringView(\n                engine: captureEngine,\n                companionReceiver: companionReceiver,\n                operatorName: lastPerformerName\n            )\n        case .captureDetails:"
+            ),
+            "The live reference-authoring route must remain inside the Advanced content DEBUG gate"
+        )
+    }
+
     func testPracticeViewReplacesOverconfidentTerminologyWithEstimateLanguage() throws {
         let sourceURL = projectRootURL().appendingPathComponent("ScratchLab/Views/PracticeModeView.swift")
         let source = try String(contentsOf: sourceURL, encoding: .utf8)

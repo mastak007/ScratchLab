@@ -618,6 +618,9 @@
 		REFAUST0TST0001 /* ReferenceAuthoringSessionTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = REFAUST0FREF0001 /* ReferenceAuthoringSessionTests.swift */; };
 		REFBRG0MAC0001 /* ReferenceAuthoringCaptureBridge.swift in Sources */ = {isa = PBXBuildFile; fileRef = REFBRG0FREF0001 /* ReferenceAuthoringCaptureBridge.swift */; };
 		REFBRGT0TST0001 /* ReferenceAuthoringCaptureBridgeTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = REFBRGT0FREF0001 /* ReferenceAuthoringCaptureBridgeTests.swift */; };
+		REFVM0MAC0001 /* ReferenceAuthoringViewModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = REFVM0FREF0001 /* ReferenceAuthoringViewModel.swift */; };
+		REFVIEW0MAC001 /* ReferenceAuthoringView.swift in Sources */ = {isa = PBXBuildFile; fileRef = REFERENCEVIEW001 /* ReferenceAuthoringView.swift */; };
+		REFVMT0TST0001 /* ReferenceAuthoringViewModelTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = REFVMT0FREF0001 /* ReferenceAuthoringViewModelTests.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -1097,6 +1100,9 @@
 		REFAUST0FREF0001 /* ReferenceAuthoringSessionTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ReferenceAuthoringSessionTests.swift; sourceTree = "<group>"; };
 		REFBRG0FREF0001 /* ReferenceAuthoringCaptureBridge.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ReferenceAuthoringCaptureBridge.swift; sourceTree = "<group>"; };
 		REFBRGT0FREF0001 /* ReferenceAuthoringCaptureBridgeTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ReferenceAuthoringCaptureBridgeTests.swift; sourceTree = "<group>"; };
+		REFVM0FREF0001 /* ReferenceAuthoringViewModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ReferenceAuthoringViewModel.swift; sourceTree = "<group>"; };
+		REFERENCEVIEW001 /* ReferenceAuthoringView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ReferenceAuthoringView.swift; sourceTree = "<group>"; };
+		REFVMT0FREF0001 /* ReferenceAuthoringViewModelTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ReferenceAuthoringViewModelTests.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFileSystemSynchronizedRootGroup section */
@@ -1141,6 +1147,7 @@
 		2010DD0010DD0010DD0010DD /* ScratchLabDesktopTests */ = {
 			isa = PBXGroup;
 			children = (
+				REFVMT0FREF0001 /* ReferenceAuthoringViewModelTests.swift */,
 				REFBRGT0FREF0001 /* ReferenceAuthoringCaptureBridgeTests.swift */,
 				REFAUST0FREF0001 /* ReferenceAuthoringSessionTests.swift */,
 				REFAUT0FREF0001 /* ReferenceAuthoringTests.swift */,
@@ -1600,6 +1607,7 @@
 				A11CE0000000000000000001 /* ScratchLabLogo.svg */,
 				SLCORE00000000000000FR07 /* ScratchLabDesktop-Bridging-Header.h */,
 				ROM0000000ROM001ROM00001 /* Models */,
+				REFVM0GRP0001 /* ViewModels */,
 				B5000002 /* Views */,
 				B5000003 /* Services */,
 				B2000010 /* AppIcon.icns */,
@@ -1612,6 +1620,7 @@
 		B5000002 /* Views */ = {
 			isa = PBXGroup;
 			children = (
+				REFERENCEVIEW001 /* ReferenceAuthoringView.swift */,
 				B2000002 /* MacAnalyzerView.swift */,
 				B2000003 /* MacCameraPreviewView.swift */,
 				B2000004 /* HandMotionOverlay.swift */,
@@ -1631,6 +1640,14 @@
 				9E40AFA8F68E91632E54E273 /* CalibrationCameraOverlay.swift */,
 			);
 			path = Views;
+			sourceTree = "<group>";
+		};
+		REFVM0GRP0001 /* ViewModels */ = {
+			isa = PBXGroup;
+			children = (
+				REFVM0FREF0001 /* ReferenceAuthoringViewModel.swift */,
+			);
+			path = ViewModels;
 			sourceTree = "<group>";
 		};
 		B5000003 /* Services */ = {
@@ -2078,6 +2095,8 @@
 		4137724FB3900E509AAF6EDF /* Sources */ = {
 			isa = PBXSourcesBuildPhase;
 			files = (
+				REFVIEW0MAC001 /* ReferenceAuthoringView.swift in Sources */,
+				REFVM0MAC0001 /* ReferenceAuthoringViewModel.swift in Sources */,
 				REFBRG0MAC0001 /* ReferenceAuthoringCaptureBridge.swift in Sources */,
 				REFAU0MAC0009 /* ReferenceAuthoringSession.swift in Sources */,
 				REFIO0MAC0001 /* ReferencePackageIO.swift in Sources */,
@@ -2521,6 +2540,7 @@
 		F9TESTSRC10AA0010AA10AA /* Sources */ = {
 			isa = PBXSourcesBuildPhase;
 			files = (
+				REFVMT0TST0001 /* ReferenceAuthoringViewModelTests.swift in Sources */,
 				REFBRGT0TST0001 /* ReferenceAuthoringCaptureBridgeTests.swift in Sources */,
 				REFAUST0TST0001 /* ReferenceAuthoringSessionTests.swift in Sources */,
 				REFAUT0TST0001 /* ReferenceAuthoringTests.swift in Sources */,

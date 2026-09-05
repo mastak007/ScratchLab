@@ -4176,3 +4176,31 @@ Affected platform builds passed: `ScratchLab` on `generic/platform=iOS` and `Scr
 ### Preservation
 
 All 661 primary files and all 93 protected evidence files match the saved baselines. Primary remains `feature/ios-capture-camera-ux` at `d3ecf2a6` with an unchanged empty index; receipt branch intact; `git diff --check` passes. Among protected files only `project.pbxproj` changed, by membership only. Takes 001-006 and the documented historical metadata mutations are untouched. No Take 007 was recorded, no reference was approved, installed or published, no training was enabled, and no detector output was treated as human ground truth.
+
+## 2026-09-05 - Boundary 6 committed: DEBUG authoring workflow and live notation
+
+### Scope and exact extraction
+
+Candidate `/private/tmp/scratchlab-refauth-baseline.iYmLZU/worktree`, branch `checkpoint/reference-authoring-baseline`, parent `71c4f47`. Copied whole from the primary and byte-compared: `ScratchLabDesktop/ViewModels/ReferenceAuthoringViewModel.swift`, `ScratchLabDesktop/Views/ReferenceAuthoringView.swift`, `ScratchLabDesktopTests/ReferenceAuthoringViewModelTests.swift`, `ScratchLabDesktop/Services/LivePerformedNotationTracker.swift`, `ScratchLabDesktopTests/LivePerformedNotationTrackerTests.swift`, `ScratchLabDesktopTests/MacCameraPreviewViewTests.swift` and `ScratchLabDesktop/Views/MacAnalyzerView.swift`. Whole-file copies are exact here because every hunk those files have in the primary belongs to this boundary: tracker 5, tracker tests 2, camera preview tests 1 and MacAnalyzerView 4, which are the audited route hunks 521, 535, 549 and 3744.
+
+`CaptureReliabilityPhase1Tests.swift` required care, because it now carries both primary hunks and the test classes added in Boundaries 2, 3 and 4. The 688 appended lines were saved, the file was rebuilt from the pristine base with the union of hunks 3202, 3204, 12009, 14151 and the inherited 22196 receipt block, and the appended classes were restored. The resulting diff against the previous commit is exactly 30 insertions: `CaptureRecoveryPhase2CoreTests/testMacReferenceAuthoringHardwareRouteIsDebugOnly`.
+
+`project.pbxproj` was rebuilt from the pristine base with all 14 membership hunks whole. Membership is now exactly complete and was checked against the primary line by line: 140 primary membership lines, 140 in the candidate, none missing and none extra. All six `CURRENT_PROJECT_VERSION` 21 to 22 hunks remain excluded, `CURRENT_PROJECT_VERSION = 22` appears zero times, `= 21` appears six times, and the file parses.
+
+### Verified constraints
+
+- The route exists only in DEBUG. All four `MacAnalyzerView.swift` additions - the enum case, the display name, the icon and the destination - sit inside existing `#if DEBUG` regions.
+- The label is exactly `CXL Reference Authoring — Hardware Test`.
+- `ReferenceAuthoringView` uses `liveNotationMinimumHeight` of 180 and `cameraPreviewMaximumHeight` of 360, with `.aspectRatio(16.0 / 9.0, contentMode: .fit)` on the camera preview, and reserves notation height when idle rather than letting `maxHeight: .infinity` collapse to the ideal height inside a scroll view.
+- Only the view's DEBUG diagnostics row is compiled out of Release. `LivePerformedNotationTracker.swift` contains no `#if DEBUG` at all: `LiveNotationDiagnostics`, the `@Published private(set) var diagnostics` property and the `diagnostics(...)` computation all compile in Release. This entry deliberately does not claim the underlying tracker diagnostics computation is DEBUG-only, because it is not.
+- No coordinate, decoder, motor-phase-origin or renderer y-scale semantics changed, and no TTM or Tear work is present.
+
+### Commands and results
+
+`build-for-testing` passed. Focused, executed once: `test-without-building` with `-only-testing:` for `ReferenceAuthoringViewModelTests`, `LivePerformedNotationTrackerTests`, `MacCameraPreviewViewTests`, `ScratchNotationPanelTests`, `ReferenceAuthoringTests`, `ReferenceAuthoringSessionTests`, `ReferenceAuthoringCaptureBridgeTests`, `CrossfaderCalibrationTests` and the exact selector `CaptureRecoveryPhase2CoreTests/testMacReferenceAuthoringHardwareRouteIsDebugOnly`. Per configuration 261 passed, 0 failed, 1 skipped, under both `Test Scheme Action` and `Configuration 2`; 522 executions. Log `../logs/b6-focused.log`, bundle `../results/b6-focused.xcresult`.
+
+The single skip is `testTake003RealStreamIsNotFlattenedByTheLivePath`, which throws `XCTSkip("take-003 artifact not present")` when the take-003 artifact is absent from the worktree. It is a pre-existing environment guard in the audited source, not a skip introduced or widened here, and no test was disabled to obtain this result.
+
+### Preservation
+
+All 661 primary files and all 93 protected evidence files match the saved baselines. Primary remains `feature/ios-capture-camera-ux` at `d3ecf2a6` with an unchanged empty index; receipt branch intact; `git diff --check` passes. Among protected files only `project.pbxproj` changed, by membership only. Takes 001-006 and the documented historical metadata mutations are untouched. Opening the authoring screen starts no capture and persists nothing; nothing was deployed, launched, recorded, approved, installed, published or made training-eligible.
