@@ -23277,3 +23277,176 @@ final class SessionExportFailureTextTests: XCTestCase {
         )
     }
 }
+
+/// Coverage for the calibrated crossfader fields on `RawMixerMIDIEvent` and
+/// the all-or-nothing gate that decides whether derivation reads them.
+///
+/// `CrossfaderCalibrationTests` covers the calibration model, sweep, store and
+/// state deriver. It does not reach `CaptureCore`, and the only other file that
+/// references these two fields, `ReferenceAuthoringCaptureBridgeTests`, arrives
+/// in a later boundary. These tests close that gap.
+///
+/// The gesture below is one-way and deliberately built so the two position
+/// spaces cannot be confused: it travels 0.02 in controller terms, below the
+/// 0.10 minimum delta, and a full 1.0 in calibrated deck terms. Whether any
+/// event comes out, and how far it travels, therefore reports exactly which
+/// position source the derivation read. It is one-way on purpose: an
+/// out-and-back gesture collapses into a single pulse whose endpoints are the
+/// outer samples, so its net travel is zero in either space and would say
+/// nothing about the source. That collapse is pinned separately below.
+final class CaptureCoreCalibratedCrossfaderTests: XCTestCase {
+
+    private func event(
+        takeRelativeTime: Double,
+        normalizedValue: Double,
+        calibratedPosition: Double?,
+        calibrationID: String? = "cal-rane-one-mkii"
+    ) -> CaptureCore.RawMixerMIDIEvent {
+        CaptureCore.RawMixerMIDIEvent(
+            timestamp: takeRelativeTime,
+            takeRelativeTime: takeRelativeTime,
+            deviceName: "RANE ONE MKII",
+            channel: 1,
+            controller: 6,
+            value: Int((normalizedValue * 127).rounded()),
+            normalizedValue: normalizedValue,
+            mappedControl: "crossfader",
+            calibratedPosition: calibratedPosition,
+            calibrationID: calibratedPosition == nil ? nil : calibrationID
+        )
+    }
+
+    /// One-way close-to-open sweep: 0.02 of controller travel, 1.0 of
+    /// calibrated deck travel.
+    private func gesture(calibrated: [Double?]) -> [CaptureCore.RawMixerMIDIEvent] {
+        let normalized = [0.50, 0.52]
+        return (0..<2).map { index in
+            event(
+                takeRelativeTime: Double(index) * 0.1,
+                normalizedValue: normalized[index],
+                calibratedPosition: calibrated[index]
+            )
+        }
+    }
+
+    // MARK: - Codable round trip
+
+    func testCalibratedFieldsSurviveACodableRoundTrip() throws {
+        let original = event(takeRelativeTime: 0.25, normalizedValue: 0.5039, calibratedPosition: 0.75)
+
+        let data = try JSONEncoder().encode(original)
+        let decoded = try JSONDecoder().decode(CaptureCore.RawMixerMIDIEvent.self, from: data)
+
+        XCTAssertEqual(decoded, original)
+        XCTAssertEqual(decoded.calibratedPosition, 0.75)
+        XCTAssertEqual(decoded.calibrationID, "cal-rane-one-mkii")
+    }
+
+    func testAnUncalibratedEventRoundTripsWithBothFieldsNil() throws {
+        let original = event(takeRelativeTime: 0.25, normalizedValue: 0.5039, calibratedPosition: nil)
+
+        let decoded = try JSONDecoder().decode(
+            CaptureCore.RawMixerMIDIEvent.self,
+            from: try JSONEncoder().encode(original)
+        )
+
+        XCTAssertEqual(decoded, original)
+        XCTAssertNil(decoded.calibratedPosition)
+        XCTAssertNil(decoded.calibrationID)
+    }
+
+    func testALegacySidecarWithoutTheCalibratedKeysStillDecodes() throws {
+        let legacy = """
+        {
+          "timestamp": 1.0,
+          "takeRelativeTime": 0.5,
+          "deviceName": "RANE ONE MKII",
+          "channel": 1,
+          "controller": 6,
+          "value": 64,
+          "normalizedValue": 0.5039370078740157,
+          "mappedControl": "crossfader"
+        }
+        """.data(using: .utf8)!
+
+        let decoded = try JSONDecoder().decode(CaptureCore.RawMixerMIDIEvent.self, from: legacy)
+
+        XCTAssertNil(decoded.calibratedPosition, "The fields are additive; historical sidecars must still decode.")
+        XCTAssertNil(decoded.calibrationID)
+        XCTAssertEqual(decoded.normalizedValue, 0.5039370078740157)
+    }
+
+    // MARK: - Which position source derivation reads
+
+    func testDerivationUsesCalibratedPositionsWhenEveryEventSuppliesOne() {
+        let events = CaptureCore.deriveDetectedNotationFaderEvents(
+            from: gesture(calibrated: [0.0, 1.0])
+        )
+
+        XCTAssertEqual(
+            events.count, 1,
+            "Full calibrated travel must be derived; the 0.02 controller travel alone would yield nothing."
+        )
+        XCTAssertEqual(events.first?.fromValue, 0.0)
+        XCTAssertEqual(
+            events.first?.toValue, 1.0,
+            "The derived travel must be the calibrated 1.0, not the 0.02 controller fraction."
+        )
+        XCTAssertEqual(events.first?.control, "crossfader")
+    }
+
+    func testDerivationFallsBackToLegacyPositionsWhenAnyEventLacksCalibration() {
+        let events = CaptureCore.deriveDetectedNotationFaderEvents(
+            from: gesture(calibrated: [0.0, nil])
+        )
+
+        XCTAssertTrue(
+            events.isEmpty,
+            "One uncalibrated sample must drop the whole stream back to normalizedValue, whose 0.02 travel is below the minimum delta."
+        )
+    }
+
+    func testAFullyUncalibratedStreamIsDerivedExactlyAsBefore() {
+        let events = CaptureCore.deriveDetectedNotationFaderEvents(
+            from: gesture(calibrated: [nil, nil])
+        )
+
+        XCTAssertTrue(events.isEmpty, "Legacy behaviour for uncalibrated captures is unchanged.")
+    }
+
+    func testCalibratedAndLegacyStreamsAgreeWhenTheTwoPositionSpacesAgree() {
+        func stream(calibrated: Bool) -> [CaptureCore.RawMixerMIDIEvent] {
+            (0..<2).map { index in
+                let position = [0.0, 1.0][index]
+                return event(
+                    takeRelativeTime: Double(index) * 0.1,
+                    normalizedValue: position,
+                    calibratedPosition: calibrated ? position : nil
+                )
+            }
+        }
+
+        XCTAssertEqual(
+            CaptureCore.deriveDetectedNotationFaderEvents(from: stream(calibrated: true)),
+            CaptureCore.deriveDetectedNotationFaderEvents(from: stream(calibrated: false)),
+            "Calibration changes which numbers are read, never how they are interpreted."
+        )
+    }
+
+    func testAnOutAndBackCalibratedGestureStillCollapsesIntoOnePulse() {
+        let events = CaptureCore.deriveDetectedNotationFaderEvents(
+            from: (0..<3).map { index in
+                event(
+                    takeRelativeTime: Double(index) * 0.1,
+                    normalizedValue: [0.50, 0.52, 0.50][index],
+                    calibratedPosition: [0.0, 1.0, 0.0][index]
+                )
+            }
+        )
+
+        XCTAssertEqual(events.count, 1, "Two alternating calibrated cuts pair into a single pulse.")
+        XCTAssertEqual(events.first?.eventKind, .pulse)
+        XCTAssertEqual(events.first?.fromValue, 0.0, "A pulse reports its outer endpoints, so its net travel is zero.")
+        XCTAssertEqual(events.first?.toValue, 0.0)
+    }
+}

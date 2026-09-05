@@ -1,5 +1,21 @@
 # AI Handoff
 
+## 2026-09-05 - Boundary 3 of 6 committed: CaptureCore checkpoint reached
+
+Supersedes the Boundary 2 entry below for current status. Candidate `/private/tmp/scratchlab-refauth-baseline.iYmLZU/worktree`, branch `checkpoint/reference-authoring-baseline`. Boundaries 1 to 3 are committed; three remain.
+
+- Boundary 3 subject: `feat(capture): preserve calibrated crossfader evidence`. This is the hard CaptureCore checkpoint required before TTM Prompt 1.
+- Extracted: four calibration sources; all eight `CaptureCore.swift` hunks; six calibration-owned engine hunks (4252, 4439, 10811, 10945 whole, plus 10790 new 11102-11139 and 11151-11174, and 10812 new 11279-11290); the whole `CrossfaderCalibrationTests.swift`; and 36 lines of calibration-only `project.pbxproj` membership. Build number remains 21.
+- `CaptureCore.swift` has exactly eight hunks in the primary and all eight are now committed, so the file is fully consumed and clean for TTM.
+- Excluded and verified absent from the engine: `persistedCrossfaderMappingSnapshot`, the live CC observability block, and the unconditional live observation call. All belong to Boundary 5.
+- Semantics preserved: calibrated positions are read only when every crossfader event supplies one; a single uncalibrated sample returns the whole stream to legacy `normalizedValue` derivation.
+- Applying old-side coordinates to a file an earlier boundary already changed fails a context check. The engine was rebuilt from the pristine base with the union of Boundary 1 and Boundary 3 hunks. Any later boundary touching an already-modified file must use that same union-from-base method.
+- Coverage: six of the nine named gaps were already closed by the extracted calibration tests. The three CaptureCore-side gaps were closed by a new eight-test `CaptureCoreCalibratedCrossfaderTests` appended to `CaptureReliabilityPhase1Tests.swift`. The audited `CrossfaderCalibrationTests.swift` was not edited.
+- Focused 472 per configuration, 944 executions, zero failures. Affected builds iOS and macOS passed; watch is unaffected and was not rebuilt.
+- Revised verification plan in force: Boundaries 2 to 5 run focused tests plus affected platform builds only. One serial `scripts/build.sh all`, the explicit Debug and universal Release builds, and the DEBUG-route exclusion proof run once against the complete branch after Boundary 6.
+- `project.pbxproj` note for later boundaries: membership lines are interleaved and split at line level. One line, `REFAU0FREF0009 /* ReferenceAuthoringSession.swift */` at new 1887, is Boundary 5 but sits inside the `Reference` group object that Boundary 4 creates. It must be inserted content-anchored inside that group, not at the old hunk anchor, or it lands outside the group and breaks the file.
+- Preservation unchanged: 661 primary files, 93 protected evidence files, empty indexes, intact receipt branch, build number 21, `git diff --check` passes.
+
 ## 2026-09-05 - Boundary 2 of 6 committed on checkpoint/reference-authoring-baseline
 
 Supersedes the Boundary 1 entry below for current status. Candidate `/private/tmp/scratchlab-refauth-baseline.iYmLZU/worktree`, branch `checkpoint/reference-authoring-baseline`. Boundaries 1 and 2 are committed; four remain.

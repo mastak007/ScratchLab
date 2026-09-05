@@ -1,3 +1,18 @@
+## Current continuation - Boundaries 1 to 3 committed; Boundary 4 is next
+
+Supersedes the continuation blocks below. Candidate `/private/tmp/scratchlab-refauth-baseline.iYmLZU/worktree`, branch `checkpoint/reference-authoring-baseline`. The CaptureCore checkpoint is reached.
+
+1. Re-read the repository instructions and this candidate's newest `DEV_LOG.md`/`AI_HANDOFF.md` entries. Inspect both worktrees, indexes and HEADs. Never write to the primary worktree.
+2. Boundary 4 only: `feat(reference): add authoring evidence and package foundation`. Copy whole from the primary: `ReferenceTechnique.swift`, `ReferenceTake.swift`, `ReferenceValidation.swift`, `ReferenceRegistry.swift`, `ReferencePackage.swift`, `CallAndResponseSchedule.swift`, `LegacyReferenceInventory.swift`, `ReferenceCapturePreflight.swift`, `ScratchLab/Services/ReferencePackageIO.swift` and `ScratchLabDesktopTests/ReferenceAuthoringTests.swift`.
+3. Do NOT include `ReferenceAuthoringSession.swift`, the capture bridge, the view model or view, the DEBUG route, live notation, or any ledger/observability engine change.
+4. Boundary 4 `project.pbxproj` lines, new-side: hunk 587 lines 596-613 and 615; hunk 1047 lines 1088-1096 and 1098; hunk 1091 line 1153; hunk 1384 line 1448; hunk 1496 line 1561; hunk 1795 lines 1884-1886 and 1888-1899 (skipping 1887, which is Boundary 5); hunk 1993 lines 2102-2110; hunk 2220 lines 2343-2351; hunk 2407 line 2546.
+5. Keep validation truthful: cut-requiring techniques require crossfader evidence, Baby and open-fader techniques require proven continuously-open evidence, unknown open state blocks, no detector result becomes human ground truth, withdrawn or invalid references stay unavailable, and package write does not install, publish or enable training.
+6. Add or complete package-I/O write, read and verify round-trip coverage using isolated temporary storage only. Append new tests at the end of `CaptureReliabilityPhase1Tests.swift`; do not edit the audited `ReferenceAuthoringTests.swift`.
+7. Verify with `ReferenceAuthoringTests`, `CrossfaderCalibrationTests` and the new round-trip tests, plus the affected platform builds only. The full serial gate, explicit Debug and universal Release builds and the DEBUG-route exclusion proof run once after Boundary 6.
+8. Use `apply-hunks.rb`; never `git apply --unidiff-zero`. When a file was already changed by an earlier boundary, rebuild it from the pristine base with the union of all owned hunks.
+9. Only `MIDILearnEngineTests/testCalibrationIsolatedBetweenDevices` failing with `Optional(0)` vs `Optional(5)` at `MIDILearnEngineTests.swift:561` is an authorized known flake. Any other failure, extraction ambiguity, preservation mismatch or unexpected dependency is blocking.
+10. Do not push, merge, deploy, record Take 007, approve, install or publish a reference, enable training, or begin TTM/Tear.
+
 ## Current continuation - Boundaries 1 and 2 committed; Boundary 3 is next
 
 Supersedes the continuation blocks below. Candidate `/private/tmp/scratchlab-refauth-baseline.iYmLZU/worktree`, branch `checkpoint/reference-authoring-baseline`.

@@ -4080,3 +4080,39 @@ The extracted helper and the added tests contain no `#if`, `#else` or `#endif`, 
 ### Preservation
 
 All 661 primary files and all 93 protected evidence files match the saved baselines. Primary remains `feature/ios-capture-camera-ux` at `d3ecf2a6` with an unchanged empty index; receipt branch intact; protected project settings, schemes, entitlements, plists and build numbers unchanged; `git diff --check` passes. Takes 001-006 and the documented historical metadata mutations are untouched. Nothing was installed, published, approved or made training-eligible, and no detector output was treated as human ground truth.
+
+## 2026-09-05 - Boundary 3 committed: calibrated crossfader evidence, the CaptureCore checkpoint
+
+### Scope and exact extraction
+
+Candidate `/private/tmp/scratchlab-refauth-baseline.iYmLZU/worktree`, branch `checkpoint/reference-authoring-baseline`, parent `47c537e`. Extracted, all against the primary's diff of `d3ecf2a69bde57f7d6ac681b6dbdd37347c83e97`:
+
+- The four calibration sources under `ScratchLab/Models/ControllerInput/Calibration/`: `CrossfaderCalibration.swift` (382 lines), `CrossfaderCalibrationStore.swift` (193), `CrossfaderCalibrationSweep.swift` (307) and `CrossfaderStateDeriver.swift` (478). Copied whole from the primary's untracked tree and byte-compared against it.
+- All eight `ScratchLab/Models/CaptureCore.swift` hunks: old anchors 8588, 8595, 8606, 8616, 8828, 8851, 8875 and 8896. These add `calibratedPosition` and `calibrationID` to `RawMixerMIDIEvent` with defaulted initialiser parameters, and introduce the all-or-nothing gate `usesCalibratedPositions = crossfaderEvents.allSatisfy { $0.calibratedPosition != nil }` with a `position(of:)` accessor that the run, delta and primitive construction then read instead of `normalizedValue`. Calibrated positions are therefore used only when the complete control stream supplies them; any missing sample returns the whole stream to legacy derivation. `CaptureCore.swift` has exactly these eight hunks in the primary, so the file is now fully consumed and is clean for TTM work.
+- Six calibration-owned `ScratchLabDesktop/Services/MacCaptureEngine.swift` hunks: old anchors 4252, 4439, 10811, 10945 whole, plus the calibration portions only of 10790 (new lines 11102-11139 and 11151-11174) and 10812 (new lines 11279-11290). Together they add the cached calibration array, the directory override, the reload call, the Application Support calibration directory, the store accessor, the MIDI-thread cache reload, the device-name/channel/controller calibration lookup, and the wiring of `calibratedPosition`/`calibrationID` into `RawMixerMIDIEvent` construction.
+- The whole `ScratchLabDesktopTests/CrossfaderCalibrationTests.swift` (963 lines, 49 tests), byte-compared against the primary.
+- Calibration-only `project.pbxproj` membership: 36 added lines, all `XFCAL`-prefixed plus the structural members of the `Calibration` group object. No removals, no scheme, entitlement or plist change, and none of the six `CURRENT_PROJECT_VERSION` 21 to 22 hunks. Build number remains 21 in all six places and `MARKETING_VERSION` remains 1.0.1.
+
+Explicitly excluded and verified absent from the engine after extraction: `persistedCrossfaderMappingSnapshot` (the learned-mapping snapshot at new 11140-11150), the live CC observability block at new 11175-11252, and the unconditional live observation call at new 11291-11298. All three belong to Boundary 5.
+
+### Extraction-tool note
+
+Boundary 1's committed engine changes shift that file by two lines, so applying Boundary 3's old-side coordinates to the working file failed a context check at 10945. The engine was therefore rebuilt from the pristine base with the union of the Boundary 1 and Boundary 3 hunks, which yields a working tree whose diff against HEAD is exactly the six Boundary 3 hunks, `+91/-1`. This union-from-base method is how any later boundary touching an already-modified file must be applied.
+
+### Added coverage
+
+Six of the nine named coverage gaps were already closed by the extracted `CrossfaderCalibrationTests.swift`: both fader orientations, the explicit arm boundary, retry clearing and unarming, stale and pre-arm sample rejection, the 0/0/126 invalid centre (covered by the `[0, 1, 125, 126]` loop against end stops 0 and 126) and the 0/69/126 valid armed sweep.
+
+Three gaps were genuinely open, because `calibratedPosition` and `calibrationID` are referenced only by `ReferenceAuthoringCaptureBridgeTests.swift`, which belongs to Boundary 5. A new `CaptureCoreCalibratedCrossfaderTests` class of eight tests was appended to the end of `CaptureReliabilityPhase1Tests.swift`, which already has target membership, closing: the calibrated-field Codable round trip, the uncalibrated round trip, legacy sidecars without the new keys still decoding, all-calibrated derivation, mixed calibrated/uncalibrated fallback, fully uncalibrated legacy behaviour, agreement of the two position spaces when they carry the same numbers, and the out-and-back pulse collapse. The audited `CrossfaderCalibrationTests.swift` was not edited.
+
+The derivation fixture is one-way on purpose and is built so the two position spaces cannot be confused: 0.02 of controller travel, which is below the 0.10 minimum delta and yields nothing, against 1.0 of calibrated deck travel, which yields one event. A first attempt used an out-and-back gesture and its travel assertion failed; the cause was not the extraction but the fixture, because two alternating cut primitives pair into a single `.pulse` whose `fromValue` and `toValue` are the outer samples, so a round trip has zero net travel in either space and says nothing about the source. The fixture was corrected to one-way and the assertion tightened from "travel greater than 0.9" to exact `fromValue` 0.0 and `toValue` 1.0; the pulse-collapse behaviour the first fixture had accidentally been measuring is now pinned by its own test. No assertion was weakened and no existing test was touched.
+
+### Commands and results
+
+`build-for-testing` passed. Focused, executed once after the fixture correction: `test-without-building` with `-only-testing:` for `CrossfaderCalibrationTests`, `CaptureCoreCalibratedCrossfaderTests` and `CaptureReliabilityPhase1CoreTests`. Per configuration 472 executed and passed with zero failures and zero skips: calibration 49, new CaptureCore calibration tests 8, core 415. 944 executions across both configurations. Log `../logs/b3-focused-2.log`, bundle `../results/b3-focused-2.xcresult`. An earlier invocation in the same batch did not execute at all because its result-bundle path already existed; its stale counts were discarded rather than reported.
+
+Affected platform builds, both passed: `ScratchLab` on `generic/platform=iOS` and `ScratchLabDesktop` on `platform=macOS`. The watch target is unaffected and was not rebuilt: `CaptureCore.swift` appears in exactly two Sources phases, both of which also carry the calibration files, and the watch phase carries neither. Under the revised verification plan the serial `scripts/build.sh all` gate and the explicit Debug and universal Release checks run once against the complete six-commit branch after Boundary 6.
+
+### Preservation
+
+All 661 primary files and all 93 protected evidence files match the saved baselines. Primary remains `feature/ios-capture-camera-ux` at `d3ecf2a6` with an unchanged empty index; receipt branch intact; candidate index empty before and after staging; `git diff --check` passes. Among protected files only `project.pbxproj` changed, by membership only. Takes 001-006 and the documented historical metadata mutations are untouched. No reference was approved, installed, packaged or published, no training was enabled, no capture was recorded, and no detector output was treated as human ground truth.

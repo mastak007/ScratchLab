@@ -585,6 +585,15 @@
 		VPB0TST3VPB0TST3VPB0TST3 /* VirtualPlatterTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = VPL00003VPL00003VPL00003 /* VirtualPlatterTests.swift */; };
 		VPRESB01VPRESB01VPRESB01 /* Resources/VirtualPlatter in Resources */ = {isa = PBXBuildFile; fileRef = VPRES001VPRES001VPRES001 /* Resources/VirtualPlatter */; };
 		VPRESMACVPRESMACVPRESMAC /* Resources/VirtualPlatter in Resources */ = {isa = PBXBuildFile; fileRef = VPRES001VPRES001VPRES001 /* Resources/VirtualPlatter */; };
+		XFCAL0IOS0001 /* CrossfaderCalibration.swift in Sources */ = {isa = PBXBuildFile; fileRef = XFCAL0FREF0001 /* CrossfaderCalibration.swift */; };
+		XFCAL0MAC0001 /* CrossfaderCalibration.swift in Sources */ = {isa = PBXBuildFile; fileRef = XFCAL0FREF0001 /* CrossfaderCalibration.swift */; };
+		XFCAL0IOS0002 /* CrossfaderCalibrationSweep.swift in Sources */ = {isa = PBXBuildFile; fileRef = XFCAL0FREF0002 /* CrossfaderCalibrationSweep.swift */; };
+		XFCAL0MAC0002 /* CrossfaderCalibrationSweep.swift in Sources */ = {isa = PBXBuildFile; fileRef = XFCAL0FREF0002 /* CrossfaderCalibrationSweep.swift */; };
+		XFCAL0IOS0003 /* CrossfaderStateDeriver.swift in Sources */ = {isa = PBXBuildFile; fileRef = XFCAL0FREF0003 /* CrossfaderStateDeriver.swift */; };
+		XFCAL0MAC0003 /* CrossfaderStateDeriver.swift in Sources */ = {isa = PBXBuildFile; fileRef = XFCAL0FREF0003 /* CrossfaderStateDeriver.swift */; };
+		XFCAL0IOS0004 /* CrossfaderCalibrationStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = XFCAL0FREF0004 /* CrossfaderCalibrationStore.swift */; };
+		XFCAL0MAC0004 /* CrossfaderCalibrationStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = XFCAL0FREF0004 /* CrossfaderCalibrationStore.swift */; };
+		XFCALT0TST0001 /* CrossfaderCalibrationTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = XFCALT0FREF0001 /* CrossfaderCalibrationTests.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -1045,6 +1054,11 @@
 		VPL00002VPL00002VPL00002 /* VirtualPlatterPrototypeView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VirtualPlatterPrototypeView.swift; sourceTree = "<group>"; };
 		VPL00003VPL00003VPL00003 /* VirtualPlatterTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VirtualPlatterTests.swift; sourceTree = "<group>"; };
 		VPRES001VPRES001VPRES001 /* Resources/VirtualPlatter */ = {isa = PBXFileReference; lastKnownFileType = folder; path = Resources/VirtualPlatter; sourceTree = "<group>"; };
+		XFCAL0FREF0001 /* CrossfaderCalibration.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CrossfaderCalibration.swift; sourceTree = "<group>"; };
+		XFCAL0FREF0002 /* CrossfaderCalibrationSweep.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CrossfaderCalibrationSweep.swift; sourceTree = "<group>"; };
+		XFCAL0FREF0003 /* CrossfaderStateDeriver.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CrossfaderStateDeriver.swift; sourceTree = "<group>"; };
+		XFCAL0FREF0004 /* CrossfaderCalibrationStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CrossfaderCalibrationStore.swift; sourceTree = "<group>"; };
+		XFCALT0FREF0001 /* CrossfaderCalibrationTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CrossfaderCalibrationTests.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFileSystemSynchronizedRootGroup section */
@@ -1089,6 +1103,7 @@
 		2010DD0010DD0010DD0010DD /* ScratchLabDesktopTests */ = {
 			isa = PBXGroup;
 			children = (
+				XFCALT0FREF0001 /* CrossfaderCalibrationTests.swift */,
 				2010BB0010BB0010BB0010BB /* CaptureReliabilityPhase1Tests.swift */,
 				7D1A2B3C4E5F00037D1A2B3C /* HandDirectionTrackerTests.swift */,
 				VCG0000000VCG001VCG00001 /* VisionCaptureGateTests.swift */,
@@ -1617,6 +1632,7 @@
 		CI00GRP00001 /* ControllerInput */ = {
 			isa = PBXGroup;
 			children = (
+				XFCAL0GRP0001 /* Calibration */,
 				MIDPRS0FREF0001 /* MIDIChannelMessageParser.swift */,
 				MIDRDY0FREF0001 /* MIDIReadinessState.swift */,
 				MIDAR0FREF0001 /* MIDIActionResolver.swift */,
@@ -1791,6 +1807,17 @@
 				TRST0000FREF0001 /* TransportState.swift */,
 			);
 			path = Transport;
+			sourceTree = "<group>";
+		};
+		XFCAL0GRP0001 /* Calibration */ = {
+			isa = PBXGroup;
+			children = (
+				XFCAL0FREF0004 /* CrossfaderCalibrationStore.swift */,
+				XFCAL0FREF0003 /* CrossfaderStateDeriver.swift */,
+				XFCAL0FREF0002 /* CrossfaderCalibrationSweep.swift */,
+				XFCAL0FREF0001 /* CrossfaderCalibration.swift */,
+			);
+			path = Calibration;
 			sourceTree = "<group>";
 		};
 /* End PBXGroup section */
@@ -1991,6 +2018,10 @@
 		4137724FB3900E509AAF6EDF /* Sources */ = {
 			isa = PBXSourcesBuildPhase;
 			files = (
+				XFCAL0MAC0004 /* CrossfaderCalibrationStore.swift in Sources */,
+				XFCAL0MAC0003 /* CrossfaderStateDeriver.swift in Sources */,
+				XFCAL0MAC0002 /* CrossfaderCalibrationSweep.swift in Sources */,
+				XFCAL0MAC0001 /* CrossfaderCalibration.swift in Sources */,
 				SLCORE00000000000000BF01 /* ScratchAnalysisCore.cpp in Sources */,
 				SLCORE00000000000000BF02 /* ScratchAnalysisBridge.mm in Sources */,
 				SLCORE00000000000000BF03 /* Analysis/ScratchAnalysis.swift in Sources */,
@@ -2218,6 +2249,10 @@
 		A6000002 /* Sources */ = {
 			isa = PBXSourcesBuildPhase;
 			files = (
+				XFCAL0IOS0004 /* CrossfaderCalibrationStore.swift in Sources */,
+				XFCAL0IOS0003 /* CrossfaderStateDeriver.swift in Sources */,
+				XFCAL0IOS0002 /* CrossfaderCalibrationSweep.swift in Sources */,
+				XFCAL0IOS0001 /* CrossfaderCalibration.swift in Sources */,
 				A1000001 /* ScratchLabApp.swift in Sources */,
 				SLDS0001001SLDS001SLDS00001 /* ScratchLabDesignSystem.swift in Sources */,
 				SLCC0001001SLCC001SLCC0001 /* ScratchLabCoreColors.swift in Sources */,
@@ -2405,6 +2440,7 @@
 		F9TESTSRC10AA0010AA10AA /* Sources */ = {
 			isa = PBXSourcesBuildPhase;
 			files = (
+				XFCALT0TST0001 /* CrossfaderCalibrationTests.swift in Sources */,
 				SLCORE00000000000000BF04 /* ScratchAnalysisBridgeTests.swift in Sources */,
 				SLCORE00000000000000BF06 /* ScratchAnalysisFixtureDecodeTests.swift in Sources */,
 				SLCORE00000000000000BF08 /* ScratchAnalysisRealRaneFixtureTests.swift in Sources */,

@@ -4252,6 +4252,11 @@ final class MacCaptureEngine: NSObject, ObservableObject {
     /// applies. Lock-protected alongside `learnSessionAction`.
     private var midiLearnRequestID: UInt64 = 0
     private var persistedCrossfaderMapping: CrossfaderCCMapping? = nil
+    /// Calibrations cached for the MIDI read thread. Guarded by
+    /// `midiCaptureLock`, refreshed only by `reloadCrossfaderCalibrations()`.
+    private var cachedCrossfaderCalibrations: [CrossfaderCalibration] = []
+    /// Test seam: redirects calibration persistence to a temporary directory.
+    var crossfaderCalibrationDirectoryOverride: URL? = nil
     private var pendingRoutineTakeIdentity: TakeIdentity?
     private var pendingWatchReply: WatchCaptureControlReply?
     private var routineArtifactRefreshTask: Task<Void, Never>?
@@ -4438,6 +4443,11 @@ final class MacCaptureEngine: NSObject, ObservableObject {
                 self.midiLearnState = .learned(mapping)
             }
         }
+
+        // Load calibrations into the MIDI-thread cache before any controller
+        // traffic can arrive, so the first sample of the first take is already
+        // calibrated rather than silently uncalibrated.
+        reloadCrossfaderCalibrations()
 
         rescanRoutineCaptures()
         refreshDevices()
@@ -10790,6 +10800,68 @@ final class MacCaptureEngine: NSObject, ObservableObject {
         reconnectSelectedMIDIInput()
     }
 
+    // MARK: - Crossfader calibration
+
+    /// Directory the shared `CrossfaderCalibrationStore` persists into.
+    ///
+    /// Sits beside `RoutineCaptures` under Application Support so a
+    /// calibration survives app restarts and travels with the capture folder
+    /// an operator would back up.
+    static func crossfaderCalibrationDirectoryURL(
+        fileManager: FileManager = .default
+    ) -> URL {
+        let baseDirectory = fileManager.urls(for: .applicationSupportDirectory, in: .userDomainMask).first
+            ?? fileManager.urls(for: .documentDirectory, in: .userDomainMask).first
+            ?? fileManager.homeDirectoryForCurrentUser.appendingPathComponent("Documents", isDirectory: true)
+        return baseDirectory
+            .appendingPathComponent("ScratchLab", isDirectory: true)
+            .appendingPathComponent("Calibration", isDirectory: true)
+    }
+
+    var crossfaderCalibrationStore: CrossfaderCalibrationStore {
+        CrossfaderCalibrationStore(
+            directoryURL: crossfaderCalibrationDirectoryOverride
+                ?? Self.crossfaderCalibrationDirectoryURL()
+        )
+    }
+
+    /// Re-read calibrations from disk into the MIDI-thread cache.
+    ///
+    /// Must be called after saving a calibration. The cache exists because
+    /// `recordReceivedMIDICCEvent` runs on the Core MIDI read thread at up to
+    /// ~800 Hz for a single platter; touching the file system there would be
+    /// a real-time violation.
+    func reloadCrossfaderCalibrations() {
+        let loaded = crossfaderCalibrationStore.load().calibrations
+        midiCaptureLock.lock()
+        cachedCrossfaderCalibrations = loaded
+        midiCaptureLock.unlock()
+    }
+
+    /// The calibration for one live MIDI address, or `nil`.
+    ///
+    /// Matches on device NAME here because that is the only device identity
+    /// the CC read path carries; the calibration was written with the same
+    /// name as its identifier by `ReferenceAuthoringModel`. Channel and CC
+    /// must match exactly - a calibration for the crossfader is never applied
+    /// to the platter's CC.
+    func crossfaderCalibration(
+        forDeviceName deviceName: String,
+        channel: Int,
+        controller: Int
+    ) -> CrossfaderCalibration? {
+        midiCaptureLock.lock()
+        let calibrations = cachedCrossfaderCalibrations
+        midiCaptureLock.unlock()
+        return calibrations.first {
+            $0.address.matches(
+                deviceIdentifier: deviceName,
+                channel: channel,
+                controller: controller
+            )
+        }
+    }
+
     /// Monitors/records an already-classified CC event. This function must
     /// NEVER learn, persist, cancel, or change any mapping — the sole,
     /// action-aware learn consumer is `evaluateMIDILearnForCC`, called
@@ -10811,7 +10883,23 @@ final class MacCaptureEngine: NSObject, ObservableObject {
 
         let effectiveMappedControl = mappedControl
             ?? ((effectiveMapping?.channel == channel && effectiveMapping?.controller == controller) ? "crossfader" : nil)
+        // Full-range position. Kept for schema continuity, and it is the only
+        // number available for a control that has not been calibrated - but it
+        // is NOT a deck position, so it is never what the calibrated
+        // derivation measures. See `RawMixerMIDIEvent.normalizedValue`.
         let normalizedValue = Double(value) / 127.0
+        // Calibrated position across this deck's active half, when a
+        // calibration exists for exactly this device + channel + CC. Absent
+        // calibration this stays `nil`; it is never back-filled from
+        // `normalizedValue`, because assuming the fader spans 0-127 is the
+        // defect this replaces.
+        let activeCalibration = crossfaderCalibration(
+            forDeviceName: sourceName,
+            channel: channel,
+            controller: controller
+        )
+        let calibratedPosition = activeCalibration?.normalized(rawValue: value)
+        let calibrationID = calibratedPosition == nil ? nil : activeCalibration?.id
         // Rane ONE MK2 pad candidate labelling — diagnostic only; no routing, no scoring.
         let padLabel = RaneOneMK2PadCandidateLabeler.label(channel: channel, cc: controller, value: value)
         let summary: String
@@ -10944,7 +11032,9 @@ final class MacCaptureEngine: NSObject, ObservableObject {
             controller: controller,
             value: value,
             normalizedValue: normalizedValue,
-            mappedControl: effectiveMappedControl
+            mappedControl: effectiveMappedControl,
+            calibratedPosition: calibratedPosition,
+            calibrationID: calibrationID
         )
         midiCaptureLock.lock()
         capturedMidiCCEvents.append(event)
