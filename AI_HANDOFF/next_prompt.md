@@ -1,3 +1,39 @@
+# Current continuation — Independent read-only checkpoint review
+
+This prompt supersedes earlier eight-file, test-count and repetition claims.
+
+```text
+Perform an independent READ-ONLY checkpoint review of the completed second correction. Do not edit source or workflow documents, stage, commit, merge, push, rebuild, rerun tests, launch/relaunch/terminate apps, record, recalibrate, approve/reject a take, export, publish, install reference data or train. Do not alter the installed stable hardware host or any other worktree. Use saved xcresult summaries; if an uncached xcresult extraction needs writes, inspect a temporary copy outside the repository.
+
+Candidate: /Users/karlwatson/Downloads/ScratchLab-TTM-PreRecordNotation
+Branch: fix/reference-authoring-prerecord-live-notation
+Exact base and HEAD: 7ba70916546829a5b2fceb8559cc0934c0a798c4
+Evidence: /private/tmp/scratchlab-prerecord-second-finish-20260907T051832
+Protected host: /Users/karlwatson/Applications/ScratchLab-HardwareTest.app, PID 79259; executable SHA-256 908bbff4f994c81ef38a0b48c24ea81f4de65f56e0a4584e8fab425e81bc8975.
+
+Read AGENTS.md, SOUL.md and the current top workflow records. Verify branch/HEAD, empty index, zero untracked files, and the ACTUAL NINE modified files against final-diffstat.txt/final-receipt.json. The request's eight-file expectation was already false at ingress: CaptureReliabilityPhase1Tests.swift was the ninth dirty file and was preserved. Verify incoming.patch SHA-256 dec753739be98fdcc60ecc5f2065955e1c0906a8a534b81209b09a0647cf228c and final.patch against final.patch.sha256. Inspect the complete diff and distinguish the incoming second-correction work from Codex's continuation via continuation.patch. Do not rerun superseded candidate tests.
+
+Independently trace actual CoreMIDI ingress through processing to append. Require one lock-owned idle/preview/take owner, one monotonic generation, one optional unique take token and one ticket captured at real ingress. Require complete owner/generation/epoch/token equality, epoch > 0, relative-time calculation solely from the ticket and append in ONE critical section. Confirm no cached/caller epoch override survives, including same-generation altered-ticket cases. The DEBUG pause must bracket the actual ticket-to-append interval and compile out of non-DEBUG builds.
+
+Trace take identity through arming, media start, explicit Stop, every audio/mux success/error/notArmed/empty path, cancellation/start failure, no-sidecar finalization, normal drain and abandonment. Verify immutable media-URL matching at callback ingress, then carriage of that exact token through both asynchronous stages. An old callback must never obtain the current unrelated token; both finalization stages must refuse stale tokens. Arming and the real start entry point must preserve a stopped/undrained take. Drain/abandon must match the token and publish only after a real take-to-idle transition. Duplicates/stale tokens must be no-ops. Published recording/finalization flags cannot own the MIDI window.
+
+Verify ReferenceAuthoringView retains its plain-let engine and explicitly subscribes to the engine publisher with onReceive; publication runs on main. Inspect the SAME handler exercised by the executable publisher test: replay, stale and duplicate counts cause no re-arm; one release while preview presentation is active causes one. Inspect the shared production transition exercised by lifecycle tests: one tracker constructor, per-mode idempotency, reset across preview/take, teardown without stopping shared capture, repeated/restored entry without another window/tracker. Presentation state is not capture authority. Distinguish handler/lifecycle tests from mounted SwiftUI or physical acceptance.
+
+Verify retention from the real append path: out-of-order timestamps use true min/max and filtering. Policy is preview-only 15-second trailing retention with the inherited 30-second amortized span trigger, hard 32,000 ceiling and 24,000 trim target; do not misstate it as an exact 15-second held span. Tests must check 32,000/32,001/33,000 preview arrivals and preserve/drain all 33,000 take events once. Idle expiry occurs only on a later append. No persisted/export schema, new buffer, decoder, renderer or capture-authority UI flag may be introduced.
+
+Review all 12 proof groups in AI_HANDOFF.md against executable tests and xcresult evidence, not source strings alone. Specifically inspect real packet-list preview/arming interleavings, zero epoch, malformed same-generation ticket, stale token and old media URL, failed REAL start before device work, duplicate release/no-sidecar, real publisher plus production re-arm handler, out-of-order retention, real ceiling and oversized take, preview clear before media epoch, paused Stop/drain/next-preview packets, and production route lifecycle identity. Check bounded barriers/expectations and no sleeps in the added interleaving tests.
+
+Recount tests using test-counts.json and method bodies: 39 genuinely new + seven updated against HEAD, including one rename counted only as updated; four new + 12 updated in this continuation; zero removed. Final focused3 xcresult: 373 unique, 372 passed/one skipped/zero failed EACH configuration, 746 runs total (744/2/0). repeat3: 76 unique, 225 passed/one skipped/zero failed EACH configuration, 452 runs total (450/2/0); 75 cases repeated three times and the skipped case once. Zero final runtime warnings. prepare3 build-for-testing and compile-final2 Debug build both PASS; commands must be sequential and fully isolated. Review retained focused2 failure separately (371/1/1 each configuration) and the compile-final argument error; neither is final passing evidence. No production bundle ID, Release, iOS, Watch or full gate was authorized.
+
+Verify the historical correction: ...20260907b repeat3 was 186 passed/ONE skipped per configuration, 374 total runs, not 378; ...20260907c was 213/1 each, 428 total. Retain the UNEXPLAINED 212.421-second passing observation; do not infer a cause.
+
+Verify preservation receipts: BASELINE 83,567 regular files + 34 symlinks = 83,601 production entries; FINAL SNAPSHOT 83,572 + 34 = 83,606, with five added and eleven changed .DS_Store files and no other production differences. Inspect preservation-exception.json; the writer is not established, the files were left untouched, and blanket production preservation must not be claimed. Verify 65 protected session files; Takes 001–008 present and 009 absent; stable host full app hash inventory and PID/launch-time unchanged; nine other extant worktrees and three missing baselines unchanged; eleven protected configuration files match HEAD; empty index and no untracked additions. Check final-source hashes match prepare3-tested-sources.json. The installed stable host contains the OLD COMMITTED BUILD; hardware acceptance is pending.
+
+Return findings ordered by severity with concrete file/line and artifact evidence, residual risks and a verdict of READY FOR A SEPARATELY AUTHORIZED CHECKPOINT or REQUEST CHANGES. Do not perform a checkpoint or any hardware action. If the final design or evidence fails a requirement, say so explicitly rather than inferring acceptance from passing builds.
+```
+
+---
+
 # Current continuation — Read-only restored-camera-start candidate review
 
 This section supersedes earlier continuation instructions below. No hardware acceptance or commit is authorized.

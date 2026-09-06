@@ -1,6 +1,7 @@
 // ReferenceAuthoringView.swift
 // ScratchLabDesktop
 
+import Combine
 import SwiftUI
 
 struct ReferenceAuthoringView: View {
@@ -10,10 +11,24 @@ struct ReferenceAuthoringView: View {
     /// starts, stops, or configures capture from here.
     private let captureEngine: MacCaptureEngine
 
-    /// Live performed-notation tracker for the take currently recording, or
-    /// `nil`. A FRESH instance per take is the reset — the same ownership rule
-    /// Capture uses — so no evidence from a prior take can leak into this one.
+    /// Live performed-notation tracker for whatever the notation lane is
+    /// currently showing, or `nil` when the route is not active. A FRESH
+    /// instance per mode change is the reset — the same ownership rule
+    /// Capture uses — so neither a prior take nor the pre-record preview that
+    /// preceded a take can leak into it.
     @State private var liveNotationTracker: LivePerformedNotationTracker?
+    /// What `liveNotationTracker` is currently showing. Held so the lifecycle
+    /// point below is idempotent: repeated syncs to the mode already running
+    /// must not rebuild the tracker and throw away the trace on screen.
+    @State private var liveNotationMode: LiveNotationMode = .off
+    /// Last window-release count this route has acted on.
+    ///
+    /// A `Published` publisher replays its current value to each new
+    /// subscriber, so the first delivery after `.onReceive` subscribes is the
+    /// standing count, not a new release. Recording it here and acting only on
+    /// a CHANGE is what makes one real release produce exactly one re-arm, and
+    /// a replayed or duplicated value produce none.
+    @State private var lastHandledMIDIWindowReleaseCount: Int?
     @State private var isShowingMIDIAddressDiagnostics = false
     /// Framing panel starts open — it is the thing being watched during a
     /// take — and can be folded away while configuring.
@@ -28,6 +43,26 @@ struct ReferenceAuthoringView: View {
     /// The EXISTING session-archive pipeline, reused verbatim for the raw
     /// diagnostic export. This screen adds no second archive format.
     @StateObject private var exportCoordinator = SessionExportCoordinator()
+
+    /// What the live-notation lane is showing.
+    ///
+    /// Reference Authoring must show real platter movement BEFORE Record: it
+    /// is the only place the operator can confirm the controller is actually
+    /// reaching the app, and a lane that stays blank until Record cannot tell
+    /// "rig is ready" apart from "no MIDI is arriving at all". `.preview` is
+    /// that pre-record surface and `.take` is the in-take one.
+    ///
+    /// They are separate modes, not one long-lived tracker, because the mode
+    /// change is the re-anchor: the take's trace must start at the take, and
+    /// the preview must never be mistaken for it.
+    enum LiveNotationMode: Equatable {
+        /// Route inactive. No tracker, no preview accumulation.
+        case off
+        /// On the route, not recording. Presentation only.
+        case preview
+        /// A take is running. The take owns the MIDI window.
+        case take
+    }
 
     /// Minimum height the live-notation card is guaranteed.
     ///
@@ -108,11 +143,12 @@ struct ReferenceAuthoringView: View {
             // Reuse an exactly-matching saved calibration rather than asking
             // for another sweep every time this screen opens.
             viewModel.adoptPersistedCalibrationIfAvailable()
-            // Re-entering the screen mid-take must still show live motion.
-            // `onChange` only fires on a transition, and `@State` is reset by
-            // the fresh view, so without this the tracker would stay nil for
-            // the rest of a take the operator stepped away from.
-            syncLiveNotationTracker(isRecording: viewModel.session.phase == .recording)
+            // Entry and re-entry both have to resolve the mode explicitly.
+            // `onChange` only fires on a transition and `@State` is reset by
+            // the fresh view, so without this the lane would stay blank both
+            // before Record and for the rest of a take the operator stepped
+            // away from.
+            syncLiveNotationTracker(mode: resolvedLiveNotationMode)
         }
         .onChange(of: viewModel.selectedTechnique) { _, _ in
             viewModel.refreshAutofilledPatternIdentity()
@@ -129,16 +165,45 @@ struct ReferenceAuthoringView: View {
         .onChange(of: viewModel.crossfaderOpenEndRawValue) { _, _ in
             viewModel.adoptPersistedCalibrationIfAvailable()
         }
-        .onChange(of: viewModel.session.phase == .recording) { _, isRecording in
-            syncLiveNotationTracker(isRecording: isRecording)
+        .onChange(of: viewModel.session.phase == .recording) { _, _ in
+            syncLiveNotationTracker(mode: resolvedLiveNotationMode)
+        }
+        // A stopped take is not a finished one. It keeps ownership of the
+        // engine's MIDI accumulation window until that window is RELEASED —
+        // by the finalization drain, or by an abandonment release on a path
+        // that never drains, and in both cases only for the take that actually
+        // owns it. Until then `beginLiveMIDICapture()` fails closed, so the
+        // preview must re-arm on the release itself. Observing the release
+        // counter rather than `isRoutineFinalizationPending` is what covers
+        // the early-return finalization paths, which never set that flag and
+        // so never publish a transition to observe; without this the lane
+        // would stay blank for the rest of the session after take 1.
+        //
+        // `onReceive` on the engine's own publisher, NOT `onChange` of a
+        // property: `captureEngine` is a plain `let`, not an `@ObservedObject`
+        // or `@StateObject`, so this view is not a subscriber to its
+        // `objectWillChange` and reading a property in `onChange` would
+        // establish no observation at all — the handler would simply never
+        // run. Engine ownership is deliberately unchanged; only the
+        // observation boundary is made explicit.
+        .onReceive(captureEngine.$midiCaptureWindowReleaseCount) { releaseCount in
+            Self.handleMIDIWindowRelease(
+                releaseCount,
+                lastHandled: &lastHandledMIDIWindowReleaseCount,
+                mode: liveNotationMode,
+                captureEngine: captureEngine
+            )
         }
         .onDisappear {
             viewModel.cancelTransientWorkForViewDisappearance()
             // The tracker owns a repeating timer; dropping it here is what
-            // stops that timer when the screen goes away. It touches no
-            // capture state — the camera session and any in-flight take are
-            // owned by the engine and are deliberately left alone.
-            syncLiveNotationTracker(isRecording: false)
+            // stops that timer when the screen goes away. It closes only the
+            // preview accumulation window this route opened — the camera
+            // session, engine ownership and any in-flight, stopped or
+            // finalizing take are left alone, because
+            // `endLiveMIDICaptureIfIdle()` acts only while the PREVIEW owns
+            // the MIDI window, decided under the engine's own lock.
+            syncLiveNotationTracker(mode: .off)
         }
     }
 
@@ -151,28 +216,88 @@ struct ReferenceAuthoringView: View {
         captureEngine.start()
     }
 
-    /// The ONE place the live-notation tracker is created or dropped.
-    ///
-    /// A fresh instance per take is the reset — the same ownership rule
-    /// Capture uses (`MacAnalyzerView.captureLiveNotationTracker`) — so no
-    /// evidence from a prior take, a rejected take or a retake can leak into
-    /// the next one. Dropping the instance cancels its poll timer through
-    /// `deinit`; nothing here starts, stops or configures capture.
+    /// Which mode the lane should be in right now.
     ///
     /// Keyed on the authoring session's own `.recording` phase rather than on
     /// `engine.isRoutineRecording`, which turns true earlier in the start
     /// sequence. The phase only becomes `.recording` after the bridge has
-    /// confirmed the engine genuinely started, so the preview can never show
-    /// motion attributed to a take that has not begun.
-    private func syncLiveNotationTracker(isRecording: Bool) {
-        if isRecording {
-            guard liveNotationTracker == nil else { return }
+    /// confirmed the engine genuinely started, so a pre-record preview can
+    /// never be relabelled as motion belonging to a take that has not begun.
+    private var resolvedLiveNotationMode: LiveNotationMode {
+        viewModel.session.phase == .recording ? .take : .preview
+    }
+
+    /// The ONE place the live-notation tracker is created or dropped.
+    ///
+    /// A fresh instance per MODE CHANGE is the reset — the same ownership rule
+    /// Capture uses (`MacAnalyzerView.captureLiveNotationTracker`) — so no
+    /// evidence from a prior take, a rejected take, a retake, or the
+    /// pre-record preview can leak into the next thing shown. Crossing into
+    /// `.take` therefore rebuilds the tracker rather than keeping the preview
+    /// one, which is what re-anchors the trace to the take's own start.
+    /// Dropping the instance cancels its poll timer through `deinit`.
+    ///
+    /// Capture ownership is untouched throughout: nothing here starts, stops
+    /// or configures the session, the camera, or recording. The only engine
+    /// state this touches is the MIDI accumulation window, and only through
+    /// the two accessors that act solely while the preview owns that window.
+    private func syncLiveNotationTracker(mode: LiveNotationMode) {
+        Self.syncLiveNotationTracker(
+            mode: mode,
+            liveNotationMode: &liveNotationMode,
+            liveNotationTracker: &liveNotationTracker,
+            captureEngine: captureEngine
+        )
+    }
+
+    // Uses the view's existing state directly. Tests exercise the same
+    // transition and tracker construction; there is no second lifecycle.
+    static func syncLiveNotationTracker(
+        mode: LiveNotationMode,
+        liveNotationMode: inout LiveNotationMode,
+        liveNotationTracker: inout LivePerformedNotationTracker?,
+        captureEngine: MacCaptureEngine
+    ) {
+        guard mode != liveNotationMode else { return }
+        liveNotationMode = mode
+        switch mode {
+        case .off:
+            liveNotationTracker = nil
+            captureEngine.endLiveMIDICaptureIfIdle()
+        case .preview, .take:
+            if mode == .preview {
+                // Only the pre-record preview needs a window opened. A take
+                // arms and owns its own at media start, and opening one here
+                // would be refused anyway while recording.
+                captureEngine.beginLiveMIDICapture()
+            }
             liveNotationTracker = LivePerformedNotationTracker(
                 dataSource: captureEngine.makeLivePerformedNotationDataSource()
             )
-        } else {
-            liveNotationTracker = nil
         }
+    }
+
+    /// Re-opens the pre-record preview window once a take has released the
+    /// MIDI accumulation window. No-op in any other mode, and it never builds
+    /// a tracker — `.preview` already has one. `beginLiveMIDICapture()` is
+    /// itself idempotent and claims the window only from `.idle`, so an
+    /// early or repeated call is harmless.
+    @discardableResult
+    static func handleMIDIWindowRelease(
+        _ releaseCount: Int,
+        lastHandled: inout Int?,
+        mode: LiveNotationMode,
+        captureEngine: MacCaptureEngine
+    ) -> Bool {
+        guard let previous = lastHandled else {
+            lastHandled = releaseCount
+            return false // Initial subscription replay.
+        }
+        guard releaseCount > previous else { return false }
+        lastHandled = releaseCount
+        guard mode == .preview else { return false }
+        captureEngine.beginLiveMIDICapture()
+        return true
     }
 
     /// Camera framing + live performed notation.
@@ -246,9 +371,9 @@ struct ReferenceAuthoringView: View {
                 LiveNotationDiagnosticsRow(tracker: liveNotationTracker)
                 #endif
             } else {
-                // Same reserved height when idle, so starting a take does not
-                // shove the rest of the page down.
-                Text("Live motion appears here while a take is recording.")
+                // Only reachable while the route is inactive; the lane is live
+                // from entry onward. Same reserved height, so nothing shifts.
+                Text("Live motion appears here while this screen is open.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
                     .frame(

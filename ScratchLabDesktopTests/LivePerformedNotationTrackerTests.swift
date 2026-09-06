@@ -15,6 +15,8 @@
 //     into its output — the safety property that replaced a retained array
 //     index).
 
+import Combine
+import CoreMIDI
 import QuartzCore
 import XCTest
 @testable import ScratchLab
@@ -540,9 +542,12 @@ final class LivePerformedNotationTrackerTests: XCTestCase {
         let engine = MacCaptureEngine(autoRefreshDevices: false)
         let deviceName = "Rane ONE MKII"
 
-        let baseline = CACurrentMediaTime()
         engine.beginLiveMIDICapture()
         addTeardownBlock { engine.endLiveMIDICaptureIfIdle() }
+        // AFTER the window opens: the window's own epoch is now the only epoch
+        // admission uses, so a baseline taken before it could fall outside the
+        // window and make this case timing-dependent.
+        let baseline = CACurrentMediaTime()
 
         // A forward platter sweep on the verified right-deck address.
         for index in 0..<40 {
@@ -551,8 +556,7 @@ final class LivePerformedNotationTrackerTests: XCTestCase {
                 channel: 1,
                 controller: 6,
                 value: index % 128,
-                timestamp: baseline + 0.001 * Double(index + 1),
-                recordingStartTime: baseline
+                timestamp: baseline + 0.001 * Double(index + 1)
             )
         }
         XCTAssertEqual(
@@ -619,37 +623,81 @@ final class LivePerformedNotationTrackerTests: XCTestCase {
 
     func testAuthoringOwnsExactlyOneTrackerLifecyclePoint() throws {
         let source = try authoringViewSource()
+        // UNCHANGED ownership rule. The lane now has three modes rather than
+        // two states, but there is still exactly ONE construction site, so a
+        // take — or a preview — can only ever have one tracker.
         XCTAssertEqual(
             source.components(separatedBy: "LivePerformedNotationTracker(").count - 1,
             1,
             "the tracker must be constructed in exactly one place, so a take can only ever have one"
         )
         XCTAssertTrue(
-            source.contains("private func syncLiveNotationTracker(isRecording: Bool)"),
+            source.contains("private func syncLiveNotationTracker(mode: LiveNotationMode)"),
             "creation and clearing must go through one named lifecycle point"
         )
-        // Recording transition, view appearance mid-take, and teardown.
-        XCTAssertTrue(source.contains("syncLiveNotationTracker(isRecording: isRecording)"))
-        XCTAssertTrue(source.contains("syncLiveNotationTracker(isRecording: viewModel.session.phase == .recording)"))
-        XCTAssertTrue(source.contains("syncLiveNotationTracker(isRecording: false)"))
+        // The three modes are the whole contract, and nothing else may set one.
+        XCTAssertTrue(
+            source.contains("enum LiveNotationMode: Equatable {"),
+            "the lane's modes must be a closed set, not ad-hoc booleans"
+        )
+        for mode in ["case off", "case preview", "case take"] {
+            XCTAssertTrue(source.contains(mode), "LiveNotationMode must declare \(mode)")
+        }
+        // Entry/restoration, the recording transition, and teardown.
+        XCTAssertTrue(source.contains("syncLiveNotationTracker(mode: resolvedLiveNotationMode)"))
+        XCTAssertTrue(source.contains("syncLiveNotationTracker(mode: .off)"))
+        XCTAssertTrue(
+            source.contains("viewModel.session.phase == .recording ? .take : .preview"),
+            "the mode must still be keyed on the authoring session's own recording phase"
+        )
+        // Idempotency: re-syncing to the mode already running must not rebuild
+        // the tracker and discard the trace currently on screen.
+        XCTAssertTrue(
+            source.contains("guard mode != liveNotationMode else { return }"),
+            "the lifecycle point must be idempotent per mode"
+        )
     }
 
-    /// Reject, retake and a new take all leave `.recording`, and leaving
-    /// `.recording` drops the tracker — so none of them can carry a prior
-    /// take's trace into the next one.
-    func testLeavingTheRecordingPhaseClearsTheAuthoringTracker() throws {
+    /// Reject, retake and a new take all leave `.recording`. Under the mode
+    /// contract that is a `.take` → `.preview` transition, and a transition is
+    /// what REBUILDS the tracker — so none of them can carry a prior take's
+    /// trace into the next thing shown, and equally the pre-record preview
+    /// cannot be carried into a take.
+    ///
+    /// This is strictly stronger than the boolean rule it replaces. The old
+    /// `guard liveNotationTracker == nil` KEPT an existing tracker when
+    /// entering `.recording`; with a preview tracker now always present before
+    /// Record, that guard would have handed the take the preview's trace.
+    func testLeavingTheRecordingPhaseRebuildsTheAuthoringTracker() throws {
         let source = try authoringViewSource()
-        XCTAssertTrue(
+        XCTAssertFalse(
             source.contains("guard liveNotationTracker == nil else { return }"),
-            "an already-running take must not be given a second tracker"
+            "the take must not inherit whatever tracker the preview left behind"
         )
         XCTAssertTrue(
             source.contains("liveNotationTracker = nil"),
-            "the not-recording branch must clear the tracker"
+            "the .off branch must clear the tracker"
         )
         XCTAssertTrue(
             source.contains(".onChange(of: viewModel.session.phase == .recording)"),
             "the tracker is keyed on the authoring session's own recording phase"
+        )
+        // Every mode change rebuilds, and `.off` is the only branch that
+        // clears — so crossing into or out of `.take` is always a re-anchor.
+        let syncRange = try XCTUnwrap(
+            source.range(of: "private func syncLiveNotationTracker(mode: LiveNotationMode)")
+        )
+        let reopenRange = try XCTUnwrap(
+            source.range(of: "static func handleMIDIWindowRelease(")
+        )
+        let body = String(source[syncRange.lowerBound..<reopenRange.lowerBound])
+        XCTAssertEqual(
+            body.components(separatedBy: "liveNotationTracker = nil").count - 1, 1,
+            "exactly one branch may clear the tracker"
+        )
+        XCTAssertEqual(
+            body.components(separatedBy: "LivePerformedNotationTracker(").count - 1, 1,
+            "both live modes must share the single construction site"
         )
     }
 
@@ -1119,5 +1167,1565 @@ final class LivePerformedNotationTrackerTests: XCTestCase {
         XCTAssertEqual(diagnostics.committedMovementCount, 0)
         XCTAssertEqual(diagnostics.renderedPositionSpan, 0)
         XCTAssertEqual(diagnostics.latestEventAge, -1, "no events means no age, not a fabricated zero")
+    }
+
+    // MARK: - Pre-record live preview (Reference Authoring)
+    //
+    // The 2026-09-07 hardware session showed the authoring notation lane blank
+    // until Record was pressed, which is exactly the moment it is least useful:
+    // before a take it is the only place the operator can confirm the RANE
+    // platter is actually reaching the app. Two independent boundaries caused
+    // it, and both are pinned here.
+    //
+    //  1. `ReferenceAuthoringView` only built a tracker while the session phase
+    //     was `.recording`.
+    //  2. Even with a tracker, `recordReceivedMIDICCEvent` only appends to
+    //     `capturedMidiCCEvents` once an accumulation window with an open epoch
+    //     exists, and nothing on this route ever opened the preview window
+    //     `beginLiveMIDICapture()` exists to open — it had no production caller.
+    //
+    // The repair adds a THIRD owner of that one buffer, so the cases below are
+    // mostly about ownership, not about drawing: the buffer is now claimed by
+    // `.idle` → `.preview` → `.take` → `.idle` transitions decided under
+    // `midiCaptureLock`, never by the asynchronously published
+    // `isRoutineRecording` / `isRoutineFinalizationPending` flags. Every
+    // interleaving case below drives real threads through the engine's own
+    // append seam; none asserts on source text for its primary claim.
+    //
+    // Everything here is presentation only. No case writes a sidecar, a take,
+    // an approval or an export.
+
+    /// The engine-backed data source, minus the Core MIDI device-name lookup a
+    /// headless test cannot have. Same substitution as
+    /// `engineBackedDataSource`, reused for the pre-record cases.
+    private func previewDataSource(
+        engine: MacCaptureEngine,
+        deviceName: String = "Rane ONE MKII"
+    ) -> LivePerformedNotationDataSource {
+        engineBackedDataSource(engine: engine, deviceName: deviceName)
+    }
+
+    /// 1 + 2. An ACTIVE authoring route that is NOT recording accumulates real
+    /// platter telemetry and presents it as drawn movement.
+    ///
+    /// This is the whole defect in one case: before the repair the buffer stayed
+    /// empty because no window was open, so the canonical renderer received
+    /// nothing no matter how much the operator moved the platter.
+    func testInactiveAuthoringRouteWithFreshPlatterInputPublishesVisibleNotation() {
+        let engine = MacCaptureEngine(autoRefreshDevices: false)
+        engine.beginLiveMIDICapture()
+        addTeardownBlock { engine.endLiveMIDICaptureIfIdle() }
+
+        XCTAssertFalse(
+            engine.isRoutineRecording,
+            "this case is explicitly the NOT-recording route"
+        )
+        XCTAssertEqual(
+            engine.midiCaptureWindowTicket.owner, .preview,
+            "the route's own window must be the preview window"
+        )
+
+        // Timestamps are taken after the window opens so every event lands
+        // inside it. Deterministic offsets, no sleeping.
+        let base = CACurrentMediaTime()
+        for index in 0..<40 {
+            engine.recordReceivedMIDICCEvent(
+                sourceName: "Rane ONE MKII",
+                channel: 1,
+                controller: 6,
+                value: index % 128,
+                timestamp: base + 0.001 * Double(index + 1)
+            )
+        }
+
+        XCTAssertEqual(
+            engine.capturedMidiCCEventsSnapshot().count, 40,
+            "an open preview window must accumulate platter telemetry before Record"
+        )
+
+        let state = LivePerformedNotationTracker.computeState(
+            dataSource: previewDataSource(engine: engine),
+            baselineTimestamp: base
+        )
+        guard case .tracking = state else {
+            return XCTFail("pre-record platter movement must present as tracking, got \(state)")
+        }
+        XCTAssertFalse(
+            LivePerformedNotationTracker.renderedEvents(for: state).isEmpty,
+            "the canonical renderer must receive pre-record events, not an empty source"
+        )
+    }
+
+    /// Without an open window the same input reaches nothing — the exact
+    /// pre-repair behaviour, kept as the negative control so a future change
+    /// that silently stops opening the window fails here rather than on the rig.
+    func testWithoutAPreviewWindowThePreRecordChartReceivesNothing() {
+        let engine = MacCaptureEngine(autoRefreshDevices: false)
+        // Deliberately no `beginLiveMIDICapture()`.
+        XCTAssertEqual(engine.midiCaptureWindowTicket.owner, .idle)
+        let base = CACurrentMediaTime()
+        for index in 0..<40 {
+            engine.recordReceivedMIDICCEvent(
+                sourceName: "Rane ONE MKII",
+                channel: 1, controller: 6, value: index % 128,
+                timestamp: base + 0.001 * Double(index + 1)
+            )
+        }
+        XCTAssertTrue(
+            engine.capturedMidiCCEventsSnapshot().isEmpty,
+            "no window means no accumulation; this is what made the lane blank"
+        )
+    }
+
+    /// Opening a preview window must not fabricate ANY take state. The preview
+    /// is not a take: no media-start epoch, no sidecar, no artifact status, no
+    /// detected notation, no Watch linkage.
+    func testPreRecordPreviewFabricatesNoTakeEvidence() {
+        let engine = MacCaptureEngine(autoRefreshDevices: false)
+        engine.beginLiveMIDICapture()
+        addTeardownBlock { engine.endLiveMIDICaptureIfIdle() }
+
+        let base = CACurrentMediaTime()
+        for index in 0..<20 {
+            engine.recordReceivedMIDICCEvent(
+                sourceName: "Rane ONE MKII",
+                channel: 1, controller: 6, value: index % 128,
+                timestamp: base + 0.001 * Double(index + 1)
+            )
+        }
+
+        XCTAssertFalse(engine.isRoutineRecording, "preview must not start a take")
+        XCTAssertFalse(engine.isRoutineFinalizationPending, "preview must not finalize anything")
+        XCTAssertNil(engine.lastRoutineRecordingURL, "preview must not produce a media file")
+        XCTAssertNil(engine.lastRoutineRecordingSessionID, "preview must not claim a session")
+        XCTAssertNil(engine.lastRoutineDetectedNotation, "preview must not publish detected notation")
+        XCTAssertTrue(
+            engine.routineTakeArtifactStatuses.isEmpty,
+            "preview must not register a take artifact"
+        )
+        XCTAssertNotEqual(
+            engine.midiCaptureWindowTicket.owner, .take,
+            "a preview must never take ownership of a take's window"
+        )
+    }
+
+    // MARK: - Ownership interleavings
+    //
+    // Each case below pauses a real MIDI packet inside the engine's append
+    // seam on a background thread, performs a lifecycle transition on the test
+    // thread while it is paused, then releases it. Semaphores with bounded
+    // waits throughout; there is no sleep and no timing-sensitive assertion.
+
+    /// (1) A preview packet paused across record arming must never enter the
+    /// take. Its window was retired by arming, so it is dropped.
+    func testPreviewPacketPausedAcrossRecordArmingNeverEntersTheTake() {
+        let engine = MacCaptureEngine(autoRefreshDevices: false)
+        engine.beginLiveMIDICapture()
+        addTeardownBlock { engine.testOnly_setMIDIAppendInterleavingHook(nil) }
+
+        let base = CACurrentMediaTime()
+        let mediaStart = base + 1
+
+        var ticketAtIngress: MacCaptureEngine.MIDICaptureWindowTicket?
+        pauseOneMIDIPacket(
+            engine: engine,
+            packet: {
+                engine.recordReceivedMIDICCEvent(
+                    sourceName: "Rane ONE MKII",
+                    channel: 1, controller: 6, value: 40,
+                    timestamp: base + 0.001
+                )
+            },
+            observingTicket: { ticketAtIngress = $0 },
+            whilePaused: {
+                engine.testOnly_armTakeMIDIWindow()
+                engine.testOnly_openTakeMIDIEpoch(at: mediaStart)
+            }
+        )
+
+        XCTAssertEqual(
+            ticketAtIngress?.owner, .preview,
+            "the packet must have captured the PREVIEW window's ticket at ingress"
+        )
+        XCTAssertNil(ticketAtIngress?.takeToken, "a preview ticket carries no take token")
+
+        XCTAssertEqual(engine.midiCaptureWindowTicket.owner, .take)
+        XCTAssertTrue(
+            engine.capturedMidiCCEventsSnapshot().isEmpty,
+            "a packet admitted under the preview window must never land in the take"
+        )
+        XCTAssertEqual(
+            engine.testOnly_midiEventsRejectedAsStale, 1,
+            "the packet must be dropped explicitly, not silently mis-filed"
+        )
+    }
+
+    /// (2) A preview begin/end attempted AFTER arming but BEFORE
+    /// `isRoutineRecording` has been published must be refused.
+    ///
+    /// This is the interleaving the published flags could not cover:
+    /// `startRoutineRecording` schedules `isRoutineRecording = true` on the
+    /// MainActor and arms on the session queue, and those are not ordered. Here
+    /// both published flags still read false while the take already owns the
+    /// window.
+    func testPreviewWindowMutationAfterArmingBeforeRecordingPublicationIsRefused() {
+        let engine = MacCaptureEngine(autoRefreshDevices: false)
+        engine.testOnly_armTakeMIDIWindow()
+        let mediaStart = CACurrentMediaTime()
+        engine.testOnly_openTakeMIDIEpoch(at: mediaStart)
+
+        for index in 0..<12 {
+            engine.recordReceivedMIDICCEvent(
+                sourceName: "Rane ONE MKII",
+                channel: 1, controller: 6, value: index % 128,
+                timestamp: mediaStart + 0.01 * Double(index + 1)
+            )
+        }
+        let armedTicket = engine.midiCaptureWindowTicket
+        XCTAssertEqual(engine.capturedMidiCCEventsSnapshot().count, 12)
+
+        XCTAssertFalse(
+            engine.isRoutineRecording,
+            "the publication this repair must not depend on has deliberately not happened"
+        )
+        XCTAssertFalse(engine.isRoutineFinalizationPending)
+
+        engine.beginLiveMIDICapture()
+        engine.endLiveMIDICaptureIfIdle()
+
+        XCTAssertEqual(
+            engine.capturedMidiCCEventsSnapshot().count, 12,
+            "an armed take's evidence survives a preview begin/end in the arming gap"
+        )
+        XCTAssertEqual(
+            engine.midiCaptureWindowTicket, armedTicket,
+            "a refused preview mutation must not even change the window identity"
+        )
+    }
+
+    /// (3) Navigation away during Stop, before finalization-pending is
+    /// published, must not clear undrained take evidence.
+    ///
+    /// `stopRoutineRecording` publishes `isRoutineRecording = false` and closes
+    /// the epoch, while `isRoutineFinalizationPending` is not set until the
+    /// AVFoundation completion callback. Both published flags therefore read
+    /// false here — the exact gap in which route teardown used to be able to
+    /// wipe the crossfader samples the sidecar is written from.
+    func testPreviewShutdownDuringStopBeforeFinalizationPendingKeepsTakeEvidence() {
+        let engine = MacCaptureEngine(autoRefreshDevices: false)
+        let token = engine.testOnly_armTakeMIDIWindow()
+        let mediaStart = CACurrentMediaTime()
+        engine.testOnly_openTakeMIDIEpoch(at: mediaStart)
+        for index in 0..<9 {
+            engine.recordReceivedMIDICCEvent(
+                sourceName: "Rane ONE MKII",
+                channel: 1, controller: 6, value: index % 128,
+                timestamp: mediaStart + 0.01 * Double(index + 1)
+            )
+        }
+
+        // Stop: epoch closed, ownership deliberately retained.
+        engine.testOnly_closeTakeMIDIEpoch()
+        XCTAssertFalse(engine.isRoutineRecording)
+        XCTAssertFalse(engine.isRoutineFinalizationPending)
+        XCTAssertEqual(
+            engine.midiCaptureWindowTicket.owner, .take,
+            "a stopped take still owns its undrained evidence"
+        )
+
+        // Route teardown, then route re-entry, in that gap.
+        engine.endLiveMIDICaptureIfIdle()
+        engine.beginLiveMIDICapture()
+
+        XCTAssertEqual(
+            engine.capturedMidiCCEventsSnapshot().count, 9,
+            "preview cleanup must never clear undrained take evidence"
+        )
+        XCTAssertEqual(
+            engine.testOnly_drainTakeMIDIWindow(token: token)?.count, 9,
+            "finalization must still receive the whole take"
+        )
+    }
+
+    /// (4) A take packet already in flight when Stop begins is DROPPED, not
+    /// appended after the media has ended. This is the defined behaviour, and
+    /// it leaves the already-admitted evidence untouched.
+    func testTakePacketPausedAcrossStopIsDroppedNotAppendedAfterMediaEnd() {
+        let engine = MacCaptureEngine(autoRefreshDevices: false)
+        engine.testOnly_armTakeMIDIWindow()
+        addTeardownBlock { engine.testOnly_setMIDIAppendInterleavingHook(nil) }
+        let mediaStart = CACurrentMediaTime()
+        engine.testOnly_openTakeMIDIEpoch(at: mediaStart)
+        for index in 0..<5 {
+            engine.recordReceivedMIDICCEvent(
+                sourceName: "Rane ONE MKII",
+                channel: 1, controller: 6, value: index,
+                timestamp: mediaStart + 0.01 * Double(index + 1)
+            )
+        }
+
+        pauseOneMIDIPacket(
+            engine: engine,
+            packet: {
+                engine.recordReceivedMIDICCEvent(
+                    sourceName: "Rane ONE MKII",
+                    channel: 1, controller: 6, value: 99,
+                    timestamp: mediaStart + 0.5
+                )
+            },
+            whilePaused: { engine.testOnly_closeTakeMIDIEpoch() }
+        )
+
+        let held = engine.capturedMidiCCEventsSnapshot()
+        XCTAssertEqual(held.count, 5, "the in-flight packet must not be appended after Stop")
+        XCTAssertFalse(
+            held.contains { $0.value == 99 },
+            "and specifically not that packet"
+        )
+        XCTAssertEqual(engine.midiCaptureWindowTicket.owner, .take)
+    }
+
+    /// (5) A take packet paused across the FINAL DRAIN cannot race it. The
+    /// drain takes exactly what was admitted; the in-flight packet is dropped
+    /// rather than appended into an already-drained window.
+    func testTakePacketPausedAcrossTheFinalDrainCannotRaceIt() {
+        let engine = MacCaptureEngine(autoRefreshDevices: false)
+        let token = engine.testOnly_armTakeMIDIWindow()
+        addTeardownBlock { engine.testOnly_setMIDIAppendInterleavingHook(nil) }
+        let mediaStart = CACurrentMediaTime()
+        engine.testOnly_openTakeMIDIEpoch(at: mediaStart)
+        for index in 0..<7 {
+            engine.recordReceivedMIDICCEvent(
+                sourceName: "Rane ONE MKII",
+                channel: 1, controller: 6, value: index,
+                timestamp: mediaStart + 0.01 * Double(index + 1)
+            )
+        }
+
+        var drained: [CaptureCore.RawMixerMIDIEvent] = []
+        pauseOneMIDIPacket(
+            engine: engine,
+            packet: {
+                engine.recordReceivedMIDICCEvent(
+                    sourceName: "Rane ONE MKII",
+                    channel: 1, controller: 6, value: 99,
+                    timestamp: mediaStart + 0.5
+                )
+            },
+            whilePaused: { drained = engine.testOnly_drainTakeMIDIWindow(token: token) ?? [] }
+        )
+
+        XCTAssertEqual(drained.count, 7, "the drain takes exactly the admitted evidence")
+        XCTAssertFalse(drained.contains { $0.value == 99 })
+        XCTAssertTrue(
+            engine.capturedMidiCCEventsSnapshot().isEmpty,
+            "and nothing may be appended into the window it just closed"
+        )
+        XCTAssertEqual(engine.midiCaptureWindowTicket.owner, .idle)
+    }
+
+    /// (6) A stale append released after the drain, with a NEW preview window
+    /// already open, must not contaminate that preview either.
+    func testStaleAppendAfterTheDrainCannotContaminateTheNextPreview() {
+        let engine = MacCaptureEngine(autoRefreshDevices: false)
+        let token = engine.testOnly_armTakeMIDIWindow()
+        addTeardownBlock {
+            engine.testOnly_setMIDIAppendInterleavingHook(nil)
+            engine.endLiveMIDICaptureIfIdle()
+        }
+        let mediaStart = CACurrentMediaTime()
+        engine.testOnly_openTakeMIDIEpoch(at: mediaStart)
+        engine.recordReceivedMIDICCEvent(
+            sourceName: "Rane ONE MKII",
+            channel: 1, controller: 6, value: 1,
+            timestamp: mediaStart + 0.01
+        )
+
+        pauseOneMIDIPacket(
+            engine: engine,
+            packet: {
+                engine.recordReceivedMIDICCEvent(
+                    sourceName: "Rane ONE MKII",
+                    channel: 1, controller: 6, value: 99,
+                    timestamp: mediaStart + 0.5
+                )
+            },
+            whilePaused: {
+                engine.testOnly_drainTakeMIDIWindow(token: token)
+                engine.beginLiveMIDICapture()
+            }
+        )
+
+        XCTAssertEqual(engine.midiCaptureWindowTicket.owner, .preview)
+        XCTAssertTrue(
+            engine.capturedMidiCCEventsSnapshot().isEmpty,
+            "a take packet must never be appended into a later preview window"
+        )
+    }
+
+    /// (7) The finalization paths that never drain must still release the
+    /// window, or the preview could never re-arm for the rest of the session.
+    func testEarlyReturnFinalizationPathsReleaseTheWindow() throws {
+        let engine = MacCaptureEngine(autoRefreshDevices: false)
+        let token = engine.testOnly_armTakeMIDIWindow()
+        let mediaStart = CACurrentMediaTime()
+        engine.testOnly_openTakeMIDIEpoch(at: mediaStart)
+        engine.recordReceivedMIDICCEvent(
+            sourceName: "Rane ONE MKII",
+            channel: 1, controller: 6, value: 3,
+            timestamp: mediaStart + 0.01
+        )
+        XCTAssertEqual(engine.capturedMidiCCEventsSnapshot().count, 1)
+
+        XCTAssertTrue(engine.testOnly_releaseAbandonedTakeMIDIWindow(token: token))
+
+        XCTAssertEqual(engine.midiCaptureWindowTicket.owner, .idle)
+        XCTAssertTrue(
+            engine.capturedMidiCCEventsSnapshot().isEmpty,
+            "an abandoned take's accumulation is discarded, not inherited"
+        )
+        engine.beginLiveMIDICapture()
+        addTeardownBlock { engine.endLiveMIDICaptureIfIdle() }
+        XCTAssertEqual(
+            engine.midiCaptureWindowTicket.owner, .preview,
+            "and the preview can claim the window again"
+        )
+
+        // Both no-drain paths must actually call it.
+        let source = try engineSource()
+        let armFailure = try XCTUnwrap(
+            source.range(of: "self.scratchPlaybackController.cancelRoutineOutputCapture()")
+        )
+        XCTAssertTrue(
+            String(source[armFailure.upperBound...].prefix(700))
+                .contains("releaseAbandonedTakeMIDIWindow(token: midiTakeToken)"),
+            "a take that fails to start must hand the window back"
+        )
+        let noSidecar = try XCTUnwrap(
+            source.range(of: "guard let sidecar = activeRoutineRecordingSidecar else {")
+        )
+        XCTAssertTrue(
+            String(source[noSidecar.upperBound...].prefix(900))
+                .contains("releaseAbandonedTakeMIDIWindow(token: midiTakeToken)"),
+            "the no-sidecar finalization early return must hand the window back"
+        )
+    }
+
+    /// (8) Repeated preview → take → preview generations stay isolated. No
+    /// generation is ever reused, and each take drains exactly its own events.
+    func testRepeatedPreviewTakePreviewGenerationsStayIsolated() {
+        let engine = MacCaptureEngine(autoRefreshDevices: false)
+        addTeardownBlock { engine.endLiveMIDICaptureIfIdle() }
+        var seenGenerations: [UInt64] = [engine.midiCaptureWindowTicket.generation]
+        var seenTokens: [MacCaptureEngine.MIDICaptureTakeToken] = []
+
+        for cycle in 1...3 {
+            engine.beginLiveMIDICapture()
+            seenGenerations.append(engine.midiCaptureWindowTicket.generation)
+            let previewBase = CACurrentMediaTime()
+            for index in 0..<4 {
+                engine.recordReceivedMIDICCEvent(
+                    sourceName: "Rane ONE MKII",
+                    channel: 1, controller: 6, value: index,
+                    timestamp: previewBase + 0.001 * Double(index + 1)
+                )
+            }
+            XCTAssertEqual(
+                engine.capturedMidiCCEventsSnapshot().count, 4,
+                "cycle \(cycle): the preview accumulates"
+            )
+
+            let token = engine.testOnly_armTakeMIDIWindow()
+            seenTokens.append(token)
+            seenGenerations.append(engine.midiCaptureWindowTicket.generation)
+            XCTAssertTrue(
+                engine.capturedMidiCCEventsSnapshot().isEmpty,
+                "cycle \(cycle): arming discards the preview"
+            )
+
+            let mediaStart = CACurrentMediaTime()
+            engine.testOnly_openTakeMIDIEpoch(at: mediaStart)
+            seenGenerations.append(engine.midiCaptureWindowTicket.generation)
+            for index in 0..<cycle {
+                engine.recordReceivedMIDICCEvent(
+                    sourceName: "Rane ONE MKII",
+                    channel: 1, controller: 6, value: index,
+                    timestamp: mediaStart + 0.01 * Double(index + 1)
+                )
+            }
+            engine.testOnly_closeTakeMIDIEpoch()
+            seenGenerations.append(engine.midiCaptureWindowTicket.generation)
+
+            let drained = engine.testOnly_drainTakeMIDIWindow(token: token)
+            seenGenerations.append(engine.midiCaptureWindowTicket.generation)
+            XCTAssertEqual(
+                drained?.count, cycle,
+                "cycle \(cycle): a take drains exactly its own events, never a neighbour's"
+            )
+            XCTAssertEqual(engine.midiCaptureWindowTicket.owner, .idle)
+        }
+
+        XCTAssertEqual(
+            seenGenerations.count, Set(seenGenerations).count,
+            "no window generation may ever be reused"
+        )
+        XCTAssertEqual(
+            seenGenerations, seenGenerations.sorted(),
+            "window generations must advance monotonically"
+        )
+        XCTAssertEqual(
+            seenTokens.count, Set(seenTokens).count,
+            "no take token may ever be reused"
+        )
+    }
+
+    /// (9) Record arming discards every pre-record preview event BEFORE the
+    /// take epoch is established, which is what makes contamination
+    /// structurally impossible rather than merely unlikely.
+    func testRecordArmingClearsPreviewDataBeforeTheTakeEpochExists() throws {
+        let engine = MacCaptureEngine(autoRefreshDevices: false)
+        engine.beginLiveMIDICapture()
+        let previewBase = CACurrentMediaTime()
+        for index in 0..<25 {
+            engine.recordReceivedMIDICCEvent(
+                sourceName: "Rane ONE MKII",
+                channel: 1, controller: 6, value: index % 128,
+                timestamp: previewBase + 0.001 * Double(index + 1)
+            )
+        }
+        XCTAssertEqual(engine.capturedMidiCCEventsSnapshot().count, 25)
+
+        let token = engine.testOnly_armTakeMIDIWindow()
+
+        let armed = engine.midiCaptureWindowTicket
+        XCTAssertEqual(armed.owner, .take)
+        XCTAssertEqual(armed.takeToken, token, "the armed window carries this take's token")
+        XCTAssertEqual(
+            armed.epochStartHostTime, 0,
+            "arming must leave the epoch closed until media start is confirmed"
+        )
+        XCTAssertTrue(
+            engine.capturedMidiCCEventsSnapshot().isEmpty,
+            "preview accumulation must be discarded at arming"
+        )
+
+        // With the epoch still closed, nothing at all can be admitted.
+        engine.recordReceivedMIDICCEvent(
+            sourceName: "Rane ONE MKII",
+            channel: 1, controller: 6, value: 7,
+            timestamp: CACurrentMediaTime()
+        )
+        XCTAssertTrue(
+            engine.capturedMidiCCEventsSnapshot().isEmpty,
+            "pre-roll traffic must not enter the take timeline"
+        )
+
+        // And the epoch comes only from the confirmed media start.
+        let source = try engineSource()
+        XCTAssertTrue(
+            source.contains("beginMIDIRecordingWindow(at: mediaStartHostTime, token: midiTakeToken)"),
+            "the take epoch must come from the confirmed media start host time"
+        )
+    }
+
+    /// (10) Admitted take evidence is drained exactly once, with no loss and no
+    /// contamination from the preview that preceded it or the preview that
+    /// follows it.
+    func testAdmittedTakeEvidenceIsDrainedExactlyOnce() throws {
+        let engine = MacCaptureEngine(autoRefreshDevices: false)
+        addTeardownBlock { engine.endLiveMIDICaptureIfIdle() }
+
+        engine.beginLiveMIDICapture()
+        let previewBase = CACurrentMediaTime()
+        for index in 0..<6 {
+            engine.recordReceivedMIDICCEvent(
+                sourceName: "Rane ONE MKII",
+                channel: 1, controller: 6, value: 111,
+                timestamp: previewBase + 0.001 * Double(index + 1)
+            )
+        }
+
+        let token = engine.testOnly_armTakeMIDIWindow()
+        let mediaStart = CACurrentMediaTime()
+        engine.testOnly_openTakeMIDIEpoch(at: mediaStart)
+        for index in 0..<10 {
+            engine.recordReceivedMIDICCEvent(
+                sourceName: "Rane ONE MKII",
+                channel: 1, controller: 6, value: 22,
+                timestamp: mediaStart + 0.01 * Double(index + 1)
+            )
+        }
+        engine.testOnly_closeTakeMIDIEpoch()
+
+        let drained = try XCTUnwrap(engine.testOnly_drainTakeMIDIWindow(token: token))
+        XCTAssertEqual(drained.count, 10, "no loss")
+        XCTAssertFalse(
+            drained.contains { $0.value == 111 },
+            "no contamination from the preceding preview"
+        )
+        XCTAssertTrue(
+            drained.allSatisfy { $0.takeRelativeTime >= 0 },
+            "every drained event is expressed on the take's own timeline"
+        )
+
+        // Exactly once: the window is released, so a second drain for the same
+        // token matches nothing at all — nil, not an empty take.
+        XCTAssertNil(engine.testOnly_drainTakeMIDIWindow(token: token))
+        engine.beginLiveMIDICapture()
+        XCTAssertTrue(
+            engine.capturedMidiCCEventsSnapshot().isEmpty,
+            "the next preview must not inherit a drained take"
+        )
+    }
+
+    /// The preview re-arms on the engine's window RELEASE, not on a published
+    /// lifecycle flag — which is what covers the finalization paths that never
+    /// set `isRoutineFinalizationPending` at all.
+    func testPreviewReArmsOnTheEngineWindowRelease() throws {
+        let view = try authoringViewSource()
+        XCTAssertTrue(
+            view.contains(".onReceive(captureEngine.$midiCaptureWindowReleaseCount)"),
+            "the route must SUBSCRIBE to the engine publisher; captureEngine is a plain let, so onChange of one of its properties establishes no observation and would never fire"
+        )
+        XCTAssertFalse(
+            view.contains(".onChange(of: captureEngine."),
+            "no engine property may be watched through onChange from a non-observed reference"
+        )
+        XCTAssertFalse(
+            view.contains(".onChange(of: captureEngine.isRoutineFinalizationPending)"),
+            "re-arming must not depend on a flag the early-return paths never set"
+        )
+        XCTAssertTrue(view.contains("Self.handleMIDIWindowRelease("))
+
+        // Re-arming must not build a second tracker.
+        let reopenRange = try XCTUnwrap(
+            view.range(of: "static func handleMIDIWindowRelease(")
+        )
+        XCTAssertFalse(
+            String(view[reopenRange.upperBound...].prefix(300))
+                .contains("LivePerformedNotationTracker("),
+            "re-arming reopens the window only; the preview already has its tracker"
+        )
+
+        // And the engine publishes that release from BOTH release paths.
+        let source = try engineSource()
+        XCTAssertEqual(
+            source.components(separatedBy: "publishMIDICaptureWindowRelease()").count - 1, 3,
+            "one definition plus exactly the drain and abandonment release sites"
+        )
+    }
+
+    /// The two preview-window accessors must decide on LOCK-OWNED ownership.
+    /// Reading the asynchronously published lifecycle flags is what left the
+    /// arming and drain gaps open, so neither accessor may consult them.
+    func testPreviewWindowAccessorsDoNotDependOnPublishedFlags() throws {
+        let source = try engineSource()
+        for accessor in ["func beginLiveMIDICapture() {", "func endLiveMIDICaptureIfIdle() {"] {
+            let range = try XCTUnwrap(source.range(of: accessor), "missing \(accessor)")
+            let body = String(source[range.upperBound...].prefix(400))
+            XCTAssertTrue(
+                body.contains("midiWindowOwnerStorage =="),
+                "\(accessor) must decide on lock-owned ownership"
+            )
+            XCTAssertTrue(
+                body.contains("midiCaptureLock.lock()"),
+                "\(accessor) must decide under the lock"
+            )
+            for flag in ["isRoutineRecording", "isRoutineFinalizationPending"] {
+                XCTAssertFalse(
+                    body.contains(flag),
+                    "\(accessor) must not read the published \(flag)"
+                )
+            }
+        }
+        // Finalization keeps its own destructive drain, now token-scoped.
+        XCTAssertTrue(
+            source.contains("guard let capturedMidi = drainCapturedMidiCCEvents(token: midiTakeToken) else { return }"),
+            "finalization must still own ending a real take's window, for its own take"
+        )
+    }
+
+    // MARK: - Epoch and take-token boundaries
+
+    /// A `.take` window whose epoch is still zero rejects EVERY packet.
+    ///
+    /// Zero is the epoch from arming until `didStartRecordingTo` confirms
+    /// media start, and again from Stop until the drain. Nothing may be
+    /// admitted in either interval.
+    func testTakeWindowWithAZeroEpochRejectsEveryPacket() {
+        let engine = MacCaptureEngine(autoRefreshDevices: false)
+        let token = engine.testOnly_armTakeMIDIWindow()
+        XCTAssertEqual(engine.midiCaptureWindowTicket.epochStartHostTime, 0)
+
+        let now = CACurrentMediaTime()
+        for offset in [-1.0, 0.0, 0.001, 5.0] {
+            engine.recordReceivedMIDICCEvent(
+                sourceName: "Rane ONE MKII",
+                channel: 1, controller: 6, value: 5,
+                timestamp: now + offset
+            )
+        }
+        XCTAssertTrue(
+            engine.capturedMidiCCEventsSnapshot().isEmpty,
+            "an epoch of zero must reject every packet, at any host time"
+        )
+
+        // Same again after Stop closes the epoch on a take that HAS captured.
+        engine.testOnly_openTakeMIDIEpoch(at: now)
+        engine.recordReceivedMIDICCEvent(
+            sourceName: "Rane ONE MKII",
+            channel: 1, controller: 6, value: 6, timestamp: now + 0.01
+        )
+        XCTAssertEqual(engine.capturedMidiCCEventsSnapshot().count, 1)
+        engine.testOnly_closeTakeMIDIEpoch()
+        XCTAssertEqual(engine.midiCaptureWindowTicket.epochStartHostTime, 0)
+        engine.recordReceivedMIDICCEvent(
+            sourceName: "Rane ONE MKII",
+            channel: 1, controller: 6, value: 7, timestamp: now + 0.02
+        )
+        XCTAssertEqual(
+            engine.capturedMidiCCEventsSnapshot().count, 1,
+            "nothing may be admitted after Stop closed the epoch"
+        )
+        XCTAssertEqual(engine.testOnly_drainTakeMIDIWindow(token: token)?.count, 1)
+    }
+
+    /// No cached or caller-supplied epoch may override the active ticket.
+    ///
+    /// The regression this pins: an epoch read once at ingress and carried
+    /// past an arming would admit a preview packet into a take whose own epoch
+    /// was still zero. `recordReceivedMIDICCEvent` no longer accepts an epoch
+    /// at all — only a whole ticket, validated unchanged before the append.
+    func testNoCachedEpochCanOverrideTheActiveTicket() throws {
+        let engine = MacCaptureEngine(autoRefreshDevices: false)
+        engine.beginLiveMIDICapture()
+        let previewEpoch = engine.midiCaptureWindowTicket.epochStartHostTime
+        XCTAssertGreaterThan(previewEpoch, 0)
+
+        // A timestamp that WOULD be admissible under the preview epoch.
+        let admissibleUnderPreview = previewEpoch + 1
+        engine.testOnly_armTakeMIDIWindow()
+
+        engine.recordReceivedMIDICCEvent(
+            sourceName: "Rane ONE MKII",
+            channel: 1, controller: 6, value: 9,
+            timestamp: admissibleUnderPreview
+        )
+        XCTAssertTrue(
+            engine.capturedMidiCCEventsSnapshot().isEmpty,
+            "the retired preview epoch must not admit anything into the take"
+        )
+
+        // And the ingress path carries a whole ticket, never a bare epoch.
+        let source = try engineSource()
+        XCTAssertFalse(
+            source.contains("let startTime = midiRecordingStartTime"),
+            "the cached-epoch read at packet-list ingress must be gone"
+        )
+        XCTAssertTrue(
+            source.contains("let ingressTicket = lockedMIDICaptureWindowTicket()"),
+            "ingress must capture owner, generation and epoch together"
+        )
+        XCTAssertFalse(
+            source.contains("recordingStartTime:"),
+            "no caller-supplied epoch parameter may remain"
+        )
+    }
+
+    /// An old take's token can neither drain nor abandon a newer take, and a
+    /// duplicate release of an already-released take does nothing.
+    func testAStaleTakeTokenCannotDrainOrAbandonAnotherTake() throws {
+        let engine = MacCaptureEngine(autoRefreshDevices: false)
+        let tokenA = engine.testOnly_armTakeMIDIWindow()
+        let startA = CACurrentMediaTime()
+        engine.testOnly_openTakeMIDIEpoch(at: startA)
+        engine.recordReceivedMIDICCEvent(
+            sourceName: "Rane ONE MKII",
+            channel: 1, controller: 6, value: 1, timestamp: startA + 0.01
+        )
+        XCTAssertEqual(try XCTUnwrap(engine.testOnly_drainTakeMIDIWindow(token: tokenA)).count, 1)
+
+        // Take B arms and captures.
+        let tokenB = engine.testOnly_armTakeMIDIWindow()
+        XCTAssertNotEqual(tokenA, tokenB)
+        let startB = CACurrentMediaTime()
+        engine.testOnly_openTakeMIDIEpoch(at: startB)
+        for index in 0..<4 {
+            engine.recordReceivedMIDICCEvent(
+                sourceName: "Rane ONE MKII",
+                channel: 1, controller: 6, value: index,
+                timestamp: startB + 0.01 * Double(index + 1)
+            )
+        }
+
+        // A's token must not touch B.
+        XCTAssertNil(
+            engine.testOnly_drainTakeMIDIWindow(token: tokenA),
+            "an old token must not drain a newer take"
+        )
+        XCTAssertFalse(
+            engine.testOnly_releaseAbandonedTakeMIDIWindow(token: tokenA),
+            "an old token must not abandon a newer take"
+        )
+        XCTAssertEqual(
+            engine.capturedMidiCCEventsSnapshot().count, 4,
+            "B's evidence must be untouched"
+        )
+        XCTAssertEqual(engine.midiCaptureWindowTicket.takeToken, tokenB)
+        XCTAssertEqual(try XCTUnwrap(engine.testOnly_drainTakeMIDIWindow(token: tokenB)).count, 4)
+    }
+
+    /// A start that fails must not abandon a DIFFERENT take's stopped,
+    /// undrained evidence.
+    ///
+    /// The production shape: `startRoutineRecording` holds an optional token
+    /// that is nil until arming actually happened, and its catch releases only
+    /// that token.
+    func testAFailedStartCannotAbandonAnotherTakesStoppedEvidence() throws {
+        let engine = MacCaptureEngine(autoRefreshDevices: false)
+        let stoppedTake = engine.testOnly_armTakeMIDIWindow()
+        let start = CACurrentMediaTime()
+        engine.testOnly_openTakeMIDIEpoch(at: start)
+        for index in 0..<6 {
+            engine.recordReceivedMIDICCEvent(
+                sourceName: "Rane ONE MKII",
+                channel: 1, controller: 6, value: index,
+                timestamp: start + 0.01 * Double(index + 1)
+            )
+        }
+        engine.testOnly_closeTakeMIDIEpoch()
+
+        let beforeFailedStart = engine.midiCaptureWindowTicket
+        // Actual start entry point fails before device discovery or recording.
+        let failedRequest = engine.startRoutineRecording()
+        XCTAssertNotNil(engine.routineRecordingBoundary(for: failedRequest)?.startFailureDescription)
+        let failedToken = engine.testOnly_tryArmTakeMIDIWindow(
+            mediaURL: URL(fileURLWithPath: "/tmp/failed-new-take.mov")
+        )
+        XCTAssertNil(failedToken)
+        XCTAssertEqual(engine.midiCaptureWindowTicket, beforeFailedStart)
+        // A later start attempt that threw BEFORE arming holds no token, so it
+        // releases nothing. Model the only other possibility too: a token from
+        // some earlier take must also release nothing.
+        let unrelated = MacCaptureEngine.MIDICaptureTakeToken(value: stoppedTake.value &- 1)
+        XCTAssertFalse(engine.testOnly_releaseAbandonedTakeMIDIWindow(token: unrelated))
+
+        XCTAssertEqual(
+            engine.capturedMidiCCEventsSnapshot().count, 6,
+            "a stopped take's undrained evidence must survive an unrelated failed start"
+        )
+        XCTAssertEqual(engine.midiCaptureWindowTicket.takeToken, stoppedTake)
+        XCTAssertEqual(try XCTUnwrap(engine.testOnly_drainTakeMIDIWindow(token: stoppedTake)).count, 6)
+
+        // The production catch is token-scoped and conditional on arming.
+        let source = try engineSource()
+        XCTAssertTrue(
+            source.contains("var midiTakeToken: MIDICaptureTakeToken?"),
+            "the start path must hold an OPTIONAL token, nil until arming happened"
+        )
+        XCTAssertTrue(
+            source.contains("midiTakeToken = self.openMIDIInputForRecording(mediaURL: preparedRecording.mediaURL)"),
+            "the token must come from arming itself"
+        )
+    }
+
+    /// Duplicate drains and duplicate abandonments are no-ops that publish no
+    /// release. Only a real take→idle transition publishes.
+    func testDuplicateDrainAndAbandonmentPublishNoRelease() throws {
+        let engine = MacCaptureEngine(autoRefreshDevices: false)
+        var published: [Int] = []
+        var cancellables = Set<AnyCancellable>()
+        engine.$midiCaptureWindowReleaseCount
+            .sink { published.append($0) }
+            .store(in: &cancellables)
+        let replayCount = published.count
+
+        let token = engine.testOnly_armTakeMIDIWindow()
+        let start = CACurrentMediaTime()
+        engine.testOnly_openTakeMIDIEpoch(at: start)
+        engine.recordReceivedMIDICCEvent(
+            sourceName: "Rane ONE MKII",
+            channel: 1, controller: 6, value: 1, timestamp: start + 0.01
+        )
+
+        XCTAssertEqual(try XCTUnwrap(engine.testOnly_drainTakeMIDIWindow(token: token)).count, 1)
+        XCTAssertNil(engine.testOnly_drainTakeMIDIWindow(token: token), "duplicate drain is a no-op")
+        XCTAssertFalse(
+            engine.testOnly_releaseAbandonedTakeMIDIWindow(token: token),
+            "abandoning an already-drained take is a no-op"
+        )
+        XCTAssertFalse(
+            engine.testOnly_releaseAbandonedTakeMIDIWindow(token: token),
+            "and stays a no-op however many times it is repeated"
+        )
+
+        drainMainQueue()
+        XCTAssertEqual(
+            published.count - replayCount, 1,
+            "exactly one real take→idle transition may publish a release"
+        )
+    }
+
+    /// Real publisher delivery, through the same shape the route uses: one
+    /// matching release re-arms the preview exactly once; the subscription
+    /// replay and every stale or duplicated release re-arm nothing.
+    @MainActor
+    func testOneRealReleaseCausesExactlyOnePreviewReArm() throws {
+        let engine = MacCaptureEngine(autoRefreshDevices: false)
+        addTeardownBlock { engine.endLiveMIDICaptureIfIdle() }
+
+        // Identical to ReferenceAuthoringView's `.onReceive` handler: a
+        // Published publisher replays its current value on subscribe, so the
+        // first delivery is primed and never treated as a release.
+        var reArmCount = 0
+        var lastHandled: Int?
+        var cancellables = Set<AnyCancellable>()
+        engine.$midiCaptureWindowReleaseCount
+            .sink { count in
+                XCTAssertTrue(Thread.isMainThread)
+                if ReferenceAuthoringView.handleMIDIWindowRelease(
+                    count, lastHandled: &lastHandled, mode: .preview, captureEngine: engine
+                ) { reArmCount += 1 }
+            }
+            .store(in: &cancellables)
+
+        drainMainQueue()
+        XCTAssertEqual(reArmCount, 0, "the subscription replay is not a release")
+
+        let token = engine.testOnly_armTakeMIDIWindow()
+        let start = CACurrentMediaTime()
+        engine.testOnly_openTakeMIDIEpoch(at: start)
+        engine.recordReceivedMIDICCEvent(
+            sourceName: "Rane ONE MKII",
+            channel: 1, controller: 6, value: 1, timestamp: start + 0.01
+        )
+        XCTAssertEqual(try XCTUnwrap(engine.testOnly_drainTakeMIDIWindow(token: token)).count, 1)
+
+        // Stale and duplicated releases in the same window of time.
+        XCTAssertNil(engine.testOnly_drainTakeMIDIWindow(token: token))
+        XCTAssertFalse(engine.testOnly_releaseAbandonedTakeMIDIWindow(token: token))
+
+        drainMainQueue()
+        XCTAssertEqual(reArmCount, 1, "one matching release, one re-arm")
+        XCTAssertEqual(
+            engine.midiCaptureWindowTicket.owner, .preview,
+            "and the re-arm actually reopened the preview window"
+        )
+
+        let rearmed = engine.midiCaptureWindowTicket
+        XCTAssertFalse(ReferenceAuthoringView.handleMIDIWindowRelease(
+            1, lastHandled: &lastHandled, mode: .preview, captureEngine: engine
+        ))
+        XCTAssertFalse(ReferenceAuthoringView.handleMIDIWindowRelease(
+            0, lastHandled: &lastHandled, mode: .preview, captureEngine: engine
+        ))
+        XCTAssertEqual(engine.midiCaptureWindowTicket, rearmed)
+        drainMainQueue()
+        XCTAssertEqual(reArmCount, 1, "no further deliveries arrive later")
+    }
+
+    func testRealMIDIIngressPreviewTicketRetiresAcrossArmingAndMediaStart() {
+        for opensEpoch in [false, true] {
+            let engine = MacCaptureEngine(autoRefreshDevices: false)
+            engine.beginLiveMIDICapture()
+            var captured: MacCaptureEngine.MIDICaptureWindowTicket?
+            pauseOneMIDIPacket(
+                engine: engine,
+                packet: { self.receiveRealCCPacket(engine) },
+                observingTicket: { captured = $0 },
+                whilePaused: {
+                    engine.testOnly_armTakeMIDIWindow()
+                    if opensEpoch { engine.testOnly_openTakeMIDIEpoch(at: CACurrentMediaTime()) }
+                }
+            )
+            XCTAssertEqual(captured?.owner, .preview)
+            XCTAssertTrue(engine.capturedMidiCCEventsSnapshot().isEmpty)
+            XCTAssertEqual(engine.testOnly_midiEventsRejectedAsStale, 1)
+        }
+    }
+
+    func testSameGenerationCannotOverrideTicketOwnerEpochOrTakeToken() {
+        let engine = MacCaptureEngine(autoRefreshDevices: false)
+        let token = engine.testOnly_armTakeMIDIWindow()
+        let closed = engine.midiCaptureWindowTicket
+        let now = CACurrentMediaTime()
+        let forgedEpoch = MacCaptureEngine.MIDICaptureWindowTicket(
+            owner: .take, generation: closed.generation,
+            epochStartHostTime: now - 1, takeToken: token
+        )
+        engine.recordReceivedMIDICCEvent(
+            sourceName: "Test", channel: 2, controller: 16, value: 1,
+            timestamp: now, ingressTicket: forgedEpoch
+        )
+        XCTAssertTrue(engine.capturedMidiCCEventsSnapshot().isEmpty)
+        engine.testOnly_openTakeMIDIEpoch(at: now)
+        let opened = engine.midiCaptureWindowTicket
+        for malformed in [
+            MacCaptureEngine.MIDICaptureWindowTicket(
+                owner: .preview, generation: opened.generation,
+                epochStartHostTime: now, takeToken: token),
+            MacCaptureEngine.MIDICaptureWindowTicket(
+                owner: .take, generation: opened.generation,
+                epochStartHostTime: now, takeToken: nil)
+        ] {
+            engine.recordReceivedMIDICCEvent(
+                sourceName: "Test", channel: 2, controller: 16, value: 1,
+                timestamp: now + 1, ingressTicket: malformed
+            )
+        }
+        XCTAssertTrue(engine.capturedMidiCCEventsSnapshot().isEmpty)
+        engine.recordReceivedMIDICCEvent(
+            sourceName: "Test", channel: 2, controller: 16, value: 1,
+            timestamp: now + 2, ingressTicket: opened
+        )
+        XCTAssertEqual(engine.capturedMidiCCEventsSnapshot().first?.takeRelativeTime, 2)
+    }
+
+    func testDelayedMediaCallbackCannotAcquireAnotherTakesToken() throws {
+        let engine = MacCaptureEngine(autoRefreshDevices: false)
+        let urlA = URL(fileURLWithPath: "/tmp/midi-take-a.mov")
+        let urlB = URL(fileURLWithPath: "/tmp/midi-take-b.mov")
+        let a = try XCTUnwrap(engine.testOnly_tryArmTakeMIDIWindow(mediaURL: urlA))
+        let delegateToken = try XCTUnwrap(engine.testOnly_midiTakeToken(for: urlA))
+        XCTAssertEqual(delegateToken, a)
+        engine.testOnly_releaseAbandonedTakeMIDIWindow(token: a)
+        let b = try XCTUnwrap(engine.testOnly_tryArmTakeMIDIWindow(mediaURL: urlB))
+        XCTAssertNil(engine.testOnly_midiTakeToken(for: urlA))
+        XCTAssertEqual(engine.testOnly_midiTakeToken(for: urlB), b)
+        XCTAssertNil(engine.testOnly_drainTakeMIDIWindow(token: delegateToken))
+        XCTAssertFalse(engine.testOnly_releaseAbandonedTakeMIDIWindow(token: delegateToken))
+        XCTAssertEqual(engine.midiCaptureWindowTicket.takeToken, b)
+    }
+
+    func testNoSidecarFinalizationReleasesOnlyItsCapturedTokenOnce() throws {
+        let engine = MacCaptureEngine(autoRefreshDevices: false)
+        let url = URL(fileURLWithPath: "/tmp/midi-no-sidecar.mov")
+        let token = try XCTUnwrap(engine.testOnly_tryArmTakeMIDIWindow(mediaURL: url))
+        engine.testOnly_finalizeWithoutSidecar(mediaURL: url, token: token)
+        engine.testOnly_finalizeWithoutSidecar(mediaURL: url, token: token)
+        drainMainQueue()
+        XCTAssertEqual(engine.midiCaptureWindowTicket.owner, .idle)
+        XCTAssertEqual(engine.midiCaptureWindowReleaseCount, 1)
+    }
+
+    // MARK: - Bounded preview retention
+    //
+    // 15 seconds, the 32 000-event ceiling and the 2x trim multiplier are all
+    // PROVISIONAL ENGINEERING POLICY, not hardware-calibrated truth. What is
+    // pinned here is that BOTH bounds hold after every preview append, and that
+    // neither is reachable from take evidence. The bounds are enforced on
+    // append only: an idle buffer is not re-trimmed, but it is also not
+    // growing, so it keeps satisfying the bounds it satisfied last. No idle
+    // expiry is claimed.
+
+    func testPreviewRetentionDropsOnlyEventsOlderThanTheTrailingWindow() {
+        let events = (0..<60).map { index in
+            Self.previewEvent(timestamp: Double(index))
+        }
+        let trimmed = MacCaptureEngine.trimmedLivePreviewEvents(
+            events, now: 59, retentionSeconds: 15
+        )
+        XCTAssertEqual(trimmed.first?.timestamp, 44, "the window starts at now - retention")
+        XCTAssertEqual(trimmed.last?.timestamp, 59, "the newest event is always kept")
+        XCTAssertEqual(trimmed.count, 16)
+    }
+
+    func testPreviewRetentionKeepsEverythingInsideTheWindow() {
+        let events = (0..<10).map { Self.previewEvent(timestamp: Double($0)) }
+        let trimmed = MacCaptureEngine.trimmedLivePreviewEvents(
+            events, now: 9, retentionSeconds: 15
+        )
+        XCTAssertEqual(trimmed.count, 10, "nothing has aged out yet")
+    }
+
+    /// The time bound alone bounds a SPAN, not memory: how many events fit in a
+    /// span depends entirely on the controller's message rate, which this code
+    /// does not measure. The count ceiling is the bound that holds regardless.
+    func testPreviewRetentionAppliesTheEventCountCeiling() {
+        // 500 events all inside the retention window — the time rule alone
+        // would keep every one of them.
+        let events = (0..<500).map { Self.previewEvent(timestamp: 100 + 0.001 * Double($0)) }
+        XCTAssertTrue(
+            MacCaptureEngine.livePreviewNeedsTrim(
+                heldCount: events.count,
+                oldestTimestamp: events.map(\.timestamp).min(),
+                newestTimestamp: events.map(\.timestamp).max(),
+                retentionSeconds: 15,
+                maximumEventCount: 100
+            ),
+            "the count ceiling must trigger a trim on its own"
+        )
+        let trimmed = MacCaptureEngine.trimmedLivePreviewEvents(
+            events, now: 100.5, retentionSeconds: 15, maximumEventCount: 100
+        )
+        XCTAssertEqual(trimmed.count, 100, "the ceiling is a hard cap")
+        XCTAssertEqual(
+            trimmed.last?.timestamp, events.last?.timestamp,
+            "and it keeps the NEWEST events, not the oldest"
+        )
+    }
+
+    /// Both bounds hold after a sustained stream, driven entirely by explicit
+    /// timestamps.
+    func testPreviewAccumulationStaysInsideBothBoundsUnderASustainedStream() {
+        let engine = MacCaptureEngine(autoRefreshDevices: false)
+        engine.beginLiveMIDICapture()
+        addTeardownBlock { engine.endLiveMIDICaptureIfIdle() }
+
+        // 120 s of platter at 200 Hz — eight times the trim span.
+        let base = CACurrentMediaTime()
+        for index in 0..<24_000 {
+            engine.recordReceivedMIDICCEvent(
+                sourceName: "Rane ONE MKII",
+                channel: 1, controller: 6, value: index % 128,
+                timestamp: base + 0.005 * Double(index + 1)
+            )
+        }
+
+        let held = engine.capturedMidiCCEventsSnapshot()
+        XCTAssertFalse(held.isEmpty, "a bounded buffer is not an empty one")
+        let span = (held.last?.timestamp ?? 0) - (held.first?.timestamp ?? 0)
+        XCTAssertLessThanOrEqual(
+            span,
+            MacCaptureEngine.livePreviewRetentionSeconds
+                * MacCaptureEngine.livePreviewTrimSpanMultiplier + 0.01,
+            "the span bound must hold after every append"
+        )
+        XCTAssertLessThanOrEqual(
+            held.count, MacCaptureEngine.livePreviewMaximumEventCount,
+            "the count bound must hold after every append"
+        )
+        XCTAssertLessThan(
+            held.count, 24_000,
+            "an unbounded preview buffer is the defect these rules exist to prevent"
+        )
+    }
+
+    /// Take evidence is NEVER trimmed, however long the take runs, because the
+    /// trim is gated on lock-owned PREVIEW ownership which no take ever has.
+    func testTakeEvidenceIsNeverTrimmedByThePreviewRetentionRule() {
+        let engine = MacCaptureEngine(autoRefreshDevices: false)
+        let token = engine.testOnly_armTakeMIDIWindow()
+        let start = CACurrentMediaTime()
+        engine.testOnly_openTakeMIDIEpoch(at: start)
+        let count = 8_000
+        for index in 0..<count {
+            engine.recordReceivedMIDICCEvent(
+                sourceName: "Rane ONE MKII",
+                channel: 1, controller: 6, value: index % 128,
+                timestamp: start + 0.01 * Double(index + 1)
+            )
+        }
+        let held = engine.capturedMidiCCEventsSnapshot()
+        XCTAssertEqual(
+            held.count, count,
+            "an 80-second take must keep every event; retention is preview-only"
+        )
+        XCTAssertEqual(held.first?.timestamp, start + 0.01, "the take's first event must survive")
+        XCTAssertEqual(engine.testOnly_drainTakeMIDIWindow(token: token)?.count, count)
+    }
+
+    /// The retention rule must be unreachable for take evidence by
+    /// construction, not merely unobserved above.
+    func testRetentionIsGatedOnPreviewOwnershipAtTheAppendSite() throws {
+        let source = try engineSource()
+        let appendRange = try XCTUnwrap(
+            source.range(of: "capturedMidiCCEvents.append(CaptureCore.RawMixerMIDIEvent(")
+        )
+        let body = String(source[appendRange.upperBound...].prefix(2000))
+        XCTAssertTrue(
+            body.contains("if midiWindowOwnerStorage == .preview,"),
+            "the trim must be gated on lock-owned preview ownership"
+        )
+        XCTAssertTrue(
+            body.contains("Self.livePreviewNeedsTrim("),
+            "and must go through the pure, tested predicate"
+        )
+        XCTAssertTrue(
+            body.contains("trimmedLivePreviewEvents("),
+            "and the pure, tested trim"
+        )
+        // Both policy numbers must still be documented as provisional.
+        for provisional in [
+            "static let livePreviewRetentionSeconds",
+            "static let livePreviewMaximumEventCount",
+            "static let livePreviewTrimSpanMultiplier",
+        ] {
+            let range = try XCTUnwrap(source.range(of: provisional), "missing \(provisional)")
+            let preamble = String(source[..<range.lowerBound].suffix(900))
+            XCTAssertTrue(
+                preamble.contains("PROVISIONAL"),
+                "\(provisional) must be documented as provisional policy"
+            )
+        }
+    }
+
+    /// Out-of-order MIDI timestamps must still be bounded correctly. The
+    /// oldest and newest held instants are running extremes, not the first and
+    /// last array elements, so a late-arriving old packet cannot defeat the
+    /// span rule and an early-arriving new one cannot evict a recent event.
+    func testOutOfOrderPreviewTimestampsRemainCorrectlyBounded() {
+        // Deliberately shuffled: the array's first element is NOT the oldest
+        // and its last is NOT the newest.
+        let events = [50.0, 10.0, 90.0, 30.0, 70.0].map { Self.previewEvent(timestamp: $0) }
+        XCTAssertTrue(
+            MacCaptureEngine.livePreviewNeedsTrim(
+                heldCount: events.count,
+                oldestTimestamp: events.map(\.timestamp).min(),
+                newestTimestamp: events.map(\.timestamp).max(),
+                retentionSeconds: 15,
+                maximumEventCount: 1_000
+            ),
+            "a span of 80 s must trigger a trim even though first > last"
+        )
+        let trimmed = MacCaptureEngine.trimmedLivePreviewEvents(
+            events, now: 90, retentionSeconds: 15, maximumEventCount: 1_000
+        )
+        XCTAssertEqual(
+            Set(trimmed.map(\.timestamp)), [90.0],
+            "the time rule must FILTER, not drop a prefix; only 90 is inside now - 15"
+        )
+
+        // The same through the production append path.
+        let engine = MacCaptureEngine(autoRefreshDevices: false)
+        engine.beginLiveMIDICapture()
+        addTeardownBlock { engine.endLiveMIDICaptureIfIdle() }
+        let base = engine.midiCaptureWindowTicket.epochStartHostTime
+        for offset in [1.0, 100.0, 2.0, 99.0, 3.0, 98.0] {
+            engine.recordReceivedMIDICCEvent(
+                sourceName: "Rane ONE MKII",
+                channel: 1, controller: 6, value: 1,
+                timestamp: base + offset
+            )
+        }
+        let held = engine.capturedMidiCCEventsSnapshot()
+        let oldest = try? XCTUnwrap(held.map(\.timestamp).min())
+        let newest = try? XCTUnwrap(held.map(\.timestamp).max())
+        XCTAssertLessThanOrEqual(
+            (newest ?? 0) - (oldest ?? 0),
+            MacCaptureEngine.livePreviewRetentionSeconds
+                * MacCaptureEngine.livePreviewTrimSpanMultiplier + 0.01,
+            "the span bound must hold under out-of-order arrival"
+        )
+        XCTAssertTrue(
+            held.contains { $0.timestamp == base + 98 },
+            "the most recent instants must survive, wherever they arrived in the sequence"
+        )
+    }
+
+    /// The REAL configured ceiling, exercised through the production append
+    /// path with more than 32,000 preview events.
+    func testPreviewAppendCapsAtTheRealConfiguredEventCeiling() {
+        let engine = MacCaptureEngine(autoRefreshDevices: false)
+        engine.beginLiveMIDICapture()
+        addTeardownBlock { engine.endLiveMIDICaptureIfIdle() }
+
+        let ceiling = MacCaptureEngine.livePreviewMaximumEventCount
+        let base = engine.midiCaptureWindowTicket.epochStartHostTime
+        // Tight spacing so the whole stream stays inside the retention window
+        // and the COUNT rule is the only thing that can bite.
+        let total = ceiling + 1_000
+        for index in 0..<total {
+            engine.recordReceivedMIDICCEvent(
+                sourceName: "Rane ONE MKII",
+                channel: 1, controller: 6, value: index % 128,
+                timestamp: base + 0.0001 * Double(index + 1)
+            )
+            if index + 1 == ceiling {
+                XCTAssertEqual(engine.capturedMidiCCEventsSnapshot().count, ceiling)
+            }
+            if index + 1 == ceiling + 1 {
+                XCTAssertLessThanOrEqual(engine.capturedMidiCCEventsSnapshot().count, ceiling)
+            }
+        }
+
+        let held = engine.capturedMidiCCEventsSnapshot()
+        XCTAssertLessThanOrEqual(
+            held.count, ceiling,
+            "more than \(ceiling) preview events must cap at the configured ceiling"
+        )
+        XCTAssertGreaterThanOrEqual(
+            held.count, MacCaptureEngine.livePreviewTrimTargetEventCount,
+            "a trim reduces to the target watermark and no further"
+        )
+        XCTAssertLessThan(held.count, total, "and the buffer really was capped")
+        XCTAssertEqual(
+            held.last?.timestamp, base + 0.0001 * Double(total),
+            "the newest arrival is always kept"
+        )
+    }
+
+    /// A take exceeding the same ceiling is NOT trimmed, and drains whole.
+    func testATakeLargerThanTheCeilingIsNeverTrimmedAndDrainsOnce() throws {
+        let engine = MacCaptureEngine(autoRefreshDevices: false)
+        let token = engine.testOnly_armTakeMIDIWindow()
+        let start = CACurrentMediaTime()
+        engine.testOnly_openTakeMIDIEpoch(at: start)
+
+        let count = MacCaptureEngine.livePreviewMaximumEventCount + 1_000
+        for index in 0..<count {
+            engine.recordReceivedMIDICCEvent(
+                sourceName: "Rane ONE MKII",
+                channel: 1, controller: 6, value: index % 128,
+                timestamp: start + 0.0001 * Double(index + 1)
+            )
+        }
+        XCTAssertEqual(
+            engine.capturedMidiCCEventsSnapshot().count, count,
+            "a take past the preview ceiling must keep every event"
+        )
+        let drained = try XCTUnwrap(engine.testOnly_drainTakeMIDIWindow(token: token))
+        XCTAssertEqual(drained.count, count, "and drain whole")
+        XCTAssertNil(engine.testOnly_drainTakeMIDIWindow(token: token), "exactly once")
+    }
+
+    // MARK: - Route lifecycle
+
+    /// Leaving the route stops presentation work and closes only the window this
+    /// route opened. It must NOT stop the shared engine: the camera session and
+    /// capture ownership belong to the engine, and a take may still be running.
+    func testRouteExitStopsPresentationWithoutStoppingSharedCaptureOwnership() throws {
+        let source = try authoringViewSource()
+
+        let disappearRange = try XCTUnwrap(
+            source.range(of: ".onDisappear {"),
+            "the route must still tear down on disappearance"
+        )
+        let body = String(source[disappearRange.upperBound...].prefix(900))
+        XCTAssertTrue(
+            body.contains("syncLiveNotationTracker(mode: .off)"),
+            "leaving the route must drop the tracker and its poll timer"
+        )
+        // The engine is shared. Route exit may never stop it, stop the session,
+        // stop recording, or reconfigure the camera.
+        for forbidden in [
+            "captureEngine.stop()",
+            "captureEngine.stopRoutineRecording",
+            "captureEngine.stopSession",
+        ] {
+            XCTAssertFalse(
+                source.contains(forbidden),
+                "route exit must not take capture ownership away: found \(forbidden)"
+            )
+        }
+        // The ONLY engine state the route lifecycle touches is the preview
+        // window, through the two ownership-guarded accessors.
+        XCTAssertTrue(source.contains("captureEngine.endLiveMIDICaptureIfIdle()"))
+        XCTAssertTrue(source.contains("captureEngine.beginLiveMIDICapture()"))
+        // And starting the engine remains the route's single existing call.
+        XCTAssertEqual(
+            source.components(separatedBy: "captureEngine.start()").count - 1, 1,
+            "the route keeps exactly one engine start, unchanged by this repair"
+        )
+    }
+
+    /// Repeated and restored entry must not stack trackers or windows. The mode
+    /// guard makes every redundant sync a no-op, and the engine claims the
+    /// window only from `.idle`, so a second open is a no-op too.
+    @MainActor
+    func testRepeatedRouteEntryCreatesNoDuplicateTrackerOrWindow() throws {
+        let engine = MacCaptureEngine(autoRefreshDevices: false)
+        var mode: ReferenceAuthoringView.LiveNotationMode = .off
+        var tracker: LivePerformedNotationTracker?
+        func sync(_ next: ReferenceAuthoringView.LiveNotationMode) {
+            ReferenceAuthoringView.syncLiveNotationTracker(
+                mode: next, liveNotationMode: &mode,
+                liveNotationTracker: &tracker, captureEngine: engine
+            )
+        }
+        sync(.preview) // Entry, including restored entry without a phase change.
+        let first = try XCTUnwrap(tracker)
+        let opened = engine.midiCaptureWindowTicket
+        sync(.preview)
+        XCTAssertTrue(tracker === first)
+        XCTAssertEqual(engine.midiCaptureWindowTicket, opened)
+        sync(.off)
+        XCTAssertNil(tracker)
+        XCTAssertEqual(engine.midiCaptureWindowTicket.owner, .idle)
+        sync(.preview) // Re-entry has exactly one fresh tracker and window.
+        let second = try XCTUnwrap(tracker)
+        XCTAssertFalse(second === first)
+        let reopened = engine.midiCaptureWindowTicket
+        sync(.preview)
+        XCTAssertTrue(tracker === second)
+        XCTAssertEqual(engine.midiCaptureWindowTicket, reopened)
+        let token = engine.testOnly_armTakeMIDIWindow()
+        sync(.take)
+        XCTAssertFalse(tracker === second)
+        let takeTracker = try XCTUnwrap(tracker)
+        sync(.take)
+        XCTAssertTrue(tracker === takeTracker)
+        sync(.off)
+        XCTAssertNil(tracker)
+        XCTAssertEqual(engine.midiCaptureWindowTicket.takeToken, token)
+        engine.testOnly_releaseAbandonedTakeMIDIWindow(token: token)
+        sync(.preview)
+        sync(.off)
+    }
+
+    /// Restored navigation resolves the mode explicitly rather than relying on a
+    /// transition that already happened, which is what made a restored route
+    /// show a blank lane.
+    func testRestoredRouteEntryResolvesTheModeExplicitly() throws {
+        let source = try authoringViewSource()
+        let taskRange = try XCTUnwrap(source.range(of: ".task {"))
+        let body = String(source[taskRange.upperBound...].prefix(1400))
+        XCTAssertTrue(
+            body.contains("syncLiveNotationTracker(mode: resolvedLiveNotationMode)"),
+            "entry and restoration must resolve the mode, not wait for a transition"
+        )
+        XCTAssertTrue(
+            body.contains("activateCaptureInput()"),
+            "the existing restored-route engine start must be preserved"
+        )
+    }
+
+    /// Finalized review notation is untouched by this repair: it still projects
+    /// through the same builder, and the preview never reaches it.
+    func testFinalizedNotationBehaviourIsUnchanged() throws {
+        let source = try authoringViewSource()
+        XCTAssertTrue(
+            source.contains("ReferenceTearCanonicalProjectionBuilder.project(review)"),
+            "the finalized review must still project through the shared builder"
+        )
+        XCTAssertTrue(
+            source.contains("movementEvents: liveNotationTracker.renderedEvents"),
+            "and the live lane through the same one"
+        )
+        XCTAssertTrue(
+            source.contains("coordinates: liveNotationTracker.platterCoordinates"),
+            "the live boundary must still declare its coordinate basis"
+        )
+        // No second engine, decoder, model or renderer was introduced.
+        XCTAssertEqual(
+            source.components(separatedBy: "MacCaptureEngine(").count - 1, 0,
+            "the route must keep using the injected engine, never build one"
+        )
+        XCTAssertFalse(source.contains("ScratchMotionRenderer"))
+        XCTAssertFalse(source.contains("Path {"))
+    }
+
+    /// The idle copy must describe the pre-record preview truthfully, and must
+    /// not imply it is recorded or saved.
+    func testIdleCopyDoesNotClaimTheLaneWaitsForARecording() throws {
+        let source = try authoringViewSource()
+        XCTAssertFalse(
+            source.contains("Live motion appears here while a take is recording."),
+            "the lane no longer waits for a take, so that copy is now false"
+        )
+        XCTAssertTrue(
+            source.contains("Live motion appears here while this screen is open."),
+            "the copy must describe the route-scoped preview"
+        )
+        for overclaim in ["recorded", "saved", "captured evidence"] {
+            XCTAssertFalse(
+                source.contains("Live motion appears here while this screen is open. \(overclaim)"),
+                "preview copy must not imply the preview is saved evidence"
+            )
+        }
+    }
+
+    // MARK: - Pre-record preview helpers
+
+    /// One-shot latch so the append seam pauses exactly ONE packet, however
+    /// many packets the interleaving under test happens to generate.
+    private final class OneShotSeamLatch {
+        private let lock = NSLock()
+        private var hasFired = false
+        func claim() -> Bool {
+            lock.lock()
+            defer { lock.unlock() }
+            if hasFired { return false }
+            hasFired = true
+            return true
+        }
+    }
+
+    /// Runs `packet` on a background thread and blocks it inside the engine's
+    /// append seam — after it has taken its window ticket and BEFORE it
+    /// appends — while `transition` runs on the test thread. Then releases it
+    /// and waits for it to finish.
+    ///
+    /// The seam is invoked with `midiCaptureLock` NOT held, so `transition` can
+    /// take the lock freely. Every wait is bounded; nothing sleeps.
+    private func pauseOneMIDIPacket(
+        engine: MacCaptureEngine,
+        packet: @escaping () -> Void,
+        observingTicket: ((MacCaptureEngine.MIDICaptureWindowTicket) -> Void)? = nil,
+        whilePaused transition: () -> Void,
+        file: StaticString = #filePath,
+        line: UInt = #line
+    ) {
+        let latch = OneShotSeamLatch()
+        let reachedSeam = DispatchSemaphore(value: 0)
+        let mayResume = DispatchSemaphore(value: 0)
+        engine.testOnly_setMIDIAppendInterleavingHook { ticket in
+            guard latch.claim() else { return }
+            observingTicket?(ticket)
+            reachedSeam.signal()
+            XCTAssertEqual(
+                mayResume.wait(timeout: .now() + 5), .success,
+                "seam release timed out", file: file, line: line
+            )
+        }
+        let finished = expectation(description: "paused MIDI packet completed")
+        DispatchQueue.global(qos: .userInitiated).async {
+            packet()
+            finished.fulfill()
+        }
+        XCTAssertEqual(
+            reachedSeam.wait(timeout: .now() + 5), .success,
+            "the packet never reached the append seam", file: file, line: line
+        )
+        transition()
+        mayResume.signal()
+        wait(for: [finished], timeout: 5)
+        engine.testOnly_setMIDIAppendInterleavingHook(nil)
+    }
+
+    private func receiveRealCCPacket(_ engine: MacCaptureEngine) {
+        var list = MIDIPacketList()
+        withUnsafeMutablePointer(to: &list) { pointer in
+            let first = MIDIPacketListInit(pointer)
+            let bytes: [UInt8] = [0xB2, 16, 40]
+            bytes.withUnsafeBufferPointer { buffer in
+                XCTAssertNotNil(MIDIPacketListAdd(
+                    pointer, MemoryLayout<MIDIPacketList>.size, first,
+                    0, buffer.count, buffer.baseAddress!
+                ))
+            }
+            engine.testOnly_receiveMIDIPacketList(pointer)
+        }
+    }
+
+    /// Runs the main queue until everything already enqueued has executed.
+    /// Bounded; no sleeping.
+    private func drainMainQueue(file: StaticString = #filePath, line: UInt = #line) {
+        let settled = expectation(description: "main queue drained")
+        DispatchQueue.main.async { settled.fulfill() }
+        wait(for: [settled], timeout: 5)
+    }
+
+    private func engineSource() throws -> String {
+        let url = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .appendingPathComponent("ScratchLabDesktop/Services/MacCaptureEngine.swift")
+        return try String(contentsOf: url, encoding: .utf8)
+    }
+
+    private static func previewEvent(timestamp: Double) -> CaptureCore.RawMixerMIDIEvent {
+        CaptureCore.RawMixerMIDIEvent(
+            timestamp: timestamp,
+            takeRelativeTime: timestamp,
+            deviceName: "Rane ONE MKII",
+            channel: 1,
+            controller: 6,
+            value: 64,
+            normalizedValue: 0.5,
+            mappedControl: nil,
+            calibratedPosition: nil,
+            calibrationID: nil
+        )
     }
 }

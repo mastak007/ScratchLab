@@ -392,8 +392,23 @@ final class MacCameraPreviewViewTests: XCTestCase {
             "Disappearance cancels only transient work."
         )
         XCTAssertTrue(
-            source.contains("syncLiveNotationTracker(isRecording: false)"),
+            source.contains("syncLiveNotationTracker(mode: .off)"),
             "Disappearance drops the notation tracker, which is what cancels its poll timer."
+        )
+        // The lane is live from route entry, not only during a take, so
+        // disappearance must also close the preview accumulation window this
+        // route opened. `endLiveMIDICaptureIfIdle()` refuses to act while a
+        // take is recording or finalizing, so this cannot touch take evidence.
+        XCTAssertTrue(
+            source.contains("captureEngine.endLiveMIDICaptureIfIdle()"),
+            "Disappearance closes only the preview window this route opened."
+        )
+        // Preview accumulation is the ONLY engine state the route lifecycle
+        // writes. Everything that owns capture stays owned elsewhere, which
+        // the forbidden-call list above continues to enforce.
+        XCTAssertEqual(
+            source.components(separatedBy: "captureEngine.start()").count - 1, 1,
+            "Route activation remains exactly one engine start."
         )
     }
 

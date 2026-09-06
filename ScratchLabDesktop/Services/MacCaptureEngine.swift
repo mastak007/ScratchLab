@@ -3258,6 +3258,16 @@ final class MacCaptureEngine: NSObject, ObservableObject {
     // transition to know a stopped take has actually finished writing before
     // reading its sidecar back. No existing internal read/write site changes.
     @Published private(set) var isRoutineFinalizationPending = false
+    /// Incremented on the MainActor every time a take RELEASES the MIDI
+    /// accumulation window — by the finalization drain, or by an abandonment
+    /// release on a path that will never drain.
+    ///
+    /// The pre-record preview re-arms on this rather than on
+    /// `isRoutineFinalizationPending` falling, because the early-return
+    /// finalization paths never set that flag at all and so never publish a
+    /// true→false transition to observe. This counter is published from every
+    /// release path without exception.
+    @Published private(set) var midiCaptureWindowReleaseCount = 0
     @Published private(set) var routineRecordingStatus = "Pick camera and audio to record a routine."
     @Published private(set) var lastRoutineRecordingURL: URL?
     @Published private(set) var lastRoutineRecordingSessionID: String?
@@ -4553,9 +4563,10 @@ final class MacCaptureEngine: NSObject, ObservableObject {
     /// and schedules the backstop stop. Called from `didStartRecordingTo` only.
     private func beginRoutineTakeTimelines(
         at mediaStartHostTime: CFTimeInterval,
-        token: RoutineRecordingRequestToken? = nil
+        token: RoutineRecordingRequestToken? = nil,
+        midiTakeToken: MIDICaptureTakeToken?
     ) {
-        beginMIDIRecordingWindow(at: mediaStartHostTime)
+        beginMIDIRecordingWindow(at: mediaStartHostTime, token: midiTakeToken)
         captureCrossfaderTakeStartState(
             token: token,
             mediaStartHostTime: mediaStartHostTime
@@ -4624,6 +4635,15 @@ final class MacCaptureEngine: NSObject, ObservableObject {
     private var debugObserveSkippedNotRecording = 0
     private var debugObserveAttempted = 0
     private var debugMidiEventsCapturedThisTake = 0
+    /// Packets dropped at the append site because the accumulation window they
+    /// were admitted under had already been retired.
+    private var debugMidiEventsRejectedAsStale = 0
+    /// Deterministic interleaving seam, invoked BETWEEN a packet taking its
+    /// window ticket and appending under that ticket, with `midiCaptureLock`
+    /// NOT held. Tests block here to run a window transition on another thread;
+    /// nil, and therefore free, in every other build. Read under the lock, then
+    /// called outside it.
+    private var testOnly_midiAppendInterleavingHook: ((MIDICaptureWindowTicket) -> Void)?
     private var debugLastROI: CGRect = .zero
     private var debugJointsRelaxedAccepted = 0
     private var debugContinuityFilledSamples = 0
@@ -4652,7 +4672,85 @@ final class MacCaptureEngine: NSObject, ObservableObject {
     private var midiSourceEndpoints: [MIDIInputSourceChoice: MIDIEndpointRef] = [:]
     private var capturedMidiCCEvents: [CaptureCore.RawMixerMIDIEvent] = []
     private let midiCaptureLock = NSLock()
+    /// Media-start host time of the CURRENT accumulation window, or 0 while
+    /// that window admits nothing. Guarded by `midiCaptureLock`; only ever
+    /// written through `lockedSetMIDICaptureWindow`, so it
+    /// can never change without the window generation changing with it.
     private var midiRecordingStartTime: CFTimeInterval = 0
+
+    /// Who owns the `capturedMidiCCEvents` accumulation window.
+    ///
+    /// This is the ONE authority. It is not derived from `isRoutineRecording`
+    /// or `isRoutineFinalizationPending`: both of those are `@Published` flags
+    /// written asynchronously on the MainActor, so neither is ordered against
+    /// the session queue that arms a take, against the finalization queue that
+    /// drains one, or against the Core MIDI read thread that appends to the
+    /// buffer. Ownership is read and written only under `midiCaptureLock`.
+    enum MIDICaptureWindowOwner: String, Equatable {
+        /// Nobody owns the buffer; it is empty and a preview may claim it.
+        case idle
+        /// The pre-record live preview owns it. Only preview windows are
+        /// subject to trailing retention.
+        case preview
+        /// A capture take owns it, from record arming until the finalization
+        /// drain (or an abandonment release) has run. A STOPPED take still
+        /// owns it: stopping closes the take's admission epoch, it does not
+        /// release the evidence.
+        case take
+    }
+
+    /// Identity of ONE armed take's claim on the MIDI accumulation window.
+    ///
+    /// Minted per arming, so "release this take's window" is a statement about
+    /// a specific take rather than about whatever happens to own the window
+    /// now. Without it, a failed start could release a previous, stopped,
+    /// still-undrained take, and a duplicated finalization could release a
+    /// take that had already been drained.
+    struct MIDICaptureTakeToken: Hashable {
+        let value: UInt64
+        // Immutable callback identity; never persisted or exported.
+        let mediaURL: URL?
+
+        init(value: UInt64, mediaURL: URL? = nil) {
+            self.value = value
+            self.mediaURL = mediaURL
+        }
+    }
+
+    /// Identity of exactly one accumulation window, snapshotted under
+    /// `midiCaptureLock`.
+    ///
+    /// `generation` changes on EVERY ownership or epoch change, so two tickets
+    /// with the same generation necessarily describe the same window with the
+    /// same owner, the same epoch and the same take token. That makes a
+    /// generation comparison the whole staleness test at the append site.
+    struct MIDICaptureWindowTicket: Equatable {
+        let owner: MIDICaptureWindowOwner
+        let generation: UInt64
+        /// Media-start host time, or 0 while the window admits nothing.
+        /// An epoch of 0 rejects every packet.
+        let epochStartHostTime: CFTimeInterval
+        /// Non-nil exactly while `owner == .take`.
+        let takeToken: MIDICaptureTakeToken?
+    }
+
+    /// Guarded by `midiCaptureLock`.
+    private var midiWindowOwnerStorage: MIDICaptureWindowOwner = .idle
+    /// Guarded by `midiCaptureLock`. Monotonic; never wraps.
+    private var midiWindowGenerationStorage: UInt64 = 0
+    /// Guarded by `midiCaptureLock`. Non-nil exactly while a take owns the
+    /// window.
+    private var midiWindowTakeTokenStorage: MIDICaptureTakeToken?
+    /// Guarded by `midiCaptureLock`. Running minimum/maximum of the timestamps
+    /// currently held in `capturedMidiCCEvents`.
+    ///
+    /// Tracked explicitly because MIDI timestamps are NOT guaranteed to be
+    /// ordered: packets can carry host times that arrive out of order, so
+    /// neither the first nor the last array element is reliably the oldest or
+    /// the newest. Both are maintained in O(1) per append and recomputed only
+    /// when a trim actually runs.
+    private var livePreviewOldestTimestamp: Double?
+    private var livePreviewNewestTimestamp: Double?
     private var midiConnectedSourceName: String = ""
     /// Monotonic identity of the MIDI input DEVICE SESSION this process is
     /// currently reading from.
@@ -5274,6 +5372,15 @@ final class MacCaptureEngine: NSObject, ObservableObject {
         captureTiming: CaptureTimingMetadata? = nil
     ) -> RoutineRecordingRequestToken {
         let recordingToken = routineRecordingBoundaryLedger.beginRequest()
+        // Refuse before touching any camera, duration, sidecar or audio state.
+        // The prior take may be stopped with neither UI flag published yet.
+        guard midiCaptureWindowTicket.owner != .take else {
+            routineRecordingBoundaryLedger.failStart(
+                token: recordingToken,
+                description: "A previous routine take still owns its MIDI evidence."
+            )
+            return recordingToken
+        }
         // A prior take's asynchronous finalization may still be pending; refuse
         // to start a new take (and re-open the admission gate) until it completes.
         guard !isRoutineFinalizationPending else {
@@ -5388,7 +5495,13 @@ final class MacCaptureEngine: NSObject, ObservableObject {
                 return
             }
 
+            var midiTakeToken: MIDICaptureTakeToken?
             do {
+                // A stopped take retains its evidence until its own release.
+                // Refuse before preparing any new sidecar or capture state.
+                guard self.midiCaptureWindowTicket.owner != .take else {
+                    throw RoutineRecordingError.sessionNotReady
+                }
                 if !self.captureSessionHasInput(matching: selectedVideoID, mediaType: .video)
                     || !self.captureSessionHasInput(matching: selectedAudioID, mediaType: .audio) {
                     self.configureCaptureSession(
@@ -5463,7 +5576,12 @@ final class MacCaptureEngine: NSObject, ObservableObject {
                     self.onboardOutputCaptureStatus = "Recording is armed, but onboard AHHH is currently silent."
                     self.routineRecordingStatus = "Starting routine recording"
                 }
-                self.openMIDIInputForRecording()
+                // Captured so the catch below can abandon THIS take's window
+                // and no other. Nil until arming actually happened: a throw
+                // before this point must release nothing, or a failed start
+                // would destroy a previous stopped-but-undrained take.
+                midiTakeToken = self.openMIDIInputForRecording(mediaURL: preparedRecording.mediaURL)
+                guard midiTakeToken != nil else { throw RoutineRecordingError.sessionNotReady }
                 // Phase 3.1 — discard any stale timeline from a previous take.
                 // The recorder is deliberately left *disarmed* until
                 // `didStartRecordingTo`: samples observed while the writer is
@@ -5519,6 +5637,15 @@ final class MacCaptureEngine: NSObject, ObservableObject {
                 self.movieOutput.startRecording(to: preparedRecording.mediaURL, recordingDelegate: self)
             } catch {
                 self.scratchPlaybackController.cancelRoutineOutputCapture()
+                // Arming may already have seized the MIDI window; this take
+                // will never reach finalization, so nothing would ever drain
+                // it. Hand the window back explicitly or the pre-record
+                // preview stays closed for the rest of the session. Scoped to
+                // this take's own token, so a start that threw before arming
+                // releases nothing and can never abandon another take.
+                if let midiTakeToken {
+                    self.releaseAbandonedTakeMIDIWindow(token: midiTakeToken)
+                }
                 self.reconnectSelectedMIDIInput()
                 self.requestWatchStopIfNeeded(reason: .interrupted)
                 let message = (error as? LocalizedError)?.errorDescription
@@ -5537,6 +5664,7 @@ final class MacCaptureEngine: NSObject, ObservableObject {
     }
 
     func stopRoutineRecording(reason: CaptureStopReason = .manual) {
+        let midiTakeToken = midiCaptureWindowTicket.takeToken
         noteRoutineStopReason(reason)
         // Dispatched before the media stop so the Watch is told as early as
         // possible; it is bounded and asynchronous, so it never delays the
@@ -5558,7 +5686,7 @@ final class MacCaptureEngine: NSObject, ObservableObject {
                     )
                 }
             }
-            self.closeMIDIRecordingWindow()
+            self.closeMIDIRecordingWindow(token: midiTakeToken)
             self.movieOutput.stopRecording()
         }
     }
@@ -7001,7 +7129,11 @@ final class MacCaptureEngine: NSObject, ObservableObject {
     /// `DispatchGroup.wait()` here would deadlock. This closes admission,
     /// captures the take's state, and schedules the second half via
     /// `group.notify(queue: finalizationQueue)`.
-    private func finalizeRoutineRecording(outputFileURL: URL, error: Error?) {
+    private func finalizeRoutineRecording(
+        outputFileURL: URL, error: Error?, midiTakeToken: MIDICaptureTakeToken?
+    ) {
+        guard midiTakeToken != nil,
+              midiCaptureWindowTicket.takeToken == midiTakeToken else { return }
         let recordingToken = routineRecordingBoundaryLedger.enterFinalization(
             mediaURL: outputFileURL
         )
@@ -7016,10 +7148,20 @@ final class MacCaptureEngine: NSObject, ObservableObject {
             captureErrorDescription: captureErrorDescription
         )
 
+        // The delegate captured this exact media file's token before any
+        // asynchronous audio/mux work. Never resample the current owner here.
         guard let sidecar = activeRoutineRecordingSidecar else {
             let message = captureErrorDescription != nil
                 ? "Recording ended before it could be saved."
                 : "Finalizing \(outputFileURL.lastPathComponent)..."
+            // This early return never reaches `completeRoutineFinalization`,
+            // so the drain never runs and this path never sets
+            // `isRoutineFinalizationPending` either. Release the window here,
+            // or a take that ended without a sidecar would hold it forever and
+            // the preview could never re-arm.
+            if let midiTakeToken {
+                releaseAbandonedTakeMIDIWindow(token: midiTakeToken)
+            }
             publishRoutineFinalization(
                 outputFileURL: outputFileURL,
                 captureErrorDescription: captureErrorDescription,
@@ -7059,6 +7201,7 @@ final class MacCaptureEngine: NSObject, ObservableObject {
         // the main queue / MainActor, so the admitted @MainActor tasks can run.
         group.notify(queue: finalizationQueue) { [weak self] in
             self?.completeRoutineFinalization(
+                midiTakeToken: midiTakeToken,
                 outputFileURL: outputFileURL,
                 captureErrorDescription: captureErrorDescription,
                 stopReason: stopReason,
@@ -7078,6 +7221,7 @@ final class MacCaptureEngine: NSObject, ObservableObject {
     /// and drains the builder, freezes diagnostics, writes the sidecar +
     /// companions, clears take state, and publishes the completed UI state.
     private func completeRoutineFinalization(
+        midiTakeToken: MIDICaptureTakeToken?,
         outputFileURL: URL,
         captureErrorDescription: String?,
         stopReason: CaptureStopReason,
@@ -7090,6 +7234,8 @@ final class MacCaptureEngine: NSObject, ObservableObject {
         debugSession: RoutineMovementDebugSession?,
         recordingToken: RoutineRecordingRequestToken?
     ) {
+        guard let midiTakeToken,
+              midiCaptureWindowTicket.takeToken == midiTakeToken else { return }
         var sidecar = sidecar
 
         // The group has emptied — no admitted task remains, so detaching the
@@ -7104,7 +7250,10 @@ final class MacCaptureEngine: NSObject, ObservableObject {
             "MovementEventBuild",
             count: motionEvents.count,
             take: sidecar.appLocalTakeNumber)
-        let capturedMidi = drainCapturedMidiCCEvents()
+        // Token-scoped: a duplicated or stale finalization drains nothing and
+        // publishes no release. `nil` here means "not this take's window any
+        // more", which is not the same as "this take captured nothing".
+        guard let capturedMidi = drainCapturedMidiCCEvents(token: midiTakeToken) else { return }
         // Read BEFORE the reconnect below: reconnecting bumps the MIDI
         // connection generation, and this record must carry the generation it
         // was actually observed under.
@@ -10946,33 +11095,181 @@ final class MacCaptureEngine: NSObject, ObservableObject {
         }
     }
 
-    private func openMIDIInputForRecording() {
-        midiCaptureLock.lock()
+    /// Reads the current window's identity. MUST be called with
+    /// `midiCaptureLock` held.
+    private func lockedMIDICaptureWindowTicket() -> MIDICaptureWindowTicket {
+        MIDICaptureWindowTicket(
+            owner: midiWindowOwnerStorage,
+            generation: midiWindowGenerationStorage,
+            epochStartHostTime: midiRecordingStartTime,
+            takeToken: midiWindowTakeTokenStorage
+        )
+    }
+
+    /// The ONLY writer of window ownership, epoch and take token. MUST be
+    /// called with `midiCaptureLock` held.
+    ///
+    /// Bumping the generation on every call is what makes a generation
+    /// comparison at the append site a complete staleness test: an owner
+    /// change, an epoch change and a take change are all generation changes,
+    /// so no packet admitted under one window can be appended into another.
+    private func lockedSetMIDICaptureWindow(
+        owner: MIDICaptureWindowOwner,
+        epochStartHostTime: CFTimeInterval,
+        takeToken: MIDICaptureTakeToken?
+    ) {
+        assert(
+            (owner == .take) == (takeToken != nil),
+            "a take token exists exactly while a take owns the window"
+        )
+        midiWindowOwnerStorage = owner
+        midiRecordingStartTime = epochStartHostTime
+        midiWindowTakeTokenStorage = takeToken
+        midiWindowGenerationStorage += 1
+    }
+
+    /// Clears the buffer and its retention bookkeeping together. MUST be
+    /// called with `midiCaptureLock` held.
+    private func lockedClearCapturedMidiCCEvents() {
         capturedMidiCCEvents = []
+        livePreviewOldestTimestamp = nil
+        livePreviewNewestTimestamp = nil
+    }
+
+    /// Current MIDI accumulation-window identity. Read-only; production
+    /// transitions take their own ticket inside their own critical section.
+    var midiCaptureWindowTicket: MIDICaptureWindowTicket {
+        midiCaptureLock.lock()
+        defer { midiCaptureLock.unlock() }
+        return lockedMIDICaptureWindowTicket()
+    }
+
+    /// A callback may obtain only the token armed for its own media URL.
+    /// A delayed callback from another take cannot acquire the current token.
+    private func midiTakeToken(for mediaURL: URL) -> MIDICaptureTakeToken? {
+        midiCaptureLock.lock()
+        defer { midiCaptureLock.unlock() }
+        guard midiWindowOwnerStorage == .take,
+              let token = midiWindowTakeTokenStorage,
+              token.mediaURL == mediaURL else { return nil }
+        return token
+    }
+
+    /// Publishes a window release so the pre-record preview can re-arm.
+    /// Called AFTER `midiCaptureLock` is released, never under it.
+    private func publishMIDICaptureWindowRelease() {
+        publishOnMainAsync(field: "midiCaptureWindowReleaseCount") { [weak self] in
+            self?.midiCaptureWindowReleaseCount += 1
+        }
+    }
+
+    /// Record arming. Seizes the accumulation window for the take
+    /// from idle or preview under the lock; an undrained take refuses arming.
+    ///
+    /// This is what makes preview contamination structurally impossible rather
+    /// than merely unlikely, and it does not depend on `isRoutineRecording`
+    /// having been published yet:
+    ///
+    /// - Any preview accumulation is discarded HERE, before a take epoch
+    ///   exists, so no preview event can ever be relabelled as take evidence.
+    /// - Ownership becomes `.take` in the same critical section, so a
+    ///   `beginLiveMIDICapture()` that lands after this — including one racing
+    ///   the MainActor publication of `isRoutineRecording` — sees a take owner
+    ///   and refuses. A preview window therefore cannot be open through media
+    ///   start.
+    /// - The generation bump retires every packet already in flight under the
+    ///   preview window; those packets are dropped at the append site rather
+    ///   than entering the take.
+    /// - Returns: the token identifying THIS take's claim on the window. Only
+    ///   this token may later drain or abandon it.
+    @discardableResult
+    private func openMIDIInputForRecording(mediaURL: URL? = nil) -> MIDICaptureTakeToken? {
+        midiCaptureLock.lock()
+        guard midiWindowOwnerStorage != .take else {
+            midiCaptureLock.unlock()
+            return nil
+        }
+        lockedClearCapturedMidiCCEvents()
         // A previous take's take-start observation must never survive into
         // this one. It is re-observed at this take's own media-start boundary.
         activeRoutineCrossfaderTakeStartState = nil
+        let token = MIDICaptureTakeToken(
+            value: midiWindowGenerationStorage + 1, mediaURL: mediaURL
+        )
         // The port is armed before AVFoundation confirms that media is being
         // written. Keep the capture epoch closed until didStartRecording so
         // pre-roll controller traffic cannot enter the take timeline.
-        midiRecordingStartTime = 0
+        lockedSetMIDICaptureWindow(owner: .take, epochStartHostTime: 0, takeToken: token)
         #if DEBUG
         debugMidiEventsCapturedThisTake = 0
         #endif
         midiCaptureLock.unlock()
         reconnectSelectedMIDIInput()
+        return token
     }
 
-    private func beginMIDIRecordingWindow(at hostTime: CFTimeInterval) {
+    /// Opens the take's admission epoch at confirmed media start.
+    ///
+    /// Guarded on `.take` ownership so an epoch can never be opened on a
+    /// preview window — that would relabel preview accumulation as take
+    /// evidence. Arming always precedes this on the same session queue, so the
+    /// guard is an invariant check, not an expected branch; failing it leaves
+    /// the epoch closed, which loses MIDI visibly rather than corrupting it.
+    private func beginMIDIRecordingWindow(at hostTime: CFTimeInterval, token: MIDICaptureTakeToken?) {
         midiCaptureLock.lock()
-        midiRecordingStartTime = hostTime
+        if midiWindowOwnerStorage == .take, let token, midiWindowTakeTokenStorage == token {
+            lockedSetMIDICaptureWindow(
+                owner: .take,
+                epochStartHostTime: hostTime,
+                takeToken: token
+            )
+        }
         midiCaptureLock.unlock()
     }
 
-    private func closeMIDIRecordingWindow() {
+    /// Closes the take's admission epoch at Stop.
+    ///
+    /// Ownership deliberately STAYS `.take`. A stopped take is not a finished
+    /// one: its events remain in `capturedMidiCCEvents` — including the
+    /// crossfader samples the sidecar is written from — until the finalization
+    /// drain. Keeping ownership here is what closes the stop/finalization gap
+    /// that `isRoutineRecording == false` alone left open, in which a preview
+    /// begin/end could have cleared undrained take evidence.
+    ///
+    /// The generation bump defines what happens to a take packet already in
+    /// flight when Stop begins: it was admitted under the open-epoch window,
+    /// that window is now retired, so it is dropped at the append site instead
+    /// of being appended after the media has stopped.
+    private func closeMIDIRecordingWindow(token: MIDICaptureTakeToken?) {
         midiCaptureLock.lock()
-        midiRecordingStartTime = 0
+        if midiWindowOwnerStorage == .take, let token, midiWindowTakeTokenStorage == token,
+           midiRecordingStartTime != 0 {
+            lockedSetMIDICaptureWindow(owner: .take, epochStartHostTime: 0, takeToken: token)
+        }
         midiCaptureLock.unlock()
+    }
+
+    /// Releases ONE SPECIFIC take's claim on the window, on a path that will
+    /// never drain it: arming succeeded but recording start threw, or
+    /// finalization ended before a sidecar existed.
+    ///
+    /// Matching on `token` is what stops a stale caller releasing somebody
+    /// else's evidence: a failed start can only abandon the take IT armed,
+    /// never a previous stopped-but-undrained take, and a duplicated
+    /// abandonment is a no-op that publishes nothing.
+    ///
+    /// - Returns: true only if this call performed a real take→idle release.
+    @discardableResult
+    private func releaseAbandonedTakeMIDIWindow(token: MIDICaptureTakeToken) -> Bool {
+        midiCaptureLock.lock()
+        let released = midiWindowOwnerStorage == .take && midiWindowTakeTokenStorage == token
+        if released {
+            lockedClearCapturedMidiCCEvents()
+            lockedSetMIDICaptureWindow(owner: .idle, epochStartHostTime: 0, takeToken: nil)
+        }
+        midiCaptureLock.unlock()
+        if released { publishMIDICaptureWindowRelease() }
+        return released
     }
 
     /// Disconnect every source from the input port.
@@ -10997,14 +11294,34 @@ final class MacCaptureEngine: NSObject, ObservableObject {
         }
     }
 
-    private func drainCapturedMidiCCEvents() -> [CaptureCore.RawMixerMIDIEvent] {
+    /// Takes this take's evidence and releases the window, atomically.
+    ///
+    /// The read, the clear and the ownership release are one critical section,
+    /// so the drain cannot race an append belonging to the same take: an
+    /// append that has already passed its generation check completed before
+    /// this acquired the lock and is therefore included, and an append still
+    /// in flight is retired by the generation bump and dropped. The take's
+    /// evidence is drained exactly once, with no loss and no contamination.
+    /// - Parameter token: the take whose evidence is being drained. A drain
+    ///   for any other take — a stale finalization, a duplicated drain of a
+    ///   take already released — is a no-op that publishes no release.
+    /// - Returns: this take's evidence, or `nil` if the token did not match
+    ///   the take currently owning the window. `nil` and `[]` are deliberately
+    ///   distinct: `[]` means "this take really captured nothing".
+    private func drainCapturedMidiCCEvents(
+        token: MIDICaptureTakeToken
+    ) -> [CaptureCore.RawMixerMIDIEvent]? {
         midiCaptureLock.lock()
-        defer {
-            capturedMidiCCEvents = []
-            midiRecordingStartTime = 0
+        guard midiWindowOwnerStorage == .take, midiWindowTakeTokenStorage == token else {
             midiCaptureLock.unlock()
+            return nil
         }
-        return capturedMidiCCEvents
+        let drained = capturedMidiCCEvents
+        lockedClearCapturedMidiCCEvents()
+        lockedSetMIDICaptureWindow(owner: .idle, epochStartHostTime: 0, takeToken: nil)
+        midiCaptureLock.unlock()
+        publishMIDICaptureWindowRelease()
+        return drained
     }
 
     /// Non-destructive counterpart to `drainCapturedMidiCCEvents()`, guarded
@@ -11019,38 +11336,211 @@ final class MacCaptureEngine: NSObject, ObservableObject {
         return capturedMidiCCEvents
     }
 
-    /// Opens a `capturedMidiCCEvents` accumulation window for a Practice
-    /// attempt's live-notation tracker, WITHOUT touching MIDI port
-    /// connection (already independently established elsewhere) or any
-    /// Capture-only state (sidecar, movement-debug session,
-    /// `activeRoutineDetectedNotationBuilder`). `recordReceivedMIDICCEvent`
-    /// only appends while `midiRecordingStartTime > 0`, so this is what
-    /// makes the same accumulator Capture drains at finalization also fill
-    /// during Practice — same buffer, same append/lock semantics, no second
-    /// capture path. A no-op while a real Capture take is already recording
-    /// (`midiRecordingStartTime` already nonzero), so it can never reset an
-    /// in-progress take's events.
+    // MARK: - Pre-record live preview window
+    //
+    // Retention policy below is PROVISIONAL ENGINEERING POLICY. None of these
+    // numbers is hardware-calibrated or derived from a measured controller
+    // rate; they are chosen to keep an unbounded surface bounded, and they may
+    // be changed without changing any contract. What is NOT provisional is
+    // that both bounds hold, and that they apply to preview accumulation only.
+
+    /// Trailing window the PRE-RECORD live preview keeps, in seconds.
+    ///
+    /// PROVISIONAL. A take is bounded by its own duration; a preview window is
+    /// bounded by nothing — the operator can sit on the authoring screen with
+    /// the platter turning for as long as they like. 15 s is a policy choice,
+    /// comfortably above the widest domain the live card ever draws
+    /// (`LivePerformedNotationCard.renderedDomain` builds a 3.2-second-wide
+    /// range), but it is NOT derived from that number and no measurement
+    /// establishes it as correct.
+    static let livePreviewRetentionSeconds: Double = 15
+
+    /// Hard ceiling on the number of preview events held, independent of any
+    /// timestamp.
+    ///
+    /// PROVISIONAL. The time bound alone is not a bound on memory: it bounds a
+    /// SPAN, and the number of events inside a span depends entirely on the
+    /// controller's message rate, which this code does not measure. This
+    /// count is the bound that holds regardless of rate.
+    static let livePreviewMaximumEventCount = 32_000
+
+    /// Count a trim reduces preview accumulation TO, once the ceiling above is
+    /// exceeded.
+    ///
+    /// PROVISIONAL. It exists only so the count rule is amortised the same way
+    /// the span rule already is: without a lower watermark, every append past
+    /// the ceiling would trigger an O(n) copy. With it, a trim runs about once
+    /// per `livePreviewMaximumEventCount - livePreviewTrimTargetEventCount`
+    /// appends, and the ceiling still holds after every single append.
+    static let livePreviewTrimTargetEventCount = 24_000
+
+    /// Multiple of `livePreviewRetentionSeconds` the held span may reach
+    /// before a trim runs.
+    ///
+    /// PROVISIONAL. It exists so the trim is amortised — roughly once per
+    /// retention window instead of an O(n) copy on every message — and it is
+    /// the reason the proven span bound is `2 ×` the retention window rather
+    /// than exactly the retention window.
+    static let livePreviewTrimSpanMultiplier: Double = 2
+
+    /// Whether preview accumulation currently needs trimming.
+    ///
+    /// Pure, so both bounds are testable without a MIDI device. Either bound
+    /// alone triggers a trim, which is what makes the post-append invariant
+    /// hold unconditionally: after ANY preview append, the held count is at
+    /// most `maximumEventCount` and the held span is at most
+    /// `retentionSeconds × livePreviewTrimSpanMultiplier`.
+    ///
+    /// This runs only on append. An idle preview buffer is therefore not
+    /// re-trimmed — but it is also not growing, so it continues to satisfy the
+    /// bounds it satisfied at its last append. There is no idle expiry and
+    /// none is claimed.
+    static func livePreviewNeedsTrim(
+        heldCount: Int,
+        oldestTimestamp: Double?,
+        newestTimestamp: Double?,
+        retentionSeconds: Double = livePreviewRetentionSeconds,
+        maximumEventCount: Int = livePreviewMaximumEventCount
+    ) -> Bool {
+        if heldCount > maximumEventCount { return true }
+        guard let oldestTimestamp, let newestTimestamp else { return false }
+        // Running minimum and maximum, NOT the first and last array elements:
+        // MIDI host times are not guaranteed to arrive in order.
+        return newestTimestamp - oldestTimestamp > retentionSeconds * livePreviewTrimSpanMultiplier
+    }
+
+    /// Drops preview events older than `retentionSeconds` before `now`, then
+    /// caps what remains at the most recently ARRIVED `maximumEventCount`.
+    ///
+    /// The time bound FILTERS rather than slicing a prefix: MIDI timestamps
+    /// can arrive out of order, so the leading elements are not reliably the
+    /// oldest and dropping a prefix could discard a recent event while keeping
+    /// a stale one. The count bound keeps the tail because array order is
+    /// arrival order, which is the only ordering this buffer actually
+    /// guarantees.
+    ///
+    /// Pure, so the retention rule is testable without a MIDI device. Returns
+    /// the input unchanged when neither bound bites, so the common case
+    /// allocates nothing.
+    static func trimmedLivePreviewEvents(
+        _ events: [CaptureCore.RawMixerMIDIEvent],
+        now: Double,
+        retentionSeconds: Double = livePreviewRetentionSeconds,
+        maximumEventCount: Int = livePreviewMaximumEventCount
+    ) -> [CaptureCore.RawMixerMIDIEvent] {
+        guard maximumEventCount > 0 else { return [] }
+        let cutoff = now - retentionSeconds
+        var kept = events
+        if kept.contains(where: { $0.timestamp < cutoff }) {
+            kept = kept.filter { $0.timestamp >= cutoff }
+        }
+        if kept.count > maximumEventCount {
+            kept = Array(kept.suffix(maximumEventCount))
+        }
+        return kept
+    }
+
+    /// Opens a `capturedMidiCCEvents` accumulation window for a live-notation
+    /// tracker — Reference Authoring before Record, and Practice — WITHOUT
+    /// touching MIDI port connection (already independently established
+    /// elsewhere) or any Capture-only state (sidecar, movement-debug session,
+    /// `activeRoutineDetectedNotationBuilder`). Same buffer, same append/lock
+    /// semantics as the one Capture drains at finalization; no second capture
+    /// path.
+    ///
+    /// Claims the window ONLY from `.idle`, decided under `midiCaptureLock`
+    /// against the lock-owned owner rather than against any `@Published` flag.
+    /// That single condition covers every case the published flags covered
+    /// separately and the ones they did not:
+    ///
+    /// - An armed or recording take owns the window, so this cannot reset it —
+    ///   including inside the arming gap, where `isRoutineRecording` may not
+    ///   have been published yet and the take epoch is deliberately still 0.
+    /// - A STOPPED but undrained take still owns the window, so this cannot
+    ///   clear evidence in the stop→finalization gap, in which
+    ///   `isRoutineRecording` is already false and
+    ///   `isRoutineFinalizationPending` is not yet true.
+    /// - An already-open preview window is left exactly as it is, so repeated
+    ///   route entry never discards the trace on screen.
+    ///
+    /// Idempotent and cheap, so it is safe to call from every re-arm trigger.
     func beginLiveMIDICapture() {
         midiCaptureLock.lock()
-        if midiRecordingStartTime == 0 {
-            capturedMidiCCEvents = []
-            midiRecordingStartTime = CACurrentMediaTime()
+        if midiWindowOwnerStorage == .idle {
+            lockedClearCapturedMidiCCEvents()
+            lockedSetMIDICaptureWindow(
+                owner: .preview,
+                epochStartHostTime: CACurrentMediaTime(),
+                takeToken: nil
+            )
         }
         midiCaptureLock.unlock()
     }
 
-    /// Closes the accumulation window `beginLiveMIDICapture()` opened, when
-    /// nothing else owns it. Never touches state while
-    /// `isRoutineRecording == true` — Capture's own finalization path
-    /// (`drainCapturedMidiCCEvents()`) remains the sole owner of ending a
-    /// real take's window.
+    /// Closes the accumulation window `beginLiveMIDICapture()` opened.
+    ///
+    /// Acts ONLY when the preview still owns the window, decided under
+    /// `midiCaptureLock`. It can therefore never clear a take's evidence:
+    /// not while recording, not in the arming gap, and not in the
+    /// stop→finalization gap where the take is stopped but undrained.
+    /// Capture's own `drainCapturedMidiCCEvents()` remains the sole owner of
+    /// ending a real take's window.
     func endLiveMIDICaptureIfIdle() {
-        guard !isRoutineRecording else { return }
         midiCaptureLock.lock()
-        capturedMidiCCEvents = []
-        midiRecordingStartTime = 0
+        if midiWindowOwnerStorage == .preview {
+            lockedClearCapturedMidiCCEvents()
+            lockedSetMIDICaptureWindow(owner: .idle, epochStartHostTime: 0, takeToken: nil)
+        }
         midiCaptureLock.unlock()
     }
+
+    #if DEBUG
+    /// Test-only drivers for the exact private window transitions the capture
+    /// lifecycle performs, so ownership interleavings can be exercised without
+    /// a camera, a movie writer or a MIDI device. Each forwards to the
+    /// production function; none reimplements one.
+    @discardableResult
+    func testOnly_armTakeMIDIWindow() -> MIDICaptureTakeToken { openMIDIInputForRecording()! }
+    func testOnly_tryArmTakeMIDIWindow(mediaURL: URL) -> MIDICaptureTakeToken? {
+        openMIDIInputForRecording(mediaURL: mediaURL)
+    }
+    func testOnly_midiTakeToken(for mediaURL: URL) -> MIDICaptureTakeToken? {
+        midiTakeToken(for: mediaURL)
+    }
+    func testOnly_finalizeWithoutSidecar(mediaURL: URL, token: MIDICaptureTakeToken) {
+        precondition(activeRoutineRecordingSidecar == nil)
+        finalizeRoutineRecording(outputFileURL: mediaURL, error: nil, midiTakeToken: token)
+    }
+    func testOnly_openTakeMIDIEpoch(at hostTime: CFTimeInterval) {
+        beginMIDIRecordingWindow(at: hostTime, token: midiCaptureWindowTicket.takeToken)
+    }
+    func testOnly_closeTakeMIDIEpoch() { closeMIDIRecordingWindow(token: midiCaptureWindowTicket.takeToken) }
+    @discardableResult
+    func testOnly_drainTakeMIDIWindow(
+        token: MIDICaptureTakeToken
+    ) -> [CaptureCore.RawMixerMIDIEvent]? {
+        drainCapturedMidiCCEvents(token: token)
+    }
+    @discardableResult
+    func testOnly_releaseAbandonedTakeMIDIWindow(token: MIDICaptureTakeToken) -> Bool {
+        releaseAbandonedTakeMIDIWindow(token: token)
+    }
+    /// Installs the append-site interleaving seam under `midiCaptureLock`, so
+    /// installing it never races the Core MIDI read thread that reads it.
+    func testOnly_setMIDIAppendInterleavingHook(
+        _ hook: ((MIDICaptureWindowTicket) -> Void)?
+    ) {
+        midiCaptureLock.lock()
+        testOnly_midiAppendInterleavingHook = hook
+        midiCaptureLock.unlock()
+    }
+    /// Packets dropped at the append site because their window was retired.
+    var testOnly_midiEventsRejectedAsStale: Int {
+        midiCaptureLock.lock()
+        defer { midiCaptureLock.unlock() }
+        return debugMidiEventsRejectedAsStale
+    }
+    #endif
 
     /// Non-destructive camera-fallback movement snapshot for
     /// `LivePerformedNotationTracker` — the exact same builder/method
@@ -11085,7 +11575,14 @@ final class MacCaptureEngine: NSObject, ObservableObject {
         )
         let now = CACurrentMediaTime()
         midiCaptureLock.lock()
-        let startTime = midiRecordingStartTime
+        // The WHOLE window identity, taken atomically at ingress. This
+        // deliberately replaces a bare `midiRecordingStartTime` read: an epoch
+        // on its own carries no owner and no generation, so a cached epoch
+        // could survive an arming and admit a preview packet into a take whose
+        // own epoch was still zero. A ticket cannot: it is validated unchanged
+        // immediately before the append, and a retired generation drops the
+        // packet.
+        let ingressTicket = lockedMIDICaptureWindowTicket()
         let deviceName = midiConnectedSourceName
         midiCaptureLock.unlock()
 
@@ -11139,7 +11636,7 @@ final class MacCaptureEngine: NSObject, ObservableObject {
                 dispatchMIDIChannelVoiceMessage(
                     message,
                     deviceName: deviceName,
-                    startTime: startTime,
+                    ingressTicket: ingressTicket,
                     now: now
                 )
             }
@@ -11191,7 +11688,7 @@ final class MacCaptureEngine: NSObject, ObservableObject {
     private func dispatchMIDIChannelVoiceMessage(
         _ message: MIDIChannelMessageParser.Message,
         deviceName: String,
-        startTime: CFTimeInterval,
+        ingressTicket: MIDICaptureWindowTicket,
         now: CFTimeInterval
     ) {
         let statusByte = message.status
@@ -11271,7 +11768,7 @@ final class MacCaptureEngine: NSObject, ObservableObject {
                 value: value,
                 mappedControl: mappedControl,
                 timestamp: now,
-                recordingStartTime: startTime,
+                ingressTicket: ingressTicket,
                 consumedByLearn: learnResult.consumedByLearn
             )
 #if DEBUG
@@ -11488,9 +11985,8 @@ final class MacCaptureEngine: NSObject, ObservableObject {
     /// message received via `recordLiveCCObservation`.
     ///
     /// Deliberately separate from `capturedMidiCCEvents`: that buffer only
-    /// accumulates while a take's recording window is open
-    /// (`midiRecordingStartTime`/`recordingStartTime` set) and is empty
-    /// before a take starts, so it cannot answer "what is the crossfader
+    /// accumulates only while a preview or take epoch is open and is cleared
+    /// at their boundaries, so it cannot reliably answer "what is the crossfader
     /// doing right now" during reference-authoring preflight or a crossfader
     /// calibration sweep — both need a live read *before* recording begins.
     /// Guarded by `midiCaptureLock`; bounded to one entry per distinct
@@ -11559,11 +12055,21 @@ final class MacCaptureEngine: NSObject, ObservableObject {
         value: Int,
         mappedControl: String? = nil,
         timestamp: Double = CACurrentMediaTime(),
-        recordingStartTime: CFTimeInterval? = nil,
+        ingressTicket: MIDICaptureWindowTicket? = nil,
         consumedByLearn: Bool = false
     ) {
+        // Window identity at INGRESS. `receiveMIDIPacketList` already took one
+        // for the whole packet list; a direct caller takes its own here. There
+        // is deliberately no caller-supplied epoch parameter any more — an
+        // epoch that is not part of a ticket cannot be validated, and allowing
+        // one to override the ticket was how a preview packet could be
+        // admitted into a take whose epoch was still zero.
         midiCaptureLock.lock()
         let effectiveMapping = persistedCrossfaderMapping
+        let admissionTicket = ingressTicket ?? lockedMIDICaptureWindowTicket()
+        #if DEBUG
+        let interleavingHook = testOnly_midiAppendInterleavingHook
+        #endif
         midiCaptureLock.unlock()
 
         let effectiveMappedControl = mappedControl
@@ -11709,16 +12215,49 @@ final class MacCaptureEngine: NSObject, ObservableObject {
             }
         }
 
-        let startTime = recordingStartTime ?? midiRecordingStartTime
-        // Zero until `didStartRecordingTo`, and `takeRelativeTime` refuses any
-        // instant before it, so controller traffic from the count-in and from
-        // writer startup never enters the take timeline.
-        guard let takeRelativeTime = RoutineTakeTimeline.takeRelativeTime(
-            hostTime: timestamp,
-            mediaStartHostTime: startTime
-        ) else { return }
+        // Deterministic interleaving seam, bracketing the real
+        // INGRESS-TICKET → APPEND interval, with `midiCaptureLock` NOT held.
+        #if DEBUG
+        interleavingHook?(admissionTicket)
+        #endif
 
-        let event = CaptureCore.RawMixerMIDIEvent(
+        // The ticket is validated UNCHANGED and the event is appended in ONE
+        // critical section, so nothing — arming, media start, stop, the
+        // finalization drain, or a preview begin/end — can land between "this
+        // packet belongs to window G" and "this packet is in window G".
+        //
+        // A packet whose window has since been retired is DROPPED. It never
+        // enters the successor window, in either direction: a preview packet
+        // cannot become take evidence, and a take packet cannot be appended
+        // into a preview or into a window that has already been drained.
+        midiCaptureLock.lock()
+        guard admissionTicket.owner != .idle,
+              lockedMIDICaptureWindowTicket() == admissionTicket else {
+            // Compare owner, generation, epoch and optional token together.
+            // Even a malformed caller ticket cannot supply a replacement epoch.
+            #if DEBUG
+            debugMidiEventsRejectedAsStale += 1
+            #endif
+            midiCaptureLock.unlock()
+            return
+        }
+        // The ticket's own epoch is the ONLY epoch. Zero always rejects: it is
+        // zero from arming until `didStartRecordingTo` confirms media start,
+        // and again from Stop until the drain, so controller traffic from the
+        // count-in, from writer startup and from after the media ended never
+        // enters the take timeline. `takeRelativeTime` also refuses any
+        // instant before the epoch, so a packet outside this window's
+        // host-time boundary is never relabelled as evidence belonging to it.
+        guard admissionTicket.epochStartHostTime > 0,
+              let takeRelativeTime = RoutineTakeTimeline.takeRelativeTime(
+                  hostTime: timestamp,
+                  mediaStartHostTime: admissionTicket.epochStartHostTime
+              ) else {
+            midiCaptureLock.unlock()
+            return
+        }
+
+        capturedMidiCCEvents.append(CaptureCore.RawMixerMIDIEvent(
             timestamp: timestamp,
             takeRelativeTime: takeRelativeTime,
             deviceName: sourceName,
@@ -11729,9 +12268,32 @@ final class MacCaptureEngine: NSObject, ObservableObject {
             mappedControl: effectiveMappedControl,
             calibratedPosition: calibratedPosition,
             calibrationID: calibrationID
-        )
-        midiCaptureLock.lock()
-        capturedMidiCCEvents.append(event)
+        ))
+        // Running extremes, maintained in O(1). Not `first`/`last`: MIDI host
+        // times are not guaranteed to arrive in order.
+        livePreviewOldestTimestamp = min(livePreviewOldestTimestamp ?? timestamp, timestamp)
+        livePreviewNewestTimestamp = max(livePreviewNewestTimestamp ?? timestamp, timestamp)
+        // Preview-only retention, gated on LOCK-OWNED ownership rather than on
+        // any published flag. A take owns its window from arming until the
+        // drain, so take evidence is unreachable from here by construction and
+        // is never trimmed however long the take runs.
+        if midiWindowOwnerStorage == .preview,
+           Self.livePreviewNeedsTrim(
+               heldCount: capturedMidiCCEvents.count,
+               oldestTimestamp: livePreviewOldestTimestamp,
+               newestTimestamp: livePreviewNewestTimestamp
+           ) {
+            // Trimmed DOWN TO the target, not to the ceiling, so the count
+            // rule is amortised exactly as the span rule is.
+            capturedMidiCCEvents = Self.trimmedLivePreviewEvents(
+                capturedMidiCCEvents,
+                now: livePreviewNewestTimestamp ?? timestamp,
+                maximumEventCount: Self.livePreviewTrimTargetEventCount
+            )
+            // Recomputed only here, not per append.
+            livePreviewOldestTimestamp = capturedMidiCCEvents.map(\.timestamp).min()
+            livePreviewNewestTimestamp = capturedMidiCCEvents.map(\.timestamp).max()
+        }
         #if DEBUG
         debugMidiEventsCapturedThisTake += 1
         #endif
@@ -12666,9 +13228,10 @@ extension MacCaptureEngine: AVCaptureFileOutputRecordingDelegate {
         // The generation this exact media start belongs to. Correlating the
         // take-start control state with it is what stops a snapshot observed
         // for one take being adopted by the next.
+        guard let midiTakeToken = midiTakeToken(for: fileURL) else { return }
         let startedToken = routineRecordingBoundaryLedger.didStartRecording(mediaURL: fileURL)
         let epoch = beginRoutineMediaEpoch(at: CACurrentMediaTime())
-        beginRoutineTakeTimelines(at: epoch.mediaStart, token: startedToken)
+        beginRoutineTakeTimelines(at: epoch.mediaStart, token: startedToken, midiTakeToken: midiTakeToken)
         if let audioURL = pendingRoutineOutputAudioURL {
             do {
                 try scratchPlaybackController.beginRoutineOutputCapture(
@@ -12700,8 +13263,9 @@ extension MacCaptureEngine: AVCaptureFileOutputRecordingDelegate {
         // One authoritative boundary: the media file has finished, so the take
         // timeline closes here for MIDI, movement, platter, and the onboard
         // audio tap alike.
+        guard let midiTakeToken = midiTakeToken(for: outputFileURL) else { return }
         endRoutineMediaEpoch()
-        closeMIDIRecordingWindow()
+        closeMIDIRecordingWindow(token: midiTakeToken)
         pendingRoutineOutputAudioURL = nil
         audioQueue.sync {
             let snapshot = self.activeRoutineAudioCaptureWriter?.diagnosticsSnapshot()
@@ -12731,7 +13295,8 @@ extension MacCaptureEngine: AVCaptureFileOutputRecordingDelegate {
                     }
                     self.finalizeRoutineRecording(
                         outputFileURL: outputFileURL,
-                        error: error ?? muxError
+                        error: error ?? muxError,
+                        midiTakeToken: midiTakeToken
                     )
                 }
                 return
@@ -12748,7 +13313,8 @@ extension MacCaptureEngine: AVCaptureFileOutputRecordingDelegate {
                 // its second half through the admission gate.
                 self.finalizeRoutineRecording(
                     outputFileURL: outputFileURL,
-                    error: finalError
+                    error: finalError,
+                    midiTakeToken: midiTakeToken
                 )
             }
         }

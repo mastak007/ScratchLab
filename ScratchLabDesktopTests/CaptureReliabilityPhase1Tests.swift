@@ -14197,20 +14197,21 @@ extension CaptureReliabilityPhase1CoreTests {
 
     func testALiveCrossfaderCCDuringAnActiveTakeReachesTheTakeScopedBuffer() {
         let engine = MacCaptureEngine(autoRefreshDevices: false)
-        engine.beginLiveMIDICapture()
-        defer { engine.endLiveMIDICaptureIfIdle() }
+        let token = engine.testOnly_armTakeMIDIWindow()
+        defer { engine.testOnly_releaseAbandonedTakeMIDIWindow(token: token) }
         let start = CACurrentMediaTime()
+        engine.testOnly_openTakeMIDIEpoch(at: start)
 
         // Platter and crossfader interleaved, exactly as the packet loop
         // delivers them.
         engine.recordReceivedMIDICCEvent(
             sourceName: "Rane ONE MKII", channel: 1, controller: 6, value: 51,
-            timestamp: start + 0.001, recordingStartTime: start
+            timestamp: start + 0.001
         )
         engine.recordReceivedMIDICCEvent(
             sourceName: "Rane ONE MKII", channel: 15, controller: 8, value: 12,
             mappedControl: "crossfader",
-            timestamp: start + 0.002, recordingStartTime: start
+            timestamp: start + 0.002
         )
 
         let captured = engine.capturedMidiCCEventsSnapshot()
@@ -14224,15 +14225,16 @@ extension CaptureReliabilityPhase1CoreTests {
 
     func testLiveObservationAndTakeScopedCaptureCannotDisagreeAboutAnAddress() {
         let engine = MacCaptureEngine(autoRefreshDevices: false)
-        engine.beginLiveMIDICapture()
-        defer { engine.endLiveMIDICaptureIfIdle() }
+        let token = engine.testOnly_armTakeMIDIWindow()
+        defer { engine.testOnly_releaseAbandonedTakeMIDIWindow(token: token) }
         let start = CACurrentMediaTime()
+        engine.testOnly_openTakeMIDIEpoch(at: start)
 
         for index in 0..<5 {
             engine.recordReceivedMIDICCEvent(
                 sourceName: "Rane ONE MKII", channel: 15, controller: 8, value: 10 + index,
                 mappedControl: "crossfader",
-                timestamp: start + 0.001 * Double(index + 1), recordingStartTime: start
+                timestamp: start + 0.001 * Double(index + 1)
             )
         }
 
@@ -14269,13 +14271,14 @@ extension CaptureReliabilityPhase1CoreTests {
 
     func testTheTakeScopedSnapshotIsNonDestructive() {
         let engine = MacCaptureEngine(autoRefreshDevices: false)
-        engine.beginLiveMIDICapture()
-        defer { engine.endLiveMIDICaptureIfIdle() }
+        let token = engine.testOnly_armTakeMIDIWindow()
+        defer { engine.testOnly_releaseAbandonedTakeMIDIWindow(token: token) }
         let start = CACurrentMediaTime()
+        engine.testOnly_openTakeMIDIEpoch(at: start)
         engine.recordReceivedMIDICCEvent(
             sourceName: "Rane ONE MKII", channel: 15, controller: 8, value: 12,
             mappedControl: "crossfader",
-            timestamp: start + 0.001, recordingStartTime: start
+            timestamp: start + 0.001
         )
         XCTAssertEqual(engine.capturedMidiCCEventsSnapshot().count, 1)
         XCTAssertEqual(
