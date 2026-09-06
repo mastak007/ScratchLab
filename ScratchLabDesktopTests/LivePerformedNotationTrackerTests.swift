@@ -504,9 +504,172 @@ final class LivePerformedNotationTrackerTests: XCTestCase {
             LivePerformedNotationTracker.renderedEvents(for: state), committed,
             "the gesture-relative feed used by .performedPlatter must not change"
         )
+        // The continuous feed is now re-normalised over a rolling window, so
+        // exact pass-through positions are no longer guaranteed; the stroke
+        // itself must still be present and carry its measured direction.
         XCTAssertEqual(
-            LivePerformedNotationTracker.continuousRenderedEvents(for: state), continuous,
-            "the continuous feed must carry the global positions"
+            LivePerformedNotationTracker.continuousRenderedEvents(for: state).map(\.direction),
+            ["forward"],
+            "the continuous feed must still carry the stroke"
+        )
+    }
+
+    // MARK: - Free-rotation / rolling-window regression (hardware acceptance)
+
+    /// Several off-screen forward revolutions must not pin a subsequent Tear
+    /// against the top of the lane. The old free-spin history is dropped from
+    /// the rolling window and the current Tear is re-normalised to a healthy
+    /// vertical range while keeping one shared reversal apex.
+    func testFreeRotationDoesNotPinSubsequentTearAtTheCeiling() {
+        let freeSpin = CaptureCore.DetectedNotationRecordMovementEvent(
+            startTime: 0, endTime: 3.0, startPosition: 0.0, endPosition: 1.0,
+            direction: "forward", movementKind: .normalPush,
+            speed: 0.4, confidence: 0.9, source: "controller"
+        )
+        let tearForward = CaptureCore.DetectedNotationRecordMovementEvent(
+            startTime: 6.0, endTime: 6.5, startPosition: 0.98, endPosition: 0.99,
+            direction: "forward", movementKind: .normalPush,
+            speed: 0.02, confidence: 0.9, source: "controller"
+        )
+        let tearReverse = CaptureCore.DetectedNotationRecordMovementEvent(
+            startTime: 6.5, endTime: 7.0, startPosition: 0.99, endPosition: 0.98,
+            direction: "backward", movementKind: .normalPull,
+            speed: 0.02, confidence: 0.9, source: "controller"
+        )
+        let state = LiveNotationTrackingState.tracking(
+            committed: [], provisional: nil,
+            continuousCommitted: [freeSpin, tearForward, tearReverse],
+            continuousProvisional: nil
+        )
+
+        let rendered = LivePerformedNotationTracker.continuousRenderedEvents(for: state)
+
+        XCTAssertEqual(rendered.count, 2, "the off-screen free spin must be dropped from the live window")
+        let positions = rendered.flatMap { [$0.startPosition, $0.endPosition] }
+        XCTAssertGreaterThan(
+            (positions.max() ?? 0) - (positions.min() ?? 0), 0.5,
+            "the post-spin Tear must span a healthy range, not a tiny band at the ceiling"
+        )
+        XCTAssertEqual(
+            rendered[0].endPosition, rendered[1].startPosition, accuracy: 1e-9,
+            "forward/reverse must still share one reversal apex"
+        )
+    }
+
+    /// Adding old off-screen free-spin history must not materially flatten an
+    /// otherwise identical current Tear fixture (history independence).
+    func testOldFreeSpinHistoryDoesNotFlattenTheCurrentTear() {
+        let freeSpin = CaptureCore.DetectedNotationRecordMovementEvent(
+            startTime: 0, endTime: 3.0, startPosition: 0.0, endPosition: 1.0,
+            direction: "forward", movementKind: .normalPush,
+            speed: 0.4, confidence: 0.9, source: "controller"
+        )
+        let tearForward = CaptureCore.DetectedNotationRecordMovementEvent(
+            startTime: 6.0, endTime: 6.5, startPosition: 0.98, endPosition: 0.99,
+            direction: "forward", movementKind: .normalPush,
+            speed: 0.02, confidence: 0.9, source: "controller"
+        )
+        let tearReverse = CaptureCore.DetectedNotationRecordMovementEvent(
+            startTime: 6.5, endTime: 7.0, startPosition: 0.99, endPosition: 0.98,
+            direction: "backward", movementKind: .normalPull,
+            speed: 0.02, confidence: 0.9, source: "controller"
+        )
+        let withSpin = LiveNotationTrackingState.tracking(
+            committed: [], provisional: nil,
+            continuousCommitted: [freeSpin, tearForward, tearReverse],
+            continuousProvisional: nil
+        )
+        let withoutSpin = LiveNotationTrackingState.tracking(
+            committed: [], provisional: nil,
+            continuousCommitted: [tearForward, tearReverse],
+            continuousProvisional: nil
+        )
+
+        let a = LivePerformedNotationTracker.continuousRenderedEvents(for: withSpin)
+        let b = LivePerformedNotationTracker.continuousRenderedEvents(for: withoutSpin)
+
+        XCTAssertEqual(a.count, b.count, "history must not change the number of live strokes")
+        for (x, y) in zip(a, b) {
+            XCTAssertEqual(x.startPosition, y.startPosition, accuracy: 1e-9)
+            XCTAssertEqual(x.endPosition, y.endPosition, accuracy: 1e-9)
+            XCTAssertEqual(x.direction, y.direction)
+        }
+    }
+
+    /// After free rotation, a Clover (forward ascent → apex → reverse descent)
+    /// keeps a readable continuous topology rather than collapsing to a band.
+    func testCloverAfterFreeRotationKeepsReadableTopology() {
+        let freeSpin = CaptureCore.DetectedNotationRecordMovementEvent(
+            startTime: 0, endTime: 3.0, startPosition: 0.0, endPosition: 1.0,
+            direction: "forward", movementKind: .normalPush,
+            speed: 0.4, confidence: 0.9, source: "controller"
+        )
+        let ascent1 = CaptureCore.DetectedNotationRecordMovementEvent(
+            startTime: 6.0, endTime: 6.4, startPosition: 0.90, endPosition: 0.93,
+            direction: "forward", movementKind: .normalPush,
+            speed: 0.05, confidence: 0.9, source: "controller"
+        )
+        let ascent2 = CaptureCore.DetectedNotationRecordMovementEvent(
+            startTime: 6.5, endTime: 6.9, startPosition: 0.93, endPosition: 0.96,
+            direction: "forward", movementKind: .normalPush,
+            speed: 0.05, confidence: 0.9, source: "controller"
+        )
+        let descent1 = CaptureCore.DetectedNotationRecordMovementEvent(
+            startTime: 7.0, endTime: 7.4, startPosition: 0.96, endPosition: 0.93,
+            direction: "backward", movementKind: .normalPull,
+            speed: 0.05, confidence: 0.9, source: "controller"
+        )
+        let descent2 = CaptureCore.DetectedNotationRecordMovementEvent(
+            startTime: 7.5, endTime: 7.9, startPosition: 0.93, endPosition: 0.90,
+            direction: "backward", movementKind: .normalPull,
+            speed: 0.05, confidence: 0.9, source: "controller"
+        )
+        let state = LiveNotationTrackingState.tracking(
+            committed: [], provisional: nil,
+            continuousCommitted: [freeSpin, ascent1, ascent2, descent1, descent2],
+            continuousProvisional: nil
+        )
+
+        let rendered = LivePerformedNotationTracker.continuousRenderedEvents(for: state)
+
+        XCTAssertEqual(rendered.count, 4, "the free spin must be dropped; the clover's four strokes remain")
+        XCTAssertEqual(
+            rendered[1].endPosition, rendered[2].startPosition, accuracy: 1e-9,
+            "the ascent apex must feed the descent without a discontinuity"
+        )
+        XCTAssertEqual(rendered.map(\.direction), ["forward", "forward", "backward", "backward"])
+    }
+
+    /// An open provisional Tear stroke after free rotation stays visible and
+    /// shares the same windowed basis as the committed stroke around it.
+    func testProvisionalTearSharesTheWindowedBasisAfterFreeSpin() {
+        let freeSpin = CaptureCore.DetectedNotationRecordMovementEvent(
+            startTime: 0, endTime: 3.0, startPosition: 0.0, endPosition: 1.0,
+            direction: "forward", movementKind: .normalPush,
+            speed: 0.4, confidence: 0.9, source: "controller"
+        )
+        let tearForward = CaptureCore.DetectedNotationRecordMovementEvent(
+            startTime: 6.0, endTime: 6.5, startPosition: 0.98, endPosition: 0.99,
+            direction: "forward", movementKind: .normalPush,
+            speed: 0.02, confidence: 0.9, source: "controller"
+        )
+        let provisional = CaptureCore.ProvisionalPlatterMovement(
+            startTime: 6.5, currentTime: 7.0, startPosition: 0.99, currentPosition: 0.98,
+            direction: "backward", movementKind: .normalPull, displacement: -0.01
+        )
+        let state = LiveNotationTrackingState.tracking(
+            committed: [], provisional: nil,
+            continuousCommitted: [freeSpin, tearForward],
+            continuousProvisional: provisional
+        )
+
+        let rendered = LivePerformedNotationTracker.continuousRenderedEvents(for: state)
+
+        XCTAssertEqual(rendered.count, 2, "free spin dropped; committed stroke + open provisional remain")
+        XCTAssertEqual(rendered.last?.source, "live_preview", "the open stroke stays visible")
+        XCTAssertEqual(
+            rendered[0].endPosition, rendered[1].startPosition, accuracy: 1e-9,
+            "the provisional stroke shares the committed stroke's reversal apex"
         )
     }
 

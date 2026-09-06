@@ -195,31 +195,71 @@ final class LivePerformedNotationTracker: ObservableObject {
         return committed + [preview]
     }
 
-    /// Continuous (global span-normalised) renderer input for the canonical
-    /// Tear projection. Unlike `renderedEvents` these positions are NOT
-    /// gesture-relative: each run keeps its measured global position, so a
+    /// Continuous renderer input for the canonical Tear projection. Unlike
+    /// `renderedEvents` these positions are NOT gesture-relative, so a
     /// reversal apex shared between a forward and a backward run stays one
-    /// position-continuous trajectory instead of fragmenting into re-anchored
-    /// ramps. Presentation-only, like `renderedEvents`.
+    /// position-continuous trajectory. Positions are re-normalised over a
+    /// rolling presentation window so a free-running platter (several
+    /// off-screen revolutions) cannot permanently pin the current Tear at the
+    /// top of the lane. Presentation-only, like `renderedEvents`.
     static func continuousRenderedEvents(
         for state: LiveNotationTrackingState
     ) -> [CaptureCore.DetectedNotationRecordMovementEvent] {
         guard case .tracking(_, _, let continuousCommitted, let continuousProvisional) = state else { return [] }
-        guard let continuousProvisional else { return continuousCommitted }
-        let duration = max(0, continuousProvisional.currentTime - continuousProvisional.startTime)
-        let distance = abs(continuousProvisional.displacement)
-        let preview = CaptureCore.DetectedNotationRecordMovementEvent(
-            startTime: continuousProvisional.startTime,
-            endTime: continuousProvisional.currentTime,
-            startPosition: continuousProvisional.startPosition,
-            endPosition: continuousProvisional.currentPosition,
-            direction: continuousProvisional.direction,
-            movementKind: continuousProvisional.movementKind,
-            speed: duration > 0 ? distance / duration : 0,
-            confidence: 0.5,
-            source: "live_preview"
-        )
-        return continuousCommitted + [preview]
+        var events = continuousCommitted
+        if let continuousProvisional {
+            let duration = max(0, continuousProvisional.currentTime - continuousProvisional.startTime)
+            let distance = abs(continuousProvisional.displacement)
+            events.append(CaptureCore.DetectedNotationRecordMovementEvent(
+                startTime: continuousProvisional.startTime,
+                endTime: continuousProvisional.currentTime,
+                startPosition: continuousProvisional.startPosition,
+                endPosition: continuousProvisional.currentPosition,
+                direction: continuousProvisional.direction,
+                movementKind: continuousProvisional.movementKind,
+                speed: duration > 0 ? distance / duration : 0,
+                confidence: 0.5,
+                source: "live_preview"
+            ))
+        }
+        return windowNormalized(events)
+    }
+
+    /// Rolling window (seconds) over which continuous live Tear positions are
+    /// re-normalised, matching `LivePerformedNotationCard.renderedDomain`.
+    private static let continuousTearWindowSeconds: TimeInterval = 3.2
+
+    /// Re-normalise the continuous trajectory over the rolling presentation
+    /// window, dropping motion older than the window so historical free-spin
+    /// cannot bias the current Tear's vertical scale. One affine transform is
+    /// applied to the whole visible trajectory — preserving ordering, signed
+    /// direction, relative displacement, and reversal-apex continuity — never
+    /// a per-run or per-candidate transform.
+    private static func windowNormalized(
+        _ events: [CaptureCore.DetectedNotationRecordMovementEvent]
+    ) -> [CaptureCore.DetectedNotationRecordMovementEvent] {
+        guard let latest = events.map(\.endTime).max() else { return [] }
+        let windowStart = max(0, latest - continuousTearWindowSeconds)
+        let visible = events.filter { $0.endTime >= windowStart }
+        let positions = visible.flatMap { [$0.startPosition, $0.endPosition] }
+        guard let low = positions.min(), let high = positions.max(), high > low else {
+            return visible
+        }
+        let span = high - low
+        func normalized(_ position: Double) -> Double { (position - low) / span }
+        return visible.map { event in
+            CaptureCore.DetectedNotationRecordMovementEvent(
+                startTime: event.startTime,
+                endTime: event.endTime,
+                startPosition: normalized(event.startPosition),
+                endPosition: normalized(event.endPosition),
+                direction: event.direction,
+                movementKind: event.movementKind,
+                speed: event.speed,
+                confidence: event.confidence,
+                source: event.source
+            )
+        }
     }
 
     /// Continuous global span-normalised platter telemetry for the canonical
@@ -234,7 +274,7 @@ final class LivePerformedNotationTracker: ObservableObject {
     /// gesture-relative revolutions.
     var continuousPlatterCoordinates: CaptureCore.PlatterNotationCoordinates {
         .normalizedTakeLocal(
-            reference: "continuous global span-normalised platter telemetry "
+            reference: "continuous window-normalised platter telemetry "
                 + "for the canonical Tear projection"
         )
     }
