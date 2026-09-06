@@ -2148,4 +2148,207 @@ final class ReferenceTearCanonicalProjectionTests: XCTestCase {
         let projection = ReferenceTearCanonicalProjectionBuilder.project(review)
         XCTAssertEqual(projection.records.first?.internalHolds.count, 0)
     }
+
+    // MARK: - Live / finalized evidence parity
+
+    /// A derivation that genuinely CHANGES state inside the gesture, so a
+    /// projection that stamped one instantaneous state over the whole span
+    /// would disagree with one that placed the transition in time.
+    private func openThenClosedDerivation(
+        openFrom: Double,
+        switchAt: Double,
+        closedUntil: Double
+    ) -> CrossfaderDerivation {
+        CrossfaderDerivation(
+            intervals: [
+                CrossfaderStateInterval(
+                    state: .open, startTime: openFrom, endTime: switchAt,
+                    startPosition: 1, endPosition: 1
+                ),
+                CrossfaderStateInterval(
+                    state: .closed, startTime: switchAt, endTime: closedUntil,
+                    startPosition: 0, endPosition: 0
+                )
+            ],
+            events: []
+        )
+    }
+
+    /// SEMANTIC parity, deliberately not byte parity. The live path measures
+    /// calibrated platter revolutions and a finalized take measures its own
+    /// span-normalised displacement, so only unit-independent facts are
+    /// compared: gesture structure, where observed platter stillness placed
+    /// its holds, and what the fader evidence says over which time spans.
+    private func assertSemanticParity(
+        live: ReferenceTearCanonicalProjection,
+        finalized: ReferenceTearCanonicalProjection,
+        file: StaticString = #filePath,
+        line: UInt = #line
+    ) {
+        XCTAssertEqual(
+            live.records.count, finalized.records.count,
+            "gesture count must not depend on which path projected it",
+            file: file, line: line
+        )
+        guard live.records.count == finalized.records.count else { return }
+
+        for index in live.records.indices {
+            let liveRecord = live.records[index]
+            let finalizedRecord = finalized.records[index]
+            XCTAssertEqual(liveRecord.direction, finalizedRecord.direction,
+                           "record \(index) direction", file: file, line: line)
+            XCTAssertEqual(liveRecord.subdivisions.count, finalizedRecord.subdivisions.count,
+                           "record \(index) subdivision count", file: file, line: line)
+            XCTAssertEqual(liveRecord.tearLabel, finalizedRecord.tearLabel,
+                           "record \(index) tear label", file: file, line: line)
+
+            // Observed platter stillness must land in the same place.
+            XCTAssertEqual(liveRecord.internalHolds.count, finalizedRecord.internalHolds.count,
+                           "record \(index) hold count", file: file, line: line)
+            guard liveRecord.internalHolds.count == finalizedRecord.internalHolds.count else { continue }
+            for holdIndex in liveRecord.internalHolds.indices {
+                let liveHold = liveRecord.internalHolds[holdIndex]
+                let finalizedHold = finalizedRecord.internalHolds[holdIndex]
+                XCTAssertEqual(liveHold.span.startTime, finalizedHold.span.startTime, accuracy: 1e-9,
+                               "record \(index) hold \(holdIndex) start", file: file, line: line)
+                XCTAssertEqual(liveHold.span.endTime, finalizedHold.span.endTime, accuracy: 1e-9,
+                               "record \(index) hold \(holdIndex) end", file: file, line: line)
+                XCTAssertEqual(liveHold.label.effective, finalizedHold.label.effective,
+                               "record \(index) hold \(holdIndex) label", file: file, line: line)
+            }
+
+            // Fader evidence: same states over the same time spans.
+            XCTAssertEqual(
+                liveRecord.faderIntervals.map(\.state), finalizedRecord.faderIntervals.map(\.state),
+                "record \(index) fader states", file: file, line: line
+            )
+            guard liveRecord.faderIntervals.count == finalizedRecord.faderIntervals.count else { continue }
+            for faderIndex in liveRecord.faderIntervals.indices {
+                let liveSpan = liveRecord.faderIntervals[faderIndex].span
+                let finalizedSpan = finalizedRecord.faderIntervals[faderIndex].span
+                XCTAssertEqual(liveSpan.startTime, finalizedSpan.startTime, accuracy: 1e-9,
+                               "record \(index) fader \(faderIndex) start", file: file, line: line)
+                XCTAssertEqual(liveSpan.endTime, finalizedSpan.endTime, accuracy: 1e-9,
+                               "record \(index) fader \(faderIndex) end", file: file, line: line)
+            }
+        }
+
+        XCTAssertEqual(
+            live.reasons.contains(.faderUnobserved), finalized.reasons.contains(.faderUnobserved),
+            "an unobserved fader must be declared by both paths or by neither",
+            file: file, line: line
+        )
+    }
+
+    /// The LIVE one-call projection and the FINALIZED review-then-project
+    /// route must agree on where observed platter stillness placed its hold
+    /// and on what the crossfader was doing, even though the live take is in
+    /// calibrated revolutions and the finalized take is in its own normalised
+    /// displacement.
+    func testLiveAndFinalizedAgreeOnStillnessPlacementAndOpenFader() throws {
+        let open = derivation(openFrom: 0, to: 0.60)
+
+        let live = ReferenceTearCanonicalProjectionBuilder.project(
+            movementEvents: calibratedTearEvents,
+            platterEvidenceIntervals: syntheticObservedPlatterStillness(calibratedTearEvents),
+            derivation: open,
+            referenceTakeID: "live-preview",
+            coordinates: .raneOneMKIIDirectMIDI()
+        )
+        let review = ReferenceTearSegmentationReviewBuilder.build(
+            referenceTakeID: "ref-take-0009",
+            movementEvents: normalizedTearEvents,
+            platterEvidenceIntervals: syntheticObservedPlatterStillness(normalizedTearEvents),
+            derivation: open,
+            coordinates: .normalizedTakeLocal()
+        )
+        let finalized = ReferenceTearCanonicalProjectionBuilder.project(review)
+
+        // The declared units genuinely differ; the semantics must not.
+        XCTAssertEqual(live.coordinateSpace, .platterRevolutions)
+        XCTAssertEqual(finalized.coordinateSpace, .normalizedTakeLocalDisplacement)
+        assertSemanticParity(live: live, finalized: finalized)
+
+        // The specific facts the live card was missing before this slice.
+        let liveHold = try XCTUnwrap(live.records.first?.internalHolds.first)
+        XCTAssertEqual(liveHold.span.startTime, 0.20, accuracy: 1e-9)
+        XCTAssertEqual(liveHold.span.endTime, 0.40, accuracy: 1e-9)
+        XCTAssertEqual(liveHold.label.effective, .stationary)
+        XCTAssertEqual(live.records.first?.faderIntervals.map(\.state), [.open])
+        XCTAssertFalse(
+            live.reasons.contains(.faderUnobserved),
+            "a fully covered open interval is observed evidence, not FADER UNKNOWN"
+        )
+    }
+
+    /// A real open -> closed change inside the gesture must be PLACED in time
+    /// by both paths. Stamping the whole gesture with one state — the
+    /// instantaneous-preflight shortcut this slice must never take — would
+    /// produce a single interval here.
+    func testLiveAndFinalizedAgreeOnAFaderTransitionAndNeverStampOneState() throws {
+        let switching = openThenClosedDerivation(openFrom: 0, switchAt: 0.30, closedUntil: 0.60)
+
+        let live = ReferenceTearCanonicalProjectionBuilder.project(
+            movementEvents: calibratedTearEvents,
+            platterEvidenceIntervals: syntheticObservedPlatterStillness(calibratedTearEvents),
+            derivation: switching,
+            referenceTakeID: "live-preview",
+            coordinates: .raneOneMKIIDirectMIDI()
+        )
+        let review = ReferenceTearSegmentationReviewBuilder.build(
+            referenceTakeID: "ref-take-0009",
+            movementEvents: normalizedTearEvents,
+            platterEvidenceIntervals: syntheticObservedPlatterStillness(normalizedTearEvents),
+            derivation: switching,
+            coordinates: .normalizedTakeLocal()
+        )
+        let finalized = ReferenceTearCanonicalProjectionBuilder.project(review)
+
+        assertSemanticParity(live: live, finalized: finalized)
+
+        let record = try XCTUnwrap(live.records.first)
+        XCTAssertEqual(
+            record.faderIntervals.map(\.state), [.open, .closed],
+            "the transition must be placed in time, not stamped from one value"
+        )
+        let openSpan = try XCTUnwrap(record.faderIntervals.first).span
+        let closedSpan = try XCTUnwrap(record.faderIntervals.last).span
+        XCTAssertEqual(openSpan.startTime, 0.00, accuracy: 1e-9)
+        XCTAssertEqual(openSpan.endTime, 0.30, accuracy: 1e-9)
+        XCTAssertEqual(closedSpan.startTime, 0.30, accuracy: 1e-9)
+        XCTAssertEqual(closedSpan.endTime, 0.60, accuracy: 1e-9)
+
+        // The fader changing state is fader work; it never mints a platter hold.
+        XCTAssertEqual(record.internalHolds.count, 1, "still exactly the one observed stillness hold")
+    }
+
+    /// Fail closed, identically, on both paths: no derivation means no fader
+    /// rails and a declared unobserved reason, never an assumed open line.
+    func testLiveAndFinalizedBothStayFaderUnknownWithoutDerivation() throws {
+        let live = ReferenceTearCanonicalProjectionBuilder.project(
+            movementEvents: calibratedTearEvents,
+            platterEvidenceIntervals: syntheticObservedPlatterStillness(calibratedTearEvents),
+            derivation: nil,
+            referenceTakeID: "live-preview",
+            coordinates: .raneOneMKIIDirectMIDI()
+        )
+        let review = ReferenceTearSegmentationReviewBuilder.build(
+            referenceTakeID: "ref-take-0009",
+            movementEvents: normalizedTearEvents,
+            platterEvidenceIntervals: syntheticObservedPlatterStillness(normalizedTearEvents),
+            derivation: nil,
+            coordinates: .normalizedTakeLocal()
+        )
+        let finalized = ReferenceTearCanonicalProjectionBuilder.project(review)
+
+        assertSemanticParity(live: live, finalized: finalized)
+        XCTAssertTrue(live.records.allSatisfy { $0.faderIntervals.isEmpty })
+        XCTAssertTrue(finalized.records.allSatisfy { $0.faderIntervals.isEmpty })
+        XCTAssertTrue(live.reasons.contains(.faderUnobserved))
+        XCTAssertTrue(finalized.reasons.contains(.faderUnobserved))
+
+        // Missing fader evidence must not cost the platter its stillness hold.
+        XCTAssertEqual(live.records.first?.internalHolds.count, 1)
+        XCTAssertEqual(finalized.records.first?.internalHolds.count, 1)
+    }
 }

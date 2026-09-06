@@ -823,6 +823,104 @@ final class LivePerformedNotationTrackerTests: XCTestCase {
         XCTAssertNil(faderDerivation, "pre-baseline CC8 must not enter the live take's fader derivation")
     }
 
+    // MARK: - Clock basis (host-time scoping vs take-relative derivation)
+
+    /// Re-stamp a fixture's host clock so `timestamp` and `takeRelativeTime`
+    /// are NOT the same number.
+    ///
+    /// Production keeps two clocks: `timestamp` is the CoreMIDI packet host
+    /// time (the `CACurrentMediaTime()` domain the tracker's baseline is in),
+    /// and `takeRelativeTime` is seconds since the capture window's epoch
+    /// (`timestamp - epochStartHostTime`). Every other fixture in this file
+    /// sets the two equal, which cannot distinguish a correct implementation
+    /// from one that confuses the domains.
+    private func shiftedToHostEpoch(
+        _ events: [CaptureCore.RawMixerMIDIEvent],
+        epoch: Double
+    ) -> [CaptureCore.RawMixerMIDIEvent] {
+        events.map { event in
+            CaptureCore.RawMixerMIDIEvent(
+                timestamp: event.takeRelativeTime + epoch,
+                takeRelativeTime: event.takeRelativeTime,
+                deviceName: event.deviceName,
+                channel: event.channel,
+                controller: event.controller,
+                value: event.value,
+                normalizedValue: event.normalizedValue,
+                mappedControl: event.mappedControl
+            )
+        }
+    }
+
+    /// Take scoping happens in the HOST domain and fader derivation happens in
+    /// the TAKE-RELATIVE domain. With a large epoch offset between them:
+    ///
+    /// * a CC8 sample before the tracker's baseline is excluded even though
+    ///   its `takeRelativeTime` looks like a perfectly ordinary in-take value;
+    /// * the derived intervals come back in take-relative seconds, the same
+    ///   domain `decodePlatterCore` stamps its events and evidence intervals
+    ///   in, so platter and fader evidence are mutually aligned rather than
+    ///   one being offset by the epoch.
+    func testFaderDerivationIsHostScopedAndTakeRelativeAligned() throws {
+        let epoch = 10_000.0
+        let calibration = usableCrossfaderCalibration()
+        // The tracker starts 0.10s into an already-open capture window.
+        let baseline = epoch + 0.10
+
+        let platter = shiftedToHostEpoch(
+            Self.raneRingStream(runs: 2, stepsPerRun: 240), epoch: epoch
+        )
+        let preBaselineCC8 = shiftedToHostEpoch(
+            [crossfaderCC8Event(value: 0, takeRelativeTime: 0.02)], epoch: epoch
+        )
+        let inTakeCC8 = shiftedToHostEpoch(
+            [0.20, 0.30, 0.40, 0.50].map { crossfaderCC8Event(value: 0, takeRelativeTime: $0) },
+            epoch: epoch
+        )
+
+        let dataSource = LivePerformedNotationDataSource(
+            selectedMIDISourceName: { "Rane ONE MKII" },
+            capturedMidiCCEventsSnapshot: { platter + preBaselineCC8 + inTakeCC8 },
+            cameraMovementEventsSnapshot: { _ in nil },
+            activeCrossfaderCalibration: { calibration }
+        )
+        let state = LivePerformedNotationTracker.computeState(
+            dataSource: dataSource, baselineTimestamp: baseline
+        )
+        guard case .tracking(_, _, _, _, let platterIntervals, let faderDerivation) = state else {
+            return XCTFail("expected .tracking, got \(state)")
+        }
+
+        let derivation = try XCTUnwrap(faderDerivation, "in-take CC8 must derive fader evidence")
+        let faderTimes = derivation.intervals.flatMap { [$0.startTime, $0.endTime] }
+        XCTAssertFalse(faderTimes.isEmpty)
+
+        // Take-relative, not host time. A domain confusion would put these
+        // around 10_000 and the fader rails would sit thousands of seconds
+        // away from the platter geometry.
+        XCTAssertTrue(
+            faderTimes.allSatisfy { $0 < 1.0 },
+            "fader intervals must be in take-relative seconds, got \(faderTimes)"
+        )
+
+        // The pre-baseline sample is gone even though `takeRelativeTime` 0.02
+        // is a legitimate-looking in-window value. Only its HOST time proves
+        // it predates this tracker.
+        let earliest = try XCTUnwrap(faderTimes.min())
+        XCTAssertGreaterThanOrEqual(
+            earliest, 0.20 - 1e-9,
+            "a CC8 sample before the host-domain baseline must not enter the take"
+        )
+
+        // Platter evidence is stamped in the same domain, which is what makes
+        // stillness and fader state comparable at all.
+        let platterTimes = platterIntervals.flatMap { [$0.startTime, $0.endTime] }
+        XCTAssertTrue(
+            platterTimes.allSatisfy { $0 < 1.0 },
+            "platter evidence must share the fader's take-relative domain, got \(platterTimes)"
+        )
+    }
+
     func testFreezePreservesLastVisibleTrace() {
         let event = CaptureCore.DetectedNotationRecordMovementEvent(
             startTime: 0, endTime: 0.5, startPosition: 0, endPosition: 0.7,
