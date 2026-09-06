@@ -1,3 +1,27 @@
+## Current continuation - Physical Tear hardware verification (checkpoint 2 candidate prepared, 2026-09-06)
+
+Both checkpoints now exist: checkpoint 1 is committed as `997bc33` (the derived-structure classifier that repaired the non-building HEAD); checkpoint 2 is prepared as an UNCOMMITTED isolated candidate at `/private/tmp/scratchlab-cp2-tear-authoring.sh87xI/worktree` on `checkpoint/tear-authoring-raw-export`. Read `AI_HANDOFF.md`'s top entry and the 2026-09-06 `DEV_LOG.md` entry before doing anything.
+
+Nothing below has ever run against real hardware. Take 007 user-observed screenshots exposed the problem; every test so far uses synthetic fixtures, and no physical artifact was parsed or modified.
+
+Exact next prompt:
+
+```text
+Open the macOS ScratchLabDesktop app on the Rane ONE MKII rig with the paired Watch and camera connected, running the checkpoint-2 build. In the DEBUG Reference Authoring screen:
+
+1. Select Tear, set deck and open end to match the physical wiring, apply the setup, and confirm the saved Ch16 CC8 calibration is adopted automatically with no sweep requested. Do not press Recalibrate.
+2. With the crossfader PARKED OPEN and untouched, record one take of four Tear repetitions. Do not wiggle the fader before or after pressing Record.
+3. While recording, report whether the live chart shows same-direction subdivisions separated by horizontal holds, or still alternating diagonals.
+4. Stop and finalize. Report the take's scratchTypeID, the mapped crossfader sample count, whether the sidecar carries a crossfaderTakeStartState with provenance preTakeSnapshot and a NEGATIVE observedTakeRelativeTime, and what approvalBlockReason says about the fader state.
+5. Compare the finalized canonical chart against the live one and the video. Report any gesture drawn as MOTION UNKNOWN and the reason lines given.
+6. Press Save Capture..., save the ZIP, and confirm export succeeded with no repetition selected and approval still blocked.
+
+Do not approve, publish, install, commit or push anything. Report exact numbers.
+```
+
+If the parked-fader path yields no `preTakeSnapshot` record, capture the sidecar JSON and its `unknownReason` before changing code: the correlation fails closed and the reason string names which identity did not line up.
+
+---
 ## Current continuation - Prompt 5 checkpoint; Prompt 6 preflight only
 
 This record accompanies the single authorized checkpoint `feat(notation): add authored canonical tear templates`, parent `c17bdb9def7566414dfb7e5d444964bd87d8db12`, on `feature/ttm-tear-notation-alignment` in `/Users/karlwatson/Downloads/ScratchLab-TTM`. The user's checkpoint instruction explicitly permits this one commit after isolation and gates are proved, superseding the earlier no-commit text for this checkpoint only. Implementation began clean; checkpoint baseline contains exactly six isolated slice files and an empty index. Every complete diff was reviewed; all six file hashes matched the saved end-of-slice audit before checkpoint documentation updates. No unrelated pre-existing dirty work or mixed hunks; no other worktree's source/data accessed. After successful commit, expect a clean worktree/index. No push or next implementation slice authorized.

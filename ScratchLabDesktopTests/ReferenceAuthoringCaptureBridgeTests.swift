@@ -752,3 +752,260 @@ final class ReferenceAuthoringCaptureBridgeTests: XCTestCase {
         )
     }
 }
+
+// MARK: - Take-start crossfader control state (engine side + sidecar schema)
+
+/// The engine-owned observation, its correlation identities, and the
+/// backward-compatible sidecar record that carries it.
+///
+/// Everything here is synthetic. No Core MIDI, no camera, no capture session,
+/// and no physical take is read, altered, approved or promoted.
+final class CrossfaderTakeStartStateTests: XCTestCase {
+
+    private func observation(
+        deviceName: String = "Rane ONE MKII",
+        channel: Int = 15,
+        controller: Int = 8,
+        value: Int = 127,
+        calibratedPosition: Double? = 1,
+        observedAt: CFTimeInterval = 99.6,
+        eventCount: Int = 412,
+        connectionGeneration: UInt64 = 3,
+        calibrationID: String? = "Rane ONE MKII#15#8"
+    ) -> MacCaptureEngine.LiveCCObservation {
+        MacCaptureEngine.LiveCCObservation(
+            deviceName: deviceName,
+            channel: channel,
+            controller: controller,
+            value: value,
+            calibratedPosition: calibratedPosition,
+            observedAt: observedAt,
+            eventCount: eventCount,
+            connectionGeneration: connectionGeneration,
+            calibrationID: calibrationID
+        )
+    }
+
+    private func classify(
+        sessionID: String? = "session-008",
+        takeID: String? = "take-008",
+        takeGeneration: UInt64? = 8,
+        midiSourceID: String = "midi_rane_one_mkii",
+        connectionGeneration: UInt64 = 3,
+        mapping: MacCaptureEngine.CrossfaderCCMapping? = MacCaptureEngine.CrossfaderCCMapping(channel: 15, controller: 8),
+        observation: MacCaptureEngine.LiveCCObservation?,
+        mediaStartHostTime: CFTimeInterval = 100.0
+    ) -> CaptureCore.CrossfaderTakeStartState {
+        MacCaptureEngine.crossfaderTakeStartState(
+            sessionID: sessionID,
+            takeID: takeID,
+            takeGeneration: takeGeneration,
+            midiSourceID: midiSourceID,
+            connectionGeneration: connectionGeneration,
+            mapping: mapping,
+            observation: observation,
+            mediaStartHostTime: mediaStartHostTime
+        )
+    }
+
+    /// The take-008 shape: a fader parked hard open, last message 0.4 s before
+    /// media start, nothing during the take at all.
+    func testAParkedFaderIsRecordedAsAPreTakeSnapshotWithItsOriginalTime() {
+        let state = classify(observation: observation())
+        XCTAssertEqual(state.provenance, .preTakeSnapshot)
+        XCTAssertTrue(state.isUsableSnapshot)
+        XCTAssertEqual(state.rawValue, 127)
+        XCTAssertEqual(state.channel, 15)
+        XCTAssertEqual(state.controller, 8)
+        XCTAssertEqual(state.calibrationID, "Rane ONE MKII#15#8")
+        XCTAssertEqual(state.midiConnectionGeneration, 3)
+        XCTAssertEqual(state.takeGeneration, 8)
+        XCTAssertEqual(state.observationSequence, 412)
+        // Its ORIGINAL instant, preserved and negative — never rewritten to 0
+        // and never presented as an in-take packet.
+        XCTAssertEqual(try XCTUnwrap(state.observedTakeRelativeTime), -0.4, accuracy: 1e-9)
+        XCTAssertNil(state.unknownReason)
+    }
+
+    func testAbsentEvidenceIsRecordedAsExplicitUnknownRatherThanInvented() throws {
+        let noObservation = classify(observation: nil)
+        XCTAssertEqual(noObservation.provenance, .unknown)
+        XCTAssertNil(noObservation.rawValue)
+        XCTAssertNotNil(noObservation.unknownReason)
+        XCTAssertFalse(noObservation.isUsableSnapshot)
+
+        let noMapping = classify(mapping: nil, observation: observation())
+        XCTAssertEqual(noMapping.provenance, .unknown)
+
+        let noSource = classify(midiSourceID: "", observation: observation())
+        XCTAssertEqual(noSource.provenance, .unknown)
+
+        let noIdentity = classify(takeID: nil, observation: observation())
+        XCTAssertEqual(noIdentity.provenance, .unknown)
+    }
+
+    func testAnObservationFromAPreviousDeviceConnectionIsNotAdopted() {
+        let state = classify(observation: observation(connectionGeneration: 2))
+        XCTAssertEqual(state.provenance, .unknown)
+        XCTAssertEqual(
+            state.unknownReason,
+            "the cached observation predates the current MIDI device connection"
+        )
+    }
+
+    func testAnObservationOnADifferentAddressIsNotAdopted() {
+        let state = classify(observation: observation(channel: 0, controller: 6))
+        XCTAssertEqual(state.provenance, .unknown)
+        XCTAssertEqual(state.unknownReason, "the cached observation is not on the learned crossfader address")
+    }
+
+    /// A message that landed at or after media start belongs to the take's own
+    /// MIDI stream. Duplicating it here would create a second, contradictory
+    /// claim about the same instant.
+    func testAnInTakeMessageIsNotDuplicatedAsAPreTakeSnapshot() {
+        let state = classify(observation: observation(observedAt: 100.25))
+        XCTAssertEqual(state.provenance, .unknown)
+        XCTAssertEqual(
+            state.unknownReason,
+            "an in-take crossfader message already establishes this take's start"
+        )
+    }
+
+    // MARK: Sidecar schema: additive, backward compatible
+
+    private static let decoder: JSONDecoder = {
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .iso8601
+        return decoder
+    }()
+
+    private func makeSidecar(
+        takeStartState: CaptureCore.CrossfaderTakeStartState? = nil
+    ) -> CaptureCore.LocalRecordingSidecar {
+        CaptureCore.LocalRecordingSidecar(
+            sessionID: "session-008",
+            takeID: "take-008",
+            appLocalTakeNumber: 8,
+            recordingRole: "mac_routine_capture",
+            platform: "macOS",
+            appSurface: "ScratchLab Routine Recorder",
+            sourceDeviceName: "DJ",
+            startedAt: Date(timeIntervalSince1970: 1_788_000_000),
+            recordingStatus: "completed",
+            mediaFileName: "session-008_take-008_routine.mov",
+            sidecarFileName: "session-008_take-008_routine.json",
+            crossfaderTakeStartState: takeStartState
+        )
+    }
+
+    func testASidecarWrittenBeforeThisFieldExistedStillDecodes() throws {
+        // The exact document shape a pre-existing take carries: no
+        // `crossfaderTakeStartState` key at all.
+        let legacy = """
+        {
+          "schemaVersion": "scratchlab_local_recording_sidecar_v1",
+          "sessionID": "session-007",
+          "takeID": "take-007",
+          "appLocalTakeNumber": 7,
+          "recordingRole": "mac_routine_capture",
+          "platform": "macOS",
+          "appSurface": "ScratchLab Routine Recorder",
+          "sourceDeviceName": "DJ",
+          "startedAt": "2026-09-05T00:00:00Z",
+          "recordingStatus": "completed",
+          "mediaFileName": "session-007_take-007_routine.mov",
+          "sidecarFileName": "session-007_take-007_routine.json",
+          "watchSyncState": "notRequested",
+          "auditTrail": []
+        }
+        """
+        let sidecar = try Self.decoder.decode(
+            CaptureCore.LocalRecordingSidecar.self,
+            from: Data(legacy.utf8)
+        )
+        XCTAssertEqual(sidecar.takeID, "take-007")
+        XCTAssertNil(
+            sidecar.crossfaderTakeStartState,
+            "An absent field means NOT RECORDED, never an observed unknown position."
+        )
+    }
+
+    func testTheTakeStartRecordRoundTripsThroughTheSidecar() throws {
+        let state = classify(observation: observation())
+        let data = try makeSidecar(takeStartState: state).encodedData()
+        let decoded = try Self.decoder.decode(CaptureCore.LocalRecordingSidecar.self, from: data)
+        XCTAssertEqual(decoded.crossfaderTakeStartState, state)
+        XCTAssertEqual(decoded.crossfaderTakeStartState?.schemaVersion, 1)
+
+        // It lives BESIDE the detected notation, never inside it: a pre-take
+        // snapshot is not one of the take's measured mixer MIDI events.
+        XCTAssertNil(decoded.detectedNotation)
+    }
+
+    func testARecordFromAFutureSchemaIsRefusedRatherThanReinterpreted() {
+        let state = CaptureCore.CrossfaderTakeStartState(
+            schemaVersion: CaptureCore.CrossfaderTakeStartState.currentSchemaVersion + 1,
+            provenance: .preTakeSnapshot,
+            sessionID: "session-008",
+            takeID: "take-008",
+            takeGeneration: 8,
+            midiSourceID: "midi_rane_one_mkii",
+            deviceName: "Rane ONE MKII",
+            midiConnectionGeneration: 3,
+            channel: 15,
+            controller: 8,
+            rawValue: 127,
+            calibratedPosition: 1,
+            calibrationID: "Rane ONE MKII#15#8",
+            observationSequence: 412,
+            observedTakeRelativeTime: -0.4,
+            unknownReason: nil
+        )
+        XCTAssertFalse(state.isUsableSnapshot)
+        let outcome = ReferenceCrossfaderTakeStart.correlate(
+            state,
+            against: ReferenceCrossfaderTakeStart.Correlation(
+                sessionID: "session-008",
+                takeID: "take-008",
+                takeGeneration: 8,
+                midiSourceID: "midi_rane_one_mkii",
+                midiConnectionGeneration: 3
+            ),
+            calibration: nil,
+            recordedSamples: []
+        )
+        XCTAssertEqual(outcome, .rejected(.unsupportedSchema))
+    }
+
+    // MARK: Tear reaches the capture pipeline as Tear
+
+    func testATearSetupCarriesTearIntoTheCapturePipelineConfiguration() {
+        let configuration = ReferenceAuthoringBridgeTakeConfiguration(
+            technique: .tear,
+            bpm: 95,
+            handedness: .right,
+            notes: "tear reference"
+        )
+        // This is the exact value the bridge writes into
+        // `MacCaptureEngine.recordingSessionConfig.scratchType`, and therefore
+        // into the finalized sidecar's session config.
+        XCTAssertEqual(configuration.technique.scratchType, .tear)
+        XCTAssertEqual(configuration.technique.scratchType.rawValue, "tear")
+        XCTAssertEqual(configuration.technique.scratchType.title, "Tear")
+        // Never Baby Scratch as a fallback.
+        XCTAssertNotEqual(configuration.technique.scratchType, .babyScratch)
+    }
+
+    func testAdvisoryDetectionOfBabyDoesNotProduceATechniqueSelection() {
+        // The bridge maps a detected LABEL to an advisory technique. It is
+        // read beside the operator's selection and never written into it.
+        XCTAssertEqual(
+            ReferenceAuthoringCaptureBridge.autoDetectedTechnique(fromDetectedLabel: "Baby Scratch"),
+            .babyScratch
+        )
+        XCTAssertEqual(
+            ReferenceAuthoringCaptureBridge.autoDetectedTechnique(fromDetectedLabel: "Tear"),
+            .tear
+        )
+    }
+}

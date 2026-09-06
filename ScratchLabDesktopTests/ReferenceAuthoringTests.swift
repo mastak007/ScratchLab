@@ -1223,3 +1223,346 @@ final class ReferenceAuthoringTests: XCTestCase {
         XCTAssertTrue(ReferenceValidator.validate(evidence).passes)
     }
 }
+
+// MARK: - Canonical tear projection
+
+/// The bridge from tear-segmentation evidence into `ScratchNotation.GestureRecord`.
+///
+/// These tests are the guarantee that a Tear is DRAWN as a tear: same-direction
+/// subdivisions separated by horizontal internal holds, N holds and N+1 moving
+/// subdivisions, a physical reversal ending the gesture rather than becoming a
+/// hold, and fader clicks staying fader evidence. Everything is synthetic; no
+/// physical take is read.
+final class ReferenceTearCanonicalProjectionTests: XCTestCase {
+
+    /// Gesture-relative controller telemetry, the only coordinate the
+    /// projection will claim as platter revolutions. Forward runs rise from
+    /// the run's own baseline; backward runs return to it.
+    private func controllerRun(
+        start: Double,
+        end: Double,
+        direction: String,
+        excursion: Double,
+        confidence: Double = 1,
+        movementKind: ScratchMovementKind? = nil,
+        source: String = "controller"
+    ) -> CaptureCore.DetectedNotationRecordMovementEvent {
+        let forward = direction == "forward"
+        return CaptureCore.DetectedNotationRecordMovementEvent(
+            startTime: start,
+            endTime: end,
+            startPosition: forward ? 0 : excursion,
+            endPosition: forward ? excursion : 0,
+            direction: direction,
+            movementKind: movementKind ?? (forward ? .normalPush : .normalPull),
+            speed: excursion / max(1e-6, end - start),
+            confidence: confidence,
+            source: source
+        )
+    }
+
+    private func derivation(
+        openFrom: Double,
+        to end: Double,
+        clicks: [(CrossfaderSemanticEventKind, Double, Double)] = []
+    ) -> CrossfaderDerivation {
+        CrossfaderDerivation(
+            intervals: [
+                CrossfaderStateInterval(
+                    state: .open,
+                    startTime: openFrom,
+                    endTime: end,
+                    startPosition: 1,
+                    endPosition: 1
+                )
+            ],
+            events: clicks.map {
+                CrossfaderSemanticEvent(
+                    kind: $0.0,
+                    startTime: $0.1,
+                    endTime: $0.2,
+                    fromPosition: 1,
+                    toPosition: 0
+                )
+            }
+        )
+    }
+
+    /// forward → bounded hold → SAME-direction forward.
+    private var tearEvents: [CaptureCore.DetectedNotationRecordMovementEvent] {
+        [
+            controllerRun(start: 0.00, end: 0.20, direction: "forward", excursion: 0.10),
+            controllerRun(start: 0.40, end: 0.60, direction: "forward", excursion: 0.10)
+        ]
+    }
+
+    private func project(
+        _ events: [CaptureCore.DetectedNotationRecordMovementEvent],
+        derivation: CrossfaderDerivation? = nil
+    ) -> ReferenceTearCanonicalProjection {
+        ReferenceTearCanonicalProjectionBuilder.project(
+            movementEvents: events,
+            derivation: derivation,
+            referenceTakeID: "synthetic-tear"
+        )
+    }
+
+    func testMoveHoldSameDirectionMoveProducesTwoSubdivisionsAndOneHorizontalHold() throws {
+        let projection = project(tearEvents)
+        XCTAssertEqual(projection.records.count, 1, "One same-direction gesture, not two strokes.")
+        let record = try XCTUnwrap(projection.records.first)
+        XCTAssertTrue(
+            record.motionValidationIssues().isEmpty,
+            "Issues: \(record.motionValidationIssues())"
+        )
+        XCTAssertEqual(record.direction, .forward)
+        XCTAssertEqual(record.subdivisions.count, 2)
+        XCTAssertEqual(record.internalHolds.count, 1)
+        // The canonical invariant, derived from structure and never stored.
+        XCTAssertEqual(record.subdivisions.count, record.internalHolds.count + 1)
+        XCTAssertEqual(record.tearLabel, "tear1")
+
+        let hold = try XCTUnwrap(record.internalHolds.first)
+        XCTAssertEqual(hold.span.startTime, 0.20, accuracy: 1e-9)
+        XCTAssertEqual(hold.span.endTime, 0.40, accuracy: 1e-9)
+        XCTAssertEqual(hold.label.effective, .stationary)
+        // Horizontal: the hold sits at the position both neighbours share.
+        let holdPosition = try XCTUnwrap(hold.position)
+        XCTAssertEqual(holdPosition, 0.10, accuracy: 1e-9)
+        XCTAssertEqual(record.subdivisions[0].measuredCurve?.endPosition, holdPosition)
+        XCTAssertEqual(record.subdivisions[1].measuredCurve?.startPosition, holdPosition)
+        // Measured durations survive, unrounded.
+        XCTAssertEqual(record.subdivisions[0].span.duration, 0.20, accuracy: 1e-9)
+        XCTAssertEqual(record.subdivisions[1].span.duration, 0.20, accuracy: 1e-9)
+    }
+
+    func testTheHoldRendersAsAHorizontalSegmentThroughTheSharedGeometry() throws {
+        let projection = project(tearEvents, derivation: derivation(openFrom: 0, to: 0.60))
+        let frame = try XCTUnwrap(
+            ScratchStrokeGeometry.CanonicalFrame(
+                timeRange: 0...0.60,
+                positionRange: try XCTUnwrap(projection.positionRange),
+                coordinateSpace: projection.coordinateSpace,
+                beatsPerMinute: 95
+            )
+        )
+        let geometry = ScratchStrokeGeometry.canonicalGeometry(
+            records: projection.records,
+            layer: .performance,
+            frame: frame
+        )
+        XCTAssertTrue(geometry.missingMotion.isEmpty, "Every interval must be placed.")
+        let holds = geometry.motion.segments.filter(\.isHold)
+        XCTAssertEqual(holds.count, 1, "Exactly one internal tear hold.")
+        let hold = try XCTUnwrap(holds.first)
+        XCTAssertEqual(hold.travel, 0, accuracy: 1e-9, "A tear hold must be horizontal.")
+        XCTAssertEqual(hold.startTime, 0.20, accuracy: 1e-9)
+        XCTAssertEqual(hold.endTime, 0.40, accuracy: 1e-9)
+        // Not one uninterrupted diagonal, and not a reversal: two travel runs
+        // separated by a flat hold.
+        let travel = geometry.motion.segments.filter { !$0.isHold }
+        XCTAssertGreaterThanOrEqual(travel.count, 2)
+        XCTAssertTrue(travel.allSatisfy { $0.endPosition >= $0.startPosition },
+                      "A forward tear never draws a backward slope.")
+    }
+
+    func testADirectionReversalEndsTheTearGesture() throws {
+        // The backward run is longer than the reversal-confirmation window, so
+        // it is a real polarity flip and not absorbed sign chatter.
+        let events = [
+            controllerRun(start: 0.00, end: 0.30, direction: "forward", excursion: 0.15),
+            controllerRun(start: 0.40, end: 0.90, direction: "backward", excursion: 0.15)
+        ]
+        let projection = project(events)
+        XCTAssertEqual(projection.records.count, 2, "A reversal ends the gesture; it never becomes a hold.")
+        XCTAssertEqual(projection.records[0].direction, .forward)
+        XCTAssertEqual(projection.records[1].direction, .backward)
+        XCTAssertTrue(projection.records.allSatisfy { $0.internalHolds.isEmpty })
+        XCTAssertTrue(projection.records.allSatisfy { $0.tearLabel == nil })
+    }
+
+    func testFaderClicksNeverIncrementTheTearHoldCount() throws {
+        let clicked = derivation(
+            openFrom: 0,
+            to: 0.60,
+            clicks: [(.cut, 0.25, 0.27), (.transformPulse, 0.45, 0.47)]
+        )
+        let review = ReferenceTearSegmentationReviewBuilder.build(
+            referenceTakeID: "synthetic-tear",
+            movementEvents: tearEvents,
+            derivation: clicked
+        )
+        XCTAssertEqual(review.totalCountedTearHoldCount, 1, "Two fader clicks add no platter holds.")
+
+        let projection = ReferenceTearCanonicalProjectionBuilder.project(review)
+        let record = try XCTUnwrap(projection.records.first)
+        XCTAssertEqual(record.internalHolds.count, 1)
+        XCTAssertEqual(record.tearLabel, "tear1")
+        // Clicks appear as FADER evidence — glyphs, not holds.
+        XCTAssertEqual(record.faderTransitions.count, 2)
+        XCTAssertTrue(record.faderValidationIssues().isEmpty,
+                      "Issues: \(record.faderValidationIssues())")
+        XCTAssertTrue(projection.reasons.contains(.faderClicksCitedNotCounted))
+    }
+
+    func testUnobservedFaderStaysUnknownAndIsNeverDrawnAsOpen() throws {
+        let projection = project(tearEvents)
+        let record = try XCTUnwrap(projection.records.first)
+        XCTAssertTrue(record.faderIntervals.isEmpty, "No observation means no rail, never an assumed open one.")
+        XCTAssertTrue(projection.reasons.contains(.faderUnobserved))
+    }
+
+    func testClosedFaderTravelIsProjectedAsAGhostRegionNotASoundingStroke() throws {
+        let closed = CrossfaderDerivation(
+            intervals: [
+                CrossfaderStateInterval(
+                    state: .closed,
+                    startTime: 0,
+                    endTime: 0.60,
+                    startPosition: 0,
+                    endPosition: 0
+                )
+            ],
+            events: []
+        )
+        let projection = project(tearEvents, derivation: closed)
+        let record = try XCTUnwrap(projection.records.first)
+        XCTAssertEqual(record.faderIntervals.count, 1)
+        XCTAssertEqual(record.faderIntervals.first?.state, .closed)
+        XCTAssertTrue(projection.reasons.contains(.ghostMovementPresent))
+    }
+
+    func testFreePlaybackIsNeverFlattenedIntoAnOrdinaryStroke() throws {
+        let events = [
+            controllerRun(
+                start: 0.00,
+                end: 0.40,
+                direction: "forward",
+                excursion: 0.20,
+                movementKind: .releaseNormalPlayback
+            )
+        ]
+        let projection = project(events)
+        let record = try XCTUnwrap(projection.records.first)
+        XCTAssertFalse(
+            record.motionValidationIssues().isEmpty,
+            "Released playback carries no gesture polarity and must not validate as travel."
+        )
+        XCTAssertTrue(projection.reasons.contains(.releasedPlaybackPresent))
+    }
+
+    func testLowConfidenceEvidenceIsProjectedAsUnknown() throws {
+        let events = [
+            controllerRun(start: 0.00, end: 0.20, direction: "forward", excursion: 0.10, confidence: 0.2),
+            controllerRun(start: 0.40, end: 0.60, direction: "forward", excursion: 0.10, confidence: 0.2)
+        ]
+        let projection = project(events)
+        let record = try XCTUnwrap(projection.records.first)
+        XCTAssertFalse(record.motionValidationIssues().isEmpty)
+        XCTAssertTrue(projection.reasons.contains(.lowMovementConfidence))
+    }
+
+    func testNonControllerCoordinatesAreProjectedAsUnknownRatherThanClaimedAsRevolutions() throws {
+        let events = [
+            controllerRun(start: 0.00, end: 0.20, direction: "forward", excursion: 0.10, source: "video"),
+            controllerRun(start: 0.40, end: 0.60, direction: "forward", excursion: 0.10, source: "video")
+        ]
+        let projection = project(events)
+        let record = try XCTUnwrap(projection.records.first)
+        XCTAssertFalse(record.motionValidationIssues().isEmpty)
+        XCTAssertTrue(projection.reasons.contains(.unsupportedCoordinateSpace))
+    }
+
+    /// The live preview and the finalized review must not disagree about a
+    /// gesture's structure. Both go through the SAME projection; only the
+    /// fader stream differs, because a live preview has no committed
+    /// derivation yet.
+    func testLiveAndFinalizedProjectionsShareTheSameCanonicalStructure() throws {
+        let live = ReferenceTearCanonicalProjectionBuilder.project(
+            movementEvents: tearEvents,
+            derivation: nil,
+            referenceTakeID: "live-preview"
+        )
+        let finalizedReview = ReferenceTearSegmentationReviewBuilder.build(
+            referenceTakeID: "ref-take-0008",
+            movementEvents: tearEvents,
+            derivation: derivation(openFrom: 0, to: 0.60)
+        )
+        let finalized = ReferenceTearCanonicalProjectionBuilder.project(finalizedReview)
+
+        XCTAssertEqual(live.records.count, finalized.records.count)
+        XCTAssertEqual(live.coordinateSpace, finalized.coordinateSpace)
+        for (liveRecord, finalRecord) in zip(live.records, finalized.records) {
+            XCTAssertEqual(liveRecord.direction, finalRecord.direction)
+            XCTAssertEqual(liveRecord.subdivisions.map(\.span), finalRecord.subdivisions.map(\.span))
+            XCTAssertEqual(liveRecord.internalHolds.map(\.span), finalRecord.internalHolds.map(\.span))
+            XCTAssertEqual(liveRecord.internalHolds.map(\.position), finalRecord.internalHolds.map(\.position))
+            XCTAssertEqual(liveRecord.tearLabel, finalRecord.tearLabel)
+            XCTAssertEqual(
+                liveRecord.subdivisions.compactMap { $0.measuredCurve?.points.map(\.position) },
+                finalRecord.subdivisions.compactMap { $0.measuredCurve?.points.map(\.position) }
+            )
+        }
+        // The one legitimate difference: the finalized take has fader evidence.
+        XCTAssertTrue(live.records.allSatisfy { $0.faderIntervals.isEmpty })
+        XCTAssertTrue(finalized.records.allSatisfy { !$0.faderIntervals.isEmpty })
+    }
+
+    func testAnOperatorRemovedHoldRepartitionsTheGestureAndKeepsTheInvariant() throws {
+        var review = ReferenceTearSegmentationReviewBuilder.build(
+            referenceTakeID: "synthetic-tear",
+            movementEvents: tearEvents,
+            derivation: derivation(openFrom: 0, to: 0.60)
+        )
+        let candidate = try XCTUnwrap(review.candidates.first)
+        let boundary = try XCTUnwrap(candidate.boundaries.first)
+        XCTAssertTrue(
+            review.setBoundaryRemoved(
+                inCandidate: candidate.id,
+                boundaryID: boundary.id,
+                removed: true,
+                correction: ReferenceTearCorrection(
+                    correctedBy: "Karl",
+                    correctedAt: Date(timeIntervalSince1970: 1_788_000_600),
+                    notes: "not a hold",
+                    reason: "test"
+                )
+            )
+        )
+        let projection = ReferenceTearCanonicalProjectionBuilder.project(review)
+        let record = try XCTUnwrap(projection.records.first)
+        XCTAssertEqual(record.internalHolds.count, 0, "A struck-out boundary contributes no hold.")
+        XCTAssertEqual(record.subdivisions.count, 1, "N holds still require N+1 subdivisions.")
+        XCTAssertNil(record.tearLabel)
+        XCTAssertTrue(record.motionValidationIssues().isEmpty,
+                      "Issues: \(record.motionValidationIssues())")
+    }
+
+    func testAHoldRenamedAFaderClickStopsCountingWithoutDeletingAnything() throws {
+        var review = ReferenceTearSegmentationReviewBuilder.build(
+            referenceTakeID: "synthetic-tear",
+            movementEvents: tearEvents,
+            derivation: derivation(openFrom: 0, to: 0.60)
+        )
+        let candidate = try XCTUnwrap(review.candidates.first)
+        let boundary = try XCTUnwrap(candidate.boundaries.first)
+        XCTAssertTrue(
+            review.setBoundaryKind(
+                inCandidate: candidate.id,
+                boundaryID: boundary.id,
+                to: .faderClick,
+                correction: ReferenceTearCorrection(
+                    correctedBy: "Karl",
+                    correctedAt: Date(timeIntervalSince1970: 1_788_000_600),
+                    notes: "fader work",
+                    reason: "test"
+                )
+            )
+        )
+        XCTAssertEqual(review.totalCountedTearHoldCount, 0)
+        let retained = try XCTUnwrap(review.candidates.first?.boundaries.first)
+        XCTAssertNotNil(retained.proposal, "The machine proposal is retained, never deleted.")
+        let projection = ReferenceTearCanonicalProjectionBuilder.project(review)
+        XCTAssertEqual(projection.records.first?.internalHolds.count, 0)
+    }
+}

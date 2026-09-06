@@ -653,20 +653,95 @@ final class LivePerformedNotationTrackerTests: XCTestCase {
         )
     }
 
-    /// One renderer, shared. The authoring screen must present the same card
-    /// Capture does rather than drawing notation of its own.
+    /// One notation model and one renderer, shared.
+    ///
+    /// GUARD HISTORY — read this before changing the assertions below.
+    ///
+    /// Until 2026-09-06 this test banned the literal strings
+    /// `ScratchPhraseChartView(`, `ScratchStrokeGeometry`, `Canvas {` and
+    /// `Path {` outright. Two of those bans had stopped describing reality:
+    ///
+    /// - `ScratchPhraseChartView(` names the SHARED chart. The tear repair
+    ///   renders through it with `ChartSource.canonical`, which IS the
+    ///   canonical renderer — not a second one.
+    /// - `Canvas {` was ALREADY VIOLATED at committed HEAD by
+    ///   `TearReviewTimelineChart`, added by a3d86e9 BEFORE this repair. The
+    ///   blanket ban was a failing historical rule, not a passing one.
+    ///
+    /// Deleting those bans outright would silently legitimize that
+    /// pre-existing `Canvas`. So the rule is made PRECISE instead: the
+    /// pre-existing chart is pinned by name AND by count, this repair is
+    /// asserted to add no new hand-rolled renderer, and any future one fails.
     func testAuthoringUsesTheCanonicalRendererAndNotASecondOne() throws {
         let source = try authoringViewSource()
+
+        // Positive: the shared chart, fed canonical gesture records.
         XCTAssertTrue(
             source.contains("LivePerformedNotationCard("),
             "authoring must present the canonical live-notation card"
         )
-        for forbidden in ["ScratchPhraseChartView(", "ScratchMotionRenderer", "ScratchStrokeGeometry", "Canvas {", "Path {"] {
-            XCTAssertFalse(
-                source.contains(forbidden),
-                "authoring must reach the renderer through LivePerformedNotationCard, never draw \(forbidden) itself"
-            )
-        }
+        XCTAssertTrue(
+            source.contains("ScratchPhraseChartView("),
+            "the canonical tear chart must render through the shared phrase chart"
+        )
+        XCTAssertTrue(
+            source.contains("source: .canonical(projection.records, layer: .performance, frame: frame)"),
+            "tear notation must be projected canonical gesture records, not a bespoke drawing"
+        )
+
+        // Negative: no direct stroke renderer, no hand-rolled path.
+        XCTAssertFalse(
+            source.contains("ScratchMotionRenderer"),
+            "authoring must not call the stroke renderer directly; the shared chart owns that"
+        )
+        XCTAssertFalse(
+            source.contains("Path {"),
+            "authoring must not hand-roll a stroke path of its own"
+        )
+    }
+
+    /// The ONE `Canvas` on this screen is pre-existing and stays pinned.
+    ///
+    /// `TearReviewTimelineChart` (a3d86e9) draws the tear-review overview
+    /// timeline with a raw `Canvas`. This test does not endorse that: it
+    /// FREEZES it, so the tear repair cannot add a second hand-rolled
+    /// renderer and a future one cannot appear unnoticed. Removing or
+    /// replacing `TearReviewTimelineChart` with the shared chart is a
+    /// separate, still-open piece of work.
+    func testThePreExistingTimelineCanvasIsPinnedAndNotWidened() throws {
+        let source = try authoringViewSource()
+        let canvasCount = source.components(separatedBy: "Canvas {").count - 1
+        XCTAssertEqual(
+            canvasCount, 1,
+            "exactly one pre-existing Canvas is tolerated on this screen; "
+                + "found \(canvasCount). A new one means a second renderer was added."
+        )
+        let structRange = try XCTUnwrap(
+            source.range(of: "struct TearReviewTimelineChart: View {"),
+            "the pinned Canvas must still belong to TearReviewTimelineChart"
+        )
+        let canvasRange = try XCTUnwrap(source.range(of: "Canvas {"))
+        XCTAssertTrue(
+            canvasRange.lowerBound > structRange.lowerBound,
+            "the tolerated Canvas must sit inside TearReviewTimelineChart, "
+                + "not in the canonical tear chart or the live preview"
+        )
+    }
+
+    /// Live preview and finalized review must go through the SAME projection.
+    /// A screen that projected one way while recording and another way
+    /// afterwards is how a tear ends up drawn as a Baby-style reversal.
+    func testAuthoringLiveAndReviewShareOneTearProjection() throws {
+        let source = try authoringViewSource()
+        XCTAssertTrue(
+            source.contains("ReferenceTearCanonicalProjectionBuilder.project(\n                            movementEvents: liveNotationTracker.renderedEvents\n                        )")
+                || source.contains("movementEvents: liveNotationTracker.renderedEvents"),
+            "the live preview must project through ReferenceTearCanonicalProjectionBuilder"
+        )
+        XCTAssertTrue(
+            source.contains("ReferenceTearCanonicalProjectionBuilder.project(review)"),
+            "the finalized review must project through the same builder"
+        )
     }
 
     /// The card this slice wires up is the one that renders through the

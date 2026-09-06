@@ -4480,3 +4480,53 @@ Explicit preservation confirmations: no raw capture was deleted or rewritten; no
 Git metadata for this linked worktree is under the original repository's `.git/worktrees/ScratchLab-TTM`, and configured `core.hooksPath` points to that repository's external hooks. Following the established isolated-checkpoint procedure, this authorized Git mutation uses command-local `-c core.hooksPath=/dev/null` to avoid executing external hooks. No checked-in instruction requires a Git hook; no persistent configuration change. Necessary shared Git metadata writes do not access another worktree's source/data.
 
 This entry accompanies the single authorized checkpoint `feat(notation): add authored canonical tear templates`, parent `c17bdb9def7566414dfb7e5d444964bd87d8db12`. After successful commit, expect a clean worktree/index. No push. Remaining risks: internal authored timing/travel has no physical captured-reference acceptance, no GPU bitmap acceptance, and two pre-existing broad-plan runtime warnings. The exact next numbered task is **Prompt 6 — read-only preflight and specification check only**, fully written in `AI_HANDOFF/next_prompt.md`; no Prompt 6 implementation brief has been supplied, so further implementation is not inferred.
+
+# 2026-09-06 — Tear authoring, calibration reuse, take-start fader evidence, raw export
+
+Checkpoint 2 of 2 on `feature/ttm-tear-notation-alignment`, parent `997bc332f885532ea05b9aac7f636b284785a596`. Prepared as an isolated candidate; NOT committed, staged or pushed at the time of writing. Scope: **15 implementation/test files plus four workflow documents.**
+
+## Evidence provenance — read this before citing it
+
+Take 007 user-observed screenshots exposed the authoring/review problem. The repair's deterministic verification uses synthetic fixtures; no physical artifact was parsed or modified in this slice.
+
+Two corrections to earlier drafts of this record:
+- Earlier wording referred to a "Take 008". **No Take 008 artifact exists on this machine.** The RoutineCaptures store holds takes 001–007 only, newest 2026-08-31, and nothing in that store was read, altered or promoted by this work.
+- Earlier wording said "19 files". The repair owns **15 implementation/test files**; the four workflow documents are counted separately.
+
+The problem statement (Tear absent from the picker, a live chart drawing generic alternating diagonals, a parked fader leaving no crossfader samples, an export blocked behind approval) comes from Karl's screenshots and description of a Take 007 session — user-observed, not locally inspected. No measurement from that take is reproduced here, because the artifact was never parsed.
+
+## What changed (15 files)
+
+Production (9): `CaptureCore.swift` (+161/−0 in exactly four hunks — `CrossfaderTakeStartState` +151, optional sidecar field/doc +8, initializer parameter +1, initializer assignment +1); `ReferenceTechnique.swift`; `ReferenceTake.swift`; `ReferenceValidation.swift`; `ReferenceAuthoringSession.swift`; `MacCaptureEngine.swift`; `ReferenceAuthoringCaptureBridge.swift`; `ReferenceAuthoringViewModel.swift`; `ReferenceAuthoringView.swift`.
+
+Tests (6): `ReferenceAuthoringTests.swift`; `ReferenceAuthoringSessionTests.swift`; `ReferenceAuthoringViewModelTests.swift`; `ReferenceAuthoringCaptureBridgeTests.swift`; `LivePerformedNotationTrackerTests.swift`; `MacCameraPreviewViewTests.swift`.
+
+Tear becomes a first-class `ReferenceTechnique` via a new `authorableSet`; `minimumRequiredSet` is deliberately unchanged because `ReferenceRegistry` reads it as `trainingEnabledTechniques`, so authorability must not widen training eligibility. One projection (`ReferenceTearCanonicalProjectionBuilder`) feeds BOTH the live preview and the finalized review through the existing `ScratchPhraseChartView` → `ScratchStrokeGeometry` → `ScratchMotionRenderer` chain. An exactly-matching stored `CrossfaderCalibration` is adopted automatically (device, channel, CC, deck and open end must all match); nothing is fabricated from a fader curve. Recording, finalization, retention and export no longer require a calibration — its absence is a blocking `.crossfaderCalibrationMissing` finding and explicit unknown fader evidence, so canonical approval stays fail-closed. The parked fader's take-start state is observed at the authoritative media-start boundary and persisted as an optional, backward-compatible sidecar record correlated with take generation, MIDI source, connection generation, address and calibration; it keeps its own negative observation time and never enters `mixerMidiEvents`. `Save Capture…` reuses `SessionExportCoordinator` and is independent of repetition selection, calibration, tear review and approval.
+
+## Source-guard disposition
+
+Two source-string guards were made PRECISE rather than deleted. `MacCameraPreviewViewTests` and `LivePerformedNotationTrackerTests` previously banned the literal `ScratchPhraseChartView(` — which names the SHARED canonical renderer this repair correctly routes through — and `Canvas {`, which was ALREADY VIOLATED at committed HEAD by `TearReviewTimelineChart` (introduced by a3d86e9, before this repair). Deleting those bans would have silently legitimized the pre-existing `Canvas`. Instead a new test, `testThePreExistingTimelineCanvasIsPinnedAndNotWidened`, asserts `Canvas {` occurs EXACTLY ONCE and that the occurrence sits inside `TearReviewTimelineChart` — so this repair adds no hand-rolled renderer and any future one fails. `ScratchStrokeGeometry` was narrowed to `ScratchStrokeGeometry.canonicalGeometry` (naming the frame type is allowed; calling the geometry layer is not). Every capture/approval/publication ban (`startRoutineRecording`, `stopRoutineRecording`, `approveTakeInReview`, `markTakePublished`, `writePackage`) is unchanged, and `ScratchMotionRenderer` and `Path {` remain banned. Replacing `TearReviewTimelineChart` with the shared chart remains separate, still-open work.
+
+`testBeginRecordingRefusesWithoutACommittedCalibration` was replaced by `testBeginRecordingProceedsWithoutACalibration`, and `testRecordingIsBlockedByPreflightBeforeCalibration` now expects `.preflightBlocked`. That inversion IS the decoupling of capture eligibility from canonical-reference eligibility, not a weakened assertion; three stronger gates (finalization, unknown-fader approval block, export independence) replace the old one.
+
+## Verification (isolated candidate)
+
+Candidate worktree from `997bc33`, unique signed host identity `com.machelpnz.scratchlab.cp2.sh87xi` (sandbox entitlement intact, dedicated container), isolated `SYMROOT`/`OBJROOT`/DerivedData/products/intermediates/result bundles. No bare `xcrun xctest`. No concurrent `xcodebuild`. Candidate tree frozen across the whole run (diff digest identical before and after).
+
+- Capture-pipeline fixtures (python): **82 tests, OK**.
+- Full `ScratchLabDesktop` XCTest plan, both configurations: **3,729 executed, 56 skipped, 0 failures**, `TEST SUCCEEDED`.
+- Focused suites, both configurations: **778 executed, 2 skipped, 0 failures** across `ReferenceAuthoringTests` (67), `ReferenceAuthoringSessionTests` (37), `ReferenceAuthoringViewModelTests` (12), `ReferenceAuthoringCaptureBridgeTests` (36), `LivePerformedNotationTrackerTests` (37, 1 pre-existing skip), `MacCameraPreviewViewTests` (16), `ReferenceTearAuthoringSliceTests` (21), `ReferenceTearCanonicalProjectionTests` (12), `CrossfaderTakeStartStateTests` (10), `ReferenceAuthoringCalibrationReuseAndExportTests` (5), `ReferenceTearSegmentationReviewTests` (25), `ReferenceTearSegmentationViewModelTests` (11), `ReferenceTearSegmentationChatterRootCauseTests` (14), `CrossfaderCalibrationTests` (49), `ScratchNotationPanelTests` (9), `CapturedNotationTravelTests` (12), `NotationLaneGeometryTests` (16).
+- iOS build PASS, macOS build PASS, watchOS build PASS (unsigned). The watchOS build is not strictly required: zero changed files belong to the `ScratchLabWatch` target.
+- The one skip inside a file this repair touches (`testTake003RealStreamIsNotFlattenedByTheLivePath`, "take-003 artifact not present") is pre-existing at committed HEAD; this repair introduces no `XCTSkip`.
+
+**The literal `scripts/build.sh all` was NOT run.** `xcodebuild` ignores `SYMROOT`/`OBJROOT` supplied through the environment on this Mac (`IDEBuildLocationStyle = Custom`), so the script cannot be given a unique container or isolated products. Running it would have used the default container and the shared build-products directory. The five stages it performs — python fixtures, the full macOS test plan, and the iOS/macOS/watchOS builds — were each run individually with command-line isolation instead, which is equal in coverage and stricter in isolation.
+
+No unsigned universal macOS Release build was run: this slice introduces no `#if DEBUG`/Release routing or conditional compilation.
+
+## Safety
+
+No raw capture was deleted or rewritten. RoutineCaptures remained byte-identical throughout (202 files). The operator's production Application Support store was untouched — zero files written to it during the run, while 186 files landed in the candidate's own sandbox container. No reference was approved, published, installed, registered or made training-eligible, and no take is claimed to be valid reference material. No ScratchBook or GPL material. Excluded and left dirty in the source worktree: `project.pbxproj` (71/71 pure reordering) and `CrossfaderCalibrationStore.swift` (3/5).
+
+## Remaining risk
+
+**No hardware verification has been performed.** Nothing has been recorded on the Rane through this code, the canonical tear chart has not been seen in a running app, and the parked-fader take-start path has never executed against real Core MIDI. Camera/DVS movement events are projected as explicitly unknown rather than claiming platter revolutions. A gesture containing chatter-merged opposite-direction runs renders that subdivision as MOTION UNKNOWN. `PlatterMotionSegmenter` is still not wired to reference takes. No package round-trip was exercised.

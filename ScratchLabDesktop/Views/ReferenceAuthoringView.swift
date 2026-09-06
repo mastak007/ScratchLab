@@ -22,6 +22,9 @@ struct ReferenceAuthoringView: View {
     /// one is ever expanded, and none by default, so a noisy take never
     /// renders dozens of open cards.
     @State private var selectedTearCandidateID: String?
+    /// The EXISTING session-archive pipeline, reused verbatim for the raw
+    /// diagnostic export. This screen adds no second archive format.
+    @StateObject private var exportCoordinator = SessionExportCoordinator()
 
     /// Minimum height the live-notation card is guaranteed.
     ///
@@ -49,6 +52,13 @@ struct ReferenceAuthoringView: View {
     /// scroll content and pushing notation off-screen. Framing stays a
     /// separate, clearly visible panel — notation is never overlaid on it.
     private static let cameraPreviewMaximumHeight: CGFloat = 360
+
+    /// Drawing height for the canonical tear chart's lane.
+    ///
+    /// Sits just under `liveNotationMinimumHeight` so the chart's own header
+    /// and reason rows fit inside the 180 pt box its call sites reserve,
+    /// without the lane itself ever asking for unbounded height.
+    private static let canonicalTearChartMinimumHeight: CGFloat = 140
 
     init(
         engine: MacCaptureEngine,
@@ -91,6 +101,9 @@ struct ReferenceAuthoringView: View {
         .task {
             viewModel.refreshAutofilledPatternIdentity()
             viewModel.startPreflightPolling()
+            // Reuse an exactly-matching saved calibration rather than asking
+            // for another sweep every time this screen opens.
+            viewModel.adoptPersistedCalibrationIfAvailable()
             // Re-entering the screen mid-take must still show live motion.
             // `onChange` only fires on a transition, and `@State` is reset by
             // the fresh view, so without this the tracker would stay nil for
@@ -102,6 +115,15 @@ struct ReferenceAuthoringView: View {
         }
         .onChange(of: viewModel.phraseBars) { _, _ in
             viewModel.refreshAutofilledPatternIdentity()
+        }
+        // Changing the deck or the open end changes WHICH stored calibration
+        // is the exact match, so retry adoption rather than making the
+        // operator press Apply Setup again to discover it.
+        .onChange(of: viewModel.activeDeckRawValue) { _, _ in
+            viewModel.adoptPersistedCalibrationIfAvailable()
+        }
+        .onChange(of: viewModel.crossfaderOpenEndRawValue) { _, _ in
+            viewModel.adoptPersistedCalibrationIfAvailable()
         }
         .onChange(of: viewModel.session.phase == .recording) { _, isRecording in
             syncLiveNotationTracker(isRecording: isRecording)
@@ -180,14 +202,32 @@ struct ReferenceAuthoringView: View {
             }
 
             if let liveNotationTracker {
-                LivePerformedNotationCard(
-                    tracker: liveNotationTracker,
-                    bpm: Double(viewModel.bpm)
-                )
-                // The minimum applies to the CARD only. The DEBUG diagnostics
-                // row below is a sibling in this stack, so it can never eat
-                // into the notation's guaranteed height.
-                .frame(maxWidth: .infinity, minHeight: Self.liveNotationMinimumHeight)
+                if viewModel.selectedTechnique != .tear {
+                    LivePerformedNotationCard(
+                        tracker: liveNotationTracker,
+                        bpm: Double(viewModel.bpm)
+                    )
+                    // The minimum applies to the CARD only. The DEBUG diagnostics
+                    // row below is a sibling in this stack, so it can never eat
+                    // into the notation's guaranteed height.
+                    .frame(maxWidth: .infinity, minHeight: Self.liveNotationMinimumHeight)
+                } else {
+                    // The LIVE view of a tear goes through the SAME canonical
+                    // projection the finalized review uses, so a
+                    // forward → hold → forward gesture cannot be drawn one way
+                    // here and another way afterwards — and can never be drawn
+                    // as a Baby-style reversal or as one uninterrupted
+                    // diagonal. Presentation only: nothing here is persisted,
+                    // scored, reviewed or exported.
+                    canonicalTearChart(
+                        title: "YOUR MOTION — LIVE (TEAR STRUCTURE)",
+                        projection: ReferenceTearCanonicalProjectionBuilder.project(
+                            movementEvents: liveNotationTracker.renderedEvents
+                        ),
+                        emptyMessage: "Waiting for tear motion…"
+                    )
+                    .frame(maxWidth: .infinity, minHeight: Self.liveNotationMinimumHeight)
+                }
                 #if DEBUG
                 LiveNotationDiagnosticsRow(tracker: liveNotationTracker)
                 #endif
@@ -230,7 +270,7 @@ struct ReferenceAuthoringView: View {
 
                 Picker("Technique", selection: $viewModel.selectedTechnique) {
                     Text("Select a technique").tag(Optional<ReferenceTechnique>.none)
-                    ForEach(ReferenceTechnique.minimumRequiredSet) { technique in
+                    ForEach(ReferenceTechnique.authorableSet) { technique in
                         Text(technique.displayName).tag(Optional(technique))
                     }
                 }
@@ -238,6 +278,11 @@ struct ReferenceAuthoringView: View {
 
                 if case .flare = viewModel.selectedTechnique {
                     Text("Flare click count is part of the selected technique and must be chosen explicitly.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+                if viewModel.selectedTechnique == .tear {
+                    Text("Tear is recorded as Tear. The selected technique is the take's metadata; automatic detection stays advisory and never overwrites it.")
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 }
@@ -302,10 +347,26 @@ struct ReferenceAuthoringView: View {
                     }
                 }
 
-                Button("Start Calibration Sweep") {
-                    viewModel.beginCalibration()
+                HStack {
+                    Button(viewModel.session.confirmedCalibration == nil
+                        ? "Start Calibration Sweep"
+                        : "Recalibrate Crossfader") {
+                        viewModel.recalibrateCrossfader()
+                    }
+                    .disabled(!viewModel.session.configurationIsComplete || viewModel.isWorking)
+                    Button("Reuse Saved Calibration") {
+                        viewModel.adoptPersistedCalibrationIfAvailable(announce: true)
+                    }
+                    .disabled(viewModel.session.confirmedCalibration != nil || viewModel.isWorking)
                 }
-                .disabled(!viewModel.session.configurationIsComplete || viewModel.isWorking)
+                if let summary = viewModel.calibrationSourceSummary {
+                    Text(summary)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+                Text("A saved calibration for this exact device, channel, CC, deck and open end is adopted automatically — the learned MIDI mapping is never relearned and no new sweep is required. Recalibrate only when the hardware or its wiring has changed.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
 
                 if let sweep = viewModel.session.calibrationSweep {
                     Text("Live raw value: \(viewModel.state.latestCalibrationRawValue.map(String.init) ?? "No traffic")")
@@ -465,10 +526,53 @@ struct ReferenceAuthoringView: View {
                         .font(.caption.monospaced())
                         .foregroundStyle(.secondary)
                 }
+                if viewModel.session.confirmedCalibration == nil {
+                    Text("No crossfader calibration is in force. This take will still record, finalize and export — its fader evidence will be recorded as explicitly unknown, and it cannot be approved as a canonical reference until a calibration is in place.")
+                        .font(.caption)
+                        .foregroundStyle(.orange)
+                }
+                rawExportControls
             }
             .frame(maxWidth: .infinity, alignment: .leading)
             .padding(.top, 4)
         }
+    }
+
+    // MARK: - Raw diagnostic export
+
+    /// Export the RAW capture, separately from canonical approval.
+    ///
+    /// This copies the already-finalized files through the existing
+    /// `SessionExportCoordinator` archive pipeline — there is no second ZIP
+    /// implementation here. It does not depend on repetition selection, fader
+    /// calibration, tear-review corrections, or `approvalBlockReason`, and it
+    /// approves, publishes, installs and registers nothing.
+    @ViewBuilder
+    private var rawExportControls: some View {
+        Divider()
+        HStack {
+            Button("Save Capture…") { saveRawCapture() }
+                .disabled(!viewModel.canExportRawCapture || exportCoordinator.isPreparing)
+            if exportCoordinator.isPreparing {
+                ProgressView().controlSize(.small)
+            }
+            if let status = exportCoordinator.statusMessage {
+                Text(status).font(.caption).foregroundStyle(.secondary)
+            }
+        }
+        if let reason = viewModel.rawCaptureExportBlockReason {
+            Text(reason).font(.caption).foregroundStyle(.secondary)
+        }
+        Text(ReferenceAuthoringViewModel.rawCaptureExportDisclaimer)
+            .font(.caption)
+            .foregroundStyle(.secondary)
+    }
+
+    private func saveRawCapture() {
+        guard let source = viewModel.rawCaptureExportSource(
+            config: captureEngine.recordingSessionConfig
+        ) else { return }
+        exportCoordinator.saveArchiveCopy(for: source)
     }
 
     @ViewBuilder
@@ -515,8 +619,16 @@ struct ReferenceAuthoringView: View {
                     TextField("Approval or rejection notes", text: $viewModel.reviewNotes, axis: .vertical)
                         .lineLimit(2...4)
 
+                    // Approval's scope, stated wherever approval is offered.
+                    // Approving marks ONE draft canonical inside this session.
+                    // It is not an export, and it publishes, installs and
+                    // enables nothing — those are separate, later actions.
+                    Text("Approving a canonical draft is not export, publication, installation, or training eligibility. Use Save Capture… above to export the raw take; it is independent of approval.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+
                     if take.evidence.metadata.lifecycleState == .approvedCanonical {
-                        Text("Approved canonical draft. Not installed for training.")
+                        Text("Approved canonical draft. Not published, not installed, not eligible for training.")
                             .font(.headline)
                             .foregroundStyle(.green)
                     } else {
@@ -543,6 +655,56 @@ struct ReferenceAuthoringView: View {
         }
     }
 
+    // MARK: - Canonical tear notation
+
+    /// One canonical chart over projected `ScratchNotation.GestureRecord`s.
+    ///
+    /// Renders through the EXISTING shared chart
+    /// (`ScratchPhraseChartView.ChartSource.canonical`), which draws holds as
+    /// horizontal segments, closed-fader travel distinctly from sounding
+    /// travel, explicit MOTION UNKNOWN / FADER UNKNOWN bands, and fader glyphs
+    /// only from real fader observations. No second renderer and no second
+    /// notation model exists for this screen.
+    @ViewBuilder
+    private func canonicalTearChart(
+        title: String,
+        projection: ReferenceTearCanonicalProjection,
+        emptyMessage: String
+    ) -> some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Text(title)
+                .font(.system(size: 10, weight: .bold, design: .monospaced))
+                .foregroundStyle(Color(white: 0.55))
+            if let frame = ReferenceAuthoringViewModel.canonicalFrame(
+                for: projection,
+                bpm: Double(viewModel.bpm)
+            ), !projection.isEmpty {
+                ScratchPhraseChartView(
+                    source: .canonical(projection.records, layer: .performance, frame: frame),
+                    bpm: Double(viewModel.bpm),
+                    backgroundColor: .clear
+                )
+                // Bounded, never `maxHeight: .infinity`: this card also lives
+                // inside an unbounded `ScrollView`, where `.infinity` resolves
+                // to the IDEAL height and collapses the lane — the same trap
+                // documented on `liveNotationMinimumHeight`.
+                .frame(maxWidth: .infinity, minHeight: Self.canonicalTearChartMinimumHeight)
+            } else {
+                ScratchPhraseChartView(
+                    source: .empty(emptyMessage),
+                    bpm: Double(viewModel.bpm),
+                    backgroundColor: .clear
+                )
+                .frame(maxWidth: .infinity, minHeight: Self.canonicalTearChartMinimumHeight)
+            }
+            ForEach(projection.reasons, id: \.rawValue) { reason in
+                Text(reason.detail)
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+            }
+        }
+    }
+
     // MARK: - Tear segmentation review
 
     /// Inspect and correct one take's tear segmentation.
@@ -557,6 +719,12 @@ struct ReferenceAuthoringView: View {
         let review = take.tearReview
         VStack(alignment: .leading, spacing: 10) {
             Text("Tear segmentation review").font(.headline)
+            canonicalTearChart(
+                title: "CANONICAL TEAR STRUCTURE — FINALIZED TAKE",
+                projection: ReferenceTearCanonicalProjectionBuilder.project(review),
+                emptyMessage: "No tear structure could be placed from this take's evidence."
+            )
+            .frame(maxWidth: .infinity, minHeight: Self.liveNotationMinimumHeight)
             Text(ReferenceAuthoringViewModel.tearReviewStatusText(review))
                 .font(.caption)
                 .foregroundStyle(.secondary)
@@ -993,8 +1161,17 @@ struct ReferenceAuthoringView: View {
         viewModel.reviewedTake?.evidence.boundaries.repetitions.first { $0.index == index }
     }
 
+    /// Recording eligibility.
+    ///
+    /// Deliberately NOT gated on a crossfader calibration. A missing
+    /// calibration costs the take its fader evidence — reported as explicit
+    /// unknown, and blocking for canonical approval — but it must never cost
+    /// the operator the raw diagnostic capture. The warning below says so
+    /// before Record is pressed.
     private var canRecord: Bool {
-        viewModel.session.phase == .readyToRecord
+        let phaseAllowsRecording = viewModel.session.phase == .readyToRecord
+            || (viewModel.session.phase == .configuring && viewModel.session.configurationIsComplete)
+        return phaseAllowsRecording
             && viewModel.session.latestPreflight?.blocksRecording == false
             && !viewModel.isWorking
     }

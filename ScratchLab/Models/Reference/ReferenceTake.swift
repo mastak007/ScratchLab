@@ -226,9 +226,20 @@ struct ReferenceTakeMetadata: Codable, Equatable, Sendable, Identifiable {
     /// approved version.
     let referenceVersion: Int
 
-    /// The calibration in force when this take was recorded. Non-optional:
-    /// a reference take cannot exist without one.
-    let crossfaderCalibration: CrossfaderCalibration
+    /// The calibration in force when this take was recorded, or `nil` when
+    /// the take was recorded without a usable reference calibration.
+    ///
+    /// Optional deliberately. Capture eligibility and CANONICAL-REFERENCE
+    /// eligibility are separate gates: a diagnostic take recorded with no
+    /// calibration is still a real capture that must be retained, reviewed and
+    /// exportable, and modelling it with a fabricated calibration would make
+    /// the take lie about its own evidence. `ReferenceValidator` reports the
+    /// absence as `.crossfaderCalibrationMissing`, which keeps canonical
+    /// approval fail-closed while leaving the raw take intact.
+    ///
+    /// Codable-compatible with every take written before this became optional:
+    /// the key is simply present in those documents.
+    let crossfaderCalibration: CrossfaderCalibration?
     /// Hysteresis in force when the fader events were derived, so a package
     /// can be re-derived identically years later.
     let crossfaderHysteresisClosedAtOrBelow: Double
@@ -292,7 +303,7 @@ struct ReferenceTakeMetadata: Codable, Equatable, Sendable, Identifiable {
         handedness: CaptureSessionHandedness = .right,
         notes: String = "",
         referenceVersion: Int,
-        crossfaderCalibration: CrossfaderCalibration,
+        crossfaderCalibration: CrossfaderCalibration?,
         hysteresis: CrossfaderHysteresis = .default,
         deviceInfo: ReferenceDeviceInfo,
         recordedAt: Date,
@@ -1788,5 +1799,751 @@ enum ReferenceTearSegmentationReviewBuilder {
         case "backward": return .backward
         default: return nil
         }
+    }
+}
+
+// MARK: - Take-start crossfader correlation
+
+/// Whether a take's persisted `CaptureCore.CrossfaderTakeStartState` may be
+/// used as the take's fader baseline, and if not, why.
+///
+/// This is the ONLY place that decision is made. It is a pure function of the
+/// recorded state, the identities it must match and the take's own recorded
+/// samples, so every rejection edge is deterministically testable with no
+/// hardware, and so no consumer can quietly adopt a snapshot on weaker terms.
+///
+/// A parked-open fader emits nothing for a whole take. Take 008 finalized with
+/// a valid learned mapping (Ch16 CC8), a valid calibration, raw 127 live in the
+/// engine's cache, and ZERO mapped crossfader samples — the fader was simply
+/// never touched after Record. This type is what lets that take prove the state
+/// it actually knew, without an artificial wiggle and without inventing a
+/// measurement.
+enum ReferenceCrossfaderTakeStart {
+
+    /// Why a take-start snapshot was not adopted.
+    ///
+    /// A closed vocabulary. Every case names a correlation that failed or a
+    /// piece of evidence that was absent — never performer content.
+    enum RejectionReason: String, Equatable, Sendable {
+        /// No control-state record was written for this take at all.
+        case notRecorded
+        /// The engine recorded an explicit "we did not know".
+        case recordedUnknown
+        /// Written by a schema this build does not read.
+        case unsupportedSchema
+        /// Non-finite time, out-of-range raw value, or no named address.
+        case malformedObservation
+        /// The snapshot names a different session/take.
+        case takeIdentityMismatch
+        /// The snapshot was correlated with a different recording generation.
+        case takeGenerationMismatch
+        /// A different MIDI input source was selected when it was observed.
+        case midiSourceMismatch
+        /// Observed during an earlier MIDI device connection.
+        case connectionGenerationMismatch
+        /// Observed on a different channel/CC than the take's calibration.
+        case addressMismatch
+        /// Observed under a different calibration than the take carries.
+        case calibrationMismatch
+        /// The take carries no usable calibration to interpret it against.
+        case calibrationMissing
+        /// The record claims an instant at or after media start, which a
+        /// pre-take snapshot cannot have. Refused rather than re-timed.
+        case observationNotBeforeTakeStart
+
+        var detail: String {
+            switch self {
+            case .notRecorded:
+                return "this take recorded no crossfader control state at its media-start boundary"
+            case .recordedUnknown:
+                return "the engine recorded that no trustworthy crossfader observation existed for this take"
+            case .unsupportedSchema:
+                return "the recorded crossfader control state uses a schema this build does not read"
+            case .malformedObservation:
+                return "the recorded crossfader control state is missing a usable address, value or observation time"
+            case .takeIdentityMismatch:
+                return "the recorded crossfader control state names a different session or take"
+            case .takeGenerationMismatch:
+                return "the recorded crossfader control state belongs to a different recording generation"
+            case .midiSourceMismatch:
+                return "the recorded crossfader control state was observed under a different MIDI input source"
+            case .connectionGenerationMismatch:
+                return "the recorded crossfader control state was observed during an earlier MIDI device connection"
+            case .addressMismatch:
+                return "the recorded crossfader control state was observed on a different MIDI address than this take's calibration"
+            case .calibrationMismatch:
+                return "the recorded crossfader control state was observed under a different crossfader calibration"
+            case .calibrationMissing:
+                return "this take carries no usable crossfader calibration, so a raw control value cannot be interpreted"
+            case .observationNotBeforeTakeStart:
+                return "the recorded crossfader control state claims an instant at or after media start, which a pre-take snapshot cannot have"
+            }
+        }
+    }
+
+    enum Outcome: Equatable, Sendable {
+        /// Usable. `rawValue` may seed the take's fader baseline at t = 0.
+        /// `observedTakeRelativeTime` is the observation's ORIGINAL (negative)
+        /// instant, retained so nothing downstream can present it as an
+        /// in-take measurement.
+        case adopted(rawValue: Int, observedTakeRelativeTime: Double)
+        /// A real in-take crossfader sample already establishes the take's
+        /// start, so no baseline is needed. Adopting one anyway would create a
+        /// second, possibly contradictory, claim about the same instant.
+        case notNeeded
+        case rejected(RejectionReason)
+
+        var adoptedRawValue: Int? {
+            if case .adopted(let rawValue, _) = self { return rawValue }
+            return nil
+        }
+    }
+
+    /// The identities a snapshot must have been observed under to be adopted.
+    struct Correlation: Equatable, Sendable {
+        let sessionID: String
+        let takeID: String
+        let takeGeneration: UInt64?
+        let midiSourceID: String?
+        let midiConnectionGeneration: UInt64?
+
+        init(
+            sessionID: String,
+            takeID: String,
+            takeGeneration: UInt64?,
+            midiSourceID: String?,
+            midiConnectionGeneration: UInt64?
+        ) {
+            self.sessionID = sessionID
+            self.takeID = takeID
+            self.takeGeneration = takeGeneration
+            self.midiSourceID = midiSourceID
+            self.midiConnectionGeneration = midiConnectionGeneration
+        }
+    }
+
+    /// Decide whether `state` may seed this take's fader baseline.
+    ///
+    /// Every check fails CLOSED: an absent identity on either side is a
+    /// mismatch, not a pass, because "we cannot tell whether this snapshot
+    /// belongs to this take" and "this snapshot belongs to this take" are not
+    /// the same statement.
+    static func correlate(
+        _ state: CaptureCore.CrossfaderTakeStartState?,
+        against correlation: Correlation,
+        calibration: CrossfaderCalibration?,
+        recordedSamples: [CrossfaderPositionSample],
+        baselineTolerance: Double = ReferenceValidator.faderOpenBaselineTolerance
+    ) -> Outcome {
+        guard let state else { return .rejected(.notRecorded) }
+        guard state.schemaVersion == CaptureCore.CrossfaderTakeStartState.currentSchemaVersion else {
+            return .rejected(.unsupportedSchema)
+        }
+        guard state.provenance == .preTakeSnapshot else { return .rejected(.recordedUnknown) }
+        guard state.isUsableSnapshot,
+              let rawValue = state.rawValue,
+              let channel = state.channel,
+              let controller = state.controller,
+              let observedTakeRelativeTime = state.observedTakeRelativeTime else {
+            return .rejected(.malformedObservation)
+        }
+        guard state.sessionID == correlation.sessionID,
+              state.takeID == correlation.takeID else {
+            return .rejected(.takeIdentityMismatch)
+        }
+        guard let recordedGeneration = state.takeGeneration,
+              let expectedGeneration = correlation.takeGeneration,
+              recordedGeneration == expectedGeneration else {
+            return .rejected(.takeGenerationMismatch)
+        }
+        guard let recordedSource = state.midiSourceID,
+              let expectedSource = correlation.midiSourceID,
+              !expectedSource.isEmpty,
+              recordedSource == expectedSource else {
+            return .rejected(.midiSourceMismatch)
+        }
+        guard let recordedConnection = state.midiConnectionGeneration,
+              let expectedConnection = correlation.midiConnectionGeneration,
+              recordedConnection == expectedConnection else {
+            return .rejected(.connectionGenerationMismatch)
+        }
+        guard let calibration, calibration.isUsable else {
+            return .rejected(.calibrationMissing)
+        }
+        guard calibration.address.channel == channel,
+              calibration.address.controller == controller,
+              calibration.address.deviceIdentifier == (state.deviceName ?? "") else {
+            return .rejected(.addressMismatch)
+        }
+        guard state.calibrationID == calibration.id else {
+            return .rejected(.calibrationMismatch)
+        }
+        // A pre-take snapshot is, by definition, from before media start.
+        // A record claiming otherwise is refused rather than re-timed: it
+        // would be indistinguishable from a measured in-take packet.
+        guard observedTakeRelativeTime < 0 else {
+            return .rejected(.observationNotBeforeTakeStart)
+        }
+        // A real in-take event already covering the take's start is the
+        // stronger evidence and the only one allowed to speak for it.
+        // Adopting a baseline beside it would mint a duplicate, potentially
+        // contradictory, claim about the same instant.
+        if recordedSamples.contains(where: { $0.takeRelativeTime <= baselineTolerance }) {
+            return .notNeeded
+        }
+        return .adopted(rawValue: rawValue, observedTakeRelativeTime: observedTakeRelativeTime)
+    }
+
+    /// The `(time, rawValue)` stream `CrossfaderStateDeriver` should be run
+    /// over for this take.
+    ///
+    /// Identical to the recorded samples in every case except an ADOPTED
+    /// baseline, where a single `t = 0` entry is prepended. The recorded
+    /// samples themselves are never modified, reordered or removed, and the
+    /// take's own `crossfaderRawSamples` continue to carry exactly what was
+    /// received — the baseline exists only in the derivation input, so no
+    /// pre-take packet is ever persisted as an in-take measurement.
+    static func derivationInput(
+        recordedSamples: [CrossfaderPositionSample],
+        outcome: Outcome
+    ) -> [(takeRelativeTime: Double, rawValue: Int)] {
+        let recorded = recordedSamples.map {
+            (takeRelativeTime: $0.takeRelativeTime, rawValue: $0.rawValue)
+        }
+        guard let baseline = outcome.adoptedRawValue else { return recorded }
+        return [(takeRelativeTime: 0, rawValue: baseline)] + recorded
+    }
+}
+
+// MARK: - Canonical projection of a tear review
+
+/// Why the projection reached the shape it did, including the readings it
+/// declined to make.
+///
+/// A separate vocabulary from `ReferenceTearReviewReason` on purpose: these
+/// describe the PROJECTION (what could and could not be placed on a canonical
+/// grid), not the segmentation, and the two must not be conflated in a UI or
+/// in a test.
+enum ReferenceTearProjectionReason: String, Equatable, Sendable, CaseIterable {
+    case measuredPlatterTravel
+    case gestureLocalPlatterRevolutions
+    case unsupportedCoordinateSpace
+    case lowMovementConfidence
+    case releasedPlaybackPresent
+    case ghostMovementPresent
+    case holdStructureUnsupported
+    case noPlacedMotion
+    case faderUnobserved
+    case faderClicksCitedNotCounted
+
+    var detail: String {
+        switch self {
+        case .measuredPlatterTravel:
+            return "subdivision geometry is the take's own decoded platter travel, at its measured durations"
+        case .gestureLocalPlatterRevolutions:
+            return "each gesture's travel runs are re-anchored end-to-end into one gesture-local origin; the unit is platter revolutions and every run's measured excursion survives"
+        case .unsupportedCoordinateSpace:
+            return "at least one backing movement event is not gesture-relative controller telemetry, so its positions are not platter revolutions and no geometry is claimed"
+        case .lowMovementConfidence:
+            return "the weakest decoder confidence backing this gesture is below the review's provisional threshold, so the gesture is projected as unknown"
+        case .releasedPlaybackPresent:
+            return "at least one backing interval is free-running playback, which is motion without gesture polarity and is never drawn as an ordinary stroke"
+        case .ghostMovementPresent:
+            return "at least one region is travel with the fader observed closed — a silent move, drawn as such and never as a sounding stroke"
+        case .holdStructureUnsupported:
+            return "the surviving hold boundaries do not partition this gesture into N holds and N+1 bounded subdivisions, so no canonical structure is asserted"
+        case .noPlacedMotion:
+            return "no gesture could be placed on a time grid from this take's evidence"
+        case .faderUnobserved:
+            return "at least one region carries no fader observation, which stays explicitly unknown and is never drawn as open"
+        case .faderClicksCitedNotCounted:
+            return "fader cuts, pulses and transform pulses are projected as fader evidence only; none of them contributes a platter tear hold"
+        }
+    }
+}
+
+/// A tear review projected into the CANONICAL notation model.
+///
+/// This is the single bridge between the reference-authoring evidence layer
+/// and `ScratchNotation.GestureRecord`. Both the live in-progress preview and
+/// the finalized review render through it, so a forward → hold → forward
+/// gesture cannot be drawn one way while recording and another way afterwards,
+/// and neither can draw it as a Baby-style reversal or as one uninterrupted
+/// diagonal.
+///
+/// It builds no notation model and no renderer of its own: the output is
+/// `ScratchNotation.GestureRecord`, which `ScratchStrokeGeometry` /
+/// `ScratchMotionRenderer` / `ScratchPhraseChartView` already draw.
+struct ReferenceTearCanonicalProjection: Equatable, Sendable {
+    let records: [ScratchNotation.GestureRecord]
+    /// Take-relative seconds actually occupied by the projected records.
+    let timeRange: ClosedRange<Double>?
+    /// Position bounds across every placed curve point and hold, in the
+    /// declared coordinate space. `nil` when nothing could be placed.
+    let positionRange: ClosedRange<Double>?
+    let coordinateSpace: ScratchNotation.GestureRecord.CoordinateSpace
+    let reasons: [ReferenceTearProjectionReason]
+
+    var isEmpty: Bool { records.isEmpty }
+}
+
+enum ReferenceTearCanonicalProjectionBuilder {
+
+    /// Gesture-relative controller telemetry is expressed in revolutions
+    /// (`PlatterCoordinateSemantics.gestureRelativeNotation` divides raw steps
+    /// by steps-per-revolution), so that is the only coordinate space this
+    /// projection will ever claim. Camera or DVS movement events use a
+    /// different, un-named coordinate and are projected as unknown instead.
+    static let coordinateSpace: ScratchNotation.GestureRecord.CoordinateSpace = .platterRevolutions
+
+    static func project(
+        _ review: ReferenceTearSegmentationReview,
+        configuration: ReferenceTearReviewConfiguration = ReferenceTearReviewConfiguration()
+    ) -> ReferenceTearCanonicalProjection {
+        var records: [ScratchNotation.GestureRecord] = []
+        var reasons: [ReferenceTearProjectionReason] = []
+        var positions: [Double] = []
+        var times: [Double] = []
+
+        for candidate in review.candidates {
+            let built = buildRecord(
+                candidate: candidate,
+                review: review,
+                configuration: configuration
+            )
+            records.append(built.record)
+            reasons.append(contentsOf: built.reasons)
+            positions.append(contentsOf: built.positions)
+            times.append(candidate.span.startTime)
+            times.append(candidate.span.endTime)
+        }
+
+        if records.isEmpty { reasons.append(.noPlacedMotion) }
+        if review.faderIntervals.isEmpty { reasons.append(.faderUnobserved) }
+        if !review.faderClicks.isEmpty { reasons.append(.faderClicksCitedNotCounted) }
+
+        let timeRange: ClosedRange<Double>?
+        if let lower = times.min(), let upper = times.max(), upper > lower {
+            timeRange = lower...upper
+        } else {
+            timeRange = nil
+        }
+        let positionRange: ClosedRange<Double>?
+        if let lower = positions.min(), let upper = positions.max(), upper > lower {
+            positionRange = lower...upper
+        } else {
+            positionRange = nil
+        }
+
+        return ReferenceTearCanonicalProjection(
+            records: records,
+            timeRange: timeRange,
+            positionRange: positionRange,
+            coordinateSpace: coordinateSpace,
+            reasons: orderedUnique(reasons)
+        )
+    }
+
+    /// Convenience for the LIVE path: segment the in-progress movement events
+    /// with the same builder the finalized review uses, then project them the
+    /// same way. There is deliberately no second segmentation or second
+    /// projection for live preview.
+    static func project(
+        movementEvents: [CaptureCore.DetectedNotationRecordMovementEvent],
+        derivation: CrossfaderDerivation? = nil,
+        referenceTakeID: String = "live-preview",
+        configuration: ReferenceTearReviewConfiguration = ReferenceTearReviewConfiguration()
+    ) -> ReferenceTearCanonicalProjection {
+        project(
+            ReferenceTearSegmentationReviewBuilder.build(
+                referenceTakeID: referenceTakeID,
+                movementEvents: movementEvents,
+                derivation: derivation,
+                configuration: configuration
+            ),
+            configuration: configuration
+        )
+    }
+
+    // MARK: One gesture
+
+    private struct BuiltRecord {
+        let record: ScratchNotation.GestureRecord
+        let reasons: [ReferenceTearProjectionReason]
+        let positions: [Double]
+    }
+
+    private static func buildRecord(
+        candidate: ReferenceTearCandidate,
+        review: ReferenceTearSegmentationReview,
+        configuration: ReferenceTearReviewConfiguration
+    ) -> BuiltRecord {
+        var reasons: [ReferenceTearProjectionReason] = []
+        let fader = faderEvidence(candidate: candidate, review: review)
+        reasons.append(contentsOf: fader.reasons)
+
+        func unknownRecord(_ reason: ReferenceTearProjectionReason) -> BuiltRecord {
+            reasons.append(reason)
+            return BuiltRecord(
+                record: ScratchNotation.GestureRecord(
+                    id: candidate.id,
+                    direction: candidate.direction,
+                    timingDomain: .seconds,
+                    coordinateSpace: coordinateSpace,
+                    evidence: unknownEvidence(reason),
+                    subdivisions: [
+                        ScratchNotation.GestureRecord.Subdivision(
+                            id: "\(candidate.id)#sub0",
+                            span: candidate.span,
+                            evidence: unknownEvidence(reason)
+                        )
+                    ],
+                    internalHolds: [],
+                    faderTransitions: fader.transitions,
+                    faderIntervals: fader.intervals
+                ),
+                reasons: reasons,
+                positions: []
+            )
+        }
+
+        // Travel evidence backing this gesture, in evidence order.
+        let travelSegments = candidate.motionSegmentIndices
+            .compactMap { review.segments.indices.contains($0) ? review.segments[$0] : nil }
+            .filter(\.isTravel)
+            .sorted { $0.span.startTime < $1.span.startTime }
+        guard !travelSegments.isEmpty else { return unknownRecord(.noPlacedMotion) }
+
+        let backingEvents = travelSegments.compactMap { segment -> CaptureCore.DetectedNotationRecordMovementEvent? in
+            guard let index = segment.movementEventIndex,
+                  review.rawMovementEvents.indices.contains(index) else { return nil }
+            return review.rawMovementEvents[index]
+        }
+        guard backingEvents.count == travelSegments.count else {
+            return unknownRecord(.noPlacedMotion)
+        }
+        // Free playback is motion WITHOUT gesture polarity. It is never
+        // flattened into an ordinary sounding stroke.
+        guard !backingEvents.contains(where: { $0.movementKind.motionState == .released }) else {
+            return unknownRecord(.releasedPlaybackPresent)
+        }
+        // Only gesture-relative controller telemetry is in revolutions.
+        guard backingEvents.allSatisfy(CaptureCore.usesGestureRelativeControllerNotation) else {
+            return unknownRecord(.unsupportedCoordinateSpace)
+        }
+        if let confidence = candidate.proposedConfidence,
+           confidence < configuration.lowMovementConfidence {
+            return unknownRecord(.lowMovementConfidence)
+        }
+
+        // Cumulative gesture-local position track. Each decoded run is
+        // rebased to its own origin by `PlatterCoordinateSemantics`, so the
+        // runs are joined end-to-end here: the platter did not teleport
+        // across the stationary interval between them.
+        var track: [(time: Double, position: Double)] = []
+        var cursor: Double = 0
+        for (segment, event) in zip(travelSegments, backingEvents) {
+            let displacement = event.endPosition - event.startPosition
+            guard displacement.isFinite else { return unknownRecord(.noPlacedMotion) }
+            track.append((segment.span.startTime, cursor))
+            cursor += displacement
+            track.append((segment.span.endTime, cursor))
+        }
+        reasons.append(.measuredPlatterTravel)
+        reasons.append(.gestureLocalPlatterRevolutions)
+
+        // Surviving platter holds partition the gesture. A struck-out
+        // boundary and a boundary renamed a fader click contribute nothing —
+        // `countsAsTearHold` is the one predicate, here as everywhere.
+        let holds = candidate.boundaries
+            .filter(\.countsAsTearHold)
+            .sorted { $0.span.startTime < $1.span.startTime }
+        guard let spans = subdivisionSpans(candidateSpan: candidate.span, holds: holds.map(\.span)) else {
+            return unknownRecord(.holdStructureUnsupported)
+        }
+
+        var subdivisions: [ScratchNotation.GestureRecord.Subdivision] = []
+        var positions: [Double] = []
+        for (index, span) in spans.enumerated() {
+            let points = curvePoints(track: track, from: span.startTime, to: span.endTime)
+            guard points.count >= 2 else { return unknownRecord(.holdStructureUnsupported) }
+            positions.append(contentsOf: points.map(\.position))
+            let evidence = ScratchNotation.GestureRecord.Evidence(
+                provenance: .measured,
+                observation: ScratchNotationEvidence(
+                    source: .platterTimeline,
+                    confidence: candidate.proposedConfidence ?? 1,
+                    reason: "platter_travel_runs=\(travelSegments.count)",
+                    rawSampleCount: points.count
+                )
+            )
+            subdivisions.append(
+                ScratchNotation.GestureRecord.Subdivision(
+                    id: "\(candidate.id)#sub\(index)",
+                    span: span,
+                    evidence: evidence,
+                    measuredCurve: ScratchNotation.GestureRecord.MotionCurve(
+                        points: points,
+                        evidence: evidence
+                    )
+                )
+            )
+        }
+
+        var internalHolds: [ScratchNotation.GestureRecord.TearHold] = []
+        for (index, hold) in holds.enumerated() {
+            let position = interpolatedPosition(track: track, at: hold.span.startTime)
+            positions.append(position)
+            internalHolds.append(
+                ScratchNotation.GestureRecord.TearHold(
+                    id: "\(candidate.id)#hold\(index)",
+                    span: hold.span,
+                    label: ScratchNotationMotionLabel(derived: .stationary),
+                    evidence: holdEvidence(hold),
+                    position: position
+                )
+            )
+        }
+
+        let record = ScratchNotation.GestureRecord(
+            id: candidate.id,
+            direction: candidate.direction,
+            timingDomain: .seconds,
+            coordinateSpace: coordinateSpace,
+            evidence: ScratchNotation.GestureRecord.Evidence(
+                provenance: .measured,
+                observation: ScratchNotationEvidence(
+                    source: .platterTimeline,
+                    confidence: candidate.proposedConfidence ?? 1,
+                    reason: "tear_candidate=\(candidate.id)",
+                    rawSampleCount: backingEvents.count
+                )
+            ),
+            subdivisions: subdivisions,
+            internalHolds: internalHolds,
+            faderTransitions: fader.transitions,
+            faderIntervals: fader.intervals
+        )
+        if fader.sawClosedRegion { reasons.append(.ghostMovementPresent) }
+        return BuiltRecord(record: record, reasons: reasons, positions: positions)
+    }
+
+    // MARK: Structure
+
+    /// The N+1 bounded subdivisions implied by N holds, or `nil` when the
+    /// holds do not actually partition the gesture. Nothing is clamped,
+    /// merged or dropped to force the invariant to hold.
+    static func subdivisionSpans(
+        candidateSpan: ReferenceTearTimeSpan,
+        holds: [ReferenceTearTimeSpan]
+    ) -> [ReferenceTearTimeSpan]? {
+        guard candidateSpan.endTime > candidateSpan.startTime else { return nil }
+        var spans: [ReferenceTearTimeSpan] = []
+        var cursor = candidateSpan.startTime
+        for hold in holds {
+            guard hold.startTime >= cursor,
+                  hold.endTime > hold.startTime,
+                  hold.endTime <= candidateSpan.endTime,
+                  hold.startTime > cursor else { return nil }
+            spans.append(ReferenceTearTimeSpan(startTime: cursor, endTime: hold.startTime))
+            cursor = hold.endTime
+        }
+        guard candidateSpan.endTime > cursor else { return nil }
+        spans.append(ReferenceTearTimeSpan(startTime: cursor, endTime: candidateSpan.endTime))
+        return spans
+    }
+
+    // MARK: Geometry
+
+    private static func interpolatedPosition(
+        track: [(time: Double, position: Double)],
+        at time: Double
+    ) -> Double {
+        guard let first = track.first else { return 0 }
+        if time <= first.time { return first.position }
+        guard let last = track.last else { return first.position }
+        if time >= last.time { return last.position }
+        for index in 1..<track.count {
+            let previous = track[index - 1]
+            let current = track[index]
+            guard time <= current.time else { continue }
+            let span = current.time - previous.time
+            guard span > 0 else { return current.position }
+            let fraction = (time - previous.time) / span
+            return previous.position + (current.position - previous.position) * fraction
+        }
+        return last.position
+    }
+
+    /// Curve points for one subdivision, retaining every measured vertex
+    /// inside it and both of its exact endpoints — the shape
+    /// `GestureRecord.motionValidationIssues()` requires and the shape
+    /// `ScratchStrokeGeometry` draws without resampling.
+    private static func curvePoints(
+        track: [(time: Double, position: Double)],
+        from start: Double,
+        to end: Double
+    ) -> [ScratchNotation.GestureRecord.CurvePoint] {
+        var points: [ScratchNotation.GestureRecord.CurvePoint] = [
+            .init(time: start, position: interpolatedPosition(track: track, at: start))
+        ]
+        for entry in track where entry.time > start && entry.time < end {
+            guard entry.time > (points.last?.time ?? start) else { continue }
+            points.append(.init(time: entry.time, position: entry.position))
+        }
+        let endPosition = interpolatedPosition(track: track, at: end)
+        if let last = points.last, end > last.time {
+            points.append(.init(time: end, position: endPosition))
+        }
+        return points
+    }
+
+    // MARK: Fader
+
+    private struct FaderEvidence {
+        let intervals: [ScratchNotation.GestureRecord.FaderSpan]
+        let transitions: [ScratchNotation.GestureRecord.FaderTransition]
+        let reasons: [ReferenceTearProjectionReason]
+        let sawClosedRegion: Bool
+    }
+
+    private static func faderEvidence(
+        candidate: ReferenceTearCandidate,
+        review: ReferenceTearSegmentationReview
+    ) -> FaderEvidence {
+        var intervals: [ScratchNotation.GestureRecord.FaderSpan] = []
+        var reasons: [ReferenceTearProjectionReason] = []
+        var sawClosed = false
+
+        // Only definite open/closed observations become rails. A
+        // `transitioning` interval and an uncovered region alike stay OFF the
+        // record, which is what makes the renderer draw them as explicit
+        // FADER UNKNOWN rather than as an assumed open line.
+        var covered: Double = 0
+        for interval in review.faderIntervals {
+            let lower = max(interval.startTime, candidate.span.startTime)
+            let upper = min(interval.endTime, candidate.span.endTime)
+            guard upper > lower else { continue }
+            let state: ScratchNotationFaderState
+            switch interval.state {
+            case .open: state = .open
+            case .closed: state = .closed; sawClosed = true
+            case .transitioning: continue
+            }
+            covered += upper - lower
+            if let last = intervals.last,
+               last.state == state,
+               last.span.endTime == lower {
+                intervals.removeLast()
+                intervals.append(
+                    ScratchNotation.GestureRecord.FaderSpan(
+                        id: last.id,
+                        span: ReferenceTearTimeSpan(startTime: last.span.startTime, endTime: upper),
+                        state: state,
+                        evidence: last.evidence
+                    )
+                )
+            } else {
+                intervals.append(
+                    ScratchNotation.GestureRecord.FaderSpan(
+                        id: "\(candidate.id)#fader\(intervals.count)",
+                        span: ReferenceTearTimeSpan(startTime: lower, endTime: upper),
+                        state: state,
+                        evidence: faderObservation(reason: "crossfader_interval=\(interval.state.rawValue)")
+                    )
+                )
+            }
+        }
+        if covered + 1e-9 < candidate.span.duration { reasons.append(.faderUnobserved) }
+
+        // A click is instantaneous fader work. It mints a fader glyph and
+        // NOTHING else: it can never become, extend, or increment a platter
+        // tear hold. The state it lands in is read from the committed
+        // intervals, never guessed.
+        var transitions: [ScratchNotation.GestureRecord.FaderTransition] = []
+        let clicks = review.faderClicks(over: candidate.span)
+            .sorted { $0.endTime < $1.endTime }
+        for click in clicks {
+            let landing = click.endTime
+            guard landing >= candidate.span.startTime, landing <= candidate.span.endTime else { continue }
+            guard let covering = intervals.first(where: {
+                $0.span.startTime <= landing && landing <= $0.span.endTime
+            }) else { continue }
+            guard transitions.last.map({ landing > $0.time }) ?? true else { continue }
+            transitions.append(
+                ScratchNotation.GestureRecord.FaderTransition(
+                    id: "\(candidate.id)#edge\(transitions.count)",
+                    time: landing,
+                    state: covering.state,
+                    evidence: faderObservation(reason: "crossfader_click=\(click.kind.rawValue)")
+                )
+            )
+        }
+        if !clicks.isEmpty { reasons.append(.faderClicksCitedNotCounted) }
+
+        return FaderEvidence(
+            intervals: intervals,
+            transitions: transitions,
+            reasons: reasons,
+            sawClosedRegion: sawClosed
+        )
+    }
+
+    // MARK: Evidence helpers
+
+    private static func unknownEvidence(
+        _ reason: ReferenceTearProjectionReason
+    ) -> ScratchNotation.GestureRecord.Evidence {
+        ScratchNotation.GestureRecord.Evidence(
+            provenance: .unknown,
+            observation: ScratchNotationEvidence(
+                source: .unknown,
+                confidence: 0,
+                reason: reason.rawValue
+            )
+        )
+    }
+
+    private static func faderObservation(reason: String) -> ScratchNotation.GestureRecord.Evidence {
+        ScratchNotation.GestureRecord.Evidence(
+            provenance: .measured,
+            observation: ScratchNotationEvidence(
+                source: .crossfaderRaw,
+                confidence: 1,
+                reason: reason
+            )
+        )
+    }
+
+    private static func holdEvidence(
+        _ boundary: ReferenceTearBoundary
+    ) -> ScratchNotation.GestureRecord.Evidence {
+        switch boundary.origin {
+        case .automatic:
+            return ScratchNotation.GestureRecord.Evidence(
+                provenance: .inferred,
+                observation: ScratchNotationEvidence(
+                    source: .platterTimeline,
+                    confidence: boundary.evidenceQuality.isAmbiguous ? 0.5 : 1,
+                    reason: (boundary.proposal?.reasons.map(\.rawValue).joined(separator: "+"))
+                        ?? ReferenceTearReviewReason.gapDerivedStationaryInterval.rawValue
+                )
+            )
+        case .operatorAdded:
+            return ScratchNotation.GestureRecord.Evidence(
+                provenance: .manuallyCorrected,
+                observation: ScratchNotationEvidence(
+                    source: .manualCorrection,
+                    confidence: boundary.evidenceQuality.isAmbiguous ? 0.5 : 1,
+                    reason: "operator_added_hold"
+                )
+            )
+        }
+    }
+
+    private static func orderedUnique(
+        _ reasons: [ReferenceTearProjectionReason]
+    ) -> [ReferenceTearProjectionReason] {
+        ReferenceTearProjectionReason.allCases.filter(reasons.contains)
     }
 }

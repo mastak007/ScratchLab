@@ -71,6 +71,11 @@ enum FlareClickCount: Int, Codable, Equatable, Sendable, CaseIterable, Identifia
 /// A technique a reference performance may be authored for.
 enum ReferenceTechnique: Codable, Equatable, Sendable, Hashable, Identifiable {
     case babyScratch
+    /// A plain tear: same-direction travel interrupted by bounded stationary
+    /// holds, performed with the fader parked open. The hold count is derived
+    /// from the PLATTER stream (`ScratchNotation.GestureRecord.tearLabel`), so
+    /// unlike flare this technique needs no click count in its identity.
+    case tear
     case chirp
     case transform
     case flare(FlareClickCount)
@@ -80,6 +85,7 @@ enum ReferenceTechnique: Codable, Equatable, Sendable, Hashable, Identifiable {
     var scratchType: CaptureSessionScratchType {
         switch self {
         case .babyScratch: return .babyScratch
+        case .tear: return .tear
         case .chirp: return .chirp
         case .transform: return .transform
         case .flare(let clicks): return clicks.scratchType
@@ -91,8 +97,30 @@ enum ReferenceTechnique: Codable, Equatable, Sendable, Hashable, Identifiable {
     /// The minimum required set named in the authoring brief, in teaching
     /// order. Flare appears once per click count because they are distinct
     /// techniques, not one technique with a parameter.
+    ///
+    /// Deliberately UNCHANGED by the addition of `.tear`. This list is also
+    /// what `ReferenceRegistry` reads as `trainingEnabledTechniques`, so
+    /// adding a technique here would widen training eligibility as a side
+    /// effect of making it authorable. Authorability and training eligibility
+    /// are separate decisions; see `authorableSet`.
     static let minimumRequiredSet: [ReferenceTechnique] = [
         .babyScratch,
+        .chirp,
+        .transform,
+        .flare(.oneClick),
+        .flare(.twoClick),
+        .flare(.threeClick)
+    ]
+
+    /// Every technique CXL may author a reference take for, in teaching order.
+    ///
+    /// This is the authoring picker's source. It is a superset of
+    /// `minimumRequiredSet` and confers nothing beyond the ability to RECORD a
+    /// draft: no entry here is published, installed, registered, or training
+    /// eligible by virtue of appearing in it.
+    static let authorableSet: [ReferenceTechnique] = [
+        .babyScratch,
+        .tear,
         .chirp,
         .transform,
         .flare(.oneClick),
@@ -108,6 +136,7 @@ enum ReferenceTechnique: Codable, Equatable, Sendable, Hashable, Identifiable {
     init?(scratchType: CaptureSessionScratchType) {
         switch scratchType {
         case .babyScratch: self = .babyScratch
+        case .tear: self = .tear
         case .chirp: self = .chirp
         case .transform: self = .transform
         case .flare1Click: self = .flare(.oneClick)
@@ -238,6 +267,18 @@ extension ReferenceTechnique {
     var defaultFaderExpectation: ReferenceFaderExpectation {
         switch self {
         case .babyScratch:
+            return ReferenceFaderExpectation(
+                requiresContinuouslyOpenFader: true,
+                minimumCutEventsPerRepetition: 0,
+                maximumUnknownEventRatio: 0.0
+            )
+        case .tear:
+            // A plain tear is performed with the fader PARKED OPEN: its
+            // subdivisions are made by stopping the PLATTER, not by cutting.
+            // So it owes the same evidence a Baby Scratch owes — proof the
+            // fader was open — and requires no cut events at all. Counting
+            // fader clicks as tear holds is explicitly forbidden by
+            // `ScratchNotation.GestureRecord`, and nothing here does it.
             return ReferenceFaderExpectation(
                 requiresContinuouslyOpenFader: true,
                 minimumCutEventsPerRepetition: 0,

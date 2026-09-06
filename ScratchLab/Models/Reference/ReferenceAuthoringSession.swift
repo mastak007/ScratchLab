@@ -90,6 +90,14 @@ struct ReferenceRecordedTakeArtifacts: Equatable, Sendable {
     /// rather than a count; see `ReferenceTakeEvidence.platterMovementEvents`.
     let platterMovementEvents: [CaptureCore.DetectedNotationRecordMovementEvent]
     let recordedAt: Date
+    /// The crossfader control state the ENGINE recorded at this take's
+    /// media-start boundary, verbatim, or `nil` when none was written.
+    let crossfaderTakeStartState: CaptureCore.CrossfaderTakeStartState?
+    /// The identities that snapshot must have been observed under to be
+    /// adopted. Supplied by the host, which is the only layer that knows the
+    /// live device/session identity; the decision itself is made once, by
+    /// `ReferenceCrossfaderTakeStart.correlate`.
+    let crossfaderTakeStartCorrelation: ReferenceCrossfaderTakeStart.Correlation?
     /// What automatic detection believed the technique was, if it ran.
     /// ADVISORY ONLY — see the file header. `nil` when detection did not run
     /// or produced nothing.
@@ -116,7 +124,9 @@ struct ReferenceRecordedTakeArtifacts: Equatable, Sendable {
         watchEvidence: ReferenceWatchEvidence = .missing(
             syncState: CaptureWatchSyncState.notRequested.rawValue
         ),
-        platterMovementEvents: [CaptureCore.DetectedNotationRecordMovementEvent] = []
+        platterMovementEvents: [CaptureCore.DetectedNotationRecordMovementEvent] = [],
+        crossfaderTakeStartState: CaptureCore.CrossfaderTakeStartState? = nil,
+        crossfaderTakeStartCorrelation: ReferenceCrossfaderTakeStart.Correlation? = nil
     ) {
         self.audio = audio
         self.video = video
@@ -127,6 +137,8 @@ struct ReferenceRecordedTakeArtifacts: Equatable, Sendable {
         self.platterMovementEventCount = platterMovementEventCount
         self.platterMovementEvents = platterMovementEvents
         self.recordedAt = recordedAt
+        self.crossfaderTakeStartState = crossfaderTakeStartState
+        self.crossfaderTakeStartCorrelation = crossfaderTakeStartCorrelation
         self.autoDetectedTechnique = autoDetectedTechnique
         self.watchEvidence = watchEvidence
     }
@@ -151,6 +163,101 @@ enum ReferenceAuthoringError: LocalizedError, Equatable {
             return "No recording is in progress."
         case .stepOutOfOrder(let expected, let actual):
             return "Expected to be at step '\(expected)', but the session is at '\(actual)'."
+        }
+    }
+}
+
+// MARK: - Calibration provenance
+
+/// How the session came by the calibration it is holding.
+///
+/// Three concepts stay distinct throughout this file and must not be
+/// collapsed into one another:
+///
+/// - the LEARNED MIDI MAPPING (which channel/CC is the crossfader) —
+///   `MacCaptureEngine`'s MIDI Learn owns it and it is never relearned here;
+/// - the PERSISTED AUDIO RESPONSE of that fader (slope/curve) — separate
+///   state, and deliberately not a source of reference geometry;
+/// - the REFERENCE EVIDENCE CALIBRATION — the three measured positions in
+///   `CrossfaderCalibration`, which is what this session needs.
+///
+/// A stored reference calibration for exactly the address, deck and open end
+/// currently selected is already the answer. Re-sweeping it every time the
+/// screen opens asks the operator to re-measure something ScratchLab already
+/// measured, so it is adopted automatically. What is NEVER done is the
+/// converse: a fader response curve that lacks three distinct measured
+/// positions cannot be turned into a reference calibration, because the
+/// missing measurement would have to be invented.
+enum ReferenceCalibrationSource: Equatable, Sendable {
+    /// Measured by a sweep in this session.
+    case sweptInThisSession
+    /// Adopted unchanged from `CrossfaderCalibrationStore`.
+    case reusedPersisted(calibratedAt: Date)
+
+    var isReused: Bool {
+        if case .reusedPersisted = self { return true }
+        return false
+    }
+
+    var displayName: String {
+        switch self {
+        case .sweptInThisSession:
+            return "Calibrated in this session"
+        case .reusedPersisted(let calibratedAt):
+            return "Reusing the saved calibration from "
+                + ReferenceCalibrationSource.formatter.string(from: calibratedAt)
+        }
+    }
+
+    private static let formatter: DateFormatter = {
+        let formatter = DateFormatter()
+        formatter.dateStyle = .medium
+        formatter.timeStyle = .short
+        return formatter
+    }()
+}
+
+/// Why an existing stored calibration was not adopted, or that it was.
+enum ReferenceCalibrationReuseOutcome: Equatable, Sendable {
+    case adopted(CrossfaderCalibration)
+    /// Already holding a calibration; nothing to adopt.
+    case alreadyCalibrated
+    /// No stored calibration for the live crossfader address.
+    case noStoredCalibration
+    /// Stored, but not for this device/address.
+    case addressMismatch
+    /// Stored, but measured for a different deck or open end.
+    case configurationMismatch
+    /// Stored, but it does not pass `validationIssues()`.
+    case storedCalibrationUnusable
+    /// No live crossfader address is known yet, so nothing can be matched.
+    case noObservedAddress
+    /// A sweep is in progress; an automatic adoption must not pre-empt it.
+    case calibrationInProgress
+
+    var adoptedCalibration: CrossfaderCalibration? {
+        if case .adopted(let calibration) = self { return calibration }
+        return nil
+    }
+
+    var operatorSummary: String {
+        switch self {
+        case .adopted(let calibration):
+            return "Reusing the saved calibration for \(calibration.address.displayName)."
+        case .alreadyCalibrated:
+            return "This session already has a calibration."
+        case .noStoredCalibration:
+            return "No saved crossfader calibration exists for this address yet."
+        case .addressMismatch:
+            return "The saved calibration was measured on a different MIDI address."
+        case .configurationMismatch:
+            return "The saved calibration was measured for a different deck or open end."
+        case .storedCalibrationUnusable:
+            return "The saved calibration does not pass validation and was not reused."
+        case .noObservedAddress:
+            return "No crossfader address has been identified yet."
+        case .calibrationInProgress:
+            return "A calibration sweep is already in progress."
         }
     }
 }
@@ -193,6 +300,8 @@ struct ReferenceAuthoringSession: Equatable, Sendable {
 
     var calibrationSweep: CrossfaderCalibrationSweep?
     var confirmedCalibration: CrossfaderCalibration?
+    /// How `confirmedCalibration` was obtained. `nil` whenever there is none.
+    private(set) var confirmedCalibrationSource: ReferenceCalibrationSource?
     /// Highest `observationSequence` already fed into the sweep. Everything at
     /// or below it is a re-read of a message the sweep has already counted, so
     /// it may keep the settle counter moving but must never count as proof the
@@ -282,6 +391,10 @@ struct ReferenceAuthoringSession: Equatable, Sendable {
         // collects nothing until the operator presses Capture. Whatever the
         // address last reported before that is a stale reading by definition.
         lastIngestedCalibrationSequence = nil
+        // An explicit recalibration supersedes an adopted calibration: the
+        // operator has said they want to measure it again.
+        confirmedCalibration = nil
+        confirmedCalibrationSource = nil
         phase = .calibrating
     }
 
@@ -308,6 +421,7 @@ struct ReferenceAuthoringSession: Equatable, Sendable {
         )
         if let calibration = calibrationSweep?.state.calibration, calibration.isUsable {
             confirmedCalibration = calibration
+            confirmedCalibrationSource = .sweptInThisSession
         }
     }
 
@@ -333,6 +447,55 @@ struct ReferenceAuthoringSession: Equatable, Sendable {
         calibrationSweep = calibrationSweep?.retryingCurrentStep()
     }
 
+    /// Adopt an already-stored reference calibration for the crossfader the
+    /// operator is currently pointed at, without asking for another sweep.
+    ///
+    /// Adopts ONLY on an exact match: same device identifier, same channel and
+    /// CC, same active deck, same open end, and the stored calibration passes
+    /// its own `validationIssues()`. Anything less is refused with a named
+    /// reason — a calibration measured for the other deck, or for the other
+    /// open end, describes a different physical arrangement and applying it
+    /// would silently mis-read every fader sample in the take.
+    ///
+    /// Nothing is fabricated here. The store is the only source; a fader
+    /// response curve that does not carry three distinct measured positions is
+    /// not a reference calibration and is never promoted into one.
+    ///
+    /// Advances to `readyToRecord` only when the configuration is complete and
+    /// the session is not already past that point.
+    @discardableResult
+    mutating func adoptPersistedCalibrationIfExact(
+        store: CrossfaderCalibrationStore,
+        openEnd: CrossfaderOpenEnd,
+        activeDeck: CrossfaderActiveDeck,
+        address: CrossfaderMIDIAddress?
+    ) -> ReferenceCalibrationReuseOutcome {
+        guard confirmedCalibration == nil else { return .alreadyCalibrated }
+        guard calibrationSweep == nil else { return .calibrationInProgress }
+        guard let address else { return .noObservedAddress }
+        guard let stored = store.calibration(
+            deviceIdentifier: address.deviceIdentifier,
+            channel: address.channel,
+            controller: address.controller
+        ) else { return .noStoredCalibration }
+        guard stored.address.matches(
+            deviceIdentifier: address.deviceIdentifier,
+            channel: address.channel,
+            controller: address.controller
+        ) else { return .addressMismatch }
+        guard stored.openEnd == openEnd, stored.activeDeck == activeDeck else {
+            return .configurationMismatch
+        }
+        guard stored.isUsable else { return .storedCalibrationUnusable }
+
+        confirmedCalibration = stored
+        confirmedCalibrationSource = .reusedPersisted(calibratedAt: stored.calibratedAt)
+        if configurationIsComplete, phase == .configuring || phase == .calibrating {
+            phase = .readyToRecord
+        }
+        return .adopted(stored)
+    }
+
     /// Persist the completed sweep and advance to `readyToRecord`.
     ///
     /// Throws when the sweep has not produced a usable calibration — a
@@ -356,9 +519,16 @@ struct ReferenceAuthoringSession: Equatable, Sendable {
         guard configurationIsComplete else {
             return .failure(.stepOutOfOrder(expected: "configuring", actual: "\(phase)"))
         }
-        guard confirmedCalibration != nil else {
-            return .failure(.calibrationIncomplete)
-        }
+        // Deliberately NOT gated on `confirmedCalibration`.
+        //
+        // Capture eligibility and canonical-reference eligibility are separate
+        // gates. A missing or unusable reference calibration costs the take its
+        // fader evidence — reported as explicit `unknown` and, through
+        // `ReferenceValidator`, as a blocking `.crossfaderCalibrationMissing`
+        // finding — but it must never cost the operator the RAW capture. The
+        // take is still recorded, finalized, retained and exportable; it simply
+        // cannot be approved as canonical. `approvalBlockReason` stays
+        // fail-closed and is where that refusal lives.
         let snapshot = hooks.currentPreflightSnapshot()
         latestPreflightSnapshot = snapshot
         let preflight = ReferenceCapturePreflight.evaluate(
@@ -396,10 +566,12 @@ struct ReferenceAuthoringSession: Equatable, Sendable {
               let pattern = selectedPattern,
               let bpm = selectedBPM,
               let direction = selectedStartingDirection,
-              let faderVariant = selectedFaderVariant,
-              let calibration = confirmedCalibration else {
-            return .failure(.stepOutOfOrder(expected: "configured + calibrated", actual: "\(phase)"))
+              let faderVariant = selectedFaderVariant else {
+            return .failure(.stepOutOfOrder(expected: "configured", actual: "\(phase)"))
         }
+        // May legitimately be nil — see `beginRecording`. The take records what
+        // it actually had; it never borrows a calibration to look complete.
+        let calibration = confirmedCalibration
 
         let artifacts: ReferenceRecordedTakeArtifacts
         switch hooks.stopRecording() {
@@ -427,8 +599,13 @@ struct ReferenceAuthoringSession: Equatable, Sendable {
             deviceInfo: ReferenceDeviceInfo(
                 platform: "macOS",
                 appVersion: Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "",
-                controllerName: calibration.address.deviceName,
-                controllerIdentifier: calibration.address.deviceIdentifier,
+                // Falls back to the address the take actually OBSERVED traffic
+                // on when no calibration is in force, so an uncalibrated take
+                // still names its controller truthfully instead of naming none.
+                controllerName: calibration?.address.deviceName
+                    ?? artifacts.observedCrossfaderAddress?.deviceName ?? "",
+                controllerIdentifier: calibration?.address.deviceIdentifier
+                    ?? artifacts.observedCrossfaderAddress?.deviceIdentifier ?? "",
                 audioDeviceName: nil,
                 videoDeviceName: nil,
                 // Kept in step with `evidence.watchEvidence` and set from
@@ -440,10 +617,33 @@ struct ReferenceAuthoringSession: Equatable, Sendable {
             lifecycleState: .draft
         )
 
-        let derivation = CrossfaderStateDeriver.derive(
-            rawEvents: artifacts.crossfaderRawSamples.map { ($0.takeRelativeTime, $0.rawValue) },
-            calibration: calibration
-        )
+        // A parked fader emits nothing. The engine's take-start control state
+        // is what lets such a take prove the position it genuinely knew —
+        // provided the snapshot correlates with THIS take, this device
+        // connection, this mapped address and this calibration. The recorded
+        // samples themselves are handed to the evidence untouched; the
+        // baseline exists only in the derivation input, so no pre-take packet
+        // is ever persisted as an in-take measurement.
+        let takeStartOutcome: ReferenceCrossfaderTakeStart.Outcome
+        if let correlation = artifacts.crossfaderTakeStartCorrelation {
+            takeStartOutcome = ReferenceCrossfaderTakeStart.correlate(
+                artifacts.crossfaderTakeStartState,
+                against: correlation,
+                calibration: calibration,
+                recordedSamples: artifacts.crossfaderRawSamples
+            )
+        } else {
+            takeStartOutcome = .rejected(.notRecorded)
+        }
+        let derivation = calibration.flatMap { calibration in
+            CrossfaderStateDeriver.derive(
+                rawEvents: ReferenceCrossfaderTakeStart.derivationInput(
+                    recordedSamples: artifacts.crossfaderRawSamples,
+                    outcome: takeStartOutcome
+                ),
+                calibration: calibration
+            )
+        }
 
         var boundaries = ReferencePhraseBoundaries.nominal(for: metadata)
         // No repetition is pre-selected — step 9 is an explicit operator
@@ -462,7 +662,9 @@ struct ReferenceAuthoringSession: Equatable, Sendable {
             platterMovementEventCount: artifacts.platterMovementEventCount,
             derivation: derivation,
             watchEvidence: artifacts.watchEvidence,
-            platterMovementEvents: artifacts.platterMovementEvents
+            platterMovementEvents: artifacts.platterMovementEvents,
+            crossfaderTakeStartState: artifacts.crossfaderTakeStartState,
+            crossfaderTakeStartOutcome: takeStartOutcome
         )
 
         let report = ReferenceValidator.validate(evidence, expectation: expectation, now: now)
@@ -829,6 +1031,53 @@ struct ReferenceAuthoringSession: Equatable, Sendable {
         }
         return nil
     }
+
+    // MARK: Raw diagnostic export
+    //
+    // Exporting the RAW capture and APPROVING a canonical reference are two
+    // different acts with two different gates, and this is where they are kept
+    // apart. Export copies what was recorded; approval asserts that what was
+    // recorded is reference material. Export is therefore deliberately blind
+    // to repetition selection, crossfader calibration, tear-review corrections
+    // and `approvalBlockReason` — none of those changes a single byte of the
+    // raw take, and refusing the export because one of them is outstanding
+    // strands a real diagnostic capture on the machine that made it.
+    //
+    // Exporting APPROVES NOTHING. It does not publish, install, register or
+    // make any take training-eligible, and it never advances a lifecycle
+    // state.
+
+    /// The most recently recorded take, whatever its lifecycle state.
+    /// Rejected and un-reviewed takes are raw captures too and are retained.
+    var latestRecordedTake: ReferenceAuthoringTake? { takes.last }
+
+    /// Why the latest recorded take cannot be exported as a raw diagnostic
+    /// capture right now, or `nil` when it can.
+    ///
+    /// Only two things are required: the take was authoritatively finalized,
+    /// and the artifacts it names are actually on disk and readable. Both are
+    /// properties of the CAPTURE, which is exactly what is being exported.
+    func rawCaptureExportBlockReason() -> String? {
+        guard case .recording = phase else {
+            guard let take = latestRecordedTake else {
+                return "No take has been recorded in this session yet."
+            }
+            let evidence = take.evidence
+            guard evidence.sidecar.exists, evidence.sidecar.readError == nil else {
+                return "This take's sidecar is missing or unreadable, so there is nothing stable to export."
+            }
+            guard evidence.audio.exists, evidence.audio.readError == nil else {
+                return "This take's audio artifact is missing or unreadable, so there is nothing stable to export."
+            }
+            if let video = evidence.video, video.exists, let readError = video.readError {
+                return "This take's video artifact is not stable yet: \(readError)"
+            }
+            return nil
+        }
+        return "A take is still recording."
+    }
+
+    var canExportRawCapture: Bool { rawCaptureExportBlockReason() == nil }
 
     /// Convenience for the UI. Never the only check — see
     /// `approvalBlockReason`.

@@ -188,9 +188,13 @@ final class ReferenceAuthoringSessionTests: XCTestCase {
         guard case .failure(let error) = result else {
             return XCTFail("Expected a blocking failure, got success.")
         }
-        // Calibration is checked before the preflight snapshot for an
-        // unconfigured session, since there is nothing to record against yet.
-        XCTAssertEqual(error, .calibrationIncomplete)
+        // Capture-integrity preflight is what blocks here. A missing
+        // calibration is deliberately NOT a recording gate any more: it costs
+        // the take its fader evidence and its canonical approval, never the
+        // raw capture. See `testBeginRecordingProceedsWithoutACalibration`.
+        guard case .preflightBlocked = error else {
+            return XCTFail("Expected preflightBlocked, got \(error)")
+        }
     }
 
     func testCalibrationSweepMustCompleteBeforeItCanBeCommitted() throws {
@@ -207,7 +211,11 @@ final class ReferenceAuthoringSessionTests: XCTestCase {
         XCTAssertNotNil(store.calibration(deviceIdentifier: "Rane ONE MKII", channel: 15, controller: 8))
     }
 
-    func testBeginRecordingRefusesWithoutACommittedCalibration() {
+    /// Capture eligibility and canonical-reference eligibility are separate
+    /// gates. A take recorded with no calibration must still record, finalize
+    /// and be retained; what it loses is its fader evidence and its ability to
+    /// be approved — not the raw diagnostic capture.
+    func testBeginRecordingProceedsWithoutACalibration() {
         var session = makeConfiguredSession()
         let hooks = ReferenceAuthoringRecordingHooks(
             startRecording: { .success(()) },
@@ -215,10 +223,12 @@ final class ReferenceAuthoringSessionTests: XCTestCase {
             currentPreflightSnapshot: { self.passingSnapshot() },
             latestCalibrationObservation: { nil }
         )
+        XCTAssertNil(session.confirmedCalibration)
         let result = session.beginRecording(using: hooks)
-        guard case .failure(.calibrationIncomplete) = result else {
-            return XCTFail("Expected calibrationIncomplete, got \(result)")
+        guard case .success = result else {
+            return XCTFail("Expected recording to start without a calibration, got \(result)")
         }
+        XCTAssertEqual(session.phase, .recording)
     }
 
     func testBeginRecordingRefusesOnABlockingPreflightEvenWithCalibration() throws {
@@ -1853,5 +1863,698 @@ final class ReferenceTearSegmentationChatterRootCauseTests: XCTestCase {
             "a clock-discontinuous gap must stay an unknown absence of telemetry"
         )
         XCTAssertEqual(review.reversals.count, 1, "the repair must not fabricate a reversal across the gap")
+    }
+}
+
+// MARK: - Tear authoring, calibration reuse, take-start correlation, raw export
+
+/// Regression cover for the 2026-09-06 authoring slice.
+///
+/// Every fixture here is SYNTHETIC. Take 008 is used only as the shape to
+/// reproduce (a Tear performed with the fader parked open, a valid learned
+/// Ch16/CC8 mapping, and zero mapped crossfader samples); the physical take is
+/// never read, altered, approved or promoted by anything in this file.
+final class ReferenceTearAuthoringSliceTests: XCTestCase {
+
+    // MARK: Fixtures
+
+    /// Mirrors the physical rig: Rane ONE MKII, Ch16 (channel 15) CC8, right
+    /// deck, open at the far right — so a PARKED-OPEN fader reads raw 127 and
+    /// emits nothing for the whole take.
+    private let calibration = CrossfaderCalibration(
+        address: CrossfaderMIDIAddress(
+            deviceIdentifier: "Rane ONE MKII",
+            deviceName: "Rane ONE MKII",
+            channel: 15,
+            controller: 8
+        ),
+        fullLeftRawValue: 0,
+        centerRawValue: 63,
+        fullRightRawValue: 127,
+        openEnd: .right,
+        activeDeck: .rightDeck,
+        calibratedAt: Date(timeIntervalSince1970: 1_788_000_000)
+    )
+
+    private var otherDeviceCalibration: CrossfaderCalibration {
+        CrossfaderCalibration(
+            address: CrossfaderMIDIAddress(
+                deviceIdentifier: "Pioneer DDJ-GRV6",
+                deviceName: "Pioneer DDJ-GRV6",
+                channel: 6,
+                controller: 31
+            ),
+            fullLeftRawValue: 0,
+            centerRawValue: 63,
+            fullRightRawValue: 127,
+            openEnd: .right,
+            activeDeck: .rightDeck,
+            calibratedAt: Date(timeIntervalSince1970: 1_788_000_000)
+        )
+    }
+
+    private func makeStore() throws -> CrossfaderCalibrationStore {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("ReferenceTearAuthoringSliceTests-\(UUID().uuidString)", isDirectory: true)
+        addTeardownBlock { try? FileManager.default.removeItem(at: directory) }
+        return CrossfaderCalibrationStore(directoryURL: directory)
+    }
+
+    private func passingSnapshot() -> ReferencePreflightSnapshot {
+        ReferencePreflightSnapshot(
+            controllerName: "Rane ONE MKII",
+            controllerIdentifier: "Rane ONE MKII",
+            observedCrossfaderAddress: calibration.address,
+            latestCrossfaderRawValue: 127,
+            calibration: calibration,
+            crossfaderEventCount: 40,
+            platterEventCount: 100,
+            platterIsMoving: true,
+            audioInputPeakLevel: 0.5,
+            audioDeviceName: "Rane ONE MKII",
+            watchIsReachable: true,
+            watchMotionIsStreaming: true,
+            cameraDeviceName: "Studio Camera",
+            cameraIsActive: true,
+            crossfaderSecondsSinceLastMessage: 0.1
+        )
+    }
+
+    private func makeConfiguredTearSession() -> ReferenceAuthoringSession {
+        var session = ReferenceAuthoringSession(authoringSessionID: "auth-tear", operatorName: "Karl")
+        session.selectTechnique(.tear)
+        session.selectPattern(
+            ReferencePatternIdentity(id: "tear_1bar", name: "Tear · 1 bar", phraseBars: 1),
+            bpm: 95
+        )
+        session.declareVariant(
+            startingDirection: .forward,
+            faderVariant: .faderOpenThroughout,
+            handedness: .right
+        )
+        return session
+    }
+
+    /// The correlation the host supplies for a take. Defaults line up with
+    /// `parkedTakeStartState`; each rejection test perturbs exactly one field.
+    private func correlation(
+        sessionID: String = "session-008",
+        takeID: String = "take-008",
+        takeGeneration: UInt64? = 8,
+        midiSourceID: String? = "midi_rane_one_mkii",
+        midiConnectionGeneration: UInt64? = 3
+    ) -> ReferenceCrossfaderTakeStart.Correlation {
+        ReferenceCrossfaderTakeStart.Correlation(
+            sessionID: sessionID,
+            takeID: takeID,
+            takeGeneration: takeGeneration,
+            midiSourceID: midiSourceID,
+            midiConnectionGeneration: midiConnectionGeneration
+        )
+    }
+
+    /// A parked-open fader observed 0.4 s BEFORE media start. Negative
+    /// observation time and snapshot provenance are the point: it is never
+    /// presented as an in-take MIDI packet.
+    private func parkedTakeStartState(
+        sessionID: String = "session-008",
+        takeID: String = "take-008",
+        takeGeneration: UInt64? = 8,
+        midiSourceID: String? = "midi_rane_one_mkii",
+        midiConnectionGeneration: UInt64? = 3,
+        channel: Int? = 15,
+        controller: Int? = 8,
+        deviceName: String? = "Rane ONE MKII",
+        rawValue: Int? = 127,
+        calibrationID: String? = "Rane ONE MKII#15#8",
+        observedTakeRelativeTime: Double? = -0.4,
+        provenance: CaptureCore.CrossfaderTakeStartState.Provenance = .preTakeSnapshot
+    ) -> CaptureCore.CrossfaderTakeStartState {
+        CaptureCore.CrossfaderTakeStartState(
+            provenance: provenance,
+            sessionID: sessionID,
+            takeID: takeID,
+            takeGeneration: takeGeneration,
+            midiSourceID: midiSourceID,
+            deviceName: deviceName,
+            midiConnectionGeneration: midiConnectionGeneration,
+            channel: channel,
+            controller: controller,
+            rawValue: rawValue,
+            calibratedPosition: 1,
+            calibrationID: calibrationID,
+            observationSequence: 412,
+            observedTakeRelativeTime: observedTakeRelativeTime,
+            unknownReason: nil
+        )
+    }
+
+    /// A finalized take with ZERO mapped crossfader samples — exactly the
+    /// shape take 008 produced with the fader parked open.
+    private func parkedArtifacts(
+        autoDetected: ReferenceTechnique? = nil,
+        takeStartState: CaptureCore.CrossfaderTakeStartState? = nil,
+        takeStartCorrelation: ReferenceCrossfaderTakeStart.Correlation? = nil,
+        crossfaderRawSamples: [CrossfaderPositionSample] = []
+    ) -> ReferenceRecordedTakeArtifacts {
+        ReferenceRecordedTakeArtifacts(
+            audio: ReferenceArtifactMeasurement(
+                fileName: "reference.wav",
+                exists: true,
+                byteCount: 500_000,
+                peakLevel: 0.8,
+                frameCount: 100_000
+            ),
+            video: nil,
+            sidecar: ReferenceArtifactMeasurement(fileName: "take.json", exists: true, byteCount: 2_048),
+            actualMediaFileName: nil,
+            crossfaderRawSamples: crossfaderRawSamples,
+            observedCrossfaderAddress: crossfaderRawSamples.isEmpty ? nil : calibration.address,
+            platterMovementEventCount: 55,
+            recordedAt: Date(timeIntervalSince1970: 1_788_000_500),
+            autoDetectedTechnique: autoDetected,
+            watchEvidence: .linked(motionFileName: "watch-motion.json"),
+            platterMovementEvents: [],
+            crossfaderTakeStartState: takeStartState,
+            crossfaderTakeStartCorrelation: takeStartCorrelation
+        )
+    }
+
+    private func hooks(
+        artifacts: ReferenceRecordedTakeArtifacts
+    ) -> ReferenceAuthoringRecordingHooks {
+        ReferenceAuthoringRecordingHooks(
+            startRecording: { .success(()) },
+            stopRecording: { .success(artifacts) },
+            currentPreflightSnapshot: { self.passingSnapshot() },
+            latestCalibrationObservation: { nil }
+        )
+    }
+
+    // MARK: Tear is a first-class authorable technique
+
+    func testTearIsAuthorableAndRoundTripsThroughItsScratchType() {
+        XCTAssertTrue(ReferenceTechnique.authorableSet.contains(.tear))
+        XCTAssertEqual(ReferenceTechnique.tear.scratchType, .tear)
+        XCTAssertEqual(ReferenceTechnique.tear.id, "tear")
+        XCTAssertEqual(ReferenceTechnique(scratchType: .tear), .tear)
+        XCTAssertEqual(ReferenceTechnique(scratchTypeID: "tear"), .tear)
+        XCTAssertEqual(ReferenceTechnique.tear.displayName, "Tear")
+        // Authorability must not widen training eligibility as a side effect.
+        XCTAssertFalse(
+            ReferenceTechnique.minimumRequiredSet.contains(.tear),
+            "Tear must not enter the registry's trainingEnabledTechniques by becoming authorable."
+        )
+    }
+
+    func testTearFaderExpectationRequiresAnOpenFaderAndNoCuts() {
+        let expectation = ReferenceTechnique.tear.defaultFaderExpectation
+        XCTAssertTrue(expectation.requiresContinuouslyOpenFader)
+        XCTAssertEqual(expectation.minimumCutEventsPerRepetition, 0)
+    }
+
+    func testTearSetupWritesTearMetadataIntoTheFinalizedTake() throws {
+        var session = makeConfiguredTearSession()
+        let store = try makeStore()
+        try store.save(calibration)
+        _ = session.adoptPersistedCalibrationIfExact(
+            store: store,
+            openEnd: .right,
+            activeDeck: .rightDeck,
+            address: calibration.address
+        )
+        let artifacts = parkedArtifacts(
+            takeStartState: parkedTakeStartState(),
+            takeStartCorrelation: correlation()
+        )
+        let recordingHooks = hooks(artifacts: artifacts)
+        guard case .success = session.beginRecording(using: recordingHooks) else {
+            return XCTFail("Expected recording to start.")
+        }
+        guard case .success = session.finishRecording(using: recordingHooks) else {
+            return XCTFail("Expected the take to finalize.")
+        }
+        let take = try XCTUnwrap(session.takeInReview)
+        XCTAssertEqual(take.evidence.metadata.technique, .tear)
+        XCTAssertEqual(take.evidence.metadata.technique.scratchType, .tear)
+        XCTAssertEqual(take.evidence.metadata.technique.scratchType.rawValue, "tear")
+    }
+
+    func testAdvisoryBabyDetectionNeverOverwritesASelectedTear() throws {
+        var session = makeConfiguredTearSession()
+        let store = try makeStore()
+        try store.save(calibration)
+        _ = session.adoptPersistedCalibrationIfExact(
+            store: store,
+            openEnd: .right,
+            activeDeck: .rightDeck,
+            address: calibration.address
+        )
+        let artifacts = parkedArtifacts(
+            autoDetected: .babyScratch,
+            takeStartState: parkedTakeStartState(),
+            takeStartCorrelation: correlation()
+        )
+        let recordingHooks = hooks(artifacts: artifacts)
+        _ = session.beginRecording(using: recordingHooks)
+        _ = session.finishRecording(using: recordingHooks)
+        let take = try XCTUnwrap(session.takeInReview)
+        XCTAssertEqual(session.selectedTechnique, .tear, "Advisory detection must never write back into the selection.")
+        XCTAssertEqual(take.evidence.metadata.technique, .tear)
+        XCTAssertEqual(take.autoDetectedTechnique, .babyScratch)
+        XCTAssertTrue(take.autoDetectionDisagreesWithSelection)
+    }
+
+    // MARK: Crossfader setup reuse
+
+    func testExactPersistedCalibrationIsAdoptedWithoutANewSweep() throws {
+        var session = makeConfiguredTearSession()
+        let store = try makeStore()
+        try store.save(calibration)
+
+        let outcome = session.adoptPersistedCalibrationIfExact(
+            store: store,
+            openEnd: .right,
+            activeDeck: .rightDeck,
+            address: calibration.address
+        )
+        guard case .adopted(let adopted) = outcome else {
+            return XCTFail("Expected the exact stored calibration to be adopted, got \(outcome)")
+        }
+        XCTAssertEqual(adopted, calibration)
+        XCTAssertEqual(session.confirmedCalibration, calibration)
+        XCTAssertTrue(session.confirmedCalibrationSource?.isReused == true)
+        XCTAssertEqual(session.phase, .readyToRecord, "Reuse must advance the session without a sweep.")
+        XCTAssertNil(session.calibrationSweep, "Adoption must never start a sweep.")
+    }
+
+    func testAWrongDeviceCalibrationIsNeverAdopted() throws {
+        var session = makeConfiguredTearSession()
+        let store = try makeStore()
+        try store.save(otherDeviceCalibration)
+
+        let outcome = session.adoptPersistedCalibrationIfExact(
+            store: store,
+            openEnd: .right,
+            activeDeck: .rightDeck,
+            address: calibration.address
+        )
+        XCTAssertEqual(outcome, .noStoredCalibration)
+        XCTAssertNil(session.confirmedCalibration)
+        XCTAssertEqual(session.phase, .configuring)
+    }
+
+    func testACalibrationForADifferentDeckOrOpenEndIsNeverAdopted() throws {
+        var session = makeConfiguredTearSession()
+        let store = try makeStore()
+        try store.save(calibration)
+
+        XCTAssertEqual(
+            session.adoptPersistedCalibrationIfExact(
+                store: store,
+                openEnd: .left,
+                activeDeck: .rightDeck,
+                address: calibration.address
+            ),
+            .configurationMismatch
+        )
+        XCTAssertEqual(
+            session.adoptPersistedCalibrationIfExact(
+                store: store,
+                openEnd: .right,
+                activeDeck: .leftDeck,
+                address: calibration.address
+            ),
+            .configurationMismatch
+        )
+        XCTAssertNil(session.confirmedCalibration)
+    }
+
+    func testNoStoredCalibrationAndNoObservedAddressAreBothRefused() throws {
+        var session = makeConfiguredTearSession()
+        let store = try makeStore()
+        XCTAssertEqual(
+            session.adoptPersistedCalibrationIfExact(
+                store: store,
+                openEnd: .right,
+                activeDeck: .rightDeck,
+                address: nil
+            ),
+            .noObservedAddress
+        )
+        XCTAssertEqual(
+            session.adoptPersistedCalibrationIfExact(
+                store: store,
+                openEnd: .right,
+                activeDeck: .rightDeck,
+                address: calibration.address
+            ),
+            .noStoredCalibration
+        )
+        XCTAssertNil(session.confirmedCalibration)
+    }
+
+    func testAdoptionIsRefusedWhileASweepIsInProgressOrAlreadyCalibrated() throws {
+        var session = makeConfiguredTearSession()
+        let store = try makeStore()
+        try store.save(calibration)
+
+        session.beginCalibration(address: calibration.address, openEnd: .right, activeDeck: .rightDeck)
+        XCTAssertEqual(
+            session.adoptPersistedCalibrationIfExact(
+                store: store,
+                openEnd: .right,
+                activeDeck: .rightDeck,
+                address: calibration.address
+            ),
+            .calibrationInProgress
+        )
+
+        var second = makeConfiguredTearSession()
+        _ = second.adoptPersistedCalibrationIfExact(
+            store: store,
+            openEnd: .right,
+            activeDeck: .rightDeck,
+            address: calibration.address
+        )
+        XCTAssertEqual(
+            second.adoptPersistedCalibrationIfExact(
+                store: store,
+                openEnd: .right,
+                activeDeck: .rightDeck,
+                address: calibration.address
+            ),
+            .alreadyCalibrated
+        )
+    }
+
+    func testRecalibrationDiscardsTheAdoptedCalibration() throws {
+        var session = makeConfiguredTearSession()
+        let store = try makeStore()
+        try store.save(calibration)
+        _ = session.adoptPersistedCalibrationIfExact(
+            store: store,
+            openEnd: .right,
+            activeDeck: .rightDeck,
+            address: calibration.address
+        )
+        XCTAssertNotNil(session.confirmedCalibration)
+
+        session.beginCalibration(address: calibration.address, openEnd: .right, activeDeck: .rightDeck)
+        XCTAssertNil(session.confirmedCalibration, "An explicit recalibration must supersede an adopted calibration.")
+        XCTAssertNil(session.confirmedCalibrationSource)
+        XCTAssertEqual(session.phase, .calibrating)
+    }
+
+    // MARK: Take-start crossfader correlation
+
+    func testAParkedCrossfaderIsAdoptedAsCorrelatedTakeStartState() {
+        let outcome = ReferenceCrossfaderTakeStart.correlate(
+            parkedTakeStartState(),
+            against: correlation(),
+            calibration: calibration,
+            recordedSamples: []
+        )
+        guard case .adopted(let rawValue, let observedAt) = outcome else {
+            return XCTFail("Expected the parked snapshot to be adopted, got \(outcome)")
+        }
+        XCTAssertEqual(rawValue, 127)
+        XCTAssertEqual(observedAt, -0.4, accuracy: 1e-9)
+
+        // The baseline exists ONLY in the derivation input; the take's own
+        // recorded samples are untouched.
+        let input = ReferenceCrossfaderTakeStart.derivationInput(
+            recordedSamples: [],
+            outcome: outcome
+        )
+        XCTAssertEqual(input.count, 1)
+        XCTAssertEqual(input[0].takeRelativeTime, 0)
+        XCTAssertEqual(input[0].rawValue, 127)
+    }
+
+    func testAnInTakeFaderEventProducesNoDuplicateBaseline() {
+        let inTakeSample = CrossfaderPositionSample(
+            takeRelativeTime: 0.05,
+            rawValue: 127,
+            normalizedPosition: 1
+        )
+        let outcome = ReferenceCrossfaderTakeStart.correlate(
+            parkedTakeStartState(),
+            against: correlation(),
+            calibration: calibration,
+            recordedSamples: [inTakeSample]
+        )
+        XCTAssertEqual(outcome, .notNeeded)
+        let input = ReferenceCrossfaderTakeStart.derivationInput(
+            recordedSamples: [inTakeSample],
+            outcome: outcome
+        )
+        XCTAssertEqual(input.count, 1, "A real in-take sample must not be joined by a contradictory baseline.")
+        XCTAssertEqual(input[0].takeRelativeTime, 0.05)
+    }
+
+    func testStalePreviousTakeAndPreviousConnectionSnapshotsAreRejected() {
+        func reason(
+            _ state: CaptureCore.CrossfaderTakeStartState,
+            _ correlation: ReferenceCrossfaderTakeStart.Correlation,
+            calibration: CrossfaderCalibration? = nil
+        ) -> ReferenceCrossfaderTakeStart.RejectionReason? {
+            let outcome = ReferenceCrossfaderTakeStart.correlate(
+                state,
+                against: correlation,
+                calibration: calibration ?? self.calibration,
+                recordedSamples: []
+            )
+            if case .rejected(let rejection) = outcome { return rejection }
+            return nil
+        }
+
+        XCTAssertEqual(reason(parkedTakeStartState(takeID: "take-007"), correlation()), .takeIdentityMismatch)
+        XCTAssertEqual(reason(parkedTakeStartState(sessionID: "session-007"), correlation()), .takeIdentityMismatch)
+        XCTAssertEqual(reason(parkedTakeStartState(takeGeneration: 7), correlation()), .takeGenerationMismatch)
+        XCTAssertEqual(reason(parkedTakeStartState(takeGeneration: nil), correlation()), .takeGenerationMismatch)
+        XCTAssertEqual(reason(parkedTakeStartState(midiSourceID: "midi_other"), correlation()), .midiSourceMismatch)
+        XCTAssertEqual(reason(parkedTakeStartState(midiSourceID: nil), correlation()), .midiSourceMismatch)
+        XCTAssertEqual(
+            reason(parkedTakeStartState(midiConnectionGeneration: 2), correlation()),
+            .connectionGenerationMismatch
+        )
+        XCTAssertEqual(
+            reason(parkedTakeStartState(midiConnectionGeneration: nil), correlation()),
+            .connectionGenerationMismatch
+        )
+    }
+
+    func testWrongAddressWrongCalibrationAndMissingCalibrationSnapshotsAreRejected() {
+        func reason(
+            _ state: CaptureCore.CrossfaderTakeStartState?,
+            calibration: CrossfaderCalibration?
+        ) -> ReferenceCrossfaderTakeStart.RejectionReason? {
+            let outcome = ReferenceCrossfaderTakeStart.correlate(
+                state,
+                against: correlation(),
+                calibration: calibration,
+                recordedSamples: []
+            )
+            if case .rejected(let rejection) = outcome { return rejection }
+            return nil
+        }
+
+        XCTAssertEqual(reason(parkedTakeStartState(), calibration: nil), .calibrationMissing)
+        XCTAssertEqual(reason(parkedTakeStartState(controller: 9), calibration: calibration), .addressMismatch)
+        XCTAssertEqual(reason(parkedTakeStartState(channel: 0), calibration: calibration), .addressMismatch)
+        XCTAssertEqual(
+            reason(parkedTakeStartState(deviceName: "Pioneer DDJ-GRV6"), calibration: calibration),
+            .addressMismatch
+        )
+        XCTAssertEqual(
+            reason(parkedTakeStartState(calibrationID: "Rane ONE MKII#15#9"), calibration: calibration),
+            .calibrationMismatch
+        )
+        XCTAssertEqual(reason(nil, calibration: calibration), .notRecorded)
+        XCTAssertEqual(
+            reason(
+                CaptureCore.CrossfaderTakeStartState.unknown(
+                    sessionID: "session-008",
+                    takeID: "take-008",
+                    takeGeneration: 8,
+                    reason: "no learned crossfader MIDI mapping exists"
+                ),
+                calibration: calibration
+            ),
+            .recordedUnknown
+        )
+        // A record claiming an in-take instant is refused, never re-timed:
+        // a pre-take packet must never masquerade as a measured one.
+        XCTAssertEqual(
+            reason(parkedTakeStartState(observedTakeRelativeTime: 0.25), calibration: calibration),
+            .observationNotBeforeTakeStart
+        )
+    }
+
+    func testAParkedTakeProvesItsOpenFaderWithoutAnArtificialWiggle() throws {
+        var session = makeConfiguredTearSession()
+        let store = try makeStore()
+        try store.save(calibration)
+        _ = session.adoptPersistedCalibrationIfExact(
+            store: store,
+            openEnd: .right,
+            activeDeck: .rightDeck,
+            address: calibration.address
+        )
+        let artifacts = parkedArtifacts(
+            takeStartState: parkedTakeStartState(),
+            takeStartCorrelation: correlation()
+        )
+        let recordingHooks = hooks(artifacts: artifacts)
+        _ = session.beginRecording(using: recordingHooks)
+        _ = session.finishRecording(using: recordingHooks)
+
+        let take = try XCTUnwrap(session.takeInReview)
+        XCTAssertTrue(
+            take.evidence.crossfaderRawSamples.isEmpty,
+            "The recorded sample stream must stay exactly what the take received."
+        )
+        XCTAssertEqual(take.evidence.crossfaderTakeStartOutcome?.adoptedRawValue, 127)
+        XCTAssertNotNil(take.evidence.derivation)
+        XCTAssertEqual(
+            ReferenceValidator.faderOpenEvidence(for: take.evidence),
+            .provenContinuouslyOpen
+        )
+    }
+
+    func testAnUncorrelatedSnapshotLeavesFaderEvidenceExplicitlyUnknown() throws {
+        var session = makeConfiguredTearSession()
+        let store = try makeStore()
+        try store.save(calibration)
+        _ = session.adoptPersistedCalibrationIfExact(
+            store: store,
+            openEnd: .right,
+            activeDeck: .rightDeck,
+            address: calibration.address
+        )
+        let artifacts = parkedArtifacts(
+            takeStartState: parkedTakeStartState(takeGeneration: 7),
+            takeStartCorrelation: correlation()
+        )
+        let recordingHooks = hooks(artifacts: artifacts)
+        _ = session.beginRecording(using: recordingHooks)
+        _ = session.finishRecording(using: recordingHooks)
+
+        let take = try XCTUnwrap(session.takeInReview)
+        XCTAssertEqual(
+            take.evidence.crossfaderTakeStartOutcome,
+            .rejected(.takeGenerationMismatch)
+        )
+        guard case .unknown = ReferenceValidator.faderOpenEvidence(for: take.evidence) else {
+            return XCTFail("A rejected snapshot must leave the fader state unknown, never open.")
+        }
+    }
+
+    // MARK: Calibration does not block raw capture or raw export
+
+    func testATakeRecordedWithoutACalibrationFinalizesAndStaysExportable() throws {
+        var session = makeConfiguredTearSession()
+        let artifacts = parkedArtifacts()
+        let recordingHooks = hooks(artifacts: artifacts)
+
+        XCTAssertNil(session.confirmedCalibration)
+        guard case .success = session.beginRecording(using: recordingHooks) else {
+            return XCTFail("A missing calibration must not block recording.")
+        }
+        guard case .success(let report) = session.finishRecording(using: recordingHooks) else {
+            return XCTFail("A missing calibration must not block finalization.")
+        }
+
+        let take = try XCTUnwrap(session.takeInReview)
+        XCTAssertNil(take.evidence.metadata.crossfaderCalibration)
+        XCTAssertNil(take.evidence.derivation)
+        XCTAssertTrue(
+            report.findings.contains(.crossfaderCalibrationMissing),
+            "The absence must be reported explicitly, never papered over."
+        )
+        guard case .unknown = ReferenceValidator.faderOpenEvidence(for: take.evidence) else {
+            return XCTFail("An uncalibrated take's fader evidence must be explicitly unknown.")
+        }
+        // Retained and exportable all the same.
+        XCTAssertNil(session.rawCaptureExportBlockReason())
+        XCTAssertTrue(session.canExportRawCapture)
+        // And still not approvable.
+        XCTAssertNotNil(session.approvalBlockReason())
+    }
+
+    func testRawExportIsAvailableWithNoSelectedRepetitionAndFailingValidation() throws {
+        var session = makeConfiguredTearSession()
+        let artifacts = parkedArtifacts()
+        let recordingHooks = hooks(artifacts: artifacts)
+        _ = session.beginRecording(using: recordingHooks)
+        _ = session.finishRecording(using: recordingHooks)
+
+        let take = try XCTUnwrap(session.takeInReview)
+        XCTAssertNil(
+            take.evidence.boundaries.selectedRepetitionIndex,
+            "No repetition is pre-selected; export must not depend on one."
+        )
+        XCTAssertFalse(take.latestValidation.passes)
+        XCTAssertNotNil(session.approvalBlockReason(), "Canonical approval stays blocked.")
+        XCTAssertNil(session.rawCaptureExportBlockReason(), "Raw export must be independent of approval.")
+    }
+
+    func testRawExportIsRefusedWhileRecordingAndBeforeAnyTake() {
+        var session = makeConfiguredTearSession()
+        XCTAssertNotNil(session.rawCaptureExportBlockReason())
+
+        let recordingHooks = hooks(artifacts: parkedArtifacts())
+        _ = session.beginRecording(using: recordingHooks)
+        XCTAssertEqual(session.phase, .recording)
+        XCTAssertNotNil(session.rawCaptureExportBlockReason(), "A take still recording is not stable evidence.")
+    }
+
+    func testRawExportPerformsNoLifecyclePublicationOrTrainingSideEffect() throws {
+        var session = makeConfiguredTearSession()
+        let artifacts = parkedArtifacts()
+        let recordingHooks = hooks(artifacts: artifacts)
+        _ = session.beginRecording(using: recordingHooks)
+        _ = session.finishRecording(using: recordingHooks)
+
+        let before = try XCTUnwrap(session.takeInReview)
+        // Reading the export gate is the whole of the model-side export path.
+        _ = session.rawCaptureExportBlockReason()
+        _ = session.canExportRawCapture
+        _ = session.latestRecordedTake
+        let after = try XCTUnwrap(session.takeInReview)
+
+        XCTAssertEqual(before.evidence.metadata.lifecycleState, .draft)
+        XCTAssertEqual(after.evidence.metadata.lifecycleState, .draft)
+        XCTAssertNil(after.evidence.metadata.reviewDecision)
+        XCTAssertFalse(after.evidence.metadata.lifecycleState.isPlayableByLearner)
+        XCTAssertNil(session.takeReadyForPublication(takeIndex: 0), "Nothing may become publishable by exporting.")
+        XCTAssertEqual(before.evidence, after.evidence, "Export must not mutate the take's evidence.")
+    }
+
+    func testCanonicalApprovalRemainsBlockedUntilItsOwnGatesPass() throws {
+        var session = makeConfiguredTearSession()
+        let store = try makeStore()
+        try store.save(calibration)
+        _ = session.adoptPersistedCalibrationIfExact(
+            store: store,
+            openEnd: .right,
+            activeDeck: .rightDeck,
+            address: calibration.address
+        )
+        let artifacts = parkedArtifacts(
+            takeStartState: parkedTakeStartState(),
+            takeStartCorrelation: correlation()
+        )
+        let recordingHooks = hooks(artifacts: artifacts)
+        _ = session.beginRecording(using: recordingHooks)
+        _ = session.finishRecording(using: recordingHooks)
+
+        // No repetition selected yet: still blocked, and never by accident.
+        let blocked = try XCTUnwrap(session.approvalBlockReason())
+        XCTAssertTrue(blocked.contains("repetition"), "Expected the repetition gate, got: \(blocked)")
+        XCTAssertThrowsError(try session.approveTakeInReview(notes: "attempt"))
+        let take = try XCTUnwrap(session.takeInReview)
+        XCTAssertEqual(take.evidence.metadata.lifecycleState, .draft)
     }
 }

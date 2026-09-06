@@ -1082,3 +1082,209 @@ final class ReferenceTearSegmentationViewModelTests: XCTestCase {
         return condition()
     }
 }
+
+// MARK: - Calibration reuse and raw export wiring
+
+/// The view-model wiring for the 2026-09-06 slice: adopting an already-stored
+/// crossfader calibration instead of re-sweeping it, and offering the RAW
+/// diagnostic export independently of canonical approval.
+///
+/// Synthetic throughout. Nothing is approved, published, installed or made
+/// training eligible by any test here.
+@MainActor
+final class ReferenceAuthoringCalibrationReuseAndExportTests: XCTestCase {
+
+    private let calibration = CrossfaderCalibration(
+        address: CrossfaderMIDIAddress(
+            deviceIdentifier: "Rane ONE MKII",
+            deviceName: "Rane ONE MKII",
+            channel: 15,
+            controller: 8
+        ),
+        fullLeftRawValue: 0,
+        centerRawValue: 63,
+        fullRightRawValue: 127,
+        openEnd: .right,
+        activeDeck: .rightDeck,
+        calibratedAt: Date(timeIntervalSince1970: 1_788_000_000)
+    )
+
+    private func passingSnapshot() -> ReferencePreflightSnapshot {
+        ReferencePreflightSnapshot(
+            controllerName: "Rane ONE MKII",
+            controllerIdentifier: "Rane ONE MKII",
+            observedCrossfaderAddress: calibration.address,
+            latestCrossfaderRawValue: 127,
+            calibration: calibration,
+            crossfaderEventCount: 40,
+            platterEventCount: 80,
+            platterIsMoving: true,
+            audioInputPeakLevel: 0.5,
+            audioDeviceName: "Rane ONE MKII",
+            watchIsReachable: true,
+            watchMotionIsStreaming: true,
+            cameraDeviceName: "Studio Camera",
+            cameraIsActive: true,
+            crossfaderSecondsSinceLastMessage: 0.1
+        )
+    }
+
+    private func artifacts() -> ReferenceRecordedTakeArtifacts {
+        ReferenceRecordedTakeArtifacts(
+            audio: ReferenceArtifactMeasurement(
+                fileName: "reference.wav",
+                exists: true,
+                byteCount: 500_000,
+                peakLevel: 0.8,
+                frameCount: 100_000
+            ),
+            video: nil,
+            sidecar: ReferenceArtifactMeasurement(fileName: "take.json", exists: true, byteCount: 2_048),
+            actualMediaFileName: nil,
+            crossfaderRawSamples: [],
+            observedCrossfaderAddress: nil,
+            platterMovementEventCount: 55,
+            recordedAt: Date(timeIntervalSince1970: 1_788_000_500),
+            autoDetectedTechnique: .babyScratch,
+            watchEvidence: .linked(motionFileName: "watch-motion.json")
+        )
+    }
+
+    private func hooks() -> ReferenceAuthoringRecordingHooks {
+        ReferenceAuthoringRecordingHooks(
+            startRecording: { .success(()) },
+            stopRecording: { .success(self.artifacts()) },
+            currentPreflightSnapshot: { self.passingSnapshot() },
+            latestCalibrationObservation: { nil }
+        )
+    }
+
+    private func makeViewModel(
+        store: CrossfaderCalibrationStore,
+        finalizedURL: URL? = nil
+    ) -> ReferenceAuthoringViewModel {
+        var session = ReferenceAuthoringSession(authoringSessionID: "auth-tear", operatorName: "Karl")
+        session.selectTechnique(.tear)
+        session.selectPattern(
+            ReferencePatternIdentity(id: "tear_1bar", name: "Tear · 1 bar", phraseBars: 1),
+            bpm: 95
+        )
+        session.declareVariant(
+            startingDirection: .forward,
+            faderVariant: .faderOpenThroughout,
+            handedness: .right
+        )
+        let worker = ReferenceAuthoringWorker(
+            session: session,
+            driver: ReferenceAuthoringWorkerDriver(
+                hooks: hooks(),
+                lastFinalizedRecordingURLProvider: { finalizedURL }
+            ),
+            calibrationStore: store,
+            queueLabel: "com.machelpnz.scratchlab.reference-authoring.tests.\(UUID().uuidString)"
+        )
+        let viewModel = ReferenceAuthoringViewModel(
+            worker: worker,
+            initialState: ReferenceAuthoringViewState(session: session, latestCalibrationRawValue: nil)
+        )
+        viewModel.selectedTechnique = .tear
+        viewModel.crossfaderOpenEndRawValue = CrossfaderOpenEnd.right.rawValue
+        viewModel.activeDeckRawValue = CrossfaderActiveDeck.rightDeck.rawValue
+        return viewModel
+    }
+
+    private func makeStore() throws -> CrossfaderCalibrationStore {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("RefAuthReuseTests-\(UUID().uuidString)", isDirectory: true)
+        addTeardownBlock { try? FileManager.default.removeItem(at: directory) }
+        return CrossfaderCalibrationStore(directoryURL: directory)
+    }
+
+    private func waitUntil(
+        attempts: Int = 200,
+        condition: @escaping @MainActor () -> Bool
+    ) async -> Bool {
+        for _ in 0..<attempts {
+            if condition() { return true }
+            try? await Task.sleep(nanoseconds: 5_000_000)
+        }
+        return condition()
+    }
+
+    func testAnExactStoredCalibrationIsAdoptedWithoutStartingASweep() async throws {
+        let store = try makeStore()
+        try store.save(calibration)
+        let viewModel = makeViewModel(store: store)
+
+        viewModel.adoptPersistedCalibrationIfAvailable(announce: true)
+        let adopted = await waitUntil { viewModel.session.confirmedCalibration != nil }
+        XCTAssertTrue(adopted, "An exact stored calibration must be reused automatically.")
+        XCTAssertEqual(viewModel.session.confirmedCalibration, calibration)
+        XCTAssertTrue(viewModel.isReusingPersistedCalibration)
+        XCTAssertNil(viewModel.session.calibrationSweep, "Reuse must never start a sweep.")
+        XCTAssertEqual(viewModel.session.phase, .readyToRecord)
+        XCTAssertNotNil(viewModel.calibrationSourceSummary)
+    }
+
+    func testAStoredCalibrationForADifferentOpenEndIsNeverAdopted() async throws {
+        let store = try makeStore()
+        try store.save(calibration)
+        let viewModel = makeViewModel(store: store)
+        viewModel.crossfaderOpenEndRawValue = CrossfaderOpenEnd.left.rawValue
+
+        viewModel.adoptPersistedCalibrationIfAvailable(announce: true)
+        _ = await waitUntil { viewModel.visibleMessage != nil }
+        XCTAssertNil(
+            viewModel.session.confirmedCalibration,
+            "A calibration measured for the other open end describes a different rig."
+        )
+        XCTAssertFalse(viewModel.isReusingPersistedCalibration)
+    }
+
+    func testRawExportIsBlockedBeforeATakeAndAvailableAfterFinalization() async throws {
+        let store = try makeStore()
+        let url = FileManager.default.temporaryDirectory
+            .appendingPathComponent("session-008_take-008_routine.mov")
+        let viewModel = makeViewModel(store: store, finalizedURL: url)
+
+        XCTAssertNotNil(viewModel.rawCaptureExportBlockReason)
+        XCTAssertFalse(viewModel.canExportRawCapture)
+
+        viewModel.startRecording()
+        _ = await waitUntil { viewModel.session.phase == .recording }
+        viewModel.stopRecording()
+        let reviewed = await waitUntil { viewModel.reviewedTake != nil && !viewModel.isWorking }
+        XCTAssertTrue(reviewed)
+
+        // No calibration, no selected repetition, failing validation — and the
+        // RAW capture is still exportable.
+        XCTAssertNil(viewModel.session.confirmedCalibration)
+        XCTAssertNil(viewModel.reviewedTake?.evidence.boundaries.selectedRepetitionIndex)
+        XCTAssertNotNil(viewModel.approvalBlockReason)
+        XCTAssertNil(viewModel.rawCaptureExportBlockReason)
+        XCTAssertTrue(viewModel.canExportRawCapture)
+        XCTAssertNotNil(viewModel.rawCaptureExportSource(config: nil))
+        XCTAssertEqual(viewModel.lastFinalizedRecordingURL, url)
+    }
+
+    func testAdvisoryDetectionNeverOverwritesTheSelectedTearInTheViewModel() async throws {
+        let store = try makeStore()
+        let viewModel = makeViewModel(store: store)
+        viewModel.startRecording()
+        _ = await waitUntil { viewModel.session.phase == .recording }
+        viewModel.stopRecording()
+        _ = await waitUntil { viewModel.reviewedTake != nil }
+
+        XCTAssertEqual(viewModel.session.selectedTechnique, .tear)
+        XCTAssertEqual(viewModel.reviewedTake?.evidence.metadata.technique, .tear)
+        XCTAssertEqual(viewModel.reviewedTake?.autoDetectedTechnique, .babyScratch)
+    }
+
+    func testTheRawExportDisclaimerStatesThatExportIsNotApproval() {
+        let text = ReferenceAuthoringViewModel.rawCaptureExportDisclaimer.lowercased()
+        XCTAssertTrue(text.contains("does not approve"))
+        XCTAssertTrue(text.contains("publish"))
+        XCTAssertTrue(text.contains("install"))
+        XCTAssertTrue(text.contains("training"))
+    }
+}

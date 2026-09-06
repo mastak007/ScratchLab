@@ -482,9 +482,27 @@ final class ReferenceAuthoringCaptureBridge {
             return .failure(error)
         }
 
+        // Identities the take-start crossfader snapshot must have been
+        // observed under. Read from the LIVE engine here, at stop time, so a
+        // snapshot recorded under a since-replaced device connection or a
+        // since-changed input selection is refused rather than adopted.
+        let liveIdentity: (sourceID: String, connectionGeneration: UInt64) = DispatchQueue.main.sync {
+            (engine.selectedMIDIInputSourceID, engine.midiConnectionGeneration)
+        }
+        let takeStartCorrelation = reservedTakeIdentity.map { identity in
+            ReferenceCrossfaderTakeStart.Correlation(
+                sessionID: identity.sessionID,
+                takeID: identity.takeID,
+                takeGeneration: recordingToken.generation,
+                midiSourceID: liveIdentity.sourceID,
+                midiConnectionGeneration: liveIdentity.connectionGeneration
+            )
+        }
+
         let artifacts = Self.buildArtifacts(
             mediaURL: completion.mediaURL,
-            expectedIdentity: reservedTakeIdentity
+            expectedIdentity: reservedTakeIdentity,
+            takeStartCorrelation: takeStartCorrelation
         )
         if case .success = artifacts {
             activeRecordingToken = nil
@@ -572,9 +590,10 @@ final class ReferenceAuthoringCaptureBridge {
     /// `ReferencePackageIO.sha256Hex` (hashing —
     /// `ScratchLab/Services/ReferencePackageIO.swift`), never a re-implementation
     /// of either.
-    private static func buildArtifacts(
+    static func buildArtifacts(
         mediaURL: URL,
         expectedIdentity: TakeIdentity?,
+        takeStartCorrelation: ReferenceCrossfaderTakeStart.Correlation? = nil,
         fileManager: FileManager = .default
     ) -> Result<ReferenceRecordedTakeArtifacts, ReferenceAuthoringError> {
         let sidecarURL = CaptureCore.LocalRecordingFiles.sidecarURL(forMediaURL: mediaURL)
@@ -653,7 +672,14 @@ final class ReferenceAuthoringCaptureBridge {
                     fromDetectedLabel: detectedNotation?.effectiveDetectedLabel
                 ),
                 watchEvidence: watchEvidence(in: sidecar, expectedIdentity: expectedIdentity),
-                platterMovementEvents: platterMovementEvents
+                platterMovementEvents: platterMovementEvents,
+                // Handed through VERBATIM. Whether it may seed this take's
+                // fader baseline is decided once, by
+                // `ReferenceCrossfaderTakeStart.correlate`, in the session —
+                // this bridge only supplies the record and the identities it
+                // must be correlated against.
+                crossfaderTakeStartState: sidecar.crossfaderTakeStartState,
+                crossfaderTakeStartCorrelation: takeStartCorrelation
             )
         )
     }
@@ -713,6 +739,16 @@ final class ReferenceAuthoringCaptureBridge {
             )
         }
     }
+
+    /// The media URL of the take this bridge most recently finalized, or
+    /// `nil` when it has finalized none.
+    ///
+    /// Read-only provenance for the RAW diagnostic export action. Exposing it
+    /// starts, stops, promotes and publishes nothing: the export path copies
+    /// the already-written capture through the existing
+    /// `SessionExportCoordinator`, and never touches reference lifecycle
+    /// state.
+    var lastFinalizedRecordingURL: URL? { lastFinalizedMediaURL }
 
     /// Re-read the last finalized take's sidecar and re-classify its Watch
     /// evidence. Pure file read; attaches nothing itself.

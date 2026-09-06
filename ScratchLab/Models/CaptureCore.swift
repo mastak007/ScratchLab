@@ -10936,6 +10936,157 @@ enum CaptureCore {
         }
     }
 
+    /// What the crossfader was doing at the take's AUTHORITATIVE media-start
+    /// boundary, recorded as an explicit control-state observation rather than
+    /// as a MIDI packet.
+    ///
+    /// Why this exists: a fader parked at one end emits nothing. On take 008
+    /// the mapping (Rane ONE MKII, Ch16 CC8) was learned and valid, the live
+    /// preflight cache held raw 127, and the take still finalized with ZERO
+    /// mapped crossfader samples — because the operator never touched the
+    /// fader after Record. The take therefore could not prove a state that was
+    /// in fact known, and canonical validation reported `unknown`.
+    ///
+    /// Two rules make this evidence rather than a fabrication:
+    ///
+    /// 1. It is NEVER appended to `mixerMidiEvents`. A pre-take packet is not
+    ///    an in-take packet, so it keeps its own record, its own provenance
+    ///    (`preTakeSnapshot`) and its ORIGINAL observation time — which is
+    ///    negative in take-relative seconds and is never rewritten to zero.
+    /// 2. Every correlating identity it was observed under travels with it, so
+    ///    a consumer can refuse a snapshot from a previous take, a previous
+    ///    device connection, a different source, a different mapped address or
+    ///    a different calibration instead of trusting the value alone.
+    ///
+    /// When no trustworthy observation exists the record is still written,
+    /// with `provenance == .unknown` and a stated reason. Absence of knowledge
+    /// is recorded as absence of knowledge; it is never invented.
+    ///
+    /// Additive and optional on `LocalRecordingSidecar`: a sidecar written
+    /// before this field existed decodes as `nil`, which means "not recorded",
+    /// never "unknown position observed".
+    struct CrossfaderTakeStartState: Codable, Equatable, Sendable {
+
+        /// Bumped only when the MEANING of a persisted field changes.
+        static let currentSchemaVersion = 1
+
+        enum Provenance: String, Codable, Equatable, Sendable {
+            /// Read from the engine's live control cache at the media-start
+            /// boundary. A snapshot of a message that arrived BEFORE the take.
+            case preTakeSnapshot
+            /// No trustworthy current-session observation existed.
+            case unknown
+        }
+
+        let schemaVersion: Int
+        let provenance: Provenance
+        /// Identity of the take this observation was correlated with.
+        let sessionID: String
+        let takeID: String
+        /// Engine recording generation this observation was correlated with.
+        let takeGeneration: UInt64?
+        /// Stable identity of the MIDI input source selected at observation.
+        let midiSourceID: String?
+        /// Source name as Core MIDI reported it. Display/provenance only.
+        let deviceName: String?
+        /// Monotonic count of MIDI input connections made by this process. A
+        /// snapshot taken under a different generation describes a device
+        /// session that has since ended and must be refused.
+        let midiConnectionGeneration: UInt64?
+        /// The LEARNED crossfader address the snapshot was read from.
+        let channel: Int?
+        let controller: Int?
+        let rawValue: Int?
+        /// Position across the calibrated active half, when a calibration was
+        /// in force. `nil` never means `0`.
+        let calibratedPosition: Double?
+        /// Identity of the calibration that produced `calibratedPosition`.
+        let calibrationID: String?
+        /// Lifetime message count on that address at the moment of
+        /// observation, so a later consumer can tell a held control from a
+        /// silent one exactly as the calibration sweep does.
+        let observationSequence: Int?
+        /// The observation's ORIGINAL instant, expressed in the take's clock.
+        /// Negative for a `preTakeSnapshot`, by construction. Never clamped.
+        let observedTakeRelativeTime: Double?
+        /// Why the state is unknown. `nil` for a usable snapshot.
+        let unknownReason: String?
+
+        init(
+            schemaVersion: Int = CrossfaderTakeStartState.currentSchemaVersion,
+            provenance: Provenance,
+            sessionID: String,
+            takeID: String,
+            takeGeneration: UInt64?,
+            midiSourceID: String?,
+            deviceName: String?,
+            midiConnectionGeneration: UInt64?,
+            channel: Int?,
+            controller: Int?,
+            rawValue: Int?,
+            calibratedPosition: Double?,
+            calibrationID: String?,
+            observationSequence: Int?,
+            observedTakeRelativeTime: Double?,
+            unknownReason: String?
+        ) {
+            self.schemaVersion = schemaVersion
+            self.provenance = provenance
+            self.sessionID = sessionID
+            self.takeID = takeID
+            self.takeGeneration = takeGeneration
+            self.midiSourceID = midiSourceID
+            self.deviceName = deviceName
+            self.midiConnectionGeneration = midiConnectionGeneration
+            self.channel = channel
+            self.controller = controller
+            self.rawValue = rawValue
+            self.calibratedPosition = calibratedPosition
+            self.calibrationID = calibrationID
+            self.observationSequence = observationSequence
+            self.observedTakeRelativeTime = observedTakeRelativeTime
+            self.unknownReason = unknownReason
+        }
+
+        /// An explicit "we do not know" record. Written whenever no live
+        /// observation on the learned address can be trusted for this take.
+        static func unknown(
+            sessionID: String,
+            takeID: String,
+            takeGeneration: UInt64?,
+            reason: String
+        ) -> CrossfaderTakeStartState {
+            CrossfaderTakeStartState(
+                provenance: .unknown,
+                sessionID: sessionID,
+                takeID: takeID,
+                takeGeneration: takeGeneration,
+                midiSourceID: nil,
+                deviceName: nil,
+                midiConnectionGeneration: nil,
+                channel: nil,
+                controller: nil,
+                rawValue: nil,
+                calibratedPosition: nil,
+                calibrationID: nil,
+                observationSequence: nil,
+                observedTakeRelativeTime: nil,
+                unknownReason: reason
+            )
+        }
+
+        /// `true` only for a snapshot that carries a real, in-range reading on
+        /// a named address under the schema this build understands.
+        var isUsableSnapshot: Bool {
+            provenance == .preTakeSnapshot
+                && schemaVersion == Self.currentSchemaVersion
+                && rawValue.map { (0...127).contains($0) } == true
+                && channel.map { (0...15).contains($0) } == true
+                && controller.map { (0...127).contains($0) } == true
+                && (observedTakeRelativeTime?.isFinite ?? false)
+        }
+    }
+
     struct DetectedNotationFaderEvent: Codable, Equatable, Sendable {
         let startTime: Double
         let endTime: Double
@@ -11922,6 +12073,14 @@ enum CaptureCore {
         var reviewDecision: CaptureReviewDecision?
         var reviewMetadata: CaptureReviewMetadata?
         var detectedNotation: DetectedNotationSnapshot?
+        /// The crossfader's control state at this take's media-start boundary.
+        ///
+        /// Optional and additive: a sidecar written before this field existed
+        /// decodes as `nil`, meaning "not recorded". It is deliberately NOT
+        /// part of `detectedNotation` — it is not a detected event and must
+        /// never be mistaken for one of `mixerMidiEvents`. See
+        /// `CrossfaderTakeStartState`.
+        var crossfaderTakeStartState: CrossfaderTakeStartState?
         var auditTrail: [CaptureAuditEvent]
 
         init(
@@ -11958,6 +12117,7 @@ enum CaptureCore {
             reviewDecision: CaptureReviewDecision? = nil,
             reviewMetadata: CaptureReviewMetadata? = nil,
             detectedNotation: DetectedNotationSnapshot? = nil,
+            crossfaderTakeStartState: CrossfaderTakeStartState? = nil,
             auditTrail: [CaptureAuditEvent] = []
         ) {
             self.schemaVersion = schemaVersion
@@ -11993,6 +12153,7 @@ enum CaptureCore {
             self.reviewDecision = reviewDecision
             self.reviewMetadata = reviewMetadata
             self.detectedNotation = detectedNotation
+            self.crossfaderTakeStartState = crossfaderTakeStartState
             self.auditTrail = auditTrail
         }
 

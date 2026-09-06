@@ -255,13 +255,36 @@ final class MacCameraPreviewViewTests: XCTestCase {
 
     /// The canonical renderer is still the one drawing, and the view still
     /// performs no capture, approval, packaging, publication or training work.
+    ///
+    /// GUARD HISTORY — see the twin guard in
+    /// `LivePerformedNotationTrackerTests` for the full reasoning.
+    ///
+    /// Two blanket string bans were retired on 2026-09-06 because they had
+    /// stopped describing reality once the tear repair routed canonical
+    /// gesture records through the SHARED chart:
+    ///
+    /// - `ScratchPhraseChartView(` — that IS the shared canonical renderer.
+    ///   Replaced by a POSITIVE assertion that it is used with
+    ///   `ChartSource.canonical`.
+    /// - `ScratchStrokeGeometry` — narrowed to
+    ///   `ScratchStrokeGeometry.canonicalGeometry`, so naming the frame type
+    ///   is allowed but CALLING the geometry layer directly is still banned.
+    ///
+    /// Every capture/approval/publication ban below is unchanged, and the
+    /// pre-existing `Canvas` is pinned separately by
+    /// `testThePreExistingTimelineCanvasIsPinnedAndNotWidened`.
     func testTheCanonicalRendererAndSafetyBoundariesAreUnchanged() throws {
         let source = try authoringViewSource()
         XCTAssertTrue(source.contains("LivePerformedNotationCard("))
+        XCTAssertTrue(
+            source.contains("source: .canonical(projection.records, layer: .performance, frame: frame)"),
+            "tear notation must reach the shared chart as canonical gesture records"
+        )
+        // Unchanged safety boundary: the authoring view starts no capture,
+        // approves nothing, and packages/publishes nothing.
         for forbidden in [
-            "ScratchPhraseChartView(",
             "ScratchMotionRenderer",
-            "ScratchStrokeGeometry",
+            "ScratchStrokeGeometry.canonicalGeometry",
             "startRoutineRecording",
             "stopRoutineRecording",
             "approveTakeInReview",

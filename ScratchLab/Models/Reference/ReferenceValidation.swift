@@ -351,8 +351,20 @@ struct ReferenceTakeEvidence: Equatable, Sendable {
     /// Defaults to empty so a take measured before this field existed decodes
     /// and validates unchanged.
     let platterMovementEvents: [CaptureCore.DetectedNotationRecordMovementEvent]
+    /// The crossfader control state the engine recorded at this take's
+    /// media-start boundary, VERBATIM, or `nil` when the take carries none.
+    ///
+    /// Never merged into `crossfaderRawSamples`: a pre-take snapshot is not an
+    /// in-take MIDI packet, and this field is what keeps the two apart. See
+    /// `CaptureCore.CrossfaderTakeStartState`.
+    let crossfaderTakeStartState: CaptureCore.CrossfaderTakeStartState?
+    /// Whether that snapshot was correlated closely enough to seed this take's
+    /// fader baseline, and if not, why. Decided once, by
+    /// `ReferenceCrossfaderTakeStart.correlate`, and reported here rather than
+    /// re-decided by each consumer.
+    let crossfaderTakeStartOutcome: ReferenceCrossfaderTakeStart.Outcome?
     /// The derivation produced from the raw samples and the calibration.
-    /// `nil` when derivation could not run (unusable calibration).
+    /// `nil` when derivation could not run (unusable or absent calibration).
     let derivation: CrossfaderDerivation?
     /// `var`: the Watch's motion file can finish transferring after macOS
     /// media finalization, so this is updated in place when the MATCHING
@@ -372,7 +384,9 @@ struct ReferenceTakeEvidence: Equatable, Sendable {
         platterMovementEventCount: Int,
         derivation: CrossfaderDerivation?,
         watchEvidence: ReferenceWatchEvidence = .missing(syncState: "notRequested"),
-        platterMovementEvents: [CaptureCore.DetectedNotationRecordMovementEvent] = []
+        platterMovementEvents: [CaptureCore.DetectedNotationRecordMovementEvent] = [],
+        crossfaderTakeStartState: CaptureCore.CrossfaderTakeStartState? = nil,
+        crossfaderTakeStartOutcome: ReferenceCrossfaderTakeStart.Outcome? = nil
     ) {
         self.watchEvidence = watchEvidence
         self.metadata = metadata
@@ -385,6 +399,8 @@ struct ReferenceTakeEvidence: Equatable, Sendable {
         self.observedCrossfaderAddress = observedCrossfaderAddress
         self.platterMovementEventCount = platterMovementEventCount
         self.platterMovementEvents = platterMovementEvents
+        self.crossfaderTakeStartState = crossfaderTakeStartState
+        self.crossfaderTakeStartOutcome = crossfaderTakeStartOutcome
         self.derivation = derivation
     }
 }
@@ -538,7 +554,19 @@ enum ReferenceValidator {
         _ evidence: ReferenceTakeEvidence
     ) -> [ReferenceValidationFinding] {
         var findings: [ReferenceValidationFinding] = []
-        let calibration = evidence.metadata.crossfaderCalibration
+        // A take recorded without a usable reference calibration is a real,
+        // retained, exportable diagnostic capture. What it is NOT is canonical
+        // reference material, and this is where that stays fail-closed: the
+        // absence is reported as a blocking finding rather than papered over
+        // with a fabricated three-position calibration.
+        guard let calibration = evidence.metadata.crossfaderCalibration else {
+            findings.append(.crossfaderCalibrationMissing)
+            if evidence.metadata.deviceInfo.controllerIdentifier
+                .trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                findings.append(.controllerNotIdentified)
+            }
+            return findings
+        }
         let issues = calibration.validationIssues()
         if !issues.isEmpty {
             findings.append(
@@ -602,7 +630,10 @@ enum ReferenceValidator {
         for evidence: ReferenceTakeEvidence,
         baselineTolerance: Double = ReferenceValidator.faderOpenBaselineTolerance
     ) -> FaderOpenEvidence {
-        guard evidence.metadata.crossfaderCalibration.isUsable else {
+        guard let calibration = evidence.metadata.crossfaderCalibration else {
+            return .unknown(detail: "this take was recorded without a crossfader calibration, so its fader state is unmeasured.")
+        }
+        guard calibration.isUsable else {
             return .unknown(detail: "the stored crossfader calibration is not usable.")
         }
         guard let derivation = evidence.derivation else {
@@ -645,7 +676,7 @@ enum ReferenceValidator {
         if !expectation.requiresContinuouslyOpenFader {
             if evidence.crossfaderRawSamples.isEmpty {
                 findings.append(.crossfaderEvidenceMissing)
-            } else if evidence.metadata.crossfaderCalibration.isUsable, evidence.derivation == nil {
+            } else if evidence.metadata.crossfaderCalibration?.isUsable == true, evidence.derivation == nil {
                 // The calibration is fine, so a nil derivation can only mean
                 // the stream itself was unusable.
                 findings.append(.crossfaderEvidenceMissing)

@@ -25,9 +25,14 @@ final class ReferenceAuthoringWorkerDriver: @unchecked Sendable {
     private let pendingConfigurationHandler: (ReferenceAuthoringBridgeTakeConfiguration) -> Void
     private let calibrationCommittedHandler: () -> Void
     private let finalizationWaitCancellationHandler: () -> Void
+    /// The raw capture this session most recently finalized. Read-only
+    /// provenance for the RAW export action; it starts, stops, approves and
+    /// publishes nothing.
+    private let lastFinalizedRecordingURLProvider: () -> URL?
 
     init(bridge: ReferenceAuthoringCaptureBridge, engine: MacCaptureEngine) {
         hooks = bridge.hooks
+        lastFinalizedRecordingURLProvider = { bridge.lastFinalizedRecordingURL }
         pendingConfigurationHandler = { configuration in
             bridge.setPendingConfiguration(configuration)
         }
@@ -49,13 +54,17 @@ final class ReferenceAuthoringWorkerDriver: @unchecked Sendable {
         hooks: ReferenceAuthoringRecordingHooks,
         pendingConfigurationHandler: @escaping (ReferenceAuthoringBridgeTakeConfiguration) -> Void = { _ in },
         calibrationCommittedHandler: @escaping () -> Void = {},
-        finalizationWaitCancellationHandler: @escaping () -> Void = {}
+        finalizationWaitCancellationHandler: @escaping () -> Void = {},
+        lastFinalizedRecordingURLProvider: @escaping () -> URL? = { nil }
     ) {
         self.hooks = hooks
         self.pendingConfigurationHandler = pendingConfigurationHandler
         self.calibrationCommittedHandler = calibrationCommittedHandler
         self.finalizationWaitCancellationHandler = finalizationWaitCancellationHandler
+        self.lastFinalizedRecordingURLProvider = lastFinalizedRecordingURLProvider
     }
+
+    var lastFinalizedRecordingURL: URL? { lastFinalizedRecordingURLProvider() }
 
     func setPendingConfiguration(_ configuration: ReferenceAuthoringBridgeTakeConfiguration) {
         pendingConfigurationHandler(configuration)
@@ -170,6 +179,33 @@ final class ReferenceAuthoringWorker: @unchecked Sendable {
             return worker.makeUpdate()
         }
     }
+
+    /// Adopt an exactly-matching stored reference calibration, if one exists,
+    /// instead of asking for another sweep.
+    ///
+    /// The live crossfader address comes from the SAME preflight snapshot the
+    /// panel already shows, so the calibration adopted is the one belonging to
+    /// the fader the operator is actually pointed at. Nothing is fabricated:
+    /// only a stored `CrossfaderCalibration` that passes its own validation
+    /// and matches device, channel, CC, deck and open end is ever adopted.
+    func adoptPersistedCalibration(
+        openEnd: CrossfaderOpenEnd,
+        activeDeck: CrossfaderActiveDeck
+    ) async -> (update: ReferenceAuthoringWorkerUpdate, outcome: ReferenceCalibrationReuseOutcome) {
+        await enqueue { worker in
+            let snapshot = worker.driver.hooks.currentPreflightSnapshot()
+            worker.session.refreshPreflight(using: worker.driver.hooks)
+            let outcome = worker.session.adoptPersistedCalibrationIfExact(
+                store: worker.calibrationStore,
+                openEnd: openEnd,
+                activeDeck: activeDeck,
+                address: snapshot.observedCrossfaderAddress
+            )
+            return (worker.makeUpdate(), outcome)
+        }
+    }
+
+    var lastFinalizedRecordingURL: URL? { driver.lastFinalizedRecordingURL }
 
     func commitCalibration() async -> ReferenceAuthoringWorkerUpdate {
         await enqueue { worker in
@@ -663,12 +699,136 @@ final class ReferenceAuthoringViewModel: ObservableObject {
             visibleMessage = update.errorMessage ?? "Authoring setup applied."
             isApplyingSetup = false
             isWorking = false
+            // A valid stored calibration for exactly this fader is already the
+            // answer. Adopting it here is what stops the operator being asked
+            // to re-sweep Ch16 CC8 every time this screen is opened.
+            adoptPersistedCalibrationIfAvailable()
         }
     }
 
     func refreshPreflightOnce() async {
         let update = await worker.refreshPreflight()
         apply(update)
+    }
+
+    // MARK: - Crossfader setup reuse
+
+    /// `true` while the session is holding a calibration it adopted from disk
+    /// rather than one swept in this session.
+    var isReusingPersistedCalibration: Bool {
+        session.confirmedCalibrationSource?.isReused ?? false
+    }
+
+    var calibrationSourceSummary: String? {
+        session.confirmedCalibrationSource?.displayName
+    }
+
+    /// Adopt an exactly-matching stored calibration for the currently selected
+    /// device/address/deck/open-end, so the operator is not asked to re-sweep
+    /// a fader ScratchLab has already measured.
+    ///
+    /// Called automatically once setup is applied and whenever the screen
+    /// appears. It is a no-op when a calibration is already held, when a sweep
+    /// is running, or when nothing on disk matches exactly. The explicit
+    /// `Recalibrate Crossfader` action remains the way to measure again.
+    func adoptPersistedCalibrationIfAvailable(announce: Bool = false) {
+        guard session.confirmedCalibration == nil else { return }
+        guard let openEnd = CrossfaderOpenEnd(rawValue: crossfaderOpenEndRawValue),
+              let activeDeck = CrossfaderActiveDeck(rawValue: activeDeckRawValue) else { return }
+        Task { [weak self] in
+            guard let self else { return }
+            let result = await worker.adoptPersistedCalibration(
+                openEnd: openEnd,
+                activeDeck: activeDeck
+            )
+            apply(result.update)
+            if case .adopted = result.outcome {
+                visibleMessage = result.outcome.operatorSummary
+                    + " No new sweep is needed. Use Recalibrate Crossfader to measure it again."
+            } else if announce {
+                visibleMessage = result.outcome.operatorSummary
+            }
+        }
+    }
+
+    /// Explicit operator-initiated re-measurement. Discards the adopted
+    /// calibration and starts a fresh sweep.
+    func recalibrateCrossfader() {
+        beginCalibration()
+    }
+
+    // MARK: - Raw diagnostic export
+
+    /// Why the raw capture cannot be exported right now, or `nil`.
+    ///
+    /// Deliberately independent of `approvalBlockReason`: repetition
+    /// selection, crossfader calibration, tear-review corrections and
+    /// canonical approval have no bearing on whether the recorded files can be
+    /// copied off this machine.
+    var rawCaptureExportBlockReason: String? {
+        if isWorking { return "An operation is still running." }
+        if let reason = session.rawCaptureExportBlockReason() { return reason }
+        guard lastFinalizedRecordingURL != nil else {
+            return "This session has not finalized a capture on disk yet."
+        }
+        return nil
+    }
+
+    var canExportRawCapture: Bool { rawCaptureExportBlockReason == nil }
+
+    /// The finalized media URL of the raw capture this session produced.
+    var lastFinalizedRecordingURL: URL? { worker.lastFinalizedRecordingURL }
+
+    /// The export source for the raw diagnostic capture, or `nil` when there
+    /// is nothing stable to export. Reuses the existing session-archive
+    /// pipeline; this screen builds no second archive format.
+    func rawCaptureExportSource(config: CaptureSessionConfig?) -> SessionExportSource? {
+        guard canExportRawCapture, let url = lastFinalizedRecordingURL else { return nil }
+        return .localRecordingSession(
+            lastRecordingURL: url,
+            sessionName: Self.rawCaptureExportSessionName,
+            config: config
+        )
+    }
+
+    static let rawCaptureExportSessionName = "Reference Authoring Capture"
+
+    /// Stated wherever export is offered. Exporting is not approval,
+    /// publication, installation or training eligibility.
+    static let rawCaptureExportDisclaimer =
+        "Saving the capture copies the recorded files only. It does not approve, publish, "
+            + "install, or make any reference eligible for training."
+
+    // MARK: - Canonical tear notation
+
+    /// The take under review, projected into canonical gesture records.
+    ///
+    /// The live preview projects the SAME way (see
+    /// `ReferenceTearCanonicalProjectionBuilder.project(movementEvents:)`), so
+    /// the two views cannot disagree about a gesture's structure.
+    var reviewTearProjection: ReferenceTearCanonicalProjection? {
+        tearReview.map { ReferenceTearCanonicalProjectionBuilder.project($0) }
+    }
+
+    /// Shared time/position frame for a canonical chart.
+    ///
+    /// Returns `nil` when the projection placed nothing — the chart then shows
+    /// its explicit empty state rather than an invented axis.
+    static func canonicalFrame(
+        for projection: ReferenceTearCanonicalProjection,
+        bpm: Double
+    ) -> ScratchStrokeGeometry.CanonicalFrame? {
+        guard let timeRange = projection.timeRange else { return nil }
+        // A single flat gesture has no vertical extent of its own. Padding the
+        // AXIS is presentation framing and changes no measured value; the
+        // curve points and hold positions are drawn exactly as measured.
+        let positionRange = projection.positionRange ?? -0.5...0.5
+        return ScratchStrokeGeometry.CanonicalFrame(
+            timeRange: timeRange,
+            positionRange: positionRange,
+            coordinateSpace: projection.coordinateSpace,
+            beatsPerMinute: bpm > 0 ? bpm : 90
+        )
     }
 
     func startPreflightPolling(intervalNanoseconds: UInt64 = 250_000_000) {
