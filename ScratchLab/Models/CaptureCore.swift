@@ -12017,19 +12017,27 @@ enum CaptureCore {
         /// for the live Tear card.
         let continuousProvisionalMovement: ProvisionalPlatterMovement?
 
-        /// The continuous fields are optional trailing arguments so the
-        /// engine's fail-closed empty constructor and the iOS call sites keep
-        /// compiling unchanged.
+        /// `decodePlatterCore`'s provenance intervals (observed stillness,
+        /// packet gaps, clock discontinuities). Live preview previously
+        /// discarded these, so the canonical live Tear projection could never
+        /// place a platter hold. Carried verbatim, never reinterpreted.
+        let platterEvidenceIntervals: [PlatterEvidenceInterval]
+
+        /// The continuous fields and provenance intervals are optional
+        /// trailing arguments so the engine's fail-closed empty constructor
+        /// and the iOS call sites keep compiling unchanged.
         init(
             committedEvents: [DetectedNotationRecordMovementEvent],
             provisionalMovement: ProvisionalPlatterMovement?,
             continuousEvents: [DetectedNotationRecordMovementEvent] = [],
-            continuousProvisionalMovement: ProvisionalPlatterMovement? = nil
+            continuousProvisionalMovement: ProvisionalPlatterMovement? = nil,
+            platterEvidenceIntervals: [PlatterEvidenceInterval] = []
         ) {
             self.committedEvents = committedEvents
             self.provisionalMovement = provisionalMovement
             self.continuousEvents = continuousEvents
             self.continuousProvisionalMovement = continuousProvisionalMovement
+            self.platterEvidenceIntervals = platterEvidenceIntervals
         }
     }
 
@@ -12103,7 +12111,8 @@ enum CaptureCore {
             committedEvents: committed,
             provisionalMovement: provisional,
             continuousEvents: core.events,
-            continuousProvisionalMovement: continuousProvisional
+            continuousProvisionalMovement: continuousProvisional,
+            platterEvidenceIntervals: core.intervals
         )
     }
 

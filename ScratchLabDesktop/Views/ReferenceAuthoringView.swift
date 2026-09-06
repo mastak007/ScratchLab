@@ -361,6 +361,8 @@ struct ReferenceAuthoringView: View {
                         title: "YOUR MOTION — LIVE (TEAR STRUCTURE)",
                         projection: ReferenceTearCanonicalProjectionBuilder.project(
                             movementEvents: liveNotationTracker.continuousRenderedEvents,
+                            platterEvidenceIntervals: liveNotationTracker.platterEvidenceIntervals,
+                            derivation: liveNotationTracker.faderDerivation,
                             coordinates: liveNotationTracker.continuousPlatterCoordinates
                         ),
                         emptyMessage: "Waiting for tear motion…"

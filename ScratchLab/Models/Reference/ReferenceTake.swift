@@ -2056,9 +2056,9 @@ enum ReferenceTearProjectionReason: String, Equatable, Sendable, CaseIterable {
         case .measuredPlatterTravel:
             return "subdivision geometry is the take's own decoded platter travel, at its measured durations"
         case .gestureLocalPlatterRevolutions:
-            return "each gesture's travel runs are re-anchored end-to-end into one gesture-local origin; the unit is calibrated platter revolutions and every run's measured excursion survives"
+            return "each gesture's travel runs are joined end-to-end into one continuous position track; the unit is calibrated platter revolutions and every run's measured excursion survives"
         case .gestureLocalNormalizedDisplacement:
-            return "each gesture's travel runs are re-anchored end-to-end into one gesture-local origin; the unit is this take's own normalised displacement, NOT calibrated revolutions, so no absolute travel is claimed and values are not comparable with another take"
+            return "each gesture's travel runs are joined end-to-end into one continuous position track; the unit is this take's own normalised displacement, NOT calibrated revolutions, so no absolute travel is claimed and values are not comparable with another take"
         case .unsupportedCoordinateSpace:
             return "at least one backing movement event is not gesture-relative controller telemetry, so its positions are in no declared platter coordinate and no geometry is claimed"
         case .lowMovementConfidence:

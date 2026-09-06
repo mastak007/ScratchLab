@@ -11564,7 +11564,16 @@ final class MacCaptureEngine: NSObject, ObservableObject {
         LivePerformedNotationDataSource(
             selectedMIDISourceName: { [weak self] in self?.selectedMIDIInputSourceName ?? "Not Connected" },
             capturedMidiCCEventsSnapshot: { [weak self] in self?.capturedMidiCCEventsSnapshot() ?? [] },
-            cameraMovementEventsSnapshot: { [weak self] now in self?.cameraMovementEventsSnapshot(now: now) }
+            cameraMovementEventsSnapshot: { [weak self] now in self?.cameraMovementEventsSnapshot(now: now) },
+            activeCrossfaderCalibration: { [weak self] in
+                guard let self else { return nil }
+                guard let mapping = self.persistedCrossfaderMappingSnapshot else { return nil }
+                return self.crossfaderCalibration(
+                    forDeviceName: self.selectedMIDIInputSourceName,
+                    channel: mapping.channel,
+                    controller: mapping.controller
+                )
+            }
         )
     }
 

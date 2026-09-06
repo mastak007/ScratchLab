@@ -451,7 +451,7 @@ final class LivePerformedNotationTrackerTests: XCTestCase {
             cameraMovementEventsSnapshot: { _ in cameraEvents }
         )
         let state = LivePerformedNotationTracker.computeState(dataSource: dataSource, baselineTimestamp: 0)
-        guard case .tracking(let committed, let provisional, _, _) = state else {
+        guard case .tracking(let committed, let provisional, _, _, _, _) = state else {
             return XCTFail("expected .tracking via camera fallback, got \(state)")
         }
         XCTAssertEqual(committed, cameraEvents)
@@ -466,7 +466,7 @@ final class LivePerformedNotationTrackerTests: XCTestCase {
             displacement: 0.6
         )
         let events = LivePerformedNotationTracker.renderedEvents(
-            for: .tracking(committed: [], provisional: openStroke, continuousCommitted: [], continuousProvisional: nil)
+            for: .tracking(committed: [], provisional: openStroke, continuousCommitted: [], continuousProvisional: nil, platterEvidenceIntervals: [], faderDerivation: nil)
         )
 
         XCTAssertEqual(events.count, 1)
@@ -498,7 +498,9 @@ final class LivePerformedNotationTrackerTests: XCTestCase {
             committed: committed,
             provisional: nil,
             continuousCommitted: continuous,
-            continuousProvisional: nil
+            continuousProvisional: nil,
+            platterEvidenceIntervals: [],
+            faderDerivation: nil
         )
         XCTAssertEqual(
             LivePerformedNotationTracker.renderedEvents(for: state), committed,
@@ -539,7 +541,9 @@ final class LivePerformedNotationTrackerTests: XCTestCase {
         let state = LiveNotationTrackingState.tracking(
             committed: [], provisional: nil,
             continuousCommitted: [freeSpin, tearForward, tearReverse],
-            continuousProvisional: nil
+            continuousProvisional: nil,
+            platterEvidenceIntervals: [],
+            faderDerivation: nil
         )
 
         let rendered = LivePerformedNotationTracker.continuousRenderedEvents(for: state)
@@ -577,12 +581,16 @@ final class LivePerformedNotationTrackerTests: XCTestCase {
         let withSpin = LiveNotationTrackingState.tracking(
             committed: [], provisional: nil,
             continuousCommitted: [freeSpin, tearForward, tearReverse],
-            continuousProvisional: nil
+            continuousProvisional: nil,
+            platterEvidenceIntervals: [],
+            faderDerivation: nil
         )
         let withoutSpin = LiveNotationTrackingState.tracking(
             committed: [], provisional: nil,
             continuousCommitted: [tearForward, tearReverse],
-            continuousProvisional: nil
+            continuousProvisional: nil,
+            platterEvidenceIntervals: [],
+            faderDerivation: nil
         )
 
         let a = LivePerformedNotationTracker.continuousRenderedEvents(for: withSpin)
@@ -627,7 +635,9 @@ final class LivePerformedNotationTrackerTests: XCTestCase {
         let state = LiveNotationTrackingState.tracking(
             committed: [], provisional: nil,
             continuousCommitted: [freeSpin, ascent1, ascent2, descent1, descent2],
-            continuousProvisional: nil
+            continuousProvisional: nil,
+            platterEvidenceIntervals: [],
+            faderDerivation: nil
         )
 
         let rendered = LivePerformedNotationTracker.continuousRenderedEvents(for: state)
@@ -660,7 +670,9 @@ final class LivePerformedNotationTrackerTests: XCTestCase {
         let state = LiveNotationTrackingState.tracking(
             committed: [], provisional: nil,
             continuousCommitted: [freeSpin, tearForward],
-            continuousProvisional: provisional
+            continuousProvisional: provisional,
+            platterEvidenceIntervals: [],
+            faderDerivation: nil
         )
 
         let rendered = LivePerformedNotationTracker.continuousRenderedEvents(for: state)
@@ -671,6 +683,144 @@ final class LivePerformedNotationTrackerTests: XCTestCase {
             rendered[0].endPosition, rendered[1].startPosition, accuracy: 1e-9,
             "the provisional stroke shares the committed stroke's reversal apex"
         )
+    }
+
+    // MARK: - Live evidence parity (stillness + crossfader wiring)
+
+    private func crossfaderCC8Event(
+        value: Int,
+        takeRelativeTime: Double,
+        deviceName: String = "Rane ONE MKII"
+    ) -> CaptureCore.RawMixerMIDIEvent {
+        CaptureCore.RawMixerMIDIEvent(
+            timestamp: takeRelativeTime,
+            takeRelativeTime: takeRelativeTime,
+            deviceName: deviceName,
+            channel: 15,
+            controller: 8,
+            value: value,
+            normalizedValue: Double(value) / 127.0,
+            mappedControl: nil
+        )
+    }
+
+    private func usableCrossfaderCalibration() -> CrossfaderCalibration {
+        CrossfaderCalibration(
+            address: CrossfaderMIDIAddress(
+                deviceIdentifier: "Rane ONE MKII", deviceName: "Rane ONE MKII",
+                channel: 15, controller: 8
+            ),
+            fullLeftRawValue: 0, centerRawValue: 52, fullRightRawValue: 104,
+            openEnd: .left, activeDeck: .rightDeck,
+            calibratedAt: Date(timeIntervalSince1970: 1_788_000_000)
+        )
+    }
+
+    /// A CC6 stream whose runs are separated by genuine zero-delta stillness,
+    /// so `decodePlatterCore` emits `.observedStillness` provenance intervals.
+    private func cc6WithStillness() -> [CaptureCore.RawMixerMIDIEvent] {
+        var events: [CaptureCore.RawMixerMIDIEvent] = []
+        var t = 0.0
+        var value = 40
+        for _ in 0..<20 { value += 1; events.append(midiEvent(value: value, takeRelativeTime: t, deviceName: "Rane ONE MKII")); t += 0.005 }
+        for _ in 0..<8 { events.append(midiEvent(value: value, takeRelativeTime: t, deviceName: "Rane ONE MKII")); t += 0.005 }
+        for _ in 0..<20 { value += 1; events.append(midiEvent(value: value, takeRelativeTime: t, deviceName: "Rane ONE MKII")); t += 0.005 }
+        return events
+    }
+
+    func testLiveDecodeCarriesPlatterStillnessIntervals() {
+        let decoded = MacCaptureEngine.resolvedControllerMovementEventsWithProvisional(
+            selectedMIDISourceName: "Rane ONE MKII",
+            capturedMidi: cc6WithStillness()
+        )
+        XCTAssertTrue(
+            decoded.platterEvidenceIntervals.contains { $0.kind == .observedStillness },
+            "the live decode result must expose decodePlatterCore's stillness provenance"
+        )
+    }
+
+    func testLiveTearTrackingCarriesPlatterIntervalsAndOpenFader() {
+        let calibration = usableCrossfaderCalibration()
+        let snapshot = cc6WithStillness() + [
+            crossfaderCC8Event(value: 0, takeRelativeTime: 0.0),
+            crossfaderCC8Event(value: 0, takeRelativeTime: 0.2),
+            crossfaderCC8Event(value: 0, takeRelativeTime: 0.4),
+        ]
+        let dataSource = LivePerformedNotationDataSource(
+            selectedMIDISourceName: { "Rane ONE MKII" },
+            capturedMidiCCEventsSnapshot: { snapshot },
+            cameraMovementEventsSnapshot: { _ in nil },
+            activeCrossfaderCalibration: { calibration }
+        )
+        let state = LivePerformedNotationTracker.computeState(dataSource: dataSource, baselineTimestamp: 0)
+        guard case .tracking(_, _, _, _, let platterIntervals, let faderDerivation) = state else {
+            return XCTFail("expected .tracking, got \(state)")
+        }
+        XCTAssertTrue(
+            platterIntervals.contains { $0.kind == .observedStillness },
+            "the live tracker must carry observed platter stillness into the Tear state"
+        )
+        XCTAssertNotNil(faderDerivation, "calibrated CC8 must derive live fader evidence")
+        XCTAssertFalse(faderDerivation?.intervals.isEmpty ?? true, "derived fader evidence must not be empty")
+    }
+
+    func testLiveTearFaderDerivationReflectsTransitionNotLatestState() {
+        let calibration = usableCrossfaderCalibration()
+        // OPEN for a while, then CLOSED (centre detent) — a real state change.
+        let cc8 = (0..<8).map { i in crossfaderCC8Event(value: 0, takeRelativeTime: Double(i) * 0.05) }
+            + (0..<8).map { i in crossfaderCC8Event(value: 52, takeRelativeTime: 0.4 + Double(i) * 0.05) }
+        let snapshot = Self.raneRingStream(runs: 2, stepsPerRun: 40) + cc8
+        let dataSource = LivePerformedNotationDataSource(
+            selectedMIDISourceName: { "Rane ONE MKII" },
+            capturedMidiCCEventsSnapshot: { snapshot },
+            cameraMovementEventsSnapshot: { _ in nil },
+            activeCrossfaderCalibration: { calibration }
+        )
+        let state = LivePerformedNotationTracker.computeState(dataSource: dataSource, baselineTimestamp: 0)
+        guard case .tracking(_, _, _, _, _, let faderDerivation) = state else {
+            return XCTFail("expected .tracking, got \(state)")
+        }
+        XCTAssertNotNil(faderDerivation)
+        XCTAssertGreaterThan(
+            faderDerivation?.intervals.count ?? 0, 1,
+            "a real open→closed change must produce more than one interval, not a single stamped state"
+        )
+    }
+
+    func testLiveTearFaderUnknownWithoutCalibration() {
+        let snapshot = Self.raneRingStream(runs: 2, stepsPerRun: 40)
+            + [crossfaderCC8Event(value: 0, takeRelativeTime: 0.0)]
+        let dataSource = LivePerformedNotationDataSource(
+            selectedMIDISourceName: { "Rane ONE MKII" },
+            capturedMidiCCEventsSnapshot: { snapshot },
+            cameraMovementEventsSnapshot: { _ in nil },
+            activeCrossfaderCalibration: { nil }
+        )
+        let state = LivePerformedNotationTracker.computeState(dataSource: dataSource, baselineTimestamp: 0)
+        guard case .tracking(_, _, _, _, _, let faderDerivation) = state else {
+            return XCTFail("expected .tracking, got \(state)")
+        }
+        XCTAssertNil(faderDerivation, "no usable calibration must yield no fader derivation (UNKNOWN, not fabricated OPEN)")
+    }
+
+    func testLiveTearFaderDerivationIsBaselineScoped() {
+        let calibration = usableCrossfaderCalibration()
+        // Pre-baseline CC8 (timestamp < 0) plus post-baseline platter. The
+        // baseline filter must exclude the CC8, so no in-take fader evidence
+        // is derived even though platter motion reaches `.tracking`.
+        let snapshot = Self.raneRingStream(runs: 2, stepsPerRun: 40)
+            + [crossfaderCC8Event(value: 0, takeRelativeTime: -1.0)]
+        let dataSource = LivePerformedNotationDataSource(
+            selectedMIDISourceName: { "Rane ONE MKII" },
+            capturedMidiCCEventsSnapshot: { snapshot },
+            cameraMovementEventsSnapshot: { _ in nil },
+            activeCrossfaderCalibration: { calibration }
+        )
+        let state = LivePerformedNotationTracker.computeState(dataSource: dataSource, baselineTimestamp: 0.0)
+        guard case .tracking(_, _, _, _, _, let faderDerivation) = state else {
+            return XCTFail("expected .tracking, got \(state)")
+        }
+        XCTAssertNil(faderDerivation, "pre-baseline CC8 must not enter the live take's fader derivation")
     }
 
     func testFreezePreservesLastVisibleTrace() {
@@ -686,7 +836,7 @@ final class LivePerformedNotationTrackerTests: XCTestCase {
         )
         let tracker = LivePerformedNotationTracker(dataSource: dataSource, pollInterval: 60)
         let visibleBeforeFreeze = LivePerformedNotationTracker.renderedEvents(
-            for: .tracking(committed: [event], provisional: nil, continuousCommitted: [], continuousProvisional: nil)
+            for: .tracking(committed: [event], provisional: nil, continuousCommitted: [], continuousProvisional: nil, platterEvidenceIntervals: [], faderDerivation: nil)
         )
 
         tracker.freeze()
@@ -766,7 +916,7 @@ final class LivePerformedNotationTrackerTests: XCTestCase {
             dataSource: engineBackedDataSource(engine: engine, deviceName: deviceName),
             baselineTimestamp: baseline
         )
-        guard case .tracking(let committed, let provisional, _, _) = state else {
+        guard case .tracking(let committed, let provisional, _, _, _, _) = state else {
             return XCTFail("expected .tracking from real captured platter telemetry, got \(state)")
         }
         XCTAssertFalse(
@@ -1105,7 +1255,9 @@ final class LivePerformedNotationTrackerTests: XCTestCase {
             committed: decoded.committedEvents,
             provisional: decoded.provisionalMovement,
             continuousCommitted: decoded.continuousEvents,
-            continuousProvisional: decoded.continuousProvisionalMovement
+            continuousProvisional: decoded.continuousProvisionalMovement,
+            platterEvidenceIntervals: decoded.platterEvidenceIntervals,
+            faderDerivation: nil
         )
         let strokes = LivePerformedNotationTracker.renderedEvents(for: state)
             .compactMap(PerformedStrokeAdapter.laneStroke(from:))
@@ -1166,7 +1318,9 @@ final class LivePerformedNotationTrackerTests: XCTestCase {
                 committed: decoded.committedEvents,
                 provisional: decoded.provisionalMovement,
                 continuousCommitted: [],
-                continuousProvisional: nil
+                continuousProvisional: nil,
+                platterEvidenceIntervals: [],
+                faderDerivation: nil
             ))
             .compactMap(PerformedStrokeAdapter.laneStroke(from:))
         let values = strokes.flatMap { stroke -> [Double] in
@@ -1258,7 +1412,9 @@ final class LivePerformedNotationTrackerTests: XCTestCase {
                 committed: decoded.committedEvents,
                 provisional: decoded.provisionalMovement,
                 continuousCommitted: [],
-                continuousProvisional: nil
+                continuousProvisional: nil,
+                platterEvidenceIntervals: [],
+                faderDerivation: nil
             ))
             .compactMap(PerformedStrokeAdapter.laneStroke(from:))
         let starts = strokes.compactMap(\.measuredStartPosition)
@@ -1319,7 +1475,7 @@ final class LivePerformedNotationTrackerTests: XCTestCase {
         let provisional = try? XCTUnwrap(decoded.provisionalMovement)
         XCTAssertNotNil(provisional)
         let rendered = LivePerformedNotationTracker.renderedEvents(
-            for: .tracking(committed: [], provisional: decoded.provisionalMovement, continuousCommitted: [], continuousProvisional: nil)
+            for: .tracking(committed: [], provisional: decoded.provisionalMovement, continuousCommitted: [], continuousProvisional: nil, platterEvidenceIntervals: [], faderDerivation: nil)
         )
         XCTAssertEqual(rendered.count, 1)
         XCTAssertGreaterThan(

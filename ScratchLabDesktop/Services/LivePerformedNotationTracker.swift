@@ -35,6 +35,24 @@ struct LivePerformedNotationDataSource {
     /// camera builder is currently active at all (distinct from "active but
     /// has seen no movement yet", which is an empty array).
     let cameraMovementEventsSnapshot: (_ now: CFTimeInterval) -> [CaptureCore.DetectedNotationRecordMovementEvent]?
+    /// The active crossfader calibration (already resolved against the
+    /// selected source's learned mapping), or `nil`. The tracker derives
+    /// take-scoped, time-aligned crossfader state from the CC snapshot through
+    /// the existing `CrossfaderStateDeriver`. Defaults to `nil` so synthetic
+    /// data sources that only exercise platter motion stay source-compatible.
+    let activeCrossfaderCalibration: () -> CrossfaderCalibration?
+
+    init(
+        selectedMIDISourceName: @escaping () -> String,
+        capturedMidiCCEventsSnapshot: @escaping () -> [CaptureCore.RawMixerMIDIEvent],
+        cameraMovementEventsSnapshot: @escaping (_ now: CFTimeInterval) -> [CaptureCore.DetectedNotationRecordMovementEvent]?,
+        activeCrossfaderCalibration: @escaping () -> CrossfaderCalibration? = { nil }
+    ) {
+        self.selectedMIDISourceName = selectedMIDISourceName
+        self.capturedMidiCCEventsSnapshot = capturedMidiCCEventsSnapshot
+        self.cameraMovementEventsSnapshot = cameraMovementEventsSnapshot
+        self.activeCrossfaderCalibration = activeCrossfaderCalibration
+    }
 }
 
 /// Bounded, read-only counters describing ONE tracker poll.
@@ -70,7 +88,9 @@ enum LiveNotationTrackingState: Equatable {
         committed: [CaptureCore.DetectedNotationRecordMovementEvent],
         provisional: CaptureCore.ProvisionalPlatterMovement?,
         continuousCommitted: [CaptureCore.DetectedNotationRecordMovementEvent],
-        continuousProvisional: CaptureCore.ProvisionalPlatterMovement?
+        continuousProvisional: CaptureCore.ProvisionalPlatterMovement?,
+        platterEvidenceIntervals: [CaptureCore.PlatterEvidenceInterval],
+        faderDerivation: CrossfaderDerivation?
     )
 }
 
@@ -172,7 +192,7 @@ final class LivePerformedNotationTracker: ObservableObject {
     static func renderedEvents(
         for state: LiveNotationTrackingState
     ) -> [CaptureCore.DetectedNotationRecordMovementEvent] {
-        guard case .tracking(let committed, let provisional, _, _) = state else { return [] }
+        guard case .tracking(let committed, let provisional, _, _, _, _) = state else { return [] }
         guard let provisional else { return committed }
         let duration = max(0, provisional.currentTime - provisional.startTime)
         // Keep controller speed in raw steps/second, matching committed
@@ -205,7 +225,7 @@ final class LivePerformedNotationTracker: ObservableObject {
     static func continuousRenderedEvents(
         for state: LiveNotationTrackingState
     ) -> [CaptureCore.DetectedNotationRecordMovementEvent] {
-        guard case .tracking(_, _, let continuousCommitted, let continuousProvisional) = state else { return [] }
+        guard case .tracking(_, _, let continuousCommitted, let continuousProvisional, _, _) = state else { return [] }
         var events = continuousCommitted
         if let continuousProvisional {
             let duration = max(0, continuousProvisional.currentTime - continuousProvisional.startTime)
@@ -279,6 +299,21 @@ final class LivePerformedNotationTracker: ObservableObject {
         )
     }
 
+    /// `decodePlatterCore`'s provenance intervals (observed stillness, packet
+    /// gaps, clock discontinuities) for the canonical live Tear projection.
+    var platterEvidenceIntervals: [CaptureCore.PlatterEvidenceInterval] {
+        if case .tracking(_, _, _, _, let intervals, _) = state { return intervals }
+        return []
+    }
+
+    /// Take-scoped, time-aligned crossfader derivation for the canonical live
+    /// Tear projection, or `nil` when no usable calibration / CC8 evidence
+    /// exists (the projection then truthfully reports FADER UNKNOWN).
+    var faderDerivation: CrossfaderDerivation? {
+        if case .tracking(_, _, _, _, _, let derivation) = state { return derivation }
+        return nil
+    }
+
     private func startPolling(interval: TimeInterval) {
         let source = DispatchSource.makeTimerSource(queue: pollQueue)
         source.schedule(deadline: .now(), repeating: interval)
@@ -320,7 +355,7 @@ final class LivePerformedNotationTracker: ObservableObject {
         let span = (positions.max() ?? 0) - (positions.min() ?? 0)
         let committedCount: Int
         let hasProvisional: Bool
-        if case .tracking(let committed, let provisional, _, _) = state {
+        if case .tracking(let committed, let provisional, _, _, _, _) = state {
             committedCount = committed.count
             hasProvisional = provisional != nil
         } else {
@@ -368,12 +403,24 @@ final class LivePerformedNotationTracker: ObservableObject {
             capturedMidi: midiSnapshot
         )
         let usesController = !controllerResult.committedEvents.isEmpty || controllerResult.provisionalMovement != nil
+
+        // Crossfader evidence: derived from the baseline-filtered CC8 snapshot
+        // through the EXISTING production deriver, using the active
+        // calibration. Unusable calibration or no matching CC8 yields `nil`,
+        // and the Tear projection truthfully reports FADER UNKNOWN.
+        let faderDerivation = Self.deriveCrossfader(
+            midiSnapshot: midiSnapshot,
+            calibration: dataSource.activeCrossfaderCalibration()
+        )
+
         if usesController {
             return .tracking(
                 committed: controllerResult.committedEvents,
                 provisional: controllerResult.provisionalMovement,
                 continuousCommitted: controllerResult.continuousEvents,
-                continuousProvisional: controllerResult.continuousProvisionalMovement
+                continuousProvisional: controllerResult.continuousProvisionalMovement,
+                platterEvidenceIntervals: controllerResult.platterEvidenceIntervals,
+                faderDerivation: faderDerivation
             )
         }
 
@@ -382,11 +429,33 @@ final class LivePerformedNotationTracker: ObservableObject {
                 committed: cameraEvents,
                 provisional: nil,
                 continuousCommitted: cameraEvents,
-                continuousProvisional: nil
+                continuousProvisional: nil,
+                platterEvidenceIntervals: [],
+                faderDerivation: faderDerivation
             )
         }
 
         return .waiting
+    }
+
+    /// Reuse the production crossfader deriver against the take-scoped,
+    /// already-baseline-filtered CC snapshot. Returns `nil` when the
+    /// calibration is unusable or no matching CC8 evidence exists — never a
+    /// fabricated state.
+    private static func deriveCrossfader(
+        midiSnapshot: [CaptureCore.RawMixerMIDIEvent],
+        calibration: CrossfaderCalibration?
+    ) -> CrossfaderDerivation? {
+        guard let calibration, calibration.isUsable else { return nil }
+        let rawEvents = midiSnapshot
+            .filter {
+                $0.channel == calibration.address.channel
+                    && $0.controller == calibration.address.controller
+                    && $0.deviceName == calibration.address.deviceIdentifier
+            }
+            .map { (takeRelativeTime: $0.takeRelativeTime, rawValue: $0.value) }
+        guard !rawEvents.isEmpty else { return nil }
+        return CrossfaderStateDeriver.derive(rawEvents: rawEvents, calibration: calibration)
     }
 }
 
