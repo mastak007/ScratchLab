@@ -4012,6 +4012,72 @@ final class MacCaptureEngine: NSObject, ObservableObject {
     }
 
     private let sessionQueue = DispatchQueue(label: "scratchlab.mac.capture.session")
+
+    /// A per-layer lifetime handle, using the SAME queue as configuration,
+    /// start and stop. It owns no view and cannot drive the capture lifecycle.
+    func makePreviewAttachment(for layer: AVCaptureVideoPreviewLayer) -> PreviewAttachment {
+        PreviewAttachment(session: captureSession, sessionQueue: sessionQueue, layer: layer)
+    }
+
+    final class PreviewAttachment: @unchecked Sendable {
+        typealias AssignSession = @Sendable (AVCaptureVideoPreviewLayer, AVCaptureSession?) -> Void
+
+        private let session: AVCaptureSession
+        private let sessionQueue: DispatchQueue
+        private let layer: AVCaptureVideoPreviewLayer
+        private let assignSession: AssignSession
+        // Only request metadata crosses queues. Never hold this per-handle
+        // lock during AVFoundation work, dispatch, or a callback to main.
+        private let requestLock = NSLock()
+        private var generation: UInt64 = 0
+        private var requestedAttachment = false
+
+        init(
+            session: AVCaptureSession,
+            sessionQueue: DispatchQueue,
+            layer: AVCaptureVideoPreviewLayer,
+            assignSession: @escaping AssignSession = { layer, session in
+                guard layer.session !== session else { return }
+                layer.session = session
+            }
+        ) {
+            self.session = session
+            self.sessionQueue = sessionQueue
+            self.layer = layer
+            self.assignSession = assignSession
+        }
+
+        /// Main requests only; AVFoundation association belongs to sessionQueue.
+        /// A request already executing finishes before the next queued request;
+        /// superseded requests that have not started never touch the session.
+        @MainActor
+        func setAttached(_ attached: Bool) {
+            let request: UInt64? = requestLock.withLock {
+                guard requestedAttachment != attached else { return nil }
+                requestedAttachment = attached
+                generation &+= 1
+                return generation
+            }
+            guard let request else { return }
+            sessionQueue.async { [self] in
+                guard requestLock.withLock({ generation == request }) else { return }
+                assignSession(layer, attached ? session : nil)
+            }
+        }
+
+        deinit {
+            // Also covers view destruction without SwiftUI dismantling. The
+            // queued closure retains the layer, not this handle or its view.
+            // Last release cannot synchronously remove a preview on main while
+            // AVFoundation holds its session lock on sessionQueue.
+            let layer = layer
+            let assignSession = assignSession
+            sessionQueue.async {
+                assignSession(layer, nil)
+            }
+        }
+    }
+
     private let videoQueue = DispatchQueue(label: "scratchlab.mac.capture.video")
     private let audioQueue = DispatchQueue(label: "scratchlab.mac.capture.audio")
     private let performerMonitorDemandQueue = DispatchQueue(label: "scratchlab.mac.capture.performer-demand")

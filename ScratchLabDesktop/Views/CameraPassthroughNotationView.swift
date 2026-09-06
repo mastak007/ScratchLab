@@ -9,7 +9,7 @@ import AVFoundation
 ///
 /// ## Layers (back to front)
 /// 1. **Camera preview** — `MacCameraPreviewView` using the caller-supplied
-///    `AVCaptureSession`.
+///    engine's session owner.
 /// 2. **Notation overlay** — SwiftUI `Canvas` drawing:
 ///    - A platter guide circle at the calibrated centre / radius.
 ///    - Arc strokes for visible notation events, projected via
@@ -27,7 +27,7 @@ import AVFoundation
 /// - Playback cursor: `OverlayReplayController` + `TimelineView`.
 struct CameraPassthroughNotationView: View {
 
-    let captureSession: AVCaptureSession
+    let captureEngine: MacCaptureEngine
     private let snapshot: CaptureCore.DetectedNotationSnapshot?
 
     @StateObject private var calibration = CameraNotationOverlayCalibration()
@@ -45,9 +45,9 @@ struct CameraPassthroughNotationView: View {
 
     // MARK: - Init
 
-    init(captureSession: AVCaptureSession,
+    init(captureEngine: MacCaptureEngine,
          snapshot: CaptureCore.DetectedNotationSnapshot?) {
-        self.captureSession = captureSession
+        self.captureEngine = captureEngine
         self.snapshot = snapshot
 
         // Resolve target notation once at init so we can pick a sensible
@@ -131,7 +131,7 @@ struct CameraPassthroughNotationView: View {
         GeometryReader { geo in
             ZStack(alignment: .bottom) {
                 // ---- Layer 0: Camera preview ----
-                MacCameraPreviewView(session: captureSession)
+                MacCameraPreviewView(captureEngine: captureEngine)
 
                 // ---- Layer 1: Notation overlay ----
                 if let model {

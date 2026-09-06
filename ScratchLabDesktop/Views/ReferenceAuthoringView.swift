@@ -187,7 +187,7 @@ struct ReferenceAuthoringView: View {
     private var framingContent: some View {
         VStack(alignment: .leading, spacing: 8) {
             MacCameraPreviewView(
-                session: captureEngine.captureSession,
+                captureEngine: captureEngine,
                 videoGravity: .resizeAspect
             )
             .aspectRatio(16.0 / 9.0, contentMode: .fit)

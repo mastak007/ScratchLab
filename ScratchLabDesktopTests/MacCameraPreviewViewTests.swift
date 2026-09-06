@@ -16,6 +16,7 @@ import AVFoundation
 import XCTest
 @testable import ScratchLab
 
+@MainActor
 final class MacCameraPreviewViewTests: XCTestCase {
 
     func testDefaultGravityIsResizeAspectFill() {
@@ -32,19 +33,21 @@ final class MacCameraPreviewViewTests: XCTestCase {
     /// SwiftUI can call `updateNSView` repeatedly — when the capture session
     /// changes, or on an unrelated re-render — and the gravity setting must
     /// survive every one of those calls, not just the initial construction.
-    func testGravitySurvivesRepeatedUpdatesIncludingSessionChanges() {
+    func testGravitySurvivesRepeatedUpdatesIncludingSessionChanges() async {
         let view = PreviewView()
         view.updateGravity(.resizeAspect)
         XCTAssertEqual(view.previewLayer.videoGravity, .resizeAspect)
 
         // Simulate SwiftUI re-invoking updateNSView after a session change.
         let session = AVCaptureSession()
-        view.updateSession(session)
+        attach(view, to: session)
+        await drainSessionQueue()
         view.updateGravity(.resizeAspect)
         XCTAssertEqual(view.previewLayer.videoGravity, .resizeAspect, "gravity must not be reset by a session change")
 
         // A second unrelated update pass (e.g. an unrelated re-render).
-        view.updateSession(session)
+        attach(view, to: session)
+        await drainSessionQueue()
         view.updateGravity(.resizeAspect)
         XCTAssertEqual(view.previewLayer.videoGravity, .resizeAspect)
     }
@@ -63,37 +66,260 @@ final class MacCameraPreviewViewTests: XCTestCase {
     /// Reference Authoring attaches a second preview to the engine's own
     /// running session, so this has to hold or opening the DEBUG route could
     /// disturb the capture the take is recorded from.
-    func testAttachingAndDetachingAPreviewNeverStartsOrStopsTheSession() {
+    func testAttachingAndDetachingAPreviewNeverStartsOrStopsTheSession() async {
         let session = AVCaptureSession()
         XCTAssertFalse(session.isRunning)
 
         let view = PreviewView()
-        view.updateSession(session)
+        attach(view, to: session)
+        await drainSessionQueue()
         XCTAssertFalse(session.isRunning, "attaching a preview must not start capture")
         XCTAssertTrue(view.previewLayer.session === session)
 
         MacCameraPreviewView.dismantleNSView(view, coordinator: ())
+        await drainSessionQueue()
         XCTAssertNil(view.previewLayer.session, "dismantling detaches the preview layer")
         XCTAssertFalse(session.isRunning, "detaching a preview must not stop capture")
     }
 
     /// Two previews can observe one session at once — Capture's and the
     /// authoring screen's — without either taking it from the other.
-    func testASecondPreviewOnTheSameSessionDoesNotDetachTheFirst() {
+    func testASecondPreviewOnTheSameSessionDoesNotDetachTheFirst() async {
         let session = AVCaptureSession()
         let capturePreview = PreviewView()
         let authoringPreview = PreviewView()
 
-        capturePreview.updateSession(session)
-        authoringPreview.updateSession(session)
+        attach(capturePreview, to: session)
+        attach(authoringPreview, to: session)
+        await drainSessionQueue()
         XCTAssertTrue(capturePreview.previewLayer.session === session)
         XCTAssertTrue(authoringPreview.previewLayer.session === session)
 
         MacCameraPreviewView.dismantleNSView(authoringPreview, coordinator: ())
+        await drainSessionQueue()
         XCTAssertTrue(
             capturePreview.previewLayer.session === session,
             "leaving the authoring screen must not take the preview away from the main capture workflow"
         )
+    }
+
+
+    private let sessionQueue = DispatchQueue(
+        label: "test.camera.session", autoreleaseFrequency: .workItem
+    )
+
+    private func attach(
+        _ view: PreviewView,
+        to session: AVCaptureSession,
+        queue: DispatchQueue? = nil,
+        assignSession: MacCaptureEngine.PreviewAttachment.AssignSession? = nil
+    ) {
+        view.updateSession(ownerID: ObjectIdentifier(session)) { layer in
+            if let assignSession {
+                return MacCaptureEngine.PreviewAttachment(
+                    session: session, sessionQueue: queue ?? sessionQueue,
+                    layer: layer, assignSession: assignSession
+                )
+            }
+            return MacCaptureEngine.PreviewAttachment(
+                session: session, sessionQueue: queue ?? sessionQueue, layer: layer
+            )
+        }
+    }
+
+    private func drainSessionQueue(_ queue: DispatchQueue? = nil) async {
+        await withCheckedContinuation { continuation in
+            (queue ?? sessionQueue).async { continuation.resume() }
+        }
+    }
+
+    /// Models the exact old lock ordering without deliberately deadlocking
+    /// XCTest: tryLock records the old synchronous setter's blocked boundary.
+    /// The worker's release is driven by a main heartbeat, never a timer.
+    func testDismantleReturnsDuringSessionWorkAndMainHeartbeatReleasesConfiguration() async {
+        for phase in ["beginConfiguration", "commitConfiguration", "start", "stop", "reconfigure"] {
+            let session = AVCaptureSession()
+            let view = PreviewView()
+            let probe = PreviewSessionAssignmentProbe()
+            let detached = expectation(description: "detached after \(phase)")
+            attach(view, to: session) { layer, session in
+                if probe.assign(layer, session) && session == nil { detached.fulfill() }
+            }
+            await drainSessionQueue()
+            let heartbeat = DispatchSemaphore(value: 0)
+            await withCheckedContinuation { configurationStarted in
+                sessionQueue.async {
+                    probe.configurationLock.lock()
+                    probe.record("configuration began")
+                    configurationStarted.resume()
+                    heartbeat.wait()
+                    probe.record("configuration finished")
+                    probe.configurationLock.unlock()
+                }
+            }
+            // The original updateSession(nil) reached this setter on main
+            // while configuration held its resource. Detect that ordering,
+            // but do not wait and strand the test runner.
+            XCTAssertFalse(probe.assign(view.previewLayer, nil))
+            XCTAssertEqual(probe.events.last, "old main assignment would block")
+            MacCameraPreviewView.dismantleNSView(view, coordinator: ())
+            probe.record("dismantle returned")
+            DispatchQueue.main.async {
+                probe.record("main heartbeat")
+                heartbeat.signal()
+            }
+            await fulfillment(of: [detached], timeout: 5)
+            await drainSessionQueue()
+            XCTAssertEqual(probe.events, [
+                "attached", "configuration began", "old main assignment would block",
+                "dismantle returned", "main heartbeat", "configuration finished", "detached"
+            ], phase)
+            XCTAssertNil(view.previewLayer.session)
+            XCTAssertFalse(session.isRunning)
+        }
+    }
+
+    func testSupersededQueuedAttachAndDetachAreIgnored() async {
+        let session = AVCaptureSession()
+        let view = PreviewView()
+        let probe = PreviewSessionAssignmentProbe()
+        sessionQueue.suspend()
+        attach(view, to: session, assignSession: { layer, session in probe.assignIgnoringResult(layer, session) })
+        view.detachSession()
+        attach(view, to: session, assignSession: { layer, session in probe.assignIgnoringResult(layer, session) })
+        sessionQueue.resume()
+        await drainSessionQueue()
+        XCTAssertEqual(probe.events, ["attached"], "Only the newest generation may reach AVFoundation")
+        XCTAssertTrue(view.previewLayer.session === session)
+        view.detachSession()
+        await drainSessionQueue()
+    }
+
+    func testTeardownBeforeQueuedAttachDoesNotAttachAnObsoletePreview() async {
+        let session = AVCaptureSession()
+        let view = PreviewView()
+        let probe = PreviewSessionAssignmentProbe()
+        sessionQueue.suspend()
+        attach(view, to: session, assignSession: { layer, session in probe.assignIgnoringResult(layer, session) })
+        MacCameraPreviewView.dismantleNSView(view, coordinator: ())
+        sessionQueue.resume()
+        await drainSessionQueue()
+        XCTAssertTrue(probe.events.isEmpty, "A never-attached layer needs no session mutation")
+        XCTAssertNil(view.previewLayer.session)
+    }
+
+    func testRepeatedAttachAndDetachAreIdempotent() async {
+        let session = AVCaptureSession()
+        let view = PreviewView()
+        let probe = PreviewSessionAssignmentProbe()
+        for _ in 0..<3 { attach(view, to: session, assignSession: { layer, session in probe.assignIgnoringResult(layer, session) }) }
+        await drainSessionQueue()
+        for _ in 0..<3 { view.detachSession() }
+        await drainSessionQueue()
+        XCTAssertEqual(probe.events, ["attached", "detached"])
+    }
+
+    func testDelayedTeardownOfPreviewALeavesPreviewBAttached() async {
+        let session = AVCaptureSession()
+        var previewA: PreviewView? = PreviewView()
+        let previewB = PreviewView()
+        attach(previewA!, to: session)
+        await drainSessionQueue()
+        let layerA = previewA!.previewLayer
+        sessionQueue.suspend()
+        attach(previewB, to: session)
+        MacCameraPreviewView.dismantleNSView(previewA!, coordinator: ())
+        previewA = nil
+        sessionQueue.resume()
+        await drainSessionQueue()
+        await drainSessionQueue() // includes the last handle's queued fallback cleanup
+        XCTAssertNil(layerA.session)
+        XCTAssertTrue(previewB.previewLayer.session === session)
+        previewB.detachSession()
+        await drainSessionQueue()
+    }
+
+    func testNavigationAwayAndBackRestoresTheSameSessionPreview() async {
+        let session = AVCaptureSession()
+        let view = PreviewView()
+        attach(view, to: session)
+        await drainSessionQueue()
+        view.detachSession()
+        await drainSessionQueue()
+        XCTAssertNil(view.previewLayer.session)
+        attach(view, to: session)
+        await drainSessionQueue()
+        XCTAssertTrue(view.previewLayer.session === session)
+        XCTAssertFalse(session.isRunning)
+        view.detachSession()
+        await drainSessionQueue()
+    }
+
+    func testReplacingOwnerUsesANewLayerSoOldCleanupCannotDetachReplacement() async {
+        let sessionA = AVCaptureSession()
+        let sessionB = AVCaptureSession()
+        let queueB = DispatchQueue(label: "test.camera.session.replacement")
+        let view = PreviewView()
+        view.updateGravity(.resizeAspect)
+        attach(view, to: sessionA)
+        await drainSessionQueue()
+        let oldLayer = view.previewLayer
+        sessionQueue.suspend()
+        attach(view, to: sessionB, queue: queueB)
+        await drainSessionQueue(queueB)
+        XCTAssertFalse(view.previewLayer === oldLayer)
+        XCTAssertTrue(view.previewLayer.session === sessionB)
+        XCTAssertEqual(view.previewLayer.videoGravity, .resizeAspect)
+        sessionQueue.resume()
+        await drainSessionQueue()
+        await drainSessionQueue()
+        XCTAssertNil(oldLayer.session)
+        XCTAssertTrue(view.previewLayer.session === sessionB)
+        view.detachSession()
+        await drainSessionQueue(queueB)
+    }
+
+    func testQueuedWorkRetainsLayerAndSessionButNotViewUntilFinalCleanup() async {
+        weak var weakView: PreviewView?
+        weak var weakLayer: AVCaptureVideoPreviewLayer?
+        weak var weakSession: AVCaptureSession?
+        sessionQueue.suspend()
+        autoreleasepool {
+            let session = AVCaptureSession()
+            let view = PreviewView()
+            weakView = view
+            weakLayer = view.previewLayer
+            weakSession = session
+            attach(view, to: session)
+            view.detachSession()
+        }
+        XCTAssertNil(weakView, "Queued work must not retain the NSView")
+        XCTAssertNotNil(weakLayer, "The queued operation must keep its layer alive")
+        XCTAssertNotNil(weakSession)
+        sessionQueue.resume()
+        await drainSessionQueue()
+        await drainSessionQueue()
+        // The view's main-thread layer-tree edits also belong to an implicit
+        // Core Animation transaction. Complete that presentation lifetime,
+        // just as the normal main run loop would, before checking ARC release.
+        autoreleasepool { CATransaction.flush() }
+        XCTAssertNil(weakLayer)
+        XCTAssertNil(weakSession)
+    }
+
+    func testDestructionWithoutDismantleStillDetachesAndReleasesTheSession() async {
+        var view: PreviewView? = PreviewView()
+        var session: AVCaptureSession? = AVCaptureSession()
+        weak var weakSession: AVCaptureSession?
+        weakSession = session
+        attach(view!, to: session!)
+        await drainSessionQueue()
+        let layer = view!.previewLayer
+        XCTAssertTrue(layer.session === session)
+        autoreleasepool { view = nil; session = nil }
+        await drainSessionQueue()
+        XCTAssertNil(layer.session)
+        XCTAssertNil(weakSession)
     }
 
     // MARK: - Reference Authoring uses the engine's own session
@@ -113,7 +339,7 @@ final class MacCameraPreviewViewTests: XCTestCase {
             // change — the panel moved below the Record controls on
             // 2026-09-05 and a whitespace-sensitive literal broke with it.
             source.contains("MacCameraPreviewView(")
-                && source.contains("session: captureEngine.captureSession"),
+                && source.contains("captureEngine: captureEngine"),
             "The authoring preview must render the engine's existing session, not one of its own."
         )
         XCTAssertFalse(
@@ -308,5 +534,39 @@ final class MacCameraPreviewViewTests: XCTestCase {
             source.contains("#if DEBUG\n/// Compact, bounded, read-only counters"),
             "the diagnostics view itself must compile out of Release"
         )
+    }
+}
+
+
+/// Per-test model of the session's configuration resource. There is no actual
+/// blocking setter: a contended main-thread attempt is an observed failure of
+/// the old ordering. Queue barriers control the release in the executable test.
+private final class PreviewSessionAssignmentProbe: @unchecked Sendable {
+    let configurationLock = NSLock()
+    private let eventLock = NSLock()
+    private var recordedEvents: [String] = []
+
+    var events: [String] { eventLock.withLock { recordedEvents } }
+
+    func record(_ event: String) {
+        eventLock.withLock { recordedEvents.append(event) }
+    }
+
+    @discardableResult
+    func assign(_ layer: AVCaptureVideoPreviewLayer, _ session: AVCaptureSession?) -> Bool {
+        guard configurationLock.try() else {
+            record(Thread.isMainThread ? "old main assignment would block" : "unexpected worker contention")
+            return false
+        }
+        defer { configurationLock.unlock() }
+        guard layer.session !== session else { return false }
+        XCTAssertFalse(Thread.isMainThread, "AVFoundation association must run on the session owner")
+        layer.session = session
+        record(session == nil ? "detached" : "attached")
+        return true
+    }
+
+    func assignIgnoringResult(_ layer: AVCaptureVideoPreviewLayer, _ session: AVCaptureSession?) {
+        assign(layer, session)
     }
 }

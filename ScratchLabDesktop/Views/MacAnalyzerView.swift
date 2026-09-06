@@ -1909,7 +1909,7 @@ struct MacAnalyzerView: View {
 
                 ZStack {
                     MacCameraPreviewView(
-                        session: captureEngine.captureSession,
+                        captureEngine: captureEngine,
                         videoGravity: .resizeAspect
                     )
 
@@ -4362,7 +4362,7 @@ struct MacAnalyzerView: View {
 
             ZStack(alignment: .bottom) {
                 MacCameraPreviewView(
-                    session: captureEngine.captureSession,
+                    captureEngine: captureEngine,
                     videoGravity: .resizeAspect
                 )
                 .aspectRatio(16.0 / 9.0, contentMode: .fit)
@@ -4505,7 +4505,7 @@ struct MacAnalyzerView: View {
             // own existing calibration editor — all three share the exact
             // same `captureEngine.zoneAdjustments`/`calibrationLocked` state.
             ZStack(alignment: .topTrailing) {
-                MacCameraPreviewView(session: captureEngine.captureSession, videoGravity: videoGravity)
+                MacCameraPreviewView(captureEngine: captureEngine, videoGravity: videoGravity)
                 CalibrationCameraOverlay(captureEngine: captureEngine)
             }
         }
@@ -9748,7 +9748,7 @@ struct MacAnalyzerView: View {
             }
             if showCameraPassthrough {
                 CameraPassthroughNotationView(
-                    captureSession: captureEngine.captureSession,
+                    captureEngine: captureEngine,
                     snapshot: currentRoutineNotationSnapshot
                 )
                 .frame(minHeight: 360)
@@ -14199,7 +14199,7 @@ struct MacPerformerMonitorView: View {
             }
 
             ZStack(alignment: .topLeading) {
-                MacCameraPreviewView(session: captureEngine.captureSession)
+                MacCameraPreviewView(captureEngine: captureEngine)
                     .overlay(Color.black.opacity(0.08))
 
                 if captureEngine.showRigGuides {
