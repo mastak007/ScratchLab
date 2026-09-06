@@ -14,10 +14,10 @@ enum LiveNotationOverlayDrawMode {
 
 /// Motion-style live notation overlay.
 ///
-/// F/B pairs are drawn as **connected diagonal lines** — F rises from
-/// baseline to the pair amplitude turning point, B mirrors back from
-/// that same point to baseline.  The final forward let-go is a gold
-/// release line.  No per-stroke text labels, no boundary dots.
+/// Controller F/B neighbours share a turnaround time but retain independent
+/// physical excursions. Other sources preserve their connected pair amplitude.
+/// The final forward let-go is a gold release line. No per-stroke text labels,
+/// no boundary dots.
 ///
 /// An optional beat grid can be drawn behind the strokes.
 struct LiveNotationOverlayView: View {
@@ -191,7 +191,12 @@ struct LiveNotationOverlayView: View {
         /// Capped travel fraction — limits stroke height to `maximumAmplitude`
         /// so Baby Scratch reads as a compact centre-band rather than full-height.
         func travelFor(_ event: CaptureCore.DetectedNotationRecordMovementEvent) -> CGFloat {
-            min(cap, CGFloat(CapturedNotationStrokeGeometry.travelFraction(for: event)))
+            CGFloat(
+                LiveNotationOverlayStrokeGeometry.cappedTravel(
+                    for: event,
+                    maximumAmplitude: Double(cap)
+                )
+            )
         }
 
         // Process events in F/B pairs
@@ -240,14 +245,19 @@ struct LiveNotationOverlayView: View {
                 i += 1
 
             } else if pairUp {
-                // F/B pair: connected V-shaped diagonal lines
+                // F/B neighbours: same reversal time, independent excursion.
                 let f = e0; let b = events[i+1]
                 let f_ts = f.startTime; let b_te = b.endTime
                 let turnPoint = b.startTime // F ends here, B starts here
                 guard b_te > f_ts, turnPoint > f_ts, b_te > turnPoint else { i += 2; continue }
 
-                let travel = travelFor(f)
-                let peak = baseline - travel * maxBand
+                let travels = LiveNotationOverlayStrokeGeometry.pairedTravels(
+                    forward: f,
+                    backward: b,
+                    maximumAmplitude: Double(cap)
+                )
+                let forwardPeak = baseline - CGFloat(travels.forward) * maxBand
+                let backwardPeak = baseline - CGFloat(travels.backward) * maxBand
 
                 let x_fs = xForTime(f_ts, rangeMin: rangeMin, visibleDuration: visibleDuration, width: size.width)
                 let x_tp = xForTime(turnPoint, rangeMin: rangeMin, visibleDuration: visibleDuration, width: size.width)
@@ -270,10 +280,10 @@ struct LiveNotationOverlayView: View {
                 if drawMode == .replayReveal, fActive {
                     let prog = CGFloat((currentTime - f_ts) / (turnPoint - f_ts))
                     let cx = x_fs + (x_tp - x_fs) * prog
-                    let cy = baseline - (baseline - peak) * prog
+                    let cy = baseline - (baseline - forwardPeak) * prog
                     fPath.addLine(to: CGPoint(x: cx, y: cy))
                 } else {
-                    fPath.addLine(to: CGPoint(x: x_tp, y: peak))
+                    fPath.addLine(to: CGPoint(x: x_tp, y: forwardPeak))
                 }
                 context.stroke(fPath, with: .color(fColor.opacity(fAlpha)), lineWidth: 3.0)
 
@@ -283,11 +293,11 @@ struct LiveNotationOverlayView: View {
                 else if bFuture { bColor = Color(white: 0.45); bAlpha = 0.40 }
                 else { bColor = backColor; bAlpha = 0.48 }
 
-                var bPath = Path(); bPath.move(to: CGPoint(x: x_tp, y: peak))
+                var bPath = Path(); bPath.move(to: CGPoint(x: x_tp, y: backwardPeak))
                 if drawMode == .replayReveal, bActive {
                     let prog = CGFloat((currentTime - turnPoint) / (b_te - turnPoint))
                     let cx = x_tp + (x_be - x_tp) * prog
-                    let cy = peak + (baseline - peak) * prog
+                    let cy = backwardPeak + (baseline - backwardPeak) * prog
                     bPath.addLine(to: CGPoint(x: cx, y: cy))
                 } else {
                     bPath.addLine(to: CGPoint(x: x_be, y: baseline))

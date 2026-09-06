@@ -414,6 +414,14 @@ public final class TimecodeControlPipeline: ObservableObject, @unchecked Sendabl
         set { updateConfiguration { $0.signalThresholdRMS = newValue } }
     }
 
+    /// Carrier frequency used by the decoder's speed denominator in Hertz.
+    /// Serato-class presets keep this at 1000. Traktor presets can override
+    /// it to 1200 via profile selection.
+    public var carrierFrequencyHz: Float {
+        get { currentConfigurationSnapshot().carrierFrequencyHz }
+        set { updateConfiguration { $0.carrierFrequencyHz = newValue } }
+    }
+
     /// Dead-band around zero for `currentDirection` sign decisions, in the
     /// same position-units/second domain as `currentRate`. Below this
     /// magnitude, the previous `currentDirection` is held rather than
@@ -468,9 +476,10 @@ public final class TimecodeControlPipeline: ObservableObject, @unchecked Sendabl
 
     // MARK: - Configuration state
 
-    /// The eight pipeline-configuration values (`liveTapEnabled`, `mode`,
+    /// The nine pipeline-configuration values (`liveTapEnabled`, `mode`,
     /// `invertDirection`, `rateScale`, `inputChannel`, `minConfidence`,
-    /// `maxRate`, `signalThresholdRMS`) published as one coherent unit,
+    /// `maxRate`, `signalThresholdRMS`, `carrierFrequencyHz`) published as one
+    /// coherent unit,
     /// mirroring `OutputState` below. `pushStereoBuffer` and `flushDecode`
     /// capture this exactly once via `captureConfigurationForOperation()`
     /// — *after* acquiring `processingLock`, never before — and use only
@@ -491,6 +500,7 @@ public final class TimecodeControlPipeline: ObservableObject, @unchecked Sendabl
         var minConfidence: Double = 0.3
         var maxRate: Double = 5.0
         var signalThresholdRMS: Float = 0.001
+        var carrierFrequencyHz: Float = 1000
     }
 
     /// Guards the single published `_publishedConfiguration` snapshot.
@@ -560,7 +570,7 @@ public final class TimecodeControlPipeline: ObservableObject, @unchecked Sendabl
 
     /// Reads the currently published configuration snapshot. Cheap: only
     /// takes `configurationLock` for the duration of a struct copy. Used
-    /// directly by the eight property getters above (each an independent,
+    /// directly by the public property getters above (each an independent,
     /// internally-coherent read, exactly like the `OutputState` getters
     /// below) and by `captureConfigurationForOperation()`.
     private func currentConfigurationSnapshot() -> ConfigurationState {
@@ -617,25 +627,29 @@ public final class TimecodeControlPipeline: ObservableObject, @unchecked Sendabl
         if changed { sendChangeNotification() }
     }
 
-    /// Atomically applies the five calibration values a
+    /// Atomically applies the calibration values a
     /// `TimecodePrototypeProfile` controls (`inputChannel`,
-    /// `invertDirection`, `rateScale`, `minConfidence`, `maxRate`) as a
+    /// `invertDirection`, `rateScale`, `minConfidence`, `maxRate`,
+    /// `carrierFrequencyHz`) as a
     /// single configuration swap, matching `TimecodePrototypeProfile.
-    /// apply(to:)`'s "atomically" documentation — which five sequential
+    /// apply(to:)`'s "atomically" documentation — which six sequential
     /// `@Published` assignments did not actually provide, since each was
     /// independently visible and independently notified the instant it
     /// was set. A pipeline operation that captures its configuration
     /// snapshot concurrently therefore observes either the complete old
-    /// set of five values or the complete new set, never a mixture (e.g.
+    /// set of values or the complete new set, never a mixture (e.g.
     /// one profile's `invertDirection` paired with another profile's
-    /// `minConfidence`). Does not touch `mode` or `liveTapEnabled`,
-    /// matching `apply(to:)`'s existing scope.
+    /// `minConfidence`). Includes `carrierFrequencyHz` so profile changes
+    /// cannot be observed mid-write by a concurrent pipeline operation.
+    /// Does not touch `mode` or `liveTapEnabled`, matching `apply(to:)`'s
+    /// existing scope.
     public func applyCalibrationBatch(
         inputChannel: TimecodeInputChannel,
         invertDirection: Bool,
         rateScale: Double,
         minConfidence: Double,
-        maxRate: Double
+        maxRate: Double,
+        carrierFrequencyHz: Float = 1000
     ) {
         updateConfiguration {
             $0.inputChannel = inputChannel
@@ -643,6 +657,7 @@ public final class TimecodeControlPipeline: ObservableObject, @unchecked Sendabl
             $0.rateScale = rateScale
             $0.minConfidence = minConfidence
             $0.maxRate = maxRate
+            $0.carrierFrequencyHz = carrierFrequencyHz
         }
     }
 
@@ -850,12 +865,12 @@ public final class TimecodeControlPipeline: ObservableObject, @unchecked Sendabl
     private static let maximumPendingLiveAudioDuration: TimeInterval = 0.2
 
     /// Internal decoder instance, built from the `signalThresholdRMS`
-    /// captured in a pipeline operation's own `ConfigurationState`
-    /// snapshot (never the live property getter — see `ConfigurationState`'s
-    /// doc comment).
-    private func decoder(signalThresholdRMS: Float) -> TimecodePhaseDecoder {
+    /// and `carrierFrequencyHz` captured in a pipeline operation's own
+    /// `ConfigurationState` snapshot (never the live property getter — see
+    /// `ConfigurationState`'s doc comment).
+    private func decoder(signalThresholdRMS: Float, carrierFrequencyHz: Float) -> TimecodePhaseDecoder {
         TimecodePhaseDecoder(
-            carrierFrequency: 1000,
+            carrierFrequency: carrierFrequencyHz,
             silenceThresholdRMS: signalThresholdRMS,
             clippingThreshold: 0.999,
             minCorrelationMagnitude: 0.1
@@ -1176,7 +1191,10 @@ public final class TimecodeControlPipeline: ObservableObject, @unchecked Sendabl
         }
 
         // Run decoder
-        let decoderInstance = decoder(signalThresholdRMS: config.signalThresholdRMS)
+        let decoderInstance = decoder(
+            signalThresholdRMS: config.signalThresholdRMS,
+            carrierFrequencyHz: config.carrierFrequencyHz
+        )
         let decodeResult = decoderInstance.decode(inputs)
 
         // Transfer decoder counters into pipeline counters

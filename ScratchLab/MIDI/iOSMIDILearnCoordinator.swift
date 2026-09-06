@@ -11,6 +11,10 @@ final class IOSMIDILearnCoordinator: ObservableObject {
     @Published private(set) var feedback = ""
     @Published private(set) var selectedDeviceName: String?
 
+    /// Keeps the live iOS dispatcher synchronized after any persisted mapping
+    /// mutation. The app installs this callback once at its composition root.
+    var onMappingChanged: ((String?) -> Void)?
+
     private let store: MIDILearnedMappingStore
     private var selectedDeviceID: String?
 
@@ -27,7 +31,15 @@ final class IOSMIDILearnCoordinator: ObservableObject {
         feedback = ""
         selectedDeviceID = id
         selectedDeviceName = name
-        currentMapping = store.load(deviceIdentifier: id)
+        var mapping = store.load(deviceIdentifier: id)
+        if var savedMapping = mapping,
+           RaneOneMKIIVerifiedLearnedMapping.matches(deviceName: name),
+           savedMapping.restoreMissingAssignedHotCueSamples() {
+            store.save(savedMapping)
+            mapping = savedMapping
+        }
+        currentMapping = mapping
+        onMappingChanged?(id)
     }
 
     func clearDeviceSelection() {
@@ -36,6 +48,7 @@ final class IOSMIDILearnCoordinator: ObservableObject {
         feedback = ""
         selectedDeviceID = nil
         selectedDeviceName = nil
+        onMappingChanged?(nil)
     }
 
     func startLearning(_ action: MIDISemanticAction) {
@@ -63,6 +76,10 @@ final class IOSMIDILearnCoordinator: ObservableObject {
         let controlNumber = learnedType == .controlChange
             ? Int(message.controlNumber)
             : Int(message.noteNumber)
+        let preservedSampleID = currentMapping?.control(for: action)?.assignedSampleID
+        let defaultSampleID = RaneOneMKIIVerifiedLearnedMapping.matches(deviceName: deviceName)
+            ? RaneOneMKIIVerifiedLearnedMapping.defaultSampleID(for: action)
+            : nil
         let control = MIDILearnedControl(
             action: action,
             messageType: learnedType,
@@ -72,7 +89,7 @@ final class IOSMIDILearnCoordinator: ObservableObject {
             minValue: 0,
             maxValue: 127,
             inverted: false,
-            assignedSampleID: currentMapping?.control(for: action)?.assignedSampleID,
+            assignedSampleID: preservedSampleID ?? defaultSampleID,
             learnedAt: Date(),
             isVerified: true,
             curveConfig: nil
@@ -88,8 +105,33 @@ final class IOSMIDILearnCoordinator: ObservableObject {
         mapping.upsert(control)
         store.save(mapping)
         currentMapping = mapping
+        onMappingChanged?(deviceID)
         activeAction = nil
         feedback = "Learned \(control.displayName)."
+    }
+
+    /// Installs the hardware values already verified for Rane ONE MKII and
+    /// restores ScratchLab's local samples to the right-deck hot cues.
+    func applyVerifiedRaneOneMKIIMapping() {
+        guard let deviceID = selectedDeviceID, let deviceName = selectedDeviceName else {
+            feedback = "Connect one Rane ONE MKII MIDI source before applying its mapping."
+            return
+        }
+
+        var mapping = currentMapping
+            ?? MIDIDeviceMapping(deviceIdentifier: deviceID, deviceName: deviceName)
+        RaneOneMKIIVerifiedLearnedMapping.apply(
+            to: &mapping,
+            overwriteExisting: true,
+            assignsScratchLabSamples: true
+        )
+
+        mapping.deviceName = deviceName
+        store.save(mapping)
+        currentMapping = mapping
+        activeAction = nil
+        feedback = "Applied verified Rane ONE MKII mapping. Local sample playback follows Audio Ownership."
+        onMappingChanged?(deviceID)
     }
 
     func clear(_ action: MIDISemanticAction) {
@@ -102,12 +144,14 @@ final class IOSMIDILearnCoordinator: ObservableObject {
             store.save(mapping)
             currentMapping = mapping
         }
+        onMappingChanged?(deviceID)
         if activeAction == action { activeAction = nil }
         feedback = "Cleared \(action.displayName)."
     }
 
     func assignSample(_ sampleID: String?, to action: MIDISemanticAction) {
         guard action.hotCueIndex != nil,
+              let deviceID = selectedDeviceID,
               var mapping = currentMapping,
               let existing = mapping.control(for: action) else { return }
         let normalized = sampleID?.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -128,6 +172,7 @@ final class IOSMIDILearnCoordinator: ObservableObject {
         mapping.upsert(updated)
         store.save(mapping)
         currentMapping = mapping
+        onMappingChanged?(deviceID)
         feedback = updated.assignedSampleID.map {
             "Assigned \($0) to \(action.displayName)."
         } ?? "Removed the sample from \(action.displayName)."

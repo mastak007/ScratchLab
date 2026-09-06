@@ -31,6 +31,8 @@
 		<string>_scrcamfeed._tcp</string>
 		<string>_scrmonfeed._tcp</string>
 	</array>
+	<key>NSAudioCaptureUsageDescription</key>
+	<string>ScratchLab records the audio your DJ app is playing so each take's scratch audio lines up with its video. Audio stays on this Mac unless you export it yourself.</string>
 	<key>NSCameraUsageDescription</key>
 	<string>ScratchLab uses the camera to frame the deck view, align deck calibration, and record routine captures.</string>
 	<key>NSLocalNetworkUsageDescription</key>

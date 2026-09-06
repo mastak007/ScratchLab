@@ -3,7 +3,7 @@ import AVFoundation
 import AppKit
 
 struct MacCameraPreviewView: NSViewRepresentable {
-    let session: AVCaptureSession
+    let captureEngine: MacCaptureEngine
     /// Defaults to `.resizeAspectFill` — every pre-existing call site keeps
     /// its current cropped-fill behavior unchanged. Practice's live camera
     /// passes `.resizeAspect` so the full frame is visible (letterboxed
@@ -12,13 +12,13 @@ struct MacCameraPreviewView: NSViewRepresentable {
 
     func makeNSView(context: Context) -> PreviewView {
         let view = PreviewView()
-        view.updateSession(session)
+        view.updateSession(captureEngine)
         view.updateGravity(videoGravity)
         return view
     }
 
     func updateNSView(_ nsView: PreviewView, context: Context) {
-        nsView.updateSession(session)
+        nsView.updateSession(captureEngine)
         // Re-applied on every update, not only at construction — SwiftUI can
         // call `updateNSView` when the capture session changes or the view
         // re-renders, and the gravity must survive that, not just the
@@ -27,14 +27,17 @@ struct MacCameraPreviewView: NSViewRepresentable {
     }
 
     static func dismantleNSView(_ nsView: PreviewView, coordinator: ()) {
-        nsView.updateSession(nil)
+        nsView.detachSession()
     }
 }
 
+@MainActor
 final class PreviewView: NSView {
     override var wantsUpdateLayer: Bool { true }
 
-    let previewLayer = AVCaptureVideoPreviewLayer()
+    private(set) var previewLayer = AVCaptureVideoPreviewLayer()
+    private var sessionOwnerID: ObjectIdentifier?
+    private var attachment: MacCaptureEngine.PreviewAttachment?
 
     override init(frame frameRect: NSRect) {
         super.init(frame: frameRect)
@@ -48,9 +51,37 @@ final class PreviewView: NSView {
         fatalError("init(coder:) has not been implemented")
     }
 
-    func updateSession(_ session: AVCaptureSession?) {
-        guard previewLayer.session !== session else { return }
-        previewLayer.session = session
+    func updateSession(_ engine: MacCaptureEngine) {
+        updateSession(ownerID: ObjectIdentifier(engine.captureSession), makeAttachment: engine.makePreviewAttachment)
+    }
+
+    /// The factory binds each layer to its session owner. The internal seam
+    /// also lets tests exercise the real queue ordering without opening devices.
+    func updateSession(
+        ownerID: ObjectIdentifier,
+        makeAttachment: (AVCaptureVideoPreviewLayer) -> MacCaptureEngine.PreviewAttachment
+    ) {
+        if sessionOwnerID != ownerID {
+            attachment?.setAttached(false)
+            if sessionOwnerID != nil {
+                // A different owner gets a different layer. Old queued cleanup
+                // can therefore never detach the replacement owner's preview.
+                let gravity = previewLayer.videoGravity
+                previewLayer.removeFromSuperlayer()
+                previewLayer = AVCaptureVideoPreviewLayer()
+                previewLayer.videoGravity = gravity
+                layer?.addSublayer(previewLayer)
+                needsLayout = true
+            }
+            sessionOwnerID = ownerID
+            attachment = makeAttachment(previewLayer)
+        }
+        attachment?.setAttached(true)
+    }
+
+    func detachSession() {
+        // No AVFoundation access here, including no synchronous session getter.
+        attachment?.setAttached(false)
     }
 
     func updateGravity(_ gravity: AVLayerVideoGravity) {

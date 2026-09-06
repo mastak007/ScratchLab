@@ -5,11 +5,158 @@
 // Thread-safe via os_unfair_lock. No audio/MIDI dependency.
 // No scoring. No routing.
 //
-// Rane ONE MKII: CC6 ±1 per event, ~3932 steps/rev, ~800–935 Hz update.
+// Rane ONE MKII: CC6 ±1 per event, ~800–935 Hz update.
 // Two independent decks: ch=0 (left), ch=1 (right).
 
 import Foundation
 import os
+
+/// Explicit coordinate semantics for platter motion.
+///
+/// Notation and sample playback deliberately consume different coordinates:
+/// a committed notation stroke is local to that stroke, while sample playback
+/// follows the full signed displacement from the hot-cue origin. Keeping both
+/// transforms here, beside the raw ring-counter tracker, prevents presentation
+/// code from accidentally reusing the audio clock's accumulated motor phase.
+enum PlatterCoordinateSemantics {
+    /// Direct-MIDI RANE ONE MKII resolution measured from powered-rotation
+    /// hardware runs. The older 3,932-step value belongs to the DVS/timecode
+    /// calibration and must not scale direct CC6 gesture travel.
+    static let raneOneMKIIDirectMIDIStepsPerRevolution: Double = 3_600
+
+    struct GestureRelativeCoordinates: Equatable, Sendable {
+        let startPosition: Double
+        let endPosition: Double
+        /// Unsigned physical travel as a fraction of one platter revolution.
+        /// Deliberately unbounded: a multi-revolution run remains > 1 rather
+        /// than being clamped or rescaled by later motion.
+        let excursion: Double
+    }
+
+    /// Rebase one decoder-committed directional run onto the notation baseline.
+    /// Forward rises from baseline; backward returns to baseline. Direction,
+    /// timing, and the run's real excursion are retained without consulting any
+    /// earlier/later motor phase or inventing another gesture detector.
+    static func gestureRelativeNotation(
+        signedDisplacementSteps: Double,
+        stepsPerRevolution: Double = raneOneMKIIDirectMIDIStepsPerRevolution
+    ) -> GestureRelativeCoordinates {
+        guard signedDisplacementSteps.isFinite,
+              stepsPerRevolution.isFinite,
+              stepsPerRevolution > 0 else {
+            return GestureRelativeCoordinates(
+                startPosition: 0,
+                endPosition: 0,
+                excursion: 0
+            )
+        }
+
+        let excursion = abs(signedDisplacementSteps) / stepsPerRevolution
+        if signedDisplacementSteps < 0 {
+            return GestureRelativeCoordinates(
+                startPosition: excursion,
+                endPosition: 0,
+                excursion: excursion
+            )
+        }
+        return GestureRelativeCoordinates(
+            startPosition: 0,
+            endPosition: excursion,
+            excursion: excursion
+        )
+    }
+
+    /// Raw signed, unwrapped sample displacement from the hot-cue origin.
+    /// No modulo, normalization, or clamp is allowed here: negative and
+    /// past-end positions are required by the waveform's BEFORE START / PAST
+    /// END states and by the audio renderer's authoritative playhead.
+    static func samplePosition(
+        rawSignedPosition: Double,
+        hotCueOrigin: Double
+    ) -> Double {
+        rawSignedPosition - hotCueOrigin
+    }
+}
+
+/// Pure presentation projection for the renderer's signed, unwrapped sample
+/// position. Audio remains free to wrap inside the renderer; this projection
+/// never does, so moving backward through the hot-cue origin cannot appear at
+/// the end of the waveform and forward travel past the content cannot appear
+/// back at its start.
+struct PlatterSamplePositionProjection: Equatable, Sendable {
+    enum Region: Equatable, Sendable {
+        case unloaded
+        case cue
+        case start
+        case middle
+        case end
+        case beforeStart
+        case pastEnd
+    }
+
+    let framePosition: Double
+    let positionSeconds: TimeInterval
+    let progress: Double
+    let region: Region
+
+    var pastEndOvershootSeconds: TimeInterval {
+        guard region == .pastEnd else { return 0 }
+        return max(0, positionSeconds - durationSeconds)
+    }
+
+    private let durationSeconds: TimeInterval
+
+    static func resolve(
+        framePosition: Double,
+        contentFrameCount: Int,
+        sampleRate: Double,
+        cueToleranceSeconds: TimeInterval = 0.005
+    ) -> PlatterSamplePositionProjection {
+        guard framePosition.isFinite,
+              contentFrameCount > 0,
+              sampleRate.isFinite,
+              sampleRate > 0,
+              cueToleranceSeconds.isFinite,
+              cueToleranceSeconds >= 0 else {
+            return PlatterSamplePositionProjection(
+                framePosition: 0,
+                positionSeconds: 0,
+                progress: 0,
+                region: .unloaded,
+                durationSeconds: 0
+            )
+        }
+
+        let contentFrames = Double(contentFrameCount)
+        let positionSeconds = framePosition / sampleRate
+        let durationSeconds = contentFrames / sampleRate
+        let progress = min(max(framePosition / contentFrames, 0), 1)
+        let toleranceFrames = max(1, sampleRate * cueToleranceSeconds)
+
+        let region: Region
+        if framePosition < -toleranceFrames {
+            region = .beforeStart
+        } else if framePosition > contentFrames + toleranceFrames {
+            region = .pastEnd
+        } else if abs(framePosition) <= toleranceFrames {
+            region = .cue
+        } else if progress < 1.0 / 3.0 {
+            region = .start
+        } else if progress < 2.0 / 3.0 {
+            region = .middle
+        } else {
+            region = .end
+        }
+
+        return PlatterSamplePositionProjection(
+            framePosition: framePosition,
+            positionSeconds: positionSeconds,
+            progress: progress,
+            region: region,
+            durationSeconds: durationSeconds
+        )
+    }
+}
 
 /// Accumulated platter position from CC6 ring-counter events, per deck.
 /// Thread-safe. Call `ingest(channel:value:)` from the MIDI receive thread

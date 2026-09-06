@@ -153,6 +153,16 @@ final class CompanionCameraBroadcaster: NSObject, ObservableObject {
     @Published private(set) var isStorageReady = true
     @Published private(set) var nextTakeNumberPreview = 1
     @Published private(set) var pendingWatchControlCommand: WatchControlCommandEvent?
+    /// Delivers a Mac control command straight to the relay, without waiting
+    /// for a SwiftUI view to notice `pendingWatchControlCommand` changed.
+    ///
+    /// Every other relay concern here is already a direct closure. This one was
+    /// the exception, routed through an `.onChange` in the app's view body, so
+    /// capture control depended on the view-update cycle: a take whose command
+    /// arrived while that view was not updating forwarded nothing, and the Mac
+    /// saw an unexplained timeout in both directions with no watch motion at
+    /// all. Delivery must not depend on rendering.
+    var onWatchControlCommand: ((WatchCaptureCommandPayload) -> Void)?
     var onWatchCaptureAcknowledged: ((UUID) -> Void)?
     var recordingSessionID = CaptureCore.LocalRecordingNaming.sessionID() {
         didSet {
@@ -161,6 +171,11 @@ final class CompanionCameraBroadcaster: NSObject, ObservableObject {
         }
     }
     var recordingSessionConfig: CaptureSessionConfig?
+    /// Optional Watch request that belongs to the next local recording. The
+    /// request is folded into the initial sidecar on the capture queue so a
+    /// linked Watch start can never be reported later as `notRequested`.
+    var recordingWatchRequest: WatchCaptureCommandPayload?
+    private var recordingWatchReply: WatchCaptureControlReply?
 
     let captureSession = AVCaptureSession()
 
@@ -169,11 +184,20 @@ final class CompanionCameraBroadcaster: NSObject, ObservableObject {
     private lazy var session = MCSession(peer: peerID, securityIdentity: nil, encryptionPreference: .required)
     private lazy var advertiser = MCNearbyServiceAdvertiser(
         peer: peerID,
-        discoveryInfo: ["role": "camera"],
+        discoveryInfo: ["role": "companion"],
         serviceType: serviceType
     )
 
     private let captureQueue = DispatchQueue(label: "scratchlab.companion.capture")
+    /// Control-plane sends to the Mac: watch status, availability, relay
+    /// lifecycle.
+    ///
+    /// Deliberately NOT `captureQueue`. That queue is also the video output's
+    /// sample-buffer delegate queue, so anything dispatched to it waits behind
+    /// every camera frame. Relaying the watch's stop acknowledgement on it put
+    /// that acknowledgement behind the video pipeline and is why the Mac's stop
+    /// handshake timed out while the watch had in fact already stopped.
+    private let controlQueue = DispatchQueue(label: "scratchlab.companion.control")
     private let videoOutput = AVCaptureVideoDataOutput()
     private let movieOutput = AVCaptureMovieFileOutput()
     private let ciContext = CIContext()
@@ -190,6 +214,8 @@ final class CompanionCameraBroadcaster: NSObject, ObservableObject {
     private var activeRecordingURL: URL?
     private var activeRecordingSidecar: CaptureCore.LocalRecordingSidecar?
     private var activeRecordingSidecarURL: URL?
+    private var pendingRecordingFinalizations: [(RecordingSummary?) -> Void] = []
+    private var stopRequestedWhileRecordingStarts = false
     private var rotationCoordinator: AVCaptureDevice.RotationCoordinator?
     private var rotationAngleObservation: NSKeyValueObservation?
 
@@ -251,7 +277,7 @@ final class CompanionCameraBroadcaster: NSObject, ObservableObject {
     }
 
     func toggleRecording() {
-        isRecording ? stopRecording() : startRecording()
+        isRecording ? stopRecording(onFinalized: nil) : startRecording()
     }
 
     func beginRecording(captureTiming: CaptureTimingMetadata? = nil) {
@@ -259,7 +285,15 @@ final class CompanionCameraBroadcaster: NSObject, ObservableObject {
     }
 
     func endRecording() {
-        stopRecording()
+        stopRecording(onFinalized: nil)
+    }
+
+    /// Stops the exact local recording currently owned by the movie output
+    /// and completes only after its media + sidecar finalization callback has
+    /// run. The completion is delivered on the main queue so capture UI state
+    /// does not depend solely on a separately published observation.
+    func endRecording(onFinalized: @escaping (RecordingSummary?) -> Void) {
+        stopRecording(onFinalized: onFinalized)
     }
 
     func validateStorageLocation() -> Bool {
@@ -295,6 +329,12 @@ final class CompanionCameraBroadcaster: NSObject, ObservableObject {
             }
             if FileManager.default.fileExists(atPath: summary.sidecarURL.path) {
                 try FileManager.default.removeItem(at: summary.sidecarURL)
+            }
+            let scratchAudioURL = summary.sidecarURL
+                .deletingPathExtension()
+                .appendingPathExtension("wav")
+            if FileManager.default.fileExists(atPath: scratchAudioURL.path) {
+                try FileManager.default.removeItem(at: scratchAudioURL)
             }
 
             DispatchQueue.main.async {
@@ -341,10 +381,80 @@ final class CompanionCameraBroadcaster: NSObject, ObservableObject {
         }
     }
 
+    func sendWatchMotionBatch(_ batch: WatchMotionRelayBatch) {
+        captureQueue.async {
+            guard !self.session.connectedPeers.isEmpty,
+                  let encoded = try? PropertyListEncoder().encode(batch) else { return }
+            do {
+                // Five small batches per second is low enough for reliable delivery, and a
+                // missing sequence prevents the Mac assembler from producing an exportable
+                // Watch artifact. Capture integrity is more important than shaving latency.
+                try self.session.send(encoded, toPeers: self.session.connectedPeers, with: .reliable)
+            } catch {
+                DispatchQueue.main.async {
+                    self.connectionStatus = "Live watch motion relay was interrupted."
+                }
+            }
+        }
+    }
+
+    func sendWatchRelayLifecycle(
+        _ event: WatchRelayLifecycleEvent,
+        context: WatchRelayTakeContext?,
+        detail: String?
+    ) {
+        controlQueue.async {
+            guard !self.session.connectedPeers.isEmpty else { return }
+            let packet = WatchRelayLifecyclePacket(event: event, context: context, detail: detail)
+            guard let encoded = try? PropertyListEncoder().encode(packet) else { return }
+            try? self.session.send(encoded, toPeers: self.session.connectedPeers, with: .reliable)
+        }
+    }
+
+    /// Persists finalized controller/notation evidence into the exact sidecar
+    /// represented by `summary`, returning the matching in-memory summary for
+    /// Guided Capture review/export. The write is atomic and intentionally
+    /// fails to the caller instead of silently exporting a stale sidecar.
+    func persistingDetectedNotation(
+        _ detectedNotation: CaptureCore.DetectedNotationSnapshot?,
+        in summary: RecordingSummary
+    ) throws -> RecordingSummary {
+        let updatedSidecar = summary.sidecar.withDetectedNotation(detectedNotation)
+        try writeRecordingSidecar(updatedSidecar, to: summary.sidecarURL)
+        return RecordingSummary(
+            mediaURL: summary.mediaURL,
+            sidecarURL: summary.sidecarURL,
+            sidecar: updatedSidecar,
+            statusMessage: summary.statusMessage
+        )
+    }
+
+    /// Records the Watch's acknowledgement/failure against the active take.
+    /// The reply is retained on the capture queue so it is also applied when it
+    /// arrives just before `prepareRecording` has created the initial sidecar.
+    func recordWatchControlReply(_ reply: WatchCaptureControlReply) {
+        captureQueue.async {
+            self.recordingWatchReply = reply
+            guard var sidecar = self.activeRecordingSidecar,
+                  sidecar.sessionID == reply.sessionID,
+                  sidecar.takeID == reply.takeID else { return }
+            sidecar = sidecar.withWatchSync(reply)
+            guard let sidecarURL = self.activeRecordingSidecarURL else { return }
+            do {
+                try self.writeRecordingSidecar(sidecar, to: sidecarURL)
+                self.activeRecordingSidecar = sidecar
+            } catch {
+                DispatchQueue.main.async {
+                    self.recordingStatus = "Watch sync status could not be saved with this take."
+                }
+            }
+        }
+    }
+
     /// Relays the local WCSession's live view of the watch (paired / installed / reachable) to
     /// the Mac, so macOS never has to (and never does) infer reachability merely from pairing.
     func sendWatchAvailability(isPaired: Bool, isInstalled: Bool, isReachable: Bool) {
-        captureQueue.async {
+        controlQueue.async {
             guard !self.session.connectedPeers.isEmpty else { return }
             let packet = WatchAvailabilityPacket(isPaired: isPaired, isInstalled: isInstalled, isReachable: isReachable)
             guard let encoded = try? PropertyListEncoder().encode(packet) else { return }
@@ -364,7 +474,7 @@ final class CompanionCameraBroadcaster: NSObject, ObservableObject {
     }
 
     func sendWatchControlStatus(_ reply: WatchCaptureControlReply) {
-        captureQueue.async {
+        controlQueue.async {
             guard !self.session.connectedPeers.isEmpty else { return }
             let packet = WatchControlStatusPacket(reply: reply)
             guard let encoded = try? PropertyListEncoder().encode(packet) else { return }
@@ -409,6 +519,7 @@ final class CompanionCameraBroadcaster: NSObject, ObservableObject {
                 self.activeRecordingSidecarURL = preparedRecording.sidecarURL
                 self.applyVideoRotationToCaptureOutputs()
                 DispatchQueue.main.async {
+                    self.lastRecordingSummary = nil
                     self.recordingStatus = "Starting local recording"
                 }
                 self.movieOutput.startRecording(to: preparedRecording.mediaURL, recordingDelegate: self)
@@ -420,13 +531,38 @@ final class CompanionCameraBroadcaster: NSObject, ObservableObject {
         }
     }
 
-    private func stopRecording() {
+    private func stopRecording(onFinalized: ((RecordingSummary?) -> Void)?) {
         captureQueue.async {
-            guard self.movieOutput.isRecording else { return }
-            DispatchQueue.main.async {
-                self.recordingStatus = "Stopping recording"
+            if let onFinalized {
+                self.pendingRecordingFinalizations.append(onFinalized)
             }
-            self.movieOutput.stopRecording()
+
+            if self.movieOutput.isRecording {
+                DispatchQueue.main.async {
+                    self.recordingStatus = "Stopping recording"
+                }
+                self.movieOutput.stopRecording()
+                return
+            }
+
+            // `startRecording(to:)` returns before AVCaptureFileOutput reports
+            // didStart. A fast Save Take can therefore arrive while the staged
+            // sidecar exists but `isRecording` is still false. Remember that
+            // stop and execute it from didStart rather than losing the request.
+            if self.activeRecordingSidecar != nil {
+                self.stopRequestedWhileRecordingStarts = true
+                DispatchQueue.main.async {
+                    self.recordingStatus = "Waiting for recorder to finish starting"
+                }
+                return
+            }
+
+            let completions = self.pendingRecordingFinalizations
+            self.pendingRecordingFinalizations.removeAll()
+            DispatchQueue.main.async {
+                self.recordingStatus = "The camera recorder was not active when Save Take was requested."
+                completions.forEach { $0(nil) }
+            }
         }
     }
 
@@ -806,7 +942,7 @@ final class CompanionCameraBroadcaster: NSObject, ObservableObject {
             roleLabel: roleLabel
         )
 
-        let sidecar = CaptureCore.LocalRecordingSidecar.recording(
+        var sidecar = CaptureCore.LocalRecordingSidecar.recording(
             sessionID: sessionID,
             sessionConfig: recordingSessionConfig,
             takeIdentity: takeIdentity,
@@ -820,6 +956,16 @@ final class CompanionCameraBroadcaster: NSObject, ObservableObject {
             captureTiming: captureTiming,
             startedAt: startedAt
         )
+        if let request = recordingWatchRequest,
+           request.sessionID == sessionID,
+           request.takeID == takeIdentity.takeID {
+            sidecar = sidecar.withPendingWatchRequest(request)
+        }
+        if let reply = recordingWatchReply,
+           reply.sessionID == sessionID,
+           reply.takeID == takeIdentity.takeID {
+            sidecar = sidecar.withWatchSync(reply)
+        }
 
         return PreparedRecording(mediaURL: files.mediaURL, sidecarURL: files.sidecarURL, sidecar: sidecar)
     }
@@ -854,6 +1000,8 @@ final class CompanionCameraBroadcaster: NSObject, ObservableObject {
             activeRecordingURL = nil
             activeRecordingSidecar = nil
             activeRecordingSidecarURL = nil
+            recordingWatchRequest = nil
+            recordingWatchReply = nil
         }
 
         let captureErrorDescription = error?.localizedDescription
@@ -934,9 +1082,18 @@ extension CompanionCameraBroadcaster: AVCaptureFileOutputRecordingDelegate {
     func fileOutput(_ output: AVCaptureFileOutput,
                     didStartRecordingTo fileURL: URL,
                     from connections: [AVCaptureConnection]) {
-        DispatchQueue.main.async {
-            self.isRecording = true
-            self.recordingStatus = "Recording to \(fileURL.lastPathComponent)"
+        captureQueue.async {
+            let shouldStopImmediately = self.stopRequestedWhileRecordingStarts
+            self.stopRequestedWhileRecordingStarts = false
+            DispatchQueue.main.async {
+                self.isRecording = true
+                self.recordingStatus = shouldStopImmediately
+                    ? "Stopping recording"
+                    : "Recording to \(fileURL.lastPathComponent)"
+            }
+            if shouldStopImmediately {
+                self.movieOutput.stopRecording()
+            }
         }
     }
 
@@ -944,20 +1101,26 @@ extension CompanionCameraBroadcaster: AVCaptureFileOutputRecordingDelegate {
                     didFinishRecordingTo outputFileURL: URL,
                     from connections: [AVCaptureConnection],
                     error: Error?) {
-        let (statusMessage, summary) = finalizeRecording(outputFileURL: outputFileURL, error: error)
-        DispatchQueue.main.async {
-            self.isRecording = false
+        captureQueue.async {
+            let (statusMessage, summary) = self.finalizeRecording(outputFileURL: outputFileURL, error: error)
+            let completions = self.pendingRecordingFinalizations
+            self.pendingRecordingFinalizations.removeAll()
+            self.stopRequestedWhileRecordingStarts = false
+            DispatchQueue.main.async {
+                self.isRecording = false
 
-            if error == nil {
-                self.lastRecordingName = outputFileURL.lastPathComponent
-            }
+                if error == nil {
+                    self.lastRecordingName = outputFileURL.lastPathComponent
+                }
 
-            if let summary {
-                self.lastRecordingSummary = summary
+                if let summary {
+                    self.lastRecordingSummary = summary
+                }
+                self.recordingStatus = statusMessage
+                completions.forEach { $0(summary) }
             }
-            self.recordingStatus = statusMessage
+            self.refreshNextTakeNumberPreview()
         }
-        refreshNextTakeNumberPreview()
     }
 }
 
@@ -973,14 +1136,18 @@ extension CompanionCameraBroadcaster: MCSessionDelegate {
             self.connectedPeerNames = session.connectedPeers.map(\.displayName).sorted()
             switch state {
             case .connected:
-                self.connectionStatus = "Streaming \(self.selectedCameraPosition.title.lowercased()) camera to \(peerID.displayName)"
+                self.connectionStatus = self.isRunning
+                    ? "Streaming \(self.selectedCameraPosition.title.lowercased()) camera to \(peerID.displayName)"
+                    : "Watch relay connected to \(peerID.displayName)"
             case .connecting:
                 self.connectionStatus = "Connecting to \(peerID.displayName)"
             case .notConnected:
                 self.isBroadcasting = false
                 self.connectionStatus = self.connectedPeerNames.isEmpty
                     ? "Searching for nearby ScratchLab"
-                    : "Streaming \(self.selectedCameraPosition.title.lowercased()) camera to \(self.connectedPeerNames.joined(separator: ", "))"
+                    : (self.isRunning
+                        ? "Streaming \(self.selectedCameraPosition.title.lowercased()) camera to \(self.connectedPeerNames.joined(separator: ", "))"
+                        : "Watch relay connected to \(self.connectedPeerNames.joined(separator: ", "))")
             @unknown default:
                 self.connectionStatus = "Connection state changed"
             }
@@ -991,10 +1158,27 @@ extension CompanionCameraBroadcaster: MCSessionDelegate {
         if let commandPacket = try? PropertyListDecoder().decode(WatchControlCommandPacket.self, from: data),
            commandPacket.payload.kind == WatchCaptureCommandPayload.packetKind {
             DispatchQueue.main.async {
+                // Tell the Mac the relay has the command before doing anything
+                // with it. A stop that later times out can then say whether the
+                // phone never heard it or the watch never answered — states an
+                // unqualified `timedOut` cannot tell apart.
+                self.sendWatchControlStatus(
+                    WatchCaptureControlReply(
+                        commandID: commandPacket.payload.commandID,
+                        sessionID: commandPacket.payload.sessionID,
+                        takeID: commandPacket.payload.takeID,
+                        syncState: .requested,
+                        detail: "Relay received the command and is forwarding it to the watch.",
+                        acknowledgedAt: Date()
+                    )
+                )
+                // Published for the UI and for debugging only; delivery is the
+                // closure's job.
                 self.pendingWatchControlCommand = WatchControlCommandEvent(
                     payload: commandPacket.payload,
                     requestedAt: Date()
                 )
+                self.onWatchControlCommand?(commandPacket.payload)
             }
             return
         }

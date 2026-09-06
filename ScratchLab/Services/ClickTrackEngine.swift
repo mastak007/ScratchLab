@@ -147,6 +147,11 @@ final class ClickTrackEngine: ObservableObject {
         }
     }
 
+    func setOutputGain(_ normalizedGain: Double) {
+        let finiteGain = normalizedGain.isFinite ? normalizedGain : 0
+        playerNode.volume = Float(min(max(finiteGain, 0), 1))
+    }
+
     private func resolvedSampleRate() -> Double {
         let sampleRate = audioEngine.outputNode.outputFormat(forBus: 0).sampleRate
         return sampleRate > 0 ? sampleRate : 48_000
@@ -199,10 +204,15 @@ final class ClickTrackEngine: ObservableObject {
         durationSeconds: Double,
         sampleRate: Double,
         channelCount: AVAudioChannelCount,
-        startBeatIndex: Int
+        startBeatIndex: Int,
+        exactFrameCount: AVAudioFrameCount? = nil
     ) throws -> AVAudioPCMBuffer {
         let bpm = CaptureClickTrackDefaults.clampedBPM(requestedBPM)
-        let totalFrameCount = max(1, Int(ceil(max(0, durationSeconds) * sampleRate)))
+        let totalFrameCount = max(
+            1,
+            exactFrameCount.map(Int.init)
+                ?? Int(ceil(max(0, durationSeconds) * sampleRate))
+        )
         guard let format = AVAudioFormat(
             standardFormatWithSampleRate: sampleRate,
             channels: channelCount

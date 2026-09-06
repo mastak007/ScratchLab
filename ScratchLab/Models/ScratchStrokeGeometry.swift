@@ -28,6 +28,11 @@ enum MotionSegmentKind: Equatable, Sendable {
 /// (0 = the curve's lowest point, 1 = its highest) so the path always fits the
 /// lane whatever the pattern.
 struct MotionSegment: Equatable, Sendable {
+    /// Legacy gaps are layout padding. Canonical holds have position evidence
+    /// and must remain visible. Fader uncertainty never changes platter position.
+    enum EvidenceStyle: Equatable, Sendable {
+        case legacy, open, closed, unknownFader
+    }
     let kind: MotionSegmentKind
     let startTime: TimeInterval
     let endTime: TimeInterval
@@ -40,6 +45,9 @@ struct MotionSegment: Equatable, Sendable {
     let speed: ScratchNotationSpeedClassification
     /// True for a derived copy-window ghost (Demo mode).
     let isGhost: Bool
+    var evidenceStyle: EvidenceStyle = .legacy
+
+    var drawsLine: Bool { !isHold || evidenceStyle != .legacy }
 
     var duration: TimeInterval { max(0, endTime - startTime) }
 
@@ -99,7 +107,8 @@ struct MotionPath: Equatable, Sendable {
                               endTime: $0.endTime + offset,
                               startPosition: $0.startPosition,
                               endPosition: $0.endPosition,
-                              speed: $0.speed, isGhost: $0.isGhost)
+                              speed: $0.speed, isGhost: $0.isGhost,
+                              evidenceStyle: $0.evidenceStyle)
             },
             timeRange: (timeRange.lowerBound + offset)...(timeRange.upperBound + offset))
     }
@@ -309,5 +318,222 @@ enum ScratchStrokeGeometry {
             anchors.append(TurnaroundAnchor(time: a.endTime, position: path.position(at: a.endTime)))
         }
         return anchors
+    }
+}
+
+// MARK: - Canonical evidence projection (same MotionPath and renderer)
+
+extension ScratchStrokeGeometry {
+    enum CanonicalLayer: Equatable, Sendable { case target, performance }
+
+    /// Supplied once for a target/performance comparison. Never auto-fit either
+    /// row. Time is seconds from the shared origin; position retains its unit.
+    struct CanonicalFrame: Equatable, Sendable {
+        let timeRange: ClosedRange<Double>
+        let positionRange: ClosedRange<Double>
+        let coordinateSpace: ScratchNotation.GestureRecord.CoordinateSpace
+        let beatsPerMinute: Double
+
+        init?(timeRange: ClosedRange<Double>, positionRange: ClosedRange<Double>,
+              coordinateSpace: ScratchNotation.GestureRecord.CoordinateSpace,
+              beatsPerMinute: Double) {
+            guard timeRange.lowerBound.isFinite, timeRange.upperBound.isFinite,
+                  timeRange.upperBound > timeRange.lowerBound,
+                  (timeRange.upperBound - timeRange.lowerBound).isFinite,
+                  positionRange.lowerBound.isFinite, positionRange.upperBound.isFinite,
+                  positionRange.upperBound > positionRange.lowerBound,
+                  (positionRange.upperBound - positionRange.lowerBound).isFinite,
+                  beatsPerMinute.isFinite, beatsPerMinute > 0,
+                  (60 / beatsPerMinute).isFinite else { return nil }
+            self.timeRange = timeRange
+            self.positionRange = positionRange
+            self.coordinateSpace = coordinateSpace
+            self.beatsPerMinute = beatsPerMinute
+        }
+    }
+
+    struct CanonicalFaderInterval: Equatable, Sendable {
+        let range: ClosedRange<Double>
+        /// Nil is explicitly unknown, never an open/closed rail.
+        let state: ScratchNotationFaderState?
+    }
+
+    struct CanonicalFaderEdge: Equatable, Sendable {
+        let time: Double
+        let state: ScratchNotationFaderState
+    }
+
+    struct CanonicalGeometry: Equatable, Sendable {
+        let motion: MotionPath
+        let missingMotion: [ClosedRange<Double>]
+        let fader: [CanonicalFaderInterval]
+        let faderEdges: [CanonicalFaderEdge]
+        /// Malformed evidence without a usable time cannot be placed on a grid.
+        let hasUnplacedEvidence: Bool
+    }
+
+    /// Preserves every supplied curve point and hold position. No speed bucket,
+    /// ratio template, release assumption, click threshold or curve fallback.
+    /// Piecewise linear clipping at stream boundaries preserves the local slope.
+    static func canonicalGeometry(
+        records: [ScratchNotation.GestureRecord], layer: CanonicalLayer,
+        frame: CanonicalFrame
+    ) -> CanonicalGeometry {
+        typealias Record = ScratchNotation.GestureRecord
+        var candidates: [MotionSegment] = []
+        var invalidMotion: [ClosedRange<Double>] = []
+        var fader: [CanonicalFaderInterval] = []
+        var edges: [CanonicalFaderEdge] = []
+        var unplaced = false
+
+        func normalized(_ position: Double) -> CGFloat {
+            CGFloat((position - frame.positionRange.lowerBound)
+                / (frame.positionRange.upperBound - frame.positionRange.lowerBound))
+        }
+        func bounded(_ span: Record.TimeSpan, scale: Double) -> ClosedRange<Double>? {
+            let start = span.startTime * scale, end = span.endTime * scale
+            guard start.isFinite, end.isFinite, start >= 0, end > start else { return nil }
+            return start...end
+        }
+        func supported(_ evidence: Record.Evidence, platter: Bool) -> Bool {
+            Record.evidenceIssues(evidence, platter: platter).isEmpty
+        }
+
+        for record in records {
+            let scale = record.timingDomain == .beats ? 60 / frame.beatsPerMinute : 1
+            let ranges = (record.subdivisions.map(\.span) + record.internalHolds.map(\.span))
+                .compactMap { bounded($0, scale: scale) }
+            let recordRange: ClosedRange<Double>
+            if let start = ranges.map(\.lowerBound).min(), let end = ranges.map(\.upperBound).max() {
+                recordRange = start...end
+            } else {
+                recordRange = frame.timeRange
+                unplaced = true
+            }
+
+            if record.coordinateSpace != frame.coordinateSpace || !record.motionValidationIssues().isEmpty {
+                invalidMotion.append(recordRange)
+            } else {
+                for subdivision in record.subdivisions {
+                    guard let range = bounded(subdivision.span, scale: scale) else {
+                        invalidMotion.append(recordRange); unplaced = true; continue
+                    }
+                    let curve = layer == .target ? subdivision.targetCurve : subdivision.measuredCurve
+                    guard let curve, supported(curve.evidence, platter: true) else {
+                        invalidMotion.append(range); continue
+                    }
+                    // A direction label cannot turn contrary or wholly stationary
+                    // samples into travel. Local measured plateaus remain flat;
+                    // they do not acquire a tear label or a fader glyph.
+                    let pairs = Array(zip(curve.points, curve.points.dropFirst()))
+                    guard let startPosition = curve.startPosition, let endPosition = curve.endPosition else {
+                        invalidMotion.append(range); continue
+                    }
+                    let displacement = endPosition - startPosition
+                    guard displacement.isFinite,
+                          record.direction == .forward ? displacement > 0 : displacement < 0,
+                          pairs.allSatisfy({ a, b in
+                        let delta = b.position - a.position
+                        return delta.isFinite && (record.direction == .forward ? delta >= 0 : delta <= 0)
+                            && normalized(a.position).isFinite && normalized(b.position).isFinite
+                            && (a.time * scale).isFinite && (b.time * scale).isFinite
+                    }) else { invalidMotion.append(range); continue }
+                    for (a, b) in pairs {
+                        candidates.append(MotionSegment(kind: .stroke(record.direction),
+                            startTime: a.time * scale, endTime: b.time * scale,
+                            startPosition: normalized(a.position), endPosition: normalized(b.position),
+                            speed: .medium, isGhost: false, evidenceStyle: .unknownFader))
+                    }
+                }
+                for hold in record.internalHolds {
+                    guard let range = bounded(hold.span, scale: scale) else {
+                        invalidMotion.append(recordRange); unplaced = true; continue
+                    }
+                    guard let position = hold.position, normalized(position).isFinite else {
+                        invalidMotion.append(range); continue
+                    }
+                    candidates.append(MotionSegment(kind: .hold,
+                        startTime: range.lowerBound, endTime: range.upperBound,
+                        startPosition: normalized(position), endPosition: normalized(position),
+                        speed: .medium, isGhost: false, evidenceStyle: .unknownFader))
+                }
+            }
+
+            // Fader is independent, including when the platter is unavailable.
+            guard record.faderValidationIssues().isEmpty else {
+                fader.append(.init(range: recordRange, state: nil))
+                unplaced = true
+                continue
+            }
+            for interval in record.faderIntervals {
+                guard let range = bounded(interval.span, scale: scale) else {
+                    fader.append(.init(range: recordRange, state: nil)); unplaced = true; continue
+                }
+                fader.append(.init(range: range,
+                    state: supported(interval.evidence, platter: false) ? interval.state : nil))
+            }
+            for edge in record.faderTransitions {
+                let time = edge.time * scale
+                guard time.isFinite, time >= 0, supported(edge.evidence, platter: false) else {
+                    unplaced = true; continue
+                }
+                edges.append(.init(time: time, state: edge.state))
+            }
+        }
+
+        // One partition over the actual evidence boundaries, shared by both
+        // streams. Uncovered or overlapping motion is an explicit gap, never
+        // a baseline or a connector between independently observed points.
+        var boundaries = [frame.timeRange.lowerBound, frame.timeRange.upperBound]
+        boundaries += candidates.flatMap { [$0.startTime, $0.endTime] }
+        boundaries += invalidMotion.flatMap { [$0.lowerBound, $0.upperBound] }
+        boundaries += fader.flatMap { [$0.range.lowerBound, $0.range.upperBound] }
+        boundaries = Array(Set(boundaries.filter { frame.timeRange.contains($0) })).sorted()
+        var motion: [MotionSegment] = []
+        var missing: [ClosedRange<Double>] = []
+        var rails: [CanonicalFaderInterval] = []
+        for (start, end) in zip(boundaries, boundaries.dropFirst()) {
+            let midpoint = start + (end - start) / 2
+            let coveringFader = fader.filter { $0.range.lowerBound <= midpoint && midpoint < $0.range.upperBound }
+            let state = coveringFader.count == 1 ? coveringFader[0].state : nil
+            if let last = rails.last, last.state == state, last.range.upperBound == start {
+                rails[rails.count - 1] = .init(range: last.range.lowerBound...end, state: state)
+            } else { rails.append(.init(range: start...end, state: state)) }
+
+            let coveringMotion = candidates.filter { $0.startTime <= midpoint && midpoint < $0.endTime }
+            guard coveringMotion.count == 1,
+                  !invalidMotion.contains(where: { $0.lowerBound <= midpoint && midpoint < $0.upperBound }) else {
+                if let last = missing.last, last.upperBound == start {
+                    missing[missing.count - 1] = last.lowerBound...end
+                } else { missing.append(start...end) }
+                continue
+            }
+            let segment = coveringMotion[0]
+            func position(_ time: Double) -> CGFloat {
+                segment.startPosition + (segment.endPosition - segment.startPosition)
+                    * CGFloat((time - segment.startTime) / (segment.endTime - segment.startTime))
+            }
+            let evidenceStyle: MotionSegment.EvidenceStyle
+            switch state {
+            case .open: evidenceStyle = .open
+            case .closed: evidenceStyle = .closed
+            case nil: evidenceStyle = .unknownFader
+            }
+            motion.append(MotionSegment(kind: segment.kind, startTime: start, endTime: end,
+                startPosition: position(start), endPosition: position(end), speed: .medium,
+                isGhost: false, evidenceStyle: evidenceStyle))
+        }
+        // Explicit fader observations alone mint glyphs. No pairing threshold,
+        // no hold-derived click and no synthetic transition across a data gap.
+        let groupedEdges = Dictionary(grouping: edges, by: \.time)
+        let uniqueEdges = groupedEdges.keys.sorted().compactMap { time -> CanonicalFaderEdge? in
+            guard frame.timeRange.contains(time), let atTime = groupedEdges[time],
+                  let first = atTime.first else { return nil }
+            guard atTime.allSatisfy({ $0.state == first.state }) else { unplaced = true; return nil }
+            return first
+        }
+        return CanonicalGeometry(motion: MotionPath(segments: motion, timeRange: frame.timeRange),
+            missingMotion: missing, fader: rails, faderEdges: uniqueEdges,
+            hasUnplacedEvidence: unplaced)
     }
 }

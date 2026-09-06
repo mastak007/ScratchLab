@@ -35,6 +35,50 @@ struct LivePerformedNotationDataSource {
     /// camera builder is currently active at all (distinct from "active but
     /// has seen no movement yet", which is an empty array).
     let cameraMovementEventsSnapshot: (_ now: CFTimeInterval) -> [CaptureCore.DetectedNotationRecordMovementEvent]?
+    /// The active crossfader calibration (already resolved against the
+    /// selected source's learned mapping), or `nil`. The tracker derives
+    /// take-scoped, time-aligned crossfader state from the CC snapshot through
+    /// the existing `CrossfaderStateDeriver`. Defaults to `nil` so synthetic
+    /// data sources that only exercise platter motion stay source-compatible.
+    let activeCrossfaderCalibration: () -> CrossfaderCalibration?
+
+    init(
+        selectedMIDISourceName: @escaping () -> String,
+        capturedMidiCCEventsSnapshot: @escaping () -> [CaptureCore.RawMixerMIDIEvent],
+        cameraMovementEventsSnapshot: @escaping (_ now: CFTimeInterval) -> [CaptureCore.DetectedNotationRecordMovementEvent]?,
+        activeCrossfaderCalibration: @escaping () -> CrossfaderCalibration? = { nil }
+    ) {
+        self.selectedMIDISourceName = selectedMIDISourceName
+        self.capturedMidiCCEventsSnapshot = capturedMidiCCEventsSnapshot
+        self.cameraMovementEventsSnapshot = cameraMovementEventsSnapshot
+        self.activeCrossfaderCalibration = activeCrossfaderCalibration
+    }
+}
+
+/// Bounded, read-only counters describing ONE tracker poll.
+///
+/// Added after the 2026-09-05 authoring take rendered a visually flat trace.
+/// Replaying that take's captured MIDI through this exact path produced a
+/// healthy 0.718 vertical span for its first ~12 s and 0.036 for the trailing
+/// 3.2 s window the card displays — so the chain was not flattening anything,
+/// and no record existed of what the tracker actually held at the moment the
+/// operator was watching. These counters make that attributable live.
+///
+/// Presentation only: nothing here is persisted, scored, exported, or allowed
+/// to influence capture.
+struct LiveNotationDiagnostics: Equatable, Sendable {
+    /// Events in the engine's take-scoped buffer before any filtering.
+    let rawSnapshotCount: Int
+    /// Events surviving the tracker's baseline filter.
+    let baselineMatchedCount: Int
+    /// Committed movement events the decoder produced.
+    let committedMovementCount: Int
+    /// Whether an open provisional stroke is present.
+    let hasProvisional: Bool
+    /// Vertical span across every rendered stroke, in lane units.
+    let renderedPositionSpan: Double
+    /// Age of the newest event in the buffer, in seconds.
+    let latestEventAge: Double
 }
 
 enum LiveNotationTrackingState: Equatable {
@@ -42,7 +86,11 @@ enum LiveNotationTrackingState: Equatable {
     case waiting
     case tracking(
         committed: [CaptureCore.DetectedNotationRecordMovementEvent],
-        provisional: CaptureCore.ProvisionalPlatterMovement?
+        provisional: CaptureCore.ProvisionalPlatterMovement?,
+        continuousCommitted: [CaptureCore.DetectedNotationRecordMovementEvent],
+        continuousProvisional: CaptureCore.ProvisionalPlatterMovement?,
+        platterEvidenceIntervals: [CaptureCore.PlatterEvidenceInterval],
+        faderDerivation: CrossfaderDerivation?
     )
 }
 
@@ -51,11 +99,14 @@ enum LiveNotationTrackingState: Equatable {
 /// `freeze()` stops polling while retaining the completed Practice trace.
 final class LivePerformedNotationTracker: ObservableObject {
     @Published private(set) var state: LiveNotationTrackingState = .waiting
+    /// Latest poll's counters. DEBUG surfaces only; never read by rendering.
+    @Published private(set) var diagnostics: LiveNotationDiagnostics?
     @Published private(set) var isFrozen = false
     @Published private(set) var frozenAt: Date?
 
     private let dataSource: LivePerformedNotationDataSource
     private let baselineTimestamp: Double
+    private var frozenTimestamp: Double?
     private var timer: DispatchSourceTimer?
     private let pollQueue = DispatchQueue(label: "com.scratchlab.livePerformedNotation.poll")
 
@@ -88,8 +139,17 @@ final class LivePerformedNotationTracker: ObservableObject {
         guard !isFrozen else { return }
         isFrozen = true
         frozenAt = Date()
+        frozenTimestamp = CACurrentMediaTime()
         timer?.cancel()
         timer = nil
+    }
+
+    /// Monotonic attempt-relative presentation time in the same
+    /// `CACurrentMediaTime()` domain used to baseline incoming MIDI events.
+    /// The live camera overlay and its notation playhead therefore share the
+    /// tracker's real capture start instead of a separate wall-clock anchor.
+    var elapsedTime: TimeInterval {
+        max(0, (frozenTimestamp ?? CACurrentMediaTime()) - baselineTimestamp)
     }
 
     /// Canonical renderer input. The open run is represented as a preview
@@ -100,13 +160,47 @@ final class LivePerformedNotationTracker: ObservableObject {
         Self.renderedEvents(for: state)
     }
 
+    /// Which coordinate `renderedEvents` positions are ACTUALLY in.
+    ///
+    /// The controller branch of `computeState` comes from
+    /// `derivePlatterMovementEventsWithProvisional`, which divides raw CC6 step
+    /// displacement by `PlatterCoordinateSemantics
+    /// .raneOneMKIIDirectMIDIStepsPerRevolution` — genuine revolutions. The
+    /// camera fallback branch emits builder events in no declared platter
+    /// coordinate, and an empty state claims nothing. This declaration is made
+    /// HERE, at the boundary that knows which branch ran, and never inferred
+    /// downstream: an identically-sourced event persisted by finalization is
+    /// span-normalised instead, so `source` alone cannot settle the unit.
+    var platterCoordinates: CaptureCore.PlatterNotationCoordinates {
+        Self.platterCoordinates(for: state)
+    }
+
+    static func platterCoordinates(
+        for state: LiveNotationTrackingState
+    ) -> CaptureCore.PlatterNotationCoordinates {
+        let rendered = renderedEvents(for: state)
+        guard !rendered.isEmpty,
+              rendered.allSatisfy(CaptureCore.usesGestureRelativeControllerNotation) else {
+            return .normalizedTakeLocal(
+                reference: "live movement is not gesture-relative controller "
+                    + "telemetry, so no platter calibration is claimed"
+            )
+        }
+        return .raneOneMKIIDirectMIDI()
+    }
+
     static func renderedEvents(
         for state: LiveNotationTrackingState
     ) -> [CaptureCore.DetectedNotationRecordMovementEvent] {
-        guard case .tracking(let committed, let provisional) = state else { return [] }
+        guard case .tracking(let committed, let provisional, _, _, _, _) = state else { return [] }
         guard let provisional else { return committed }
         let duration = max(0, provisional.currentTime - provisional.startTime)
-        let distance = abs(provisional.currentPosition - provisional.startPosition)
+        // Keep controller speed in raw steps/second, matching committed
+        // controller events. The positions above are now gesture-relative
+        // notation coordinates; deriving speed from them would divide the
+        // physical excursion by the platter calibration a second time when
+        // the shared performed-stroke adapter projects this preview.
+        let distance = abs(provisional.displacement)
         let preview = CaptureCore.DetectedNotationRecordMovementEvent(
             startTime: provisional.startTime,
             endTime: provisional.currentTime,
@@ -119,6 +213,105 @@ final class LivePerformedNotationTracker: ObservableObject {
             source: "live_preview"
         )
         return committed + [preview]
+    }
+
+    /// Continuous renderer input for the canonical Tear projection. Unlike
+    /// `renderedEvents` these positions are NOT gesture-relative, so a
+    /// reversal apex shared between a forward and a backward run stays one
+    /// position-continuous trajectory. Positions are re-normalised over a
+    /// rolling presentation window so a free-running platter (several
+    /// off-screen revolutions) cannot permanently pin the current Tear at the
+    /// top of the lane. Presentation-only, like `renderedEvents`.
+    static func continuousRenderedEvents(
+        for state: LiveNotationTrackingState
+    ) -> [CaptureCore.DetectedNotationRecordMovementEvent] {
+        guard case .tracking(_, _, let continuousCommitted, let continuousProvisional, _, _) = state else { return [] }
+        var events = continuousCommitted
+        if let continuousProvisional {
+            let duration = max(0, continuousProvisional.currentTime - continuousProvisional.startTime)
+            let distance = abs(continuousProvisional.displacement)
+            events.append(CaptureCore.DetectedNotationRecordMovementEvent(
+                startTime: continuousProvisional.startTime,
+                endTime: continuousProvisional.currentTime,
+                startPosition: continuousProvisional.startPosition,
+                endPosition: continuousProvisional.currentPosition,
+                direction: continuousProvisional.direction,
+                movementKind: continuousProvisional.movementKind,
+                speed: duration > 0 ? distance / duration : 0,
+                confidence: 0.5,
+                source: "live_preview"
+            ))
+        }
+        return windowNormalized(events)
+    }
+
+    /// Rolling window (seconds) over which continuous live Tear positions are
+    /// re-normalised, matching `LivePerformedNotationCard.renderedDomain`.
+    private static let continuousTearWindowSeconds: TimeInterval = 3.2
+
+    /// Re-normalise the continuous trajectory over the rolling presentation
+    /// window, dropping motion older than the window so historical free-spin
+    /// cannot bias the current Tear's vertical scale. One affine transform is
+    /// applied to the whole visible trajectory — preserving ordering, signed
+    /// direction, relative displacement, and reversal-apex continuity — never
+    /// a per-run or per-candidate transform.
+    private static func windowNormalized(
+        _ events: [CaptureCore.DetectedNotationRecordMovementEvent]
+    ) -> [CaptureCore.DetectedNotationRecordMovementEvent] {
+        guard let latest = events.map(\.endTime).max() else { return [] }
+        let windowStart = max(0, latest - continuousTearWindowSeconds)
+        let visible = events.filter { $0.endTime >= windowStart }
+        let positions = visible.flatMap { [$0.startPosition, $0.endPosition] }
+        guard let low = positions.min(), let high = positions.max(), high > low else {
+            return visible
+        }
+        let span = high - low
+        func normalized(_ position: Double) -> Double { (position - low) / span }
+        return visible.map { event in
+            CaptureCore.DetectedNotationRecordMovementEvent(
+                startTime: event.startTime,
+                endTime: event.endTime,
+                startPosition: normalized(event.startPosition),
+                endPosition: normalized(event.endPosition),
+                direction: event.direction,
+                movementKind: event.movementKind,
+                speed: event.speed,
+                confidence: event.confidence,
+                source: event.source
+            )
+        }
+    }
+
+    /// Continuous global span-normalised platter telemetry for the canonical
+    /// Tear projection, exposed as an instance convenience alongside
+    /// `renderedEvents`.
+    var continuousRenderedEvents: [CaptureCore.DetectedNotationRecordMovementEvent] {
+        Self.continuousRenderedEvents(for: state)
+    }
+
+    /// Coordinate `continuousRenderedEvents` positions are ACTUALLY in: the
+    /// global span-normalised take-local basis (0..1), never per-run
+    /// gesture-relative revolutions.
+    var continuousPlatterCoordinates: CaptureCore.PlatterNotationCoordinates {
+        .normalizedTakeLocal(
+            reference: "continuous window-normalised platter telemetry "
+                + "for the canonical Tear projection"
+        )
+    }
+
+    /// `decodePlatterCore`'s provenance intervals (observed stillness, packet
+    /// gaps, clock discontinuities) for the canonical live Tear projection.
+    var platterEvidenceIntervals: [CaptureCore.PlatterEvidenceInterval] {
+        if case .tracking(_, _, _, _, let intervals, _) = state { return intervals }
+        return []
+    }
+
+    /// Take-scoped, time-aligned crossfader derivation for the canonical live
+    /// Tear projection, or `nil` when no usable calibration / CC8 evidence
+    /// exists (the projection then truthfully reports FADER UNKNOWN).
+    var faderDerivation: CrossfaderDerivation? {
+        if case .tracking(_, _, _, _, _, let derivation) = state { return derivation }
+        return nil
     }
 
     private func startPolling(interval: TimeInterval) {
@@ -135,10 +328,48 @@ final class LivePerformedNotationTracker: ObservableObject {
         let dataSource = self.dataSource
         let baseline = self.baselineTimestamp
         let newState = Self.computeState(dataSource: dataSource, baselineTimestamp: baseline)
+        let newDiagnostics = Self.diagnostics(
+            dataSource: dataSource,
+            baselineTimestamp: baseline,
+            state: newState
+        )
         Task { @MainActor [weak self] in
             guard let self, !self.isFrozen else { return }
             self.state = newState
+            self.diagnostics = newDiagnostics
         }
+    }
+
+    /// Pure counter derivation, testable without a timer. Reads the same
+    /// snapshot `computeState` reads; adds no second source of truth.
+    static func diagnostics(
+        dataSource: LivePerformedNotationDataSource,
+        baselineTimestamp: Double,
+        state: LiveNotationTrackingState,
+        now: Double = CACurrentMediaTime()
+    ) -> LiveNotationDiagnostics {
+        let snapshot = dataSource.capturedMidiCCEventsSnapshot()
+        let matched = snapshot.filter { $0.timestamp > baselineTimestamp }
+        let rendered = renderedEvents(for: state)
+        let positions = rendered.flatMap { [$0.startPosition, $0.endPosition] }
+        let span = (positions.max() ?? 0) - (positions.min() ?? 0)
+        let committedCount: Int
+        let hasProvisional: Bool
+        if case .tracking(let committed, let provisional, _, _, _, _) = state {
+            committedCount = committed.count
+            hasProvisional = provisional != nil
+        } else {
+            committedCount = 0
+            hasProvisional = false
+        }
+        return LiveNotationDiagnostics(
+            rawSnapshotCount: snapshot.count,
+            baselineMatchedCount: matched.count,
+            committedMovementCount: committedCount,
+            hasProvisional: hasProvisional,
+            renderedPositionSpan: span,
+            latestEventAge: matched.last.map { max(0, now - $0.timestamp) } ?? -1
+        )
     }
 
     /// Pure decision function — no timer, no `@Published`, no main-actor
@@ -172,15 +403,59 @@ final class LivePerformedNotationTracker: ObservableObject {
             capturedMidi: midiSnapshot
         )
         let usesController = !controllerResult.committedEvents.isEmpty || controllerResult.provisionalMovement != nil
+
+        // Crossfader evidence: derived from the baseline-filtered CC8 snapshot
+        // through the EXISTING production deriver, using the active
+        // calibration. Unusable calibration or no matching CC8 yields `nil`,
+        // and the Tear projection truthfully reports FADER UNKNOWN.
+        let faderDerivation = Self.deriveCrossfader(
+            midiSnapshot: midiSnapshot,
+            calibration: dataSource.activeCrossfaderCalibration()
+        )
+
         if usesController {
-            return .tracking(committed: controllerResult.committedEvents, provisional: controllerResult.provisionalMovement)
+            return .tracking(
+                committed: controllerResult.committedEvents,
+                provisional: controllerResult.provisionalMovement,
+                continuousCommitted: controllerResult.continuousEvents,
+                continuousProvisional: controllerResult.continuousProvisionalMovement,
+                platterEvidenceIntervals: controllerResult.platterEvidenceIntervals,
+                faderDerivation: faderDerivation
+            )
         }
 
         if let cameraEvents, !cameraEvents.isEmpty {
-            return .tracking(committed: cameraEvents, provisional: nil)
+            return .tracking(
+                committed: cameraEvents,
+                provisional: nil,
+                continuousCommitted: cameraEvents,
+                continuousProvisional: nil,
+                platterEvidenceIntervals: [],
+                faderDerivation: faderDerivation
+            )
         }
 
         return .waiting
+    }
+
+    /// Reuse the production crossfader deriver against the take-scoped,
+    /// already-baseline-filtered CC snapshot. Returns `nil` when the
+    /// calibration is unusable or no matching CC8 evidence exists — never a
+    /// fabricated state.
+    private static func deriveCrossfader(
+        midiSnapshot: [CaptureCore.RawMixerMIDIEvent],
+        calibration: CrossfaderCalibration?
+    ) -> CrossfaderDerivation? {
+        guard let calibration, calibration.isUsable else { return nil }
+        let rawEvents = midiSnapshot
+            .filter {
+                $0.channel == calibration.address.channel
+                    && $0.controller == calibration.address.controller
+                    && $0.deviceName == calibration.address.deviceIdentifier
+            }
+            .map { (takeRelativeTime: $0.takeRelativeTime, rawValue: $0.value) }
+        guard !rawEvents.isEmpty else { return nil }
+        return CrossfaderStateDeriver.derive(rawEvents: rawEvents, calibration: calibration)
     }
 }
 
@@ -188,19 +463,19 @@ final class LivePerformedNotationTracker: ObservableObject {
 
 import SwiftUI
 
-/// Live performed-notation card for Practice (during a scored attempt) and
-/// Capture (while actively recording) — its own separate card/region, never
-/// layered on the camera image (that's reserved for `CalibrationCameraOverlay`).
-/// It deliberately uses the same canonical platter geometry as Target and
-/// Review; lane labels and the performance colour preserve trace identity.
+/// Live performed-notation card for Capture (while actively recording) and
+/// any standalone diagnostic presentation. Practice's canonical Copy screen
+/// now reads the same tracker directly into its camera overlay, while Capture
+/// keeps this separate card. Both routes use the same canonical platter
+/// geometry; neither feeds Review or export.
 struct LivePerformedNotationCard: View {
     @ObservedObject var tracker: LivePerformedNotationTracker
     var bpm: Double = 90
     /// True while the calibration box editor is open — the card dims
     /// strongly rather than competing visually with the edit handles, per
-    /// Karl's directive. The two surfaces are already separate regions
-    /// (this card is never on the camera), so this is a plain
-    /// visibility/opacity binding, not a z-order fix.
+    /// Karl's directive. This is a plain visibility/opacity binding so the
+    /// calibration handles remain readable when the transparent notation
+    /// canvas is composited over the camera.
     var isDimmedForCalibrationEditing: Bool = false
 
     var body: some View {
@@ -215,18 +490,17 @@ struct LivePerformedNotationCard: View {
                     .foregroundStyle(stateColor)
             }
 
-            ScratchNotationPanel(
-                lane: .performance,
-                presentation: .standard,
+            ScratchPhraseChartView(
                 source: tracker.renderedEvents.isEmpty
                     ? .empty(emptyMessage)
                     : .performedPlatter(tracker.renderedEvents),
                 bpm: bpm,
-                domain: renderedDomain,
-                mode: tracker.isFrozen ? .reviewComparison : .liveComparison,
-                canvasHeightOverride: 220
+                capturedWindow: renderedDomain,
+                backgroundColor: .clear
             )
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         .opacity(isDimmedForCalibrationEditing ? 0.15 : 1)
         .allowsHitTesting(!isDimmedForCalibrationEditing)
         .animation(.easeInOut(duration: 0.2), value: isDimmedForCalibrationEditing)

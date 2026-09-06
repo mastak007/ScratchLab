@@ -1,13 +1,14 @@
 #!/usr/bin/env python3
 from __future__ import annotations
 
+import array
 import csv
 import hashlib
 import json
+import math
 import re
 import shutil
 import subprocess
-import wave
 from datetime import datetime
 from pathlib import Path
 from typing import Any
@@ -99,7 +100,7 @@ TAKE_LOG_FILENAME = "take_log.csv"
 VALIDATION_REPORT_FILENAME = "validation_report.txt"
 
 FILENAME_PATTERN = re.compile(
-    r"^(?P<dj>[A-Z0-9]+)_baby_(?P<bpm>070|090|110)_take(?P<take>\d{2})_"
+    r"^(?P<dj>[A-Z0-9]+)_baby_(?P<bpm>\d{3})_take(?P<take>\d{2})_"
     r"(?P<source>camA|camB|serato|scratch_only|beat_only|scratch_with_beat|raw_original|watch)\.(?P<ext>mov|wav|csv)$"
 )
 
@@ -205,13 +206,13 @@ def parse_bool(value: str, *, default: bool | None = None, field_name: str = "bo
     )
 
 
-def parse_bpm(value: str) -> int:
+def parse_bpm(value: str, allowed_bpms: tuple[int, ...] = ALLOWED_BPMS) -> int:
     try:
         bpm = int(value)
     except ValueError as exc:
         raise ValueError("BPM must be a whole number.") from exc
-    if bpm not in ALLOWED_BPMS:
-        raise ValueError(f"BPM must be one of {', '.join(str(item) for item in ALLOWED_BPMS)}.")
+    if bpm not in allowed_bpms:
+        raise ValueError(f"BPM must be one of {', '.join(str(item) for item in allowed_bpms)}.")
     return bpm
 
 
@@ -255,6 +256,90 @@ def resolve_raw_path(session_dir: Path, raw_value: str) -> Path:
     except ValueError as exc:
         raise ValueError(f"Raw source paths must stay inside the session raw/ folder: {raw_value}") from exc
     return resolved_path
+
+
+def resolve_take_log_media_path(session_dir: Path, raw_value: str) -> Path:
+    """Resolve a take-log media path the way it is written.
+
+    Take-log media columns are session-root-relative. App exports write
+    canonical locations (`video/...`, `audio/...`), so the validator must not
+    silently reroot them under `raw/`. Bare filenames with no directory
+    component are the legacy staging convention from `create_session.py` /
+    `rename_files.py`, where the operator drops sources straight into `raw/`;
+    those still resolve there, but only when the file is not already present at
+    the session root.
+    """
+    session_root = session_dir.resolve()
+    candidate = Path(raw_value)
+    if candidate.is_absolute():
+        raise ValueError(f"Take log media paths must stay inside the session folder: {raw_value}")
+
+    def _contained(path: Path) -> Path:
+        resolved = (session_root / path).resolve()
+        try:
+            resolved.relative_to(session_root)
+        except ValueError as exc:
+            raise ValueError(
+                f"Take log media paths must stay inside the session folder: {raw_value}"
+            ) from exc
+        return resolved
+
+    as_written = _contained(candidate)
+    if as_written.exists() or len(candidate.parts) > 1:
+        return as_written
+    return _contained(Path("raw") / candidate)
+
+
+def audio_peak_sample(path: Path) -> float:
+    """Return the largest absolute sample value in a WAV artifact.
+
+    Reported in linear full-scale units, so 1.0 is 0 dBFS and anything above it
+    would clip on playback or on conversion to an integer format.
+    """
+    metadata = read_riff_wave_metadata(path)
+    sample_width = int(metadata["sample_width_bytes"])
+    format_tag = int(metadata["format_tag"])
+
+    with path.open("rb") as handle:
+        header = handle.read(12)
+        if len(header) < 12:
+            raise ValueError(f"{path.name} is not a RIFF/WAVE file.")
+        payload = b""
+        while True:
+            chunk_header = handle.read(8)
+            if len(chunk_header) < 8:
+                break
+            chunk_id = chunk_header[0:4]
+            chunk_size = int.from_bytes(chunk_header[4:8], "little")
+            if chunk_id == b"data":
+                payload = handle.read(chunk_size if chunk_size not in (0, 0xFFFFFFFF) else -1)
+                break
+            handle.seek(chunk_size + (chunk_size & 1), 1)
+
+    if not payload:
+        return 0.0
+
+    if format_tag == RIFF_FORMAT_TAG_IEEE_FLOAT and sample_width == 4:
+        values = array.array("f")
+        values.frombytes(payload[: len(payload) - (len(payload) % 4)])
+        return max((abs(value) for value in values), default=0.0)
+    if format_tag == RIFF_FORMAT_TAG_PCM and sample_width == 2:
+        values = array.array("h")
+        values.frombytes(payload[: len(payload) - (len(payload) % 2)])
+        return max((abs(value) / 32768.0 for value in values), default=0.0)
+    if format_tag == RIFF_FORMAT_TAG_PCM and sample_width == 1:
+        return max((abs(byte - 128) / 128.0 for byte in payload), default=0.0)
+
+    raise ValueError(
+        f"{path.name} uses a sample format this peak reader does not support"
+        f" (tag {format_tag}, {sample_width} bytes per sample)."
+    )
+
+
+def peak_dbfs(peak_sample: float) -> float:
+    if peak_sample <= 0:
+        return float("-inf")
+    return 20.0 * math.log10(peak_sample)
 
 
 def relative_to_session(session_dir: Path, path: Path) -> str:
@@ -379,15 +464,149 @@ def probe_video_metadata(path: Path) -> dict[str, Any]:
     return metadata
 
 
+# RIFF chunk identifiers that carry no sample data. Real capture writers
+# (AVAudioFile among them) pad the header area with these before `data`, so a
+# reader that assumes `fmt ` is immediately followed by `data` will fail on a
+# perfectly valid file.
+RIFF_FORMAT_TAG_PCM = 0x0001
+RIFF_FORMAT_TAG_IEEE_FLOAT = 0x0003
+RIFF_FORMAT_TAG_EXTENSIBLE = 0xFFFE
+SUPPORTED_RIFF_FORMAT_TAGS = (
+    RIFF_FORMAT_TAG_PCM,
+    RIFF_FORMAT_TAG_IEEE_FLOAT,
+    RIFF_FORMAT_TAG_EXTENSIBLE,
+)
+
+
+def read_riff_wave_metadata(path: Path) -> dict[str, Any]:
+    """Parse a RIFF/WAVE header without the stdlib `wave` module.
+
+    `wave` only understands WAVE_FORMAT_PCM (tag 1) and raises on
+    WAVE_FORMAT_IEEE_FLOAT (tag 3), which is what ScratchLab captures write.
+    This walker also skips arbitrary non-data chunks (JUNK, FLLR, LIST, ...)
+    and honours the odd-size word-alignment padding byte.
+    """
+    with path.open("rb") as handle:
+        header = handle.read(12)
+        if len(header) < 12 or header[0:4] != b"RIFF" or header[8:12] != b"WAVE":
+            raise ValueError(f"{path.name} is not a RIFF/WAVE file.")
+
+        file_size = path.stat().st_size
+        fmt_chunk: bytes | None = None
+        data_size: int | None = None
+
+        while True:
+            chunk_header = handle.read(8)
+            if len(chunk_header) < 8:
+                break
+            chunk_id = chunk_header[0:4]
+            chunk_size = int.from_bytes(chunk_header[4:8], "little")
+            chunk_start = handle.tell()
+
+            if chunk_id == b"fmt ":
+                fmt_chunk = handle.read(min(chunk_size, 40))
+            elif chunk_id == b"data":
+                # A streaming writer may leave 0xFFFFFFFF here; fall back to
+                # whatever actually remains in the file.
+                remaining = max(0, file_size - chunk_start)
+                data_size = remaining if chunk_size in (0, 0xFFFFFFFF) else min(chunk_size, remaining)
+                break
+
+            handle.seek(chunk_start + chunk_size + (chunk_size & 1))
+
+    if fmt_chunk is None or len(fmt_chunk) < 16:
+        raise ValueError(f"{path.name} has no readable RIFF fmt chunk.")
+    if data_size is None:
+        raise ValueError(f"{path.name} has no RIFF data chunk.")
+
+    format_tag = int.from_bytes(fmt_chunk[0:2], "little")
+    channel_count = int.from_bytes(fmt_chunk[2:4], "little")
+    sample_rate = int.from_bytes(fmt_chunk[4:8], "little")
+    block_align = int.from_bytes(fmt_chunk[12:14], "little")
+    bits_per_sample = int.from_bytes(fmt_chunk[14:16], "little")
+
+    if format_tag == RIFF_FORMAT_TAG_EXTENSIBLE and len(fmt_chunk) >= 26:
+        # cbSize(2) + validBits(2) + channelMask(4), then the 16-byte GUID whose
+        # first two bytes are the real format tag.
+        format_tag = int.from_bytes(fmt_chunk[24:26], "little")
+    if format_tag not in SUPPORTED_RIFF_FORMAT_TAGS:
+        raise ValueError(f"{path.name} uses unsupported WAV format tag {format_tag}.")
+
+    if block_align <= 0:
+        block_align = max(1, channel_count * (bits_per_sample // 8))
+
+    return {
+        "channel_count": channel_count,
+        "sample_rate_hz": sample_rate,
+        "frame_count": data_size // block_align,
+        "sample_width_bytes": max(1, bits_per_sample // 8),
+        "format_tag": format_tag,
+        "block_align": block_align,
+        "data_offset_bytes": None,
+    }
+
+
+def ffprobe_audio_metadata(path: Path) -> dict[str, Any]:
+    payload = run_ffprobe(path)
+    streams = payload.get("streams", [])
+    if not isinstance(streams, list):
+        raise ValueError(f"ffprobe returned no streams for {path.name}.")
+    audio_stream = next(
+        (
+            stream
+            for stream in streams
+            if isinstance(stream, dict) and stream.get("codec_type") == "audio"
+        ),
+        None,
+    )
+    if audio_stream is None:
+        raise ValueError(f"{path.name} has no audio stream.")
+
+    channel_count = parse_probe_int(audio_stream.get("channels"))
+    sample_rate = parse_probe_int(audio_stream.get("sample_rate"))
+    bits_per_sample = parse_probe_int(audio_stream.get("bits_per_sample")) or parse_probe_int(
+        audio_stream.get("bits_per_raw_sample")
+    )
+    frame_count = parse_probe_int(audio_stream.get("duration_ts"))
+    if frame_count is None:
+        frame_count = parse_probe_int(audio_stream.get("nb_samples"))
+
+    if channel_count is None or sample_rate is None or frame_count is None or not bits_per_sample:
+        raise ValueError(f"ffprobe returned an incomplete audio payload for {path.name}.")
+
+    return {
+        "channel_count": channel_count,
+        "sample_rate_hz": sample_rate,
+        "frame_count": frame_count,
+        "sample_width_bytes": max(1, bits_per_sample // 8),
+    }
+
+
 def probe_audio_metadata(path: Path) -> dict[str, Any]:
+    """Probe a WAV artifact, preferring ffprobe and falling back to RIFF.
+
+    ffprobe is authoritative when present because it reads the same container
+    the app wrote. The RIFF walker keeps the validator usable on machines
+    without ffmpeg installed. `wave` is deliberately not used: it rejects the
+    IEEE Float32 files the capture pipeline produces.
+    """
+    ffprobe_error: Exception | None = None
     try:
-        with wave.open(str(path), "rb") as handle:
-            channel_count = handle.getnchannels()
-            sample_rate = handle.getframerate()
-            frame_count = handle.getnframes()
-            sample_width = handle.getsampwidth()
-    except (wave.Error, EOFError) as exc:
-        raise ValueError(f"{path.name} is not a readable WAV file.") from exc
+        metadata = ffprobe_audio_metadata(path)
+    except Exception as exc:  # noqa: BLE001 - fall back to the local parser
+        ffprobe_error = exc
+        try:
+            metadata = read_riff_wave_metadata(path)
+        except ValueError as riff_exc:
+            raise ValueError(
+                f"{path.name} is not a readable WAV file"
+                f" (ffprobe: {ffprobe_error}; riff: {riff_exc})."
+            ) from riff_exc
+
+    channel_count = int(metadata["channel_count"])
+    sample_rate = int(metadata["sample_rate_hz"])
+    frame_count = int(metadata["frame_count"])
+    sample_width = int(metadata["sample_width_bytes"])
 
     if channel_count < 1:
         raise ValueError(f"{path.name} is missing audio channels.")

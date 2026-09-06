@@ -141,6 +141,22 @@ final class TimecodePrototypeProfileTests: XCTestCase {
         XCTAssertLessThan(profile.smoothingConfig.emaAlpha, 0.5)
     }
 
+    func testNativeInstrumentsTraktorProfileDefaultsSafe() {
+        let profile = TimecodePrototypeProfile.nativeInstrumentsTraktorDebug()
+
+        XCTAssertEqual(profile.preset, .nativeInstrumentsTraktorDebug)
+        XCTAssertEqual(profile.inputChannel, .stereo)
+        XCTAssertFalse(profile.invertDirection)
+        XCTAssertEqual(profile.rateScale, 1.0, accuracy: 0.001)
+        XCTAssertEqual(profile.minConfidence, 0.25, accuracy: 0.001)
+        XCTAssertEqual(profile.maxRate, 8.0, accuracy: 0.001)
+        XCTAssertEqual(profile.smoothingConfig, .standard)
+        XCTAssertEqual(profile.carrierFrequencyHz, 1200, accuracy: 0.001)
+        XCTAssertTrue(profile.validationRequired)
+        XCTAssertFalse(profile.playbackBridgeAllowed)
+        XCTAssertNotNil(profile.preset.experimentalWarning)
+    }
+
     /// 7. Rane DEBUG hardware profile launches explicitly configured for
     /// real Rane ONE MKII hardware validated this session: Invert direction
     /// ON, Min confidence 0.10. (The USB channel pair pin to 3/4 is applied
@@ -168,19 +184,36 @@ final class TimecodePrototypeProfileTests: XCTestCase {
         XCTAssertEqual(resolved, profile)
     }
 
+    func testNativeInstrumentsTraktorDebugProfileResolvesFromMake() {
+        let pipeline = TimecodeControlPipeline()
+        let resolved = TimecodePrototypeProfile.make(preset: .nativeInstrumentsTraktorDebug, pipeline: pipeline)
+        XCTAssertEqual(resolved, TimecodePrototypeProfile.nativeInstrumentsTraktorDebug())
+    }
+
     /// The Rane preset's Swift values alone can't capture "use physical USB
     /// pair 3/4" or "if forward sounds swapped, trust your ears" — this
     /// keeps that reproducible from the app itself rather than requiring a
     /// search through hardware-session history.
-    func testRaneOneMkiiDebugPresetHasSetupNoteOtherPresetsDoNot() {
-        XCTAssertNotNil(
-            TimecodeControlPreset.raneOneMkiiDebug.setupNote,
+    func testHardwareDebugPresetSetupNotesRemainVendorScoped() throws {
+        let raneNote = try XCTUnwrap(TimecodeControlPreset.raneOneMkiiDebug.setupNote)
+        XCTAssertTrue(
+            raneNote.contains("Rane ONE MKII"),
             "The validated Rane hardware setup must remain discoverable from the preset itself"
         )
-        for preset in TimecodeControlPreset.allCases where preset != .raneOneMkiiDebug {
+
+        let traktorNote = try XCTUnwrap(TimecodeControlPreset.nativeInstrumentsTraktorDebug.setupNote)
+        XCTAssertTrue(traktorNote.contains("Native Instruments Traktor"))
+        XCTAssertFalse(traktorNote.contains("Rane ONE MKII"))
+
+        let presetsWithoutHardwareNotes: [TimecodeControlPreset] = [
+            .scratchLabPrototype,
+            .genericDVS,
+            .manual
+        ]
+        for preset in presetsWithoutHardwareNotes {
             XCTAssertNil(
                 preset.setupNote,
-                "\(preset) should not carry the Rane-specific physical setup note"
+                "\(preset) should not carry hardware-specific setup guidance"
             )
         }
     }
@@ -251,6 +284,8 @@ final class TimecodePrototypeProfileTests: XCTestCase {
                        "profile must apply min confidence")
         XCTAssertEqual(pipeline.maxRate, 8.0, accuracy: 0.001,
                        "profile must apply max rate")
+        XCTAssertEqual(pipeline.carrierFrequencyHz, 1000, accuracy: 0.001,
+                       "profile must apply carrier frequency")
 
         // Apply ScratchLab profile
         let slProfile = TimecodePrototypeProfile.scratchLabPrototype()
@@ -260,6 +295,8 @@ final class TimecodePrototypeProfileTests: XCTestCase {
                        "switching profile must update min confidence")
         XCTAssertEqual(pipeline.maxRate, 5.0, accuracy: 0.001,
                        "switching profile must update max rate")
+        XCTAssertEqual(pipeline.carrierFrequencyHz, 1000, accuracy: 0.001,
+                       "switching profile must update carrier frequency")
     }
 
     func testProfileMakeWithManualPresetCapturesCurrentCalibration() {
@@ -269,6 +306,7 @@ final class TimecodePrototypeProfileTests: XCTestCase {
         pipeline.rateScale = 2.0
         pipeline.minConfidence = 0.5
         pipeline.maxRate = 10.0
+        pipeline.carrierFrequencyHz = 1500
 
         let profile = TimecodePrototypeProfile.make(preset: .manual, pipeline: pipeline)
 
@@ -277,6 +315,7 @@ final class TimecodePrototypeProfileTests: XCTestCase {
         XCTAssertEqual(profile.rateScale, 2.0, accuracy: 0.001)
         XCTAssertEqual(profile.minConfidence, 0.5, accuracy: 0.001)
         XCTAssertEqual(profile.maxRate, 10.0, accuracy: 0.001)
+        XCTAssertEqual(profile.carrierFrequencyHz, 1500, accuracy: 0.001)
     }
 
     func testApplyingManualProfileDoesNotOverwriteUserCustomMinConfidence() {

@@ -6,6 +6,73 @@ import XCTest
 /// Platter channels: 0 = left, 1 = right (NOT 4/5 — those are pad channels).
 final class ScratchPlatterTrackerTests: XCTestCase {
 
+    // MARK: - Signed sample-position projection
+
+    func testSampleProjectionKeepsBackwardTravelBeforeStartWithoutWrapping() {
+        let projection = PlatterSamplePositionProjection.resolve(
+            framePosition: -4_800,
+            contentFrameCount: 48_000,
+            sampleRate: 48_000
+        )
+
+        XCTAssertEqual(projection.region, .beforeStart)
+        XCTAssertEqual(projection.positionSeconds, -0.1, accuracy: 1e-12)
+        XCTAssertEqual(projection.progress, 0, accuracy: 1e-12)
+    }
+
+    func testSampleProjectionKeepsCueDeadbandAndInRangeRegionsDeterministic() {
+        let cue = PlatterSamplePositionProjection.resolve(
+            framePosition: -240,
+            contentFrameCount: 48_000,
+            sampleRate: 48_000
+        )
+        let start = PlatterSamplePositionProjection.resolve(
+            framePosition: 12_000,
+            contentFrameCount: 48_000,
+            sampleRate: 48_000
+        )
+        let middle = PlatterSamplePositionProjection.resolve(
+            framePosition: 24_000,
+            contentFrameCount: 48_000,
+            sampleRate: 48_000
+        )
+        let end = PlatterSamplePositionProjection.resolve(
+            framePosition: 40_000,
+            contentFrameCount: 48_000,
+            sampleRate: 48_000
+        )
+
+        XCTAssertEqual(cue.region, .cue)
+        XCTAssertEqual(start.region, .start)
+        XCTAssertEqual(middle.region, .middle)
+        XCTAssertEqual(end.region, .end)
+    }
+
+    func testSampleProjectionKeepsPastEndTravelAtRightBoundary() {
+        let projection = PlatterSamplePositionProjection.resolve(
+            framePosition: 52_800,
+            contentFrameCount: 48_000,
+            sampleRate: 48_000
+        )
+
+        XCTAssertEqual(projection.region, .pastEnd)
+        XCTAssertEqual(projection.positionSeconds, 1.1, accuracy: 1e-12)
+        XCTAssertEqual(projection.pastEndOvershootSeconds, 0.1, accuracy: 1e-12)
+        XCTAssertEqual(projection.progress, 1, accuracy: 1e-12)
+    }
+
+    func testSampleProjectionRejectsInvalidMetadataWithoutFabricatingPosition() {
+        let projection = PlatterSamplePositionProjection.resolve(
+            framePosition: .nan,
+            contentFrameCount: 0,
+            sampleRate: 0
+        )
+
+        XCTAssertEqual(projection.region, .unloaded)
+        XCTAssertEqual(projection.positionSeconds, 0)
+        XCTAssertEqual(projection.progress, 0)
+    }
+
     // MARK: - Wrap detection
 
     func testForwardWrap127To0() {

@@ -43,6 +43,11 @@ public enum TimecodeControlPreset: String, Equatable, Sendable, CaseIterable {
     /// audibly-confirmed hardware evidence.
     case raneOneMkiiDebug
 
+    /// Native Instruments Traktor benchmark profile — experimental only. Reuses the
+    /// same control-pipeline defaults as generic DVS with 1.2 kHz carrier for
+    /// Traktor-style control tone verification.
+    case nativeInstrumentsTraktorDebug
+
     /// Manual calibration — all fields user-adjustable.
     case manual
 
@@ -54,6 +59,8 @@ public enum TimecodeControlPreset: String, Equatable, Sendable, CaseIterable {
         case .scratchLabPrototype:  return "ScratchLab Prototype"
         case .genericDVS:           return "Generic DVS Control Signal"
         case .raneOneMkiiDebug:     return "Rane ONE MKII (DEBUG, pair 3/4 pinned)"
+        case .nativeInstrumentsTraktorDebug:
+            return "Native Instruments Traktor (DEBUG, 1.2 kHz carrier)"
         case .manual:               return "Manual"
         }
     }
@@ -64,6 +71,7 @@ public enum TimecodeControlPreset: String, Equatable, Sendable, CaseIterable {
         case .scratchLabPrototype:  return "ScratchLab"
         case .genericDVS:           return "DVS"
         case .raneOneMkiiDebug:     return "Rane"
+        case .nativeInstrumentsTraktorDebug: return "Traktor"
         case .manual:               return "Manual"
         }
     }
@@ -71,7 +79,7 @@ public enum TimecodeControlPreset: String, Equatable, Sendable, CaseIterable {
     /// Whether this preset is experimental (not a compatibility claim).
     public var isExperimental: Bool {
         switch self {
-        case .genericDVS:  return true
+        case .genericDVS, .nativeInstrumentsTraktorDebug:  return true
         default:           return false
         }
     }
@@ -81,6 +89,8 @@ public enum TimecodeControlPreset: String, Equatable, Sendable, CaseIterable {
         switch self {
         case .genericDVS:
             return "Experimental — not Serato/SDJ certified or compatible"
+        case .nativeInstrumentsTraktorDebug:
+            return "Experimental — not manufacturer-certified compatibility"
         default:
             return nil
         }
@@ -98,6 +108,9 @@ public enum TimecodeControlPreset: String, Equatable, Sendable, CaseIterable {
             return "Rane ONE MKII: USB DVS input, physical pair 3/4 (pinned automatically). " +
                 "If forward/backward ever sounds swapped, trust what you hear — " +
                 "do not force Invert off to match a raw decoder label."
+        case .nativeInstrumentsTraktorDebug:
+            return "Native Instruments Traktor: prototype benchmark only. " +
+                "If audible playback works, prioritize it over docs assumptions."
         default:
             return nil
         }
@@ -218,6 +231,9 @@ public struct TimecodePrototypeProfile: Equatable, Sendable {
     /// all other gates pass.
     public let playbackBridgeAllowed: Bool
 
+    /// Carrier frequency used by the timecode decoder in Hertz.
+    public let carrierFrequencyHz: Float
+
     // MARK: - Init
 
     public init(
@@ -230,7 +246,8 @@ public struct TimecodePrototypeProfile: Equatable, Sendable {
         maxRate: Double = 5.0,
         smoothingConfig: TimecodeSmoothingConfig = .conservative,
         validationRequired: Bool = true,
-        playbackBridgeAllowed: Bool = false
+        playbackBridgeAllowed: Bool = false,
+        carrierFrequencyHz: Float = 1000
     ) {
         self.preset = preset
         self.name = name
@@ -242,6 +259,7 @@ public struct TimecodePrototypeProfile: Equatable, Sendable {
         self.smoothingConfig = smoothingConfig
         self.validationRequired = validationRequired
         self.playbackBridgeAllowed = playbackBridgeAllowed
+        self.carrierFrequencyHz = carrierFrequencyHz
     }
 
     // MARK: - Static factories
@@ -295,7 +313,8 @@ public struct TimecodePrototypeProfile: Equatable, Sendable {
             maxRate: 8.0,
             smoothingConfig: .standard,
             validationRequired: true,
-            playbackBridgeAllowed: false
+            playbackBridgeAllowed: false,
+            carrierFrequencyHz: 1000
         )
     }
 
@@ -330,7 +349,26 @@ public struct TimecodePrototypeProfile: Equatable, Sendable {
             maxRate: 5.0,
             smoothingConfig: .conservative,
             validationRequired: true,
-            playbackBridgeAllowed: false
+            playbackBridgeAllowed: false,
+            carrierFrequencyHz: 1000
+        )
+    }
+
+    /// Native Instruments Traktor benchmark profile — same decode structure as
+    /// Generic DVS, with 1.2 kHz carrier frequency.
+    public static func nativeInstrumentsTraktorDebug() -> TimecodePrototypeProfile {
+        TimecodePrototypeProfile(
+            preset: .nativeInstrumentsTraktorDebug,
+            name: "Native Instruments Traktor (DEBUG)",
+            inputChannel: .stereo,
+            invertDirection: false,
+            rateScale: 1.0,
+            minConfidence: 0.25,
+            maxRate: 8.0,
+            smoothingConfig: .standard,
+            validationRequired: true,
+            playbackBridgeAllowed: false,
+            carrierFrequencyHz: 1200
         )
     }
 
@@ -344,7 +382,8 @@ public struct TimecodePrototypeProfile: Equatable, Sendable {
         rateScale: Double = 1.0,
         minConfidence: Double = 0.3,
         maxRate: Double = 5.0,
-        smoothingConfig: TimecodeSmoothingConfig = .conservative
+        smoothingConfig: TimecodeSmoothingConfig = .conservative,
+        carrierFrequencyHz: Float = 1000
     ) -> TimecodePrototypeProfile {
         TimecodePrototypeProfile(
             preset: .manual,
@@ -356,7 +395,8 @@ public struct TimecodePrototypeProfile: Equatable, Sendable {
             maxRate: maxRate,
             smoothingConfig: smoothingConfig,
             validationRequired: false,
-            playbackBridgeAllowed: false
+            playbackBridgeAllowed: false,
+            carrierFrequencyHz: carrierFrequencyHz
         )
     }
 
@@ -373,13 +413,16 @@ public struct TimecodePrototypeProfile: Equatable, Sendable {
             return .genericDVS()
         case .raneOneMkiiDebug:
             return .raneOneMkiiDebug()
+        case .nativeInstrumentsTraktorDebug:
+            return .nativeInstrumentsTraktorDebug()
         case .manual:
             return .manual(
                 inputChannel: pipeline.inputChannel,
                 invertDirection: pipeline.invertDirection,
                 rateScale: pipeline.rateScale,
                 minConfidence: pipeline.minConfidence,
-                maxRate: pipeline.maxRate
+                maxRate: pipeline.maxRate,
+                carrierFrequencyHz: pipeline.carrierFrequencyHz
             )
         }
     }
@@ -428,10 +471,10 @@ extension TimecodePrototypeProfile {
     /// Apply this profile's calibration values to a pipeline.
     ///
     /// Sets input channel, invert direction, rate scale, min confidence,
-    /// and max rate atomically, via `TimecodeControlPipeline.
-    /// applyCalibrationBatch(_:...)` — a single configuration swap, not
-    /// five sequential property writes. Does NOT change the pipeline mode
-    /// or live tap state.
+    /// max rate, and carrier frequency atomically, via
+    /// `TimecodeControlPipeline.applyCalibrationBatch(_:...)` — a single
+    /// configuration swap, not six sequential property writes. Does NOT
+    /// change the pipeline mode or live tap state.
     ///
     /// - Parameter pipeline: The pipeline to configure.
     public func apply(to pipeline: TimecodeControlPipeline) {
@@ -440,7 +483,8 @@ extension TimecodePrototypeProfile {
             invertDirection: invertDirection,
             rateScale: rateScale,
             minConfidence: minConfidence,
-            maxRate: maxRate
+            maxRate: maxRate,
+            carrierFrequencyHz: carrierFrequencyHz
         )
     }
 }

@@ -37,9 +37,14 @@ final class CameraNotationOverlayCalibration: ObservableObject {
     @Published var platterCenter: CGPoint = CGPoint(x: 0.5, y: 0.5)
 
     /// Normalised platter radius expressed as a fraction of the shorter
-    /// viewport dimension.  Default `0.35` gives a visible circle that
-    /// occupies ~70 % of the shorter axis.
-    @Published var platterRadius: CGFloat = 0.35
+    /// viewport dimension.  Default `0.5` fills the camera view: the ring
+    /// spans the whole shorter axis, which is also `radiusRange`'s maximum.
+    /// Was `0.35` (~70 % of the shorter axis) until 2026-08-30, when Karl
+    /// asked for the notation to fill the camera view rather than sit
+    /// inside a margin. Still user-calibratable down to `0.05`, so a rig
+    /// that needs the ring to match a physically smaller platter in frame
+    /// can dial it back; only the starting point changed.
+    @Published var platterRadius: CGFloat = 0.5
 
     /// Optional rotational offset for the notation start angle (radians).
     /// Positive rotates clockwise.  Default `0`.
@@ -182,7 +187,7 @@ final class CameraNotationOverlayCalibration: ObservableObject {
     /// Reset calibration to sensible defaults, unlock, and persist the reset.
     func reset() {
         platterCenter = CGPoint(x: 0.5, y: 0.5)
-        platterRadius = 0.35
+        platterRadius = 0.5
         angleOffset = 0.0
         isLocked = false
         // Persist the reset state immediately so a crash/close after reset

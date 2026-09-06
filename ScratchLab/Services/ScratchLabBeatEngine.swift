@@ -9,6 +9,11 @@ protocol ClickTrackTimingEngine: AnyObject {
         onRecordingStart: (() -> Void)?
     ) throws -> ClickTrackStartMetadata
     func stop()
+    func setOutputGain(_ normalizedGain: Double)
+}
+
+extension ClickTrackTimingEngine {
+    func setOutputGain(_ normalizedGain: Double) {}
 }
 
 extension ClickTrackEngine: ClickTrackTimingEngine {}
@@ -242,6 +247,76 @@ final class ScratchLabBeatEngine: ObservableObject {
         }
     }
 
+    func setOutputGain(_ normalizedGain: Double) {
+        let finiteGain = normalizedGain.isFinite ? normalizedGain : 0
+        let clampedGain = min(max(finiteGain, 0), 1)
+        playerNode.volume = Float(clampedGain)
+        clickTrackEngine.setOutputGain(clampedGain)
+    }
+
+    /// Peak-level policy for audio ScratchLab *generates* (timing/beat stems and
+    /// the scratch+timing mix).
+    ///
+    /// Summed percussion voices routinely overshoot full scale, and the old
+    /// export clamped the overshoot sample-by-sample, which is hard clipping:
+    /// it is audible, it is irreversible, and it makes a stem that no longer
+    /// matches what the pattern actually is. Instead every generated buffer is
+    /// attenuated by one constant linear gain until its peak sits at the
+    /// ceiling. Attenuation only — a quiet pattern is never boosted — so the
+    /// operation is a pure gain and cannot change frame counts, timing, or the
+    /// relative shape of the waveform.
+    enum GeneratedAudioHeadroom {
+        /// Ceiling for stems ScratchLab renders on its own (beat_only).
+        static let generatedStemCeilingDBFS: Double = -1.0
+        /// Ceiling for the scratch + timing mix.
+        ///
+        /// Deliberately close to full scale rather than matching the generated
+        /// stem ceiling. The mix contains *captured* audio, and the captured
+        /// scratch in the regression fixture already peaks at -0.234 dBFS; a
+        /// -1 dBFS mix ceiling would force an attenuation of the recording
+        /// itself just to make room for a stem ScratchLab generated. The mix
+        /// instead holds the scratch at unity and reduces only the timing
+        /// contribution — see `SessionArchiveBuilder.mixScratchWithTiming`.
+        static let mixCeilingDBFS: Double = -0.1
+
+        static func amplitude(forDBFS dbfs: Double) -> Float {
+            Float(pow(10.0, dbfs / 20.0))
+        }
+
+        static func peakAmplitude(of buffer: AVAudioPCMBuffer) -> Float {
+            guard let channels = buffer.floatChannelData else { return 0 }
+            let frameCount = Int(buffer.frameLength)
+            var peak: Float = 0
+            for channel in 0..<Int(buffer.format.channelCount) {
+                let samples = channels[channel]
+                for frame in 0..<frameCount {
+                    peak = max(peak, abs(samples[frame]))
+                }
+            }
+            return peak
+        }
+
+        /// Attenuates `buffer` in place so its peak is at most `ceilingDBFS`.
+        /// Returns the gain that was applied (1.0 when nothing was needed).
+        @discardableResult
+        static func applyCeiling(_ ceilingDBFS: Double, to buffer: AVAudioPCMBuffer) -> Float {
+            let ceiling = amplitude(forDBFS: ceilingDBFS)
+            let peak = peakAmplitude(of: buffer)
+            guard peak > ceiling, peak.isFinite, peak > 0,
+                  let channels = buffer.floatChannelData else { return 1 }
+
+            let gain = ceiling / peak
+            let frameCount = Int(buffer.frameLength)
+            for channel in 0..<Int(buffer.format.channelCount) {
+                let samples = channels[channel]
+                for frame in 0..<frameCount {
+                    samples[frame] *= gain
+                }
+            }
+            return gain
+        }
+    }
+
     static func renderedTimingBuffer(
         mode: BeatEngineMode,
         bpm requestedBPM: Int,
@@ -251,7 +326,8 @@ final class ScratchLabBeatEngine: ObservableObject {
         clickStartHostTime: UInt64?,
         recordingStartHostTime: UInt64?,
         sampleRate: Double,
-        channelCount: AVAudioChannelCount
+        channelCount: AVAudioChannelCount,
+        exactFrameCount: AVAudioFrameCount? = nil
     ) throws -> AVAudioPCMBuffer {
         let bpm = CaptureClickTrackDefaults.clampedBPM(requestedBPM)
         let startBeatIndex = resolvedStartBeatIndex(
@@ -262,16 +338,26 @@ final class ScratchLabBeatEngine: ObservableObject {
         )
 
         if mode == .clickTrack {
-            return try ClickTrackEngine.renderedClickTrackBuffer(
+            let clickBuffer = try ClickTrackEngine.renderedClickTrackBuffer(
                 bpm: bpm,
                 durationSeconds: durationSeconds,
                 sampleRate: sampleRate,
                 channelCount: channelCount,
-                startBeatIndex: startBeatIndex
+                startBeatIndex: startBeatIndex,
+                exactFrameCount: exactFrameCount
             )
+            GeneratedAudioHeadroom.applyCeiling(
+                GeneratedAudioHeadroom.generatedStemCeilingDBFS,
+                to: clickBuffer
+            )
+            return clickBuffer
         }
 
-        let totalFrameCount = max(1, Int(ceil(max(0, durationSeconds) * sampleRate)))
+        let totalFrameCount = max(
+            1,
+            exactFrameCount.map(Int.init)
+                ?? Int(ceil(max(0, durationSeconds) * sampleRate))
+        )
         guard let format = AVAudioFormat(
             standardFormatWithSampleRate: sampleRate,
             channels: channelCount
@@ -298,7 +384,8 @@ final class ScratchLabBeatEngine: ObservableObject {
             ? Int((Double(beatFrames) * mode.defaultSwingAmount).rounded())
             : 0
         let startStepIndex = max(0, startBeatIndex * 2)
-        let totalStepCount = Int(ceil(max(0, durationSeconds) / max(0.0001, 60.0 / Double(bpm) / 2.0))) + 8
+        let renderedDurationSeconds = Double(totalFrameCount) / sampleRate
+        let totalStepCount = Int(ceil(renderedDurationSeconds / max(0.0001, 60.0 / Double(bpm) / 2.0))) + 8
 
         for stepIndex in startStepIndex..<(startStepIndex + totalStepCount) {
             let stepInBar = stepIndex % renderedSteps.count
@@ -321,6 +408,14 @@ final class ScratchLabBeatEngine: ObservableObject {
                 }
             }
         }
+
+        // Overlapping kick/snare/hat voices sum past full scale on the
+        // downbeat. Pull the whole stem back to the headroom ceiling with one
+        // gain instead of clipping individual samples.
+        GeneratedAudioHeadroom.applyCeiling(
+            GeneratedAudioHeadroom.generatedStemCeilingDBFS,
+            to: buffer
+        )
 
         return buffer
     }

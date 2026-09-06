@@ -11,6 +11,34 @@ import UIKit
 import AppKit
 #endif
 
+/// ScratchLab owns audible scratch-sample playback. The persisted raw value is
+/// retained so installs that previously saved another ownership mode migrate
+/// cleanly to the standalone product behavior.
+enum ScratchAudioOwnershipMode: String, Codable, CaseIterable, Identifiable, Sendable {
+    case scratchLabStandalone
+
+    static let defaultsKey = "scratchlab.audio.ownershipMode"
+    static let defaultMode: Self = .scratchLabStandalone
+
+    var id: String { rawValue }
+    var allowsLocalScratchPlayback: Bool { true }
+    var title: String { "ScratchLab AHHH" }
+    var detail: String { "ScratchLab loads and plays its local AHHH sample from the platter." }
+
+    static func load(from defaults: UserDefaults) -> Self {
+        if let rawValue = defaults.string(forKey: defaultsKey),
+           let mode = Self(rawValue: rawValue) {
+            return mode
+        }
+        defaultMode.persist(to: defaults)
+        return defaultMode
+    }
+
+    func persist(to defaults: UserDefaults) {
+        defaults.set(rawValue, forKey: Self.defaultsKey)
+    }
+}
+
 enum ScratchLabPerformanceSignpost {
     private static let log = OSLog(
         subsystem: "com.machelpnz.scratchlab",
@@ -473,47 +501,916 @@ struct CaptureTimingMetadata: Codable, Equatable, Sendable {
     var recordingStartHostTime: UInt64?
 }
 
-struct GuidedCaptureMotionAssessment: Equatable, Sendable {
-    let syncStatus: String
-    let motionStatusTitle: String
-    let motionPresent: Bool
+// MARK: - Capture motion evidence
+
+/// Which platter evidence a take's decoded movement runs actually amount to.
+///
+/// A powered, released turntable is still *moving* — it produces a long
+/// forward-only stream of CC6 steps — but it is not a scratch gesture. Every
+/// real gesture contains a reversal (the pull-back), so the presence of a
+/// decoded backward run is the structural discriminator. This deliberately
+/// reuses `derivePlatterMovementEvents`' existing noise gates (minimum run
+/// duration and step count) rather than introducing a second, independently
+/// tunable threshold layer.
+enum CapturePlatterMotionEvidence: Equatable, Sendable {
+    /// No decoded movement runs at all.
+    case absent
+    /// Forward-only runs: motion, but never a scratch gesture on its own.
+    case steadyRotationOnly(forwardRuns: Int)
+    /// At least one decoded reversal.
+    case gesture(movementRuns: Int, reversalRuns: Int)
+
+    var isGesture: Bool {
+        if case .gesture = self { return true }
+        return false
+    }
+}
+
+enum CaptureWatchMotionEvidence: Equatable, Sendable {
+    case notUsed
+    case linked
+}
+
+/// DVS is modelled so the evidence type is complete and callers can switch
+/// exhaustively, but iOS capture has no timecode-pipeline feed at take
+/// finalization today. It therefore reports `.unsupported` rather than a
+/// fabricated value — wiring a genuine DVS source is a separate slice, and
+/// until then this must never contribute to motion presence.
+enum CaptureDVSMotionEvidence: Equatable, Sendable {
+    case unsupported
+}
+
+/// The sources that can independently establish that a take contains motion.
+enum CaptureMotionSource: String, Codable, Sendable, CaseIterable {
+    case platter
+    case watch
+    case dvs
+}
+
+/// Typed, domain-only record of which capture sources produced motion
+/// evidence for one take.
+///
+/// This carries no user-facing strings by design: presentation belongs to the
+/// review/HUD layer, so the two platforms cannot drift into different
+/// vocabularies for the same underlying state.
+///
+/// Motion presence is not a Watch-only question. A RANE platter scratch
+/// captured over MIDI is real movement even with no Watch paired. Before this
+/// model existed, three separate sites derived presence solely from a linked
+/// Watch artifact, so valid controller takes reported motion missing in review
+/// and exported as motionless.
+struct CaptureMotionEvidence: Equatable, Sendable {
+    let platter: CapturePlatterMotionEvidence
+    let faderEventCount: Int
+    let watch: CaptureWatchMotionEvidence
+    let dvs: CaptureDVSMotionEvidence
+    /// How this take's crossfader was recognised, or nil when no fader
+    /// evidence carried provenance — either none was captured, or the sidecar
+    /// predates provenance being recorded.
+    let faderMappingSource: FaderMappingSource?
+
+    init(
+        platter: CapturePlatterMotionEvidence,
+        faderEventCount: Int,
+        watch: CaptureWatchMotionEvidence,
+        dvs: CaptureDVSMotionEvidence = .unsupported,
+        faderMappingSource: FaderMappingSource? = nil
+    ) {
+        self.platter = platter
+        self.faderEventCount = faderEventCount
+        self.watch = watch
+        self.dvs = dvs
+        self.faderMappingSource = faderMappingSource
+    }
+
+    /// Sources that independently establish motion presence, in a stable
+    /// order so callers and tests never depend on incidental ordering.
+    ///
+    /// Crossfader activity is deliberately excluded. A cut is real captured
+    /// evidence and is persisted and exported as such, but it is not platter
+    /// movement and must never stand in for it — a take where only the fader
+    /// moved has no scratch gesture to review.
+    var motionSources: [CaptureMotionSource] {
+        var sources: [CaptureMotionSource] = []
+        if platter.isGesture { sources.append(.platter) }
+        if watch == .linked { sources.append(.watch) }
+        switch dvs {
+        case .unsupported: break
+        }
+        return sources
+    }
+
+    var motionPresent: Bool { !motionSources.isEmpty }
+
+    /// True when the only motion claim comes from a linked Watch artifact.
+    /// Export validation uses this to decide whether a watch file is required.
+    var requiresLinkedWatchArtifact: Bool { motionSources == [.watch] }
+
+    static let none = CaptureMotionEvidence(
+        platter: .absent,
+        faderEventCount: 0,
+        watch: .notUsed,
+        faderMappingSource: nil
+    )
+}
+
+extension ScratchMovementKind {
+    /// Backward (pull) travel. Used to identify the reversal that separates a
+    /// scratch gesture from free-running forward platter rotation.
+    var isReversal: Bool {
+        switch self {
+        case .fastPull, .normalPull, .slowPullDrag:
+            return true
+        case .fastPush, .normalPush, .slowDrag, .hold, .releaseNormalPlayback:
+            return false
+        }
+    }
+}
+
+/// Single place that turns persisted take evidence into a `CaptureMotionEvidence`.
+///
+/// Both the live capture path and the recovery/export path resolve through
+/// this, reading the same persisted sidecar notation, so a take that is
+/// reviewed live and the same take rebuilt from disk can never disagree about
+/// whether it contains motion.
+enum CaptureMotionEvidenceResolver {
+    static func platterEvidence(
+        from movementEvents: [CaptureCore.DetectedNotationRecordMovementEvent]
+    ) -> CapturePlatterMotionEvidence {
+        guard !movementEvents.isEmpty else { return .absent }
+        let reversalRuns = movementEvents.filter { $0.movementKind.isReversal }.count
+        guard reversalRuns > 0 else {
+            return .steadyRotationOnly(forwardRuns: movementEvents.count)
+        }
+        return .gesture(movementRuns: movementEvents.count, reversalRuns: reversalRuns)
+    }
+
+    static func resolve(
+        detectedNotation: CaptureCore.DetectedNotationSnapshot?,
+        watchCaptureLinked: Bool
+    ) -> CaptureMotionEvidence {
+        CaptureMotionEvidence(
+            platter: platterEvidence(from: detectedNotation?.recordMovementEvents ?? []),
+            faderEventCount: detectedNotation?.faderEvents.count ?? 0,
+            watch: watchCaptureLinked ? .linked : .notUsed,
+            faderMappingSource: faderMappingSource(from: detectedNotation)
+        )
+    }
+
+    /// Drops controller events that arrived after the take's Stop instant.
+    ///
+    /// Finalization is not instantaneous — the movie-file callback can arrive
+    /// well after Stop — so without this bound a fader or platter move made
+    /// while the take was still finalizing would be decoded into the finished
+    /// take's evidence. `stopRelativeTime` is in the same monotonic take-clock
+    /// domain as `RawMixerMIDIEvent.takeRelativeTime`; `nil` means the take is
+    /// still running and nothing is dropped.
+    ///
+    /// Shared rather than dispatcher-private so the boundary is one testable
+    /// rule (the iOS dispatcher is not reachable from the macOS test target).
+    static func eventsWithinTakeWindow(
+        _ events: [CaptureCore.RawMixerMIDIEvent],
+        stopRelativeTime: Double?
+    ) -> [CaptureCore.RawMixerMIDIEvent] {
+        guard let stopRelativeTime else { return events }
+        return events.filter { $0.takeRelativeTime <= stopRelativeTime }
+    }
+
+    /// Reads provenance back off the persisted mixer events, so a take
+    /// recovered from disk reports the same source the live take did. Older
+    /// sidecars decode `mappingSource` as nil and simply report no provenance.
+    static func faderMappingSource(
+        from detectedNotation: CaptureCore.DetectedNotationSnapshot?
+    ) -> FaderMappingSource? {
+        guard let detectedNotation else { return nil }
+        let sources = Set(
+            detectedNotation.mixerMidiEvents
+                .filter {
+                    $0.mappedControl == "crossfader"
+                        || $0.mappedControl == "leftUpfader"
+                        || $0.mappedControl == "rightUpfader"
+                }
+                .compactMap(\.mappingSource)
+        )
+        if sources.contains(.learned) { return .learned }
+        return sources.contains(.certifiedRegistry) ? .certifiedRegistry : nil
+    }
+}
+
+// MARK: - Guided capture review state
+
+/// Whether this take is required to contain motion at all.
+enum CaptureMotionRequirement: Equatable, Sendable {
+    /// The drill needs motion and the operator did not skip it.
+    case required
+    /// The drill declares motion optional.
+    case optional
+    /// The operator explicitly skipped motion for this take.
+    case skipped
+}
+
+enum CaptureMotionStatus: Equatable, Sendable {
+    case present
+    case optional
+    case missing
+
+    var title: String {
+        switch self {
+        case .present: return "Motion Present"
+        case .optional: return "Motion Optional"
+        case .missing: return "Motion Missing"
+        }
+    }
+}
+
+/// The single readiness verdict for a finished take.
+///
+/// Ordered most- to least-blocking. Exactly one case is reported, so the
+/// review surface cannot present a take as simultaneously ready and blocked.
+enum CaptureReviewReadiness: Equatable, Sendable {
+    case recordingInterrupted
+    case takeTooShort
+    case missingAudio
+    case calibrationInvalid
+    /// Required motion is absent. Distinct from a hard failure: the media is
+    /// valid and keepable, but the take will not teach anything.
+    case retakeRecommended
+    case readyToKeep
+
+    var title: String {
+        switch self {
+        case .recordingInterrupted: return "Recording interrupted"
+        case .takeTooShort: return "Take too short"
+        case .missingAudio: return "Missing audio"
+        case .calibrationInvalid: return "Calibration invalid"
+        case .retakeRecommended: return "Retake recommended"
+        case .readyToKeep: return "Ready to keep"
+        }
+    }
+
+    var isKeepable: Bool {
+        switch self {
+        case .readyToKeep, .retakeRecommended: return true
+        case .recordingInterrupted, .takeTooShort, .missingAudio, .calibrationInvalid: return false
+        }
+    }
+}
+
+/// One resolved review state for a finished take.
+///
+/// Every label the review surface renders is a projection of this single
+/// value. Previously the operator message was a hardcoded literal and the
+/// sync/motion labels were computed independently from the same inputs, so
+/// one take could truthfully render "Ready to keep", "Motion pending" and
+/// "Motion Missing" at the same time. Deriving all three here makes that
+/// combination unrepresentable rather than merely unlikely.
+struct GuidedCaptureReviewState: Equatable, Sendable {
+    let readiness: CaptureReviewReadiness
+    let motionStatus: CaptureMotionStatus
+
+    var operatorMessage: String { readiness.title }
+    var motionStatusTitle: String { motionStatus.title }
+    var motionPresent: Bool { motionStatus == .present }
+
+    /// The sync label. Deliberately a projection of the same readiness rather
+    /// than an independently computed string: when motion is the blocker it
+    /// repeats the motion wording verbatim, so the two labels can restate each
+    /// other but can never contradict each other.
+    var syncStatus: String {
+        switch readiness {
+        case .recordingInterrupted: return "Recording interrupted"
+        case .takeTooShort: return "Take too short"
+        case .missingAudio: return "Missing audio"
+        case .calibrationInvalid: return "Needs calibration"
+        case .retakeRecommended: return motionStatus.title
+        case .readyToKeep:
+            return motionStatus == .optional ? "Motion optional" : "Ready"
+        }
+    }
 }
 
 enum GuidedCaptureReviewStateResolver {
-    static func motionAssessment(
+    static func motionRequirement(
+        motionSkipped: Bool,
+        motionOptional: Bool
+    ) -> CaptureMotionRequirement {
+        if motionSkipped { return .skipped }
+        if motionOptional { return .optional }
+        return .required
+    }
+
+    static func motionStatus(
+        motionPresent: Bool,
+        requirement: CaptureMotionRequirement
+    ) -> CaptureMotionStatus {
+        if motionPresent { return .present }
+        switch requirement {
+        case .optional, .skipped: return .optional
+        case .required: return .missing
+        }
+    }
+
+    /// Resolves the one state every review label projects from.
+    ///
+    /// `recordingFailed` and `duration` are folded in here so the operator
+    /// message can no longer be decided at the call site — that split is what
+    /// let a hardcoded "Ready to keep" survive next to a missing-motion pill.
+    static func reviewState(
+        recordingFailed: Bool,
+        duration: TimeInterval,
         calibrationValid: Bool,
         audioPresent: Bool,
         motionPresent: Bool,
         motionSkipped: Bool,
         motionOptional: Bool
-    ) -> GuidedCaptureMotionAssessment {
-        let motionStatusTitle: String
-        if motionSkipped || motionOptional {
-            motionStatusTitle = "Motion Optional"
-        } else if motionPresent {
-            motionStatusTitle = "Motion Present"
-        } else {
-            motionStatusTitle = "Motion Missing"
-        }
+    ) -> GuidedCaptureReviewState {
+        let requirement = motionRequirement(motionSkipped: motionSkipped, motionOptional: motionOptional)
+        let status = motionStatus(motionPresent: motionPresent, requirement: requirement)
 
-        let syncStatus: String
-        if !calibrationValid {
-            syncStatus = "Needs calibration"
+        let readiness: CaptureReviewReadiness
+        if recordingFailed {
+            readiness = .recordingInterrupted
+        } else if duration < minimumKeepableTakeDuration {
+            readiness = .takeTooShort
         } else if !audioPresent {
-            syncStatus = "Missing audio"
-        } else if motionSkipped || motionOptional {
-            syncStatus = "Motion optional"
-        } else if motionPresent {
-            syncStatus = "Ready"
+            readiness = .missingAudio
+        } else if !calibrationValid {
+            readiness = .calibrationInvalid
+        } else if status == .missing {
+            readiness = .retakeRecommended
         } else {
-            syncStatus = "Motion pending"
+            readiness = .readyToKeep
         }
 
-        return GuidedCaptureMotionAssessment(
-            syncStatus: syncStatus,
-            motionStatusTitle: motionStatusTitle,
-            motionPresent: motionPresent
-        )
+        return GuidedCaptureReviewState(readiness: readiness, motionStatus: status)
+    }
+
+    /// Shortest take the review flow will offer to keep.
+    static let minimumKeepableTakeDuration: TimeInterval = 1.0
+}
+
+// MARK: - Bounded capture finalization state machine
+
+/// Where an accepted Stop originated.
+///
+/// Both sources drive the *identical* transition. This value exists only so
+/// the Watch reply text and the take audit trail can name the origin; it must
+/// never be branched on to decide what finalization does, which is exactly
+/// how the phone and Watch paths drifted apart before.
+enum CaptureStopSource: String, Equatable, Sendable {
+    case phone
+    case watch
+}
+
+/// What the movie recorder was doing when a Stop was accepted.
+enum CaptureRecorderPhase: Equatable, Sendable {
+    /// `startRecording(to:)` was issued but `AVCaptureFileOutput` has not yet
+    /// reported `didStartRecordingTo`. A Stop here must still be delivered to
+    /// the recorder, or capture keeps running with no visible UI state.
+    case starting
+    case recording
+}
+
+/// Identity of the take one finalization cycle belongs to.
+///
+/// Finalization is scoped to this key, not to a global "is saving" flag, so a
+/// summary published for a different take cannot complete the active one.
+struct CaptureFinalizationTakeKey: Hashable, Sendable {
+    let sessionID: String
+    let takeNumber: Int
+
+    init(sessionID: String, takeNumber: Int) {
+        self.sessionID = sessionID
+        self.takeNumber = takeNumber
+    }
+}
+
+/// The bound on one finalization cycle.
+///
+/// `worstCaseSaving` is the total time Saving can last before the operator is
+/// returned to System Check with an explicit recoverable failure. There is no
+/// path that exceeds it, because exactly one retry is permitted.
+struct CaptureFinalizationBudget: Equatable, Sendable {
+    let firstWait: TimeInterval
+    let retryWait: TimeInterval
+    /// Optional post-Review audio inspection bound. Review is already reached
+    /// before inspection starts; this only stops a stalled `AVAsset` load from
+    /// leaving a task alive forever.
+    let audioInspection: TimeInterval
+
+    init(firstWait: TimeInterval, retryWait: TimeInterval, audioInspection: TimeInterval) {
+        self.firstWait = max(0, firstWait)
+        self.retryWait = max(0, retryWait)
+        self.audioInspection = max(0, audioInspection)
+    }
+
+    static let `default` = CaptureFinalizationBudget(
+        firstWait: 12,
+        retryWait: 3,
+        audioInspection: 5
+    )
+
+    var worstCaseSaving: TimeInterval { firstWait + retryWait }
+}
+
+/// The single authoritative finalization state.
+///
+/// Nothing else may store "are we saving", "did the watchdog already fire",
+/// or "was this summary already handled" — those all became contradictory
+/// when they lived in separate flags across the view, the store, and the
+/// watchdog task.
+enum CaptureFinalizationState: Equatable, Sendable {
+    case idle
+    /// Stop accepted; the first recorder-summary window is open.
+    case awaitingRecorder(take: CaptureFinalizationTakeKey, stoppedAt: Date, deadline: Date)
+    /// The single permitted stop retry is outstanding.
+    case retryingStop(take: CaptureFinalizationTakeKey, stoppedAt: Date, deadline: Date)
+    /// Terminal: the take reached Review.
+    case completed(take: CaptureFinalizationTakeKey, recordingID: String)
+    /// Terminal: the take could not be finalized and the operator was given an
+    /// explicit recoverable failure with the staged media preserved.
+    case failed(take: CaptureFinalizationTakeKey, reason: String)
+
+    /// True while a Stop has been accepted but no terminal result exists yet.
+    var isSaving: Bool {
+        switch self {
+        case .awaitingRecorder, .retryingStop: return true
+        case .idle, .completed, .failed: return false
+        }
+    }
+
+    var isTerminal: Bool {
+        switch self {
+        case .completed, .failed: return true
+        case .idle, .awaitingRecorder, .retryingStop: return false
+        }
+    }
+
+    var take: CaptureFinalizationTakeKey? {
+        switch self {
+        case .idle: return nil
+        case let .awaitingRecorder(take, _, _): return take
+        case let .retryingStop(take, _, _): return take
+        case let .completed(take, _): return take
+        case let .failed(take, _): return take
+        }
+    }
+
+    /// The instant the first accepted Stop was recorded. The elapsed-time
+    /// readout freezes here and never moves again for this take.
+    var stoppedAt: Date? {
+        switch self {
+        case let .awaitingRecorder(_, stoppedAt, _): return stoppedAt
+        case let .retryingStop(_, stoppedAt, _): return stoppedAt
+        case .idle, .completed, .failed: return nil
+        }
+    }
+
+    var deadline: Date? {
+        switch self {
+        case let .awaitingRecorder(_, _, deadline): return deadline
+        case let .retryingStop(_, _, deadline): return deadline
+        case .idle, .completed, .failed: return nil
+        }
+    }
+}
+
+/// Everything that can move the finalization cycle forward.
+enum CaptureFinalizationEvent: Equatable, Sendable {
+    /// A new take started recording, so the previous cycle's terminal result
+    /// is retired.
+    case takeArmedForRecording(take: CaptureFinalizationTakeKey)
+    /// Stop pressed on the phone, or received from the Watch. Identical
+    /// handling for both.
+    case stopRequested(
+        take: CaptureFinalizationTakeKey,
+        source: CaptureStopSource,
+        recorderPhase: CaptureRecorderPhase
+    )
+    /// A finalized recorder summary arrived, from any delivery path: the
+    /// `endRecording` completion, the published-summary subscription, or the
+    /// deadline handler consuming an already-published summary.
+    case summaryDelivered(take: CaptureFinalizationTakeKey, recordingID: String)
+    /// The recorder stated that no summary will arrive for this take.
+    case recorderReportedNoSummary(status: String)
+    /// The one scheduled deadline fired.
+    case deadlineElapsed(recorderStillRecording: Bool, status: String)
+}
+
+/// Side effects the owner must perform, in the order returned.
+///
+/// `preserveStagedMedia` always precedes `presentRecoverableFailure`, so the
+/// operator is never shown a failure for media that has not been secured yet.
+enum CaptureFinalizationEffect: Equatable, Sendable {
+    case freezeElapsedTimer(at: Date)
+    /// Close the controller/MIDI take window so moves made during
+    /// finalization cannot land in this take's evidence.
+    case closeTakeEvidenceWindow
+    /// The recorder had not reached `didStartRecordingTo`; make sure the
+    /// pending start cannot leave capture running invisibly.
+    case cancelPendingRecorderStart
+    case requestRecorderStop
+    case scheduleDeadline(at: Date)
+    case cancelDeadline
+    case completeToReview(recordingID: String)
+    case preserveStagedMedia
+    case presentRecoverableFailure(message: String)
+}
+
+/// One bounded, take-ID-scoped finalization state machine.
+///
+/// This is the whole of the finalization policy. It is pure and clock-free —
+/// every transition is given the current instant — so the races that produced
+/// the original hang (duplicate recorder callbacks, a stale published summary,
+/// a stop that raced the recorder starting, and a watchdog that could fire
+/// after the take had already reached Review) are reproducible in tests
+/// without waiting on real time.
+///
+/// Guarantees, each covered by a test:
+/// - every accepted Stop reaches exactly one terminal state, within
+///   `budget.worstCaseSaving`;
+/// - duplicate summaries, duplicate deadline deliveries, and repeated Stop
+///   presses are no-ops that emit no effects;
+/// - a summary whose take key differs from the active take is ignored;
+/// - phone and Watch Stops produce byte-identical effect lists;
+/// - failure preserves staged media before it is presented.
+struct CaptureFinalizationMachine: Equatable, Sendable {
+    let budget: CaptureFinalizationBudget
+    private(set) var state: CaptureFinalizationState
+
+    init(budget: CaptureFinalizationBudget = .default) {
+        self.budget = budget
+        self.state = .idle
+    }
+
+    var isSaving: Bool { state.isSaving }
+    var activeTake: CaptureFinalizationTakeKey? { state.take }
+    var stoppedAt: Date? { state.stoppedAt }
+
+    /// Whether a summary for `take` would be accepted right now. The delivery
+    /// sites use this to skip *all* of their side work — notation persistence,
+    /// scratch-stem renaming, artifact banners — on a duplicate or foreign
+    /// summary, rather than doing that work and de-duplicating afterwards.
+    func acceptsSummary(for take: CaptureFinalizationTakeKey) -> Bool {
+        state.isSaving && state.take == take
+    }
+
+    /// Optional audio inspection may only refine the take it was started for.
+    func acceptsAudioInspection(forRecordingID recordingID: String) -> Bool {
+        guard case let .completed(_, completedID) = state else { return false }
+        return completedID == recordingID
+    }
+
+    @discardableResult
+    mutating func apply(
+        _ event: CaptureFinalizationEvent,
+        at now: Date
+    ) -> [CaptureFinalizationEffect] {
+        switch event {
+        case let .takeArmedForRecording(take):
+            let hadTimer = state.isSaving
+            _ = take
+            state = .idle
+            return hadTimer ? [.cancelDeadline] : []
+
+        case let .stopRequested(take, _, recorderPhase):
+            // A Stop while already saving joins the in-flight cycle. It must
+            // not re-freeze the timer, re-close the evidence window, or start
+            // a second deadline.
+            guard !state.isSaving else { return [] }
+
+            let deadline = now.addingTimeInterval(budget.firstWait)
+            state = .awaitingRecorder(take: take, stoppedAt: now, deadline: deadline)
+
+            var effects: [CaptureFinalizationEffect] = [
+                .freezeElapsedTimer(at: now),
+                .closeTakeEvidenceWindow
+            ]
+            if recorderPhase == .starting {
+                effects.append(.cancelPendingRecorderStart)
+            }
+            // The deadline is armed before the stop is issued, so a recorder
+            // that finalizes synchronously cancels a timer that already
+            // exists rather than racing one into existence behind it.
+            effects.append(.scheduleDeadline(at: deadline))
+            effects.append(.requestRecorderStop)
+            return effects
+
+        case let .summaryDelivered(take, recordingID):
+            guard acceptsSummary(for: take) else { return [] }
+            state = .completed(take: take, recordingID: recordingID)
+            return [.cancelDeadline, .completeToReview(recordingID: recordingID)]
+
+        case let .recorderReportedNoSummary(status):
+            guard let take = state.take, state.isSaving else { return [] }
+            let message = Self.recoveryMessage(status: status)
+            state = .failed(take: take, reason: message)
+            return [.cancelDeadline, .preserveStagedMedia, .presentRecoverableFailure(message: message)]
+
+        case let .deadlineElapsed(recorderStillRecording, status):
+            switch state {
+            case let .awaitingRecorder(take, stoppedAt, _) where recorderStillRecording:
+                // The original stop can race the movie output becoming
+                // active. Retry exactly once so recording cannot continue
+                // invisibly after Save Take, then give up within the bound.
+                let deadline = now.addingTimeInterval(budget.retryWait)
+                state = .retryingStop(take: take, stoppedAt: stoppedAt, deadline: deadline)
+                return [.scheduleDeadline(at: deadline), .requestRecorderStop]
+
+            case let .awaitingRecorder(take, _, _):
+                return fail(take: take, status: status)
+
+            case let .retryingStop(take, _, _):
+                return fail(take: take, status: status)
+
+            case .idle, .completed, .failed:
+                // A deadline that outlived its cycle is inert.
+                return []
+            }
+        }
+    }
+
+    private mutating func fail(
+        take: CaptureFinalizationTakeKey,
+        status: String
+    ) -> [CaptureFinalizationEffect] {
+        let message = Self.recoveryMessage(status: status)
+        state = .failed(take: take, reason: message)
+        return [.preserveStagedMedia, .presentRecoverableFailure(message: message)]
+    }
+
+    /// The exact operator-facing recovery wording. Kept here so the timeout,
+    /// the retry exhaustion, and the explicit no-summary report cannot drift
+    /// into three different explanations of the same situation.
+    static func recoveryMessage(status: String) -> String {
+        let trimmed = status.trimmingCharacters(in: .whitespacesAndNewlines)
+        let detail = trimmed.isEmpty ? "The recorder did not report completion." : trimmed
+        return "Take save did not finish. The staged recording was preserved. \(detail)"
+    }
+}
+
+/// Injectable time source so a finalization cycle is deterministic in tests.
+struct CaptureFinalizationClock: Sendable {
+    let now: @Sendable () -> Date
+
+    init(now: @escaping @Sendable () -> Date) {
+        self.now = now
+    }
+
+    static let system = CaptureFinalizationClock { Date() }
+}
+
+/// The one place a finalization deadline becomes real elapsed time.
+///
+/// Exactly one timer exists per scheduler, and scheduling replaces the
+/// previous one. This is what keeps a second watchdog from reappearing: the
+/// machine emits `scheduleDeadline`, and there is nowhere else to start one.
+final class CaptureFinalizationDeadlineScheduler {
+    private var task: Task<Void, Never>?
+    private let clock: CaptureFinalizationClock
+
+    init(clock: CaptureFinalizationClock = .system) {
+        self.clock = clock
+    }
+
+    var isScheduled: Bool { task != nil }
+
+    func schedule(at deadline: Date, _ body: @escaping () -> Void) {
+        cancel()
+        let interval = max(0, deadline.timeIntervalSince(clock.now()))
+        task = Task { @MainActor in
+            if interval > 0 {
+                try? await Task.sleep(nanoseconds: UInt64(interval * 1_000_000_000))
+            }
+            guard !Task.isCancelled else { return }
+            body()
+        }
+    }
+
+    func cancel() {
+        task?.cancel()
+        task = nil
+    }
+}
+
+// MARK: - Capture evidence presentation
+
+/// One labelled evidence row for the review surface.
+struct CaptureEvidenceRow: Equatable, Sendable, Identifiable {
+    let label: String
+    let value: String
+    /// True when this row represents evidence that was actually captured, so
+    /// the surface can style contributing sources differently from absent ones
+    /// without re-deriving the meaning of the string.
+    let isPresent: Bool
+
+    var id: String { label }
+}
+
+/// Turns the typed `CaptureMotionEvidence` into review rows.
+///
+/// Lives in the shared model, alongside the readiness vocabulary, so iOS and
+/// macOS name the same evidence identically rather than each inventing its own
+/// wording for the same state.
+enum CaptureMotionEvidencePresenter {
+    static func rows(for evidence: CaptureMotionEvidence) -> [CaptureEvidenceRow] {
+        [
+            CaptureEvidenceRow(
+                label: "Platter",
+                value: platterValue(evidence.platter),
+                isPresent: evidence.platter.isGesture
+            ),
+            CaptureEvidenceRow(
+                label: "Fader",
+                value: faderValue(
+                    eventCount: evidence.faderEventCount,
+                    source: evidence.faderMappingSource
+                ),
+                isPresent: evidence.faderEventCount > 0
+            ),
+            CaptureEvidenceRow(
+                label: "Watch",
+                value: evidence.watch == .linked ? "Linked" : "Not used",
+                isPresent: evidence.watch == .linked
+            )
+        ]
+        // DVS is deliberately absent: iOS capture has no timecode feed at take
+        // finalization, and a permanent "Unavailable" row would imply a source
+        // the product does not have. It returns as a row when a real feed exists.
+    }
+
+    /// Names the fader evidence and, when there is any, where its mapping came
+    /// from. A certified-registry take says so explicitly rather than implying
+    /// the user mapped the control. "No movement" stays unqualified — an open
+    /// fader is a real, correct result for a Baby Scratch, not a mapping fault.
+    private static func faderValue(
+        eventCount: Int,
+        source: FaderMappingSource?
+    ) -> String {
+        guard eventCount > 0 else { return "No movement" }
+        let base = "\(eventCount) event\(eventCount == 1 ? "" : "s")"
+        switch source {
+        case .learned: return "\(base) · learned"
+        case .certifiedRegistry: return "\(base) · certified default"
+        case .none: return base
+        }
+    }
+
+    private static func platterValue(_ platter: CapturePlatterMotionEvidence) -> String {
+        switch platter {
+        case .gesture:
+            return "Present · MIDI"
+        case .steadyRotationOnly:
+            // Movement was decoded, but forward-only: a running motor, not a
+            // scratch. Naming it separately stops it reading as a capture bug.
+            return "Rotation only"
+        case .absent:
+            return "Not detected"
+        }
+    }
+}
+
+/// Why a routine take stopped.
+///
+/// Recorded per take so nothing downstream has to infer intent from a duration.
+/// A take that ran 16.7 s under a 64 s safety cap is a complete manual take,
+/// not a take that fell 47 s short of a plan.
+enum CaptureStopReason: String, Codable, CaseIterable, Sendable {
+    /// The operator pressed Stop.
+    case manual
+    /// An explicitly selected take duration elapsed.
+    case plannedDurationReached = "planned_duration_reached"
+    /// The capture session or its device was interrupted.
+    case interrupted
+    /// Capture failed and the take was ended to preserve what existed.
+    case captureError = "capture_error"
+    /// The recorder's safety cap was reached with no planned duration set.
+    case mediaLimit = "media_limit"
+
+    var isCompleteTake: Bool {
+        self == .manual || self == .plannedDurationReached || self == .mediaLimit
+    }
+}
+
+enum RoutineCaptureDefaults {
+    /// Safety cap on an unbounded routine take, in seconds.
+    ///
+    /// This is a **maximum**, not a plan. The macOS Capture panel has no take
+    /// duration control — it renders this number as static text — so an
+    /// operator never selects it and it must never be persisted as
+    /// `plannedTakeDurationSeconds`. Doing so made a manually stopped 16.7 s
+    /// take read as a 64 s take that came up 47 s short.
+    static let defaultMaximumTakeDurationSeconds: Double = 64
+
+    /// Guard rails for an operator-supplied take length. Anything outside this
+    /// range is treated as unset rather than silently truncating a take.
+    static let minimumTakeLengthSeconds: Double = 1
+    static let maximumTakeLengthSeconds: Double = 600
+
+    static var maximumTakeDurationLabel: String {
+        "Max \(Int(defaultMaximumTakeDurationSeconds)) seconds"
+    }
+
+    private static func validated(_ value: Double?) -> Double? {
+        guard let value,
+              value.isFinite,
+              value >= minimumTakeLengthSeconds,
+              value <= maximumTakeLengthSeconds else {
+            return nil
+        }
+        return value
+    }
+
+    /// The take duration the operator explicitly selected, or `nil` for an
+    /// open-ended take.
+    ///
+    /// Deliberately has no fallback. A cap, a default, and a measurement are
+    /// all things this must not report as a plan — an absent plan is a fact
+    /// about the take, not a gap to be filled.
+    static func plannedTakeDurationSeconds(for config: CaptureSessionConfig?) -> Double? {
+        validated(config?.plannedTakeDurationSeconds)
+    }
+
+    /// The longest the recorder will let a take run, in seconds.
+    ///
+    /// An explicit plan bounds the take when one exists. Otherwise the stored
+    /// cap applies, then the default.
+    ///
+    /// A config written before this field existed contributes its legacy
+    /// `takeDurationSeconds` here rather than as a plan: that value did bound
+    /// the take, but the old field was overloaded (export also wrote the
+    /// measured aggregate into it), so it is not evidence that anyone chose it.
+    static func maximumTakeDurationSeconds(for config: CaptureSessionConfig?) -> Double {
+        validated(config?.plannedTakeDurationSeconds)
+            ?? validated(config?.maximumTakeDurationSeconds)
+            ?? validated(config?.takeDurationSeconds)
+            ?? defaultMaximumTakeDurationSeconds
+    }
+
+    /// Why a take that reached its bound stopped: an elapsed plan when the
+    /// operator set one, otherwise the recorder's own cap.
+    static func stopReasonForBoundReached(for config: CaptureSessionConfig?) -> CaptureStopReason {
+        plannedTakeDurationSeconds(for: config) == nil ? .mediaLimit : .plannedDurationReached
+    }
+}
+
+/// Take-boundary arithmetic for a routine recording.
+///
+/// Kept free of AVFoundation so the boundary rules can be exercised directly:
+/// the whole point of the fix is that a slow camera/writer start must not
+/// shorten the recorded media, and that is a property of these functions, not
+/// of the capture session.
+enum RoutineTakeTimeline {
+    /// Take-relative time for an absolute host time, or `nil` when the instant
+    /// falls before media start.
+    ///
+    /// Returning `nil` (rather than clamping to zero) is deliberate: a
+    /// controller or hand-tracking event observed during writer startup did not
+    /// happen inside the media and must be dropped, not stacked onto frame 0.
+    static func takeRelativeTime(
+        hostTime: Double,
+        mediaStartHostTime: Double
+    ) -> Double? {
+        guard mediaStartHostTime > 0, hostTime.isFinite, mediaStartHostTime.isFinite else {
+            return nil
+        }
+        let relative = hostTime - mediaStartHostTime
+        return relative < 0 ? nil : relative
+    }
+
+    /// Host time at which the wall-clock backstop stop should fire.
+    ///
+    /// Anchored to the confirmed media start, so the interval it produces is
+    /// `requestedDurationSeconds + graceSeconds` no matter how long
+    /// `startRecording(to:)` took to yield its first sample buffer.
+    static func scheduledStopHostTime(
+        mediaStartHostTime: Double,
+        requestedDurationSeconds: Double,
+        graceSeconds: Double
+    ) -> Double {
+        mediaStartHostTime + max(0, requestedDurationSeconds) + max(0, graceSeconds)
+    }
+
+    /// Seconds the backstop should wait, measured from the confirmed media
+    /// start rather than from the moment recording was requested.
+    static func stopDelaySeconds(
+        requestedDurationSeconds: Double,
+        graceSeconds: Double
+    ) -> Double {
+        max(0, requestedDurationSeconds) + max(0, graceSeconds)
+    }
+
+    /// Whether a requested take was satisfied by the media that came back.
+    ///
+    /// `tolerance` covers ordinary frame/packet quantisation; anything larger
+    /// means the take really was cut short and must not be labelled complete.
+    static func mediaSatisfiesRequest(
+        requestedDurationSeconds: Double,
+        actualMediaDurationSeconds: Double,
+        toleranceSeconds: Double = 0.5
+    ) -> Bool {
+        guard requestedDurationSeconds > 0, actualMediaDurationSeconds.isFinite else { return false }
+        return actualMediaDurationSeconds >= requestedDurationSeconds - max(0, toleranceSeconds)
     }
 }
 
@@ -532,7 +1429,28 @@ struct CaptureSessionConfig: Codable, Equatable, Sendable {
     var swingAmount: Double
     var engineVersion: String
     var timingPrintedToRecording: TimingPrintedToRecordingState
+    /// Measured playable duration across the session's takes, written at export
+    /// time from the captured media. Never the operator's request.
     var takeDurationSeconds: Double?
+    /// The take duration the operator explicitly selected, in seconds, or
+    /// `nil` for an open-ended take that the operator stops by hand.
+    ///
+    /// Only ever set from a real user choice. A default, a safety cap, and a
+    /// measurement are all excluded — see `maximumTakeDurationSeconds`.
+    var plannedTakeDurationSeconds: Double?
+    /// The longest this session's takes are allowed to run, in seconds.
+    ///
+    /// A safety cap, not an intent. Present on open-ended takes precisely
+    /// because those have no planned duration to report.
+    var maximumTakeDurationSeconds: Double?
+    /// IANA identifier of the capture device's time zone, stamped when the
+    /// session identity is created.
+    ///
+    /// The session's calendar date is derived from `createdAt` in *this* zone,
+    /// not in whatever zone the exporting machine happens to be in later. A
+    /// session captured in Auckland and exported after a flight to London must
+    /// still be dated the day it was actually recorded.
+    var sessionTimeZoneIdentifier: String?
     var takeCount: Int
     var handedness: CaptureSessionHandedness?
     var notes: String
@@ -560,6 +1478,9 @@ struct CaptureSessionConfig: Codable, Equatable, Sendable {
         case clickVersion
         case timingPrintedToRecording
         case takeDurationSeconds
+        case plannedTakeDurationSeconds
+        case maximumTakeDurationSeconds
+        case sessionTimeZoneIdentifier
         case takeCount
         case handedness
         case notes
@@ -584,6 +1505,9 @@ struct CaptureSessionConfig: Codable, Equatable, Sendable {
         engineVersion: String = CaptureBeatEngineDefaults.engineVersion,
         timingPrintedToRecording: TimingPrintedToRecordingState = .unknown,
         takeDurationSeconds: Double? = nil,
+        plannedTakeDurationSeconds: Double? = nil,
+        maximumTakeDurationSeconds: Double? = nil,
+        sessionTimeZoneIdentifier: String? = TimeZone.current.identifier,
         takeCount: Int = 0,
         handedness: CaptureSessionHandedness? = .right,
         notes: String = "",
@@ -606,6 +1530,9 @@ struct CaptureSessionConfig: Codable, Equatable, Sendable {
         self.engineVersion = engineVersion
         self.timingPrintedToRecording = timingPrintedToRecording
         self.takeDurationSeconds = takeDurationSeconds
+        self.plannedTakeDurationSeconds = plannedTakeDurationSeconds
+        self.maximumTakeDurationSeconds = maximumTakeDurationSeconds
+        self.sessionTimeZoneIdentifier = sessionTimeZoneIdentifier
         self.takeCount = takeCount
         self.handedness = handedness
         self.notes = notes
@@ -628,7 +1555,12 @@ struct CaptureSessionConfig: Codable, Equatable, Sendable {
         createdAt: Date,
         updatedAt: Date,
         takeCount: Int,
-        takeDurationSeconds: Double?
+        takeDurationSeconds: Double?,
+        // Open-ended by default: the routine recorder has no duration control,
+        // so there is no plan to record — only the cap that bounds the take.
+        plannedTakeDurationSeconds: Double? = nil,
+        maximumTakeDurationSeconds: Double? = RoutineCaptureDefaults.defaultMaximumTakeDurationSeconds,
+        sessionTimeZoneIdentifier: String? = TimeZone.current.identifier
     ) -> CaptureSessionConfig {
         CaptureSessionConfig(
             performerName: "",
@@ -637,6 +1569,9 @@ struct CaptureSessionConfig: Codable, Equatable, Sendable {
             drillMode: .fullCapture,
             captureMode: .timedClick,
             takeDurationSeconds: takeDurationSeconds,
+            plannedTakeDurationSeconds: plannedTakeDurationSeconds,
+            maximumTakeDurationSeconds: maximumTakeDurationSeconds,
+            sessionTimeZoneIdentifier: sessionTimeZoneIdentifier,
             takeCount: takeCount,
             handedness: .right,
             notes: "",
@@ -656,6 +1591,10 @@ struct CaptureSessionConfig: Codable, Equatable, Sendable {
         updatedAt = now
         takeCount = 0
         takeDurationSeconds = nil
+        // A new session identity re-stamps the zone its date will be read in.
+        // `plannedTakeDurationSeconds` is a setting, not a measurement, so it
+        // deliberately survives.
+        sessionTimeZoneIdentifier = timeZone.identifier
     }
 
     mutating func applyCapturedTakeMetrics(
@@ -770,6 +1709,30 @@ struct CaptureSessionConfig: Codable, Equatable, Sendable {
             timingPrintedToRecording = captureMode == .calibrationNoClick ? .notPrinted : .unknown
         }
         takeDurationSeconds = try container.decodeIfPresent(Double.self, forKey: .takeDurationSeconds)
+        // Decoded faithfully: absent stays absent. Migrating the legacy
+        // `takeDurationSeconds` into this field *here* would make a decoded
+        // config unequal to the in-memory config it was written from, which
+        // silently breaks every idempotency check that compares a reloaded
+        // record to an incoming one. The legacy fallback lives at the point of
+        // use instead — see `RoutineCaptureDefaults.maximumTakeDurationSeconds`.
+        plannedTakeDurationSeconds = try container.decodeIfPresent(
+            Double.self,
+            forKey: .plannedTakeDurationSeconds
+        )
+        // Absent on configs written before the plan/cap split. Left absent:
+        // `RoutineCaptureDefaults.maximumTakeDurationSeconds(for:)` resolves
+        // the effective cap without rewriting the stored record.
+        maximumTakeDurationSeconds = try container.decodeIfPresent(
+            Double.self,
+            forKey: .maximumTakeDurationSeconds
+        )
+        // Absent on legacy configs. `nil` means "no zone was recorded", and the
+        // export falls back to the exporting device's zone rather than
+        // inventing one.
+        sessionTimeZoneIdentifier = try container.decodeIfPresent(
+            String.self,
+            forKey: .sessionTimeZoneIdentifier
+        )
         takeCount = try container.decodeIfPresent(Int.self, forKey: .takeCount) ?? 0
         if let handednessValue = try container.decodeIfPresent(String.self, forKey: .handedness)?
             .trimmingCharacters(in: .whitespacesAndNewlines),
@@ -807,6 +1770,9 @@ struct CaptureSessionConfig: Codable, Equatable, Sendable {
         try container.encode(clickVersion, forKey: .clickVersion)
         try container.encode(timingPrintedToRecording.rawValue, forKey: .timingPrintedToRecording)
         try container.encodeIfPresent(takeDurationSeconds, forKey: .takeDurationSeconds)
+        try container.encodeIfPresent(plannedTakeDurationSeconds, forKey: .plannedTakeDurationSeconds)
+        try container.encodeIfPresent(maximumTakeDurationSeconds, forKey: .maximumTakeDurationSeconds)
+        try container.encodeIfPresent(sessionTimeZoneIdentifier, forKey: .sessionTimeZoneIdentifier)
         try container.encode(takeCount, forKey: .takeCount)
         try container.encodeIfPresent(handedness?.rawValue, forKey: .handedness)
         try container.encode(notes, forKey: .notes)
@@ -853,6 +1819,1569 @@ struct CaptureSessionConfig: Codable, Equatable, Sendable {
         } else if config.scratchType != nil {
             config.bpm = CaptureClickTrackDefaults.defaultTimedBPM
         }
+    }
+}
+
+// MARK: - App-container artifact references
+
+/// The app-container roots ScratchLab owns capture artifacts inside.
+///
+/// iOS reissues the Data-container UUID across installs, so an absolute URL
+/// captured under one container is not a durable reference to the same file.
+/// Everything ScratchLab writes itself is therefore addressed as a root plus a
+/// relative path, and the root is resolved fresh on every launch.
+enum CaptureContainerRoot: String, Codable, Equatable, Sendable, CaseIterable {
+    case documents
+    case applicationSupport = "application_support"
+
+    /// The directory segments that identify this root inside an absolute path.
+    /// Used only to interpret a legacy absolute URL that was written before
+    /// references existed; never to construct a new location.
+    var legacyPathMarker: [String] {
+        switch self {
+        case .documents:
+            return ["Documents"]
+        case .applicationSupport:
+            return ["Library", "Application Support"]
+        }
+    }
+}
+
+/// The kinds of capture artifact the kept-session ledger addresses, and the one
+/// directory each is allowed to live in. A legacy absolute URL may only be
+/// rebased into the exact directory its kind owns, so recovery can never walk
+/// the container looking for a plausible file.
+enum CaptureArtifactKind: String, Equatable, Sendable, CaseIterable {
+    case media
+    case sidecar
+    case audio
+    case watchMotion
+
+    var containerRoot: CaptureContainerRoot {
+        switch self {
+        case .media, .sidecar, .audio:
+            return .documents
+        case .watchMotion:
+            return .applicationSupport
+        }
+    }
+
+    /// Every directory, relative to `containerRoot`, this kind is allowed to
+    /// live in. A legacy absolute URL is only rebased when its own directory is
+    /// one of these, so recovery never reaches outside the app's own capture
+    /// storage. `RelayedWatchCaptures` is included because the export
+    /// coordinator already resolves linked Watch captures from there too.
+    var allowedDirectories: [String] {
+        switch self {
+        case .media, .sidecar, .audio:
+            return ["CompanionCaptures"]
+        case .watchMotion:
+            return ["WatchMotionCaptures", "ScratchLab/RelayedWatchCaptures"]
+        }
+    }
+
+    /// The human-readable field name used in ledger errors.
+    var fieldName: String {
+        switch self {
+        case .media: return "media"
+        case .sidecar: return "sidecar"
+        case .audio: return "audio"
+        case .watchMotion: return "watch motion"
+        }
+    }
+}
+
+/// One capture-artifact location.
+///
+/// App-owned artifacts are persisted relative to their container root so they
+/// survive a container UUID change. Anything ScratchLab does not own keeps its
+/// absolute URL, because rewriting a foreign path would be fabrication.
+enum CaptureArtifactReference: Equatable, Sendable {
+    case containerRelative(root: CaptureContainerRoot, path: String)
+    case absolute(URL)
+
+    /// Rejects empty, absolute, traversing, and current/parent-directory
+    /// components. A stored relative path must be a plain chain of real names.
+    static func isSafeRelativePath(_ path: String) -> Bool {
+        guard !path.isEmpty, !path.hasPrefix("/") else { return false }
+        let components = path.components(separatedBy: "/")
+        guard !components.isEmpty else { return false }
+        return components.allSatisfy(isSafePathComponent)
+    }
+
+    static func isSafePathComponent(_ component: String) -> Bool {
+        !component.isEmpty && component != "." && component != ".."
+    }
+}
+
+extension CaptureArtifactReference: Codable {
+    private enum CodingKeys: String, CodingKey {
+        case containerRoot
+        case relativePath
+    }
+
+    init(from decoder: Decoder) throws {
+        // Ledgers written before this type persisted a bare absolute file-URL
+        // string. Decoding those unchanged is what lets an existing install's
+        // takes survive to the rebase step instead of failing the whole load.
+        if let singleValue = try? decoder.singleValueContainer(),
+           let url = try? singleValue.decode(URL.self) {
+            self = .absolute(url)
+            return
+        }
+
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        let root = try container.decode(CaptureContainerRoot.self, forKey: .containerRoot)
+        let relativePath = try container.decode(String.self, forKey: .relativePath)
+        self = .containerRelative(root: root, path: relativePath)
+    }
+
+    func encode(to encoder: Encoder) throws {
+        switch self {
+        case let .absolute(url):
+            var singleValue = encoder.singleValueContainer()
+            try singleValue.encode(url)
+        case let .containerRelative(root, path):
+            var container = encoder.container(keyedBy: CodingKeys.self)
+            try container.encode(root, forKey: .containerRoot)
+            try container.encode(path, forKey: .relativePath)
+        }
+    }
+}
+
+/// Resolves container roots to their locations in the *current* container.
+///
+/// Total by construction: both roots are always known, so resolving a stored
+/// reference can never fail. Resolution is pure path arithmetic and never
+/// consults the file system — a reference whose file is genuinely missing must
+/// still produce the path the export validators report, so the failure stays
+/// visible and retryable instead of silently disappearing.
+struct CaptureContainerLocator: Equatable, Sendable {
+    let documentsURL: URL
+    let applicationSupportURL: URL
+
+    init(documentsURL: URL, applicationSupportURL: URL) {
+        self.documentsURL = documentsURL.standardizedFileURL
+        self.applicationSupportURL = applicationSupportURL.standardizedFileURL
+    }
+
+    static func current(fileManager: FileManager = .default) -> CaptureContainerLocator {
+        let home = URL(fileURLWithPath: NSHomeDirectory(), isDirectory: true)
+        let documentsURL = fileManager.urls(for: .documentDirectory, in: .userDomainMask).first
+            ?? home.appendingPathComponent("Documents", isDirectory: true)
+        let applicationSupportURL = fileManager.urls(for: .applicationSupportDirectory, in: .userDomainMask).first
+            ?? home
+                .appendingPathComponent("Library", isDirectory: true)
+                .appendingPathComponent("Application Support", isDirectory: true)
+        return CaptureContainerLocator(
+            documentsURL: documentsURL,
+            applicationSupportURL: applicationSupportURL
+        )
+    }
+
+    func rootURL(for root: CaptureContainerRoot) -> URL {
+        switch root {
+        case .documents:
+            return documentsURL
+        case .applicationSupport:
+            return applicationSupportURL
+        }
+    }
+
+    func url(for reference: CaptureArtifactReference) -> URL {
+        switch reference {
+        case let .absolute(url):
+            return url
+        case let .containerRelative(root, path):
+            return path
+                .components(separatedBy: "/")
+                .filter { !$0.isEmpty }
+                .reduce(rootURL(for: root)) { $0.appendingPathComponent($1) }
+        }
+    }
+
+    /// Classifies a concrete URL for durable storage. Anything inside a
+    /// container root becomes relative to it; anything else stays absolute.
+    func reference(for url: URL) -> CaptureArtifactReference {
+        let standardized = url.standardizedFileURL
+        for root in CaptureContainerRoot.allCases {
+            if let relativePath = Self.relativePath(of: standardized, under: rootURL(for: root)),
+               CaptureArtifactReference.isSafeRelativePath(relativePath) {
+                return .containerRelative(root: root, path: relativePath)
+            }
+        }
+        return .absolute(url)
+    }
+
+    /// True when this absolute URL lies inside a container root, which means
+    /// persisting it absolutely would reintroduce the stale-path defect.
+    func isContainerOwned(_ url: URL) -> Bool {
+        if case .containerRelative = reference(for: url) { return true }
+        return false
+    }
+
+    private static func relativePath(of url: URL, under rootURL: URL) -> String? {
+        let rootComponents = rootURL.standardizedFileURL.pathComponents
+        let urlComponents = url.pathComponents
+        guard urlComponents.count > rootComponents.count,
+              Array(urlComponents.prefix(rootComponents.count)) == rootComponents else {
+            return nil
+        }
+        return urlComponents.dropFirst(rootComponents.count).joined(separator: "/")
+    }
+}
+
+// MARK: - Guided capture kept-session ledger
+
+/// The durable information needed to rebuild one guided-capture
+/// `SessionExportTake` after the capture view has gone away.
+///
+/// These references deliberately point at the original staged artifacts, so a
+/// Keep action never copies or renames media, and the export coordinator stays
+/// responsible for validating and packaging the real files at Export/Share.
+///
+/// They are `CaptureArtifactReference`, not `URL`, on purpose: iOS reissues the
+/// Data-container UUID across installs, so an absolute container URL persisted
+/// by one install dangles in the next even though the capture is untouched.
+/// Resolving a reference requires a `CaptureContainerLocator`, which makes it a
+/// compile-time error to read a stored location without rebasing it onto the
+/// container the app is actually running in.
+struct GuidedCaptureKeptTake: Codable, Equatable, Sendable, Identifiable {
+    /// Legacy ledgers wrote these four locations as bare absolute file URLs
+    /// under the keys below. The keys are preserved so an existing install
+    /// still decodes; `CaptureArtifactReference` accepts either form.
+    private enum CodingKeys: String, CodingKey {
+        case sessionID
+        case takeID
+        case takeNumber
+        case bpm
+        case sourceMedia = "sourceMediaURL"
+        case sourceSidecar = "sourceSidecarURL"
+        case sourceAudio = "sourceAudioURL"
+        case sourceWatchMotion = "sourceWatchMotionURL"
+        case drillName
+        case duration
+        case quality
+        case comboTagged
+        case audioPresent
+        case motionPresent
+        case syncStatus
+        case recordingStatus
+        case verbalSlateUsed
+        case syncClapUsed
+        case note
+        case captureTiming
+        case motionSources
+        case faderMappingSource
+    }
+
+    let sessionID: String
+    let takeID: String
+    let takeNumber: Int
+    let bpm: Int
+    let sourceMedia: CaptureArtifactReference
+    let sourceSidecar: CaptureArtifactReference
+    var sourceAudio: CaptureArtifactReference?
+    let sourceWatchMotion: CaptureArtifactReference?
+    let drillName: String?
+    let duration: TimeInterval
+    let quality: String?
+    let comboTagged: Bool
+    var audioPresent: Bool?
+    let motionPresent: Bool?
+    let syncStatus: String?
+    let recordingStatus: String
+    let verbalSlateUsed: Bool?
+    let syncClapUsed: Bool?
+    let note: String?
+    let captureTiming: CaptureTimingMetadata?
+    let motionSources: [CaptureMotionSource]?
+    let faderMappingSource: FaderMappingSource?
+
+    var id: String { recordingID }
+    var recordingID: String { "\(sessionID):\(takeID)" }
+
+    init(
+        sessionID: String,
+        takeID: String,
+        takeNumber: Int,
+        bpm: Int,
+        sourceMedia: CaptureArtifactReference,
+        sourceSidecar: CaptureArtifactReference,
+        sourceAudio: CaptureArtifactReference?,
+        sourceWatchMotion: CaptureArtifactReference?,
+        drillName: String?,
+        duration: TimeInterval,
+        quality: String?,
+        comboTagged: Bool,
+        audioPresent: Bool?,
+        motionPresent: Bool?,
+        syncStatus: String?,
+        recordingStatus: String,
+        verbalSlateUsed: Bool?,
+        syncClapUsed: Bool?,
+        note: String?,
+        captureTiming: CaptureTimingMetadata? = nil,
+        motionSources: [CaptureMotionSource]? = nil,
+        faderMappingSource: FaderMappingSource? = nil
+    ) {
+        self.sessionID = sessionID
+        self.takeID = takeID
+        self.takeNumber = takeNumber
+        self.bpm = bpm
+        self.sourceMedia = sourceMedia
+        self.sourceSidecar = sourceSidecar
+        self.sourceAudio = sourceAudio
+        self.sourceWatchMotion = sourceWatchMotion
+        self.drillName = drillName
+        self.duration = duration
+        self.quality = quality
+        self.comboTagged = comboTagged
+        self.audioPresent = audioPresent
+        self.motionPresent = motionPresent
+        self.syncStatus = syncStatus
+        self.recordingStatus = recordingStatus
+        self.verbalSlateUsed = verbalSlateUsed
+        self.syncClapUsed = syncClapUsed
+        self.note = note
+        self.captureTiming = captureTiming
+        self.motionSources = motionSources
+        self.faderMappingSource = faderMappingSource
+    }
+
+    /// Builds a take from the concrete URLs a live capture produced.
+    ///
+    /// The locator classifies each URL as it is stored, so an app-owned
+    /// artifact is durable from the moment it is kept and never has to be
+    /// recovered later. Artifacts outside the app container keep their
+    /// absolute URL, because ScratchLab does not own those paths.
+    init(
+        sessionID: String,
+        takeID: String,
+        takeNumber: Int,
+        bpm: Int,
+        sourceMediaURL: URL,
+        sourceSidecarURL: URL,
+        sourceAudioURL: URL?,
+        sourceWatchMotionURL: URL?,
+        drillName: String?,
+        duration: TimeInterval,
+        quality: String?,
+        comboTagged: Bool,
+        audioPresent: Bool?,
+        motionPresent: Bool?,
+        syncStatus: String?,
+        recordingStatus: String,
+        verbalSlateUsed: Bool?,
+        syncClapUsed: Bool?,
+        note: String?,
+        captureTiming: CaptureTimingMetadata? = nil,
+        motionSources: [CaptureMotionSource]? = nil,
+        faderMappingSource: FaderMappingSource? = nil,
+        containerLocator: CaptureContainerLocator = .current()
+    ) {
+        self.init(
+            sessionID: sessionID,
+            takeID: takeID,
+            takeNumber: takeNumber,
+            bpm: bpm,
+            sourceMedia: containerLocator.reference(for: sourceMediaURL),
+            sourceSidecar: containerLocator.reference(for: sourceSidecarURL),
+            sourceAudio: sourceAudioURL.map(containerLocator.reference(for:)),
+            sourceWatchMotion: sourceWatchMotionURL.map(containerLocator.reference(for:)),
+            drillName: drillName,
+            duration: duration,
+            quality: quality,
+            comboTagged: comboTagged,
+            audioPresent: audioPresent,
+            motionPresent: motionPresent,
+            syncStatus: syncStatus,
+            recordingStatus: recordingStatus,
+            verbalSlateUsed: verbalSlateUsed,
+            syncClapUsed: syncClapUsed,
+            note: note,
+            captureTiming: captureTiming,
+            motionSources: motionSources,
+            faderMappingSource: faderMappingSource
+        )
+    }
+
+    func sourceMediaURL(in locator: CaptureContainerLocator) -> URL {
+        locator.url(for: sourceMedia)
+    }
+
+    func sourceSidecarURL(in locator: CaptureContainerLocator) -> URL {
+        locator.url(for: sourceSidecar)
+    }
+
+    func sourceAudioURL(in locator: CaptureContainerLocator) -> URL? {
+        sourceAudio.map(locator.url(for:))
+    }
+
+    func sourceWatchMotionURL(in locator: CaptureContainerLocator) -> URL? {
+        sourceWatchMotion.map(locator.url(for:))
+    }
+
+    /// The reference for one artifact kind, or `nil` when the take has none.
+    func reference(for kind: CaptureArtifactKind) -> CaptureArtifactReference? {
+        switch kind {
+        case .media: return sourceMedia
+        case .sidecar: return sourceSidecar
+        case .audio: return sourceAudio
+        case .watchMotion: return sourceWatchMotion
+        }
+    }
+
+    /// Returns a copy with the given artifact locations replaced. Used only by
+    /// the ledger's legacy rebase, which replaces every location of a take
+    /// together or none of them.
+    func replacingArtifactReferences(
+        media: CaptureArtifactReference,
+        sidecar: CaptureArtifactReference,
+        audio: CaptureArtifactReference?,
+        watchMotion: CaptureArtifactReference?
+    ) -> GuidedCaptureKeptTake {
+        GuidedCaptureKeptTake(
+            sessionID: sessionID,
+            takeID: takeID,
+            takeNumber: takeNumber,
+            bpm: bpm,
+            sourceMedia: media,
+            sourceSidecar: sidecar,
+            sourceAudio: audio,
+            sourceWatchMotion: watchMotion,
+            drillName: drillName,
+            duration: duration,
+            quality: quality,
+            comboTagged: comboTagged,
+            audioPresent: audioPresent,
+            motionPresent: motionPresent,
+            syncStatus: syncStatus,
+            recordingStatus: recordingStatus,
+            verbalSlateUsed: verbalSlateUsed,
+            syncClapUsed: syncClapUsed,
+            note: note,
+            captureTiming: captureTiming,
+            motionSources: motionSources,
+            faderMappingSource: faderMappingSource
+        )
+    }
+}
+
+/// Durable guided-capture session context plus every take the operator kept.
+/// Profile values stay as raw strings because their current UI enums are
+/// private to `CompanionCameraView`; persisting the raw values keeps this
+/// shared ledger platform-agnostic without creating a second profile model.
+struct GuidedCaptureKeptSession: Codable, Equatable, Sendable, Identifiable {
+    let sessionID: String
+    var config: CaptureSessionConfig
+    var deckProfileRawValue: String
+    var cameraProfileRawValue: String
+    var watchWristRawValue: String
+    var workflow: String
+    var platform: String
+    var sessionName: String
+    var calibrationData: Data?
+    fileprivate(set) var takes: [GuidedCaptureKeptTake]
+    fileprivate(set) var updatedAt: Date?
+
+    var id: String { sessionID }
+
+    init(
+        sessionID: String,
+        config: CaptureSessionConfig,
+        deckProfileRawValue: String,
+        cameraProfileRawValue: String,
+        watchWristRawValue: String,
+        workflow: String = "guided_capture",
+        platform: String,
+        sessionName: String,
+        calibrationData: Data?,
+        takes: [GuidedCaptureKeptTake] = [],
+        updatedAt: Date? = nil
+    ) {
+        self.sessionID = sessionID
+        self.config = config
+        self.deckProfileRawValue = deckProfileRawValue
+        self.cameraProfileRawValue = cameraProfileRawValue
+        self.watchWristRawValue = watchWristRawValue
+        self.workflow = workflow
+        self.platform = platform
+        self.sessionName = sessionName
+        self.calibrationData = calibrationData
+        self.takes = takes
+        self.updatedAt = updatedAt
+    }
+
+    func take(id takeID: String) -> GuidedCaptureKeptTake? {
+        takes.first { $0.takeID == takeID }
+    }
+}
+
+/// A validated, read-only production projection of one durable kept take.
+///
+/// The ledger remains the source of identity and artifact locations. Opening a
+/// take re-reads its finalized sidecar and verifies the real movie before UI is
+/// allowed to offer playback. Notation is presentation-only and goes through
+/// the same gesture-relative projection used by macOS Review/Take Detail;
+/// canonical evidence in the sidecar is never changed.
+struct GuidedCaptureSavedTakeDetail: Equatable, Sendable, Identifiable {
+    let take: GuidedCaptureKeptTake
+    let mediaURL: URL
+    let sidecar: CaptureCore.LocalRecordingSidecar
+    let presentationEvents: [CaptureCore.DetectedNotationRecordMovementEvent]
+    let presentationDuration: TimeInterval
+
+    var id: String { take.recordingID }
+
+    static func load(
+        take: GuidedCaptureKeptTake,
+        containerLocator: CaptureContainerLocator,
+        fileManager: FileManager = .default
+    ) throws -> GuidedCaptureSavedTakeDetail {
+        let mediaURL = take.sourceMediaURL(in: containerLocator)
+        let sidecarURL = take.sourceSidecarURL(in: containerLocator)
+
+        try requireNonemptyRegularFile(
+            at: mediaURL,
+            missing: .mediaMissing(take.takeID),
+            empty: .mediaEmpty(take.takeID),
+            fileManager: fileManager
+        )
+        try requireNonemptyRegularFile(
+            at: sidecarURL,
+            missing: .sidecarMissing(take.takeID),
+            empty: .sidecarEmpty(take.takeID),
+            fileManager: fileManager
+        )
+
+        let sidecar: CaptureCore.LocalRecordingSidecar
+        do {
+            let decoder = JSONDecoder()
+            decoder.dateDecodingStrategy = .iso8601
+            sidecar = try decoder.decode(
+                CaptureCore.LocalRecordingSidecar.self,
+                from: Data(contentsOf: sidecarURL)
+            )
+        } catch {
+            throw GuidedCaptureSavedTakeDetailError.sidecarUnreadable(take.takeID)
+        }
+
+        guard sidecar.sessionID == take.sessionID,
+              sidecar.takeID == take.takeID,
+              sidecar.appLocalTakeNumber == take.takeNumber else {
+            throw GuidedCaptureSavedTakeDetailError.sidecarIdentityMismatch(take.takeID)
+        }
+        guard sidecar.sidecarFileName == sidecarURL.lastPathComponent,
+              sidecar.mediaFileName == mediaURL.lastPathComponent else {
+            throw GuidedCaptureSavedTakeDetailError.artifactAssociationMismatch(take.takeID)
+        }
+        guard sidecar.recordingStatus == "completed",
+              take.recordingStatus == "completed" else {
+            throw GuidedCaptureSavedTakeDetailError.recordingIncomplete(take.takeID)
+        }
+
+        let events = sidecar.detectedNotation.map {
+            CaptureCore.gestureRelativeRecordMovementEventsForPresentation(from: $0)
+        } ?? []
+        let notationEnd = sidecar.detectedNotation.flatMap {
+            CaptureCore.gestureRelativeRecordMovementPresentationEndTime(
+                from: $0,
+                presentationEvents: events
+            )
+        } ?? 0
+
+        return GuidedCaptureSavedTakeDetail(
+            take: take,
+            mediaURL: mediaURL,
+            sidecar: sidecar,
+            presentationEvents: events,
+            presentationDuration: max(take.duration, notationEnd)
+        )
+    }
+
+    private static func requireNonemptyRegularFile(
+        at url: URL,
+        missing: GuidedCaptureSavedTakeDetailError,
+        empty: GuidedCaptureSavedTakeDetailError,
+        fileManager: FileManager
+    ) throws {
+        guard fileManager.fileExists(atPath: url.path) else { throw missing }
+        let values: URLResourceValues
+        do {
+            values = try url.resourceValues(forKeys: [.isRegularFileKey, .fileSizeKey])
+        } catch {
+            throw missing
+        }
+        guard values.isRegularFile == true else { throw missing }
+        guard (values.fileSize ?? 0) > 0 else { throw empty }
+    }
+}
+
+enum GuidedCaptureSavedTakeDetailError: Error, Equatable, Sendable {
+    case mediaMissing(String)
+    case mediaEmpty(String)
+    case sidecarMissing(String)
+    case sidecarEmpty(String)
+    case sidecarUnreadable(String)
+    case sidecarIdentityMismatch(String)
+    case artifactAssociationMismatch(String)
+    case recordingIncomplete(String)
+}
+
+extension GuidedCaptureSavedTakeDetailError: LocalizedError {
+    var errorDescription: String? {
+        switch self {
+        case .mediaMissing:
+            return "This saved take's video is missing. The take was left in the session."
+        case .mediaEmpty:
+            return "This saved take's video is empty. The take was left in the session."
+        case .sidecarMissing:
+            return "This saved take's metadata is missing. The take was left in the session."
+        case .sidecarEmpty:
+            return "This saved take's metadata is empty. The take was left in the session."
+        case .sidecarUnreadable:
+            return "This saved take's metadata could not be read. The take was left in the session."
+        case .sidecarIdentityMismatch, .artifactAssociationMismatch:
+            return "This saved take's files do not match its session record. The take was left in the session."
+        case .recordingIncomplete:
+            return "This saved take did not finish recording, so playback is unavailable. The take was left in the session."
+        }
+    }
+}
+
+// MARK: - Legacy kept-ledger rebase
+
+/// Why one take's legacy absolute locations were refused a rebase.
+///
+/// Every case leaves the take's stored locations exactly as they were: the
+/// capture files are never touched, the ledger keeps the take, and Export keeps
+/// reporting the real problem so the operator can retry.
+enum GuidedCaptureLedgerRebaseRejection: String, Equatable, Sendable {
+    /// A stored path contained `.`/`..` or was otherwise not a plain name chain.
+    case pathTraversal
+    /// The legacy path named its container root more than once, so which
+    /// segment was the root is genuinely unknowable.
+    case ambiguousContainerRoot
+    /// The legacy path was inside the container but not in a capture directory
+    /// this artifact kind owns.
+    case unknownCaptureLocation
+    /// The recovered sidecar could not be read or decoded.
+    case sidecarUnreadable
+    /// The recovered sidecar belongs to a different session, take, or number.
+    case sidecarIdentityMismatch
+    /// The recovered sidecar does not name itself as the candidate file.
+    case sidecarFileNameMismatch
+    /// The recovered sidecar does not name the candidate media file.
+    case mediaAssociationMismatch
+    /// The candidate audio file is not the media file's audio sibling.
+    case audioAssociationMismatch
+    /// The recovered sidecar does not link the candidate Watch/motion file.
+    case watchMotionAssociationMismatch
+    /// A candidate file is genuinely absent from the current container.
+    case artifactMissing
+    /// Two takes in one session resolved onto the same file.
+    case duplicateResolvedPath
+}
+
+/// What happened to one take during a rebase pass.
+enum GuidedCaptureLedgerTakeRebase: Equatable, Sendable {
+    /// Nothing needed rebasing; the take is already durable.
+    case unchanged
+    case rebased(GuidedCaptureKeptTake)
+    case rejected(GuidedCaptureLedgerRebaseRejection)
+}
+
+/// The outcome of one whole-ledger rebase pass, for logging and tests.
+struct GuidedCaptureLedgerRebaseReport: Equatable, Sendable {
+    /// `sessionID:takeID` of every take whose locations were made durable.
+    var rebasedRecordingIDs: [String] = []
+    /// `sessionID:takeID` to the reason its rebase was refused.
+    var rejections: [String: GuidedCaptureLedgerRebaseRejection] = [:]
+
+    var didChangeAnything: Bool { !rebasedRecordingIDs.isEmpty }
+}
+
+/// Rebases legacy absolute artifact locations onto the container the app is
+/// running in now.
+///
+/// This is deliberately not a search. Each legacy path is *interpreted* — its
+/// container-root segment is located and the remainder must already be a
+/// capture directory that artifact kind owns — and the single resulting
+/// candidate is then proved against the recovered sidecar before it is
+/// accepted. Nothing is ever matched by basename alone, no directory is
+/// enumerated, no take is invented, and a take that fails any check keeps its
+/// stale location so the failure stays visible.
+enum GuidedCaptureLedgerRebase {
+    private static let sidecarDecoder: JSONDecoder = {
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .iso8601
+        return decoder
+    }()
+
+    /// One artifact location's interpretation.
+    enum DerivedReference: Equatable, Sendable {
+        /// Already durable, or a path ScratchLab does not own. Left alone.
+        case unchanged
+        case candidate(CaptureArtifactReference)
+        case rejected(GuidedCaptureLedgerRebaseRejection)
+    }
+
+    static func derivedReference(
+        for reference: CaptureArtifactReference,
+        kind: CaptureArtifactKind
+    ) -> DerivedReference {
+        switch reference {
+        case let .containerRelative(_, path):
+            guard CaptureArtifactReference.isSafeRelativePath(path) else {
+                return .rejected(.pathTraversal)
+            }
+            return .unchanged
+
+        case let .absolute(url):
+            let components = url.pathComponents
+            guard components.allSatisfy({ $0 == "/" || CaptureArtifactReference.isSafePathComponent($0) }) else {
+                return .rejected(.pathTraversal)
+            }
+
+            let root = kind.containerRoot
+            let marker = root.legacyPathMarker
+            let markerStarts = markerStartIndices(of: marker, in: components)
+            guard !markerStarts.isEmpty else {
+                // Not an app-container path at all — nothing to rebase.
+                return .unchanged
+            }
+            guard markerStarts.count == 1, let markerStart = markerStarts.first else {
+                return .rejected(.ambiguousContainerRoot)
+            }
+
+            let suffix = Array(components.dropFirst(markerStart + marker.count))
+            guard let relativePath = knownCaptureRelativePath(for: suffix, kind: kind) else {
+                return .rejected(.unknownCaptureLocation)
+            }
+            return .candidate(.containerRelative(root: root, path: relativePath))
+        }
+    }
+
+    /// Rebases one take, proving every candidate against the recovered sidecar
+    /// before accepting any of them. All four locations move together or none
+    /// do, so a take can never end up half-rebased.
+    static func rebasedTake(
+        _ take: GuidedCaptureKeptTake,
+        locator: CaptureContainerLocator,
+        fileManager: FileManager = .default
+    ) -> GuidedCaptureLedgerTakeRebase {
+        var proposed: [CaptureArtifactKind: CaptureArtifactReference] = [:]
+        var didDeriveCandidate = false
+
+        for kind in CaptureArtifactKind.allCases {
+            guard let existing = take.reference(for: kind) else { continue }
+            switch derivedReference(for: existing, kind: kind) {
+            case .unchanged:
+                proposed[kind] = existing
+            case let .candidate(candidate):
+                proposed[kind] = candidate
+                didDeriveCandidate = true
+            case let .rejected(reason):
+                return .rejected(reason)
+            }
+        }
+
+        guard didDeriveCandidate else { return .unchanged }
+
+        guard let mediaReference = proposed[.media], let sidecarReference = proposed[.sidecar] else {
+            return .rejected(.unknownCaptureLocation)
+        }
+        let audioReference = proposed[.audio]
+        let watchMotionReference = proposed[.watchMotion]
+
+        let sidecarURL = locator.url(for: sidecarReference)
+        let mediaURL = locator.url(for: mediaReference)
+
+        guard fileManager.fileExists(atPath: sidecarURL.path) else {
+            return .rejected(.artifactMissing)
+        }
+        guard let sidecarData = try? Data(contentsOf: sidecarURL),
+              let sidecar = try? sidecarDecoder.decode(
+                  CaptureCore.LocalRecordingSidecar.self,
+                  from: sidecarData
+              ) else {
+            return .rejected(.sidecarUnreadable)
+        }
+
+        guard sidecar.sessionID == take.sessionID,
+              sidecar.takeID == take.takeID,
+              sidecar.appLocalTakeNumber == take.takeNumber else {
+            return .rejected(.sidecarIdentityMismatch)
+        }
+        guard sidecar.sidecarFileName == sidecarURL.lastPathComponent else {
+            return .rejected(.sidecarFileNameMismatch)
+        }
+        guard sidecar.mediaFileName == mediaURL.lastPathComponent else {
+            return .rejected(.mediaAssociationMismatch)
+        }
+        guard fileManager.fileExists(atPath: mediaURL.path) else {
+            return .rejected(.artifactMissing)
+        }
+
+        if let audioReference {
+            let audioURL = locator.url(for: audioReference)
+            guard audioURL.deletingPathExtension().lastPathComponent
+                    == mediaURL.deletingPathExtension().lastPathComponent else {
+                return .rejected(.audioAssociationMismatch)
+            }
+            guard fileManager.fileExists(atPath: audioURL.path) else {
+                return .rejected(.artifactMissing)
+            }
+        }
+
+        if let watchMotionReference {
+            let watchMotionURL = locator.url(for: watchMotionReference)
+            // The sidecar's linked file name is the only durable evidence that
+            // this Watch capture belongs to this take. Without it there is
+            // nothing to prove the association, so the rebase is refused.
+            guard sidecar.linkedMotionFileName == watchMotionURL.lastPathComponent else {
+                return .rejected(.watchMotionAssociationMismatch)
+            }
+            guard fileManager.fileExists(atPath: watchMotionURL.path) else {
+                return .rejected(.artifactMissing)
+            }
+        }
+
+        return .rebased(
+            take.replacingArtifactReferences(
+                media: mediaReference,
+                sidecar: sidecarReference,
+                audio: audioReference,
+                watchMotion: watchMotionReference
+            )
+        )
+    }
+
+    /// Rebases every take in every session, preserving take count and order.
+    /// Takes are never added, removed, merged, or reordered here.
+    static func rebasedSessions(
+        _ sessions: [GuidedCaptureKeptSession],
+        locator: CaptureContainerLocator,
+        fileManager: FileManager = .default
+    ) -> (sessions: [GuidedCaptureKeptSession], report: GuidedCaptureLedgerRebaseReport) {
+        var report = GuidedCaptureLedgerRebaseReport()
+        var outcomes: [[GuidedCaptureLedgerTakeRebase]] = []
+        outcomes.reserveCapacity(sessions.count)
+        for session in sessions {
+            outcomes.append(
+                session.takes.map { rebasedTake($0, locator: locator, fileManager: fileManager) }
+            )
+        }
+
+        // No two takes may land on the same file, in this session or any other.
+        // A collision is mutually ambiguous evidence, so every take involved
+        // keeps its original locations rather than one of them silently
+        // winning and the other pointing at a file it does not own.
+        struct TakeAddress: Hashable {
+            let session: Int
+            let take: Int
+        }
+        var pathOwners: [String: TakeAddress] = [:]
+        var collidingAddresses: Set<TakeAddress> = []
+        for (sessionIndex, sessionOutcomes) in outcomes.enumerated() {
+            for (takeIndex, outcome) in sessionOutcomes.enumerated() {
+                guard case let .rebased(candidate) = outcome else { continue }
+                let address = TakeAddress(session: sessionIndex, take: takeIndex)
+                for path in resolvedPaths(of: candidate, locator: locator) {
+                    if let owner = pathOwners[path] {
+                        collidingAddresses.insert(owner)
+                        collidingAddresses.insert(address)
+                    } else {
+                        pathOwners[path] = address
+                    }
+                }
+            }
+        }
+
+        var updatedSessions: [GuidedCaptureKeptSession] = []
+        updatedSessions.reserveCapacity(sessions.count)
+        for (sessionIndex, session) in sessions.enumerated() {
+            var updatedSession = session
+            for (takeIndex, outcome) in outcomes[sessionIndex].enumerated() {
+                let take = session.takes[takeIndex]
+                let address = TakeAddress(session: sessionIndex, take: takeIndex)
+                if collidingAddresses.contains(address) {
+                    report.rejections[take.recordingID] = .duplicateResolvedPath
+                    continue
+                }
+                switch outcome {
+                case .unchanged:
+                    continue
+                case let .rejected(reason):
+                    report.rejections[take.recordingID] = reason
+                case let .rebased(rebasedTake):
+                    updatedSession.takes[takeIndex] = rebasedTake
+                    report.rebasedRecordingIDs.append(rebasedTake.recordingID)
+                }
+            }
+            updatedSessions.append(updatedSession)
+        }
+
+        return (updatedSessions, report)
+    }
+
+    private static func resolvedPaths(
+        of take: GuidedCaptureKeptTake,
+        locator: CaptureContainerLocator
+    ) -> [String] {
+        CaptureArtifactKind.allCases.compactMap { kind in
+            take.reference(for: kind).map { locator.url(for: $0).standardizedFileURL.path }
+        }
+    }
+
+    private static func markerStartIndices(of marker: [String], in components: [String]) -> [Int] {
+        guard !marker.isEmpty, components.count >= marker.count else { return [] }
+        return (0...(components.count - marker.count)).filter { start in
+            Array(components[start..<(start + marker.count)]) == marker
+        }
+    }
+
+    /// Accepts a container-relative suffix only when it is exactly one of the
+    /// capture directories this kind owns followed by a single file name.
+    private static func knownCaptureRelativePath(
+        for suffix: [String],
+        kind: CaptureArtifactKind
+    ) -> String? {
+        for directory in kind.allowedDirectories {
+            let directoryComponents = directory.components(separatedBy: "/")
+            guard suffix.count == directoryComponents.count + 1,
+                  Array(suffix.prefix(directoryComponents.count)) == directoryComponents,
+                  let fileName = suffix.last,
+                  CaptureArtifactReference.isSafePathComponent(fileName) else {
+                continue
+            }
+            return "\(directory)/\(fileName)"
+        }
+        return nil
+    }
+}
+
+enum GuidedCaptureKeptSessionStoreError: Error, Equatable, Sendable {
+    case unableToResolveDefaultStorage
+    case invalidStorageURL(String)
+    case unreadableStore(String)
+    case invalidStoredData(String)
+    case unsupportedSchemaVersion(Int)
+    case duplicateSessionID(String)
+    case sessionIdentityMismatch(sessionID: String, configSessionID: String)
+    case takeSessionMismatch(sessionID: String, takeSessionID: String)
+    case invalidSessionID(String)
+    case invalidSessionContext(sessionID: String)
+    case invalidTakeIdentity(sessionID: String, takeID: String, takeNumber: Int)
+    case nonAbsoluteSourceURL(sessionID: String, takeID: String, field: String)
+    case containerOwnedAbsoluteSourceURL(sessionID: String, takeID: String, field: String)
+    case unsafeRelativeSourcePath(sessionID: String, takeID: String, field: String)
+    case takeIDCollision(sessionID: String, takeID: String)
+    case takeNumberCollision(sessionID: String, takeNumber: Int)
+    case takePayloadConflict(sessionID: String, takeID: String, takeNumber: Int)
+    case sessionNotFound(String)
+    case takeNotFound(sessionID: String, takeID: String)
+    case recordingNotFound(String)
+    case storageChanged(String)
+    case persistenceFailed(String)
+}
+
+extension GuidedCaptureKeptSessionStoreError: LocalizedError {
+    var errorDescription: String? {
+        switch self {
+        case .unableToResolveDefaultStorage:
+            return "ScratchLab could not locate Application Support for the kept-session ledger."
+        case let .invalidStorageURL(path):
+            return "The kept-session storage location is invalid: \(path)"
+        case .unreadableStore:
+            return "ScratchLab could not read the kept-session ledger."
+        case .invalidStoredData:
+            return "The kept-session ledger is damaged or inconsistent. It was left unchanged."
+        case let .unsupportedSchemaVersion(version):
+            return "This kept-session ledger uses unsupported schema version \(version)."
+        case let .duplicateSessionID(sessionID):
+            return "The kept-session ledger contains more than one session named \(sessionID)."
+        case .sessionIdentityMismatch:
+            return "The kept session and its capture configuration have different session IDs."
+        case .takeSessionMismatch:
+            return "The kept take belongs to a different capture session."
+        case .invalidSessionID:
+            return "The kept session has an invalid session ID."
+        case .invalidSessionContext:
+            return "The kept session is missing required export context."
+        case let .invalidTakeIdentity(_, takeID, takeNumber):
+            return "Take \(takeID) has invalid take number \(takeNumber)."
+        case let .nonAbsoluteSourceURL(_, takeID, field):
+            return "Take \(takeID) has an invalid \(field) source location."
+        case let .containerOwnedAbsoluteSourceURL(_, takeID, field):
+            return "Take \(takeID) tried to store its \(field) location as an absolute app-container path, which does not survive reinstalling."
+        case let .unsafeRelativeSourcePath(_, takeID, field):
+            return "Take \(takeID) has an unsafe \(field) source path."
+        case let .takeIDCollision(_, takeID):
+            return "A different take already uses take ID \(takeID)."
+        case let .takeNumberCollision(_, takeNumber):
+            return "A different take already uses take number \(takeNumber)."
+        case let .takePayloadConflict(_, takeID, _):
+            return "Take \(takeID) was already kept with different capture details."
+        case let .sessionNotFound(sessionID):
+            return "Kept session \(sessionID) was not found."
+        case let .takeNotFound(_, takeID):
+            return "Kept take \(takeID) was not found."
+        case let .recordingNotFound(recordingID):
+            return "Kept recording \(recordingID) was not found."
+        case .storageChanged:
+            return "The kept-session ledger changed on disk. Reload it before retrying."
+        case .persistenceFailed:
+            return "ScratchLab could not save the kept-session ledger. The in-memory ledger was left unchanged."
+        }
+    }
+}
+
+/// File-backed source of truth for guided captures the operator has kept.
+///
+/// A mutation is published only after its complete JSON document has been
+/// written atomically. The exact bytes loaded or written are retained as an
+/// optimistic concurrency token, so another store instance (or damaged file)
+/// can never be silently overwritten by stale in-memory state.
+@MainActor
+final class GuidedCaptureKeptSessionStore: ObservableObject {
+    private struct Document: Codable, Equatable, Sendable {
+        static let currentSchemaVersion = 1
+
+        let schemaVersion: Int
+        let sessions: [GuidedCaptureKeptSession]
+
+        init(sessions: [GuidedCaptureKeptSession]) {
+            self.schemaVersion = Self.currentSchemaVersion
+            self.sessions = sessions
+        }
+    }
+
+    @Published private(set) var sessions: [GuidedCaptureKeptSession] = []
+
+    let storageURL: URL
+
+    /// The container roots every stored reference is resolved against. Held
+    /// here rather than baked into the ledger so a container UUID change is
+    /// absorbed at load time.
+    let containerLocator: CaptureContainerLocator
+
+    /// What the last load did with legacy absolute locations, for diagnostics.
+    private(set) var lastRebaseReport = GuidedCaptureLedgerRebaseReport()
+
+    private let fileManager: FileManager
+    private let now: () -> Date
+    private let encoder: JSONEncoder
+    private let decoder: JSONDecoder
+    private var lastPersistedData: Data?
+
+    init(
+        storageURL: URL? = nil,
+        fileManager: FileManager = .default,
+        containerLocator: CaptureContainerLocator? = nil,
+        now: @escaping () -> Date = { Date() }
+    ) throws {
+        self.fileManager = fileManager
+        self.containerLocator = containerLocator ?? .current(fileManager: fileManager)
+        self.now = now
+
+        if let storageURL {
+            self.storageURL = storageURL
+        } else {
+            self.storageURL = try Self.defaultStorageURL(fileManager: fileManager)
+        }
+
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+        self.encoder = encoder
+        self.decoder = JSONDecoder()
+
+        guard Self.isAbsoluteFileURL(self.storageURL) else {
+            throw GuidedCaptureKeptSessionStoreError.invalidStorageURL(self.storageURL.absoluteString)
+        }
+
+        try reload()
+    }
+
+    static func defaultStorageURL(fileManager: FileManager = .default) throws -> URL {
+        guard let applicationSupportURL = fileManager.urls(
+            for: .applicationSupportDirectory,
+            in: .userDomainMask
+        ).first else {
+            throw GuidedCaptureKeptSessionStoreError.unableToResolveDefaultStorage
+        }
+
+        return applicationSupportURL
+            .appendingPathComponent("ScratchLab", isDirectory: true)
+            .appendingPathComponent("guided-capture-kept-sessions.json", isDirectory: false)
+    }
+
+    /// Reloads a complete document. Invalid data throws before published state
+    /// or the concurrency token changes, so a later retry cannot overwrite it.
+    func reload() throws {
+        guard fileManager.fileExists(atPath: storageURL.path) else {
+            sessions = []
+            lastPersistedData = nil
+            return
+        }
+
+        let data: Data
+        do {
+            data = try Data(contentsOf: storageURL)
+        } catch {
+            throw GuidedCaptureKeptSessionStoreError.unreadableStore(storageURL.path)
+        }
+
+        let document: Document
+        do {
+            document = try decoder.decode(Document.self, from: data)
+        } catch {
+            throw GuidedCaptureKeptSessionStoreError.invalidStoredData(storageURL.path)
+        }
+
+        guard document.schemaVersion == Document.currentSchemaVersion else {
+            throw GuidedCaptureKeptSessionStoreError.unsupportedSchemaVersion(document.schemaVersion)
+        }
+
+        let canonicalSessions: [GuidedCaptureKeptSession]
+        do {
+            // A legacy ledger legitimately still holds absolute container URLs,
+            // so loading only enforces structural validity. The durable-form
+            // rule is enforced on write, below and in `persist`.
+            canonicalSessions = try Self.validatedCanonicalSessions(
+                document.sessions,
+                containerLocator: containerLocator,
+                mode: .loading
+            )
+        } catch let storeError as GuidedCaptureKeptSessionStoreError {
+            throw storeError
+        } catch {
+            throw GuidedCaptureKeptSessionStoreError.invalidStoredData(storageURL.path)
+        }
+
+        sessions = canonicalSessions
+        lastPersistedData = data
+
+        migrateLegacyReferencesIfNeeded(from: canonicalSessions)
+    }
+
+    /// Rebases any legacy absolute locations onto the current container and
+    /// writes the result back in the same atomic transaction the store uses for
+    /// every other mutation.
+    ///
+    /// A take that cannot be proved keeps its stale location: the capture files
+    /// are untouched, the take stays in the ledger, and Export keeps reporting
+    /// the real failure so the operator can retry after the next install.
+    private func migrateLegacyReferencesIfNeeded(from loadedSessions: [GuidedCaptureKeptSession]) {
+        let (rebasedSessions, report) = GuidedCaptureLedgerRebase.rebasedSessions(
+            loadedSessions,
+            locator: containerLocator,
+            fileManager: fileManager
+        )
+        lastRebaseReport = report
+        guard report.didChangeAnything, rebasedSessions != loadedSessions else { return }
+
+        do {
+            try persist(rebasedSessions)
+        } catch {
+            // The rebase is a durability improvement, not the operator's
+            // request. If the write fails, keep the resolved ledger in memory
+            // so this launch can still export, and let the next mutation retry
+            // the write.
+            if let validated = try? Self.validatedCanonicalSessions(
+                rebasedSessions,
+                containerLocator: containerLocator,
+                mode: .persisting
+            ) {
+                sessions = validated
+            }
+        }
+    }
+
+    func session(id sessionID: String) -> GuidedCaptureKeptSession? {
+        sessions.first { $0.sessionID == sessionID }
+    }
+
+    /// Adds a take to its active session without ever replacing an existing
+    /// take. Passing the same record again is an idempotent no-op. Passing the
+    /// same identity with different payload, or reusing either half of the
+    /// identity for another take, fails visibly.
+    @discardableResult
+    func keep(
+        _ take: GuidedCaptureKeptTake,
+        in session: GuidedCaptureKeptSession
+    ) throws -> GuidedCaptureKeptSession {
+        guard take.sessionID == session.sessionID else {
+            throw GuidedCaptureKeptSessionStoreError.takeSessionMismatch(
+                sessionID: session.sessionID,
+                takeSessionID: take.sessionID
+            )
+        }
+
+        var nextSessions = sessions
+        let sessionIndex = nextSessions.firstIndex { $0.sessionID == session.sessionID }
+        var updatedSession: GuidedCaptureKeptSession
+
+        if let sessionIndex {
+            let existing = nextSessions[sessionIndex]
+            updatedSession = session
+            // Kept takes are append-only here. Metadata/profile changes can be
+            // refreshed by the active session, but omission from an incoming
+            // snapshot never detaches an earlier take.
+            updatedSession.takes = existing.takes
+            updatedSession.updatedAt = existing.updatedAt
+        } else {
+            updatedSession = session
+            updatedSession.takes = []
+            updatedSession.updatedAt = nil
+        }
+
+        var didChange = sessionIndex == nil
+        for incomingTake in session.takes + [take] {
+            didChange = try Self.merge(incomingTake, into: &updatedSession.takes) || didChange
+        }
+
+        if let sessionIndex,
+           Self.sessionContext(updatedSession, equals: nextSessions[sessionIndex]) == false {
+            didChange = true
+        }
+
+        guard didChange else { return updatedSession }
+
+        updatedSession.takes.sort(by: Self.takeOrder)
+        updatedSession.updatedAt = now()
+
+        if let sessionIndex {
+            nextSessions[sessionIndex] = updatedSession
+        } else {
+            nextSessions.append(updatedSession)
+        }
+
+        try persist(nextSessions)
+        return self.session(id: updatedSession.sessionID) ?? updatedSession
+    }
+
+    /// Refines the delayed media-track verdict for a take that may already
+    /// have been kept. An optional newly-resolved scratch-audio URL is stored
+    /// in the same atomic transaction; omitting it preserves the prior URL.
+    @discardableResult
+    func updateAudioPresence(
+        _ audioPresent: Bool,
+        sourceAudioURL: URL? = nil,
+        sessionID: String,
+        takeID: String
+    ) throws -> GuidedCaptureKeptTake {
+        guard let sessionIndex = sessions.firstIndex(where: { $0.sessionID == sessionID }) else {
+            throw GuidedCaptureKeptSessionStoreError.sessionNotFound(sessionID)
+        }
+        guard let takeIndex = sessions[sessionIndex].takes.firstIndex(where: { $0.takeID == takeID }) else {
+            throw GuidedCaptureKeptSessionStoreError.takeNotFound(sessionID: sessionID, takeID: takeID)
+        }
+
+        if let sourceAudioURL,
+           !Self.isAbsoluteFileURL(sourceAudioURL) {
+            throw GuidedCaptureKeptSessionStoreError.nonAbsoluteSourceURL(
+                sessionID: sessionID,
+                takeID: takeID,
+                field: "audio"
+            )
+        }
+
+        var nextSessions = sessions
+        var updatedTake = nextSessions[sessionIndex].takes[takeIndex]
+        let resolvedAudio = sourceAudioURL.map(containerLocator.reference(for:))
+            ?? updatedTake.sourceAudio
+        guard updatedTake.audioPresent != audioPresent
+                || updatedTake.sourceAudio != resolvedAudio else {
+            return updatedTake
+        }
+
+        updatedTake.audioPresent = audioPresent
+        updatedTake.sourceAudio = resolvedAudio
+        nextSessions[sessionIndex].takes[takeIndex] = updatedTake
+        nextSessions[sessionIndex].updatedAt = now()
+        try persist(nextSessions)
+        return updatedTake
+    }
+
+    /// Convenience for the existing delayed inspection path, whose stable ID
+    /// is the sidecar's `sessionID:takeID` recording identity.
+    @discardableResult
+    func updateAudioPresence(
+        _ audioPresent: Bool,
+        forRecordingID recordingID: String
+    ) throws -> GuidedCaptureKeptTake {
+        for session in sessions {
+            if let take = session.takes.first(where: { $0.recordingID == recordingID }) {
+                return try updateAudioPresence(
+                    audioPresent,
+                    sessionID: session.sessionID,
+                    takeID: take.takeID
+                )
+            }
+        }
+        throw GuidedCaptureKeptSessionStoreError.recordingNotFound(recordingID)
+    }
+
+    private func persist(_ proposedSessions: [GuidedCaptureKeptSession]) throws {
+        let canonicalSessions = try Self.validatedCanonicalSessions(
+            proposedSessions,
+            containerLocator: containerLocator,
+            mode: .persisting
+        )
+        let data: Data
+        do {
+            data = try encoder.encode(Document(sessions: canonicalSessions))
+        } catch {
+            throw GuidedCaptureKeptSessionStoreError.persistenceFailed(storageURL.path)
+        }
+
+        try assertStorageHasNotChanged()
+
+        do {
+            try fileManager.createDirectory(
+                at: storageURL.deletingLastPathComponent(),
+                withIntermediateDirectories: true
+            )
+            try data.write(to: storageURL, options: .atomic)
+            guard try Data(contentsOf: storageURL) == data else {
+                throw GuidedCaptureKeptSessionStoreError.persistenceFailed(storageURL.path)
+            }
+        } catch {
+            if let storeError = error as? GuidedCaptureKeptSessionStoreError {
+                throw storeError
+            }
+            throw GuidedCaptureKeptSessionStoreError.persistenceFailed(storageURL.path)
+        }
+
+        lastPersistedData = data
+        sessions = canonicalSessions
+    }
+
+    private func assertStorageHasNotChanged() throws {
+        let exists = fileManager.fileExists(atPath: storageURL.path)
+        guard exists else {
+            guard lastPersistedData == nil else {
+                throw GuidedCaptureKeptSessionStoreError.storageChanged(storageURL.path)
+            }
+            return
+        }
+
+        guard let lastPersistedData else {
+            throw GuidedCaptureKeptSessionStoreError.storageChanged(storageURL.path)
+        }
+
+        let currentData: Data
+        do {
+            currentData = try Data(contentsOf: storageURL)
+        } catch {
+            throw GuidedCaptureKeptSessionStoreError.storageChanged(storageURL.path)
+        }
+        guard currentData == lastPersistedData else {
+            throw GuidedCaptureKeptSessionStoreError.storageChanged(storageURL.path)
+        }
+    }
+
+    private static func merge(
+        _ incoming: GuidedCaptureKeptTake,
+        into takes: inout [GuidedCaptureKeptTake]
+    ) throws -> Bool {
+        if let takeIDMatch = takes.first(where: { $0.takeID == incoming.takeID }) {
+            guard takeIDMatch.takeNumber == incoming.takeNumber else {
+                throw GuidedCaptureKeptSessionStoreError.takeIDCollision(
+                    sessionID: incoming.sessionID,
+                    takeID: incoming.takeID
+                )
+            }
+            guard takeIDMatch == incoming else {
+                throw GuidedCaptureKeptSessionStoreError.takePayloadConflict(
+                    sessionID: incoming.sessionID,
+                    takeID: incoming.takeID,
+                    takeNumber: incoming.takeNumber
+                )
+            }
+            return false
+        }
+
+        if takes.contains(where: { $0.takeNumber == incoming.takeNumber }) {
+            throw GuidedCaptureKeptSessionStoreError.takeNumberCollision(
+                sessionID: incoming.sessionID,
+                takeNumber: incoming.takeNumber
+            )
+        }
+
+        takes.append(incoming)
+        return true
+    }
+
+    /// Loading must accept a legacy ledger's absolute container URLs so the
+    /// rebase can repair them; writing must refuse them so the defect can never
+    /// be reintroduced.
+    private enum LedgerValidationMode {
+        case loading
+        case persisting
+    }
+
+    private static func validatedCanonicalSessions(
+        _ candidateSessions: [GuidedCaptureKeptSession],
+        containerLocator: CaptureContainerLocator,
+        mode: LedgerValidationMode
+    ) throws -> [GuidedCaptureKeptSession] {
+        var seenSessionIDs: Set<String> = []
+        var canonicalSessions: [GuidedCaptureKeptSession] = []
+        canonicalSessions.reserveCapacity(candidateSessions.count)
+
+        for var session in candidateSessions {
+            guard !session.sessionID.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+                throw GuidedCaptureKeptSessionStoreError.invalidSessionID(session.sessionID)
+            }
+            guard seenSessionIDs.insert(session.sessionID).inserted else {
+                throw GuidedCaptureKeptSessionStoreError.duplicateSessionID(session.sessionID)
+            }
+            guard session.config.sessionID == session.sessionID else {
+                throw GuidedCaptureKeptSessionStoreError.sessionIdentityMismatch(
+                    sessionID: session.sessionID,
+                    configSessionID: session.config.sessionID
+                )
+            }
+            guard Self.hasText(session.workflow),
+                  Self.hasText(session.platform),
+                  Self.hasText(session.sessionName),
+                  Self.hasText(session.deckProfileRawValue),
+                  Self.hasText(session.cameraProfileRawValue),
+                  Self.hasText(session.watchWristRawValue) else {
+                throw GuidedCaptureKeptSessionStoreError.invalidSessionContext(
+                    sessionID: session.sessionID
+                )
+            }
+
+            var seenTakeIDs: Set<String> = []
+            var seenTakeNumbers: Set<Int> = []
+            for take in session.takes {
+                guard take.sessionID == session.sessionID,
+                      Self.hasText(take.takeID),
+                      take.takeNumber > 0 else {
+                    throw GuidedCaptureKeptSessionStoreError.invalidTakeIdentity(
+                        sessionID: session.sessionID,
+                        takeID: take.takeID,
+                        takeNumber: take.takeNumber
+                    )
+                }
+                guard seenTakeIDs.insert(take.takeID).inserted else {
+                    throw GuidedCaptureKeptSessionStoreError.takeIDCollision(
+                        sessionID: session.sessionID,
+                        takeID: take.takeID
+                    )
+                }
+                guard seenTakeNumbers.insert(take.takeNumber).inserted else {
+                    throw GuidedCaptureKeptSessionStoreError.takeNumberCollision(
+                        sessionID: session.sessionID,
+                        takeNumber: take.takeNumber
+                    )
+                }
+                for kind in CaptureArtifactKind.allCases {
+                    guard let reference = take.reference(for: kind) else { continue }
+                    try validateArtifactReference(
+                        reference,
+                        kind: kind,
+                        sessionID: session.sessionID,
+                        takeID: take.takeID,
+                        containerLocator: containerLocator,
+                        mode: mode
+                    )
+                }
+            }
+
+            session.takes.sort(by: takeOrder)
+            canonicalSessions.append(session)
+        }
+
+        return canonicalSessions.sorted(by: sessionOrder)
+    }
+
+    private static func validateArtifactReference(
+        _ reference: CaptureArtifactReference,
+        kind: CaptureArtifactKind,
+        sessionID: String,
+        takeID: String,
+        containerLocator: CaptureContainerLocator,
+        mode: LedgerValidationMode
+    ) throws {
+        switch reference {
+        case let .containerRelative(_, path):
+            guard CaptureArtifactReference.isSafeRelativePath(path) else {
+                throw GuidedCaptureKeptSessionStoreError.unsafeRelativeSourcePath(
+                    sessionID: sessionID,
+                    takeID: takeID,
+                    field: kind.fieldName
+                )
+            }
+
+        case let .absolute(url):
+            guard isAbsoluteFileURL(url) else {
+                throw GuidedCaptureKeptSessionStoreError.nonAbsoluteSourceURL(
+                    sessionID: sessionID,
+                    takeID: takeID,
+                    field: kind.fieldName
+                )
+            }
+            // Writing an absolute path that lives inside the current app
+            // container is exactly the defect this type exists to prevent:
+            // the next install reissues the container UUID and the path dies.
+            if mode == .persisting, containerLocator.isContainerOwned(url) {
+                throw GuidedCaptureKeptSessionStoreError.containerOwnedAbsoluteSourceURL(
+                    sessionID: sessionID,
+                    takeID: takeID,
+                    field: kind.fieldName
+                )
+            }
+        }
+    }
+
+    private static func isAbsoluteFileURL(_ url: URL) -> Bool {
+        url.isFileURL && url.path.hasPrefix("/")
+    }
+
+    private static func hasText(_ value: String) -> Bool {
+        !value.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    }
+
+    private static func takeOrder(
+        _ lhs: GuidedCaptureKeptTake,
+        _ rhs: GuidedCaptureKeptTake
+    ) -> Bool {
+        if lhs.takeNumber != rhs.takeNumber {
+            return lhs.takeNumber < rhs.takeNumber
+        }
+        return lhs.takeID < rhs.takeID
+    }
+
+    private static func sessionOrder(
+        _ lhs: GuidedCaptureKeptSession,
+        _ rhs: GuidedCaptureKeptSession
+    ) -> Bool {
+        if lhs.config.createdAt != rhs.config.createdAt {
+            return lhs.config.createdAt > rhs.config.createdAt
+        }
+        return lhs.sessionID < rhs.sessionID
+    }
+
+    /// Compares mutable session/export context while deliberately excluding
+    /// the append-only take ledger and store-owned update timestamp.
+    private static func sessionContext(
+        _ lhs: GuidedCaptureKeptSession,
+        equals rhs: GuidedCaptureKeptSession
+    ) -> Bool {
+        lhs.sessionID == rhs.sessionID
+            && lhs.config == rhs.config
+            && lhs.deckProfileRawValue == rhs.deckProfileRawValue
+            && lhs.cameraProfileRawValue == rhs.cameraProfileRawValue
+            && lhs.watchWristRawValue == rhs.watchWristRawValue
+            && lhs.workflow == rhs.workflow
+            && lhs.platform == rhs.platform
+            && lhs.sessionName == rhs.sessionName
+            && lhs.calibrationData == rhs.calibrationData
     }
 }
 
@@ -1159,6 +3688,11 @@ protocol PracticeBeatPlaybackEngine: AnyObject {
     func start(mode: BeatEngineMode, bpm: Int) throws
     func stop()
     func hardResetBeatPlayback()
+    func setOutputGain(_ normalizedGain: Double)
+}
+
+extension PracticeBeatPlaybackEngine {
+    func setOutputGain(_ normalizedGain: Double) {}
 }
 
 extension ScratchLabBeatEngine: PracticeBeatPlaybackEngine {
@@ -1213,6 +3747,10 @@ final class PracticeBeatStore: ObservableObject {
         } else {
             self.preferences = PracticeBeatPreferences.defaultValue
         }
+    }
+
+    func setOutputGain(_ normalizedGain: Double) {
+        beatEngine.setOutputGain(normalizedGain)
     }
 
     var scratchType: CaptureSessionScratchType {
@@ -1670,6 +4208,11 @@ protocol ScratchCoachDemoPlayable: AnyObject {
     @discardableResult func play() -> Bool
     func pause()
     func stop()
+    func setOutputGain(_ normalizedGain: Float)
+}
+
+extension ScratchCoachDemoPlayable {
+    func setOutputGain(_ normalizedGain: Float) {}
 }
 
 private final class ScratchCoachAVAudioPlayerAdapter: ScratchCoachDemoPlayable {
@@ -1711,6 +4254,11 @@ private final class ScratchCoachAVAudioPlayerAdapter: ScratchCoachDemoPlayable {
 
     func stop() {
         player.stop()
+    }
+
+    func setOutputGain(_ normalizedGain: Float) {
+        let finiteGain = normalizedGain.isFinite ? normalizedGain : 0
+        player.volume = min(max(finiteGain, 0), 1)
     }
 }
 
@@ -1765,6 +4313,7 @@ final class ScratchCoachDemoAudioPlayer: ObservableObject {
     private var player: ScratchCoachDemoPlayable?
     private var currentAudioFile: String?
     private var lifecycleObservers: [NSObjectProtocol] = []
+    private var outputGain: Float = 1.0
 
     // Host-clock source for the Demo-mode playhead clock (injectable for tests).
     private let hostTimeProvider: () -> TimeInterval
@@ -1840,6 +4389,7 @@ final class ScratchCoachDemoAudioPlayer: ObservableObject {
 
         do {
             let nextPlayer = try playerFactory(audioURL)
+            nextPlayer.setOutputGain(outputGain)
             nextPlayer.prepareToPlay()
             player = nextPlayer
             isAudioAvailable = true
@@ -1863,6 +4413,7 @@ final class ScratchCoachDemoAudioPlayer: ObservableObject {
 
         do {
             let nextPlayer = try playerFactory(url)
+            nextPlayer.setOutputGain(outputGain)
             nextPlayer.prepareToPlay()
             player = nextPlayer
             isAudioAvailable = true
@@ -1909,6 +4460,12 @@ final class ScratchCoachDemoAudioPlayer: ObservableObject {
         player.stop()
         player.currentTime = 0
         playbackState = .stopped
+    }
+
+    func setOutputGain(_ normalizedGain: Double) {
+        let finiteGain = normalizedGain.isFinite ? normalizedGain : 0
+        outputGain = Float(min(max(finiteGain, 0), 1))
+        player?.setOutputGain(outputGain)
     }
 
     nonisolated static func bundledDemoAudioURL(
@@ -2749,11 +5306,9 @@ struct ScratchNotation: Codable, Equatable, Sendable {
     static let babyScratch: ScratchNotation? = loadBabyScratchFromBundle()
 
     /// Full-demo notation constructed from the extracted stroke resource
-    /// (`CoachDemoMotion/baby_scratch_strokes.json`). Covers all four
-    /// demonstration phrases across the full ~42.4 s timeline, so the
-    /// Practice Coach cursor and the Advanced template canvas display
-    /// strokes for the entire demo audio instead of freezing after the
-    /// first ~5 s excerpt.
+    /// (`CoachDemoMotion/baby_scratch_strokes.json`). The resource follows
+    /// the bundled 79 BPM performance exactly: a 2-second lead-in, 16
+    /// forward/backward cycles, and a 2-second tail hold.
     ///
     /// Falls back to `nil` when the extracted stroke resource is missing
     /// from the bundle — callers should treat `nil` as the empty state
@@ -3113,6 +5668,29 @@ extension ScratchNotation {
     static func canonicalBeatPattern(forScratchID scratchID: String) -> BeatPattern? {
         canonicalBeatPatterns.first { $0.scratchID == scratchID }
     }
+
+    #if DEBUG
+    /// Authored teaching examples, not captured/verified technique references.
+    /// Explicit template IDs keep these out of production scratch-ID lookup,
+    /// reference eligibility and learner progression. "orbit" remains a flare.
+    static let internalCanonicalTearTemplates: [TearTemplate] = [
+        (1, "equal", [1.0, 1.0]), (1, "unequal", [1.0, 2.0]),
+        (2, "equal", [1.0, 1.0, 1.0]), (2, "unequal", [1.0, 2.0, 1.0]),
+        (3, "equal", [1.0, 1.0, 1.0, 1.0]), (3, "unequal", [1.0, 2.0, 2.0, 1.0])
+    ].flatMap { holds, rhythm, ratio in
+        TearTemplate.Form.allCases.map { form in
+            TearTemplate(id: "scratchlab.tear.\(holds).\(form.rawValue).\(rhythm).v1",
+                         form: form, holdCount: holds, subdivisionRatio: ratio,
+                         gestureDurationBeats: 1, holdDurationBeats: 1.0 / 16)
+        }
+    }
+
+    /// Target-side factory using the same lossless records as the shared chart.
+    /// There is deliberately no default template for a curriculum scratch ID.
+    static func internalCanonicalGestureRecords(forTemplateID id: String) -> [GestureRecord]? {
+        internalCanonicalTearTemplates.first { $0.id == id }?.expanded()
+    }
+    #endif
 }
 
 /// Frame-anchored direction polarity for Baby Scratch.
@@ -3141,6 +5719,1623 @@ enum BabyScratchPolarity {
             return initialDirection
         }
         return initialDirection == .forward ? .backward : .forward
+    }
+}
+
+// MARK: - Tear-capable canonical notation semantics
+
+/// The canonical PLATTER-motion vocabulary for tear-capable notation.
+///
+/// `ScratchNotationDirection` deliberately keeps its two cases: it names
+/// travel POLARITY and nothing else, and every existing stroke, adapter and
+/// renderer keeps using it unchanged. This type is the strictly larger
+/// observation vocabulary the tear layer needs, and it can express states a
+/// polarity never could:
+///
+/// - `.forward` / `.backward` — the platter is travelling under the hand.
+/// - `.stationary` — a TRUE zero-velocity hold: the platter is stopped and
+///   held. This is the only state a tear hold may be built from.
+/// - `.released` — the hand let go and the platter is free-running at
+///   playback speed. It is MOVING, so it is never a hold, never a tear hold,
+///   and never part of a gesture's travel.
+/// - `.unknown` — evidence was insufficient. It is never silently coerced
+///   into any other case; it terminates a gesture rather than joining one.
+///
+/// Nothing in this enum describes the fader. The two streams are independent
+/// and share only the beat axis — see `ScratchNotation.GesturePattern`.
+enum ScratchNotationMotionState: String, Codable, Equatable, Sendable, CaseIterable {
+    case forward
+    case backward
+    case stationary
+    case released
+    case unknown
+
+    init(direction: ScratchNotationDirection) {
+        switch direction {
+        case .forward:  self = .forward
+        case .backward: self = .backward
+        }
+    }
+
+    /// Travel polarity, or `nil` for every state that is not hand-driven
+    /// travel. `.released` is moving but carries no gesture polarity, so it
+    /// reports `nil` too — a released platter must never be read as a stroke.
+    var travelDirection: ScratchNotationDirection? {
+        switch self {
+        case .forward:  return .forward
+        case .backward: return .backward
+        case .stationary, .released, .unknown: return nil
+        }
+    }
+
+    /// True only for hand-driven travel — the motion a gesture is made of.
+    var isTravel: Bool { travelDirection != nil }
+
+    /// True zero-velocity only. `.released` is excluded by construction, so
+    /// free playback can never be counted as a hold.
+    var isStationary: Bool { self == .stationary }
+}
+
+extension ScratchMovementKind {
+    /// The tear-layer motion state this capture-side movement kind observes.
+    /// Bridging in exactly one place keeps the detected/capture vocabulary
+    /// and the canonical vocabulary from drifting apart.
+    var motionState: ScratchNotationMotionState {
+        switch self {
+        case .fastPush, .normalPush, .slowDrag:      return .forward
+        case .fastPull, .normalPull, .slowPullDrag:  return .backward
+        case .hold:                                  return .stationary
+        case .releaseNormalPlayback:                 return .released
+        }
+    }
+}
+
+/// Instantaneous / very short FADER evidence.
+///
+/// A click is NOT a bounded fader interval and is never widened into one.
+/// The two live in separate channels precisely so a transform click inside an
+/// otherwise-open span cannot be mistaken for a closed interval, and so a
+/// closed interval can never be counted as a click.
+enum ScratchNotationFaderClickKind: String, Codable, Equatable, Sendable, CaseIterable {
+    case cut
+    case pulse
+    case transformPulse
+    case flareClick
+    case unknown
+
+    /// Bridges the existing capture vocabulary. `.open` and `.closed`
+    /// describe sustained interval state, not a click, so they map to `nil`
+    /// rather than being coerced into a click kind.
+    init?(faderEventKind: ScratchFaderEventKind) {
+        switch faderEventKind {
+        case .cut:            self = .cut
+        case .pulse:          self = .pulse
+        case .transformPulse: self = .transformPulse
+        case .flareClick:     self = .flareClick
+        case .unknown:        self = .unknown
+        case .open, .closed:  return nil
+        }
+    }
+}
+
+/// Where a raw observation came from.
+///
+/// Capability is a property of the SOURCE, which is how the "a zero-velocity
+/// platter interval must never create a phantom click" rule is enforced
+/// structurally rather than by convention: no platter-only source can
+/// establish fader state, so platter evidence has no path to minting a click
+/// or a closed interval. `.unknown` establishes nothing — an observation must
+/// name a real provenance, and "we do not know what the platter did" is
+/// expressed by `ScratchNotationMotionState.unknown` carried on a real
+/// source, not by erasing the source.
+enum ScratchNotationEvidenceSource: String, Codable, Equatable, Sendable, CaseIterable {
+    case authored
+    case platterTimeline
+    case crossfaderRaw
+    case audioOnset
+    case watchMotion
+    case manualCorrection
+    case unknown
+
+    var canEstablishPlatterMotion: Bool {
+        switch self {
+        case .authored, .platterTimeline, .watchMotion, .manualCorrection: return true
+        case .crossfaderRaw, .audioOnset, .unknown: return false
+        }
+    }
+
+    var canEstablishFaderState: Bool {
+        switch self {
+        case .authored, .crossfaderRaw, .manualCorrection: return true
+        case .platterTimeline, .watchMotion, .audioOnset, .unknown: return false
+        }
+    }
+}
+
+/// Raw, uninterpreted provenance for one observation, preserved verbatim
+/// alongside every derived label.
+///
+/// Evidence is never rewritten by interpretation: a correction changes the
+/// LABEL (`ScratchNotationMotionLabel`), never this record, so the original
+/// observation and the disagreement with it both stay auditable.
+///
+/// The memberwise initializer clamps `confidence` into `0...1`, but decoding
+/// deliberately does not — this type follows the same doctrine as
+/// `ScratchNotation` itself, where decoding stays tolerant and strictness
+/// lives in `validationIssues()`.
+struct ScratchNotationEvidence: Codable, Equatable, Sendable {
+    let source: ScratchNotationEvidenceSource
+    /// Detector/authoring confidence in `[0, 1]`.
+    let confidence: Double
+    /// Machine-readable reason for the observation (for example
+    /// `"cc6_steps=0_over_118ms"`). Required: an observation with no stated
+    /// reason is a validation issue, never a silent default.
+    let reason: String
+    /// Count of raw samples backing the observation, when the producer knows
+    /// it. Never inferred.
+    let rawSampleCount: Int?
+
+    init(source: ScratchNotationEvidenceSource,
+         confidence: Double,
+         reason: String,
+         rawSampleCount: Int? = nil) {
+        self.source = source
+        self.confidence = confidence.isFinite ? min(1, max(0, confidence)) : 0
+        self.reason = reason
+        self.rawSampleCount = rawSampleCount
+    }
+
+    /// Provenance for hand-authored target notation.
+    static func authored(_ reason: String) -> ScratchNotationEvidence {
+        ScratchNotationEvidence(source: .authored, confidence: 1, reason: reason)
+    }
+}
+
+/// A DERIVED motion label plus its optional human correction.
+///
+/// Labels are derived, correctable annotations — never raw evidence. The
+/// derived value is retained after a correction so the disagreement between
+/// what was inferred and what a reviewer asserted remains inspectable.
+struct ScratchNotationMotionLabel: Codable, Equatable, Sendable {
+    let derived: ScratchNotationMotionState
+    let correction: ScratchNotationMotionState?
+
+    init(derived: ScratchNotationMotionState,
+         correction: ScratchNotationMotionState? = nil) {
+        self.derived = derived
+        self.correction = correction
+    }
+
+    /// The label every consumer must read. A correction always wins.
+    var effective: ScratchNotationMotionState { correction ?? derived }
+
+    /// True only when a correction actually disagrees with the derivation.
+    var isCorrected: Bool {
+        guard let correction else { return false }
+        return correction != derived
+    }
+}
+
+/// The derived correlation of the two independent streams at one instant.
+///
+/// This is the only place the platter stream and the fader stream are read
+/// together, and it is derived — neither stream is modified by it.
+enum ScratchNotationCorrelatedState: String, Codable, Equatable, Sendable, CaseIterable {
+    /// Travelling with the fader open — the audible scratch.
+    case sounding
+    /// Stationary with the fader open.
+    case hold
+    /// Travelling with the fader closed — a ghost (silent) move.
+    case ghost
+    /// Stationary with the fader closed.
+    case ghostHold
+    /// Released free playback with the fader open.
+    case releasedSounding
+    /// Released free playback with the fader closed.
+    case releasedMuted
+    /// Either stream had no usable observation at that instant. NEVER a
+    /// default: an absent fader interval means unknown, never implicitly
+    /// open or closed — the same authority rule `ScratchNotation.faderEvents`
+    /// already states.
+    case unknown
+
+    /// `fader == nil` means "no fader observation covers this instant".
+    static func correlate(motion: ScratchNotationMotionState,
+                          fader: ScratchNotationFaderState?) -> ScratchNotationCorrelatedState {
+        guard let fader else { return .unknown }
+        switch (motion, fader) {
+        case (.forward, .open), (.backward, .open):     return .sounding
+        case (.forward, .closed), (.backward, .closed): return .ghost
+        case (.stationary, .open):                      return .hold
+        case (.stationary, .closed):                    return .ghostHold
+        case (.released, .open):                        return .releasedSounding
+        case (.released, .closed):                      return .releasedMuted
+        case (.unknown, _):                             return .unknown
+        }
+    }
+}
+
+extension ScratchNotation {
+
+    /// A half-open beat span `[startBeat, endBeat)`, in fractional beats from
+    /// the pattern origin — the same beat convention the rest of the
+    /// canonical layer uses.
+    struct BeatSpan: Codable, Equatable, Sendable {
+        let startBeat: Double
+        let endBeat: Double
+
+        init(startBeat: Double, endBeat: Double) {
+            self.startBeat = startBeat
+            self.endBeat = endBeat
+        }
+
+        var durationBeats: Double { max(0, endBeat - startBeat) }
+
+        /// Half-open containment, so abutting spans never both claim the
+        /// shared boundary beat.
+        func contains(_ beat: Double) -> Bool {
+            beat >= startBeat && beat < endBeat
+        }
+    }
+
+    /// One bounded PLATTER observation. A motion segment is always an
+    /// interval, never an instant — instantaneous evidence belongs to the
+    /// fader click channel, which is what keeps "a click is not a tear hold"
+    /// true at the type level.
+    struct PlatterMotionSegment: Codable, Equatable, Sendable {
+        let span: BeatSpan
+        let label: ScratchNotationMotionLabel
+        let evidence: ScratchNotationEvidence
+
+        init(span: BeatSpan,
+             label: ScratchNotationMotionLabel,
+             evidence: ScratchNotationEvidence) {
+            self.span = span
+            self.label = label
+            self.evidence = evidence
+        }
+
+        init(startBeat: Double,
+             endBeat: Double,
+             state: ScratchNotationMotionState,
+             evidence: ScratchNotationEvidence) {
+            self.init(span: BeatSpan(startBeat: startBeat, endBeat: endBeat),
+                      label: ScratchNotationMotionLabel(derived: state),
+                      evidence: evidence)
+        }
+
+        /// The effective (correction-aware) state — what every consumer reads.
+        var state: ScratchNotationMotionState { label.effective }
+        var startBeat: Double { span.startBeat }
+        var endBeat: Double { span.endBeat }
+        var durationBeats: Double { span.durationBeats }
+    }
+
+    /// One bounded FADER observation. Bounded by definition: an
+    /// instantaneous fader event is a `FaderClick`, never a zero-width
+    /// interval.
+    ///
+    /// Unlike the platter stream, gaps between intervals are LEGAL and mean
+    /// "no fader observation here" — never implicitly open or closed.
+    struct FaderInterval: Codable, Equatable, Sendable {
+        let span: BeatSpan
+        let state: ScratchNotationFaderState
+        let evidence: ScratchNotationEvidence
+
+        init(span: BeatSpan,
+             state: ScratchNotationFaderState,
+             evidence: ScratchNotationEvidence) {
+            self.span = span
+            self.state = state
+            self.evidence = evidence
+        }
+
+        init(startBeat: Double,
+             endBeat: Double,
+             state: ScratchNotationFaderState,
+             evidence: ScratchNotationEvidence) {
+            self.init(span: BeatSpan(startBeat: startBeat, endBeat: endBeat),
+                      state: state,
+                      evidence: evidence)
+        }
+
+        var startBeat: Double { span.startBeat }
+        var endBeat: Double { span.endBeat }
+        var durationBeats: Double { span.durationBeats }
+    }
+
+    /// Instantaneous / very short fader evidence, positioned on the beat
+    /// axis. `widthBeats` records a measured width when the producer knows
+    /// one; it is metadata only and never promotes the click into a
+    /// `FaderInterval`.
+    struct FaderClick: Codable, Equatable, Sendable {
+        let beat: Double
+        let kind: ScratchNotationFaderClickKind
+        let widthBeats: Double?
+        let evidence: ScratchNotationEvidence
+
+        init(beat: Double,
+             kind: ScratchNotationFaderClickKind,
+             widthBeats: Double? = nil,
+             evidence: ScratchNotationEvidence) {
+            self.beat = beat
+            self.kind = kind
+            self.widthBeats = widthBeats
+            self.evidence = evidence
+        }
+    }
+
+    /// A maximal run of SAME-DIRECTION travel together with the bounded
+    /// stationary intervals inside it.
+    ///
+    /// This is the canonical definition of a tear: one same-direction gesture
+    /// containing one or more bounded stationary intervals. `N` internal tear
+    /// holds always produce `N + 1` motion subdivisions — an invariant
+    /// guaranteed by construction, not merely asserted.
+    ///
+    /// Deliberately excluded from `internalHolds`:
+    /// - A direction REVERSAL (the Baby turnaround). It ends the gesture; the
+    ///   opposite-direction travel starts a new one.
+    /// - A stationary interval that is not bounded by same-direction travel
+    ///   on BOTH sides (a leading or trailing pause, including one that sits
+    ///   just before a reversal).
+    /// - A fader CLICK. Clicks are not in this stream at all.
+    /// - A `.released` interval. Free playback is motion, not a hold.
+    struct PlatterGesture: Equatable, Sendable {
+        let direction: ScratchNotationDirection
+        /// First travel start to last travel end — leading/trailing
+        /// stationary intervals are outside the gesture.
+        let span: BeatSpan
+        /// Travel subdivisions in order. Always `internalHolds.count + 1`.
+        let subdivisions: [BeatSpan]
+        /// The bounded stationary intervals between the subdivisions.
+        let internalHolds: [BeatSpan]
+
+        var tearHoldCount: Int { internalHolds.count }
+        var subdivisionCount: Int { subdivisions.count }
+        /// A gesture is a tear exactly when it contains at least one internal
+        /// tear hold.
+        var isTear: Bool { !internalHolds.isEmpty }
+    }
+
+    /// The tempo-free, beat-domain canonical pattern for tear-capable motion.
+    ///
+    /// Two INDEPENDENT streams synchronized only by the shared beat axis:
+    ///
+    /// - `motionSegments` — the platter. Contiguous and total over its span:
+    ///   every instant the pattern covers carries an explicit state, and an
+    ///   unobserved region is stated as `.unknown` rather than left as a gap.
+    /// - `faderIntervals` + `faderClicks` — the fader. Gaps are legal and
+    ///   mean unknown; sustained state and instantaneous clicks are separate
+    ///   channels and are never interconvertible.
+    ///
+    /// Neither stream constrains the other. There is no cross-stream ordering
+    /// rule in `validationIssues()` by design: a fader edge may freely share a
+    /// beat with a stroke boundary, a ghost move needs the fader closed while
+    /// the platter travels, and a platter observation can never produce fader
+    /// evidence (see `ScratchNotationEvidenceSource`).
+    ///
+    /// Tempo-free by type, exactly like `ScratchNotation.BeatPattern`: no
+    /// seconds appear anywhere, so a pattern cannot reach seconds-domain
+    /// consumers without a tempo being chosen first.
+    struct GesturePattern: Codable, Equatable, Sendable {
+
+        /// Tolerance for beat-axis continuity and ordering comparisons.
+        static let beatContinuityTolerance: Double = 1e-9
+
+        let version: Int
+        let scratchID: String
+        /// Must carry `ScratchNotation.beatAuthoredTimingBasisPrefix`, so a
+        /// pattern can never claim seconds authorship.
+        let timingBasis: String
+        let beatsPerBar: Int?
+        let motionSegments: [PlatterMotionSegment]
+        let faderIntervals: [FaderInterval]
+        let faderClicks: [FaderClick]
+
+        init(version: Int,
+             scratchID: String,
+             timingBasis: String,
+             beatsPerBar: Int? = nil,
+             motionSegments: [PlatterMotionSegment],
+             faderIntervals: [FaderInterval] = [],
+             faderClicks: [FaderClick] = []) {
+            self.version = version
+            self.scratchID = scratchID
+            self.timingBasis = timingBasis
+            self.beatsPerBar = beatsPerBar
+            self.motionSegments = motionSegments
+            self.faderIntervals = faderIntervals
+            self.faderClicks = faderClicks
+        }
+
+        /// Total span in beats — the union of BOTH streams, since fader
+        /// evidence is independent of platter boundaries and may extend past
+        /// the last motion segment.
+        var durationBeats: Double {
+            max(max(motionSegments.map(\.endBeat).max() ?? 0,
+                    faderIntervals.map(\.endBeat).max() ?? 0),
+                faderClicks.map(\.beat).max() ?? 0)
+        }
+
+        // MARK: Stream reads
+
+        /// Effective platter state at `beat`, or `nil` when no motion segment
+        /// covers it.
+        func motionState(atBeat beat: Double) -> ScratchNotationMotionState? {
+            motionSegments.first { $0.span.contains(beat) }?.state
+        }
+
+        /// Fader state at `beat`, or `nil` when no interval covers it.
+        /// `nil` means UNKNOWN and must never be read as open or closed.
+        /// Clicks are deliberately not consulted: a click is an instant, not
+        /// a sustained state.
+        func faderState(atBeat beat: Double) -> ScratchNotationFaderState? {
+            faderIntervals.first { $0.span.contains(beat) }?.state
+        }
+
+        /// Derived correlation of the two streams at `beat`. An uncovered
+        /// platter instant correlates to `.unknown`, never to a hold.
+        func correlatedState(atBeat beat: Double) -> ScratchNotationCorrelatedState {
+            guard let motion = motionState(atBeat: beat) else { return .unknown }
+            return ScratchNotationCorrelatedState.correlate(motion: motion,
+                                                            fader: faderState(atBeat: beat))
+        }
+
+        // MARK: Derived gestures
+
+        /// Beats at which travel polarity flips with NO intervening
+        /// stationary interval — the Baby turnaround. A reversal is a
+        /// boundary between two gestures and is never a tear hold.
+        var reversalBeats: [Double] {
+            guard motionSegments.count > 1 else { return [] }
+            var beats: [Double] = []
+            for index in 1..<motionSegments.count {
+                let previous = motionSegments[index - 1]
+                let current = motionSegments[index]
+                guard let previousDirection = previous.state.travelDirection,
+                      let currentDirection = current.state.travelDirection,
+                      previousDirection != currentDirection else { continue }
+                beats.append(previous.endBeat)
+            }
+            return beats
+        }
+
+        /// Maximal same-direction gestures, in order.
+        ///
+        /// A gesture accumulates same-direction travel and any stationary
+        /// intervals between that travel. It ends at a reversal, a
+        /// `.released` interval, an `.unknown` interval, or the end of the
+        /// stream. A stationary run is promoted to an internal tear hold only
+        /// once same-direction travel resumes after it, which is what makes
+        /// `subdivisions.count == internalHolds.count + 1` hold by
+        /// construction.
+        var gestures: [PlatterGesture] {
+            var result: [PlatterGesture] = []
+            var index = 0
+            while index < motionSegments.count {
+                guard let direction = motionSegments[index].state.travelDirection else {
+                    index += 1
+                    continue
+                }
+
+                var subdivisions: [BeatSpan] = []
+                var internalHolds: [BeatSpan] = []
+                var currentTravel: BeatSpan?
+                var pendingHold: BeatSpan?
+                var cursor = index
+
+                while cursor < motionSegments.count {
+                    let segment = motionSegments[cursor]
+                    if segment.state.travelDirection == direction {
+                        if let hold = pendingHold {
+                            // Same-direction travel resumed after a
+                            // stationary run: the run is bounded on both
+                            // sides, so it is an internal tear hold and it
+                            // closes the current subdivision.
+                            if let travel = currentTravel { subdivisions.append(travel) }
+                            internalHolds.append(hold)
+                            currentTravel = nil
+                            pendingHold = nil
+                        }
+                        currentTravel = BeatSpan(startBeat: currentTravel?.startBeat ?? segment.startBeat,
+                                                 endBeat: segment.endBeat)
+                        cursor += 1
+                        continue
+                    }
+                    if segment.state.isStationary {
+                        pendingHold = BeatSpan(startBeat: pendingHold?.startBeat ?? segment.startBeat,
+                                               endBeat: segment.endBeat)
+                        cursor += 1
+                        continue
+                    }
+                    // Reversal, release or unknown — the gesture ends here and
+                    // this segment is left for the next iteration.
+                    break
+                }
+
+                if let travel = currentTravel { subdivisions.append(travel) }
+                // A trailing stationary run is intentionally dropped: it is
+                // not bounded by same-direction travel on both sides, so it is
+                // not a tear hold and it is not part of the gesture's span.
+                if let first = subdivisions.first, let last = subdivisions.last {
+                    result.append(PlatterGesture(
+                        direction: direction,
+                        span: BeatSpan(startBeat: first.startBeat, endBeat: last.endBeat),
+                        subdivisions: subdivisions,
+                        internalHolds: internalHolds
+                    ))
+                }
+                index = max(cursor, index + 1)
+            }
+            return result
+        }
+
+        /// Every gesture that qualifies as a tear.
+        var tears: [PlatterGesture] { gestures.filter(\.isTear) }
+
+        // MARK: Validation
+
+        /// Pure invariant check, deliberately separate from decoding — the
+        /// same doctrine `ScratchNotation.validationIssues()` follows.
+        /// Returns an ordered list of human-readable issues; empty means
+        /// valid.
+        func validationIssues() -> [String] {
+            var issues: [String] = []
+            let tolerance = Self.beatContinuityTolerance
+
+            if !timingBasis.hasPrefix(ScratchNotation.beatAuthoredTimingBasisPrefix) {
+                issues.append("timingBasis '\(timingBasis)' does not declare beat authorship")
+            }
+            if let beatsPerBar, beatsPerBar <= 0 {
+                issues.append("beatsPerBar must be > 0, got \(beatsPerBar)")
+            }
+
+            // Platter stream: contiguous and total, so no instant is silently
+            // undescribed. An unobserved region must be stated as `.unknown`.
+            for (index, segment) in motionSegments.enumerated() {
+                let name = "motionSegment \(index)"
+                if !segment.startBeat.isFinite || !segment.endBeat.isFinite {
+                    issues.append("\(name): startBeat/endBeat must be finite")
+                    continue
+                }
+                if segment.startBeat < 0 {
+                    issues.append("\(name): startBeat must be >= 0, got \(segment.startBeat)")
+                }
+                if segment.endBeat <= segment.startBeat {
+                    issues.append("\(name): must be a bounded interval — endBeat must exceed startBeat (an instantaneous observation is a fader click, never a motion segment)")
+                }
+                if index == 0, segment.startBeat != 0 {
+                    issues.append("motionSegment 0: the platter stream must begin at beat 0, got \(segment.startBeat)")
+                }
+                if index > 0 {
+                    let previous = motionSegments[index - 1]
+                    if segment.startBeat < previous.endBeat - tolerance {
+                        issues.append("\(name): overlaps motionSegment \(index - 1)")
+                    } else if segment.startBeat > previous.endBeat + tolerance {
+                        issues.append("\(name): leaves a gap after motionSegment \(index - 1) — the platter stream must be contiguous (state an unobserved region as .unknown)")
+                    }
+                    if segment.state == previous.state {
+                        issues.append("\(name): adjacent motion segments must not repeat the same state")
+                    }
+                }
+                issues.append(contentsOf: Self.evidenceIssues(segment.evidence,
+                                                              named: name,
+                                                              requiresPlatterCapability: true))
+            }
+
+            // Fader stream: ordered and non-overlapping, but gaps are LEGAL
+            // and mean unknown.
+            for (index, interval) in faderIntervals.enumerated() {
+                let name = "faderInterval \(index)"
+                if !interval.startBeat.isFinite || !interval.endBeat.isFinite {
+                    issues.append("\(name): startBeat/endBeat must be finite")
+                    continue
+                }
+                if interval.startBeat < 0 {
+                    issues.append("\(name): startBeat must be >= 0, got \(interval.startBeat)")
+                }
+                if interval.endBeat <= interval.startBeat {
+                    issues.append("\(name): must be a bounded interval — endBeat must exceed startBeat (an instantaneous fader observation is a click, never an interval)")
+                }
+                if index > 0 {
+                    let previous = faderIntervals[index - 1]
+                    if interval.startBeat < previous.endBeat - tolerance {
+                        issues.append("\(name): overlaps faderInterval \(index - 1)")
+                    } else if abs(interval.startBeat - previous.endBeat) <= tolerance,
+                              interval.state == previous.state {
+                        issues.append("\(name): abutting fader intervals must not repeat the same state")
+                    }
+                }
+                issues.append(contentsOf: Self.evidenceIssues(interval.evidence,
+                                                              named: name,
+                                                              requiresPlatterCapability: false))
+            }
+
+            for (index, click) in faderClicks.enumerated() {
+                let name = "faderClick \(index)"
+                if !click.beat.isFinite {
+                    issues.append("\(name): beat must be finite")
+                    continue
+                }
+                if click.beat < 0 {
+                    issues.append("\(name): beat must be >= 0, got \(click.beat)")
+                }
+                if let widthBeats = click.widthBeats, !widthBeats.isFinite || widthBeats <= 0 {
+                    issues.append("\(name): widthBeats, when present, must be finite and > 0, got \(widthBeats)")
+                }
+                if index > 0, click.beat <= faderClicks[index - 1].beat {
+                    issues.append("\(name): beat must strictly increase over faderClick \(index - 1)")
+                }
+                // The phantom-click guard: a click may only come from a
+                // source that can actually observe the fader, so no platter
+                // interval — zero-velocity or otherwise — can mint one.
+                issues.append(contentsOf: Self.evidenceIssues(click.evidence,
+                                                              named: name,
+                                                              requiresPlatterCapability: false))
+            }
+
+            return issues
+        }
+
+        private static func evidenceIssues(_ evidence: ScratchNotationEvidence,
+                                           named name: String,
+                                           requiresPlatterCapability: Bool) -> [String] {
+            var issues: [String] = []
+            if !evidence.confidence.isFinite || evidence.confidence < 0 || evidence.confidence > 1 {
+                issues.append("\(name): evidence confidence must be finite and within 0...1, got \(evidence.confidence)")
+            }
+            if evidence.reason.isEmpty {
+                issues.append("\(name): evidence reason must not be empty")
+            }
+            if let rawSampleCount = evidence.rawSampleCount, rawSampleCount < 0 {
+                issues.append("\(name): evidence rawSampleCount must be >= 0, got \(rawSampleCount)")
+            }
+            if requiresPlatterCapability {
+                if !evidence.source.canEstablishPlatterMotion {
+                    issues.append("\(name): evidence source '\(evidence.source.rawValue)' cannot establish platter motion")
+                }
+            } else if !evidence.source.canEstablishFaderState {
+                issues.append("\(name): evidence source '\(evidence.source.rawValue)' cannot establish fader state")
+            }
+            return issues
+        }
+    }
+}
+
+extension ScratchNotation.BeatPattern {
+
+    /// Reason recorded on the stationary segments this lift materializes from
+    /// the authored schema's implicit inter-stroke gaps.
+    static let authoredGapEvidenceReason = "authored_inter_stroke_gap"
+    /// Reason recorded on the travel segments lifted from authored strokes.
+    static let authoredStrokeEvidenceReason = "authored_stroke"
+    /// Reason recorded on the fader intervals lifted from authored state.
+    static let authoredFaderEvidenceReason = "authored_fader_state"
+
+    /// Lifts this authored pattern into the tear-capable canonical form,
+    /// making explicit what the authored schema only implies.
+    ///
+    /// - Each stroke becomes a travel `PlatterMotionSegment`.
+    /// - Each GAP between strokes (and any gap before the first stroke)
+    ///   becomes an explicit `.stationary` segment. This is exactly the
+    ///   reading `ScratchNotation` already documents — "a stationary/hold
+    ///   region is the implicit gap between one stroke's end and the next
+    ///   stroke's start" — now stated rather than implied, which is what lets
+    ///   a tear be counted at all. A gap is never read as `.released`: the
+    ///   authored schema cannot express a release and inventing one would be
+    ///   a guess.
+    /// - Fader: when `faderEvents` is non-empty it is authoritative and its
+    ///   edges become intervals (the last edge runs to the pattern end). When
+    ///   it is empty, per-stroke `faderState` is the sole description, so each
+    ///   stroke contributes an interval over its OWN span and abutting equal
+    ///   states coalesce. Gaps get NO fader interval — per-stroke state
+    ///   describes strokes only, and an absent interval means unknown, never
+    ///   implicitly open.
+    /// - No clicks are produced. The authored schema has no click channel,
+    ///   and a stationary platter interval must never mint one.
+    ///
+    /// Returns `nil` when the pattern has no strokes, mirroring the "no
+    /// canonical target notation" convention used elsewhere in this layer.
+    func gesturePattern() -> ScratchNotation.GesturePattern? {
+        guard !strokes.isEmpty else { return nil }
+
+        let strokeEvidence = ScratchNotationEvidence.authored(Self.authoredStrokeEvidenceReason)
+        let gapEvidence = ScratchNotationEvidence.authored(Self.authoredGapEvidenceReason)
+        let faderEvidence = ScratchNotationEvidence.authored(Self.authoredFaderEvidenceReason)
+
+        var motionSegments: [ScratchNotation.PlatterMotionSegment] = []
+        var cursor = 0.0
+        for stroke in strokes {
+            if stroke.startBeat > cursor {
+                motionSegments.append(.init(startBeat: cursor,
+                                            endBeat: stroke.startBeat,
+                                            state: .stationary,
+                                            evidence: gapEvidence))
+            }
+            motionSegments.append(.init(startBeat: stroke.startBeat,
+                                        endBeat: stroke.endBeat,
+                                        state: ScratchNotationMotionState(direction: stroke.direction),
+                                        evidence: strokeEvidence))
+            cursor = max(cursor, stroke.endBeat)
+        }
+
+        var faderIntervals: [ScratchNotation.FaderInterval] = []
+        if faderEvents.isEmpty {
+            // Per-stroke state only — it describes strokes, never gaps.
+            for stroke in strokes {
+                if let last = faderIntervals.last,
+                   last.state == stroke.faderState,
+                   last.endBeat == stroke.startBeat {
+                    faderIntervals[faderIntervals.count - 1] = .init(startBeat: last.startBeat,
+                                                                     endBeat: stroke.endBeat,
+                                                                     state: last.state,
+                                                                     evidence: faderEvidence)
+                } else {
+                    faderIntervals.append(.init(startBeat: stroke.startBeat,
+                                                endBeat: stroke.endBeat,
+                                                state: stroke.faderState,
+                                                evidence: faderEvidence))
+                }
+            }
+        } else {
+            let horizon = max(durationBeats, faderEvents.map(\.beat).max() ?? 0)
+            for (index, event) in faderEvents.enumerated() {
+                let end = index + 1 < faderEvents.count ? faderEvents[index + 1].beat : horizon
+                guard end > event.beat else { continue }
+                faderIntervals.append(.init(startBeat: event.beat,
+                                            endBeat: end,
+                                            state: event.state,
+                                            evidence: faderEvidence))
+            }
+        }
+
+        return ScratchNotation.GesturePattern(version: version,
+                                              scratchID: scratchID,
+                                              timingBasis: timingBasis,
+                                              beatsPerBar: beatsPerBar,
+                                              motionSegments: motionSegments,
+                                              faderIntervals: faderIntervals,
+                                              faderClicks: [])
+    }
+}
+
+extension ScratchNotation {
+    /// The canonical Baby Scratch cycle in tear-capable form: forward,
+    /// turnaround, backward, fader open throughout — two gestures, no tear
+    /// holds, one reversal at the half beat.
+    static let babyScratchGesturePattern: GesturePattern? = babyScratchCycle.gesturePattern()
+}
+
+// MARK: - Lossless tear gesture records
+
+/// Interpretation provenance is independent of the sensor/source in
+/// `ScratchNotationEvidence`. Inference never acquires a new sensor capability.
+enum ScratchNotationProvenance: String, Codable, Equatable, Sendable, CaseIterable {
+    case authored, measured, inferred, manuallyCorrected, unknown
+}
+
+extension ScratchNotation {
+    /// A persisted description of ONE same-direction gesture. Reversals,
+    /// releases and unobserved motion terminate a gesture (Prompt 1).
+    ///
+    /// All times, including curve points and fader edges, use `timingDomain`
+    /// relative to the same recording/pattern origin. Seconds are never snapped
+    /// to beats. Beat-authored targets need no tempo until materialization.
+    /// Positions are signed and unwrapped; negative values and overshoot survive.
+    /// Presentation can read these records; the model owns no rendering,
+    /// detector, export or eligibility behavior.
+    ///
+    /// IDs are supplied by the producer and serialized verbatim, never minted
+    /// during decoding or computed from editable times. Arrays retain evidence
+    /// order. Valid records require chronological order (simultaneous fader
+    /// transitions use ID order). Decoding preserves malformed evidence too;
+    /// validation reports it without sorting, clamping or discarding samples.
+    struct GestureRecord: Codable, Equatable, Sendable, Identifiable {
+        enum CoordinateSpace: String, Codable, Equatable, Sendable {
+            /// Fraction of source-sample duration from its cue, not clamped 0...1.
+            case samplePosition
+            /// Signed platter displacement in REVOLUTIONS from the recording
+            /// origin. Only positions divided by an explicitly stated
+            /// steps-per-revolution reference may claim this space.
+            case platterRevolutions
+            /// Signed platter displacement normalised over ONE take's own
+            /// decoded range, so the unit is that take and nothing else. It is
+            /// proportional to physical travel but carries no revolution,
+            /// millimetre or degree claim, and two takes' values are not
+            /// comparable. This is what `decodePlatterCore` writes into a
+            /// finalized `DetectedNotationRecordMovementEvent`, and it must
+            /// never be relabelled `platterRevolutions`.
+            case normalizedTakeLocalDisplacement
+        }
+
+        struct Evidence: Codable, Equatable, Sendable {
+            let provenance: ScratchNotationProvenance
+            let observation: ScratchNotationEvidence
+        }
+
+        /// Half-open interval in the record's declared timing domain.
+        struct TimeSpan: Codable, Equatable, Sendable {
+            let startTime: Double
+            let endTime: Double
+            var duration: Double { endTime - startTime }
+            func contains(_ time: Double) -> Bool { time >= startTime && time < endTime }
+        }
+
+        struct CurvePoint: Codable, Equatable, Sendable {
+            let time: Double
+            let position: Double
+        }
+
+        /// Sampled geometry only: no forced analytic curve family, fitting,
+        /// interpolation, normalization or resampling. Endpoints explicitly
+        /// record start/end position or displacement in `coordinateSpace`.
+        struct MotionCurve: Codable, Equatable, Sendable {
+            let points: [CurvePoint]
+            let evidence: Evidence
+            var startPosition: Double? { points.first?.position }
+            var endPosition: Double? { points.last?.position }
+        }
+
+        struct Subdivision: Codable, Equatable, Sendable, Identifiable {
+            let id: String
+            let span: TimeSpan
+            let evidence: Evidence
+            let measuredCurve: MotionCurve?
+            let targetCurve: MotionCurve?
+            /// Relative authored MOVING-duration weight (e.g. 1:2:1).
+            /// Holds are excluded. Stored per ID so edits cannot shift weights
+            /// onto a different subdivision. Nil means no authored constraint.
+            let authoredDurationWeight: Double?
+
+            init(id: String, span: TimeSpan, evidence: Evidence,
+                 measuredCurve: MotionCurve? = nil, targetCurve: MotionCurve? = nil,
+                 authoredDurationWeight: Double? = nil) {
+                self.id = id
+                self.span = span
+                self.evidence = evidence
+                self.measuredCurve = measuredCurve
+                self.targetCurve = targetCurve
+                self.authoredDurationWeight = authoredDurationWeight
+            }
+        }
+
+        struct TearHold: Codable, Equatable, Sendable, Identifiable {
+            let id: String
+            let span: TimeSpan
+            /// The original label survives a manual correction, just as in
+            /// Prompt 1. Only an effective stationary label can be a tear hold.
+            let label: ScratchNotationMotionLabel
+            let evidence: Evidence
+            /// Nil means position was not observed; never default to cue/zero.
+            let position: Double?
+        }
+
+        struct FaderTransition: Codable, Equatable, Sendable, Identifiable {
+            let id: String
+            let time: Double
+            let state: ScratchNotationFaderState
+            let evidence: Evidence
+        }
+
+        struct FaderSpan: Codable, Equatable, Sendable, Identifiable {
+            let id: String
+            let span: TimeSpan
+            let state: ScratchNotationFaderState
+            let evidence: Evidence
+        }
+
+        enum Audibility: String, Equatable, Sendable {
+            case audible, silent, unknown
+        }
+
+        /// Derived, never serialized as another source of truth. "Audible"
+        /// describes motion/fader mechanics, not proof of non-silent audio PCM.
+        struct ClassifiedInterval: Equatable, Sendable {
+            let span: TimeSpan
+            let state: ScratchNotationCorrelatedState
+            var audibility: Audibility {
+                switch state {
+                case .sounding, .releasedSounding: return .audible
+                case .hold, .ghost, .ghostHold, .releasedMuted: return .silent
+                case .unknown: return .unknown
+                }
+            }
+        }
+
+        let id: String
+        let direction: ScratchNotationDirection
+        let timingDomain: ScratchNotationTimingDomain
+        let coordinateSpace: CoordinateSpace
+        let evidence: Evidence
+        let subdivisions: [Subdivision]
+        let internalHolds: [TearHold]
+        /// Independent observations. Edges do NOT fill uncovered intervals:
+        /// only bounded spans establish sustained state, as in Prompt 1.
+        let faderTransitions: [FaderTransition]
+        let faderIntervals: [FaderSpan]
+
+        init(id: String, direction: ScratchNotationDirection,
+             timingDomain: ScratchNotationTimingDomain, coordinateSpace: CoordinateSpace,
+             evidence: Evidence, subdivisions: [Subdivision], internalHolds: [TearHold] = [],
+             faderTransitions: [FaderTransition] = [], faderIntervals: [FaderSpan] = []) {
+            self.id = id
+            self.direction = direction
+            self.timingDomain = timingDomain
+            self.coordinateSpace = coordinateSpace
+            self.evidence = evidence
+            self.subdivisions = subdivisions
+            self.internalHolds = internalHolds
+            self.faderTransitions = faderTransitions
+            self.faderIntervals = faderIntervals
+        }
+
+        /// No stored "tear2" assertion: two bounded pauses and three motion
+        /// slices derive it, regardless of their unequal lengths or curves.
+        /// Fader data cannot change the platter's technique label.
+        var tearLabel: String? {
+            guard motionValidationIssues().isEmpty, !internalHolds.isEmpty else { return nil }
+            return "tear\(internalHolds.count)"
+        }
+
+        /// Optional target weights, in subdivision order, without normalization.
+        var authoredSubdivisionRatio: [Double]? {
+            guard !subdivisions.isEmpty,
+                  subdivisions.allSatisfy({ $0.authoredDurationWeight != nil }) else { return nil }
+            return subdivisions.compactMap(\.authoredDurationWeight)
+        }
+
+        /// Actual moving-duration fractions, excluding holds. Available only
+        /// for measured seconds-domain boundaries; authored/inferred/unknown
+        /// boundaries must never masquerade as measurements. Raw durations
+        /// remain persisted, so no rounding or cached ratio loses information.
+        var measuredSubdivisionRatio: [Double]? {
+            guard timingDomain == .seconds, motionValidationIssues().isEmpty,
+                  subdivisions.allSatisfy({ $0.evidence.provenance == .measured }) else { return nil }
+            let total = subdivisions.reduce(0) { $0 + $1.span.duration }
+            guard total.isFinite, total > 0 else { return nil }
+            return subdivisions.map { $0.span.duration / total }
+        }
+
+        /// Boundaries from BOTH independent streams partition the gesture.
+        /// Conflicting, malformed or unsupported evidence stays unknown.
+        /// No fader event or interval is created from a stationary platter.
+        var classifiedIntervals: [ClassifiedInterval] {
+            guard let first = subdivisions.first, let last = subdivisions.last,
+                  first.span.startTime.isFinite, last.span.endTime.isFinite,
+                  last.span.endTime > first.span.startTime else { return [] }
+            let start = first.span.startTime
+            let end = last.span.endTime
+            var boundaries = subdivisions.flatMap { [$0.span.startTime, $0.span.endTime] }
+            boundaries += internalHolds.flatMap { [$0.span.startTime, $0.span.endTime] }
+            boundaries += faderIntervals.flatMap { [$0.span.startTime, $0.span.endTime] }
+            boundaries += faderTransitions.map(\.time)
+            boundaries = Array(Set(boundaries.filter { $0.isFinite && $0 >= start && $0 <= end })).sorted()
+            let validMotion = motionValidationIssues().isEmpty
+            return zip(boundaries, boundaries.dropFirst()).map { lower, upper in
+                let time = lower + (upper - lower) / 2
+                let motion: ScratchNotationMotionState
+                if !validMotion { motion = .unknown }
+                else if subdivisions.contains(where: { $0.span.contains(time) }) {
+                    motion = .init(direction: direction)
+                } else if internalHolds.contains(where: { $0.span.contains(time) }) {
+                    motion = .stationary
+                } else { motion = .unknown }
+                let covering = faderIntervals.filter { $0.span.contains(time) }
+                let fader = covering.count == 1 && Self.validSpan(covering[0].span)
+                    && Self.evidenceIssues(covering[0].evidence, platter: false).isEmpty
+                    ? covering[0].state : nil
+                return ClassifiedInterval(span: .init(startTime: lower, endTime: upper),
+                    state: .correlate(motion: motion, fader: fader))
+            }
+        }
+
+        func validationIssues() -> [String] {
+            motionValidationIssues() + faderValidationIssues()
+        }
+
+        func faderValidationIssues() -> [String] {
+            var issues: [String] = []
+            var ids = Set([id] + subdivisions.map(\.id) + internalHolds.map(\.id))
+            for (index, interval) in faderIntervals.enumerated() {
+                if interval.id.isEmpty || !ids.insert(interval.id).inserted { issues.append("fader interval ID must be unique and nonempty") }
+                if !Self.validSpan(interval.span) { issues.append("fader interval must be finite and bounded") }
+                if index > 0, interval.span.startTime < faderIntervals[index - 1].span.endTime {
+                    issues.append("fader intervals must be ordered and nonoverlapping")
+                }
+                issues += Self.evidenceIssues(interval.evidence, platter: false)
+            }
+            for (index, edge) in faderTransitions.enumerated() {
+                if edge.id.isEmpty || !ids.insert(edge.id).inserted { issues.append("fader transition ID must be unique and nonempty") }
+                if !edge.time.isFinite || edge.time < 0 { issues.append("fader transition time must be finite and nonnegative") }
+                if index > 0 {
+                    let previous = faderTransitions[index - 1]
+                    if edge.time < previous.time || (edge.time == previous.time && edge.id <= previous.id) {
+                        issues.append("fader transitions must be ordered by time then ID")
+                    }
+                }
+                issues += Self.evidenceIssues(edge.evidence, platter: false)
+            }
+            return issues
+        }
+
+        /// Shared with presentation so fader faults cannot invalidate platter evidence.
+        func motionValidationIssues() -> [String] {
+            var issues = Self.evidenceIssues(evidence, platter: true)
+            let ids = [id] + subdivisions.map(\.id) + internalHolds.map(\.id)
+            if ids.contains(where: \.isEmpty) || Set(ids).count != ids.count { issues.append("gesture/motion IDs must be unique and nonempty") }
+            if subdivisions.isEmpty || subdivisions.count != internalHolds.count + 1 {
+                issues.append("N bounded internal holds require N+1 motion subdivisions")
+            }
+            for (index, subdivision) in subdivisions.enumerated() {
+                if !Self.validSpan(subdivision.span) { issues.append("subdivision must be finite and bounded") }
+                issues += Self.evidenceIssues(subdivision.evidence, platter: true)
+                if let weight = subdivision.authoredDurationWeight, !weight.isFinite || weight <= 0 {
+                    issues.append("authored duration weight must be finite and positive")
+                }
+                for curve in [subdivision.measuredCurve, subdivision.targetCurve].compactMap({ $0 }) {
+                    issues += Self.evidenceIssues(curve.evidence, platter: true)
+                    if curve.points.count < 2 || curve.points.first?.time != subdivision.span.startTime
+                        || curve.points.last?.time != subdivision.span.endTime {
+                        issues.append("curve must retain both subdivision endpoints")
+                    }
+                    for (pointIndex, point) in curve.points.enumerated() {
+                        if !point.time.isFinite || !point.position.isFinite { issues.append("curve points must be finite") }
+                        if pointIndex > 0, point.time <= curve.points[pointIndex - 1].time {
+                            issues.append("curve point times must strictly increase")
+                        }
+                    }
+                }
+                if let curve = subdivision.measuredCurve, curve.evidence.provenance == .authored {
+                    issues.append("authored curve cannot be a measured curve")
+                }
+                if index > 0, subdivision.span.startTime <= subdivisions[index - 1].span.endTime {
+                    issues.append("subdivisions must be ordered with bounded holds between them")
+                }
+            }
+            for (index, hold) in internalHolds.enumerated() {
+                if !Self.validSpan(hold.span) || hold.label.effective != .stationary {
+                    issues.append("tear hold must be a bounded stationary interval")
+                }
+                if let position = hold.position, !position.isFinite { issues.append("hold position must be finite") }
+                issues += Self.evidenceIssues(hold.evidence, platter: true)
+                if index + 1 < subdivisions.count,
+                   (hold.span.startTime != subdivisions[index].span.endTime
+                    || hold.span.endTime != subdivisions[index + 1].span.startTime) {
+                    issues.append("tear hold must exactly join its surrounding same-direction subdivisions")
+                }
+            }
+            return issues
+        }
+
+        private static func validSpan(_ span: TimeSpan) -> Bool {
+            span.startTime.isFinite && span.endTime.isFinite && span.startTime >= 0 && span.endTime > span.startTime
+        }
+
+        static func evidenceIssues(_ evidence: Evidence, platter: Bool) -> [String] {
+            let observation = evidence.observation
+            var issues: [String] = []
+            if evidence.provenance == .unknown { issues.append("unknown provenance cannot establish a state") }
+            if evidence.provenance == .measured,
+               ![.platterTimeline, .watchMotion, .crossfaderRaw].contains(observation.source) {
+                issues.append("measured provenance requires a measurement source")
+            }
+            if !observation.confidence.isFinite || !(0...1).contains(observation.confidence) {
+                issues.append("evidence confidence must be finite and within 0...1")
+            }
+            if observation.reason.isEmpty { issues.append("evidence reason must not be empty") }
+            if let count = observation.rawSampleCount, count < 0 { issues.append("raw sample count must be nonnegative") }
+            if !(platter ? observation.source.canEstablishPlatterMotion : observation.source.canEstablishFaderState) {
+                issues.append("evidence source cannot establish \(platter ? "platter" : "fader") state")
+            }
+            return issues
+        }
+    }
+}
+
+#if DEBUG
+extension ScratchNotation {
+    /// ScratchLab-authored, finite plain-tear teaching vocabulary. No formula
+    /// parser, external catalog data, measured curves or reference lifecycle.
+    /// Each direction occupies one authored beat span. Ratios describe MOVING
+    /// durations only; every hold has its own positive musical duration.
+    struct TearTemplate: Equatable, Sendable, Identifiable {
+        enum Form: String, CaseIterable, Sendable {
+            case forward, backward
+            case forwardBackward = "forward-backward"
+
+            var directions: [ScratchNotationDirection] {
+                switch self {
+                case .forward: return [.forward]
+                case .backward: return [.backward]
+                case .forwardBackward: return [.forward, .backward]
+                }
+            }
+        }
+
+        let id: String
+        let form: Form
+        let holdCount: Int
+        let subdivisionRatio: [Double]
+        let gestureDurationBeats: Double
+        let holdDurationBeats: Double
+
+        var durationBeats: Double { gestureDurationBeats * Double(form.directions.count) }
+
+        func validationIssues() -> [String] {
+            var issues: [String] = []
+            if id.isEmpty { issues.append("template ID must be nonempty") }
+            if !(1...3).contains(holdCount) { issues.append("plain tear templates require 1...3 holds") }
+            if subdivisionRatio.count - 1 != holdCount {
+                issues.append("N holds require N+1 authored motion weights")
+            }
+            let sum = subdivisionRatio.reduce(0, +)
+            if !sum.isFinite || sum <= 0 || subdivisionRatio.contains(where: { !$0.isFinite || $0 <= 0 }) {
+                issues.append("motion ratios must be finite and positive")
+            }
+            if !gestureDurationBeats.isFinite || gestureDurationBeats <= 0 || !durationBeats.isFinite {
+                issues.append("template duration must be finite and positive")
+            }
+            let holdTotal = Double(holdCount) * holdDurationBeats
+            if !holdDurationBeats.isFinite || holdDurationBeats <= 0
+                || !holdTotal.isFinite || holdTotal >= gestureDurationBeats {
+                issues.append("bounded holds must leave positive moving time")
+            }
+            return issues
+        }
+
+        /// Pure expansion from beat zero. IDs depend only on the versioned
+        /// template ID and semantic indices, never on tempo, time or UUIDs.
+        /// Equal distance per slice is an authored target choice, not a
+        /// reconstruction of measured platter travel. Backward starts at 1;
+        /// the orbit reverses continuously at 1 and returns to 0.
+        func expanded() -> [GestureRecord]? {
+            guard validationIssues().isEmpty else { return nil }
+            let evidence = GestureRecord.Evidence(provenance: .authored,
+                observation: .authored("scratchlab_internal_teaching_template:\(id)"))
+            let movingDuration = gestureDurationBeats - Double(holdCount) * holdDurationBeats
+            let weightSum = subdivisionRatio.reduce(0, +)
+            let records = form.directions.enumerated().map { gestureIndex, direction in
+                let gestureID = "\(id)/gesture/\(gestureIndex)"
+                let start = Double(gestureIndex) * gestureDurationBeats
+                let end = Double(gestureIndex + 1) * gestureDurationBeats
+                var cursor = start
+                var subdivisions: [GestureRecord.Subdivision] = []
+                var holds: [GestureRecord.TearHold] = []
+                func position(_ boundary: Int) -> Double {
+                    let fraction = Double(boundary) / Double(subdivisionRatio.count)
+                    return direction == .forward ? fraction : 1 - fraction
+                }
+                for (index, weight) in subdivisionRatio.enumerated() {
+                    let motionEnd = index == holdCount ? end : cursor + movingDuration * (weight / weightSum)
+                    subdivisions.append(.init(id: "\(gestureID)/motion/\(index)",
+                        span: .init(startTime: cursor, endTime: motionEnd), evidence: evidence,
+                        targetCurve: .init(points: [
+                            .init(time: cursor, position: position(index)),
+                            .init(time: motionEnd, position: position(index + 1))
+                        ], evidence: evidence), authoredDurationWeight: weight))
+                    cursor = motionEnd
+                    if index < holdCount {
+                        let holdEnd = cursor + holdDurationBeats
+                        holds.append(.init(id: "\(gestureID)/hold/\(index)",
+                            span: .init(startTime: cursor, endTime: holdEnd),
+                            label: .init(derived: .stationary), evidence: evidence,
+                            position: position(index + 1)))
+                        cursor = holdEnd
+                    }
+                }
+                return GestureRecord(id: gestureID, direction: direction, timingDomain: .beats,
+                    coordinateSpace: .samplePosition, evidence: evidence,
+                    subdivisions: subdivisions, internalHolds: holds,
+                    faderIntervals: [.init(id: "\(gestureID)/fader/open",
+                        span: .init(startTime: start, endTime: end), state: .open, evidence: evidence)])
+            }
+            // Reject unrepresentable floating-point spans as well as structural
+            // errors; do not clamp, repair or return a partial target.
+            return expansionValidationIssues(records).isEmpty ? records : nil
+        }
+
+        /// Stricter target-authoring checks supplement lossless-record checks:
+        /// the latter intentionally retain contradictory captured evidence.
+        func expansionValidationIssues(_ records: [GestureRecord]) -> [String] {
+            var issues = validationIssues()
+            guard issues.isEmpty else { return issues }
+            guard records.count == form.directions.count else { return ["template gesture count mismatch"] }
+            let weightSum = subdivisionRatio.reduce(0, +)
+            let movingDuration = gestureDurationBeats - Double(holdCount) * holdDurationBeats
+            func close(_ lhs: Double, _ rhs: Double) -> Bool {
+                lhs.isFinite && rhs.isFinite && abs(lhs - rhs) <= 1e-9 * max(abs(rhs), 1)
+            }
+            var ids = Set<String>()
+            for (index, record) in records.enumerated() {
+                issues += record.validationIssues()
+                let allIDs = [record.id] + record.subdivisions.map(\.id) + record.internalHolds.map(\.id)
+                    + record.faderIntervals.map(\.id) + record.faderTransitions.map(\.id)
+                if allIDs.contains(where: { !ids.insert($0).inserted }) { issues.append("template event IDs must be unique") }
+                if record.direction != form.directions[index] || record.timingDomain != .beats
+                    || record.coordinateSpace != .samplePosition || record.evidence.provenance != .authored {
+                    issues.append("template must retain authored beat-domain direction and coordinates")
+                }
+                guard record.subdivisions.count == holdCount + 1, record.internalHolds.count == holdCount else {
+                    issues.append("template hold/subdivision count mismatch")
+                    continue
+                }
+                let start = Double(index) * gestureDurationBeats
+                let end = Double(index + 1) * gestureDurationBeats
+                if record.subdivisions.first?.span.startTime != start || record.subdivisions.last?.span.endTime != end {
+                    issues.append("template gestures must cover their full beat span continuously")
+                }
+                if record.authoredSubdivisionRatio != subdivisionRatio { issues.append("authored motion ratio mismatch") }
+                for (sliceIndex, slice) in record.subdivisions.enumerated() {
+                    if !close(slice.span.duration / movingDuration, subdivisionRatio[sliceIndex] / weightSum) {
+                        issues.append("expanded motion duration ratio mismatch")
+                    }
+                    guard slice.measuredCurve == nil, slice.evidence.provenance == .authored,
+                          let curve = slice.targetCurve, curve.evidence.provenance == .authored,
+                          curve.points.count >= 2 else {
+                        issues.append("template motion requires authored target curves only")
+                        continue
+                    }
+                    let sign = record.direction == .forward ? 1.0 : -1.0
+                    if zip(curve.points, curve.points.dropFirst()).contains(where: { ($1.position - $0.position) * sign <= 0 }) {
+                        issues.append("target curve must travel in the gesture direction")
+                    }
+                    let fraction = Double(sliceIndex) / Double(holdCount + 1)
+                    let nextFraction = Double(sliceIndex + 1) / Double(holdCount + 1)
+                    if !close(curve.startPosition ?? .nan, record.direction == .forward ? fraction : 1 - fraction)
+                        || !close(curve.endPosition ?? .nan, record.direction == .forward ? nextFraction : 1 - nextFraction) {
+                        issues.append("template target positions must remain continuous")
+                    }
+                    if sliceIndex < holdCount {
+                        let hold = record.internalHolds[sliceIndex]
+                        if !close(hold.span.duration, holdDurationBeats) || hold.evidence.provenance != .authored
+                            || hold.position != curve.endPosition
+                            || hold.position != record.subdivisions[sliceIndex + 1].targetCurve?.startPosition {
+                            issues.append("hold must preserve duration and adjoining target position")
+                        }
+                    }
+                }
+                if !record.faderTransitions.isEmpty || record.faderIntervals.count != 1
+                    || record.faderIntervals.first?.state != .open
+                    || record.faderIntervals.first?.span != .init(startTime: start, endTime: end)
+                    || record.faderIntervals.first?.evidence.provenance != .authored {
+                    issues.append("plain tears require explicit authored open fader throughout, without clicks")
+                }
+                if index > 0,
+                   records[index - 1].subdivisions.last?.targetCurve?.endPosition != record.subdivisions.first?.targetCurve?.startPosition {
+                    issues.append("orbit reversal must preserve position")
+                }
+            }
+            return issues
+        }
+    }
+}
+#endif
+
+// MARK: - Offline calibrated platter-motion segmentation
+
+/// Pure kinematic evidence analysis. No fader, scratch name, clock, I/O or app
+/// consumer. In particular, movement alone cannot establish hand contact or
+/// distinguish free playback from a hand moving at the same speed.
+enum PlatterMotionSegmenter {
+    typealias TimeSpan = ScratchNotation.GestureRecord.TimeSpan
+    typealias Point = ScratchNotation.GestureRecord.CurvePoint
+
+    struct Sample: Equatable, Sendable {
+        let time: Double
+        let position: Double
+        var confidence: Double = 1
+    }
+
+    struct Calibration: Equatable, Sendable {
+        enum Basis: Equatable, Sendable {
+            case physicalPlatterDisplacement, samplePosition, rawMotorPhase
+        }
+        let basis: Basis
+        /// An explicit, externally established calibration reference. This
+        /// segmenter cannot verify calibration or recover it from raw phase.
+        let reference: String
+        let inputOrigin: Double
+        /// Positive conversion to revolutions or fractions of sample duration.
+        let unitsPerInputUnit: Double
+        /// Exactly +1 or -1; positive output always means forward.
+        let forwardSign: Double
+
+        var coordinateSpace: ScratchNotation.GestureRecord.CoordinateSpace? {
+            switch basis {
+            case .physicalPlatterDisplacement: return .platterRevolutions
+            case .samplePosition: return .samplePosition
+            case .rawMotorPhase: return nil
+            }
+        }
+    }
+
+    /// Values below are synthetic-fixture starting points, NOT CXL calibration.
+    /// Callers must explicitly supply a configuration in the calibration's
+    /// output units (units/sec for speed, units for excursion, seconds for time).
+    struct Configuration: Equatable, Sendable {
+        var movingSpeed: Double = 0.08
+        var stationarySpeed: Double = 0.02
+        var minimumMovingDuration: Double = 0.04
+        var minimumHoldDuration: Double = 0.04
+        var maximumRepairDuration: Double = 0.02
+        var maximumJitterExcursion: Double = 0.0005
+        var maximumStationaryExcursion: Double = 0.001
+        var minimumSampleRate: Double = 100
+        var maximumSampleGap: Double = 0.05
+        var maximumPlausibleSpeed: Double = 8
+        var minimumSampleConfidence: Double = 0.8
+
+        fileprivate var isValid: Bool {
+            let positive = [movingSpeed, minimumMovingDuration, minimumHoldDuration,
+                            maximumStationaryExcursion, minimumSampleRate,
+                            maximumSampleGap, maximumPlausibleSpeed]
+            let nonnegative = [stationarySpeed, maximumRepairDuration, maximumJitterExcursion]
+            return positive.allSatisfy { $0.isFinite && $0 > 0 }
+                && nonnegative.allSatisfy { $0.isFinite && $0 >= 0 }
+                && stationarySpeed < movingSpeed && movingSpeed < maximumPlausibleSpeed
+                && maximumRepairDuration < min(minimumMovingDuration, minimumHoldDuration)
+                && maximumJitterExcursion <= maximumStationaryExcursion
+                && maximumSampleGap >= 1 / minimumSampleRate
+                && minimumSampleConfidence.isFinite && (0...1).contains(minimumSampleConfidence)
+        }
+    }
+
+    /// Observed direction, not the canonical model's assertion of hand-driven
+    /// travel. There is deliberately no inferred `released` state.
+    enum State: Equatable, Sendable {
+        case forward, backward, stationary, unknown
+        var direction: ScratchNotationDirection? {
+            switch self {
+            case .forward: return .forward
+            case .backward: return .backward
+            case .stationary, .unknown: return nil
+            }
+        }
+    }
+
+    /// Confidence in the kinematic segmentation under the supplied parameters;
+    /// not a calibrated probability or confidence in a named technique.
+    enum Confidence: Int, Equatable, Sendable {
+        case unknown, low, supported
+    }
+
+    enum Reason: String, CaseIterable, Equatable, Sendable {
+        case invalidConfiguration, invalidCalibration, unsupportedMotorPhase
+        case insufficientSamples, nonfiniteEvidence, clockDiscontinuity
+        case insufficientSampleRate, sampleGap, lowInputConfidence, implausibleSpeed
+        case hysteresisBand, ambiguousMotion, belowMinimumMovingDuration, belowMinimumHoldDuration
+        case stationaryDrift, mergedJitter, bridgedDropout, interruptedEvidence
+        case observedMovement, observedStationary, sameDirectionPauseResume, directionReversal
+        case handContactUnobserved
+    }
+
+    struct Segment: Equatable, Sendable {
+        let span: TimeSpan
+        let state: State
+        /// Original calibrated points, including both interval endpoints.
+        let points: [Point]
+        let confidence: Confidence
+        let reasons: [Reason]
+        /// Largest sample-pair duration incident to either boundary. This is
+        /// sampling resolution, not a guarantee about a gradual threshold crossing.
+        let boundaryResolutionSeconds: Double
+    }
+
+    struct Gesture: Equatable, Sendable {
+        let direction: ScratchNotationDirection
+        let subdivisions: [Segment]
+        let tearHolds: [Segment]
+        let confidence: Confidence
+        let reasons: [Reason]
+        var isTearCandidate: Bool { !tearHolds.isEmpty }
+        var span: TimeSpan {
+            .init(startTime: subdivisions[0].span.startTime, endTime: subdivisions.last!.span.endTime)
+        }
+        /// Fractions of observed MOVING durations, excluding holds. Repaired or
+        /// ambiguous evidence does not claim an exact measured ratio.
+        var measuredSubdivisionRatios: [Double]? {
+            guard confidence == .supported else { return nil }
+            let total = subdivisions.reduce(0) { $0 + $1.span.duration }
+            return subdivisions.map { $0.span.duration / total }
+        }
+    }
+
+    struct Reversal: Equatable, Sendable {
+        /// Direct turnaround: zero-width boundary. A stop before opposite
+        /// travel: the whole stationary interval, not a fabricated instant.
+        let span: TimeSpan
+        let from: ScratchNotationDirection
+        let to: ScratchNotationDirection
+    }
+
+    struct Result: Equatable, Sendable {
+        let coordinateSpace: ScratchNotation.GestureRecord.CoordinateSpace?
+        let segments: [Segment]
+        let gestures: [Gesture]
+        let reversals: [Reversal]
+        let confidence: Confidence
+        let reasons: [Reason]
+    }
+
+    private struct Run {
+        var first: Int
+        var end: Int // exclusive edge index; also the final point index
+        var state: State
+        var reasons: [Reason]
+    }
+
+    /// Timestamp order is evidence: never sort, unwrap, clamp, rebase time,
+    /// normalize to observed extrema, or fill a gap with stationary samples.
+    /// Boundaries are the original sample times bounding pair-average speeds.
+    /// Duration/speed comparisons allow 1e-9 for floating-point arithmetic only.
+    static func segment(_ samples: [Sample], calibration: Calibration,
+                        configuration c: Configuration) -> Result {
+        func rejected(_ reason: Reason) -> Result {
+            Result(coordinateSpace: calibration.coordinateSpace, segments: [], gestures: [],
+                   reversals: [], confidence: .unknown, reasons: [reason])
+        }
+        guard c.isValid else { return rejected(.invalidConfiguration) }
+        guard calibration.basis != .rawMotorPhase else { return rejected(.unsupportedMotorPhase) }
+        guard !calibration.reference.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+              calibration.inputOrigin.isFinite, calibration.unitsPerInputUnit.isFinite,
+              calibration.unitsPerInputUnit > 0, abs(calibration.forwardSign) == 1 else {
+            return rejected(.invalidCalibration)
+        }
+        guard samples.count >= 2 else { return rejected(.insufficientSamples) }
+        guard samples.allSatisfy({ $0.time.isFinite && $0.position.isFinite && $0.confidence.isFinite }) else {
+            return rejected(.nonfiniteEvidence)
+        }
+        guard samples[0].time >= 0,
+              zip(samples, samples.dropFirst()).allSatisfy({ $1.time > $0.time }) else {
+            return rejected(.clockDiscontinuity)
+        }
+        let points = samples.map {
+            Point(time: $0.time, position: ($0.position - calibration.inputOrigin)
+                  * calibration.unitsPerInputUnit * calibration.forwardSign)
+        }
+        guard points.allSatisfy({ $0.position.isFinite }) else { return rejected(.nonfiniteEvidence) }
+        var runs: [Run] = []
+        var previous: State = .unknown
+        for i in 0..<(points.count - 1) {
+            let dt = points[i + 1].time - points[i].time
+            let speed = (points[i + 1].position - points[i].position) / dt
+            var state: State = .unknown
+            var reasons: [Reason] = []
+            if dt > c.maximumSampleGap + epsilon { reasons = [.sampleGap] }
+            else if dt > 1 / c.minimumSampleRate + epsilon { reasons = [.insufficientSampleRate] }
+            else if !speed.isFinite || abs(speed) > c.maximumPlausibleSpeed + epsilon { reasons = [.implausibleSpeed] }
+            else if [samples[i].confidence, samples[i + 1].confidence].contains(where: {
+                !(c.minimumSampleConfidence...1).contains($0)
+            }) { reasons = [.lowInputConfidence] }
+            else if abs(speed) <= c.stationarySpeed + epsilon { state = .stationary }
+            else if abs(speed) + epsilon >= c.movingSpeed { state = speed > 0 ? .forward : .backward }
+            else {
+                let sign: State = speed > 0 ? .forward : .backward
+                state = previous == .stationary || previous == sign ? previous : .unknown
+                reasons = [.hysteresisBand]
+            }
+            append(Run(first: i, end: i + 1, state: state, reasons: reasons), to: &runs)
+            previous = state
+        }
+
+        func duration(_ run: Run) -> Double { points[run.end].time - points[run.first].time }
+        func excursion(_ run: Run) -> Double {
+            let positions = points[run.first...run.end].map(\.position)
+            return positions.max()! - positions.min()!
+        }
+        func sufficientlyLong(_ run: Run) -> Bool {
+            run.state != .unknown && duration(run) + epsilon >=
+                (run.state == .stationary ? c.minimumHoldDuration : c.minimumMovingDuration)
+        }
+
+        // A repair needs independently sustained matching neighbors. Never
+        // consume a minimum-length intentional hold, or cascade short bursts
+        // into evidence of sustained motion. Preserve raw points and a low flag.
+        var i = 1
+        while i + 1 < runs.count {
+            let left = runs[i - 1], middle = runs[i], right = runs[i + 1]
+            var repair: Reason?
+            if left.state == right.state, sufficientlyLong(left), sufficientlyLong(right),
+               duration(middle) <= c.maximumRepairDuration + epsilon {
+                if middle.state != .unknown, excursion(middle) <= c.maximumJitterExcursion + epsilon {
+                    repair = .mergedJitter
+                } else if middle.state == .unknown, middle.reasons == [.insufficientSampleRate],
+                          let direction = left.state.direction {
+                    let speed = (points[middle.end].position - points[middle.first].position) / duration(middle)
+                    let sampleConfidenceOK = samples[middle.first...middle.end].allSatisfy {
+                        (c.minimumSampleConfidence...1).contains($0.confidence)
+                    }
+                    if sampleConfidenceOK, abs(speed) + epsilon >= c.movingSpeed,
+                       abs(speed) <= c.maximumPlausibleSpeed + epsilon,
+                       (speed > 0) == (direction == .forward) {
+                        repair = .bridgedDropout
+                    }
+                }
+            }
+            if let repair {
+                runs.replaceSubrange((i - 1)...(i + 1), with: [Run(first: left.first, end: right.end,
+                    state: left.state, reasons: ordered(left.reasons + middle.reasons + right.reasons + [repair]))])
+                i = max(1, i - 1)
+            } else { i += 1 }
+        }
+
+        var qualified: [Run] = []
+        for var run in runs {
+            if run.state == .stationary {
+                if duration(run) + epsilon < c.minimumHoldDuration {
+                    run.state = .unknown; run.reasons.append(.belowMinimumHoldDuration)
+                } else if excursion(run) > c.maximumStationaryExcursion + epsilon {
+                    run.state = .unknown; run.reasons.append(.stationaryDrift)
+                } else if run.reasons.contains(.hysteresisBand) {
+                    // Hysteresis prevents chatter, but threshold-band drift
+                    // cannot establish a tear hold, even with little net travel.
+                    run.state = .unknown; run.reasons.append(.ambiguousMotion)
+                }
+            } else if run.state.direction != nil, duration(run) + epsilon < c.minimumMovingDuration {
+                run.state = .unknown; run.reasons.append(.belowMinimumMovingDuration)
+            }
+            append(run, to: &qualified)
+        }
+        let segments = qualified.map { run in
+            let confidence: Confidence = run.state == .unknown ? .unknown : (run.reasons.isEmpty ? .supported : .low)
+            let base: Reason = run.state == .stationary ? .observedStationary
+                : (run.state == .unknown ? .ambiguousMotion : .observedMovement)
+            let incidentEdges = [run.first - 1, run.first, run.end - 1, run.end]
+                .filter { $0 >= 0 && $0 + 1 < points.count }
+            return Segment(span: .init(startTime: points[run.first].time, endTime: points[run.end].time),
+                state: run.state, points: Array(points[run.first...run.end]), confidence: confidence,
+                reasons: ordered(run.reasons + [base]), boundaryResolutionSeconds: incidentEdges.map {
+                    points[$0 + 1].time - points[$0].time
+                }.max()!)
+        }
+        var gestures: [Gesture] = []
+        var reversals: [Reversal] = []
+        i = 0
+        while i < segments.count {
+            guard let direction = segments[i].state.direction else { i += 1; continue }
+            let first = i
+            var subdivisions = [segments[i]]
+            var holds: [Segment] = []
+            while i + 2 < segments.count, segments[i + 1].state == .stationary,
+                  segments[i + 2].state.direction == direction {
+                holds.append(segments[i + 1]); subdivisions.append(segments[i + 2]); i += 2
+            }
+            let all = subdivisions + holds
+            let interrupted = (first > 0 && segments[first - 1].state == .unknown)
+                || (i + 1 < segments.count && segments[i + 1].state == .unknown)
+            let confidence: Confidence = interrupted || all.contains { $0.confidence != .supported } ? .low : .supported
+            gestures.append(Gesture(direction: direction, subdivisions: subdivisions, tearHolds: holds,
+                confidence: confidence, reasons: ordered(all.flatMap(\.reasons) + [.handContactUnobserved]
+                    + (holds.isEmpty ? [] : [.sameDirectionPauseResume])
+                    + (interrupted ? [.interruptedEvidence] : []))))
+            let next = i + 1 < segments.count && segments[i + 1].state == .stationary ? i + 2 : i + 1
+            if next < segments.count, let other = segments[next].state.direction, other != direction {
+                reversals.append(Reversal(span: .init(startTime: segments[i].span.endTime,
+                    endTime: segments[next].span.startTime), from: direction, to: other))
+            }
+            i += 1
+        }
+        let confidence: Confidence = segments.allSatisfy { $0.state == .unknown } ? .unknown
+            : (segments.contains { $0.confidence != .supported } ? .low : .supported)
+        return Result(coordinateSpace: calibration.coordinateSpace, segments: segments, gestures: gestures,
+            reversals: reversals, confidence: confidence,
+            reasons: ordered(segments.flatMap(\.reasons) + [.handContactUnobserved]
+                + (reversals.isEmpty ? [] : [.directionReversal])
+                + (gestures.contains(where: \.isTearCandidate) ? [.sameDirectionPauseResume] : [])))
+    }
+
+    private static let epsilon = 1e-9
+
+    private static func ordered(_ reasons: [Reason]) -> [Reason] {
+        Reason.allCases.filter { reasons.contains($0) }
+    }
+
+    private static func append(_ run: Run, to runs: inout [Run]) {
+        if let last = runs.last, last.state == run.state {
+            runs[runs.count - 1].end = run.end
+            runs[runs.count - 1].reasons = ordered(last.reasons + run.reasons)
+        } else { runs.append(run) }
     }
 }
 
@@ -3214,6 +7409,669 @@ extension ScratchNotation {
             timingBasis: "detected_capture",
             strokes: strokes
         )
+    }
+}
+
+// MARK: - Conservative derived structure classification
+
+/// The finite set of structures the conservative classifier is permitted to
+/// propose. It is deliberately CLOSED and deliberately small: it covers only
+/// what the canonical layer already supports — the Baby turnaround, the
+/// 1/2/3-hold plain tear, and the three correlated non-sounding regions.
+///
+/// Chirp and Transformer are absent on purpose. Nothing in the canonical
+/// layer models them (`ScratchNotationFaderClickKind.transformPulse` is a raw
+/// fader observation, not a technique assertion), so proposing them would be
+/// a guess. Their existing capture/demo behaviour is untouched by this layer.
+///
+/// A tear entry is named a CANDIDATE because the platter shape that produces
+/// it — same-direction travel interrupted by bounded stationary intervals —
+/// is necessary but not sufficient evidence for a performed tear. The name
+/// keeps the uncertainty visible at every call site.
+enum ScratchNotationDerivedStructure: String, Codable, Equatable, Sendable, CaseIterable {
+    /// One direct reversal joining two non-tear travel gestures, sounding.
+    case baby
+    case tear1Candidate = "tear1_candidate"
+    case tear2Candidate = "tear2_candidate"
+    case tear3Candidate = "tear3_candidate"
+    /// Bounded stationary interval, fader open.
+    case hold
+    /// Travel, fader closed — a silent move.
+    case ghost
+    /// Bounded stationary interval, fader closed.
+    case ghostHold = "ghost_hold"
+
+    /// The supported tear candidate for `holdCount`, or `nil` when the count
+    /// is outside the authored 1...3 plain-tear vocabulary. `nil` is reported
+    /// as unknown; it is never rounded down to the nearest supported tear.
+    static func tearCandidate(holdCount: Int) -> ScratchNotationDerivedStructure? {
+        switch holdCount {
+        case 1: return .tear1Candidate
+        case 2: return .tear2Candidate
+        case 3: return .tear3Candidate
+        default: return nil
+        }
+    }
+
+    /// Bounded internal tear holds this structure asserts, or `nil` when it
+    /// asserts none. This is a PLATTER count. It is not a fader click count
+    /// and it is not a count of audible sounds; those three numbers are
+    /// reported separately and are never derived from one another.
+    var assertedTearHoldCount: Int? {
+        switch self {
+        case .tear1Candidate: return 1
+        case .tear2Candidate: return 2
+        case .tear3Candidate: return 3
+        case .baby, .hold, .ghost, .ghostHold: return nil
+        }
+    }
+
+    var isTearCandidate: Bool { assertedTearHoldCount != nil }
+}
+
+/// A pointer INTO the canonical streams. The classifier cites evidence, it
+/// never copies or restates it: a reference stays valid only against the
+/// pattern it was produced from, and reading it back always yields the
+/// original, unmodified observation with its own provenance intact.
+enum ScratchNotationEvidenceReference: Codable, Equatable, Hashable, Sendable {
+    case motionSegment(index: Int)
+    case faderInterval(index: Int)
+    case faderClick(index: Int)
+
+    var detail: String {
+        switch self {
+        case .motionSegment(let index): return "motionSegment[\(index)]"
+        case .faderInterval(let index): return "faderInterval[\(index)]"
+        case .faderClick(let index):    return "faderClick[\(index)]"
+        }
+    }
+}
+
+/// Machine-readable justifications. Every proposal states why it reached the
+/// reading it did, including why it declined to reach one.
+enum ScratchNotationStructureReason: String, CaseIterable, Codable, Equatable, Sendable {
+    case invalidPattern
+    case noMotionEvidence
+    case unknownMotionPresent
+    case releasedMotionPresent
+    case correctedMotionLabel
+    case boundedStationaryInterval
+    case sameDirectionPauseResume
+    case directReversal
+    case holdCountOutsideSupportedRange
+    case faderOpenThroughout
+    case faderClosedThroughout
+    case faderStateVariesWithinRegion
+    case partialFaderCoverage
+    case faderUnobserved
+    case faderClicksPresentNotCounted
+    case tearCountIsPlatterOnly
+    case ambiguousCandidates
+
+    var detail: String {
+        switch self {
+        case .invalidPattern:
+            return "the canonical pattern failed its own validation, so nothing was classified"
+        case .noMotionEvidence:
+            return "the pattern carries no platter motion segments"
+        case .unknownMotionPresent:
+            return "at least one platter interval was unobserved and terminates any gesture it meets"
+        case .releasedMotionPresent:
+            return "at least one platter interval is free-running playback, which is motion and never a hold"
+        case .correctedMotionLabel:
+            return "a manual motion correction overrides the derived motion state in this region"
+        case .boundedStationaryInterval:
+            return "a true zero-velocity interval bounded on both sides by observation"
+        case .sameDirectionPauseResume:
+            return "same-direction travel resumed after a bounded stationary interval"
+        case .directReversal:
+            return "travel polarity flipped with no intervening stationary, released or unobserved interval"
+        case .holdCountOutsideSupportedRange:
+            return "the internal tear hold count lies outside the supported 1...3 plain-tear vocabulary"
+        case .faderOpenThroughout:
+            return "every fader observation covering this region reports open"
+        case .faderClosedThroughout:
+            return "every fader observation covering this region reports closed"
+        case .faderStateVariesWithinRegion:
+            return "the fader is observed both open and closed inside this region"
+        case .partialFaderCoverage:
+            return "fader observations cover only part of this region; the remainder is unknown"
+        case .faderUnobserved:
+            return "no fader interval covers this region, which means unknown and never implicitly open"
+        case .faderClicksPresentNotCounted:
+            return "fader clicks occur inside this region; they are cited as evidence and never counted as tear holds"
+        case .tearCountIsPlatterOnly:
+            return "the tear hold count derives from the platter stream alone; fader evidence cannot change it"
+        case .ambiguousCandidates:
+            return "the evidence supports more than one structure, so no single reading is asserted"
+        }
+    }
+}
+
+/// One conservative structural proposal over a bounded beat region.
+///
+/// `candidates` is ordered and may be empty (unknown) or hold more than one
+/// entry (ambiguous). It never contains a silently chosen winner: only
+/// `soleCandidate` — exactly one candidate — is an accepted machine reading.
+struct ScratchNotationStructureProposal: Codable, Equatable, Sendable {
+
+    typealias Reason = ScratchNotationStructureReason
+
+    /// Which canonical unit the proposal describes. Scopes are independent
+    /// layers, not competing readings: a tear hold correctly appears both as
+    /// a segment-scope `.hold` and inside a gesture-scope tear candidate.
+    enum Scope: Codable, Equatable, Sendable {
+        case motionSegment(index: Int)
+        case gesture(index: Int)
+        case reversal(fromGestureIndex: Int, toGestureIndex: Int)
+
+        var detail: String {
+            switch self {
+            case .motionSegment(let index):
+                return "motion segment \(index)"
+            case .gesture(let index):
+                return "gesture \(index)"
+            case .reversal(let from, let to):
+                return "reversal between gesture \(from) and gesture \(to)"
+            }
+        }
+    }
+
+    struct Candidate: Codable, Equatable, Sendable {
+        let structure: ScratchNotationDerivedStructure
+        /// Conservative support in `[0, 1]`. Never exceeds the weakest piece
+        /// of canonical evidence the proposal rests on.
+        let confidence: Double
+        let reasons: [Reason]
+
+        init(structure: ScratchNotationDerivedStructure,
+             confidence: Double,
+             reasons: [Reason]) {
+            self.structure = structure
+            self.confidence = confidence.isFinite ? min(1, max(0, confidence)) : 0
+            self.reasons = reasons
+        }
+
+        var narrative: String {
+            "\(structure.rawValue) (confidence \(String(format: "%.2f", confidence))): "
+                + reasons.map(\.detail).joined(separator: "; ")
+        }
+    }
+
+    let scope: Scope
+    let span: ScratchNotation.BeatSpan
+    let candidates: [Candidate]
+    /// Region-level reasons, including the reasons a reading was declined.
+    let reasons: [Reason]
+    /// Pointers into the canonical streams this proposal rests on.
+    let evidenceReferences: [ScratchNotationEvidenceReference]
+
+    /// No candidate survived the conservative rules.
+    var isUnknown: Bool { candidates.isEmpty }
+    /// More than one structure remains supportable.
+    var isAmbiguous: Bool { candidates.count > 1 }
+    /// The only accepted machine reading. Ambiguous and unknown proposals
+    /// deliberately have none — a consumer must handle that, not guess.
+    var soleCandidate: Candidate? { candidates.count == 1 ? candidates[0] : nil }
+
+    var narrative: String {
+        let heading = isUnknown
+            ? "unknown"
+            : candidates.map { "\($0.structure.rawValue)@\(String(format: "%.2f", $0.confidence))" }
+                .joined(separator: " | ")
+        return "\(scope.detail) [\(span.startBeat), \(span.endBeat)) → \(heading)"
+            + " — " + reasons.map(\.detail).joined(separator: "; ")
+            + " — evidence: " + evidenceReferences.map(\.detail).joined(separator: ", ")
+    }
+}
+
+/// A machine proposal plus its optional human label.
+///
+/// The manual label is AUTHORITATIVE, and the proposal is retained verbatim
+/// beside it — the same doctrine `ScratchNotationMotionLabel` follows, so a
+/// reviewer's disagreement with the machine stays inspectable instead of
+/// overwriting it. Neither the proposal nor the canonical evidence it cites
+/// is rewritten by annotating.
+struct ScratchNotationStructureAnnotation: Codable, Equatable, Sendable {
+    let proposal: ScratchNotationStructureProposal
+    let manualLabel: ScratchNotationDerivedStructure?
+    /// Provenance for the manual label. Required whenever a label is present.
+    let manualEvidence: ScratchNotation.GestureRecord.Evidence?
+
+    init(proposal: ScratchNotationStructureProposal,
+         manualLabel: ScratchNotationDerivedStructure? = nil,
+         manualEvidence: ScratchNotation.GestureRecord.Evidence? = nil) {
+        self.proposal = proposal
+        self.manualLabel = manualLabel
+        self.manualEvidence = manualEvidence
+    }
+
+    /// The label every consumer must read. A manual label always wins; with
+    /// none, only an unambiguous proposal supplies a reading.
+    var effective: ScratchNotationDerivedStructure? {
+        manualLabel ?? proposal.soleCandidate?.structure
+    }
+
+    var isManuallyLabelled: Bool { manualLabel != nil }
+
+    /// True only when the human asserted something the machine did not offer
+    /// at all — an ambiguous proposal that happens to list the manual label
+    /// is not a disagreement.
+    var manualLabelDisagreesWithProposal: Bool {
+        guard let manualLabel else { return false }
+        return !proposal.candidates.contains { $0.structure == manualLabel }
+    }
+
+    /// Pure invariant check, separate from decoding, as everywhere else in
+    /// this layer.
+    func validationIssues() -> [String] {
+        var issues: [String] = []
+        switch (manualLabel, manualEvidence) {
+        case (nil, nil):
+            break
+        case (nil, .some):
+            issues.append("manual evidence requires a manual label")
+        case (.some, nil):
+            issues.append("a manual label requires manual evidence")
+        case (.some, .some(let evidence)):
+            if evidence.provenance != .manuallyCorrected {
+                issues.append("a manual label must carry manuallyCorrected provenance, got '\(evidence.provenance.rawValue)'")
+            }
+            issues.append(contentsOf: ScratchNotation.GestureRecord.evidenceIssues(evidence, platter: true))
+        }
+        return issues
+    }
+}
+
+/// Conservative, PURE derivation of supported structures from canonical
+/// evidence.
+///
+/// Everything it reads is a `ScratchNotation.GesturePattern`; everything it
+/// returns is new derived value. Raw capture, canonical motion segments,
+/// fader intervals and fader clicks are never mutated, reordered, widened,
+/// repaired or discarded — the classifier only cites them by index.
+///
+/// Three counts stay deliberately independent and are never derived from one
+/// another: fader clicks come from the fader stream, sounding regions come
+/// from correlating both streams, and tear hold counts come from the platter
+/// stream alone. A tear performed with fader clicks over it has three
+/// different numbers, and collapsing any two of them would be a fabrication.
+enum ScratchNotationStructureClassifier {
+
+    typealias Reason = ScratchNotationStructureReason
+    typealias Proposal = ScratchNotationStructureProposal
+    typealias Reference = ScratchNotationEvidenceReference
+
+    /// Shared with `GesturePattern` so beat-axis comparisons agree exactly.
+    static let tolerance = ScratchNotation.GesturePattern.beatContinuityTolerance
+
+    /// Applied once per candidate when more than one structure survives.
+    static let ambiguousCandidatePenalty = 0.5
+    /// Applied when fader observations cover only part of a correlated region.
+    static let partialFaderCoveragePenalty = 0.5
+
+    /// Independently derived counts. Three numbers, three sources.
+    struct Counts: Codable, Equatable, Sendable {
+        /// Fader stream only.
+        let faderClickCount: Int
+        /// Maximal correlated `.sounding` regions across BOTH streams.
+        /// Clicks are instants and never split a sustained region, so a click
+        /// can never inflate this number.
+        let soundingRegionCount: Int
+        /// Platter stream only, per derived gesture, in gesture order.
+        let tearHoldCountsByGesture: [Int]
+
+        var totalTearHoldCount: Int { tearHoldCountsByGesture.reduce(0, +) }
+    }
+
+    struct Classification: Codable, Equatable, Sendable {
+        let proposals: [Proposal]
+        let counts: Counts
+        /// Pattern-level reasons.
+        let reasons: [Reason]
+
+        var tearCandidateProposals: [Proposal] {
+            proposals.filter { $0.candidates.contains { $0.structure.isTearCandidate } }
+        }
+        var unknownProposals: [Proposal] { proposals.filter(\.isUnknown) }
+        var ambiguousProposals: [Proposal] { proposals.filter(\.isAmbiguous) }
+        /// Only unambiguous readings, in proposal order.
+        var acceptedStructures: [ScratchNotationDerivedStructure] {
+            proposals.compactMap { $0.soleCandidate?.structure }
+        }
+        var narrative: [String] { proposals.map(\.narrative) }
+    }
+
+    /// The only entry point. A pattern that fails its own validation is not
+    /// classified at all — conservative by construction, since a malformed
+    /// stream cannot support any structural claim.
+    static func classify(_ pattern: ScratchNotation.GesturePattern) -> Classification {
+        guard pattern.validationIssues().isEmpty else {
+            return Classification(proposals: [],
+                                  counts: Counts(faderClickCount: pattern.faderClicks.count,
+                                                 soundingRegionCount: 0,
+                                                 tearHoldCountsByGesture: []),
+                                  reasons: [.invalidPattern])
+        }
+        guard !pattern.motionSegments.isEmpty else {
+            return Classification(proposals: [],
+                                  counts: Counts(faderClickCount: pattern.faderClicks.count,
+                                                 soundingRegionCount: 0,
+                                                 tearHoldCountsByGesture: []),
+                                  reasons: [.noMotionEvidence])
+        }
+
+        let gestures = pattern.gestures
+        var proposals = segmentProposals(pattern)
+        proposals += gestureProposals(pattern, gestures: gestures)
+        proposals += reversalProposals(pattern, gestures: gestures)
+        proposals.sort { lhs, rhs in
+            if lhs.span.startBeat != rhs.span.startBeat { return lhs.span.startBeat < rhs.span.startBeat }
+            return scopeRank(lhs.scope) < scopeRank(rhs.scope)
+        }
+
+        var reasons: [Reason] = []
+        if pattern.motionSegments.contains(where: { $0.state == .unknown }) { reasons.append(.unknownMotionPresent) }
+        if pattern.motionSegments.contains(where: { $0.state == .released }) { reasons.append(.releasedMotionPresent) }
+        if pattern.motionSegments.contains(where: { $0.label.isCorrected }) { reasons.append(.correctedMotionLabel) }
+        if !pattern.faderClicks.isEmpty { reasons.append(.faderClicksPresentNotCounted) }
+        if gestures.contains(where: \.isTear) { reasons.append(.tearCountIsPlatterOnly) }
+        if proposals.contains(where: \.isAmbiguous) { reasons.append(.ambiguousCandidates) }
+
+        let counts = Counts(faderClickCount: pattern.faderClicks.count,
+                            soundingRegionCount: correlatedRegions(pattern)
+                                .filter { $0.state == .sounding }.count,
+                            tearHoldCountsByGesture: gestures.map(\.tearHoldCount))
+        return Classification(proposals: proposals, counts: counts, reasons: ordered(reasons))
+    }
+
+    // MARK: Correlated regions
+
+    /// Maximal correlated regions over the platter stream's span, split at
+    /// every boundary of BOTH streams. Fader clicks are deliberately excluded
+    /// as boundaries: a click is an instant, not sustained state.
+    static func correlatedRegions(
+        _ pattern: ScratchNotation.GesturePattern
+    ) -> [(span: ScratchNotation.BeatSpan, state: ScratchNotationCorrelatedState)] {
+        guard let start = pattern.motionSegments.first?.startBeat,
+              let end = pattern.motionSegments.last?.endBeat, end > start else { return [] }
+        var edges = pattern.motionSegments.flatMap { [$0.startBeat, $0.endBeat] }
+        edges += pattern.faderIntervals.flatMap { [$0.startBeat, $0.endBeat] }
+        let boundaries = Array(Set(edges.filter { $0 >= start && $0 <= end })).sorted()
+        var regions: [(span: ScratchNotation.BeatSpan, state: ScratchNotationCorrelatedState)] = []
+        for (lower, upper) in zip(boundaries, boundaries.dropFirst()) where upper > lower {
+            let state = pattern.correlatedState(atBeat: lower + (upper - lower) / 2)
+            if let last = regions.last, last.state == state {
+                regions[regions.count - 1] = (.init(startBeat: last.span.startBeat, endBeat: upper), state)
+            } else {
+                regions.append((.init(startBeat: lower, endBeat: upper), state))
+            }
+        }
+        return regions
+    }
+
+    // MARK: Segment scope — hold, ghost, ghost hold
+
+    /// Correlated, non-sounding readings for one bounded platter interval.
+    ///
+    /// A sounding travel interval gets NO segment proposal: it is described
+    /// at gesture or reversal scope, and emitting a structure for it here
+    /// would claim a technique from a single stroke.
+    private static func segmentProposals(_ pattern: ScratchNotation.GesturePattern) -> [Proposal] {
+        pattern.motionSegments.enumerated().compactMap { index, segment -> Proposal? in
+            let stationary = segment.state.isStationary
+            guard stationary || segment.state.isTravel else { return nil }
+
+            let coverage = faderCoverage(of: segment.span, in: pattern)
+            var references: [Reference] = [.motionSegment(index: index)]
+            references += coverage.intervalIndices.map { Reference.faderInterval(index: $0) }
+            let clicks = faderClickIndices(within: segment.span, in: pattern)
+            references += clicks.map { Reference.faderClick(index: $0) }
+
+            var reasons: [Reason] = stationary ? [.boundedStationaryInterval] : []
+            if segment.label.isCorrected { reasons.append(.correctedMotionLabel) }
+            if !clicks.isEmpty { reasons.append(.faderClicksPresentNotCounted) }
+
+            let base = minimumConfidence([segment.evidence] + coverage.intervalIndices.map {
+                pattern.faderIntervals[$0].evidence
+            })
+
+            var candidates: [Proposal.Candidate] = []
+            switch coverage.reading {
+            case .unobserved:
+                reasons.append(.faderUnobserved)
+            case .open, .closed:
+                let open = coverage.reading == .open
+                reasons.append(open ? .faderOpenThroughout : .faderClosedThroughout)
+                // Travel with the fader open is the audible scratch, not one
+                // of the structures this scope may name.
+                guard stationary || !open else { return nil }
+                let structure: ScratchNotationDerivedStructure = stationary
+                    ? (open ? .hold : .ghostHold)
+                    : .ghost
+                var factor = 1.0
+                if !coverage.isComplete {
+                    reasons.append(.partialFaderCoverage)
+                    factor *= partialFaderCoveragePenalty
+                }
+                candidates = [.init(structure: structure, confidence: base * factor, reasons: ordered(reasons))]
+            case .mixed:
+                reasons.append(.faderStateVariesWithinRegion)
+                if !coverage.isComplete { reasons.append(.partialFaderCoverage) }
+                if stationary {
+                    // Both readings stay on the table rather than one being
+                    // picked; a mixed fader over one bounded stationary
+                    // interval is real ambiguity, not a weak preference.
+                    reasons.append(.ambiguousCandidates)
+                    candidates = [ScratchNotationDerivedStructure.hold, .ghostHold].map {
+                        .init(structure: $0,
+                              confidence: base * ambiguousCandidatePenalty,
+                              reasons: ordered(reasons))
+                    }
+                }
+                // Travel: the competing reading is an audible stroke, which
+                // this scope may not name, so nothing is asserted at all.
+            }
+
+            return Proposal(scope: .motionSegment(index: index),
+                            span: segment.span,
+                            candidates: candidates,
+                            reasons: ordered(reasons),
+                            evidenceReferences: references)
+        }
+    }
+
+    // MARK: Gesture scope — tear candidates
+
+    /// A gesture proposal exists only where a tear SHAPE exists — at least
+    /// one internal hold. A plain single-direction stroke asserts nothing.
+    ///
+    /// The hold count comes from the platter stream alone. Fader evidence,
+    /// including clicks inside the gesture, is cited but can never raise,
+    /// lower or invalidate it.
+    private static func gestureProposals(_ pattern: ScratchNotation.GesturePattern,
+                                         gestures: [ScratchNotation.PlatterGesture]) -> [Proposal] {
+        gestures.enumerated().compactMap { index, gesture -> Proposal? in
+            guard gesture.isTear else { return nil }
+
+            let segmentIndices = motionSegmentIndices(overlapping: gesture.span, in: pattern)
+            let coverage = faderCoverage(of: gesture.span, in: pattern)
+            let clicks = faderClickIndices(within: gesture.span, in: pattern)
+            var references: [Reference] = segmentIndices.map { .motionSegment(index: $0) }
+            references += coverage.intervalIndices.map { Reference.faderInterval(index: $0) }
+            references += clicks.map { Reference.faderClick(index: $0) }
+
+            var reasons: [Reason] = [.sameDirectionPauseResume, .boundedStationaryInterval, .tearCountIsPlatterOnly]
+            if segmentIndices.contains(where: { pattern.motionSegments[$0].label.isCorrected }) {
+                reasons.append(.correctedMotionLabel)
+            }
+            if !clicks.isEmpty { reasons.append(.faderClicksPresentNotCounted) }
+            switch coverage.reading {
+            case .unobserved: reasons.append(.faderUnobserved)
+            case .open:       reasons.append(.faderOpenThroughout)
+            case .closed:     reasons.append(.faderClosedThroughout)
+            case .mixed:      reasons.append(.faderStateVariesWithinRegion)
+            }
+
+            var candidates: [Proposal.Candidate] = []
+            if let structure = ScratchNotationDerivedStructure.tearCandidate(holdCount: gesture.tearHoldCount) {
+                // Confidence rests on platter evidence only, for the same
+                // reason the label does.
+                let base = minimumConfidence(segmentIndices.map { pattern.motionSegments[$0].evidence })
+                candidates = [.init(structure: structure, confidence: base, reasons: ordered(reasons))]
+            } else {
+                reasons.append(.holdCountOutsideSupportedRange)
+            }
+
+            return Proposal(scope: .gesture(index: index),
+                            span: gesture.span,
+                            candidates: candidates,
+                            reasons: ordered(reasons),
+                            evidenceReferences: references)
+        }
+    }
+
+    // MARK: Reversal scope — Baby
+
+    /// A Baby turnaround is a DIRECT reversal joining two non-tear travel
+    /// gestures that are audible throughout.
+    ///
+    /// Gestures are paired greedily and never shared, so an alternating run
+    /// yields whole cycles rather than overlapping claims. A tear consumes
+    /// its own gesture and can never be half of a Baby. A stationary,
+    /// released or unobserved interval between the two directions breaks
+    /// adjacency, so no proposal is made there at all — the intervening
+    /// interval is already described at segment scope.
+    private static func reversalProposals(_ pattern: ScratchNotation.GesturePattern,
+                                          gestures: [ScratchNotation.PlatterGesture]) -> [Proposal] {
+        var proposals: [Proposal] = []
+        var index = 0
+        while index + 1 < gestures.count {
+            let first = gestures[index]
+            let second = gestures[index + 1]
+            guard !first.isTear else { index += 1; continue }
+            guard !second.isTear,
+                  first.direction != second.direction,
+                  abs(second.span.startBeat - first.span.endBeat) <= tolerance else { index += 1; continue }
+
+            let span = ScratchNotation.BeatSpan(startBeat: first.span.startBeat, endBeat: second.span.endBeat)
+            let segmentIndices = motionSegmentIndices(overlapping: span, in: pattern)
+            let coverage = faderCoverage(of: span, in: pattern)
+            let clicks = faderClickIndices(within: span, in: pattern)
+            var references: [Reference] = segmentIndices.map { .motionSegment(index: $0) }
+            references += coverage.intervalIndices.map { Reference.faderInterval(index: $0) }
+            references += clicks.map { Reference.faderClick(index: $0) }
+
+            var reasons: [Reason] = [.directReversal]
+            if segmentIndices.contains(where: { pattern.motionSegments[$0].label.isCorrected }) {
+                reasons.append(.correctedMotionLabel)
+            }
+            if !clicks.isEmpty { reasons.append(.faderClicksPresentNotCounted) }
+
+            var candidates: [Proposal.Candidate] = []
+            switch coverage.reading {
+            case .open:
+                reasons.append(.faderOpenThroughout)
+                let base = minimumConfidence(segmentIndices.map { pattern.motionSegments[$0].evidence }
+                                             + coverage.intervalIndices.map { pattern.faderIntervals[$0].evidence })
+                var factor = 1.0
+                if !coverage.isComplete {
+                    reasons.append(.partialFaderCoverage)
+                    factor *= partialFaderCoveragePenalty
+                }
+                candidates = [.init(structure: .baby, confidence: base * factor, reasons: ordered(reasons))]
+            case .closed:
+                // A silent turnaround is not a Baby, and the canonical layer
+                // has no "ghost Baby". Each half is already a segment-scope
+                // ghost; nothing further is asserted here.
+                reasons.append(.faderClosedThroughout)
+            case .mixed:
+                reasons.append(.faderStateVariesWithinRegion)
+            case .unobserved:
+                reasons.append(.faderUnobserved)
+            }
+
+            proposals.append(Proposal(scope: .reversal(fromGestureIndex: index, toGestureIndex: index + 1),
+                                      span: span,
+                                      candidates: candidates,
+                                      reasons: ordered(reasons),
+                                      evidenceReferences: references))
+            index += 2
+        }
+        return proposals
+    }
+
+    // MARK: Evidence lookups
+
+    private enum FaderReading: Equatable {
+        case unobserved, open, closed, mixed
+    }
+
+    private struct FaderCoverage {
+        let reading: FaderReading
+        let intervalIndices: [Int]
+        let isComplete: Bool
+    }
+
+    /// Fader observations intersecting `span`, with no gap ever read as a
+    /// state. Intervals are validated non-overlapping, so covered length is a
+    /// plain sum of intersections.
+    private static func faderCoverage(of span: ScratchNotation.BeatSpan,
+                                      in pattern: ScratchNotation.GesturePattern) -> FaderCoverage {
+        var indices: [Int] = []
+        var states: Set<ScratchNotationFaderState> = []
+        var covered = 0.0
+        for (index, interval) in pattern.faderIntervals.enumerated() {
+            let lower = max(interval.startBeat, span.startBeat)
+            let upper = min(interval.endBeat, span.endBeat)
+            guard upper - lower > tolerance else { continue }
+            indices.append(index)
+            states.insert(interval.state)
+            covered += upper - lower
+        }
+        let reading: FaderReading
+        switch (states.count, states.first) {
+        case (0, _):            reading = .unobserved
+        case (1, .some(.open)):   reading = .open
+        case (1, .some(.closed)): reading = .closed
+        default:                reading = .mixed
+        }
+        return FaderCoverage(reading: reading,
+                             intervalIndices: indices,
+                             isComplete: covered >= span.durationBeats - tolerance)
+    }
+
+    private static func motionSegmentIndices(overlapping span: ScratchNotation.BeatSpan,
+                                             in pattern: ScratchNotation.GesturePattern) -> [Int] {
+        pattern.motionSegments.indices.filter { index in
+            let segment = pattern.motionSegments[index]
+            return min(segment.endBeat, span.endBeat) - max(segment.startBeat, span.startBeat) > tolerance
+        }
+    }
+
+    /// Half-open, matching `BeatSpan.contains`, so a click on a shared
+    /// boundary is cited by exactly one region.
+    private static func faderClickIndices(within span: ScratchNotation.BeatSpan,
+                                          in pattern: ScratchNotation.GesturePattern) -> [Int] {
+        pattern.faderClicks.indices.filter { span.contains(pattern.faderClicks[$0].beat) }
+    }
+
+    /// The weakest supporting observation. No evidence at all supports
+    /// nothing, so it reports zero rather than a default.
+    private static func minimumConfidence(_ evidence: [ScratchNotationEvidence]) -> Double {
+        evidence.map(\.confidence).min() ?? 0
+    }
+
+    private static func ordered(_ reasons: [Reason]) -> [Reason] {
+        Reason.allCases.filter { reasons.contains($0) }
+    }
+
+    private static func scopeRank(_ scope: Proposal.Scope) -> Int {
+        switch scope {
+        case .motionSegment: return 0
+        case .gesture:       return 1
+        case .reversal:      return 2
+        }
     }
 }
 
@@ -3353,10 +8211,10 @@ struct BabyScratchReferenceMotionTimeline: Sendable {
     static let recordRotationRangeDegrees: Double = 60
     // The bundled WAV is itself the demo, so app playback time 0 == demoStart.
     static let demoStart: TimeInterval = 0
-    static let demoEnd: TimeInterval = 42.866625
+    static let demoEnd: TimeInterval = 16.0483125
     static let phaseOffset: TimeInterval = 0
-    // The clean-demo timeline encodes all phrases explicitly (no looping),
-    // so the audio plays through one full cycle of the multi-phrase notation.
+    // The clean-demo timeline encodes the complete 16-cycle performance, so
+    // the audio and coach motion play through once without synthetic looping.
     static let demoAudioPhraseCycleCount = 1
     private static let fallbackPhraseDuration: TimeInterval = 1.0
     private static let notationResource = ScratchNotation.loadBabyScratchFromBundle()
@@ -3639,7 +8497,7 @@ struct BabyScratchCoachTimingProbe: Equatable, Sendable {
 }
 
 extension BabyScratchReferenceMotionTimeline {
-    static let debugProbePlaybackTimes: [TimeInterval] = [0.27, 0.778, 2.368, 1.46, 5.85, 8.5, 12.45, 42.654]
+    static let debugProbePlaybackTimes: [TimeInterval] = [2.0, 2.410975, 3.062990, 5.85, 8.5, 12.45, 14.048311, 15.0]
 
     static func debugTimingProbe(
         at playbackTime: TimeInterval,
@@ -4877,7 +9735,7 @@ struct ScratchLabDemoSessionBuilder: Sendable {
     static let demoAudioFileName = "baby_noBeat.wav"
     private static let demoSessionName = "ScratchLab Demo"
     private static let demoPerformerName = "App Review Demo"
-    private static let demoBPM = 79
+    static let demoBPM = 79
     private static let videoFrameRate: Int32 = 10
     private static let videoSize = CGSize(width: 160, height: 90)
 
@@ -5911,6 +10769,228 @@ enum CaptureCore {
         let source: String
     }
 
+    /// Controller notation is gesture-relative, while persisted movement
+    /// evidence keeps its existing finalized/export coordinate. `live_preview`
+    /// is produced only from the controller decoder's open run and follows the
+    /// same presentation rule.
+    static func usesGestureRelativeControllerNotation(
+        _ event: DetectedNotationRecordMovementEvent
+    ) -> Bool {
+        event.source == "controller" || event.source == "live_preview"
+    }
+
+    /// WHICH coordinate a set of movement-event positions is actually
+    /// expressed in, and what established it.
+    ///
+    /// `DetectedNotationRecordMovementEvent` carries positions but no unit, so
+    /// the unit used to be carried only by whichever path happened to build
+    /// the event — while the canonical tear projection hardcoded
+    /// `platterRevolutions` for every one of them. Two producers with two
+    /// different divisors reach that projection:
+    ///
+    /// * `deriveGestureRelativePlatterNotationEvents` and
+    ///   `derivePlatterMovementEventsWithProvisional` divide raw CC6 step
+    ///   displacement by a stated steps-per-revolution. Those positions are
+    ///   genuinely revolutions.
+    /// * `decodePlatterCore` normalises the integrated position over the
+    ///   stream's own range ("Normalize the integrated position to 0…1 over
+    ///   the stream's range"), and that is what finalization persists in
+    ///   `DetectedNotationSnapshot.recordMovementEvents`. Those positions are
+    ///   take-local and are NOT revolutions.
+    ///
+    /// Each boundary that hands positions to notation now states which one it
+    /// holds. Every default is the NON-CLAIMING basis, so a caller that says
+    /// nothing gets take-local normalized displacement: a forgotten argument
+    /// can only understate the claim, never fabricate a calibration.
+    struct PlatterNotationCoordinates: Equatable, Sendable {
+
+        enum Basis: String, Equatable, Sendable, CaseIterable {
+            /// Raw step displacement divided by an explicitly stated
+            /// steps-per-revolution reference.
+            case calibratedPlatterRevolutions
+            /// Span-normalised over one take's own decoded range. Proportional
+            /// to physical travel, but carrying no revolution claim and not
+            /// comparable across takes.
+            case normalizedTakeLocalDisplacement
+        }
+
+        let basis: Basis
+        /// What established the basis, in words a reviewer can check. Never
+        /// empty: a basis with no stated origin is not a contract.
+        let reference: String
+
+        private init(basis: Basis, reference: String) {
+            self.basis = basis
+            self.reference = reference
+        }
+
+        static let takeLocalNormalizerReference =
+            "decodePlatterCore span-normalises this take's integrated platter "
+                + "position over the take's own decoded range"
+
+        /// Positions already divided by `stepsPerRevolution`.
+        ///
+        /// Returns `nil` — rather than a revolution claim — when the divisor
+        /// cannot support one, or when no reference is named. This layer
+        /// cannot verify a calibration and never invents one.
+        static func calibratedRevolutions(
+            stepsPerRevolution: Double,
+            reference: String
+        ) -> PlatterNotationCoordinates? {
+            let trimmed = reference.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard stepsPerRevolution.isFinite, stepsPerRevolution > 0, !trimmed.isEmpty else {
+                return nil
+            }
+            return PlatterNotationCoordinates(
+                basis: .calibratedPlatterRevolutions,
+                reference: trimmed
+            )
+        }
+
+        static func normalizedTakeLocal(
+            reference: String = takeLocalNormalizerReference
+        ) -> PlatterNotationCoordinates {
+            let trimmed = reference.trimmingCharacters(in: .whitespacesAndNewlines)
+            return PlatterNotationCoordinates(
+                basis: .normalizedTakeLocalDisplacement,
+                reference: trimmed.isEmpty ? takeLocalNormalizerReference : trimmed
+            )
+        }
+
+        /// The basis the shared controller decoder produces when it projects a
+        /// run through `PlatterCoordinateSemantics.gestureRelativeNotation`.
+        ///
+        /// Fails CLOSED: an unusable steps-per-revolution yields take-local
+        /// normalized displacement with the reason stated, never a silent
+        /// revolution claim.
+        static func raneOneMKIIDirectMIDI(
+            stepsPerRevolution: Double = PlatterCoordinateSemantics
+                .raneOneMKIIDirectMIDIStepsPerRevolution
+        ) -> PlatterNotationCoordinates {
+            calibratedRevolutions(
+                stepsPerRevolution: stepsPerRevolution,
+                reference: "RANE ONE MKII direct-MIDI CC6 at "
+                    + "\(stepsPerRevolution) steps per revolution"
+            ) ?? normalizedTakeLocal(
+                reference: "steps-per-revolution \(stepsPerRevolution) cannot "
+                    + "support a revolution claim, so positions stay take-local"
+            )
+        }
+
+        var isCalibrated: Bool { basis == .calibratedPlatterRevolutions }
+
+        var coordinateSpace: ScratchNotation.GestureRecord.CoordinateSpace {
+            switch basis {
+            case .calibratedPlatterRevolutions: return .platterRevolutions
+            case .normalizedTakeLocalDisplacement: return .normalizedTakeLocalDisplacement
+            }
+        }
+
+        /// One line naming the unit and its origin, for a review surface that
+        /// must not let the operator guess which of the two they are reading.
+        var detail: String {
+            switch basis {
+            case .calibratedPlatterRevolutions:
+                return "positions are platter revolutions, calibrated by \(reference)"
+            case .normalizedTakeLocalDisplacement:
+                return "positions are normalised over this take's own range and are "
+                    + "not calibrated revolutions — \(reference)"
+            }
+        }
+    }
+
+    /// Presentation-only projection for one decoder-committed controller run.
+    ///
+    /// The existing run/reversal boundaries and noise gates have already made
+    /// the gesture decision before this method is called. No event is added,
+    /// removed, merged, or re-timed here; only its lane coordinates are locally
+    /// rebased from the explicit raw step displacement supplied by the shared
+    /// decoder. Finalized sidecars/export continue to own the unprojected event
+    /// returned by `derivePlatterMovementEvents`.
+    static func gestureRelativeControllerNotationEvent(
+        _ event: DetectedNotationRecordMovementEvent,
+        signedDisplacementSteps: Double,
+        stepsPerRevolution: Double = PlatterCoordinateSemantics
+            .raneOneMKIIDirectMIDIStepsPerRevolution
+    ) -> DetectedNotationRecordMovementEvent {
+        guard usesGestureRelativeControllerNotation(event) else { return event }
+        let coordinates = PlatterCoordinateSemantics.gestureRelativeNotation(
+            signedDisplacementSteps: signedDisplacementSteps,
+            stepsPerRevolution: stepsPerRevolution
+        )
+        return DetectedNotationRecordMovementEvent(
+            startTime: event.startTime,
+            endTime: event.endTime,
+            startPosition: coordinates.startPosition,
+            endPosition: coordinates.endPosition,
+            direction: event.direction,
+            movementKind: event.movementKind,
+            speed: event.speed,
+            confidence: event.confidence,
+            source: event.source
+        )
+    }
+
+    /// The decoder boundary is the only place where `speed × duration` is raw
+    /// step displacement. Keeping that conversion private prevents a fused or
+    /// persisted controller event's normalized `speed` from entering the
+    /// physical notation projection.
+    private static func gestureRelativeNotationEventFromDecodedRun(
+        _ event: DetectedNotationRecordMovementEvent,
+        stepsPerRevolution: Double
+    ) -> DetectedNotationRecordMovementEvent? {
+        let duration = event.endTime - event.startTime
+        guard duration.isFinite, duration > 0, event.speed.isFinite else {
+            return nil
+        }
+        let magnitude = abs(event.speed) * duration
+        let signedDisplacement: Double
+        switch event.direction {
+        case "forward": signedDisplacement = magnitude
+        case "backward": signedDisplacement = -magnitude
+        default: return nil
+        }
+        return gestureRelativeControllerNotationEvent(
+            event,
+            signedDisplacementSteps: signedDisplacement,
+            stepsPerRevolution: stepsPerRevolution
+        )
+    }
+
+    /// Event-only presentation fallback for controller evidence whose raw CC6
+    /// stream is unavailable (for example, an older sidecar). It preserves the
+    /// stored endpoint excursion exactly and only moves that span onto the
+    /// local gesture baseline. It intentionally never reads `speed`: macOS
+    /// finalization normalizes that field, so treating it as raw steps would
+    /// divide saved excursions by the platter scale a second time.
+    static func locallyRebasedControllerNotationEvent(
+        _ event: DetectedNotationRecordMovementEvent
+    ) -> DetectedNotationRecordMovementEvent {
+        guard usesGestureRelativeControllerNotation(event) else { return event }
+        let excursion = abs(event.endPosition - event.startPosition)
+        let signedExcursion: Double
+        switch event.direction {
+        case "forward": signedExcursion = excursion
+        case "backward": signedExcursion = -excursion
+        default: return event
+        }
+        let coordinates = PlatterCoordinateSemantics.gestureRelativeNotation(
+            signedDisplacementSteps: signedExcursion,
+            stepsPerRevolution: 1
+        )
+        return DetectedNotationRecordMovementEvent(
+            startTime: event.startTime,
+            endTime: event.endTime,
+            startPosition: coordinates.startPosition,
+            endPosition: coordinates.endPosition,
+            direction: event.direction,
+            movementKind: event.movementKind,
+            speed: event.speed,
+            confidence: event.confidence,
+            source: event.source
+        )
+    }
+
     struct DetectedNotationAudioEvent: Codable, Equatable, Sendable {
         let startTime: Double
         let endTime: Double
@@ -5929,8 +11009,212 @@ enum CaptureCore {
         let channel: Int
         let controller: Int
         let value: Int
+        /// `value / 127` — the position of this sample across the CONTROLLER'S
+        /// FULL RANGE.
+        ///
+        /// This is NOT a fader position for a deck. A right-deck cut on a RANE
+        /// ONE MKII runs centre-to-left, so a complete, correct gesture only
+        /// ever traverses part of the full range and reads here as a fraction
+        /// of it. Preserved unchanged so every historical export keeps its
+        /// meaning; new consumers read `calibratedPosition` instead.
         let normalizedValue: Double
         let mappedControl: String?
+        /// How this control was recognised — the user's learned mapping, or a
+        /// certified registry binding. Optional and additive: sidecars written
+        /// before provenance existed decode with `nil`, which means "unknown
+        /// provenance", never "learned".
+        let mappingSource: FaderMappingSource?
+        /// Position across the CALIBRATED ACTIVE HALF for this deck: `0`
+        /// fully closed, `1` fully open.
+        ///
+        /// Optional and additive. `nil` means no calibration was in force when
+        /// this sample was recorded, which is exactly what every sidecar
+        /// written before crossfader calibration existed decodes as. `nil`
+        /// must never be read as "0" or back-filled from `normalizedValue` —
+        /// the whole point is that the uncalibrated number is not a deck
+        /// position.
+        let calibratedPosition: Double?
+        /// Identity of the calibration that produced `calibratedPosition`, so
+        /// a package can be re-derived years later against the same
+        /// measurements. `nil` whenever `calibratedPosition` is `nil`.
+        let calibrationID: String?
+
+        init(
+            timestamp: Double,
+            takeRelativeTime: Double,
+            deviceName: String,
+            channel: Int,
+            controller: Int,
+            value: Int,
+            normalizedValue: Double,
+            mappedControl: String?,
+            mappingSource: FaderMappingSource? = nil,
+            calibratedPosition: Double? = nil,
+            calibrationID: String? = nil
+        ) {
+            self.timestamp = timestamp
+            self.takeRelativeTime = takeRelativeTime
+            self.deviceName = deviceName
+            self.channel = channel
+            self.controller = controller
+            self.value = value
+            self.normalizedValue = normalizedValue
+            self.mappedControl = mappedControl
+            self.mappingSource = mappingSource
+            self.calibratedPosition = calibratedPosition
+            self.calibrationID = calibrationID
+        }
+    }
+
+    /// What the crossfader was doing at the take's AUTHORITATIVE media-start
+    /// boundary, recorded as an explicit control-state observation rather than
+    /// as a MIDI packet.
+    ///
+    /// Why this exists: a fader parked at one end emits nothing. On take 008
+    /// the mapping (Rane ONE MKII, Ch16 CC8) was learned and valid, the live
+    /// preflight cache held raw 127, and the take still finalized with ZERO
+    /// mapped crossfader samples — because the operator never touched the
+    /// fader after Record. The take therefore could not prove a state that was
+    /// in fact known, and canonical validation reported `unknown`.
+    ///
+    /// Two rules make this evidence rather than a fabrication:
+    ///
+    /// 1. It is NEVER appended to `mixerMidiEvents`. A pre-take packet is not
+    ///    an in-take packet, so it keeps its own record, its own provenance
+    ///    (`preTakeSnapshot`) and its ORIGINAL observation time — which is
+    ///    negative in take-relative seconds and is never rewritten to zero.
+    /// 2. Every correlating identity it was observed under travels with it, so
+    ///    a consumer can refuse a snapshot from a previous take, a previous
+    ///    device connection, a different source, a different mapped address or
+    ///    a different calibration instead of trusting the value alone.
+    ///
+    /// When no trustworthy observation exists the record is still written,
+    /// with `provenance == .unknown` and a stated reason. Absence of knowledge
+    /// is recorded as absence of knowledge; it is never invented.
+    ///
+    /// Additive and optional on `LocalRecordingSidecar`: a sidecar written
+    /// before this field existed decodes as `nil`, which means "not recorded",
+    /// never "unknown position observed".
+    struct CrossfaderTakeStartState: Codable, Equatable, Sendable {
+
+        /// Bumped only when the MEANING of a persisted field changes.
+        static let currentSchemaVersion = 1
+
+        enum Provenance: String, Codable, Equatable, Sendable {
+            /// Read from the engine's live control cache at the media-start
+            /// boundary. A snapshot of a message that arrived BEFORE the take.
+            case preTakeSnapshot
+            /// No trustworthy current-session observation existed.
+            case unknown
+        }
+
+        let schemaVersion: Int
+        let provenance: Provenance
+        /// Identity of the take this observation was correlated with.
+        let sessionID: String
+        let takeID: String
+        /// Engine recording generation this observation was correlated with.
+        let takeGeneration: UInt64?
+        /// Stable identity of the MIDI input source selected at observation.
+        let midiSourceID: String?
+        /// Source name as Core MIDI reported it. Display/provenance only.
+        let deviceName: String?
+        /// Monotonic count of MIDI input connections made by this process. A
+        /// snapshot taken under a different generation describes a device
+        /// session that has since ended and must be refused.
+        let midiConnectionGeneration: UInt64?
+        /// The LEARNED crossfader address the snapshot was read from.
+        let channel: Int?
+        let controller: Int?
+        let rawValue: Int?
+        /// Position across the calibrated active half, when a calibration was
+        /// in force. `nil` never means `0`.
+        let calibratedPosition: Double?
+        /// Identity of the calibration that produced `calibratedPosition`.
+        let calibrationID: String?
+        /// Lifetime message count on that address at the moment of
+        /// observation, so a later consumer can tell a held control from a
+        /// silent one exactly as the calibration sweep does.
+        let observationSequence: Int?
+        /// The observation's ORIGINAL instant, expressed in the take's clock.
+        /// Negative for a `preTakeSnapshot`, by construction. Never clamped.
+        let observedTakeRelativeTime: Double?
+        /// Why the state is unknown. `nil` for a usable snapshot.
+        let unknownReason: String?
+
+        init(
+            schemaVersion: Int = CrossfaderTakeStartState.currentSchemaVersion,
+            provenance: Provenance,
+            sessionID: String,
+            takeID: String,
+            takeGeneration: UInt64?,
+            midiSourceID: String?,
+            deviceName: String?,
+            midiConnectionGeneration: UInt64?,
+            channel: Int?,
+            controller: Int?,
+            rawValue: Int?,
+            calibratedPosition: Double?,
+            calibrationID: String?,
+            observationSequence: Int?,
+            observedTakeRelativeTime: Double?,
+            unknownReason: String?
+        ) {
+            self.schemaVersion = schemaVersion
+            self.provenance = provenance
+            self.sessionID = sessionID
+            self.takeID = takeID
+            self.takeGeneration = takeGeneration
+            self.midiSourceID = midiSourceID
+            self.deviceName = deviceName
+            self.midiConnectionGeneration = midiConnectionGeneration
+            self.channel = channel
+            self.controller = controller
+            self.rawValue = rawValue
+            self.calibratedPosition = calibratedPosition
+            self.calibrationID = calibrationID
+            self.observationSequence = observationSequence
+            self.observedTakeRelativeTime = observedTakeRelativeTime
+            self.unknownReason = unknownReason
+        }
+
+        /// An explicit "we do not know" record. Written whenever no live
+        /// observation on the learned address can be trusted for this take.
+        static func unknown(
+            sessionID: String,
+            takeID: String,
+            takeGeneration: UInt64?,
+            reason: String
+        ) -> CrossfaderTakeStartState {
+            CrossfaderTakeStartState(
+                provenance: .unknown,
+                sessionID: sessionID,
+                takeID: takeID,
+                takeGeneration: takeGeneration,
+                midiSourceID: nil,
+                deviceName: nil,
+                midiConnectionGeneration: nil,
+                channel: nil,
+                controller: nil,
+                rawValue: nil,
+                calibratedPosition: nil,
+                calibrationID: nil,
+                observationSequence: nil,
+                observedTakeRelativeTime: nil,
+                unknownReason: reason
+            )
+        }
+
+        /// `true` only for a snapshot that carries a real, in-range reading on
+        /// a named address under the schema this build understands.
+        var isUsableSnapshot: Bool {
+            provenance == .preTakeSnapshot
+                && schemaVersion == Self.currentSchemaVersion
+                && rawValue.map { (0...127).contains($0) } == true
+                && channel.map { (0...15).contains($0) } == true
+                && controller.map { (0...127).contains($0) } == true
+                && (observedTakeRelativeTime?.isFinite ?? false)
+        }
     }
 
     struct DetectedNotationFaderEvent: Codable, Equatable, Sendable {
@@ -6086,6 +11370,25 @@ enum CaptureCore {
     static func deriveDetectedNotationFaderEvents(
         from mixerMidiEvents: [RawMixerMIDIEvent]
     ) -> [DetectedNotationFaderEvent] {
+        ["crossfader", "leftUpfader", "rightUpfader"]
+            .flatMap { mappedControl in
+                deriveDetectedNotationFaderEvents(
+                    from: mixerMidiEvents,
+                    mappedControl: mappedControl
+                )
+            }
+            .sorted { lhs, rhs in
+                if lhs.startTime == rhs.startTime {
+                    return lhs.control < rhs.control
+                }
+                return lhs.startTime < rhs.startTime
+            }
+    }
+
+    private static func deriveDetectedNotationFaderEvents(
+        from mixerMidiEvents: [RawMixerMIDIEvent],
+        mappedControl: String
+    ) -> [DetectedNotationFaderEvent] {
         struct PrimitiveEvent {
             let startTime: Double
             let endTime: Double
@@ -6098,13 +11401,22 @@ enum CaptureCore {
         }
 
         let minimumValueDelta = 0.10
-        let minimumCutDelta = 0.35
-        let maximumCutDuration = 0.15
+        // Cut gate widened 2026-08-30 from (0.35, 0.15) against physically
+        // captured RANE ONE MKII evidence: across 39 real closing gestures the
+        // median close lasted 0.110 s (p90 0.276 s) and travelled 0.409
+        // (p10 0.236), because a right-deck cut runs centre-to-left rather
+        // than rail-to-rail. The old duration gate sat on top of the median,
+        // so only 19 of 39 real closes classified as `.cut` - and since the
+        // renderer draws only cut-family kinds, the rest were detected but
+        // invisible. These values classify 31 of the same 39.
+        let minimumCutDelta = 0.25
+        let maximumCutDuration = 0.25
         let maximumPulseGap = 0.20
+        let maximumRunSampleGap = 0.20
         let minimumConfidence = 0.75
 
         let crossfaderEvents = mixerMidiEvents
-            .filter { $0.mappedControl == "crossfader" }
+            .filter { $0.mappedControl == mappedControl }
             .sorted { lhs, rhs in
                 if lhs.takeRelativeTime == rhs.takeRelativeTime {
                     return lhs.timestamp < rhs.timestamp
@@ -6114,9 +11426,72 @@ enum CaptureCore {
 
         guard crossfaderEvents.count >= 2 else { return [] }
 
-        let primitives: [PrimitiveEvent] = zip(crossfaderEvents, crossfaderEvents.dropFirst()).compactMap { previous, current in
+        // Position authority. When EVERY sample in this control's stream
+        // carries a calibrated position, that is what the gates below measure;
+        // otherwise the legacy `normalizedValue` is used and this derivation
+        // behaves exactly as it did before calibration existed.
+        //
+        // The choice is all-or-nothing on purpose. Mixing calibrated and
+        // full-range positions inside one stream would put two different
+        // coordinate systems on the same axis, and a delta computed across the
+        // seam would be meaningless. A partially-calibrated stream is treated
+        // as uncalibrated, which is the honest reading.
+        let usesCalibratedPositions = crossfaderEvents.allSatisfy {
+            $0.calibratedPosition != nil
+        }
+        func position(of event: RawMixerMIDIEvent) -> Double {
+            usesCalibratedPositions
+                ? (event.calibratedPosition ?? event.normalizedValue)
+                : event.normalizedValue
+        }
+
+        // A primitive is one *monotonic run* of the stream, not one adjacent
+        // sample pair. Crossfader update rates differ by two orders of
+        // magnitude between controllers (a RANE ONE MKII streams CC8 at
+        // ~800 Hz, moving 1-3 MIDI steps per sample), so gating on the
+        // adjacent-sample delta made this derivation sample-rate dependent:
+        // on a dense stream no pair can ever clear `minimumValueDelta`, and a
+        // take full of real cuts derived no fader events at all. Runs are
+        // segmented the way `decodePlatterCore` segments CC6 - zero deltas
+        // ignored, a direction reversal or a gap longer than
+        // `maximumRunSampleGap` closes the run - so the gates below measure
+        // the gesture instead of the sample period. On a sparse stream (one
+        // sample per reversal) every run is a single adjacent pair, which is
+        // exactly the previous behavior.
+        struct Run {
+            let startIndex: Int
+            let endIndex: Int
+        }
+
+        var runs: [Run] = []
+        var runSign = 0
+        var runStart = 0
+        for index in 0..<(crossfaderEvents.count - 1) {
+            let change = position(of: crossfaderEvents[index + 1])
+                - position(of: crossfaderEvents[index])
+            let sign = change > 0 ? 1 : (change < 0 ? -1 : 0)
+            if sign == 0 { continue }
+            let gap = crossfaderEvents[index + 1].takeRelativeTime
+                - crossfaderEvents[index].takeRelativeTime
+            let breaksRun = gap > maximumRunSampleGap || (runSign != 0 && sign != runSign)
+            if runSign != 0, breaksRun {
+                runs.append(Run(startIndex: runStart, endIndex: index))
+                runStart = index
+                runSign = sign
+            } else {
+                if runSign == 0 { runStart = index }
+                runSign = sign
+            }
+        }
+        if runSign != 0 {
+            runs.append(Run(startIndex: runStart, endIndex: crossfaderEvents.count - 1))
+        }
+
+        let primitives: [PrimitiveEvent] = runs.compactMap { run in
+            let previous = crossfaderEvents[run.startIndex]
+            let current = crossfaderEvents[run.endIndex]
             let duration = current.takeRelativeTime - previous.takeRelativeTime
-            let delta = abs(current.normalizedValue - previous.normalizedValue)
+            let delta = abs(position(of: current) - position(of: previous))
             guard duration > 0, delta >= minimumValueDelta else { return nil }
 
             let cutCandidate = delta >= minimumCutDelta && duration <= maximumCutDuration
@@ -6137,8 +11512,8 @@ enum CaptureCore {
             return PrimitiveEvent(
                 startTime: previous.takeRelativeTime,
                 endTime: current.takeRelativeTime,
-                fromValue: previous.normalizedValue,
-                toValue: current.normalizedValue,
+                fromValue: position(of: previous),
+                toValue: position(of: current),
                 confidence: confidence,
                 isCutCandidate: cutCandidate
             )
@@ -6158,7 +11533,7 @@ enum CaptureCore {
                 startTime: startTime,
                 endTime: endTime,
                 eventKind: eventKind,
-                control: "crossfader",
+                control: mappedControl,
                 fromValue: min(1, max(0, fromValue)),
                 toValue: min(1, max(0, toValue)),
                 source: "midi",
@@ -6257,6 +11632,57 @@ enum CaptureCore {
     /// Stage-by-stage counts of a platter telemetry decode, so the exact
     /// pipeline reduction (filtered → raw runs → noise-filtered → normalized)
     /// is observable and testable rather than a black box.
+    /// A derived view over raw packet indices; never written back into raw MIDI
+    /// or the persisted/exported movement event schema.
+    struct PlatterEvidenceInterval: Equatable, Sendable {
+        enum Kind: String, Equatable, Sendable {
+            case observedStillness, packetGap, clockDiscontinuity
+            case discardedMotion, insufficientSampling, unknown
+        }
+        enum Stage: String, Equatable, Sendable { case decoder, normalization }
+        let startTime: Double
+        let endTime: Double
+        let kind: Kind
+        var stage: Stage = .decoder
+        var firstPacketIndex: Int? = nil
+        var lastPacketIndex: Int? = nil
+        var signedSteps: Double? = nil
+    }
+
+    struct PlatterMotionEvidence: Equatable, Sendable {
+        let events: [DetectedNotationRecordMovementEvent]
+        let intervals: [PlatterEvidenceInterval]
+
+        /// Retain every decoded run omitted by a later filter. A retained
+        /// endpoint-only event cannot prove stillness in the omitted region.
+        func retaining(normalizedEvents: [DetectedNotationRecordMovementEvent]) -> Self {
+            let discarded = events.filter { event in
+                !normalizedEvents.contains {
+                    $0.direction == event.direction && $0.startTime <= event.startTime + 1e-9
+                        && $0.endTime >= event.endTime - 1e-9
+                }
+            }.map {
+                PlatterEvidenceInterval(startTime: $0.startTime, endTime: $0.endTime,
+                                        kind: .discardedMotion, stage: .normalization)
+            }
+            return Self(events: normalizedEvents, intervals: intervals + discarded)
+        }
+    }
+
+    static func derivePlatterMotionEvidence(
+        from mixerMidiEvents: [RawMixerMIDIEvent],
+        controller: Int = 6, channel: Int? = 1, deviceName: String? = nil,
+        ringModulus: Int = 128, minRunDuration: Double = 0.08,
+        minRunSteps: Int = 8, maxEventGap: Double = 0.10
+    ) -> PlatterMotionEvidence {
+        let core = decodePlatterCore(
+            from: mixerMidiEvents, controller: controller, channel: channel,
+            deviceName: deviceName, ringModulus: ringModulus,
+            minRunDuration: minRunDuration, minRunSteps: minRunSteps,
+            maxEventGap: maxEventGap)
+        return PlatterMotionEvidence(events: core.events, intervals: core.intervals)
+    }
+
     struct PlatterDecodeDiagnostics: Equatable {
         /// CC6 events that matched controller/channel/device filters.
         let filteredEventCount: Int
@@ -6326,6 +11752,36 @@ enum CaptureCore {
         return core.events
     }
 
+    /// Finalized, presentation-only controller notation using the exact same
+    /// filter/integrate/run segmentation and noise gates as canonical evidence.
+    /// Unlike `derivePlatterMovementEvents`, this projects each accepted run
+    /// from its raw step excursion onto a gesture-local coordinate and is never
+    /// persisted, scored, or exported.
+    static func deriveGestureRelativePlatterNotationEvents(
+        from mixerMidiEvents: [RawMixerMIDIEvent],
+        controller: Int,
+        channel: Int? = nil,
+        deviceName: String? = nil,
+        ringModulus: Int = 128,
+        minRunDuration: Double = 0.08,
+        minRunSteps: Int = 8,
+        maxEventGap: Double = 0.10,
+        notationStepsPerRevolution: Double = PlatterCoordinateSemantics
+            .raneOneMKIIDirectMIDIStepsPerRevolution
+    ) -> [DetectedNotationRecordMovementEvent] {
+        let core = decodePlatterCore(
+            from: mixerMidiEvents, controller: controller, channel: channel,
+            deviceName: deviceName, ringModulus: ringModulus,
+            minRunDuration: minRunDuration, minRunSteps: minRunSteps,
+            maxEventGap: maxEventGap)
+        return core.events.compactMap {
+            gestureRelativeNotationEventFromDecodedRun(
+                $0,
+                stepsPerRevolution: notationStepsPerRevolution
+            )
+        }
+    }
+
     /// Shared decode core: filters, integrates modular signed deltas, segments
     /// same-sign runs, and emits movement events, returning both the events and
     /// the stage-by-stage diagnostics.
@@ -6355,71 +11811,109 @@ enum CaptureCore {
         minRunSteps: Int,
         maxEventGap: Double,
         forceCloseTrailingRun: Bool = true
-    ) -> (events: [DetectedNotationRecordMovementEvent], diagnostics: PlatterDecodeDiagnostics, trailingRun: TrailingPlatterRun?) {
-        let events = mixerMidiEvents
-            .filter {
-                $0.controller == controller
-                    && (channel == nil || $0.channel == channel)
-                    && (deviceName == nil || $0.deviceName == deviceName)
-            }
-            .sorted { $0.takeRelativeTime < $1.takeRelativeTime }
+    ) -> (events: [DetectedNotationRecordMovementEvent], diagnostics: PlatterDecodeDiagnostics,
+          trailingRun: TrailingPlatterRun?, intervals: [PlatterEvidenceInterval]) {
+        // Preserve receive order. Sorting by time hides clock regressions.
+        let selected = mixerMidiEvents.enumerated().filter {
+            $0.element.controller == controller
+                && (channel == nil || $0.element.channel == channel)
+                && (deviceName == nil || $0.element.deviceName == deviceName)
+        }
+        let events = selected.map(\.element)
         let filteredEventCount = events.count
-        guard events.count >= 2 else {
-            return ([], PlatterDecodeDiagnostics(
-                filteredEventCount: filteredEventCount, rawRunCount: 0,
-                noiseFilteredRunCount: 0), nil)
+        var intervals: [PlatterEvidenceInterval] = []
+        func interval(_ first: Int, _ last: Int, _ kind: PlatterEvidenceInterval.Kind,
+                      steps: Double? = nil) -> PlatterEvidenceInterval {
+            let a = events[first].takeRelativeTime
+            let b = events[last].takeRelativeTime
+            return PlatterEvidenceInterval(
+                startTime: a.isFinite ? min(a, b.isFinite ? b : a) : (b.isFinite ? b : 0),
+                endTime: b.isFinite ? max(a.isFinite ? a : b, b) : (a.isFinite ? a : 0),
+                kind: kind, firstPacketIndex: selected[first].offset,
+                lastPacketIndex: selected[last].offset, signedSteps: steps)
+        }
+        guard events.count >= 2, ringModulus > 1 else {
+            let time = events.first?.takeRelativeTime ?? 0
+            intervals.append(PlatterEvidenceInterval(
+                startTime: time.isFinite ? time : 0, endTime: time.isFinite ? time : 0,
+                kind: .insufficientSampling, firstPacketIndex: selected.first?.offset,
+                lastPacketIndex: selected.last?.offset))
+            return ([], PlatterDecodeDiagnostics(filteredEventCount: filteredEventCount,
+                    rawRunCount: 0, noiseFilteredRunCount: 0), nil, intervals)
         }
 
+        // An unspecified source must still resolve uniquely. Mixed sources
+        // cannot establish stillness or a shared ring-counter baseline.
+        if Set(events.map { "\($0.deviceName)/\($0.channel)" }).count != 1 {
+            let times = events.map(\.takeRelativeTime).filter(\.isFinite)
+            intervals.append(PlatterEvidenceInterval(startTime: times.min() ?? 0,
+                endTime: times.max() ?? 0, kind: .unknown))
+            return ([], PlatterDecodeDiagnostics(filteredEventCount: filteredEventCount,
+                rawRunCount: 0, noiseFilteredRunCount: 0), nil, intervals)
+        }
         let half = ringModulus / 2
-
-        // 1. Unwrap modular signed deltas and integrate a cumulative position
-        //    (steps). positions[i] = cumulative steps at event i.
-        var cumulative = 0
-        var positions: [Double] = [0]
-        var deltas: [Int] = []
-        deltas.reserveCapacity(events.count - 1)
-        for i in 1..<events.count {
-            var delta = events[i].value - events[i - 1].value
-            if delta > half { delta -= ringModulus }
-            else if delta < -half { delta += ringModulus }
-            cumulative += delta
-            deltas.append(delta)
-            positions.append(Double(cumulative))
-        }
-
-        // 2. Segment deltas into same-sign runs. A zero delta is ignored; a gap
-        //    larger than maxEventGap, or a sign flip, closes the current run.
+        var positions = [Double](repeating: 0, count: events.count)
         struct Run { let startIdx: Int; let endIdx: Int }
         var runs: [Run] = []
         var runSign = 0
         var runStart = 0
-        for i in 0..<deltas.count {
-            let sign = deltas[i] > 0 ? 1 : (deltas[i] < 0 ? -1 : 0)
-            if sign == 0 { continue }
-            let gap = events[i + 1].takeRelativeTime - events[i].takeRelativeTime
-            let breaksRun = gap > maxEventGap || (runSign != 0 && sign != runSign)
-            if runSign != 0 && breaksRun {
-                runs.append(Run(startIdx: runStart, endIdx: i))
-                runStart = i
-                runSign = sign
+        var stillStart: Int?
+        func finishStillness(at end: Int) {
+            guard let start = stillStart else { return }
+            intervals.append(interval(start, end,
+                end - start >= 2 ? .observedStillness : .insufficientSampling, steps: 0))
+            stillStart = nil
+        }
+        for i in 0..<(events.count - 1) {
+            positions[i + 1] = positions[i]
+            let a = events[i]
+            let b = events[i + 1]
+            let gap = b.takeRelativeTime - a.takeRelativeTime
+            let clockGap = b.timestamp - a.timestamp
+            let invalidClock = !gap.isFinite || !clockGap.isFinite || gap < 0 || clockGap < 0
+                || abs(gap - clockGap) > maxEventGap
+            let sourceChanged = a.deviceName != b.deviceName || a.channel != b.channel
+            let invalidCounter = !(0..<ringModulus).contains(a.value)
+                || !(0..<ringModulus).contains(b.value)
+            var delta = b.value - a.value
+            if delta > half { delta -= ringModulus }
+            else if delta < -half { delta += ringModulus }
+            let ambiguousDelta = abs(delta) == half
+            if invalidClock || sourceChanged || invalidCounter || ambiguousDelta
+                || gap > maxEventGap || gap == 0 {
+                if runSign != 0 { runs.append(Run(startIdx: runStart, endIdx: i)) }
+                runSign = 0
+                finishStillness(at: i)
+                let kind: PlatterEvidenceInterval.Kind = invalidClock ? .clockDiscontinuity
+                    : (sourceChanged || invalidCounter || ambiguousDelta) ? .unknown
+                    : gap == 0 ? .insufficientSampling : .packetGap
+                intervals.append(interval(i, i + 1, kind))
+                // No displacement can be timed across missing/invalid packets.
+                // The first post-boundary packet is a NEW counter baseline.
+                continue
+            }
+            positions[i + 1] += Double(delta)
+            let sign = delta > 0 ? 1 : delta < 0 ? -1 : 0
+            if sign == 0 {
+                if runSign != 0 { runs.append(Run(startIdx: runStart, endIdx: i)) }
+                runSign = 0
+                if stillStart == nil { stillStart = i }
             } else {
+                finishStillness(at: i)
+                if runSign != 0 && sign != runSign {
+                    runs.append(Run(startIdx: runStart, endIdx: i))
+                    runSign = 0
+                }
                 if runSign == 0 { runStart = i }
                 runSign = sign
             }
         }
-        // The run still open when the input ends (`runSign != 0` after the
-        // loop): force-closed into `runs` for finalization (unchanged
-        // behavior), or reserved separately as `trailingRunCandidate` for a
-        // live/provisional caller — never both, so a trailing run can never
-        // be double-counted as both committed and provisional.
+        finishStillness(at: events.count - 1)
         var trailingRunCandidate: Run?
         if runSign != 0 {
-            let trailing = Run(startIdx: runStart, endIdx: deltas.count)
-            if forceCloseTrailingRun {
-                runs.append(trailing)
-            } else {
-                trailingRunCandidate = trailing
-            }
+            let trailing = Run(startIdx: runStart, endIdx: events.count - 1)
+            if forceCloseTrailingRun { runs.append(trailing) }
+            else { trailingRunCandidate = trailing }
         }
         let rawRunCount = runs.count
 
@@ -6438,9 +11932,14 @@ enum CaptureCore {
             let startPos = (positions[run.startIdx] - minPos) / span
             let endPos = (positions[run.endIdx] - minPos) / span
             let displacement = positions[run.endIdx] - positions[run.startIdx]
-            guard duration > 0,
+            guard duration > 0, run.endIdx - run.startIdx >= 2,
                   duration >= minRunDuration,
-                  abs(displacement) >= Double(minRunSteps) else { continue }
+                  abs(displacement) >= Double(minRunSteps) else {
+                intervals.append(interval(run.startIdx, run.endIdx,
+                    run.endIdx - run.startIdx < 2 ? .insufficientSampling : .discardedMotion,
+                    steps: displacement))
+                continue
+            }
             let direction = displacement > 0 ? "forward" : "backward"
             let speed = abs(displacement) / duration
             // High-confidence direct telemetry: floor 0.7, rising toward 1.0 for
@@ -6479,12 +11978,12 @@ enum CaptureCore {
                 direction: direction,
                 movementKind: direction == "forward" ? .normalPush : .normalPull,
                 displacement: displacement,
-                meetsNoiseGates: duration > 0 && duration >= minRunDuration && abs(displacement) >= Double(minRunSteps)
+                meetsNoiseGates: trailing.endIdx - trailing.startIdx >= 2 && duration > 0 && duration >= minRunDuration && abs(displacement) >= Double(minRunSteps)
             )
         }
         return (result, PlatterDecodeDiagnostics(
             filteredEventCount: filteredEventCount, rawRunCount: rawRunCount,
-            noiseFilteredRunCount: result.count), trailingRun)
+            noiseFilteredRunCount: result.count), trailingRun, intervals)
     }
 
     struct ProvisionalPlatterMovement: Equatable, Sendable {
@@ -6507,14 +12006,49 @@ enum CaptureCore {
         /// nil if the platter is idle / has produced no run yet. Never fed
         /// into finalization — preview-only.
         let provisionalMovement: ProvisionalPlatterMovement?
+        /// Continuous (global span-normalised) committed events — the raw
+        /// `decodePlatterCore` positions before any gesture-relative
+        /// re-anchoring. A Tear subdivision is NOT a new platter origin, so
+        /// the canonical Tear projection consumes these rather than the
+        /// per-run gesture-relative `committedEvents`.
+        let continuousEvents: [DetectedNotationRecordMovementEvent]
+        /// Continuous (global span-normalised) open stroke, mirroring
+        /// `provisionalMovement` but preserving measured global positions
+        /// for the live Tear card.
+        let continuousProvisionalMovement: ProvisionalPlatterMovement?
+
+        /// `decodePlatterCore`'s provenance intervals (observed stillness,
+        /// packet gaps, clock discontinuities). Live preview previously
+        /// discarded these, so the canonical live Tear projection could never
+        /// place a platter hold. Carried verbatim, never reinterpreted.
+        let platterEvidenceIntervals: [PlatterEvidenceInterval]
+
+        /// The continuous fields and provenance intervals are optional
+        /// trailing arguments so the engine's fail-closed empty constructor
+        /// and the iOS call sites keep compiling unchanged.
+        init(
+            committedEvents: [DetectedNotationRecordMovementEvent],
+            provisionalMovement: ProvisionalPlatterMovement?,
+            continuousEvents: [DetectedNotationRecordMovementEvent] = [],
+            continuousProvisionalMovement: ProvisionalPlatterMovement? = nil,
+            platterEvidenceIntervals: [PlatterEvidenceInterval] = []
+        ) {
+            self.committedEvents = committedEvents
+            self.provisionalMovement = provisionalMovement
+            self.continuousEvents = continuousEvents
+            self.continuousProvisionalMovement = continuousProvisionalMovement
+            self.platterEvidenceIntervals = platterEvidenceIntervals
+        }
     }
 
     /// Live/provisional variant of `derivePlatterMovementEvents`, sharing
     /// the exact same filter/integrate/segment core (`decodePlatterCore`)
-    /// rather than a second reconstruction algorithm. The only behavioral
-    /// difference from `derivePlatterMovementEvents` is that the run still
-    /// open at the end of `mixerMidiEvents` is never force-closed into a
-    /// committed event — it is exposed separately as `provisionalMovement`.
+    /// rather than a second reconstruction algorithm. The run still open at
+    /// the end of `mixerMidiEvents` is never force-closed into a committed
+    /// event — it is exposed separately as `provisionalMovement`. After that
+    /// shared decode, committed/open controller runs are projected into the
+    /// explicit gesture-relative notation coordinate; finalized/export
+    /// evidence remains on `derivePlatterMovementEvents` and is not rewritten.
     /// Calling this repeatedly with a monotonically growing
     /// `mixerMidiEvents` prefix (e.g. from a live poll) yields a
     /// `committedEvents` array that only ever grows/extends, since a run
@@ -6528,14 +12062,41 @@ enum CaptureCore {
         ringModulus: Int = 128,
         minRunDuration: Double = 0.08,
         minRunSteps: Int = 8,
-        maxEventGap: Double = 0.10
+        maxEventGap: Double = 0.10,
+        notationStepsPerRevolution: Double = PlatterCoordinateSemantics
+            .raneOneMKIIDirectMIDIStepsPerRevolution
     ) -> PlatterMovementDecodeResult {
         let core = decodePlatterCore(
             from: mixerMidiEvents, controller: controller, channel: channel,
             deviceName: deviceName, ringModulus: ringModulus,
             minRunDuration: minRunDuration, minRunSteps: minRunSteps,
             maxEventGap: maxEventGap, forceCloseTrailingRun: false)
+        let committed = core.events.compactMap {
+            gestureRelativeNotationEventFromDecodedRun(
+                $0,
+                stepsPerRevolution: notationStepsPerRevolution
+            )
+        }
         let provisional = core.trailingRun.map {
+            let coordinates = PlatterCoordinateSemantics.gestureRelativeNotation(
+                signedDisplacementSteps: $0.displacement,
+                stepsPerRevolution: notationStepsPerRevolution
+            )
+            return ProvisionalPlatterMovement(
+                startTime: $0.startTime,
+                currentTime: $0.currentTime,
+                startPosition: coordinates.startPosition,
+                currentPosition: coordinates.endPosition,
+                direction: $0.direction,
+                movementKind: $0.movementKind,
+                displacement: $0.displacement
+            )
+        }
+        // Continuous positions are `core.events` (already global, span-
+        // normalised) and the trailing run's measured global positions —
+        // exactly what a position-continuous Tear needs, and untouched by
+        // the gesture-relative re-anchoring above.
+        let continuousProvisional = core.trailingRun.map {
             ProvisionalPlatterMovement(
                 startTime: $0.startTime,
                 currentTime: $0.currentTime,
@@ -6546,7 +12107,192 @@ enum CaptureCore {
                 displacement: $0.displacement
             )
         }
-        return PlatterMovementDecodeResult(committedEvents: core.events, provisionalMovement: provisional)
+        return PlatterMovementDecodeResult(
+            committedEvents: committed,
+            provisionalMovement: provisional,
+            continuousEvents: core.events,
+            continuousProvisionalMovement: continuousProvisional,
+            platterEvidenceIntervals: core.intervals
+        )
+    }
+
+    /// Shared iOS/macOS presentation view of a finalized notation snapshot.
+    ///
+    /// Canonical `recordMovementEvents` remain byte-for-byte unchanged for
+    /// scoring, persistence, and export. When exactly one right-deck CC6 source
+    /// is present, physical gesture excursions are re-derived from the raw MIDI
+    /// evidence through the existing decoder. Ambiguous/missing raw evidence
+    /// fails closed to an event-only local rebase that preserves the stored
+    /// excursion and never guesses raw motor travel.
+    static func gestureRelativeRecordMovementEventsForPresentation(
+        from snapshot: DetectedNotationSnapshot,
+        controller: Int = 6,
+        channel: Int = 1
+    ) -> [DetectedNotationRecordMovementEvent] {
+        let canonical = snapshot.recordMovementEvents
+        let hasControllerEvidence = canonical.contains(
+            where: usesGestureRelativeControllerNotation
+        ) || snapshot.detectionSources.contains("controller")
+        guard hasControllerEvidence else {
+            return canonical
+        }
+
+        let eligibleMIDI = snapshot.mixerMidiEvents.filter {
+            $0.controller == controller && $0.channel == channel
+        }
+        let deviceNames = Set(eligibleMIDI.map(\.deviceName))
+        guard deviceNames.count == 1, let deviceName = deviceNames.first else {
+            return canonical.map(locallyRebasedControllerNotationEvent)
+        }
+
+        let controllerEvents = deriveGestureRelativePlatterNotationEvents(
+            from: eligibleMIDI,
+            controller: controller,
+            channel: channel,
+            deviceName: deviceName
+        )
+        guard !controllerEvents.isEmpty else {
+            return canonical.map(locallyRebasedControllerNotationEvent)
+        }
+
+        // Preserve the finalized record's metadata whenever fusion retained the
+        // decoder run. Only its coordinates are presentation-projected. This
+        // keeps fusion's movement kind, confidence, source, speed, and timing
+        // intact instead of replacing them with a fresh decoder record.
+        var matchedControllerIndexes = Set<Int>()
+        var expandedMergedControllerEvents: [DetectedNotationRecordMovementEvent] = []
+        let projectedCanonical: [DetectedNotationRecordMovementEvent] = canonical.compactMap { event in
+            guard usesGestureRelativeControllerNotation(event) else {
+                return event
+            }
+            if let match = controllerEvents.indices.first(where: { index in
+                guard !matchedControllerIndexes.contains(index) else { return false }
+                let candidate = controllerEvents[index]
+                return candidate.direction == event.direction
+                    && abs(candidate.startTime - event.startTime) <= 1e-6
+                    && abs(candidate.endTime - event.endTime) <= 1e-6
+            }) {
+                matchedControllerIndexes.insert(match)
+                let coordinates = controllerEvents[match]
+                return DetectedNotationRecordMovementEvent(
+                    startTime: event.startTime,
+                    endTime: event.endTime,
+                    startPosition: coordinates.startPosition,
+                    endPosition: coordinates.endPosition,
+                    direction: event.direction,
+                    movementKind: event.movementKind,
+                    speed: event.speed,
+                    confidence: event.confidence,
+                    source: event.source
+                )
+            }
+
+            // Fusion may merge two accepted same-direction decoder runs when a
+            // tiny intervening reversal failed the decoder noise gates. The
+            // merged canonical timing then covers multiple raw runs and cannot
+            // exact-match either one. For presentation, expand it back to those
+            // accepted shared-decoder runs so live and saved notation agree and
+            // do not render the merged record plus both runs as duplicates.
+            if let firstIndex = controllerEvents.indices.first(where: { index in
+                !matchedControllerIndexes.contains(index)
+                    && controllerEvents[index].direction == event.direction
+                    && abs(controllerEvents[index].startTime - event.startTime) <= 1e-6
+            }),
+               let lastIndex = controllerEvents.indices.last(where: { index in
+                !matchedControllerIndexes.contains(index)
+                    && controllerEvents[index].direction == event.direction
+                    && abs(controllerEvents[index].endTime - event.endTime) <= 1e-6
+            }),
+               firstIndex < lastIndex {
+                let coveredIndexes = firstIndex...lastIndex
+                let isCoveredBySameDirectionRuns = coveredIndexes.allSatisfy { index in
+                    !matchedControllerIndexes.contains(index)
+                        && controllerEvents[index].direction == event.direction
+                        && controllerEvents[index].startTime >= event.startTime - 1e-6
+                        && controllerEvents[index].endTime <= event.endTime + 1e-6
+                }
+                if isCoveredBySameDirectionRuns {
+                    matchedControllerIndexes.formUnion(coveredIndexes)
+                    expandedMergedControllerEvents.append(
+                        contentsOf: coveredIndexes.map { controllerEvents[$0] }
+                    )
+                    return nil
+                }
+            }
+            return locallyRebasedControllerNotationEvent(event)
+        }
+
+        // A controller run can pass the shared decoder gates yet be rejected
+        // later by attempt-wide fusion normalization (the original Slice D
+        // defect after a long free spin). It still belongs in notation-only
+        // presentation, but never mutates the canonical snapshot used by
+        // scoring, persistence, or export.
+        let unmatchedControllerEvents = controllerEvents.indices.compactMap { index in
+            matchedControllerIndexes.contains(index) ? nil : controllerEvents[index]
+        }
+        return (
+            projectedCanonical
+                + expandedMergedControllerEvents
+                + unmatchedControllerEvents
+        ).sorted {
+            if $0.startTime == $1.startTime {
+                return $0.endTime < $1.endTime
+            }
+            return $0.startTime < $1.startTime
+        }
+    }
+
+    /// Timeline end for presentation-only gesture notation. Canonical evidence
+    /// remains the primary duration source; a decoder-valid controller run that
+    /// fusion omitted may extend it, so overlay playback must include that run
+    /// instead of stopping at the earlier canonical edge.
+    static func gestureRelativeRecordMovementPresentationEndTime(
+        from snapshot: DetectedNotationSnapshot,
+        presentationEvents: [DetectedNotationRecordMovementEvent]
+    ) -> Double? {
+        [
+            snapshot.capturedEvidenceEndTime,
+            presentationEvents.map(\.endTime).max()
+        ].compactMap { $0 }.max()
+    }
+
+    /// Whether iOS may move its raw decode anchor along motor rotation already
+    /// rejected by the existing release gate. A committed stroke remains an
+    /// immutable published prefix until it has genuinely left the live
+    /// viewport; `live_preview` is open/provisional and is not an anchor block.
+    static func canAdvanceLiveNotationAnchorPastSuppressedMotorRotation(
+        publishedEvents: [DetectedNotationRecordMovementEvent],
+        latestTime: TimeInterval,
+        viewportDuration: TimeInterval
+    ) -> Bool {
+        let cutoff = max(0, latestTime - max(0, viewportDuration))
+        return !publishedEvents.contains { event in
+            event.source != "live_preview" && event.endTime >= cutoff
+        }
+    }
+
+    /// Finds a bounded raw-stream anchor while retaining the complete recent
+    /// window the existing motor-release classifier needs to recognize a
+    /// reversal. The classifier can remain true for the first few backward
+    /// packets; keeping this tail ensures those packets are decoded once the
+    /// gate clears, preserving the pull's true onset and excursion.
+    static func liveNotationAnchorIndexPreservingSuppressedMotorTail(
+        in mixerMidiEvents: [RawMixerMIDIEvent],
+        currentAnchorIndex: Int,
+        controller: Int,
+        channel: Int,
+        latestTime: TimeInterval,
+        lookBehindDuration: TimeInterval
+    ) -> Int? {
+        guard !mixerMidiEvents.isEmpty else { return nil }
+        let lowerBound = max(0, min(currentAnchorIndex, mixerMidiEvents.count - 1))
+        let tailStart = max(0, latestTime - max(0, lookBehindDuration))
+        return (lowerBound..<mixerMidiEvents.count).last(where: { index in
+            let event = mixerMidiEvents[index]
+            return event.controller == controller
+                && event.channel == channel
+                && event.takeRelativeTime <= tailStart
+        })
     }
 
     struct LocalRecordingSidecar: Codable, Equatable {
@@ -6578,6 +12324,11 @@ enum CaptureCore {
         let startedAt: Date
         var endedAt: Date?
         var recordingStatus: String
+        /// Why this take stopped, as a `CaptureStopReason` raw value.
+        ///
+        /// Optional so sidecars written before stop reasons existed decode as
+        /// `nil` — meaning "not recorded", never "manual".
+        var stopReason: String?
         var mediaFileName: String
         let sidecarFileName: String
         var errorDescription: String?
@@ -6585,11 +12336,26 @@ enum CaptureCore {
         var watchCommandID: String?
         var watchRequestedAt: Date?
         var watchAcknowledgedAt: Date?
+        /// The Watch **stop** handshake for this take.
+        ///
+        /// Optional so every sidecar written before stop diagnostics existed
+        /// still decodes as "not recorded" rather than failing or claiming a
+        /// stop that was never attempted. `watchSyncState` above continues to
+        /// describe only the start handshake.
+        var watchStopDiagnostics: CaptureWatchStopDiagnostics?
         var linkedMotionCaptureID: UUID?
         var linkedMotionFileName: String?
         var reviewDecision: CaptureReviewDecision?
         var reviewMetadata: CaptureReviewMetadata?
         var detectedNotation: DetectedNotationSnapshot?
+        /// The crossfader's control state at this take's media-start boundary.
+        ///
+        /// Optional and additive: a sidecar written before this field existed
+        /// decodes as `nil`, meaning "not recorded". It is deliberately NOT
+        /// part of `detectedNotation` — it is not a detected event and must
+        /// never be mistaken for one of `mixerMidiEvents`. See
+        /// `CrossfaderTakeStartState`.
+        var crossfaderTakeStartState: CrossfaderTakeStartState?
         var auditTrail: [CaptureAuditEvent]
 
         init(
@@ -6612,6 +12378,7 @@ enum CaptureCore {
             startedAt: Date,
             endedAt: Date? = nil,
             recordingStatus: String,
+            stopReason: String? = nil,
             mediaFileName: String,
             sidecarFileName: String,
             errorDescription: String? = nil,
@@ -6619,11 +12386,13 @@ enum CaptureCore {
             watchCommandID: String? = nil,
             watchRequestedAt: Date? = nil,
             watchAcknowledgedAt: Date? = nil,
+            watchStopDiagnostics: CaptureWatchStopDiagnostics? = nil,
             linkedMotionCaptureID: UUID? = nil,
             linkedMotionFileName: String? = nil,
             reviewDecision: CaptureReviewDecision? = nil,
             reviewMetadata: CaptureReviewMetadata? = nil,
             detectedNotation: DetectedNotationSnapshot? = nil,
+            crossfaderTakeStartState: CrossfaderTakeStartState? = nil,
             auditTrail: [CaptureAuditEvent] = []
         ) {
             self.schemaVersion = schemaVersion
@@ -6645,6 +12414,7 @@ enum CaptureCore {
             self.startedAt = startedAt
             self.endedAt = endedAt
             self.recordingStatus = recordingStatus
+            self.stopReason = stopReason
             self.mediaFileName = mediaFileName
             self.sidecarFileName = sidecarFileName
             self.errorDescription = errorDescription
@@ -6652,11 +12422,13 @@ enum CaptureCore {
             self.watchCommandID = watchCommandID
             self.watchRequestedAt = watchRequestedAt
             self.watchAcknowledgedAt = watchAcknowledgedAt
+            self.watchStopDiagnostics = watchStopDiagnostics
             self.linkedMotionCaptureID = linkedMotionCaptureID
             self.linkedMotionFileName = linkedMotionFileName
             self.reviewDecision = reviewDecision
             self.reviewMetadata = reviewMetadata
             self.detectedNotation = detectedNotation
+            self.crossfaderTakeStartState = crossfaderTakeStartState
             self.auditTrail = auditTrail
         }
 
@@ -6706,6 +12478,7 @@ enum CaptureCore {
                 captureTiming: captureTiming,
                 startedAt: startedAt,
                 recordingStatus: "recording",
+                stopReason: nil,
                 mediaFileName: files.mediaURL.lastPathComponent,
                 sidecarFileName: files.sidecarURL.lastPathComponent,
                 auditTrail: [takeEvent]
@@ -6719,18 +12492,23 @@ enum CaptureCore {
         func finalized(
             endedAt: Date = Date(),
             mediaFileName: String,
-            captureErrorDescription: String?
+            captureErrorDescription: String?,
+            stopReason: CaptureStopReason? = nil
         ) -> LocalRecordingSidecar {
             var finalized = self
             finalized.endedAt = endedAt
             finalized.mediaFileName = mediaFileName
             finalized.recordingStatus = captureErrorDescription == nil ? "completed" : "failed"
             finalized.errorDescription = captureErrorDescription
+            let resolvedStopReason = stopReason
+                ?? (captureErrorDescription == nil ? nil : CaptureStopReason.captureError)
+            finalized.stopReason = resolvedStopReason?.rawValue
             finalized.auditTrail.append(
                 CaptureAuditEvent(
                     timestamp: endedAt,
                     category: captureErrorDescription == nil ? "recording_completed" : "recording_failed",
-                    detail: captureErrorDescription ?? "Recording completed successfully."
+                    detail: captureErrorDescription
+                        ?? "Recording completed successfully (\(resolvedStopReason?.rawValue ?? "stop reason not recorded"))."
                 )
             )
             return finalized
@@ -6738,15 +12516,48 @@ enum CaptureCore {
 
         func withWatchSync(_ reply: WatchCaptureControlReply) -> LocalRecordingSidecar {
             var updated = self
-            updated.watchSyncState = reply.syncState
-            updated.watchCommandID = reply.commandID
-            updated.watchRequestedAt = updated.watchRequestedAt ?? reply.acknowledgedAt
-            updated.watchAcknowledgedAt = reply.acknowledgedAt
+            let preservesAcknowledgedCapture = updated.watchSyncState == .acknowledged
+                && reply.syncState == .notRequested
+            if !preservesAcknowledgedCapture {
+                updated.watchSyncState = reply.syncState
+                updated.watchCommandID = reply.commandID
+                updated.watchRequestedAt = updated.watchRequestedAt ?? reply.acknowledgedAt
+                updated.watchAcknowledgedAt = reply.acknowledgedAt
+            }
             updated.auditTrail.append(
                 CaptureAuditEvent(
                     timestamp: reply.acknowledgedAt ?? Date(),
                     category: "watch_sync",
-                    detail: "Watch sync state set to \(reply.syncState.rawValue)."
+                    // The reply's own words are the only record of *why* a
+                    // start failed. Dropping them left `watchSyncState: failed`
+                    // with no recoverable reason, which is what made the first
+                    // hardware failure need a second run to diagnose.
+                    detail: preservesAcknowledgedCapture
+                        ? "Watch stop acknowledged; linked motion remains required."
+                        : "Watch sync state set to \(reply.syncState.rawValue)"
+                            + (reply.detail.map { ": \($0)" } ?? ".")
+                )
+            )
+            return updated
+        }
+
+        /// Records the outcome of this take's Watch-stop handshake.
+        ///
+        /// Only ever writes the stop-diagnostics field and one audit entry, so
+        /// it can be applied to a freshly re-read on-disk sidecar without
+        /// disturbing a Watch association that arrived in the meantime.
+        func withWatchStopDiagnostics(
+            _ diagnostics: CaptureWatchStopDiagnostics,
+            recordedAt: Date = Date()
+        ) -> LocalRecordingSidecar {
+            var updated = self
+            updated.watchStopDiagnostics = diagnostics
+            updated.auditTrail.append(
+                CaptureAuditEvent(
+                    timestamp: diagnostics.resolvedAt ?? recordedAt,
+                    category: "watch_stop",
+                    detail: "Watch stop outcome \(diagnostics.outcome.rawValue)"
+                        + (diagnostics.detail.map { ": \($0)" } ?? ".")
                 )
             )
             return updated
@@ -6778,6 +12589,87 @@ enum CaptureCore {
                 )
             )
             return updated
+        }
+
+        func withWatchRelayInterruption(
+            _ detail: String,
+            recordedAt: Date = Date()
+        ) -> LocalRecordingSidecar {
+            var updated = self
+            updated.watchSyncState = .failed
+            updated.auditTrail.append(
+                CaptureAuditEvent(
+                    timestamp: recordedAt,
+                    category: "watch_relay_interrupted",
+                    detail: detail
+                )
+            )
+            return updated
+        }
+
+        /// Adopts a Watch link discovered elsewhere on disk, without ever
+        /// letting a stale snapshot overwrite a real one.
+        ///
+        /// Routine finalization holds an in-memory sidecar captured at take
+        /// start — before a relayed Watch capture has necessarily finished
+        /// arriving. Relay reconciliation can attach a valid link to the
+        /// on-disk sidecar file in that window; finalization then writes its
+        /// stale in-memory copy back over it, silently erasing the link. This
+        /// is the merge that closes that race: called with the current
+        /// on-disk sidecar immediately before finalization writes, so a link
+        /// that arrived after this snapshot was taken is adopted instead of
+        /// clobbered.
+        ///
+        /// A no-op unless `self` has no link, `onDisk` does, and both refer to
+        /// the same session/take — it only ever adds a link, never removes or
+        /// replaces one already present, and never touches an unrelated take.
+        func mergingLatestWatchAssociation(
+            from onDisk: LocalRecordingSidecar,
+            recordedAt: Date = Date()
+        ) -> LocalRecordingSidecar {
+            guard onDisk.sessionID == sessionID, onDisk.takeID == takeID else { return self }
+            guard linkedMotionFileName == nil, let fileName = onDisk.linkedMotionFileName else { return self }
+
+            let priorSyncState = watchSyncState
+            var merged = self
+            merged.linkedMotionCaptureID = onDisk.linkedMotionCaptureID
+            merged.linkedMotionFileName = fileName
+            // A validated link means Watch motion was actually captured and
+            // matched to this take; that supersedes whatever the take's own
+            // acknowledgement handshake reported (e.g. `timedOut`) before the
+            // relay import completed.
+            merged.watchSyncState = .acknowledged
+            if merged.watchAcknowledgedAt == nil {
+                merged.watchAcknowledgedAt = onDisk.watchAcknowledgedAt
+            }
+            // Adopting a link is also the moment the motion transfer completed.
+            // Never invent a stop record here — only refine one that exists, so
+            // a take whose stop was never requested keeps saying so.
+            merged.watchStopDiagnostics = (merged.watchStopDiagnostics ?? onDisk.watchStopDiagnostics)
+                .map { existing in
+                    CaptureWatchStopDiagnostics(
+                        outcome: existing.outcome,
+                        sessionID: existing.sessionID,
+                        takeID: existing.takeID,
+                        commandID: existing.commandID,
+                        detail: existing.detail,
+                        requestedAt: existing.requestedAt,
+                        resolvedAt: existing.resolvedAt,
+                        watchHandledAt: existing.watchHandledAt,
+                        relayReceivedAt: existing.relayReceivedAt,
+                        attemptCount: existing.attemptCount,
+                        motionTransferState: .completed
+                    )
+                }
+            merged.auditTrail.append(
+                CaptureAuditEvent(
+                    timestamp: recordedAt,
+                    category: "watch_reconciled",
+                    detail: "Adopted watch link \(fileName) found on disk during finalization,"
+                        + " superseding stale \(priorSyncState.rawValue) state."
+                )
+            )
+            return merged
         }
 
         func reviewed(
@@ -6889,6 +12781,40 @@ struct CaptureLaneReadiness: Equatable, Sendable {
     /// weak, clipped, channel-fault, no-signal and lost are all NOT usable.
     static func dvs(_ signal: DVSSignalState, required: Bool) -> CaptureLaneReadiness {
         CaptureLaneReadiness(isRequired: required, isUsable: signal.isReady)
+    }
+
+    /// Whether the DVS/timecode lane may gate recording at all.
+    ///
+    /// DVS is optional. Enabling timecode input is not by itself a
+    /// requirement to record: the operator must *also* have the DVS/Serato
+    /// source selected as the capture input. A timecode pipeline left in a
+    /// non-disabled mode after the operator returns to an ordinary input
+    /// (Rane ONE MKII) is stale state, and its signal health stays
+    /// `.noSignal` because no timecode is arriving — which would block
+    /// capture forever with nothing on screen to switch off.
+    ///
+    /// Shared on purpose: the Input readiness panel and the recording gate
+    /// must both reach their verdict through this one rule, so they cannot
+    /// contradict each other.
+    static func isDVSRequired(modeEnabled: Bool, isDVSSourceSelected: Bool) -> Bool {
+        modeEnabled && isDVSSourceSelected
+    }
+
+    /// DVS lane derived from the two facts that actually decide it: whether
+    /// timecode input is switched on, and whether the DVS/Serato source is
+    /// the selected capture input.
+    static func dvs(
+        _ signal: DVSSignalState,
+        modeEnabled: Bool,
+        isDVSSourceSelected: Bool
+    ) -> CaptureLaneReadiness {
+        dvs(
+            signal,
+            required: isDVSRequired(
+                modeEnabled: modeEnabled,
+                isDVSSourceSelected: isDVSSourceSelected
+            )
+        )
     }
 
     /// Controller lane — only `ControllerMappingState.dvsPlusMidiReady` (the

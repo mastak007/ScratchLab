@@ -648,6 +648,214 @@ final class LowLatencySinkLifecycle {
     }
 }
 
+/// Stable identity for one routine-recording request. The generation is
+/// allocated before the engine's asynchronous start work begins and follows
+/// that exact request through confirmed media start and finalization.
+struct RoutineRecordingRequestToken: Equatable, Hashable, Sendable {
+    let generation: UInt64
+}
+
+/// Durable terminal evidence for one routine-recording generation. Unlike the
+/// UI's transient `isRoutineFinalizationPending` flag, this record remains
+/// queryable after finalization has completed, so a waiter cannot miss it.
+struct RoutineRecordingFinalizationCompletion: Equatable, Sendable {
+    let token: RoutineRecordingRequestToken
+    let takeID: String
+    let mediaURL: URL
+    let succeeded: Bool
+    let statusMessage: String
+}
+
+/// Lock-protected lifecycle state exposed read-only to the reference-authoring
+/// bridge. Every identity-bearing field comes from the same prepared take.
+struct RoutineRecordingBoundarySnapshot: Equatable, Sendable {
+    let token: RoutineRecordingRequestToken
+    let takeID: String?
+    let mediaURL: URL?
+    let didStartRecording: Bool
+    let stopWasRequested: Bool
+    let didEnterFinalization: Bool
+    let completion: RoutineRecordingFinalizationCompletion?
+    let startFailureDescription: String?
+}
+
+enum RoutineRecordingStopRequestDisposition: Equatable, Sendable {
+    case accepted
+    case alreadyCompleted(RoutineRecordingFinalizationCompletion)
+    case rejected(String)
+}
+
+/// A small, engine-owned ledger for the asynchronous AVFoundation lifecycle.
+/// The engine writes it at request/preparation/delegate/finalization boundaries;
+/// consumers can safely sample it from a non-main worker without observing a
+/// lossy false -> true -> false UI flag transition.
+final class RoutineRecordingBoundaryLedger: @unchecked Sendable {
+    private struct Record {
+        let token: RoutineRecordingRequestToken
+        var takeID: String?
+        var mediaURL: URL?
+        var didStartRecording = false
+        var stopWasRequested = false
+        var didEnterFinalization = false
+        var completion: RoutineRecordingFinalizationCompletion?
+        var startFailureDescription: String?
+
+        var snapshot: RoutineRecordingBoundarySnapshot {
+            RoutineRecordingBoundarySnapshot(
+                token: token,
+                takeID: takeID,
+                mediaURL: mediaURL,
+                didStartRecording: didStartRecording,
+                stopWasRequested: stopWasRequested,
+                didEnterFinalization: didEnterFinalization,
+                completion: completion,
+                startFailureDescription: startFailureDescription
+            )
+        }
+    }
+
+    private let lock = NSLock()
+    private var nextGeneration: UInt64 = 0
+    private var records: [RoutineRecordingRequestToken: Record] = [:]
+    private var activeToken: RoutineRecordingRequestToken?
+    private let retainedTerminalRecordLimit = 32
+
+    func beginRequest() -> RoutineRecordingRequestToken {
+        lock.lock()
+        defer { lock.unlock() }
+        pruneTerminalRecordsIfNeeded()
+        nextGeneration &+= 1
+        let token = RoutineRecordingRequestToken(generation: nextGeneration)
+        records[token] = Record(token: token)
+        return token
+    }
+
+    func prepare(
+        token: RoutineRecordingRequestToken,
+        takeID: String,
+        mediaURL: URL
+    ) {
+        lock.lock()
+        defer { lock.unlock() }
+        guard var record = records[token], record.startFailureDescription == nil else { return }
+        record.takeID = takeID
+        record.mediaURL = mediaURL
+        records[token] = record
+        activeToken = token
+    }
+
+    @discardableResult
+    func didStartRecording(mediaURL: URL) -> RoutineRecordingRequestToken? {
+        lock.lock()
+        defer { lock.unlock() }
+        guard let token = activeToken,
+              var record = records[token],
+              record.mediaURL == mediaURL,
+              record.startFailureDescription == nil else {
+            return nil
+        }
+        record.didStartRecording = true
+        records[token] = record
+        return token
+    }
+
+    func failStart(token: RoutineRecordingRequestToken, description: String) {
+        lock.lock()
+        defer { lock.unlock() }
+        guard var record = records[token], record.completion == nil else { return }
+        record.startFailureDescription = description
+        records[token] = record
+        if activeToken == token {
+            activeToken = nil
+        }
+    }
+
+    func requestStop(
+        token: RoutineRecordingRequestToken
+    ) -> RoutineRecordingStopRequestDisposition {
+        lock.lock()
+        defer { lock.unlock() }
+        guard var record = records[token] else {
+            return .rejected("The requested recording generation is unknown.")
+        }
+        if let completion = record.completion {
+            return .alreadyCompleted(completion)
+        }
+        if let failure = record.startFailureDescription {
+            return .rejected(failure)
+        }
+        guard activeToken == token, record.didStartRecording else {
+            return .rejected("The requested recording generation is not the active confirmed take.")
+        }
+        record.stopWasRequested = true
+        records[token] = record
+        return .accepted
+    }
+
+    @discardableResult
+    func enterFinalization(mediaURL: URL) -> RoutineRecordingRequestToken? {
+        lock.lock()
+        defer { lock.unlock() }
+        guard let token = activeToken,
+              var record = records[token],
+              record.mediaURL == mediaURL,
+              record.didStartRecording else {
+            return nil
+        }
+        record.didEnterFinalization = true
+        records[token] = record
+        return token
+    }
+
+    @discardableResult
+    func completeFinalization(
+        token: RoutineRecordingRequestToken,
+        succeeded: Bool,
+        statusMessage: String
+    ) -> RoutineRecordingFinalizationCompletion? {
+        lock.lock()
+        defer { lock.unlock() }
+        guard var record = records[token],
+              record.didEnterFinalization,
+              let takeID = record.takeID,
+              let mediaURL = record.mediaURL else {
+            return nil
+        }
+        let completion = RoutineRecordingFinalizationCompletion(
+            token: token,
+            takeID: takeID,
+            mediaURL: mediaURL,
+            succeeded: succeeded,
+            statusMessage: statusMessage
+        )
+        record.completion = completion
+        records[token] = record
+        if activeToken == token {
+            activeToken = nil
+        }
+        return completion
+    }
+
+    func snapshot(
+        for token: RoutineRecordingRequestToken
+    ) -> RoutineRecordingBoundarySnapshot? {
+        lock.lock()
+        defer { lock.unlock() }
+        return records[token]?.snapshot
+    }
+
+    private func pruneTerminalRecordsIfNeeded() {
+        let terminalTokens = records.values
+            .filter { $0.completion != nil || $0.startFailureDescription != nil }
+            .map(\.token)
+            .sorted { $0.generation < $1.generation }
+        let removalCount = max(0, records.count - retainedTerminalRecordLimit + 1)
+        for token in terminalTokens.prefix(removalCount) where token != activeToken {
+            records.removeValue(forKey: token)
+        }
+    }
+}
+
 final class MacCaptureEngine: NSObject, ObservableObject {
     enum LiveRecordDirection: String, Equatable {
         case forward
@@ -659,10 +867,23 @@ final class MacCaptureEngine: NSObject, ObservableObject {
         let name: String
     }
 
+    enum AudioInputCaptureSuitability: Equatable {
+        case routedAudio
+        case builtInMicrophone
+        case otherMicrophone
+
+        var isMicrophonePath: Bool { self != .routedAudio }
+        var blocksIsolatedNoBeatCapture: Bool { self == .builtInMicrophone }
+    }
+
+    static let isolatedCaptureBuiltInMicrophoneMessage =
+        "Built-in microphone captures room audio. Select a routed deck or audio-interface input before recording an isolated take."
+
     enum AudioSelectionPriority: Equatable {
         case exactSeratoVirtualAudio
         case seratoLike
         case explicitUserSelection
+        case raneHardware
         case previousSelection
         case systemDefault
         case firstAvailable
@@ -684,6 +905,19 @@ final class MacCaptureEngine: NSObject, ObservableObject {
     struct MIDIInputSourceChoice: Identifiable, Equatable, Hashable {
         let id: String
         let name: String
+    }
+
+    /// Identity of the MIDI endpoint a connection was actually made to.
+    ///
+    /// A new connection continues the previous one only when BOTH halves
+    /// match: the selected source identifier, and the Core MIDI endpoint
+    /// reference that identifier resolved to. Core MIDI mints a fresh
+    /// endpoint reference when a device is unplugged and replugged, so a
+    /// replaced device is never mistaken for a still-open one even though it
+    /// reports the same name.
+    struct MIDIConnectionEndpointIdentity: Equatable {
+        let sourceID: String
+        let endpointRef: MIDIEndpointRef
     }
 
     enum MIDILearnState: Equatable {
@@ -1174,26 +1408,21 @@ final class MacCaptureEngine: NSObject, ObservableObject {
 
             let asbd = asbdPointer.pointee
             let channelCount = max(1, Int(asbd.mChannelsPerFrame))
-            let isFloat = (asbd.mFormatFlags & kAudioFormatFlagIsFloat) != 0
-            let isNonInterleaved = (asbd.mFormatFlags & kAudioFormatFlagIsNonInterleaved) != 0
-            let commonFormat: AVAudioCommonFormat
-            switch (isFloat, Int(asbd.mBitsPerChannel)) {
-            case (true, 32):
-                commonFormat = .pcmFormatFloat32
-            case (false, 16):
-                commonFormat = .pcmFormatInt16
-            case (false, 32):
-                commonFormat = .pcmFormatInt32
-            default:
-                throw RoutineAudioCaptureWriterError.unsupportedSourceFormat
-            }
-
-            guard let format = pcmFormat(
-                commonFormat: commonFormat,
-                sampleRate: asbd.mSampleRate,
-                channelCount: AVAudioChannelCount(channelCount),
-                interleaved: !isNonInterleaved
-            ) else {
+            let discreteLayout = AVAudioChannelLayout(
+                layoutTag: AudioChannelLayoutTag(
+                    kAudioChannelLayoutTag_DiscreteInOrder | UInt32(channelCount)
+                )
+            )
+            let exactFormat = AVAudioFormat(streamDescription: asbdPointer)
+                ?? discreteLayout.flatMap {
+                    AVAudioFormat(streamDescription: asbdPointer, channelLayout: $0)
+                }
+            guard asbd.mFormatID == kAudioFormatLinearPCM,
+                  let format = exactFormat,
+                  format.commonFormat == .pcmFormatFloat32
+                    || format.commonFormat == .pcmFormatFloat64
+                    || format.commonFormat == .pcmFormatInt16
+                    || format.commonFormat == .pcmFormatInt32 else {
                 throw RoutineAudioCaptureWriterError.unsupportedSourceFormat
             }
 
@@ -1204,7 +1433,7 @@ final class MacCaptureEngine: NSObject, ObservableObject {
             }
             buffer.frameLength = frameCount
 
-            let sourceBufferCount = isNonInterleaved ? channelCount : 1
+            let sourceBufferCount = format.isInterleaved ? 1 : channelCount
             let audioBufferListSize = MemoryLayout<AudioBufferList>.size
                 + max(0, sourceBufferCount - 1) * MemoryLayout<AudioBuffer>.size
             let rawPointer = UnsafeMutableRawPointer.allocate(
@@ -1249,35 +1478,100 @@ final class MacCaptureEngine: NSObject, ObservableObject {
 
             return buffer
         }
+    }
 
-        private static func pcmFormat(
-            commonFormat: AVAudioCommonFormat,
-            sampleRate: Double,
-            channelCount: AVAudioChannelCount,
-            interleaved: Bool
-        ) -> AVAudioFormat? {
-            if let format = AVAudioFormat(
-                commonFormat: commonFormat,
-                sampleRate: sampleRate,
-                channels: channelCount,
-                interleaved: interleaved
-            ) {
-                return format
+    private enum RoutineReviewMovieMuxer {
+        enum MuxError: LocalizedError {
+            case missingVideoTrack
+            case missingAudioTrack
+            case unableToCreateCompositionTrack
+            case unableToCreateExporter
+            case exportFailed(String)
+
+            var errorDescription: String? {
+                switch self {
+                case .missingVideoTrack:
+                    return "The recorded camera file contains no video track."
+                case .missingAudioTrack:
+                    return "The captured onboard AHHH file contains no audio track."
+                case .unableToCreateCompositionTrack:
+                    return "ScratchLab could not prepare the final review movie tracks."
+                case .unableToCreateExporter:
+                    return "ScratchLab could not prepare the final review movie."
+                case let .exportFailed(message):
+                    return "ScratchLab could not attach onboard AHHH to the video: \(message)"
+                }
+            }
+        }
+
+        static func replaceAudioTrack(
+            videoURL: URL,
+            onboardAudioURL: URL
+        ) async throws {
+            let videoAsset = AVURLAsset(url: videoURL)
+            let audioAsset = AVURLAsset(url: onboardAudioURL)
+            guard let sourceVideoTrack = try await videoAsset.loadTracks(withMediaType: .video).first else {
+                throw MuxError.missingVideoTrack
+            }
+            guard let sourceAudioTrack = try await audioAsset.loadTracks(withMediaType: .audio).first else {
+                throw MuxError.missingAudioTrack
             }
 
-            guard let channelLayout = AVAudioChannelLayout(
-                layoutTag: AudioChannelLayoutTag(
-                    kAudioChannelLayoutTag_DiscreteInOrder | UInt32(channelCount)
-                )
+            let composition = AVMutableComposition()
+            guard let compositionVideo = composition.addMutableTrack(
+                withMediaType: .video,
+                preferredTrackID: kCMPersistentTrackID_Invalid
+            ),
+            let audioTrack = composition.addMutableTrack(
+                withMediaType: .audio,
+                preferredTrackID: kCMPersistentTrackID_Invalid
             ) else {
-                return nil
+                throw MuxError.unableToCreateCompositionTrack
             }
-            return AVAudioFormat(
-                commonFormat: commonFormat,
-                sampleRate: sampleRate,
-                interleaved: interleaved,
-                channelLayout: channelLayout
+
+            let videoDuration = try await videoAsset.load(.duration)
+            let audioDuration = CMTimeMinimum(
+                try await audioAsset.load(.duration),
+                videoDuration
             )
+            let preferredTransform = try await sourceVideoTrack.load(.preferredTransform)
+                try compositionVideo.insertTimeRange(
+                CMTimeRange(start: .zero, duration: videoDuration),
+                of: sourceVideoTrack,
+                at: .zero
+            )
+            compositionVideo.preferredTransform = preferredTransform
+            try audioTrack.insertTimeRange(
+                CMTimeRange(start: .zero, duration: audioDuration),
+                of: sourceAudioTrack,
+                at: .zero
+            )
+
+            guard let exporter = AVAssetExportSession(
+                asset: composition,
+                presetName: AVAssetExportPresetHighestQuality
+            ) else {
+                throw MuxError.unableToCreateExporter
+            }
+
+            let temporaryURL = videoURL.deletingLastPathComponent()
+                .appendingPathComponent(".\(UUID().uuidString)-onboard-audio.mov")
+            try? FileManager.default.removeItem(at: temporaryURL)
+            exporter.shouldOptimizeForNetworkUse = true
+            do {
+                try await exporter.export(to: temporaryURL, as: .mov)
+            } catch {
+                try? FileManager.default.removeItem(at: temporaryURL)
+                throw MuxError.exportFailed(error.localizedDescription)
+            }
+
+            do {
+                try FileManager.default.removeItem(at: videoURL)
+                try FileManager.default.moveItem(at: temporaryURL, to: videoURL)
+            } catch {
+                try? FileManager.default.removeItem(at: temporaryURL)
+                throw error
+            }
         }
     }
 
@@ -1323,7 +1617,9 @@ final class MacCaptureEngine: NSObject, ObservableObject {
             var peakConfidence: Double
         }
 
-        private let startedAt: CFTimeInterval
+        /// Take-relative zero. Re-stamped by `rebaseEpoch(to:)` once
+        /// AVFoundation confirms media is being written.
+        private var startedAt: CFTimeInterval
         private var activeMovement: ActiveMovement?
         private var events: [CaptureCore.DetectedNotationRecordMovementEvent] = []
         private let debugSession: RoutineMovementDebugSession?
@@ -1337,6 +1633,16 @@ final class MacCaptureEngine: NSObject, ObservableObject {
             self.startedAt = startedAt
             self.debugSession = debugSession
             self.traceRecorder = traceRecorder
+        }
+
+        /// Moves take-relative zero to the confirmed media-start epoch and
+        /// discards anything observed before it. Pre-roll hand motion happened
+        /// while the writer was still spinning up, so it is not in the media
+        /// and must not appear in the take timeline.
+        func rebaseEpoch(to hostTime: CFTimeInterval) {
+            startedAt = hostTime
+            activeMovement = nil
+            events.removeAll(keepingCapacity: true)
         }
 
         func recordObservation(
@@ -1746,7 +2052,11 @@ final class MacCaptureEngine: NSObject, ObservableObject {
             for event in events.dropFirst() {
                 let sameDirection = event.direction == active.direction
                 let gap = max(0, event.startTime - active.endTime)
-                if sameDirection && gap <= Self.maxMergeGap {
+                // Controller endpoint runs must never bridge uncovered time:
+                // the missing interval may contain discarded opposing motion.
+                let controllerBoundary = active.source == "controller" || event.source == "controller"
+                let contiguous = abs(event.startTime - active.endTime) <= 1e-9
+                if sameDirection && gap <= Self.maxMergeGap && (!controllerBoundary || contiguous) {
                     #if DEBUG
                     debugSession?.recordMerge()
                     #endif
@@ -2090,6 +2400,7 @@ final class MacCaptureEngine: NSObject, ObservableObject {
         let sessionID: String
         let takeID: String
         let endedAt: Date
+        let detectedNotation: CaptureCore.DetectedNotationSnapshot?
     }
 
     struct PerformerMonitorZone: Codable {
@@ -2162,12 +2473,12 @@ final class MacCaptureEngine: NSObject, ObservableObject {
     @Published private(set) var availableMIDISourceNames: [String] = []
     @Published private(set) var midiLearnState: MIDILearnState = .idle
     @Published private(set) var crossfaderCCMapping: CrossfaderCCMapping? = nil
-    @Published var selectedMIDIInputSourceID: String = UserDefaults.standard.string(forKey: ScratchLabDesktopDefaultsKey.selectedMIDIInputSourceID) ?? "" {
+    @Published var selectedMIDIInputSourceID: String {
         didSet {
             if selectedMIDIInputSourceID.isEmpty {
-                UserDefaults.standard.removeObject(forKey: ScratchLabDesktopDefaultsKey.selectedMIDIInputSourceID)
+                midiSelectionDefaults.removeObject(forKey: ScratchLabDesktopDefaultsKey.selectedMIDIInputSourceID)
             } else {
-                UserDefaults.standard.set(selectedMIDIInputSourceID, forKey: ScratchLabDesktopDefaultsKey.selectedMIDIInputSourceID)
+                midiSelectionDefaults.set(selectedMIDIInputSourceID, forKey: ScratchLabDesktopDefaultsKey.selectedMIDIInputSourceID)
             }
             guard oldValue != selectedMIDIInputSourceID else { return }
             resetMIDIMonitoringState()
@@ -2179,6 +2490,38 @@ final class MacCaptureEngine: NSObject, ObservableObject {
     @Published private(set) var lastMIDIEventSummary: String = "No MIDI received yet"
     @Published private(set) var lastMIDICCMessage: String = "CC -- Ch -- Value --"
     @Published private(set) var midiLearnFeedback: String = ""
+    /// Raw value (CC value, or note number for a pad) of the event the CURRENT
+    /// MIDI Learn session actually consumed. `nil` from the moment Learn starts
+    /// until a fresh event lands, so the Learn panel shows "move the control
+    /// now" rather than echoing the parked value of whatever control was last
+    /// touched (e.g. the crossfader sitting in `lastMIDICCMessage`).
+    @Published private(set) var midiLearnObservedRawValue: Int?
+    @Published private(set) var liveCrossfaderRawValue: Int?
+    @Published private(set) var liveLeftUpfaderRawValue: Int?
+    @Published private(set) var liveRightUpfaderRawValue: Int?
+    @Published private(set) var liveHotCueIndex: Int?
+    @Published private(set) var liveHotCueSampleID: String?
+    @Published private(set) var leftUpfaderOutputGain: Double = 1.0
+    var leftUpfaderOutputHandler: ((Double) -> Void)?
+
+    private struct PendingControllerActivity {
+        var crossfaderRawValue: Int?
+        var leftUpfaderRawValue: Int?
+        var rightUpfaderRawValue: Int?
+        var hotCueIndex: Int?
+        var hotCueSampleID: String?
+        var leftUpfaderOutputGain: Double = 1.0
+    }
+
+    private enum ControllerActivityUpdate {
+        case crossfader(rawValue: Int)
+        case leftUpfader(rawValue: Int, outputGain: Double)
+        case rightUpfader(rawValue: Int)
+        case hotCue(index: Int, sampleID: String)
+    }
+
+    private var pendingControllerActivity = PendingControllerActivity()
+    private var isControllerActivityPublishPending = false
 
     // MARK: - Expanded MIDI Learn State (Phase 3)
     /// The mapping store for per-device learned MIDI mappings.
@@ -2318,19 +2661,29 @@ final class MacCaptureEngine: NSObject, ObservableObject {
     @Published private(set) var lastScratchBankPadLabel: String = ""
 #if DEBUG
     @Published private(set) var lastRawPadDiagnostic: String = ""
-    /// Debug-only: outcome of the most recent `loadPlatterTestSample()`
-    /// request — "loaded: <id>" or "load failed: <reason>" — so a silent
-    /// load failure is never mistaken for a platter/MIDI hardware problem.
-    @Published private(set) var platterTestLoadStatus: String = ""
 #endif
+    /// Outcome of the most recent validated platter-sample load request, so
+    /// a missing asset is never mistaken for a platter/MIDI hardware fault.
+    @Published private(set) var platterTestLoadStatus: String = ""
+    @Published private(set) var scratchAudioOwnershipMode: ScratchAudioOwnershipMode = .defaultMode
     var scratchBankPadPreviewCallback: ((String) -> Void)?
 
     /// Platter CC6 ring-counter tracker per deck (ch=0 left, ch=1 right).
     private let platterTracker = ScratchPlatterTracker()
 
     /// Platter-driven scratch sample playback controller.
-    private let scratchPlaybackController = ScratchSamplePlaybackController()
+    private let scratchPlaybackController: ScratchSamplePlaybackController
     private var tempDirectAhhhTriggerArmed = true
+    private let audioOwnershipLock = NSLock()
+    private var audioOwnershipModeStorage: ScratchAudioOwnershipMode = .defaultMode
+
+    /// Lock-backed so CoreMIDI/DVS callbacks enforce the boundary without
+    /// touching SwiftUI state or performing UserDefaults I/O at MIDI rate.
+    private var allowsLocalScratchPlayback: Bool {
+        audioOwnershipLock.lock()
+        defer { audioOwnershipLock.unlock() }
+        return audioOwnershipModeStorage.allowsLocalScratchPlayback
+    }
 
     /// When true, a gated `TimecodePlaybackDrive` from `TimecodePlaybackBridge`
     /// drives `scratchPlaybackController`, and the raw MIDI CC6 platter path
@@ -2477,6 +2830,7 @@ final class MacCaptureEngine: NSObject, ObservableObject {
     /// track (Task 8). Polled at ~25 Hz from a background queue and hopped to
     /// the MainActor — never mutated from `audioQueue` directly.
     @Published private(set) var playbackPositionSnapshot: ScratchSamplePlaybackController.PlaybackPositionSnapshot?
+    @Published private(set) var playbackWaveformSnapshot: ScratchSamplePlaybackController.PlaybackWaveformSnapshot?
     private static let playbackPositionPollInterval: TimeInterval = 0.04
     private var playbackPositionPollTimer: DispatchSourceTimer?
 
@@ -2562,6 +2916,7 @@ final class MacCaptureEngine: NSObject, ObservableObject {
         elapsed: TimeInterval
     ) {
         guard dvsPlaybackDriveActive else { return }
+        guard allowsLocalScratchPlayback else { return }
         let driveEntryUptime = CACurrentMediaTime()
 
 #if DEBUG
@@ -2781,6 +3136,7 @@ final class MacCaptureEngine: NSObject, ObservableObject {
             UserDefaults.standard.set(hasExplicitUserAudioSelection, forKey: ScratchLabDesktopDefaultsKey.selectedAudioDeviceWasExplicit)
             syncDirectCaptureStatus(using: availableAudioDevices)
             resetAudioSignalLevel()
+            syncScratchPlaybackOutputRoute()
             guard oldValue != selectedAudioDeviceUniqueID, isRunning else { return }
             reconfigureSession()
         }
@@ -2795,6 +3151,8 @@ final class MacCaptureEngine: NSObject, ObservableObject {
     }
     @Published var audioLevel: Float = 0
     @Published private(set) var hasPublishedAudioLevel = false
+    @Published private(set) var onboardOutputLevel: Float = 0
+    @Published private(set) var onboardOutputCaptureStatus = "Load AHHH, then record to meter the captured output."
     /// The audio device uniqueID actually attached to the running capture
     /// session by `configureCaptureSession` ("" when none). The UI and
     /// diagnostics read this so what is shown == what is captured/recorded,
@@ -2893,7 +3251,23 @@ final class MacCaptureEngine: NSObject, ObservableObject {
     /// pending (admission closed, awaiting the admitted builder tasks). Prevents
     /// a second take from starting and re-opening the gate before the prior
     /// take's builder has been drained.
-    private var isRoutineFinalizationPending = false
+    // `@Published`/`private(set)` (read-only externally, same as every other
+    // internal-write/external-read flag in this class): this is the
+    // authoritative "a take's async finalize is still running" signal, and
+    // `ReferenceAuthoringCaptureBridge` needs to observe its true→false
+    // transition to know a stopped take has actually finished writing before
+    // reading its sidecar back. No existing internal read/write site changes.
+    @Published private(set) var isRoutineFinalizationPending = false
+    /// Incremented on the MainActor every time a take RELEASES the MIDI
+    /// accumulation window — by the finalization drain, or by an abandonment
+    /// release on a path that will never drain.
+    ///
+    /// The pre-record preview re-arms on this rather than on
+    /// `isRoutineFinalizationPending` falling, because the early-return
+    /// finalization paths never set that flag at all and so never publish a
+    /// true→false transition to observe. This counter is published from every
+    /// release path without exception.
+    @Published private(set) var midiCaptureWindowReleaseCount = 0
     @Published private(set) var routineRecordingStatus = "Pick camera and audio to record a routine."
     @Published private(set) var lastRoutineRecordingURL: URL?
     @Published private(set) var lastRoutineRecordingSessionID: String?
@@ -2903,6 +3277,24 @@ final class MacCaptureEngine: NSObject, ObservableObject {
     @Published private(set) var routineAudioBuffersAppended = 0
     @Published private(set) var routineAudioBuffersSkipped = 0
     @Published private(set) var lastRoutineAudioWriterError: String?
+
+#if DEBUG
+    // Rane channel-map diagnostic (Phase 2). Developer-only: samples the live
+    // capture device's raw multichannel stream and reports per-channel /
+    // per-pair RMS, peak, DC, silence, clipping and a program-likelihood score
+    // so the correct stereo program pair can be identified with hardware.
+    @Published private(set) var isChannelMapDiagnosticRunning = false
+    @Published private(set) var channelMapDiagnosticSnapshot: MultichannelSignalProbe.Snapshot?
+    @Published private(set) var channelMapDiagnosticStatus =
+        "Idle. Start the diagnostic, then play obvious program audio through the Rane."
+    /// Guarded by `audioQueue`.
+    private var channelMapDiagnosticActive = false
+    private var channelMapDiagnosticChannels: [[Float]] = []
+    private var channelMapDiagnosticFrames = 0
+    private var channelMapDiagnosticSampleRate: Double = 0
+    /// ~1.5 s at 48 kHz — enough to characterise a pair without a long wait.
+    private let channelMapDiagnosticTargetFrames = 72_000
+#endif
 
     // CXL notation capture
     let cxlRecorder = CXLNotationCaptureRecorder()
@@ -2958,6 +3350,27 @@ final class MacCaptureEngine: NSObject, ObservableObject {
         return seratoDevice.uniqueID != selectedAudioDeviceUniqueID
     }
 
+    /// True only when the DVS/Serato capture input is the *selected* audio
+    /// input. This is the platform fact that
+    /// `CaptureLaneReadiness.isDVSRequired` needs; the rule itself is shared.
+    /// Exactly the inverse condition of `shouldOfferUseSeratoAudio`, which
+    /// offers the switch precisely because Serato is not selected.
+    var isSeratoAudioSelected: Bool {
+        guard let seratoDevice = preferredSeratoAudioDevice(from: availableAudioDevices.map(Self.audioChoice(from:))) else {
+            return false
+        }
+        return seratoDevice.uniqueID == selectedAudioDeviceUniqueID
+    }
+
+    var selectedAudioInputCaptureSuitability: AudioInputCaptureSuitability? {
+        guard let selectedDevice = availableAudioDevices.first(where: {
+            $0.uniqueID == selectedAudioDeviceUniqueID
+        }) else {
+            return nil
+        }
+        return Self.audioInputCaptureSuitability(for: Self.audioChoice(from: selectedDevice))
+    }
+
     var selectedAudioDeviceName: String {
         let selectedName = availableAudioDevices
             .first(where: { $0.uniqueID == selectedAudioDeviceUniqueID })?
@@ -2993,6 +3406,26 @@ final class MacCaptureEngine: NSObject, ObservableObject {
 
     var formattedAudioSignalPercent: String {
         Self.formattedAudioPercent(for: currentAudioSignalLevel, hasPublishedAudioLevel: true)
+    }
+
+    var currentOnboardOutputLevel: Float {
+        min(max(onboardOutputLevel.isFinite ? onboardOutputLevel : 0, 0), 1)
+    }
+
+    var formattedOnboardOutputPercent: String {
+        Self.formattedAudioPercent(
+            for: currentOnboardOutputLevel,
+            hasPublishedAudioLevel: isRoutineRecording,
+            unavailablePlaceholder: "IDLE"
+        )
+    }
+
+    var onboardOutputMeterColor: Color {
+        let level = currentOnboardOutputLevel
+        if level >= 0.98 { return Color(hex: "FF3B30") }
+        if level >= 0.65 { return Color(hex: "4CAF50") }
+        if level > 0.001 { return Color(hex: "FFC107") }
+        return Color(hex: "9E9E9E")
     }
 
     var audioReadinessText: String {
@@ -3209,11 +3642,286 @@ final class MacCaptureEngine: NSObject, ObservableObject {
 
     func applyPendingWatchReply(_ reply: WatchCaptureControlReply?) {
         pendingWatchReply = reply
+
+        // A take owns a Watch capture whenever the start handshake may have
+        // left one running — not only when it was acknowledged.
+        //
+        // Gating this on `.acknowledged` alone was fail-open in the dangerous
+        // direction: a start whose reply came back `failed` or `timedOut` can
+        // still have started Core Motion on the wrist, with only the answer
+        // lost. The Mac then owned nothing, sent no stop, and the Watch ran
+        // until the operator stopped it by hand — exactly the take that
+        // exported `watchSyncState: failed` with `watchStopOutcome:
+        // notRequested`. `startMayHaveLeftWatchRecording` states the
+        // fail-closed rule; a stop for a capture that never started is
+        // harmless.
+        guard let reply,
+              CaptureWatchStopPolicy.startMayHaveLeftWatchRecording(reply.syncState),
+              let identity = resolvedWatchTakeIdentity(for: reply) else {
+            noteWatchCaptureOwnership(nil)
+            return
+        }
+        noteWatchCaptureOwnership(identity)
+    }
+
+    /// The identity a Watch stop for this reply must name.
+    ///
+    /// Prefers the reply's own session/take, because that is what the Watch was
+    /// told. A synthesized failure may carry an incomplete identity, so the
+    /// reserved take identity is the fallback — without one there is nothing
+    /// safe to name and no stop is armed.
+    private func resolvedWatchTakeIdentity(
+        for reply: WatchCaptureControlReply
+    ) -> TakeIdentity? {
+        let pending = pendingRoutineTakeIdentity
+        let sessionID = reply.sessionID.isEmpty ? (pending?.sessionID ?? "") : reply.sessionID
+        let takeID = (reply.takeID?.isEmpty == false ? reply.takeID : nil) ?? pending?.takeID ?? ""
+        guard !sessionID.isEmpty, !takeID.isEmpty else { return nil }
+        return TakeIdentity(
+            sessionID: sessionID,
+            takeID: takeID,
+            takeNumber: pending?.takeNumber ?? 0
+        )
+    }
+
+    // MARK: - Watch stop ownership
+
+    /// Sends a Watch stop for one take and resolves what happened.
+    ///
+    /// Injected by the desktop app so this engine owns *when* a stop is
+    /// required — every terminal path for a take, not just the Stop button —
+    /// without knowing anything about MultipeerConnectivity or
+    /// WatchConnectivity. `nil` means no relay is wired up, which is recorded
+    /// as an unreachable stop rather than passed over in silence.
+    var watchStopRequestHandler: ((TakeIdentity) async -> WatchCaptureControlReply)?
+
+    /// The take whose Watch capture this engine believes is still running.
+    private var watchOwnedTakeIdentityStorage: TakeIdentity?
+    /// `sessionID:takeID` keys a stop has already been dispatched for. This is
+    /// what makes "exactly once" true even though several terminal paths can
+    /// run for the same take (button, timed backstop, AVFoundation's own
+    /// maximum-duration end, and finalization).
+    private var dispatchedWatchStopKeys: [String] = []
+    private let watchStopLock = NSLock()
+    private static let maximumRememberedWatchStopKeys = 32
+
+    private func noteWatchCaptureOwnership(_ identity: TakeIdentity?) {
+        watchStopLock.lock()
+        watchOwnedTakeIdentityStorage = identity
+        watchStopLock.unlock()
+    }
+
+    /// The take this engine would stop on the Watch right now, if any.
+    var watchOwnedTakeIdentity: TakeIdentity? {
+        watchStopLock.lock()
+        defer { watchStopLock.unlock() }
+        return watchOwnedTakeIdentityStorage
+    }
+
+    /// Requests a Watch stop for the owned take, at most once per take.
+    ///
+    /// Returns immediately. The handshake runs on a detached task and its
+    /// outcome is merged into that take's on-disk sidecar when it resolves, so
+    /// media finalization is never blocked waiting on a watch. A second call
+    /// for the same take — the timed backstop firing just after the button, say
+    /// — is a no-op and returns `nil`.
+    ///
+    /// - Returns: the identity a stop was dispatched for, or `nil` when there
+    ///   was nothing to stop or a stop was already sent for this take.
+    @discardableResult
+    func requestWatchStopIfNeeded(reason: CaptureStopReason?) -> TakeIdentity? {
+        watchStopLock.lock()
+        guard let identity = watchOwnedTakeIdentityStorage else {
+            watchStopLock.unlock()
+            return nil
+        }
+        let key = "\(identity.sessionID):\(identity.takeID)"
+        guard !dispatchedWatchStopKeys.contains(key) else {
+            watchStopLock.unlock()
+            return nil
+        }
+        dispatchedWatchStopKeys.append(key)
+        while dispatchedWatchStopKeys.count > Self.maximumRememberedWatchStopKeys {
+            dispatchedWatchStopKeys.removeFirst()
+        }
+        watchOwnedTakeIdentityStorage = nil
+        watchStopLock.unlock()
+
+        let requestedAt = Date()
+        let inFlight = CaptureWatchStopDiagnostics(
+            outcome: .sent,
+            sessionID: identity.sessionID,
+            takeID: identity.takeID,
+            detail: reason.map { "Stop dispatched for \($0.rawValue) stop." },
+            requestedAt: requestedAt,
+            attemptCount: 1,
+            motionTransferState: .pending
+        )
+        persistWatchStopDiagnostics(inFlight, for: identity)
+
+        guard let handler = watchStopRequestHandler else {
+            persistWatchStopDiagnostics(
+                CaptureWatchStopDiagnostics(
+                    outcome: .unreachable,
+                    sessionID: identity.sessionID,
+                    takeID: identity.takeID,
+                    detail: "No companion relay is connected, so the watch could not be told to stop.",
+                    requestedAt: requestedAt,
+                    resolvedAt: Date(),
+                    attemptCount: 0,
+                    motionTransferState: .pending
+                ),
+                for: identity
+            )
+            return identity
+        }
+
+        Task { [weak self] in
+            let reply = await handler(identity)
+            guard let self else { return }
+            let outcome = CaptureWatchStopPolicy.outcome(for: reply)
+            self.persistWatchStopDiagnostics(
+                CaptureWatchStopDiagnostics(
+                    outcome: outcome,
+                    sessionID: identity.sessionID,
+                    takeID: identity.takeID,
+                    commandID: reply.commandID,
+                    detail: reply.detail,
+                    requestedAt: requestedAt,
+                    // When this Mac finished with the command, always — a
+                    // timeout resolves here too, and dating that from the
+                    // Watch's clock would hide how long the wait actually was.
+                    resolvedAt: Date(),
+                    watchHandledAt: reply.acknowledgedAt,
+                    relayReceivedAt: reply.relayReceivedAt,
+                    attemptCount: 1,
+                    motionTransferState: outcome.isStopConfirmed ? .pending : .notApplicable
+                ),
+                for: identity
+            )
+            if outcome.isDegraded {
+                await MainActor.run {
+                    self.routineRecordingStatus = reply.detail
+                        ?? "The Apple Watch did not confirm it stopped recording for this take."
+                }
+            }
+        }
+        return identity
+    }
+
+    /// Merges a stop outcome into the take's sidecar on disk.
+    ///
+    /// Always re-reads the current file first and only writes the
+    /// stop-diagnostics field, so a Watch association that landed in the
+    /// meantime — the write-back race closed by
+    /// `mergingLatestWatchAssociation` — is preserved rather than clobbered.
+    private func persistWatchStopDiagnostics(
+        _ diagnostics: CaptureWatchStopDiagnostics,
+        for identity: TakeIdentity
+    ) {
+        guard let sidecarURL = routineSidecarURL(for: identity),
+              let data = try? Data(contentsOf: sidecarURL),
+              let onDisk = try? Self.routineSidecarDecoder.decode(
+                  CaptureCore.LocalRecordingSidecar.self,
+                  from: data
+              ),
+              onDisk.sessionID == identity.sessionID,
+              onDisk.takeID == identity.takeID else {
+            return
+        }
+
+        var updated = onDisk.withWatchStopDiagnostics(diagnostics)
+        // A link already present means the motion artifact arrived; say so
+        // rather than leaving the transfer state stuck at `pending`.
+        if onDisk.linkedMotionFileName != nil, var refined = updated.watchStopDiagnostics {
+            refined = CaptureWatchStopDiagnostics(
+                outcome: refined.outcome,
+                sessionID: refined.sessionID,
+                takeID: refined.takeID,
+                commandID: refined.commandID,
+                detail: refined.detail,
+                requestedAt: refined.requestedAt,
+                resolvedAt: refined.resolvedAt,
+                watchHandledAt: refined.watchHandledAt,
+                relayReceivedAt: refined.relayReceivedAt,
+                attemptCount: refined.attemptCount,
+                motionTransferState: .completed
+            )
+            updated.watchStopDiagnostics = refined
+        }
+
+        try? writeRoutineRecordingSidecar(updated, to: sidecarURL)
+        if activeRoutineRecordingSidecarURL == sidecarURL {
+            activeRoutineRecordingSidecar = updated
+        }
+    }
+
+    /// Locates the on-disk sidecar for a take, preferring the active one.
+    private func routineSidecarURL(for identity: TakeIdentity) -> URL? {
+        if let activeURL = activeRoutineRecordingSidecarURL,
+           activeRoutineRecordingSidecar?.sessionID == identity.sessionID,
+           activeRoutineRecordingSidecar?.takeID == identity.takeID {
+            return activeURL
+        }
+        guard let directory = try? recordingsDirectoryURL(),
+              let entries = try? FileManager.default.contentsOfDirectory(
+                  at: directory,
+                  includingPropertiesForKeys: nil,
+                  options: [.skipsHiddenFiles]
+              ) else {
+            return nil
+        }
+        return entries
+            .filter { $0.pathExtension.lowercased() == "json" }
+            .first { url in
+                guard let data = try? Data(contentsOf: url),
+                      let sidecar = try? Self.routineSidecarDecoder.decode(
+                          CaptureCore.LocalRecordingSidecar.self,
+                          from: data
+                      ) else { return false }
+                return sidecar.sessionID == identity.sessionID && sidecar.takeID == identity.takeID
+            }
+    }
+
+    @MainActor
+    func recordWatchRelayInterruption(_ interruption: WatchRelayInterruption) {
+        guard let context = interruption.context else { return }
+        if var sidecar = activeRoutineRecordingSidecar,
+           sidecar.sessionID == context.sessionID,
+           sidecar.takeID == context.takeID,
+           let sidecarURL = activeRoutineRecordingSidecarURL {
+            sidecar = sidecar.withWatchRelayInterruption(
+                interruption.detail,
+                recordedAt: interruption.occurredAt
+            )
+            do {
+                try writeRoutineRecordingSidecar(sidecar, to: sidecarURL)
+                activeRoutineRecordingSidecar = sidecar
+            } catch {
+                reportRoutineRecordingIssue("Watch relay interruption could not be saved to the take diagnostics.")
+            }
+            return
+        }
+
+        guard pendingRoutineTakeIdentity?.sessionID == context.sessionID,
+              pendingRoutineTakeIdentity?.takeID == context.takeID else { return }
+        pendingWatchReply = WatchCaptureControlReply(
+            commandID: pendingWatchReply?.commandID ?? "watch-relay-interruption",
+            sessionID: context.sessionID,
+            takeID: context.takeID,
+            syncState: .failed,
+            detail: interruption.detail,
+            acknowledgedAt: interruption.occurredAt
+        )
     }
 
     @MainActor
     func cancelPendingRoutineReservation() -> TakeIdentity? {
         let pendingIdentity = pendingRoutineTakeIdentity
+        // A cancelled count-in still leaves an acknowledged Watch capture
+        // running. Stop it before the reservation is dropped, or nothing else
+        // ever will.
+        requestWatchStopIfNeeded(reason: .interrupted)
         pendingRoutineTakeIdentity = nil
         pendingWatchReply = nil
         return pendingIdentity
@@ -3331,6 +4039,72 @@ final class MacCaptureEngine: NSObject, ObservableObject {
     }
 
     private let sessionQueue = DispatchQueue(label: "scratchlab.mac.capture.session")
+
+    /// A per-layer lifetime handle, using the SAME queue as configuration,
+    /// start and stop. It owns no view and cannot drive the capture lifecycle.
+    func makePreviewAttachment(for layer: AVCaptureVideoPreviewLayer) -> PreviewAttachment {
+        PreviewAttachment(session: captureSession, sessionQueue: sessionQueue, layer: layer)
+    }
+
+    final class PreviewAttachment: @unchecked Sendable {
+        typealias AssignSession = @Sendable (AVCaptureVideoPreviewLayer, AVCaptureSession?) -> Void
+
+        private let session: AVCaptureSession
+        private let sessionQueue: DispatchQueue
+        private let layer: AVCaptureVideoPreviewLayer
+        private let assignSession: AssignSession
+        // Only request metadata crosses queues. Never hold this per-handle
+        // lock during AVFoundation work, dispatch, or a callback to main.
+        private let requestLock = NSLock()
+        private var generation: UInt64 = 0
+        private var requestedAttachment = false
+
+        init(
+            session: AVCaptureSession,
+            sessionQueue: DispatchQueue,
+            layer: AVCaptureVideoPreviewLayer,
+            assignSession: @escaping AssignSession = { layer, session in
+                guard layer.session !== session else { return }
+                layer.session = session
+            }
+        ) {
+            self.session = session
+            self.sessionQueue = sessionQueue
+            self.layer = layer
+            self.assignSession = assignSession
+        }
+
+        /// Main requests only; AVFoundation association belongs to sessionQueue.
+        /// A request already executing finishes before the next queued request;
+        /// superseded requests that have not started never touch the session.
+        @MainActor
+        func setAttached(_ attached: Bool) {
+            let request: UInt64? = requestLock.withLock {
+                guard requestedAttachment != attached else { return nil }
+                requestedAttachment = attached
+                generation &+= 1
+                return generation
+            }
+            guard let request else { return }
+            sessionQueue.async { [self] in
+                guard requestLock.withLock({ generation == request }) else { return }
+                assignSession(layer, attached ? session : nil)
+            }
+        }
+
+        deinit {
+            // Also covers view destruction without SwiftUI dismantling. The
+            // queued closure retains the layer, not this handle or its view.
+            // Last release cannot synchronously remove a preview on main while
+            // AVFoundation holds its session lock on sessionQueue.
+            let layer = layer
+            let assignSession = assignSession
+            sessionQueue.async {
+                assignSession(layer, nil)
+            }
+        }
+    }
+
     private let videoQueue = DispatchQueue(label: "scratchlab.mac.capture.video")
     private let audioQueue = DispatchQueue(label: "scratchlab.mac.capture.audio")
     private let performerMonitorDemandQueue = DispatchQueue(label: "scratchlab.mac.capture.performer-demand")
@@ -3339,6 +4113,9 @@ final class MacCaptureEngine: NSObject, ObservableObject {
     /// on the main queue) so the main queue / MainActor is never blocked waiting
     /// for the admitted `@MainActor` builder tasks.
     private let finalizationQueue = DispatchQueue(label: "scratchlab.mac.capture.finalize")
+    /// Durable, per-generation start/stop/finalization correlation for clients
+    /// that must wait for one exact take rather than sample transient UI state.
+    private let routineRecordingBoundaryLedger = RoutineRecordingBoundaryLedger()
     private let handPoseRequest = VNDetectHumanHandPoseRequest()
     private let scratchDetector = MacScratchDetector()
     private let rigLayoutDetector = DJRigLayoutDetector()
@@ -3535,6 +4312,307 @@ final class MacCaptureEngine: NSObject, ObservableObject {
     /// Host-time anchor captured at recording start, used to produce
     /// take-relative trace timestamps.
     private var movementTraceRecordingStartHostTime: Double = 0
+    #endif
+
+    /// Single confirmed media-start epoch for the active routine take.
+    ///
+    /// `AVCaptureMovieFileOutput.startRecording(to:)` returns long before the
+    /// first sample buffer is written — on a cold camera the gap is close to a
+    /// second. Anchoring the take timeline at the *request* therefore offsets
+    /// every movement, platter, and MIDI event from the media by that gap, and
+    /// makes the "recording duration" include camera and writer startup. This
+    /// is stamped once, in `didStartRecordingTo`, and every take-relative clock
+    /// is rebased onto it.
+    private let routineMediaEpochLock = NSLock()
+    private var routineMediaStartHostTimeStorage: CFTimeInterval = 0
+    /// Longest the active take may run. A safety cap unless the operator chose
+    /// a duration, in which case it is that duration.
+    private var routineMaximumTakeDurationSecondsStorage = RoutineCaptureDefaults.defaultMaximumTakeDurationSeconds
+    /// The operator's explicitly chosen take duration, or `nil` for an
+    /// open-ended take. Decides whether reaching the bound is
+    /// `plannedDurationReached` or `mediaLimit`.
+    private var routinePlannedTakeDurationSecondsStorage: Double?
+    /// Why the active take is ending, recorded at the stop call site so
+    /// finalization does not have to guess.
+    private var routineStopReasonStorage: CaptureStopReason?
+    private var routineTimedStopWorkItem: DispatchWorkItem?
+
+    /// Wall-clock slack allowed past the requested length before the backstop
+    /// stop fires. `AVCaptureMovieFileOutput.maxRecordedDuration` is the primary
+    /// bound and is measured in recorded media time, so it should always win.
+    private static let routineTimedStopGraceSeconds: Double = 0.75
+
+    /// Confirmed media-start epoch, or 0 when no take is being written.
+    var routineMediaStartHostTime: CFTimeInterval {
+        routineMediaEpochLock.lock()
+        defer { routineMediaEpochLock.unlock() }
+        return routineMediaStartHostTimeStorage
+    }
+
+    /// Longest the active take may run, in seconds.
+    var routineMaximumTakeDurationSeconds: Double {
+        routineMediaEpochLock.lock()
+        defer { routineMediaEpochLock.unlock() }
+        return routineMaximumTakeDurationSecondsStorage
+    }
+
+    /// Operator-selected take duration for the active take, or `nil` when the
+    /// take is open-ended.
+    var routinePlannedTakeDurationSeconds: Double? {
+        routineMediaEpochLock.lock()
+        defer { routineMediaEpochLock.unlock() }
+        return routinePlannedTakeDurationSecondsStorage
+    }
+
+    private func armRoutineTakeDuration(
+        maximumSeconds: Double,
+        plannedSeconds: Double?
+    ) {
+        routineMediaEpochLock.lock()
+        routineMaximumTakeDurationSecondsStorage = maximumSeconds
+        routinePlannedTakeDurationSecondsStorage = plannedSeconds
+        routineStopReasonStorage = nil
+        routineMediaStartHostTimeStorage = 0
+        routineMediaEpochLock.unlock()
+    }
+
+    /// Records why the active take is stopping. First reason wins: the site
+    /// that actually initiated the stop is the truthful one, and later
+    /// bookkeeping must not overwrite it.
+    private func noteRoutineStopReason(_ reason: CaptureStopReason) {
+        routineMediaEpochLock.lock()
+        if routineStopReasonStorage == nil {
+            routineStopReasonStorage = reason
+        }
+        routineMediaEpochLock.unlock()
+    }
+
+    /// Resolves the stop reason for a finished take.
+    ///
+    /// AVFoundation's own maximum-duration marker outranks whatever the app
+    /// recorded, because that path ends the take without going through
+    /// `stopRoutineRecording`.
+    private func resolvedRoutineStopReason(
+        captureError: Error?,
+        captureErrorDescription: String?
+    ) -> CaptureStopReason {
+        routineMediaEpochLock.lock()
+        let noted = routineStopReasonStorage
+        let planned = routinePlannedTakeDurationSecondsStorage
+        routineMediaEpochLock.unlock()
+
+        if let nsError = captureError as NSError?,
+           nsError.domain == AVFoundationErrorDomain,
+           nsError.code == AVError.maximumDurationReached.rawValue {
+            return planned == nil ? .mediaLimit : .plannedDurationReached
+        }
+        if captureErrorDescription != nil { return .captureError }
+        return noted ?? .manual
+    }
+
+    /// Stamps the confirmed media-start epoch and returns it together with the
+    /// requested take length.
+    private func beginRoutineMediaEpoch(
+        at hostTime: CFTimeInterval
+    ) -> (mediaStart: CFTimeInterval, maximumDuration: Double) {
+        routineMediaEpochLock.lock()
+        routineMediaStartHostTimeStorage = hostTime
+        let maximum = routineMaximumTakeDurationSecondsStorage
+        routineMediaEpochLock.unlock()
+        return (hostTime, maximum)
+    }
+
+    private func endRoutineMediaEpoch() {
+        routineMediaEpochLock.lock()
+        routineMediaStartHostTimeStorage = 0
+        let pendingStop = routineTimedStopWorkItem
+        routineTimedStopWorkItem = nil
+        routineMediaEpochLock.unlock()
+        pendingStop?.cancel()
+    }
+
+    /// Observe the crossfader's control state at the AUTHORITATIVE media-start
+    /// boundary and hold it for this take's sidecar.
+    ///
+    /// This is the fix for a fader that is simply parked: it emits no MIDI, so
+    /// the take records no crossfader samples and can prove nothing about a
+    /// position the app in fact already knew. Reading the live cache HERE —
+    /// at the same instant every take-relative clock is stamped — and writing
+    /// it as an explicitly-provenanced snapshot removes the need for an
+    /// artificial wiggle after Record without inventing a measurement.
+    ///
+    /// Everything the reading must be correlated against travels with it: the
+    /// exact recording generation, the selected MIDI source, the learned
+    /// channel/CC, the MIDI connection generation and the calibration in
+    /// force. When any of those is missing or does not line up, an explicit
+    /// UNKNOWN record is written instead of a value.
+    ///
+    /// Non-blocking and lock-scoped, exactly like every other call on this
+    /// path: no file I/O, no main-actor hop, no publication.
+    private func captureCrossfaderTakeStartState(
+        token: RoutineRecordingRequestToken?,
+        mediaStartHostTime: CFTimeInterval
+    ) {
+        let identity = activeRoutineRecordingSidecar.map {
+            (sessionID: $0.sessionID, takeID: $0.takeID)
+        }
+        midiCaptureLock.lock()
+        let mapping = persistedCrossfaderMapping
+        let connectionGeneration = midiConnectionGenerationStorage
+        let observation = mapping.flatMap {
+            latestCCObservationsByAddress[
+                Self.ccObservationKey(channel: $0.channel, controller: $0.controller)
+            ]
+        }
+        midiCaptureLock.unlock()
+
+        let state = Self.crossfaderTakeStartState(
+            sessionID: identity?.sessionID,
+            takeID: identity?.takeID,
+            takeGeneration: token?.generation,
+            midiSourceID: selectedMIDIInputSourceID,
+            connectionGeneration: connectionGeneration,
+            mapping: mapping,
+            observation: observation,
+            mediaStartHostTime: mediaStartHostTime
+        )
+        midiCaptureLock.lock()
+        activeRoutineCrossfaderTakeStartState = state
+        midiCaptureLock.unlock()
+    }
+
+    /// Pure classification of one live observation into a take-start control
+    /// state. Separated from the engine so every rejection edge is testable
+    /// with no Core MIDI, no camera and no capture session.
+    static func crossfaderTakeStartState(
+        sessionID: String?,
+        takeID: String?,
+        takeGeneration: UInt64?,
+        midiSourceID: String,
+        connectionGeneration: UInt64,
+        mapping: CrossfaderCCMapping?,
+        observation: LiveCCObservation?,
+        mediaStartHostTime: CFTimeInterval
+    ) -> CaptureCore.CrossfaderTakeStartState {
+        let sessionID = sessionID ?? ""
+        let takeID = takeID ?? ""
+        func unknown(_ reason: String) -> CaptureCore.CrossfaderTakeStartState {
+            .unknown(
+                sessionID: sessionID,
+                takeID: takeID,
+                takeGeneration: takeGeneration,
+                reason: reason
+            )
+        }
+        guard !sessionID.isEmpty, !takeID.isEmpty else {
+            return unknown("no take identity was available at the media-start boundary")
+        }
+        guard !midiSourceID.isEmpty else {
+            return unknown("no MIDI input source was selected")
+        }
+        guard let mapping else {
+            return unknown("no learned crossfader MIDI mapping exists")
+        }
+        guard let observation else {
+            return unknown("no crossfader message has been received on Ch\(mapping.channel + 1) CC\(mapping.controller) in this session")
+        }
+        guard observation.channel == mapping.channel,
+              observation.controller == mapping.controller else {
+            return unknown("the cached observation is not on the learned crossfader address")
+        }
+        guard observation.connectionGeneration == connectionGeneration else {
+            return unknown("the cached observation predates the current MIDI device connection")
+        }
+        let observedTakeRelativeTime = observation.observedAt - mediaStartHostTime
+        guard observedTakeRelativeTime.isFinite, observedTakeRelativeTime < 0 else {
+            // The message landed at or after media start, so it is a real
+            // in-take packet and belongs to the take's own MIDI stream. It is
+            // deliberately not duplicated here as a pre-take snapshot.
+            return unknown("an in-take crossfader message already establishes this take's start")
+        }
+        return CaptureCore.CrossfaderTakeStartState(
+            provenance: .preTakeSnapshot,
+            sessionID: sessionID,
+            takeID: takeID,
+            takeGeneration: takeGeneration,
+            midiSourceID: midiSourceID,
+            deviceName: observation.deviceName,
+            midiConnectionGeneration: connectionGeneration,
+            channel: observation.channel,
+            controller: observation.controller,
+            rawValue: observation.value,
+            calibratedPosition: observation.calibratedPosition,
+            calibrationID: observation.calibrationID,
+            observationSequence: observation.eventCount,
+            observedTakeRelativeTime: observedTakeRelativeTime,
+            unknownReason: nil
+        )
+    }
+
+    /// Take the take-start control state observed for the current take, if any.
+    private func takeCrossfaderTakeStartState() -> CaptureCore.CrossfaderTakeStartState? {
+        midiCaptureLock.lock()
+        defer {
+            activeRoutineCrossfaderTakeStartState = nil
+            midiCaptureLock.unlock()
+        }
+        return activeRoutineCrossfaderTakeStartState
+    }
+
+    /// Rebases every take-relative clock onto the confirmed media-start epoch
+    /// and schedules the backstop stop. Called from `didStartRecordingTo` only.
+    private func beginRoutineTakeTimelines(
+        at mediaStartHostTime: CFTimeInterval,
+        token: RoutineRecordingRequestToken? = nil,
+        midiTakeToken: MIDICaptureTakeToken?
+    ) {
+        beginMIDIRecordingWindow(at: mediaStartHostTime, token: midiTakeToken)
+        captureCrossfaderTakeStartState(
+            token: token,
+            mediaStartHostTime: mediaStartHostTime
+        )
+
+        platterRecorderLock.lock()
+        platterRecordingStartTime = mediaStartHostTime
+        platterPositionRecorder.startRecording(at: 0)
+        platterRecorderLock.unlock()
+
+        activeRoutineDetectedNotationBuilder?.rebaseEpoch(to: mediaStartHostTime)
+
+        #if DEBUG
+        movementTraceRecordingStartHostTime = mediaStartHostTime
+        movementTraceRecorder.startRecording(at: mediaStartHostTime)
+        #endif
+    }
+
+    /// Backstop for the requested take length, armed only once media is
+    /// confirmed. `maxRecordedDuration` normally ends the take first; this
+    /// covers the case where AVFoundation never reaches that bound.
+    private func scheduleRoutineTimedStop(
+        mediaStartHostTime: CFTimeInterval,
+        maximumDurationSeconds: Double
+    ) {
+        let deadline = RoutineTakeTimeline.stopDelaySeconds(
+            requestedDurationSeconds: maximumDurationSeconds,
+            graceSeconds: Self.routineTimedStopGraceSeconds
+        )
+        let workItem = DispatchWorkItem { [weak self] in
+            guard let self else { return }
+            guard self.routineMediaStartHostTime == mediaStartHostTime else { return }
+            guard self.movieOutput.isRecording else { return }
+            // Reaching the bound is a planned stop only when the operator
+            // actually chose the duration; otherwise it is the safety cap.
+            self.stopRoutineRecording(
+                reason: self.routinePlannedTakeDurationSeconds == nil ? .mediaLimit : .plannedDurationReached
+            )
+        }
+        routineMediaEpochLock.lock()
+        routineTimedStopWorkItem?.cancel()
+        routineTimedStopWorkItem = workItem
+        routineMediaEpochLock.unlock()
+        sessionQueue.asyncAfter(deadline: .now() + deadline, execute: workItem)
+    }
+    #if DEBUG
     /// Frozen at take finalization; drained by the export companion writer so a
     /// later take cannot overwrite the trace/diagnostics of an earlier one.
     private(set) var lastMovementTraceExport: MovementTraceExport?
@@ -3557,6 +4635,15 @@ final class MacCaptureEngine: NSObject, ObservableObject {
     private var debugObserveSkippedNotRecording = 0
     private var debugObserveAttempted = 0
     private var debugMidiEventsCapturedThisTake = 0
+    /// Packets dropped at the append site because the accumulation window they
+    /// were admitted under had already been retired.
+    private var debugMidiEventsRejectedAsStale = 0
+    /// Deterministic interleaving seam, invoked BETWEEN a packet taking its
+    /// window ticket and appending under that ticket, with `midiCaptureLock`
+    /// NOT held. Tests block here to run a window transition on another thread;
+    /// nil, and therefore free, in every other build. Read under the lock, then
+    /// called outside it.
+    private var testOnly_midiAppendInterleavingHook: ((MIDICaptureWindowTicket) -> Void)?
     private var debugLastROI: CGRect = .zero
     private var debugJointsRelaxedAccepted = 0
     private var debugContinuityFilledSamples = 0
@@ -3576,6 +4663,7 @@ final class MacCaptureEngine: NSObject, ObservableObject {
     var recordingSessionConfig: CaptureSessionConfig?
     private var activeRoutineRecordingSidecar: CaptureCore.LocalRecordingSidecar?
     private var activeRoutineRecordingSidecarURL: URL?
+    private var pendingRoutineOutputAudioURL: URL?
     private var activeRoutineAudioCaptureWriter: RoutineAudioCaptureWriter?
     private var activeRoutineAudioNotationDetector: ScratchAudioNotationDetector?
     private var activeRoutineDetectedNotationBuilder: RoutineDetectedNotationBuilder?
@@ -3584,8 +4672,112 @@ final class MacCaptureEngine: NSObject, ObservableObject {
     private var midiSourceEndpoints: [MIDIInputSourceChoice: MIDIEndpointRef] = [:]
     private var capturedMidiCCEvents: [CaptureCore.RawMixerMIDIEvent] = []
     private let midiCaptureLock = NSLock()
+    /// Media-start host time of the CURRENT accumulation window, or 0 while
+    /// that window admits nothing. Guarded by `midiCaptureLock`; only ever
+    /// written through `lockedSetMIDICaptureWindow`, so it
+    /// can never change without the window generation changing with it.
     private var midiRecordingStartTime: CFTimeInterval = 0
+
+    /// Who owns the `capturedMidiCCEvents` accumulation window.
+    ///
+    /// This is the ONE authority. It is not derived from `isRoutineRecording`
+    /// or `isRoutineFinalizationPending`: both of those are `@Published` flags
+    /// written asynchronously on the MainActor, so neither is ordered against
+    /// the session queue that arms a take, against the finalization queue that
+    /// drains one, or against the Core MIDI read thread that appends to the
+    /// buffer. Ownership is read and written only under `midiCaptureLock`.
+    enum MIDICaptureWindowOwner: String, Equatable {
+        /// Nobody owns the buffer; it is empty and a preview may claim it.
+        case idle
+        /// The pre-record live preview owns it. Only preview windows are
+        /// subject to trailing retention.
+        case preview
+        /// A capture take owns it, from record arming until the finalization
+        /// drain (or an abandonment release) has run. A STOPPED take still
+        /// owns it: stopping closes the take's admission epoch, it does not
+        /// release the evidence.
+        case take
+    }
+
+    /// Identity of ONE armed take's claim on the MIDI accumulation window.
+    ///
+    /// Minted per arming, so "release this take's window" is a statement about
+    /// a specific take rather than about whatever happens to own the window
+    /// now. Without it, a failed start could release a previous, stopped,
+    /// still-undrained take, and a duplicated finalization could release a
+    /// take that had already been drained.
+    struct MIDICaptureTakeToken: Hashable {
+        let value: UInt64
+        // Immutable callback identity; never persisted or exported.
+        let mediaURL: URL?
+
+        init(value: UInt64, mediaURL: URL? = nil) {
+            self.value = value
+            self.mediaURL = mediaURL
+        }
+    }
+
+    /// Identity of exactly one accumulation window, snapshotted under
+    /// `midiCaptureLock`.
+    ///
+    /// `generation` changes on EVERY ownership or epoch change, so two tickets
+    /// with the same generation necessarily describe the same window with the
+    /// same owner, the same epoch and the same take token. That makes a
+    /// generation comparison the whole staleness test at the append site.
+    struct MIDICaptureWindowTicket: Equatable {
+        let owner: MIDICaptureWindowOwner
+        let generation: UInt64
+        /// Media-start host time, or 0 while the window admits nothing.
+        /// An epoch of 0 rejects every packet.
+        let epochStartHostTime: CFTimeInterval
+        /// Non-nil exactly while `owner == .take`.
+        let takeToken: MIDICaptureTakeToken?
+    }
+
+    /// Guarded by `midiCaptureLock`.
+    private var midiWindowOwnerStorage: MIDICaptureWindowOwner = .idle
+    /// Guarded by `midiCaptureLock`. Monotonic; never wraps.
+    private var midiWindowGenerationStorage: UInt64 = 0
+    /// Guarded by `midiCaptureLock`. Non-nil exactly while a take owns the
+    /// window.
+    private var midiWindowTakeTokenStorage: MIDICaptureTakeToken?
+    /// Guarded by `midiCaptureLock`. Running minimum/maximum of the timestamps
+    /// currently held in `capturedMidiCCEvents`.
+    ///
+    /// Tracked explicitly because MIDI timestamps are NOT guaranteed to be
+    /// ordered: packets can carry host times that arrive out of order, so
+    /// neither the first nor the last array element is reliably the oldest or
+    /// the newest. Both are maintained in O(1) per append and recomputed only
+    /// when a trim actually runs.
+    private var livePreviewOldestTimestamp: Double?
+    private var livePreviewNewestTimestamp: Double?
     private var midiConnectedSourceName: String = ""
+    /// Monotonic identity of the MIDI input DEVICE SESSION this process is
+    /// currently reading from.
+    ///
+    /// It is what lets a later consumer tell "this reading came from the
+    /// device session that is still open" from "this reading came from a
+    /// device that has since been unplugged and replugged", which a bare
+    /// cached value cannot.
+    ///
+    /// Deliberately NOT a count of `MIDIPortConnectSource` calls. Recording
+    /// start closes and reopens the input port on purpose
+    /// (`openMIDIInputForRecording`), and so does finalization; both target
+    /// the same endpoint and change nothing a reading was correlated
+    /// against. Counting them retired an operator's parked-fader observation
+    /// captured seconds earlier, which is the whole reason a pre-take
+    /// snapshot exists. See `nextMIDIConnectionGeneration` for the exact
+    /// advance rule — it fails closed on every case that is not a
+    /// same-endpoint reconnect. Guarded by `midiCaptureLock`, like every
+    /// other field the Core MIDI read thread touches.
+    private var midiConnectionGenerationStorage: UInt64 = 0
+    /// The endpoint `midiConnectionGenerationStorage` currently identifies,
+    /// or `nil` when no input is connected. Guarded by `midiCaptureLock`.
+    private var midiConnectionEndpointIdentityStorage: MIDIConnectionEndpointIdentity?
+    /// The crossfader control state observed at the CURRENT take's media-start
+    /// boundary, awaiting the sidecar write at finalization. Cleared with the
+    /// rest of the per-take state. Guarded by `midiCaptureLock`.
+    private var activeRoutineCrossfaderTakeStartState: CaptureCore.CrossfaderTakeStartState?
     /// MIDI monitor UI-publish throttle: all incoming MIDI CC events are
     /// still captured at full fidelity; only the @Published SwiftUI
     /// monitor properties below are rate-limited to ~4 Hz so the main
@@ -3619,12 +4811,25 @@ final class MacCaptureEngine: NSObject, ObservableObject {
     /// applies. Lock-protected alongside `learnSessionAction`.
     private var midiLearnRequestID: UInt64 = 0
     private var persistedCrossfaderMapping: CrossfaderCCMapping? = nil
+    /// Calibrations cached for the MIDI read thread. Guarded by
+    /// `midiCaptureLock`, refreshed only by `reloadCrossfaderCalibrations()`.
+    private var cachedCrossfaderCalibrations: [CrossfaderCalibration] = []
+    /// Test seam: redirects calibration persistence to a temporary directory.
+    var crossfaderCalibrationDirectoryOverride: URL? = nil
     private var pendingRoutineTakeIdentity: TakeIdentity?
     private var pendingWatchReply: WatchCaptureControlReply?
     private var routineArtifactRefreshTask: Task<Void, Never>?
     private var fixedRigLayout: DJRigLayout?
     private var fixedRigLayoutUsesManualGuide = false
     private let autoRefreshDevicesAfterViewMount: Bool
+    /// Keeps hosted XCTest processes from overwriting the real app's selected
+    /// controller with synthetic `midi_test_*` identifiers. Production uses
+    /// `.standard`; tests get a process-local suite while retaining normal
+    /// persistence semantics between engine instances in the same test run.
+    private let midiSelectionDefaults: UserDefaults
+    /// Keeps the legacy crossfader mapping on the production app domain unless
+    /// a caller explicitly injects a fully isolated MIDI defaults store.
+    private let midiPersistenceDefaults: UserDefaults
     private var hasStartedDeviceDiscoveryAfterViewMount = false
     private let audioSignalStaleInterval: CFTimeInterval = 0.8
     private let audioSignalDecayPollInterval: CFTimeInterval = 0.25
@@ -3644,18 +4849,87 @@ final class MacCaptureEngine: NSObject, ObservableObject {
     }()
 
     override init() {
+        let midiSelectionDefaults = Self.makeMIDISelectionDefaults()
+        let audioOwnershipMode = ScratchAudioOwnershipMode.load(from: .standard)
         autoRefreshDevicesAfterViewMount = true
+        self.midiSelectionDefaults = midiSelectionDefaults
+        midiPersistenceDefaults = .standard
+        scratchPlaybackController = ScratchSamplePlaybackController()
+        scratchAudioOwnershipMode = audioOwnershipMode
+        audioOwnershipModeStorage = audioOwnershipMode
+        selectedMIDIInputSourceID = midiSelectionDefaults.string(
+            forKey: ScratchLabDesktopDefaultsKey.selectedMIDIInputSourceID
+        ) ?? ""
         super.init()
         configureInitialState()
     }
 
-    init(autoRefreshDevices: Bool) {
+    init(
+        autoRefreshDevices: Bool,
+        midiDefaults: UserDefaults? = nil,
+        sampleResourceRoot: URL? = Bundle.main.resourceURL
+    ) {
+        let midiSelectionDefaults = midiDefaults ?? Self.makeMIDISelectionDefaults()
+        let audioOwnershipMode = ScratchAudioOwnershipMode.load(from: midiDefaults ?? .standard)
         autoRefreshDevicesAfterViewMount = autoRefreshDevices
+        self.midiSelectionDefaults = midiSelectionDefaults
+        midiPersistenceDefaults = midiDefaults ?? .standard
+        scratchPlaybackController = ScratchSamplePlaybackController(
+            sampleResourceRoot: sampleResourceRoot
+        )
+        scratchAudioOwnershipMode = audioOwnershipMode
+        audioOwnershipModeStorage = audioOwnershipMode
+        selectedMIDIInputSourceID = midiSelectionDefaults.string(
+            forKey: ScratchLabDesktopDefaultsKey.selectedMIDIInputSourceID
+        ) ?? ""
         super.init()
         configureInitialState()
+    }
+
+    private static func makeMIDISelectionDefaults(
+        processInfo: ProcessInfo = .processInfo
+    ) -> UserDefaults {
+        guard processInfo.environment["XCTestConfigurationFilePath"] != nil,
+              let isolatedDefaults = UserDefaults(
+                suiteName: "com.machelpnz.scratchlab.tests.midi-selection.\(processInfo.processIdentifier)"
+              ) else {
+            return .standard
+        }
+        return isolatedDefaults
+    }
+
+    func setScratchAudioOwnershipMode(_ mode: ScratchAudioOwnershipMode) {
+        audioOwnershipLock.lock()
+        audioOwnershipModeStorage = mode
+        audioOwnershipLock.unlock()
+        mode.persist(to: midiPersistenceDefaults)
+        if !mode.allowsLocalScratchPlayback {
+            scratchPlaybackController.unload()
+            scratchPlaybackController.waitForAudioQueue()
+        }
+        publishOnMainAsync(field: "scratchAudioOwnershipMode") { [weak self] in
+            guard let self else { return }
+            self.scratchAudioOwnershipMode = mode
+            self.platterTestLoadStatus = mode.allowsLocalScratchPlayback
+                ? "Standalone audio enabled — load AHHH to arm the platter."
+                : mode.detail
+        }
     }
 
     private func configureInitialState() {
+        scratchPlaybackController.routineOutputLevelHandler = { [weak self] level in
+            Task { @MainActor in
+                guard let self else { return }
+                self.onboardOutputLevel = level
+                if self.isRoutineRecording {
+                    self.onboardOutputCaptureStatus = level >= 0.98
+                        ? "Onboard output is clipping. Reduce ScratchLab output level."
+                        : level > 0.001
+                            ? "Recording ScratchLab's onboard AHHH output."
+                            : "Recording is armed, but onboard AHHH is currently silent."
+                }
+            }
+        }
         handPoseRequest.maximumHandCount = 1
         videoOutput.alwaysDiscardsLateVideoFrames = true
         videoOutput.setSampleBufferDelegate(self, queue: videoQueue)
@@ -3702,7 +4976,7 @@ final class MacCaptureEngine: NSObject, ObservableObject {
             object: nil
         )
 
-        if let data = UserDefaults.standard.data(forKey: ScratchLabDesktopDefaultsKey.crossfaderMIDIMapping),
+        if let data = midiPersistenceDefaults.data(forKey: ScratchLabDesktopDefaultsKey.crossfaderMIDIMapping),
            let mapping = try? JSONDecoder().decode(CrossfaderCCMapping.self, from: data) {
             crossfaderCCMapping = mapping
             midiLearnState = .learned(mapping)
@@ -3729,6 +5003,11 @@ final class MacCaptureEngine: NSObject, ObservableObject {
             }
         }
 
+        // Load calibrations into the MIDI-thread cache before any controller
+        // traffic can arrive, so the first sample of the first take is already
+        // calibrated rather than silently uncalibrated.
+        reloadCrossfaderCalibrations()
+
         rescanRoutineCaptures()
         refreshDevices()
     }
@@ -3745,12 +5024,24 @@ final class MacCaptureEngine: NSObject, ObservableObject {
         if midiClient != 0 { MIDIClientDispose(midiClient) }
     }
 
+#if DEBUG
+    /// Replaces hardware discovery, permission requests and playback polling
+    /// in deterministic tests. The real per-engine start guard still runs.
+    var liveInputStartupOverride: (() -> Void)?
+#endif
+
     func start() {
         guard !isRunning else { return }
         isRunning = true
         isCameraActive = true
         isRoutineCaptureReady = false
         resetAudioSignalLevel()
+#if DEBUG
+        if let liveInputStartupOverride {
+            liveInputStartupOverride()
+            return
+        }
+#endif
         refreshDevices()
         requestPermissionsAndConfigure()
         startPlaybackPositionPoll()
@@ -3761,6 +5052,7 @@ final class MacCaptureEngine: NSObject, ObservableObject {
         playbackPositionPollTimer?.cancel()
         playbackPositionPollTimer = nil
         playbackPositionSnapshot = nil
+        playbackWaveformSnapshot = nil
         isCameraActive = false
         isRoutineCaptureReady = false
         activeCaptureAudioDeviceUniqueID = ""
@@ -4041,7 +5333,33 @@ final class MacCaptureEngine: NSObject, ObservableObject {
     }
 
     func toggleRoutineRecording() {
-        isRoutineRecording ? stopRoutineRecording() : startRoutineRecording()
+        if isRoutineRecording {
+            stopRoutineRecording()
+        } else {
+            startRoutineRecording()
+        }
+    }
+
+    /// Read-only, thread-safe lifecycle evidence for one exact recording
+    /// request. This deliberately does not expose the ledger for mutation.
+    func routineRecordingBoundary(
+        for token: RoutineRecordingRequestToken
+    ) -> RoutineRecordingBoundarySnapshot? {
+        routineRecordingBoundaryLedger.snapshot(for: token)
+    }
+
+    /// Correlate a stop with one confirmed recording generation. A stale token
+    /// can never stop a newer take; an already-completed matching generation is
+    /// returned as durable terminal evidence without touching capture state.
+    func requestRoutineRecordingStop(
+        for token: RoutineRecordingRequestToken,
+        reason: CaptureStopReason = .manual
+    ) -> RoutineRecordingStopRequestDisposition {
+        let disposition = routineRecordingBoundaryLedger.requestStop(token: token)
+        if disposition == .accepted {
+            stopRoutineRecording(reason: reason)
+        }
+        return disposition
     }
 
     @MainActor
@@ -4049,10 +5367,55 @@ final class MacCaptureEngine: NSObject, ObservableObject {
         routineRecordingStatus = message
     }
 
-    func startRoutineRecording(captureTiming: CaptureTimingMetadata? = nil) {
+    @discardableResult
+    func startRoutineRecording(
+        captureTiming: CaptureTimingMetadata? = nil
+    ) -> RoutineRecordingRequestToken {
+        let recordingToken = routineRecordingBoundaryLedger.beginRequest()
+        // Refuse before touching any camera, duration, sidecar or audio state.
+        // The prior take may be stopped with neither UI flag published yet.
+        guard midiCaptureWindowTicket.owner != .take else {
+            routineRecordingBoundaryLedger.failStart(
+                token: recordingToken,
+                description: "A previous routine take still owns its MIDI evidence."
+            )
+            return recordingToken
+        }
         // A prior take's asynchronous finalization may still be pending; refuse
         // to start a new take (and re-open the admission gate) until it completes.
-        guard !isRoutineFinalizationPending else { return }
+        guard !isRoutineFinalizationPending else {
+            routineRecordingBoundaryLedger.failStart(
+                token: recordingToken,
+                description: "A previous routine take is still finalizing."
+            )
+            // The watch may already have acknowledged a start for the take this
+            // refusal abandons. Nothing downstream would ever stop it.
+            requestWatchStopIfNeeded(reason: .interrupted)
+            return recordingToken
+        }
+
+        let selectedAudioChoice = availableAudioDevices
+            .first(where: { $0.uniqueID == selectedAudioDeviceUniqueID })
+            .map { Self.audioChoice(from: $0) }
+        let selectedAudioSuitability = selectedAudioChoice.map {
+            Self.audioInputCaptureSuitability(for: $0)
+        }
+        if let config = recordingSessionConfig,
+           Self.shouldBlockRoutineCapture(
+               audioInputSuitability: selectedAudioSuitability,
+               captureMode: config.captureMode,
+               beatEngineMode: config.beatEngineMode
+           ) {
+            routineRecordingBoundaryLedger.failStart(
+                token: recordingToken,
+                description: Self.isolatedCaptureBuiltInMicrophoneMessage
+            )
+            requestWatchStopIfNeeded(reason: .interrupted)
+            Task { @MainActor in
+                self.routineRecordingStatus = Self.isolatedCaptureBuiltInMicrophoneMessage
+            }
+            return recordingToken
+        }
 
         // Reset the shared camera processor (cadence phase, held anchor, and
         // accumulated angle/direction) so a prior take cannot leak into this one.
@@ -4063,6 +5426,20 @@ final class MacCaptureEngine: NSObject, ObservableObject {
         let selectedAudioID = selectedAudioDeviceUniqueID
         let audioDevices = availableAudioDevices
         let videoDevices = availableVideoDevices
+        // Resolved here but consumed only from `didStartRecordingTo`: camera
+        // and writer startup must not eat into the take. The plan and the cap
+        // are tracked apart so a take that runs to the bound can say which one
+        // it hit.
+        let plannedTakeDurationSeconds = RoutineCaptureDefaults.plannedTakeDurationSeconds(
+            for: recordingSessionConfig
+        )
+        let maximumTakeDurationSeconds = RoutineCaptureDefaults.maximumTakeDurationSeconds(
+            for: recordingSessionConfig
+        )
+        armRoutineTakeDuration(
+            maximumSeconds: maximumTakeDurationSeconds,
+            plannedSeconds: plannedTakeDurationSeconds
+        )
 
         Task { @MainActor in
             self.isRoutineRecording = true
@@ -4070,37 +5447,61 @@ final class MacCaptureEngine: NSObject, ObservableObject {
         }
 
         sessionQueue.async {
-            guard !self.movieOutput.isRecording else { return }
+            guard !self.movieOutput.isRecording else {
+                self.routineRecordingBoundaryLedger.failStart(
+                    token: recordingToken,
+                    description: "Another routine take is already recording."
+                )
+                return
+            }
             guard !selectedVideoID.isEmpty else {
+                let message = RoutineRecordingError.missingVideo.errorDescription ?? "Unable to start recording."
+                self.routineRecordingBoundaryLedger.failStart(token: recordingToken, description: message)
+                self.requestWatchStopIfNeeded(reason: .interrupted)
                 Task { @MainActor in
                     self.isRoutineRecording = false
-                    self.routineRecordingStatus = RoutineRecordingError.missingVideo.errorDescription ?? "Unable to start recording."
+                    self.routineRecordingStatus = message
                 }
                 return
             }
             guard !selectedAudioID.isEmpty else {
+                let message = RoutineRecordingError.missingAudio.errorDescription ?? "Unable to start recording."
+                self.routineRecordingBoundaryLedger.failStart(token: recordingToken, description: message)
+                self.requestWatchStopIfNeeded(reason: .interrupted)
                 Task { @MainActor in
                     self.isRoutineRecording = false
-                    self.routineRecordingStatus = RoutineRecordingError.missingAudio.errorDescription ?? "Unable to start recording."
+                    self.routineRecordingStatus = message
                 }
                 return
             }
             guard videoDevices.contains(where: { $0.uniqueID == selectedVideoID }) else {
+                let message = RoutineRecordingError.selectedVideoUnavailable.errorDescription ?? "Unable to start recording."
+                self.routineRecordingBoundaryLedger.failStart(token: recordingToken, description: message)
+                self.requestWatchStopIfNeeded(reason: .interrupted)
                 Task { @MainActor in
                     self.isRoutineRecording = false
-                    self.routineRecordingStatus = RoutineRecordingError.selectedVideoUnavailable.errorDescription ?? "Unable to start recording."
+                    self.routineRecordingStatus = message
                 }
                 return
             }
             guard audioDevices.contains(where: { $0.uniqueID == selectedAudioID }) else {
+                let message = RoutineRecordingError.selectedAudioUnavailable.errorDescription ?? "Unable to start recording."
+                self.routineRecordingBoundaryLedger.failStart(token: recordingToken, description: message)
+                self.requestWatchStopIfNeeded(reason: .interrupted)
                 Task { @MainActor in
                     self.isRoutineRecording = false
-                    self.routineRecordingStatus = RoutineRecordingError.selectedAudioUnavailable.errorDescription ?? "Unable to start recording."
+                    self.routineRecordingStatus = message
                 }
                 return
             }
 
+            var midiTakeToken: MIDICaptureTakeToken?
             do {
+                // A stopped take retains its evidence until its own release.
+                // Refuse before preparing any new sidecar or capture state.
+                guard self.midiCaptureWindowTicket.owner != .take else {
+                    throw RoutineRecordingError.sessionNotReady
+                }
                 if !self.captureSessionHasInput(matching: selectedVideoID, mediaType: .video)
                     || !self.captureSessionHasInput(matching: selectedAudioID, mediaType: .audio) {
                     self.configureCaptureSession(
@@ -4128,6 +5529,11 @@ final class MacCaptureEngine: NSObject, ObservableObject {
                     audioDevices: audioDevices,
                     captureTiming: captureTiming
                 )
+                self.routineRecordingBoundaryLedger.prepare(
+                    token: recordingToken,
+                    takeID: preparedRecording.sidecar.takeID,
+                    mediaURL: preparedRecording.mediaURL
+                )
                 try? CaptureJournalStore.appendTransactionBegan(
                     storageKind: .routine,
                     sessionID: preparedRecording.sidecar.sessionID,
@@ -4146,11 +5552,11 @@ final class MacCaptureEngine: NSObject, ObservableObject {
                 let movementDebugSession = RoutineMovementDebugSession(handPoseInterval: self.routineRecordingHandPoseInterval)
                 self.activeRoutineMovementDebugSession = movementDebugSession
                 self.publishRoutineMovementDiagnostics(movementDebugSession.snapshot())
-                // Arm the per-observation movement trace for this take. Started
-                // here (before movieOutput) so the first observation lands with a
-                // take-relative time near zero; the prior take's trace is dropped.
-                self.movementTraceRecordingStartHostTime = CACurrentMediaTime()
-                self.movementTraceRecorder.startRecording(at: self.movementTraceRecordingStartHostTime)
+                // Clear the prior take's trace. The epoch is deliberately left
+                // at zero until `didStartRecordingTo` re-arms the recorder with
+                // the confirmed media-start host time.
+                self.movementTraceRecordingStartHostTime = 0
+                self.movementTraceRecorder.startRecording(at: 0)
                 self.activeRoutineDetectedNotationBuilder = RoutineDetectedNotationBuilder(
                     debugSession: movementDebugSession,
                     traceRecorder: self.movementTraceRecorder
@@ -4159,25 +5565,32 @@ final class MacCaptureEngine: NSObject, ObservableObject {
                 self.activeRoutineDetectedNotationBuilder = RoutineDetectedNotationBuilder()
                 #endif
                 self.activeRoutineAudioNotationDetector = ScratchAudioNotationDetector()
+                self.pendingRoutineOutputAudioURL = preparedRecording.audioURL
                 self.audioQueue.sync {
-                    self.activeRoutineAudioCaptureWriter = RoutineAudioCaptureWriter(destinationURL: preparedRecording.audioURL)
-                    self.publishRoutineAudioCaptureDiagnostics(self.activeRoutineAudioCaptureWriter?.diagnosticsSnapshot())
+                    self.activeRoutineAudioCaptureWriter = nil
+                    self.publishRoutineAudioCaptureDiagnostics(nil)
                 }
                 Task { @MainActor in
                     self.lastRoutineDetectedNotation = nil
+                    self.onboardOutputLevel = 0
+                    self.onboardOutputCaptureStatus = "Recording is armed, but onboard AHHH is currently silent."
                     self.routineRecordingStatus = "Starting routine recording"
                 }
-                self.openMIDIInputForRecording()
-                // Phase 3.1 — arm the raw-platter recorder just before
-                // movieOutput starts, so the first hand-tracker sample
-                // after this point lands in the buffer with a
-                // take-relative time near zero. The clear+start pair
-                // also discards any stale timeline from a previous
-                // take.
+                // Captured so the catch below can abandon THIS take's window
+                // and no other. Nil until arming actually happened: a throw
+                // before this point must release nothing, or a failed start
+                // would destroy a previous stopped-but-undrained take.
+                midiTakeToken = self.openMIDIInputForRecording(mediaURL: preparedRecording.mediaURL)
+                guard midiTakeToken != nil else { throw RoutineRecordingError.sessionNotReady }
+                // Phase 3.1 — discard any stale timeline from a previous take.
+                // The recorder is deliberately left *disarmed* until
+                // `didStartRecordingTo`: samples observed while the writer is
+                // still starting are not in the media, and `observe(...)`
+                // silently ignores calls outside an active recording.
                 self.platterRecorderLock.lock()
                 self.lastDrainedPlatterPositionTimeline = nil
-                self.platterRecordingStartTime = CACurrentMediaTime()
-                self.platterPositionRecorder.startRecording(at: 0)
+                self.platterRecordingStartTime = 0
+                _ = self.platterPositionRecorder.finishRecording(at: 0)
                 self.platterRecorderLock.unlock()
                 #if DEBUG
                 self.timecodeNotationLock.lock()
@@ -4212,20 +5625,51 @@ final class MacCaptureEngine: NSObject, ObservableObject {
                 // debugLastROI intentionally left alone — it will be
                 // updated on the next analyzed frame.
                 #endif
+                // Measured in recorded media time, so camera/writer startup
+                // cannot consume any of the take. This is the primary take
+                // boundary; the wall-clock backstop armed in
+                // `didStartRecordingTo` only covers the case where AVFoundation
+                // never reaches it.
+                self.movieOutput.maxRecordedDuration = CMTime(
+                    seconds: maximumTakeDurationSeconds,
+                    preferredTimescale: 600
+                )
                 self.movieOutput.startRecording(to: preparedRecording.mediaURL, recordingDelegate: self)
             } catch {
+                self.scratchPlaybackController.cancelRoutineOutputCapture()
+                // Arming may already have seized the MIDI window; this take
+                // will never reach finalization, so nothing would ever drain
+                // it. Hand the window back explicitly or the pre-record
+                // preview stays closed for the rest of the session. Scoped to
+                // this take's own token, so a start that threw before arming
+                // releases nothing and can never abandon another take.
+                if let midiTakeToken {
+                    self.releaseAbandonedTakeMIDIWindow(token: midiTakeToken)
+                }
                 self.reconnectSelectedMIDIInput()
+                self.requestWatchStopIfNeeded(reason: .interrupted)
                 let message = (error as? LocalizedError)?.errorDescription
                     ?? error.localizedDescription
+                self.routineRecordingBoundaryLedger.failStart(
+                    token: recordingToken,
+                    description: message
+                )
                 Task { @MainActor in
                     self.isRoutineRecording = false
                     self.routineRecordingStatus = message
                 }
             }
         }
+        return recordingToken
     }
 
-    func stopRoutineRecording() {
+    func stopRoutineRecording(reason: CaptureStopReason = .manual) {
+        let midiTakeToken = midiCaptureWindowTicket.takeToken
+        noteRoutineStopReason(reason)
+        // Dispatched before the media stop so the Watch is told as early as
+        // possible; it is bounded and asynchronous, so it never delays the
+        // recorder. Idempotent, so finalization asking again costs nothing.
+        requestWatchStopIfNeeded(reason: reason)
         sessionQueue.async {
             guard self.movieOutput.isRecording else {
                 Task { @MainActor in
@@ -4234,6 +5678,7 @@ final class MacCaptureEngine: NSObject, ObservableObject {
                 return
             }
             Task { @MainActor in
+                self.isRoutineRecording = false
                 self.routineRecordingStatus = "Finishing routine recording"
                 if let sidecar = self.activeRoutineRecordingSidecar {
                     self.upsertRoutineTakeArtifactStatus(
@@ -4241,6 +5686,7 @@ final class MacCaptureEngine: NSObject, ObservableObject {
                     )
                 }
             }
+            self.closeMIDIRecordingWindow(token: midiTakeToken)
             self.movieOutput.stopRecording()
         }
     }
@@ -4269,6 +5715,7 @@ final class MacCaptureEngine: NSObject, ObservableObject {
         refreshMIDISources()
 
         refreshAudioInputSelection(using: audioDevices)
+        syncScratchPlaybackOutputRoute(using: audioDevices)
 
         if !videoDevices.contains(where: { $0.uniqueID == selectedVideoDeviceUniqueID }) {
             selectedVideoDeviceUniqueID = videoDevices.first?.uniqueID ?? ""
@@ -4463,6 +5910,34 @@ final class MacCaptureEngine: NSObject, ObservableObject {
         pendingAudioSelectionOrigin = .automatic
     }
 
+    /// Standalone scratch audio must leave through the real Rane interface so
+    /// the controller's hardware signal meters represent the sound ScratchLab
+    /// is producing. Never bind playback to a Serato virtual endpoint. The
+    /// system default remains the fail-safe when no physical Rane is present.
+    private func syncScratchPlaybackOutputRoute(using audioDevices: [AVCaptureDevice]? = nil) {
+        let devices = audioDevices ?? availableAudioDevices
+        let selectedRane = devices.first(where: {
+            $0.uniqueID == selectedAudioDeviceUniqueID
+                && Self.isRaneHardwareDeviceName($0.localizedName)
+        })
+        let raneDevice = selectedRane
+            ?? devices.first(where: { Self.isRaneHardwareDeviceName($0.localizedName) })
+
+        guard let raneDevice,
+              let deviceID = Self.audioDeviceID(forUID: raneDevice.uniqueID) else {
+            scratchPlaybackController.setPreferredOutputDevice(
+                deviceID: nil,
+                deviceName: "System Default"
+            )
+            return
+        }
+
+        scratchPlaybackController.setPreferredOutputDevice(
+            deviceID: deviceID,
+            deviceName: raneDevice.localizedName
+        )
+    }
+
     private func refreshAudioInputSelection(
         using audioDevices: [AVCaptureDevice]? = nil,
         forceReselect: Bool = false
@@ -4499,7 +5974,8 @@ final class MacCaptureEngine: NSObject, ObservableObject {
             explicitSelectionUniqueID: explicitSelectionID,
             previousSelectionUniqueID: currentSelection.isEmpty ? nil : currentSelection,
             systemDefaultUniqueID: defaultSystemAudioInputUniqueID(),
-            skipSeratoPriority: true
+            skipSeratoPriority: true,
+            preferRaneHardware: true
         )
 #else
         decision = Self.preferredCaptureAudioDevice(
@@ -4563,6 +6039,53 @@ final class MacCaptureEngine: NSObject, ObservableObject {
         }
 
         return uid?.takeRetainedValue() as String?
+    }
+
+    private static func audioDeviceID(forUID requestedUID: String) -> AudioDeviceID? {
+        var devicesAddress = AudioObjectPropertyAddress(
+            mSelector: kAudioHardwarePropertyDevices,
+            mScope: kAudioObjectPropertyScopeGlobal,
+            mElement: kAudioObjectPropertyElementMain
+        )
+        var dataSize: UInt32 = 0
+        guard AudioObjectGetPropertyDataSize(
+            AudioObjectID(kAudioObjectSystemObject),
+            &devicesAddress,
+            0,
+            nil,
+            &dataSize
+        ) == noErr else { return nil }
+        let count = Int(dataSize) / MemoryLayout<AudioDeviceID>.size
+        var devices = Array(repeating: AudioDeviceID(0), count: count)
+        guard AudioObjectGetPropertyData(
+            AudioObjectID(kAudioObjectSystemObject),
+            &devicesAddress,
+            0,
+            nil,
+            &dataSize,
+            &devices
+        ) == noErr else { return nil }
+
+        return devices.first { deviceID in
+            var uidAddress = AudioObjectPropertyAddress(
+                mSelector: kAudioDevicePropertyDeviceUID,
+                mScope: kAudioObjectPropertyScopeGlobal,
+                mElement: kAudioObjectPropertyElementMain
+            )
+            var uidSize = UInt32(MemoryLayout<Unmanaged<CFString>?>.size)
+            var uid: Unmanaged<CFString>?
+            let status = withUnsafeMutableBytes(of: &uid) { ptr in
+                AudioObjectGetPropertyData(
+                    deviceID,
+                    &uidAddress,
+                    0,
+                    nil,
+                    &uidSize,
+                    ptr.baseAddress!
+                )
+            }
+            return status == noErr && (uid?.takeRetainedValue() as String?) == requestedUID
+        }
     }
 
 #if ENABLE_TIMECODE_LIVE_TAP
@@ -5049,53 +6572,6 @@ final class MacCaptureEngine: NSObject, ObservableObject {
         )
     }
 
-    private static func audioDeviceID(forUID requestedUID: String) -> AudioDeviceID? {
-        var devicesAddress = AudioObjectPropertyAddress(
-            mSelector: kAudioHardwarePropertyDevices,
-            mScope: kAudioObjectPropertyScopeGlobal,
-            mElement: kAudioObjectPropertyElementMain
-        )
-        var dataSize: UInt32 = 0
-        guard AudioObjectGetPropertyDataSize(
-            AudioObjectID(kAudioObjectSystemObject),
-            &devicesAddress,
-            0,
-            nil,
-            &dataSize
-        ) == noErr else { return nil }
-        let count = Int(dataSize) / MemoryLayout<AudioDeviceID>.size
-        var devices = Array(repeating: AudioDeviceID(0), count: count)
-        guard AudioObjectGetPropertyData(
-            AudioObjectID(kAudioObjectSystemObject),
-            &devicesAddress,
-            0,
-            nil,
-            &dataSize,
-            &devices
-        ) == noErr else { return nil }
-
-        return devices.first { deviceID in
-            var uidAddress = AudioObjectPropertyAddress(
-                mSelector: kAudioDevicePropertyDeviceUID,
-                mScope: kAudioObjectPropertyScopeGlobal,
-                mElement: kAudioObjectPropertyElementMain
-            )
-            var uidSize = UInt32(MemoryLayout<Unmanaged<CFString>?>.size)
-            var uid: Unmanaged<CFString>?
-            let status = withUnsafeMutableBytes(of: &uid) { ptr in
-                AudioObjectGetPropertyData(
-                    deviceID,
-                    &uidAddress,
-                    0,
-                    nil,
-                    &uidSize,
-                    ptr.baseAddress!
-                )
-            }
-            return status == noErr && (uid?.takeRetainedValue() as String?) == requestedUID
-        }
-    }
-
     /// Read-only query of the properties that actually govern the frame
     /// count an `AVAudioEngine` tap receives from this device.
     /// `installTap(bufferSize:)` is a request, not a guarantee — this is
@@ -5223,6 +6699,45 @@ final class MacCaptureEngine: NSObject, ObservableObject {
         AudioInputDeviceChoice(uniqueID: device.uniqueID, name: device.localizedName)
     }
 
+    static func audioInputCaptureSuitability(
+        for device: AudioInputDeviceChoice
+    ) -> AudioInputCaptureSuitability {
+        let normalizedID = device.uniqueID
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .lowercased()
+        let normalizedName = device.name
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .lowercased()
+        let nameIdentifiesMicrophone = normalizedName.contains("microphone")
+            || normalizedName == "mic"
+            || normalizedName.hasPrefix("mic ")
+            || normalizedName.contains(" mic ")
+            || normalizedName.hasSuffix(" mic")
+        let nameIdentifiesBuiltInHardware = normalizedName.contains("built-in")
+            || normalizedName.contains("built in")
+            || normalizedName.contains("internal")
+            || normalizedName.contains("macbook")
+
+        if normalizedID == "builtinmicrophonedevice"
+            || (nameIdentifiesMicrophone && nameIdentifiesBuiltInHardware) {
+            return .builtInMicrophone
+        }
+        if nameIdentifiesMicrophone {
+            return .otherMicrophone
+        }
+        return .routedAudio
+    }
+
+    static func shouldBlockRoutineCapture(
+        audioInputSuitability: AudioInputCaptureSuitability?,
+        captureMode: CaptureSessionCaptureMode,
+        beatEngineMode: BeatEngineMode
+    ) -> Bool {
+        audioInputSuitability?.blocksIsolatedNoBeatCapture == true
+            && captureMode == .calibrationNoClick
+            && beatEngineMode == .silent
+    }
+
     private static func isExactSeratoVirtualAudioDeviceName(_ name: String) -> Bool {
         name.trimmingCharacters(in: .whitespacesAndNewlines)
             .localizedCaseInsensitiveCompare("Serato Virtual Audio") == .orderedSame
@@ -5230,6 +6745,10 @@ final class MacCaptureEngine: NSObject, ObservableObject {
 
     private static func isSeratoLikeDeviceName(_ name: String) -> Bool {
         name.localizedCaseInsensitiveContains("Serato")
+    }
+
+    private static func isRaneHardwareDeviceName(_ name: String) -> Bool {
+        name.localizedCaseInsensitiveContains("Rane")
     }
 
     /// Map raw device names to generic, App-Store-safe labels for user-visible UI.
@@ -5287,7 +6806,8 @@ final class MacCaptureEngine: NSObject, ObservableObject {
         explicitSelectionUniqueID: String?,
         previousSelectionUniqueID: String?,
         systemDefaultUniqueID: String?,
-        skipSeratoPriority: Bool = false
+        skipSeratoPriority: Bool = false,
+        preferRaneHardware: Bool = false
     ) -> AudioSelectionDecision {
         guard !devices.isEmpty else {
             return AudioSelectionDecision(device: nil, priority: .noneAvailable)
@@ -5298,6 +6818,11 @@ final class MacCaptureEngine: NSObject, ObservableObject {
            !normalizedExplicitID.isEmpty,
            let explicitDevice = devices.first(where: { $0.uniqueID == normalizedExplicitID }) {
             return AudioSelectionDecision(device: explicitDevice, priority: .explicitUserSelection)
+        }
+
+        if preferRaneHardware,
+           let raneDevice = devices.first(where: { isRaneHardwareDeviceName($0.name) }) {
+            return AudioSelectionDecision(device: raneDevice, priority: .raneHardware)
         }
 
         // Batch 12: when skipSeratoPriority is true (DEBUG timecode
@@ -5604,19 +7129,46 @@ final class MacCaptureEngine: NSObject, ObservableObject {
     /// `DispatchGroup.wait()` here would deadlock. This closes admission,
     /// captures the take's state, and schedules the second half via
     /// `group.notify(queue: finalizationQueue)`.
-    private func finalizeRoutineRecording(outputFileURL: URL, error: Error?) {
-        let captureErrorDescription = error?.localizedDescription
+    private func finalizeRoutineRecording(
+        outputFileURL: URL, error: Error?, midiTakeToken: MIDICaptureTakeToken?
+    ) {
+        guard midiTakeToken != nil,
+              midiCaptureWindowTicket.takeToken == midiTakeToken else { return }
+        let recordingToken = routineRecordingBoundaryLedger.enterFinalization(
+            mediaURL: outputFileURL
+        )
+        // Backstop for every terminal path that does not go through
+        // `stopRoutineRecording` — most importantly AVFoundation ending the
+        // take itself at `maxRecordedDuration`, and any capture error. A stop
+        // already dispatched for this take is not sent twice.
+        requestWatchStopIfNeeded(reason: nil)
+        let captureErrorDescription = Self.routineCaptureFailureDescription(for: error)
+        let stopReason = resolvedRoutineStopReason(
+            captureError: error,
+            captureErrorDescription: captureErrorDescription
+        )
 
+        // The delegate captured this exact media file's token before any
+        // asynchronous audio/mux work. Never resample the current owner here.
         guard let sidecar = activeRoutineRecordingSidecar else {
             let message = captureErrorDescription != nil
                 ? "Recording ended before it could be saved."
                 : "Finalizing \(outputFileURL.lastPathComponent)..."
+            // This early return never reaches `completeRoutineFinalization`,
+            // so the drain never runs and this path never sets
+            // `isRoutineFinalizationPending` either. Release the window here,
+            // or a take that ended without a sidecar would hold it forever and
+            // the preview could never re-arm.
+            if let midiTakeToken {
+                releaseAbandonedTakeMIDIWindow(token: midiTakeToken)
+            }
             publishRoutineFinalization(
                 outputFileURL: outputFileURL,
                 captureErrorDescription: captureErrorDescription,
                 statusMessage: message,
                 sessionID: nil,
-                sidecar: nil)
+                sidecar: nil,
+                recordingToken: recordingToken)
             return
         }
 
@@ -5649,15 +7201,18 @@ final class MacCaptureEngine: NSObject, ObservableObject {
         // the main queue / MainActor, so the admitted @MainActor tasks can run.
         group.notify(queue: finalizationQueue) { [weak self] in
             self?.completeRoutineFinalization(
+                midiTakeToken: midiTakeToken,
                 outputFileURL: outputFileURL,
                 captureErrorDescription: captureErrorDescription,
+                stopReason: stopReason,
                 sidecar: sidecar,
                 sidecarURL: sidecarURL,
                 builder: builder,
                 audioDetector: audioDetector,
                 labelSource: labelSource,
                 selectedPlatterSourceName: selectedPlatterSourceName,
-                debugSession: debugSession)
+                debugSession: debugSession,
+                recordingToken: recordingToken)
         }
     }
 
@@ -5666,16 +7221,21 @@ final class MacCaptureEngine: NSObject, ObservableObject {
     /// and drains the builder, freezes diagnostics, writes the sidecar +
     /// companions, clears take state, and publishes the completed UI state.
     private func completeRoutineFinalization(
+        midiTakeToken: MIDICaptureTakeToken?,
         outputFileURL: URL,
         captureErrorDescription: String?,
+        stopReason: CaptureStopReason,
         sidecar: CaptureCore.LocalRecordingSidecar,
         sidecarURL: URL,
         builder: RoutineDetectedNotationBuilder?,
         audioDetector: ScratchAudioNotationDetector?,
         labelSource: String,
         selectedPlatterSourceName: String,
-        debugSession: RoutineMovementDebugSession?
+        debugSession: RoutineMovementDebugSession?,
+        recordingToken: RoutineRecordingRequestToken?
     ) {
+        guard let midiTakeToken,
+              midiCaptureWindowTicket.takeToken == midiTakeToken else { return }
         var sidecar = sidecar
 
         // The group has emptied — no admitted task remains, so detaching the
@@ -5690,7 +7250,14 @@ final class MacCaptureEngine: NSObject, ObservableObject {
             "MovementEventBuild",
             count: motionEvents.count,
             take: sidecar.appLocalTakeNumber)
-        let capturedMidi = drainCapturedMidiCCEvents()
+        // Token-scoped: a duplicated or stale finalization drains nothing and
+        // publishes no release. `nil` here means "not this take's window any
+        // more", which is not the same as "this take captured nothing".
+        guard let capturedMidi = drainCapturedMidiCCEvents(token: midiTakeToken) else { return }
+        // Read BEFORE the reconnect below: reconnecting bumps the MIDI
+        // connection generation, and this record must carry the generation it
+        // was actually observed under.
+        let crossfaderTakeStartState = takeCrossfaderTakeStartState()
         reconnectSelectedMIDIInput()
 
         // Decode direct platter telemetry (RANE ONE MKII CC6 ring counter) into
@@ -5779,11 +7346,32 @@ final class MacCaptureEngine: NSObject, ObservableObject {
         writeReplayDiagnosticsToDisk(diag: replayDiagnostics)
         #endif
 
+        // Relay reconciliation can attach a valid Watch link to the on-disk
+        // sidecar any time after this take started — including after this
+        // in-memory snapshot was captured but before the write below. Adopt
+        // that link instead of overwriting it with the stale unlinked/timedOut
+        // state this snapshot carries.
+        if let onDiskData = try? Data(contentsOf: sidecarURL),
+           let onDiskSidecar = try? Self.routineSidecarDecoder.decode(
+               CaptureCore.LocalRecordingSidecar.self,
+               from: onDiskData
+           ) {
+            sidecar = sidecar.mergingLatestWatchAssociation(from: onDiskSidecar)
+        }
+
         sidecar = sidecar.finalized(
             mediaFileName: outputFileURL.lastPathComponent,
-            captureErrorDescription: captureErrorDescription
+            captureErrorDescription: captureErrorDescription,
+            stopReason: stopReason
         )
         .withDetectedNotation(notationSnapshot)
+        // The take-start control state is written BESIDE the detected
+        // notation, never inside it: it is a snapshot of a pre-take message,
+        // not one of this take's measured `mixerMidiEvents`, and conflating
+        // the two would be exactly the masquerade this record exists to
+        // avoid. A take that observed nothing trustworthy still gets an
+        // explicit unknown record rather than no record at all.
+        sidecar.crossfaderTakeStartState = crossfaderTakeStartState
 
         #if DEBUG
         writeMovementCompanionFilesForTake(sidecar: sidecar, sidecarURL: sidecarURL)
@@ -5831,7 +7419,22 @@ final class MacCaptureEngine: NSObject, ObservableObject {
             captureErrorDescription: captureErrorDescription,
             statusMessage: statusMessage,
             sessionID: sessionID,
-            sidecar: finalizedSidecar)
+            sidecar: finalizedSidecar,
+            recordingToken: recordingToken)
+    }
+
+    /// `AVCaptureMovieFileOutput` may finish a manually stopped recording with
+    /// a non-nil AVFoundation error while explicitly marking the file as having
+    /// finished successfully. Treat only that documented marker as success;
+    /// every other error remains a fail-closed capture failure.
+    static func routineCaptureFailureDescription(for error: Error?) -> String? {
+        guard let error else { return nil }
+        let nsError = error as NSError
+        if nsError.domain == AVFoundationErrorDomain,
+           nsError.userInfo[AVErrorRecordingSuccessfullyFinishedKey] as? Bool == true {
+            return nil
+        }
+        return error.localizedDescription
     }
 
     /// Publishes the completed take's UI state on the MainActor and clears the
@@ -5841,9 +7444,22 @@ final class MacCaptureEngine: NSObject, ObservableObject {
         captureErrorDescription: String?,
         statusMessage: String,
         sessionID: String?,
-        sidecar: CaptureCore.LocalRecordingSidecar?
+        sidecar: CaptureCore.LocalRecordingSidecar?,
+        recordingToken: RoutineRecordingRequestToken?
     ) {
         Task { @MainActor in
+            if let recordingToken {
+                let completionSucceeded = captureErrorDescription == nil && sidecar != nil
+                let completionStatus = captureErrorDescription
+                    ?? (sidecar == nil
+                        ? "Recording finalization did not produce a completed sidecar."
+                        : statusMessage)
+                self.routineRecordingBoundaryLedger.completeFinalization(
+                    token: recordingToken,
+                    succeeded: completionSucceeded,
+                    statusMessage: completionStatus
+                )
+            }
             self.isRoutineRecording = false
             if captureErrorDescription == nil {
                 self.lastRoutineRecordingURL = outputFileURL
@@ -5944,6 +7560,7 @@ final class MacCaptureEngine: NSObject, ObservableObject {
 
             lastRoutineRecordingURL = snapshot.mediaURL
             lastRoutineRecordingSessionID = snapshot.sessionID
+            lastRoutineDetectedNotation = snapshot.detectedNotation
             routineRecordingStatus = "Ready to export \(snapshot.mediaURL.lastPathComponent)."
         } catch {
             routineRecordingStatus = "Routine capture recovery needs attention."
@@ -5970,6 +7587,7 @@ final class MacCaptureEngine: NSObject, ObservableObject {
                 guard self.routineRecordingsFolderURL == directory else { return }
                 self.routineTakeArtifactStatuses = statuses
                 self.lastRoutineDetectedNotation = statuses.last?.detectedNotation
+                    ?? self.lastRoutineDetectedNotation
                 if let latest = statuses.last {
                     self.applyRoutineArtifactStatusToMessage(latest)
                 }
@@ -6033,6 +7651,8 @@ final class MacCaptureEngine: NSObject, ObservableObject {
             targetLabel: sidecar.sessionConfig?.scratchType.flatMap {
                 $0 == .unknown ? nil : $0.title
             },
+            sessionConfig: sidecar.sessionConfig,
+            startedAt: sidecar.startedAt,
             audioSourceURL: audioURL,
             videoSourceURL: mediaURL,
             audioExists: audioExists,
@@ -6087,7 +7707,8 @@ final class MacCaptureEngine: NSObject, ObservableObject {
                     sidecarURL: sidecarURL,
                     sessionID: sidecar.sessionID,
                     takeID: sidecar.takeID,
-                    endedAt: sidecar.endedAt ?? sidecar.startedAt
+                    endedAt: sidecar.endedAt ?? sidecar.startedAt,
+                    detectedNotation: sidecar.detectedNotation
                 )
             }
             .sorted { lhs, rhs in
@@ -6293,7 +7914,7 @@ final class MacCaptureEngine: NSObject, ObservableObject {
                 trackerPoint: rawTrackedPoint,
                 trackerTime: now,
                 jointConfidence: Double(rawJointConfidence),
-                builderPoint: currentPoint,
+                builderPosition: processed.position,
                 builderState: movementState,
                 builderConfidence: processed.confidence,
                 rawDirection: direction,
@@ -6438,7 +8059,7 @@ final class MacCaptureEngine: NSObject, ObservableObject {
         if detection != nil {
             ScratchLabPerformanceSignpost.event("AudioOnsetDetected")
         }
-        if isRoutineRecording || movieOutput.isRecording {
+        if (isRoutineRecording || movieOutput.isRecording), !allowsLocalScratchPlayback {
             activeRoutineAudioNotationDetector?.process(samples: audioPacket.samples, sampleRate: audioPacket.sampleRate)
         }
         let now = CACurrentMediaTime()
@@ -6695,7 +8316,7 @@ final class MacCaptureEngine: NSObject, ObservableObject {
                 trackerPoint: nil,
                 trackerTime: processingStartTime,
                 jointConfidence: nil,
-                builderPoint: nil, builderState: .searching, builderConfidence: nil,
+                builderPosition: nil, builderState: .searching, builderConfidence: nil,
                 rawDirection: direction, idleReason: nil,
                 trackerConfidence: Double(handDirectionTracker.confidence),
                 semanticDirection: .searching,
@@ -6725,7 +8346,7 @@ final class MacCaptureEngine: NSObject, ObservableObject {
                 trackerPoint: nil,
                 trackerTime: processingStartTime,
                 jointConfidence: nil,
-                builderPoint: smoothedHandPoint,
+                builderPosition: nil,
                 builderState: movementState,
                 builderConfidence: Double(handDirectionTracker.confidence),
                 rawDirection: direction,
@@ -6819,7 +8440,7 @@ final class MacCaptureEngine: NSObject, ObservableObject {
     /// returns its stable observation ID. DEBUG-only — the trace is the
     /// capture-evidence path; it must never depend on MainActor.
     ///
-    /// `builderPoint`/`builderState`/`builderConfidence` are the ACTUAL builder
+    /// `builderPosition`/`builderState`/`builderConfidence` are the ACTUAL builder
     /// input: they must be nil whenever the builder was not fed (dedup rejected,
     /// continuity-filled, or a miss/jump that never reached publication).
     @discardableResult
@@ -6831,7 +8452,7 @@ final class MacCaptureEngine: NSObject, ObservableObject {
         trackerPoint: CGPoint?,
         trackerTime: Double,
         jointConfidence: Double?,
-        builderPoint: CGPoint?,
+        builderPosition: Double?,
         builderState: HandMotionState?,
         builderConfidence: Double?,
         rawDirection: HandDirectionTracker.Direction?,
@@ -6855,7 +8476,7 @@ final class MacCaptureEngine: NSObject, ObservableObject {
             trackerPoint: trackerPoint.map(MovementTraceObservation.Point.init),
             trackerTime: trackerTime,
             jointConfidence: jointConfidence,
-            builderPoint: fedToBuilder ? builderPoint.map(MovementTraceObservation.Point.init) : nil,
+            builderPoint: fedToBuilder ? builderPosition.map { .init(x: $0, y: 0) } : nil,
             builderState: fedToBuilder ? builderState.map { String(describing: $0) } : nil,
             builderConfidence: fedToBuilder ? builderConfidence : nil,
             rawDirection: rawDirection.map { String(describing: $0) },
@@ -7443,6 +9064,203 @@ final class MacCaptureEngine: NSObject, ObservableObject {
             self.routineMovementDiagnostics = snapshot
         }
     }
+
+    // MARK: - Rane channel-map diagnostic (Phase 2, DEBUG only)
+
+    /// Begin sampling the live capture device's raw multichannel stream. The
+    /// capture session must already be running on the target audio input.
+    func startChannelMapDiagnostic() {
+        audioQueue.async { [weak self] in
+            guard let self else { return }
+            self.channelMapDiagnosticActive = true
+            self.channelMapDiagnosticChannels = []
+            self.channelMapDiagnosticFrames = 0
+            self.channelMapDiagnosticSampleRate = 0
+            Task { @MainActor in
+                self.isChannelMapDiagnosticRunning = true
+                self.channelMapDiagnosticSnapshot = nil
+                self.channelMapDiagnosticStatus =
+                    "Sampling… play or scratch obvious program audio through the Rane now."
+            }
+        }
+    }
+
+    /// Stop sampling without waiting for the window to fill.
+    func stopChannelMapDiagnostic() {
+        audioQueue.async { [weak self] in
+            guard let self else { return }
+            let hadSamples = self.channelMapDiagnosticFrames > 0
+            self.finishChannelMapDiagnosticLocked(reason: hadSamples ? nil : "No audio reached the diagnostic — check the input selection.")
+        }
+    }
+
+    /// Called on `audioQueue` for every captured audio buffer while the
+    /// diagnostic is active. Accumulates de-interleaved per-channel Float
+    /// samples until the target window is filled, then analyses once.
+    private func accumulateChannelMapDiagnosticSampleBufferIfNeeded(_ sampleBuffer: CMSampleBuffer) {
+        guard channelMapDiagnosticActive else { return }
+        guard let decoded = Self.planarFloatChannels(from: sampleBuffer) else { return }
+
+        if channelMapDiagnosticChannels.isEmpty {
+            channelMapDiagnosticChannels = Array(
+                repeating: [Float](),
+                count: decoded.channels.count
+            )
+            channelMapDiagnosticSampleRate = decoded.sampleRate
+        }
+        guard decoded.channels.count == channelMapDiagnosticChannels.count else { return }
+
+        for index in 0..<decoded.channels.count {
+            channelMapDiagnosticChannels[index].append(contentsOf: decoded.channels[index])
+        }
+        channelMapDiagnosticFrames += decoded.channels.first?.count ?? 0
+
+        if channelMapDiagnosticFrames >= channelMapDiagnosticTargetFrames {
+            finishChannelMapDiagnosticLocked(reason: nil)
+        }
+    }
+
+    /// `audioQueue`-isolated. Runs the probe (if any samples) and publishes.
+    private func finishChannelMapDiagnosticLocked(reason: String?) {
+        guard channelMapDiagnosticActive else { return }
+        channelMapDiagnosticActive = false
+
+        let channels = channelMapDiagnosticChannels
+        let sampleRate = channelMapDiagnosticSampleRate
+        channelMapDiagnosticChannels = []
+        channelMapDiagnosticFrames = 0
+        channelMapDiagnosticSampleRate = 0
+
+        let snapshot = channels.isEmpty
+            ? nil
+            : MultichannelSignalProbe.analyze(planarChannels: channels, sampleRate: sampleRate)
+
+        Task { @MainActor in
+            self.isChannelMapDiagnosticRunning = false
+            self.channelMapDiagnosticSnapshot = snapshot
+            if let reason {
+                self.channelMapDiagnosticStatus = reason
+            } else if let snapshot {
+                if let recommended = snapshot.recommendedPair {
+                    self.channelMapDiagnosticStatus =
+                        "Done. Program audio looks strongest on CH \(recommended.label). Verify against the report, then set it as the program pair."
+                } else {
+                    self.channelMapDiagnosticStatus =
+                        "Done. No pair clearly carries program audio — play louder/obvious audio and re-run."
+                }
+                NSLog("[MacCaptureEngine] Channel-map diagnostic:\n%@", snapshot.reportText)
+            } else {
+                self.channelMapDiagnosticStatus = "Stopped before any audio was captured."
+            }
+        }
+    }
+
+    /// De-interleave a captured PCM buffer into one Float array per channel.
+    /// Handles Float32 / Int16 / Int32, interleaved or non-interleaved.
+    static func planarFloatChannels(
+        from sampleBuffer: CMSampleBuffer
+    ) -> (channels: [[Float]], sampleRate: Double)? {
+        guard let formatDescription = CMSampleBufferGetFormatDescription(sampleBuffer),
+              let asbdPointer = CMAudioFormatDescriptionGetStreamBasicDescription(formatDescription) else {
+            return nil
+        }
+        let asbd = asbdPointer.pointee
+        guard asbd.mFormatID == kAudioFormatLinearPCM else { return nil }
+
+        let isFloat = (asbd.mFormatFlags & kAudioFormatFlagIsFloat) != 0
+        let isNonInterleaved = (asbd.mFormatFlags & kAudioFormatFlagIsNonInterleaved) != 0
+        let bitsPerChannel = Int(asbd.mBitsPerChannel)
+        let channelCount = Int(asbd.mChannelsPerFrame)
+        let frameCount = CMSampleBufferGetNumSamples(sampleBuffer)
+        guard channelCount > 0,
+              channelCount <= maximumAudioPacketChannelCount,
+              frameCount > 0,
+              frameCount <= maximumAudioPacketFrameCount else {
+            return nil
+        }
+
+        let bytesPerSample: Int
+        if isFloat && bitsPerChannel == 32 {
+            bytesPerSample = MemoryLayout<Float>.size
+        } else if !isFloat && bitsPerChannel == 16 {
+            bytesPerSample = MemoryLayout<Int16>.size
+        } else if !isFloat && bitsPerChannel == 32 {
+            bytesPerSample = MemoryLayout<Int32>.size
+        } else {
+            return nil
+        }
+
+        let bufferCount = isNonInterleaved ? channelCount : 1
+        let audioBufferListSize = MemoryLayout<AudioBufferList>.size
+            + max(0, bufferCount - 1) * MemoryLayout<AudioBuffer>.size
+        let rawPointer = UnsafeMutableRawPointer.allocate(
+            byteCount: audioBufferListSize,
+            alignment: max(16, MemoryLayout<AudioBufferList>.alignment)
+        )
+        defer { rawPointer.deallocate() }
+        let listPointer = rawPointer.bindMemory(to: AudioBufferList.self, capacity: 1)
+        listPointer.pointee = AudioBufferList(
+            mNumberBuffers: UInt32(bufferCount),
+            mBuffers: AudioBuffer(mNumberChannels: 0, mDataByteSize: 0, mData: nil)
+        )
+
+        var blockBuffer: CMBlockBuffer?
+        let status = CMSampleBufferGetAudioBufferListWithRetainedBlockBuffer(
+            sampleBuffer,
+            bufferListSizeNeededOut: nil,
+            bufferListOut: listPointer,
+            bufferListSize: audioBufferListSize,
+            blockBufferAllocator: nil,
+            blockBufferMemoryAllocator: nil,
+            flags: UInt32(kCMSampleBufferFlag_AudioBufferList_Assure16ByteAlignment),
+            blockBufferOut: &blockBuffer
+        )
+        guard status == noErr else { return nil }
+
+        let buffers = UnsafeMutableAudioBufferListPointer(listPointer)
+        guard !buffers.isEmpty else { return nil }
+
+        func normalize(_ raw: UnsafeRawPointer, sampleIndex: Int) -> Float {
+            if isFloat {
+                return raw.assumingMemoryBound(to: Float.self)[sampleIndex]
+            } else if bitsPerChannel == 16 {
+                return Float(raw.assumingMemoryBound(to: Int16.self)[sampleIndex]) / Float(Int16.max)
+            } else {
+                return Float(raw.assumingMemoryBound(to: Int32.self)[sampleIndex]) / Float(Int32.max)
+            }
+        }
+
+        var channels = Array(repeating: [Float](), count: channelCount)
+
+        if isNonInterleaved {
+            guard buffers.count == channelCount else { return nil }
+            for channel in 0..<channelCount {
+                guard let data = buffers[channel].mData else { return nil }
+                let available = Int(buffers[channel].mDataByteSize) / bytesPerSample
+                let count = min(frameCount, available)
+                var out = [Float](repeating: 0, count: count)
+                for index in 0..<count {
+                    out[index] = normalize(data, sampleIndex: index)
+                }
+                channels[channel] = out
+            }
+        } else {
+            guard buffers.count == 1, let data = buffers[0].mData else { return nil }
+            let totalSamples = Int(buffers[0].mDataByteSize) / bytesPerSample
+            let frames = min(frameCount, totalSamples / channelCount)
+            for channel in 0..<channelCount {
+                channels[channel] = [Float](repeating: 0, count: frames)
+            }
+            for frame in 0..<frames {
+                let base = frame * channelCount
+                for channel in 0..<channelCount {
+                    channels[channel][frame] = normalize(data, sampleIndex: base + channel)
+                }
+            }
+        }
+
+        return (channels, asbd.mSampleRate)
+    }
     #endif
 
     private func startAudioSignalDecayTimer() {
@@ -7478,8 +9296,12 @@ final class MacCaptureEngine: NSObject, ObservableObject {
         timer.setEventHandler { [weak self] in
             guard let self else { return }
             let snapshot = self.scratchPlaybackController.currentPlaybackPositionSnapshot()
+            let waveform = self.scratchPlaybackController.currentPlaybackWaveformSnapshot()
             Task { @MainActor in
                 self.playbackPositionSnapshot = snapshot
+                if self.playbackWaveformSnapshot != waveform {
+                    self.playbackWaveformSnapshot = waveform
+                }
             }
         }
         playbackPositionPollTimer = timer
@@ -7510,6 +9332,9 @@ final class MacCaptureEngine: NSObject, ObservableObject {
         publishOnMainAsync(field: "midiLearn") { [weak self] in
             guard let self else { return }
             self.activeMIDILearnAction = action
+            // Drop any value carried over from a previous Learn session so the
+            // panel shows "move the control now" until a fresh event lands.
+            if self.midiLearnObservedRawValue != nil { self.midiLearnObservedRawValue = nil }
             // Crossfader keeps the original `.listening` state/feedback text so the
             // pre-existing crossfader-only UI and tests continue to see the same
             // behaviour as before multi-action learn was added.
@@ -7547,8 +9372,7 @@ final class MacCaptureEngine: NSObject, ObservableObject {
         startMIDILearn(for: .crossfader)
     }
 
-#if DEBUG
-    /// Debug-only right-deck platter test: loads the validated
+    /// Loads the validated right-deck platter sample
     /// one-revolution `dvs_ahhh` asset (`VirtualPlatter/ahhh.wav`,
     /// ~1.0474 s) with no automatic preview/playback — only loads it into
     /// `scratchPlaybackController`. Moving the right platter (channel 1
@@ -7563,6 +9387,12 @@ final class MacCaptureEngine: NSObject, ObservableObject {
     /// direct-MIDI path is out of scope here (hot-cue/sample-mapping
     /// design, later).
     func loadPlatterTestSample() {
+        guard allowsLocalScratchPlayback else {
+            publishOnMainAsync(field: "platterTestLoadStatus") { [weak self] in
+                self?.platterTestLoadStatus = "ScratchLab audio is unavailable."
+            }
+            return
+        }
         let sampleID = "dvs_ahhh"
         print("[ScratchSamplePlaybackBridge] platter test load requested · sampleID=\(sampleID)")
         let requested = scratchPlaybackController.load(sampleID: sampleID, playDiagnosticPreview: false)
@@ -7573,8 +9403,8 @@ final class MacCaptureEngine: NSObject, ObservableObject {
             return
         }
         // Bounded: `load` only queues a small bundled-WAV read on the
-        // controller's own audio queue; draining it here (debug tool only,
-        // main-thread button action) lets the status reflect the real
+        // controller's own audio queue; draining it here from the explicit
+        // main-thread button action lets the status reflect the real
         // outcome instead of just "a request was queued".
         scratchPlaybackController.waitForAudioQueue()
         let snapshot = scratchPlaybackController.diagnosticsSnapshot()
@@ -7587,7 +9417,45 @@ final class MacCaptureEngine: NSObject, ObservableObject {
             }
         }
     }
-#endif
+
+    /// Plays the controller's bounded audible diagnostic using the exact
+    /// bundled `dvs_ahhh` asset, then leaves that sample armed for right-deck
+    /// platter movement. This is deliberately separate from
+    /// `loadPlatterTestSample()`: applying a MIDI mapping must remain silent,
+    /// while an explicit Test action must prove the real sample and macOS
+    /// output chain are audible. Unloading first resets the controller's
+    /// once-per-load preview guard, so every button press is a real test.
+    func previewPlatterTestSample() {
+        guard allowsLocalScratchPlayback else {
+            publishOnMainAsync(field: "platterTestLoadStatus") { [weak self] in
+                self?.platterTestLoadStatus = "ScratchLab audio is unavailable."
+            }
+            return
+        }
+        let sampleID = "dvs_ahhh"
+        print("[ScratchSamplePlaybackBridge] audible platter test requested · sampleID=\(sampleID)")
+        scratchPlaybackController.unload()
+        scratchPlaybackController.waitForAudioQueue()
+
+        let requested = scratchPlaybackController.load(sampleID: sampleID, playDiagnosticPreview: true)
+        guard requested else {
+            publishOnMainAsync(field: "platterTestLoadStatus") { [weak self] in
+                self?.platterTestLoadStatus = "not found: \(sampleID)"
+            }
+            return
+        }
+
+        scratchPlaybackController.waitForAudioQueue()
+        let snapshot = scratchPlaybackController.diagnosticsSnapshot()
+        publishOnMainAsync(field: "platterTestLoadStatus") { [weak self] in
+            guard let self else { return }
+            if snapshot.loadedSampleID == sampleID, snapshot.engineRunning {
+                self.platterTestLoadStatus = "audible test: \(sampleID)"
+            } else {
+                self.platterTestLoadStatus = "test failed: \(snapshot.lastLoadError ?? "audio engine unavailable")"
+            }
+        }
+    }
 
     private func publishOnMainAsync(field: String, _ update: @escaping () -> Void) {
         let requestTime = CACurrentMediaTime()
@@ -7614,10 +9482,100 @@ final class MacCaptureEngine: NSObject, ObservableObject {
         publishOnMainAsync(field: "midiLearn") { [weak self] in
             guard let self else { return }
             self.activeMIDILearnAction = nil
+            if self.midiLearnObservedRawValue != nil { self.midiLearnObservedRawValue = nil }
             let nextState: MIDILearnState = self.crossfaderCCMapping.map { .learned($0) } ?? .idle
             if self.midiLearnState != nextState { self.midiLearnState = nextState }
             if self.midiLearnFeedback != "" { self.midiLearnFeedback = "" }
         }
+    }
+
+    /// Publishes the raw value of the event a Learn session actually consumed
+    /// (CC value, or note number for a pad). `startMIDILearn(for:)` and
+    /// `cancelMIDILearn()` clear it back to `nil` so the Learn panel never
+    /// shows a stale pre-Learn value.
+    private func publishMIDILearnObservedValue(_ value: Int?) {
+        publishOnMainAsync(field: "midiLearnObservedRawValue") { [weak self] in
+            guard let self, self.midiLearnObservedRawValue != value else { return }
+            self.midiLearnObservedRawValue = value
+        }
+    }
+
+    var canApplyVerifiedRaneOneMKIIMapping: Bool {
+        !selectedMIDIInputSourceID.isEmpty
+            && RaneOneMKIIVerifiedLearnedMapping.matches(deviceName: selectedMIDIInputSourceName)
+    }
+
+    /// Installs the already-verified Rane ONE MKII mixer and right-deck pad
+    /// addresses into the selected device's learned mapping. This does not
+    /// alter platter decoding, captured MIDI events, notation, or DVS.
+    func applyVerifiedRaneOneMKIIMapping() {
+        installVerifiedRaneOneMKIIMapping(overwriteExisting: true, reportsSuccess: true)
+    }
+
+    /// Applies the verified mixer/pad addresses and arms the existing
+    /// right-deck platter renderer with the validated AHHH sample.
+    func applyVerifiedRaneOneMKIIMappingAndLoadAhhh() {
+        applyVerifiedRaneOneMKIIMapping()
+        loadPlatterTestSample()
+    }
+
+    private func seedVerifiedRaneOneMKIIMappingIfNeeded(
+        existingMapping: MIDIDeviceMapping?
+    ) {
+        guard canApplyVerifiedRaneOneMKIIMapping,
+              !RaneOneMKIIVerifiedLearnedMapping.isComplete(existingMapping)
+        else { return }
+        installVerifiedRaneOneMKIIMapping(overwriteExisting: false, reportsSuccess: true)
+    }
+
+    private func installVerifiedRaneOneMKIIMapping(
+        overwriteExisting: Bool,
+        reportsSuccess: Bool
+    ) {
+        guard canApplyVerifiedRaneOneMKIIMapping else {
+            publishOnMainAsync(field: "midiMappingError") { [weak self] in
+                self?.midiMappingError = "Select the Rane ONE MKII MIDI source before applying its verified mapping."
+            }
+            return
+        }
+
+        midiCaptureLock.lock()
+        learnSessionAction = nil
+        midiLearnRequestID &+= 1
+        midiCaptureLock.unlock()
+
+        let deviceID = selectedMIDIInputSourceID
+        let deviceName = selectedMIDIInputSourceName
+        mutateDeviceMapping(deviceID: deviceID, deviceName: deviceName, transform: { mapping in
+            RaneOneMKIIVerifiedLearnedMapping.apply(
+                to: &mapping,
+                overwriteExisting: overwriteExisting
+            )
+        }, completion: { [weak self] mapping in
+            guard let self, self.selectedMIDIInputSourceID == deviceID else { return }
+            self.currentMIDIDeviceMapping = mapping
+            self.midiMappingError = ""
+            self.activeMIDILearnAction = nil
+
+            if let crossfader = mapping.control(for: .crossfader) {
+                let legacy = CrossfaderCCMapping(
+                    channel: crossfader.channel,
+                    controller: crossfader.controlNumber
+                )
+                self.applyLearnedCrossfaderMapping(legacy)
+                self.crossfaderCCMapping = legacy
+                self.midiLearnState = .learned(legacy)
+            }
+            if let crossfader = mapping.control(for: .crossfader) {
+                self.pushResolvedCurve(for: crossfader)
+            }
+            if let rightUpfader = mapping.control(for: .rightUpfader) {
+                self.pushResolvedCurve(for: rightUpfader)
+            }
+            if reportsSuccess {
+                self.midiLearnFeedback = "Applied verified Rane ONE MKII mapping: faders and right-deck hot cues."
+            }
+        })
     }
 
     func clearCrossfaderMapping() {
@@ -7626,7 +9584,7 @@ final class MacCaptureEngine: NSObject, ObservableObject {
         learnSessionAction = nil
         midiLearnRequestID &+= 1
         midiCaptureLock.unlock()
-        UserDefaults.standard.removeObject(forKey: ScratchLabDesktopDefaultsKey.crossfaderMIDIMapping)
+        midiPersistenceDefaults.removeObject(forKey: ScratchLabDesktopDefaultsKey.crossfaderMIDIMapping)
         publishOnMainAsync(field: "midiLearn") { [weak self] in
             guard let self else { return }
             self.activeMIDILearnAction = nil
@@ -7663,7 +9621,7 @@ final class MacCaptureEngine: NSObject, ObservableObject {
         midiCaptureLock.unlock()
         midiMappingPersistenceQueue.async {
             if let data = try? JSONEncoder().encode(mapping) {
-                UserDefaults.standard.set(data, forKey: ScratchLabDesktopDefaultsKey.crossfaderMIDIMapping)
+                self.midiPersistenceDefaults.set(data, forKey: ScratchLabDesktopDefaultsKey.crossfaderMIDIMapping)
             }
         }
     }
@@ -7871,6 +9829,10 @@ final class MacCaptureEngine: NSObject, ObservableObject {
         midiCaptureLock.unlock()
         guard let action = claimedAction else { return false }
 
+        // First real event from the pad being learned — surface its note
+        // number to the Learn panel.
+        publishMIDILearnObservedValue(noteNumber)
+
         let learned = MIDILearnedControl(
             action: action,
             messageType: .note,
@@ -7920,6 +9882,29 @@ final class MacCaptureEngine: NSObject, ObservableObject {
             return MIDILearnCCConsumeResult(consumedByLearn: false, crossfaderMapping: nil)
         }
 
+        // A Learn session must consume a genuinely new event from the control
+        // being learned, not a stale one from another. When learning a
+        // continuous control, ignore a CC whose (channel, controller) is
+        // already mapped to a *different* continuous action — that is the
+        // previously-touched control (typically the crossfader) still
+        // streaming as Learn begins, and it must not instantly claim the
+        // session. Hot-cue-via-CC learn is unaffected (a pad is not a
+        // continuous stream). The session stays open for the real control.
+        midiCaptureLock.lock()
+        let pendingAction = learnSessionAction
+        midiCaptureLock.unlock()
+        if let pendingAction,
+           pendingAction.hotCueIndex == nil,
+           currentMIDIDeviceMapping?.controls.contains(where: {
+               $0.messageType == .controlChange
+                   && $0.channel == channel
+                   && $0.controlNumber == controller
+                   && $0.action != pendingAction
+                   && $0.action.hotCueIndex == nil
+           }) == true {
+            return MIDILearnCCConsumeResult(consumedByLearn: false, crossfaderMapping: nil)
+        }
+
         midiCaptureLock.lock()
         let claimedAction = learnSessionAction
         if claimedAction != nil {
@@ -7931,6 +9916,11 @@ final class MacCaptureEngine: NSObject, ObservableObject {
         guard let learnAction = claimedAction else {
             return MIDILearnCCConsumeResult(consumedByLearn: false, crossfaderMapping: nil)
         }
+
+        // First real event from the control being learned — surface its raw
+        // value to the Learn panel (which otherwise has nothing to show but
+        // the pre-Learn value).
+        publishMIDILearnObservedValue(value)
 
         let deck: Int?
         switch learnAction {
@@ -8469,36 +10459,127 @@ final class MacCaptureEngine: NSObject, ObservableObject {
         clearCurveCaptureSession(errorMessage: "")
     }
 
-    /// Evaluates whether this CC event matches the learned right-upfader or
-    /// crossfader mapping and, if so, forwards the calibrated/normalized
-    /// value (via the existing `MIDILearnedControl.normalizedValue(from:)` —
-    /// respecting min/max calibration and inversion exactly like every other
-    /// learned continuous control) to the playback controller as
-    /// scratch-sample audio gain. Matching is by EXACT (channel, controller),
-    /// same as `evaluateCalibrationForCC` above, so the platter's CC6 flood
-    /// can never match a fader binding.
-    ///
-    /// The left upfader intentionally has no audio effect (no supported beat
-    /// bus exists yet — see `MIDISemanticAction.leftUpfader`): it stays
-    /// mapped, persisted, and visible in diagnostics, but is never checked
-    /// here, so a learned left-upfader mapping simply never reaches the
-    /// playback controller.
+    /// Evaluates whether this CC event matches a learned mixer control. The
+    /// right upfader and crossfader keep feeding the existing scratch renderer;
+    /// the left upfader always publishes a calibrated/curved gain for the
+    /// macOS beat and demo players (unconditionally, independent of scratch
+    /// gain), and separately mirrors into the same scratch-gain path as the
+    /// right upfader ONLY when the device has no right-upfader mapping at
+    /// all — right stays authoritative whenever it's mapped. Matching
+    /// remains exact `(channel, controller)`, so the platter's CC6 flood
+    /// cannot match any fader binding.
     ///
     /// Called from the real CoreMIDI packet-parsing loop for every incoming
     /// CC message; also callable directly from tests as a seam.
+    func mappedMixerControlForCC(channel: Int, controller: Int) -> String? {
+        guard let mapping = currentMIDIDeviceMapping else { return nil }
+        for action in [
+            MIDISemanticAction.crossfader,
+            .leftUpfader,
+            .rightUpfader
+        ] {
+            guard let control = mapping.control(for: action),
+                  control.messageType == .controlChange,
+                  control.channel == channel,
+                  control.controlNumber == controller else {
+                continue
+            }
+            return action.rawValue
+        }
+        return nil
+    }
+
     func evaluateUserMixerGainForCC(channel: Int, controller: Int, value: Int) {
         guard let mapping = currentMIDIDeviceMapping else { return }
+        if let leftUpfader = mapping.control(for: .leftUpfader),
+           leftUpfader.messageType == .controlChange,
+           leftUpfader.channel == channel,
+           leftUpfader.controlNumber == controller {
+            let normalizedPosition = leftUpfader.normalizedValue(from: value)
+            let outputGain = FaderCurveResponse.gain(
+                forNormalizedPosition: normalizedPosition,
+                response: leftUpfader.resolvedCurveConfig.resolvedResponse(for: leftUpfader)
+            )
+            queueControllerActivity(.leftUpfader(rawValue: value, outputGain: outputGain))
+        }
         if let rightUpfader = mapping.control(for: .rightUpfader),
            rightUpfader.messageType == .controlChange,
            rightUpfader.channel == channel,
            rightUpfader.controlNumber == controller {
             scratchPlaybackController.setRightUpfaderGain(rightUpfader.normalizedValue(from: value))
+            queueControllerActivity(.rightUpfader(rawValue: value))
+        } else if mapping.control(for: .rightUpfader) == nil,
+                  let leftUpfader = mapping.control(for: .leftUpfader),
+                  leftUpfader.messageType == .controlChange,
+                  leftUpfader.channel == channel,
+                  leftUpfader.controlNumber == controller {
+            // Right upfader stays authoritative for scratch gain whenever the
+            // device has one mapped at all — even for a CC event that isn't
+            // its own (e.g. the left fader's CC on a different channel), so
+            // it must never fall through to this branch. Only mirror left
+            // upfader into the same gain path when there is no right-upfader
+            // mapping on this device whatsoever, matching the iOS parity
+            // fallback in `IOSMIDIControllerDispatcher.receive(_:)`.
+            scratchPlaybackController.setRightUpfaderGain(leftUpfader.normalizedValue(from: value))
         }
         if let crossfader = mapping.control(for: .crossfader),
            crossfader.messageType == .controlChange,
            crossfader.channel == channel,
            crossfader.controlNumber == controller {
             scratchPlaybackController.setCrossfaderPosition(crossfader.normalizedValue(from: value))
+            queueControllerActivity(.crossfader(rawValue: value))
+        }
+    }
+
+    /// Coalesces high-rate controller input to at most one pending main-queue
+    /// publication while retaining the newest value for every control.
+    private func queueControllerActivity(_ update: ControllerActivityUpdate) {
+        midiCaptureLock.lock()
+        switch update {
+        case .crossfader(let rawValue):
+            pendingControllerActivity.crossfaderRawValue = rawValue
+        case .leftUpfader(let rawValue, let outputGain):
+            pendingControllerActivity.leftUpfaderRawValue = rawValue
+            pendingControllerActivity.leftUpfaderOutputGain = outputGain
+        case .rightUpfader(let rawValue):
+            pendingControllerActivity.rightUpfaderRawValue = rawValue
+        case .hotCue(let index, let sampleID):
+            pendingControllerActivity.hotCueIndex = index
+            pendingControllerActivity.hotCueSampleID = sampleID
+        }
+        let shouldSchedule = !isControllerActivityPublishPending
+        if shouldSchedule {
+            isControllerActivityPublishPending = true
+        }
+        midiCaptureLock.unlock()
+
+        guard shouldSchedule else { return }
+        DispatchQueue.main.async { [weak self] in
+            guard let self else { return }
+            self.midiCaptureLock.lock()
+            let snapshot = self.pendingControllerActivity
+            self.isControllerActivityPublishPending = false
+            self.midiCaptureLock.unlock()
+
+            if self.liveCrossfaderRawValue != snapshot.crossfaderRawValue {
+                self.liveCrossfaderRawValue = snapshot.crossfaderRawValue
+            }
+            if self.liveLeftUpfaderRawValue != snapshot.leftUpfaderRawValue {
+                self.liveLeftUpfaderRawValue = snapshot.leftUpfaderRawValue
+            }
+            if self.liveRightUpfaderRawValue != snapshot.rightUpfaderRawValue {
+                self.liveRightUpfaderRawValue = snapshot.rightUpfaderRawValue
+            }
+            if self.liveHotCueIndex != snapshot.hotCueIndex {
+                self.liveHotCueIndex = snapshot.hotCueIndex
+            }
+            if self.liveHotCueSampleID != snapshot.hotCueSampleID {
+                self.liveHotCueSampleID = snapshot.hotCueSampleID
+            }
+            if self.leftUpfaderOutputGain != snapshot.leftUpfaderOutputGain {
+                self.leftUpfaderOutputGain = snapshot.leftUpfaderOutputGain
+            }
+            self.leftUpfaderOutputHandler?(snapshot.leftUpfaderOutputGain)
         }
     }
 
@@ -8849,6 +10930,9 @@ final class MacCaptureEngine: NSObject, ObservableObject {
         if let rightUpfaderControl = loadedMapping?.control(for: .rightUpfader) {
             pushResolvedCurve(for: rightUpfaderControl)
         }
+        if mappingError.isEmpty {
+            seedVerifiedRaneOneMKIIMappingIfNeeded(existingMapping: loadedMapping)
+        }
     }
 
     // MARK: - Hot-Cue Sample Assignment
@@ -8967,6 +11051,12 @@ final class MacCaptureEngine: NSObject, ObservableObject {
         guard decision.shouldTrigger, let sampleID = decision.sampleID else {
             return false
         }
+        guard allowsLocalScratchPlayback else {
+            print("[HotCueAutoLoad] suppressed · ScratchLab audio unavailable")
+            return false
+        }
+
+        queueControllerActivity(.hotCue(index: action.hotCueIndex ?? 0, sampleID: sampleID))
 
         print("[HotCueAutoLoad] matched · action=\(action.displayName) sample=\(sampleID) channel=\(channel) control=\(controlNumber)")
         // Enqueue the load onto the controller's private audio queue — no file I/O
@@ -9005,17 +11095,190 @@ final class MacCaptureEngine: NSObject, ObservableObject {
         }
     }
 
-    private func openMIDIInputForRecording() {
-        midiCaptureLock.lock()
+    /// Reads the current window's identity. MUST be called with
+    /// `midiCaptureLock` held.
+    private func lockedMIDICaptureWindowTicket() -> MIDICaptureWindowTicket {
+        MIDICaptureWindowTicket(
+            owner: midiWindowOwnerStorage,
+            generation: midiWindowGenerationStorage,
+            epochStartHostTime: midiRecordingStartTime,
+            takeToken: midiWindowTakeTokenStorage
+        )
+    }
+
+    /// The ONLY writer of window ownership, epoch and take token. MUST be
+    /// called with `midiCaptureLock` held.
+    ///
+    /// Bumping the generation on every call is what makes a generation
+    /// comparison at the append site a complete staleness test: an owner
+    /// change, an epoch change and a take change are all generation changes,
+    /// so no packet admitted under one window can be appended into another.
+    private func lockedSetMIDICaptureWindow(
+        owner: MIDICaptureWindowOwner,
+        epochStartHostTime: CFTimeInterval,
+        takeToken: MIDICaptureTakeToken?
+    ) {
+        assert(
+            (owner == .take) == (takeToken != nil),
+            "a take token exists exactly while a take owns the window"
+        )
+        midiWindowOwnerStorage = owner
+        midiRecordingStartTime = epochStartHostTime
+        midiWindowTakeTokenStorage = takeToken
+        midiWindowGenerationStorage += 1
+    }
+
+    /// Clears the buffer and its retention bookkeeping together. MUST be
+    /// called with `midiCaptureLock` held.
+    private func lockedClearCapturedMidiCCEvents() {
         capturedMidiCCEvents = []
-        midiRecordingStartTime = CACurrentMediaTime()
+        livePreviewOldestTimestamp = nil
+        livePreviewNewestTimestamp = nil
+    }
+
+    /// Current MIDI accumulation-window identity. Read-only; production
+    /// transitions take their own ticket inside their own critical section.
+    var midiCaptureWindowTicket: MIDICaptureWindowTicket {
+        midiCaptureLock.lock()
+        defer { midiCaptureLock.unlock() }
+        return lockedMIDICaptureWindowTicket()
+    }
+
+    /// A callback may obtain only the token armed for its own media URL.
+    /// A delayed callback from another take cannot acquire the current token.
+    private func midiTakeToken(for mediaURL: URL) -> MIDICaptureTakeToken? {
+        midiCaptureLock.lock()
+        defer { midiCaptureLock.unlock() }
+        guard midiWindowOwnerStorage == .take,
+              let token = midiWindowTakeTokenStorage,
+              token.mediaURL == mediaURL else { return nil }
+        return token
+    }
+
+    /// Publishes a window release so the pre-record preview can re-arm.
+    /// Called AFTER `midiCaptureLock` is released, never under it.
+    private func publishMIDICaptureWindowRelease() {
+        publishOnMainAsync(field: "midiCaptureWindowReleaseCount") { [weak self] in
+            self?.midiCaptureWindowReleaseCount += 1
+        }
+    }
+
+    /// Record arming. Seizes the accumulation window for the take
+    /// from idle or preview under the lock; an undrained take refuses arming.
+    ///
+    /// This is what makes preview contamination structurally impossible rather
+    /// than merely unlikely, and it does not depend on `isRoutineRecording`
+    /// having been published yet:
+    ///
+    /// - Any preview accumulation is discarded HERE, before a take epoch
+    ///   exists, so no preview event can ever be relabelled as take evidence.
+    /// - Ownership becomes `.take` in the same critical section, so a
+    ///   `beginLiveMIDICapture()` that lands after this — including one racing
+    ///   the MainActor publication of `isRoutineRecording` — sees a take owner
+    ///   and refuses. A preview window therefore cannot be open through media
+    ///   start.
+    /// - The generation bump retires every packet already in flight under the
+    ///   preview window; those packets are dropped at the append site rather
+    ///   than entering the take.
+    /// - Returns: the token identifying THIS take's claim on the window. Only
+    ///   this token may later drain or abandon it.
+    @discardableResult
+    private func openMIDIInputForRecording(mediaURL: URL? = nil) -> MIDICaptureTakeToken? {
+        midiCaptureLock.lock()
+        guard midiWindowOwnerStorage != .take else {
+            midiCaptureLock.unlock()
+            return nil
+        }
+        lockedClearCapturedMidiCCEvents()
+        // A previous take's take-start observation must never survive into
+        // this one. It is re-observed at this take's own media-start boundary.
+        activeRoutineCrossfaderTakeStartState = nil
+        let token = MIDICaptureTakeToken(
+            value: midiWindowGenerationStorage + 1, mediaURL: mediaURL
+        )
+        // The port is armed before AVFoundation confirms that media is being
+        // written. Keep the capture epoch closed until didStartRecording so
+        // pre-roll controller traffic cannot enter the take timeline.
+        lockedSetMIDICaptureWindow(owner: .take, epochStartHostTime: 0, takeToken: token)
         #if DEBUG
         debugMidiEventsCapturedThisTake = 0
         #endif
         midiCaptureLock.unlock()
         reconnectSelectedMIDIInput()
+        return token
     }
 
+    /// Opens the take's admission epoch at confirmed media start.
+    ///
+    /// Guarded on `.take` ownership so an epoch can never be opened on a
+    /// preview window — that would relabel preview accumulation as take
+    /// evidence. Arming always precedes this on the same session queue, so the
+    /// guard is an invariant check, not an expected branch; failing it leaves
+    /// the epoch closed, which loses MIDI visibly rather than corrupting it.
+    private func beginMIDIRecordingWindow(at hostTime: CFTimeInterval, token: MIDICaptureTakeToken?) {
+        midiCaptureLock.lock()
+        if midiWindowOwnerStorage == .take, let token, midiWindowTakeTokenStorage == token {
+            lockedSetMIDICaptureWindow(
+                owner: .take,
+                epochStartHostTime: hostTime,
+                takeToken: token
+            )
+        }
+        midiCaptureLock.unlock()
+    }
+
+    /// Closes the take's admission epoch at Stop.
+    ///
+    /// Ownership deliberately STAYS `.take`. A stopped take is not a finished
+    /// one: its events remain in `capturedMidiCCEvents` — including the
+    /// crossfader samples the sidecar is written from — until the finalization
+    /// drain. Keeping ownership here is what closes the stop/finalization gap
+    /// that `isRoutineRecording == false` alone left open, in which a preview
+    /// begin/end could have cleared undrained take evidence.
+    ///
+    /// The generation bump defines what happens to a take packet already in
+    /// flight when Stop begins: it was admitted under the open-epoch window,
+    /// that window is now retired, so it is dropped at the append site instead
+    /// of being appended after the media has stopped.
+    private func closeMIDIRecordingWindow(token: MIDICaptureTakeToken?) {
+        midiCaptureLock.lock()
+        if midiWindowOwnerStorage == .take, let token, midiWindowTakeTokenStorage == token,
+           midiRecordingStartTime != 0 {
+            lockedSetMIDICaptureWindow(owner: .take, epochStartHostTime: 0, takeToken: token)
+        }
+        midiCaptureLock.unlock()
+    }
+
+    /// Releases ONE SPECIFIC take's claim on the window, on a path that will
+    /// never drain it: arming succeeded but recording start threw, or
+    /// finalization ended before a sidecar existed.
+    ///
+    /// Matching on `token` is what stops a stale caller releasing somebody
+    /// else's evidence: a failed start can only abandon the take IT armed,
+    /// never a previous stopped-but-undrained take, and a duplicated
+    /// abandonment is a no-op that publishes nothing.
+    ///
+    /// - Returns: true only if this call performed a real take→idle release.
+    @discardableResult
+    private func releaseAbandonedTakeMIDIWindow(token: MIDICaptureTakeToken) -> Bool {
+        midiCaptureLock.lock()
+        let released = midiWindowOwnerStorage == .take && midiWindowTakeTokenStorage == token
+        if released {
+            lockedClearCapturedMidiCCEvents()
+            lockedSetMIDICaptureWindow(owner: .idle, epochStartHostTime: 0, takeToken: nil)
+        }
+        midiCaptureLock.unlock()
+        if released { publishMIDICaptureWindowRelease() }
+        return released
+    }
+
+    /// Disconnect every source from the input port.
+    ///
+    /// Deliberately leaves `midiConnectionEndpointIdentityStorage` alone: its
+    /// only caller reconnects immediately, and that call is what decides
+    /// whether the new connection continues the previous device session or
+    /// retires it. Any future caller that does NOT reconnect must clear the
+    /// identity itself, or a cached observation would outlive its connection.
     private func closeMIDIInput() {
         guard midiInputPort != 0 else { return }
         for endpoint in midiSourceEndpoints.values {
@@ -9031,14 +11294,34 @@ final class MacCaptureEngine: NSObject, ObservableObject {
         }
     }
 
-    private func drainCapturedMidiCCEvents() -> [CaptureCore.RawMixerMIDIEvent] {
+    /// Takes this take's evidence and releases the window, atomically.
+    ///
+    /// The read, the clear and the ownership release are one critical section,
+    /// so the drain cannot race an append belonging to the same take: an
+    /// append that has already passed its generation check completed before
+    /// this acquired the lock and is therefore included, and an append still
+    /// in flight is retired by the generation bump and dropped. The take's
+    /// evidence is drained exactly once, with no loss and no contamination.
+    /// - Parameter token: the take whose evidence is being drained. A drain
+    ///   for any other take — a stale finalization, a duplicated drain of a
+    ///   take already released — is a no-op that publishes no release.
+    /// - Returns: this take's evidence, or `nil` if the token did not match
+    ///   the take currently owning the window. `nil` and `[]` are deliberately
+    ///   distinct: `[]` means "this take really captured nothing".
+    private func drainCapturedMidiCCEvents(
+        token: MIDICaptureTakeToken
+    ) -> [CaptureCore.RawMixerMIDIEvent]? {
         midiCaptureLock.lock()
-        defer {
-            capturedMidiCCEvents = []
-            midiRecordingStartTime = 0
+        guard midiWindowOwnerStorage == .take, midiWindowTakeTokenStorage == token else {
             midiCaptureLock.unlock()
+            return nil
         }
-        return capturedMidiCCEvents
+        let drained = capturedMidiCCEvents
+        lockedClearCapturedMidiCCEvents()
+        lockedSetMIDICaptureWindow(owner: .idle, epochStartHostTime: 0, takeToken: nil)
+        midiCaptureLock.unlock()
+        publishMIDICaptureWindowRelease()
+        return drained
     }
 
     /// Non-destructive counterpart to `drainCapturedMidiCCEvents()`, guarded
@@ -9053,38 +11336,211 @@ final class MacCaptureEngine: NSObject, ObservableObject {
         return capturedMidiCCEvents
     }
 
-    /// Opens a `capturedMidiCCEvents` accumulation window for a Practice
-    /// attempt's live-notation tracker, WITHOUT touching MIDI port
-    /// connection (already independently established elsewhere) or any
-    /// Capture-only state (sidecar, movement-debug session,
-    /// `activeRoutineDetectedNotationBuilder`). `recordReceivedMIDICCEvent`
-    /// only appends while `midiRecordingStartTime > 0`, so this is what
-    /// makes the same accumulator Capture drains at finalization also fill
-    /// during Practice — same buffer, same append/lock semantics, no second
-    /// capture path. A no-op while a real Capture take is already recording
-    /// (`midiRecordingStartTime` already nonzero), so it can never reset an
-    /// in-progress take's events.
+    // MARK: - Pre-record live preview window
+    //
+    // Retention policy below is PROVISIONAL ENGINEERING POLICY. None of these
+    // numbers is hardware-calibrated or derived from a measured controller
+    // rate; they are chosen to keep an unbounded surface bounded, and they may
+    // be changed without changing any contract. What is NOT provisional is
+    // that both bounds hold, and that they apply to preview accumulation only.
+
+    /// Trailing window the PRE-RECORD live preview keeps, in seconds.
+    ///
+    /// PROVISIONAL. A take is bounded by its own duration; a preview window is
+    /// bounded by nothing — the operator can sit on the authoring screen with
+    /// the platter turning for as long as they like. 15 s is a policy choice,
+    /// comfortably above the widest domain the live card ever draws
+    /// (`LivePerformedNotationCard.renderedDomain` builds a 3.2-second-wide
+    /// range), but it is NOT derived from that number and no measurement
+    /// establishes it as correct.
+    static let livePreviewRetentionSeconds: Double = 15
+
+    /// Hard ceiling on the number of preview events held, independent of any
+    /// timestamp.
+    ///
+    /// PROVISIONAL. The time bound alone is not a bound on memory: it bounds a
+    /// SPAN, and the number of events inside a span depends entirely on the
+    /// controller's message rate, which this code does not measure. This
+    /// count is the bound that holds regardless of rate.
+    static let livePreviewMaximumEventCount = 32_000
+
+    /// Count a trim reduces preview accumulation TO, once the ceiling above is
+    /// exceeded.
+    ///
+    /// PROVISIONAL. It exists only so the count rule is amortised the same way
+    /// the span rule already is: without a lower watermark, every append past
+    /// the ceiling would trigger an O(n) copy. With it, a trim runs about once
+    /// per `livePreviewMaximumEventCount - livePreviewTrimTargetEventCount`
+    /// appends, and the ceiling still holds after every single append.
+    static let livePreviewTrimTargetEventCount = 24_000
+
+    /// Multiple of `livePreviewRetentionSeconds` the held span may reach
+    /// before a trim runs.
+    ///
+    /// PROVISIONAL. It exists so the trim is amortised — roughly once per
+    /// retention window instead of an O(n) copy on every message — and it is
+    /// the reason the proven span bound is `2 ×` the retention window rather
+    /// than exactly the retention window.
+    static let livePreviewTrimSpanMultiplier: Double = 2
+
+    /// Whether preview accumulation currently needs trimming.
+    ///
+    /// Pure, so both bounds are testable without a MIDI device. Either bound
+    /// alone triggers a trim, which is what makes the post-append invariant
+    /// hold unconditionally: after ANY preview append, the held count is at
+    /// most `maximumEventCount` and the held span is at most
+    /// `retentionSeconds × livePreviewTrimSpanMultiplier`.
+    ///
+    /// This runs only on append. An idle preview buffer is therefore not
+    /// re-trimmed — but it is also not growing, so it continues to satisfy the
+    /// bounds it satisfied at its last append. There is no idle expiry and
+    /// none is claimed.
+    static func livePreviewNeedsTrim(
+        heldCount: Int,
+        oldestTimestamp: Double?,
+        newestTimestamp: Double?,
+        retentionSeconds: Double = livePreviewRetentionSeconds,
+        maximumEventCount: Int = livePreviewMaximumEventCount
+    ) -> Bool {
+        if heldCount > maximumEventCount { return true }
+        guard let oldestTimestamp, let newestTimestamp else { return false }
+        // Running minimum and maximum, NOT the first and last array elements:
+        // MIDI host times are not guaranteed to arrive in order.
+        return newestTimestamp - oldestTimestamp > retentionSeconds * livePreviewTrimSpanMultiplier
+    }
+
+    /// Drops preview events older than `retentionSeconds` before `now`, then
+    /// caps what remains at the most recently ARRIVED `maximumEventCount`.
+    ///
+    /// The time bound FILTERS rather than slicing a prefix: MIDI timestamps
+    /// can arrive out of order, so the leading elements are not reliably the
+    /// oldest and dropping a prefix could discard a recent event while keeping
+    /// a stale one. The count bound keeps the tail because array order is
+    /// arrival order, which is the only ordering this buffer actually
+    /// guarantees.
+    ///
+    /// Pure, so the retention rule is testable without a MIDI device. Returns
+    /// the input unchanged when neither bound bites, so the common case
+    /// allocates nothing.
+    static func trimmedLivePreviewEvents(
+        _ events: [CaptureCore.RawMixerMIDIEvent],
+        now: Double,
+        retentionSeconds: Double = livePreviewRetentionSeconds,
+        maximumEventCount: Int = livePreviewMaximumEventCount
+    ) -> [CaptureCore.RawMixerMIDIEvent] {
+        guard maximumEventCount > 0 else { return [] }
+        let cutoff = now - retentionSeconds
+        var kept = events
+        if kept.contains(where: { $0.timestamp < cutoff }) {
+            kept = kept.filter { $0.timestamp >= cutoff }
+        }
+        if kept.count > maximumEventCount {
+            kept = Array(kept.suffix(maximumEventCount))
+        }
+        return kept
+    }
+
+    /// Opens a `capturedMidiCCEvents` accumulation window for a live-notation
+    /// tracker — Reference Authoring before Record, and Practice — WITHOUT
+    /// touching MIDI port connection (already independently established
+    /// elsewhere) or any Capture-only state (sidecar, movement-debug session,
+    /// `activeRoutineDetectedNotationBuilder`). Same buffer, same append/lock
+    /// semantics as the one Capture drains at finalization; no second capture
+    /// path.
+    ///
+    /// Claims the window ONLY from `.idle`, decided under `midiCaptureLock`
+    /// against the lock-owned owner rather than against any `@Published` flag.
+    /// That single condition covers every case the published flags covered
+    /// separately and the ones they did not:
+    ///
+    /// - An armed or recording take owns the window, so this cannot reset it —
+    ///   including inside the arming gap, where `isRoutineRecording` may not
+    ///   have been published yet and the take epoch is deliberately still 0.
+    /// - A STOPPED but undrained take still owns the window, so this cannot
+    ///   clear evidence in the stop→finalization gap, in which
+    ///   `isRoutineRecording` is already false and
+    ///   `isRoutineFinalizationPending` is not yet true.
+    /// - An already-open preview window is left exactly as it is, so repeated
+    ///   route entry never discards the trace on screen.
+    ///
+    /// Idempotent and cheap, so it is safe to call from every re-arm trigger.
     func beginLiveMIDICapture() {
         midiCaptureLock.lock()
-        if midiRecordingStartTime == 0 {
-            capturedMidiCCEvents = []
-            midiRecordingStartTime = CACurrentMediaTime()
+        if midiWindowOwnerStorage == .idle {
+            lockedClearCapturedMidiCCEvents()
+            lockedSetMIDICaptureWindow(
+                owner: .preview,
+                epochStartHostTime: CACurrentMediaTime(),
+                takeToken: nil
+            )
         }
         midiCaptureLock.unlock()
     }
 
-    /// Closes the accumulation window `beginLiveMIDICapture()` opened, when
-    /// nothing else owns it. Never touches state while
-    /// `isRoutineRecording == true` — Capture's own finalization path
-    /// (`drainCapturedMidiCCEvents()`) remains the sole owner of ending a
-    /// real take's window.
+    /// Closes the accumulation window `beginLiveMIDICapture()` opened.
+    ///
+    /// Acts ONLY when the preview still owns the window, decided under
+    /// `midiCaptureLock`. It can therefore never clear a take's evidence:
+    /// not while recording, not in the arming gap, and not in the
+    /// stop→finalization gap where the take is stopped but undrained.
+    /// Capture's own `drainCapturedMidiCCEvents()` remains the sole owner of
+    /// ending a real take's window.
     func endLiveMIDICaptureIfIdle() {
-        guard !isRoutineRecording else { return }
         midiCaptureLock.lock()
-        capturedMidiCCEvents = []
-        midiRecordingStartTime = 0
+        if midiWindowOwnerStorage == .preview {
+            lockedClearCapturedMidiCCEvents()
+            lockedSetMIDICaptureWindow(owner: .idle, epochStartHostTime: 0, takeToken: nil)
+        }
         midiCaptureLock.unlock()
     }
+
+    #if DEBUG
+    /// Test-only drivers for the exact private window transitions the capture
+    /// lifecycle performs, so ownership interleavings can be exercised without
+    /// a camera, a movie writer or a MIDI device. Each forwards to the
+    /// production function; none reimplements one.
+    @discardableResult
+    func testOnly_armTakeMIDIWindow() -> MIDICaptureTakeToken { openMIDIInputForRecording()! }
+    func testOnly_tryArmTakeMIDIWindow(mediaURL: URL) -> MIDICaptureTakeToken? {
+        openMIDIInputForRecording(mediaURL: mediaURL)
+    }
+    func testOnly_midiTakeToken(for mediaURL: URL) -> MIDICaptureTakeToken? {
+        midiTakeToken(for: mediaURL)
+    }
+    func testOnly_finalizeWithoutSidecar(mediaURL: URL, token: MIDICaptureTakeToken) {
+        precondition(activeRoutineRecordingSidecar == nil)
+        finalizeRoutineRecording(outputFileURL: mediaURL, error: nil, midiTakeToken: token)
+    }
+    func testOnly_openTakeMIDIEpoch(at hostTime: CFTimeInterval) {
+        beginMIDIRecordingWindow(at: hostTime, token: midiCaptureWindowTicket.takeToken)
+    }
+    func testOnly_closeTakeMIDIEpoch() { closeMIDIRecordingWindow(token: midiCaptureWindowTicket.takeToken) }
+    @discardableResult
+    func testOnly_drainTakeMIDIWindow(
+        token: MIDICaptureTakeToken
+    ) -> [CaptureCore.RawMixerMIDIEvent]? {
+        drainCapturedMidiCCEvents(token: token)
+    }
+    @discardableResult
+    func testOnly_releaseAbandonedTakeMIDIWindow(token: MIDICaptureTakeToken) -> Bool {
+        releaseAbandonedTakeMIDIWindow(token: token)
+    }
+    /// Installs the append-site interleaving seam under `midiCaptureLock`, so
+    /// installing it never races the Core MIDI read thread that reads it.
+    func testOnly_setMIDIAppendInterleavingHook(
+        _ hook: ((MIDICaptureWindowTicket) -> Void)?
+    ) {
+        midiCaptureLock.lock()
+        testOnly_midiAppendInterleavingHook = hook
+        midiCaptureLock.unlock()
+    }
+    /// Packets dropped at the append site because their window was retired.
+    var testOnly_midiEventsRejectedAsStale: Int {
+        midiCaptureLock.lock()
+        defer { midiCaptureLock.unlock() }
+        return debugMidiEventsRejectedAsStale
+    }
+    #endif
 
     /// Non-destructive camera-fallback movement snapshot for
     /// `LivePerformedNotationTracker` — the exact same builder/method
@@ -9108,7 +11564,16 @@ final class MacCaptureEngine: NSObject, ObservableObject {
         LivePerformedNotationDataSource(
             selectedMIDISourceName: { [weak self] in self?.selectedMIDIInputSourceName ?? "Not Connected" },
             capturedMidiCCEventsSnapshot: { [weak self] in self?.capturedMidiCCEventsSnapshot() ?? [] },
-            cameraMovementEventsSnapshot: { [weak self] now in self?.cameraMovementEventsSnapshot(now: now) }
+            cameraMovementEventsSnapshot: { [weak self] now in self?.cameraMovementEventsSnapshot(now: now) },
+            activeCrossfaderCalibration: { [weak self] in
+                guard let self else { return nil }
+                guard let mapping = self.persistedCrossfaderMappingSnapshot else { return nil }
+                return self.crossfaderCalibration(
+                    forDeviceName: self.selectedMIDIInputSourceName,
+                    channel: mapping.channel,
+                    controller: mapping.controller
+                )
+            }
         )
     }
 
@@ -9119,7 +11584,14 @@ final class MacCaptureEngine: NSObject, ObservableObject {
         )
         let now = CACurrentMediaTime()
         midiCaptureLock.lock()
-        let startTime = midiRecordingStartTime
+        // The WHOLE window identity, taken atomically at ingress. This
+        // deliberately replaces a bare `midiRecordingStartTime` read: an epoch
+        // on its own carries no owner and no generation, so a cached epoch
+        // could survive an arming and admit a preview packet into a take whose
+        // own epoch was still zero. A ticket cannot: it is validated unchanged
+        // immediately before the append, and a retired generation drops the
+        // packet.
+        let ingressTicket = lockedMIDICaptureWindowTicket()
         let deviceName = midiConnectedSourceName
         midiCaptureLock.unlock()
 
@@ -9173,7 +11645,7 @@ final class MacCaptureEngine: NSObject, ObservableObject {
                 dispatchMIDIChannelVoiceMessage(
                     message,
                     deviceName: deviceName,
-                    startTime: startTime,
+                    ingressTicket: ingressTicket,
                     now: now
                 )
             }
@@ -9225,7 +11697,7 @@ final class MacCaptureEngine: NSObject, ObservableObject {
     private func dispatchMIDIChannelVoiceMessage(
         _ message: MIDIChannelMessageParser.Message,
         deviceName: String,
-        startTime: CFTimeInterval,
+        ingressTicket: MIDICaptureWindowTicket,
         now: CFTimeInterval
     ) {
         let statusByte = message.status
@@ -9250,7 +11722,10 @@ final class MacCaptureEngine: NSObject, ObservableObject {
             evaluateCurveCaptureForCC(channel: channel, controller: controller, value: value)
             evaluateUserMixerGainForCC(channel: channel, controller: controller, value: value)
 
-            let mappedControl: String? = (currentMapping?.channel == channel && currentMapping?.controller == controller) ? "crossfader" : nil
+            let mappedControl = mappedMixerControlForCC(channel: channel, controller: controller)
+                ?? ((currentMapping?.channel == channel && currentMapping?.controller == controller)
+                    ? MIDISemanticAction.crossfader.rawValue
+                    : nil)
             if mappedControl == "crossfader" {
                 ScratchLabPerformanceSignpost.event("FaderMap", count: value)
             }
@@ -9302,7 +11777,7 @@ final class MacCaptureEngine: NSObject, ObservableObject {
                 value: value,
                 mappedControl: mappedControl,
                 timestamp: now,
-                recordingStartTime: startTime,
+                ingressTicket: ingressTicket,
                 consumedByLearn: learnResult.consumedByLearn
             )
 #if DEBUG
@@ -9407,6 +11882,176 @@ final class MacCaptureEngine: NSObject, ObservableObject {
         reconnectSelectedMIDIInput()
     }
 
+    // MARK: - Crossfader calibration
+
+    /// Directory the shared `CrossfaderCalibrationStore` persists into.
+    ///
+    /// Sits beside `RoutineCaptures` under Application Support so a
+    /// calibration survives app restarts and travels with the capture folder
+    /// an operator would back up.
+    static func crossfaderCalibrationDirectoryURL(
+        fileManager: FileManager = .default
+    ) -> URL {
+        let baseDirectory = fileManager.urls(for: .applicationSupportDirectory, in: .userDomainMask).first
+            ?? fileManager.urls(for: .documentDirectory, in: .userDomainMask).first
+            ?? fileManager.homeDirectoryForCurrentUser.appendingPathComponent("Documents", isDirectory: true)
+        return baseDirectory
+            .appendingPathComponent("ScratchLab", isDirectory: true)
+            .appendingPathComponent("Calibration", isDirectory: true)
+    }
+
+    var crossfaderCalibrationStore: CrossfaderCalibrationStore {
+        CrossfaderCalibrationStore(
+            directoryURL: crossfaderCalibrationDirectoryOverride
+                ?? Self.crossfaderCalibrationDirectoryURL()
+        )
+    }
+
+    /// Re-read calibrations from disk into the MIDI-thread cache.
+    ///
+    /// Must be called after saving a calibration. The cache exists because
+    /// `recordReceivedMIDICCEvent` runs on the Core MIDI read thread at up to
+    /// ~800 Hz for a single platter; touching the file system there would be
+    /// a real-time violation.
+    func reloadCrossfaderCalibrations() {
+        let loaded = crossfaderCalibrationStore.load().calibrations
+        midiCaptureLock.lock()
+        cachedCrossfaderCalibrations = loaded
+        midiCaptureLock.unlock()
+    }
+
+    /// The learned crossfader MIDI address, if MIDI Learn has confirmed one —
+    /// read-only external mirror of the private `persistedCrossfaderMapping`,
+    /// for callers (reference-authoring preflight) that need to know WHICH
+    /// address is the crossfader without duplicating the learn/persist logic
+    /// that already lives here.
+    var persistedCrossfaderMappingSnapshot: CrossfaderCCMapping? {
+        midiCaptureLock.lock()
+        defer { midiCaptureLock.unlock() }
+        return persistedCrossfaderMapping
+    }
+
+    /// The calibration for one live MIDI address, or `nil`.
+    ///
+    /// Matches on device NAME here because that is the only device identity
+    /// the CC read path carries; the calibration was written with the same
+    /// name as its identifier by `ReferenceAuthoringModel`. Channel and CC
+    /// must match exactly - a calibration for the crossfader is never applied
+    /// to the platter's CC.
+    func crossfaderCalibration(
+        forDeviceName deviceName: String,
+        channel: Int,
+        controller: Int
+    ) -> CrossfaderCalibration? {
+        midiCaptureLock.lock()
+        let calibrations = cachedCrossfaderCalibrations
+        midiCaptureLock.unlock()
+        return calibrations.first {
+            $0.address.matches(
+                deviceIdentifier: deviceName,
+                channel: channel,
+                controller: controller
+            )
+        }
+    }
+
+    // MARK: - Live MIDI CC observability (reference-authoring preflight/calibration)
+
+    /// One MIDI address's most recent observation, independent of whether a
+    /// take is currently recording.
+    struct LiveCCObservation: Equatable {
+        let deviceName: String
+        let channel: Int
+        let controller: Int
+        let value: Int
+        let calibratedPosition: Double?
+        let observedAt: CFTimeInterval
+        /// How many CC messages have been observed on this address since app
+        /// launch (or since a value was last observed for it). Not reset by a
+        /// take starting or stopping — a session-lifetime activity counter for
+        /// the preflight panel's event counts, not a take-scoped one.
+        let eventCount: Int
+        /// The MIDI input connection this observation was received on. A
+        /// cached value outlives the connection that produced it, so this is
+        /// what stops a reading from an unplugged device being adopted as a
+        /// take's baseline.
+        let connectionGeneration: UInt64
+        /// Identity of the calibration in force when the reading arrived, or
+        /// `nil` when none was. Travels with the reading so a later consumer
+        /// can refuse a value measured under a different calibration.
+        let calibrationID: String?
+    }
+
+    /// Current MIDI input connection generation. See
+    /// `midiConnectionGenerationStorage`.
+    var midiConnectionGeneration: UInt64 {
+        midiCaptureLock.lock()
+        defer { midiCaptureLock.unlock() }
+        return midiConnectionGenerationStorage
+    }
+
+    /// Latest observation per (channel, controller), updated on EVERY CC
+    /// message received via `recordLiveCCObservation`.
+    ///
+    /// Deliberately separate from `capturedMidiCCEvents`: that buffer only
+    /// accumulates only while a preview or take epoch is open and is cleared
+    /// at their boundaries, so it cannot reliably answer "what is the crossfader
+    /// doing right now" during reference-authoring preflight or a crossfader
+    /// calibration sweep — both need a live read *before* recording begins.
+    /// Guarded by `midiCaptureLock`; bounded to one entry per distinct
+    /// (channel, controller) actually seen, a handful at most.
+    private var latestCCObservationsByAddress: [String: LiveCCObservation] = [:]
+
+    private static func ccObservationKey(channel: Int, controller: Int) -> String {
+        "\(channel):\(controller)"
+    }
+
+    /// Called unconditionally from `recordReceivedMIDICCEvent`, before that
+    /// function's recording-window gate — see the doc comment on
+    /// `latestCCObservationsByAddress`.
+    private func recordLiveCCObservation(
+        deviceName: String,
+        channel: Int,
+        controller: Int,
+        value: Int,
+        calibratedPosition: Double?,
+        calibrationID: String?,
+        observedAt: CFTimeInterval
+    ) {
+        let key = Self.ccObservationKey(channel: channel, controller: controller)
+        midiCaptureLock.lock()
+        let priorCount = latestCCObservationsByAddress[key]?.eventCount ?? 0
+        latestCCObservationsByAddress[key] = LiveCCObservation(
+            deviceName: deviceName,
+            channel: channel,
+            controller: controller,
+            value: value,
+            calibratedPosition: calibratedPosition,
+            observedAt: observedAt,
+            eventCount: priorCount + 1,
+            connectionGeneration: midiConnectionGenerationStorage,
+            calibrationID: calibrationID
+        )
+        midiCaptureLock.unlock()
+    }
+
+    /// The latest observation on one address, or `nil` if nothing has been
+    /// received on it since app launch.
+    func latestCCObservation(channel: Int, controller: Int) -> LiveCCObservation? {
+        midiCaptureLock.lock()
+        defer { midiCaptureLock.unlock() }
+        return latestCCObservationsByAddress[Self.ccObservationKey(channel: channel, controller: controller)]
+    }
+
+    /// Every address observed since app launch, most-recent first. Used to
+    /// discover which address the operator is currently moving during a
+    /// calibration sweep, before any address has been confirmed.
+    func allLiveCCObservations() -> [LiveCCObservation] {
+        midiCaptureLock.lock()
+        defer { midiCaptureLock.unlock() }
+        return latestCCObservationsByAddress.values.sorted { $0.observedAt > $1.observedAt }
+    }
+
     /// Monitors/records an already-classified CC event. This function must
     /// NEVER learn, persist, cancel, or change any mapping — the sole,
     /// action-aware learn consumer is `evaluateMIDILearnForCC`, called
@@ -9419,16 +12064,51 @@ final class MacCaptureEngine: NSObject, ObservableObject {
         value: Int,
         mappedControl: String? = nil,
         timestamp: Double = CACurrentMediaTime(),
-        recordingStartTime: CFTimeInterval? = nil,
+        ingressTicket: MIDICaptureWindowTicket? = nil,
         consumedByLearn: Bool = false
     ) {
+        // Window identity at INGRESS. `receiveMIDIPacketList` already took one
+        // for the whole packet list; a direct caller takes its own here. There
+        // is deliberately no caller-supplied epoch parameter any more — an
+        // epoch that is not part of a ticket cannot be validated, and allowing
+        // one to override the ticket was how a preview packet could be
+        // admitted into a take whose epoch was still zero.
         midiCaptureLock.lock()
         let effectiveMapping = persistedCrossfaderMapping
+        let admissionTicket = ingressTicket ?? lockedMIDICaptureWindowTicket()
+        #if DEBUG
+        let interleavingHook = testOnly_midiAppendInterleavingHook
+        #endif
         midiCaptureLock.unlock()
 
         let effectiveMappedControl = mappedControl
             ?? ((effectiveMapping?.channel == channel && effectiveMapping?.controller == controller) ? "crossfader" : nil)
+        // Full-range position. Kept for schema continuity, and it is the only
+        // number available for a control that has not been calibrated - but it
+        // is NOT a deck position, so it is never what the calibrated
+        // derivation measures. See `RawMixerMIDIEvent.normalizedValue`.
         let normalizedValue = Double(value) / 127.0
+        // Calibrated position across this deck's active half, when a
+        // calibration exists for exactly this device + channel + CC. Absent
+        // calibration this stays `nil`; it is never back-filled from
+        // `normalizedValue`, because assuming the fader spans 0-127 is the
+        // defect this replaces.
+        let activeCalibration = crossfaderCalibration(
+            forDeviceName: sourceName,
+            channel: channel,
+            controller: controller
+        )
+        let calibratedPosition = activeCalibration?.normalized(rawValue: value)
+        let calibrationID = calibratedPosition == nil ? nil : activeCalibration?.id
+        recordLiveCCObservation(
+            deviceName: sourceName,
+            channel: channel,
+            controller: controller,
+            value: value,
+            calibratedPosition: calibratedPosition,
+            calibrationID: calibrationID,
+            observedAt: timestamp
+        )
         // Rane ONE MK2 pad candidate labelling — diagnostic only; no routing, no scoring.
         let padLabel = RaneOneMK2PadCandidateLabeler.label(channel: channel, cc: controller, value: value)
         let summary: String
@@ -9544,21 +12224,85 @@ final class MacCaptureEngine: NSObject, ObservableObject {
             }
         }
 
-        let startTime = recordingStartTime ?? midiRecordingStartTime
-        guard startTime > 0 else { return }
+        // Deterministic interleaving seam, bracketing the real
+        // INGRESS-TICKET → APPEND interval, with `midiCaptureLock` NOT held.
+        #if DEBUG
+        interleavingHook?(admissionTicket)
+        #endif
 
-        let event = CaptureCore.RawMixerMIDIEvent(
+        // The ticket is validated UNCHANGED and the event is appended in ONE
+        // critical section, so nothing — arming, media start, stop, the
+        // finalization drain, or a preview begin/end — can land between "this
+        // packet belongs to window G" and "this packet is in window G".
+        //
+        // A packet whose window has since been retired is DROPPED. It never
+        // enters the successor window, in either direction: a preview packet
+        // cannot become take evidence, and a take packet cannot be appended
+        // into a preview or into a window that has already been drained.
+        midiCaptureLock.lock()
+        guard admissionTicket.owner != .idle,
+              lockedMIDICaptureWindowTicket() == admissionTicket else {
+            // Compare owner, generation, epoch and optional token together.
+            // Even a malformed caller ticket cannot supply a replacement epoch.
+            #if DEBUG
+            debugMidiEventsRejectedAsStale += 1
+            #endif
+            midiCaptureLock.unlock()
+            return
+        }
+        // The ticket's own epoch is the ONLY epoch. Zero always rejects: it is
+        // zero from arming until `didStartRecordingTo` confirms media start,
+        // and again from Stop until the drain, so controller traffic from the
+        // count-in, from writer startup and from after the media ended never
+        // enters the take timeline. `takeRelativeTime` also refuses any
+        // instant before the epoch, so a packet outside this window's
+        // host-time boundary is never relabelled as evidence belonging to it.
+        guard admissionTicket.epochStartHostTime > 0,
+              let takeRelativeTime = RoutineTakeTimeline.takeRelativeTime(
+                  hostTime: timestamp,
+                  mediaStartHostTime: admissionTicket.epochStartHostTime
+              ) else {
+            midiCaptureLock.unlock()
+            return
+        }
+
+        capturedMidiCCEvents.append(CaptureCore.RawMixerMIDIEvent(
             timestamp: timestamp,
-            takeRelativeTime: max(0, timestamp - startTime),
+            takeRelativeTime: takeRelativeTime,
             deviceName: sourceName,
             channel: channel,
             controller: controller,
             value: value,
             normalizedValue: normalizedValue,
-            mappedControl: effectiveMappedControl
-        )
-        midiCaptureLock.lock()
-        capturedMidiCCEvents.append(event)
+            mappedControl: effectiveMappedControl,
+            calibratedPosition: calibratedPosition,
+            calibrationID: calibrationID
+        ))
+        // Running extremes, maintained in O(1). Not `first`/`last`: MIDI host
+        // times are not guaranteed to arrive in order.
+        livePreviewOldestTimestamp = min(livePreviewOldestTimestamp ?? timestamp, timestamp)
+        livePreviewNewestTimestamp = max(livePreviewNewestTimestamp ?? timestamp, timestamp)
+        // Preview-only retention, gated on LOCK-OWNED ownership rather than on
+        // any published flag. A take owns its window from arming until the
+        // drain, so take evidence is unreachable from here by construction and
+        // is never trimmed however long the take runs.
+        if midiWindowOwnerStorage == .preview,
+           Self.livePreviewNeedsTrim(
+               heldCount: capturedMidiCCEvents.count,
+               oldestTimestamp: livePreviewOldestTimestamp,
+               newestTimestamp: livePreviewNewestTimestamp
+           ) {
+            // Trimmed DOWN TO the target, not to the ceiling, so the count
+            // rule is amortised exactly as the span rule is.
+            capturedMidiCCEvents = Self.trimmedLivePreviewEvents(
+                capturedMidiCCEvents,
+                now: livePreviewNewestTimestamp ?? timestamp,
+                maximumEventCount: Self.livePreviewTrimTargetEventCount
+            )
+            // Recomputed only here, not per append.
+            livePreviewOldestTimestamp = capturedMidiCCEvents.map(\.timestamp).min()
+            livePreviewNewestTimestamp = capturedMidiCCEvents.map(\.timestamp).max()
+        }
         #if DEBUG
         debugMidiEventsCapturedThisTake += 1
         #endif
@@ -9759,7 +12503,10 @@ final class MacCaptureEngine: NSObject, ObservableObject {
         let isTemporaryAhhhFallback =
             ((channel == 4 || channel == 5) && (noteNumber == 20 || noteNumber == 24)) ||
             (channel == 6 && noteNumber == 20)
-        if isTemporaryAhhhFallback, routedSampleID == nil, !productionMatched {
+        if isTemporaryAhhhFallback,
+           routedSampleID == nil,
+           !productionMatched,
+           allowsLocalScratchPlayback {
             print("[RanePad] TEMP diagnostic direct load · sampleID=dvs_ahhh channel=\(channel) note=\(noteNumber) velocity=\(velocity)")
             scratchPlaybackController.load(sampleID: "dvs_ahhh", playDiagnosticPreview: false)
             testOnly_hotCueLoadObserver?("dvs_ahhh")
@@ -9780,6 +12527,7 @@ final class MacCaptureEngine: NSObject, ObservableObject {
     // Loads `dvs_ahhh`, not the legacy raw `ahhh` — product decision 2026-08-14:
     // dvs_ahhh is the only user-facing "Ahh" sample.
     private func handleTemporaryDirectAhhhTrigger(rawValue: Int) {
+        guard allowsLocalScratchPlayback else { return }
         if rawValue > 120, tempDirectAhhhTriggerArmed {
             tempDirectAhhhTriggerArmed = false
             print("[ScratchSamplePlaybackBridge] TEMP direct ahhh trigger fired · source=cc8 raw=\(rawValue)")
@@ -9790,11 +12538,48 @@ final class MacCaptureEngine: NSObject, ObservableObject {
         }
     }
 
+    /// The MIDI connection generation a connection to `next` must carry,
+    /// given that the port was last connected to `previous`.
+    ///
+    /// Returns `current` unchanged for the ONE case that is not a change of
+    /// device session: reconnecting to the exact same endpoint of the exact
+    /// same selected source. That reconnect is an implementation detail of
+    /// arming the port for a take, and an observation captured just before it
+    /// describes the same physical control on the same open device.
+    ///
+    /// Advances — retiring every cached observation — for everything else,
+    /// which is every way the device session can actually have changed:
+    /// a different selected source, a different endpoint reference behind the
+    /// same source (an unplug/replug, which Core MIDI gives a fresh ref), a
+    /// connect that resolved no endpoint at all, and the first connect of the
+    /// process. Absent identity on either side is treated as a change, never
+    /// as a match.
+    static func nextMIDIConnectionGeneration(
+        current: UInt64,
+        previous: MIDIConnectionEndpointIdentity?,
+        next: MIDIConnectionEndpointIdentity?
+    ) -> UInt64 {
+        guard let next, let previous, next == previous else { return current &+ 1 }
+        return current
+    }
+
     private func reconnectSelectedMIDIInput() {
         guard midiInputPort != 0 else { return }
         closeMIDIInput()
         guard let selectedSource = availableMIDISources.first(where: { $0.id == selectedMIDIInputSourceID }),
               let endpoint = midiSourceEndpoints[selectedSource] else {
+            // The selection resolved to nothing, so there is no open device
+            // session any more. Retire the generation and the identity
+            // together: a cached reading must never outlive the connection it
+            // arrived on.
+            midiCaptureLock.lock()
+            midiConnectionGenerationStorage = Self.nextMIDIConnectionGeneration(
+                current: midiConnectionGenerationStorage,
+                previous: midiConnectionEndpointIdentityStorage,
+                next: nil
+            )
+            midiConnectionEndpointIdentityStorage = nil
+            midiCaptureLock.unlock()
             publishOnMainAsync(field: "midiListeningState") { [weak self] in
                 guard let self else { return }
                 let next = self.availableMIDISources.isEmpty ? "Not Connected" : "Source Missing"
@@ -9803,8 +12588,18 @@ final class MacCaptureEngine: NSObject, ObservableObject {
             return
         }
 
+        let endpointIdentity = MIDIConnectionEndpointIdentity(
+            sourceID: selectedSource.id,
+            endpointRef: endpoint
+        )
         midiCaptureLock.lock()
         midiConnectedSourceName = selectedSource.name
+        midiConnectionGenerationStorage = Self.nextMIDIConnectionGeneration(
+            current: midiConnectionGenerationStorage,
+            previous: midiConnectionEndpointIdentityStorage,
+            next: endpointIdentity
+        )
+        midiConnectionEndpointIdentityStorage = endpointIdentity
         midiCaptureLock.unlock()
         MIDIPortConnectSource(midiInputPort, endpoint, nil)
         // Load any saved device mapping for this source.
@@ -9821,6 +12616,8 @@ final class MacCaptureEngine: NSObject, ObservableObject {
         batchedMidiCCMessage = ""
         batchedMidiSummary = "No MIDI received yet"
         lastMidiMonitorPublishTime = 0
+        pendingControllerActivity = PendingControllerActivity()
+        isControllerActivityPublishPending = false
         midiCaptureLock.unlock()
         publishOnMainAsync(field: "midiMonitorReset") { [weak self] in
             guard let self else { return }
@@ -9828,7 +12625,15 @@ final class MacCaptureEngine: NSObject, ObservableObject {
             self.lastMIDIEventSummary = "No MIDI received yet"
             self.lastMIDICCMessage = "CC -- Ch -- Value --"
             if self.midiLearnFeedback != "" { self.midiLearnFeedback = "" }
+            self.midiLearnObservedRawValue = nil
             self.lastScratchBankPadLabel = ""
+            self.liveCrossfaderRawValue = nil
+            self.liveLeftUpfaderRawValue = nil
+            self.liveRightUpfaderRawValue = nil
+            self.liveHotCueIndex = nil
+            self.liveHotCueSampleID = nil
+            self.leftUpfaderOutputGain = 1.0
+            self.leftUpfaderOutputHandler?(1.0)
 #if DEBUG
             self.lastRawPadDiagnostic = ""
 #endif
@@ -10407,6 +13212,9 @@ extension MacCaptureEngine: AVCaptureVideoDataOutputSampleBufferDelegate, AVCapt
                 count: Int(CMSampleBufferGetNumSamples(sampleBuffer))
             )
             appendRoutineAudioSampleBufferIfNeeded(sampleBuffer)
+            #if DEBUG
+            accumulateChannelMapDiagnosticSampleBufferIfNeeded(sampleBuffer)
+            #endif
         }
         guard shouldProcessCaptureSamples else { return }
         let signpostID = ScratchLabPerformanceSignpost.begin("CaptureFrameProcess")
@@ -10422,6 +13230,38 @@ extension MacCaptureEngine: AVCaptureVideoDataOutputSampleBufferDelegate, AVCapt
 
 extension MacCaptureEngine: AVCaptureFileOutputRecordingDelegate {
     nonisolated func fileOutput(_ output: AVCaptureFileOutput, didStartRecordingTo fileURL: URL, from connections: [AVCaptureConnection]) {
+        // AVFoundation has confirmed the first sample buffer is being written.
+        // This — not `startRecording(to:)` — is take-relative zero for every
+        // capture source, and the instant the requested take length starts
+        // counting down.
+        // The generation this exact media start belongs to. Correlating the
+        // take-start control state with it is what stops a snapshot observed
+        // for one take being adopted by the next.
+        guard let midiTakeToken = midiTakeToken(for: fileURL) else { return }
+        let startedToken = routineRecordingBoundaryLedger.didStartRecording(mediaURL: fileURL)
+        let epoch = beginRoutineMediaEpoch(at: CACurrentMediaTime())
+        beginRoutineTakeTimelines(at: epoch.mediaStart, token: startedToken, midiTakeToken: midiTakeToken)
+        if let audioURL = pendingRoutineOutputAudioURL {
+            do {
+                try scratchPlaybackController.beginRoutineOutputCapture(
+                    destinationURL: audioURL
+                )
+            } catch {
+                pendingRoutineOutputAudioURL = nil
+                noteRoutineStopReason(.captureError)
+                endRoutineMediaEpoch()
+                let message = error.localizedDescription
+                Task { @MainActor in
+                    self.reportRoutineRecordingIssue(message)
+                }
+                output.stopRecording()
+                return
+            }
+        }
+        scheduleRoutineTimedStop(
+            mediaStartHostTime: epoch.mediaStart,
+            maximumDurationSeconds: epoch.maximumDuration
+        )
         Task { @MainActor in
             self.isRoutineRecording = true
             self.routineRecordingStatus = "Recording \(fileURL.lastPathComponent)"
@@ -10429,15 +13269,64 @@ extension MacCaptureEngine: AVCaptureFileOutputRecordingDelegate {
     }
 
     nonisolated func fileOutput(_ output: AVCaptureFileOutput, didFinishRecordingTo outputFileURL: URL, from connections: [AVCaptureConnection], error: Error?) {
+        // One authoritative boundary: the media file has finished, so the take
+        // timeline closes here for MIDI, movement, platter, and the onboard
+        // audio tap alike.
+        guard let midiTakeToken = midiTakeToken(for: outputFileURL) else { return }
+        endRoutineMediaEpoch()
+        closeMIDIRecordingWindow(token: midiTakeToken)
+        pendingRoutineOutputAudioURL = nil
         audioQueue.sync {
             let snapshot = self.activeRoutineAudioCaptureWriter?.diagnosticsSnapshot()
             self.activeRoutineAudioCaptureWriter = nil
             self.publishRoutineAudioCaptureDiagnostics(snapshot)
         }
-        // finalizeRoutineRecording returns immediately (it schedules the async
-        // second half via the admission gate's group.notify); the UI state is
-        // published when that async half completes.
-        finalizeRoutineRecording(outputFileURL: outputFileURL, error: error)
+        scratchPlaybackController.finishRoutineOutputCapture { [weak self] outcome in
+            guard let self else { return }
+            let finalError: Error?
+            switch outcome {
+            case let .exported(audioURL, frames, sampleRate, samples):
+                self.activeRoutineAudioNotationDetector?.process(
+                    samples: samples,
+                    sampleRate: sampleRate
+                )
+                Task { @MainActor in
+                    self.onboardOutputCaptureStatus = "Captured \(frames) onboard AHHH frames for this take."
+                    let muxError: Error?
+                    do {
+                        try await RoutineReviewMovieMuxer.replaceAudioTrack(
+                            videoURL: outputFileURL,
+                            onboardAudioURL: audioURL
+                        )
+                        muxError = nil
+                    } catch {
+                        muxError = error
+                    }
+                    self.finalizeRoutineRecording(
+                        outputFileURL: outputFileURL,
+                        error: error ?? muxError,
+                        midiTakeToken: midiTakeToken
+                    )
+                }
+                return
+            case .empty:
+                finalError = error ?? ScratchSamplePlaybackController.RoutineOutputCaptureError.emptyCapture
+            case .notArmed:
+                finalError = error ?? ScratchSamplePlaybackController.RoutineOutputCaptureError.playbackEngineNotRunning
+            case let .error(captureError):
+                finalError = error ?? captureError
+            }
+
+            Task { @MainActor in
+                // finalizeRoutineRecording returns immediately and schedules
+                // its second half through the admission gate.
+                self.finalizeRoutineRecording(
+                    outputFileURL: outputFileURL,
+                    error: finalError,
+                    midiTakeToken: midiTakeToken
+                )
+            }
+        }
     }
 }
 
@@ -10527,7 +13416,10 @@ struct MovementTraceObservation: Codable, Equatable {
     // observation (dedup rejected, continuity-filled, or never reached
     // publication). These values are identical to what was enqueued — position,
     // state, and confidence are captured before the MainActor hop.
-    let builderPoint: Point?            // smoothed/displayed point the builder received
+    /// Actual scalar movement position the builder received, stored in `x`;
+    /// `y` is reserved as zero. Current camera capture supplies angular platter
+    /// position here, not the smoothed image-space display point.
+    let builderPoint: Point?
     let builderState: String?           // HandMotionState the builder received
     let builderConfidence: Double?      // tracker confidence the builder received
 

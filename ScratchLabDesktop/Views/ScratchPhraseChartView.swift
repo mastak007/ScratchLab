@@ -3,16 +3,11 @@ import SwiftUI
 // Static full-phrase notation chart — all strokes visible at once.
 // Replaces ScratchNotationCanvasView in non-animated contexts (capture, review).
 //
-// The TARGET case routes its strokes through the shared `ScratchMotionRenderer`
-// and `ScratchStrokeGeometry` — the same renderer the iOS practice lane uses —
-// so a Baby Scratch reference shown in macOS Review reads in exactly the same
-// visual language as the iOS lane: cyan forward push and hot pink backward
-// pull, deflect-and-return tent ramps with apex nodes on each rail, and a
-// dashed rest line between strokes. macOS-specific affordances (beat-number
-// labels, PLATTER/FADER lane labels, turnaround diamonds, OPEN/CLOSED binary
-// fader rails with transition markers, and the optional playhead) live around
-// the shared renderer's record-lane output. The CAPTURED / EMPTY cases are
-// unchanged.
+// Shared iOS/macOS target/performance chart. Legacy strokes and lossless
+// canonical curves both route through ScratchStrokeGeometry / MotionPath /
+// ScratchMotionRenderer. This view supplies the musical grid, separate
+// platter/fader lanes, bone target/cyan performance styling and playhead.
+// Canonical records require an explicit shared time and position frame.
 
 struct ScratchPhraseChartView: View {
 
@@ -26,11 +21,19 @@ struct ScratchPhraseChartView: View {
         /// in the performed accent style — the learner-facing MY PERFORMANCE
         /// row of the stacked comparison.
         case performedPlatter([CaptureCore.DetectedNotationRecordMovementEvent])
+        /// Lossless canonical curves in an explicit shared comparison frame.
+        /// Both layers use the existing MotionPath / ScratchMotionRenderer.
+        case canonical([ScratchNotation.GestureRecord],
+                       layer: ScratchStrokeGeometry.CanonicalLayer,
+                       frame: ScratchStrokeGeometry.CanonicalFrame)
         case empty(String)
     }
 
     let source: ChartSource
     var bpm: Double = 90
+    /// Beatless audio references still need the notation renderer, but must not
+    /// imply a tempo by drawing beat/subdivision lines and beat numbers.
+    var showBeatGrid: Bool = true
     /// Review-only render-time window for the `.target` source. When `nil`,
     /// the chart renders the full notation timeline (Practice/iOS/preview
     /// behaviour preserved). When set, the chart maps `[lowerBound, upperBound]`
@@ -54,6 +57,12 @@ struct ScratchPhraseChartView: View {
     /// fader sub-lane. `nil` (every pre-existing call site) renders the
     /// chart byte-identically to before. Ignored by `.captured`/`.empty`.
     var comparisonOverlay: ScratchComparisonOverlay? = nil
+    /// In-progress performed movement drawn directly over a target phrase.
+    /// This is presentation-only: callers supply attempt-relative events and
+    /// the chart renders them with the canonical cyan performance style on
+    /// the target's time and vertical axes. Nothing here mutates, scores, or
+    /// persists the events.
+    var livePerformedEvents: [CaptureCore.DetectedNotationRecordMovementEvent] = []
     /// Captured fader spans for the `.performedPlatter` source's fader lane.
     /// Empty means "no trustworthy fader capture" — the lane shows a subdued
     /// "Fader not captured" state instead of inventing an open line. Non-empty
@@ -98,6 +107,8 @@ struct ScratchPhraseChartView: View {
             ScratchLabPerformanceSignpost.event("CapturedNotationRender", count: events.count)
         case .performedPlatter(let events):
             ScratchLabPerformanceSignpost.event("PerformedPlatterRender", count: events.count)
+        case .canonical:
+            break
         case .empty:
             break
         }
@@ -107,6 +118,8 @@ struct ScratchPhraseChartView: View {
             case .target(let notation):           drawTarget(ctx: ctx, size: size, notation: notation)
             case .captured(let events):           drawCaptured(ctx: ctx, size: size, events: events)
             case .performedPlatter(let events):   drawPerformedPlatter(ctx: ctx, size: size, events: events)
+            case .canonical(let records, let layer, let frame):
+                drawCanonical(ctx: ctx, size: size, records: records, layer: layer, frame: frame)
             case .empty(let message):             drawEmpty(ctx: ctx, size: size, message: message)
             }
         }
@@ -114,6 +127,100 @@ struct ScratchPhraseChartView: View {
     }
 
     // MARK: - Target (ScratchNotation)
+
+    private func drawCanonical(ctx: GraphicsContext, size: CGSize,
+                               records: [ScratchNotation.GestureRecord],
+                               layer: ScratchStrokeGeometry.CanonicalLayer,
+                               frame: ScratchStrokeGeometry.CanonicalFrame) {
+        let geometry = ScratchStrokeGeometry.canonicalGeometry(records: records, layer: layer, frame: frame)
+        let start = frame.timeRange.lowerBound
+        let duration = frame.timeRange.upperBound - start
+        let pps = size.width / CGFloat(duration)
+        let platterHeight = size.height * (1 - faderLaneFraction)
+        let style: ScratchMotionRenderer.Style = layer == .target ? .target : .performance
+        drawBeatGrid(ctx: ctx, size: size, startTime: start, duration: duration, pps: pps,
+                     labelBottomY: platterHeight - 2, beatsPerMinute: frame.beatsPerMinute)
+        let viewport = LaneViewport(size: CGSize(width: size.width, height: platterHeight),
+                                    now: start, axis: .horizontal, actionLineFraction: 0,
+                                    secondsAhead: duration)
+        var platterContext = ctx
+        platterContext.clip(to: Path(CGRect(origin: .zero, size: viewport.size)))
+        ScratchMotionRenderer.draw(geometry.motion, in: platterContext, viewport: viewport, style: style)
+        drawUnknownIntervals(geometry.missingMotion, label: "MOTION UNKNOWN", ctx: platterContext,
+                             start: start, pps: pps, top: 16, height: max(0, platterHeight - 30))
+        ctx.draw(Text("PLATTER").font(.system(size: 10, weight: .bold, design: .monospaced))
+            .foregroundStyle(Color(white: 0.42)), at: CGPoint(x: 4, y: 3), anchor: .topLeading)
+        drawLaneDivider(ctx: ctx, size: size, y: platterHeight)
+
+        let faderHeight = size.height - platterHeight
+        let openY = platterHeight + faderHeight * 0.15
+        let closedY = platterHeight + faderHeight * 0.88
+        for y in [openY, closedY] {
+            var guide = Path()
+            guide.move(to: CGPoint(x: 0, y: y)); guide.addLine(to: CGPoint(x: size.width, y: y))
+            ctx.stroke(guide, with: .color(Color(white: 0.28).opacity(0.16)), lineWidth: 0.5)
+        }
+        for interval in geometry.fader {
+            guard let state = interval.state else { continue }
+            let y = state == .open ? openY : closedY
+            var rail = Path()
+            rail.move(to: CGPoint(x: CGFloat(interval.range.lowerBound - start) * pps, y: y))
+            rail.addLine(to: CGPoint(x: CGFloat(interval.range.upperBound - start) * pps, y: y))
+            ctx.stroke(rail, with: .color(style.color.opacity(0.78)), lineWidth: 2.5)
+        }
+        drawUnknownIntervals(geometry.fader.filter { $0.state == nil }.map(\.range),
+                             label: "FADER UNKNOWN", ctx: ctx, start: start, pps: pps,
+                             top: openY, height: closedY - openY)
+        // Fader glyphs come ONLY from explicit supported fader transitions.
+        // A hold, reversal or two differently coloured rails cannot mint one.
+        for edge in geometry.faderEdges {
+            let x = CGFloat(edge.time - start) * pps
+            let y = edge.state == .open ? openY : closedY
+            var tick = Path()
+            tick.move(to: CGPoint(x: x, y: openY)); tick.addLine(to: CGPoint(x: x, y: closedY))
+            ctx.stroke(tick, with: .color(style.color.opacity(0.5)), lineWidth: 1.2)
+            var diamond = Path()
+            diamond.move(to: CGPoint(x: x, y: y - 2.5))
+            diamond.addLine(to: CGPoint(x: x + 2.5, y: y))
+            diamond.addLine(to: CGPoint(x: x, y: y + 2.5))
+            diamond.addLine(to: CGPoint(x: x - 2.5, y: y))
+            diamond.closeSubpath()
+            ctx.fill(diamond, with: .color(style.color.opacity(0.65)))
+        }
+        ctx.draw(Text("FADER").font(.system(size: 8.5, weight: .bold, design: .monospaced))
+            .foregroundStyle(Color(white: 0.40)), at: CGPoint(x: 4, y: platterHeight), anchor: .bottomLeading)
+        for (label, y, anchor) in [("OPEN", openY + 1, UnitPoint.topLeading),
+                                   ("CLOSED", closedY - 1, UnitPoint.bottomLeading)] {
+            ctx.draw(Text(label).font(.system(size: 7.5, weight: .medium, design: .monospaced))
+                .foregroundStyle(Color(white: 0.32)), at: CGPoint(x: 4, y: y), anchor: anchor)
+        }
+        if geometry.hasUnplacedEvidence {
+            ctx.draw(Text("UNPLACED / INVALID EVIDENCE").font(.system(size: 9, design: .monospaced))
+                .foregroundStyle(Color(white: 0.65)), at: CGPoint(x: size.width - 4, y: 3), anchor: .topTrailing)
+        }
+        if showPlayhead {
+            drawPlayhead(ctx: ctx, size: size, x: CGFloat(playheadTime - start) * pps)
+        }
+    }
+
+    /// Unknown spans are shaded bands with a question mark, never a line at a
+    /// made-up platter position or fader rail. Narrow gaps remain visible.
+    private func drawUnknownIntervals(_ ranges: [ClosedRange<Double>], label: String,
+                                      ctx: GraphicsContext, start: Double, pps: CGFloat,
+                                      top: CGFloat, height: CGFloat) {
+        for range in ranges {
+            let x = CGFloat(range.lowerBound - start) * pps
+            let width = CGFloat(range.upperBound - range.lowerBound) * pps
+            let rect = CGRect(x: x, y: top, width: width, height: height)
+            ctx.fill(Path(rect), with: .color(Color.gray.opacity(0.12)))
+            ctx.stroke(Path(rect), with: .color(Color.gray.opacity(0.4)),
+                       style: StrokeStyle(lineWidth: 0.5, dash: [2, 3]))
+            if width >= 8 {
+                ctx.draw(Text(width >= 100 ? label : "?").font(.system(size: 8, design: .monospaced))
+                    .foregroundStyle(Color(white: 0.6)), at: CGPoint(x: rect.midX, y: rect.midY))
+            }
+        }
+    }
 
     private func drawTarget(ctx: GraphicsContext, size: CGSize, notation: ScratchNotation) {
         let full = max(notation.timelineDuration, 0.1)
@@ -149,15 +256,21 @@ struct ScratchPhraseChartView: View {
         ScratchMotionRenderer.draw(motionPath, in: ctx, viewport: viewport,
                                     style: .target)
 
-        // Explicit turnaround anchors + per-stroke directional chevrons, drawn
-        // over the shared motion path so FORWARD → TURNAROUND → BACKWARD reads
-        // without any colour.
-        drawTurnaroundMarkers(ctx: ctx, strokes: laneContent.strokes, path: motionPath,
-                              windowStart: windowStart, pps: pps,
-                              strokeRegionHeight: strokeRegionHeight)
+        // Per-stroke directional chevrons keep FORWARD / BACKWARD readable
+        // without reusing the fader-transition diamond on platter reversals.
+        // A diamond is reserved for a real OPEN/CLOSED fader transition.
         drawPlatterDirectionCues(ctx: ctx, strokes: laneContent.strokes,
                                   windowStart: windowStart, pps: pps,
                                   strokeRegionHeight: strokeRegionHeight)
+
+        drawLivePerformedOverlay(
+            ctx: ctx,
+            size: strokeRegion,
+            events: livePerformedEvents,
+            windowStart: windowStart,
+            duration: duration,
+            targetFrame: ScratchStrokeGeometry.rawRange(for: laneContent)
+        )
 
         // PLATTER lane label — top-left anchor at the head of the stroke region
         ctx.draw(
@@ -184,6 +297,47 @@ struct ScratchPhraseChartView: View {
             drawPlayhead(ctx: ctx, size: size,
                          x: CGFloat(playheadTime - windowStart) * pps)
         }
+    }
+
+    /// Draws the live take with the same motion-path renderer as Review, but
+    /// without adding a second grid, label set, or fader lane. The target is
+    /// already the chart substrate; this layer contributes only measured
+    /// platter motion in the stronger performance colour.
+    private func drawLivePerformedOverlay(
+        ctx: GraphicsContext,
+        size: CGSize,
+        events: [CaptureCore.DetectedNotationRecordMovementEvent],
+        windowStart: TimeInterval,
+        duration: TimeInterval,
+        targetFrame: ClosedRange<CGFloat>
+    ) {
+        let strokes = events.compactMap(PerformedStrokeAdapter.laneStroke)
+        guard !strokes.isEmpty else { return }
+
+        let content = LaneContent(
+            strokes: strokes,
+            segments: [],
+            beatsPerMinute: bpm,
+            duration: max(windowStart + duration, 0.001),
+            loops: false
+        )
+        let path = ScratchStrokeGeometry.motionPath(
+            for: content,
+            normalizingTo: targetFrame
+        )
+        let viewport = LaneViewport(
+            size: size,
+            now: windowStart,
+            axis: .horizontal,
+            actionLineFraction: 0,
+            secondsAhead: duration
+        )
+        ScratchMotionRenderer.draw(
+            path,
+            in: ctx,
+            viewport: viewport,
+            style: Self.performedStyle
+        )
     }
 
     // MARK: - Captured (recordMovementEvents)
@@ -223,7 +377,11 @@ struct ScratchPhraseChartView: View {
             let x2 = CGFloat(event.endTime - windowStart) * pps
             guard x2 > x1 else { continue }
 
-            let travel = CGFloat(CapturedNotationStrokeGeometry.travelFraction(for: event))
+            let travel = CGFloat(
+                ControllerGestureNotationDisplayScale.displayTravelFraction(
+                    for: event
+                )
+            )
             guard travel > 0 else { continue }  // idle / no movement: draw nothing
 
             let isForward = event.direction == "forward"
@@ -299,15 +457,23 @@ struct ScratchPhraseChartView: View {
         let motionPath: MotionPath
         if let performedFrame {
             motionPath = ScratchStrokeGeometry.motionPath(for: content, normalizingTo: performedFrame)
+        } else if let gestureFrame = PerformedStrokeAdapter.gestureRelativeNormalizationFrame(
+            for: events
+        ) {
+            // Gesture-relative controller notation owns a stable one-revolution
+            // frame. Do not normalize against the take's extrema: a multi-turn
+            // motor run would otherwise shrink every later scratch even though
+            // their local baselines are correct.
+            motionPath = ScratchStrokeGeometry.motionPath(
+                for: content,
+                normalizingTo: gestureFrame
+            )
         } else {
             motionPath = ScratchStrokeGeometry.motionPath(for: content)
         }
         ScratchMotionRenderer.draw(motionPath, in: ctx, viewport: viewport,
                                     style: Self.performedStyle)
 
-        drawTurnaroundMarkers(ctx: ctx, strokes: laneStrokes, path: motionPath,
-                              windowStart: windowStart, pps: pps,
-                              strokeRegionHeight: strokeRegionHeight)
         drawPlatterDirectionCues(ctx: ctx, strokes: laneStrokes,
                                   windowStart: windowStart, pps: pps,
                                   strokeRegionHeight: strokeRegionHeight)
@@ -552,8 +718,9 @@ struct ScratchPhraseChartView: View {
     private func drawBeatGrid(ctx: GraphicsContext, size: CGSize,
                               startTime: Double = 0,
                               duration: Double, pps: CGFloat,
-                              labelBottomY: CGFloat) {
-        let beatInterval = 60.0 / max(bpm, 1)
+                              labelBottomY: CGFloat, beatsPerMinute: Double? = nil) {
+        guard showBeatGrid else { return }
+        let beatInterval = 60.0 / (beatsPerMinute ?? max(bpm, 1))
         let subdivInterval = beatInterval / 2  // eighth-note subdivision
 
         // Width-aware density. Subdivisions only appear when a beat is wide
@@ -717,47 +884,6 @@ struct ScratchPhraseChartView: View {
         )
     }
 
-    /// Explicit turnaround anchors at forward→backward direction-change
-    /// boundaries. The corrected path is one continuous trace, so the
-    /// reversal sits at the forward stroke's peak position on the path
-    /// (not the lane centre) — a filled diamond with a faint ring reads as a
-    /// deliberate reversal marker rather than an accidental corner in the
-    /// polyline.
-    private func drawTurnaroundMarkers(ctx: GraphicsContext,
-                                        strokes: [LaneStroke],
-                                        path: MotionPath,
-                                        windowStart: Double,
-                                        pps: CGFloat,
-                                        strokeRegionHeight: CGFloat) {
-        let anchors = ScratchStrokeGeometry.turnaroundAnchors(strokes: strokes, path: path)
-        guard !anchors.isEmpty else { return }
-        let inset = strokeRegionHeight * ScratchMotionRenderer.crossInsetFraction
-        let band = max(strokeRegionHeight - inset * 2, 1)
-
-        func screenY(for position: CGFloat) -> CGFloat {
-            // Mirrors `ScratchMotionRenderer.crossCoordinate` for the
-            // horizontal axis: position 0 → bottom, 1 → top.
-            let clamped = min(max(position, 0), 1)
-            return (strokeRegionHeight - inset) - clamped * band
-        }
-
-        for anchor in anchors {
-            let x = CGFloat(anchor.time - windowStart) * pps
-            guard x >= -20 else { continue }
-            let turnaroundY = screenY(for: anchor.position)
-
-            let d: CGFloat = 4.5
-            var diamond = Path()
-            diamond.move(to: CGPoint(x: x, y: turnaroundY - d))
-            diamond.addLine(to: CGPoint(x: x + d, y: turnaroundY))
-            diamond.addLine(to: CGPoint(x: x, y: turnaroundY + d))
-            diamond.addLine(to: CGPoint(x: x - d, y: turnaroundY))
-            diamond.closeSubpath()
-            ctx.fill(diamond, with: .color(Color(white: 0.85).opacity(0.92)))
-            ctx.stroke(diamond, with: .color(Color(white: 0.98).opacity(0.70)), lineWidth: 0.9)
-        }
-    }
-
     /// Restrained directional chevrons on the platter lane — a small up chevron
     /// at each forward stroke's apex and a down chevron at each backward
     /// stroke's trough. Direction reads from the chevron's geometry alone (no
@@ -906,6 +1032,49 @@ enum CapturedNotationStrokeGeometry {
     }
 }
 
+// MARK: - Controller gesture display scale
+
+/// Fixed presentation zoom for locally rebased controller notation.
+///
+/// CaptureCore keeps each event's exact, unbounded physical excursion in
+/// platter revolutions. The notation lane maps one quarter revolution to its
+/// full cross-axis so normal scratches remain legible; this mapping never
+/// depends on the take's extrema, so a later multi-revolution run cannot move
+/// or shrink an already committed stroke. Camera/DVS/target evidence keeps its
+/// established 0...1 presentation.
+enum ControllerGestureNotationDisplayScale {
+    static let fullScaleExcursionRevolutions: Double = 0.25
+
+    static func displayTravelFraction(
+        for event: CaptureCore.DetectedNotationRecordMovementEvent
+    ) -> Double {
+        let physicalTravel = CapturedNotationStrokeGeometry.travelFraction(
+            for: event
+        )
+        guard CaptureCore.usesGestureRelativeControllerNotation(event) else {
+            return physicalTravel
+        }
+        return min(
+            1,
+            max(0, physicalTravel / fullScaleExcursionRevolutions)
+        )
+    }
+
+    static func displayPositions(
+        for event: CaptureCore.DetectedNotationRecordMovementEvent
+    ) -> (start: Double, end: Double) {
+        guard CaptureCore.usesGestureRelativeControllerNotation(event) else {
+            return (event.startPosition, event.endPosition)
+        }
+        let travel = displayTravelFraction(for: event)
+        switch event.direction {
+        case "forward": return (0, travel)
+        case "backward": return (travel, 0)
+        default: return (event.startPosition, event.endPosition)
+        }
+    }
+}
+
 // MARK: - Performed stroke adapter
 
 /// Pure, Foundation-only adapter that maps a captured record-movement event
@@ -919,33 +1088,61 @@ enum CapturedNotationStrokeGeometry {
 enum PerformedStrokeAdapter {
 
     static func laneStroke(from event: CaptureCore.DetectedNotationRecordMovementEvent) -> LaneStroke? {
-        guard PerformedScratchTimelineAdapter.isStrokeKind(event.movementKind) else { return nil }
+        // Snapshot-aware callers supply physical gesture events re-derived
+        // from raw MIDI. This event-only fallback still guarantees a local
+        // baseline for older/isolated controller events, while preserving
+        // their stored excursion and never interpreting normalized speed as
+        // raw motor steps.
+        let projectedEvent = CaptureCore.locallyRebasedControllerNotationEvent(event)
+        guard PerformedScratchTimelineAdapter.isStrokeKind(projectedEvent.movementKind) else { return nil }
 
         let direction: ScratchNotationDirection
-        switch event.direction {
+        switch projectedEvent.direction {
         case "forward": direction = .forward
         case "backward": direction = .backward
         default: return nil
         }
 
         let speed: ScratchNotationSpeedClassification
-        switch event.movementKind {
+        switch projectedEvent.movementKind {
         case .fastPush, .fastPull: speed = .fast
         case .slowDrag, .slowPullDrag: speed = .slow
         default: speed = .medium
         }
 
+        let displayPositions = ControllerGestureNotationDisplayScale
+            .displayPositions(for: projectedEvent)
+
         return LaneStroke(
-            startTime: event.startTime,
-            endTime: event.endTime,
+            startTime: projectedEvent.startTime,
+            endTime: projectedEvent.endTime,
             direction: direction,
             speed: speed,
             faderState: .open,
             isGhost: false,
-            normalizedTravel: CapturedNotationStrokeGeometry.travelFraction(for: event),
-            measuredStartPosition: event.startPosition,
-            measuredEndPosition: event.endPosition
+            normalizedTravel: CapturedNotationStrokeGeometry.travelFraction(for: projectedEvent),
+            measuredStartPosition: displayPositions.start,
+            measuredEndPosition: displayPositions.end
         )
+    }
+
+    /// Standalone controller-performance lanes use one stable display frame.
+    /// `laneStroke(from:)` has already projected a quarter revolution onto
+    /// that frame without changing the physical event. Target/performance
+    /// comparisons still use the caller-supplied target frame, which takes
+    /// precedence. Camera/DVS events retain their existing content-derived
+    /// frame.
+    static func gestureRelativeNormalizationFrame(
+        for events: [CaptureCore.DetectedNotationRecordMovementEvent]
+    ) -> ClosedRange<CGFloat>? {
+        let usableStrokeEvents = events.filter { laneStroke(from: $0) != nil }
+        guard !usableStrokeEvents.isEmpty,
+              usableStrokeEvents.allSatisfy(
+                CaptureCore.usesGestureRelativeControllerNotation
+              ) else {
+            return nil
+        }
+        return 0...1
     }
 }
 

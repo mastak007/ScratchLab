@@ -17,6 +17,38 @@
 
 import Foundation
 
+// MARK: - Mapping provenance
+
+/// Where a resolved fader control's mapping came from.
+///
+/// ScratchLab can recognise a crossfader two ways: from the user's own learned
+/// mapping, or from a `.certified` hardware-registry binding when the connected
+/// device genuinely matches a verified profile. The two are not equivalent —
+/// only the first represents an explicit user action — so evidence carries the
+/// distinction all the way through the sidecar, review, and export rather than
+/// presenting a registry default as though the user had mapped it.
+enum FaderMappingSource: String, Codable, Equatable, Sendable, CaseIterable {
+    /// The user's per-device `MIDIDeviceMapping`. Always takes priority.
+    case learned
+    /// A `.certified` registry binding for a device the registry matched.
+    /// Evidence-only: this never drives audible playback.
+    case certifiedRegistry
+}
+
+// MARK: - Control normalization
+
+/// Normalization for controls recognised without a learned mapping.
+///
+/// A `MIDILearnedControl` carries the user's own min/max/inverted calibration.
+/// A certified registry binding has none, so it uses the plain 7-bit range the
+/// profile documents — never another action's calibration borrowed by accident.
+/// Shared so both platforms and the tests use one definition.
+enum MIDIControlNormalization {
+    static func sevenBit(_ rawValue: Int) -> Double {
+        Double(max(0, min(127, rawValue))) / 127.0
+    }
+}
+
 // MARK: - Resolved action
 
 /// The outcome of resolving a parsed MIDI message to a semantic action.
@@ -31,8 +63,11 @@ enum MIDIResolvedAction: Equatable {
     /// hot-cue has no assigned sample).
     case hotCue(action: MIDISemanticAction?, sampleID: String?)
 
-    /// A crossfader Control Change (`value` is the raw 0–127 value).
-    case crossfader(value: Int)
+    /// A crossfader Control Change (`value` is the raw 0–127 value). `source`
+    /// records whether this came from the user's learned mapping or from a
+    /// certified hardware-registry binding, so downstream evidence can name its
+    /// provenance instead of implying the user mapped the control themselves.
+    case crossfader(value: Int, source: FaderMappingSource)
 
     /// A per-deck channel (up) fader. `deck` is 0-based; `value` is raw 0–127.
     case upfader(deck: Int, value: Int)
@@ -48,8 +83,18 @@ enum MIDIResolvedAction: Equatable {
 /// Resolution order:
 /// 1. Transport — a press matching a registry `.transport` binding.
 /// 2. Learned mapping — the user's per-device `MIDIDeviceMapping`, preferred.
+/// 2b. Certified-registry crossfader — evidence-only fallback for recognised
+///    hardware with no learned crossfader (see `matchesCertifiedCrossfader`).
 /// 3. Built-in pad router — Rane ONE pad notes fall back to the confirmed
 ///    `ScratchBankPadEventRouter` sample table.
+///
+/// KNOWN PLATFORM DIVERGENCE (deliberate, not an oversight): only the iOS
+/// dispatcher resolves crossfader through this path. macOS keeps its own
+/// `CrossfaderCCMapping` persisted separately in `UserDefaults`
+/// (`MacCaptureEngine`), which predates the shared learned-mapping model and is
+/// not registry-aware. Unifying the two is its own slice; until then a certified
+/// registry crossfader default applies on iOS only, and macOS still requires an
+/// explicit crossfader learn.
 enum MIDIActionResolver {
 
     /// Resolve a parsed message against learned mappings (preferred) and the
@@ -57,6 +102,7 @@ enum MIDIActionResolver {
     static func resolve(
         message: ParsedMIDIMessage,
         mapping: MIDIDeviceMapping?,
+        identity: MIDIDeviceIdentity? = nil,
         registry: MIDIHardwareRegistry = .shared
     ) -> MIDIResolvedAction {
         // 1. Transport (registry `.transport` binding, press only).
@@ -69,7 +115,7 @@ enum MIDIActionResolver {
            let control = mapping.controls.first(where: { matches($0, message) }) {
             switch control.action {
             case .crossfader:
-                return .crossfader(value: Int(message.value))
+                return .crossfader(value: Int(message.value), source: .learned)
             case .leftUpfader:
                 return .upfader(deck: 0, value: Int(message.value))
             case .rightUpfader:
@@ -84,6 +130,19 @@ enum MIDIActionResolver {
             case .unassigned:
                 break
             }
+        }
+
+        // 2b. Certified-registry crossfader fallback.
+        //
+        // Mirrors the transport fallback above: the registry already carries a
+        // verified crossfader binding for recognised hardware, and without this
+        // a connected device with no learned mapping produced `.unknown` and
+        // recorded no fader evidence at all. Deliberately narrow — it requires
+        // an identity that the registry actually matched at `.certified`
+        // confidence, so an unknown controller is never sniffed for CC8.
+        if let identity,
+           matchesCertifiedCrossfader(message, identity: identity, registry: registry) {
+            return .crossfader(value: Int(message.value), source: .certifiedRegistry)
         }
 
         // 3. Pad-router fallback (Rane ONE pad note → sample ID).
@@ -135,6 +194,32 @@ enum MIDIActionResolver {
             return message.messageType == .controlChange
                 && control.channel == Int(message.channel)
                 && control.controlNumber == Int(message.controlNumber)
+        }
+    }
+
+    /// Whether a message is the crossfader of a device the registry matched at
+    /// `.certified` confidence.
+    ///
+    /// Three conditions must all hold, and each one exists to stop this from
+    /// becoming a blind "any CC8 is a crossfader" sniff:
+    /// 1. the registry produced a real match for this device identity;
+    /// 2. that match is `.certified`, not `.verified`/`.unverified` — the
+    ///    values are only trustworthy for hardware that has been confirmed;
+    /// 3. a non-diagnostic `.crossfader` binding on that profile matches the
+    ///    message, reusing the shared `MIDIControlBinding.matches(_:)` channel
+    ///    and CC-number rules rather than a second comparison.
+    private static func matchesCertifiedCrossfader(
+        _ message: ParsedMIDIMessage,
+        identity: MIDIDeviceIdentity,
+        registry: MIDIHardwareRegistry
+    ) -> Bool {
+        guard let match = registry.bestMatch(for: identity), match.confidence == .certified else {
+            return false
+        }
+        return match.profile.bindings.contains { binding in
+            binding.role.kind == .crossfader
+                && !binding.isDiagnosticOnly
+                && binding.matches(message)
         }
     }
 

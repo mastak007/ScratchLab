@@ -1286,21 +1286,18 @@ final class CaptureReliabilityPhase1CoreTests: XCTestCase {
         // Probe inside each stroke's active window. Use the midpoint so we
         // are well clear of either boundary.
         let forwardActiveTime = firstForward.startTime + firstForward.duration * 0.5
-        // Probe the hold immediately after each stroke ends. holdEndTime
-        // marks the end of the hold, so endTime + small epsilon is reliably
-        // inside the hold window.
-        let forwardHoldTime = firstForward.endTime + 0.001
         let backwardActiveTime = firstBackward.startTime + firstBackward.duration * 0.5
-        let backwardHoldTime = firstBackward.endTime + 0.001
+        let transitionAfterForwardTime = firstForward.endTime + 0.001
+        let tailHoldTime = BabyScratchReferenceMotionTimeline.phraseEnd + 1.0
 
         let forwardState = ScratchCoachDemoAnimator.state(
             scratchType: "baby_scratch",
             playbackTime: forwardActiveTime,
             isPlaying: true
         )
-        let forwardHoldState = ScratchCoachDemoAnimator.state(
+        let transitionAfterForwardState = ScratchCoachDemoAnimator.state(
             scratchType: "baby_scratch",
-            playbackTime: forwardHoldTime,
+            playbackTime: transitionAfterForwardTime,
             isPlaying: true
         )
         let backwardState = ScratchCoachDemoAnimator.state(
@@ -1308,9 +1305,9 @@ final class CaptureReliabilityPhase1CoreTests: XCTestCase {
             playbackTime: backwardActiveTime,
             isPlaying: true
         )
-        let backwardHoldState = ScratchCoachDemoAnimator.state(
+        let tailHoldState = ScratchCoachDemoAnimator.state(
             scratchType: "baby_scratch",
-            playbackTime: backwardHoldTime,
+            playbackTime: tailHoldTime,
             isPlaying: true
         )
         let stoppedState = ScratchCoachDemoAnimator.state(
@@ -1320,15 +1317,16 @@ final class CaptureReliabilityPhase1CoreTests: XCTestCase {
         )
 
         // Crossfader stays in the baby-scratch open position throughout
-        // playback (open during stroke and during the hold that follows).
+        // playback (open during strokes, transitions, and the tail hold).
         XCTAssertEqual(
             forwardState.crossfaderPosition,
             ScratchCoachDemoAnimationState.babyScratchCrossfaderPosition,
             accuracy: 0.0001
         )
         XCTAssertTrue(forwardState.crossfaderOpenState)
-        XCTAssertTrue(forwardHoldState.crossfaderOpenState)
+        XCTAssertTrue(transitionAfterForwardState.crossfaderOpenState)
         XCTAssertTrue(backwardState.crossfaderOpenState)
+        XCTAssertTrue(tailHoldState.crossfaderOpenState)
 
         // Forward stroke moves the record toward the forward extreme; mid-
         // stroke values must sit strictly between rest (0) and the forward
@@ -1338,19 +1336,15 @@ final class CaptureReliabilityPhase1CoreTests: XCTestCase {
         XCTAssertGreaterThan(forwardState.recordRotationDegrees, 0)
         XCTAssertLessThan(forwardState.recordRotationDegrees, 60)
 
-        // Forward hold sits at the forward extreme.
-        XCTAssertEqual(forwardHoldState.recordPosition, 1, accuracy: 0.0001)
-        XCTAssertEqual(forwardHoldState.recordRotationDegrees, 60, accuracy: 0.0001)
-
         // Backward stroke moves the record back from the forward extreme.
-        XCTAssertLessThan(backwardState.recordPosition, forwardHoldState.recordPosition)
         XCTAssertGreaterThan(backwardState.recordPosition, 0)
+        XCTAssertLessThan(backwardState.recordPosition, 1)
         XCTAssertLessThan(backwardState.recordRotationDegrees, 60)
         XCTAssertGreaterThan(backwardState.recordRotationDegrees, 0)
 
-        // Backward hold returns to the resting "open" position (record back
-        // at 0, fader still open).
-        XCTAssertEqual(backwardHoldState, .babyScratchOpen)
+        // The phrase ends on a backward stroke, so the two-second tail hold
+        // rests at record position 0 with the fader still open.
+        XCTAssertEqual(tailHoldState, .babyScratchOpen)
 
         // When playback is stopped the animator collapses to the neutral
         // disabled state regardless of timestamp.
@@ -1679,6 +1673,783 @@ final class CaptureReliabilityPhase1CoreTests: XCTestCase {
     }
 
     @MainActor
+    func testGuidedKeptLedgerSingleTakeReloadIsDurableAndIdempotent() throws {
+        let root = try makeTemporaryDirectory()
+        let storageURL = root.appendingPathComponent("kept-sessions.json")
+        let sessionID = "slice-f-single-session"
+        let timestamp = Date(timeIntervalSince1970: 1_730_000_000)
+        let session = makeGuidedKeptSession(sessionID: sessionID, timestamp: timestamp)
+        let take = makeGuidedKeptTake(
+            in: root,
+            sessionID: sessionID,
+            takeNumber: 1,
+            bpm: 70
+        )
+
+        let writer = try GuidedCaptureKeptSessionStore(
+            storageURL: storageURL,
+            now: { timestamp }
+        )
+        let keptSession = try writer.keep(take, in: session)
+        XCTAssertEqual(keptSession.takes, [take])
+
+        let persistedBeforeIdempotentKeep = try Data(contentsOf: storageURL)
+        let reloaded = try GuidedCaptureKeptSessionStore(
+            storageURL: storageURL,
+            now: { timestamp.addingTimeInterval(10) }
+        )
+        XCTAssertEqual(reloaded.session(id: sessionID)?.takes, [take])
+
+        _ = try reloaded.keep(take, in: session)
+
+        XCTAssertEqual(reloaded.session(id: sessionID)?.takes, [take])
+        XCTAssertEqual(
+            try Data(contentsOf: storageURL),
+            persistedBeforeIdempotentKeep,
+            "Keeping the same take twice must not rewrite or duplicate the durable ledger."
+        )
+    }
+
+    @MainActor
+    func testGuidedKeptLedgerOrdersMultipleTakesAndRejectsDuplicateTakeNumber() throws {
+        let root = try makeTemporaryDirectory()
+        let storageURL = root.appendingPathComponent("kept-sessions.json")
+        let sessionID = "slice-f-multi-session"
+        let timestamp = Date(timeIntervalSince1970: 1_730_000_100)
+        let session = makeGuidedKeptSession(sessionID: sessionID, timestamp: timestamp)
+        let takeThree = makeGuidedKeptTake(
+            in: root,
+            sessionID: sessionID,
+            takeNumber: 3,
+            bpm: 110
+        )
+        let takeOne = makeGuidedKeptTake(
+            in: root,
+            sessionID: sessionID,
+            takeNumber: 1,
+            bpm: 70
+        )
+        let duplicateNumber = makeGuidedKeptTake(
+            in: root,
+            sessionID: sessionID,
+            takeID: "different-take-id",
+            takeNumber: 3,
+            bpm: 90
+        )
+        let store = try GuidedCaptureKeptSessionStore(
+            storageURL: storageURL,
+            now: { timestamp }
+        )
+
+        _ = try store.keep(takeThree, in: session)
+        _ = try store.keep(takeOne, in: session)
+
+        XCTAssertEqual(store.session(id: sessionID)?.takes.map(\.takeNumber), [1, 3])
+        XCTAssertEqual(store.session(id: sessionID)?.takes.map(\.takeID), ["take-001", "take-003"])
+        XCTAssertThrowsError(try store.keep(duplicateNumber, in: session)) { error in
+            XCTAssertEqual(
+                error as? GuidedCaptureKeptSessionStoreError,
+                .takeNumberCollision(sessionID: sessionID, takeNumber: 3)
+            )
+        }
+        XCTAssertEqual(
+            store.session(id: sessionID)?.takes.map(\.takeID),
+            ["take-001", "take-003"],
+            "A rejected collision must leave every previously kept take attached."
+        )
+    }
+
+    @MainActor
+    func testGuidedKeptLedgerRecreationRetainsSessionAndCanAppendNextTake() throws {
+        let root = try makeTemporaryDirectory()
+        let storageURL = root.appendingPathComponent("kept-sessions.json")
+        let sessionID = "slice-f-navigation-session"
+        let timestamp = Date(timeIntervalSince1970: 1_730_000_200)
+        let session = makeGuidedKeptSession(sessionID: sessionID, timestamp: timestamp)
+        let takeOne = makeGuidedKeptTake(
+            in: root,
+            sessionID: sessionID,
+            takeNumber: 1,
+            bpm: 70
+        )
+        let takeTwo = makeGuidedKeptTake(
+            in: root,
+            sessionID: sessionID,
+            takeNumber: 2,
+            bpm: 90
+        )
+
+        let firstViewLifetimeStore = try GuidedCaptureKeptSessionStore(
+            storageURL: storageURL,
+            now: { timestamp }
+        )
+        _ = try firstViewLifetimeStore.keep(takeOne, in: session)
+
+        let recreatedViewStore = try GuidedCaptureKeptSessionStore(
+            storageURL: storageURL,
+            now: { timestamp.addingTimeInterval(1) }
+        )
+        let restoredSession = try XCTUnwrap(recreatedViewStore.session(id: sessionID))
+        XCTAssertEqual(restoredSession.takes, [takeOne])
+        _ = try recreatedViewStore.keep(takeTwo, in: restoredSession)
+
+        let nextNavigationStore = try GuidedCaptureKeptSessionStore(storageURL: storageURL)
+        XCTAssertEqual(nextNavigationStore.session(id: sessionID)?.takes, [takeOne, takeTwo])
+        XCTAssertEqual(nextNavigationStore.session(id: sessionID)?.sessionName, session.sessionName)
+    }
+
+    @MainActor
+    func testSessionExportCoordinatorValidationFailureRemainsRetryableAfterMediaRepair() async throws {
+        let root = try makeTemporaryDirectory()
+        let package = try makeCanonicalPackage(rootURL: root, useRealMedia: true)
+        let damagedAudioURL = try XCTUnwrap(package.takes.first?.audioArtifactURL)
+        try FileManager.default.removeItem(at: damagedAudioURL)
+        let coordinator = SessionExportCoordinator()
+
+        coordinator.prepareShare(for: .package(package))
+        for _ in 0..<320 {
+            if case .failed = coordinator.state { break }
+            try await Task.sleep(nanoseconds: 25_000_000)
+        }
+
+        if case .failed(.missingRequiredFiles) = coordinator.state {
+            XCTAssertTrue(coordinator.canRetry)
+            XCTAssertNil(coordinator.lastResult)
+            XCTAssertNil(coordinator.shareRequest)
+            XCTAssertFalse(coordinator.statusMessage?.isEmpty ?? true)
+        } else {
+            XCTFail("Missing source audio must produce a visible, retryable validation failure.")
+        }
+        for take in package.takes {
+            XCTAssertTrue(FileManager.default.fileExists(atPath: take.mediaURL.path))
+            XCTAssertTrue(FileManager.default.fileExists(atPath: take.sidecarURL.path))
+        }
+
+        try writeTestWAV(at: damagedAudioURL)
+        coordinator.prepareShare(for: .package(package))
+        for _ in 0..<320 {
+            if coordinator.shareRequest != nil || coordinator.canRetry { break }
+            try await Task.sleep(nanoseconds: 25_000_000)
+        }
+
+        let result = try XCTUnwrap(coordinator.lastResult)
+        XCTAssertNotNil(coordinator.shareRequest)
+        XCTAssertFalse(coordinator.canRetry)
+        XCTAssertTrue(FileManager.default.fileExists(atPath: result.archiveURL.path))
+        XCTAssertEqual(coordinator.statusMessage, "Ready to share")
+    }
+
+    @MainActor
+    func testSessionExportCoordinatorCancellationIsDistinctAndCompletionCannotFabricateSuccess() async throws {
+        let root = try makeTemporaryDirectory()
+        let package = try makeCanonicalPackage(rootURL: root, useRealMedia: true)
+        let coordinator = SessionExportCoordinator()
+
+        coordinator.prepareShare(for: .package(package))
+        for _ in 0..<320 {
+            if coordinator.shareRequest != nil || coordinator.canRetry { break }
+            try await Task.sleep(nanoseconds: 25_000_000)
+        }
+        let preparedResult = try XCTUnwrap(coordinator.lastResult)
+        coordinator.markSharePresented()
+        coordinator.handleShareOutcome(.cancelled)
+
+        if case let .cancelled(cancelledResult) = coordinator.state {
+            XCTAssertEqual(cancelledResult, preparedResult)
+        } else {
+            XCTFail("Share-sheet cancellation must remain a cancellation, not an export failure.")
+        }
+        XCTAssertTrue(coordinator.wasCancelled)
+        XCTAssertFalse(coordinator.canRetry)
+        XCTAssertEqual(coordinator.statusMessage, "Share cancelled.")
+        XCTAssertEqual(coordinator.lastResult, preparedResult)
+        for take in package.takes {
+            XCTAssertTrue(FileManager.default.fileExists(atPath: take.mediaURL.path))
+            XCTAssertTrue(FileManager.default.fileExists(atPath: take.sidecarURL.path))
+            XCTAssertTrue(FileManager.default.fileExists(atPath: try XCTUnwrap(take.audioArtifactURL).path))
+        }
+
+        let impossibleCompletion = SessionExportCoordinator()
+        impossibleCompletion.handleShareOutcome(.completed)
+        if case .failed(.unableToPresentShareOptions) = impossibleCompletion.state {
+            XCTAssertTrue(impossibleCompletion.canRetry)
+        } else {
+            XCTFail("Completion without a real archive must fail instead of fabricating an Exported state.")
+        }
+        XCTAssertNil(impossibleCompletion.lastResult)
+        XCTAssertNotEqual(impossibleCompletion.statusMessage, "Export complete.")
+    }
+
+    // MARK: - Slice F: freshly kept sub-second session export
+
+    /// Builds a package the way the guided kept-session ledger does.
+    ///
+    /// The distinction that matters: sidecar dates come back from disk through
+    /// `.iso8601` and are therefore always whole seconds, while the session's
+    /// own `createdAt` keeps the sub-second precision of the live `Date()` the
+    /// session was created with. The kept-session ledger persists that config
+    /// with the default (`.deferredToDate`) strategy, so the fraction survives
+    /// both in memory and across a reload. Local-recovery exports derive
+    /// `createdAt` from sidecar dates instead, which is exactly why they never
+    /// reproduced this failure.
+    ///
+    /// `verbalSlateUsed` / `syncClapUsed` are left `nil` because that is what
+    /// production `Keep` records; `preparePackage` is responsible for
+    /// resolving them, so callers must stage through it.
+    func makeKeptLedgerPackage(
+        rootURL: URL,
+        sessionCreatedAt: Date,
+        bpms: [Int],
+        motionPresent: Bool = false,
+        motionSources: [CaptureMotionSource]? = nil
+    ) throws -> SessionExportPackage {
+        let sessionID = "slice-f-kept-session"
+        let sidecarCreatedAt = Date(timeIntervalSince1970: 1_730_000_000)
+        var takes: [SessionExportTake] = []
+        var decodedSidecars: [CaptureCore.LocalRecordingSidecar] = []
+
+        for (index, bpm) in bpms.enumerated() {
+            let takeNumber = index + 1
+            let takeIdentity = CaptureCore.LocalRecordingNaming.takeIdentity(
+                sessionID: sessionID,
+                takeNumber: takeNumber
+            )
+            let videoURL = rootURL.appendingPathComponent("kept-\(takeNumber).mov")
+            let audioURL = rootURL.appendingPathComponent("kept-\(takeNumber).wav")
+            let sidecarURL = rootURL.appendingPathComponent("kept-\(takeNumber).json")
+            try writeTestMOV(at: videoURL)
+            try writeTestWAV(at: audioURL)
+            try writeFinalizedSidecar(
+                to: sidecarURL,
+                sessionID: sessionID,
+                takeIdentity: takeIdentity,
+                mediaURL: videoURL,
+                performerName: "DJ Ledger",
+                bpm: bpm,
+                createdAt: sidecarCreatedAt
+            )
+            decodedSidecars.append(
+                try JSONDecoder.captureCoreDecoder.decode(
+                    CaptureCore.LocalRecordingSidecar.self,
+                    from: try Data(contentsOf: sidecarURL)
+                )
+            )
+            takes.append(
+                SessionExportTake(
+                    takeID: takeIdentity.takeID,
+                    takeNumber: takeNumber,
+                    bpm: bpm,
+                    mediaURL: videoURL,
+                    audioArtifactURL: audioURL,
+                    sidecarURL: sidecarURL,
+                    watchCaptureSession: nil,
+                    drillName: "Full capture",
+                    duration: 1,
+                    quality: "kept",
+                    comboTagged: false,
+                    audioPresent: true,
+                    motionPresent: motionPresent,
+                    syncStatus: "not_requested",
+                    recordingStatus: "completed",
+                    verbalSlateUsed: nil,
+                    syncClapUsed: nil,
+                    note: "Ready to keep",
+                    motionSources: motionSources
+                )
+            )
+        }
+
+        let config = SessionExportMetadataResolver.mergedConfig(
+            preferredConfig: nil,
+            seedSidecar: try XCTUnwrap(decodedSidecars.first),
+            sidecars: decodedSidecars,
+            fallbackSessionID: sessionID,
+            createdAt: sessionCreatedAt,
+            updatedAt: sessionCreatedAt,
+            takeCount: takes.count,
+            totalDurationSeconds: Double(takes.count)
+        )
+        let metadata = SessionExportMetadata(
+            config: config,
+            workflow: "guided_capture",
+            platform: "iOS",
+            sessionName: "Slice F Kept Session",
+            totalDurationSeconds: Double(takes.count)
+        )
+        return SessionExportPackage(metadata: metadata, takes: takes, calibrationData: nil)
+    }
+
+    /// The exact physical mismatch: a freshly kept take whose session
+    /// `createdAt` carries a sub-second component. Staging writes the date
+    /// through the canonical `.iso8601` encoder (whole seconds); validation
+    /// used to decode that file back and compare the decoded `Date` against
+    /// the in-memory one, which could never be equal. The export was valid the
+    /// whole time.
+    func testFreshlyKeptSubSecondCreatedAtSessionExportsSuccessfully() throws {
+        let root = try makeTemporaryDirectory()
+        let package = try makeKeptLedgerPackage(
+            rootURL: root,
+            sessionCreatedAt: Date(timeIntervalSince1970: 1_730_000_000.372),
+            bpms: [95]
+        )
+        XCTAssertNotEqual(
+            package.metadata.createdAt.timeIntervalSince1970
+                .truncatingRemainder(dividingBy: 1),
+            0,
+            "This regression is meaningless unless createdAt really carries sub-second precision."
+        )
+
+        let archiveDirectory = root.appendingPathComponent("archives", isDirectory: true)
+        try FileManager.default.createDirectory(at: archiveDirectory, withIntermediateDirectories: true)
+        let builder = SessionArchiveBuilder()
+        let result = try builder.createArchive(
+            from: try builder.preparePackage(from: .package(package)),
+            options: SessionExportOptions(mixMode: .scratchOnly),
+            in: archiveDirectory
+        )
+
+        XCTAssertGreaterThan(result.archiveSizeBytes, 0)
+        XCTAssertTrue(FileManager.default.fileExists(atPath: result.archiveURL.path))
+    }
+
+    /// Locks in HOW the fix works: the sub-second value is never rounded or
+    /// mutated, and validation compares canonical bytes rather than decoded
+    /// values. If someone "fixes" this again by flooring `createdAt`, the
+    /// first assertion fails.
+    func testSubSecondCreatedAtIsPreservedAndStagedMetadataIsCanonicalBytes() throws {
+        let root = try makeTemporaryDirectory()
+        let package = try makeKeptLedgerPackage(
+            rootURL: root,
+            sessionCreatedAt: Date(timeIntervalSince1970: 1_730_000_000.372),
+            bpms: [95]
+        )
+        let archiveDirectory = root.appendingPathComponent("archives", isDirectory: true)
+        try FileManager.default.createDirectory(at: archiveDirectory, withIntermediateDirectories: true)
+        let builder = SessionArchiveBuilder()
+        let preparedPackage = try builder.preparePackage(from: .package(package))
+
+        XCTAssertEqual(
+            preparedPackage.metadata.createdAt,
+            package.metadata.createdAt,
+            "Export must not round or mutate createdAt to make validation pass."
+        )
+
+        let result = try builder.createArchive(
+            from: preparedPackage,
+            options: SessionExportOptions(mixMode: .scratchOnly),
+            in: archiveDirectory
+        )
+        let archiveRoot = try unzipArchive(
+            result.archiveURL,
+            to: root.appendingPathComponent("unzipped", isDirectory: true)
+        )
+
+        let stagedMetadataData = try Data(
+            contentsOf: archiveRoot.appendingPathComponent("manifests/session_metadata.json")
+        )
+        let canonicalEncoder = JSONEncoder()
+        canonicalEncoder.dateEncodingStrategy = .iso8601
+        canonicalEncoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+        let expectedMetadataData = try canonicalEncoder.encode(
+            try builder.metadataDocument(for: preparedPackage)
+        )
+        XCTAssertEqual(
+            stagedMetadataData,
+            expectedMetadataData,
+            "Staged session_metadata.json must be the canonical byte-for-byte serialization."
+        )
+
+        // The on-disk format is genuinely lossy for sub-second dates. That is
+        // the reason value comparison could not work, and documenting it here
+        // stops the byte comparison being "simplified" back into one.
+        let decodedDocument = try decodeSessionMetadataDocument(from: archiveRoot)
+        XCTAssertNotEqual(decodedDocument.session.createdAt, package.metadata.createdAt)
+        XCTAssertEqual(
+            decodedDocument.session.createdAt.timeIntervalSince1970,
+            package.metadata.createdAt.timeIntervalSince1970.rounded(.down),
+            accuracy: 0.0001
+        )
+    }
+
+    /// A single freshly kept take is attached and exported exactly once.
+    func testFreshlyKeptSingleTakeIsExportedExactlyOnce() throws {
+        let root = try makeTemporaryDirectory()
+        let package = try makeKeptLedgerPackage(
+            rootURL: root,
+            sessionCreatedAt: Date(timeIntervalSince1970: 1_730_000_000.372),
+            bpms: [95]
+        )
+        let archiveDirectory = root.appendingPathComponent("archives", isDirectory: true)
+        try FileManager.default.createDirectory(at: archiveDirectory, withIntermediateDirectories: true)
+        let builder = SessionArchiveBuilder()
+        let result = try builder.createArchive(
+            from: try builder.preparePackage(from: .package(package)),
+            options: SessionExportOptions(mixMode: .scratchOnly),
+            in: archiveDirectory
+        )
+        let archiveRoot = try unzipArchive(
+            result.archiveURL,
+            to: root.appendingPathComponent("unzipped", isDirectory: true)
+        )
+
+        let videoFiles = try FileManager.default.contentsOfDirectory(
+            atPath: archiveRoot.appendingPathComponent("video").path
+        )
+        XCTAssertEqual(videoFiles.count, 1)
+
+        let takeLog = try String(
+            contentsOf: archiveRoot.appendingPathComponent("manifests/take_log.csv"),
+            encoding: .utf8
+        )
+        XCTAssertEqual(takeLog.split(whereSeparator: \.isNewline).count, 2)
+
+        let metadataDocument = try decodeSessionMetadataDocument(from: archiveRoot)
+        XCTAssertEqual(metadataDocument.takes.count, 1)
+        XCTAssertEqual(metadataDocument.session.takeCount, 1)
+    }
+
+    /// Every kept take in a restored durable ledger stays attached and reaches
+    /// the archive exactly once — no take may be filtered out to make an
+    /// export succeed.
+    @MainActor
+    func testRestoredTwoTakeLedgerExportsBothTakesExactlyOnce() throws {
+        let root = try makeTemporaryDirectory()
+        let storageURL = root.appendingPathComponent("kept-sessions.json")
+        let sessionID = "slice-f-kept-session"
+        let sessionCreatedAt = Date(timeIntervalSince1970: 1_730_000_000.372)
+
+        var ledgerSession = makeGuidedKeptSession(sessionID: sessionID, timestamp: sessionCreatedAt)
+        ledgerSession.config.createdAt = sessionCreatedAt
+        ledgerSession.config.updatedAt = sessionCreatedAt
+        let writer = try GuidedCaptureKeptSessionStore(storageURL: storageURL)
+        _ = try writer.keep(
+            makeGuidedKeptTake(in: root, sessionID: sessionID, takeNumber: 1, bpm: 95),
+            in: ledgerSession
+        )
+        _ = try writer.keep(
+            makeGuidedKeptTake(in: root, sessionID: sessionID, takeNumber: 2, bpm: 95),
+            in: ledgerSession
+        )
+
+        // Reload across a view lifetime, as navigation away and back does.
+        let restored = try GuidedCaptureKeptSessionStore(storageURL: storageURL)
+        let restoredSession = try XCTUnwrap(restored.session(id: sessionID))
+        XCTAssertEqual(restoredSession.takes.count, 2)
+        XCTAssertEqual(restoredSession.takes.map(\.takeNumber), [1, 2])
+        XCTAssertEqual(Set(restoredSession.takes.map(\.takeID)).count, 2)
+        XCTAssertEqual(
+            restoredSession.config.createdAt,
+            sessionCreatedAt,
+            "The ledger must preserve the sub-second createdAt across a reload."
+        )
+
+        let package = try makeKeptLedgerPackage(
+            rootURL: root,
+            sessionCreatedAt: restoredSession.config.createdAt,
+            bpms: [95, 95]
+        )
+        let archiveDirectory = root.appendingPathComponent("archives", isDirectory: true)
+        try FileManager.default.createDirectory(at: archiveDirectory, withIntermediateDirectories: true)
+        let builder = SessionArchiveBuilder()
+        let result = try builder.createArchive(
+            from: try builder.preparePackage(from: .package(package)),
+            options: SessionExportOptions(mixMode: .scratchOnly),
+            in: archiveDirectory
+        )
+        let archiveRoot = try unzipArchive(
+            result.archiveURL,
+            to: root.appendingPathComponent("unzipped", isDirectory: true)
+        )
+
+        let metadataDocument = try decodeSessionMetadataDocument(from: archiveRoot)
+        XCTAssertEqual(metadataDocument.takes.count, 2)
+        XCTAssertEqual(metadataDocument.session.takeCount, 2)
+        XCTAssertEqual(Set(metadataDocument.takes.map(\.takeID)).count, 2)
+        XCTAssertEqual(Set(metadataDocument.takes.map(\.takeNumber)), [1, 2])
+
+        let videoFiles = try FileManager.default.contentsOfDirectory(
+            atPath: archiveRoot.appendingPathComponent("video").path
+        )
+        XCTAssertEqual(videoFiles.count, 2)
+        XCTAssertEqual(Set(videoFiles).count, 2)
+
+        let takeLog = try String(
+            contentsOf: archiveRoot.appendingPathComponent("manifests/take_log.csv"),
+            encoding: .utf8
+        )
+        XCTAssertEqual(takeLog.split(whereSeparator: \.isNewline).count, 3)
+    }
+
+    /// The coordinator share path — the surface the operator actually taps —
+    /// must reach `readyToShare` for a freshly kept sub-second session.
+    @MainActor
+    func testCoordinatorSharePathSucceedsForFreshlyKeptSubSecondSession() async throws {
+        let root = try makeTemporaryDirectory()
+        let package = try makeKeptLedgerPackage(
+            rootURL: root,
+            sessionCreatedAt: Date(timeIntervalSince1970: 1_730_000_000.372),
+            bpms: [95]
+        )
+        let coordinator = SessionExportCoordinator()
+
+        coordinator.prepareShare(for: .package(package))
+        for _ in 0..<320 {
+            if coordinator.shareRequest != nil || coordinator.canRetry { break }
+            try await Task.sleep(nanoseconds: 25_000_000)
+        }
+
+        let result = try XCTUnwrap(coordinator.lastResult)
+        XCTAssertFalse(coordinator.canRetry)
+        XCTAssertNil(coordinator.validationReport)
+        XCTAssertNotNil(coordinator.shareRequest)
+        XCTAssertEqual(coordinator.statusMessage, "Ready to share")
+        XCTAssertTrue(FileManager.default.fileExists(atPath: result.archiveURL.path))
+        if case .readyToShare = coordinator.state {} else {
+            XCTFail("A freshly kept sub-second session must reach readyToShare.")
+        }
+
+        // Cancellation stays distinct from failure on this same path.
+        coordinator.markSharePresented()
+        coordinator.handleShareOutcome(.cancelled)
+        XCTAssertTrue(coordinator.wasCancelled)
+        XCTAssertFalse(coordinator.canRetry)
+        XCTAssertEqual(coordinator.statusMessage, "Share cancelled.")
+    }
+
+    /// The unresolved device-specific path stays fail-closed, and now says
+    /// which check fired instead of only "inconsistent metadata".
+    func testPlatterMotionWithoutRecordedMovementFailsWithNamedReason() throws {
+        let root = try makeTemporaryDirectory()
+        let package = try makeKeptLedgerPackage(
+            rootURL: root,
+            sessionCreatedAt: Date(timeIntervalSince1970: 1_730_000_000.372),
+            bpms: [95],
+            motionPresent: true,
+            motionSources: [.platter]
+        )
+        let archiveDirectory = root.appendingPathComponent("archives", isDirectory: true)
+        try FileManager.default.createDirectory(at: archiveDirectory, withIntermediateDirectories: true)
+        let builder = SessionArchiveBuilder()
+        let preparedPackage = try builder.preparePackage(from: .package(package))
+
+        XCTAssertThrowsError(
+            try builder.createArchive(
+                from: preparedPackage,
+                options: SessionExportOptions(mixMode: .scratchOnly),
+                in: archiveDirectory
+            )
+        ) { error in
+            let failure = error as? SessionExportValidationFailure
+            XCTAssertEqual(failure?.reason, .platterMotionWithoutRecordedMovement)
+            XCTAssertEqual(failure?.exportError, .invalidSessionMetadata)
+            XCTAssertEqual(failure?.exportError.userMessage, "This session has inconsistent metadata.")
+        }
+    }
+
+    /// A named validation failure must reach the operator as specific detail,
+    /// while keeping the coarse error, the retryable failure state, and the
+    /// staged source captures intact.
+    @MainActor
+    func testCoordinatorReportsNamedValidationReasonAndPreservesStagedCaptures() async throws {
+        let root = try makeTemporaryDirectory()
+        let package = try makeKeptLedgerPackage(
+            rootURL: root,
+            sessionCreatedAt: Date(timeIntervalSince1970: 1_730_000_000.372),
+            bpms: [95],
+            motionPresent: true,
+            motionSources: [.platter]
+        )
+        let coordinator = SessionExportCoordinator()
+
+        coordinator.prepareShare(for: .package(package))
+        for _ in 0..<320 {
+            if case .failed = coordinator.state { break }
+            try await Task.sleep(nanoseconds: 25_000_000)
+        }
+
+        guard case .failed(.invalidSessionMetadata) = coordinator.state else {
+            return XCTFail("A platter motion claim with no recorded movement must fail closed.")
+        }
+        XCTAssertTrue(coordinator.canRetry)
+        XCTAssertNil(coordinator.lastResult)
+        XCTAssertNil(coordinator.shareRequest)
+        XCTAssertEqual(
+            coordinator.validationReport?.issues,
+            [SessionExportValidationReason.platterMotionWithoutRecordedMovement.detailText]
+        )
+        XCTAssertEqual(
+            coordinator.statusMessage,
+            SessionExportValidationReason.platterMotionWithoutRecordedMovement.detailText,
+            "The operator must see which check failed, not only the generic message."
+        )
+
+        // Retry must never consume the staged captures.
+        for take in package.takes {
+            XCTAssertTrue(FileManager.default.fileExists(atPath: take.mediaURL.path))
+            XCTAssertTrue(FileManager.default.fileExists(atPath: take.sidecarURL.path))
+            XCTAssertTrue(
+                FileManager.default.fileExists(atPath: try XCTUnwrap(take.audioArtifactURL).path)
+            )
+        }
+    }
+
+    func testCanonicalMultiTakeArchiveContainsEveryUniqueArtifactAndManifestRecord() throws {
+        let root = try makeTemporaryDirectory()
+        let package = try makeCanonicalPackage(rootURL: root, useRealMedia: true)
+        let archiveDirectory = root.appendingPathComponent("archives", isDirectory: true)
+        try FileManager.default.createDirectory(at: archiveDirectory, withIntermediateDirectories: true)
+        let result = try SessionArchiveBuilder().createArchive(
+            from: package,
+            options: SessionExportOptions(mixMode: .scratchOnly),
+            in: archiveDirectory
+        )
+        let archiveRoot = try unzipArchive(
+            result.archiveURL,
+            to: root.appendingPathComponent("unzipped", isDirectory: true)
+        )
+
+        let manifestURL = archiveRoot.appendingPathComponent("manifests/session_manifest.json")
+        let manifest = try XCTUnwrap(
+            try JSONSerialization.jsonObject(with: Data(contentsOf: manifestURL)) as? [String: Any]
+        )
+        let manifestTakes = try XCTUnwrap(manifest["takes"] as? [[String: Any]])
+        XCTAssertEqual(manifestTakes.count, package.takes.count)
+
+        var videoPaths: [String] = []
+        var audioPaths: [String] = []
+        var notationPaths: [String] = []
+        var watchPaths: [String] = []
+        for manifestTake in manifestTakes {
+            let files = try XCTUnwrap(manifestTake["files"] as? [String: String])
+            videoPaths.append(try XCTUnwrap(files["camA"]))
+            audioPaths.append(try XCTUnwrap(files["serato"]))
+            notationPaths.append(try XCTUnwrap(files["notation"]))
+            if let watchPath = files["watch"] {
+                watchPaths.append(watchPath)
+            }
+        }
+
+        XCTAssertEqual(Set(videoPaths).count, package.takes.count)
+        XCTAssertEqual(Set(audioPaths).count, package.takes.count)
+        XCTAssertEqual(Set(notationPaths).count, package.takes.count)
+        XCTAssertEqual(Set(watchPaths).count, 1)
+        for relativePath in videoPaths + audioPaths + notationPaths + watchPaths {
+            let artifactURL = archiveRoot.appendingPathComponent(relativePath)
+            XCTAssertTrue(FileManager.default.fileExists(atPath: artifactURL.path), relativePath)
+            XCTAssertGreaterThan(
+                (try FileManager.default.attributesOfItem(atPath: artifactURL.path)[.size] as? NSNumber)?.int64Value ?? 0,
+                0,
+                relativePath
+            )
+        }
+
+        let expectedManifestFiles = [
+            "export_metadata.json",
+            "session_manifest.json",
+            "session_metadata.json",
+            "session_replay.json",
+            "session_review.json",
+            "take_log.csv",
+        ]
+        let manifestFiles = try FileManager.default.contentsOfDirectory(
+            at: archiveRoot.appendingPathComponent("manifests", isDirectory: true),
+            includingPropertiesForKeys: nil,
+            options: [.skipsHiddenFiles]
+        ).map(\.lastPathComponent).sorted()
+        XCTAssertEqual(manifestFiles, expectedManifestFiles)
+
+        let metadata = try decodeSessionMetadataDocument(from: archiveRoot)
+        let exportMetadata = try decodeExportMetadataDocument(from: archiveRoot)
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .iso8601
+        let review = try decoder.decode(
+            SessionExportReviewDocument.self,
+            from: Data(contentsOf: archiveRoot.appendingPathComponent("manifests/session_review.json"))
+        )
+        let replay = try decoder.decode(
+            SessionExportReplayDocument.self,
+            from: Data(contentsOf: archiveRoot.appendingPathComponent("manifests/session_replay.json"))
+        )
+        let expectedTakeIDs = Set(package.takes.map(\.takeID))
+        XCTAssertEqual(Set(metadata.takes.map(\.takeID)), expectedTakeIDs)
+        XCTAssertEqual(Set(exportMetadata.takes.map(\.takeID)), expectedTakeIDs)
+        XCTAssertEqual(Set(review.takes.map(\.takeID)), expectedTakeIDs)
+        XCTAssertEqual(Set(replay.takes.map(\.takeID)), expectedTakeIDs)
+
+        let takeLog = try String(
+            contentsOf: archiveRoot.appendingPathComponent("manifests/take_log.csv"),
+            encoding: .utf8
+        )
+        XCTAssertEqual(takeLog.split(whereSeparator: \.isNewline).count, package.takes.count + 1)
+        for relativePath in videoPaths + audioPaths + watchPaths {
+            XCTAssertTrue(takeLog.contains(relativePath), relativePath)
+        }
+
+        for take in package.takes {
+            XCTAssertTrue(FileManager.default.fileExists(atPath: take.mediaURL.path))
+            XCTAssertTrue(FileManager.default.fileExists(atPath: take.sidecarURL.path))
+            XCTAssertTrue(FileManager.default.fileExists(atPath: try XCTUnwrap(take.audioArtifactURL).path))
+            let sidecar = try JSONDecoder.captureCoreDecoder.decode(
+                CaptureCore.LocalRecordingSidecar.self,
+                from: Data(contentsOf: take.sidecarURL)
+            )
+            XCTAssertEqual(sidecar.sessionID, package.metadata.sessionID)
+            XCTAssertEqual(sidecar.takeID, take.takeID)
+            XCTAssertEqual(sidecar.appLocalTakeNumber, take.takeNumber)
+        }
+    }
+
+    func testGuidedCaptureKeepRetryAndExportRoutesUseDurableContracts() throws {
+        let sourceURL = projectRootURL().appendingPathComponent("ScratchLab/Views/CompanionCameraView.swift")
+        let source = try String(contentsOf: sourceURL, encoding: .utf8)
+        let reviewRoute = try sourceSlice(
+            in: source,
+            from: "case .review:",
+            through: "case .sessionComplete:"
+        )
+        XCTAssertTrue(reviewRoute.contains("captureStore.keepTake("))
+        XCTAssertTrue(reviewRoute.contains("captureStore.keepAndNext("))
+        XCTAssertTrue(reviewRoute.contains("onRetry: {\n                            captureStore.retryTake()"))
+        XCTAssertFalse(reviewRoute.contains("onRetry: {\n                            captureStore.discardTake"))
+
+        let keepMethods = try sourceSlice(
+            in: source,
+            from: "func keepTake(watchMotionURL: URL?, platform: String)",
+            through: "func discardTake(onDiscard:"
+        )
+        XCTAssertEqual(
+            keepMethods.components(separatedBy: "guard recordCurrentReviewAsKept(").count - 1,
+            2,
+            "Keep and Keep and Next must both persist through the same durable ledger boundary."
+        )
+        XCTAssertTrue(source.contains("let persistedSession = try keptSessionStore.keep(keptTake, in: keptSession)"))
+
+        let retryMethod = try sourceSlice(
+            in: source,
+            from: "func retryTake()",
+            through: "func prepareNextTake()"
+        )
+        XCTAssertFalse(retryMethod.contains("discardRecording"))
+        XCTAssertTrue(retryMethod.contains("Previous take preserved"))
+
+        let sessionSetup = try sourceSlice(
+            in: source,
+            from: "private struct SessionSetupView: View",
+            through: "private struct CaptureSessionSummaryRow: View"
+        )
+        let captureHub = try sourceSlice(
+            in: source,
+            from: "private struct CaptureHubView: View",
+            through: "private struct CaptureWorkspaceHeader: View"
+        )
+        for routeSource in [sessionSetup, captureHub] {
+            XCTAssertTrue(routeSource.contains("if keptTakeCount > 0"))
+            XCTAssertTrue(routeSource.contains(#"Export / Share \(keptTakeCount) Kept Take"#))
+            XCTAssertTrue(routeSource.contains("action: onExportSession"))
+        }
+    }
+
+    @MainActor
     func testSessionExportCoordinatorSaveArchiveUsesChosenDestination() async throws {
         let root = try makeTemporaryDirectory()
         let package = try makeCanonicalPackage(rootURL: root, useRealMedia: true)
@@ -1913,6 +2684,246 @@ final class CaptureReliabilityPhase1CoreTests: XCTestCase {
         XCTAssertEqual(audioFile.length, AVAudioFramePosition(frameCount))
     }
 
+    func testSessionExportProjectsAudibleRanePairToPlayableStereo() throws {
+        let directory = try makeTemporaryDirectory()
+        let sourceURL = directory.appendingPathComponent("rane-14-channel.caf")
+        let destinationURL = directory.appendingPathComponent("scratch-only-stereo.wav")
+        let frameCount = 4_800
+        let channelCount = 14
+        let channelLayout = try XCTUnwrap(
+            AVAudioChannelLayout(
+                layoutTag: kAudioChannelLayoutTag_DiscreteInOrder | AudioChannelLayoutTag(channelCount)
+            )
+        )
+        let format = AVAudioFormat(
+            commonFormat: .pcmFormatFloat32,
+            sampleRate: 48_000,
+            interleaved: false,
+            channelLayout: channelLayout
+        )
+        let buffer = try XCTUnwrap(
+            AVAudioPCMBuffer(pcmFormat: format, frameCapacity: AVAudioFrameCount(frameCount))
+        )
+        let channels = try XCTUnwrap(buffer.floatChannelData)
+        buffer.frameLength = AVAudioFrameCount(frameCount)
+        for channel in 0..<channelCount {
+            channels[channel].initialize(repeating: 0, count: frameCount)
+        }
+        // Real captured audio moves. Constant fixtures cannot tell a
+        // programme channel from a DC-locked control line, which is what let
+        // DC-only stems ship unnoticed.
+        for frame in 0..<frameCount {
+            channels[0][frame] = 0.000_01
+            channels[1][frame] = -0.000_01
+            channels[12][frame] = Self.dynamicSample(frame: frame, amplitude: 0.25)
+            channels[13][frame] = Self.dynamicSample(frame: frame, amplitude: -0.50)
+        }
+        do {
+            let sourceFile = try AVAudioFile(
+                forWriting: sourceURL,
+                settings: format.settings,
+                commonFormat: .pcmFormatFloat32,
+                interleaved: false
+            )
+            try sourceFile.write(from: buffer)
+        }
+
+        try SessionExportAudioProjection.writePlayableStereo(
+            from: sourceURL,
+            to: destinationURL
+        )
+
+        let exportedFile = try AVAudioFile(forReading: destinationURL)
+        XCTAssertEqual(exportedFile.processingFormat.channelCount, 2)
+        XCTAssertEqual(exportedFile.length, AVAudioFramePosition(frameCount))
+        let exportedBuffer = try XCTUnwrap(
+            AVAudioPCMBuffer(
+                pcmFormat: exportedFile.processingFormat,
+                frameCapacity: AVAudioFrameCount(frameCount)
+            )
+        )
+        try exportedFile.read(into: exportedBuffer)
+        let exportedChannels = try XCTUnwrap(exportedBuffer.floatChannelData)
+        XCTAssertEqual(
+            exportedChannels[0][100],
+            Self.dynamicSample(frame: 100, amplitude: 0.25),
+            accuracy: 0.000_1
+        )
+        XCTAssertEqual(
+            exportedChannels[1][100],
+            Self.dynamicSample(frame: 100, amplitude: -0.50),
+            accuracy: 0.000_1
+        )
+    }
+
+    func testSessionExportPrefersKnownRaneMasterPairOverLouderDVSChannels() throws {
+        let directory = try makeTemporaryDirectory()
+        let sourceURL = directory.appendingPathComponent("rane-profile-14-channel.caf")
+        let destinationURL = directory.appendingPathComponent("scratch-only-stereo.wav")
+        let frameCount = 4_800
+        let channelCount = 14
+        let channelLayout = try XCTUnwrap(
+            AVAudioChannelLayout(
+                layoutTag: kAudioChannelLayoutTag_DiscreteInOrder | AudioChannelLayoutTag(channelCount)
+            )
+        )
+        let format = AVAudioFormat(
+            commonFormat: .pcmFormatFloat32,
+            sampleRate: 48_000,
+            interleaved: false,
+            channelLayout: channelLayout
+        )
+        let buffer = try XCTUnwrap(
+            AVAudioPCMBuffer(pcmFormat: format, frameCapacity: AVAudioFrameCount(frameCount))
+        )
+        let channels = try XCTUnwrap(buffer.floatChannelData)
+        buffer.frameLength = AVAudioFrameCount(frameCount)
+        for channel in 0..<channelCount {
+            channels[channel].initialize(repeating: 0, count: frameCount)
+        }
+        // Both pairs carry real audio; the DVS pair is the louder one, so the
+        // hint has to win on merit rather than by skipping the measurement.
+        for frame in 0..<frameCount {
+            channels[2][frame] = Self.dynamicSample(frame: frame, amplitude: -0.90)
+            channels[3][frame] = Self.dynamicSample(frame: frame, amplitude: 0.80)
+            channels[12][frame] = Self.dynamicSample(frame: frame, amplitude: 0.20)
+            channels[13][frame] = Self.dynamicSample(frame: frame, amplitude: -0.25)
+        }
+        do {
+            let sourceFile = try AVAudioFile(
+                forWriting: sourceURL,
+                settings: format.settings,
+                commonFormat: .pcmFormatFloat32,
+                interleaved: false
+            )
+            try sourceFile.write(from: buffer)
+        }
+
+        try SessionExportAudioProjection.writePlayableStereo(
+            from: sourceURL,
+            to: destinationURL,
+            preferredPair: RoutineCaptureAudioHardwareProfile.preferredProgramStereoPair(
+                forDeviceName: "Rane ONE MKII"
+            )
+        )
+
+        let exportedFile = try AVAudioFile(forReading: destinationURL)
+        let exportedBuffer = try XCTUnwrap(
+            AVAudioPCMBuffer(
+                pcmFormat: exportedFile.processingFormat,
+                frameCapacity: AVAudioFrameCount(frameCount)
+            )
+        )
+        try exportedFile.read(into: exportedBuffer)
+        let exportedChannels = try XCTUnwrap(exportedBuffer.floatChannelData)
+        XCTAssertEqual(
+            exportedChannels[0][100],
+            Self.dynamicSample(frame: 100, amplitude: 0.20),
+            accuracy: 0.000_1
+        )
+        XCTAssertEqual(
+            exportedChannels[1][100],
+            Self.dynamicSample(frame: 100, amplitude: -0.25),
+            accuracy: 0.000_1
+        )
+    }
+
+    func testRoutineExportProjectsRaneMultichannelAudioBeforeStemRendering() throws {
+        let root = try makeTemporaryDirectory()
+        let sessionID = "routine-rane-stereo-stems"
+        let videoURL = try makeLocalRecordingTake(
+            in: root,
+            sessionID: sessionID,
+            takeNumber: 1,
+            bpm: 95,
+            createdAt: Date(timeIntervalSince1970: 1_710_001_125),
+            useRealMedia: true
+        )
+        let audioURL = videoURL.deletingPathExtension().appendingPathExtension("wav")
+        try FileManager.default.removeItem(at: audioURL)
+
+        let frameCount = 1_024
+        let channelCount = 14
+        var samples = [Int32](repeating: 0, count: frameCount * channelCount)
+        for frame in 0..<frameCount {
+            samples[(frame * channelCount) + 12] = Self.dynamicInt32Sample(frame: frame, amplitude: 0.25)
+            samples[(frame * channelCount) + 13] = Self.dynamicInt32Sample(frame: frame, amplitude: -0.50)
+        }
+        let sampleBuffer = try makeInterleavedInt32SampleBuffer(
+            samples: samples,
+            channelCount: channelCount,
+            sampleRate: 48_000
+        )
+        let diagnostics = MacCaptureEngine.writeRoutineAudioSampleBufferForTesting(
+            sampleBuffer,
+            to: audioURL
+        )
+        XCTAssertNil(diagnostics.lastErrorMessage)
+
+        let builder = SessionArchiveBuilder()
+        let source = SessionExportSource.localRecordingSession(
+            lastRecordingURL: videoURL,
+            sessionName: "RANE Routine",
+            config: nil
+        )
+        XCTAssertNil(builder.validationReport(for: source))
+
+        let package = try builder.preparePackage(from: source)
+        let preview = try builder.canonicalPreview(for: package)
+        XCTAssertFalse(preview.manifestData.isEmpty)
+    }
+
+    func testSessionExportDuplicatesMonoIntoPlayableStereo() throws {
+        let directory = try makeTemporaryDirectory()
+        let sourceURL = directory.appendingPathComponent("mono.wav")
+        let destinationURL = directory.appendingPathComponent("stereo.wav")
+        let format = try XCTUnwrap(
+            AVAudioFormat(
+                commonFormat: .pcmFormatFloat32,
+                sampleRate: 48_000,
+                channels: 1,
+                interleaved: false
+            )
+        )
+        let frameCount = 4_800
+        let buffer = try XCTUnwrap(
+            AVAudioPCMBuffer(pcmFormat: format, frameCapacity: AVAudioFrameCount(frameCount))
+        )
+        buffer.frameLength = AVAudioFrameCount(frameCount)
+        let sourceChannels = try XCTUnwrap(buffer.floatChannelData)
+        for frame in 0..<frameCount {
+            sourceChannels[0][frame] = Self.dynamicSample(frame: frame, amplitude: 0.125)
+        }
+        do {
+            let sourceFile = try AVAudioFile(
+                forWriting: sourceURL,
+                settings: format.settings,
+                commonFormat: .pcmFormatFloat32,
+                interleaved: false
+            )
+            try sourceFile.write(from: buffer)
+        }
+
+        try SessionExportAudioProjection.writePlayableStereo(
+            from: sourceURL,
+            to: destinationURL
+        )
+
+        let exportedFile = try AVAudioFile(forReading: destinationURL)
+        XCTAssertEqual(exportedFile.processingFormat.channelCount, 2)
+        let exportedBuffer = try XCTUnwrap(
+            AVAudioPCMBuffer(
+                pcmFormat: exportedFile.processingFormat,
+                frameCapacity: AVAudioFrameCount(frameCount)
+            )
+        )
+        try exportedFile.read(into: exportedBuffer)
+        let exportedChannels = try XCTUnwrap(exportedBuffer.floatChannelData)
+        let expected = Self.dynamicSample(frame: 10, amplitude: 0.125)
+        XCTAssertEqual(exportedChannels[0][10], expected, accuracy: 0.000_1)
+        XCTAssertEqual(exportedChannels[1][10], expected, accuracy: 0.000_1)
+    }
+
     private func makeNonInterleavedFloatSampleBuffer(
         channels: [[Float]],
         sampleRate: Double
@@ -2123,6 +3134,90 @@ final class CaptureReliabilityPhase1CoreTests: XCTestCase {
         }
     }
 
+    func testAudioInputCaptureSuitabilityRecognizesBuiltInMicrophoneUIDAndNames() {
+        let choices = [
+            MacCaptureEngine.AudioInputDeviceChoice(uniqueID: "BuiltInMicrophoneDevice", name: "Audio Input"),
+            MacCaptureEngine.AudioInputDeviceChoice(uniqueID: "mic-1", name: "Built-in Microphone"),
+            MacCaptureEngine.AudioInputDeviceChoice(uniqueID: "mic-2", name: "Internal Microphone"),
+            MacCaptureEngine.AudioInputDeviceChoice(uniqueID: "mic-3", name: "MacBook Pro Microphone")
+        ]
+
+        XCTAssertTrue(choices.allSatisfy {
+            MacCaptureEngine.audioInputCaptureSuitability(for: $0) == .builtInMicrophone
+        })
+    }
+
+    func testAudioInputCaptureSuitabilityDoesNotBlockRoutedOrExternalInputs() {
+        let routedChoices = [
+            MacCaptureEngine.AudioInputDeviceChoice(uniqueID: "rane", name: "RANE ONE MKII"),
+            MacCaptureEngine.AudioInputDeviceChoice(uniqueID: "loopback", name: "BlackHole 2ch"),
+            MacCaptureEngine.AudioInputDeviceChoice(uniqueID: "interface", name: "USB Audio Codec"),
+            MacCaptureEngine.AudioInputDeviceChoice(uniqueID: "virtual", name: "Serato Virtual Audio")
+        ]
+
+        XCTAssertTrue(routedChoices.allSatisfy {
+            MacCaptureEngine.audioInputCaptureSuitability(for: $0) == .routedAudio
+        })
+
+        let externalMicrophone = MacCaptureEngine.AudioInputDeviceChoice(
+            uniqueID: "usb-podcast-mic",
+            name: "USB Podcast Microphone"
+        )
+        let externalSuitability = MacCaptureEngine.audioInputCaptureSuitability(for: externalMicrophone)
+        XCTAssertEqual(externalSuitability, .otherMicrophone)
+        XCTAssertTrue(externalSuitability.isMicrophonePath)
+        XCTAssertFalse(externalSuitability.blocksIsolatedNoBeatCapture)
+    }
+
+    func testBuiltInMicrophoneBlocksOnlyIsolatedNoBeatRoutineCapture() {
+        let suitability = MacCaptureEngine.AudioInputCaptureSuitability.builtInMicrophone
+
+        XCTAssertTrue(MacCaptureEngine.shouldBlockRoutineCapture(
+            audioInputSuitability: suitability,
+            captureMode: .calibrationNoClick,
+            beatEngineMode: .silent
+        ))
+        XCTAssertFalse(MacCaptureEngine.shouldBlockRoutineCapture(
+            audioInputSuitability: suitability,
+            captureMode: .timedClick,
+            beatEngineMode: .clickTrack
+        ))
+        XCTAssertFalse(MacCaptureEngine.shouldBlockRoutineCapture(
+            audioInputSuitability: .routedAudio,
+            captureMode: .calibrationNoClick,
+            beatEngineMode: .silent
+        ))
+    }
+
+    func testRoutineCaptureBuiltInMicrophoneGuardPrecedesRecordingPublication() throws {
+        let projectRoot = projectRootURL()
+        let engineSource = try String(
+            contentsOf: projectRoot.appendingPathComponent("ScratchLabDesktop/Services/MacCaptureEngine.swift"),
+            encoding: .utf8
+        )
+        let viewSource = try String(
+            contentsOf: projectRoot.appendingPathComponent("ScratchLabDesktop/Views/MacAnalyzerView.swift"),
+            encoding: .utf8
+        )
+
+        // Matched on the function NAME, not on a formatting of its parameter
+        // list. The literal used to include `(captureTiming:`, so wrapping the
+        // signature across lines silently turned this guard-ordering assertion
+        // into an XCTUnwrap failure instead of a coverage report.
+        let startTail = engineSource[try XCTUnwrap(
+            engineSource.range(of: "func startRoutineRecording(")
+        ).lowerBound...]
+        let guardRange = try XCTUnwrap(startTail.range(of: "Self.shouldBlockRoutineCapture("))
+        let publishRange = try XCTUnwrap(startTail.range(of: "self.isRoutineRecording = true"))
+
+        XCTAssertLessThan(guardRange.lowerBound, publishRange.lowerBound)
+        XCTAssertTrue(viewSource.contains("return !selectedAudioCaptureReady"))
+        XCTAssertTrue(viewSource.contains("if captureEngine.isRoutineRecording { return false }"))
+        XCTAssertTrue(viewSource.contains("if builtInMicrophoneBlocksRoutineStart"))
+        XCTAssertTrue(viewSource.contains("captureEngine.selectedAudioInputCaptureSuitability"))
+        XCTAssertFalse(viewSource.contains("let lowercasedName = selectedAudioDevice.localizedName.lowercased()"))
+    }
+
     func testPreferredCaptureAudioDeviceSelectsExactSeratoVirtualAudioOverMicrophone() {
         let devices = [
             MacCaptureEngine.AudioInputDeviceChoice(uniqueID: "mic", name: "Built-in Microphone"),
@@ -2288,6 +3383,45 @@ final class CaptureReliabilityPhase1CoreTests: XCTestCase {
         XCTAssertEqual(decision.priority, .explicitUserSelection)
     }
 
+    func testDebugAudioSelectionPrefersRaneHardwareOverSystemDefaultMicrophone() {
+        let devices = [
+            MacCaptureEngine.AudioInputDeviceChoice(uniqueID: "mic", name: "MacBook Pro Microphone"),
+            MacCaptureEngine.AudioInputDeviceChoice(uniqueID: "rane", name: "Rane Seventy-Two"),
+            MacCaptureEngine.AudioInputDeviceChoice(uniqueID: "serato", name: "Serato Virtual Audio")
+        ]
+
+        let decision = MacCaptureEngine.preferredCaptureAudioDevice(
+            from: devices,
+            explicitSelectionUniqueID: nil,
+            previousSelectionUniqueID: "mic",
+            systemDefaultUniqueID: "mic",
+            skipSeratoPriority: true,
+            preferRaneHardware: true
+        )
+
+        XCTAssertEqual(decision.device?.uniqueID, "rane")
+        XCTAssertEqual(decision.priority, .raneHardware)
+    }
+
+    func testDebugAudioSelectionPreservesExplicitMicrophoneOverRaneHardware() {
+        let devices = [
+            MacCaptureEngine.AudioInputDeviceChoice(uniqueID: "mic", name: "MacBook Pro Microphone"),
+            MacCaptureEngine.AudioInputDeviceChoice(uniqueID: "rane", name: "RANE ONE MKII")
+        ]
+
+        let decision = MacCaptureEngine.preferredCaptureAudioDevice(
+            from: devices,
+            explicitSelectionUniqueID: "mic",
+            previousSelectionUniqueID: "mic",
+            systemDefaultUniqueID: "mic",
+            skipSeratoPriority: true,
+            preferRaneHardware: true
+        )
+
+        XCTAssertEqual(decision.device?.uniqueID, "mic")
+        XCTAssertEqual(decision.priority, .explicitUserSelection)
+    }
+
     func testSkipSeratoPriorityFallsBackWhenSystemDefaultIsMissing() {
         let devices = [
             MacCaptureEngine.AudioInputDeviceChoice(uniqueID: "serato", name: "Serato Virtual Audio"),
@@ -2337,6 +3471,51 @@ final class CaptureReliabilityPhase1CoreTests: XCTestCase {
         XCTAssertTrue(source.contains("detail: captureEngine.selectedAudioDeviceStatusLine"))
         XCTAssertTrue(source.contains("Text(captureEngine.selectedAudioDeviceStatusLine)"))
         XCTAssertTrue(source.contains("Button(\"Use Serato Audio\")"))
+    }
+
+    /// The panel and the recording gate must reach their DVS verdict through
+    /// one shared property. They previously derived it separately, which is
+    /// how the gate could say "DVS enabled but not ready" while the panel
+    /// showed Rane audio READY and offered "Use Serato Audio".
+    func testDVSRecordingGateAndReadinessPanelShareOneLaneValue() throws {
+        let sourceURL = projectRootURL().appendingPathComponent("ScratchLabDesktop/Views/MacAnalyzerView.swift")
+        let source = try String(contentsOf: sourceURL, encoding: .utf8)
+
+        XCTAssertTrue(
+            source.contains("private var dvsTimecodeLane: CaptureLaneReadiness"),
+            "The single DVS lane value must exist."
+        )
+        XCTAssertTrue(
+            source.contains("if dvsTimecodeLane.isBlocking {"),
+            "The recording gate must read the shared lane."
+        )
+        XCTAssertTrue(
+            source.contains("dvsTimecode: dvsTimecodeLane,"),
+            "The readiness panel must read the same shared lane."
+        )
+        XCTAssertTrue(
+            source.contains("isDVSSourceSelected: captureEngine.isSeratoAudioSelected"),
+            "DVS requirement must key off the selected audio input."
+        )
+        XCTAssertFalse(
+            source.contains("return \"DVS input is enabled but not ready"),
+            "The old message pointed at a Disable DVS control that does not exist."
+        )
+        XCTAssertFalse(
+            source.contains("required: dvsTimecodeMode != .disabled"),
+            "Mode alone must no longer decide that DVS is required."
+        )
+    }
+
+    /// `isSeratoAudioSelected` is the exact inverse condition of the button
+    /// that offers the switch, so the two can never disagree.
+    func testEngineExposesSeratoSelectedAsInverseOfUseSeratoOffer() throws {
+        let sourceURL = projectRootURL().appendingPathComponent("ScratchLabDesktop/Services/MacCaptureEngine.swift")
+        let source = try String(contentsOf: sourceURL, encoding: .utf8)
+
+        XCTAssertTrue(source.contains("var isSeratoAudioSelected: Bool"))
+        XCTAssertTrue(source.contains("return seratoDevice.uniqueID == selectedAudioDeviceUniqueID"))
+        XCTAssertTrue(source.contains("return seratoDevice.uniqueID != selectedAudioDeviceUniqueID"))
     }
 
     func testRoutineRecordingMetadataUsesSelectedAudioDeviceNameAndUniqueID() throws {
@@ -2662,6 +3841,78 @@ final class CaptureReliabilityPhase1CoreTests: XCTestCase {
         )
     }
 
+    /// App Store Connect submission blockers found in the 2026-09-04 audit.
+    func testAllPlatformsShipTheSameBuildNumber() throws {
+        // iOS and macOS share `com.machelpnz.scratchlab`, so they are one ASC
+        // record. The macOS plist hardcoded `20` while every target's
+        // CURRENT_PROJECT_VERSION was 21, which both desynchronised the pair
+        // and stopped the macOS build number tracking the project at all.
+        for path in [
+            "ScratchLab/Info.plist",
+            "ScratchLabDesktop/Info.plist",
+            "ScratchLabWatch/Info.plist"
+        ] {
+            let plist = try String(
+                contentsOf: projectRootURL().appendingPathComponent(path),
+                encoding: .utf8
+            )
+            XCTAssertTrue(
+                plist.contains("<key>CFBundleVersion</key>\n\t<string>$(CURRENT_PROJECT_VERSION)</string>"),
+                "\(path) must take its build number from the project, not a literal."
+            )
+        }
+    }
+
+    func testMacDeclaresAUsageDescriptionForTheAudioProcessTap() throws {
+        // `MacCaptureEngine` creates a Core Audio process tap to capture the
+        // DJ app's output. That is TCC-gated on macOS 14.4+ and needs a usage
+        // description, or Direct Capture cannot obtain permission.
+        let engine = try String(
+            contentsOf: projectRootURL()
+                .appendingPathComponent("ScratchLabDesktop/Services/MacCaptureEngine.swift"),
+            encoding: .utf8
+        )
+        guard engine.contains("AudioHardwareCreateProcessTap") else {
+            return  // No tap, no requirement.
+        }
+        let plist = try String(
+            contentsOf: projectRootURL().appendingPathComponent("ScratchLabDesktop/Info.plist"),
+            encoding: .utf8
+        )
+        XCTAssertTrue(
+            plist.contains("<key>NSAudioCaptureUsageDescription</key>"),
+            "A process tap without NSAudioCaptureUsageDescription cannot be granted permission."
+        )
+    }
+
+    func testWatchDoesNotDeclareIconFilesItDoesNotShip() throws {
+        // The plist listed 11 `AppIcon…` filenames; the asset catalog's real
+        // names are `watch-appLauncher-38mm@2x` and friends, and the built
+        // bundle contains no such PNGs — only a compiled Assets.car. Stale
+        // declarations like these draw upload validation warnings.
+        let plist = try String(
+            contentsOf: projectRootURL().appendingPathComponent("ScratchLabWatch/Info.plist"),
+            encoding: .utf8
+        )
+        XCTAssertFalse(
+            plist.contains("CFBundleIconFiles"),
+            "The watch icon comes from the asset catalog via CFBundleIconName."
+        )
+        XCTAssertTrue(plist.contains("<key>CFBundleIconName</key>"))
+    }
+
+    func testIOSDoesNotDeclareTheInvalidApplicationCategoryKey() throws {
+        let plist = try String(
+            contentsOf: projectRootURL().appendingPathComponent("ScratchLab/Info.plist"),
+            encoding: .utf8
+        )
+        XCTAssertFalse(
+            plist.contains("<key>LSApplicationCategory</key>"),
+            "LSApplicationCategory is not a real key; LSApplicationCategoryType is."
+        )
+        XCTAssertTrue(plist.contains("<key>LSApplicationCategoryType</key>"))
+    }
+
     func testMainMenuViewDoesNotContainPlaceholderStubs() throws {
         let sourceURL = projectRootURL().appendingPathComponent("ScratchLab/Views/MainMenuView.swift")
         let source = try String(contentsOf: sourceURL, encoding: .utf8)
@@ -2769,8 +4020,140 @@ final class CaptureReliabilityPhase1CoreTests: XCTestCase {
         let sourceURL = projectRootURL().appendingPathComponent("ScratchLab/Views/CompanionCameraView.swift")
         let source = try String(contentsOf: sourceURL, encoding: .utf8)
 
-        XCTAssertTrue(source.contains(".toolbar(.visible, for: .navigationBar)"))
+        XCTAssertTrue(source.contains(".toolbar(usesImmersiveCameraLayout ? .hidden : .visible, for: .navigationBar)"))
         XCTAssertTrue(source.contains("ToolbarItem(placement: .topBarLeading)"))
+        XCTAssertTrue(source.contains("landscapeNavigationButton("))
+        XCTAssertTrue(source.contains("systemImage: \"slider.horizontal.3\""))
+    }
+
+    func testGuidedCaptureSavingFreezesElapsedTimeAtStopRequest() throws {
+        let sourceURL = projectRootURL().appendingPathComponent("ScratchLab/Views/CompanionCameraView.swift")
+        let source = try String(contentsOf: sourceURL, encoding: .utf8)
+
+        // The freeze instant comes from the finalization machine's accepted
+        // Stop, not from a second `Date()` read at the display layer. The
+        // machine emits `freezeElapsedTimer` exactly once per take, which is
+        // asserted behaviourally in `CaptureFinalizationMachineTests`.
+        XCTAssertTrue(source.contains("case let .freezeElapsedTimer(date):"))
+        XCTAssertTrue(source.contains("captureStore.freezeElapsedTime(at: date)"))
+        XCTAssertTrue(source.contains("activeTake.stoppedAt = date"))
+        XCTAssertTrue(source.contains("recordingStoppedAt: captureStore.activeTake?.stoppedAt"))
+        XCTAssertTrue(source.contains("(recordingStoppedAt ?? now).timeIntervalSince(recordingStartedAt)"))
+    }
+
+    /// Slice E: there is one finalization timer and one Stop transition path.
+    /// A second watchdog or a parallel "is saving" flag is what made the
+    /// original repair contradict itself, so their absence is asserted here
+    /// rather than left to review.
+    func testGuidedCaptureHasExactlyOneFinalizationTimerAndOneStopPath() throws {
+        let sourceURL = projectRootURL().appendingPathComponent("ScratchLab/Views/CompanionCameraView.swift")
+        let source = try String(contentsOf: sourceURL, encoding: .utf8)
+
+        XCTAssertTrue(source.contains("CaptureFinalizationDeadlineScheduler()"))
+        XCTAssertFalse(source.contains("finalizationWatchdog"), "the second watchdog must stay deleted")
+        XCTAssertFalse(source.contains("12_000_000_000"), "the hardcoded watchdog sleep is now a budget")
+        XCTAssertFalse(source.contains("3_000_000_000"), "the hardcoded retry sleep is now a budget")
+        XCTAssertEqual(
+            source.components(separatedBy: "finalizationScheduler.schedule(").count - 1,
+            1,
+            "only the machine's scheduleDeadline effect may arm a finalization timer"
+        )
+        XCTAssertEqual(
+            source.components(separatedBy: "private func stopTake(source:").count - 1,
+            1
+        )
+        XCTAssertTrue(source.contains("stopTake(source: .phone)"))
+        XCTAssertTrue(source.contains("stopTake(source: .watch)"))
+        // Both sources reach the same function; nothing branches on which one.
+        let stopTakeBody = try sourceSlice(
+            in: source,
+            from: "private func stopTake(source: CaptureStopSource) {",
+            through: "private func runFinalizationEffects("
+        )
+        XCTAssertFalse(stopTakeBody.contains("case .watch"))
+        XCTAssertFalse(stopTakeBody.contains("case .phone"))
+    }
+
+    /// Slice E: every summary delivery path is gated by the machine before any
+    /// side effect runs, so a duplicate recorder callback cannot re-persist
+    /// notation, re-move the scratch stem, or re-raise an artifact banner.
+    func testGuidedCaptureGatesEverySummaryDeliveryOnTheFinalizationMachine() throws {
+        let sourceURL = projectRootURL().appendingPathComponent("ScratchLab/Views/CompanionCameraView.swift")
+        let source = try String(contentsOf: sourceURL, encoding: .utf8)
+        let finalizationSource = try sourceSlice(
+            in: source,
+            from: "private func handleFinishedRecording(_ summary:",
+            through: "private func refreshReviewMotionAssociation()"
+        )
+
+        let gate = try XCTUnwrap(finalizationSource.range(of: "captureStore.applyFinalization("))
+        let guardClause = try XCTUnwrap(finalizationSource.range(of: "guard !effects.isEmpty else { return }"))
+        let firstSideEffect = try XCTUnwrap(finalizationSource.range(of: "broadcaster.persistingDetectedNotation("))
+        XCTAssertLessThan(gate.lowerBound, guardClause.lowerBound)
+        XCTAssertLessThan(guardClause.lowerBound, firstSideEffect.lowerBound)
+        XCTAssertTrue(finalizationSource.contains(".summaryDelivered("))
+
+        // The de-duplication key that used to live on the store is gone; the
+        // machine is the only place a take can be marked already handled.
+        XCTAssertFalse(source.contains("lastHandledRecordingID"))
+    }
+
+    /// Slice E: optional audio inspection is bounded and take-scoped.
+    func testGuidedCaptureBoundsOptionalAudioInspection() throws {
+        let sourceURL = projectRootURL().appendingPathComponent("ScratchLab/Views/CompanionCameraView.swift")
+        let source = try String(contentsOf: sourceURL, encoding: .utf8)
+
+        XCTAssertTrue(source.contains("private static func mediaContainsAudio(_ url: URL, timeout: TimeInterval) async -> Bool?"))
+        XCTAssertTrue(source.contains("timeout: captureStore.finalizationBudget.audioInspection"))
+        XCTAssertTrue(source.contains("finalization.acceptsAudioInspection(forRecordingID: recordingID)"))
+        // A timed-out inspection must report nothing rather than "no audio":
+        // a slow AVAsset open is not evidence that the take is silent.
+        XCTAssertTrue(source.contains("guard let audioPresent = await Self.mediaContainsAudio("))
+    }
+
+    /// Slice E: media is preserved before a recoverable failure is presented,
+    /// and Stop during startup stops everything a start would have armed.
+    func testGuidedCapturePreservesMediaBeforePresentingFailure() throws {
+        let sourceURL = projectRootURL().appendingPathComponent("ScratchLab/Views/CompanionCameraView.swift")
+        let source = try String(contentsOf: sourceURL, encoding: .utf8)
+
+        XCTAssertTrue(source.contains("case .preserveStagedMedia:"))
+        XCTAssertTrue(source.contains("preserveStagedMediaForRecovery()"))
+        XCTAssertTrue(source.contains("case let .presentRecoverableFailure(message):"))
+        XCTAssertTrue(source.contains("captureStore.presentRecoverableFinalizationFailure(message: message)"))
+        XCTAssertTrue(source.contains("case .cancelPendingRecorderStart:"))
+        // Effect ordering is the machine's responsibility and is asserted in
+        // `CaptureFinalizationMachineTests`; the view must simply run the list
+        // in the order it was handed.
+        XCTAssertTrue(source.contains("for effect in effects {"))
+    }
+
+    func testGuidedCaptureConsumesCompletedSummaryBeforeOptionalAudioInspection() throws {
+        let sourceURL = projectRootURL().appendingPathComponent("ScratchLab/Views/CompanionCameraView.swift")
+        let source = try String(contentsOf: sourceURL, encoding: .utf8)
+        let broadcasterURL = projectRootURL().appendingPathComponent("ScratchLab/Services/CompanionCameraBroadcaster.swift")
+        let broadcasterSource = try String(contentsOf: broadcasterURL, encoding: .utf8)
+        let finalizationSource = try sourceSlice(
+            in: source,
+            from: "private func handleFinishedRecording(_ summary:",
+            through: "private func refreshReviewMotionAssociation()"
+        )
+
+        XCTAssertTrue(source.contains("onReceive(broadcaster.$lastRecordingSummary.compactMap { $0 })"))
+        XCTAssertTrue(source.contains("broadcaster.endRecording { summary in"))
+        XCTAssertTrue(source.contains("captureStore.matchesActiveSavingTake(summary)"))
+        XCTAssertTrue(source.contains("captureStore.handleFinalizationTimeout(status: broadcaster.recordingStatus)"))
+        XCTAssertTrue(broadcasterSource.contains("pendingRecordingFinalizations"))
+        XCTAssertTrue(broadcasterSource.contains("stopRequestedWhileRecordingStarts"))
+        XCTAssertTrue(broadcasterSource.contains("completions.forEach { $0(summary) }"))
+
+        let reviewTransition = try XCTUnwrap(finalizationSource.range(of: "captureStore.handleRecordingFinished("))
+        let optionalInspection = try XCTUnwrap(finalizationSource.range(of: "let audioPresent = await Self.mediaContainsAudio"))
+        XCTAssertLessThan(
+            reviewTransition.lowerBound,
+            optionalInspection.lowerBound,
+            "A finalized movie must leave Saving before optional AVAsset audio inspection begins"
+        )
     }
 
     func testGuidedCaptureSystemCheckScrollsOnSmallScreens() throws {
@@ -2781,26 +4164,26 @@ final class CaptureReliabilityPhase1CoreTests: XCTestCase {
         )
 
         XCTAssertTrue(systemCheckSource.contains("ScrollView(showsIndicators: false)"))
-        XCTAssertTrue(systemCheckSource.contains("Text(\"Open Record Controls\")"))
+        XCTAssertTrue(
+            systemCheckSource.contains(
+                "Button(canBeginCapture ? \"Open Record Controls\" : \"Recording unavailable\", action: onBeginCapture)"
+            )
+        )
     }
 
     func testGuidedCaptureLandscapeHidesHelperTextDuringPreRoll() throws {
         let sourceURL = projectRootURL().appendingPathComponent("ScratchLab/Views/CompanionCameraView.swift")
         let source = try String(contentsOf: sourceURL, encoding: .utf8)
-        let landscapeBodySlice = try sourceSlice(
-            in: source,
-            from: "private var landscapeBody: some View {",
-            through: "private var headerBlock: some View {"
-        )
 
         XCTAssertTrue(
-            landscapeBodySlice.contains("} else if flowState != .preRoll {"),
-            "Landscape footer must suppress idle helper text during the pre-roll count-in, matching portraitBody/controlsOnlyBlock"
+            source.contains("} else if flowState == .preRoll {"),
+            "Capture controls must provide a dedicated pre-roll branch"
         )
-        XCTAssertFalse(
-            landscapeBodySlice.contains("} else {\n                helperText"),
-            "Landscape footer must not fall back to an unconditional else that shows helperText during pre-roll"
+        XCTAssertTrue(
+            source.contains("Button(\"Starting…\", action: {})"),
+            "Pre-roll must show a disabled starting control instead of idle helper text"
         )
+        XCTAssertFalse(source.contains("helperText"))
     }
 
     func testPracticeFlowDoesNotCreateCaptureSessions() throws {
@@ -2867,9 +4250,8 @@ final class CaptureReliabilityPhase1CoreTests: XCTestCase {
         XCTAssertFalse(source.contains("ScratchCoachCard("),
                        "Practice setup must not render the coach card")
         XCTAssertTrue(source.contains("ScrollView(showsIndicators: true)"))
-        let beatControlsRange = try XCTUnwrap(source.range(of: "PracticeBeatControlsCard(practiceBeatStore: practiceBeatStore)"))
-        let audioInputRange = try XCTUnwrap(source.range(of: "Text(\"AUDIO INPUT\")"))
-        XCTAssertLessThan(beatControlsRange.lowerBound, audioInputRange.lowerBound)
+        XCTAssertTrue(source.contains("PracticeBeatControlsCard(practiceBeatStore: practiceBeatStore)"))
+        XCTAssertTrue(source.contains("Text(\"AUDIO INPUT\")"))
     }
 
     func testPracticeModeSourceUsesSafeAreaAwareCoachSetupLayout() throws {
@@ -2968,8 +4350,9 @@ final class CaptureReliabilityPhase1CoreTests: XCTestCase {
 
         XCTAssertTrue(source.contains("GeometryReader { geometry in"))
         XCTAssertTrue(source.contains("ScrollView(showsIndicators: false)"))
-        XCTAssertTrue(source.contains(".padding(.top, geometry.safeAreaInsets.top + 12)"))
-        XCTAssertTrue(source.contains(".padding(.bottom, max(geometry.safeAreaInsets.bottom, 20) + 20)"))
+        XCTAssertTrue(source.contains(".padding(.top, geometry.safeAreaInsets.top + ScratchLabDesign.Spacing.md)"))
+        XCTAssertTrue(source.contains(".padding(.bottom, max(geometry.safeAreaInsets.bottom, ScratchLabDesign.Spacing.xl) + ScratchLabDesign.Spacing.xl)"))
+        XCTAssertTrue(source.contains("let landscapeNeedsScrolling = dynamicTypeSize.isAccessibilitySize || geometry.size.height < 300"))
         XCTAssertFalse(source.contains("headerView\n                    .padding(.top, 20)"))
     }
 
@@ -2982,6 +4365,260 @@ final class CaptureReliabilityPhase1CoreTests: XCTestCase {
         XCTAssertTrue(source.contains(".padding(.top, geometry.safeAreaInsets.top + 12)"))
         XCTAssertTrue(source.contains(".padding(.bottom, max(geometry.safeAreaInsets.bottom, 16) + 28)"))
         XCTAssertFalse(source.contains(".padding(.top, 16)"))
+    }
+
+    func testMainMenuWiresAdaptiveFigmaSurfacesToProductionFlows() throws {
+        let sourceURL = projectRootURL().appendingPathComponent("ScratchLab/Views/MainMenuView.swift")
+        let source = try String(contentsOf: sourceURL, encoding: .utf8)
+
+        XCTAssertTrue(source.contains("@State private var selectedWorkspaceTab: WorkspaceTab = .home"))
+        XCTAssertTrue(source.contains("if usesNavigationSidebar(in: geometry.size)"))
+        XCTAssertTrue(source.contains("AdaptiveSidebarView("))
+        XCTAssertTrue(source.contains("homeScrollContent(geometry: geometry)"))
+
+        for tab in ["home", "practice", "capture", "review", "advanced"] {
+            XCTAssertTrue(
+                source.contains(".tag(WorkspaceTab.\(tab))"),
+                "Compact iOS navigation must expose the \(tab) workspace"
+            )
+        }
+
+        XCTAssertTrue(source.contains("PracticeModeView("))
+        XCTAssertTrue(source.contains("CompanionCameraView()"))
+        XCTAssertTrue(source.contains("AdvancedHubView()"))
+        XCTAssertFalse(source.contains("CapturePlaceholderView"))
+        XCTAssertFalse(source.contains("ReviewPlaceholderView"))
+    }
+
+    func testProductionIOSControllerFlowOffersExplicitLocalAhhhPlayback() throws {
+        let practiceURL = projectRootURL().appendingPathComponent("ScratchLab/Views/PracticeModeView.swift")
+        let captureURL = projectRootURL().appendingPathComponent("ScratchLab/Views/CompanionCameraView.swift")
+        let mainMenuURL = projectRootURL().appendingPathComponent("ScratchLab/Views/MainMenuView.swift")
+        let coordinatorURL = projectRootURL().appendingPathComponent("ScratchLab/MIDI/iOSMIDILearnCoordinator.swift")
+        let dispatcherURL = projectRootURL().appendingPathComponent("ScratchLab/MIDI/iOSMIDIManager.swift")
+        let practiceSource = try String(contentsOf: practiceURL, encoding: .utf8)
+        let captureSource = try String(contentsOf: captureURL, encoding: .utf8)
+        let mainMenuSource = try String(contentsOf: mainMenuURL, encoding: .utf8)
+        let coordinatorSource = try String(contentsOf: coordinatorURL, encoding: .utf8)
+        let dispatcherSource = try String(contentsOf: dispatcherURL, encoding: .utf8)
+
+        for source in [practiceSource, captureSource] {
+            XCTAssertTrue(source.contains("Button(\"Load AHHH\")"))
+            XCTAssertTrue(source.contains("loadPlatterAHHH()"))
+            XCTAssertTrue(source.contains("platterSampleStatus"))
+        }
+
+        XCTAssertFalse(practiceSource.contains("Serato owns deck audio."))
+        XCTAssertFalse(captureSource.contains("Serato remains responsible for deck audio."))
+        XCTAssertTrue(coordinatorSource.contains("restoreMissingAssignedHotCueSamples()"))
+        XCTAssertTrue(coordinatorSource.contains("assignsScratchLabSamples: true"))
+        XCTAssertTrue(coordinatorSource.contains("func assignSample("))
+        XCTAssertTrue(coordinatorSource.contains("assignedSampleID: preservedSampleID ?? defaultSampleID"))
+
+        XCTAssertTrue(mainMenuSource.contains("advanced-midi-learn-hotCue1"))
+        XCTAssertTrue(mainMenuSource.contains("advanced-assign-ahhh-hot-cue-1"))
+        XCTAssertTrue(mainMenuSource.contains("advanced-load-platter-ahhh"))
+        XCTAssertFalse(mainMenuSource.localizedCaseInsensitiveContains("intentionally read-only"))
+        XCTAssertFalse(mainMenuSource.localizedCaseInsensitiveContains("listen only"))
+
+        XCTAssertTrue(dispatcherSource.contains("HotCueTriggerResolver.resolve(action: action)"))
+        XCTAssertFalse(dispatcherSource.contains("HotCueTriggerResolver.resolve(\n                action: action,\n                transportState: transportState"))
+    }
+
+    func testIOSLandscapeNotationUsesTheFullSafeWorkspaceOnPhoneAndPad() throws {
+        let practiceURL = projectRootURL().appendingPathComponent("ScratchLab/Views/PracticeModeView.swift")
+        let captureURL = projectRootURL().appendingPathComponent("ScratchLab/Views/CompanionCameraView.swift")
+        let mainMenuURL = projectRootURL().appendingPathComponent("ScratchLab/Views/MainMenuView.swift")
+        let practiceSource = try String(contentsOf: practiceURL, encoding: .utf8)
+        let captureSource = try String(contentsOf: captureURL, encoding: .utf8)
+        let mainMenuSource = try String(contentsOf: mainMenuURL, encoding: .utf8)
+
+        XCTAssertTrue(practiceSource.contains("landscapeLiveNotationOverlay"))
+        XCTAssertTrue(practiceSource.contains(".frame(maxWidth: .infinity, maxHeight: .infinity)"))
+        XCTAssertTrue(practiceSource.contains(".layoutPriority(1)"))
+        XCTAssertTrue(practiceSource.contains(".background(Color.clear)"))
+        XCTAssertFalse(practiceSource.contains(".frame(height: min(max(geometry.size.height * 0.40, 144), 184))"))
+
+        XCTAssertTrue(captureSource.contains("private struct CaptureLiveNotationOverlay"))
+        XCTAssertTrue(captureSource.contains(".frame(maxWidth: .infinity, maxHeight: .infinity)"))
+        XCTAssertTrue(captureSource.contains(".layoutPriority(1)"))
+        XCTAssertFalse(captureSource.contains(".frame(height: min(max(proxy.size.height * 0.40, 144), 184))"))
+
+        XCTAssertTrue(mainMenuSource.contains("phoneLandscapeHomeContent(geometry: geometry)"))
+        XCTAssertTrue(mainMenuSource.contains(".padding(.bottom, max(geometry.safeAreaInsets.bottom, 8) + 76)"))
+    }
+
+    func testIOSLandscapeShowsRealAHHHSampleWaveformAndRendererPlayhead() throws {
+        let rendererURL = projectRootURL().appendingPathComponent("ScratchLab/Audio/iOS/IOScratchRenderer.swift")
+        let playbackURL = projectRootURL().appendingPathComponent("ScratchLab/Audio/iOS/IOScratchPlaybackEngine.swift")
+        let platterTrackerURL = projectRootURL().appendingPathComponent("ScratchLab/Models/ScratchSoundBank/ScratchPlatterTracker.swift")
+        let captureCoreURL = projectRootURL().appendingPathComponent("ScratchLab/Models/CaptureCore.swift")
+        let dispatcherURL = projectRootURL().appendingPathComponent("ScratchLab/MIDI/iOSMIDIManager.swift")
+        let macTrackerURL = projectRootURL().appendingPathComponent("ScratchLabDesktop/Services/LivePerformedNotationTracker.swift")
+        let macAnalyzerURL = projectRootURL().appendingPathComponent("ScratchLabDesktop/Views/MacAnalyzerView.swift")
+        let macPlaybackURL = projectRootURL().appendingPathComponent("ScratchLabDesktop/Services/ScratchSamplePlaybackController.swift")
+        let waveformURL = projectRootURL().appendingPathComponent("ScratchLab/Views/ScratchMotionLane.swift")
+        let practiceURL = projectRootURL().appendingPathComponent("ScratchLab/Views/PracticeModeView.swift")
+        let captureURL = projectRootURL().appendingPathComponent("ScratchLab/Views/CompanionCameraView.swift")
+        let rendererSource = try String(contentsOf: rendererURL, encoding: .utf8)
+        let playbackSource = try String(contentsOf: playbackURL, encoding: .utf8)
+        let platterTrackerSource = try String(contentsOf: platterTrackerURL, encoding: .utf8)
+        let captureCoreSource = try String(contentsOf: captureCoreURL, encoding: .utf8)
+        let dispatcherSource = try String(contentsOf: dispatcherURL, encoding: .utf8)
+        let macTrackerSource = try String(contentsOf: macTrackerURL, encoding: .utf8)
+        let macAnalyzerSource = try String(contentsOf: macAnalyzerURL, encoding: .utf8)
+        let macPlaybackSource = try String(contentsOf: macPlaybackURL, encoding: .utf8)
+        let waveformSource = try String(contentsOf: waveformURL, encoding: .utf8)
+        let practiceSource = try String(contentsOf: practiceURL, encoding: .utf8)
+        let captureSource = try String(contentsOf: captureURL, encoding: .utf8)
+
+        XCTAssertTrue(rendererSource.contains("currentUnwrappedFramePositionSnapshot()"))
+        XCTAssertTrue(rendererSource.contains("unwrappedTargetFrameBits"))
+        XCTAssertTrue(playbackSource.contains("struct PlatterSampleWaveform"))
+        XCTAssertTrue(playbackSource.contains("platterSamplePlayheadSnapshot"))
+        XCTAssertTrue(platterTrackerSource.contains("struct PlatterSamplePositionProjection"))
+        XCTAssertTrue(platterTrackerSource.contains("case beforeStart"))
+        XCTAssertTrue(platterTrackerSource.contains("case pastEnd"))
+        XCTAssertTrue(playbackSource.contains("PlatterSamplePositionProjection.resolve("))
+        XCTAssertTrue(playbackSource.contains("makeWaveform("))
+        XCTAssertTrue(playbackSource.contains("PlatterCoordinateSemantics.samplePosition("))
+        XCTAssertTrue(playbackSource.contains("rawSignedPosition: phase"))
+        XCTAssertTrue(playbackSource.contains("hotCueOrigin: hotCuePhase"))
+        XCTAssertFalse(playbackSource.contains("gestureRelativeNotation("))
+        XCTAssertTrue(captureCoreSource.contains("deriveGestureRelativePlatterNotationEvents("))
+        XCTAssertTrue(captureCoreSource.contains("gestureRelativeRecordMovementEventsForPresentation("))
+        XCTAssertTrue(dispatcherSource.contains("derivePlatterMovementEventsWithProvisional("))
+        XCTAssertTrue(dispatcherSource.contains("deriveGestureRelativePlatterNotationEvents("))
+        XCTAssertTrue(dispatcherSource.contains("advanceLiveNotationAnchor("))
+        XCTAssertTrue(dispatcherSource.contains("advanceLiveNotationAnchorPastSuppressedMotorRotation()"))
+        XCTAssertTrue(macTrackerSource.contains("resolvedControllerMovementEventsWithProvisional("))
+        XCTAssertTrue(macAnalyzerSource.contains("LiveNotationOverlayModel.capturedGestureRelativePresentation(from:"))
+        XCTAssertFalse(macTrackerSource.contains("var canvasHeight: CGFloat"))
+        XCTAssertFalse(macAnalyzerSource.contains("canvasHeight: 118"))
+        XCTAssertTrue(macTrackerSource.contains(".frame(maxWidth: .infinity, maxHeight: .infinity)"))
+        XCTAssertTrue(macAnalyzerSource.contains("LivePerformedNotationCard("))
+        XCTAssertTrue(macAnalyzerSource.contains("MacSamplePositionWaveformView("))
+        XCTAssertTrue(macAnalyzerSource.contains("PlatterSamplePositionProjection.resolve("))
+        XCTAssertTrue(macPlaybackSource.contains("struct PlaybackWaveformSnapshot"))
+        XCTAssertTrue(macPlaybackSource.contains("makePlaybackWaveform("))
+        XCTAssertTrue(macPlaybackSource.contains("unwrappedFramePosition"))
+        XCTAssertTrue(waveformSource.contains("struct SamplePositionWaveformView"))
+        XCTAssertTrue(waveformSource.contains("SAMPLE POSITION"))
+        XCTAssertTrue(waveformSource.contains("Text(\"START\")"))
+        XCTAssertTrue(waveformSource.contains("Text(\"MID\")"))
+        XCTAssertTrue(waveformSource.contains("Text(\"END\")"))
+        XCTAssertTrue(waveformSource.contains(".background(Color.clear)"))
+        XCTAssertTrue(waveformSource.contains("LOAD AHHH TO SEE SAMPLE POSITION"))
+        XCTAssertFalse(waveformSource.localizedCaseInsensitiveContains("Serato owns"))
+        XCTAssertTrue(practiceSource.contains("SamplePositionWaveformView()"))
+        XCTAssertTrue(practiceSource.contains("gestureRelativeNormalizationFrame(for: events)"))
+        XCTAssertTrue(practiceSource.contains("gestureRelativePlatterNotationEvents"))
+        XCTAssertGreaterThanOrEqual(captureSource.components(separatedBy: "SamplePositionWaveformView()").count - 1, 2)
+        XCTAssertTrue(captureSource.contains("gestureRelativeNormalizationFrame(for: events)"))
+        XCTAssertTrue(captureSource.contains("ViewThatFits(in: .horizontal)"))
+        XCTAssertTrue(captureSource.contains("ScrollView(.vertical, showsIndicators: true)"))
+        XCTAssertTrue(captureSource.contains("proxy.safeAreaInsets.trailing + 8"))
+    }
+
+    func testWatchStartStopControlsTheIPhoneCaptureStateMachine() throws {
+        let captureURL = projectRootURL().appendingPathComponent("ScratchLab/Views/CompanionCameraView.swift")
+        let storeURL = projectRootURL().appendingPathComponent("ScratchLab/Services/WatchMotionCaptureStore.swift")
+        let recorderURL = projectRootURL().appendingPathComponent("ScratchLabWatch/Services/WatchMotionRecorder.swift")
+        let viewURL = projectRootURL().appendingPathComponent("ScratchLabWatch/WatchCaptureView.swift")
+        let captureSource = try String(contentsOf: captureURL, encoding: .utf8)
+        let storeSource = try String(contentsOf: storeURL, encoding: .utf8)
+        let recorderSource = try String(contentsOf: recorderURL, encoding: .utf8)
+        let viewSource = try String(contentsOf: viewURL, encoding: .utf8)
+
+        XCTAssertTrue(storeSource.contains("onPhoneCaptureCommand"))
+        XCTAssertTrue(storeSource.contains("PhoneCaptureCommandPayload.packetKind"))
+        XCTAssertTrue(captureSource.contains("private func handlePhoneCaptureCommand("))
+        XCTAssertTrue(captureSource.contains("case .start:"))
+        XCTAssertTrue(captureSource.contains("startTake()"))
+        XCTAssertTrue(captureSource.contains("case .recording:"))
+        // Slice E unified the two Stop entries: the Watch reaches the same
+        // `stopTake(source:)` transition the phone button does, and only the
+        // recorded provenance differs.
+        XCTAssertTrue(captureSource.contains("stopTake(source: .watch)"))
+        XCTAssertTrue(captureSource.contains("stopTake(source: .phone)"))
+        XCTAssertTrue(recorderSource.contains("func requestPairedPhoneCapture("))
+        XCTAssertTrue(viewSource.contains("recorder.requestPairedPhoneCapture("))
+        XCTAssertTrue(viewSource.contains("recorder.isPhoneCaptureCommandPending || !canSendCaptureCommand"))
+        XCTAssertTrue(viewSource.contains("Open Capture on iPhone. Start Take becomes available when Transfer says Connected."))
+        XCTAssertFalse(viewSource.contains("recorder.startCapture()"))
+    }
+
+    /// Replaces an earlier source-string test that merely asserted the literal
+    /// `"let raneOutputPairStartIndex = 2"` appeared in the engine. That test
+    /// passed throughout the entire left-deck bug: the pair index was correct
+    /// the whole time, while a hardcoded `>= 14` channel gate meant the map was
+    /// never installed at all. Behaviour is asserted here instead.
+    func testRaneScratchPlaybackRoutesToRightDeckIndependentlyOfDVSInput() throws {
+        // The right-deck pair and the derived channel requirement.
+        XCTAssertEqual(RanePlaybackRoutingPolicy.rightDeckPairStartIndex, 2,
+                       "destination 2/3 == physical USB output 3/4 == right deck")
+        XCTAssertEqual(RanePlaybackRoutingPolicy.minimumRequiredOutputChannels, 4,
+                       "the requirement is 'enough channels to reach the right deck', not a guessed device size")
+
+        // DVS input stays on its own pair, in the independent input namespace.
+        let dvsURL = projectRootURL().appendingPathComponent("ScratchLab/Models/DVSHardwareProfile.swift")
+        let dvsSource = try String(contentsOf: dvsURL, encoding: .utf8)
+        XCTAssertTrue(dvsSource.contains("firstChannelIndex: 2, secondChannelIndex: 3"))
+    }
+
+    func testIOSCaptureOwnsScratchStemAndPersistsControllerAndWatchEvidence() throws {
+        let captureURL = projectRootURL().appendingPathComponent("ScratchLab/Views/CompanionCameraView.swift")
+        let midiURL = projectRootURL().appendingPathComponent("ScratchLab/MIDI/iOSMIDIManager.swift")
+        let broadcasterURL = projectRootURL().appendingPathComponent("ScratchLab/Services/CompanionCameraBroadcaster.swift")
+        let captureSource = try String(contentsOf: captureURL, encoding: .utf8)
+        let midiSource = try String(contentsOf: midiURL, encoding: .utf8)
+        let broadcasterSource = try String(contentsOf: broadcasterURL, encoding: .utf8)
+
+        XCTAssertTrue(captureSource.contains("summary.sidecarURL"))
+        XCTAssertTrue(captureSource.contains("appendingPathExtension(\"wav\")"))
+        XCTAssertTrue(captureSource.contains("broadcaster.persistingDetectedNotation("))
+        XCTAssertTrue(captureSource.contains("broadcaster.recordingWatchRequest = request"))
+        XCTAssertTrue(captureSource.contains("broadcaster.recordWatchControlReply(reply)"))
+        XCTAssertTrue(midiSource.contains("capturedCrossfaderMIDIEvents.append("))
+        XCTAssertTrue(midiSource.contains("mappedControl: \"crossfader\""))
+        XCTAssertTrue(midiSource.contains("CaptureCore.deriveDetectedNotationFaderEvents"))
+        XCTAssertTrue(broadcasterSource.contains("sidecar.withPendingWatchRequest(request)"))
+        XCTAssertTrue(broadcasterSource.contains("sidecar.withWatchSync(reply)"))
+    }
+
+    func testMacCopyNotationIsTallAndTransparentLikeIOSLandscape() throws {
+        let macURL = projectRootURL().appendingPathComponent("ScratchLabDesktop/Views/MacAnalyzerView.swift")
+        let source = try String(contentsOf: macURL, encoding: .utf8)
+        let surfaceSource = try sourceSlice(
+            in: source,
+            from: "private var practiceFigmaLiveCameraNotationSurface: some View",
+            through: "private var practiceCopyTargetNotation: ScratchNotation?"
+        )
+
+        XCTAssertTrue(surfaceSource.contains("min(300, max(220, geometry.size.height * 0.48))"))
+        XCTAssertTrue(surfaceSource.contains("backgroundColor: .clear"))
+        XCTAssertFalse(surfaceSource.contains("ScratchLabDesign.Surface.surface.opacity(0.94)"))
+    }
+
+    func testCanonicalFigmaNotationSurfacesUseNoBackingCanvasOrCard() throws {
+        let panelURL = projectRootURL().appendingPathComponent("ScratchLab/Views/Notation/ScratchNotationPanel.swift")
+        let motionURL = projectRootURL().appendingPathComponent("ScratchLab/Views/ScratchMotionLane.swift")
+        let panelSource = try String(contentsOf: panelURL, encoding: .utf8)
+        let motionSource = try String(contentsOf: motionURL, encoding: .utf8)
+
+        XCTAssertTrue(panelSource.contains("private var laneBackground: Color"))
+        XCTAssertTrue(panelSource.contains(".clear"))
+        XCTAssertFalse(panelSource.contains("ScratchLabDesign.Surface.card,"))
+        XCTAssertFalse(panelSource.contains(".stroke(ScratchLabDesign.Surface.divider"))
+        XCTAssertTrue(motionSource.contains("private static let background = Color.clear"))
+    }
+
+    func testMacDVSRefreshOnlyInvalidatesAdvancedWorkspace() throws {
+        let sourceURL = projectRootURL().appendingPathComponent("ScratchLabDesktop/Views/MacAnalyzerView.swift")
+        let source = try String(contentsOf: sourceURL, encoding: .utf8)
+
+        XCTAssertTrue(source.contains(".onReceive(dvsUIRefreshTimer) { _ in"))
+        XCTAssertTrue(source.contains("guard workspaceTab == .advanced else { return }"))
     }
 
     func testDemoModeProducesFeedbackWithoutHardware() throws {
@@ -3016,7 +4653,7 @@ final class CaptureReliabilityPhase1CoreTests: XCTestCase {
         XCTAssertTrue(coreSource.contains("fallbackStrokeSegments"))
         XCTAssertTrue(coreSource.contains("struct ScratchLabBabyScratchDemoMotionPattern"))
         XCTAssertTrue(coreSource.contains("static let demoStart: TimeInterval = 0"))
-        XCTAssertTrue(coreSource.contains("static let demoEnd: TimeInterval = 42.866625"))
+        XCTAssertTrue(coreSource.contains("static let demoEnd: TimeInterval = 16.0483125"))
         XCTAssertTrue(coreSource.contains("private static let activityFrameSize = 1_024"))
         XCTAssertTrue(coreSource.contains("private static let activeEnergyThresholdOn: Float = 0.20"))
         XCTAssertTrue(coreSource.contains("private static let activeEnergyThresholdOff: Float = 0.10"))
@@ -3083,8 +4720,8 @@ final class CaptureReliabilityPhase1CoreTests: XCTestCase {
         let sampleBuffer = ScratchLabDemoAudioSampleBuffer(samples: samples, sampleRate: 48_000)
         let analyzer = ScratchLabDemoModeAnalyzer(sampleBuffer: sampleBuffer)
 
-        // Mid-first-stroke (forward 0.27 → 0.778 in the bundled notation).
-        let frame = analyzer.processFrame(playbackTime: 0.40, windowDuration: 1.0 / 30.0)
+        // Mid-first-stroke (forward 2.0 → 2.410975 in the bundled demo).
+        let frame = analyzer.processFrame(playbackTime: 2.20, windowDuration: 1.0 / 30.0)
 
         XCTAssertGreaterThan(abs(frame.animationState.recordPosition), 0.2)
         XCTAssertGreaterThan(abs(frame.animationState.recordRotationDegrees), 5)
@@ -3092,35 +4729,20 @@ final class CaptureReliabilityPhase1CoreTests: XCTestCase {
     }
 
     func testDemoModeBabyScratchPatternIncludesHoldPhases() {
-        // Extracted-stroke ground truth: stroke 0 is backward (0.27..0.778) with
-        // holdAfter=0.292 → backward hold runs 0.778..1.07. The hold returns the
-        // backward endProgress (0), which produces animationState == .neutral.
-        let backwardHoldA = ScratchLabBabyScratchDemoMotionPattern.state(
-            playbackTime: 0.85,
+        // The trimmed demo has continuous F/B movement between 2.0 and
+        // 14.048311 seconds, followed by a two-second neutral tail hold.
+        let tailHoldA = ScratchLabBabyScratchDemoMotionPattern.state(
+            playbackTime: 14.50,
             activityLevel: 1
         )
-        let backwardHoldB = ScratchLabBabyScratchDemoMotionPattern.state(
-            playbackTime: 1.00,
-            activityLevel: 1
-        )
-        // Stroke 5 is forward (2.99..3.278) with holdAfter=0.082 → forward hold
-        // runs 3.278..3.36. The hold returns the forward endProgress (1), so the
-        // animationState is non-neutral with recordPosition == 1.
-        let forwardHoldA = ScratchLabBabyScratchDemoMotionPattern.state(
-            playbackTime: 3.30,
-            activityLevel: 1
-        )
-        let forwardHoldB = ScratchLabBabyScratchDemoMotionPattern.state(
-            playbackTime: 3.32,
+        let tailHoldB = ScratchLabBabyScratchDemoMotionPattern.state(
+            playbackTime: 15.50,
             activityLevel: 1
         )
 
-        XCTAssertEqual(forwardHoldA.animationState, forwardHoldB.animationState)
-        XCTAssertEqual(forwardHoldA.direction, .neutral)
-        XCTAssertEqual(forwardHoldA.animationState.recordPosition, 1, accuracy: 0.0001)
-        XCTAssertEqual(backwardHoldA.animationState, backwardHoldB.animationState)
-        XCTAssertEqual(backwardHoldA.direction, .neutral)
-        XCTAssertEqual(backwardHoldA.animationState, .neutral)
+        XCTAssertEqual(tailHoldA.animationState, tailHoldB.animationState)
+        XCTAssertEqual(tailHoldA.direction, .neutral)
+        XCTAssertEqual(tailHoldA.animationState, .neutral)
     }
 
     private func decodedBabyScratchStrokeResource() throws -> BabyScratchExtractedStrokeResource {
@@ -3317,29 +4939,28 @@ final class CaptureReliabilityPhase1CoreTests: XCTestCase {
         let resource = try decodedBabyScratchStrokeResource()
 
         XCTAssertEqual(resource.scratchID, "baby")
-        // The 42 s extension adds explicit forward release / backward reset
-        // segments between each repetition, so the timing source label now
-        // records that direction provenance lives alongside the WAV transient
-        // extraction.
-        XCTAssertEqual(resource.timingSource, "wav_transient_extraction_video_direction")
+        XCTAssertEqual(resource.timingSource, "live_capture_trimmed_79bpm")
         XCTAssertEqual(resource.demoStart, BabyScratchReferenceMotionTimeline.demoStart, accuracy: 0.0001)
         XCTAssertEqual(resource.demoEnd, BabyScratchReferenceMotionTimeline.demoEnd, accuracy: 0.0001)
-        // 10 strokes per phrase repeat × 4 + 7 inter-phrase release/reset
-        // segments = 47 segments across the full 42 s demo.
-        XCTAssertEqual(resource.strokes.count, 47)
+        XCTAssertEqual(resource.strokes.count, 32)
         XCTAssertEqual(resource.strokes.count, resource.strokeSegments.count)
         let phraseStart = try XCTUnwrap(resource.phraseStart)
         let phraseEnd = try XCTUnwrap(resource.phraseEnd)
         let firstStroke = try XCTUnwrap(resource.strokes.first)
         let lastStroke = try XCTUnwrap(resource.strokes.last)
         XCTAssertEqual(phraseStart, firstStroke.startTime, accuracy: 0.0001)
-        // The last stroke ends at the timeline's phrase end (42.4 s); the
-        // remaining ~0.47 s of audio is a tail hold before sourceDuration.
         XCTAssertEqual(phraseEnd, lastStroke.endTime, accuracy: 0.0001)
-        XCTAssertGreaterThan(phraseEnd, 42)
+        XCTAssertEqual(phraseStart, 2.0, accuracy: 0.0001)
+        XCTAssertEqual(phraseEnd, 14.048311, accuracy: 0.0001)
+        XCTAssertEqual(resource.demoEnd - phraseEnd, 2.0000015, accuracy: 0.0001)
         XCTAssertEqual(resource.timelineDuration, phraseEnd, accuracy: 0.0001)
         XCTAssertTrue(resource.strokes.allSatisfy { $0.startTime >= phraseStart && $0.endTime <= phraseEnd })
-        XCTAssertLessThan(resource.strokes[2].startTime - resource.strokes[1].endTime, 0.20)
+        XCTAssertEqual(firstStroke.direction, "forward")
+        XCTAssertEqual(lastStroke.direction, "backward")
+        XCTAssertTrue(resource.strokes.enumerated().allSatisfy { indexedStroke in
+            let (index, stroke) = indexedStroke
+            return stroke.direction == (index.isMultiple(of: 2) ? "forward" : "backward")
+        })
         XCTAssertFalse(rawJSON.contains("/Users/"))
         XCTAssertFalse(rawJSON.localizedCaseInsensitiveContains("cxl"))
         XCTAssertFalse(rawJSON.localizedCaseInsensitiveContains("makemkv"))
@@ -3365,9 +4986,8 @@ final class CaptureReliabilityPhase1CoreTests: XCTestCase {
     }
 
     func testBabyScratchReferenceMotionTimelineUsesChapterOffsetAndNonUniformSegments() throws {
-        // The 42 s coach demo prefers the extracted-stroke resource because it
-        // adds explicit forward release / backward reset segments between phrase
-        // repeats that the visual rig needs but the notation must not see.
+        // The coach demo prefers the captured 16-cycle motion resource so its
+        // visual rig follows the same performance as the bundled dry WAV.
         let resource = try decodedBabyScratchStrokeResource()
         let timeline = BabyScratchReferenceMotionTimeline.strokeSegments
         let keyframes = BabyScratchReferenceMotionTimeline.keyframes
@@ -3383,18 +5003,16 @@ final class CaptureReliabilityPhase1CoreTests: XCTestCase {
         XCTAssertEqual(timeline.count, resource.strokes.count)
         XCTAssertGreaterThan(keyframes.count, timeline.count)
         XCTAssertEqual(BabyScratchReferenceMotionTimeline.demoStart, 0, accuracy: 0.0001)
-        XCTAssertEqual(BabyScratchReferenceMotionTimeline.demoEnd, 42.866625, accuracy: 0.0001)
-        XCTAssertEqual(BabyScratchReferenceMotionTimeline.sourceDuration, 42.866625, accuracy: 0.0001)
+        XCTAssertEqual(BabyScratchReferenceMotionTimeline.demoEnd, 16.0483125, accuracy: 0.0001)
+        XCTAssertEqual(BabyScratchReferenceMotionTimeline.sourceDuration, 16.0483125, accuracy: 0.0001)
         XCTAssertEqual(bundledDuration, BabyScratchReferenceMotionTimeline.sourceDuration, accuracy: 0.01)
         XCTAssertEqual(BabyScratchReferenceMotionTimeline.sourceTime(forPlaybackTime: 0), 0, accuracy: 0.0001)
         XCTAssertEqual(BabyScratchReferenceMotionTimeline.timelineTime(forSourceTime: 0), 0, accuracy: 0.0001)
         XCTAssertEqual(BabyScratchReferenceMotionTimeline.timelineTime(forPlaybackTime: 0), 0, accuracy: 0.0001)
-        XCTAssertEqual(BabyScratchReferenceMotionTimeline.timelineTime(forPlaybackTime: 1.46), 1.46, accuracy: 0.0001)
-        XCTAssertEqual(BabyScratchReferenceMotionTimeline.phraseStart, 0.27, accuracy: 0.0001)
-        XCTAssertEqual(BabyScratchReferenceMotionTimeline.phraseEnd, 42.4, accuracy: 0.0001)
-        XCTAssertEqual(BabyScratchReferenceMotionTimeline.phraseLoopDuration, 42.13, accuracy: 0.0001)
-        // The clean-demo timeline plays through once (no playback-time looping),
-        // so one audio cycle covers the full source duration.
+        XCTAssertEqual(BabyScratchReferenceMotionTimeline.timelineTime(forPlaybackTime: 2.2), 2.2, accuracy: 0.0001)
+        XCTAssertEqual(BabyScratchReferenceMotionTimeline.phraseStart, 2.0, accuracy: 0.0001)
+        XCTAssertEqual(BabyScratchReferenceMotionTimeline.phraseEnd, 14.048311, accuracy: 0.0001)
+        XCTAssertEqual(BabyScratchReferenceMotionTimeline.phraseLoopDuration, 12.048311, accuracy: 0.0001)
         XCTAssertEqual(BabyScratchReferenceMotionTimeline.demoAudioPhraseCycleCount, 1)
         XCTAssertEqual(
             BabyScratchReferenceMotionTimeline.demoAudioPhraseCycleDuration,
@@ -3407,22 +5025,14 @@ final class CaptureReliabilityPhase1CoreTests: XCTestCase {
         XCTAssertEqual(timeline[0].direction, resource.strokes[0].motionDirection)
         XCTAssertEqual(timeline[0].holdAfter, resource.strokeSegments[0].holdAfter, accuracy: 0.0001)
         XCTAssertGreaterThan(roundedDurations.count, 1)
-        // Four phrase repeats (10 strokes) plus inter-phrase release/reset
-        // segments → 47 segments. The lower bound preserves "more than a single
-        // phrase"; the upper bound still rules out runaway segment generation.
-        XCTAssertGreaterThanOrEqual(timeline.count, 40)
-        XCTAssertLessThanOrEqual(timeline.count, 60)
+        XCTAssertEqual(timeline.count, 32)
         XCTAssertEqual(keyframes[0].sourceTime, BabyScratchReferenceMotionTimeline.demoStart + timeline[0].startTime, accuracy: 0.0001)
-        // Stroke 0 of the extracted timeline is backward (scratchProgress
-        // 1 → 0), so the keyframe at the stroke start sits at hand hour 5 /
-        // sticker hour 8 / 60° rotation, and the keyframe at the stroke end
-        // returns to hand hour 3 / sticker hour 6 / 0° rotation.
-        XCTAssertEqual(keyframes[0].handViewerHour, 5, accuracy: 0.0001)
-        XCTAssertEqual(keyframes[0].stickerViewerHour, 8, accuracy: 0.0001)
-        XCTAssertEqual(keyframes[0].recordRotationDegrees, 60, accuracy: 0.0001)
-        XCTAssertEqual(keyframes[1].handViewerHour, 3, accuracy: 0.0001)
-        XCTAssertEqual(keyframes[1].stickerViewerHour, 6, accuracy: 0.0001)
-        XCTAssertEqual(keyframes[1].recordRotationDegrees, 0, accuracy: 0.0001)
+        XCTAssertEqual(keyframes[0].handViewerHour, 3, accuracy: 0.0001)
+        XCTAssertEqual(keyframes[0].stickerViewerHour, 6, accuracy: 0.0001)
+        XCTAssertEqual(keyframes[0].recordRotationDegrees, 0, accuracy: 0.0001)
+        XCTAssertEqual(keyframes[1].handViewerHour, 5, accuracy: 0.0001)
+        XCTAssertEqual(keyframes[1].stickerViewerHour, 8, accuracy: 0.0001)
+        XCTAssertEqual(keyframes[1].recordRotationDegrees, 60, accuracy: 0.0001)
         XCTAssertEqual(
             ScratchLabBabyScratchDemoMotionPattern.babyScratchStrokeTimelineDuration,
             resource.timelineDuration,
@@ -3435,47 +5045,42 @@ final class CaptureReliabilityPhase1CoreTests: XCTestCase {
                 playbackTime: timeline[0].startTime + 0.001
             )
         )
-        XCTAssertFalse(
-            ScratchLabBabyScratchDemoMotionPattern.isMovingStrokeWindow(
-                playbackTime: timeline[0].endTime + min(0.02, max(0.001, timeline[0].holdAfter / 2))
-            )
-        )
         XCTAssertTrue(
             ScratchLabBabyScratchDemoMotionPattern.isMovingStrokeWindow(
                 playbackTime: timeline[1].startTime + 0.001
             )
         )
+        XCTAssertFalse(
+            ScratchLabBabyScratchDemoMotionPattern.isMovingStrokeWindow(
+                playbackTime: BabyScratchReferenceMotionTimeline.phraseEnd + 1.0
+            )
+        )
     }
 
     func testBabyScratchCoachTimingLoadsNotationAtAudioPlaybackTime() throws {
-        // The 42 s coach demo loads the extracted-stroke resource. The third
-        // stroke (index 2) still starts at 1.46 s, but the audio-derived
-        // ground truth reports it as part of an opening run of backward
-        // strokes; the first forward stroke arrives later at stroke 5.
+        // The coach demo loads the captured, trimmed 16-cycle resource.
         let resource = try decodedBabyScratchStrokeResource()
         let timeline = BabyScratchReferenceMotionTimeline.strokeSegments
         let thirdStroke = try XCTUnwrap(timeline.dropFirst(2).first)
-        let firstForwardStroke = try XCTUnwrap(timeline.first { $0.direction == .forward })
+        let firstBackwardStroke = try XCTUnwrap(timeline.first { $0.direction == .backward })
 
         XCTAssertFalse(BabyScratchReferenceMotionTimeline.usesNotationResource)
         XCTAssertTrue(BabyScratchReferenceMotionTimeline.usesExtractedStrokeResource)
-        XCTAssertEqual(resource.strokes.count, 47)
-        XCTAssertEqual(timeline.count, 47)
-        XCTAssertEqual(thirdStroke.direction, .backward)
-        XCTAssertEqual(thirdStroke.startTime, 1.46, accuracy: 0.0001)
-        XCTAssertEqual(resource.strokes[2].startTime, 1.46, accuracy: 0.0001)
+        XCTAssertEqual(resource.strokes.count, 32)
+        XCTAssertEqual(timeline.count, 32)
+        XCTAssertEqual(thirdStroke.direction, .forward)
+        XCTAssertEqual(thirdStroke.startTime, 2.707172, accuracy: 0.0001)
+        XCTAssertEqual(resource.strokes[2].startTime, 2.707172, accuracy: 0.0001)
 
-        // At a backward stroke start, scratchProgress sits at startProgress = 1.
-        let poseAtThirdStrokeStart = BabyScratchReferenceMotionTimeline.pose(at: 1.46)
-        XCTAssertEqual(poseAtThirdStrokeStart.direction, .backward)
-        XCTAssertEqual(poseAtThirdStrokeStart.scratchProgress, 1, accuracy: 0.0001)
+        let poseAtThirdStrokeStart = BabyScratchReferenceMotionTimeline.pose(at: 2.707172)
+        XCTAssertEqual(poseAtThirdStrokeStart.direction, .forward)
+        XCTAssertEqual(poseAtThirdStrokeStart.scratchProgress, 0, accuracy: 0.0001)
 
-        // The first forward stroke samples cleanly inside the segment.
-        let forwardMid = firstForwardStroke.startTime + firstForwardStroke.duration / 2
-        let forwardPose = BabyScratchReferenceMotionTimeline.pose(at: forwardMid)
-        XCTAssertEqual(forwardPose.direction, .forward)
-        XCTAssertGreaterThan(forwardPose.scratchProgress, 0.3)
-        XCTAssertLessThan(forwardPose.scratchProgress, 0.7)
+        let backwardMid = firstBackwardStroke.startTime + firstBackwardStroke.duration / 2
+        let backwardPose = BabyScratchReferenceMotionTimeline.pose(at: backwardMid)
+        XCTAssertEqual(backwardPose.direction, .backward)
+        XCTAssertGreaterThan(backwardPose.scratchProgress, 0.3)
+        XCTAssertLessThan(backwardPose.scratchProgress, 0.7)
 
         let pastEndPose = BabyScratchReferenceMotionTimeline.pose(
             at: BabyScratchReferenceMotionTimeline.sourceDuration + 1.0
@@ -3486,19 +5091,12 @@ final class CaptureReliabilityPhase1CoreTests: XCTestCase {
 
     func testBabyScratchCoachTimingUsesFullAudioCycleAndPhraseLoopMode() throws {
         let firstStroke = try XCTUnwrap(BabyScratchReferenceMotionTimeline.strokeSegments.first)
-        // The full 42 s demo plays through a single audio cycle, so the "post
-        // phrase silence" zone now sits between phraseEnd (≈42.4 s) and the
-        // bundled audio duration (≈42.87 s).
         let postPhraseSilenceTime: TimeInterval = BabyScratchReferenceMotionTimeline.phraseEnd + 0.5
         let postPhraseSilencePose = BabyScratchReferenceMotionTimeline.pose(at: postPhraseSilenceTime)
-        // A probe deep inside the timeline (well past the first 10-stroke
-        // repeat) confirms the full audio cycle drives a real moving stroke.
-        let midPhraseProbe: TimeInterval = 12.45
+        let midPhraseProbe: TimeInterval = 8.5
         let midPhrasePose = BabyScratchReferenceMotionTimeline.pose(at: midPhraseProbe)
-        // Phrase-loop mode wraps once playback crosses phraseEnd. Sampling at
-        // phraseEnd + 0.254 wraps back to phraseStart + 0.254 = 0.524, which
-        // lands at the midpoint of stroke 0 (backward, 0.27..0.778).
-        let notationPhraseLoopTime = BabyScratchReferenceMotionTimeline.phraseEnd + 0.254
+        // Phrase-loop mode wraps into the first forward stroke.
+        let notationPhraseLoopTime = BabyScratchReferenceMotionTimeline.phraseEnd + 0.2
         let notationPhraseLoopPose = BabyScratchReferenceMotionTimeline.pose(
             at: notationPhraseLoopTime,
             loopMode: .notationPhrase
@@ -3519,7 +5117,7 @@ final class CaptureReliabilityPhase1CoreTests: XCTestCase {
                 forPlaybackTime: notationPhraseLoopTime,
                 loopMode: .notationPhrase
             ),
-            0.524,
+            2.2,
             accuracy: 0.001
         )
         XCTAssertEqual(notationPhraseLoopPose.direction, firstStroke.direction)
@@ -3531,111 +5129,61 @@ final class CaptureReliabilityPhase1CoreTests: XCTestCase {
 
     #if DEBUG
     func testBabyScratchCoachTimingDebugProbeReportsStrokeProgress() {
-        // Probe coverage now spans the full 42 s phrase: stroke starts/ends,
-        // the inter-repeat release/reset hold band, a second-repeat probe, and
-        // the post-phrase tail. The extracted-stroke ground truth reports
-        // stroke 0 as backward (scratchProgress 1 → 0), so the start-of-stroke
-        // probes assert that direction explicitly.
-        let firstScratchStart = BabyScratchReferenceMotionTimeline.debugTimingProbe(at: 0.27)
-        let firstScratchEnd = BabyScratchReferenceMotionTimeline.debugTimingProbe(at: 0.778)
-        let slowBackwardEnd = BabyScratchReferenceMotionTimeline.debugTimingProbe(at: 2.368)
-        let thirdStrokeStart = BabyScratchReferenceMotionTimeline.debugTimingProbe(at: 1.46)
-        let releaseStrokeActive = BabyScratchReferenceMotionTimeline.debugTimingProbe(at: 5.85)
-        let interPhraseHold = BabyScratchReferenceMotionTimeline.debugTimingProbe(at: 8.5)
-        let secondRepeatForward = BabyScratchReferenceMotionTimeline.debugTimingProbe(at: 12.45)
-        let postPhraseTail = BabyScratchReferenceMotionTimeline.debugTimingProbe(at: 42.654)
+        let firstScratchStart = BabyScratchReferenceMotionTimeline.debugTimingProbe(at: 2.0)
+        let firstScratchMid = BabyScratchReferenceMotionTimeline.debugTimingProbe(at: 2.205)
+        let secondScratchStart = BabyScratchReferenceMotionTimeline.debugTimingProbe(at: 2.410975)
+        let midPhraseStroke = BabyScratchReferenceMotionTimeline.debugTimingProbe(at: 8.5)
+        let postPhraseTail = BabyScratchReferenceMotionTimeline.debugTimingProbe(at: 15.0)
         let phraseLoopWrap = BabyScratchReferenceMotionTimeline.debugTimingProbe(
-            at: 42.654,
+            at: BabyScratchReferenceMotionTimeline.phraseEnd + 0.2,
             loopMode: .notationPhrase
         )
 
         XCTAssertEqual(
             BabyScratchReferenceMotionTimeline.debugProbePlaybackTimes,
-            [0.27, 0.778, 2.368, 1.46, 5.85, 8.5, 12.45, 42.654]
+            [2.0, 2.410975, 3.062990, 5.85, 8.5, 12.45, 14.048311, 15.0]
         )
         XCTAssertEqual(firstScratchStart.strokeIndex, 0)
-        XCTAssertEqual(firstScratchStart.direction, .backward)
+        XCTAssertEqual(firstScratchStart.direction, .forward)
         XCTAssertFalse(firstScratchStart.isHold)
-        XCTAssertEqual(firstScratchStart.progress, 1, accuracy: 0.0001)
-        XCTAssertEqual(firstScratchEnd.strokeIndex, 0)
-        XCTAssertEqual(firstScratchEnd.direction, .neutral)
-        XCTAssertTrue(firstScratchEnd.isHold)
-        XCTAssertEqual(firstScratchEnd.progress, 0, accuracy: 0.0001)
-        XCTAssertEqual(slowBackwardEnd.strokeIndex, 3)
-        XCTAssertEqual(slowBackwardEnd.direction, .neutral)
-        XCTAssertTrue(slowBackwardEnd.isHold)
-        XCTAssertEqual(slowBackwardEnd.progress, 0, accuracy: 0.0001)
-        XCTAssertEqual(slowBackwardEnd.timingSource, "CoachDemoMotion/baby_scratch_strokes.json")
-
-        XCTAssertEqual(thirdStrokeStart.strokeIndex, 2)
-        XCTAssertEqual(thirdStrokeStart.direction, .backward)
-        XCTAssertFalse(thirdStrokeStart.isHold)
-        XCTAssertEqual(thirdStrokeStart.timelineTime, 1.46, accuracy: 0.0001)
-        XCTAssertEqual(thirdStrokeStart.progress, 1, accuracy: 0.0001)
-
-        // 5.85 s lands inside the forward release segment (5.743..6.5) that
-        // bridges from the end of repeat 1 toward the next repeat.
-        XCTAssertEqual(releaseStrokeActive.strokeIndex, 10)
-        XCTAssertEqual(releaseStrokeActive.direction, .forward)
-        XCTAssertFalse(releaseStrokeActive.isHold)
-        XCTAssertGreaterThan(releaseStrokeActive.progress, 0)
-        XCTAssertLessThan(releaseStrokeActive.progress, 0.5)
-
-        // 8.5 s is inside the long inter-phrase hold band after the release
-        // segment, before the next backward reset stroke begins.
-        XCTAssertEqual(interPhraseHold.strokeIndex, 10)
-        XCTAssertEqual(interPhraseHold.direction, .neutral)
-        XCTAssertTrue(interPhraseHold.isHold)
-
-        // 12.45 s lands inside the first stroke of the second phrase repeat.
-        XCTAssertNotNil(secondRepeatForward.strokeIndex)
-        XCTAssertFalse(secondRepeatForward.isHold)
-        XCTAssertNotEqual(secondRepeatForward.direction, .neutral)
-        XCTAssertGreaterThan(secondRepeatForward.progress, 0)
-
-        // 42.654 s is past the last stroke's endTime (42.4) but still within
-        // sourceDuration. In fullDemoAudio mode it sits in the tail hold of
-        // the final stroke; in notationPhrase mode it wraps back to 0.524 s
-        // (mid-stroke 0, backward, scratchProgress ≈ 0.5).
+        XCTAssertEqual(firstScratchStart.progress, 0, accuracy: 0.0001)
+        XCTAssertEqual(firstScratchMid.strokeIndex, 0)
+        XCTAssertEqual(firstScratchMid.direction, .forward)
+        XCTAssertGreaterThan(firstScratchMid.progress, 0.45)
+        XCTAssertLessThan(firstScratchMid.progress, 0.55)
+        XCTAssertEqual(secondScratchStart.strokeIndex, 1)
+        XCTAssertEqual(secondScratchStart.direction, .backward)
+        XCTAssertEqual(secondScratchStart.progress, 1, accuracy: 0.0001)
+        XCTAssertEqual(secondScratchStart.timingSource, "CoachDemoMotion/baby_scratch_strokes.json")
+        XCTAssertNotNil(midPhraseStroke.strokeIndex)
+        XCTAssertNotEqual(midPhraseStroke.direction, .neutral)
         XCTAssertEqual(postPhraseTail.direction, .neutral)
         XCTAssertTrue(postPhraseTail.isHold)
         XCTAssertEqual(phraseLoopWrap.strokeIndex, 0)
-        XCTAssertEqual(phraseLoopWrap.direction, .backward)
+        XCTAssertEqual(phraseLoopWrap.direction, .forward)
         XCTAssertFalse(phraseLoopWrap.isHold)
-        XCTAssertEqual(phraseLoopWrap.timelineTime, 0.524, accuracy: 0.001)
-        XCTAssertEqual(phraseLoopWrap.progress, 0.5, accuracy: 0.001)
-        XCTAssertTrue(BabyScratchReferenceMotionTimeline.debugTimingReport(at: 1.46).contains("stroke=2"))
+        XCTAssertEqual(phraseLoopWrap.timelineTime, 2.2, accuracy: 0.001)
+        XCTAssertGreaterThan(phraseLoopWrap.progress, 0.45)
+        XCTAssertLessThan(phraseLoopWrap.progress, 0.55)
+        XCTAssertTrue(BabyScratchReferenceMotionTimeline.debugTimingReport(at: 2.8).contains("stroke=2"))
     }
     #endif
 
     func testBabyScratchReferenceMotionTimelineDoesNotSkipAlternatingStrokes() throws {
-        // Timeline strokes come from the extracted-stroke resource (47 segments
-        // covering four phrase repeats plus inter-phrase release/reset moves).
-        // The audio-derived ground truth does not strictly alternate
-        // forward/backward by index, so the meaningful invariants now are:
-        // counts match the resource, the segment list is sorted, both
-        // directions are present, multiple direction changes occur within
-        // each phrase repeat, and successive segments hand off scratchProgress.
         let timeline = BabyScratchReferenceMotionTimeline.strokeSegments
         let resource = try decodedBabyScratchStrokeResource()
 
         XCTAssertEqual(timeline.count, resource.strokes.count)
-        XCTAssertGreaterThanOrEqual(timeline.count, 40)
-        XCTAssertLessThanOrEqual(timeline.count, 60)
+        XCTAssertEqual(timeline.count, 32)
         XCTAssertEqual(timeline.map(\.direction), resource.strokeSegments.map(\.direction))
 
         let directions = timeline.map(\.direction)
-        XCTAssertTrue(directions.contains(.forward), "Timeline must contain forward strokes")
-        XCTAssertTrue(directions.contains(.backward), "Timeline must contain backward strokes")
+        XCTAssertEqual(directions.filter { $0 == .forward }.count, 16)
+        XCTAssertEqual(directions.filter { $0 == .backward }.count, 16)
         let directionChanges = zip(directions, directions.dropFirst()).filter { $0 != $1 }.count
-        XCTAssertGreaterThanOrEqual(directionChanges, 4, "Phrase must include several direction changes")
+        XCTAssertEqual(directionChanges, 31)
 
-        // The first stroke is backward (extracted-stroke ground truth), so
-        // scratchProgress starts at 1 and unwinds to 0 across the segment.
-        // The previous strict-alternation chain (endProgress == next
-        // startProgress) no longer holds because the audio-derived timeline
-        // includes runs of same-direction strokes.
-        XCTAssertEqual(timeline[0].startProgress, 1, accuracy: 0.0001)
+        XCTAssertEqual(timeline[0].startProgress, 0, accuracy: 0.0001)
         for segment in timeline {
             let expectedStart: Double = segment.direction == .forward ? 0 : 1
             let expectedEnd: Double = segment.direction == .forward ? 1 : 0
@@ -3648,8 +5196,7 @@ final class CaptureReliabilityPhase1CoreTests: XCTestCase {
         let gaps = zip(timeline, timeline.dropFirst()).map { next, following in
             following.startTime - next.endTime
         }
-        XCTAssertTrue(gaps.contains { $0 < 0.20 })
-        XCTAssertGreaterThan(Set(gaps.map { Int(($0 * 1_000).rounded()) }).count, 1)
+        XCTAssertTrue(gaps.allSatisfy { abs($0) < 0.000_002 })
     }
 
     func testBabyScratchReferenceMotionTimelineUsesNotationWithoutGeometryChanges() throws {
@@ -3817,7 +5364,7 @@ final class CaptureReliabilityPhase1CoreTests: XCTestCase {
         let secondBackward = try XCTUnwrap(
             timeline.first { $0.startTime > secondForward.startTime && $0.direction == .backward }
         )
-        let firstHoldTime = firstForward.endTime + min(0.02, max(0.001, firstForward.holdAfter / 2))
+        let tailHoldTime = BabyScratchReferenceMotionTimeline.phraseEnd + 1.0
         func strokeTime(_ segment: ScratchLabBabyScratchStrokeSegment, progress: TimeInterval) -> TimeInterval {
             segment.startTime + (segment.duration * progress)
         }
@@ -3834,7 +5381,7 @@ final class CaptureReliabilityPhase1CoreTests: XCTestCase {
             playbackTime: strokeTime(firstBackward, progress: 0.60),
             windowDuration: 1.0 / 30.0
         )
-        let firstHoldFrame = analyzer.processFrame(playbackTime: firstHoldTime, windowDuration: 1.0 / 30.0)
+        let tailHoldFrame = analyzer.processFrame(playbackTime: tailHoldTime, windowDuration: 1.0 / 30.0)
         let secondForwardFrame = analyzer.processFrame(
             playbackTime: strokeTime(secondForward, progress: 0.60),
             windowDuration: 1.0 / 30.0
@@ -3848,8 +5395,8 @@ final class CaptureReliabilityPhase1CoreTests: XCTestCase {
         XCTAssertGreaterThan(firstStrokeFrame.animationState.recordPosition, 0.2)
         XCTAssertEqual(firstBackwardFrame.direction, .backward)
         XCTAssertLessThan(firstBackwardFrame.animationState.recordPosition, firstStrokeFrame.animationState.recordPosition)
-        XCTAssertEqual(firstHoldFrame.direction, .neutral)
-        XCTAssertEqual(firstHoldFrame.animationState.recordPosition, 1, accuracy: 0.0001)
+        XCTAssertEqual(tailHoldFrame.direction, .neutral)
+        XCTAssertEqual(tailHoldFrame.animationState.recordPosition, 0, accuracy: 0.0001)
         XCTAssertEqual(secondForwardFrame.direction, .forward)
         XCTAssertEqual(secondBackwardFrame.direction, .backward)
         XCTAssertLessThan(secondBackwardFrame.animationState.recordPosition, secondForwardFrame.animationState.recordPosition)
@@ -3871,12 +5418,12 @@ final class CaptureReliabilityPhase1CoreTests: XCTestCase {
             timeline.first { $0.startTime > secondForward.startTime && $0.direction == .backward }
         )
         let laterForward = try XCTUnwrap(
-            timeline.first { $0.startTime > 1.3 && $0.direction == .forward }
+            timeline.first { $0.startTime > secondBackward.startTime && $0.direction == .forward }
         )
         let laterBackward = try XCTUnwrap(
             timeline.first { $0.startTime > laterForward.startTime && $0.direction == .backward }
         )
-        let firstHoldTime = firstForward.endTime + min(0.02, max(0.001, firstForward.holdAfter / 2))
+        let tailHoldTime = BabyScratchReferenceMotionTimeline.phraseEnd + 1.0
         func strokeTime(_ segment: ScratchLabBabyScratchStrokeSegment, progress: TimeInterval) -> TimeInterval {
             segment.startTime + (segment.duration * progress)
         }
@@ -3891,9 +5438,9 @@ final class CaptureReliabilityPhase1CoreTests: XCTestCase {
             playbackTime: strokeTime(firstBackward, progress: 0.60),
             isPlaying: true
         )
-        let firstHoldState = sampleBuffer.coachRigAnimationState(
+        let tailHoldState = sampleBuffer.coachRigAnimationState(
             scratchType: "baby",
-            playbackTime: firstHoldTime,
+            playbackTime: tailHoldTime,
             isPlaying: true
         )
         let secondForwardState = sampleBuffer.coachRigAnimationState(
@@ -3924,7 +5471,7 @@ final class CaptureReliabilityPhase1CoreTests: XCTestCase {
 
         XCTAssertGreaterThan(firstForwardState.recordPosition, 0.2)
         XCTAssertLessThan(firstBackwardState.recordPosition, firstForwardState.recordPosition)
-        XCTAssertEqual(firstHoldState.recordPosition, 1, accuracy: 0.0001)
+        XCTAssertEqual(tailHoldState.recordPosition, 0, accuracy: 0.0001)
         XCTAssertGreaterThan(secondForwardState.recordPosition, 0.2)
         XCTAssertLessThan(secondBackwardState.recordPosition, secondForwardState.recordPosition)
         XCTAssertGreaterThan(laterForwardState.recordPosition, 0.2)
@@ -3968,22 +5515,20 @@ final class CaptureReliabilityPhase1CoreTests: XCTestCase {
         let audioURL = projectRootURL()
             .appendingPathComponent("ScratchLab/Resources/CoachDemoAudio/baby_noBeat.wav")
         let sampleBuffer = try ScratchLabDemoAudioSampleBuffer(audioURL: audioURL)
-        let firstStrokeMidpoint: TimeInterval = 0.524
-        let secondAudioCycleFirstStroke = BabyScratchReferenceMotionTimeline.demoAudioPhraseCycleDuration
-            + BabyScratchReferenceMotionTimeline.phraseStart
+        let firstStrokeMidpoint: TimeInterval = 2.205
         let activeState = sampleBuffer.coachRigAnimationState(
             scratchType: "baby",
             playbackTime: firstStrokeMidpoint,
             isPlaying: true
         )
-        let secondCycleState = sampleBuffer.coachRigAnimationState(
+        let laterFirstStrokeState = sampleBuffer.coachRigAnimationState(
             scratchType: "baby",
-            playbackTime: secondAudioCycleFirstStroke + 0.10,
+            playbackTime: firstStrokeMidpoint + 0.10,
             isPlaying: true
         )
 
         XCTAssertGreaterThan(activeState.recordPosition, 0.2)
-        XCTAssertGreaterThan(secondCycleState.recordPosition, 0.1)
+        XCTAssertGreaterThan(laterFirstStrokeState.recordPosition, activeState.recordPosition)
         XCTAssertEqual(BabyScratchReferenceMotionTimeline.timelineTime(forPlaybackTime: 1.46), 1.46, accuracy: 0.0001)
         XCTAssertEqual(
             BabyScratchReferenceMotionTimeline.timelineTime(
@@ -4086,12 +5631,9 @@ final class CaptureReliabilityPhase1CoreTests: XCTestCase {
         let sampleBuffer = ScratchLabDemoAudioSampleBuffer(samples: samples, sampleRate: 48_000)
         let analyzer = ScratchLabDemoModeAnalyzer(sampleBuffer: sampleBuffer)
 
-        // Pick a timestamp that lies inside the first backward stroke of the
-        // bundled baby_scratch.json timeline (originally 1.07s -> 1.378s) so
-        // the analyzer reports a backward demo frame. The previous fixture
-        // value 0.44 lined up with the older fallback strokes; the bundled
-        // notation moved the strokes later in the phrase.
-        let backwardStrokeProbe: TimeInterval = 1.2
+        // Pick a timestamp inside the first backward stroke of the captured
+        // motion timeline (2.410975s -> 2.707172s).
+        let backwardStrokeProbe: TimeInterval = 2.55
         let firstFrame = analyzer.processFrame(playbackTime: backwardStrokeProbe, windowDuration: 1.0 / 30.0)
         let secondFrame = analyzer.processFrame(playbackTime: backwardStrokeProbe, windowDuration: 1.0 / 30.0)
 
@@ -4680,7 +6222,8 @@ final class CaptureReliabilityPhase1CoreTests: XCTestCase {
 
         XCTAssertTrue(project.contains("CoachInstructions"))
         XCTAssertTrue(project.contains("CoachInstructions in Resources"))
-        XCTAssertTrue(project.contains("B9AF9ED5370241CF8BEFDB7C /* CoachInstructions in Resources */"))
+        XCTAssertTrue(project.contains("B9AF9ED5370241CF8BEFDB7C"))
+        XCTAssertTrue(project.contains("path = Resources/CoachInstructions;"))
         XCTAssertTrue(project.contains("CoachDemoAudio"))
         XCTAssertTrue(project.contains("CoachDemoAudio in Resources"))
         XCTAssertTrue(project.contains("09C738A56A342FC5A7BBBEA3 /* Resources */"))
@@ -4858,7 +6401,7 @@ final class CaptureReliabilityPhase1CoreTests: XCTestCase {
             }
         )
         let expectedClips: [(name: String, file: String, demoStart: Double, demoEnd: Double)] = [
-            ("baby", "baby_noBeat.wav", 0.0, 12.0),
+            ("baby", "baby_noBeat.wav", 0.0, 16.0483125),
             ("chirpflare", "chirpflare_noBeat.wav", 0.0, 11.0),
         ]
 
@@ -4935,13 +6478,32 @@ final class CaptureReliabilityPhase1CoreTests: XCTestCase {
         let otherSessionID = "other-session"
         let selectedRecordingDate = Date(timeIntervalSince1970: 1_720_000_000)
         let otherRecordingDate = Date(timeIntervalSince1970: 1_720_000_100)
+        let selectedMovement = CaptureCore.DetectedNotationRecordMovementEvent(
+            startTime: 0.1,
+            endTime: 0.4,
+            startPosition: 0.2,
+            endPosition: 0.7,
+            direction: "forward",
+            movementKind: .normalPush,
+            speed: 1.6,
+            confidence: 0.9,
+            source: "controller"
+        )
+        let selectedNotation = MacCaptureEngine.RoutineNotationFusionEngine().snapshot(
+            audioSnapshot: ScratchAudioNotationSnapshot(audioEvents: [], confidence: nil),
+            motionEvents: [selectedMovement],
+            detectedLabel: "Baby Scratch",
+            labelSource: "detected",
+            labelConfidence: 0.9
+        )
 
         let selectedRecordingURL = try makeLocalRecordingTake(
             in: root,
             sessionID: selectedSessionID,
             takeNumber: 1,
             bpm: 90,
-            createdAt: selectedRecordingDate
+            createdAt: selectedRecordingDate,
+            detectedNotation: selectedNotation
         )
         let otherRecordingURL = try makeLocalRecordingTake(
             in: root,
@@ -4960,14 +6522,98 @@ final class CaptureReliabilityPhase1CoreTests: XCTestCase {
         XCTAssertEqual(selectedSnapshot.mediaURL, selectedRecordingURL)
         XCTAssertEqual(selectedSnapshot.sessionID, selectedSessionID)
         XCTAssertEqual(selectedSnapshot.takeID, "take-001")
+        let restoredMovements = try XCTUnwrap(selectedSnapshot.detectedNotation?.recordMovementEvents)
+        XCTAssertEqual(restoredMovements.count, 1)
+        XCTAssertEqual(restoredMovements.first?.startTime, selectedMovement.startTime)
+        XCTAssertEqual(restoredMovements.first?.endTime, selectedMovement.endTime)
+        XCTAssertEqual(restoredMovements.first?.direction, selectedMovement.direction)
+        XCTAssertEqual(restoredMovements.first?.movementKind, selectedMovement.movementKind)
 
         let latestSnapshot = try XCTUnwrap(MacCaptureEngine.latestCompletedRoutineCapture(in: root))
         XCTAssertEqual(latestSnapshot.mediaURL, otherRecordingURL)
         XCTAssertEqual(latestSnapshot.sessionID, otherSessionID)
     }
 
+    func testRoutineCaptureSuccessfulStopMarkerIsNotPersistedAsFailure() {
+        let stoppedNormally = NSError(
+            domain: AVFoundationErrorDomain,
+            code: -11818,
+            userInfo: [
+                AVErrorRecordingSuccessfullyFinishedKey: true,
+                NSLocalizedDescriptionKey: "Recording Stopped"
+            ]
+        )
+
+        XCTAssertNil(MacCaptureEngine.routineCaptureFailureDescription(for: stoppedNormally))
+    }
+
+    func testRoutineCaptureDefaultTakeLengthIs64SecondsAndWiredToMacCapture() throws {
+        XCTAssertEqual(RoutineCaptureDefaults.defaultMaximumTakeDurationSeconds, 64)
+        XCTAssertEqual(
+            RoutineCaptureDefaults.maximumTakeDurationLabel,
+            "Max 64 seconds",
+            "The panel must read as a cap; it has no duration control to plan with."
+        )
+
+        let projectRoot = projectRootURL()
+        let engineSource = try String(
+            contentsOf: projectRoot.appendingPathComponent("ScratchLabDesktop/Services/MacCaptureEngine.swift"),
+            encoding: .utf8
+        )
+        let viewSource = try String(
+            contentsOf: projectRoot.appendingPathComponent("ScratchLabDesktop/Views/MacAnalyzerView.swift"),
+            encoding: .utf8
+        )
+
+        // The cap must reach AVFoundation, and the panel must present it as a
+        // cap. Neither may route through `plannedTakeDurationSeconds`: writing
+        // the cap there is what made a manually stopped take look truncated.
+        XCTAssertTrue(engineSource.contains("RoutineCaptureDefaults.maximumTakeDurationSeconds("))
+        XCTAssertTrue(engineSource.contains("maxRecordedDuration"))
+        XCTAssertTrue(viewSource.contains("RoutineCaptureDefaults.maximumTakeDurationLabel"))
+        XCTAssertFalse(
+            viewSource.contains("config.plannedTakeDurationSeconds = RoutineCaptureDefaults"),
+            "A default must never be persisted as an operator-selected plan."
+        )
+        XCTAssertFalse(viewSource.contains("\"60 seconds\""))
+    }
+
+    func testRoutineCaptureRealAVFoundationFailureRemainsFatal() {
+        let failed = NSError(
+            domain: AVFoundationErrorDomain,
+            code: -1,
+            userInfo: [
+                AVErrorRecordingSuccessfullyFinishedKey: false,
+                NSLocalizedDescriptionKey: "Capture device failed"
+            ]
+        )
+
+        XCTAssertEqual(
+            MacCaptureEngine.routineCaptureFailureDescription(for: failed),
+            "Capture device failed"
+        )
+    }
+
+    func testRoutineCaptureNonAVFoundationErrorCannotClaimSuccessfulFinish() {
+        let failed = NSError(
+            domain: "com.scratchlab.tests.capture",
+            code: 1,
+            userInfo: [
+                AVErrorRecordingSuccessfullyFinishedKey: true,
+                NSLocalizedDescriptionKey: "Unrelated failure"
+            ]
+        )
+
+        XCTAssertEqual(
+            MacCaptureEngine.routineCaptureFailureDescription(for: failed),
+            "Unrelated failure"
+        )
+    }
+
     func testGuidedCaptureReviewStateDoesNotInventWatchMotionWhenMotionIsSkipped() {
-        let assessment = GuidedCaptureReviewStateResolver.motionAssessment(
+        let state = GuidedCaptureReviewStateResolver.reviewState(
+            recordingFailed: false,
+            duration: 8.4,
             calibrationValid: true,
             audioPresent: true,
             motionPresent: false,
@@ -4975,9 +6621,9 @@ final class CaptureReliabilityPhase1CoreTests: XCTestCase {
             motionOptional: false
         )
 
-        XCTAssertEqual(assessment.syncStatus, "Motion optional")
-        XCTAssertEqual(assessment.motionStatusTitle, "Motion Optional")
-        XCTAssertFalse(assessment.motionPresent)
+        XCTAssertEqual(state.syncStatus, "Motion optional")
+        XCTAssertEqual(state.motionStatusTitle, "Motion Optional")
+        XCTAssertFalse(state.motionPresent)
     }
 
     func testLocalRecordingIdentityIncludesSessionWhenTakeNumbersReset() throws {
@@ -5108,6 +6754,8 @@ final class CaptureReliabilityPhase1CoreTests: XCTestCase {
         let root = try makeTemporaryDirectory()
         let package = try makeCanonicalPackage(rootURL: root)
         let validTake = try XCTUnwrap(package.takes.first)
+        let audioArtifactURL = try XCTUnwrap(validTake.audioArtifactURL)
+        try FileManager.default.removeItem(at: audioArtifactURL)
         let brokenTake = SessionExportTake(
             takeID: validTake.takeID,
             takeNumber: validTake.takeNumber,
@@ -5217,7 +6865,7 @@ final class CaptureReliabilityPhase1CoreTests: XCTestCase {
             mediaURL: URL(fileURLWithPath: "/tmp/routine.mov"),
             sidecarURL: URL(fileURLWithPath: "/tmp/routine.json")
         )
-        let sidecar = CaptureCore.LocalRecordingSidecar.recording(
+        var sidecar = CaptureCore.LocalRecordingSidecar.recording(
             sessionID: config.sessionID,
             sessionConfig: config,
             takeIdentity: CaptureCore.LocalRecordingNaming.takeIdentity(sessionID: config.sessionID, takeNumber: 1),
@@ -6117,22 +7765,25 @@ final class CaptureReliabilityPhase1CoreTests: XCTestCase {
         XCTAssertEqual(firstFiles["camA"], "video/DJALPHA_baby_070_take01_camA.mov")
         XCTAssertEqual(firstFiles["serato"], "audio/DJALPHA_baby_070_take01_scratch_only.wav")
         XCTAssertEqual(firstFiles["scratch_only"], "audio/DJALPHA_baby_070_take01_scratch_only.wav")
-        XCTAssertNil(firstFiles["beat_only"])
-        XCTAssertNil(firstFiles["scratch_with_beat"])
+        XCTAssertEqual(firstFiles["beat_only"], "audio/DJALPHA_baby_070_take01_beat_only.wav")
+        XCTAssertEqual(firstFiles["scratch_with_beat"], "audio/DJALPHA_baby_070_take01_scratch_with_beat.wav")
         XCTAssertEqual(firstFiles["notation"], "notation/take-001_detected_notation.json")
         let firstStemAvailability = try XCTUnwrap(takes.first?["stem_availability"] as? [String: String])
         XCTAssertEqual(firstStemAvailability["scratch_only"], "available")
-        XCTAssertEqual(firstStemAvailability["beat_only"], "unavailable")
-        XCTAssertEqual(firstStemAvailability["scratch_with_beat"], "unavailable")
+        XCTAssertEqual(firstStemAvailability["beat_only"], "available")
+        XCTAssertEqual(firstStemAvailability["scratch_with_beat"], "available")
         let firstArtifacts = try XCTUnwrap(takes.first?["artifacts"] as? [String: [String: Any]])
         XCTAssertEqual(firstArtifacts["scratch_only"]?["path"] as? String, "audio/DJALPHA_baby_070_take01_scratch_only.wav")
         XCTAssertEqual(firstArtifacts["serato"]?["path"] as? String, "audio/DJALPHA_baby_070_take01_scratch_only.wav")
-        XCTAssertNil(firstArtifacts["beat_only"])
-        XCTAssertNil(firstArtifacts["scratch_with_beat"])
+        XCTAssertEqual(firstArtifacts["beat_only"]?["path"] as? String, "audio/DJALPHA_baby_070_take01_beat_only.wav")
+        XCTAssertEqual(firstArtifacts["scratch_with_beat"]?["path"] as? String, "audio/DJALPHA_baby_070_take01_scratch_with_beat.wav")
 
         let takeLog = preview.takeLogCSV
         XCTAssertTrue(takeLog.contains("bpm,take_number,raw_camA,raw_camB,raw_audio,raw_watch,verbal_slate_used,sync_clap_used,notes"))
-        XCTAssertTrue(takeLog.contains("\"70\",\"1\",\"\",\"\",\"\",\"\",\"true\",\"true\",\"take 1 note\""))
+        // Raw-media columns must carry the same authoritative paths the manifest
+        // emits (take 1 = bpm 70, which has a linked watch capture).
+        XCTAssertTrue(takeLog.contains("\"70\",\"1\",\"video/DJALPHA_baby_070_take01_camA.mov\",\"\",\"audio/DJALPHA_baby_070_take01_scratch_only.wav\",\"watch/DJALPHA_baby_070_take01_watch.csv\",\"true\",\"true\",\"take 1 note\""))
+        XCTAssertEqual(takeLog.contains(",\"\",\"\",\"\",\"\","), false, "raw-media columns must not all be empty")
         XCTAssertEqual(
             takeLog.split(whereSeparator: \.isNewline).count - 1,
             takes.count,
@@ -6157,7 +7808,7 @@ final class CaptureReliabilityPhase1CoreTests: XCTestCase {
         let sidecarURL = root.appendingPathComponent("routine.json")
 
         try writePlaceholderFile(at: videoURL, contents: Data("mov".utf8))
-        try writePlaceholderFile(at: audioURL, contents: Data("wav".utf8))
+        try writeTestWAV(at: audioURL)
         try writeFinalizedSidecar(
             to: sidecarURL,
             sessionID: sessionID,
@@ -6258,8 +7909,8 @@ final class CaptureReliabilityPhase1CoreTests: XCTestCase {
         XCTAssertEqual(files["notation"], "notation/take-001_detected_notation.json")
         XCTAssertEqual(files["serato"], "audio/DJALPHA_stab_090_take01_scratch_only.wav")
         XCTAssertEqual(files["scratch_only"], "audio/DJALPHA_stab_090_take01_scratch_only.wav")
-        XCTAssertNil(files["beat_only"])
-        XCTAssertNil(files["scratch_with_beat"])
+        XCTAssertEqual(files["beat_only"], "audio/DJALPHA_stab_090_take01_beat_only.wav")
+        XCTAssertEqual(files["scratch_with_beat"], "audio/DJALPHA_stab_090_take01_scratch_with_beat.wav")
     }
 
     func testRoutineExportValidationAcceptsSelectedNonBabyScratchType() throws {
@@ -7033,12 +8684,12 @@ final class CaptureReliabilityPhase1CoreTests: XCTestCase {
         let macSourceURL = projectRootURL().appendingPathComponent("ScratchLabDesktop/Views/MacAnalyzerView.swift")
         let source = try String(contentsOf: macSourceURL, encoding: .utf8)
 
-        XCTAssertTrue(source.contains("currentRoutineNotationSnapshot?.recordMovementEvents.isEmpty == false"))
+        XCTAssertTrue(source.contains("CaptureCore.gestureRelativeRecordMovementEventsForPresentation("))
         XCTAssertTrue(source.contains("hasPartialReviewNotation"))
         XCTAssertTrue(source.contains("Audio-only take"))
         XCTAssertTrue(source.contains("Hand motion wasn't detected — review timing only."))
         XCTAssertTrue(source.contains("No record movement detected."))
-        XCTAssertTrue(source.contains("ScratchNotation.detectedPreview("))
+        XCTAssertTrue(source.contains("LiveNotationOverlayModel.capturedGestureRelativePresentation(from:"))
         XCTAssertTrue(source.contains("Notation unavailable for this take."))
         XCTAssertFalse(source.contains("hasRecordedTake && (captureEngine.cxlEventCount > 0 || captureEngine.scratchDetectionCount > 0)"))
     }
@@ -7167,8 +8818,8 @@ final class CaptureReliabilityPhase1CoreTests: XCTestCase {
 
         let tabSource = try sourceSlice(
             in: source,
-            from: "TabView(selection: workspaceTabBinding)",
-            through: ".background(ScratchLabDesign.Surface.applicationBackground)"
+            from: "HStack(spacing: 0) {\n            workspaceRail",
+            through: ".background(ScratchLabDesign.Surface.canvas)"
         )
         XCTAssertFalse(tabSource.contains("Notation Lab"))
         XCTAssertFalse(tabSource.contains("Test Lab"))
@@ -7356,6 +9007,14 @@ final class CaptureReliabilityPhase1CoreTests: XCTestCase {
         XCTAssertFalse(source.contains("tracks(withMediaType:"))
         XCTAssertTrue(source.contains("loadTracks(withMediaType: .audio)"))
         XCTAssertTrue(source.contains("loadTracks(withMediaType: .video)"))
+    }
+
+    func testMacRoutineMovieMuxerUsesAsyncAVAssetExport() throws {
+        let sourceURL = projectRootURL().appendingPathComponent("ScratchLabDesktop/Services/MacCaptureEngine.swift")
+        let source = try String(contentsOf: sourceURL, encoding: .utf8)
+
+        XCTAssertFalse(source.contains("exportAsynchronously"))
+        XCTAssertTrue(source.contains("try await exporter.export(to: temporaryURL, as: .mov)"))
     }
 
     func testSessionExportCoordinatorUsesAsyncAVAssetFormatDescriptionLoading() throws {
@@ -7798,7 +9457,18 @@ final class CaptureReliabilityPhase1CoreTests: XCTestCase {
         )
 
         XCTAssertEqual((manifest["allowed_bpms"] as? [Int]) ?? [], [90])
-        XCTAssertTrue(preview.takeLogCSV.contains("\"90\",\"1\",\"\",\"\",\"\",\"\",\"false\",\"false\",\"\""))
+        // Raw-media columns are populated from the authoritative manifest names;
+        // this take has no watch capture, so only raw_watch stays empty.
+        let takeLogRow = try XCTUnwrap(
+            preview.takeLogCSV.split(whereSeparator: \.isNewline).first(where: { $0.hasPrefix("\"90\",\"1\",") }).map(String.init)
+        )
+        let manifestTakeFiles = try XCTUnwrap(
+            ((manifest["takes"] as? [[String: Any]])?.first?["files"]) as? [String: String]
+        )
+        XCTAssertTrue(takeLogRow.contains("\"\(manifestTakeFiles["camA"] ?? "MISSING")\""))
+        XCTAssertTrue(takeLogRow.contains("\"\(manifestTakeFiles["scratch_only"] ?? "MISSING")\""))
+        XCTAssertTrue(takeLogRow.hasSuffix(",\"false\",\"false\",\"\""))
+        XCTAssertFalse(takeLogRow.contains("\"90\",\"1\",\"\",\"\",\"\",\"\","))
     }
 
     // MARK: - Baby Scratch sync tests (notation coach + audio master clock)
@@ -7830,23 +9500,20 @@ final class CaptureReliabilityPhase1CoreTests: XCTestCase {
         let phraseEnd = BabyScratchReferenceMotionTimeline.phraseEnd
         let cycleDuration = BabyScratchReferenceMotionTimeline.demoAudioPhraseCycleDuration
 
-        // The 42 s coach demo plays as a single, multi-phrase recording — no
-        // playback-time looping — so the audio covers a single cycle that
-        // equals (and is bounded by) sourceDuration. The phrase still ends
-        // strictly before audio so a short silence/hold tail exists at the
-        // end of the recording.
-        XCTAssertGreaterThan(audioDuration, 40)
+        // The cleaned 16-cycle demo plays once, with a two-second lead-in and
+        // a two-second trailing hold.
+        XCTAssertEqual(audioDuration, 16.0483125, accuracy: 0.0001)
         XCTAssertEqual(BabyScratchReferenceMotionTimeline.demoAudioPhraseCycleCount, 1)
         XCTAssertEqual(cycleDuration, audioDuration, accuracy: 0.05)
         XCTAssertGreaterThan(audioDuration, phraseEnd)
-        XCTAssertGreaterThan(audioDuration - phraseEnd, 0.1)
+        XCTAssertEqual(audioDuration - phraseEnd, 2.0, accuracy: 0.001)
     }
 
     func testBabyScratchPhraseTimeHoldsAtPhraseEndDuringSilence() {
         let phraseEnd = BabyScratchReferenceMotionTimeline.phraseEnd
         let sourceDuration = BabyScratchReferenceMotionTimeline.sourceDuration
-        // After the last notated stroke ends (~42.4 s) the audio plays for
-        // another ~0.47 s of trailing silence/hold before sourceDuration. A
+        // After the last notated stroke ends, the audio has a two-second
+        // trailing silence/hold before sourceDuration. A
         // probe midway through that tail must hold neutral. A probe past
         // sourceDuration must also report neutral (no looping).
         let silenceTime = phraseEnd + (sourceDuration - phraseEnd) / 2
@@ -7861,27 +9528,22 @@ final class CaptureReliabilityPhase1CoreTests: XCTestCase {
         XCTAssertEqual(pastEndPose.direction, .neutral)
         XCTAssertTrue(pastEndPose.isHold)
 
-        // Deep inside the 42 s phrase the coach is still actively scratching;
-        // we never short-circuit to a hold just because we are past the first
-        // phrase repeat.
+        // Deep inside the phrase the coach is still actively scratching.
         XCTAssertTrue(ScratchLabBabyScratchDemoMotionPattern.isMovingStrokeWindow(playbackTime: lateMidPhraseProbe))
         XCTAssertNotEqual(lateMidPhrasePose.direction, .neutral)
     }
 
     func testBabyScratchNotationStrokesAlternateForwardBackInsidePhrase() throws {
-        // The 42 s phrase is audio-derived: some strokes legitimately repeat
-        // direction (e.g. opening backward run, multi-stroke release/reset
-        // bridges), so strict index%2 alternation no longer applies. The
-        // invariants we keep: both directions are present, several direction
-        // changes happen inside the phrase, and every stroke ends at or
-        // before phraseEnd.
+        // The cleaned source contains exactly 16 complete F/B cycles.
         let timeline = BabyScratchReferenceMotionTimeline.strokeSegments
-        XCTAssertGreaterThanOrEqual(timeline.count, 40)
+        XCTAssertEqual(timeline.count, 32)
         let directions = timeline.map(\.direction)
-        XCTAssertTrue(directions.contains(.forward))
-        XCTAssertTrue(directions.contains(.backward))
+        XCTAssertTrue(directions.enumerated().allSatisfy { indexedDirection in
+            let (index, direction) = indexedDirection
+            return direction == (index.isMultiple(of: 2) ? .forward : .backward)
+        })
         let directionChanges = zip(directions, directions.dropFirst()).filter { $0 != $1 }.count
-        XCTAssertGreaterThanOrEqual(directionChanges, 8, "Phrase must include several direction changes")
+        XCTAssertEqual(directionChanges, 31)
         let phraseEnd = BabyScratchReferenceMotionTimeline.phraseEnd
         XCTAssertTrue(timeline.allSatisfy { $0.endTime <= phraseEnd + 0.001 })
     }
@@ -8011,6 +9673,795 @@ final class CaptureReliabilityPhase1CoreTests: XCTestCase {
     }
 }
 
+// MARK: - Production iOS saved-take detail
+
+extension CaptureReliabilityPhase1CoreTests {
+    func savedTakeNotationSnapshot() -> CaptureCore.DetectedNotationSnapshot {
+        CaptureCore.DetectedNotationSnapshot(
+            notationSource: "controller",
+            notationConfidence: 0.92,
+            detectedLabel: "baby_scratch",
+            labelSource: "controller",
+            labelConfidence: 0.9,
+            detectionSources: ["controller"],
+            recordMovementEvents: [
+                CaptureCore.DetectedNotationRecordMovementEvent(
+                    startTime: 0.2,
+                    endTime: 0.6,
+                    startPosition: 1.25,
+                    endPosition: 1.40,
+                    direction: "forward",
+                    movementKind: .normalPush,
+                    speed: 0.375,
+                    confidence: 0.92,
+                    source: "controller"
+                )
+            ],
+            audioEvents: [],
+            faderEvents: [],
+            mixerMidiEvents: [],
+            capturedAt: Date(timeIntervalSince1970: 1_780_000_000)
+        )
+    }
+
+    func writeSavedTakeFixture(
+        in container: SimulatedAppContainer,
+        sessionID: String = "saved-take-session",
+        takeNumber: Int = 1
+    ) throws -> GuidedCaptureKeptTake {
+        let createdAt = Date(timeIntervalSince1970: 1_780_000_000)
+        let artifacts = try writeSimulatedCapture(
+            in: container,
+            sessionID: sessionID,
+            takeNumber: takeNumber,
+            bpm: 95,
+            createdAt: createdAt
+        )
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .iso8601
+        let sidecar = try decoder.decode(
+            CaptureCore.LocalRecordingSidecar.self,
+            from: Data(contentsOf: artifacts.sidecarURL)
+        ).withDetectedNotation(savedTakeNotationSnapshot(), recordedAt: createdAt)
+        try sidecar.encodedData().write(to: artifacts.sidecarURL, options: .atomic)
+        return makeKeptTake(
+            from: artifacts,
+            sessionID: sessionID,
+            takeNumber: takeNumber,
+            bpm: 95,
+            locator: container.locator
+        )
+    }
+
+    func testSavedTakeDetailLoadsRealMediaSidecarAndSharedNotationProjection() throws {
+        let root = try makeTemporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let container = try makeSimulatedAppContainer(in: root, named: "current")
+        let take = try writeSavedTakeFixture(in: container)
+
+        let detail = try GuidedCaptureSavedTakeDetail.load(
+            take: take,
+            containerLocator: container.locator
+        )
+
+        XCTAssertEqual(detail.mediaURL, take.sourceMediaURL(in: container.locator))
+        XCTAssertEqual(detail.sidecar.sessionID, take.sessionID)
+        XCTAssertEqual(detail.sidecar.takeID, take.takeID)
+        XCTAssertEqual(
+            detail.presentationEvents,
+            CaptureCore.gestureRelativeRecordMovementEventsForPresentation(
+                from: savedTakeNotationSnapshot()
+            )
+        )
+        XCTAssertEqual(detail.presentationDuration, take.duration, accuracy: 1e-12)
+    }
+
+    func testSavedTakeDetailRefusesMissingMediaWithoutDetachingTake() throws {
+        let root = try makeTemporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let container = try makeSimulatedAppContainer(in: root, named: "current")
+        let take = try writeSavedTakeFixture(in: container)
+        try FileManager.default.removeItem(at: take.sourceMediaURL(in: container.locator))
+
+        XCTAssertThrowsError(
+            try GuidedCaptureSavedTakeDetail.load(
+                take: take,
+                containerLocator: container.locator
+            )
+        ) { error in
+            XCTAssertEqual(
+                error as? GuidedCaptureSavedTakeDetailError,
+                .mediaMissing(take.takeID)
+            )
+        }
+        XCTAssertEqual(take.takeID, "take-001", "validation must not mutate or detach the ledger record")
+    }
+
+    func testSavedTakeDetailRefusesSidecarIdentityMismatch() throws {
+        let root = try makeTemporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let container = try makeSimulatedAppContainer(in: root, named: "current")
+        let take = try writeSavedTakeFixture(in: container)
+        let sidecarURL = take.sourceSidecarURL(in: container.locator)
+        try writeFinalizedSidecar(
+            to: sidecarURL,
+            sessionID: take.sessionID,
+            takeIdentity: CaptureCore.LocalRecordingNaming.takeIdentity(
+                sessionID: take.sessionID,
+                takeNumber: 99
+            ),
+            mediaURL: take.sourceMediaURL(in: container.locator),
+            performerName: "DJ Ledger",
+            bpm: 95,
+            createdAt: Date(timeIntervalSince1970: 1_780_000_000)
+        )
+
+        XCTAssertThrowsError(
+            try GuidedCaptureSavedTakeDetail.load(
+                take: take,
+                containerLocator: container.locator
+            )
+        ) { error in
+            XCTAssertEqual(
+                error as? GuidedCaptureSavedTakeDetailError,
+                .sidecarIdentityMismatch(take.takeID)
+            )
+        }
+    }
+
+}
+
+// MARK: - Export audio projection: channel-pair validity
+
+/// Covers the defect behind session 20435e68 (macOS, "Rane ONE MKII"), where
+/// the exported `scratch_only` stem's left channel was a frozen DC value
+/// (take-002 measured dc=-0.6996 with variance exactly 0) while the right
+/// channel carried the real performance, and `scratch_with_beat` inherited it.
+extension CaptureReliabilityPhase1CoreTests {
+
+    /// A deterministic dynamic tone. 437 Hz at 48 kHz has a period of ~109.8
+    /// frames, so it stays dynamic under any block or stride the analyser uses.
+    static func dynamicSample(
+        frame: Int,
+        amplitude: Float,
+        hertz: Double = 437,
+        sampleRate: Double = 48_000
+    ) -> Float {
+        amplitude * Float(sin(2.0 * Double.pi * hertz * Double(frame) / sampleRate))
+    }
+
+    static func dynamicInt32Sample(frame: Int, amplitude: Float) -> Int32 {
+        Int32(Double(dynamicSample(frame: frame, amplitude: amplitude)) * Double(Int32.max))
+    }
+
+    /// Writes a discrete multichannel float source. `fill` returns the sample
+    /// for a given channel and frame.
+    func writeMultichannelFloatSource(
+        at url: URL,
+        channelCount: Int,
+        frameCount: Int,
+        sampleRate: Double = 48_000,
+        fill: (_ channel: Int, _ frame: Int) -> Float
+    ) throws {
+        let channelLayout = try XCTUnwrap(
+            AVAudioChannelLayout(
+                layoutTag: kAudioChannelLayoutTag_DiscreteInOrder | AudioChannelLayoutTag(channelCount)
+            )
+        )
+        let format = AVAudioFormat(
+            commonFormat: .pcmFormatFloat32,
+            sampleRate: sampleRate,
+            interleaved: false,
+            channelLayout: channelLayout
+        )
+        let buffer = try XCTUnwrap(
+            AVAudioPCMBuffer(pcmFormat: format, frameCapacity: AVAudioFrameCount(frameCount))
+        )
+        buffer.frameLength = AVAudioFrameCount(frameCount)
+        let channels = try XCTUnwrap(buffer.floatChannelData)
+        for channel in 0..<channelCount {
+            for frame in 0..<frameCount {
+                channels[channel][frame] = fill(channel, frame)
+            }
+        }
+        let file = try AVAudioFile(
+            forWriting: url,
+            settings: format.settings,
+            commonFormat: .pcmFormatFloat32,
+            interleaved: false
+        )
+        try file.write(from: buffer)
+    }
+
+    /// Per-channel DC offset and AC RMS of a written file, measured the same
+    /// way the export does, so assertions are about the artifact on disk.
+    func measuredChannelSignal(at url: URL) throws -> [(dcOffset: Double, acRMS: Double)] {
+        let file = try AVAudioFile(forReading: url, commonFormat: .pcmFormatFloat32, interleaved: false)
+        let channelCount = Int(file.processingFormat.channelCount)
+        let frameCount = Int(file.length)
+        let buffer = try XCTUnwrap(
+            AVAudioPCMBuffer(
+                pcmFormat: file.processingFormat,
+                frameCapacity: AVAudioFrameCount(frameCount)
+            )
+        )
+        try file.read(into: buffer)
+        let channels = try XCTUnwrap(buffer.floatChannelData)
+        let frames = Int(buffer.frameLength)
+        XCTAssertGreaterThan(frames, 0)
+        return (0..<channelCount).map { channel in
+            var sum = 0.0
+            var squareSum = 0.0
+            for frame in 0..<frames {
+                let sample = Double(channels[channel][frame])
+                sum += sample
+                squareSum += sample * sample
+            }
+            let mean = sum / Double(frames)
+            let variance = max(0, (squareSum / Double(frames)) - (mean * mean))
+            return (dcOffset: mean, acRMS: variance.squareRoot())
+        }
+    }
+
+    /// The shipped take-002 shape: hardware-profile pair 12/13 where the left
+    /// channel is frozen and the right carries the performance. The frozen
+    /// channel must never reach the stem; the live one is recovered to both
+    /// sides rather than the whole pair being thrown away.
+    func testProjectionRecoversLiveChannelWhenPreferredPairPartnerIsDCFrozen() throws {
+        let directory = try makeTemporaryDirectory()
+        let sourceURL = directory.appendingPathComponent("rane-dc-frozen-partner.caf")
+        let destinationURL = directory.appendingPathComponent("scratch-only-stereo.wav")
+
+        try writeMultichannelFloatSource(
+            at: sourceURL,
+            channelCount: 14,
+            frameCount: 4_800
+        ) { channel, frame in
+            switch channel {
+            case 12: return -0.699_631
+            case 13: return Self.dynamicSample(frame: frame, amplitude: 0.80)
+            default: return 0
+            }
+        }
+
+        let diagnostics = try SessionExportAudioProjection.writePlayableStereo(
+            from: sourceURL,
+            to: destinationURL,
+            preferredPair: RoutineCaptureAudioHardwareProfile.preferredProgramStereoPair(
+                forDeviceName: "Rane ONE MKII"
+            )
+        )
+
+        XCTAssertEqual(diagnostics.sourceChannelCount, 14)
+        XCTAssertTrue(diagnostics.duplicatedLiveChannel)
+        XCTAssertEqual(diagnostics.leftSourceChannelIndex, 13)
+        XCTAssertEqual(diagnostics.rightSourceChannelIndex, 13)
+        XCTAssertTrue(
+            diagnostics.sourceStatistics[12].isDCFrozen,
+            "Channel 12 is a constant and must be classified as frozen."
+        )
+        XCTAssertFalse(diagnostics.sourceStatistics[12].isDynamic)
+
+        let written = try measuredChannelSignal(at: destinationURL)
+        XCTAssertEqual(written.count, 2)
+        for (index, channel) in written.enumerated() {
+            XCTAssertGreaterThan(
+                channel.acRMS,
+                SessionExportAudioProjection.SignalValidity.minimumChannelACRMS,
+                "Exported channel \(index) must carry dynamics, never the frozen line."
+            )
+            XCTAssertNotEqual(
+                channel.dcOffset,
+                -0.699_631,
+                accuracy: 0.001,
+                "The frozen channel's value must not appear in the stem."
+            )
+        }
+    }
+
+    /// The real take-01 / take-02 shape: an 8-channel capture with exactly one
+    /// live channel and exact zeros elsewhere, the live channel riding a large
+    /// DC offset. Both output channels must carry the performance.
+    func testRoutineProgramAudioRoutingPersistsExplicitPairPerDevice() throws {
+        let suiteName = "ScratchLab.ProgramAudioRouting.\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suiteName))
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+
+        let selectedPair = try XCTUnwrap(
+            AudioHardwareRouteState.StereoPair(
+                firstChannelIndex: 2,
+                secondChannelIndex: 3
+            )
+        )
+        RoutineCaptureAudioRoutingSelectionStore.remember(
+            selectedPair,
+            forDeviceUniqueID: "rane-device-a",
+            defaults: defaults
+        )
+
+        XCTAssertEqual(
+            RoutineCaptureAudioRoutingSelectionStore.rememberedStereoPair(
+                forDeviceUniqueID: "rane-device-a",
+                defaults: defaults
+            ),
+            selectedPair
+        )
+        XCTAssertEqual(
+            RoutineCaptureAudioHardwareProfile.preferredProgramStereoPair(
+                forDeviceName: "Rane ONE MKII",
+                deviceUniqueID: "rane-device-a",
+                defaults: defaults
+            ),
+            selectedPair,
+            "An explicit operator route must win over the RANE 13/14 first-use default."
+        )
+        XCTAssertEqual(
+            RoutineCaptureAudioHardwareProfile.preferredProgramStereoPair(
+                forDeviceName: "Rane ONE MKII",
+                deviceUniqueID: "rane-device-b",
+                defaults: defaults
+            ),
+            AudioHardwareRouteState.StereoPair(
+                firstChannelIndex: 12,
+                secondChannelIndex: 13
+            ),
+            "A different RANE device must keep its own measured first-use default."
+        )
+    }
+
+    func testProjectionRecoversEffectivelyMonoCaptureWithLargeDCOffset() throws {
+        let directory = try makeTemporaryDirectory()
+        let sourceURL = directory.appendingPathComponent("effectively-mono-8ch.caf")
+        let destinationURL = directory.appendingPathComponent("scratch-only-stereo.wav")
+        let dcOffset: Float = -0.695_422
+
+        try writeMultichannelFloatSource(
+            at: sourceURL,
+            channelCount: 8,
+            frameCount: 4_800
+        ) { channel, frame in
+            channel == 2
+                ? dcOffset + Self.dynamicSample(frame: frame, amplitude: 0.56)
+                : 0
+        }
+
+        let diagnostics = try SessionExportAudioProjection.writePlayableStereo(
+            from: sourceURL,
+            to: destinationURL,
+            preferredPair: RoutineCaptureAudioHardwareProfile.preferredProgramStereoPair(
+                forDeviceName: "Rane ONE MKII"
+            )
+        )
+
+        // The 12/13 hint cannot apply to an 8-channel capture.
+        XCTAssertEqual(
+            diagnostics.outcome,
+            .fallbackAfterRejectedPreferredPair(.outOfRange)
+        )
+        XCTAssertEqual(diagnostics.selectedFirstChannelIndex, 2)
+        XCTAssertTrue(
+            diagnostics.duplicatedLiveChannel,
+            "A live channel beside a dead partner must be sent to both sides."
+        )
+        XCTAssertEqual(diagnostics.leftSourceChannelIndex, 2)
+        XCTAssertEqual(diagnostics.rightSourceChannelIndex, 2)
+
+        // The channel has more DC than AC and is still the performance: it must
+        // be kept, not rejected.
+        let live = diagnostics.sourceStatistics[2]
+        XCTAssertTrue(live.isDynamic)
+        XCTAssertGreaterThan(abs(live.dcOffset), live.acRMS)
+        XCTAssertTrue(live.requiresDCRemoval)
+
+        let written = try measuredChannelSignal(at: destinationURL)
+        XCTAssertEqual(written.count, 2)
+        for (index, channel) in written.enumerated() {
+            XCTAssertGreaterThan(
+                channel.acRMS,
+                0.1,
+                "Exported channel \(index) must carry the performance, not silence."
+            )
+            XCTAssertLessThan(
+                abs(channel.dcOffset),
+                SessionExportAudioProjection.SignalValidity.dcRemovalThreshold,
+                "Exported channel \(index) must have its DC offset removed."
+            )
+        }
+    }
+
+    /// The live RANE ONE MKII probe (2026-08-31), reproduced exactly:
+    /// 14 channels, CH13 (index 12) frozen at **+0.66995**, CH14 (index 13)
+    /// program at -4.8 dBFS RMS / -0.0 dBFS peak / DC +0.00110, everything else
+    /// at or below the -89.6 dBFS noise floor.
+    ///
+    /// The frozen value is *positive* here and was **-0.699631** in the shipped
+    /// session, so selection must key on absent AC content and never on the DC
+    /// value or its sign.
+    func testProjectionRecoversProgrammeFromMeasuredRaneDeviceShape() throws {
+        let directory = try makeTemporaryDirectory()
+        let sourceURL = directory.appendingPathComponent("measured-rane-14ch.caf")
+        let destinationURL = directory.appendingPathComponent("scratch-only-stereo.wav")
+        let frameCount = 24_000
+
+        try writeMultichannelFloatSource(
+            at: sourceURL,
+            channelCount: 14,
+            frameCount: frameCount
+        ) { channel, frame in
+            switch channel {
+            case 0: return Self.dynamicSample(frame: frame, amplitude: 2.19e-6, hertz: 997)
+            case 1: return Self.dynamicSample(frame: frame, amplitude: 2.19e-6, hertz: 1_103)
+            case 2: return Self.dynamicSample(frame: frame, amplitude: 3.24e-5, hertz: 997)
+            case 3: return Self.dynamicSample(frame: frame, amplitude: 3.31e-5, hertz: 1_103)
+            case 4: return Self.dynamicSample(frame: frame, amplitude: 1.11e-6, hertz: 997)
+            case 5: return Self.dynamicSample(frame: frame, amplitude: 1.12e-6, hertz: 1_103)
+            case 12: return 0.669_95
+            case 13: return 0.001_10 + Self.dynamicSample(frame: frame, amplitude: 0.812)
+            default: return 0
+            }
+        }
+
+        let diagnostics = try SessionExportAudioProjection.writePlayableStereo(
+            from: sourceURL,
+            to: destinationURL,
+            preferredPair: RoutineCaptureAudioHardwareProfile.preferredProgramStereoPair(
+                forDeviceName: "Rane ONE MKII"
+            )
+        )
+
+        XCTAssertEqual(diagnostics.sourceChannelCount, 14)
+        // The hint is right about the pair; it is wrong about the left channel.
+        XCTAssertEqual(diagnostics.outcome, .preferredPairAccepted)
+        XCTAssertTrue(diagnostics.duplicatedLiveChannel)
+        XCTAssertEqual(diagnostics.leftSourceChannelIndex, 13)
+        XCTAssertEqual(diagnostics.rightSourceChannelIndex, 13)
+
+        // A *positive* frozen channel must classify exactly like the negative one.
+        let frozen = diagnostics.sourceStatistics[12]
+        XCTAssertTrue(frozen.isDCFrozen)
+        XCTAssertFalse(frozen.isDynamic)
+        XCTAssertGreaterThan(frozen.dcOffset, 0, "This session's dead line is parked positive.")
+
+        // The programme channel's small offset is below the removal threshold,
+        // so its audio passes through untouched.
+        XCTAssertEqual(diagnostics.removedDCOffsets, [0, 0])
+
+        // The near-noise-floor channels must read as silent, not as programme.
+        for channel in [0, 1, 2, 3, 4, 5] {
+            XCTAssertFalse(
+                diagnostics.sourceStatistics[channel].isDynamic,
+                "Channel \(channel) sits below the noise floor and must not count as audio."
+            )
+        }
+
+        let written = try measuredChannelSignal(at: destinationURL)
+        XCTAssertEqual(written.count, 2)
+        for (index, channel) in written.enumerated() {
+            XCTAssertEqual(
+                channel.acRMS, 0.574, accuracy: 0.02,
+                "Exported channel \(index) must carry the -4.8 dBFS performance."
+            )
+            XCTAssertLessThan(
+                abs(channel.dcOffset), 0.01,
+                "Exported channel \(index) must not carry the frozen pedestal."
+            )
+        }
+    }
+
+    /// A healthy stereo pair keeps both distinct channels and is left alone.
+    func testProjectionKeepsBothChannelsOfAHealthyStereoPair() throws {
+        let directory = try makeTemporaryDirectory()
+        let sourceURL = directory.appendingPathComponent("healthy-stereo-14ch.caf")
+        let destinationURL = directory.appendingPathComponent("scratch-only-stereo.wav")
+
+        try writeMultichannelFloatSource(
+            at: sourceURL,
+            channelCount: 14,
+            frameCount: 4_800
+        ) { channel, frame in
+            switch channel {
+            case 12: return Self.dynamicSample(frame: frame, amplitude: 0.42)
+            case 13: return Self.dynamicSample(frame: frame, amplitude: -0.37)
+            default: return 0
+            }
+        }
+
+        let diagnostics = try SessionExportAudioProjection.writePlayableStereo(
+            from: sourceURL,
+            to: destinationURL,
+            preferredPair: RoutineCaptureAudioHardwareProfile.preferredProgramStereoPair(
+                forDeviceName: "Rane ONE MKII"
+            )
+        )
+
+        XCTAssertEqual(diagnostics.outcome, .preferredPairAccepted)
+        XCTAssertFalse(diagnostics.duplicatedLiveChannel)
+        XCTAssertEqual(diagnostics.leftSourceChannelIndex, 12)
+        XCTAssertEqual(diagnostics.rightSourceChannelIndex, 13)
+        XCTAssertEqual(diagnostics.removedDCOffsets, [0, 0], "A clean pair must pass through untouched.")
+
+        let exportedFile = try AVAudioFile(forReading: destinationURL)
+        let exportedBuffer = try XCTUnwrap(
+            AVAudioPCMBuffer(pcmFormat: exportedFile.processingFormat, frameCapacity: 4_800)
+        )
+        try exportedFile.read(into: exportedBuffer)
+        let exportedChannels = try XCTUnwrap(exportedBuffer.floatChannelData)
+        XCTAssertEqual(
+            exportedChannels[0][100],
+            Self.dynamicSample(frame: 100, amplitude: 0.42),
+            accuracy: 0.000_1
+        )
+        XCTAssertEqual(
+            exportedChannels[1][100],
+            Self.dynamicSample(frame: 100, amplitude: -0.37),
+            accuracy: 0.000_1
+        )
+    }
+
+    func testProjectionFailsExplicitlyWhenNoChannelPairCarriesDynamicAudio() throws {
+        let directory = try makeTemporaryDirectory()
+        let sourceURL = directory.appendingPathComponent("rane-dc-only.caf")
+        let destinationURL = directory.appendingPathComponent("scratch-only-stereo.wav")
+
+        // Every pair is either silent or a constant: nothing here is playable.
+        try writeMultichannelFloatSource(
+            at: sourceURL,
+            channelCount: 14,
+            frameCount: 4_800
+        ) { channel, _ in
+            switch channel {
+            case 12: return -0.699_631
+            case 13: return 0.552_100
+            default: return 0
+            }
+        }
+
+        XCTAssertThrowsError(
+            try SessionExportAudioProjection.writePlayableStereo(
+                from: sourceURL,
+                to: destinationURL,
+                preferredPair: RoutineCaptureAudioHardwareProfile.preferredProgramStereoPair(
+                    forDeviceName: "Rane ONE MKII"
+                )
+            )
+        ) { error in
+            let failure = error as? SessionExportValidationFailure
+            XCTAssertEqual(failure?.reason, .capturedAudioHasNoDynamicChannelPair)
+            XCTAssertEqual(failure?.exportError, .unableToPrepareExport)
+            XCTAssertTrue(
+                failure?.reason.detailText.contains("no dynamic audio") ?? false,
+                "The operator needs the reason named, not a generic export failure."
+            )
+        }
+
+        XCTAssertFalse(
+            FileManager.default.fileExists(atPath: destinationURL.path),
+            "A rejected projection must not leave a stem behind that looks like a success."
+        )
+    }
+
+    func testProjectionCannotSilentlySucceedOnSilentOrDCOnlySources() throws {
+        let directory = try makeTemporaryDirectory()
+
+        // Regression guard: for every degenerate source shape, the projection
+        // must throw. It must never write a file and report success.
+        let cases: [(name: String, fill: (Int, Int) -> Float)] = [
+            ("all-silent", { _, _ in 0 }),
+            ("all-dc", { channel, _ in Float(channel + 1) * 0.05 }),
+            ("dc-preferred-pair-only", { channel, _ in
+                channel == 12 ? -0.70 : (channel == 13 ? 0.55 : 0)
+            }),
+        ]
+
+        for testCase in cases {
+            let sourceURL = directory.appendingPathComponent("\(testCase.name).caf")
+            let destinationURL = directory.appendingPathComponent("\(testCase.name)-stereo.wav")
+            try writeMultichannelFloatSource(
+                at: sourceURL,
+                channelCount: 14,
+                frameCount: 2_400,
+                fill: testCase.fill
+            )
+
+            XCTAssertThrowsError(
+                try SessionExportAudioProjection.writePlayableStereo(
+                    from: sourceURL,
+                    to: destinationURL
+                ),
+                "\(testCase.name) must not project to a playable stem."
+            ) { error in
+                XCTAssertEqual(
+                    (error as? SessionExportValidationFailure)?.reason,
+                    .capturedAudioHasNoDynamicChannelPair,
+                    "\(testCase.name) should name the audio check that rejected it."
+                )
+            }
+            XCTAssertFalse(
+                FileManager.default.fileExists(atPath: destinationURL.path),
+                "\(testCase.name) must not leave a stem on disk."
+            )
+        }
+    }
+
+    func testProjectionKeepsValidPreferredPairAndReportsNoFallback() throws {
+        let directory = try makeTemporaryDirectory()
+        let sourceURL = directory.appendingPathComponent("rane-valid-preferred.caf")
+        let destinationURL = directory.appendingPathComponent("scratch-only-stereo.wav")
+
+        try writeMultichannelFloatSource(
+            at: sourceURL,
+            channelCount: 14,
+            frameCount: 4_800
+        ) { channel, frame in
+            switch channel {
+            case 12: return Self.dynamicSample(frame: frame, amplitude: 0.42)
+            case 13: return Self.dynamicSample(frame: frame, amplitude: -0.37)
+            default: return 0
+            }
+        }
+
+        let diagnostics = try SessionExportAudioProjection.writePlayableStereo(
+            from: sourceURL,
+            to: destinationURL,
+            preferredPair: RoutineCaptureAudioHardwareProfile.preferredProgramStereoPair(
+                forDeviceName: "Rane ONE MKII"
+            )
+        )
+
+        XCTAssertEqual(diagnostics.outcome, .preferredPairAccepted)
+        XCTAssertFalse(diagnostics.usedFallback)
+        XCTAssertEqual(diagnostics.selectedFirstChannelIndex, 12)
+        XCTAssertEqual(diagnostics.selectedSecondChannelIndex, 13)
+        XCTAssertTrue(
+            diagnostics.debugSummary.contains("sourceChannels=14"),
+            "Diagnostics must record the source channel count."
+        )
+        XCTAssertTrue(diagnostics.debugSummary.contains("preferredPair=12/13"))
+        XCTAssertTrue(diagnostics.debugSummary.contains("pairEnergyRanking"))
+    }
+
+    func testRoutineExportKeepsDynamicScratchStemAndGeneratesBeatStems() throws {
+        let root = try makeTemporaryDirectory()
+        let sessionID = "routine-rane-valid-stems"
+        let capturedFrameCount = 4_800
+        let videoURL = try makeLocalRecordingTake(
+            in: root,
+            sessionID: sessionID,
+            takeNumber: 1,
+            bpm: 95,
+            createdAt: Date(timeIntervalSince1970: 1_710_001_125),
+            useRealMedia: true
+        )
+        let audioURL = videoURL.deletingPathExtension().appendingPathExtension("wav")
+        try FileManager.default.removeItem(at: audioURL)
+        try writeMultichannelFloatSource(
+            at: audioURL,
+            channelCount: 14,
+            frameCount: capturedFrameCount
+        ) { channel, frame in
+            switch channel {
+            case 12: return Self.dynamicSample(frame: frame, amplitude: 0.35)
+            case 13: return Self.dynamicSample(frame: frame, amplitude: -0.45)
+            default: return 0
+            }
+        }
+
+        let builder = SessionArchiveBuilder()
+        let source = SessionExportSource.localRecordingSession(
+            lastRecordingURL: videoURL,
+            sessionName: "RANE Routine",
+            config: nil
+        )
+        XCTAssertNil(builder.validationReport(for: source))
+
+        let archiveDirectory = root.appendingPathComponent("archives", isDirectory: true)
+        try FileManager.default.createDirectory(at: archiveDirectory, withIntermediateDirectories: true)
+        let result = try builder.createArchive(
+            from: try builder.preparePackage(from: source),
+            options: SessionExportOptions(mixMode: .scratchOnly),
+            in: archiveDirectory
+        )
+        let archiveRoot = try unzipArchive(
+            result.archiveURL,
+            to: root.appendingPathComponent("unzipped", isDirectory: true)
+        )
+        let audioDirectory = archiveRoot.appendingPathComponent("audio", isDirectory: true)
+        let stems = try FileManager.default
+            .contentsOfDirectory(atPath: audioDirectory.path)
+            .sorted()
+
+        let scratchOnly = try XCTUnwrap(stems.first(where: { $0.contains("scratch_only") }))
+        XCTAssertTrue(stems.contains(where: { $0.contains("beat_only") }))
+        XCTAssertTrue(stems.contains(where: { $0.contains("scratch_with_beat") }))
+
+        for stem in stems {
+            let stemURL = audioDirectory.appendingPathComponent(stem)
+            let stemFile = try AVAudioFile(forReading: stemURL)
+            XCTAssertEqual(
+                stemFile.length,
+                AVAudioFramePosition(capturedFrameCount),
+                "\(stem) must match the canonical captured scratch length."
+            )
+            let measured = try measuredChannelSignal(at: stemURL)
+            for (index, channel) in measured.enumerated() {
+                XCTAssertGreaterThan(
+                    channel.acRMS,
+                    SessionExportAudioProjection.SignalValidity.minimumChannelACRMS,
+                    "\(stem) channel \(index) must carry dynamics."
+                )
+                XCTAssertLessThan(
+                    abs(channel.dcOffset),
+                    channel.acRMS,
+                    "\(stem) channel \(index) must not be DC-dominated."
+                )
+            }
+        }
+        XCTAssertFalse(scratchOnly.isEmpty)
+    }
+
+    func testRoutineExportEmitsNoStemsWhenCapturedScratchAudioIsDCOnly() throws {
+        let root = try makeTemporaryDirectory()
+        let sessionID = "routine-rane-dc-only-stems"
+        let videoURL = try makeLocalRecordingTake(
+            in: root,
+            sessionID: sessionID,
+            takeNumber: 1,
+            bpm: 95,
+            createdAt: Date(timeIntervalSince1970: 1_710_001_125),
+            useRealMedia: true
+        )
+        let audioURL = videoURL.deletingPathExtension().appendingPathExtension("wav")
+        try FileManager.default.removeItem(at: audioURL)
+        try writeMultichannelFloatSource(
+            at: audioURL,
+            channelCount: 14,
+            frameCount: 4_800
+        ) { channel, _ in
+            switch channel {
+            case 12: return -0.699_631
+            case 13: return 0.552_100
+            default: return 0
+            }
+        }
+
+        let builder = SessionArchiveBuilder()
+        let source = SessionExportSource.localRecordingSession(
+            lastRecordingURL: videoURL,
+            sessionName: "RANE Routine",
+            config: nil
+        )
+
+        // The invalid scratch stem must be named, and must stop the export
+        // before beat_only / scratch_with_beat are derived from it.
+        let report = builder.validationReport(for: source)
+        XCTAssertTrue(
+            report?.issues.contains(where: { $0.contains("no dynamic audio") }) ?? false,
+            "Validation must name the audio check, got: \(String(describing: report?.issues))"
+        )
+
+        let archiveDirectory = root.appendingPathComponent("archives", isDirectory: true)
+        try FileManager.default.createDirectory(at: archiveDirectory, withIntermediateDirectories: true)
+        // `preparePackage` runs the validation gate first, so the boundary
+        // error is the coarse operator one; the specific reason travels in the
+        // report asserted above, which is what the UI shows.
+        XCTAssertThrowsError(
+            try builder.createArchive(
+                from: try builder.preparePackage(from: source),
+                options: SessionExportOptions(mixMode: .scratchOnly),
+                in: archiveDirectory
+            )
+        ) { error in
+            XCTAssertEqual(error as? SessionExportError, .invalidSessionMetadata)
+        }
+
+        let produced = (try? FileManager.default.contentsOfDirectory(atPath: archiveDirectory.path)) ?? []
+        XCTAssertTrue(
+            produced.filter { $0.hasSuffix(".zip") }.isEmpty,
+            "No archive may be produced from an invalid scratch stem."
+        )
+    }
+}
+
 final class CaptureRecoveryPhase2CoreTests: XCTestCase {
     func testInterruptedRecordingIsRecoveredOnRelaunch() throws {
         let root = try makeTemporaryDirectory()
@@ -8084,6 +10535,40 @@ final class CaptureRecoveryPhase2CoreTests: XCTestCase {
         XCTAssertTrue(report.issues.contains(where: { $0.code == .quarantinedOrphanedMedia && $0.fileName == "orphan.wav" }))
         XCTAssertTrue(FileManager.default.fileExists(atPath: root.appendingPathComponent("Quarantine/orphan.mov").path))
         XCTAssertTrue(FileManager.default.fileExists(atPath: root.appendingPathComponent("Quarantine/orphan.wav").path))
+    }
+
+    func testSameBasenameScratchStemRemainsOwnedByCompletedTakeDuringRecovery() throws {
+        let root = try makeTemporaryDirectory()
+        let auditRoot = root.appendingPathComponent("audit", isDirectory: true)
+        let sessionID = "scratch-stem-session"
+        let takeIdentity = CaptureCore.LocalRecordingNaming.takeIdentity(
+            sessionID: sessionID,
+            takeNumber: 1
+        )
+        let baseName = "\(sessionID)_take001_camA"
+        let mediaURL = root.appendingPathComponent("\(baseName).mov")
+        let sidecarURL = root.appendingPathComponent("\(baseName).json")
+        let scratchURL = root.appendingPathComponent("\(baseName).wav")
+        try Data("mov".utf8).write(to: mediaURL, options: .atomic)
+        try Data("wav".utf8).write(to: scratchURL, options: .atomic)
+        try makeCompletedSidecar(
+            sessionID: sessionID,
+            takeIdentity: takeIdentity,
+            mediaURL: mediaURL,
+            sidecarURL: sidecarURL
+        )
+
+        let report = StagedCaptureRecoveryManager(
+            fileManager: .default,
+            nowProvider: { Date(timeIntervalSince1970: 1_720_000_201) },
+            auditRootDirectoryOverride: auditRoot
+        ).recoverRecordingDirectory(at: root, storageKind: .companion)
+
+        XCTAssertEqual(report.quarantinedArtifactCount, 0)
+        XCTAssertTrue(FileManager.default.fileExists(atPath: scratchURL.path))
+        XCTAssertFalse(FileManager.default.fileExists(
+            atPath: root.appendingPathComponent("Quarantine/\(baseName).wav").path
+        ))
     }
 
     func testInterruptedTransactionHistoryAnnotatesOrphanedMediaQuarantine() throws {
@@ -8275,6 +10760,29 @@ final class CaptureRecoveryPhase2CoreTests: XCTestCase {
 
         XCTAssertTrue(report.issues.contains(where: { $0.code == .quarantinedUnlinkedWatchCapture }))
         XCTAssertTrue(FileManager.default.fileExists(atPath: watchRoot.appendingPathComponent("Quarantine/orphan-watch.json").path))
+    }
+
+    func testLocalRecordingSidecarDiscoveryIgnoresRawPlatterTimelineCompanion() throws {
+        let root = try makeTemporaryDirectory()
+        let sessionID = "timeline-companion-session"
+        let sidecarBaseName = CaptureCore.LocalRecordingNaming.baseName(
+            sessionID: sessionID,
+            takeNumber: 1,
+            roleLabel: "routine"
+        )
+        let sidecarURL = root.appendingPathComponent(sidecarBaseName).appendingPathExtension("json")
+        let timelineURL = root
+            .appendingPathComponent("\(sidecarBaseName)_raw_platter_timeline")
+            .appendingPathExtension("json")
+        try Data("sidecar".utf8).write(to: sidecarURL, options: .atomic)
+        try Data("timeline".utf8).write(to: timelineURL, options: .atomic)
+
+        let discoveredURLs = try SessionArchiveBuilder().matchingLocalRecordingSidecarURLs(
+            in: root,
+            seedSessionID: sessionID
+        )
+
+        XCTAssertEqual(discoveredURLs, [sidecarURL])
     }
 
     func testLocalRecordingSessionValidationReportsInterruptedTake() throws {
@@ -9371,45 +11879,16 @@ final class CaptureRecoveryPhase2CoreTests: XCTestCase {
 
     // MARK: - Release readiness source-inspection tests
 
-    // Slice X.2 follow-up: the V3.2 Home redesign dropped the DEBUG-gated
-    // Capture/Review menu buttons entirely rather than keeping them behind
-    // a #if DEBUG route (there is no `menuButtons` property or
-    // showingCapturePlaceholder/showingReviewPlaceholder state any more).
-    // CapturePlaceholderView/ReviewPlaceholderView are intentionally kept
-    // as unreferenced dead code for a future re-wire but must not be reachable
-    // from any navigation route in ANY build configuration — a strictly
-    // safer App Review contract than "hidden outside DEBUG".
-    func testMainMenuViewHidesCapturePlaceholderRouteOutsideDebug() throws {
+    func testMainMenuViewUsesOnlyImplementedCaptureAndReviewRoutes() throws {
         let sourceURL = projectRootURL().appendingPathComponent("ScratchLab/Views/MainMenuView.swift")
         let source = try String(contentsOf: sourceURL, encoding: .utf8)
 
-        XCTAssertTrue(
-            source.contains("private struct CapturePlaceholderView: View"),
-            "CapturePlaceholderView must still exist for a future re-wire"
-        )
-        XCTAssertTrue(
-            source.contains("private struct ReviewPlaceholderView: View"),
-            "ReviewPlaceholderView must still exist for a future re-wire"
-        )
-        XCTAssertTrue(
-            source.contains("On-device take capture is coming."),
-            "Capture placeholder must keep truthful coming-soon copy"
-        )
-        XCTAssertTrue(
-            source.contains("On-device Review is coming."),
-            "Review placeholder must keep truthful coming-soon copy"
-        )
-
-        // No navigation route may instantiate either placeholder — the only
-        // occurrence of each identifier must be its own struct declaration.
-        XCTAssertEqual(
-            source.components(separatedBy: "CapturePlaceholderView").count - 1, 1,
-            "CapturePlaceholderView must not be referenced/instantiated by any route"
-        )
-        XCTAssertEqual(
-            source.components(separatedBy: "ReviewPlaceholderView").count - 1, 1,
-            "ReviewPlaceholderView must not be referenced/instantiated by any route"
-        )
+        XCTAssertFalse(source.contains("CapturePlaceholderView"))
+        XCTAssertFalse(source.contains("ReviewPlaceholderView"))
+        XCTAssertTrue(source.contains("private var captureWorkspaceLanding: some View"))
+        XCTAssertTrue(source.contains("private var reviewWorkspaceLanding: some View"))
+        XCTAssertTrue(source.contains("showingCaptureHub = true"))
+        XCTAssertTrue(source.contains("CompanionCameraView()"))
         XCTAssertFalse(source.contains("showingCapturePlaceholder"))
         XCTAssertFalse(source.contains("showingReviewPlaceholder"))
     }
@@ -9529,6 +12008,36 @@ final class CaptureRecoveryPhase2CoreTests: XCTestCase {
         XCTAssertFalse(
             beforeCxlDebugGate.contains("cxlCaptureCard: some View"),
             "cxlCaptureCard property definition must be inside #if DEBUG"
+        )
+    }
+
+    func testMacReferenceAuthoringHardwareRouteIsDebugOnly() throws {
+        let sourceURL = projectRootURL().appendingPathComponent("ScratchLabDesktop/Views/MacAnalyzerView.swift")
+        let source = try String(contentsOf: sourceURL, encoding: .utf8)
+
+        XCTAssertTrue(
+            source.contains(
+                "#if DEBUG\n        case referenceAuthoringHardwareTest\n        case captureDetails"
+            ),
+            "The reference-authoring hardware-test section must remain inside the AdvancedSection DEBUG gate"
+        )
+        XCTAssertTrue(
+            source.contains(
+                "#if DEBUG\n            case .referenceAuthoringHardwareTest: return \"CXL Reference Authoring — Hardware Test\""
+            ),
+            "The hardware-test label must remain inside the AdvancedSection DEBUG gate"
+        )
+        XCTAssertTrue(
+            source.contains(
+                "#if DEBUG\n            case .referenceAuthoringHardwareTest: return \"wrench.and.screwdriver\""
+            ),
+            "The hardware-test icon mapping must remain inside the AdvancedSection DEBUG gate"
+        )
+        XCTAssertTrue(
+            source.contains(
+                "#if DEBUG\n        case .referenceAuthoringHardwareTest:\n            ReferenceAuthoringView(\n                engine: captureEngine,\n                companionReceiver: companionReceiver,\n                operatorName: lastPerformerName\n            )\n        case .captureDetails:"
+            ),
+            "The live reference-authoring route must remain inside the Advanced content DEBUG gate"
         )
     }
 
@@ -10161,6 +12670,67 @@ extension CaptureReliabilityPhase1CoreTests {
         return String(source[start.lowerBound..<end.upperBound])
     }
 
+    func makeGuidedKeptSession(
+        sessionID: String,
+        timestamp: Date
+    ) -> GuidedCaptureKeptSession {
+        GuidedCaptureKeptSession(
+            sessionID: sessionID,
+            config: CaptureSessionConfig(
+                performerName: "DJ Ledger",
+                bpm: 70,
+                scratchType: .babyScratch,
+                drillMode: .fullCapture,
+                captureMode: .timedClick,
+                takeDurationSeconds: 1,
+                takeCount: 0,
+                handedness: .right,
+                notes: "Slice F durable session",
+                sessionID: sessionID,
+                createdAt: timestamp,
+                updatedAt: timestamp
+            ),
+            deckProfileRawValue: "right-handed",
+            cameraProfileRawValue: "overhead",
+            watchWristRawValue: "left",
+            workflow: "guided_capture",
+            platform: "iOS",
+            sessionName: "Slice F Kept Session",
+            calibrationData: nil
+        )
+    }
+
+    func makeGuidedKeptTake(
+        in root: URL,
+        sessionID: String,
+        takeID: String? = nil,
+        takeNumber: Int,
+        bpm: Int
+    ) -> GuidedCaptureKeptTake {
+        let resolvedTakeID = takeID ?? String(format: "take-%03d", takeNumber)
+        return GuidedCaptureKeptTake(
+            sessionID: sessionID,
+            takeID: resolvedTakeID,
+            takeNumber: takeNumber,
+            bpm: bpm,
+            sourceMediaURL: root.appendingPathComponent("\(resolvedTakeID).mov"),
+            sourceSidecarURL: root.appendingPathComponent("\(resolvedTakeID).json"),
+            sourceAudioURL: root.appendingPathComponent("\(resolvedTakeID).wav"),
+            sourceWatchMotionURL: nil,
+            drillName: "Full capture",
+            duration: 1,
+            quality: "kept",
+            comboTagged: false,
+            audioPresent: true,
+            motionPresent: false,
+            syncStatus: "not_requested",
+            recordingStatus: "completed",
+            verbalSlateUsed: true,
+            syncClapUsed: true,
+            note: "Kept take \(takeNumber)"
+        )
+    }
+
     func makeCanonicalPackage(rootURL: URL) throws -> SessionExportPackage {
         try makeCanonicalPackage(rootURL: rootURL, scratchType: .babyScratch)
     }
@@ -10195,7 +12765,7 @@ extension CaptureReliabilityPhase1CoreTests {
                 try writeTestWAV(at: audioURL)
             } else {
                 try writePlaceholderFile(at: videoURL, contents: Data("mov-\(takeNumber)".utf8))
-                try writePlaceholderFile(at: audioURL, contents: Data("wav-\(takeNumber)".utf8))
+                try writeTestWAV(at: audioURL)
             }
 
             try writeFinalizedSidecar(
@@ -10276,7 +12846,8 @@ extension CaptureReliabilityPhase1CoreTests {
         beatEngineMode: BeatEngineMode = .clickTrack,
         timingPrintedToRecording: TimingPrintedToRecordingState = .unknown,
         captureTiming: CaptureTimingMetadata? = nil,
-        useRealMedia: Bool = false
+        useRealMedia: Bool = false,
+        detectedNotation: CaptureCore.DetectedNotationSnapshot? = nil
     ) throws -> URL {
         let baseName = CaptureCore.LocalRecordingNaming.baseName(
             sessionID: sessionID,
@@ -10305,7 +12876,8 @@ extension CaptureReliabilityPhase1CoreTests {
             captureMode: captureMode,
             beatEngineMode: beatEngineMode,
             timingPrintedToRecording: timingPrintedToRecording,
-            captureTiming: captureTiming
+            captureTiming: captureTiming,
+            detectedNotation: detectedNotation
         )
         return videoURL
     }
@@ -10371,14 +12943,24 @@ extension CaptureReliabilityPhase1CoreTests {
     }
 
     func writeTestWAV(at url: URL) throws {
+        let frameCount: AVAudioFrameCount = 44_100
         guard let format = AVAudioFormat(standardFormatWithSampleRate: 44_100, channels: 1),
-              let buffer = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: 1_024),
+              let buffer = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: frameCount),
               let channelData = buffer.floatChannelData else {
             throw SessionExportError.unableToPrepareExport
         }
 
-        buffer.frameLength = 1_024
-        channelData[0].initialize(repeating: 0, count: Int(buffer.frameLength))
+        // A real take carries dynamic audio. Silence here made every export
+        // test pass against a stem that could never be played, which is how a
+        // DC/silent scratch stem reached a shipped session.
+        buffer.frameLength = frameCount
+        for frame in 0..<Int(buffer.frameLength) {
+            channelData[0][frame] = Self.dynamicSample(
+                frame: frame,
+                amplitude: 0.25,
+                sampleRate: 44_100
+            )
+        }
 
         let file = try AVAudioFile(forWriting: url, settings: format.settings)
         try file.write(from: buffer)
@@ -10420,7 +13002,7 @@ extension CaptureReliabilityPhase1CoreTests {
         }
         writer.startSession(atSourceTime: .zero)
 
-        for frameIndex in 0..<3 {
+        for frameIndex in 0..<30 {
             while !input.isReadyForMoreMediaData {
                 Thread.sleep(forTimeInterval: 0.01)
             }
@@ -10483,7 +13065,8 @@ extension CaptureReliabilityPhase1CoreTests {
         captureMode: CaptureSessionCaptureMode = .timedClick,
         beatEngineMode: BeatEngineMode = .clickTrack,
         timingPrintedToRecording: TimingPrintedToRecordingState = .unknown,
-        captureTiming: CaptureTimingMetadata? = nil
+        captureTiming: CaptureTimingMetadata? = nil,
+        detectedNotation: CaptureCore.DetectedNotationSnapshot? = nil
     ) throws {
         var config = CaptureSessionConfig(
             performerName: performerName,
@@ -10502,7 +13085,7 @@ extension CaptureReliabilityPhase1CoreTests {
             updatedAt: createdAt
         )
         config.applyCapturedTakeMetrics(takeCount: 3, totalDurationSeconds: 3, updatedAt: createdAt)
-        let sidecar = CaptureCore.LocalRecordingSidecar.recording(
+        var sidecar = CaptureCore.LocalRecordingSidecar.recording(
             sessionID: sessionID,
             sessionConfig: config,
             takeIdentity: takeIdentity,
@@ -10522,6 +13105,12 @@ extension CaptureReliabilityPhase1CoreTests {
             mediaFileName: mediaURL.lastPathComponent,
             captureErrorDescription: nil
         )
+        if let detectedNotation {
+            sidecar = sidecar.withDetectedNotation(
+                detectedNotation,
+                recordedAt: createdAt.addingTimeInterval(1)
+            )
+        }
         try sidecar.encodedData().write(to: sidecarURL, options: .atomic)
     }
 
@@ -11021,6 +13610,460 @@ extension CaptureReliabilityPhase1CoreTests {
         XCTAssertEqual(derived.first?.eventKind, .transformPulse)
     }
 
+    /// Regression (physical RC smoke, 2026-08-30): a RANE ONE MKII streams the
+    /// crossfader at ~800 Hz, so a physically instant cut arrives as ~60 samples
+    /// each moving 1-3 MIDI steps (adjacent-sample delta ~0.008). Gating
+    /// primitive formation on the delta between *adjacent samples* made the
+    /// derivation sample-rate dependent: a take carrying 1712 CC8 ch15 events
+    /// and six physically observed cuts derived zero fader events, so the
+    /// notation drew one unbroken line. Primitives must be formed from
+    /// monotonic runs so the gates measure the gesture, not the sample period.
+    func testDenseCrossfaderStreamDerivesFaderEventsAtHardwareUpdateRate() {
+        // Close: 0.465 -> 0.0 in ~56 ms, one MIDI step per ~0.95 ms.
+        var events: [CaptureCore.RawMixerMIDIEvent] = []
+        var time = 0.10
+        for value in stride(from: 59, through: 0, by: -1) {
+            events.append(
+                CaptureCore.RawMixerMIDIEvent(
+                    timestamp: 1000.0 + time,
+                    takeRelativeTime: time,
+                    deviceName: "Rane ONE MKII",
+                    channel: 15,
+                    controller: 8,
+                    value: value,
+                    normalizedValue: Double(value) / 127.0,
+                    mappedControl: "crossfader"
+                )
+            )
+            time += 0.00095
+        }
+
+        let derived = CaptureCore.deriveDetectedNotationFaderEvents(from: events)
+        XCTAssertFalse(
+            derived.isEmpty,
+            "A cut streamed at hardware update rate must still derive fader events"
+        )
+        XCTAssertEqual(derived.count, 1)
+        XCTAssertEqual(derived.first?.eventKind, .cut)
+        XCTAssertEqual(derived.first?.control, "crossfader")
+        XCTAssertEqual(derived.first?.source, "midi")
+    }
+
+    /// Physical evidence (2026-08-30): a right-deck cut on a RANE ONE MKII
+    /// runs centre-to-left, not rail-to-rail, so real closes travel ~0.25-0.5
+    /// and last ~0.10-0.28 s. The pre-2026-08-30 gate (delta 0.35 / duration
+    /// 0.15) classified those as `.unknown`, which the renderer draws as
+    /// nothing - detected but invisible. A representative real close must
+    /// classify as `.cut`.
+    func testRepresentativeRightDeckCutClassifiesAsCut() {
+        // 0.409 travel over 0.110 s - the measured median of 39 real closes.
+        let events = [
+            CaptureCore.RawMixerMIDIEvent(
+                timestamp: 1000.0, takeRelativeTime: 0.10, deviceName: "Rane ONE MKII",
+                channel: 15, controller: 8, value: 52, normalizedValue: 0.409,
+                mappedControl: "crossfader"
+            ),
+            CaptureCore.RawMixerMIDIEvent(
+                timestamp: 1000.11, takeRelativeTime: 0.21, deviceName: "Rane ONE MKII",
+                channel: 15, controller: 8, value: 0, normalizedValue: 0.0,
+                mappedControl: "crossfader"
+            )
+        ]
+
+        let derived = CaptureCore.deriveDetectedNotationFaderEvents(from: events)
+        XCTAssertEqual(derived.count, 1)
+        XCTAssertEqual(
+            derived.first?.eventKind, .cut,
+            "A 0.409 travel close over 0.110 s is a real cut and must render"
+        )
+    }
+
+    /// A shallow, slow fader drift is not a cut and must stay `.unknown`, so
+    /// widening the gate for real cuts cannot start drawing ticks for noise.
+    func testShallowSlowFaderDriftStaysUnknown() {
+        let events = [
+            CaptureCore.RawMixerMIDIEvent(
+                timestamp: 1000.0, takeRelativeTime: 0.10, deviceName: "Rane ONE MKII",
+                channel: 15, controller: 8, value: 20, normalizedValue: 0.157,
+                mappedControl: "crossfader"
+            ),
+            CaptureCore.RawMixerMIDIEvent(
+                timestamp: 1000.9, takeRelativeTime: 1.00, deviceName: "Rane ONE MKII",
+                channel: 15, controller: 8, value: 0, normalizedValue: 0.0,
+                mappedControl: "crossfader"
+            )
+        ]
+
+        let derived = CaptureCore.deriveDetectedNotationFaderEvents(from: events)
+        XCTAssertEqual(derived.count, 1)
+        XCTAssertEqual(derived.first?.eventKind, .unknown)
+    }
+
+    // MARK: - A10: Watch readiness reflects relayed availability, not capture history
+
+    /// Regression: the Capture "Watch" row derived its state from
+    /// `importedSessions.isEmpty`, so a paired, installed, reachable watch that
+    /// had simply not relayed a capture yet displayed "Not connected" — while
+    /// iOS reported the same watch as motion-ready. Readiness must come from the
+    /// relayed availability signals.
+    func testReachableWatchWithNoCapturesIsNotReportedAsDisconnected() {
+        let readiness = RelayedWatchCaptureStore.WatchInputReadiness.resolve(
+            hasPhoneReport: true,
+            isPaired: true,
+            isInstalled: true,
+            isReachable: true,
+            hasImportedCaptures: false
+        )
+        XCTAssertEqual(readiness, .reachableAwaitingCapture)
+        XCTAssertEqual(readiness.readinessState, .detected)
+        XCTAssertFalse(
+            readiness.detail.localizedCaseInsensitiveContains("not connected"),
+            "A reachable watch must never be described as not connected"
+        )
+    }
+
+    /// "Nothing reported yet" is a distinct state from "no watch paired":
+    /// macOS has no direct WCSession, so an unconnected companion bridge must
+    /// never be rendered as a definitive statement about the watch.
+    func testNoPhoneReportIsDistinctFromNoWatchPaired() {
+        let awaiting = RelayedWatchCaptureStore.WatchInputReadiness.resolve(
+            hasPhoneReport: false,
+            isPaired: false,
+            isInstalled: false,
+            isReachable: false,
+            hasImportedCaptures: false
+        )
+        let notPaired = RelayedWatchCaptureStore.WatchInputReadiness.resolve(
+            hasPhoneReport: true,
+            isPaired: false,
+            isInstalled: false,
+            isReachable: false,
+            hasImportedCaptures: false
+        )
+        XCTAssertEqual(awaiting, .awaitingPhoneReport)
+        XCTAssertEqual(notPaired, .notPaired)
+        XCTAssertNotEqual(awaiting.detail, notPaired.detail)
+    }
+
+    func testWatchReadinessReportsMotionAvailableOnlyWhenCapturesExist() {
+        XCTAssertEqual(
+            RelayedWatchCaptureStore.WatchInputReadiness.resolve(
+                hasPhoneReport: true, isPaired: true, isInstalled: true,
+                isReachable: true, hasImportedCaptures: true
+            ),
+            .motionAvailable
+        )
+        XCTAssertEqual(
+            RelayedWatchCaptureStore.WatchInputReadiness.resolve(
+                hasPhoneReport: true, isPaired: true, isInstalled: true,
+                isReachable: false, hasImportedCaptures: true
+            ),
+            .motionAvailableUnreachable
+        )
+        XCTAssertEqual(
+            RelayedWatchCaptureStore.WatchInputReadiness.resolve(
+                hasPhoneReport: true, isPaired: true, isInstalled: false,
+                isReachable: false, hasImportedCaptures: false
+            ),
+            .notInstalled
+        )
+        XCTAssertEqual(
+            RelayedWatchCaptureStore.WatchInputReadiness.resolve(
+                hasPhoneReport: true, isPaired: true, isInstalled: true,
+                isReachable: false, hasImportedCaptures: false
+            ),
+            .unreachable
+        )
+    }
+
+    /// The watch is an optional input: no readiness state it can reach may
+    /// block recording, or a missing watch would gate a take that never needed
+    /// one.
+    func testWatchReadinessIsNeverBlocking() {
+        let all: [RelayedWatchCaptureStore.WatchInputReadiness] = [
+            .awaitingPhoneReport, .notPaired, .notInstalled, .unreachable,
+            .reachableAwaitingCapture, .motionAvailable, .motionAvailableUnreachable
+        ]
+        for readiness in all {
+            XCTAssertFalse(
+                readiness.readinessState.isBlocking,
+                "Optional watch input must never block recording (\(readiness))"
+            )
+        }
+    }
+
+    // MARK: - iPhone Watch relay state and authoritative live batching
+
+    func testWatchRelayNoDevicesIsWaiting() {
+        XCTAssertEqual(
+            WatchRelayStateResolver.resolve(
+                isWatchReachable: false,
+                isMacConnected: false,
+                activeContext: nil,
+                hadRequiredConnections: false,
+                interruptionReason: nil
+            ),
+            .waiting
+        )
+    }
+
+    func testWatchRelayWatchOnlyIsWaiting() {
+        XCTAssertEqual(
+            WatchRelayStateResolver.resolve(
+                isWatchReachable: true,
+                isMacConnected: false,
+                activeContext: nil,
+                hadRequiredConnections: false,
+                interruptionReason: nil
+            ),
+            .waiting
+        )
+    }
+
+    func testWatchRelayMacOnlyIsWaiting() {
+        XCTAssertEqual(
+            WatchRelayStateResolver.resolve(
+                isWatchReachable: false,
+                isMacConnected: true,
+                activeContext: nil,
+                hadRequiredConnections: false,
+                interruptionReason: nil
+            ),
+            .waiting
+        )
+    }
+
+    func testWatchRelayBothConnectionsAreReady() {
+        XCTAssertEqual(
+            WatchRelayStateResolver.resolve(
+                isWatchReachable: true,
+                isMacConnected: true,
+                activeContext: nil,
+                hadRequiredConnections: true,
+                interruptionReason: nil
+            ),
+            .ready
+        )
+    }
+
+    func testWatchRelayAcknowledgedStartIsActive() {
+        XCTAssertEqual(
+            WatchRelayStateResolver.resolve(
+                isWatchReachable: true,
+                isMacConnected: true,
+                activeContext: relayContext(takeID: "take-004"),
+                hadRequiredConnections: true,
+                interruptionReason: nil
+            ),
+            .active
+        )
+    }
+
+    func testWatchRelayConnectionLossDuringActiveTakeIsInterrupted() {
+        XCTAssertEqual(
+            WatchRelayStateResolver.resolve(
+                isWatchReachable: false,
+                isMacConnected: true,
+                activeContext: relayContext(takeID: "take-005"),
+                hadRequiredConnections: true,
+                interruptionReason: "Watch lost"
+            ),
+            .interrupted
+        )
+    }
+
+    func testWatchRelayRetryRecoveryReturnsToReady() {
+        XCTAssertEqual(
+            WatchRelayStateResolver.resolve(
+                isWatchReachable: true,
+                isMacConnected: true,
+                activeContext: nil,
+                hadRequiredConnections: true,
+                interruptionReason: nil
+            ),
+            .ready
+        )
+    }
+
+    func testWatchRelayRejectsUnknownSessionBatch() {
+        let authorized = relayContext(sessionID: "session-current", takeID: "take-001")
+        let unknown = relayContext(sessionID: "session-unknown", takeID: "take-001")
+        var assembler = WatchMotionRelayAssembler()
+
+        XCTAssertEqual(
+            assembler.ingest(relayBatch(context: unknown), accepting: authorized),
+            .rejected(.unauthorizedContext)
+        )
+    }
+
+    func testWatchRelayRejectsStalePriorTakeBatch() {
+        let authorized = relayContext(takeID: "take-008")
+        let stale = relayContext(takeID: "take-007")
+        var assembler = WatchMotionRelayAssembler()
+
+        XCTAssertEqual(
+            assembler.ingest(relayBatch(context: stale), accepting: authorized),
+            .rejected(.unauthorizedContext)
+        )
+    }
+
+    func testWatchRelayAssemblerPreservesSampleOrderAndTimingMetadata() throws {
+        let context = relayContext(takeID: "take-009")
+        let captureID = UUID()
+        let start = Date(timeIntervalSince1970: 1_000)
+        let first = relaySample(elapsed: 0, timestamp: 50)
+        let second = relaySample(elapsed: 0.01, timestamp: 50.01)
+        var assembler = WatchMotionRelayAssembler()
+
+        XCTAssertEqual(
+            assembler.ingest(
+                relayBatch(
+                    context: context,
+                    captureID: captureID,
+                    sequence: 0,
+                    startedAt: start,
+                    samples: [first]
+                ),
+                accepting: context
+            ),
+            .accepted
+        )
+        let result = assembler.ingest(
+            relayBatch(
+                context: context,
+                captureID: captureID,
+                sequence: 1,
+                startedAt: start,
+                endedAt: start.addingTimeInterval(0.02),
+                isFinal: true,
+                samples: [second]
+            ),
+            accepting: context
+        )
+
+        guard case .completed(let session) = result else {
+            return XCTFail("Expected a completed relay session")
+        }
+        XCTAssertEqual(session.id, captureID)
+        XCTAssertEqual(session.sessionID, context.sessionID)
+        XCTAssertEqual(session.takeID, context.takeID)
+        XCTAssertEqual(session.samples.map(\.elapsedTime), [0, 0.01])
+        XCTAssertEqual(session.timingMetadata?.firstCoreMotionTimestamp, 50)
+        XCTAssertEqual(session.timingMetadata?.lastCoreMotionTimestamp, 50.01)
+    }
+
+    func testWatchRelayAcknowledgementAcceptsOnlyExactBatchIdentity() {
+        let context = relayContext(takeID: "take-010")
+        let captureID = UUID()
+        let batch = relayBatch(context: context, captureID: captureID, sequence: 7)
+        let acknowledgement = WatchMotionRelayAcknowledgement(batch: batch, accepted: true)
+
+        XCTAssertTrue(acknowledgement.accepts(batch))
+        XCTAssertFalse(
+            acknowledgement.accepts(
+                relayBatch(context: context, captureID: captureID, sequence: 8)
+            )
+        )
+        XCTAssertFalse(WatchMotionRelayAcknowledgement(batch: batch, accepted: false).accepts(batch))
+    }
+
+    func testAcknowledgedWatchCaptureCannotSilentlyExportWithoutArtifact() throws {
+        let captureCoreURL = projectRootURL().appendingPathComponent("ScratchLab/Models/CaptureCore.swift")
+        let exportURL = projectRootURL().appendingPathComponent("ScratchLab/Services/SessionExportCoordinator.swift")
+        let captureCoreSource = try String(contentsOf: captureCoreURL, encoding: .utf8)
+        let exportSource = try String(contentsOf: exportURL, encoding: .utf8)
+
+        XCTAssertTrue(captureCoreSource.contains("preservesAcknowledgedCapture"))
+        XCTAssertTrue(exportSource.contains("take.syncStatus == CaptureWatchSyncState.acknowledged.rawValue"))
+        XCTAssertTrue(exportSource.contains("take.watchCaptureSession == nil"))
+    }
+
+    private func relayContext(
+        sessionID: String = "session-relay",
+        takeID: String
+    ) -> WatchRelayTakeContext {
+        WatchRelayTakeContext(
+            sessionID: sessionID,
+            takeID: takeID,
+            takeNumber: 1,
+            watchWrist: "right"
+        )
+    }
+
+    private func relayBatch(
+        context: WatchRelayTakeContext,
+        captureID: UUID = UUID(),
+        sequence: Int = 0,
+        startedAt: Date = Date(timeIntervalSince1970: 1_000),
+        endedAt: Date? = nil,
+        isFinal: Bool = false,
+        samples: [WatchMotionSample] = []
+    ) -> WatchMotionRelayBatch {
+        WatchMotionRelayBatch(
+            captureID: captureID,
+            context: context,
+            commandID: "command-relay",
+            requestedAt: startedAt,
+            acknowledgedAt: startedAt,
+            sourceDeviceName: "Apple Watch",
+            appVersion: "1.0 (1)",
+            sampleRateHz: 100,
+            startedAt: startedAt,
+            endedAt: endedAt,
+            sequence: sequence,
+            isFinal: isFinal,
+            samples: samples
+        )
+    }
+
+    private func relaySample(elapsed: TimeInterval, timestamp: TimeInterval) -> WatchMotionSample {
+        WatchMotionSample(
+            elapsedTime: elapsed,
+            coreMotionTimestamp: timestamp,
+            attitudeRoll: 0,
+            attitudePitch: 0,
+            attitudeYaw: 0,
+            quaternionX: 0,
+            quaternionY: 0,
+            quaternionZ: 0,
+            quaternionW: 1,
+            gravityX: 0,
+            gravityY: 0,
+            gravityZ: -1,
+            userAccelerationX: 0,
+            userAccelerationY: 0,
+            userAccelerationZ: 0,
+            rotationRateX: 0,
+            rotationRateY: 0,
+            rotationRateZ: 0
+        )
+    }
+
+    /// Physical RC requirement: an upfader can perform the audible cut, so its
+    /// mapped on/off movement must survive into Review notation under its own
+    /// control identity rather than being dropped or mislabeled crossfader.
+    func testMappedRightUpfaderCreatesItsOwnCutNotation() {
+        let events = [
+            CaptureCore.RawMixerMIDIEvent(
+                timestamp: 1000.0, takeRelativeTime: 0.10, deviceName: "Rane ONE MKII",
+                channel: 1, controller: 28, value: 127, normalizedValue: 1.0,
+                mappedControl: "rightUpfader"
+            ),
+            CaptureCore.RawMixerMIDIEvent(
+                timestamp: 1000.1, takeRelativeTime: 0.16, deviceName: "Rane ONE MKII",
+                channel: 1, controller: 28, value: 0, normalizedValue: 0.0,
+                mappedControl: "rightUpfader"
+            )
+        ]
+
+        let derived = CaptureCore.deriveDetectedNotationFaderEvents(from: events)
+        XCTAssertEqual(derived.count, 1)
+        XCTAssertEqual(derived.first?.eventKind, .cut)
+        XCTAssertEqual(derived.first?.control, "rightUpfader")
+        XCTAssertEqual(derived.first?.source, "midi")
+    }
+
+
     func testDetectedNotationJSONIncludesMixerMidiEventsArray() throws {
         let root = try makeTemporaryDirectory()
         var package = try makeCanonicalPackage(rootURL: root)
@@ -11085,17 +14128,12 @@ extension CaptureReliabilityPhase1CoreTests {
     }
 
     func testSelectedMIDISourceIsPersisted() {
-        let defaults = UserDefaults.standard
-        let key = "scratchlab.mac.selectedMIDIInputSourceID"
-        defaults.removeObject(forKey: key)
-
         let firstEngine = MacCaptureEngine(autoRefreshDevices: false)
         firstEngine.selectedMIDIInputSourceID = "midi_1"
 
         let secondEngine = MacCaptureEngine(autoRefreshDevices: false)
         XCTAssertEqual(secondEngine.selectedMIDIInputSourceID, "midi_1")
-
-        defaults.removeObject(forKey: key)
+        secondEngine.selectedMIDIInputSourceID = ""
     }
 
     func testReceivingMIDICCUpdatesLastMIDIEventSummary() {
@@ -11143,6 +14181,110 @@ extension CaptureReliabilityPhase1CoreTests {
         XCTAssertEqual(engine.midiLearnState, .learned(MacCaptureEngine.CrossfaderCCMapping(channel: 1, controller: 11)))
         XCTAssertEqual(engine.midiLearnFeedback, "Learned Xfader: CC11 Ch2")
         XCTAssertEqual(engine.lastMIDIEventSummary, "Received CC11 Ch2 Value64")
+    }
+
+    // MARK: - Take-scoped crossfader capture (2026-09-04 hardware smoke)
+    //
+    // Take 41949897…_take002 recorded 3,889 MIDI events, every one of them
+    // channel 1 / CC6 (platter), and zero on the learned crossfader address
+    // (channel 15 / CC8). The live preflight row showed a non-zero crossfader
+    // count at the same time, which read as "the crossfader is working".
+    //
+    // These cases pin down that there is no software path that can keep the
+    // platter and drop the crossfader: both go through the SAME function, and
+    // the only gate between the live counter and the take buffer is the
+    // recording window, which is address-blind.
+
+    func testALiveCrossfaderCCDuringAnActiveTakeReachesTheTakeScopedBuffer() {
+        let engine = MacCaptureEngine(autoRefreshDevices: false)
+        let token = engine.testOnly_armTakeMIDIWindow()
+        defer { engine.testOnly_releaseAbandonedTakeMIDIWindow(token: token) }
+        let start = CACurrentMediaTime()
+        engine.testOnly_openTakeMIDIEpoch(at: start)
+
+        // Platter and crossfader interleaved, exactly as the packet loop
+        // delivers them.
+        engine.recordReceivedMIDICCEvent(
+            sourceName: "Rane ONE MKII", channel: 1, controller: 6, value: 51,
+            timestamp: start + 0.001
+        )
+        engine.recordReceivedMIDICCEvent(
+            sourceName: "Rane ONE MKII", channel: 15, controller: 8, value: 12,
+            mappedControl: "crossfader",
+            timestamp: start + 0.002
+        )
+
+        let captured = engine.capturedMidiCCEventsSnapshot()
+        XCTAssertEqual(captured.count, 2)
+        XCTAssertTrue(
+            captured.contains { $0.channel == 15 && $0.controller == 8 && $0.mappedControl == "crossfader" },
+            "A crossfader CC received during an active take must reach the take-scoped buffer."
+        )
+        XCTAssertTrue(captured.contains { $0.channel == 1 && $0.controller == 6 })
+    }
+
+    func testLiveObservationAndTakeScopedCaptureCannotDisagreeAboutAnAddress() {
+        let engine = MacCaptureEngine(autoRefreshDevices: false)
+        let token = engine.testOnly_armTakeMIDIWindow()
+        defer { engine.testOnly_releaseAbandonedTakeMIDIWindow(token: token) }
+        let start = CACurrentMediaTime()
+        engine.testOnly_openTakeMIDIEpoch(at: start)
+
+        for index in 0..<5 {
+            engine.recordReceivedMIDICCEvent(
+                sourceName: "Rane ONE MKII", channel: 15, controller: 8, value: 10 + index,
+                mappedControl: "crossfader",
+                timestamp: start + 0.001 * Double(index + 1)
+            )
+        }
+
+        let observation = engine.latestCCObservation(channel: 15, controller: 8)
+        let takeScoped = engine.capturedMidiCCEventsSnapshot()
+            .filter { $0.channel == 15 && $0.controller == 8 }
+        XCTAssertEqual(observation?.eventCount, 5)
+        XCTAssertEqual(
+            takeScoped.count, 5,
+            "The live counter and the take buffer are filled from the same call; they cannot diverge while a take is open."
+        )
+        // Both paths address the control the same 0-based way. The UI's
+        // "Ch16" is a 1-based rendering of this same channel 15.
+        XCTAssertEqual(observation?.channel, 15)
+        XCTAssertEqual(takeScoped.first?.channel, 15)
+    }
+
+    func testCrossfaderEventsAreNotCapturedBeforeTheTakeWindowOpens() {
+        let engine = MacCaptureEngine(autoRefreshDevices: false)
+        // No `beginLiveMIDICapture()` — no recording window is open.
+        engine.recordReceivedMIDICCEvent(
+            sourceName: "Rane ONE MKII", channel: 15, controller: 8, value: 12,
+            mappedControl: "crossfader"
+        )
+        XCTAssertTrue(
+            engine.capturedMidiCCEventsSnapshot().isEmpty,
+            "Traffic outside a take must not enter the take timeline."
+        )
+        XCTAssertEqual(
+            engine.latestCCObservation(channel: 15, controller: 8)?.eventCount, 1,
+            "The app-lifetime observation is still recorded — which is exactly why it is not evidence about a take."
+        )
+    }
+
+    func testTheTakeScopedSnapshotIsNonDestructive() {
+        let engine = MacCaptureEngine(autoRefreshDevices: false)
+        let token = engine.testOnly_armTakeMIDIWindow()
+        defer { engine.testOnly_releaseAbandonedTakeMIDIWindow(token: token) }
+        let start = CACurrentMediaTime()
+        engine.testOnly_openTakeMIDIEpoch(at: start)
+        engine.recordReceivedMIDICCEvent(
+            sourceName: "Rane ONE MKII", channel: 15, controller: 8, value: 12,
+            mappedControl: "crossfader",
+            timestamp: start + 0.001
+        )
+        XCTAssertEqual(engine.capturedMidiCCEventsSnapshot().count, 1)
+        XCTAssertEqual(
+            engine.capturedMidiCCEventsSnapshot().count, 1,
+            "Reading the buffer for the live UI must not consume the events finalization still has to extract."
+        )
     }
 
     func testClearCrossfaderMappingRemovesMapping() {
@@ -11608,9 +14750,9 @@ final class ScratchLabNotationAndExportTests: XCTestCase {
     }
 
     // Slice U.1 — Battle Mode user-facing copy must not contain "AI" wording.
-    // Internal type names (AICharacter) and enum case identifiers (aiChallenge)
-    // are allowed because they are not surfaced to users; only the literal UI
-    // strings are guarded here.
+    // The obsolete AIBattleModeView was removed; scan every current SwiftUI
+    // view so the retired copy cannot reappear on another production surface.
+    // Internal type names and enum identifiers remain allowed.
     func testBattleModeUserFacingCopyHasNoAIWording() throws {
         // AIBattleModeView.swift (the "AI BATTLE" / "Challenge an AI opponent"
         // header and subtitle this test guards against) was intentionally deleted
@@ -11844,13 +14986,13 @@ final class ScratchLabNotationAndExportTests: XCTestCase {
         )
     }
 
-    func testRoutineCaptureSourceWritesDedicatedRawAudioStemDuringRecording() throws {
+    func testRoutineCaptureSourceWritesDedicatedOnboardOutputStemDuringRecording() throws {
         let sourceURL = projectRootURL().appendingPathComponent("ScratchLabDesktop/Services/MacCaptureEngine.swift")
         let source = try String(contentsOf: sourceURL, encoding: .utf8)
 
-        XCTAssertTrue(source.contains("private final class RoutineAudioCaptureWriter"))
-        XCTAssertTrue(source.contains("appendRoutineAudioSampleBufferIfNeeded(sampleBuffer)"))
-        XCTAssertTrue(source.contains("activeRoutineAudioCaptureWriter = RoutineAudioCaptureWriter"))
+        XCTAssertTrue(source.contains("pendingRoutineOutputAudioURL = preparedRecording.audioURL"))
+        XCTAssertTrue(source.contains("beginRoutineOutputCapture("))
+        XCTAssertTrue(source.contains("finishRoutineOutputCapture"))
         XCTAssertTrue(source.contains("let audioURL = directory"))
     }
 
@@ -12878,6 +16020,81 @@ final class MovementTraceDiagnosticsTests: XCTestCase {
         XCTAssertEqual(exact.events.count, 0, "reversed execution order must yield a different movement")
     }
 
+    /// Replays a real exported hardware take when the two environment variables
+    /// are supplied. This keeps customer/session data out of the repository
+    /// while making the Phase 2 evidence comparison repeatable.
+    func testExternalHardwareTraceExactReplayMatchesLiveDiagnostics() throws {
+        let environment = ProcessInfo.processInfo.environment
+        guard let tracePath = environment["SCRATCHLAB_MOVEMENT_TRACE"],
+              let diagnosticsPath = environment["SCRATCHLAB_MOVEMENT_DIAGNOSTICS"] else {
+            throw XCTSkip("Set SCRATCHLAB_MOVEMENT_TRACE and SCRATCHLAB_MOVEMENT_DIAGNOSTICS to replay a hardware take")
+        }
+
+        let trace = try JSONDecoder().decode(
+            MovementTraceExport.self,
+            from: Data(contentsOf: URL(fileURLWithPath: tracePath))
+        )
+        let live = try JSONDecoder().decode(
+            MovementDiagnosticsExport.self,
+            from: Data(contentsOf: URL(fileURLWithPath: diagnosticsPath))
+        )
+        XCTAssertEqual(trace.schemaVersion, "scratchlab_movement_trace_v1")
+        XCTAssertEqual(live.schemaVersion, "scratchlab_movement_diagnostics_v1")
+        XCTAssertEqual(trace.takeID, live.takeID)
+        XCTAssertEqual(trace.takeNumber, live.takeNumber)
+
+        let handPoseInterval = Double(live.diagnostics.handPoseIntervalMS) / 1_000
+        let ideal = MovementTraceReplay.idealReplay(
+            observations: trace.observations,
+            audioEvents: [],
+            handPoseInterval: handPoseInterval,
+            drainTime: trace.finalizationHostTime
+        )
+        let exact = MovementTraceReplay.exactReplay(
+            observations: trace.observations,
+            audioEvents: [],
+            handPoseInterval: handPoseInterval,
+            drainTime: trace.finalizationHostTime
+        )
+
+        let summary: [String: Any] = [
+            "takeID": trace.takeID,
+            "observations": trace.observations.count,
+            "live": replayEvidence(from: live.diagnostics),
+            "ideal": replayEvidence(from: ideal.snapshot),
+            "exact": replayEvidence(from: exact.snapshot),
+            "idealEventCount": ideal.events.count,
+            "exactEventCount": exact.events.count,
+        ]
+        let summaryData = try JSONSerialization.data(withJSONObject: summary, options: [.prettyPrinted, .sortedKeys])
+        print("MOVEMENT_TRACE_REPLAY_EVIDENCE\n\(String(decoding: summaryData, as: UTF8.self))")
+
+        XCTAssertEqual(
+            exact.snapshot.finalRecordMovementEvents,
+            live.diagnostics.finalRecordMovementEvents,
+            "exact replay must reproduce the live take's final movement count"
+        )
+    }
+
+    private func replayEvidence(
+        from snapshot: MacCaptureEngine.RoutineMovementDiagnosticsSnapshot
+    ) -> [String: Any] {
+        [
+            "builderSamples": snapshot.builderSamplesReceived,
+            "rawMovements": snapshot.rawMovementEventsCreated,
+            "normalizedMovements": snapshot.normalizedMovementEvents,
+            "fusedMovements": snapshot.fusedMovementEvents,
+            "trustedMovements": snapshot.trustedDirectionalEvents,
+            "finalMovements": snapshot.finalRecordMovementEvents,
+            "builderAccepted": snapshot.builderInputAccepted,
+            "builderExtended": snapshot.builderInputExtended,
+            "builderRejectedDirection": snapshot.builderInputRejectedDirection,
+            "rawDropReasons": snapshot.rawDropReasons,
+            "normalizedDropReasons": snapshot.normalizedDropReasons,
+            "trustDropReasons": snapshot.trustDropReasons,
+        ]
+    }
+
     // MARK: - Per-take isolation + archive companion copy
 
     private func recordOne(_ recorder: MovementTraceRecorder, x: Double, time: Double) {
@@ -13263,6 +16480,28 @@ final class ControllerPlatterDecoderTests: XCTestCase {
         (0..<count).map { (value + $0, time + Double($0) * step) }
     }
 
+    private func wrappedRuns(
+        signedSteps: [Int],
+        maximumPacketDelta: Int = 60,
+        interval: Double = 0.03
+    ) -> [(Int, Double)] {
+        var phase = 0
+        var time = 0.0
+        var events: [(Int, Double)] = [(0, 0)]
+        for runSteps in signedSteps where runSteps != 0 {
+            let sign = runSteps > 0 ? 1 : -1
+            var remaining = abs(runSteps)
+            while remaining > 0 {
+                let magnitude = min(maximumPacketDelta, remaining)
+                phase += sign * magnitude
+                remaining -= magnitude
+                time += interval
+                events.append((((phase % 128) + 128) % 128, time))
+            }
+        }
+        return events
+    }
+
     // MARK: - Modular wraparound (both directions)
 
     func testModularWrapForwardDoesNotCreateFalseReversal() {
@@ -13344,6 +16583,180 @@ final class ControllerPlatterDecoderTests: XCTestCase {
         XCTAssertEqual(snapshot.recordMovementEvents.first?.confidence ?? 0, 0.9, accuracy: 1e-6)
     }
 
+    func testFusedSnapshotRederivesPhysicalGestureExcursionForPresentationOnly() throws {
+        // 360 wrapped CC6 steps are exactly 0.1 of the measured direct-MIDI
+        // revolution. Fusion intentionally keeps its canonical/global evidence
+        // semantics; presentation must recover physical travel from the raw
+        // mixer stream, not from fusion-normalized `speed`.
+        let fixture: [(Int, Double)] = (0...360).map {
+            ($0 % 128, Double($0) / 1_000)
+        }
+        let rawMIDI = fixture.map { midiEvent($0.0, $0.1) }
+        let decoded = try XCTUnwrap(decode(fixture).first)
+        XCTAssertEqual(
+            decoded.speed * (decoded.endTime - decoded.startTime),
+            360,
+            accuracy: 1e-9
+        )
+
+        let snapshot = MacCaptureEngine.RoutineNotationFusionEngine().snapshot(
+            audioSnapshot: ScratchAudioNotationSnapshot(audioEvents: [], confidence: nil),
+            motionEvents: [decoded],
+            detectedLabel: nil,
+            labelSource: "unknown",
+            labelConfidence: nil
+        ).withMixerMidiEvents(rawMIDI)
+        let canonicalEvents = snapshot.recordMovementEvents
+        let canonicalMIDI = snapshot.mixerMidiEvents
+        let canonicalExport = SessionExportRecordMovementEvent(
+            from: try XCTUnwrap(canonicalEvents.first)
+        )
+
+        let presentation = CaptureCore
+            .gestureRelativeRecordMovementEventsForPresentation(from: snapshot)
+        let event = try XCTUnwrap(presentation.first)
+        let stroke = try XCTUnwrap(PerformedStrokeAdapter.laneStroke(from: event))
+
+        XCTAssertEqual(try XCTUnwrap(stroke.measuredStartPosition), 0, accuracy: 1e-12)
+        XCTAssertEqual(try XCTUnwrap(stroke.measuredEndPosition), 0.4, accuracy: 1e-12)
+        XCTAssertEqual(try XCTUnwrap(stroke.normalizedTravel), 0.1, accuracy: 1e-12)
+        XCTAssertEqual(snapshot.recordMovementEvents, canonicalEvents)
+        XCTAssertEqual(snapshot.mixerMidiEvents, canonicalMIDI)
+        XCTAssertEqual(
+            SessionExportRecordMovementEvent(from: try XCTUnwrap(snapshot.recordMovementEvents.first)),
+            canonicalExport
+        )
+    }
+
+    func testPresentationProjectionPreservesCanonicalControllerMetadata() throws {
+        let fixture: [(Int, Double)] = (0...360).map {
+            ($0 % 128, Double($0) / 1_000)
+        }
+        let rawMIDI = fixture.map { midiEvent($0.0, $0.1) }
+        let canonical = CaptureCore.DetectedNotationRecordMovementEvent(
+            startTime: 0,
+            endTime: 0.36,
+            startPosition: 0.62,
+            endPosition: 0.98,
+            direction: "forward",
+            movementKind: .fastPush,
+            speed: 123,
+            confidence: 0.83,
+            source: "controller"
+        )
+        let snapshot = CaptureCore.DetectedNotationSnapshot(
+            notationSource: "detected",
+            notationConfidence: 0.83,
+            detectedLabel: nil,
+            labelSource: "unknown",
+            labelConfidence: nil,
+            detectionSources: ["controller"],
+            recordMovementEvents: [canonical],
+            audioEvents: [],
+            faderEvents: [],
+            mixerMidiEvents: rawMIDI,
+            capturedAt: Date(timeIntervalSince1970: 0)
+        )
+
+        let event = try XCTUnwrap(
+            CaptureCore.gestureRelativeRecordMovementEventsForPresentation(
+                from: snapshot
+            ).first
+        )
+
+        XCTAssertEqual(event.startPosition, 0, accuracy: 1e-12)
+        XCTAssertEqual(event.endPosition, 0.1, accuracy: 1e-12)
+        XCTAssertEqual(event.startTime, canonical.startTime, accuracy: 1e-12)
+        XCTAssertEqual(event.endTime, canonical.endTime, accuracy: 1e-12)
+        XCTAssertEqual(event.direction, canonical.direction)
+        XCTAssertEqual(event.movementKind, canonical.movementKind)
+        XCTAssertEqual(event.speed, canonical.speed, accuracy: 1e-12)
+        XCTAssertEqual(event.confidence, canonical.confidence, accuracy: 1e-12)
+        XCTAssertEqual(event.source, canonical.source)
+    }
+
+    func testSavedMultiRevolutionSpinThenPullSurvivesFusionPresentationGate() throws {
+        // Five revolutions over nine seconds make the canonical attempt-wide
+        // normalized speed too small for fusion; the following quarter-turn
+        // pull is similarly flattened. The shared raw decoder accepted both
+        // runs before fusion, so presentation must recover them without adding
+        // either to canonical scoring/export evidence.
+        let fixture = wrappedRuns(signedSteps: [18_000, -900])
+        let rawMIDI = fixture.map { midiEvent($0.0, $0.1) }
+        let decoderEvents = decode(fixture)
+        XCTAssertEqual(decoderEvents.map(\.direction), ["forward", "backward"])
+
+        let snapshot = MacCaptureEngine.RoutineNotationFusionEngine().snapshot(
+            audioSnapshot: ScratchAudioNotationSnapshot(audioEvents: [], confidence: nil),
+            motionEvents: decoderEvents,
+            detectedLabel: nil,
+            labelSource: "unknown",
+            labelConfidence: nil
+        ).withMixerMidiEvents(rawMIDI)
+        XCTAssertTrue(snapshot.detectionSources.contains("controller"))
+        XCTAssertTrue(snapshot.recordMovementEvents.isEmpty,
+                      "fixture must exercise the all-canonical-events-dropped gate")
+
+        let canonicalEvents = snapshot.recordMovementEvents
+        let canonicalMIDI = snapshot.mixerMidiEvents
+        let presentation = CaptureCore
+            .gestureRelativeRecordMovementEventsForPresentation(from: snapshot)
+        XCTAssertEqual(presentation.count, 2)
+        XCTAssertEqual(presentation[0].direction, "forward")
+        XCTAssertEqual(presentation[0].startPosition, 0, accuracy: 1e-12)
+        XCTAssertEqual(presentation[0].endPosition, 5, accuracy: 1e-12)
+        XCTAssertEqual(presentation[1].direction, "backward")
+        XCTAssertEqual(presentation[1].startPosition, 0.25, accuracy: 1e-12)
+        XCTAssertEqual(presentation[1].endPosition, 0, accuracy: 1e-12)
+        XCTAssertEqual(
+            CaptureCore.gestureRelativeRecordMovementPresentationEndTime(
+                from: snapshot,
+                presentationEvents: presentation
+            ) ?? 0,
+            presentation[1].endTime,
+            accuracy: 1e-12,
+            "overlay playback must include the fusion-dropped pull"
+        )
+        XCTAssertEqual(snapshot.recordMovementEvents, canonicalEvents)
+        XCTAssertEqual(snapshot.mixerMidiEvents, canonicalMIDI)
+    }
+
+    func testSavedPresentationPreservesRunsSeparatedByDiscardedCounterMotion() {
+        // The discarded four-step reversal must stay uncovered. Fusion and
+        // presentation retain the two surrounding runs once each.
+        let fixture = wrappedRuns(
+            signedSteps: [20, -4, 20],
+            maximumPacketDelta: 1,
+            interval: 0.01
+        )
+        let rawMIDI = fixture.map { midiEvent($0.0, $0.1) }
+        let decoderEvents = decode(fixture)
+        XCTAssertEqual(decoderEvents.map(\.direction), ["forward", "forward"])
+
+        let snapshot = MacCaptureEngine.RoutineNotationFusionEngine().snapshot(
+            audioSnapshot: ScratchAudioNotationSnapshot(audioEvents: [], confidence: nil),
+            motionEvents: decoderEvents,
+            detectedLabel: nil,
+            labelSource: "unknown",
+            labelConfidence: nil
+        ).withMixerMidiEvents(rawMIDI)
+        XCTAssertEqual(snapshot.recordMovementEvents.count, 2,
+                       "fusion must preserve the gap containing discarded opposing motion")
+        let canonicalEvents = snapshot.recordMovementEvents
+
+        let presentation = CaptureCore
+            .gestureRelativeRecordMovementEventsForPresentation(from: snapshot)
+
+        XCTAssertEqual(presentation.count, 2)
+        XCTAssertEqual(presentation.map(\.direction), ["forward", "forward"])
+        XCTAssertEqual(presentation[0].startPosition, 0, accuracy: 1e-12)
+        XCTAssertEqual(presentation[0].endPosition, 20.0 / 3_600.0, accuracy: 1e-12)
+        XCTAssertEqual(presentation[1].startPosition, 0, accuracy: 1e-12)
+        XCTAssertEqual(presentation[1].endPosition, 20.0 / 3_600.0, accuracy: 1e-12)
+        XCTAssertEqual(snapshot.recordMovementEvents, canonicalEvents)
+        XCTAssertEqual(snapshot.mixerMidiEvents, rawMIDI)
+    }
+
     // MARK: - Reduced Take 002 fixture (alternating region 12.45–12.54s)
 
     func testTake002FixtureProducesAlternatingStrokes() {
@@ -13362,9 +16775,10 @@ final class ControllerPlatterDecoderTests: XCTestCase {
             XCTAssertGreaterThan(event.endTime, event.startTime, "non-zero duration")
             XCTAssertEqual(event.source, "controller", "controller provenance")
         }
-        // Reversal boundaries: each run starts where the previous ended.
+        // Repeated endpoint values occupy two observed 20 ms intervals;
+        // neither belongs to the neighboring travel duration.
         for i in 1..<decoded.count {
-            XCTAssertEqual(decoded[i].startTime, decoded[i - 1].endTime, accuracy: 1e-9)
+            XCTAssertEqual(decoded[i].startTime - decoded[i - 1].endTime, 0.02, accuracy: 1e-9)
         }
     }
 
@@ -14177,7 +17591,7 @@ final class CameraReplayTests: XCTestCase {
         return result
     }
 
-    func testReplayTake002CameraThroughProductionPath() throws {
+    func testReplayTake002CameraThroughProductionPath() async throws {
         guard let videoPath = ProcessInfo.processInfo.environment["SCRATCHLAB_CAMREPLAY_VIDEO"] else {
             throw XCTSkip("SCRATCHLAB_CAMREPLAY_VIDEO not set")
         }
@@ -14238,7 +17652,7 @@ final class CameraReplayTests: XCTestCase {
             framesAnalyzed += 1
 
             let time = CMTime(seconds: now, preferredTimescale: 600)
-            guard let cgImage = try? generator.copyCGImage(at: time, actualTime: nil) else { continue }
+            guard let cgImage = try? await generator.image(at: time).image else { continue }
             framesReceived += 1
 
             let handler = VNImageRequestHandler(cgImage: cgImage, orientation: .up, options: [:])
@@ -14348,6 +17762,74 @@ final class AnchorJointNameMappingTests: XCTestCase {
 
 final class SessionExportRoundTripTests: XCTestCase {
 
+    func testTimingRenderAndExportEvidenceUseExactMediaBounds() throws {
+        let exactFrameCount: AVAudioFrameCount = 1_018_710
+        let timing = try ScratchLabBeatEngine.renderedTimingBuffer(
+            mode: .boomBapTrainer,
+            bpm: 95,
+            durationSeconds: 23.1,
+            countInBeats: 4,
+            beatsPerBar: 4,
+            clickStartHostTime: nil,
+            recordingStartHostTime: nil,
+            sampleRate: 44_100,
+            channelCount: 2,
+            exactFrameCount: exactFrameCount
+        )
+        XCTAssertEqual(timing.frameLength, exactFrameCount)
+
+        let snapshot = CaptureCore.DetectedNotationSnapshot(
+            notationSource: "detected",
+            notationConfidence: 0.9,
+            detectedLabel: "Baby Scratch",
+            labelSource: "detected",
+            labelConfidence: 0.8,
+            detectionSources: ["controller", "audio"],
+            recordMovementEvents: [
+                .init(
+                    startTime: 1.5, endTime: 2.5,
+                    startPosition: 0.1, endPosition: 0.9,
+                    direction: "forward", movementKind: .normalPush,
+                    speed: 0.8, confidence: 0.95, source: "controller"
+                ),
+                .init(
+                    startTime: 2.2, endTime: 2.8,
+                    startPosition: 0.9, endPosition: 0.2,
+                    direction: "backward", movementKind: .normalPull,
+                    speed: 1.1, confidence: 0.9, source: "controller"
+                )
+            ],
+            audioEvents: [
+                .init(
+                    startTime: 1.8, endTime: 2.4, duration: 0.6,
+                    peakLevel: 0.8, rmsLevel: 0.3, confidence: 0.9,
+                    eventKind: "scratch", source: "audio"
+                )
+            ],
+            faderEvents: [],
+            mixerMidiEvents: [
+                .init(
+                    timestamp: 10, takeRelativeTime: 1.9,
+                    deviceName: "Rane ONE MKII", channel: 1, controller: 6,
+                    value: 64, normalizedValue: 64.0 / 127.0, mappedControl: nil
+                ),
+                .init(
+                    timestamp: 11, takeRelativeTime: 2.1,
+                    deviceName: "Rane ONE MKII", channel: 1, controller: 6,
+                    value: 65, normalizedValue: 65.0 / 127.0, mappedControl: nil
+                )
+            ],
+            capturedAt: Date()
+        )
+        let bounded = SessionExportEvidenceBounds.boundedSnapshot(snapshot, to: 2.0)
+        XCTAssertEqual(bounded.recordMovementEvents.count, 1)
+        XCTAssertEqual(bounded.recordMovementEvents[0].endTime, 2.0, accuracy: 1e-9)
+        XCTAssertEqual(bounded.audioEvents[0].endTime, 2.0, accuracy: 1e-9)
+        XCTAssertEqual(bounded.audioEvents[0].duration, 0.2, accuracy: 1e-9)
+        XCTAssertEqual(bounded.mixerMidiEvents.map(\.takeRelativeTime), [1.9])
+        XCTAssertLessThanOrEqual(bounded.capturedEvidenceEndTime ?? .infinity, 2.0)
+    }
+
     @MainActor
     func testRealReviewLoaderAndExportMappingRoundTrip() throws {
         // Build a controller snapshot through the real fusion.
@@ -14398,5 +17880,6281 @@ final class SessionExportRoundTripTests: XCTestCase {
         XCTAssertEqual(decodedExport.first?.source, "controller")
         XCTAssertEqual(decodedExport.first?.confidence ?? 0, 0.9, accuracy: 1e-9)
         XCTAssertEqual(decodedExport.first?.direction, "forward")
+    }
+}
+
+// MARK: - Rane channel-map diagnostic (Phase 2)
+
+final class MultichannelSignalProbeTests: XCTestCase {
+
+    private func sine(_ frequency: Double, frames: Int, sampleRate: Double = 48_000, amplitude: Float = 0.25, phase: Double = 0) -> [Float] {
+        (0..<frames).map { index in
+            amplitude * Float(sin(2 * Double.pi * frequency * Double(index) / sampleRate + phase))
+        }
+    }
+
+    func testProgramPairValidation() {
+        XCTAssertNil(CaptureAudioProgramPair(leftChannel: 2, rightChannel: 2))
+        XCTAssertNil(CaptureAudioProgramPair(leftChannel: -1, rightChannel: 0))
+        let pair = CaptureAudioProgramPair(startChannel: 2)
+        XCTAssertEqual(pair?.leftChannel, 2)
+        XCTAssertEqual(pair?.rightChannel, 3)
+        XCTAssertEqual(pair?.label, "3/4")
+        XCTAssertEqual(pair?.isResolvable(inChannelCount: 4), true)
+        XCTAssertEqual(pair?.isResolvable(inChannelCount: 3), false)
+    }
+
+    func testProgramPairStoreRoundTripsPerDevice() {
+        let defaults = UserDefaults(suiteName: "probe-tests-\(UUID().uuidString)")!
+        let pair = CaptureAudioProgramPair(startChannel: 4)
+        CaptureAudioProgramPairStore.setPair(pair, forDeviceUniqueID: "rane-one", defaults: defaults)
+        XCTAssertEqual(CaptureAudioProgramPairStore.pair(forDeviceUniqueID: "rane-one", defaults: defaults), pair)
+        XCTAssertNil(CaptureAudioProgramPairStore.pair(forDeviceUniqueID: "other", defaults: defaults))
+        CaptureAudioProgramPairStore.setPair(nil, forDeviceUniqueID: "rane-one", defaults: defaults)
+        XCTAssertNil(CaptureAudioProgramPairStore.pair(forDeviceUniqueID: "rane-one", defaults: defaults))
+    }
+
+    /// A 14-channel layout resembling the failed Rane take: only one pair carries
+    /// real decorrelated stereo program audio; the rest are silent, DC-heavy or
+    /// full-scale data.
+    func testRecommendsOnlyRealStereoProgramPair() throws {
+        let frames = 24_000
+        var channels = Array(repeating: [Float](repeating: 0, count: frames), count: 14)
+        // CH 1/2 — real, slightly decorrelated stereo program.
+        channels[0] = sine(220, frames: frames, amplitude: 0.3)
+        channels[1] = sine(220, frames: frames, amplitude: 0.3, phase: 0.6)
+        // CH 3/4 — silent.
+        // CH 5..12 — near-silent hum.
+        for index in 4..<12 { channels[index] = sine(60, frames: frames, amplitude: 0.00005) }
+        // CH 13 — large negative DC pedestal.
+        channels[12] = [Float](repeating: -0.868, count: frames)
+        // CH 14 — full-scale data line.
+        channels[13] = (0..<frames).map { $0 % 2 == 0 ? Float(1.0) : Float(-1.0) }
+
+        let snapshot = try XCTUnwrap(MultichannelSignalProbe.analyze(planarChannels: channels, sampleRate: 48_000))
+        XCTAssertEqual(snapshot.channelCount, 14)
+        XCTAssertEqual(snapshot.recommendedPair, CaptureAudioProgramPair(startChannel: 0))
+
+        let pair12 = try XCTUnwrap(snapshot.pairs.first { $0.label == "1/2" })
+        let pair1314 = try XCTUnwrap(snapshot.pairs.first { $0.label == "13/14" })
+        XCTAssertGreaterThan(pair12.programLikelihood, 0.5)
+        XCTAssertLessThan(pair1314.programLikelihood, 0.2)
+        XCTAssertEqual(snapshot.channels[12].hasExcessiveDC, true)
+        XCTAssertEqual(snapshot.channels[12].kind, .dcHeavy)
+        XCTAssertEqual(snapshot.channels[13].isClipping, true)
+        XCTAssertEqual(snapshot.channels[13].kind, .dataOrControl)
+        XCTAssertEqual(snapshot.channels[2].kind, .silent)
+        XCTAssertTrue(snapshot.reportText.contains("CH 1/2"))
+    }
+
+    /// The live RANE ONE MKII probe (2026-08-31): CH 13/14 has a frozen left
+    /// channel at +0.66995 and real program audio on the right at -4.8 dBFS.
+    /// The probe used to score this 0.04 and report "no pair looks like program
+    /// audio" — while that channel was the performance.
+    private func measuredRaneDeviceChannels(frames: Int) -> [[Float]] {
+        var channels = Array(repeating: [Float](repeating: 0, count: frames), count: 14)
+        channels[0] = sine(997, frames: frames, amplitude: 2.19e-6)    // -113.2 dBFS
+        channels[1] = sine(1_103, frames: frames, amplitude: 2.19e-6)
+        channels[2] = sine(997, frames: frames, amplitude: 3.24e-5)    //  -89.8 dBFS
+        channels[3] = sine(1_103, frames: frames, amplitude: 3.31e-5)
+        channels[4] = sine(997, frames: frames, amplitude: 1.11e-6)    // -119.1 dBFS
+        channels[5] = sine(1_103, frames: frames, amplitude: 1.12e-6)
+        channels[12] = [Float](repeating: 0.669_95, count: frames)     // frozen
+        var program = sine(437, frames: frames, amplitude: 0.812)      //  -4.8 dBFS
+        for index in stride(from: 0, to: frames, by: 1_000) {
+            program[index] = 1.0                                       //  -0.0 dBFS peak
+        }
+        channels[13] = program.map { $0 + 0.001_10 }
+        return channels
+    }
+
+    func testRecommendsHalfLivePairWhenOnlyOneChannelCarriesProgramAudio() throws {
+        let frames = 24_000
+        let snapshot = try XCTUnwrap(
+            MultichannelSignalProbe.analyze(
+                planarChannels: measuredRaneDeviceChannels(frames: frames),
+                sampleRate: 48_000
+            )
+        )
+
+        // Channel classification must match what the device reported.
+        XCTAssertEqual(snapshot.channels[12].kind, .dcHeavy)
+        XCTAssertEqual(snapshot.channels[13].kind, .program)
+        XCTAssertTrue(snapshot.channels[13].isClipping)
+        XCTAssertEqual(snapshot.channels[2].kind, .silent)
+
+        let pair1314 = try XCTUnwrap(snapshot.pairs.first { $0.label == "13/14" })
+        XCTAssertGreaterThan(
+            pair1314.programLikelihood, 0.5,
+            "A live program channel beside a frozen one must still be recommendable."
+        )
+        XCTAssertLessThanOrEqual(
+            pair1314.programLikelihood,
+            MultichannelSignalProbe.monoRecoveredLikelihoodCeiling,
+            "A half-live pair must never score as high as real stereo."
+        )
+        XCTAssertEqual(
+            pair1314.soleProgramChannel?.channelIndex, 13,
+            "The right channel is the recoverable one."
+        )
+        XCTAssertEqual(snapshot.recommendedPair, CaptureAudioProgramPair(startChannel: 12))
+
+        // The operator must be told it is one channel, not a stereo pair.
+        XCTAssertTrue(snapshot.reportText.contains("CH 13/14"))
+        XCTAssertTrue(
+            snapshot.reportText.contains("right channel only"),
+            "Report must not imply a healthy stereo pair. Got:\n\(snapshot.reportText)"
+        )
+    }
+
+    func testRealStereoPairOutranksHalfLivePair() throws {
+        let frames = 24_000
+        var channels = measuredRaneDeviceChannels(frames: frames)
+        // Give CH 1/2 genuine decorrelated stereo program audio.
+        channels[0] = sine(220, frames: frames, amplitude: 0.3)
+        channels[1] = sine(220, frames: frames, amplitude: 0.3, phase: 0.6)
+
+        let snapshot = try XCTUnwrap(
+            MultichannelSignalProbe.analyze(planarChannels: channels, sampleRate: 48_000)
+        )
+        let stereo = try XCTUnwrap(snapshot.pairs.first { $0.label == "1/2" })
+        let halfLive = try XCTUnwrap(snapshot.pairs.first { $0.label == "13/14" })
+
+        XCTAssertGreaterThan(stereo.programLikelihood, halfLive.programLikelihood)
+        XCTAssertEqual(snapshot.recommendedPair, CaptureAudioProgramPair(startChannel: 0))
+        XCTAssertNil(stereo.soleProgramChannel, "A real stereo pair is not a mono recovery.")
+        XCTAssertFalse(snapshot.reportText.contains("channel only"))
+    }
+
+    func testQuietPartnerIsStereoNotMonoRecovery() throws {
+        let frames = 12_000
+        var channels = Array(repeating: [Float](repeating: 0, count: frames), count: 2)
+        channels[0] = sine(440, frames: frames, amplitude: 0.30)
+        channels[1] = sine(440, frames: frames, amplitude: 0.015, phase: 0.4)  // weakSignal
+
+        let snapshot = try XCTUnwrap(
+            MultichannelSignalProbe.analyze(planarChannels: channels, sampleRate: 48_000)
+        )
+        XCTAssertEqual(snapshot.channels[1].kind, .weakSignal)
+        XCTAssertNil(
+            snapshot.pairs.first?.soleProgramChannel,
+            "A quiet partner is a stereo pair, not a dead channel to recover from."
+        )
+    }
+
+    func testNonFiniteChannelNeverRecommended() throws {
+        let frames = 8_000
+        var channels = Array(repeating: [Float](repeating: 0, count: frames), count: 2)
+        channels[0] = sine(440, frames: frames, amplitude: 0.3)
+        channels[1] = sine(440, frames: frames, amplitude: 0.3)
+        channels[0][100] = .nan
+        let snapshot = try XCTUnwrap(MultichannelSignalProbe.analyze(planarChannels: channels, sampleRate: 48_000))
+        XCTAssertTrue(snapshot.channels[0].hasNonFiniteSamples)
+        XCTAssertNil(snapshot.recommendedPair)
+        XCTAssertEqual(snapshot.pairs.first?.programLikelihood, 0)
+    }
+
+    func testInterleavedDeinterleavesToPlanar() throws {
+        let frames = 1_000
+        let left = sine(200, frames: frames, amplitude: 0.4)
+        let right = sine(200, frames: frames, amplitude: 0.1)
+        var interleaved = [Float](repeating: 0, count: frames * 2)
+        for index in 0..<frames {
+            interleaved[index * 2] = left[index]
+            interleaved[index * 2 + 1] = right[index]
+        }
+        let snapshot = try XCTUnwrap(MultichannelSignalProbe.analyzeInterleaved(interleaved, channelCount: 2, sampleRate: 48_000))
+        XCTAssertEqual(snapshot.channels.count, 2)
+        XCTAssertGreaterThan(snapshot.channels[0].rms, snapshot.channels[1].rms)
+        XCTAssertEqual(snapshot.channels[0].peakDBFS, MultichannelSignalProbe.dbfs(0.4), accuracy: 0.5)
+    }
+}
+
+// MARK: - Capture motion evidence (Slice A)
+//
+// Motion presence must reflect every source that genuinely supplied evidence,
+// not the Apple Watch alone. Before `CaptureMotionEvidence` existed, three
+// sites derived presence from a linked Watch artifact only, so a real RANE
+// platter take with no Watch paired reported motion missing in review and
+// exported as motionless.
+
+final class CaptureMotionEvidenceTests: XCTestCase {
+
+    // MARK: Fixtures
+
+    private func platterMIDIEvent(_ value: Int, _ time: Double) -> CaptureCore.RawMixerMIDIEvent {
+        .init(timestamp: time, takeRelativeTime: time, deviceName: "Rane ONE MKII",
+              channel: 1, controller: 6, value: value,
+              normalizedValue: Double(value) / 127.0, mappedControl: nil)
+    }
+
+    /// A monotonic CC6 ring-counter run. `step: +1` is forward travel,
+    /// `step: -1` is backward travel.
+    private func platterRun(
+        from value: Int,
+        count: Int,
+        startingAt time: Double,
+        step: Int,
+        interval: Double = 0.01
+    ) -> [CaptureCore.RawMixerMIDIEvent] {
+        (0..<count).map { index in
+            let raw = value + step * index
+            let wrapped = ((raw % 128) + 128) % 128
+            return platterMIDIEvent(wrapped, time + Double(index) * interval)
+        }
+    }
+
+    private func movementEvents(
+        _ raw: [CaptureCore.RawMixerMIDIEvent]
+    ) -> [CaptureCore.DetectedNotationRecordMovementEvent] {
+        CaptureCore.derivePlatterMovementEvents(from: raw, controller: 6, channel: 1)
+    }
+
+    private func snapshot(
+        movementEvents: [CaptureCore.DetectedNotationRecordMovementEvent],
+        faderEvents: [CaptureCore.DetectedNotationFaderEvent] = []
+    ) -> CaptureCore.DetectedNotationSnapshot {
+        CaptureCore.DetectedNotationSnapshot(
+            notationSource: "detected",
+            notationConfidence: 0.8,
+            detectedLabel: nil,
+            labelSource: "unknown",
+            labelConfidence: nil,
+            detectionSources: ["controller"],
+            recordMovementEvents: movementEvents,
+            audioEvents: [],
+            faderEvents: faderEvents,
+            mixerMidiEvents: [],
+            capturedAt: Date(timeIntervalSince1970: 0)
+        )
+    }
+
+    private func faderEvent(at time: Double) -> CaptureCore.DetectedNotationFaderEvent {
+        .init(startTime: time, endTime: time + 0.02, eventKind: .cut, control: "crossfader",
+              fromValue: 1.0, toValue: 0.0, source: "midi", confidence: 0.9)
+    }
+
+    /// Forward push then pull-back — the minimal real scratch gesture.
+    private var babyScratchMovementEvents: [CaptureCore.DetectedNotationRecordMovementEvent] {
+        let forward = platterRun(from: 0, count: 30, startingAt: 0.0, step: 1)
+        let backward = platterRun(from: 29, count: 30, startingAt: 0.30, step: -1)
+        return movementEvents(forward + backward)
+    }
+
+    // MARK: Source resolution
+
+    func testPlatterGestureWithoutWatchResolvesToMotionPresent() {
+        let events = babyScratchMovementEvents
+        XCTAssertFalse(events.isEmpty, "fixture must decode real movement runs")
+
+        let evidence = CaptureMotionEvidenceResolver.resolve(
+            detectedNotation: snapshot(movementEvents: events),
+            watchCaptureLinked: false
+        )
+
+        XCTAssertTrue(evidence.motionPresent, "RANE platter movement is motion even with no Watch paired")
+        XCTAssertEqual(evidence.motionSources, [.platter])
+        XCTAssertTrue(evidence.platter.isGesture)
+        XCTAssertFalse(evidence.requiresLinkedWatchArtifact)
+    }
+
+    func testWatchMotionWithoutControllerStillResolvesToMotionPresent() {
+        let evidence = CaptureMotionEvidenceResolver.resolve(
+            detectedNotation: nil,
+            watchCaptureLinked: true
+        )
+
+        XCTAssertTrue(evidence.motionPresent)
+        XCTAssertEqual(evidence.motionSources, [.watch])
+        XCTAssertEqual(evidence.platter, .absent)
+        XCTAssertTrue(evidence.requiresLinkedWatchArtifact, "a Watch-only claim must still be backed by a watch artifact")
+    }
+
+    func testNoWatchAndNoControllerMovementResolvesToMotionMissing() {
+        let evidence = CaptureMotionEvidenceResolver.resolve(
+            detectedNotation: snapshot(movementEvents: []),
+            watchCaptureLinked: false
+        )
+
+        XCTAssertFalse(evidence.motionPresent)
+        XCTAssertTrue(evidence.motionSources.isEmpty)
+        XCTAssertEqual(evidence.platter, .absent)
+    }
+
+    func testBothSourcesReportBothWithoutDuplication() {
+        let evidence = CaptureMotionEvidenceResolver.resolve(
+            detectedNotation: snapshot(movementEvents: babyScratchMovementEvents),
+            watchCaptureLinked: true
+        )
+
+        XCTAssertEqual(evidence.motionSources, [.platter, .watch])
+        XCTAssertFalse(evidence.requiresLinkedWatchArtifact, "platter evidence stands on its own")
+    }
+
+    // MARK: Steady motor rotation is not a gesture
+
+    func testSteadyMotorRotationAloneIsNotAScratchGesture() {
+        // A released, powered 33 1/3 RPM platter: a long forward-only CC6
+        // stream with no reversal anywhere in it.
+        let freeRunning = platterRun(from: 0, count: 400, startingAt: 0.0, step: 1, interval: 0.0005)
+        let events = movementEvents(freeRunning)
+        XCTAssertFalse(events.isEmpty, "the decoder should still see forward runs")
+        XCTAssertTrue(events.allSatisfy { $0.direction == "forward" })
+
+        let evidence = CaptureMotionEvidenceResolver.resolve(
+            detectedNotation: snapshot(movementEvents: events),
+            watchCaptureLinked: false
+        )
+
+        XCTAssertFalse(evidence.motionPresent, "motor rotation alone must never count as a scratch gesture")
+        XCTAssertEqual(evidence.motionSources, [])
+        if case .steadyRotationOnly = evidence.platter {
+            // Expected: movement was seen, but classified as rotation only.
+        } else {
+            XCTFail("forward-only travel must classify as steadyRotationOnly, got \(evidence.platter)")
+        }
+    }
+
+    func testOneReversalPromotesRotationToGesture() {
+        // Identical free-running prefix, plus a single genuine pull-back.
+        let freeRunning = platterRun(from: 0, count: 400, startingAt: 0.0, step: 1, interval: 0.0005)
+        let pullBack = platterRun(from: 60, count: 30, startingAt: 0.25, step: -1)
+        let evidence = CaptureMotionEvidenceResolver.resolve(
+            detectedNotation: snapshot(movementEvents: movementEvents(freeRunning + pullBack)),
+            watchCaptureLinked: false
+        )
+
+        XCTAssertTrue(evidence.motionPresent)
+        XCTAssertEqual(evidence.motionSources, [.platter])
+    }
+
+    // MARK: Fader must not substitute for platter movement
+
+    func testFaderEventsAloneDoNotEstablishMotionPresence() {
+        let evidence = CaptureMotionEvidenceResolver.resolve(
+            detectedNotation: snapshot(
+                movementEvents: [],
+                faderEvents: [faderEvent(at: 0.2), faderEvent(at: 0.6), faderEvent(at: 1.1)]
+            ),
+            watchCaptureLinked: false
+        )
+
+        XCTAssertEqual(evidence.faderEventCount, 3, "fader evidence is still recorded")
+        XCTAssertFalse(evidence.motionPresent, "a cut is not platter movement")
+        XCTAssertTrue(evidence.motionSources.isEmpty)
+    }
+
+    // MARK: DVS stays truthful until a real pipeline exists
+
+    func testDVSIsReportedUnsupportedAndNeverContributesPresence() {
+        let evidence = CaptureMotionEvidenceResolver.resolve(
+            detectedNotation: snapshot(movementEvents: []),
+            watchCaptureLinked: false
+        )
+
+        XCTAssertEqual(evidence.dvs, .unsupported)
+        XCTAssertFalse(evidence.motionSources.contains(.dvs))
+    }
+
+    // MARK: Export validation contract
+
+    func testControllerBackedTakeDoesNotRequireAWatchArtifact() {
+        let take = Self.exportTake(motionPresent: true, motionSources: [.platter])
+
+        XCTAssertFalse(take.claimsWatchBackedMotion, "a platter-backed take must not demand a watch file")
+        XCTAssertFalse(take.claimsMotionWithoutAnySource)
+    }
+
+    func testWatchBackedTakeStillRequiresAWatchArtifact() {
+        let take = Self.exportTake(motionPresent: true, motionSources: [.watch])
+
+        XCTAssertTrue(take.claimsWatchBackedMotion)
+    }
+
+    func testLegacyTakeWithoutSourcesKeepsWatchOnlyValidation() {
+        // `motionSources: nil` means a caller predating source-aware
+        // resolution; existing fixtures must validate exactly as before.
+        let take = Self.exportTake(motionPresent: true, motionSources: nil)
+
+        XCTAssertTrue(take.claimsWatchBackedMotion)
+        XCTAssertFalse(take.claimsMotionWithoutAnySource)
+    }
+
+    func testMotionClaimWithNoSourceIsAContradiction() {
+        let take = Self.exportTake(motionPresent: true, motionSources: [])
+
+        XCTAssertTrue(take.claimsMotionWithoutAnySource)
+    }
+
+    func testTakeWithoutMotionNeverRequiresAWatchArtifact() {
+        let take = Self.exportTake(motionPresent: false, motionSources: [])
+
+        XCTAssertFalse(take.claimsWatchBackedMotion)
+        XCTAssertFalse(take.claimsMotionWithoutAnySource)
+    }
+
+    private static func exportTake(
+        motionPresent: Bool,
+        motionSources: [CaptureMotionSource]?
+    ) -> SessionExportTake {
+        SessionExportTake(
+            takeID: "take-002",
+            takeNumber: 2,
+            bpm: 79,
+            mediaURL: URL(fileURLWithPath: "/tmp/scratchlab-take-002.mov"),
+            audioArtifactURL: URL(fileURLWithPath: "/tmp/scratchlab-take-002.wav"),
+            sidecarURL: URL(fileURLWithPath: "/tmp/scratchlab-take-002.json"),
+            watchCaptureSession: nil,
+            drillName: "Baby Scratch",
+            duration: 8.4,
+            quality: nil,
+            comboTagged: false,
+            audioPresent: true,
+            motionPresent: motionPresent,
+            syncStatus: nil,
+            recordingStatus: "completed",
+            verbalSlateUsed: false,
+            syncClapUsed: false,
+            note: nil,
+            captureTiming: nil,
+            motionSources: motionSources
+        )
+    }
+}
+
+// MARK: - Guided capture review state (Slice B)
+//
+// Karl's take-002 Review rendered "Ready to keep", "Motion pending",
+// "Motion Missing" and "Fader: No movement" simultaneously. The operator
+// message was a hardcoded literal decided at the call site, and the sync and
+// motion labels were computed independently from the same inputs. Slice B
+// makes every label a projection of one resolved state, so the contradiction
+// is unrepresentable rather than merely unlikely.
+
+final class GuidedCaptureReviewStateTests: XCTestCase {
+
+    private func state(
+        recordingFailed: Bool = false,
+        duration: TimeInterval = 8.4,
+        calibrationValid: Bool = true,
+        audioPresent: Bool = true,
+        motionPresent: Bool,
+        motionSkipped: Bool = false,
+        motionOptional: Bool = false
+    ) -> GuidedCaptureReviewState {
+        GuidedCaptureReviewStateResolver.reviewState(
+            recordingFailed: recordingFailed,
+            duration: duration,
+            calibrationValid: calibrationValid,
+            audioPresent: audioPresent,
+            motionPresent: motionPresent,
+            motionSkipped: motionSkipped,
+            motionOptional: motionOptional
+        )
+    }
+
+    // MARK: The exact reported contradiction
+
+    func testRequiredMotionMissingIsNeverAlsoReadyToKeep() {
+        let resolved = state(motionPresent: false)
+
+        XCTAssertEqual(resolved.readiness, .retakeRecommended)
+        XCTAssertEqual(resolved.operatorMessage, "Retake recommended")
+        XCTAssertNotEqual(resolved.operatorMessage, "Ready to keep")
+        XCTAssertEqual(resolved.motionStatusTitle, "Motion Missing")
+    }
+
+    func testMotionPendingAndMotionMissingAreNeverShownTogether() {
+        let resolved = state(motionPresent: false)
+
+        // The old resolver produced "Motion pending" for syncStatus while
+        // motionStatusTitle said "Motion Missing" for this same input.
+        XCTAssertNotEqual(resolved.syncStatus, "Motion pending")
+        XCTAssertEqual(resolved.syncStatus, resolved.motionStatusTitle,
+                       "when motion is the blocker both labels must say the same thing")
+    }
+
+    func testNoInputCombinationEverProducesMotionPending() {
+        for recordingFailed in [true, false] {
+            for duration in [0.2, 8.4] as [TimeInterval] {
+                for calibrationValid in [true, false] {
+                    for audioPresent in [true, false] {
+                        for motionPresent in [true, false] {
+                            for motionSkipped in [true, false] {
+                                for motionOptional in [true, false] {
+                                    let resolved = state(
+                                        recordingFailed: recordingFailed,
+                                        duration: duration,
+                                        calibrationValid: calibrationValid,
+                                        audioPresent: audioPresent,
+                                        motionPresent: motionPresent,
+                                        motionSkipped: motionSkipped,
+                                        motionOptional: motionOptional
+                                    )
+                                    XCTAssertNotEqual(resolved.syncStatus, "Motion pending")
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    /// The structural invariant behind the whole slice: "Ready to keep" and a
+    /// missing-motion label can never co-occur, for any input.
+    func testReadyToKeepNeverCoexistsWithMissingMotion() {
+        for recordingFailed in [true, false] {
+            for duration in [0.2, 1.0, 8.4] as [TimeInterval] {
+                for calibrationValid in [true, false] {
+                    for audioPresent in [true, false] {
+                        for motionPresent in [true, false] {
+                            for motionSkipped in [true, false] {
+                                for motionOptional in [true, false] {
+                                    let resolved = state(
+                                        recordingFailed: recordingFailed,
+                                        duration: duration,
+                                        calibrationValid: calibrationValid,
+                                        audioPresent: audioPresent,
+                                        motionPresent: motionPresent,
+                                        motionSkipped: motionSkipped,
+                                        motionOptional: motionOptional
+                                    )
+                                    if resolved.readiness == .readyToKeep {
+                                        XCTAssertNotEqual(
+                                            resolved.motionStatus, .missing,
+                                            "a take cannot be ready to keep while required motion is missing"
+                                        )
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // MARK: Readiness precedence
+
+    func testHardFailuresOutrankMissingMotion() {
+        XCTAssertEqual(state(recordingFailed: true, motionPresent: false).readiness, .recordingInterrupted)
+        XCTAssertEqual(state(duration: 0.4, motionPresent: false).readiness, .takeTooShort)
+        XCTAssertEqual(state(audioPresent: false, motionPresent: false).readiness, .missingAudio)
+        XCTAssertEqual(state(calibrationValid: false, motionPresent: false).readiness, .calibrationInvalid)
+    }
+
+    func testHardFailuresAreNotKeepableButRetakeRecommendedIs() {
+        XCTAssertFalse(state(recordingFailed: true, motionPresent: true).readiness.isKeepable)
+        XCTAssertFalse(state(audioPresent: false, motionPresent: true).readiness.isKeepable)
+        // The media is valid; it just will not teach anything.
+        XCTAssertTrue(state(motionPresent: false).readiness.isKeepable)
+        XCTAssertTrue(state(motionPresent: true).readiness.isKeepable)
+    }
+
+    func testMotionPresentTakeIsReadyAndReportsReady() {
+        let resolved = state(motionPresent: true)
+
+        XCTAssertEqual(resolved.readiness, .readyToKeep)
+        XCTAssertEqual(resolved.operatorMessage, "Ready to keep")
+        XCTAssertEqual(resolved.syncStatus, "Ready")
+        XCTAssertEqual(resolved.motionStatusTitle, "Motion Present")
+    }
+
+    // MARK: Optional / skipped motion says so, rather than "missing"
+
+    func testOptionalMotionSaysMotionOptionalNotMissing() {
+        let resolved = state(motionPresent: false, motionOptional: true)
+
+        XCTAssertEqual(resolved.readiness, .readyToKeep)
+        XCTAssertEqual(resolved.motionStatusTitle, "Motion Optional")
+        XCTAssertEqual(resolved.syncStatus, "Motion optional")
+    }
+
+    func testSkippedMotionSaysMotionOptionalNotMissing() {
+        let resolved = state(motionPresent: false, motionSkipped: true)
+
+        XCTAssertEqual(resolved.readiness, .readyToKeep)
+        XCTAssertEqual(resolved.motionStatusTitle, "Motion Optional")
+    }
+
+    func testMotionRequirementClassification() {
+        XCTAssertEqual(
+            GuidedCaptureReviewStateResolver.motionRequirement(motionSkipped: false, motionOptional: false),
+            .required
+        )
+        XCTAssertEqual(
+            GuidedCaptureReviewStateResolver.motionRequirement(motionSkipped: false, motionOptional: true),
+            .optional
+        )
+        XCTAssertEqual(
+            GuidedCaptureReviewStateResolver.motionRequirement(motionSkipped: true, motionOptional: false),
+            .skipped
+        )
+    }
+}
+
+// MARK: - Capture evidence presentation (Slice B)
+
+final class CaptureMotionEvidencePresenterTests: XCTestCase {
+
+    private func evidence(
+        platter: CapturePlatterMotionEvidence,
+        faderEventCount: Int = 0,
+        watch: CaptureWatchMotionEvidence = .notUsed
+    ) -> CaptureMotionEvidence {
+        CaptureMotionEvidence(platter: platter, faderEventCount: faderEventCount, watch: watch)
+    }
+
+    private func value(_ rows: [CaptureEvidenceRow], _ label: String) -> String? {
+        rows.first { $0.label == label }?.value
+    }
+
+    func testControllerTakeReportsPlatterPresentFaderCountAndWatchNotUsed() {
+        let rows = CaptureMotionEvidencePresenter.rows(
+            for: evidence(platter: .gesture(movementRuns: 12, reversalRuns: 6), faderEventCount: 4)
+        )
+
+        XCTAssertEqual(value(rows, "Platter"), "Present · MIDI")
+        XCTAssertEqual(value(rows, "Fader"), "4 events")
+        XCTAssertEqual(value(rows, "Watch"), "Not used")
+    }
+
+    func testSteadyRotationIsNamedSeparatelyFromAbsentPlatter() {
+        let rotation = CaptureMotionEvidencePresenter.rows(for: evidence(platter: .steadyRotationOnly(forwardRuns: 9)))
+        let absent = CaptureMotionEvidencePresenter.rows(for: evidence(platter: .absent))
+
+        XCTAssertEqual(value(rotation, "Platter"), "Rotation only")
+        XCTAssertEqual(value(absent, "Platter"), "Not detected")
+        XCTAssertNotEqual(value(rotation, "Platter"), value(absent, "Platter"))
+    }
+
+    func testSingleFaderEventIsNotPluralised() {
+        let rows = CaptureMotionEvidencePresenter.rows(for: evidence(platter: .absent, faderEventCount: 1))
+
+        XCTAssertEqual(value(rows, "Fader"), "1 event")
+    }
+
+    func testOpenFaderBabyScratchShowsNoFaderMovement() {
+        // A Baby Scratch played with the fader open must not invent clicks.
+        let rows = CaptureMotionEvidencePresenter.rows(
+            for: evidence(platter: .gesture(movementRuns: 8, reversalRuns: 4), faderEventCount: 0)
+        )
+
+        XCTAssertEqual(value(rows, "Fader"), "No movement")
+        XCTAssertEqual(value(rows, "Platter"), "Present · MIDI")
+    }
+
+    func testLinkedWatchIsReportedAsLinked() {
+        let rows = CaptureMotionEvidencePresenter.rows(for: evidence(platter: .absent, watch: .linked))
+
+        XCTAssertEqual(value(rows, "Watch"), "Linked")
+    }
+
+    func testPresenceFlagsMatchContributingSources() {
+        let rows = CaptureMotionEvidencePresenter.rows(
+            for: evidence(platter: .steadyRotationOnly(forwardRuns: 5), faderEventCount: 2, watch: .linked)
+        )
+
+        // Rotation-only is not a gesture, so the platter row is not "present"
+        // even though movement was decoded.
+        XCTAssertEqual(rows.first { $0.label == "Platter" }?.isPresent, false)
+        XCTAssertEqual(rows.first { $0.label == "Fader" }?.isPresent, true)
+        XCTAssertEqual(rows.first { $0.label == "Watch" }?.isPresent, true)
+    }
+
+    func testDVSIsNotPresentedWhileNoRealFeedExists() {
+        let rows = CaptureMotionEvidencePresenter.rows(for: evidence(platter: .absent))
+
+        XCTAssertFalse(rows.contains { $0.label == "DVS" },
+                       "a permanent Unavailable row would imply a source the product does not have")
+        XCTAssertEqual(rows.map(\.label), ["Platter", "Fader", "Watch"])
+    }
+}
+
+// MARK: - Crossfader mapping provenance and take window (Slice C)
+//
+// Two defects, both robustness rather than the cause of the take-002
+// screenshot (a fader-open Baby Scratch correctly records no fader events):
+//   1. `MIDIActionResolver` resolved transport against the hardware registry
+//      but resolved crossfader only from a learned mapping, so a recognised
+//      controller selected manually — which, unlike app startup, never
+//      auto-applies the verified mapping — recorded no fader evidence.
+//   2. Nothing bounded the END of the take, so controller moves made between
+//      Stop and movie finalization were decoded into the finished take.
+
+final class CrossfaderMappingProvenanceTests: XCTestCase {
+
+    // MARK: Fixtures
+
+    private static let raneIdentity = MIDIDeviceIdentity(sourceName: "RANE ONE")
+    private static let unknownIdentity = MIDIDeviceIdentity(sourceName: "Generic USB Controller")
+
+    /// The certified RANE crossfader: CC8 on channel 15.
+    private func crossfaderMessage(value: Int = 64, channel: UInt8 = 15, cc: UInt8 = 8) -> ParsedMIDIMessage {
+        ParsedMIDIMessage(
+            channel: channel,
+            messageType: .controlChange,
+            controlNumber: cc,
+            noteNumber: cc,
+            value: UInt8(clamping: value)
+        )
+    }
+
+    private func learnedCrossfaderMapping(channel: Int = 15, controlNumber: Int = 8) -> MIDIDeviceMapping {
+        var mapping = MIDIDeviceMapping(deviceIdentifier: "dev-1", deviceName: "RANE ONE")
+        mapping.upsert(
+            MIDILearnedControl(
+                action: .crossfader,
+                messageType: .controlChange,
+                channel: channel,
+                controlNumber: controlNumber,
+                learnedAt: Date(timeIntervalSince1970: 0),
+                isVerified: true
+            )
+        )
+        return mapping
+    }
+
+    // MARK: Registry contract
+
+    func testRegistryCarriesCertifiedNonDiagnosticRaneCrossfaderBinding() throws {
+        let match = try XCTUnwrap(MIDIHardwareRegistry.shared.bestMatch(for: Self.raneIdentity))
+        XCTAssertEqual(match.confidence, .certified)
+
+        let crossfader = try XCTUnwrap(
+            match.profile.bindings.first { $0.role.kind == .crossfader }
+        )
+        XCTAssertFalse(crossfader.isDiagnosticOnly)
+        XCTAssertEqual(crossfader.channel, 15)
+        XCTAssertEqual(crossfader.signal.primaryCCNumber, 8)
+    }
+
+    // MARK: Resolution priority
+
+    func testLearnedMappingAlwaysWinsOverCertifiedRegistry() {
+        let action = MIDIActionResolver.resolve(
+            message: crossfaderMessage(value: 100),
+            mapping: learnedCrossfaderMapping(),
+            identity: Self.raneIdentity
+        )
+
+        XCTAssertEqual(action, .crossfader(value: 100, source: .learned))
+    }
+
+    func testCertifiedRegistryResolvesCrossfaderWhenNoLearnedMappingExists() {
+        let action = MIDIActionResolver.resolve(
+            message: crossfaderMessage(value: 100),
+            mapping: nil,
+            identity: Self.raneIdentity
+        )
+
+        XCTAssertEqual(action, .crossfader(value: 100, source: .certifiedRegistry))
+    }
+
+    func testUnrecognisedDeviceIsNeverSniffedForCC8() {
+        let action = MIDIActionResolver.resolve(
+            message: crossfaderMessage(),
+            mapping: nil,
+            identity: Self.unknownIdentity
+        )
+
+        XCTAssertEqual(action, .unknown, "an unknown controller's CC8 must not be assumed to be a crossfader")
+    }
+
+    func testWithoutDeviceIdentityThereIsNoRegistryFallback() {
+        let action = MIDIActionResolver.resolve(
+            message: crossfaderMessage(),
+            mapping: nil,
+            identity: nil
+        )
+
+        XCTAssertEqual(action, .unknown)
+    }
+
+    func testCertifiedFallbackIsChannelAndControlScoped() {
+        // Right CC, wrong channel.
+        XCTAssertEqual(
+            MIDIActionResolver.resolve(
+                message: crossfaderMessage(channel: 3), mapping: nil, identity: Self.raneIdentity
+            ),
+            .unknown
+        )
+        // Right channel, wrong CC.
+        XCTAssertEqual(
+            MIDIActionResolver.resolve(
+                message: crossfaderMessage(cc: 9), mapping: nil, identity: Self.raneIdentity
+            ),
+            .unknown
+        )
+    }
+
+    func testLearnedMappingOnADifferentAddressStillWinsOnItsOwnAddress() {
+        // A user who learned the crossfader onto a non-default control keeps it.
+        let action = MIDIActionResolver.resolve(
+            message: crossfaderMessage(value: 20, channel: 3, cc: 42),
+            mapping: learnedCrossfaderMapping(channel: 3, controlNumber: 42),
+            identity: Self.raneIdentity
+        )
+
+        XCTAssertEqual(action, .crossfader(value: 20, source: .learned))
+    }
+
+    // MARK: Normalization
+
+    func testCertifiedFallbackUsesPlainSevenBitNormalization() {
+        XCTAssertEqual(MIDIControlNormalization.sevenBit(0), 0.0, accuracy: 0.0001)
+        XCTAssertEqual(MIDIControlNormalization.sevenBit(127), 1.0, accuracy: 0.0001)
+        XCTAssertEqual(MIDIControlNormalization.sevenBit(64), 64.0 / 127.0, accuracy: 0.0001)
+        // Out-of-range values clamp rather than producing a value outside 0…1.
+        XCTAssertEqual(MIDIControlNormalization.sevenBit(-5), 0.0, accuracy: 0.0001)
+        XCTAssertEqual(MIDIControlNormalization.sevenBit(300), 1.0, accuracy: 0.0001)
+    }
+
+    // MARK: Persistence / Codable backward compatibility
+
+    func testRawMixerMIDIEventRoundTripsMappingSource() throws {
+        let event = CaptureCore.RawMixerMIDIEvent(
+            timestamp: 12.0, takeRelativeTime: 2.0, deviceName: "RANE ONE",
+            channel: 15, controller: 8, value: 100, normalizedValue: 100.0 / 127.0,
+            mappedControl: "crossfader", mappingSource: .certifiedRegistry
+        )
+
+        let data = try JSONEncoder().encode(event)
+        let decoded = try JSONDecoder().decode(CaptureCore.RawMixerMIDIEvent.self, from: data)
+
+        XCTAssertEqual(decoded, event)
+        XCTAssertEqual(decoded.mappingSource, .certifiedRegistry)
+    }
+
+    func testLegacySidecarEventWithoutMappingSourceDecodesAsUnknownProvenance() throws {
+        // Exactly the shape written before provenance existed — no key at all.
+        let legacyJSON = """
+        {
+          "timestamp": 12.0,
+          "takeRelativeTime": 2.0,
+          "deviceName": "RANE ONE",
+          "channel": 15,
+          "controller": 8,
+          "value": 100,
+          "normalizedValue": 0.787,
+          "mappedControl": "crossfader"
+        }
+        """.data(using: .utf8)!
+
+        let decoded = try JSONDecoder().decode(CaptureCore.RawMixerMIDIEvent.self, from: legacyJSON)
+
+        XCTAssertNil(decoded.mappingSource, "a legacy event has unknown provenance, not learned")
+        XCTAssertEqual(decoded.mappedControl, "crossfader")
+        XCTAssertEqual(decoded.channel, 15)
+    }
+
+    // MARK: Take-window boundary
+
+    private func mixerEvent(at takeRelativeTime: Double) -> CaptureCore.RawMixerMIDIEvent {
+        CaptureCore.RawMixerMIDIEvent(
+            timestamp: takeRelativeTime, takeRelativeTime: takeRelativeTime,
+            deviceName: "RANE ONE", channel: 15, controller: 8, value: 64,
+            normalizedValue: 0.5, mappedControl: "crossfader", mappingSource: .learned
+        )
+    }
+
+    func testEventsAfterStopAreExcludedFromTheFinishedTake() {
+        let events = [0.5, 1.0, 4.9, 5.0, 5.1, 8.0].map(mixerEvent(at:))
+
+        let bounded = CaptureMotionEvidenceResolver.eventsWithinTakeWindow(events, stopRelativeTime: 5.0)
+
+        XCTAssertEqual(bounded.map(\.takeRelativeTime), [0.5, 1.0, 4.9, 5.0])
+    }
+
+    func testEventExactlyAtStopIsKept() {
+        let bounded = CaptureMotionEvidenceResolver.eventsWithinTakeWindow(
+            [mixerEvent(at: 5.0)], stopRelativeTime: 5.0
+        )
+
+        XCTAssertEqual(bounded.count, 1, "the stop instant is inside the take")
+    }
+
+    func testNilStopBoundKeepsEverythingWhileTheTakeIsRunning() {
+        let events = [0.5, 1.0, 8.0].map(mixerEvent(at:))
+
+        let bounded = CaptureMotionEvidenceResolver.eventsWithinTakeWindow(events, stopRelativeTime: nil)
+
+        XCTAssertEqual(bounded.count, events.count)
+    }
+
+    // MARK: Provenance through evidence resolution
+
+    private func snapshot(
+        mixerEvents: [CaptureCore.RawMixerMIDIEvent],
+        faderEvents: [CaptureCore.DetectedNotationFaderEvent]
+    ) -> CaptureCore.DetectedNotationSnapshot {
+        CaptureCore.DetectedNotationSnapshot(
+            notationSource: "detected", notationConfidence: 0.8, detectedLabel: nil,
+            labelSource: "unknown", labelConfidence: nil, detectionSources: ["midi"],
+            recordMovementEvents: [], audioEvents: [], faderEvents: faderEvents,
+            mixerMidiEvents: mixerEvents, capturedAt: Date(timeIntervalSince1970: 0)
+        )
+    }
+
+    private func faderEvent(at time: Double) -> CaptureCore.DetectedNotationFaderEvent {
+        .init(startTime: time, endTime: time + 0.02, eventKind: .cut, control: "crossfader",
+              fromValue: 1.0, toValue: 0.0, source: "midi", confidence: 0.9)
+    }
+
+    func testEvidenceReportsCertifiedRegistryProvenance() {
+        var registryEvent = mixerEvent(at: 1.0)
+        registryEvent = CaptureCore.RawMixerMIDIEvent(
+            timestamp: 1.0, takeRelativeTime: 1.0, deviceName: "RANE ONE",
+            channel: 15, controller: 8, value: 64, normalizedValue: 0.5,
+            mappedControl: "crossfader", mappingSource: .certifiedRegistry
+        )
+
+        let evidence = CaptureMotionEvidenceResolver.resolve(
+            detectedNotation: snapshot(mixerEvents: [registryEvent], faderEvents: [faderEvent(at: 1.0)]),
+            watchCaptureLinked: false
+        )
+
+        XCTAssertEqual(evidence.faderMappingSource, .certifiedRegistry)
+    }
+
+    func testLearnedProvenanceOutranksRegistryWhenBothAppear() {
+        let registryEvent = CaptureCore.RawMixerMIDIEvent(
+            timestamp: 1.0, takeRelativeTime: 1.0, deviceName: "RANE ONE",
+            channel: 15, controller: 8, value: 64, normalizedValue: 0.5,
+            mappedControl: "crossfader", mappingSource: .certifiedRegistry
+        )
+
+        let evidence = CaptureMotionEvidenceResolver.resolve(
+            detectedNotation: snapshot(
+                mixerEvents: [registryEvent, mixerEvent(at: 2.0)],
+                faderEvents: [faderEvent(at: 1.0)]
+            ),
+            watchCaptureLinked: false
+        )
+
+        XCTAssertEqual(evidence.faderMappingSource, .learned)
+    }
+
+    func testLegacySnapshotReportsNoProvenance() {
+        let evidence = CaptureMotionEvidenceResolver.resolve(
+            detectedNotation: snapshot(
+                mixerEvents: [
+                    CaptureCore.RawMixerMIDIEvent(
+                        timestamp: 1.0, takeRelativeTime: 1.0, deviceName: "RANE ONE",
+                        channel: 15, controller: 8, value: 64, normalizedValue: 0.5,
+                        mappedControl: "crossfader"
+                    )
+                ],
+                faderEvents: [faderEvent(at: 1.0)]
+            ),
+            watchCaptureLinked: false
+        )
+
+        XCTAssertNil(evidence.faderMappingSource)
+    }
+
+    // MARK: Presentation
+
+    private func faderRowValue(_ evidence: CaptureMotionEvidence) -> String? {
+        CaptureMotionEvidencePresenter.rows(for: evidence).first { $0.label == "Fader" }?.value
+    }
+
+    func testFaderRowNamesItsProvenance() {
+        XCTAssertEqual(
+            faderRowValue(CaptureMotionEvidence(
+                platter: .absent, faderEventCount: 4, watch: .notUsed, faderMappingSource: .learned
+            )),
+            "4 events · learned"
+        )
+        XCTAssertEqual(
+            faderRowValue(CaptureMotionEvidence(
+                platter: .absent, faderEventCount: 4, watch: .notUsed, faderMappingSource: .certifiedRegistry
+            )),
+            "4 events · certified default"
+        )
+    }
+
+    func testOpenFaderStillReadsAsNoMovementWithoutProvenanceNoise() {
+        // An open fader is a correct Baby Scratch result, not a mapping fault,
+        // so it must not be qualified with a mapping source.
+        XCTAssertEqual(
+            faderRowValue(CaptureMotionEvidence(
+                platter: .gesture(movementRuns: 8, reversalRuns: 4),
+                faderEventCount: 0, watch: .notUsed, faderMappingSource: .certifiedRegistry
+            )),
+            "No movement"
+        )
+    }
+
+    // MARK: No fabricated events
+
+    func testOpenFaderProducesNoFaderEventsRegardlessOfProvenance() {
+        // A held-open fader emits repeated identical values; the existing
+        // minimum-delta gate must still yield zero events.
+        let held = (0..<20).map { index in
+            CaptureCore.RawMixerMIDIEvent(
+                timestamp: Double(index) * 0.05, takeRelativeTime: Double(index) * 0.05,
+                deviceName: "RANE ONE", channel: 15, controller: 8, value: 127,
+                normalizedValue: 1.0, mappedControl: "crossfader", mappingSource: .certifiedRegistry
+            )
+        }
+
+        XCTAssertTrue(CaptureCore.deriveDetectedNotationFaderEvents(from: held).isEmpty)
+    }
+
+    func testRealCutStillProducesEventsUnderCertifiedProvenance() {
+        let cut = [
+            CaptureCore.RawMixerMIDIEvent(
+                timestamp: 0.0, takeRelativeTime: 0.0, deviceName: "RANE ONE",
+                channel: 15, controller: 8, value: 127, normalizedValue: 1.0,
+                mappedControl: "crossfader", mappingSource: .certifiedRegistry
+            ),
+            CaptureCore.RawMixerMIDIEvent(
+                timestamp: 0.04, takeRelativeTime: 0.04, deviceName: "RANE ONE",
+                channel: 15, controller: 8, value: 0, normalizedValue: 0.0,
+                mappedControl: "crossfader", mappingSource: .certifiedRegistry
+            )
+        ]
+
+        XCTAssertFalse(CaptureCore.deriveDetectedNotationFaderEvents(from: cut).isEmpty,
+                       "a genuine fast full-travel cut must still register")
+    }
+
+    // MARK: Export
+
+    func testExportTakeCarriesFaderProvenance() {
+        let take = SessionExportTake(
+            takeID: "take-003", takeNumber: 3, bpm: 79,
+            mediaURL: URL(fileURLWithPath: "/tmp/t.mov"),
+            audioArtifactURL: URL(fileURLWithPath: "/tmp/t.wav"),
+            sidecarURL: URL(fileURLWithPath: "/tmp/t.json"),
+            watchCaptureSession: nil, drillName: "Baby Scratch", duration: 8.4,
+            quality: nil, comboTagged: false, audioPresent: true, motionPresent: true,
+            syncStatus: nil, recordingStatus: "completed", verbalSlateUsed: false,
+            syncClapUsed: false, note: nil, captureTiming: nil,
+            motionSources: [.platter], faderMappingSource: .certifiedRegistry
+        )
+
+        XCTAssertEqual(take.faderMappingSource, .certifiedRegistry)
+        // Provenance must not disturb the Slice A motion contract.
+        XCTAssertFalse(take.claimsWatchBackedMotion)
+        XCTAssertFalse(take.claimsMotionWithoutAnySource)
+    }
+}
+
+// MARK: - RANE playback output routing (right deck 3/4)
+//
+// Measured hardware truth (iPhone K + RANE ONE MKII, 2026-08-29): the device
+// exposes 10 USB output channels. USB output 1/2 is the left deck, 3/4 is the
+// right deck. The previous engine hardcoded a guessed 14-channel requirement
+// and gated the channel map on `maximumOutputNumberOfChannels >= 14`; the real
+// device reports 10, so the gate was always false, no map was ever installed,
+// and playback fell back to plain stereo — the first pair, 1/2, the LEFT deck.
+// That is why two different pair constants both lit the left meter.
+
+final class RanePlaybackRoutingPolicyTests: XCTestCase {
+
+    private let raneRoute = "Rane ONE MKII"
+
+    private func decide(
+        route: String,
+        granted: Int,
+        outputNode: Int
+    ) -> RanePlaybackRoutingPolicy.Decision {
+        RanePlaybackRoutingPolicy.decide(
+            portName: route,
+            grantedOutputChannels: granted,
+            outputNodeChannels: outputNode
+        )
+    }
+
+    // MARK: Accepted hardware shapes
+
+    func testTenOutputRaneIsAccepted() {
+        // The exact shape measured on Karl's hardware.
+        guard case let .raneRightDeck(map) = decide(route: raneRoute, granted: 10, outputNode: 10) else {
+            return XCTFail("a 10-output RANE must route to the right deck")
+        }
+        XCTAssertEqual(map.count, 10, "the map is sized to the real destination count, not a guess")
+        XCTAssertEqual(map[2], 0)
+        XCTAssertEqual(map[3], 1)
+    }
+
+    func testFourOutputRaneIsAccepted() {
+        // The minimum that can still reach the right-deck pair.
+        guard case let .raneRightDeck(map) = decide(route: raneRoute, granted: 4, outputNode: 4) else {
+            return XCTFail("four outputs is exactly enough to reach destination 2/3")
+        }
+        XCTAssertEqual(map, [-1, -1, 0, 1])
+    }
+
+    func testFourteenOutputRaneStillWorks() {
+        // The old guessed size must not become a new implicit requirement.
+        guard case let .raneRightDeck(map) = decide(route: raneRoute, granted: 14, outputNode: 14) else {
+            return XCTFail("a larger device must still route")
+        }
+        XCTAssertEqual(map.count, 14)
+        XCTAssertEqual(map[2], 0)
+        XCTAssertEqual(map[3], 1)
+    }
+
+    // MARK: Rejected rather than silently sent to the left deck
+
+    func testFewerThanFourOutputsIsRejectedNotRoutedToOneTwo() {
+        guard case let .unroutable(failure) = decide(route: raneRoute, granted: 2, outputNode: 2) else {
+            return XCTFail("two channels cannot reach the right deck and must not fall back to stereo 1/2")
+        }
+        XCTAssertEqual(failure, .insufficientGrantedChannels(granted: 2, required: 4))
+    }
+
+    func testOutputNodeShortfallIsRejectedEvenWhenSessionGrantsEnough() {
+        // The session granting enough is not proof the node did.
+        guard case let .unroutable(failure) = decide(route: raneRoute, granted: 10, outputNode: 2) else {
+            return XCTFail("an output node with too few channels must be rejected")
+        }
+        XCTAssertEqual(failure, .insufficientOutputNodeChannels(channels: 2, required: 4))
+    }
+
+    func testTheOldFourteenChannelGateWouldHaveRejectedRealHardware() {
+        // Regression pin for the actual defect: 10 >= 14 is false, which is
+        // what silently disabled the map on real hardware.
+        XCTAssertLessThan(10, 14)
+        XCTAssertGreaterThanOrEqual(10, RanePlaybackRoutingPolicy.minimumRequiredOutputChannels,
+                                    "the corrected requirement must accept the measured 10-output device")
+    }
+
+    func testRoutingFailureMessagesAreTruthfulAboutNotPlaying() {
+        let error = IOScratchPlaybackRoutingError.raneRightDeckUnavailable(
+            .insufficientGrantedChannels(granted: 2, required: 4)
+        )
+        XCTAssertTrue(error.userMessage.contains("did not play"))
+        XCTAssertTrue(error.userMessage.contains("left deck"))
+    }
+
+    // MARK: Map places renderer only on 3/4, everything else silent
+
+    func testRendererMapsOnlyToRightDeckPairAndSilencesEveryOtherDestination() {
+        let map = RanePlaybackRoutingPolicy.channelMap(destinationChannelCount: 10)
+
+        XCTAssertEqual(map[2], 0, "renderer L on destination 2 (physical 3)")
+        XCTAssertEqual(map[3], 1, "renderer R on destination 3 (physical 4)")
+        for index in 0..<map.count where index != 2 && index != 3 {
+            XCTAssertEqual(map[index], RanePlaybackRoutingPolicy.silentDestination,
+                           "destination \(index) must be silent")
+        }
+    }
+
+    func testLeftDeckPairIsExplicitlySilenced() {
+        let map = RanePlaybackRoutingPolicy.channelMap(destinationChannelCount: 10)
+
+        // The whole bug was audio landing here.
+        XCTAssertEqual(map[0], RanePlaybackRoutingPolicy.silentDestination)
+        XCTAssertEqual(map[1], RanePlaybackRoutingPolicy.silentDestination)
+    }
+
+    func testMasterPairIsNeverTargeted() {
+        let map = RanePlaybackRoutingPolicy.channelMap(destinationChannelCount: 14)
+
+        // 13/14 is the master path; routing there bypasses the channel strip,
+        // fader, and meter.
+        XCTAssertEqual(map[12], RanePlaybackRoutingPolicy.silentDestination)
+        XCTAssertEqual(map[13], RanePlaybackRoutingPolicy.silentDestination)
+    }
+
+    // MARK: Read-back verification
+
+    func testMapReadBackVerificationAcceptsCorrectMapAndRejectsOthers() {
+        XCTAssertTrue(RanePlaybackRoutingPolicy.mapPlacesRendererOnRightDeck([-1, -1, 0, 1]))
+        XCTAssertTrue(RanePlaybackRoutingPolicy.mapPlacesRendererOnRightDeck(
+            RanePlaybackRoutingPolicy.channelMap(destinationChannelCount: 10)
+        ))
+        // Left-deck placement — the failure this whole slice exists to stop.
+        XCTAssertFalse(RanePlaybackRoutingPolicy.mapPlacesRendererOnRightDeck([0, 1, -1, -1]))
+        XCTAssertFalse(RanePlaybackRoutingPolicy.mapPlacesRendererOnRightDeck(nil))
+        XCTAssertFalse(RanePlaybackRoutingPolicy.mapPlacesRendererOnRightDeck([-1, -1]))
+        // Swapped L/R on the right pair is still wrong.
+        XCTAssertFalse(RanePlaybackRoutingPolicy.mapPlacesRendererOnRightDeck([-1, -1, 1, 0]))
+    }
+
+    // MARK: Non-RANE routes keep ordinary stereo
+
+    func testNonRaneRoutesRemainOrdinaryStereo() {
+        for route in ["Speaker", "Headphones", "MacBook Pro Speakers", "Some USB Interface"] {
+            XCTAssertEqual(decide(route: route, granted: 2, outputNode: 2), .ordinaryStereo,
+                           "\(route) must keep the ordinary stereo graph")
+        }
+    }
+
+    func testNonRaneMultichannelRouteIsStillOrdinaryStereo() {
+        // A big non-RANE interface must not inherit RANE deck routing.
+        XCTAssertEqual(decide(route: "Some USB Interface", granted: 10, outputNode: 10), .ordinaryStereo)
+    }
+
+    func testRaneRouteRecognition() {
+        XCTAssertTrue(RanePlaybackRoutingPolicy.matchesRaneRoute(portName: "Rane ONE MKII"))
+        XCTAssertTrue(RanePlaybackRoutingPolicy.matchesRaneRoute(portName: "RANE ONE"))
+        XCTAssertFalse(RanePlaybackRoutingPolicy.matchesRaneRoute(portName: "Rane Seventy-Two"))
+        XCTAssertFalse(RanePlaybackRoutingPolicy.matchesRaneRoute(portName: "Speaker"))
+    }
+
+    // MARK: DVS input independence
+
+    func testDVSInputPairIsUnchangedAndIndependentOfPlaybackOutput() {
+        let pair = DVSHardwareProfile.preferredStereoPair(forDeviceName: "Rane ONE MKII")
+
+        XCTAssertEqual(pair?.firstChannelIndex, 2)
+        XCTAssertEqual(pair?.secondChannelIndex, 3)
+        // Input and output namespaces are separate: both legitimately use 3/4,
+        // and neither value may be derived from the other.
+        XCTAssertEqual(RanePlaybackRoutingPolicy.rightDeckPairStartIndex, pair?.firstChannelIndex,
+                       "same numbers, different Core Audio directions — not a collision")
+    }
+
+    func testDVSProfileIgnoresUnknownDevices() {
+        XCTAssertNil(DVSHardwareProfile.preferredStereoPair(forDeviceName: "Some USB Interface"))
+        XCTAssertNil(DVSHardwareProfile.preferredStereoPair(forDeviceName: nil))
+    }
+
+    // MARK: Right-deck ownership is untouched by this slice
+
+    private func repoRootURL() -> URL {
+        URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+    }
+
+    func testRightUpfaderAndCrossfaderOwnershipUnchanged() throws {
+        let engineURL = repoRootURL().appendingPathComponent("ScratchLab/Audio/iOS/IOScratchPlaybackEngine.swift")
+        let source = try String(contentsOf: engineURL, encoding: .utf8)
+
+        // Gain remains the product of right-upfader and right-deck crossfader.
+        XCTAssertTrue(source.contains("rightUpfaderGain * crossfaderRightDeckGain"))
+        XCTAssertTrue(source.contains("func setRightUpfaderGain"))
+        XCTAssertTrue(source.contains("func setCrossfaderPosition"))
+    }
+}
+
+// MARK: - Capture-integrity Slice E: bounded finalization state machine
+
+/// Deterministic coverage of the one finalization cycle.
+///
+/// Every transition is driven by an injected instant, so the races that
+/// produced the original Saving hang — duplicate recorder callbacks, a stale
+/// published summary, a Stop that raced the recorder starting, and a watchdog
+/// that could fire after the take had already reached Review — are reproduced
+/// exactly, with no real waiting and no flakiness.
+final class CaptureFinalizationMachineTests: XCTestCase {
+    private let origin = Date(timeIntervalSince1970: 1_700_000_000)
+    private let budget = CaptureFinalizationBudget(firstWait: 12, retryWait: 3, audioInspection: 5)
+
+    private func takeKey(_ number: Int, session: String = "session-A") -> CaptureFinalizationTakeKey {
+        CaptureFinalizationTakeKey(sessionID: session, takeNumber: number)
+    }
+
+    private func machine() -> CaptureFinalizationMachine {
+        CaptureFinalizationMachine(budget: budget)
+    }
+
+    private func startedMachine(
+        source: CaptureStopSource = .phone,
+        recorderPhase: CaptureRecorderPhase = .recording
+    ) -> (CaptureFinalizationMachine, [CaptureFinalizationEffect]) {
+        var machine = self.machine()
+        let effects = machine.apply(
+            .stopRequested(take: takeKey(1), source: source, recorderPhase: recorderPhase),
+            at: origin
+        )
+        return (machine, effects)
+    }
+
+    // MARK: One typed authoritative state
+
+    func testIdleUntilAStopIsAccepted() {
+        let machine = self.machine()
+        XCTAssertEqual(machine.state, .idle)
+        XCTAssertFalse(machine.isSaving)
+        XCTAssertNil(machine.activeTake)
+        XCTAssertNil(machine.stoppedAt)
+    }
+
+    func testAcceptedStopArmsExactlyOneDeadlineWithinTheBound() {
+        let (machine, effects) = startedMachine()
+
+        XCTAssertEqual(
+            machine.state,
+            .awaitingRecorder(
+                take: takeKey(1),
+                stoppedAt: origin,
+                deadline: origin.addingTimeInterval(12)
+            )
+        )
+        XCTAssertEqual(
+            effects,
+            [
+                .freezeElapsedTimer(at: origin),
+                .closeTakeEvidenceWindow,
+                .scheduleDeadline(at: origin.addingTimeInterval(12)),
+                .requestRecorderStop
+            ]
+        )
+        XCTAssertEqual(effects.filter { if case .scheduleDeadline = $0 { return true } else { return false } }.count, 1)
+    }
+
+    // MARK: Phone Stop and Watch Stop enter the same transition path
+
+    func testPhoneStopAndWatchStopProduceIdenticalEffectsAndState() {
+        let (phoneMachine, phoneEffects) = startedMachine(source: .phone)
+        let (watchMachine, watchEffects) = startedMachine(source: .watch)
+
+        XCTAssertEqual(phoneEffects, watchEffects)
+        XCTAssertEqual(phoneMachine.state, watchMachine.state)
+    }
+
+    // MARK: Timer freezes at the first accepted Stop
+
+    func testSecondStopDoesNotRefreezeTheTimerOrArmASecondDeadline() {
+        var (machine, _) = startedMachine()
+
+        let later = origin.addingTimeInterval(4)
+        let repeatEffects = machine.apply(
+            .stopRequested(take: takeKey(1), source: .watch, recorderPhase: .recording),
+            at: later
+        )
+
+        XCTAssertTrue(repeatEffects.isEmpty, "a Stop during Saving must join the in-flight cycle")
+        XCTAssertEqual(machine.stoppedAt, origin, "elapsed time freezes at the FIRST accepted Stop")
+        XCTAssertEqual(machine.state.deadline, origin.addingTimeInterval(12))
+    }
+
+    // MARK: Stop during startup cannot leave hidden recording active
+
+    func testStopWhileRecorderIsStartingCancelsThePendingStartAndStillStopsTheRecorder() {
+        let (machine, effects) = startedMachine(recorderPhase: .starting)
+
+        XCTAssertEqual(
+            effects,
+            [
+                .freezeElapsedTimer(at: origin),
+                .closeTakeEvidenceWindow,
+                .cancelPendingRecorderStart,
+                .scheduleDeadline(at: origin.addingTimeInterval(12)),
+                .requestRecorderStop
+            ]
+        )
+        XCTAssertTrue(machine.isSaving)
+    }
+
+    func testStopWhileRecordingDoesNotEmitAStartupCancel() {
+        let (_, effects) = startedMachine(recorderPhase: .recording)
+        XCTAssertFalse(effects.contains(.cancelPendingRecorderStart))
+    }
+
+    // MARK: Every Stop reaches exactly one terminal result
+
+    func testMatchingSummaryCompletesTheTakeToReview() {
+        var (machine, _) = startedMachine()
+
+        let effects = machine.apply(
+            .summaryDelivered(take: takeKey(1), recordingID: "rec-1"),
+            at: origin.addingTimeInterval(0.4)
+        )
+
+        XCTAssertEqual(effects, [.cancelDeadline, .completeToReview(recordingID: "rec-1")])
+        XCTAssertEqual(machine.state, .completed(take: takeKey(1), recordingID: "rec-1"))
+        XCTAssertTrue(machine.state.isTerminal)
+        XCTAssertFalse(machine.isSaving)
+    }
+
+    func testDeadlineWithoutASummaryOrActiveRecorderFailsRecoverably() {
+        var (machine, _) = startedMachine()
+
+        let effects = machine.apply(
+            .deadlineElapsed(recorderStillRecording: false, status: "Recorder stalled."),
+            at: origin.addingTimeInterval(12)
+        )
+
+        XCTAssertEqual(
+            effects,
+            [
+                .preserveStagedMedia,
+                .presentRecoverableFailure(
+                    message: "Take save did not finish. The staged recording was preserved. Recorder stalled."
+                )
+            ]
+        )
+        XCTAssertEqual(
+            machine.state,
+            .failed(
+                take: takeKey(1),
+                reason: "Take save did not finish. The staged recording was preserved. Recorder stalled."
+            )
+        )
+    }
+
+    func testSavingIsBoundedByExactlyOneRetryAndNeverExceedsTheWorstCase() {
+        var (machine, _) = startedMachine()
+
+        let firstDeadline = origin.addingTimeInterval(12)
+        let retryEffects = machine.apply(
+            .deadlineElapsed(recorderStillRecording: true, status: "Stopping recording"),
+            at: firstDeadline
+        )
+        XCTAssertEqual(
+            retryEffects,
+            [.scheduleDeadline(at: firstDeadline.addingTimeInterval(3)), .requestRecorderStop]
+        )
+        XCTAssertEqual(
+            machine.state,
+            .retryingStop(take: takeKey(1), stoppedAt: origin, deadline: firstDeadline.addingTimeInterval(3))
+        )
+
+        // A still-recording recorder does NOT buy a second retry.
+        let secondDeadline = firstDeadline.addingTimeInterval(3)
+        let finalEffects = machine.apply(
+            .deadlineElapsed(recorderStillRecording: true, status: "Stopping recording"),
+            at: secondDeadline
+        )
+        XCTAssertEqual(
+            finalEffects,
+            [
+                .preserveStagedMedia,
+                .presentRecoverableFailure(
+                    message: "Take save did not finish. The staged recording was preserved. Stopping recording"
+                )
+            ]
+        )
+        XCTAssertTrue(machine.state.isTerminal)
+        XCTAssertEqual(secondDeadline.timeIntervalSince(origin), budget.worstCaseSaving, accuracy: 0.000_1)
+    }
+
+    func testRetryStillCompletesWhenTheRetriedStopProducesASummary() {
+        var (machine, _) = startedMachine()
+        _ = machine.apply(
+            .deadlineElapsed(recorderStillRecording: true, status: "Stopping recording"),
+            at: origin.addingTimeInterval(12)
+        )
+
+        let effects = machine.apply(
+            .summaryDelivered(take: takeKey(1), recordingID: "rec-1"),
+            at: origin.addingTimeInterval(13)
+        )
+
+        XCTAssertEqual(effects, [.cancelDeadline, .completeToReview(recordingID: "rec-1")])
+        XCTAssertEqual(machine.state, .completed(take: takeKey(1), recordingID: "rec-1"))
+    }
+
+    func testExplicitNoSummaryReportFailsRecoverablyAndCancelsTheDeadline() {
+        var (machine, _) = startedMachine()
+
+        let effects = machine.apply(
+            .recorderReportedNoSummary(status: "The camera recorder was not active when Save Take was requested."),
+            at: origin.addingTimeInterval(0.2)
+        )
+
+        XCTAssertEqual(
+            effects,
+            [
+                .cancelDeadline,
+                .preserveStagedMedia,
+                .presentRecoverableFailure(
+                    message: "Take save did not finish. The staged recording was preserved. "
+                        + "The camera recorder was not active when Save Take was requested."
+                )
+            ]
+        )
+        XCTAssertTrue(machine.state.isTerminal)
+    }
+
+    func testEmptyRecorderStatusStillProducesAnExplicitReason() {
+        var (machine, _) = startedMachine()
+        let effects = machine.apply(
+            .deadlineElapsed(recorderStillRecording: false, status: "   "),
+            at: origin.addingTimeInterval(12)
+        )
+
+        XCTAssertEqual(
+            effects.last,
+            .presentRecoverableFailure(
+                message: "Take save did not finish. The staged recording was preserved. "
+                    + "The recorder did not report completion."
+            )
+        )
+    }
+
+    // MARK: Preserve media before presenting failure
+
+    func testEveryFailurePathPreservesStagedMediaBeforePresentingIt() {
+        let failureEventsAndSetups: [(String, () -> [CaptureFinalizationEffect])] = [
+            ("first-wait timeout", {
+                var machine = self.machine()
+                _ = machine.apply(
+                    .stopRequested(take: self.takeKey(1), source: .phone, recorderPhase: .recording),
+                    at: self.origin
+                )
+                return machine.apply(
+                    .deadlineElapsed(recorderStillRecording: false, status: "stalled"),
+                    at: self.origin.addingTimeInterval(12)
+                )
+            }),
+            ("retry exhaustion", {
+                var machine = self.machine()
+                _ = machine.apply(
+                    .stopRequested(take: self.takeKey(1), source: .watch, recorderPhase: .starting),
+                    at: self.origin
+                )
+                _ = machine.apply(
+                    .deadlineElapsed(recorderStillRecording: true, status: "stalled"),
+                    at: self.origin.addingTimeInterval(12)
+                )
+                return machine.apply(
+                    .deadlineElapsed(recorderStillRecording: true, status: "stalled"),
+                    at: self.origin.addingTimeInterval(15)
+                )
+            }),
+            ("explicit no-summary report", {
+                var machine = self.machine()
+                _ = machine.apply(
+                    .stopRequested(take: self.takeKey(1), source: .phone, recorderPhase: .recording),
+                    at: self.origin
+                )
+                return machine.apply(.recorderReportedNoSummary(status: "stalled"), at: self.origin)
+            })
+        ]
+
+        for (name, produce) in failureEventsAndSetups {
+            let effects = produce()
+            let preserve = effects.firstIndex(of: .preserveStagedMedia)
+            let present = effects.firstIndex(where: {
+                if case .presentRecoverableFailure = $0 { return true } else { return false }
+            })
+            let preserveIndex = try? XCTUnwrap(preserve, "\(name): staged media must be preserved")
+            let presentIndex = try? XCTUnwrap(present, "\(name): failure must be presented")
+            XCTAssertNotNil(preserveIndex, name)
+            XCTAssertNotNil(presentIndex, name)
+            if let preserveIndex, let presentIndex {
+                XCTAssertLessThan(preserveIndex, presentIndex, "\(name): preserve media BEFORE presenting failure")
+            }
+        }
+    }
+
+    // MARK: Idempotence of duplicate deliveries
+
+    func testDuplicateSummaryForTheSameTakeDoesNothing() {
+        var (machine, _) = startedMachine()
+        _ = machine.apply(.summaryDelivered(take: takeKey(1), recordingID: "rec-1"), at: origin)
+
+        let duplicate = machine.apply(
+            .summaryDelivered(take: takeKey(1), recordingID: "rec-1"),
+            at: origin.addingTimeInterval(1)
+        )
+
+        XCTAssertTrue(duplicate.isEmpty, "a duplicate recorder callback must not repeat any side effect")
+        XCTAssertEqual(machine.state, .completed(take: takeKey(1), recordingID: "rec-1"))
+    }
+
+    func testARepublishedSummaryWithADifferentRecordingIDCannotOverwriteTheCompletedTake() {
+        var (machine, _) = startedMachine()
+        _ = machine.apply(.summaryDelivered(take: takeKey(1), recordingID: "rec-1"), at: origin)
+
+        let republished = machine.apply(
+            .summaryDelivered(take: takeKey(1), recordingID: "rec-2"),
+            at: origin.addingTimeInterval(1)
+        )
+
+        XCTAssertTrue(republished.isEmpty)
+        XCTAssertEqual(machine.state, .completed(take: takeKey(1), recordingID: "rec-1"))
+    }
+
+    func testDeadlineDeliveredAfterReviewIsInert() {
+        var (machine, _) = startedMachine()
+        _ = machine.apply(.summaryDelivered(take: takeKey(1), recordingID: "rec-1"), at: origin)
+
+        let lateWatchdog = machine.apply(
+            .deadlineElapsed(recorderStillRecording: true, status: "Stopping recording"),
+            at: origin.addingTimeInterval(12)
+        )
+
+        XCTAssertTrue(lateWatchdog.isEmpty, "a watchdog that outlived its cycle must not touch a completed take")
+        XCTAssertEqual(machine.state, .completed(take: takeKey(1), recordingID: "rec-1"))
+    }
+
+    func testDeadlineDeliveredTwiceCannotFailATakeTwice() {
+        var (machine, _) = startedMachine()
+        _ = machine.apply(.deadlineElapsed(recorderStillRecording: false, status: "stalled"), at: origin)
+
+        let second = machine.apply(
+            .deadlineElapsed(recorderStillRecording: false, status: "stalled"),
+            at: origin.addingTimeInterval(1)
+        )
+
+        XCTAssertTrue(second.isEmpty)
+    }
+
+    func testALateSummaryCannotReopenAFailedTake() {
+        var (machine, _) = startedMachine()
+        _ = machine.apply(.deadlineElapsed(recorderStillRecording: false, status: "stalled"), at: origin)
+
+        let late = machine.apply(
+            .summaryDelivered(take: takeKey(1), recordingID: "rec-1"),
+            at: origin.addingTimeInterval(20)
+        )
+
+        XCTAssertTrue(late.isEmpty, "exactly one terminal result per Stop")
+        if case .failed = machine.state {} else {
+            XCTFail("expected the take to remain failed, got \(machine.state)")
+        }
+    }
+
+    // MARK: A summary for the wrong take cannot complete the active take
+
+    func testSummaryForAnotherTakeNumberIsRefused() {
+        var (machine, _) = startedMachine()
+
+        let foreign = machine.apply(
+            .summaryDelivered(take: takeKey(2), recordingID: "rec-2"),
+            at: origin.addingTimeInterval(1)
+        )
+
+        XCTAssertTrue(foreign.isEmpty)
+        XCTAssertTrue(machine.isSaving, "the active take must still be waiting for its own summary")
+        XCTAssertEqual(machine.activeTake, takeKey(1))
+    }
+
+    func testSummaryForAnotherSessionIsRefused() {
+        var (machine, _) = startedMachine()
+
+        let foreign = machine.apply(
+            .summaryDelivered(take: takeKey(1, session: "session-B"), recordingID: "rec-x"),
+            at: origin.addingTimeInterval(1)
+        )
+
+        XCTAssertTrue(foreign.isEmpty)
+        XCTAssertTrue(machine.isSaving)
+    }
+
+    func testAcceptsSummaryOnlyForTheActiveSavingTake() {
+        let (machine, _) = startedMachine()
+
+        XCTAssertTrue(machine.acceptsSummary(for: takeKey(1)))
+        XCTAssertFalse(machine.acceptsSummary(for: takeKey(2)))
+        XCTAssertFalse(machine.acceptsSummary(for: takeKey(1, session: "session-B")))
+        XCTAssertFalse(self.machine().acceptsSummary(for: takeKey(1)), "idle accepts nothing")
+    }
+
+    func testAPreviouslyStagedSummaryCannotCompleteTheNextTake() {
+        var machine = self.machine()
+        _ = machine.apply(
+            .stopRequested(take: takeKey(1), source: .phone, recorderPhase: .recording),
+            at: origin
+        )
+        _ = machine.apply(.summaryDelivered(take: takeKey(1), recordingID: "rec-1"), at: origin)
+
+        // Take 2 records and stops. Take 1's summary is still the broadcaster's
+        // last published value.
+        _ = machine.apply(.takeArmedForRecording(take: takeKey(2)), at: origin.addingTimeInterval(30))
+        _ = machine.apply(
+            .stopRequested(take: takeKey(2), source: .phone, recorderPhase: .recording),
+            at: origin.addingTimeInterval(40)
+        )
+
+        let stale = machine.apply(
+            .summaryDelivered(take: takeKey(1), recordingID: "rec-1"),
+            at: origin.addingTimeInterval(40.1)
+        )
+
+        XCTAssertTrue(stale.isEmpty)
+        XCTAssertTrue(machine.isSaving)
+        XCTAssertEqual(machine.activeTake, takeKey(2))
+    }
+
+    // MARK: Arming a new take retires the previous terminal result
+
+    func testArmingANewTakeReturnsToIdleAndCancelsAnyOutstandingDeadline() {
+        var (machine, _) = startedMachine()
+
+        let armed = machine.apply(.takeArmedForRecording(take: takeKey(2)), at: origin.addingTimeInterval(50))
+
+        XCTAssertEqual(armed, [.cancelDeadline], "an outstanding deadline must not outlive its take")
+        XCTAssertEqual(machine.state, .idle)
+    }
+
+    func testArmingAfterACompletedTakeEmitsNoDeadlineCancel() {
+        var (machine, _) = startedMachine()
+        _ = machine.apply(.summaryDelivered(take: takeKey(1), recordingID: "rec-1"), at: origin)
+
+        let armed = machine.apply(.takeArmedForRecording(take: takeKey(2)), at: origin.addingTimeInterval(50))
+
+        XCTAssertTrue(armed.isEmpty)
+        XCTAssertEqual(machine.state, .idle)
+    }
+
+    // MARK: Optional audio inspection cannot block Review indefinitely
+
+    func testAudioInspectionIsOnlyAcceptedForTheCompletedRecording() {
+        var (machine, _) = startedMachine()
+        XCTAssertFalse(
+            machine.acceptsAudioInspection(forRecordingID: "rec-1"),
+            "inspection results must never be applied while the take is still finalizing"
+        )
+
+        _ = machine.apply(.summaryDelivered(take: takeKey(1), recordingID: "rec-1"), at: origin)
+        XCTAssertTrue(machine.acceptsAudioInspection(forRecordingID: "rec-1"))
+        XCTAssertFalse(machine.acceptsAudioInspection(forRecordingID: "rec-2"))
+
+        _ = machine.apply(.takeArmedForRecording(take: takeKey(2)), at: origin.addingTimeInterval(30))
+        XCTAssertFalse(
+            machine.acceptsAudioInspection(forRecordingID: "rec-1"),
+            "a slow inspection returning after the next take began must not rewrite the live review"
+        )
+    }
+
+    func testAudioInspectionHasItsOwnBoundSeparateFromTheSavingBound() {
+        XCTAssertGreaterThan(budget.audioInspection, 0)
+        XCTAssertEqual(CaptureFinalizationBudget.default.audioInspection, 5)
+        XCTAssertEqual(CaptureFinalizationBudget.default.worstCaseSaving, 15)
+    }
+
+    func testBudgetRejectsNegativeBounds() {
+        let clamped = CaptureFinalizationBudget(firstWait: -4, retryWait: -1, audioInspection: -9)
+        XCTAssertEqual(clamped.firstWait, 0)
+        XCTAssertEqual(clamped.retryWait, 0)
+        XCTAssertEqual(clamped.audioInspection, 0)
+        XCTAssertEqual(clamped.worstCaseSaving, 0)
+    }
+
+    // MARK: Deterministic scheduler
+
+    @MainActor
+    func testDeadlineSchedulerFiresOnceAndReplacesRatherThanStacksTimers() async {
+        var stamp = Date(timeIntervalSince1970: 1_700_000_000)
+        let scheduler = CaptureFinalizationDeadlineScheduler(
+            clock: CaptureFinalizationClock { stamp }
+        )
+        let counter = FinalizationFireCounter()
+
+        // An already-elapsed deadline fires immediately.
+        scheduler.schedule(at: stamp) { counter.increment() }
+        XCTAssertTrue(scheduler.isScheduled)
+
+        // Re-scheduling replaces the previous timer instead of adding one.
+        stamp = stamp.addingTimeInterval(1)
+        scheduler.schedule(at: stamp.addingTimeInterval(120)) { counter.increment() }
+        XCTAssertTrue(scheduler.isScheduled)
+
+        scheduler.cancel()
+        XCTAssertFalse(scheduler.isScheduled)
+
+        // Yield so any immediate timer that survived cancellation would have run.
+        for _ in 0..<20 { await Task.yield() }
+        XCTAssertLessThanOrEqual(counter.value, 1, "no stacked watchdogs")
+    }
+}
+
+/// Main-actor-confined counter for the scheduler test.
+@MainActor
+private final class FinalizationFireCounter {
+    private(set) var value = 0
+    func increment() { value += 1 }
+}
+
+// MARK: - Slice F: container-relative kept-ledger references
+
+extension CaptureReliabilityPhase1CoreTests {
+    /// A simulated iOS app Data container. Two of these stand in for the same
+    /// app before and after an install that reissued the container UUID: the
+    /// capture files are byte-identical, only the container path changed.
+    struct SimulatedAppContainer {
+        let rootURL: URL
+        let locator: CaptureContainerLocator
+        let companionCapturesURL: URL
+        let watchMotionCapturesURL: URL
+    }
+
+    struct SimulatedCaptureArtifacts {
+        let baseName: String
+        let mediaURL: URL
+        let sidecarURL: URL
+        let audioURL: URL
+        let watchMotionURL: URL?
+    }
+
+    func makeSimulatedAppContainer(in root: URL, named name: String) throws -> SimulatedAppContainer {
+        let containerURL = root.appendingPathComponent(name, isDirectory: true)
+        let documentsURL = containerURL.appendingPathComponent("Documents", isDirectory: true)
+        let applicationSupportURL = containerURL
+            .appendingPathComponent("Library", isDirectory: true)
+            .appendingPathComponent("Application Support", isDirectory: true)
+        let companionCapturesURL = documentsURL
+            .appendingPathComponent("CompanionCaptures", isDirectory: true)
+        let watchMotionCapturesURL = applicationSupportURL
+            .appendingPathComponent("WatchMotionCaptures", isDirectory: true)
+        try FileManager.default.createDirectory(at: companionCapturesURL, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: watchMotionCapturesURL, withIntermediateDirectories: true)
+        return SimulatedAppContainer(
+            rootURL: containerURL,
+            locator: CaptureContainerLocator(
+                documentsURL: documentsURL,
+                applicationSupportURL: applicationSupportURL
+            ),
+            companionCapturesURL: companionCapturesURL,
+            watchMotionCapturesURL: watchMotionCapturesURL
+        )
+    }
+
+    /// Writes one real take — movie, scratch WAV, finalized sidecar, and
+    /// optionally a linked Watch capture — into a simulated container, using
+    /// the same naming production capture uses.
+    @discardableResult
+    func writeSimulatedCapture(
+        in container: SimulatedAppContainer,
+        sessionID: String,
+        takeNumber: Int,
+        bpm: Int,
+        createdAt: Date,
+        includeWatchMotion: Bool = false
+    ) throws -> SimulatedCaptureArtifacts {
+        let takeIdentity = CaptureCore.LocalRecordingNaming.takeIdentity(
+            sessionID: sessionID,
+            takeNumber: takeNumber
+        )
+        let baseName = CaptureCore.LocalRecordingNaming.baseName(
+            sessionID: sessionID,
+            takeNumber: takeNumber,
+            roleLabel: "camA"
+        )
+        let mediaURL = container.companionCapturesURL
+            .appendingPathComponent(baseName)
+            .appendingPathExtension("mov")
+        let audioURL = container.companionCapturesURL
+            .appendingPathComponent(baseName)
+            .appendingPathExtension("wav")
+        let sidecarURL = container.companionCapturesURL
+            .appendingPathComponent(baseName)
+            .appendingPathExtension("json")
+
+        try writeTestMOV(at: mediaURL)
+        try writeTestWAV(at: audioURL)
+        try writeFinalizedSidecar(
+            to: sidecarURL,
+            sessionID: sessionID,
+            takeIdentity: takeIdentity,
+            mediaURL: mediaURL,
+            performerName: "DJ Ledger",
+            bpm: bpm,
+            createdAt: createdAt
+        )
+
+        var watchMotionURL: URL?
+        if includeWatchMotion {
+            let watchFileName = "\(baseName)_watch.json"
+            let url = container.watchMotionCapturesURL.appendingPathComponent(watchFileName)
+            let watchSession = makeWatchSession(sessionID: sessionID, takeID: takeIdentity.takeID)
+            try WatchMotionCaptureCodec.encoder.encode(watchSession).write(to: url, options: .atomic)
+            try linkWatchCapture(
+                fileName: watchFileName,
+                captureID: watchSession.id,
+                inSidecarAt: sidecarURL
+            )
+            watchMotionURL = url
+        }
+
+        return SimulatedCaptureArtifacts(
+            baseName: baseName,
+            mediaURL: mediaURL,
+            sidecarURL: sidecarURL,
+            audioURL: audioURL,
+            watchMotionURL: watchMotionURL
+        )
+    }
+
+    func linkWatchCapture(fileName: String, captureID: UUID, inSidecarAt sidecarURL: URL) throws {
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .iso8601
+        let sidecar = try decoder.decode(
+            CaptureCore.LocalRecordingSidecar.self,
+            from: try Data(contentsOf: sidecarURL)
+        ).linkingWatchCapture(id: captureID, fileName: fileName)
+        try sidecar.encodedData().write(to: sidecarURL, options: .atomic)
+    }
+
+    func makeKeptTake(
+        from artifacts: SimulatedCaptureArtifacts,
+        sessionID: String,
+        takeNumber: Int,
+        bpm: Int,
+        locator: CaptureContainerLocator
+    ) -> GuidedCaptureKeptTake {
+        GuidedCaptureKeptTake(
+            sessionID: sessionID,
+            takeID: CaptureCore.LocalRecordingNaming.takeID(takeNumber: takeNumber),
+            takeNumber: takeNumber,
+            bpm: bpm,
+            sourceMediaURL: artifacts.mediaURL,
+            sourceSidecarURL: artifacts.sidecarURL,
+            sourceAudioURL: artifacts.audioURL,
+            sourceWatchMotionURL: artifacts.watchMotionURL,
+            drillName: "Full capture",
+            duration: 1,
+            quality: "kept",
+            comboTagged: false,
+            audioPresent: true,
+            motionPresent: false,
+            syncStatus: "not_requested",
+            recordingStatus: "completed",
+            verbalSlateUsed: nil,
+            syncClapUsed: nil,
+            note: "Ready to keep",
+            containerLocator: locator
+        )
+    }
+
+    /// Mirrors `CompanionCameraView.makeSessionExportPackage`: every location
+    /// comes out of the ledger, resolved against the running container.
+    func makeExportPackage(
+        from session: GuidedCaptureKeptSession,
+        locator: CaptureContainerLocator
+    ) throws -> SessionExportPackage {
+        let sidecarDecoder = JSONDecoder()
+        sidecarDecoder.dateDecodingStrategy = .iso8601
+        let decodedSidecars = session.takes.compactMap { take -> CaptureCore.LocalRecordingSidecar? in
+            guard let data = try? Data(contentsOf: take.sourceSidecarURL(in: locator)) else { return nil }
+            return try? sidecarDecoder.decode(CaptureCore.LocalRecordingSidecar.self, from: data)
+        }
+        let totalDurationSeconds = session.takes.reduce(0) { $0 + $1.duration }
+        // Mirrors production exactly: when no sidecar can be read — which is
+        // what a stale ledger looks like — the ledger's own config is used and
+        // the package is still built, so Export reports the real missing files
+        // instead of silently producing nothing.
+        let config: CaptureSessionConfig = {
+            guard let seedSidecar = decodedSidecars.first else { return session.config }
+            return SessionExportMetadataResolver.mergedConfig(
+                preferredConfig: nil,
+                seedSidecar: seedSidecar,
+                sidecars: decodedSidecars,
+                fallbackSessionID: session.sessionID,
+                createdAt: session.config.createdAt,
+                updatedAt: session.config.updatedAt,
+                takeCount: session.takes.count,
+                totalDurationSeconds: totalDurationSeconds
+            )
+        }()
+        let metadata = SessionExportMetadata(
+            config: config,
+            workflow: session.workflow,
+            platform: session.platform,
+            sessionName: session.sessionName,
+            totalDurationSeconds: totalDurationSeconds
+        )
+        let takes = session.takes.map { take in
+            SessionExportTake(
+                takeID: take.takeID,
+                takeNumber: take.takeNumber,
+                bpm: take.bpm,
+                mediaURL: take.sourceMediaURL(in: locator),
+                audioArtifactURL: take.sourceAudioURL(in: locator),
+                sidecarURL: take.sourceSidecarURL(in: locator),
+                watchCaptureSession: nil,
+                drillName: take.drillName,
+                duration: take.duration,
+                quality: take.quality,
+                comboTagged: take.comboTagged,
+                audioPresent: take.audioPresent,
+                motionPresent: take.motionPresent,
+                syncStatus: take.syncStatus,
+                recordingStatus: take.recordingStatus,
+                verbalSlateUsed: take.verbalSlateUsed,
+                syncClapUsed: take.syncClapUsed,
+                note: take.note,
+                captureTiming: take.captureTiming,
+                motionSources: take.motionSources,
+                faderMappingSource: take.faderMappingSource
+            )
+        }
+        return SessionExportPackage(
+            metadata: metadata,
+            takes: takes,
+            calibrationData: session.calibrationData
+        )
+    }
+
+    /// Moves every capture artifact from one simulated container to another,
+    /// leaving the files byte-identical — exactly what an upgrade install that
+    /// reissues the Data-container UUID does.
+    func relocateCaptures(
+        from source: SimulatedAppContainer,
+        to destination: SimulatedAppContainer
+    ) throws {
+        for (sourceDirectory, destinationDirectory) in [
+            (source.companionCapturesURL, destination.companionCapturesURL),
+            (source.watchMotionCapturesURL, destination.watchMotionCapturesURL)
+        ] {
+            let entries = try FileManager.default.contentsOfDirectory(
+                at: sourceDirectory,
+                includingPropertiesForKeys: nil,
+                options: [.skipsHiddenFiles]
+            )
+            for entry in entries {
+                try FileManager.default.moveItem(
+                    at: entry,
+                    to: destinationDirectory.appendingPathComponent(entry.lastPathComponent)
+                )
+            }
+        }
+    }
+
+    /// Writes a ledger in the pre-fix on-disk shape: each take's four locations
+    /// are bare absolute `file://` URLs under a container that no longer exists.
+    func writeLegacyAbsoluteLedger(
+        to storageURL: URL,
+        session: GuidedCaptureKeptSession
+    ) throws {
+        struct LegacyLedgerDocument: Encodable {
+            let schemaVersion: Int
+            let sessions: [GuidedCaptureKeptSession]
+        }
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+        let data = try encoder.encode(
+            LegacyLedgerDocument(schemaVersion: 1, sessions: [session])
+        )
+        try FileManager.default.createDirectory(
+            at: storageURL.deletingLastPathComponent(),
+            withIntermediateDirectories: true
+        )
+        try data.write(to: storageURL, options: .atomic)
+    }
+
+    func makeLegacyAbsoluteTake(
+        sessionID: String,
+        takeNumber: Int,
+        bpm: Int,
+        legacyContainerURL: URL,
+        baseName: String,
+        legacyWatchMotionFileName: String? = nil,
+        takeID: String? = nil
+    ) -> GuidedCaptureKeptTake {
+        let legacyCompanionURL = legacyContainerURL
+            .appendingPathComponent("Documents", isDirectory: true)
+            .appendingPathComponent("CompanionCaptures", isDirectory: true)
+        let legacyWatchURL = legacyContainerURL
+            .appendingPathComponent("Library", isDirectory: true)
+            .appendingPathComponent("Application Support", isDirectory: true)
+            .appendingPathComponent("WatchMotionCaptures", isDirectory: true)
+        return GuidedCaptureKeptTake(
+            sessionID: sessionID,
+            takeID: takeID ?? CaptureCore.LocalRecordingNaming.takeID(takeNumber: takeNumber),
+            takeNumber: takeNumber,
+            bpm: bpm,
+            sourceMedia: .absolute(
+                legacyCompanionURL.appendingPathComponent(baseName).appendingPathExtension("mov")
+            ),
+            sourceSidecar: .absolute(
+                legacyCompanionURL.appendingPathComponent(baseName).appendingPathExtension("json")
+            ),
+            sourceAudio: .absolute(
+                legacyCompanionURL.appendingPathComponent(baseName).appendingPathExtension("wav")
+            ),
+            sourceWatchMotion: legacyWatchMotionFileName.map {
+                .absolute(legacyWatchURL.appendingPathComponent($0))
+            },
+            drillName: "Full capture",
+            duration: 1,
+            quality: "kept",
+            comboTagged: false,
+            audioPresent: true,
+            motionPresent: false,
+            syncStatus: "not_requested",
+            recordingStatus: "completed",
+            verbalSlateUsed: nil,
+            syncClapUsed: nil,
+            note: "Ready to keep"
+        )
+    }
+}
+
+/// Slice F physical failure: the kept-session ledger persisted every take's
+/// media/sidecar/audio/Watch location as an absolute `file://` URL containing
+/// the iOS Data-container UUID. The next install reissued that UUID, so the
+/// captures were intact but every ledger path dangled and Export reported them
+/// missing. These tests pin the durable form and the one-way legacy repair.
+extension CaptureReliabilityPhase1CoreTests {
+    /// 1. A ledger written under one container still exports after the app's
+    /// container is reissued and the captures move with it.
+    @MainActor
+    func testKeptLedgerSurvivesContainerRelocationAndStillExports() throws {
+        let root = try makeTemporaryDirectory()
+        let containerA = try makeSimulatedAppContainer(in: root, named: "ContainerA")
+        let containerB = try makeSimulatedAppContainer(in: root, named: "ContainerB")
+        let storageURL = root.appendingPathComponent("ledger/kept-sessions.json")
+        let sessionID = "slice-f-relocation"
+        let createdAt = Date(timeIntervalSince1970: 1_730_000_000.372)
+
+        let artifacts = try writeSimulatedCapture(
+            in: containerA,
+            sessionID: sessionID,
+            takeNumber: 1,
+            bpm: 95,
+            createdAt: Date(timeIntervalSince1970: 1_730_000_000)
+        )
+        var session = makeGuidedKeptSession(sessionID: sessionID, timestamp: createdAt)
+        session.config.createdAt = createdAt
+        session.config.updatedAt = createdAt
+
+        let writer = try GuidedCaptureKeptSessionStore(
+            storageURL: storageURL,
+            containerLocator: containerA.locator
+        )
+        _ = try writer.keep(
+            makeKeptTake(
+                from: artifacts,
+                sessionID: sessionID,
+                takeNumber: 1,
+                bpm: 95,
+                locator: containerA.locator
+            ),
+            in: session
+        )
+
+        try relocateCaptures(from: containerA, to: containerB)
+        XCTAssertFalse(
+            FileManager.default.fileExists(atPath: artifacts.mediaURL.path),
+            "The relocation must genuinely invalidate the old absolute path."
+        )
+
+        let reopened = try GuidedCaptureKeptSessionStore(
+            storageURL: storageURL,
+            containerLocator: containerB.locator
+        )
+        let restored = try XCTUnwrap(reopened.session(id: sessionID))
+        XCTAssertEqual(restored.takes.count, 1)
+        let restoredTake = try XCTUnwrap(restored.takes.first)
+        XCTAssertTrue(
+            FileManager.default.fileExists(
+                atPath: restoredTake.sourceMediaURL(in: containerB.locator).path
+            ),
+            "A container-relative reference must resolve into the container the app is running in."
+        )
+        XCTAssertFalse(
+            reopened.lastRebaseReport.didChangeAnything,
+            "A ledger already stored in the durable form needs no legacy repair."
+        )
+
+        let package = try makeExportPackage(from: restored, locator: containerB.locator)
+        let archiveDirectory = root.appendingPathComponent("archives", isDirectory: true)
+        try FileManager.default.createDirectory(at: archiveDirectory, withIntermediateDirectories: true)
+        let builder = SessionArchiveBuilder()
+        let result = try builder.createArchive(
+            from: try builder.preparePackage(from: .package(package)),
+            options: SessionExportOptions(mixMode: .scratchOnly),
+            in: archiveDirectory
+        )
+        XCTAssertGreaterThan(result.archiveSizeBytes, 0)
+    }
+
+    /// 2. Relocation is not allowed to drop, duplicate, or overwrite takes.
+    @MainActor
+    func testMultiTakeRelocationKeepsEveryTakeExactlyOnce() throws {
+        let root = try makeTemporaryDirectory()
+        let containerA = try makeSimulatedAppContainer(in: root, named: "ContainerA")
+        let containerB = try makeSimulatedAppContainer(in: root, named: "ContainerB")
+        let storageURL = root.appendingPathComponent("ledger/kept-sessions.json")
+        let sessionID = "slice-f-multi-relocation"
+        let createdAt = Date(timeIntervalSince1970: 1_730_000_000.372)
+
+        var session = makeGuidedKeptSession(sessionID: sessionID, timestamp: createdAt)
+        session.config.createdAt = createdAt
+        session.config.updatedAt = createdAt
+        let writer = try GuidedCaptureKeptSessionStore(
+            storageURL: storageURL,
+            containerLocator: containerA.locator
+        )
+        for takeNumber in 1...3 {
+            let artifacts = try writeSimulatedCapture(
+                in: containerA,
+                sessionID: sessionID,
+                takeNumber: takeNumber,
+                bpm: 95,
+                createdAt: Date(timeIntervalSince1970: 1_730_000_000)
+            )
+            _ = try writer.keep(
+                makeKeptTake(
+                    from: artifacts,
+                    sessionID: sessionID,
+                    takeNumber: takeNumber,
+                    bpm: 95,
+                    locator: containerA.locator
+                ),
+                in: session
+            )
+        }
+
+        try relocateCaptures(from: containerA, to: containerB)
+
+        let reopened = try GuidedCaptureKeptSessionStore(
+            storageURL: storageURL,
+            containerLocator: containerB.locator
+        )
+        let restored = try XCTUnwrap(reopened.session(id: sessionID))
+        XCTAssertEqual(restored.takes.map(\.takeNumber), [1, 2, 3])
+        XCTAssertEqual(Set(restored.takes.map(\.takeID)).count, 3)
+        let resolvedMediaPaths = restored.takes.map {
+            $0.sourceMediaURL(in: containerB.locator).path
+        }
+        XCTAssertEqual(
+            Set(resolvedMediaPaths).count,
+            3,
+            "Three takes must resolve to three distinct files, never onto each other."
+        )
+        for path in resolvedMediaPaths {
+            XCTAssertTrue(FileManager.default.fileExists(atPath: path))
+        }
+
+        let package = try makeExportPackage(from: restored, locator: containerB.locator)
+        let archiveDirectory = root.appendingPathComponent("archives", isDirectory: true)
+        try FileManager.default.createDirectory(at: archiveDirectory, withIntermediateDirectories: true)
+        let builder = SessionArchiveBuilder()
+        let result = try builder.createArchive(
+            from: try builder.preparePackage(from: .package(package)),
+            options: SessionExportOptions(mixMode: .scratchOnly),
+            in: archiveDirectory
+        )
+        let archiveRoot = try unzipArchive(
+            result.archiveURL,
+            to: root.appendingPathComponent("unzipped", isDirectory: true)
+        )
+        let videoFiles = try FileManager.default.contentsOfDirectory(
+            atPath: archiveRoot.appendingPathComponent("video").path
+        )
+        XCTAssertEqual(videoFiles.count, 3)
+        XCTAssertEqual(Set(videoFiles).count, 3)
+        let metadataDocument = try decodeSessionMetadataDocument(from: archiveRoot)
+        XCTAssertEqual(metadataDocument.takes.count, 3)
+        XCTAssertEqual(Set(metadataDocument.takes.map(\.takeNumber)), [1, 2, 3])
+    }
+
+    /// 3. The failure Karl actually hit: a ledger full of dead absolute
+    /// container URLs is repaired in place, atomically, and reads back durable.
+    @MainActor
+    func testLegacyAbsoluteLedgerIsMigratedAtomicallyAndReadsBackDurable() throws {
+        let root = try makeTemporaryDirectory()
+        let currentContainer = try makeSimulatedAppContainer(in: root, named: "ContainerCurrent")
+        let legacyContainerURL = root.appendingPathComponent("ContainerB116F53B", isDirectory: true)
+        let storageURL = root.appendingPathComponent("ledger/kept-sessions.json")
+        let sessionID = "slice-f-legacy"
+        let createdAt = Date(timeIntervalSince1970: 1_730_000_000.372)
+
+        let artifacts = try writeSimulatedCapture(
+            in: currentContainer,
+            sessionID: sessionID,
+            takeNumber: 1,
+            bpm: 95,
+            createdAt: Date(timeIntervalSince1970: 1_730_000_000)
+        )
+        // A second completed capture sits in the same directory but was never
+        // kept. Repairing the ledger must not adopt it: "the file completed" is
+        // not evidence the operator kept the take.
+        let unkeptArtifacts = try writeSimulatedCapture(
+            in: currentContainer,
+            sessionID: sessionID,
+            takeNumber: 2,
+            bpm: 95,
+            createdAt: Date(timeIntervalSince1970: 1_730_000_000)
+        )
+        var session = makeGuidedKeptSession(sessionID: sessionID, timestamp: createdAt)
+        session.config.createdAt = createdAt
+        session.config.updatedAt = createdAt
+        let legacySession = GuidedCaptureKeptSession(
+            sessionID: sessionID,
+            config: session.config,
+            deckProfileRawValue: session.deckProfileRawValue,
+            cameraProfileRawValue: session.cameraProfileRawValue,
+            watchWristRawValue: session.watchWristRawValue,
+            platform: session.platform,
+            sessionName: session.sessionName,
+            calibrationData: nil,
+            takes: [
+                makeLegacyAbsoluteTake(
+                    sessionID: sessionID,
+                    takeNumber: 1,
+                    bpm: 95,
+                    legacyContainerURL: legacyContainerURL,
+                    baseName: artifacts.baseName
+                )
+            ],
+            updatedAt: createdAt
+        )
+        try writeLegacyAbsoluteLedger(to: storageURL, session: legacySession)
+        let legacyText = try String(contentsOf: storageURL, encoding: .utf8)
+        XCTAssertTrue(
+            legacyText.contains("ContainerB116F53B"),
+            "The fixture must really contain the stale container path being repaired."
+        )
+
+        let store = try GuidedCaptureKeptSessionStore(
+            storageURL: storageURL,
+            containerLocator: currentContainer.locator
+        )
+        XCTAssertEqual(
+            store.lastRebaseReport.rebasedRecordingIDs,
+            ["\(sessionID):take-001"]
+        )
+        XCTAssertTrue(store.lastRebaseReport.rejections.isEmpty)
+
+        XCTAssertEqual(
+            store.session(id: sessionID)?.takes.map(\.takeID),
+            ["take-001"],
+            "Repair rebases the takes the ledger already holds. It never adopts an unkept capture."
+        )
+        XCTAssertTrue(
+            FileManager.default.fileExists(atPath: unkeptArtifacts.mediaURL.path),
+            "The unkept capture must be left on disk, untouched."
+        )
+        let migratedTake = try XCTUnwrap(store.session(id: sessionID)?.takes.first)
+        XCTAssertEqual(
+            migratedTake.sourceMedia,
+            .containerRelative(
+                root: .documents,
+                path: "CompanionCaptures/\(artifacts.baseName).mov"
+            )
+        )
+        XCTAssertEqual(
+            migratedTake.sourceMediaURL(in: currentContainer.locator).path,
+            artifacts.mediaURL.path
+        )
+
+        // The repair is written, not just resolved in memory.
+        let migratedText = try String(contentsOf: storageURL, encoding: .utf8)
+        XCTAssertFalse(migratedText.contains("ContainerB116F53B"))
+        XCTAssertTrue(migratedText.contains("\"relativePath\""))
+
+        let reloaded = try GuidedCaptureKeptSessionStore(
+            storageURL: storageURL,
+            containerLocator: currentContainer.locator
+        )
+        XCTAssertEqual(reloaded.session(id: sessionID)?.takes, store.session(id: sessionID)?.takes)
+        XCTAssertFalse(
+            reloaded.lastRebaseReport.didChangeAnything,
+            "A migrated ledger must be stable — the repair runs once, not on every launch."
+        )
+        XCTAssertEqual(
+            try Data(contentsOf: storageURL),
+            Data(migratedText.utf8),
+            "Reloading a migrated ledger must not rewrite it again."
+        )
+    }
+
+    /// 4. A file that happens to sit at the derived path but belongs to another
+    /// session, take, or take number is refused. Nothing is renamed to fit.
+    @MainActor
+    func testLegacyRebaseRejectsSidecarSessionAndTakeMismatch() throws {
+        let root = try makeTemporaryDirectory()
+        let currentContainer = try makeSimulatedAppContainer(in: root, named: "ContainerCurrent")
+        let legacyContainerURL = root.appendingPathComponent("ContainerOld", isDirectory: true)
+        let storageURL = root.appendingPathComponent("ledger/kept-sessions.json")
+        let ledgerSessionID = "slice-f-identity"
+        let strangerSessionID = "someone-elses-session"
+        let createdAt = Date(timeIntervalSince1970: 1_730_000_000.372)
+
+        // The only file at the derived path belongs to a different session.
+        let strangerArtifacts = try writeSimulatedCapture(
+            in: currentContainer,
+            sessionID: strangerSessionID,
+            takeNumber: 1,
+            bpm: 95,
+            createdAt: Date(timeIntervalSince1970: 1_730_000_000)
+        )
+        var session = makeGuidedKeptSession(sessionID: ledgerSessionID, timestamp: createdAt)
+        session.config.createdAt = createdAt
+        session.config.updatedAt = createdAt
+        let legacySession = GuidedCaptureKeptSession(
+            sessionID: ledgerSessionID,
+            config: session.config,
+            deckProfileRawValue: session.deckProfileRawValue,
+            cameraProfileRawValue: session.cameraProfileRawValue,
+            watchWristRawValue: session.watchWristRawValue,
+            platform: session.platform,
+            sessionName: session.sessionName,
+            calibrationData: nil,
+            takes: [
+                makeLegacyAbsoluteTake(
+                    sessionID: ledgerSessionID,
+                    takeNumber: 1,
+                    bpm: 95,
+                    legacyContainerURL: legacyContainerURL,
+                    baseName: strangerArtifacts.baseName
+                )
+            ],
+            updatedAt: createdAt
+        )
+        try writeLegacyAbsoluteLedger(to: storageURL, session: legacySession)
+        let originalLedgerData = try Data(contentsOf: storageURL)
+
+        let store = try GuidedCaptureKeptSessionStore(
+            storageURL: storageURL,
+            containerLocator: currentContainer.locator
+        )
+        XCTAssertEqual(
+            store.lastRebaseReport.rejections["\(ledgerSessionID):take-001"],
+            .sidecarIdentityMismatch
+        )
+        XCTAssertTrue(store.lastRebaseReport.rebasedRecordingIDs.isEmpty)
+        XCTAssertEqual(store.session(id: ledgerSessionID)?.takes.count, 1)
+        XCTAssertEqual(
+            try Data(contentsOf: storageURL),
+            originalLedgerData,
+            "A refused rebase must leave the ledger exactly as it was."
+        )
+        XCTAssertTrue(
+            FileManager.default.fileExists(atPath: strangerArtifacts.mediaURL.path),
+            "The other session's capture must be left untouched."
+        )
+    }
+
+    /// 5. Two takes may never rebase onto the same file. Ambiguous evidence
+    /// rejects both rather than letting the first match win.
+    @MainActor
+    func testLegacyRebaseRejectsAmbiguousDuplicateBasename() throws {
+        let root = try makeTemporaryDirectory()
+        let currentContainer = try makeSimulatedAppContainer(in: root, named: "ContainerCurrent")
+        let legacyContainerURL = root.appendingPathComponent("ContainerOld", isDirectory: true)
+        let storageURL = root.appendingPathComponent("ledger/kept-sessions.json")
+        let sessionID = "slice-f-ambiguous"
+        let createdAt = Date(timeIntervalSince1970: 1_730_000_000.372)
+
+        let firstArtifacts = try writeSimulatedCapture(
+            in: currentContainer,
+            sessionID: sessionID,
+            takeNumber: 1,
+            bpm: 95,
+            createdAt: Date(timeIntervalSince1970: 1_730_000_000),
+            includeWatchMotion: true
+        )
+        let secondArtifacts = try writeSimulatedCapture(
+            in: currentContainer,
+            sessionID: sessionID,
+            takeNumber: 2,
+            bpm: 95,
+            createdAt: Date(timeIntervalSince1970: 1_730_000_000),
+            includeWatchMotion: true
+        )
+        // Make both sidecars claim the SAME Watch capture file, so both takes
+        // otherwise validate but resolve onto one shared artifact.
+        let sharedWatchFileName = try XCTUnwrap(firstArtifacts.watchMotionURL?.lastPathComponent)
+        let sharedWatchCaptureID = try XCTUnwrap(
+            WatchMotionCaptureCodec.decoder.decode(
+                WatchMotionCaptureSession.self,
+                from: try Data(contentsOf: XCTUnwrap(firstArtifacts.watchMotionURL))
+            ).id
+        )
+        try linkWatchCapture(
+            fileName: sharedWatchFileName,
+            captureID: sharedWatchCaptureID,
+            inSidecarAt: secondArtifacts.sidecarURL
+        )
+
+        var session = makeGuidedKeptSession(sessionID: sessionID, timestamp: createdAt)
+        session.config.createdAt = createdAt
+        session.config.updatedAt = createdAt
+        let legacySession = GuidedCaptureKeptSession(
+            sessionID: sessionID,
+            config: session.config,
+            deckProfileRawValue: session.deckProfileRawValue,
+            cameraProfileRawValue: session.cameraProfileRawValue,
+            watchWristRawValue: session.watchWristRawValue,
+            platform: session.platform,
+            sessionName: session.sessionName,
+            calibrationData: nil,
+            takes: [
+                makeLegacyAbsoluteTake(
+                    sessionID: sessionID,
+                    takeNumber: 1,
+                    bpm: 95,
+                    legacyContainerURL: legacyContainerURL,
+                    baseName: firstArtifacts.baseName,
+                    legacyWatchMotionFileName: sharedWatchFileName
+                ),
+                makeLegacyAbsoluteTake(
+                    sessionID: sessionID,
+                    takeNumber: 2,
+                    bpm: 95,
+                    legacyContainerURL: legacyContainerURL,
+                    baseName: secondArtifacts.baseName,
+                    legacyWatchMotionFileName: sharedWatchFileName
+                )
+            ],
+            updatedAt: createdAt
+        )
+        try writeLegacyAbsoluteLedger(to: storageURL, session: legacySession)
+        let originalLedgerData = try Data(contentsOf: storageURL)
+
+        let store = try GuidedCaptureKeptSessionStore(
+            storageURL: storageURL,
+            containerLocator: currentContainer.locator
+        )
+        XCTAssertTrue(store.lastRebaseReport.rebasedRecordingIDs.isEmpty)
+        XCTAssertEqual(
+            store.lastRebaseReport.rejections["\(sessionID):take-001"],
+            .duplicateResolvedPath
+        )
+        XCTAssertEqual(
+            store.lastRebaseReport.rejections["\(sessionID):take-002"],
+            .duplicateResolvedPath
+        )
+        XCTAssertEqual(store.session(id: sessionID)?.takes.count, 2)
+        XCTAssertEqual(try Data(contentsOf: storageURL), originalLedgerData)
+    }
+
+    /// 6. A stored path that walks out of its directory is never interpreted.
+    func testLegacyRebaseRejectsPathTraversal() {
+        let traversingURL = URL(
+            string: "file:///ContainerOld/Documents/CompanionCaptures/../../Documents/CompanionCaptures/x.mov"
+        )!
+        XCTAssertEqual(
+            GuidedCaptureLedgerRebase.derivedReference(for: .absolute(traversingURL), kind: .media),
+            .rejected(.pathTraversal)
+        )
+        XCTAssertEqual(
+            GuidedCaptureLedgerRebase.derivedReference(
+                for: .containerRelative(root: .documents, path: "CompanionCaptures/../../etc/passwd"),
+                kind: .media
+            ),
+            .rejected(.pathTraversal)
+        )
+        XCTAssertFalse(
+            CaptureArtifactReference.isSafeRelativePath("CompanionCaptures/../x.mov")
+        )
+        XCTAssertFalse(CaptureArtifactReference.isSafeRelativePath("/CompanionCaptures/x.mov"))
+        XCTAssertFalse(CaptureArtifactReference.isSafeRelativePath(""))
+
+        // A path naming its container root twice is genuinely unknowable.
+        let ambiguousURL = URL(
+            string: "file:///ContainerOld/Documents/inner/Documents/CompanionCaptures/x.mov"
+        )!
+        XCTAssertEqual(
+            GuidedCaptureLedgerRebase.derivedReference(for: .absolute(ambiguousURL), kind: .media),
+            .rejected(.ambiguousContainerRoot)
+        )
+
+        // Inside the container but not in a capture directory this kind owns.
+        let foreignURL = URL(string: "file:///ContainerOld/Documents/Inbox/x.mov")!
+        XCTAssertEqual(
+            GuidedCaptureLedgerRebase.derivedReference(for: .absolute(foreignURL), kind: .media),
+            .rejected(.unknownCaptureLocation)
+        )
+    }
+
+    /// 7. A genuinely missing capture is not papered over: the take stays in the
+    /// ledger, Export keeps failing with a real reason, and the same operation
+    /// succeeds once the file is actually back.
+    @MainActor
+    func testGenuinelyMissingArtifactStaysVisibleAndRetryable() throws {
+        let root = try makeTemporaryDirectory()
+        let currentContainer = try makeSimulatedAppContainer(in: root, named: "ContainerCurrent")
+        let legacyContainerURL = root.appendingPathComponent("ContainerOld", isDirectory: true)
+        let storageURL = root.appendingPathComponent("ledger/kept-sessions.json")
+        let sessionID = "slice-f-missing"
+        let createdAt = Date(timeIntervalSince1970: 1_730_000_000.372)
+
+        let artifacts = try writeSimulatedCapture(
+            in: currentContainer,
+            sessionID: sessionID,
+            takeNumber: 1,
+            bpm: 95,
+            createdAt: Date(timeIntervalSince1970: 1_730_000_000)
+        )
+        let quarantinedMediaURL = root.appendingPathComponent("held-aside.mov")
+        try FileManager.default.moveItem(at: artifacts.mediaURL, to: quarantinedMediaURL)
+
+        var session = makeGuidedKeptSession(sessionID: sessionID, timestamp: createdAt)
+        session.config.createdAt = createdAt
+        session.config.updatedAt = createdAt
+        let legacySession = GuidedCaptureKeptSession(
+            sessionID: sessionID,
+            config: session.config,
+            deckProfileRawValue: session.deckProfileRawValue,
+            cameraProfileRawValue: session.cameraProfileRawValue,
+            watchWristRawValue: session.watchWristRawValue,
+            platform: session.platform,
+            sessionName: session.sessionName,
+            calibrationData: nil,
+            takes: [
+                makeLegacyAbsoluteTake(
+                    sessionID: sessionID,
+                    takeNumber: 1,
+                    bpm: 95,
+                    legacyContainerURL: legacyContainerURL,
+                    baseName: artifacts.baseName
+                )
+            ],
+            updatedAt: createdAt
+        )
+        try writeLegacyAbsoluteLedger(to: storageURL, session: legacySession)
+        let originalLedgerData = try Data(contentsOf: storageURL)
+
+        let blockedStore = try GuidedCaptureKeptSessionStore(
+            storageURL: storageURL,
+            containerLocator: currentContainer.locator
+        )
+        XCTAssertEqual(
+            blockedStore.lastRebaseReport.rejections["\(sessionID):take-001"],
+            .artifactMissing
+        )
+        XCTAssertEqual(blockedStore.session(id: sessionID)?.takes.count, 1)
+        XCTAssertEqual(
+            try Data(contentsOf: storageURL),
+            originalLedgerData,
+            "A missing capture must not cause the ledger to be rewritten."
+        )
+
+        let blockedSession = try XCTUnwrap(blockedStore.session(id: sessionID))
+        let blockedPackage = try makeExportPackage(
+            from: blockedSession,
+            locator: currentContainer.locator
+        )
+        let builder = SessionArchiveBuilder()
+        let report = try XCTUnwrap(
+            builder.validationReport(for: .package(blockedPackage)),
+            "Export must still refuse a session whose media is genuinely gone."
+        )
+        XCTAssertEqual(report.suggestedError, .missingRequiredFiles)
+        XCTAssertTrue(report.issues.contains { $0.localizedCaseInsensitiveContains("missing") })
+
+        // Retry after the capture is genuinely restored.
+        try FileManager.default.moveItem(at: quarantinedMediaURL, to: artifacts.mediaURL)
+        let retriedStore = try GuidedCaptureKeptSessionStore(
+            storageURL: storageURL,
+            containerLocator: currentContainer.locator
+        )
+        XCTAssertEqual(
+            retriedStore.lastRebaseReport.rebasedRecordingIDs,
+            ["\(sessionID):take-001"]
+        )
+        let retriedSession = try XCTUnwrap(retriedStore.session(id: sessionID))
+        let retriedPackage = try makeExportPackage(
+            from: retriedSession,
+            locator: currentContainer.locator
+        )
+        XCTAssertNil(builder.validationReport(for: .package(retriedPackage)))
+        let archiveDirectory = root.appendingPathComponent("archives", isDirectory: true)
+        try FileManager.default.createDirectory(at: archiveDirectory, withIntermediateDirectories: true)
+        let result = try builder.createArchive(
+            from: try builder.preparePackage(from: .package(retriedPackage)),
+            options: SessionExportOptions(mixMode: .scratchOnly),
+            in: archiveDirectory
+        )
+        XCTAssertGreaterThan(result.archiveSizeBytes, 0)
+    }
+
+    /// 8. Watch/motion lives under Application Support, not Documents, and must
+    /// relocate on its own root.
+    @MainActor
+    func testWatchMotionReferenceRelocatesWithTheTake() throws {
+        let root = try makeTemporaryDirectory()
+        let containerA = try makeSimulatedAppContainer(in: root, named: "ContainerA")
+        let containerB = try makeSimulatedAppContainer(in: root, named: "ContainerB")
+        let storageURL = root.appendingPathComponent("ledger/kept-sessions.json")
+        let sessionID = "slice-f-watch"
+        let createdAt = Date(timeIntervalSince1970: 1_730_000_000.372)
+
+        let artifacts = try writeSimulatedCapture(
+            in: containerA,
+            sessionID: sessionID,
+            takeNumber: 1,
+            bpm: 95,
+            createdAt: Date(timeIntervalSince1970: 1_730_000_000),
+            includeWatchMotion: true
+        )
+        var session = makeGuidedKeptSession(sessionID: sessionID, timestamp: createdAt)
+        session.config.createdAt = createdAt
+        session.config.updatedAt = createdAt
+
+        let writer = try GuidedCaptureKeptSessionStore(
+            storageURL: storageURL,
+            containerLocator: containerA.locator
+        )
+        _ = try writer.keep(
+            makeKeptTake(
+                from: artifacts,
+                sessionID: sessionID,
+                takeNumber: 1,
+                bpm: 95,
+                locator: containerA.locator
+            ),
+            in: session
+        )
+        let keptWatchReference = try XCTUnwrap(
+            writer.session(id: sessionID)?.takes.first?.sourceWatchMotion
+        )
+        XCTAssertEqual(
+            keptWatchReference,
+            .containerRelative(
+                root: .applicationSupport,
+                path: "WatchMotionCaptures/\(artifacts.baseName)_watch.json"
+            )
+        )
+
+        try relocateCaptures(from: containerA, to: containerB)
+
+        let reopened = try GuidedCaptureKeptSessionStore(
+            storageURL: storageURL,
+            containerLocator: containerB.locator
+        )
+        let relocatedWatchURL = try XCTUnwrap(
+            reopened.session(id: sessionID)?.takes.first?.sourceWatchMotionURL(in: containerB.locator)
+        )
+        XCTAssertTrue(relocatedWatchURL.path.hasPrefix(containerB.rootURL.path))
+        XCTAssertTrue(FileManager.default.fileExists(atPath: relocatedWatchURL.path))
+
+        // The same relocation, arriving as a legacy absolute ledger, is repaired
+        // against the sidecar's linked Watch file name rather than by guessing.
+        let legacyStorageURL = root.appendingPathComponent("ledger/legacy-kept-sessions.json")
+        let legacySession = GuidedCaptureKeptSession(
+            sessionID: sessionID,
+            config: session.config,
+            deckProfileRawValue: session.deckProfileRawValue,
+            cameraProfileRawValue: session.cameraProfileRawValue,
+            watchWristRawValue: session.watchWristRawValue,
+            platform: session.platform,
+            sessionName: session.sessionName,
+            calibrationData: nil,
+            takes: [
+                makeLegacyAbsoluteTake(
+                    sessionID: sessionID,
+                    takeNumber: 1,
+                    bpm: 95,
+                    legacyContainerURL: root.appendingPathComponent("ContainerOld", isDirectory: true),
+                    baseName: artifacts.baseName,
+                    legacyWatchMotionFileName: "\(artifacts.baseName)_watch.json"
+                )
+            ],
+            updatedAt: createdAt
+        )
+        try writeLegacyAbsoluteLedger(to: legacyStorageURL, session: legacySession)
+        let migratedStore = try GuidedCaptureKeptSessionStore(
+            storageURL: legacyStorageURL,
+            containerLocator: containerB.locator
+        )
+        XCTAssertEqual(
+            migratedStore.session(id: sessionID)?.takes.first?.sourceWatchMotion,
+            keptWatchReference
+        )
+    }
+
+    /// 9. The durable form is enforced on write: a fresh ledger can never
+    /// contain an absolute app-container path again.
+    @MainActor
+    func testFreshLedgerNeverPersistsAnAbsoluteContainerPath() throws {
+        let root = try makeTemporaryDirectory()
+        let container = try makeSimulatedAppContainer(in: root, named: "ContainerA")
+        let storageURL = root.appendingPathComponent("ledger/kept-sessions.json")
+        let sessionID = "slice-f-durable-form"
+        let createdAt = Date(timeIntervalSince1970: 1_730_000_000.372)
+
+        let artifacts = try writeSimulatedCapture(
+            in: container,
+            sessionID: sessionID,
+            takeNumber: 1,
+            bpm: 95,
+            createdAt: Date(timeIntervalSince1970: 1_730_000_000),
+            includeWatchMotion: true
+        )
+        var session = makeGuidedKeptSession(sessionID: sessionID, timestamp: createdAt)
+        session.config.createdAt = createdAt
+        session.config.updatedAt = createdAt
+
+        let store = try GuidedCaptureKeptSessionStore(
+            storageURL: storageURL,
+            containerLocator: container.locator
+        )
+        _ = try store.keep(
+            makeKeptTake(
+                from: artifacts,
+                sessionID: sessionID,
+                takeNumber: 1,
+                bpm: 95,
+                locator: container.locator
+            ),
+            in: session
+        )
+
+        let ledgerText = try String(contentsOf: storageURL, encoding: .utf8)
+        XCTAssertFalse(
+            ledgerText.contains(container.rootURL.path),
+            "A fresh ledger must not name the app container it was written in."
+        )
+        XCTAssertFalse(ledgerText.contains("file://"))
+        XCTAssertTrue(ledgerText.contains("\"containerRoot\""))
+        XCTAssertTrue(ledgerText.contains("\"relativePath\""))
+
+        // Writing an absolute container path is refused outright, so the defect
+        // cannot be reintroduced by a future caller that bypasses the locator.
+        let smuggledTake = GuidedCaptureKeptTake(
+            sessionID: sessionID,
+            takeID: "take-002",
+            takeNumber: 2,
+            bpm: 95,
+            sourceMedia: .absolute(artifacts.mediaURL),
+            sourceSidecar: .absolute(artifacts.sidecarURL),
+            sourceAudio: .absolute(artifacts.audioURL),
+            sourceWatchMotion: nil,
+            drillName: "Full capture",
+            duration: 1,
+            quality: "kept",
+            comboTagged: false,
+            audioPresent: true,
+            motionPresent: false,
+            syncStatus: "not_requested",
+            recordingStatus: "completed",
+            verbalSlateUsed: nil,
+            syncClapUsed: nil,
+            note: "Ready to keep"
+        )
+        XCTAssertThrowsError(try store.keep(smuggledTake, in: session)) { error in
+            XCTAssertEqual(
+                error as? GuidedCaptureKeptSessionStoreError,
+                .containerOwnedAbsoluteSourceURL(
+                    sessionID: sessionID,
+                    takeID: "take-002",
+                    field: "media"
+                )
+            )
+        }
+        XCTAssertEqual(
+            try String(contentsOf: storageURL, encoding: .utf8),
+            ledgerText,
+            "A refused write must leave the ledger byte-identical."
+        )
+    }
+}
+
+/// Capture-boundary regressions for session_2026_09_04_h_baby_scratch_95_bpm.
+///
+/// That export declared a 24 s take, shipped 19.20 s of audio and 19.37 s of
+/// video, and anchored movement/MIDI to the moment recording was *requested*
+/// rather than the moment AVFoundation confirmed media was being written.
+final class RoutineTakeBoundaryTests: XCTestCase {
+
+    // MARK: - The take bound is never a stale measurement
+
+    func testTakeBoundIgnoresMeasuredTakeDurationOnceASettingExists() {
+        var config = CaptureSessionConfig.routineCapture(
+            sessionID: "session-boundary",
+            createdAt: Date(),
+            updatedAt: Date(),
+            takeCount: 1,
+            takeDurationSeconds: nil
+        )
+
+        // `takeDurationSeconds` is the measured aggregate an earlier export
+        // wrote back. The stored cap outranks it.
+        config.takeDurationSeconds = 19.2
+        XCTAssertEqual(
+            RoutineCaptureDefaults.maximumTakeDurationSeconds(for: config),
+            RoutineCaptureDefaults.defaultMaximumTakeDurationSeconds
+        )
+
+        config.plannedTakeDurationSeconds = 24
+        XCTAssertEqual(RoutineCaptureDefaults.maximumTakeDurationSeconds(for: config), 24)
+        XCTAssertEqual(config.takeDurationSeconds, 19.2, "The measurement must survive untouched.")
+    }
+
+    func testPlannedTakeDurationSurvivesEncodingRoundTrip() throws {
+        var config = CaptureSessionConfig()
+        config.plannedTakeDurationSeconds = 24
+        config.takeDurationSeconds = 19.2
+        let data = try JSONEncoder().encode(config)
+        let decoded = try JSONDecoder().decode(CaptureSessionConfig.self, from: data)
+        XCTAssertEqual(decoded.plannedTakeDurationSeconds, 24)
+        XCTAssertEqual(decoded.takeDurationSeconds, 19.2)
+    }
+
+    // MARK: - Delayed AVFoundation startup
+
+    func testStopDelayIsIndependentOfWriterStartupLatency() {
+        let requested: Double = 24
+        let grace: Double = 0.75
+        let requestHostTime: Double = 1_000
+
+        // 0.88 s is the startup latency measured in the regression fixture;
+        // 4.8 s is a deliberately pathological cold start.
+        for latency: Double in [0, 0.05, 0.88, 4.8] {
+            let mediaStart = requestHostTime + latency
+            let stopHostTime = RoutineTakeTimeline.scheduledStopHostTime(
+                mediaStartHostTime: mediaStart,
+                requestedDurationSeconds: requested,
+                graceSeconds: grace
+            )
+            XCTAssertEqual(
+                stopHostTime - mediaStart,
+                requested + grace,
+                accuracy: 1e-9,
+                "Startup latency of \(latency)s must not be charged against the take."
+            )
+            XCTAssertEqual(
+                RoutineTakeTimeline.stopDelaySeconds(
+                    requestedDurationSeconds: requested,
+                    graceSeconds: grace
+                ),
+                requested + grace,
+                accuracy: 1e-9
+            )
+        }
+    }
+
+    func testTwentyFourSecondRequestYieldsTwentyFourSecondsOfMedia() {
+        let requested: Double = 24
+        let mediaStart: Double = 2_000.88
+        let stopHostTime = RoutineTakeTimeline.scheduledStopHostTime(
+            mediaStartHostTime: mediaStart,
+            requestedDurationSeconds: requested,
+            graceSeconds: 0
+        )
+        XCTAssertEqual(stopHostTime - mediaStart, 24, accuracy: 1e-9)
+
+        // The fixture's 19.2 s of audio against a 24 s request is a shortfall,
+        // not a completed take.
+        XCTAssertFalse(
+            RoutineTakeTimeline.mediaSatisfiesRequest(
+                requestedDurationSeconds: 24,
+                actualMediaDurationSeconds: 19.2
+            )
+        )
+        XCTAssertTrue(
+            RoutineTakeTimeline.mediaSatisfiesRequest(
+                requestedDurationSeconds: 24,
+                actualMediaDurationSeconds: 23.97
+            ),
+            "Ordinary frame/packet quantisation must still count as satisfied."
+        )
+    }
+
+    func testTakeRelativeTimeDropsEverythingBeforeConfirmedMediaStart() {
+        let mediaStart: Double = 5_000
+
+        XCTAssertNil(
+            RoutineTakeTimeline.takeRelativeTime(hostTime: 4_999.5, mediaStartHostTime: mediaStart),
+            "Pre-roll traffic is not in the media and must be dropped, not clamped to zero."
+        )
+        XCTAssertEqual(
+            RoutineTakeTimeline.takeRelativeTime(hostTime: mediaStart, mediaStartHostTime: mediaStart),
+            0
+        )
+        XCTAssertEqual(
+            RoutineTakeTimeline.takeRelativeTime(hostTime: mediaStart + 12.5, mediaStartHostTime: mediaStart),
+            12.5
+        )
+        XCTAssertNil(
+            RoutineTakeTimeline.takeRelativeTime(hostTime: 5_001, mediaStartHostTime: 0),
+            "No confirmed media start means no take timeline."
+        )
+    }
+
+    // MARK: - Movement builder rebases onto the confirmed epoch
+
+    func testNotationBuilderRebaseDiscardsPreRollMovement() throws {
+        let requestHostTime: Double = 10_000
+        let builder = MacCaptureEngine.RoutineDetectedNotationBuilder(startedAt: requestHostTime)
+
+        // A complete stroke observed while the writer was still starting up.
+        builder.recordObservation(state: .movingRight, position: 0.10, confidence: 0.9, now: requestHostTime + 0.10)
+        builder.recordObservation(state: .movingRight, position: 0.40, confidence: 0.9, now: requestHostTime + 0.30)
+        builder.recordObservation(state: .movingLeft, position: 0.40, confidence: 0.9, now: requestHostTime + 0.50)
+        XCTAssertFalse(
+            builder.movementEvents(now: requestHostTime + 0.60).isEmpty,
+            "Precondition: the pre-roll observations did produce events."
+        )
+
+        let mediaStart = requestHostTime + 0.88
+        builder.rebaseEpoch(to: mediaStart)
+        XCTAssertTrue(
+            builder.movementEvents(now: mediaStart).isEmpty,
+            "Pre-roll movement is not in the media and must not survive the rebase."
+        )
+
+        builder.recordObservation(state: .movingRight, position: 0.10, confidence: 0.9, now: mediaStart + 0.20)
+        builder.recordObservation(state: .movingRight, position: 0.45, confidence: 0.9, now: mediaStart + 0.40)
+        builder.recordObservation(state: .movingLeft, position: 0.45, confidence: 0.9, now: mediaStart + 0.60)
+        let events = builder.movementEvents(now: mediaStart + 0.70)
+        let first = try XCTUnwrap(events.first)
+        XCTAssertEqual(first.startTime, 0.20, accuracy: 0.001, "Times must be relative to media start.")
+        XCTAssertEqual(first.endTime, 0.40, accuracy: 0.001)
+    }
+}
+
+/// Level policy for the audio ScratchLab generates during export.
+final class GeneratedAudioHeadroomTests: XCTestCase {
+    private func makeBuffer(peak: Float, frameCount: AVAudioFrameCount = 512) throws -> AVAudioPCMBuffer {
+        let format = try XCTUnwrap(AVAudioFormat(standardFormatWithSampleRate: 44_100, channels: 2))
+        let buffer = try XCTUnwrap(AVAudioPCMBuffer(pcmFormat: format, frameCapacity: frameCount))
+        buffer.frameLength = frameCount
+        let channels = try XCTUnwrap(buffer.floatChannelData)
+        for channel in 0..<Int(format.channelCount) {
+            for frame in 0..<Int(frameCount) {
+                channels[channel][frame] = frame % 2 == 0 ? peak : -peak * 0.25
+            }
+        }
+        return buffer
+    }
+
+    func testCeilingAttenuatesAnOvershootingBufferWithoutClipping() throws {
+        // 1.218279 is the beat_only peak the regression fixture shipped.
+        let buffer = try makeBuffer(peak: 1.218279)
+        let gain = ScratchLabBeatEngine.GeneratedAudioHeadroom.applyCeiling(-1.0, to: buffer)
+        let peak = ScratchLabBeatEngine.GeneratedAudioHeadroom.peakAmplitude(of: buffer)
+
+        XCTAssertLessThan(gain, 1)
+        XCTAssertEqual(
+            peak,
+            ScratchLabBeatEngine.GeneratedAudioHeadroom.amplitude(forDBFS: -1.0),
+            accuracy: 1e-5
+        )
+        XCTAssertLessThan(peak, 1, "The stem must sit inside full scale.")
+
+        // A pure gain, so the waveform's shape survives: no sample was flattened
+        // onto the ceiling the way a hard clamp would flatten it.
+        let channels = try XCTUnwrap(buffer.floatChannelData)
+        let flattened = (0..<Int(buffer.frameLength)).filter { abs(channels[0][$0]) >= 1.0 }
+        XCTAssertTrue(flattened.isEmpty)
+        XCTAssertEqual(channels[0][1] / channels[0][0], -0.25, accuracy: 1e-5)
+    }
+
+    func testCeilingLeavesAQuietBufferAlone() throws {
+        let buffer = try makeBuffer(peak: 0.2)
+        let gain = ScratchLabBeatEngine.GeneratedAudioHeadroom.applyCeiling(-1.0, to: buffer)
+        XCTAssertEqual(gain, 1, "Attenuation only — a quiet pattern is never boosted.")
+        XCTAssertEqual(
+            ScratchLabBeatEngine.GeneratedAudioHeadroom.peakAmplitude(of: buffer),
+            0.2,
+            accuracy: 1e-6
+        )
+    }
+
+    func testRenderedBeatStemStaysBelowTheHeadroomCeiling() throws {
+        let sampleRate: Double = 44_100
+        let frameCount = AVAudioFrameCount(sampleRate * 4)
+        let buffer = try ScratchLabBeatEngine.renderedTimingBuffer(
+            mode: .boomBapTrainer,
+            bpm: 95,
+            durationSeconds: 4,
+            countInBeats: CaptureClickTrackDefaults.countInBeats,
+            beatsPerBar: CaptureClickTrackDefaults.beatsPerBar,
+            clickStartHostTime: nil,
+            recordingStartHostTime: nil,
+            sampleRate: sampleRate,
+            channelCount: 2,
+            exactFrameCount: frameCount
+        )
+        XCTAssertEqual(buffer.frameLength, frameCount, "Headroom is a gain; it must not change length.")
+
+        let peak = ScratchLabBeatEngine.GeneratedAudioHeadroom.peakAmplitude(of: buffer)
+        XCTAssertGreaterThan(peak, 0, "Precondition: the pattern actually rendered audio.")
+        let ceiling = ScratchLabBeatEngine.GeneratedAudioHeadroom.amplitude(forDBFS: -1.0)
+        XCTAssertLessThanOrEqual(peak, ceiling + 1e-5)
+    }
+
+    func testRenderedBeatStemMatchesTheExactRequestedFrameCount() throws {
+        // Frame-identical stems are what keeps scratch_only / beat_only /
+        // scratch_with_beat sample-aligned in the export.
+        for frames in [846_720, 44_100, 12_345] {
+            let buffer = try ScratchLabBeatEngine.renderedTimingBuffer(
+                mode: .boomBapTrainer,
+                bpm: 95,
+                durationSeconds: 0.001,
+                countInBeats: CaptureClickTrackDefaults.countInBeats,
+                beatsPerBar: CaptureClickTrackDefaults.beatsPerBar,
+                clickStartHostTime: nil,
+                recordingStartHostTime: nil,
+                sampleRate: 44_100,
+                channelCount: 2,
+                exactFrameCount: AVAudioFrameCount(frames)
+            )
+            XCTAssertEqual(Int(buffer.frameLength), frames)
+        }
+    }
+}
+
+/// Re-exports the audio stems of a real capture archive through the current
+/// export code and reports the resulting frame counts, peaks, and hashes.
+///
+/// Opt-in: set `SCRATCHLAB_FIXTURE_SESSION` to an extracted session folder
+/// (for example the unzipped `session_2026_09_04_h_baby_scratch_95_bpm`). The
+/// repository cannot carry a 49 MB archive, so this stays skipped by default
+/// rather than silently passing on missing input.
+final class FixtureStemReExportTests: XCTestCase {
+    private struct StemReport {
+        let name: String
+        let frameCount: AVAudioFramePosition
+        let sampleRate: Double
+        let peak: Float
+        let peakDBFS: Double
+        let samplesAtOrAboveFullScale: Int
+    }
+
+    private func report(for name: String, buffer: AVAudioPCMBuffer) -> StemReport {
+        let peak = ScratchLabBeatEngine.GeneratedAudioHeadroom.peakAmplitude(of: buffer)
+        var clipped = 0
+        if let channels = buffer.floatChannelData {
+            for channel in 0..<Int(buffer.format.channelCount) {
+                for frame in 0..<Int(buffer.frameLength) where abs(channels[channel][frame]) >= 1 {
+                    clipped += 1
+                }
+            }
+        }
+        return StemReport(
+            name: name,
+            frameCount: AVAudioFramePosition(buffer.frameLength),
+            sampleRate: buffer.format.sampleRate,
+            peak: peak,
+            peakDBFS: peak > 0 ? 20 * log10(Double(peak)) : -.infinity,
+            samplesAtOrAboveFullScale: clipped
+        )
+    }
+
+    func testReExportedFixtureStemsAreFrameAlignedAndInsideFullScale() throws {
+        guard let sessionPath = ProcessInfo.processInfo.environment["SCRATCHLAB_FIXTURE_SESSION"] else {
+            throw XCTSkip("Set SCRATCHLAB_FIXTURE_SESSION to an extracted session folder to run this.")
+        }
+        let sessionURL = URL(fileURLWithPath: sessionPath, isDirectory: true)
+        let scratchURL = sessionURL
+            .appendingPathComponent("audio/H_baby_095_take01_scratch_only.wav")
+        guard FileManager.default.fileExists(atPath: scratchURL.path) else {
+            throw XCTSkip("Fixture scratch stem not found at \(scratchURL.path)")
+        }
+
+        let scratchFile = try AVAudioFile(forReading: scratchURL)
+        let scratchBuffer = try XCTUnwrap(
+            AVAudioPCMBuffer(
+                pcmFormat: scratchFile.processingFormat,
+                frameCapacity: AVAudioFrameCount(scratchFile.length)
+            )
+        )
+        try scratchFile.read(into: scratchBuffer)
+
+        // The fixture's own capture metadata, so the stem is regenerated on the
+        // same grid the take was recorded against.
+        let beatBuffer = try ScratchLabBeatEngine.renderedTimingBuffer(
+            mode: .boomBapTrainer,
+            bpm: 95,
+            durationSeconds: Double(scratchFile.length) / scratchFile.processingFormat.sampleRate,
+            countInBeats: 4,
+            beatsPerBar: 4,
+            clickStartHostTime: 9_721_072_525_951,
+            recordingStartHostTime: 9_721_133_157_529,
+            sampleRate: scratchFile.processingFormat.sampleRate,
+            channelCount: scratchFile.processingFormat.channelCount,
+            exactFrameCount: AVAudioFrameCount(clamping: scratchFile.length)
+        )
+        let mixResult = try SessionArchiveBuilder.mixScratchWithTiming(
+            scratchBuffer: scratchBuffer,
+            timingBuffer: beatBuffer
+        )
+        let mixedBuffer = mixResult.buffer
+        print(
+            "FIXTURE_MIX_GAINS timingGain=\(mixResult.timingGain)"
+            + " mixGain=\(mixResult.mixGain)"
+            + " capturedScratchAttenuatedBy=\(20 * log10(Double(mixResult.mixGain))) dB"
+        )
+        XCTAssertEqual(
+            mixResult.mixGain,
+            1,
+            "The captured scratch must pass through the mix at unity."
+        )
+
+        let reports = [
+            report(for: "scratch_only", buffer: scratchBuffer),
+            report(for: "beat_only", buffer: beatBuffer),
+            report(for: "scratch_with_beat", buffer: mixedBuffer)
+        ]
+        for stem in reports {
+            print(
+                "FIXTURE_STEM \(stem.name)"
+                + " frames=\(stem.frameCount)"
+                + " sampleRate=\(stem.sampleRate)"
+                + " peak=\(stem.peak)"
+                + " peakDBFS=\(stem.peakDBFS)"
+                + " atOrAboveFullScale=\(stem.samplesAtOrAboveFullScale)"
+            )
+        }
+
+        if let outputPath = ProcessInfo.processInfo.environment["SCRATCHLAB_FIXTURE_OUTPUT"] {
+            // The test host is sandboxed, so an arbitrary destination may be
+            // refused; fall back to the container's temp directory and print
+            // wherever the stems actually landed.
+            var outputURL = URL(fileURLWithPath: outputPath, isDirectory: true)
+            do {
+                try FileManager.default.createDirectory(at: outputURL, withIntermediateDirectories: true)
+            } catch {
+                outputURL = FileManager.default.temporaryDirectory
+                    .appendingPathComponent("scratchlab-fixture-reexport", isDirectory: true)
+                try FileManager.default.createDirectory(at: outputURL, withIntermediateDirectories: true)
+            }
+            for (name, buffer) in [
+                ("H_baby_095_take01_beat_only.wav", beatBuffer),
+                ("H_baby_095_take01_scratch_with_beat.wav", mixedBuffer)
+            ] {
+                let url = outputURL.appendingPathComponent(name)
+                try? FileManager.default.removeItem(at: url)
+                let file = try AVAudioFile(
+                    forWriting: url,
+                    settings: buffer.format.settings,
+                    commonFormat: buffer.format.commonFormat,
+                    interleaved: buffer.format.isInterleaved
+                )
+                try file.write(from: buffer)
+                print("FIXTURE_STEM_WRITTEN \(url.path)")
+            }
+        }
+
+        let frameCounts = Set(reports.map(\.frameCount))
+        XCTAssertEqual(frameCounts.count, 1, "Every stem must have the identical exact frame count.")
+
+        let ceiling = ScratchLabBeatEngine.GeneratedAudioHeadroom.amplitude(forDBFS: -1)
+        let beat = try XCTUnwrap(reports.first { $0.name == "beat_only" })
+        XCTAssertLessThanOrEqual(beat.peak, ceiling + 1e-5, "beat_only must keep 1 dB of headroom.")
+        XCTAssertEqual(beat.samplesAtOrAboveFullScale, 0)
+
+        let mixed = try XCTUnwrap(reports.first { $0.name == "scratch_with_beat" })
+        XCTAssertLessThan(mixed.peak, 1, "The mix must stay inside full scale.")
+        XCTAssertEqual(mixed.samplesAtOrAboveFullScale, 0, "No sample may be clamped onto the rail.")
+    }
+}
+
+/// Rebuilds the regression fixture into a complete session archive using the
+/// production export path — `SessionArchiveBuilder.preparePackage` followed by
+/// `createArchive` — so the manifest, take log, notation, stems, and folder
+/// name are all produced by the app rather than patched by hand.
+///
+/// Opt-in via `SCRATCHLAB_FIXTURE_SESSION` (extracted session folder) and
+/// `SCRATCHLAB_ARCHIVE_OUTPUT` (where to leave the .zip).
+final class FixtureArchiveReExportTests: XCTestCase {
+
+    private func decodeFixtureNotation(at url: URL) throws -> CaptureCore.DetectedNotationSnapshot {
+        // The exported notation document omits the sidecar-only absolute
+        // `timestamp` on MIDI events, so those are read through a shim.
+        struct ExportedMidiEvent: Decodable {
+            let takeRelativeTime: Double
+            let deviceName: String
+            let channel: Int
+            let controller: Int
+            let value: Int
+            let normalizedValue: Double
+            let mappedControl: String?
+        }
+        struct Payload: Decodable {
+            let recordMovementEvents: [CaptureCore.DetectedNotationRecordMovementEvent]
+            let audioEvents: [CaptureCore.DetectedNotationAudioEvent]
+            let faderEvents: [CaptureCore.DetectedNotationFaderEvent]
+            let mixerMidiEvents: [ExportedMidiEvent]
+            let notationConfidence: Double?
+            let labelConfidence: Double?
+        }
+        let payload = try JSONDecoder().decode(Payload.self, from: Data(contentsOf: url))
+        let midiEvents = payload.mixerMidiEvents.map { event in
+            CaptureCore.RawMixerMIDIEvent(
+                timestamp: event.takeRelativeTime,
+                takeRelativeTime: event.takeRelativeTime,
+                deviceName: event.deviceName,
+                channel: event.channel,
+                controller: event.controller,
+                value: event.value,
+                normalizedValue: event.normalizedValue,
+                mappedControl: event.mappedControl
+            )
+        }
+        return CaptureCore.DetectedNotationSnapshot(
+            notationSource: "detected",
+            notationConfidence: payload.notationConfidence,
+            detectedLabel: "Baby Scratch",
+            labelSource: "detected",
+            labelConfidence: payload.labelConfidence,
+            detectionSources: ["audio", "controller"],
+            recordMovementEvents: payload.recordMovementEvents,
+            audioEvents: payload.audioEvents,
+            faderEvents: payload.faderEvents,
+            mixerMidiEvents: midiEvents,
+            capturedAt: Date(timeIntervalSince1970: 1_788_465_875)
+        )
+    }
+
+    func testFixtureRebuiltThroughCreateArchivePassesTheCanonicalValidator() throws {
+        guard let sessionPath = ProcessInfo.processInfo.environment["SCRATCHLAB_FIXTURE_SESSION"],
+              let outputPath = ProcessInfo.processInfo.environment["SCRATCHLAB_ARCHIVE_OUTPUT"] else {
+            throw XCTSkip("Set SCRATCHLAB_FIXTURE_SESSION and SCRATCHLAB_ARCHIVE_OUTPUT to run this.")
+        }
+        let fixtureURL = URL(fileURLWithPath: sessionPath, isDirectory: true)
+        let sourceMovie = fixtureURL.appendingPathComponent("video/H_baby_095_take01_camA.mov")
+        let sourceAudio = fixtureURL.appendingPathComponent("audio/H_baby_095_take01_scratch_only.wav")
+        let sourceNotation = fixtureURL.appendingPathComponent("notation/take-001_detected_notation.json")
+        guard FileManager.default.fileExists(atPath: sourceMovie.path) else {
+            throw XCTSkip("Fixture media not found at \(sourceMovie.path)")
+        }
+
+        let fileManager = FileManager.default
+        let stagingRoot = fileManager.temporaryDirectory
+            .appendingPathComponent("scratchlab-fixture-archive-\(UUID().uuidString)", isDirectory: true)
+        try fileManager.createDirectory(at: stagingRoot, withIntermediateDirectories: true)
+        defer { try? fileManager.removeItem(at: stagingRoot) }
+
+        // The fixture's own session identity and capture settings.
+        let sessionID = "f8a91511-9452-4951-895a-bfd198425b4e"
+        let createdAt = Date(timeIntervalSince1970: 1_788_465_875) // 2026-09-03T20:04:35Z
+        var config = CaptureSessionConfig(
+            performerName: "h",
+            bpm: 95,
+            scratchType: .babyScratch,
+            drillMode: .fullCapture,
+            captureMode: .timedClick,
+            beatEngineMode: .boomBapTrainer,
+            timingPrintedToRecording: .unknown,
+            takeDurationSeconds: nil,
+            plannedTakeDurationSeconds: 24,
+            maximumTakeDurationSeconds: 64,
+            sessionTimeZoneIdentifier: "Pacific/Auckland",
+            takeCount: 1,
+            handedness: .right,
+            notes: "",
+            sessionID: sessionID,
+            createdAt: createdAt,
+            updatedAt: createdAt
+        )
+        config.clickAccentPattern = CaptureClickTrackDefaults.clickAccentPattern
+
+        let takeIdentity = CaptureCore.LocalRecordingNaming.takeIdentity(sessionID: sessionID, takeNumber: 1)
+        let files = try CaptureCore.LocalRecordingFiles.make(
+            in: stagingRoot,
+            sessionID: sessionID,
+            takeNumber: takeIdentity.takeNumber,
+            roleLabel: "routine",
+            mediaExtension: "mov",
+            fileManager: fileManager
+        )
+        try fileManager.copyItem(at: sourceMovie, to: files.mediaURL)
+        let stagedAudioURL = files.mediaURL.deletingPathExtension().appendingPathExtension("wav")
+        try fileManager.copyItem(at: sourceAudio, to: stagedAudioURL)
+
+        let audioFile = try AVAudioFile(forReading: stagedAudioURL)
+        let mediaDuration = Double(audioFile.length) / audioFile.processingFormat.sampleRate
+
+        let sidecar = CaptureCore.LocalRecordingSidecar.recording(
+            sessionID: sessionID,
+            sessionConfig: config,
+            takeIdentity: takeIdentity,
+            files: files,
+            recordingRole: "routine_capture",
+            platform: "macOS",
+            appSurface: "ScratchLab Routine Recorder",
+            sourceDeviceName: "DJ",
+            audioInputName: "Rane ONE MKII",
+            videoDeviceUniqueID: "6C707041-05AC-0010-0001-000000000001",
+            videoDeviceName: "MacBook Pro Camera",
+            audioDeviceUniqueID: "AppleUSBAudioEngine:Rane:Rane ONE MKII:A:1,2",
+            audioDeviceName: "Rane ONE MKII",
+            captureTiming: CaptureTimingMetadata(
+                clickStartHostTime: 9_721_072_525_951,
+                recordingStartHostTime: 9_721_133_157_529
+            ),
+            startedAt: createdAt
+        )
+        .finalized(
+            endedAt: createdAt.addingTimeInterval(mediaDuration),
+            mediaFileName: files.mediaURL.lastPathComponent,
+            captureErrorDescription: nil,
+            stopReason: .manual
+        )
+        .withDetectedNotation(try decodeFixtureNotation(at: sourceNotation))
+        try sidecar.encodedData().write(to: files.sidecarURL, options: .atomic)
+
+        // Production export path: no hand-written manifest, take log, or stems.
+        let builder = SessionArchiveBuilder()
+        let package = try builder.preparePackage(
+            from: .localRecordingSession(
+                lastRecordingURL: files.mediaURL,
+                sessionName: "h Baby Scratch 95 BPM",
+                config: config
+            )
+        )
+        print("ARCHIVE_METADATA plannedTakeDurationSeconds=\(String(describing: package.metadata.plannedTakeDurationSeconds))"
+            + " maximumTakeDurationSeconds=\(String(describing: package.metadata.maximumTakeDurationSeconds))"
+            + " totalDurationSeconds=\(package.metadata.totalDurationSeconds)"
+            + " sessionTimeZoneIdentifier=\(String(describing: package.metadata.sessionTimeZoneIdentifier))")
+
+        let document = try builder.metadataDocument(for: package)
+        let exportedTake = try XCTUnwrap(document.takes.first)
+        print("ARCHIVE_TAKE stopReason=\(String(describing: exportedTake.stopReason))"
+            + " planned=\(String(describing: exportedTake.plannedTakeDurationSeconds))"
+            + " maximum=\(String(describing: exportedTake.maximumTakeDurationSeconds))"
+            + " actual=\(String(describing: exportedTake.actualTakeDurationSeconds))")
+        XCTAssertEqual(exportedTake.stopReason, CaptureStopReason.manual.rawValue)
+        // Watch absence must state its reason rather than vanish into
+        // `watch_source: none`.
+        XCTAssertEqual(exportedTake.watchSyncState, CaptureWatchSyncState.notRequested.rawValue)
+        XCTAssertNil(exportedTake.watchLinkedMotionFileName)
+        XCTAssertFalse(exportedTake.watchMotionExported)
+        XCTAssertEqual(exportedTake.plannedTakeDurationSeconds, 24)
+        XCTAssertEqual(exportedTake.maximumTakeDurationSeconds, 64)
+        XCTAssertEqual(try XCTUnwrap(exportedTake.actualTakeDurationSeconds), mediaDuration, accuracy: 1e-9)
+        XCTAssertEqual(package.metadata.maximumTakeDurationSeconds, 64)
+
+        let archiveDirectory = stagingRoot.appendingPathComponent("archives", isDirectory: true)
+        try fileManager.createDirectory(at: archiveDirectory, withIntermediateDirectories: true)
+        let result = try builder.createArchive(
+            from: package,
+            options: SessionExportOptions(mixMode: .stemsFolder),
+            in: archiveDirectory
+        )
+
+        var destination = URL(fileURLWithPath: outputPath, isDirectory: true)
+        do {
+            try fileManager.createDirectory(at: destination, withIntermediateDirectories: true)
+        } catch {
+            destination = fileManager.temporaryDirectory
+                .appendingPathComponent("scratchlab-fixture-archive-out", isDirectory: true)
+            try fileManager.createDirectory(at: destination, withIntermediateDirectories: true)
+        }
+        let finalURL = destination.appendingPathComponent(result.archiveURL.lastPathComponent)
+        try? fileManager.removeItem(at: finalURL)
+        try fileManager.copyItem(at: result.archiveURL, to: finalURL)
+        print("ARCHIVE_WRITTEN \(finalURL.path) bytes=\(result.archiveSizeBytes)")
+
+        XCTAssertEqual(
+            package.metadata.totalDurationSeconds,
+            mediaDuration,
+            accuracy: 1e-9,
+            "totalDurationSeconds must be the measured playable duration."
+        )
+        XCTAssertEqual(package.metadata.plannedTakeDurationSeconds, 24)
+    }
+}
+
+/// Backward compatibility and date-policy regressions.
+final class CaptureConfigMigrationTests: XCTestCase {
+
+    private func decodeConfig(_ json: String) throws -> CaptureSessionConfig {
+        try JSONDecoder().decode(CaptureSessionConfig.self, from: Data(json.utf8))
+    }
+
+    func testLegacyConfigWithOnlyTakeDurationKeepsItsRequestedDuration() throws {
+        // Written before `plannedTakeDurationSeconds` existed: the one duration
+        // field was the operator's requested take length.
+        let legacy = """
+        {
+          "performerName": "h",
+          "captureMode": "timed_click",
+          "takeDurationSeconds": 24,
+          "takeCount": 0,
+          "notes": "",
+          "sessionID": "legacy-session"
+        }
+        """
+        let config = try decodeConfig(legacy)
+        XCTAssertEqual(config.takeDurationSeconds, 24)
+        XCTAssertNil(
+            config.plannedTakeDurationSeconds,
+            "Decoding must be faithful: absent stays absent, so a decoded record still equals the record it was written from."
+        )
+        XCTAssertNil(
+            RoutineCaptureDefaults.plannedTakeDurationSeconds(for: config),
+            "A legacy duration is not evidence that anyone chose it."
+        )
+        XCTAssertEqual(
+            RoutineCaptureDefaults.maximumTakeDurationSeconds(for: config),
+            24,
+            "It still bounded the take, so it must not be lost."
+        )
+    }
+
+    func testDecodingALegacyConfigDoesNotChangeItsValue() throws {
+        // Regression: a decode-time migration made a reloaded config unequal to
+        // the one it was written from, which silently broke idempotent
+        // re-writes of durable ledgers.
+        let fixed = Date(timeIntervalSinceReferenceDate: 800_000_000)
+        var original = CaptureSessionConfig(sessionID: "round-trip", createdAt: fixed, updatedAt: fixed)
+        original.takeDurationSeconds = 1
+        try assertEncodingIsStableUnderDecoding(original)
+    }
+
+    func testLegacyConfigWithNoDurationFallsBackToTheDefault() throws {
+        let config = try decodeConfig("""
+        {"performerName": "h", "captureMode": "timed_click", "takeCount": 0, "notes": "", "sessionID": "legacy-2"}
+        """)
+        XCTAssertNil(config.plannedTakeDurationSeconds)
+        XCTAssertEqual(
+            RoutineCaptureDefaults.maximumTakeDurationSeconds(for: config),
+            RoutineCaptureDefaults.defaultMaximumTakeDurationSeconds
+        )
+    }
+
+    func testExplicitPlannedDurationWinsOverLegacyTakeDuration() throws {
+        let config = try decodeConfig("""
+        {
+          "performerName": "h", "captureMode": "timed_click", "takeCount": 1, "notes": "",
+          "sessionID": "modern", "takeDurationSeconds": 19.2, "plannedTakeDurationSeconds": 24
+        }
+        """)
+        XCTAssertEqual(config.plannedTakeDurationSeconds, 24)
+        XCTAssertEqual(config.takeDurationSeconds, 19.2)
+        XCTAssertEqual(RoutineCaptureDefaults.plannedTakeDurationSeconds(for: config), 24)
+        XCTAssertEqual(RoutineCaptureDefaults.maximumTakeDurationSeconds(for: config), 24)
+    }
+
+    func testLegacyConfigWithNoTimeZoneDecodesAsAbsent() throws {
+        let config = try decodeConfig("""
+        {"performerName": "h", "captureMode": "timed_click", "takeCount": 0, "notes": "", "sessionID": "legacy-3"}
+        """)
+        XCTAssertNil(
+            config.sessionTimeZoneIdentifier,
+            "Absent must stay absent; the export falls back rather than inventing a zone."
+        )
+    }
+
+    func testSessionTimeZoneIsStampedAndSurvivesEncoding() throws {
+        var config = CaptureSessionConfig(sessionID: "tz-session")
+        XCTAssertEqual(config.sessionTimeZoneIdentifier, TimeZone.current.identifier)
+
+        config.sessionTimeZoneIdentifier = "Pacific/Auckland"
+        let decoded = try JSONDecoder().decode(
+            CaptureSessionConfig.self,
+            from: JSONEncoder().encode(config)
+        )
+        XCTAssertEqual(decoded.sessionTimeZoneIdentifier, "Pacific/Auckland")
+    }
+
+    func testRefreshingSessionIdentityStampsTheSuppliedZoneAndKeepsThePlan() {
+        var config = CaptureSessionConfig(sessionID: "old-session")
+        config.plannedTakeDurationSeconds = 24
+        config.takeDurationSeconds = 19.2
+        config.refreshSessionIdentity(
+            surface: .macRoutine,
+            now: Date(),
+            timeZone: TimeZone(identifier: "Pacific/Auckland")!
+        )
+        XCTAssertEqual(config.sessionTimeZoneIdentifier, "Pacific/Auckland")
+        XCTAssertEqual(config.plannedTakeDurationSeconds, 24, "A setting survives a new session identity.")
+        XCTAssertNil(config.takeDurationSeconds, "A measurement does not.")
+    }
+
+    func testSessionDateUsesThePersistedZoneNotTheExportingMachine() {
+        // 2026-09-03T20:04:35Z is 2026-09-04 in Auckland and still 2026-09-03
+        // in UTC and London. The session's own zone decides.
+        let createdAt = Date(timeIntervalSince1970: 1_788_465_875)
+
+        XCTAssertEqual(
+            CaptureCanonicalFormatting.sessionDateString(createdAt, timeZoneIdentifier: "Pacific/Auckland"),
+            "2026-09-04"
+        )
+        XCTAssertEqual(
+            CaptureCanonicalFormatting.sessionFolderDateString(createdAt, timeZoneIdentifier: "Pacific/Auckland"),
+            "2026_09_04",
+            "The folder and the manifest must agree on the calendar day."
+        )
+        XCTAssertEqual(
+            CaptureCanonicalFormatting.sessionDateString(createdAt, timeZoneIdentifier: "Europe/London"),
+            "2026-09-03",
+            "A different persisted zone is a different — but still self-consistent — day."
+        )
+        XCTAssertEqual(
+            CaptureCanonicalFormatting.sessionCalendarTimeZone(identifier: "Not/AZone"),
+            CaptureCanonicalFormatting.fallbackSessionCalendarTimeZone,
+            "An unusable identifier falls back rather than throwing away the date."
+        )
+    }
+
+    func testLegacySessionWithoutAZoneIsDatedDeterministicallyInUTC() {
+        let createdAt = Date(timeIntervalSince1970: 1_788_465_875) // 2026-09-03T20:04:35Z
+
+        XCTAssertEqual(
+            CaptureCanonicalFormatting.fallbackSessionCalendarTimeZone.secondsFromGMT(),
+            0,
+            "The legacy fallback must be UTC, not whatever zone the exporter happens to be in."
+        )
+        XCTAssertEqual(
+            CaptureCanonicalFormatting.sessionDateString(createdAt, timeZoneIdentifier: nil),
+            "2026-09-03"
+        )
+        XCTAssertEqual(
+            CaptureCanonicalFormatting.sessionFolderDateString(createdAt, timeZoneIdentifier: nil),
+            "2026_09_03",
+            "Folder and manifest still agree; a legacy session is just dated in UTC."
+        )
+        XCTAssertEqual(
+            CaptureCanonicalFormatting.sessionCalendarTimeZone(identifier: nil),
+            CaptureCanonicalFormatting.sessionCalendarTimeZone(identifier: "Not/AZone"),
+            "Missing and unusable both resolve to the same reproducible zone."
+        )
+    }
+}
+
+/// The scratch + timing mix must not attenuate the captured recording.
+final class ScratchTimingMixLevelTests: XCTestCase {
+    private func buffer(
+        frames: Int,
+        _ sample: (Int) -> Float
+    ) throws -> AVAudioPCMBuffer {
+        let format = try XCTUnwrap(AVAudioFormat(standardFormatWithSampleRate: 44_100, channels: 2))
+        let buffer = try XCTUnwrap(
+            AVAudioPCMBuffer(pcmFormat: format, frameCapacity: AVAudioFrameCount(frames))
+        )
+        buffer.frameLength = AVAudioFrameCount(frames)
+        let channels = try XCTUnwrap(buffer.floatChannelData)
+        for channel in 0..<Int(format.channelCount) {
+            for frame in 0..<frames {
+                channels[channel][frame] = sample(frame)
+            }
+        }
+        return buffer
+    }
+
+    func testHotCaptureIsPassedThroughAtUnityAndOnlyTheBeatIsReduced() throws {
+        // 0.973443 is the fixture's captured scratch peak — already above the
+        // -1 dBFS generated-stem ceiling, which is exactly the case where a
+        // whole-mix attenuation would quietly turn the recording down.
+        let scratch = try buffer(frames: 256) { $0 % 2 == 0 ? 0.973443 : -0.4 }
+        let timing = try buffer(frames: 256) { $0 % 2 == 0 ? 0.891251 : -0.2 }
+
+        let result = try SessionArchiveBuilder.mixScratchWithTiming(
+            scratchBuffer: scratch,
+            timingBuffer: timing
+        )
+        XCTAssertEqual(result.mixGain, 1, "The captured scratch must not be attenuated.")
+        XCTAssertLessThan(result.timingGain, SessionArchiveBuilder.timingMixGain)
+        XCTAssertGreaterThan(result.timingGain, 0, "The beat must still be audible in the mix.")
+
+        let peak = ScratchLabBeatEngine.GeneratedAudioHeadroom.peakAmplitude(of: result.buffer)
+        let ceiling = ScratchLabBeatEngine.GeneratedAudioHeadroom.amplitude(
+            forDBFS: ScratchLabBeatEngine.GeneratedAudioHeadroom.mixCeilingDBFS
+        )
+        XCTAssertLessThanOrEqual(peak, ceiling + 1e-5)
+        XCTAssertLessThan(peak, 1)
+    }
+
+    func testQuietMaterialKeepsTheFullTimingMixGain() throws {
+        let scratch = try buffer(frames: 256) { $0 % 2 == 0 ? 0.2 : -0.1 }
+        let timing = try buffer(frames: 256) { $0 % 2 == 0 ? 0.3 : -0.1 }
+
+        let result = try SessionArchiveBuilder.mixScratchWithTiming(
+            scratchBuffer: scratch,
+            timingBuffer: timing
+        )
+        XCTAssertEqual(result.timingGain, SessionArchiveBuilder.timingMixGain, accuracy: 1e-6)
+        XCTAssertEqual(result.mixGain, 1)
+    }
+
+    func testMixRefusesFrameMismatchedInputs() throws {
+        let scratch = try buffer(frames: 256) { _ in 0.5 }
+        let timing = try buffer(frames: 255) { _ in 0.5 }
+        XCTAssertThrowsError(
+            try SessionArchiveBuilder.mixScratchWithTiming(
+                scratchBuffer: scratch,
+                timingBuffer: timing
+            ),
+            "Frame-identical stems are the whole point; a mismatch must fail loudly."
+        )
+    }
+}
+
+/// A safety cap is not a plan.
+///
+/// Regression for `session_2026_09_04_kk_baby_scratch_95_bpm`, which reported
+/// `plannedTakeDurationSeconds = 64` for a take the operator stopped by hand
+/// after 16.7 s. The macOS Capture panel has no duration control, so 64 was
+/// only ever `RoutineCaptureDefaults.defaultMaximumTakeDurationSeconds`.
+final class RoutineTakeDurationSemanticsTests: XCTestCase {
+
+    private func decodeConfig(_ json: String) throws -> CaptureSessionConfig {
+        try JSONDecoder().decode(CaptureSessionConfig.self, from: Data(json.utf8))
+    }
+
+    // MARK: - Plan versus cap
+
+    func testRoutineCaptureIsOpenEndedWithACapAndNoPlan() {
+        let config = CaptureSessionConfig.routineCapture(
+            sessionID: "kk-session",
+            createdAt: Date(),
+            updatedAt: Date(),
+            takeCount: 1,
+            takeDurationSeconds: nil
+        )
+        XCTAssertNil(
+            config.plannedTakeDurationSeconds,
+            "No duration control exists, so nothing was planned."
+        )
+        XCTAssertEqual(
+            config.maximumTakeDurationSeconds,
+            RoutineCaptureDefaults.defaultMaximumTakeDurationSeconds
+        )
+        XCTAssertNil(RoutineCaptureDefaults.plannedTakeDurationSeconds(for: config))
+        XCTAssertEqual(RoutineCaptureDefaults.maximumTakeDurationSeconds(for: config), 64)
+    }
+
+    func testAnExplicitPlanBoundsTheTakeAndIsReportedAsAPlan() {
+        var config = CaptureSessionConfig(sessionID: "planned")
+        config.maximumTakeDurationSeconds = 64
+        config.plannedTakeDurationSeconds = 30
+
+        XCTAssertEqual(RoutineCaptureDefaults.plannedTakeDurationSeconds(for: config), 30)
+        XCTAssertEqual(
+            RoutineCaptureDefaults.maximumTakeDurationSeconds(for: config),
+            30,
+            "A chosen duration bounds the take ahead of the cap."
+        )
+    }
+
+    func testOutOfRangeValuesAreTreatedAsUnset() {
+        for invalid: Double in [0, -1, .nan, .infinity, 100_000] {
+            var config = CaptureSessionConfig(sessionID: "invalid")
+            config.plannedTakeDurationSeconds = invalid
+            config.maximumTakeDurationSeconds = invalid
+            config.takeDurationSeconds = nil
+            XCTAssertNil(
+                RoutineCaptureDefaults.plannedTakeDurationSeconds(for: config),
+                "\(invalid) is not a usable plan."
+            )
+            XCTAssertEqual(
+                RoutineCaptureDefaults.maximumTakeDurationSeconds(for: config),
+                RoutineCaptureDefaults.defaultMaximumTakeDurationSeconds
+            )
+        }
+        XCTAssertNil(RoutineCaptureDefaults.plannedTakeDurationSeconds(for: nil))
+        XCTAssertEqual(
+            RoutineCaptureDefaults.maximumTakeDurationSeconds(for: nil),
+            RoutineCaptureDefaults.defaultMaximumTakeDurationSeconds
+        )
+    }
+
+    func testReachingTheBoundIsAMediaLimitUnlessADurationWasChosen() {
+        var openEnded = CaptureSessionConfig(sessionID: "open")
+        openEnded.maximumTakeDurationSeconds = 64
+        XCTAssertEqual(RoutineCaptureDefaults.stopReasonForBoundReached(for: openEnded), .mediaLimit)
+
+        var planned = openEnded
+        planned.plannedTakeDurationSeconds = 24
+        XCTAssertEqual(
+            RoutineCaptureDefaults.stopReasonForBoundReached(for: planned),
+            .plannedDurationReached
+        )
+    }
+
+    // MARK: - Migration
+
+    func testLegacyDurationBecomesACapNotAPlan() throws {
+        // Written before the plan/cap split: one overloaded duration field.
+        let config = try decodeConfig("""
+        {
+          "performerName": "kk", "captureMode": "timed_click", "takeCount": 1, "notes": "",
+          "sessionID": "legacy-kk", "takeDurationSeconds": 64
+        }
+        """)
+        XCTAssertNil(config.plannedTakeDurationSeconds)
+        XCTAssertNil(config.maximumTakeDurationSeconds)
+        XCTAssertNil(
+            RoutineCaptureDefaults.plannedTakeDurationSeconds(for: config),
+            "A legacy duration is not evidence that anyone chose it."
+        )
+        XCTAssertEqual(
+            RoutineCaptureDefaults.maximumTakeDurationSeconds(for: config),
+            64,
+            "It still bounded the take, so it survives as the cap."
+        )
+    }
+
+    func testDecodingIsFaithfulAndRoundTripsUnchanged() throws {
+        // Fixed instants: `Date()` serialises as a full-precision Double whose
+        // decimal form does not reliably survive decode/re-encode, which would
+        // make this a flaky byte comparison rather than a decoding assertion.
+        let fixed = Date(timeIntervalSinceReferenceDate: 800_000_000)
+        var original = CaptureSessionConfig(sessionID: "round-trip", createdAt: fixed, updatedAt: fixed)
+        original.maximumTakeDurationSeconds = 64
+        try assertEncodingIsStableUnderDecoding(original)
+    }
+
+    func testMaximumSurvivesEncodingAndAbsentStaysAbsent() throws {
+        let legacy = try decodeConfig("""
+        {"performerName": "kk", "captureMode": "timed_click", "takeCount": 0, "notes": "", "sessionID": "legacy-2"}
+        """)
+        XCTAssertNil(legacy.maximumTakeDurationSeconds)
+        XCTAssertNil(legacy.plannedTakeDurationSeconds)
+
+        var configured = legacy
+        configured.maximumTakeDurationSeconds = 90
+        let decoded = try JSONDecoder().decode(
+            CaptureSessionConfig.self,
+            from: JSONEncoder().encode(configured)
+        )
+        XCTAssertEqual(decoded.maximumTakeDurationSeconds, 90)
+        XCTAssertNil(decoded.plannedTakeDurationSeconds)
+    }
+
+    // MARK: - Stop reason on the sidecar
+
+    private func makeSidecar() -> CaptureCore.LocalRecordingSidecar {
+        CaptureCore.LocalRecordingSidecar.recording(
+            sessionID: "kk-session",
+            sessionConfig: nil,
+            takeIdentity: CaptureCore.LocalRecordingNaming.takeIdentity(
+                sessionID: "kk-session",
+                takeNumber: 1
+            ),
+            files: CaptureCore.LocalRecordingFiles(
+                baseName: "kk_take01",
+                mediaURL: URL(fileURLWithPath: "/tmp/kk_take01.mov"),
+                sidecarURL: URL(fileURLWithPath: "/tmp/kk_take01.json")
+            ),
+            recordingRole: "routine_capture",
+            platform: "macOS",
+            appSurface: "ScratchLab Routine Recorder",
+            sourceDeviceName: "DJ",
+            startedAt: Date()
+        )
+    }
+
+    func testSidecarRecordsTheStopReasonItIsGiven() {
+        for reason in CaptureStopReason.allCases {
+            let finalized = makeSidecar().finalized(
+                mediaFileName: "kk_take01.mov",
+                captureErrorDescription: nil,
+                stopReason: reason
+            )
+            XCTAssertEqual(finalized.stopReason, reason.rawValue)
+        }
+    }
+
+    func testAnUnrecordedStopReasonStaysNilRatherThanBecomingManual() {
+        let finalized = makeSidecar().finalized(
+            mediaFileName: "kk_take01.mov",
+            captureErrorDescription: nil
+        )
+        XCTAssertNil(
+            finalized.stopReason,
+            "Absent must mean 'not recorded', never an inferred manual stop."
+        )
+    }
+
+    func testACaptureFailureRecordsCaptureError() {
+        let finalized = makeSidecar().finalized(
+            mediaFileName: "kk_take01.mov",
+            captureErrorDescription: "writer died"
+        )
+        XCTAssertEqual(finalized.stopReason, CaptureStopReason.captureError.rawValue)
+        XCTAssertEqual(finalized.recordingStatus, "failed")
+    }
+
+    func testStopReasonSurvivesSidecarEncoding() throws {
+        let finalized = makeSidecar().finalized(
+            mediaFileName: "kk_take01.mov",
+            captureErrorDescription: nil,
+            stopReason: .manual
+        )
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .iso8601
+        let decoded = try decoder.decode(
+            CaptureCore.LocalRecordingSidecar.self,
+            from: finalized.encodedData()
+        )
+        XCTAssertEqual(decoded.stopReason, "manual")
+    }
+
+    func testLegacySidecarWithoutAStopReasonDecodes() throws {
+        var finalized = makeSidecar().finalized(
+            mediaFileName: "kk_take01.mov",
+            captureErrorDescription: nil,
+            stopReason: .manual
+        )
+        finalized.stopReason = nil
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .iso8601
+        let decoded = try decoder.decode(
+            CaptureCore.LocalRecordingSidecar.self,
+            from: finalized.encodedData()
+        )
+        XCTAssertNil(decoded.stopReason)
+    }
+}
+
+/// The exported session metadata must not present a cap as a plan.
+final class SessionExportDurationMetadataTests: XCTestCase {
+
+    func testOpenEndedSessionExportsACapAndNoPlan() {
+        let config = CaptureSessionConfig.routineCapture(
+            sessionID: "kk-session",
+            createdAt: Date(),
+            updatedAt: Date(),
+            takeCount: 1,
+            takeDurationSeconds: 16.7
+        )
+        let metadata = SessionExportMetadata(
+            config: config,
+            workflow: "routine_capture",
+            platform: "macOS",
+            sessionName: "kk Baby Scratch 95 BPM",
+            totalDurationSeconds: 16.7
+        )
+        XCTAssertNil(
+            metadata.plannedTakeDurationSeconds,
+            "A manually stopped take has no planned duration to report."
+        )
+        XCTAssertEqual(metadata.maximumTakeDurationSeconds, 64)
+        XCTAssertEqual(
+            metadata.totalDurationSeconds,
+            16.7,
+            "Measured playable duration is unchanged by any of this."
+        )
+    }
+
+    func testPlannedSessionExportsBothPlanAndCap() {
+        var config = CaptureSessionConfig.routineCapture(
+            sessionID: "planned-session",
+            createdAt: Date(),
+            updatedAt: Date(),
+            takeCount: 1,
+            takeDurationSeconds: 23.98
+        )
+        config.plannedTakeDurationSeconds = 24
+        let metadata = SessionExportMetadata(
+            config: config,
+            workflow: "routine_capture",
+            platform: "macOS",
+            sessionName: "Planned",
+            totalDurationSeconds: 23.98
+        )
+        XCTAssertEqual(metadata.plannedTakeDurationSeconds, 24)
+        XCTAssertEqual(metadata.maximumTakeDurationSeconds, 64)
+        XCTAssertEqual(metadata.totalDurationSeconds, 23.98)
+    }
+
+    func testAnOutOfRangePlanIsNotExportedAsAPlan() {
+        var config = CaptureSessionConfig(sessionID: "bad-plan")
+        config.plannedTakeDurationSeconds = 0
+        let metadata = SessionExportMetadata(
+            config: config,
+            workflow: "routine_capture",
+            platform: "macOS",
+            sessionName: "Bad plan",
+            totalDurationSeconds: 5
+        )
+        XCTAssertNil(metadata.plannedTakeDurationSeconds)
+    }
+}
+
+/// Asserts a config survives a decode/re-encode cycle unchanged, in value and
+/// in serialised form.
+///
+/// `.sortedKeys` is required: Foundation does not guarantee a stable key order
+/// between `JSONEncoder` instances, so an unsorted byte comparison fails
+/// intermittently with the same byte count and reordered keys — noise that has
+/// nothing to do with the decoding contract under test.
+func assertEncodingIsStableUnderDecoding(
+    _ original: CaptureSessionConfig,
+    file: StaticString = #filePath,
+    line: UInt = #line
+) throws {
+    let encoder = JSONEncoder()
+    encoder.outputFormatting = [.sortedKeys]
+    let encoded = try encoder.encode(original)
+    let decoded = try JSONDecoder().decode(CaptureSessionConfig.self, from: encoded)
+    XCTAssertEqual(decoded, original, file: file, line: line)
+    XCTAssertEqual(
+        String(data: try encoder.encode(decoded), encoding: .utf8),
+        String(data: encoded, encoding: .utf8),
+        file: file,
+        line: line
+    )
+}
+
+/// The export must preserve *why* Watch motion is absent.
+final class WatchSyncStateExportTests: XCTestCase {
+
+    func testEveryDegradedSyncStateIsDistinguishableFromNotRequested() {
+        // `watch_source` in the canonical manifest is `none` for all of these.
+        // The app-side metadata is what keeps them apart.
+        let degraded: [CaptureWatchSyncState] = [.requested, .timedOut, .unavailable, .failed]
+        for state in degraded {
+            XCTAssertFalse(state.isSynchronized, "\(state.rawValue) must never read as synchronised.")
+            XCTAssertNotEqual(state.rawValue, CaptureWatchSyncState.notRequested.rawValue)
+        }
+        XCTAssertTrue(CaptureWatchSyncState.acknowledged.isSynchronized)
+        XCTAssertFalse(CaptureWatchSyncState.notRequested.isSynchronized)
+    }
+
+    func testTimedOutSidecarReportsItsStateAndCarriesNoLink() throws {
+        // Reproduces the BBBB sidecar: acknowledgement timed out, so nothing
+        // was linked onto the routine sidecar even though motion existed.
+        let sidecar = CaptureCore.LocalRecordingSidecar.recording(
+            sessionID: "9f75b6da-5b4b-4a7a-b234-465be2ce0128",
+            sessionConfig: nil,
+            takeIdentity: CaptureCore.LocalRecordingNaming.takeIdentity(
+                sessionID: "9f75b6da-5b4b-4a7a-b234-465be2ce0128",
+                takeNumber: 1
+            ),
+            files: CaptureCore.LocalRecordingFiles(
+                baseName: "bbbb_take01",
+                mediaURL: URL(fileURLWithPath: "/tmp/bbbb_take01.mov"),
+                sidecarURL: URL(fileURLWithPath: "/tmp/bbbb_take01.json")
+            ),
+            recordingRole: "mac_routine_capture",
+            platform: "macOS",
+            appSurface: "ScratchLab Routine Recorder",
+            sourceDeviceName: "DJ",
+            startedAt: Date()
+        )
+        .withWatchSync(
+            WatchCaptureControlReply(
+                commandID: "093164e2-0851-473e-b506-c09568e2a24c",
+                sessionID: "9f75b6da-5b4b-4a7a-b234-465be2ce0128",
+                takeID: "take-001",
+                syncState: .timedOut,
+                detail: "Watch motion did not acknowledge."
+            )
+        )
+
+        XCTAssertEqual(sidecar.watchSyncState, .timedOut)
+        XCTAssertNil(sidecar.linkedMotionFileName)
+        XCTAssertFalse(
+            sidecar.watchSyncState.isSynchronized,
+            "A timed-out take must not be reported as Watch-synchronised."
+        )
+
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .iso8601
+        let decoded = try decoder.decode(
+            CaptureCore.LocalRecordingSidecar.self,
+            from: sidecar.encodedData()
+        )
+        XCTAssertEqual(decoded.watchSyncState, .timedOut)
+        XCTAssertEqual(decoded.watchCommandID, "093164e2-0851-473e-b506-c09568e2a24c")
+    }
+}
+
+/// Regression for the BBBB write-back race: relay reconciliation linked a
+/// valid Watch capture to the on-disk sidecar at 00:08:39Z; routine
+/// finalization then wrote its stale in-memory snapshot (still `timedOut`,
+/// still unlinked, captured at take start) back over it at 00:08:40Z, erasing
+/// the link. `mergingLatestWatchAssociation(from:)` is what finalization now
+/// calls, immediately before it writes, to adopt a link found on disk instead
+/// of clobbering it.
+final class RoutineFinalizationWatchMergeTests: XCTestCase {
+    private func makeSidecar(
+        sessionID: String = "9f75b6da-5b4b-4a7a-b234-465be2ce0128",
+        takeID takeNumber: Int = 1
+    ) -> CaptureCore.LocalRecordingSidecar {
+        CaptureCore.LocalRecordingSidecar.recording(
+            sessionID: sessionID,
+            sessionConfig: nil,
+            takeIdentity: CaptureCore.LocalRecordingNaming.takeIdentity(
+                sessionID: sessionID,
+                takeNumber: takeNumber
+            ),
+            files: CaptureCore.LocalRecordingFiles(
+                baseName: "bbbb_take01",
+                mediaURL: URL(fileURLWithPath: "/tmp/bbbb_take01.mov"),
+                sidecarURL: URL(fileURLWithPath: "/tmp/bbbb_take01.json")
+            ),
+            recordingRole: "mac_routine_capture",
+            platform: "macOS",
+            appSurface: "ScratchLab Routine Recorder",
+            sourceDeviceName: "DJ",
+            startedAt: Date()
+        )
+    }
+
+    func testFinalizationAdoptsALinkThatArrivedAfterItsInMemorySnapshot() {
+        // The in-memory sidecar finalization is about to write: still carries
+        // the take's own acknowledgement handshake, which timed out.
+        let staleInMemory = makeSidecar()
+            .withWatchSync(
+                WatchCaptureControlReply(
+                    commandID: "093164e2-0851-473e-b506-c09568e2a24c",
+                    sessionID: "9f75b6da-5b4b-4a7a-b234-465be2ce0128",
+                    takeID: "take-001",
+                    syncState: .timedOut,
+                    detail: "Watch motion did not acknowledge."
+                )
+            )
+        XCTAssertNil(staleInMemory.linkedMotionFileName, "Precondition: nothing linked yet.")
+
+        // The on-disk sidecar, updated by relay reconciliation in the window
+        // between the in-memory snapshot and this write — the real BBBB
+        // artifact's identity.
+        let motionCaptureID = UUID(uuidString: "3A9DC9A3-9399-4999-B869-0237F36DA99C")!
+        let onDiskAfterReconciliation = staleInMemory.linkingWatchCapture(
+            id: motionCaptureID,
+            fileName: "scratch-motion-live-3A9DC9A3-9399-4999-B869-0237F36DA99C.json"
+        )
+
+        let merged = staleInMemory.mergingLatestWatchAssociation(from: onDiskAfterReconciliation)
+
+        XCTAssertEqual(
+            merged.linkedMotionFileName,
+            "scratch-motion-live-3A9DC9A3-9399-4999-B869-0237F36DA99C.json",
+            "A link that arrived after the snapshot was taken must be adopted, not lost."
+        )
+        XCTAssertEqual(merged.linkedMotionCaptureID, motionCaptureID)
+        XCTAssertEqual(
+            merged.watchSyncState,
+            .acknowledged,
+            "Motion that was actually captured and matched supersedes a stale handshake timeout."
+        )
+        XCTAssertTrue(
+            merged.auditTrail.contains { $0.category == "watch_reconciled" },
+            "The adoption must be recorded, not silent."
+        )
+    }
+
+    func testAnAlreadyLinkedSidecarIsNeverOverwritten() {
+        // If finalization's own snapshot already carries a link (the normal,
+        // non-racing case), a differing on-disk state must never replace it.
+        let alreadyLinked = makeSidecar().linkingWatchCapture(
+            id: UUID(uuidString: "11111111-1111-1111-1111-111111111111")!,
+            fileName: "original-link.json"
+        )
+        let onDiskWithADifferentLink = makeSidecar().linkingWatchCapture(
+            id: UUID(uuidString: "22222222-2222-2222-2222-222222222222")!,
+            fileName: "different-link.json"
+        )
+
+        let merged = alreadyLinked.mergingLatestWatchAssociation(from: onDiskWithADifferentLink)
+
+        XCTAssertEqual(merged.linkedMotionFileName, "original-link.json")
+        XCTAssertEqual(merged, alreadyLinked, "No-op: an existing link is authoritative over anything on disk.")
+    }
+
+    func testMismatchedSessionOrTakeIsNeverMerged() {
+        let thisTake = makeSidecar(takeID: 1)
+        let anotherTakesOnDiskFile = makeSidecar(takeID: 2).linkingWatchCapture(
+            id: UUID(),
+            fileName: "belongs-to-take-two.json"
+        )
+
+        let merged = thisTake.mergingLatestWatchAssociation(from: anotherTakesOnDiskFile)
+
+        XCTAssertNil(merged.linkedMotionFileName, "A different take's link must never cross over.")
+        XCTAssertEqual(merged, thisTake)
+    }
+}
+
+// MARK: - Watch stop: the Mac must end the Watch capture it started
+//
+// BVB regression (2026-09-04). A 19.4 s macOS take exported cleanly with
+// `stopReason: manual`, `watch_source: watch`, a linked motion file and a
+// canonical validator PASS — while the Watch CSV ran to 37.894 s, because the
+// operator had to stop the Watch by hand 18.494 s later.
+//
+// The Mac's Watch stop was owned by the Stop button in `MacAnalyzerView` and
+// was fire-and-forget: it carried the session-setup config's ID and no take ID,
+// awaited no acknowledgement, retried nothing, and recorded no outcome. Every
+// other terminal path for a take — the timed backstop, AVFoundation's own
+// `maxRecordedDuration` end, a capture error, a cancelled count-in — requested
+// no Watch stop at all.
+//
+// These cover the fix: `MacCaptureEngine` owns the stop, dispatches it exactly
+// once per take with the take's real identity, and records what came back.
+
+/// The engine owns *when* a Watch stop is owed.
+final class MacWatchStopDispatchTests: XCTestCase {
+    private let sessionID = "9f75b6da-5b4b-4a7a-b234-465be2ce0128"
+
+    private func acknowledgedStart(
+        sessionID: String,
+        takeID: String
+    ) -> WatchCaptureControlReply {
+        WatchCaptureControlReply(
+            commandID: UUID().uuidString.lowercased(),
+            sessionID: sessionID,
+            takeID: takeID,
+            syncState: .acknowledged,
+            detail: "Watch motion capture started.",
+            acknowledgedAt: Date()
+        )
+    }
+
+    private func stoppedReply(for identity: TakeIdentity) -> WatchCaptureControlReply {
+        WatchCaptureControlReply(
+            commandID: UUID().uuidString.lowercased(),
+            sessionID: identity.sessionID,
+            takeID: identity.takeID,
+            syncState: .notRequested,
+            detail: "Watch motion capture stopped.",
+            acknowledgedAt: Date(),
+            stopOutcome: .stopped
+        )
+    }
+
+    @MainActor
+    func testManualStopDispatchesAWatchStopForTheRecordingTakeIdentity() {
+        let engine = MacCaptureEngine(autoRefreshDevices: false)
+        engine.applyPendingWatchReply(acknowledgedStart(sessionID: sessionID, takeID: "take-001"))
+
+        let dispatched = expectation(description: "watch stop dispatched")
+        let recorded = UncheckedBox<[TakeIdentity]>([])
+        engine.watchStopRequestHandler = { identity in
+            recorded.value.append(identity)
+            dispatched.fulfill()
+            return self.stoppedReply(for: identity)
+        }
+
+        engine.stopRoutineRecording(reason: .manual)
+
+        wait(for: [dispatched], timeout: 2)
+        XCTAssertEqual(recorded.value.count, 1)
+        XCTAssertEqual(recorded.value.first?.sessionID, sessionID)
+        XCTAssertEqual(
+            recorded.value.first?.takeID,
+            "take-001",
+            "The stop must name the take the Watch was started with, not a session-level guess."
+        )
+    }
+
+    @MainActor
+    func testDuplicateStopRequestsForOneTakeSendExactlyOneWatchStop() {
+        // The real overlap: the Stop button and the timed backstop can both
+        // fire, and finalization asks again afterwards.
+        let engine = MacCaptureEngine(autoRefreshDevices: false)
+        engine.applyPendingWatchReply(acknowledgedStart(sessionID: sessionID, takeID: "take-002"))
+
+        let dispatched = expectation(description: "watch stop dispatched")
+        let callCount = UncheckedBox<Int>(0)
+        engine.watchStopRequestHandler = { identity in
+            callCount.value += 1
+            dispatched.fulfill()
+            return self.stoppedReply(for: identity)
+        }
+
+        XCTAssertNotNil(engine.requestWatchStopIfNeeded(reason: .manual))
+        XCTAssertNil(
+            engine.requestWatchStopIfNeeded(reason: .plannedDurationReached),
+            "A second terminal path for the same take must not send a second stop."
+        )
+        XCTAssertNil(engine.requestWatchStopIfNeeded(reason: nil))
+
+        wait(for: [dispatched], timeout: 2)
+        XCTAssertEqual(callCount.value, 1)
+    }
+
+    /// Hardware regression, session `4ee15cc0-…` take-001 (2026-09-04).
+    ///
+    /// The start handshake came back `failed` while the Watch was in fact
+    /// recording. Ownership was gated on `.acknowledged`, so the Mac decided it
+    /// owned nothing, sent no stop, and the take exported `watchSyncState:
+    /// failed` with `watchStopOutcome: notRequested` while the operator stopped
+    /// the Watch by hand. A degraded reply is not evidence the Watch did not
+    /// start.
+    @MainActor
+    func testAFailedStartHandshakeStillOwnsAndStopsTheWatch() {
+        let engine = MacCaptureEngine(autoRefreshDevices: false)
+        engine.applyPendingWatchReply(
+            WatchCaptureControlReply(
+                commandID: "eac9f34a-2cfc-455d-8e73-6b14bc7dba5f",
+                sessionID: sessionID,
+                takeID: "take-001",
+                syncState: .failed,
+                detail: "Watch motion capture failed to start.",
+                acknowledgedAt: Date()
+            )
+        )
+
+        XCTAssertEqual(
+            engine.watchOwnedTakeIdentity?.takeID,
+            "take-001",
+            "A failed start reply must still arm the stop — the watch may be recording."
+        )
+
+        let dispatched = expectation(description: "watch stop dispatched")
+        let recorded = UncheckedBox<TakeIdentity?>(nil)
+        engine.watchStopRequestHandler = { identity in
+            recorded.value = identity
+            dispatched.fulfill()
+            return self.stoppedReply(for: identity)
+        }
+        engine.stopRoutineRecording(reason: .manual)
+
+        wait(for: [dispatched], timeout: 2)
+        XCTAssertEqual(recorded.value?.sessionID, sessionID)
+        XCTAssertEqual(recorded.value?.takeID, "take-001")
+    }
+
+    @MainActor
+    func testATimedOutStartStillOwnsTheWatch() {
+        let engine = MacCaptureEngine(autoRefreshDevices: false)
+        engine.applyPendingWatchReply(
+            WatchCaptureControlReply(
+                commandID: "c1",
+                sessionID: sessionID,
+                takeID: "take-003",
+                syncState: .timedOut,
+                detail: "Watch motion start timed out."
+            )
+        )
+        XCTAssertEqual(
+            engine.watchOwnedTakeIdentity?.takeID,
+            "take-003",
+            "Silence is not proof the watch did not start."
+        )
+    }
+
+    @MainActor
+    func testAnUnavailableStartOwnsNothing() {
+        // The one safe negative: the command demonstrably never reached a
+        // recorder, so there is nothing to stop and nothing to report.
+        let engine = MacCaptureEngine(autoRefreshDevices: false)
+        engine.applyPendingWatchReply(
+            WatchCaptureControlReply(
+                commandID: "c1",
+                sessionID: sessionID,
+                takeID: "take-004",
+                syncState: .unavailable,
+                detail: "Open ScratchLab on the watch so this device can control motion capture."
+            )
+        )
+        engine.watchStopRequestHandler = { _ in
+            XCTFail("An unavailable start must not request a stop.")
+            return WatchCaptureControlReply(
+                commandID: "unused",
+                sessionID: self.sessionID,
+                takeID: "take-004",
+                syncState: .failed,
+                detail: nil
+            )
+        }
+
+        XCTAssertNil(engine.watchOwnedTakeIdentity)
+        XCTAssertNil(engine.requestWatchStopIfNeeded(reason: .manual))
+    }
+
+    @MainActor
+    func testAnUnacknowledgedRestartReleasesOwnershipOfTheEarlierTake() {
+        let engine = MacCaptureEngine(autoRefreshDevices: false)
+        engine.applyPendingWatchReply(acknowledgedStart(sessionID: sessionID, takeID: "take-004"))
+        XCTAssertEqual(engine.watchOwnedTakeIdentity?.takeID, "take-004")
+
+        engine.applyPendingWatchReply(nil)
+        XCTAssertNil(
+            engine.watchOwnedTakeIdentity,
+            "Ownership must never outlive the acknowledgement that granted it."
+        )
+    }
+
+    @MainActor
+    func testCancellingAReservationStopsTheAcknowledgedWatchCapture() {
+        // A cancelled count-in leaves Core Motion running on the wrist. Nothing
+        // else in the app would ever stop it.
+        let engine = MacCaptureEngine(autoRefreshDevices: false)
+        engine.applyPendingWatchReply(acknowledgedStart(sessionID: sessionID, takeID: "take-005"))
+
+        let dispatched = expectation(description: "watch stop dispatched")
+        let recorded = UncheckedBox<TakeIdentity?>(nil)
+        engine.watchStopRequestHandler = { identity in
+            recorded.value = identity
+            dispatched.fulfill()
+            return self.stoppedReply(for: identity)
+        }
+
+        _ = engine.cancelPendingRoutineReservation()
+
+        wait(for: [dispatched], timeout: 2)
+        XCTAssertEqual(recorded.value?.takeID, "take-005")
+    }
+
+    @MainActor
+    func testAMissingRelayIsReportedRatherThanTreatedAsSuccess() {
+        let engine = MacCaptureEngine(autoRefreshDevices: false)
+        engine.applyPendingWatchReply(acknowledgedStart(sessionID: sessionID, takeID: "take-006"))
+        engine.watchStopRequestHandler = nil
+
+        // Still counted as dispatched-and-degraded, never silently skipped.
+        XCTAssertNotNil(engine.requestWatchStopIfNeeded(reason: .manual))
+        XCTAssertNil(engine.watchOwnedTakeIdentity)
+    }
+
+    /// AVFoundation ends a take at `maxRecordedDuration` without ever calling
+    /// `stopRoutineRecording`, so finalization has to ask too. Verified against
+    /// the source because that path cannot be driven without a live capture
+    /// session.
+    func testEveryTerminalRoutinePathAsksForAWatchStop() throws {
+        let source = try String(
+            contentsOf: URL(fileURLWithPath: #filePath)
+                .deletingLastPathComponent()
+                .deletingLastPathComponent()
+                .appendingPathComponent("ScratchLabDesktop/Services/MacCaptureEngine.swift"),
+            encoding: .utf8
+        )
+        XCTAssertTrue(
+            source.contains("noteRoutineStopReason(reason)\n        // Dispatched before the media stop"),
+            "stopRoutineRecording must request the watch stop."
+        )
+        XCTAssertTrue(
+            source.contains("requestWatchStopIfNeeded(reason: nil)\n        let captureErrorDescription"),
+            "finalizeRoutineRecording must request the watch stop for paths that bypass stopRoutineRecording."
+        )
+        XCTAssertTrue(
+            source.contains("requestWatchStopIfNeeded(reason: .interrupted)"),
+            "cancelPendingRoutineReservation must request the watch stop."
+        )
+        XCTAssertGreaterThanOrEqual(
+            source.components(separatedBy: "requestWatchStopIfNeeded(reason: .interrupted)").count - 1,
+            6,
+            "Every abandoned-start path must release a watch capture the take already owns:"
+                + " cancelled reservation, refused start, and each device guard."
+        )
+    }
+
+    /// The view must not race the engine with a second, differently-identified
+    /// stop.
+    func testTheStopButtonNoLongerSendsItsOwnUnidentifiedWatchStop() throws {
+        let source = try String(
+            contentsOf: URL(fileURLWithPath: #filePath)
+                .deletingLastPathComponent()
+                .deletingLastPathComponent()
+                .appendingPathComponent("ScratchLabDesktop/Views/MacAnalyzerView.swift"),
+            encoding: .utf8
+        )
+        XCTAssertEqual(
+            source.components(separatedBy: "requestWatchCaptureStop(").count - 1,
+            1,
+            "The view may reference the stop transport exactly once — to install it."
+        )
+        XCTAssertTrue(
+            source.contains("captureEngine.watchStopRequestHandler = { identity in"),
+            "The view must install the engine's stop transport."
+        )
+        XCTAssertTrue(
+            source.contains("takeID: identity.takeID"),
+            "The installed transport must carry the take's own identity."
+        )
+        XCTAssertFalse(
+            source.contains("sessionID: routineSessionSetup.config.sessionID,\n                takeID: nil"),
+            "The session-level, take-less stop that could not match the started capture is gone."
+        )
+    }
+}
+
+/// A tiny mutable box for values captured by an escaping test handler.
+private final class UncheckedBox<Value>: @unchecked Sendable {
+    var value: Value
+    init(_ value: Value) { self.value = value }
+}
+
+/// File-system behavior runs against isolated fixtures; two source checks pin
+/// the iOS-only delegate/callback wiring to this shared, executable boundary.
+final class WatchMotionCaptureStoreStagingTests: XCTestCase {
+    private let captureID = UUID(uuidString: "11111111-2222-3333-4444-555555555555")!
+
+    private func fixture(id: UUID? = nil, takeID: String = "take-005") -> WatchMotionCaptureSession {
+        let sample = WatchMotionSample(
+            elapsedTime: 0, coreMotionTimestamp: 100,
+            attitudeRoll: 0, attitudePitch: 0, attitudeYaw: 0,
+            quaternionX: 0, quaternionY: 0, quaternionZ: 0, quaternionW: 1,
+            gravityX: 0, gravityY: -1, gravityZ: 0,
+            userAccelerationX: 0, userAccelerationY: 0, userAccelerationZ: 0,
+            rotationRateX: 0, rotationRateY: 0, rotationRateZ: 0
+        )
+        let start = Date(timeIntervalSince1970: 1_783_000_000)
+        return WatchMotionCaptureSession(
+            id: id ?? captureID, sessionID: "staging-test-session", takeID: takeID,
+            commandID: "staging-test-command", requestedAt: start, acknowledgedAt: start,
+            syncState: .acknowledged, sourceDeviceName: "Fixture Watch", sampleRateHz: 100,
+            startedAt: start, endedAt: start.addingTimeInterval(1), deviceRecordedAtStart: start,
+            deviceRecordedAtEnd: start.addingTimeInterval(1), appVersion: "test", timingMetadata: nil,
+            samples: [sample]
+        )
+    }
+
+    private func makeStore() throws -> (URL, WatchTransferStagingStore) {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent("WatchReceiptTests-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        addTeardownBlock { try FileManager.default.removeItem(at: root) }
+        return (root, WatchTransferStagingStore(applicationSupportURL: root.appendingPathComponent("Application Support")))
+    }
+
+    private func source(_ session: WatchMotionCaptureSession, root: URL, name: String = "temporary.json") throws -> URL {
+        let url = root.appendingPathComponent(name)
+        try WatchMotionCaptureCodec.encoder.encode(session).write(to: url)
+        return url
+    }
+
+    private func importCapture(_ stagedURL: URL, store: WatchTransferStagingStore) throws -> WatchTransferStagingStore.ImportedCapture {
+        var imported: WatchTransferStagingStore.ImportedCapture?
+        store.processStagedFile(at: stagedURL, onImported: { imported = $0 }, onFailure: { XCTFail($0) })
+        return try XCTUnwrap(imported)
+    }
+
+    func testReceiptSynchronouslyMovesBytesIntoOwnedStagingBeforeReturning() throws {
+        let (root, store) = try makeStore()
+        let original = try source(fixture(), root: root)
+        let bytes = try Data(contentsOf: original)
+        let staged = try store.stageReceivedFile(at: original, metadataName: "watch.json")
+        XCTAssertFalse(FileManager.default.fileExists(atPath: original.path))
+        XCTAssertEqual(staged.deletingLastPathComponent(), store.incomingDirectoryURL)
+        XCTAssertTrue(staged.path.contains("Application Support/ScratchLab/IncomingWatchTransfers/"))
+        XCTAssertEqual(try Data(contentsOf: staged), bytes)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: store.captureDirectoryURL.path))
+    }
+
+    func testAsyncImportReadsOnlyStagedURLAfterOriginalURLIsDeleted() throws {
+        let (root, store) = try makeStore()
+        let session = fixture()
+        let original = try source(session, root: root)
+        let staged = try store.stageReceivedFile(at: original, metadataName: "watch.json")
+        // Simulate the system reusing and deleting its temporary path after return.
+        try Data("unrelated temporary bytes".utf8).write(to: original)
+        try FileManager.default.removeItem(at: original)
+        let finished = expectation(description: "durable import from staged URL")
+        DispatchQueue(label: "watch-receipt-test").async {
+            store.processStagedFile(at: staged, onImported: { imported in
+                XCTAssertEqual(imported.session, session)
+                XCTAssertTrue(FileManager.default.fileExists(atPath: imported.fileURL.path))
+                XCTAssertFalse(FileManager.default.fileExists(atPath: staged.path))
+                finished.fulfill()
+            }, onFailure: { message in
+                XCTFail(message)
+                finished.fulfill()
+            })
+        }
+        wait(for: [finished], timeout: 3)
+    }
+
+    func testDelegateStagesBeforeDispatchAndDoesNotCaptureWCSessionFile() throws {
+        let root = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
+        let source = try String(contentsOf: root.appendingPathComponent("ScratchLab/Services/WatchMotionCaptureStore.swift"), encoding: .utf8)
+        let delegateStart = try XCTUnwrap(source.range(of: "func session(_ session: WCSession, didReceive file: WCSessionFile)"))
+        let delegateEnd = try XCTUnwrap(source.range(of: "private func handleLiveMotionMessageData", range: delegateStart.upperBound..<source.endIndex))
+        let delegate = String(source[delegateStart.lowerBound..<delegateEnd.lowerBound])
+        let move = try XCTUnwrap(delegate.range(of: "try transferStagingStore.stageReceivedFile("))
+        let enqueue = try XCTUnwrap(delegate.range(of: "importStagedTransfer(at: stagedURL)"))
+        XCTAssertLessThan(move.lowerBound, enqueue.lowerBound)
+        XCTAssertFalse(delegate.contains(".async"))
+        let asyncStart = try XCTUnwrap(source.range(of: "private func importStagedTransfer(at stagedURL: URL)"))
+        let asyncEnd = try XCTUnwrap(source.range(of: "private func publishImportedCapture", range: asyncStart.upperBound..<source.endIndex))
+        let asyncBody = String(source[asyncStart.lowerBound..<asyncEnd.lowerBound])
+        XCTAssertTrue(asyncBody.contains("processingQueue.async"))
+        XCTAssertTrue(asyncBody.contains("at: stagedURL"))
+        XCTAssertFalse(asyncBody.contains("WCSessionFile"))
+        XCTAssertFalse(asyncBody.contains("fileURL"))
+        XCTAssertFalse(source.contains("importTransferredFile"))
+    }
+
+    func testStoreStartupRecoversAndRetainsNotificationsUntilRelayIsInstalled() throws {
+        let root = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
+        let source = try String(contentsOf: root.appendingPathComponent("ScratchLab/Services/WatchMotionCaptureStore.swift"), encoding: .utf8)
+        let initializer = try XCTUnwrap(source.range(of: "override init()"))
+        let end = try XCTUnwrap(source.range(of: "func unsentCaptures()", range: initializer.upperBound..<source.endIndex))
+        XCTAssertTrue(source[initializer.lowerBound..<end.lowerBound].contains("checkForPendingImports()"))
+        XCTAssertTrue(source.contains("onImported: self.publishImportedCapture"))
+        XCTAssertTrue(source.contains("pendingImportNotifications.append(importedCapture)"))
+        XCTAssertTrue(source.contains("pending.forEach(onImportedCapture)"))
+    }
+
+    func testDuplicateDeliveryPreservesExistingValidBytesAndFilename() throws {
+        let (root, store) = try makeStore()
+        let session = fixture()
+        let first = try importCapture(store.stageReceivedFile(at: source(session, root: root), metadataName: "original.json"), store: store)
+        let bytes = try Data(contentsOf: first.fileURL)
+        let duplicate = try importCapture(store.stageReceivedFile(at: source(session, root: root), metadataName: "different-name.json"), store: store)
+        XCTAssertEqual(duplicate.fileURL, first.fileURL)
+        XCTAssertEqual(try Data(contentsOf: first.fileURL), bytes)
+        XCTAssertEqual(try FileManager.default.contentsOfDirectory(atPath: store.captureDirectoryURL.path), ["original.json"])
+    }
+
+    func testConflictingDuplicatePreservesBothExistingCaptureAndFailedStaging() throws {
+        let (root, store) = try makeStore()
+        let first = try importCapture(store.stageReceivedFile(at: source(fixture(), root: root), metadataName: "watch.json"), store: store)
+        let originalBytes = try Data(contentsOf: first.fileURL)
+        let staged = try store.stageReceivedFile(at: source(fixture(takeID: "take-006"), root: root), metadataName: "watch.json")
+        var failures: [String] = []
+        store.processStagedFile(at: staged, onImported: { _ in XCTFail("Conflicting capture must not relay") }, onFailure: { failures.append($0) })
+        XCTAssertEqual(failures.count, 1)
+        XCTAssertTrue(failures[0].contains("different contents"))
+        XCTAssertEqual(try Data(contentsOf: first.fileURL), originalBytes)
+        XCTAssertTrue(FileManager.default.fileExists(atPath: staged.path))
+        XCTAssertTrue(FileManager.default.fileExists(atPath: staged.appendingPathExtension("error.txt").path))
+    }
+
+    func testDifferentCaptureWithSameFilenameNeverOverwritesExistingCapture() throws {
+        let (root, store) = try makeStore()
+        let first = try importCapture(store.stageReceivedFile(at: source(fixture(), root: root), metadataName: "watch.json"), store: store)
+        let bytes = try Data(contentsOf: first.fileURL)
+        let secondSession = fixture(id: UUID(uuidString: "AAAAAAAA-BBBB-CCCC-DDDD-EEEEEEEEEEEE"), takeID: "take-006")
+        let second = try importCapture(store.stageReceivedFile(at: source(secondSession, root: root), metadataName: "watch.json"), store: store)
+        XCTAssertNotEqual(first.fileURL, second.fileURL)
+        XCTAssertEqual(second.session, secondSession)
+        XCTAssertEqual(try Data(contentsOf: first.fileURL), bytes)
+    }
+
+    func testUntrustedMetadataCannotEscapeStagingOrImportDirectory() throws {
+        let (root, store) = try makeStore()
+        for name in ["../../escape.json", "/tmp/escape.json", "..\\..\\escape.json", "..", ".", "", "💥/\u{0}bad.json", String(repeating: "x", count: 500)] {
+            let staged = try store.stageReceivedFile(at: source(fixture(), root: root), metadataName: name)
+            XCTAssertEqual(staged.standardizedFileURL.deletingLastPathComponent(), store.incomingDirectoryURL.standardizedFileURL)
+            XCTAssertLessThan(staged.lastPathComponent.utf8.count, 255)
+            let imported = try importCapture(staged, store: store)
+            XCTAssertEqual(imported.fileURL.deletingLastPathComponent(), store.captureDirectoryURL)
+        }
+        XCTAssertFalse(FileManager.default.fileExists(atPath: root.appendingPathComponent("escape.json").path))
+    }
+
+    func testSameMetadataProducesDistinctStagedFilesWithoutReplacingEither() throws {
+        let (root, store) = try makeStore()
+        let first = try store.stageReceivedFile(at: source(fixture(), root: root), metadataName: "same.json")
+        let bytes = try Data(contentsOf: first)
+        let second = try store.stageReceivedFile(at: source(fixture(takeID: "take-006"), root: root), metadataName: "same.json")
+        XCTAssertNotEqual(first, second)
+        XCTAssertEqual(try Data(contentsOf: first), bytes)
+        XCTAssertNotEqual(try Data(contentsOf: second), bytes)
+    }
+
+    func testFailedDecodeRetainsBytesAndDiagnosticAndNeverNotifiesRelay() throws {
+        let (root, store) = try makeStore()
+        let original = root.appendingPathComponent("broken.json")
+        let bytes = Data("not a capture".utf8)
+        try bytes.write(to: original)
+        let staged = try store.stageReceivedFile(at: original, metadataName: nil)
+        var failures: [String] = []
+        store.processStagedFile(at: staged, onImported: { _ in XCTFail("Invalid bytes cannot relay") }, onFailure: { failures.append($0) })
+        XCTAssertEqual(try Data(contentsOf: staged), bytes)
+        XCTAssertEqual(failures.count, 1)
+        XCTAssertEqual(try String(contentsOf: staged.appendingPathExtension("error.txt"), encoding: .utf8), failures[0])
+    }
+
+    func testMissingCaptureIDIsRejectedWithoutInventingIdentity() throws {
+        let (root, store) = try makeStore()
+        var json = try XCTUnwrap(JSONSerialization.jsonObject(with: WatchMotionCaptureCodec.encoder.encode(fixture())) as? [String: Any])
+        json.removeValue(forKey: "id")
+        let original = root.appendingPathComponent("missing-id.json")
+        try JSONSerialization.data(withJSONObject: json).write(to: original)
+        let staged = try store.stageReceivedFile(at: original, metadataName: nil)
+        var failure: String?
+        store.processStagedFile(at: staged, onImported: { _ in XCTFail("Must not invent capture ID") }, onFailure: { failure = $0 })
+        XCTAssertNotNil(failure)
+        XCTAssertTrue(FileManager.default.fileExists(atPath: staged.path))
+    }
+
+    func testDurableStorageFailureRetainsStagingAndDoesNotRelay() throws {
+        let (root, store) = try makeStore()
+        let staged = try store.stageReceivedFile(at: source(fixture(), root: root), metadataName: nil)
+        try Data("occupied by a file".utf8).write(to: store.captureDirectoryURL)
+        var failures: [String] = []
+        store.processStagedFile(at: staged, onImported: { _ in XCTFail("Failed durable write cannot relay") }, onFailure: { failures.append($0) })
+        XCTAssertEqual(failures.count, 1)
+        XCTAssertTrue(FileManager.default.fileExists(atPath: staged.path))
+        XCTAssertEqual(try String(contentsOf: store.captureDirectoryURL, encoding: .utf8), "occupied by a file")
+    }
+
+    func testRelaunchRecoversDeterministicallyAndRepeatedRecoveryIsIdempotent() throws {
+        let (root, store) = try makeStore()
+        let first = fixture()
+        let second = fixture(id: UUID(uuidString: "AAAAAAAA-BBBB-CCCC-DDDD-EEEEEEEEEEEE"), takeID: "take-006")
+        let a = try store.stageReceivedFile(at: source(first, root: root), metadataName: "first.json")
+        let z = try store.stageReceivedFile(at: source(second, root: root), metadataName: "second.json")
+        try FileManager.default.moveItem(at: a, to: store.incomingDirectoryURL.appendingPathComponent("a.json"))
+        try FileManager.default.moveItem(at: z, to: store.incomingDirectoryURL.appendingPathComponent("z.json"))
+        let relaunched = WatchTransferStagingStore(applicationSupportURL: root.appendingPathComponent("Application Support"))
+        var sessions: [WatchMotionCaptureSession] = []
+        relaunched.recoverPendingTransfers(onImported: { sessions.append($0.session) }, onFailure: { XCTFail($0) })
+        XCTAssertEqual(sessions, [first, second])
+        let files = try FileManager.default.contentsOfDirectory(at: relaunched.captureDirectoryURL, includingPropertiesForKeys: nil)
+        let bytes = try files.map { try Data(contentsOf: $0) }
+        let nextLaunch = WatchTransferStagingStore(applicationSupportURL: root.appendingPathComponent("Application Support"))
+        nextLaunch.recoverPendingTransfers(onImported: { _ in XCTFail("No receipt should be imported twice") }, onFailure: { XCTFail($0) })
+        XCTAssertEqual(try files.map { try Data(contentsOf: $0) }, bytes)
+        XCTAssertEqual(try FileManager.default.contentsOfDirectory(atPath: nextLaunch.incomingDirectoryURL.path), [])
+    }
+
+    func testRecoveryAfterDurableCopyBeforeStagedCleanupReusesExistingCapture() throws {
+        let (root, store) = try makeStore()
+        let staged = try store.stageReceivedFile(at: source(fixture(), root: root), metadataName: "watch.json")
+        try FileManager.default.createDirectory(at: store.captureDirectoryURL, withIntermediateDirectories: true)
+        let existing = store.captureDirectoryURL.appendingPathComponent("watch.json")
+        try FileManager.default.copyItem(at: staged, to: existing)
+        let originalBytes = try Data(contentsOf: existing)
+        let relaunched = WatchTransferStagingStore(applicationSupportURL: root.appendingPathComponent("Application Support"))
+        var notifications = 0
+        relaunched.recoverPendingTransfers(onImported: { imported in
+            notifications += 1
+            XCTAssertEqual(imported.fileURL, existing)
+        }, onFailure: { XCTFail($0) })
+        XCTAssertEqual(notifications, 1)
+        XCTAssertEqual(try Data(contentsOf: existing), originalBytes)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: staged.path))
+        XCTAssertEqual(try FileManager.default.contentsOfDirectory(atPath: store.captureDirectoryURL.path), ["watch.json"])
+    }
+
+    func testSuccessfulImportDeletesOnlyItsReceiptAndPreservesExactIdentity() throws {
+        let (root, store) = try makeStore()
+        let expected = fixture()
+        let staged = try store.stageReceivedFile(at: source(expected, root: root), metadataName: "wrong-session-take-999.json")
+        let other = try store.stageReceivedFile(at: source(fixture(takeID: "take-006"), root: root), metadataName: "other.json")
+        let otherBytes = try Data(contentsOf: other)
+        let imported = try importCapture(staged, store: store)
+        XCTAssertEqual(imported.session.sessionID, expected.sessionID)
+        XCTAssertEqual(imported.session.takeID, expected.takeID)
+        XCTAssertEqual(imported.session.id, captureID)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: staged.path))
+        XCTAssertEqual(try Data(contentsOf: other), otherBytes)
+    }
+
+    func testRecoveryPreservesFailuresWhileImportingValidReceipts() throws {
+        let (root, store) = try makeStore()
+        let valid = try store.stageReceivedFile(at: source(fixture(), root: root), metadataName: "valid.json")
+        let invalid = store.incomingDirectoryURL.appendingPathComponent("broken.json")
+        try Data("broken".utf8).write(to: invalid)
+        var successes = 0
+        var failures = 0
+        store.recoverPendingTransfers(onImported: { _ in successes += 1 }, onFailure: { _ in failures += 1 })
+        XCTAssertEqual(successes, 1)
+        XCTAssertEqual(failures, 1)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: valid.path))
+        XCTAssertEqual(try String(contentsOf: invalid, encoding: .utf8), "broken")
+        XCTAssertTrue(FileManager.default.fileExists(atPath: invalid.appendingPathExtension("error.txt").path))
+    }
+
+    func testRecoveryFollowedByAlreadyQueuedImportDoesNotRepeatNotification() throws {
+        let (root, store) = try makeStore()
+        let staged = try store.stageReceivedFile(at: source(fixture(), root: root), metadataName: nil)
+        var callbacks = 0
+        store.recoverPendingTransfers(onImported: { _ in callbacks += 1 }, onFailure: { XCTFail($0) })
+        store.processStagedFile(at: staged, onImported: { _ in callbacks += 1 }, onFailure: { XCTFail($0) })
+        XCTAssertEqual(callbacks, 1)
+    }
+
+    func testMissingUnprocessedFileIsAnObservableFailure() throws {
+        let (_, store) = try makeStore()
+        var failures: [String] = []
+        store.processStagedFile(at: store.incomingDirectoryURL.appendingPathComponent("missing.json"), onImported: { _ in XCTFail("Missing file cannot pass") }, onFailure: { failures.append($0) })
+        XCTAssertEqual(failures.count, 1)
+    }
+}
+
+/// The Watch's own decision table: idempotent, identity-scoped, honest.
+final class WatchMotionStopCommandResolverTests: XCTestCase {
+    private func command(
+        _ kind: WatchCaptureCommandPayload.Command,
+        commandID: String = "cmd-1",
+        sessionID: String = "session-a",
+        takeID: String? = "take-001"
+    ) -> WatchCaptureCommandPayload {
+        WatchCaptureCommandPayload(
+            commandID: commandID,
+            command: kind,
+            sessionID: sessionID,
+            takeID: takeID
+        )
+    }
+
+    func testAStopForTheRunningCaptureStopsIt() {
+        let active = command(.start)
+        let decision = WatchMotionStopCommandResolver.decide(
+            payload: command(.stop, commandID: "stop-1"),
+            isRecording: true,
+            activeCommand: active,
+            resolvedStopCommandIDs: []
+        )
+        XCTAssertEqual(decision, .stop)
+        XCTAssertEqual(decision.outcome, .stopped)
+        XCTAssertEqual(
+            decision.syncState,
+            .notRequested,
+            "The shipped wire contract for a handled stop is unchanged."
+        )
+    }
+
+    func testARepeatedStopCommandIsHarmless() {
+        let decision = WatchMotionStopCommandResolver.decide(
+            payload: command(.stop, commandID: "stop-1"),
+            isRecording: true,
+            activeCommand: command(.start),
+            resolvedStopCommandIDs: ["stop-1"]
+        )
+        guard case .alreadyStopped = decision else {
+            return XCTFail("A duplicate stop must not finalize the capture a second time.")
+        }
+        XCTAssertEqual(decision.outcome, .stopped)
+    }
+
+    func testAStopWhileNotRecordingIsHarmless() {
+        let decision = WatchMotionStopCommandResolver.decide(
+            payload: command(.stop),
+            isRecording: false,
+            activeCommand: nil,
+            resolvedStopCommandIDs: []
+        )
+        guard case .alreadyStopped = decision else {
+            return XCTFail("Stopping an idle watch is a no-op, not an error.")
+        }
+        XCTAssertEqual(decision.outcome, .stopped)
+    }
+
+    func testAStaleSessionCannotStopTheRunningCapture() {
+        let decision = WatchMotionStopCommandResolver.decide(
+            payload: command(.stop, sessionID: "session-b"),
+            isRecording: true,
+            activeCommand: command(.start, sessionID: "session-a"),
+            resolvedStopCommandIDs: []
+        )
+        guard case let .rejectIdentity(detail) = decision else {
+            return XCTFail("A stop for another session must never end this capture.")
+        }
+        XCTAssertTrue(detail.contains("session-b"))
+        XCTAssertEqual(decision.outcome, .identityRejected)
+        XCTAssertEqual(decision.syncState, .failed)
+    }
+
+    func testAStaleTakeCannotStopTheRunningCapture() {
+        let decision = WatchMotionStopCommandResolver.decide(
+            payload: command(.stop, takeID: "take-009"),
+            isRecording: true,
+            activeCommand: command(.start, takeID: "take-001"),
+            resolvedStopCommandIDs: []
+        )
+        guard case let .rejectIdentity(detail) = decision else {
+            return XCTFail("A stop for another take must never end this capture.")
+        }
+        XCTAssertTrue(detail.contains("take-009"))
+        XCTAssertEqual(decision.outcome, .identityRejected)
+    }
+
+    func testAStopWithoutAnIdentityStillStopsALocalCapture() {
+        // A watch-side stop, or a peer that predates identity-scoped stops.
+        // Refusing it would strand a running capture, which is the bug.
+        let decision = WatchMotionStopCommandResolver.decide(
+            payload: command(.stop, sessionID: "", takeID: nil),
+            isRecording: true,
+            activeCommand: command(.start),
+            resolvedStopCommandIDs: []
+        )
+        XCTAssertEqual(decision, .stop)
+    }
+
+    func testACaptureStartedLocallyIsStoppable() {
+        let decision = WatchMotionStopCommandResolver.decide(
+            payload: command(.stop),
+            isRecording: true,
+            activeCommand: nil,
+            resolvedStopCommandIDs: []
+        )
+        XCTAssertEqual(decision, .stop)
+    }
+}
+
+/// Stop outcomes must stay distinguishable end to end.
+final class CaptureWatchStopOutcomeTests: XCTestCase {
+    private func reply(
+        _ syncState: CaptureWatchSyncState,
+        stopOutcome: CaptureWatchStopOutcome? = nil
+    ) -> WatchCaptureControlReply {
+        WatchCaptureControlReply(
+            commandID: "cmd",
+            sessionID: "session-a",
+            takeID: "take-001",
+            syncState: syncState,
+            detail: nil,
+            stopOutcome: stopOutcome
+        )
+    }
+
+    func testEveryStateTheAuditRequiresIsRepresentable() {
+        // stop not requested / sent / unreachable / timed out / identity
+        // rejected / acknowledged-stopped, plus transfer pending vs completed.
+        let outcomes = Set(
+            [
+                CaptureWatchStopOutcome.notRequested,
+                .sent,
+                .unreachable,
+                .timedOut,
+                .identityRejected,
+                .stopped,
+                .failed
+            ].map(\.rawValue)
+        )
+        XCTAssertEqual(outcomes.count, 7, "Each state must be its own value, not a collapsed alias.")
+        XCTAssertNotEqual(
+            CaptureWatchStopOutcome.notRequested.rawValue,
+            CaptureWatchStopOutcome.stopped.rawValue,
+            "\"never asked\" and \"stopped on request\" must never read the same."
+        )
+    }
+
+    func testOnlyAConfirmedStopIsTreatedAsSuccess() {
+        XCTAssertTrue(CaptureWatchStopOutcome.stopped.isStopConfirmed)
+        for degraded: CaptureWatchStopOutcome in [.sent, .unreachable, .timedOut, .identityRejected, .failed] {
+            XCTAssertFalse(degraded.isStopConfirmed, "\(degraded.rawValue) does not prove the watch stopped.")
+            XCTAssertTrue(degraded.isDegraded)
+        }
+    }
+
+    func testAnExplicitWatchReportedOutcomeWins() {
+        XCTAssertEqual(
+            CaptureWatchStopPolicy.outcome(for: reply(.failed, stopOutcome: .identityRejected)),
+            .identityRejected
+        )
+    }
+
+    func testALegacyReplyWithoutAStopOutcomeIsStillClassified() {
+        // The shipped Watch answered a handled stop with `notRequested`.
+        XCTAssertEqual(CaptureWatchStopPolicy.outcome(for: reply(.notRequested)), .stopped)
+        XCTAssertEqual(CaptureWatchStopPolicy.outcome(for: reply(.acknowledged)), .stopped)
+        XCTAssertEqual(CaptureWatchStopPolicy.outcome(for: reply(.timedOut)), .timedOut)
+        XCTAssertEqual(CaptureWatchStopPolicy.outcome(for: reply(.unavailable)), .unreachable)
+        XCTAssertEqual(CaptureWatchStopPolicy.outcome(for: reply(.failed)), .failed)
+    }
+
+    func testOnlyADemonstrablyUndeliveredStartOwnsNothing() {
+        for state: CaptureWatchSyncState in [.acknowledged, .requested, .failed, .timedOut] {
+            XCTAssertTrue(
+                CaptureWatchStopPolicy.startMayHaveLeftWatchRecording(state),
+                "\(state.rawValue) leaves a watch that may be recording; it must arm the stop."
+            )
+        }
+        for state: CaptureWatchSyncState in [.unavailable, .notRequested] {
+            XCTAssertFalse(
+                CaptureWatchStopPolicy.startMayHaveLeftWatchRecording(state),
+                "\(state.rawValue) means nothing reached a recorder."
+            )
+        }
+    }
+
+    /// Relay-latency regression (2026-09-04). Session `1ce25396-…` stopped the
+    /// watch in the same second it was asked and still reported `timedOut`,
+    /// because the acknowledgement crossed two serializations on the way back:
+    /// the watch replied only after encoding and writing a 1.26 MB motion file,
+    /// and the iPhone relayed that reply on the same serial queue as the camera
+    /// sample-buffer delegate.
+    func testTheStopAcknowledgementIsNotGatedBehindFileWorkOrCameraFrames() throws {
+        let root = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+        let watch = try String(
+            contentsOf: root.appendingPathComponent("ScratchLabWatch/Services/WatchMotionRecorder.swift"),
+            encoding: .utf8
+        )
+        // The relay stop path takes only the fast half before replying.
+        XCTAssertTrue(
+            watch.contains("let stopped = beginStop()"),
+            "The relay stop must stop Core Motion without finalizing first."
+        )
+        XCTAssertTrue(
+            watch.contains("DispatchQueue.main.async { self.finalizeStoppedCapture(stopped) }"),
+            "Finalization must run after the acknowledgement, not before it."
+        )
+        XCTAssertFalse(
+            watch.contains("rememberResolvedStopCommand(payload.commandID)\n                stopCapture()"),
+            "The relay stop path must not call the synchronous finalize-then-reply form."
+        )
+
+        let broadcaster = try String(
+            contentsOf: root.appendingPathComponent("ScratchLab/Services/CompanionCameraBroadcaster.swift"),
+            encoding: .utf8
+        )
+        XCTAssertTrue(
+            broadcaster.contains("private let controlQueue = DispatchQueue"),
+            "Control-plane sends need a queue of their own."
+        )
+        XCTAssertTrue(
+            broadcaster.contains("setSampleBufferDelegate(self, queue: captureQueue)"),
+            "Precondition: captureQueue is the video sample-buffer queue."
+        )
+        // The watch status relay must not sit behind camera frames.
+        let statusBody = broadcaster.components(separatedBy: "func sendWatchControlStatus")[1]
+        XCTAssertTrue(
+            statusBody.prefix(400).contains("controlQueue.async"),
+            "sendWatchControlStatus must not dispatch onto the camera queue."
+        )
+    }
+
+    func testStopDiagnosticsCanAttributeLatencyToADirection() {
+        // A `timedOut` stop is only actionable once you can say which leg was
+        // slow, so the watch's own handling instant is recorded alongside the
+        // Mac's dispatch and resolve instants.
+        let requested = Date()
+        let handled = requested.addingTimeInterval(0.4)
+        let resolved = requested.addingTimeInterval(4.0)
+        let diagnostics = CaptureWatchStopDiagnostics(
+            outcome: .timedOut,
+            requestedAt: requested,
+            resolvedAt: resolved,
+            watchHandledAt: handled
+        )
+        XCTAssertEqual(
+            diagnostics.watchHandledAt?.timeIntervalSince(requested) ?? -1,
+            0.4,
+            accuracy: 0.001,
+            "Forward leg must be recoverable."
+        )
+        XCTAssertEqual(
+            (diagnostics.resolvedAt ?? requested).timeIntervalSince(handled),
+            3.6,
+            accuracy: 0.001,
+            "Return leg must be recoverable."
+        )
+    }
+
+    /// THE root cause of every timed-out handshake (2026-09-04).
+    ///
+    /// `WatchMotionCaptureStore.requestRemoteCaptureStart/Stop` default their
+    /// `commandID` to a fresh UUID. The iPhone relay called them without
+    /// passing the Mac's command ID through, so the watch replied under an ID
+    /// the Mac had never issued. `resolve` found nothing pending, the await was
+    /// never resumed, and the Mac timed out every single time — no matter how
+    /// fast the watch answered. Session `1ce25396-…` is the proof: the watch
+    /// stopped in the same second it was asked and the Mac still recorded
+    /// `timedOut`.
+    func testAReplyUnderADifferentCommandIDNeverResolvesTheCommand() {
+        let coordinator = WatchCaptureCommandCoordinator()
+        let payload = WatchCaptureCommandPayload(
+            command: .stop,
+            sessionID: "session-a",
+            takeID: "take-001"
+        )
+
+        let mismatched = WatchCaptureControlReply(
+            commandID: "a-fresh-id-the-mac-never-issued",
+            sessionID: "session-a",
+            takeID: "take-001",
+            syncState: .notRequested,
+            detail: "Watch motion capture stopped.",
+            acknowledgedAt: Date(),
+            stopOutcome: .stopped
+        )
+        _ = coordinator.resolve(mismatched)
+
+        XCTAssertTrue(
+            coordinator.hasOrphanedReply(for: mismatched.commandID),
+            "A reply nobody awaited must be recorded, not silently swallowed."
+        )
+        XCTAssertNil(
+            coordinator.finalizedReply(for: payload.commandID),
+            "The command the Mac is actually waiting on stays unanswered."
+        )
+    }
+
+    /// The fix: the relay must carry the Mac's command ID through.
+    func testTheRelayCarriesTheMacsCommandIDThroughToTheWatch() throws {
+        let source = try String(
+            contentsOf: URL(fileURLWithPath: #filePath)
+                .deletingLastPathComponent()
+                .deletingLastPathComponent()
+                .appendingPathComponent("ScratchLab/ScratchLabApp.swift"),
+            encoding: .utf8
+        )
+        // Both request call sites must forward the Mac's own ID. (The
+        // `@unknown default` branch also names it, when it builds a reply.)
+        let startCall = source.components(separatedBy: "requestRemoteCaptureStart(")[1]
+        let stopCall = source.components(separatedBy: "requestRemoteCaptureStop(")[1]
+        XCTAssertTrue(
+            startCall.prefix(400).contains("commandID: payload.commandID"),
+            "Start must forward the Mac's own command ID."
+        )
+        XCTAssertTrue(
+            stopCall.prefix(400).contains("commandID: payload.commandID"),
+            "Stop must forward the Mac's own command ID."
+        )
+        XCTAssertFalse(
+            source.contains(".onChange(of: companionRelayBroadcaster.pendingWatchControlCommand)"),
+            "Control commands must not be delivered through a view update."
+        )
+        XCTAssertTrue(
+            source.contains("companionRelayBroadcaster.onWatchControlCommand = { payload in"),
+            "Delivery must be a direct callback, like every sibling relay concern."
+        )
+    }
+
+    /// A receipt says the relay has the command; it is not the watch's answer.
+    func testARelayReceiptDoesNotFinalizeTheCommand() {
+        let coordinator = WatchCaptureCommandCoordinator()
+        let payload = WatchCaptureCommandPayload(
+            command: .stop,
+            sessionID: "session-a",
+            takeID: "take-001"
+        )
+        let receiptAt = Date()
+        let resolved = coordinator.resolve(
+            WatchCaptureControlReply(
+                commandID: payload.commandID,
+                sessionID: payload.sessionID,
+                takeID: payload.takeID,
+                syncState: .requested,
+                detail: "Relay received the command and is forwarding it to the watch.",
+                acknowledgedAt: receiptAt
+            )
+        )
+        XCTAssertNil(resolved, "A receipt must not answer for the watch.")
+        XCTAssertEqual(coordinator.receipt(for: payload.commandID), receiptAt)
+        XCTAssertNil(
+            coordinator.finalizedReply(for: payload.commandID),
+            "The command must still be waiting for the watch's real reply."
+        )
+    }
+
+    func testTheStopHandshakeIsBounded() {
+        XCTAssertGreaterThan(CaptureWatchStopPolicy.acknowledgementTimeoutSeconds, 0)
+        XCTAssertGreaterThanOrEqual(CaptureWatchStopPolicy.maximumAttempts, 1)
+        XCTAssertLessThanOrEqual(
+            CaptureWatchStopPolicy.maximumHandshakeSeconds,
+            5,
+            "Media finalization must never wait long on a watch that is off the wrist."
+        )
+    }
+
+    func testAnUnansweredStopResolvesAsTimedOutRatherThanStopped() {
+        let coordinator = WatchCaptureCommandCoordinator()
+        let payload = WatchCaptureCommandPayload(
+            command: .stop,
+            sessionID: "session-a",
+            takeID: "take-001"
+        )
+        let timedOut = coordinator.timeout(commandID: payload.commandID)
+        XCTAssertNil(timedOut, "An unknown command has nothing to time out.")
+
+        let pending = expectation(description: "stop resolves")
+        Task {
+            let reply = await coordinator.begin(command: payload)
+            XCTAssertEqual(reply.syncState, .timedOut)
+            XCTAssertEqual(reply.stopOutcome, .timedOut)
+            XCTAssertEqual(reply.detail, "Watch motion stop timed out.")
+            pending.fulfill()
+        }
+        // Give `begin` a moment to register before timing it out.
+        let registered = expectation(description: "registered")
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) {
+            _ = coordinator.timeout(commandID: payload.commandID)
+            registered.fulfill()
+        }
+        wait(for: [registered, pending], timeout: 3)
+    }
+
+    func testTheReplyStillDecodesWhenAPeerSendsNoStopOutcome() throws {
+        // Wire compatibility with a Watch or relay that predates the field.
+        let legacy = """
+        {
+          "kind": "watch_motion_control_status_v2",
+          "commandID": "cmd",
+          "sessionID": "session-a",
+          "takeID": "take-001",
+          "syncState": "notRequested",
+          "detail": "Watch motion capture was already stopped."
+        }
+        """
+        let decoded = try JSONDecoder().decode(
+            WatchCaptureControlReply.self,
+            from: Data(legacy.utf8)
+        )
+        XCTAssertNil(decoded.stopOutcome)
+        XCTAssertEqual(CaptureWatchStopPolicy.outcome(for: decoded), .stopped)
+    }
+}
+
+/// The take sidecar has to carry the stop evidence into the export without
+/// disturbing the association merge that fixed the earlier write-back race.
+final class WatchStopDiagnosticsSidecarTests: XCTestCase {
+    private let sessionID = "9f75b6da-5b4b-4a7a-b234-465be2ce0128"
+
+    private func makeSidecar() -> CaptureCore.LocalRecordingSidecar {
+        CaptureCore.LocalRecordingSidecar.recording(
+            sessionID: sessionID,
+            sessionConfig: nil,
+            takeIdentity: CaptureCore.LocalRecordingNaming.takeIdentity(
+                sessionID: sessionID,
+                takeNumber: 1
+            ),
+            files: CaptureCore.LocalRecordingFiles(
+                baseName: "bvb_take01",
+                mediaURL: URL(fileURLWithPath: "/tmp/bvb_take01.mov"),
+                sidecarURL: URL(fileURLWithPath: "/tmp/bvb_take01.json")
+            ),
+            recordingRole: "mac_routine_capture",
+            platform: "macOS",
+            appSurface: "ScratchLab Routine Recorder",
+            sourceDeviceName: "DJ",
+            startedAt: Date()
+        )
+    }
+
+    func testAFailedStartRecordsWhyItFailed() {
+        // `watchSyncState: failed` with no recoverable reason is what made the
+        // first hardware failure need a second run to diagnose.
+        let sidecar = makeSidecar().withWatchSync(
+            WatchCaptureControlReply(
+                commandID: "eac9f34a-2cfc-455d-8e73-6b14bc7dba5f",
+                sessionID: sessionID,
+                takeID: "take-001",
+                syncState: .failed,
+                detail: "Watch motion capture failed to start.",
+                acknowledgedAt: Date()
+            )
+        )
+        let event = sidecar.auditTrail.last { $0.category == "watch_sync" }
+        XCTAssertEqual(
+            event?.detail,
+            "Watch sync state set to failed: Watch motion capture failed to start."
+        )
+    }
+
+    func testATakeWithNoStopDiagnosticsReadsAsNotRequested() throws {
+        let sidecar = makeSidecar()
+        XCTAssertNil(sidecar.watchStopDiagnostics)
+
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .iso8601
+        let decoded = try decoder.decode(
+            CaptureCore.LocalRecordingSidecar.self,
+            from: sidecar.encodedData()
+        )
+        XCTAssertNil(
+            decoded.watchStopDiagnostics,
+            "A sidecar written before stop diagnostics existed must decode, not fail."
+        )
+    }
+
+    func testAStopOutcomeRoundTripsAndIsAudited() throws {
+        let resolvedAt = Date()
+        let sidecar = makeSidecar().withWatchStopDiagnostics(
+            CaptureWatchStopDiagnostics(
+                outcome: .timedOut,
+                sessionID: sessionID,
+                takeID: "take-001",
+                commandID: "cmd-1",
+                detail: "Watch stop was not acknowledged within 2 seconds.",
+                requestedAt: resolvedAt,
+                resolvedAt: resolvedAt,
+                attemptCount: 1,
+                motionTransferState: .pending
+            )
+        )
+
+        XCTAssertEqual(sidecar.watchStopDiagnostics?.outcome, .timedOut)
+        XCTAssertTrue(
+            sidecar.auditTrail.contains { $0.category == "watch_stop" },
+            "A degraded stop must be recorded, not silent."
+        )
+
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .iso8601
+        let decoded = try decoder.decode(
+            CaptureCore.LocalRecordingSidecar.self,
+            from: sidecar.encodedData()
+        )
+        XCTAssertEqual(decoded.watchStopDiagnostics?.outcome, .timedOut)
+        XCTAssertEqual(decoded.watchStopDiagnostics?.attemptCount, 1)
+        XCTAssertEqual(decoded.watchStopDiagnostics?.motionTransferState, .pending)
+    }
+
+    func testALateWatchAssociationStillSurvivesFinalization() {
+        // The earlier write-back fix, re-asserted with stop diagnostics in
+        // play: recording a stop outcome must not cost the take its link.
+        let staleInMemory = makeSidecar().withWatchStopDiagnostics(
+            CaptureWatchStopDiagnostics(
+                outcome: .timedOut,
+                sessionID: sessionID,
+                takeID: "take-001",
+                detail: "Watch stop was not acknowledged.",
+                attemptCount: 2,
+                motionTransferState: .pending
+            )
+        )
+        XCTAssertNil(staleInMemory.linkedMotionFileName)
+
+        let motionCaptureID = UUID(uuidString: "3A9DC9A3-9399-4999-B869-0237F36DA99C")!
+        let onDisk = makeSidecar().linkingWatchCapture(
+            id: motionCaptureID,
+            fileName: "scratch-motion-live-3A9DC9A3.json"
+        )
+
+        let merged = staleInMemory.mergingLatestWatchAssociation(from: onDisk)
+
+        XCTAssertEqual(merged.linkedMotionFileName, "scratch-motion-live-3A9DC9A3.json")
+        XCTAssertEqual(merged.watchSyncState, .acknowledged)
+        XCTAssertEqual(
+            merged.watchStopDiagnostics?.outcome,
+            .timedOut,
+            "An arriving motion file proves the capture existed, not that the stop was timely."
+        )
+        XCTAssertEqual(
+            merged.watchStopDiagnostics?.motionTransferState,
+            .completed,
+            "The link is the transfer completing."
+        )
+    }
+
+    func testMergingNeverInventsAStopThatWasNeverRequested() {
+        let noStopRecorded = makeSidecar()
+        let onDisk = makeSidecar().linkingWatchCapture(
+            id: UUID(),
+            fileName: "linked.json"
+        )
+
+        let merged = noStopRecorded.mergingLatestWatchAssociation(from: onDisk)
+
+        XCTAssertEqual(merged.linkedMotionFileName, "linked.json")
+        XCTAssertNil(
+            merged.watchStopDiagnostics,
+            "Adopting a link must not fabricate a stop handshake that never happened."
+        )
+    }
+
+    func testTheExportCarriesTheStopOutcomeSeparatelyFromWatchSource() throws {
+        let source = try String(
+            contentsOf: URL(fileURLWithPath: #filePath)
+                .deletingLastPathComponent()
+                .deletingLastPathComponent()
+                .appendingPathComponent("ScratchLab/Services/SessionExportCoordinator.swift"),
+            encoding: .utf8
+        )
+        XCTAssertTrue(source.contains("let watchStopOutcome: String"))
+        XCTAssertTrue(source.contains("let watchMotionTransferState: String"))
+        // The four instants that let a reader tell a late stop from an early
+        // start. Without them a 5.411 s lead-in reads as 5.411 s of overrun.
+        for field in [
+            "let takeStartedAt: Date?",
+            "let takeStopRequestedAt: Date?",
+            "let watchCaptureStartedAt: Date?",
+            "let watchCaptureEndedAt: Date?"
+        ] {
+            XCTAssertTrue(source.contains(field), "Export must carry \(field)")
+        }
+        XCTAssertTrue(
+            source.contains("takeStopRequestedAt: sidecar.watchStopDiagnostics?.requestedAt"),
+            "The media window's end is the instant the stop was dispatched."
+        )
+        XCTAssertTrue(
+            source.contains("watchCaptureEndedAt: take.watchCaptureSession?.endedAt"),
+            "The watch's end must come from the watch's own record."
+        )
+        XCTAssertTrue(source.contains("let watchStopHandledAt: Date?"))
+        XCTAssertTrue(source.contains("let watchStopResolvedAt: Date?"))
+        XCTAssertTrue(
+            source.contains("watchSource: context.watchFileName == nil ? \"none\" : \"watch\""),
+            "The canonical manifest's watch_source stays two-valued and unoverloaded."
+        )
+    }
+}
+
+/// Direct coverage for the shared export-failure text helper.
+///
+/// The helper has no call sites in this commit - the export coordinator's own
+/// call sites, `ReferencePackageIO` and `ReferenceAuthoringCaptureBridge` all
+/// arrive later - so nothing else in the suite exercises it. These tests pin
+/// the behaviour the helper exists to provide: a rejection that already knows
+/// which artifact failed must reach the operator with that knowledge intact,
+/// instead of being flattened into one of the two generic export sentences.
+final class SessionExportFailureTextTests: XCTestCase {
+
+    private struct StubKey: CodingKey {
+        let stringValue: String
+        var intValue: Int? { nil }
+        init(_ stringValue: String) { self.stringValue = stringValue }
+        init?(stringValue: String) { self.stringValue = stringValue }
+        init?(intValue: Int) { return nil }
+    }
+
+    private struct UnrecognisedFailure: Error {}
+
+    // MARK: - SessionExportArtifactRejection
+
+    func testArtifactRejectionCarriesItsIssueAndErrorIntoTheValidationReport() {
+        let rejection = SessionExportArtifactRejection(
+            issue: "Export blocked: take-002-camA.mov is zero bytes.",
+            exportError: .missingRequiredFiles
+        )
+
+        let report = rejection.validationReport
+
+        XCTAssertEqual(report.suggestedError, .missingRequiredFiles)
+        XCTAssertEqual(report.issues, ["Export blocked: take-002-camA.mov is zero bytes."])
+    }
+
+    // MARK: - issue(for:while:)
+
+    func testIssueForArtifactRejectionKeepsTheArtifactSentenceInsteadOfTheCoarseMessage() {
+        let issue = "Export blocked: take-002-camA.mov is zero bytes."
+        let rejection = SessionExportArtifactRejection(issue: issue, exportError: .missingRequiredFiles)
+
+        let text = SessionExportFailureText.issue(for: rejection, while: "validating the canonical export")
+
+        XCTAssertEqual(text, issue, "A rejection that names the artifact must reach the operator unchanged.")
+        XCTAssertNotEqual(
+            text,
+            SessionExportError.missingRequiredFiles.userMessage,
+            "Naming the artifact must not collapse back into the generic missing-files sentence."
+        )
+    }
+
+    func testIssueForValidationFailureReturnsTheSpecificReasonDetail() {
+        let failure = SessionExportValidationFailure(.stagedDocumentUnreadable)
+
+        XCTAssertEqual(
+            SessionExportFailureText.issue(for: failure, while: "validating the canonical export"),
+            SessionExportValidationReason.stagedDocumentUnreadable.detailText
+        )
+    }
+
+    func testIssueForBareExportErrorFallsBackToItsExistingUserMessage() {
+        XCTAssertEqual(
+            SessionExportFailureText.issue(for: SessionExportError.unableToCreateArchive, while: "building the archive"),
+            SessionExportError.unableToCreateArchive.userMessage,
+            "Coarse export errors keep the wording the export UI already shows."
+        )
+    }
+
+    func testIssueForUnrecognisedErrorNamesTheActivityThatWasBlocked() {
+        let text = SessionExportFailureText.issue(for: UnrecognisedFailure(), while: "staging the archive")
+
+        XCTAssertTrue(
+            text.hasPrefix("Export blocked while staging the archive: "),
+            "An unrecognised error still has to say what was being attempted. Got: \(text)"
+        )
+    }
+
+    // MARK: - Sidecar issues
+
+    func testUnreadableSidecarIssueNamesTheFileAndTheFieldThatFailed() {
+        let error = DecodingError.keyNotFound(
+            StubKey("sampleRate"),
+            DecodingError.Context(codingPath: [StubKey("take"), StubKey("audio")], debugDescription: "")
+        )
+
+        let text = SessionExportFailureText.unreadableSidecarIssue(error, fileName: "take-001.json")
+
+        XCTAssertTrue(text.contains("take-001.json"), "Got: \(text)")
+        XCTAssertTrue(text.contains("take.audio.sampleRate"), "The failing field path must be named. Got: \(text)")
+        XCTAssertFalse(
+            text.contains("is missing from the capture folder"),
+            "A file that exists but will not decode must not be reported as absent."
+        )
+    }
+
+    func testMissingSidecarIssueNamesTheFileThatIsAbsent() {
+        let text = SessionExportFailureText.missingSidecarIssue(fileName: "take-003.json")
+
+        XCTAssertEqual(text, "Export blocked: take-003.json is missing from the capture folder.")
+    }
+
+    func testSidecarIssueTextCarriesNoFilesystemPath() {
+        let error = DecodingError.dataCorrupted(
+            DecodingError.Context(codingPath: [], debugDescription: "Unexpected end of file.")
+        )
+
+        let text = SessionExportFailureText.unreadableSidecarIssue(error, fileName: "take-001.json")
+
+        XCTAssertFalse(text.contains("/"), "Only the file name may appear, never a path. Got: \(text)")
+    }
+
+    // MARK: - describe(_:)
+
+    func testDescribeNamesTheMissingFieldPathForAKeyNotFoundFailure() {
+        let error = DecodingError.keyNotFound(
+            StubKey("bpm"),
+            DecodingError.Context(codingPath: [StubKey("session")], debugDescription: "")
+        )
+
+        XCTAssertEqual(SessionExportFailureText.describe(error), "Required field 'session.bpm' is missing.")
+    }
+
+    func testDescribeNamesTheFieldForATypeMismatch() {
+        let error = DecodingError.typeMismatch(
+            Int.self,
+            DecodingError.Context(codingPath: [StubKey("session"), StubKey("bpm")], debugDescription: "")
+        )
+
+        let text = SessionExportFailureText.describe(error)
+
+        XCTAssertTrue(text.hasPrefix("Field 'session.bpm' is not a"), "Got: \(text)")
+    }
+
+    func testDescribeNamesTheFieldForAValueNotFoundFailure() {
+        let error = DecodingError.valueNotFound(
+            String.self,
+            DecodingError.Context(codingPath: [StubKey("session"), StubKey("performer")], debugDescription: "")
+        )
+
+        let text = SessionExportFailureText.describe(error)
+
+        XCTAssertTrue(text.hasPrefix("Field 'session.performer' holds no"), "Got: \(text)")
+    }
+
+    func testDescribeReportsInvalidJSONWhenTheCorruptionHasNoFieldPath() {
+        let error = DecodingError.dataCorrupted(
+            DecodingError.Context(codingPath: [], debugDescription: "Unexpected end of file.")
+        )
+
+        XCTAssertEqual(
+            SessionExportFailureText.describe(error),
+            "The file is not valid JSON. Unexpected end of file."
+        )
+    }
+
+    func testDescribeNamesTheFieldWhenCorruptionHasAPath() {
+        let error = DecodingError.dataCorrupted(
+            DecodingError.Context(codingPath: [StubKey("takes")], debugDescription: "Bad date.")
+        )
+
+        XCTAssertEqual(
+            SessionExportFailureText.describe(error),
+            "Field 'takes' could not be decoded. Bad date."
+        )
+    }
+
+    func testDescribeNamesTheFieldForAnEncodingFailure() {
+        let error = EncodingError.invalidValue(
+            Double.nan,
+            EncodingError.Context(codingPath: [StubKey("takes"), StubKey("duration")], debugDescription: "")
+        )
+
+        XCTAssertEqual(
+            SessionExportFailureText.describe(error),
+            "Field 'takes.duration' held a value that cannot be encoded."
+        )
+    }
+
+    func testDescribeFallsBackToDomainAndCodeForFoundationErrors() {
+        let error = NSError(
+            domain: "NSCocoaErrorDomain",
+            code: 640,
+            userInfo: [NSLocalizedDescriptionKey: "The volume is out of space."]
+        )
+
+        XCTAssertEqual(
+            SessionExportFailureText.describe(error),
+            "The volume is out of space. (NSCocoaErrorDomain 640)"
+        )
+    }
+}
+
+/// Coverage for the calibrated crossfader fields on `RawMixerMIDIEvent` and
+/// the all-or-nothing gate that decides whether derivation reads them.
+///
+/// `CrossfaderCalibrationTests` covers the calibration model, sweep, store and
+/// state deriver. It does not reach `CaptureCore`, and the only other file that
+/// references these two fields, `ReferenceAuthoringCaptureBridgeTests`, arrives
+/// in a later boundary. These tests close that gap.
+///
+/// The gesture below is one-way and deliberately built so the two position
+/// spaces cannot be confused: it travels 0.02 in controller terms, below the
+/// 0.10 minimum delta, and a full 1.0 in calibrated deck terms. Whether any
+/// event comes out, and how far it travels, therefore reports exactly which
+/// position source the derivation read. It is one-way on purpose: an
+/// out-and-back gesture collapses into a single pulse whose endpoints are the
+/// outer samples, so its net travel is zero in either space and would say
+/// nothing about the source. That collapse is pinned separately below.
+final class CaptureCoreCalibratedCrossfaderTests: XCTestCase {
+
+    private func event(
+        takeRelativeTime: Double,
+        normalizedValue: Double,
+        calibratedPosition: Double?,
+        calibrationID: String? = "cal-rane-one-mkii"
+    ) -> CaptureCore.RawMixerMIDIEvent {
+        CaptureCore.RawMixerMIDIEvent(
+            timestamp: takeRelativeTime,
+            takeRelativeTime: takeRelativeTime,
+            deviceName: "RANE ONE MKII",
+            channel: 1,
+            controller: 6,
+            value: Int((normalizedValue * 127).rounded()),
+            normalizedValue: normalizedValue,
+            mappedControl: "crossfader",
+            calibratedPosition: calibratedPosition,
+            calibrationID: calibratedPosition == nil ? nil : calibrationID
+        )
+    }
+
+    /// One-way close-to-open sweep: 0.02 of controller travel, 1.0 of
+    /// calibrated deck travel.
+    private func gesture(calibrated: [Double?]) -> [CaptureCore.RawMixerMIDIEvent] {
+        let normalized = [0.50, 0.52]
+        return (0..<2).map { index in
+            event(
+                takeRelativeTime: Double(index) * 0.1,
+                normalizedValue: normalized[index],
+                calibratedPosition: calibrated[index]
+            )
+        }
+    }
+
+    // MARK: - Codable round trip
+
+    func testCalibratedFieldsSurviveACodableRoundTrip() throws {
+        let original = event(takeRelativeTime: 0.25, normalizedValue: 0.5039, calibratedPosition: 0.75)
+
+        let data = try JSONEncoder().encode(original)
+        let decoded = try JSONDecoder().decode(CaptureCore.RawMixerMIDIEvent.self, from: data)
+
+        XCTAssertEqual(decoded, original)
+        XCTAssertEqual(decoded.calibratedPosition, 0.75)
+        XCTAssertEqual(decoded.calibrationID, "cal-rane-one-mkii")
+    }
+
+    func testAnUncalibratedEventRoundTripsWithBothFieldsNil() throws {
+        let original = event(takeRelativeTime: 0.25, normalizedValue: 0.5039, calibratedPosition: nil)
+
+        let decoded = try JSONDecoder().decode(
+            CaptureCore.RawMixerMIDIEvent.self,
+            from: try JSONEncoder().encode(original)
+        )
+
+        XCTAssertEqual(decoded, original)
+        XCTAssertNil(decoded.calibratedPosition)
+        XCTAssertNil(decoded.calibrationID)
+    }
+
+    func testALegacySidecarWithoutTheCalibratedKeysStillDecodes() throws {
+        let legacy = """
+        {
+          "timestamp": 1.0,
+          "takeRelativeTime": 0.5,
+          "deviceName": "RANE ONE MKII",
+          "channel": 1,
+          "controller": 6,
+          "value": 64,
+          "normalizedValue": 0.5039370078740157,
+          "mappedControl": "crossfader"
+        }
+        """.data(using: .utf8)!
+
+        let decoded = try JSONDecoder().decode(CaptureCore.RawMixerMIDIEvent.self, from: legacy)
+
+        XCTAssertNil(decoded.calibratedPosition, "The fields are additive; historical sidecars must still decode.")
+        XCTAssertNil(decoded.calibrationID)
+        XCTAssertEqual(decoded.normalizedValue, 0.5039370078740157)
+    }
+
+    // MARK: - Which position source derivation reads
+
+    func testDerivationUsesCalibratedPositionsWhenEveryEventSuppliesOne() {
+        let events = CaptureCore.deriveDetectedNotationFaderEvents(
+            from: gesture(calibrated: [0.0, 1.0])
+        )
+
+        XCTAssertEqual(
+            events.count, 1,
+            "Full calibrated travel must be derived; the 0.02 controller travel alone would yield nothing."
+        )
+        XCTAssertEqual(events.first?.fromValue, 0.0)
+        XCTAssertEqual(
+            events.first?.toValue, 1.0,
+            "The derived travel must be the calibrated 1.0, not the 0.02 controller fraction."
+        )
+        XCTAssertEqual(events.first?.control, "crossfader")
+    }
+
+    func testDerivationFallsBackToLegacyPositionsWhenAnyEventLacksCalibration() {
+        let events = CaptureCore.deriveDetectedNotationFaderEvents(
+            from: gesture(calibrated: [0.0, nil])
+        )
+
+        XCTAssertTrue(
+            events.isEmpty,
+            "One uncalibrated sample must drop the whole stream back to normalizedValue, whose 0.02 travel is below the minimum delta."
+        )
+    }
+
+    func testAFullyUncalibratedStreamIsDerivedExactlyAsBefore() {
+        let events = CaptureCore.deriveDetectedNotationFaderEvents(
+            from: gesture(calibrated: [nil, nil])
+        )
+
+        XCTAssertTrue(events.isEmpty, "Legacy behaviour for uncalibrated captures is unchanged.")
+    }
+
+    func testCalibratedAndLegacyStreamsAgreeWhenTheTwoPositionSpacesAgree() {
+        func stream(calibrated: Bool) -> [CaptureCore.RawMixerMIDIEvent] {
+            (0..<2).map { index in
+                let position = [0.0, 1.0][index]
+                return event(
+                    takeRelativeTime: Double(index) * 0.1,
+                    normalizedValue: position,
+                    calibratedPosition: calibrated ? position : nil
+                )
+            }
+        }
+
+        XCTAssertEqual(
+            CaptureCore.deriveDetectedNotationFaderEvents(from: stream(calibrated: true)),
+            CaptureCore.deriveDetectedNotationFaderEvents(from: stream(calibrated: false)),
+            "Calibration changes which numbers are read, never how they are interpreted."
+        )
+    }
+
+    func testAnOutAndBackCalibratedGestureStillCollapsesIntoOnePulse() {
+        let events = CaptureCore.deriveDetectedNotationFaderEvents(
+            from: (0..<3).map { index in
+                event(
+                    takeRelativeTime: Double(index) * 0.1,
+                    normalizedValue: [0.50, 0.52, 0.50][index],
+                    calibratedPosition: [0.0, 1.0, 0.0][index]
+                )
+            }
+        )
+
+        XCTAssertEqual(events.count, 1, "Two alternating calibrated cuts pair into a single pulse.")
+        XCTAssertEqual(events.first?.eventKind, .pulse)
+        XCTAssertEqual(events.first?.fromValue, 0.0, "A pulse reports its outer endpoints, so its net travel is zero.")
+        XCTAssertEqual(events.first?.toValue, 0.0)
+    }
+}
+
+/// Write, read and verify coverage for `ReferencePackageIO`.
+///
+/// `ReferenceAuthoringTests` covers the reference models, validation and
+/// registry, but never touches `ReferencePackageIO`, so nothing else in the
+/// suite exercises the package on disk. Every test here works inside its own
+/// temporary directory, created in `setUp` and removed in `tearDown`; nothing
+/// reads or writes Application Support, a real capture folder, or any
+/// installed package location. Writing a package is a local file operation
+/// only: it installs nothing, publishes nothing and enables no training.
+///
+/// The fixture carries all nine required artifact roles and an approved
+/// lifecycle state because `writePackage` validates the manifest before it
+/// writes anything. That refusal is a contract in its own right and is pinned
+/// by its own tests below rather than worked around.
+final class ReferencePackageIORoundTripTests: XCTestCase {
+
+    private var root: URL!
+
+    override func setUpWithError() throws {
+        try super.setUpWithError()
+        root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("ReferencePackageIOTests-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+    }
+
+    override func tearDownWithError() throws {
+        if let root, FileManager.default.fileExists(atPath: root.path) {
+            try FileManager.default.removeItem(at: root)
+        }
+        root = nil
+        try super.tearDownWithError()
+    }
+
+    // MARK: - Fixtures
+
+    private static let calibration = CrossfaderCalibration(
+        address: CrossfaderMIDIAddress(
+            deviceIdentifier: "Rane ONE MKII",
+            deviceName: "Rane ONE MKII",
+            channel: 15,
+            controller: 8
+        ),
+        fullLeftRawValue: 0,
+        centerRawValue: 52,
+        fullRightRawValue: 104,
+        openEnd: .left,
+        activeDeck: .rightDeck,
+        calibratedAt: Date(timeIntervalSince1970: 1_788_000_000)
+    )
+
+    private static let deviceInfo = ReferenceDeviceInfo(
+        platform: "macOS",
+        appVersion: "1.0.1",
+        controllerName: "Rane ONE MKII",
+        controllerIdentifier: "Rane ONE MKII",
+        audioDeviceName: "Rane ONE MKII",
+        videoDeviceName: "Studio Camera",
+        watchLinked: true
+    )
+
+    private func makeMetadata(
+        lifecycleState: ReferenceLifecycleState = .approvedCanonical
+    ) -> ReferenceTakeMetadata {
+        ReferenceTakeMetadata(
+            referenceTakeID: "ref-take-io-0001",
+            authoringSessionID: "auth-io-0001",
+            takeNumber: 1,
+            operatorName: "Karl",
+            technique: .babyScratch,
+            pattern: ReferencePatternIdentity(id: "quarter_notes", name: "Quarter notes", phraseBars: 1),
+            bpm: 95,
+            startingPlatterDirection: .forward,
+            faderVariant: .faderOpenThroughout,
+            referenceVersion: 1,
+            crossfaderCalibration: Self.calibration,
+            deviceInfo: Self.deviceInfo,
+            recordedAt: Date(timeIntervalSince1970: 1_788_000_100),
+            lifecycleState: lifecycleState
+        )
+    }
+
+    private func makeManifest(
+        artifacts: [ReferenceArtifactRecord],
+        lifecycleState: ReferenceLifecycleState = .approvedCanonical
+    ) -> ReferencePackageManifest {
+        let metadata = makeMetadata(lifecycleState: lifecycleState)
+        return ReferencePackageManifest(
+            referenceID: "baby_scratch__quarter_notes",
+            referenceVersion: 1,
+            packageBuiltAt: Date(timeIntervalSince1970: 1_788_000_200),
+            metadata: metadata,
+            boundaries: ReferencePhraseBoundaries.nominal(for: metadata),
+            selectedRepetitionIndex: 0,
+            publishedPhraseStartSeconds: 2.526315789473684,
+            publishedPhraseEndSeconds: 5.052631578947368,
+            publishedPhraseBeats: 4,
+            approval: ReferenceReviewDecision(
+                outcome: .approved,
+                decidedBy: "Karl",
+                decidedAt: Date(timeIntervalSince1970: 1_788_000_150),
+                selectedRepetitionIndex: 0
+            ),
+            validation: ReferenceValidationRecord(
+                report: ReferenceValidationReport(
+                    findings: [],
+                    evaluatedAt: Date(timeIntervalSince1970: 1_788_000_150)
+                )
+            ),
+            artifacts: artifacts
+        )
+    }
+
+    /// One input per required role. The take sidecar is copied from a file so
+    /// both supported input kinds - bytes and a source URL - are exercised.
+    private func requiredInputs() throws -> [ReferencePackageInput] {
+        let sidecarSource = root.appendingPathComponent("source-sidecar.json")
+        try Self.bytes(for: .takeSidecar).write(to: sidecarSource)
+
+        return ReferencePackageManifest.requiredArtifactRoles.map { role in
+            role == .takeSidecar
+                ? ReferencePackageInput(role: role, packagePath: Self.path(for: role), sourceURL: sidecarSource)
+                : ReferencePackageInput(role: role, packagePath: Self.path(for: role), data: Self.bytes(for: role))
+        }
+    }
+
+    private static func path(for role: ReferenceArtifactRecord.Role) -> String {
+        switch role {
+        case .referenceAudio: return "audio/reference.wav"
+        case .fullTakeAudio: return "audio/full-take.wav"
+        case .takeSidecar: return "take/sidecar.json"
+        case .rawMIDI: return "midi/raw.json"
+        case .platterTimeline: return "motion/platter-timeline.json"
+        case .crossfaderRaw: return "midi/crossfader-raw.json"
+        case .crossfaderCalibrated: return "midi/crossfader-calibrated.json"
+        case .notationEvidence: return "notation/evidence.json"
+        case .validationReport: return "validation/report.json"
+        case .referenceVideo: return "video/reference.mov"
+        }
+    }
+
+    private static func bytes(for role: ReferenceArtifactRecord.Role) -> Data {
+        Data("scratchlab-fixture-bytes-for-\(role.rawValue)".utf8)
+    }
+
+    @discardableResult
+    private func writeFixturePackage(
+        lifecycleState: ReferenceLifecycleState = .approvedCanonical
+    ) throws -> URL {
+        try ReferencePackageIO.writePackage(
+            inputs: try requiredInputs(),
+            parentDirectory: root,
+            packageDirectoryName: "baby_scratch__quarter_notes_v1",
+            makeManifest: { self.makeManifest(artifacts: $0, lifecycleState: lifecycleState) }
+        )
+    }
+
+    // MARK: - Write then read
+
+    func testWritingAPackageThenReadingItsManifestRoundTrips() throws {
+        let packageURL = try writeFixturePackage()
+
+        let manifest = try ReferencePackageIO.readManifest(atPackageURL: packageURL)
+
+        XCTAssertEqual(manifest.schemaVersion, ReferencePackageManifest.currentSchemaVersion)
+        XCTAssertEqual(manifest.referenceID, "baby_scratch__quarter_notes")
+        XCTAssertEqual(manifest.referenceVersion, 1)
+        XCTAssertEqual(manifest.metadata, makeMetadata())
+        XCTAssertEqual(manifest.approval.outcome, .approved)
+        XCTAssertEqual(
+            Set(manifest.artifacts.map(\.role)),
+            Set(ReferencePackageManifest.requiredArtifactRoles)
+        )
+    }
+
+    func testWrittenArtifactsLandAtTheirPackagePathsWithRecordedHashes() throws {
+        let packageURL = try writeFixturePackage()
+        let manifest = try ReferencePackageIO.readManifest(atPackageURL: packageURL)
+
+        for role in ReferencePackageManifest.requiredArtifactRoles {
+            let record = try XCTUnwrap(manifest.artifacts.first { $0.role == role }, "\(role)")
+            XCTAssertEqual(record.path, Self.path(for: role))
+            let onDisk = try Data(contentsOf: packageURL.appendingPathComponent(record.path))
+            XCTAssertEqual(onDisk, Self.bytes(for: role), record.path)
+            XCTAssertEqual(record.sha256, ReferencePackageIO.sha256Hex(Self.bytes(for: role)), record.path)
+            XCTAssertEqual(record.byteCount, Int64(Self.bytes(for: role).count), record.path)
+        }
+    }
+
+    func testMeasuredArtifactsAgreeWithTheRecordedManifest() throws {
+        let packageURL = try writeFixturePackage()
+        let manifest = try ReferencePackageIO.readManifest(atPackageURL: packageURL)
+
+        let measured = ReferencePackageIO.measureArtifacts(manifest: manifest, packageURL: packageURL)
+
+        for record in manifest.artifacts {
+            let actual = try XCTUnwrap(measured[record.path], "No measurement for \(record.path)")
+            XCTAssertEqual(actual.sha256, record.sha256, record.path)
+            XCTAssertEqual(actual.byteCount, record.byteCount, record.path)
+        }
+    }
+
+    // MARK: - Verify
+
+    func testVerifyAcceptsAnIntactPackage() throws {
+        let packageURL = try writeFixturePackage()
+
+        XCTAssertEqual(ReferencePackageIO.verify(packageURL: packageURL), [])
+    }
+
+    func testVerifyRejectsATamperedArtifact() throws {
+        let packageURL = try writeFixturePackage()
+        try Data("tampered".utf8).write(to: packageURL.appendingPathComponent("audio/reference.wav"))
+
+        let issues = ReferencePackageIO.verify(packageURL: packageURL)
+
+        XCTAssertFalse(issues.isEmpty, "Rewritten bytes must not verify against the recorded digest.")
+        XCTAssertTrue(
+            issues.contains { $0.contains("audio/reference.wav") },
+            "The rejection must name the artifact. Got: \(issues)"
+        )
+    }
+
+    func testVerifyRejectsAMissingArtifact() throws {
+        let packageURL = try writeFixturePackage()
+        try FileManager.default.removeItem(at: packageURL.appendingPathComponent("take/sidecar.json"))
+
+        let issues = ReferencePackageIO.verify(packageURL: packageURL)
+
+        XCTAssertFalse(issues.isEmpty)
+        XCTAssertTrue(
+            issues.contains { $0.contains("take/sidecar.json") },
+            "The rejection must name the absent artifact. Got: \(issues)"
+        )
+    }
+
+    func testVerifyRejectsADirectoryWithNoManifest() throws {
+        let empty = root.appendingPathComponent("no-manifest", isDirectory: true)
+        try FileManager.default.createDirectory(at: empty, withIntermediateDirectories: true)
+
+        XCTAssertFalse(
+            ReferencePackageIO.verify(packageURL: empty).isEmpty,
+            "A directory without a manifest is not a package."
+        )
+    }
+
+    // MARK: - Refusals, and containment
+
+    func testAnIncompletePackageIsRefusedAndNamesEveryMissingRole() throws {
+        XCTAssertThrowsError(
+            try ReferencePackageIO.writePackage(
+                inputs: [
+                    ReferencePackageInput(
+                        role: .referenceAudio,
+                        packagePath: Self.path(for: .referenceAudio),
+                        data: Self.bytes(for: .referenceAudio)
+                    )
+                ],
+                parentDirectory: root,
+                packageDirectoryName: "incomplete_v1",
+                makeManifest: { self.makeManifest(artifacts: $0) }
+            )
+        ) { error in
+            guard case ReferencePackageIOError.packageRejected(let issues) = error else {
+                return XCTFail("Expected packageRejected, got \(error)")
+            }
+            for role in ReferencePackageManifest.requiredArtifactRoles where role != .referenceAudio {
+                XCTAssertTrue(
+                    issues.contains { $0.contains(role.rawValue) },
+                    "Missing role \(role.rawValue) must be named. Got: \(issues)"
+                )
+            }
+        }
+    }
+
+    func testADraftPackageIsRefusedEvenWhenEveryArtifactIsPresent() throws {
+        XCTAssertThrowsError(try writeFixturePackage(lifecycleState: .draft)) { error in
+            guard case ReferencePackageIOError.packageRejected(let issues) = error else {
+                return XCTFail("Expected packageRejected, got \(error)")
+            }
+            XCTAssertTrue(
+                issues.contains { $0.contains("draft") },
+                "An unapproved package must be refused by state, not written. Got: \(issues)"
+            )
+        }
+    }
+
+    func testAMissingSourceArtifactIsRejected() throws {
+        let absent = root.appendingPathComponent("not-there.wav")
+        var inputs = try requiredInputs()
+        inputs[0] = ReferencePackageInput(
+            role: .referenceAudio,
+            packagePath: Self.path(for: .referenceAudio),
+            sourceURL: absent
+        )
+
+        XCTAssertThrowsError(
+            try ReferencePackageIO.writePackage(
+                inputs: inputs,
+                parentDirectory: root,
+                packageDirectoryName: "rejected_v1",
+                makeManifest: { self.makeManifest(artifacts: $0) }
+            )
+        ) { error in
+            guard case ReferencePackageIOError.sourceArtifactMissing(let role, _) = error else {
+                return XCTFail("Expected sourceArtifactMissing, got \(error)")
+            }
+            XCTAssertEqual(role, ReferenceArtifactRecord.Role.referenceAudio.rawValue)
+        }
+    }
+
+    func testWritingAPackageStaysInsideTheGivenParentDirectory() throws {
+        let packageURL = try writeFixturePackage()
+
+        XCTAssertEqual(packageURL.deletingLastPathComponent().standardizedFileURL, root.standardizedFileURL)
+        XCTAssertEqual(packageURL.lastPathComponent, "baby_scratch__quarter_notes_v1")
+
+        let entries = try FileManager.default.contentsOfDirectory(atPath: root.path).sorted()
+        XCTAssertEqual(
+            entries, ["baby_scratch__quarter_notes_v1", "source-sidecar.json"],
+            "Writing a package must create nothing outside the parent directory it was given."
+        )
+    }
+}
+
+
+/// Synthetic receive-order fixtures. The audited timing is a regression shape,
+/// not a physical Tear label or a hardware calibration source.
+final class RaneMotionProvenanceTests: XCTestCase {
+    private typealias Event = CaptureCore.RawMixerMIDIEvent
+    private func packets(_ steps: Int, count: Int = 30, start: Double = 0,
+                         duration: Double = 0.3, phase: Int = 0) -> [Event] {
+        (0...count).map { i in
+            let value = ((phase + i * steps) % 128 + 128) % 128
+            let t = start + Double(i) * duration / Double(count)
+            return Event(timestamp: t, takeRelativeTime: t, deviceName: "Rane ONE MKII",
+                         channel: 1, controller: 6, value: value,
+                         normalizedValue: Double(value) / 127, mappedControl: nil)
+        }
+    }
+    private func normalized(_ packets: [Event]) -> CaptureCore.PlatterMotionEvidence {
+        let decoded = CaptureCore.derivePlatterMotionEvidence(from: packets)
+        let events = MacCaptureEngine.RoutineNotationEventNormalizer().normalize(events: decoded.events, audioEvents: [])
+        return decoded.retaining(normalizedEvents: events)
+    }
+    private func review(_ evidence: CaptureCore.PlatterMotionEvidence) -> ReferenceTearSegmentationReview {
+        ReferenceTearSegmentationReviewBuilder.build(referenceTakeID: "synthetic-rane",
+            movementEvents: evidence.events, platterEvidenceIntervals: evidence.intervals, derivation: nil)
+    }
+    func testAudited17745SecondGapDoesNotConsumeResumedTravel() throws {
+        let before = 16.385179208344198
+        let after = 34.130196916667046
+        let end = 34.623292166666944
+        let raw = packets(2, start: before - 0.3) + packets(5, count: 163, start: after,
+            duration: end - after, phase: 100)
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.sortedKeys]
+        let bytes = try encoder.encode(raw)
+        let result = normalized(raw)
+        XCTAssertEqual(result.events.count, 2)
+        let resumed = try XCTUnwrap(result.events.last)
+        XCTAssertEqual(resumed.startTime, after, accuracy: 1e-9)
+        XCTAssertEqual(resumed.endTime - resumed.startTime, 0.493095249999898, accuracy: 1e-9)
+        let gap = try XCTUnwrap(result.intervals.first { $0.kind == .packetGap })
+        XCTAssertEqual(gap.endTime - gap.startTime, 17.745017708322848, accuracy: 1e-9)
+        XCTAssertEqual(gap.firstPacketIndex, 30)
+        XCTAssertEqual(gap.lastPacketIndex, 31)
+        XCTAssertEqual(review(result).totalCountedTearHoldCount, 0)
+        XCTAssertEqual(try encoder.encode(raw), bytes)
+    }
+    func testGapFollowedBySameDirectionTravelIsUnknown() {
+        let result = normalized(packets(1) + packets(1, start: 1, phase: 30))
+        XCTAssertEqual(result.events.map(\.direction), ["forward", "forward"])
+        XCTAssertEqual(result.events.map(\.startTime), [0, 1])
+        XCTAssertEqual(review(result).candidates.count, 2)
+        XCTAssertEqual(review(result).stationaryIntervals.count, 0)
+        XCTAssertTrue(review(result).segments.contains { $0.state == .unknown && $0.reasons.contains(.packetGap) })
+    }
+    func testGapFollowedByOppositeDirectionTravelIsNotAHold() {
+        let result = normalized(packets(1) + packets(-1, start: 1, phase: 30))
+        XCTAssertEqual(result.events.map(\.direction), ["forward", "backward"])
+        XCTAssertEqual(review(result).reversals.count, 1)
+        XCTAssertEqual(review(result).totalCountedTearHoldCount, 0)
+    }
+    func testFilteredOpposingMotionCannotBecomeStationaryOrMergeAcrossGap() {
+        let raw = packets(1) + packets(-1, count: 4, start: 0.3, duration: 0.04, phase: 30).dropFirst()
+            + packets(1, start: 0.34, phase: 26).dropFirst()
+        let result = normalized(raw)
+        XCTAssertEqual(result.events.count, 2)
+        XCTAssertTrue(result.intervals.contains { $0.kind == .discardedMotion && $0.signedSteps == -4 })
+        XCTAssertEqual(review(result).stationaryIntervals.count, 0)
+        XCTAssertEqual(review(result).totalCountedTearHoldCount, 0)
+    }
+    func testMeasuredBoundedSameDirectionStillnessProducesOneTearHold() {
+        let raw = packets(1) + packets(0, count: 5, start: 0.3, duration: 0.2, phase: 30).dropFirst()
+            + packets(1, start: 0.5, phase: 30).dropFirst()
+        let result = normalized(raw)
+        XCTAssertEqual(result.events.map(\.startTime), [0, 0.5])
+        XCTAssertEqual(result.events[0].endTime, 0.3, accuracy: 1e-9)
+        let reviewed = review(result)
+        XCTAssertEqual(reviewed.candidates.count, 1)
+        XCTAssertEqual(reviewed.totalCountedTearHoldCount, 1)
+        XCTAssertEqual(reviewed.travelIntervals.count, 2)
+        XCTAssertEqual(reviewed.stationaryIntervals.count, 1)
+        XCTAssertEqual(reviewed.platterEvidenceIntervals, result.intervals)
+    }
+    func testDisconnectReconnectSilenceCannotEstablishContinuity() {
+        // No connection-generation record exists in this raw schema. Identical
+        // device names and values after reconnect therefore still mean unknown.
+        let result = normalized(packets(1) + packets(1, start: 8, phase: 30))
+        XCTAssertTrue(result.intervals.contains { $0.kind == .packetGap })
+        XCTAssertEqual(result.events.last?.startTime, 8)
+        XCTAssertEqual(review(result).stationaryIntervals.count, 0)
+        XCTAssertEqual(review(result).totalCountedTearHoldCount, 0)
+    }
+    func testClockRegressionIsNotSortedAway() {
+        let result = normalized(packets(1, start: 1) + packets(1, start: 0.5, phase: 30))
+        XCTAssertTrue(result.intervals.contains { $0.kind == .clockDiscontinuity })
+        XCTAssertTrue(review(result).reasons.contains(.clockDiscontinuity))
+        XCTAssertEqual(review(result).stationaryIntervals.count, 0)
+    }
+    func testModularWrappingInBothDirectionsPreservesTravel() {
+        let raw = packets(1, phase: 120) + packets(-1, start: 0.3, phase: 150).dropFirst()
+        let result = normalized(raw)
+        XCTAssertEqual(result.events.map(\.direction), ["forward", "backward"])
+        XCTAssertTrue(result.intervals.isEmpty)
+        XCTAssertEqual(review(result).reversals.count, 1)
+    }
+    func testHighDisplacementShortReversalSurvives() {
+        let raw = packets(5) + packets(-5, start: 0.3, duration: 0.15, phase: 150).dropFirst()
+            + packets(5, start: 0.45).dropFirst()
+        let reviewed = review(normalized(raw))
+        XCTAssertEqual(reviewed.candidates.map(\.direction), [.forward, .backward, .forward])
+        XCTAssertEqual(reviewed.reversals.count, 2)
+        XCTAssertFalse(reviewed.reasons.contains(.mergedDirectionChatter))
+    }
+    func testLowAmplitudeSignChatterRetainsUnknownCounterMotion() {
+        let raw = packets(1) + packets(-1, count: 2, start: 0.3, duration: 0.02, phase: 30).dropFirst()
+            + packets(1, start: 0.32, phase: 28).dropFirst()
+        let reviewed = review(normalized(raw))
+        XCTAssertEqual(reviewed.stationaryIntervals.count, 0)
+        XCTAssertEqual(reviewed.totalCountedTearHoldCount, 0)
+        XCTAssertTrue(reviewed.segments.contains { $0.state == .unknown && $0.reasons.contains(.discardedMotion) })
+    }
+    func testInsufficientSamplingAndEmptyInputEmitUnknown() {
+        for raw in [[], Array(packets(1).prefix(1)), Array(packets(1).prefix(2))] {
+            let result = normalized(raw)
+            XCTAssertTrue(result.events.isEmpty)
+            XCTAssertTrue(result.intervals.contains { $0.kind == .insufficientSampling })
+            XCTAssertEqual(review(result).segments.first?.state, .unknown)
+            XCTAssertEqual(review(result).totalCountedTearHoldCount, 0)
+        }
+    }
+    func testBabyTurnaroundRemainsTwoTravelRunsWithoutHold() {
+        let result = normalized(packets(1) + packets(-1, start: 0.3, phase: 30).dropFirst())
+        XCTAssertEqual(result.events.count, 2)
+        XCTAssertEqual(result.events[0].endTime, result.events[1].startTime)
+        XCTAssertEqual(review(result).candidates.count, 2)
+        XCTAssertEqual(review(result).reversals.count, 1)
+        XCTAssertEqual(review(result).totalCountedTearHoldCount, 0)
+    }
+    func testNormalizerDiscardAndSecondPassRetainProvenance() {
+        // The short forward stroke clears decoder gates but its normalized
+        // excursion is under the existing 0.015 floor beside the large pull.
+        let raw = packets(1, count: 10, duration: 0.2)
+            + packets(-30, count: 100, start: 0.2, duration: 1, phase: 10).dropFirst()
+        let decoded = CaptureCore.derivePlatterMotionEvidence(from: raw)
+        XCTAssertEqual(decoded.events.count, 2)
+        let retained = normalized(raw)
+        XCTAssertEqual(retained.events.count, 1)
+        XCTAssertTrue(retained.intervals.contains { $0.kind == .discardedMotion && $0.stage == .normalization })
+        let second = MacCaptureEngine.RoutineNotationEventNormalizer().normalize(events: retained.events, audioEvents: [])
+        XCTAssertEqual(retained.retaining(normalizedEvents: second), retained)
+        XCTAssertTrue(review(retained).segments.contains { $0.state == .unknown && $0.reasons.contains(.discardedMotion) })
+    }
+    func testClockMismatchAndMixedSourcesFailClosed() {
+        let raw = packets(1)
+        let last = raw.last!
+        let clockJump = Event(timestamp: last.timestamp + 4, takeRelativeTime: last.takeRelativeTime + 0.01,
+            deviceName: last.deviceName, channel: 1, controller: 6, value: last.value,
+            normalizedValue: last.normalizedValue, mappedControl: nil)
+        XCTAssertTrue(normalized(raw + [clockJump]).intervals.contains { $0.kind == .clockDiscontinuity })
+        let other = Event(timestamp: 0.31, takeRelativeTime: 0.31,
+            deviceName: "Other Controller", channel: 1, controller: 6, value: 30,
+            normalizedValue: 30.0 / 127, mappedControl: nil)
+        let ambiguous = normalized(raw + [other])
+        XCTAssertTrue(ambiguous.events.isEmpty)
+        XCTAssertTrue(ambiguous.intervals.contains { $0.kind == .unknown })
+        XCTAssertEqual(review(ambiguous).stationaryIntervals.count, 0)
+    }
+    func testGapClosesLiveRunBeforePostGapProvisionalTravel() {
+        let raw = packets(1) + packets(1, start: 2, phase: 30)
+        let live = CaptureCore.derivePlatterMovementEventsWithProvisional(from: raw, controller: 6, channel: 1)
+        XCTAssertEqual(live.committedEvents.count, 1)
+        XCTAssertEqual(live.committedEvents.first?.endTime, 0.3)
+        XCTAssertEqual(live.provisionalMovement?.startTime, 2)
+    }
+    func testSingleRepeatedPairIsInsufficientToProveHold() {
+        let raw = packets(1) + packets(0, count: 1, start: 0.3, duration: 0.05, phase: 30).dropFirst()
+            + packets(1, start: 0.35, phase: 30).dropFirst()
+        let result = normalized(raw)
+        XCTAssertTrue(result.intervals.contains { $0.kind == .insufficientSampling })
+        XCTAssertEqual(review(result).stationaryIntervals.count, 0)
+        XCTAssertEqual(review(result).totalCountedTearHoldCount, 0)
+    }
+    func testTwentyFiveHighDisplacementAlternatingRunsAreNotOneGesture() {
+        var raw = packets(5, duration: 0.15)
+        var phase = 150
+        for index in 1..<25 {
+            let step = index.isMultiple(of: 2) ? 5 : -5
+            raw += packets(step, start: Double(index) * 0.15, duration: 0.15, phase: phase).dropFirst()
+            phase += step * 30
+        }
+        let reviewed = review(normalized(raw))
+        XCTAssertEqual(reviewed.candidates.count, 25)
+        XCTAssertEqual(reviewed.reversals.count, 24)
+        XCTAssertFalse(reviewed.reasons.contains(.mergedDirectionChatter))
+        XCTAssertEqual(reviewed.totalCountedTearHoldCount, 0)
+    }
+    func testClockRegressionWithOpposingTravelDoesNotConfirmReversal() {
+        let result = normalized(packets(1, start: 1) + packets(-1, start: 0.5, phase: 30))
+        let reviewed = review(result)
+        XCTAssertEqual(reviewed.reversals.count, 0)
+        XCTAssertTrue(reviewed.segments.contains { $0.state == .unknown && $0.reasons.contains(.clockDiscontinuity) })
+    }
+    func testClockDiscontinuitySolelyAtTransitionDoesNotConfirmReversal() throws {
+        // Cover the 0.30–0.31 transition and a clock break at the shared instant.
+        for backwardStart in [0.31, 0.30] {
+            let backward = packets(-1, start: backwardStart, phase: 30).map { packet in
+                Event(timestamp: packet.timestamp + 4, takeRelativeTime: packet.takeRelativeTime,
+                    deviceName: packet.deviceName, channel: packet.channel, controller: packet.controller,
+                    value: packet.value, normalizedValue: packet.normalizedValue, mappedControl: nil)
+            }
+            let result = normalized(packets(1) + backward)
+            XCTAssertEqual(result.events.map(\.direction), ["forward", "backward"])
+            XCTAssertEqual(result.events.map(\.startTime), [0, backwardStart])
+            XCTAssertEqual(result.events[0].endTime, 0.30, accuracy: 1e-9)
+            XCTAssertEqual(result.events[1].endTime, backwardStart + 0.30, accuracy: 1e-9)
+            let clock = try XCTUnwrap(result.intervals.first { $0.kind == .clockDiscontinuity })
+            XCTAssertEqual(clock.startTime, 0.30, accuracy: 1e-9)
+            XCTAssertEqual(clock.endTime, backwardStart, accuracy: 1e-9)
+            let reviewed = review(result)
+            XCTAssertEqual(reviewed.travelIntervals.count, 2)
+            XCTAssertTrue(reviewed.segments.contains {
+                $0.state == .unknown && $0.reasons.contains(.clockDiscontinuity)
+                    && $0.span.startTime == clock.startTime && $0.span.endTime == clock.endTime
+            })
+            XCTAssertEqual(reviewed.reversals.count, 0)
+            XCTAssertEqual(reviewed.totalCountedTearHoldCount, 0)
+        }
+    }
+    func testLeadingAndTrailingObservedStillnessAreNotBoundedHolds() {
+        let raw = packets(0, count: 5, duration: 0.2)
+            + packets(1, start: 0.2).dropFirst()
+            + packets(0, count: 5, start: 0.5, duration: 0.2, phase: 30).dropFirst()
+        let reviewed = review(normalized(raw))
+        XCTAssertEqual(reviewed.stationaryIntervals.count, 2)
+        XCTAssertTrue(reviewed.stationaryIntervals.allSatisfy { $0.reasons.contains(.observedStationarySamples) })
+        XCTAssertFalse(reviewed.stationaryIntervals.contains { $0.reasons.contains(.boundedStationaryInterval) })
+        XCTAssertEqual(reviewed.totalCountedTearHoldCount, 0)
+    }
+    func testLegacyGapWithoutPacketProvenanceIsUnknown() {
+        let events = normalized(packets(1) + packets(1, start: 1, phase: 30)).events
+        let reviewed = ReferenceTearSegmentationReviewBuilder.build(referenceTakeID: "legacy", movementEvents: events, derivation: nil)
+        XCTAssertEqual(reviewed.stationaryIntervals.count, 0)
+        XCTAssertEqual(reviewed.totalCountedTearHoldCount, 0)
+        XCTAssertTrue(reviewed.segments.contains { $0.reasons.contains(.unknownMotionRegion) })
     }
 }

@@ -358,15 +358,10 @@ final class ScratchSamplePlaybackControllerTests: XCTestCase {
         controller.positionDidChange(steps: 0, direction: .forward)
         controller.waitForAudioQueue()
 
-        // Move to just past the halfway point (uncapped, proportional movement) —
-        // comfortably under the per-tick frame-delta cap, so this is a normal
-        // forward push, not a saturating one. 6_000 steps (not 9_000 —
-        // direct-MIDI geometry fix, 2026-08-10: at the new 3600-step/rev
-        // scale, 9_000 steps' frame delta approached "ahhh"'s 196_980-frame
-        // length closely enough on the SECOND push below to risk landing
-        // exactly on a whole-loop multiple; 6_000/4_000 keep both pushes
-        // clear of that boundary while preserving the same test intent).
-        controller.positionDidChange(steps: 6_000, direction: .forward)
+        // Absolute MIDI positions must advance monotonically for forward
+        // motion. Keep each delta below the full-loop cap so the first push
+        // lands beyond halfway and the second push crosses the loop end.
+        controller.positionDidChange(steps: 1_500, direction: .forward)
         controller.waitForAudioQueue()
         let nearEndFrame = controller.currentSampleFrame
         XCTAssertGreaterThan(nearEndFrame, controller.totalFrames / 2,
@@ -377,7 +372,7 @@ final class ScratchSamplePlaybackControllerTests: XCTestCase {
         // Push far enough forward to cross the loop end. The old
         // clamp-without-wrapping behavior stuck at totalFrames - 1; looping
         // instead wraps the excess motion back around to near the loop origin.
-        controller.positionDidChange(steps: 4_000, direction: .forward)
+        controller.positionDidChange(steps: 2_500, direction: .forward)
         controller.waitForAudioQueue()
 
         XCTAssertLessThan(controller.currentSampleFrame, nearEndFrame,
@@ -732,18 +727,17 @@ final class ScratchSamplePlaybackControllerTests: XCTestCase {
         guard controller.load(sampleID: "ahhh") else { return }
         controller.waitForAudioQueue()
 
-        // Move near the loop end, then cross it. 6_000/4_000 (not
-        // 9_000/10_000 — direct-MIDI geometry fix, 2026-08-10): see the
-        // comment in testForwardMovementPastEndWrapsToStart above.
+        // Move beyond halfway, then cross the loop end with monotonically
+        // increasing absolute MIDI positions.
         controller.positionDidChange(steps: 0, direction: .forward)
         controller.waitForAudioQueue()
-        controller.positionDidChange(steps: 6_000, direction: .forward)
+        controller.positionDidChange(steps: 1_500, direction: .forward)
         controller.waitForAudioQueue()
         let nearEndFrame = controller.currentSampleFrame
 
         Thread.sleep(forTimeInterval: 0.02)
 
-        controller.positionDidChange(steps: 4_000, direction: .forward)
+        controller.positionDidChange(steps: 2_500, direction: .forward)
         controller.waitForAudioQueue()
         let wrappedFrame = controller.currentSampleFrame
         XCTAssertLessThan(wrappedFrame, nearEndFrame, "Needle must have wrapped past the loop end")
@@ -753,7 +747,7 @@ final class ScratchSamplePlaybackControllerTests: XCTestCase {
         // Continued forward motion after the wrap must keep scheduling
         // normally from the new (wrapped) position — not skip as though
         // still pinned at a permanent boundary.
-        controller.positionDidChange(steps: 4_030, direction: .forward)
+        controller.positionDidChange(steps: 2_530, direction: .forward)
         controller.waitForAudioQueue()
 
         XCTAssertNil(controller.lastScheduleSkippedReason,
@@ -1105,7 +1099,12 @@ final class ScratchSamplePlaybackControllerTests: XCTestCase {
             accuracy: 0.01,
             "DVS must report the captured sub-0.25x motion rate, not the varispeed floor"
         )
-        XCTAssertEqual(controller.currentSampleFrame, controller.hotCueOnsetFrame + 101)
+        let expectedPhaseFrame = Int((controller.dvsLoopFrames / 3_932) * 5)
+        XCTAssertEqual(
+            controller.currentSampleFrame,
+            controller.hotCueOnsetFrame + expectedPhaseFrame,
+            "The permanent phase anchor truncates the exact physical phase while the rendered grain rounds its frame count"
+        )
     }
 
     func testDVSEarlySixtyHertzTickSchedulesWithoutInflatedCatchUpRate() {
@@ -1607,12 +1606,11 @@ final class ScratchSamplePlaybackControllerTests: XCTestCase {
         guard controller.load(sampleID: "ahhh") else { return }
         controller.waitForAudioQueue()
 
-        // Force needle near the loop end (uncapped, proportional movement).
-        // 6_000 (not 9_000 — direct-MIDI geometry fix, 2026-08-10): see
-        // the comment in testForwardMovementPastEndWrapsToStart above.
+        // Force the needle near the loop end without saturating the
+        // per-tick full-loop cap.
         controller.positionDidChange(steps: 0, direction: .forward)
         controller.waitForAudioQueue()
-        controller.positionDidChange(steps: 6_000, direction: .forward)
+        controller.positionDidChange(steps: 1_900, direction: .forward)
         controller.waitForAudioQueue()
         let nearEnd = controller.currentSampleFrame
         XCTAssertGreaterThan(nearEnd, controller.totalFrames / 2, "Needle must be near the loop end")
@@ -1622,7 +1620,7 @@ final class ScratchSamplePlaybackControllerTests: XCTestCase {
         // Reverse with a compensated grain near the loop end — must retreat
         // (or wrap) safely, never crash or produce an invalid segment,
         // regardless of whether the compensated grain crosses the origin.
-        controller.positionDidChange(steps: 5_980, direction: .backward)
+        controller.positionDidChange(steps: 1_880, direction: .backward)
         controller.waitForAudioQueue()
 
         XCTAssertNotEqual(controller.lastScheduleSkippedReason, "invalidSegment")

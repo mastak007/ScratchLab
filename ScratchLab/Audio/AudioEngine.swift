@@ -6,9 +6,10 @@ import Foundation
 import AVFoundation
 import Accelerate
 import Combine
+import Synchronization
 
 // MARK: - Audio Input Source
-enum AudioInputSource: String, CaseIterable {
+enum AudioInputSource: String, CaseIterable, Sendable {
     case microphone = "Microphone"
     case lineIn = "Line In"
     case djApp = "DJ Software"
@@ -43,6 +44,29 @@ enum BackingTrackStatus: Equatable {
     case unavailable(name: String)
 }
 
+/// Truthful, decoder-confirmed DVS readiness. `.timecodeLocked` is only ever
+/// reached when `SeratoControlVinylAnalyzer` actually decoded a timecode
+/// frame — never inferred from raw signal presence alone.
+enum DVSReadinessState: Equatable {
+    case noSignal
+    case detectingTimecode
+    case timecodeLocked
+
+    var label: String {
+        switch self {
+        case .noSignal: return "No DVS Signal"
+        case .detectingTimecode: return "Detecting Timecode"
+        case .timecodeLocked: return "Timecode Locked"
+        }
+    }
+
+    static func classify(_ status: DVSTimecodeStatus?) -> DVSReadinessState {
+        guard let status, status.hasSignal else { return .noSignal }
+        guard status.phaseDelta != nil, status.confidence > 0 else { return .detectingTimecode }
+        return .timecodeLocked
+    }
+}
+
 // MARK: - Audio Engine
 @MainActor
 class AudioEngine: ObservableObject {
@@ -57,6 +81,65 @@ class AudioEngine: ObservableObject {
     private var playerNode: AVAudioPlayerNode?
     private var isInputTapInstalled = false
     private let hardwareRouteAdapter = iOSAudioHardwareRouteAdapter()
+
+    // DVS timecode analysis — wraps the existing shared `TimecodeControlPipeline`.
+    // `sampleRate: 48000` matches the validated Rane ONE MKII rate but is only
+    // a seed value for internal diagnostics; every call passes the tap's real
+    // per-buffer sample rate, so this never causes a rate mismatch.
+    nonisolated private let dvsAnalyzer = Mutex(
+        SeratoControlVinylAnalyzer(sampleRate: 48000, channelCount: 2)
+    )
+    // `SeratoControlVinylAnalyzer.analyze` must always be called from the same
+    // single serial queue (its wrapped pipeline is not thread-safe) — never
+    // inline on the AVAudioEngine tap thread.
+    private let dvsAnalysisQueue = DispatchQueue(label: "com.scratchlab.dvs-analysis", qos: .userInitiated)
+
+#if DEBUG
+    // Temporary DEBUG-only diagnostics for validating the iOS DVS wiring on
+    // real hardware. Throttled to ~once/second (checked once per tap buffer,
+    // reused for the whole log group) so a live device run stays readable —
+    // never logs every buffer. Guarded out of Release builds entirely.
+    private let dvsDebugLogLock = NSLock()
+    private var lastDVSDebugLogUptime: TimeInterval = -.infinity
+    private let dvsDebugLogInterval: TimeInterval = 1.0
+
+    private func shouldEmitDVSDebugLog() -> Bool {
+        let now = ProcessInfo.processInfo.systemUptime
+        dvsDebugLogLock.lock()
+        defer { dvsDebugLogLock.unlock() }
+        guard now - lastDVSDebugLogUptime >= dvsDebugLogInterval else { return false }
+        lastDVSDebugLogUptime = now
+        return true
+    }
+
+    /// Scans every currently-available stereo pair on the connected device
+    /// — not just the selected one — and logs left/right RMS for each.
+    /// Diagnostic only: reads `audioHardwareRouteState.availableStereoPairs`
+    /// and re-extracts from the same tap buffer via the existing
+    /// `extractStereoPair`; never touches `selectedStereoPair` or any
+    /// routing state. Caller gates this to the same once/second throttle as
+    /// the rest of the DVS debug log group.
+    private func logAllStereoPairRMS(buffer: AVAudioPCMBuffer) {
+        let pairs = audioHardwareRouteState.availableStereoPairs
+        guard !pairs.isEmpty else {
+            print("[DVS-DEBUG] stereo pair scan · no available pairs")
+            return
+        }
+        var lines = ["[DVS-DEBUG] stereo pair scan (\(pairs.count) pairs):"]
+        for (index, pair) in pairs.enumerated() {
+            guard let extracted = Self.extractStereoPair(from: buffer, pair: pair) else {
+                lines.append("  [\(index)] \(pair.displayName): extraction failed")
+                continue
+            }
+            var leftRMS: Float = 0
+            var rightRMS: Float = 0
+            vDSP_rmsqv(extracted.left, 1, &leftRMS, vDSP_Length(extracted.left.count))
+            vDSP_rmsqv(extracted.right, 1, &rightRMS, vDSP_Length(extracted.right.count))
+            lines.append("  [\(index)] \(pair.displayName): leftRMS=\(leftRMS) rightRMS=\(rightRMS)")
+        }
+        print(lines.joined(separator: "\n"))
+    }
+#endif
     
     // Analysis buffers
     private var analysisBuffer: [Float] = []
@@ -75,6 +158,14 @@ class AudioEngine: ObservableObject {
     @Published var scratchMotionDirection: ScratchMotionDirection = .neutral
     @Published var scratchMotionFeedback: ScratchMotionFeedback?
     @Published private(set) var audioHardwareRouteState: AudioHardwareRouteState = .unavailable
+    @Published private(set) var dvsTimecodeStatus: DVSTimecodeStatus?
+
+    /// Truthful UI readiness state derived from the decoder's own output.
+    /// Never reports `.timecodeLocked` unless the decoder actually produced
+    /// a decoded frame (`phaseDelta != nil`) with non-zero confidence.
+    var dvsReadinessState: DVSReadinessState {
+        DVSReadinessState.classify(dvsTimecodeStatus)
+    }
 
     // User-visible audio error surface. Set on every session/engine/
     // permission failure path so the UI can show something instead of a
@@ -118,6 +209,7 @@ class AudioEngine: ObservableObject {
     private let recentSignalHoldDuration: TimeInterval = 0.8
     private let noSignalGraceDuration: TimeInterval = 1.2
     private var didConfigureAudioSession = false
+    private var isStarting = false
     private var currentAnalysisSampleRate = 44100.0
     private var monitorRefreshTask: Task<Void, Never>?
     
@@ -142,26 +234,47 @@ class AudioEngine: ObservableObject {
     
     // MARK: - Audio Session Setup
     
-    private func setupAudioSession() {
-        guard !didConfigureAudioSession else { return }
-        let session = AVAudioSession.sharedInstance()
-        
-        do {
-            // Configure for playback and recording
-            try session.setCategory(.playAndRecord, mode: .default, options: [.defaultToSpeaker, .allowBluetoothHFP, .mixWithOthers])
-            try session.setPreferredSampleRate(44100)
-            try session.setPreferredIOBufferDuration(0.005) // Low latency
-            try session.setActive(true)
-            
-            // Get available inputs
+    private func setupAudioSession(
+        completion: @escaping @MainActor @Sendable (Bool) -> Void
+    ) {
+        guard !didConfigureAudioSession else {
+            completion(true)
+            return
+        }
+
+        Task { [weak self] in
+            let errorDescription = await Task.detached(priority: .userInitiated) {
+                let session = AVAudioSession.sharedInstance()
+                do {
+                    // Keep the existing category, mode, options and latency values.
+                    try session.setCategory(.playAndRecord, mode: .default, options: [.defaultToSpeaker, .allowBluetoothHFP, .mixWithOthers])
+                    try session.setPreferredSampleRate(44100)
+                    try session.setPreferredIOBufferDuration(0.005)
+                    try session.setActive(true)
+                    return nil as String?
+                } catch {
+                    return String(describing: error)
+                }
+            }.value
+
+            guard let self else { return }
+            if let errorDescription {
+                #if DEBUG
+                print("Audio session setup error: \(errorDescription)")
+                #endif
+                lastAudioError = "Audio session could not start."
+                completion(false)
+                return
+            }
+
             updateAvailableInputs()
             syncInputRouteState()
-            let activeInputs = session.currentRoute.inputs.map(\.portName).joined(separator: ", ")
+            let activeInputs = AVAudioSession.sharedInstance().currentRoute.inputs
+                .map(\.portName)
+                .joined(separator: ", ")
             #if DEBUG
             print("Audio route input: \(activeInputs)")
             #endif
-            
-            // Listen for route changes
             NotificationCenter.default.addObserver(
                 self,
                 selector: #selector(handleRouteChange),
@@ -169,11 +282,7 @@ class AudioEngine: ObservableObject {
                 object: nil
             )
             didConfigureAudioSession = true
-        } catch {
-            #if DEBUG
-            print("Audio session setup error: \(error)")
-            #endif
-            lastAudioError = "Audio session could not start."
+            completion(true)
         }
     }
     
@@ -238,7 +347,10 @@ class AudioEngine: ObservableObject {
         availableInputs.contains { $0.portType == .usbAudio || $0.portType == .lineIn }
     }
 
-    private func preferredInputPort(for source: AudioInputSource, in session: AVAudioSession) -> AVAudioSessionPortDescription? {
+    nonisolated private static func preferredInputPort(
+        for source: AudioInputSource,
+        in session: AVAudioSession
+    ) -> AVAudioSessionPortDescription? {
         let inputs = session.availableInputs ?? []
 
         switch source {
@@ -298,10 +410,21 @@ class AudioEngine: ObservableObject {
     // MARK: - Engine Control
     
     func start() {
-        guard !isRunning else { return }
+        guard !isRunning, !isStarting else { return }
+        isStarting = true
         teardownAudioEngine()
-        setupAudioSession()
+        setupAudioSession { [weak self] configured in
+            guard let self else { return }
+            guard configured, isStarting else {
+                isStarting = false
+                return
+            }
+            continueStartingAfterSessionSetup()
+        }
+    }
 
+    private func continueStartingAfterSessionSetup() {
+        guard isStarting else { return }
         let session = AVAudioSession.sharedInstance()
         if #available(iOS 17.0, *) {
             switch AVAudioApplication.shared.recordPermission {
@@ -312,8 +435,10 @@ class AudioEngine: ObservableObject {
                 print("Microphone permission denied")
                 #endif
                 lastAudioError = "Microphone access is off. Enable it in Settings to use Practice."
+                isStarting = false
                 return
             case .undetermined:
+                isStarting = false
                 AVAudioApplication.requestRecordPermission { [weak self] granted in
                     guard granted else {
                         #if DEBUG
@@ -330,6 +455,7 @@ class AudioEngine: ObservableObject {
                 }
                 return
             @unknown default:
+                isStarting = false
                 return
             }
         } else {
@@ -341,8 +467,10 @@ class AudioEngine: ObservableObject {
                 print("Microphone permission denied")
                 #endif
                 lastAudioError = "Microphone access is off. Enable it in Settings to use Practice."
+                isStarting = false
                 return
             case .undetermined:
+                isStarting = false
                 session.requestRecordPermission { [weak self] granted in
                     guard granted else {
                         #if DEBUG
@@ -359,6 +487,7 @@ class AudioEngine: ObservableObject {
                 }
                 return
             @unknown default:
+                isStarting = false
                 return
             }
         }
@@ -367,16 +496,45 @@ class AudioEngine: ObservableObject {
         // backgrounding) can deactivate the audio session even after a successful
         // `setupAudioSession()`. Re-assert active state on every `start()` pass —
         // `setActive(true)` is idempotent when the session is already active.
-        do {
-            try session.setActive(true)
-        } catch {
-            #if DEBUG
-            print("Audio session re-activation error: \(error)")
-            #endif
-            lastAudioError = "Audio session could not start."
-            return
+        reactivateAudioSession { [weak self] activated in
+            guard let self else { return }
+            guard activated, isStarting else {
+                isStarting = false
+                return
+            }
+            startAudioEngineAfterSessionActivation()
         }
-        
+    }
+
+    private func reactivateAudioSession(
+        completion: @escaping @MainActor @Sendable (Bool) -> Void
+    ) {
+        Task { [weak self] in
+            let errorDescription = await Task.detached(priority: .userInitiated) {
+                do {
+                    try AVAudioSession.sharedInstance().setActive(true)
+                    return nil as String?
+                } catch {
+                    return String(describing: error)
+                }
+            }.value
+
+            guard let self else { return }
+            if let errorDescription {
+                #if DEBUG
+                print("Audio session re-activation error: \(errorDescription)")
+                #endif
+                lastAudioError = "Audio session could not start."
+                completion(false)
+                return
+            }
+            completion(true)
+        }
+    }
+
+    private func startAudioEngineAfterSessionActivation() {
+        guard isStarting else { return }
+        defer { isStarting = false }
         audioEngine = AVAudioEngine()
         guard let engine = audioEngine else { return }
         
@@ -413,8 +571,8 @@ class AudioEngine: ObservableObject {
             input.removeTap(onBus: 0)
             isInputTapInstalled = false
         }
-        input.installTap(onBus: 0, bufferSize: bufferSize, format: inputFormat) { [weak self] buffer, _ in
-            self?.processAudioBuffer(buffer)
+        input.installTap(onBus: 0, bufferSize: bufferSize, format: inputFormat) { [weak self] buffer, time in
+            self?.processAudioBuffer(buffer, at: time)
         }
         isInputTapInstalled = true
         analysisBuffer.removeAll()
@@ -441,6 +599,7 @@ class AudioEngine: ObservableObject {
     }
     
     func stop() {
+        isStarting = false
         teardownAudioEngine()
     }
 
@@ -472,6 +631,7 @@ class AudioEngine: ObservableObject {
         isRunning = false
         isAnalyzing = false
         inputLevel = 0
+        dvsTimecodeStatus = nil
         publishInputActivity(isActive: false, signalLevel: 0)
         inputMonitorState = .micOff
         backingTrackStatus = .idle
@@ -482,13 +642,25 @@ class AudioEngine: ObservableObject {
     
     // MARK: - Audio Processing
     
-    private func processAudioBuffer(_ buffer: AVAudioPCMBuffer) {
+    private func processAudioBuffer(_ buffer: AVAudioPCMBuffer, at time: AVAudioTime) {
         guard let packet = Self.audioPacket(
             from: buffer,
             selectedStereoPair: audioHardwareRouteState.selectedStereoPair
         ) else { return }
         let samples = packet.samples
         guard !samples.isEmpty else { return }
+
+        // DVS timecode analysis — independent of the mono scratch-analysis
+        // path below. Re-extracts the selected pair (rather than reusing
+        // `packet`, which is already downmixed to mono) and hands it to the
+        // existing shared decoder off this thread; see `processDVSAnalysis`.
+        if let selectedPair = audioHardwareRouteState.selectedStereoPair {
+            processDVSAnalysis(
+                buffer: buffer,
+                selectedPair: selectedPair,
+                hostTime: time.isHostTimeValid ? time.hostTime : nil
+            )
+        }
 
         if abs(packet.sampleRate - currentAnalysisSampleRate) > 0.5 {
             currentAnalysisSampleRate = packet.sampleRate
@@ -545,7 +717,62 @@ class AudioEngine: ObservableObject {
             analyzeBuffer(bufferToAnalyze, sampleRate: packet.sampleRate)
         }
     }
-    
+
+    // MARK: - DVS Analysis
+
+    /// Extracts the currently-selected stereo pair straight from the tap
+    /// buffer and hands it to the shared `SeratoControlVinylAnalyzer` on a
+    /// dedicated serial queue — never inline on the tap thread. The analyzer
+    /// wraps `TimecodeControlPipeline`, which is documented as not
+    /// thread-safe, so every call must land on the same single queue.
+    private func processDVSAnalysis(
+        buffer: AVAudioPCMBuffer,
+        selectedPair: AudioHardwareRouteState.StereoPair,
+        hostTime: UInt64?
+    ) {
+        guard let stereoPair = Self.extractStereoPair(from: buffer, pair: selectedPair) else { return }
+        let sampleRate = buffer.format.sampleRate
+
+#if DEBUG
+        let shouldLog = shouldEmitDVSDebugLog()
+        if shouldLog {
+            print("[DVS-DEBUG] processDVSAnalysis entered · pair=\(selectedPair.displayName) frames=\(stereoPair.left.count) sampleRate=\(sampleRate)")
+            logAllStereoPairRMS(buffer: buffer)
+        }
+#endif
+
+        dvsAnalysisQueue.async { [weak self] in
+            guard let self else { return }
+#if DEBUG
+            if shouldLog {
+                var leftRMS: Float = 0
+                var rightRMS: Float = 0
+                vDSP_rmsqv(stereoPair.left, 1, &leftRMS, vDSP_Length(stereoPair.left.count))
+                vDSP_rmsqv(stereoPair.right, 1, &rightRMS, vDSP_Length(stereoPair.right.count))
+                print("[DVS-DEBUG] dvsAnalysisQueue executing · leftRMS=\(leftRMS) rightRMS=\(rightRMS) hostTimeValid=\(hostTime != nil)")
+            }
+#endif
+            let status = self.dvsAnalyzer.withLock { analyzer in
+                analyzer.analyze(
+                    left: stereoPair.left,
+                    right: stereoPair.right,
+                    sampleRate: sampleRate,
+                    hostTime: hostTime
+                )
+            }
+#if DEBUG
+            if shouldLog {
+                let readiness = DVSReadinessState.classify(status)
+                let phaseDeltaText = status.phaseDelta.map { "\($0)" } ?? "nil"
+                print("[DVS-DEBUG] after analyzer · hasSignal=\(status.hasSignal) confidence=\(status.confidence) phaseDelta=\(phaseDeltaText) direction=\(status.direction.rawValue) readiness=\(readiness.label)")
+            }
+#endif
+            Task { @MainActor in
+                self.dvsTimecodeStatus = status
+            }
+        }
+    }
+
     private func analyzeBuffer(_ buffer: [Float], sampleRate: Double) {
         guard isAnalyzing else { return }
 
@@ -1081,39 +1308,73 @@ class AudioEngine: ObservableObject {
     
     // MARK: - Input Source Selection
     
-    func selectInputSource(_ source: AudioInputSource) {
-        setupAudioSession()
-        currentInputSource = source
-        
-        let session = AVAudioSession.sharedInstance()
-        
-        do {
-            switch source {
-            case .microphone:
-                if let microphone = preferredInputPort(for: .microphone, in: session) {
-                    try session.setPreferredInput(microphone)
-                } else {
-                    try session.setPreferredInput(nil)
-                }
-            case .lineIn:
-                if let lineIn = preferredInputPort(for: .lineIn, in: session) {
-                    try session.setPreferredInput(lineIn)
-                } else {
-                    try session.setPreferredInput(nil)
-                }
-            case .djApp:
-                // Inter-app audio routing (requires additional setup)
-                // This would use AudioUnit for inter-app audio
-                #if DEBUG
-                print("DJ App input requires Inter-App Audio setup")
-                #endif
+    func selectInputSource(
+        _ source: AudioInputSource,
+        preferredPortUID: String? = nil,
+        completion: ((Bool) -> Void)? = nil
+    ) {
+        setupAudioSession { [weak self] configured in
+            guard let self else { return }
+            guard configured else {
+                completion?(false)
+                return
             }
+            currentInputSource = source
+            applyInputSourceSelection(
+                source,
+                preferredPortUID: preferredPortUID,
+                completion: completion
+            )
+        }
+    }
+
+    private func applyInputSourceSelection(
+        _ source: AudioInputSource,
+        preferredPortUID: String?,
+        completion: ((Bool) -> Void)?
+    ) {
+        Task { [weak self] in
+            let errorDescription = await Task.detached(priority: .userInitiated) {
+                let session = AVAudioSession.sharedInstance()
+                do {
+                    if let preferredPortUID,
+                       let exactPort = session.availableInputs?.first(where: { $0.uid == preferredPortUID }) {
+                        try session.setPreferredInput(exactPort)
+                    } else {
+                        switch source {
+                        case .microphone:
+                            try session.setPreferredInput(
+                                Self.preferredInputPort(for: .microphone, in: session)
+                            )
+                        case .lineIn:
+                            try session.setPreferredInput(
+                                Self.preferredInputPort(for: .lineIn, in: session)
+                            )
+                        case .djApp:
+                            #if DEBUG
+                            print("DJ App input requires Inter-App Audio setup")
+                            #endif
+                        }
+                    }
+                    return nil as String?
+                } catch {
+                    return String(describing: error)
+                }
+            }.value
+
+            guard let self else { return }
+            if let errorDescription {
+                #if DEBUG
+                print("Error selecting input source: \(errorDescription)")
+                #endif
+                lastAudioError = "ScratchLab could not switch to that audio input. Check the USB connection and try again."
+                completion?(false)
+                return
+            }
+            lastAudioError = nil
             updateAvailableInputs()
             syncInputRouteState()
-        } catch {
-            #if DEBUG
-            print("Error selecting input source: \(error)")
-            #endif
+            completion?(true)
         }
     }
 }

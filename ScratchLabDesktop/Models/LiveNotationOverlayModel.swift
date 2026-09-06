@@ -1,5 +1,41 @@
 import Foundation
 
+/// Pure travel projection shared by the Canvas renderer and deterministic
+/// tests. Gesture-relative controller neighbours keep their own physical
+/// excursions. Other notation sources retain the established connected-pair
+/// rendering contract.
+enum LiveNotationOverlayStrokeGeometry {
+    static func cappedTravel(
+        for event: CaptureCore.DetectedNotationRecordMovementEvent,
+        maximumAmplitude: Double
+    ) -> Double {
+        min(
+            max(0, maximumAmplitude),
+            ControllerGestureNotationDisplayScale.displayTravelFraction(
+                for: event
+            )
+        )
+    }
+
+    static func pairedTravels(
+        forward: CaptureCore.DetectedNotationRecordMovementEvent,
+        backward: CaptureCore.DetectedNotationRecordMovementEvent,
+        maximumAmplitude: Double
+    ) -> (forward: Double, backward: Double) {
+        let forwardTravel = cappedTravel(
+            for: forward,
+            maximumAmplitude: maximumAmplitude
+        )
+        let usesGestureCoordinates = CaptureCore
+            .usesGestureRelativeControllerNotation(forward)
+            || CaptureCore.usesGestureRelativeControllerNotation(backward)
+        let backwardTravel = usesGestureCoordinates
+            ? cappedTravel(for: backward, maximumAmplitude: maximumAmplitude)
+            : forwardTravel
+        return (forwardTravel, backwardTravel)
+    }
+}
+
 /// Pure model for the live notation overlay cursor and visible-stroke filtering.
 ///
 /// Used by `LiveNotationOverlayView` and testable without any SwiftUI import.
@@ -25,6 +61,30 @@ struct LiveNotationOverlayModel: Equatable {
     /// Total phrase / take span. Zero when the model is empty.
     let duration: TimeInterval
     let mode: Mode
+
+    /// Compact/saved controller presentation without round-tripping through
+    /// authored `ScratchNotation` (which intentionally owns canonical Baby
+    /// Scratch alternation and fixed amplitudes). Captured direction and real
+    /// gesture excursion remain authoritative here.
+    static func capturedGestureRelativePresentation(
+        from snapshot: CaptureCore.DetectedNotationSnapshot
+    ) -> LiveNotationOverlayModel? {
+        let events = CaptureCore
+            .gestureRelativeRecordMovementEventsForPresentation(from: snapshot)
+        guard !events.isEmpty else { return nil }
+        let duration = max(
+            CaptureCore.gestureRelativeRecordMovementPresentationEndTime(
+                from: snapshot,
+                presentationEvents: events
+            ) ?? 0,
+            0.1
+        )
+        return LiveNotationOverlayModel(
+            events: events,
+            duration: duration,
+            mode: .captured
+        )
+    }
 
     // MARK: - Cursor
 
@@ -275,11 +335,9 @@ struct LiveNotationOverlayModel: Equatable {
     /// Build a `.captured`-mode model from an authored `ScratchNotation`
     /// with **gap-compressed timing and duration-derived amplitude**.
     ///
-    /// The full extracted stroke resource spans ~42.4 s but includes
-    /// ~15 s of instructional hold gaps between the four Baby Scratch
-    /// phrases. This factory collapses those gaps so the active scratch
-    /// timeline (~26–27 s) fills the stage overlay display width without
-    /// the cursor scanning through 5-second blank stretches.
+    /// Extracted stroke resources may contain long instructional gaps. This
+    /// factory collapses those gaps so active scratching fills the stage
+    /// overlay display width without the cursor scanning through blank spans.
     ///
     /// - Amplitude: derived from stroke duration, normalized against the
     ///   longest stroke, with a 0.15 floor.

@@ -14,6 +14,26 @@ Have these ready:
 - optional Apple Watch on the scratching hand
 - session folder already created for the DJ and date
 
+## Rane ONE MKII Controller Setup (MIDI Learn)
+
+Only relevant if you are mapping a Rane ONE MKII through MIDI Learn.
+
+Before you run MIDI Learn, set the channel-assign switch above the fader fully
+left. If it is not fully left, the mixer section's MIDI output is silenced: the
+upfaders and the normal (unshifted) hot-cue pads may not transmit any MIDI, so
+MIDI Learn cannot see them. Only the crossfader and the SHIFT + pad layer still
+transmit in that position. With the switch fully left, every control transmits.
+
+Verified addresses with the switch fully left (1-indexed channel, raw 0-indexed
+in parentheses):
+
+- crossfader: `CC 8`, channel 16 (raw 15)
+- left upfader: `CC 28`, channel 1 (raw 0)
+- right upfader: `CC 28`, channel 2 (raw 1)
+- Hot Cue 1: `NoteOn` channel 6 (raw 5), note 20
+- Hot Cue 2: `NoteOn` channel 6 (raw 5), note 21
+- SHIFT + Hot Cue 1: `NoteOn` channel 16 (raw 15), note 50 (shift layer only)
+
 ## Session Rules
 
 Do not change these during the session:

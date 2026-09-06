@@ -47,6 +47,7 @@ struct ScratchLabDesktopApp: App {
         Window("ScratchLab", id: ScratchLabDesktopWindowID.mainWindow) {
             rootContent
         }
+        .defaultSize(width: 1440, height: 900)
         .windowResizability(.contentSize)
         .commands {
             ScratchLabDesktopCommands(

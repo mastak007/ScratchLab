@@ -9,18 +9,12 @@ import SwiftUI
 // a flat horizontal line. There is no easing and no area-fill — the bare
 // angular shape IS the notation.
 //
-// To keep tightly packed strokes from blending into one triangular wave, push
-// and pull are drawn in DIFFERENT colours — by default cyan for a forward push
-// and a contrasting muted rose-coral for a backward pull. Holds (lead-in,
-// inter-stroke gaps, trailing rest) draw no visible line: with every hold
-// rendered, the geometry's centre-resting endpoints concatenated into a
-// continuous baseline across the lane and the chart read as two notation
-// half-lanes flanking a visible centre spine. Dropping the hold line
-// removes the spine; the path reads as one trace of angular stroke
-// triangles. Every stroke-endpoint junction (centre entry, rail apex,
-// centre return) is then punctuated with a small neutral dot — the
-// dot row at centre provides the trace-continuity hint the eye needs
-// without drawing a baseline.
+// V3.2 target/performance layers use bone/cyan; direction reads from the
+// position curve. Legacy layout-padding holds remain hidden to preserve those
+// visuals. Canonical evidence-backed holds draw horizontally, with no platter
+// junction dots that could be mistaken for fader clicks. Closed-fader motion
+// is dim/dashed; missing fader evidence is dotted and explicitly labeled by
+// the chart's independent fader lane.
 //
 // The renderer is presentation-agnostic: it reads only its arguments and draws
 // only into the supplied `GraphicsContext` — no state, no clock, no SwiftUI
@@ -150,29 +144,15 @@ enum ScratchMotionRenderer {
     /// Draws `path` into `context`, mapped through `viewport`, in `style`.
     /// Pure — reads only its arguments, writes only to the context.
     ///
-    /// ONLY stroke segments draw a visible line; holds are skipped so the
-    /// chart reads as one continuous SXRATCH-style trace of angular
-    /// triangles rather than two notation half-lanes flanking a centre
-    /// baseline. Small junction dots mark every stroke endpoint (centre
-    /// entry, rail apex, centre return) so the dot row at centre carries
-    /// the trace-continuity hint without drawing a spine.
+    /// Canonical curves and observed holds draw their supplied geometry.
+    /// Legacy padding holds stay hidden and retain their old junction dots.
+    /// Canonical fader glyphs belong exclusively to the separate fader lane.
     static func draw(_ path: MotionPath,
                      in context: GraphicsContext,
                      viewport: LaneViewport,
                      style: Style) {
-        let visible = path.segments.filter {
-            viewport.isVisible(from: $0.startTime, to: $0.endTime)
-        }
-        guard !visible.isEmpty else { return }
-
-        // One straight line per segment — endpoints only, no sampling.
-        let drawn = visible.map { segment in
-            (segment: segment,
-             a: screenPoint(time: segment.startTime, position: segment.startPosition,
-                            viewport: viewport),
-             b: screenPoint(time: segment.endTime, position: segment.endPosition,
-                            viewport: viewport))
-        }
+        let drawn = projectedSegments(path, viewport: viewport)
+        guard !drawn.isEmpty else { return }
 
         var layer = context
         layer.opacity = style.opacity
@@ -188,23 +168,15 @@ enum ScratchMotionRenderer {
             }
         }
 
-        // 2. The notation line. ONLY stroke segments draw a visible line —
-        //    holds (lead-in, gaps between strokes, trailing rest) are skipped
-        //    entirely. With every hold rendered, the geometry's centre-
-        //    resting endpoints concatenated into a continuous horizontal
-        //    line across the lane and the chart read as two notation
-        //    half-lanes flanking a visible centre spine. Dropping the hold
-        //    line removes the spine; the path reads as a series of angular
-        //    stroke triangles, and the Tier 3A junction dots at every
-        //    stroke endpoint provide the timing-continuity hint the eye
-        //    needs without drawing a baseline.
-        for item in drawn where !item.segment.isHold {
+        // 2. The notation line includes canonical holds. Legacy
+        // padding stays hidden; closed/unknown fader state changes style only.
+        for item in drawn where item.segment.drawsLine {
             let color = strokeColor(for: item.segment, style: style)
-            let width = style.lineWidth * speedWeight(item.segment.speed)
-            let dash: [CGFloat] = style.dashed ? [width * 1.5, width * 1.4] : []
+            let appearance = lineAppearance(for: item.segment, style: style)
             layer.stroke(segmentPath(item.a, item.b),
-                         with: .color(color),
-                         style: StrokeStyle(lineWidth: width, lineCap: .round, dash: dash))
+                         with: .color(color.opacity(appearance.opacity)),
+                         style: StrokeStyle(lineWidth: appearance.width, lineCap: .round,
+                                            dash: appearance.dash))
         }
 
         // 3. Junction nodes — small neutral dots at every meaningful timing
@@ -230,12 +202,13 @@ enum ScratchMotionRenderer {
                 lastTime = time
                 lastPosition = position
             }
-            if let first = drawn.first {
+            let legacyJunctions = drawn.filter { $0.segment.evidenceStyle == .legacy }
+            if let first = legacyJunctions.first {
                 drawIfNew(time: first.segment.startTime,
                           position: first.segment.startPosition,
                           point: first.a)
             }
-            for item in drawn {
+            for item in legacyJunctions {
                 drawIfNew(time: item.segment.endTime,
                           position: item.segment.endPosition,
                           point: item.b)
@@ -519,21 +492,61 @@ enum ScratchMotionRenderer {
 
     // MARK: - Geometry
 
+    struct ProjectedSegment: Equatable {
+        let segment: MotionSegment
+        let a: CGPoint
+        let b: CGPoint
+    }
+
+    /// The actual Canvas input, also used by deterministic pixel-coordinate
+    /// snapshots. Canonical positions are clipped by the canvas, never clamped
+    /// to a rail (which would fabricate a hold at an overshoot).
+    static func projectedSegments(_ path: MotionPath, viewport: LaneViewport) -> [ProjectedSegment] {
+        path.segments.filter {
+            viewport.isVisible(from: $0.startTime, to: $0.endTime)
+        }.map { segment in
+            ProjectedSegment(segment: segment,
+                a: screenPoint(time: segment.startTime, position: segment.startPosition,
+                               viewport: viewport, clampPosition: segment.evidenceStyle == .legacy),
+                b: screenPoint(time: segment.endTime, position: segment.endPosition,
+                               viewport: viewport, clampPosition: segment.evidenceStyle == .legacy))
+        }
+    }
+
+    struct LineAppearance: Equatable {
+        let width: CGFloat
+        let dash: [CGFloat]
+        let opacity: Double
+    }
+
+    static func lineAppearance(for segment: MotionSegment, style: Style) -> LineAppearance {
+        let width = style.lineWidth * speedWeight(segment.speed)
+        switch segment.evidenceStyle {
+        case .closed:
+            // Ghost motion/ghost-hold keep the layer's bone/cyan identity.
+            return .init(width: width, dash: [4, 3], opacity: 0.45)
+        case .unknownFader:
+            return .init(width: width, dash: [1, 3], opacity: 0.65)
+        case .legacy, .open:
+            return .init(width: width, dash: style.dashed ? [width * 1.5, width * 1.4] : [], opacity: 1)
+        }
+    }
+
     /// Maps a `(time, position)` pair to a screen point for the active axis.
     /// `position` 0 is the lane's low edge, 1 the high edge; "rising" reads as
     /// up in landscape and as a forward deflection in portrait.
     private static func screenPoint(time: TimeInterval, position: CGFloat,
-                                    viewport: LaneViewport) -> CGPoint {
-        let cross = crossCoordinate(for: position, viewport: viewport)
+                                    viewport: LaneViewport, clampPosition: Bool = true) -> CGPoint {
+        let cross = crossCoordinate(for: position, viewport: viewport, clampPosition: clampPosition)
         return viewport.point(scroll: viewport.pos(for: time), cross: cross)
     }
 
     /// Cross-axis screen coordinate for a normalized platter position.
     private static func crossCoordinate(for position: CGFloat,
-                                        viewport: LaneViewport) -> CGFloat {
+                                        viewport: LaneViewport, clampPosition: Bool = true) -> CGFloat {
         let inset = crossInsetFraction * viewport.crossLength
         let band = max(viewport.crossLength - inset * 2, 1)
-        let clamped = min(max(position, 0), 1)
+        let clamped = clampPosition ? min(max(position, 0), 1) : position
         switch viewport.axis {
         case .vertical:   return inset + clamped * band
         case .horizontal: return (viewport.crossLength - inset) - clamped * band
