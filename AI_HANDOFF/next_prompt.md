@@ -2,7 +2,11 @@
 
 Both checkpoints now exist: checkpoint 1 is committed as `997bc33` (the derived-structure classifier that repaired the non-building HEAD); checkpoint 2 is prepared as an UNCOMMITTED isolated candidate at `/private/tmp/scratchlab-cp2-tear-authoring.sh87xI/worktree` on `checkpoint/tear-authoring-raw-export`. Read `AI_HANDOFF.md`'s top entry and the 2026-09-06 `DEV_LOG.md` entry before doing anything.
 
-Nothing below has ever run against real hardware. Take 007 user-observed screenshots exposed the problem; every test so far uses synthetic fixtures, and no physical artifact was parsed or modified.
+Nothing below has ever run against real hardware. Take 007 user-observed screenshots exposed the problem (their finalized-take paths end in `41949897-...._take007_routine`); every test so far uses synthetic fixtures, and no physical artifact was parsed or modified.
+
+EVIDENCE LOCATION. The authoritative physical-capture store for the sandboxed macOS app is
+`~/Library/Containers/com.machelpnz.scratchlab/Data/Library/Application Support/ScratchLab/`.
+It holds Takes 001-008. Take 007 is the chatter evidence (83 movement events, 29,699 mixer MIDI, 38 crossfader samples, watchSync failed). Take 008 is a separate real artifact with 55 movement events, 19,097 mixer MIDI events, zero mapped crossfader samples and linked Watch capture `786056BA-4C08-4277-9422-43FE0BF88E2D`. A legacy NON-container store at `~/Library/Application Support/ScratchLab/` also exists; do not conflate the two, and do not treat the non-container 202-file manifest as protecting the real evidence.
 
 Exact next prompt:
 
