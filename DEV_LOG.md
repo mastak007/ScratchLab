@@ -4598,3 +4598,21 @@ macOS Debug arm64 and unsigned generic iOS Debug compile gates PASS, with the ex
 The real live caller at ReferenceAuthoringView.swift:224 supplies movement events without platter provenance. Live/finalized parity has NOT been established: the synthetic projection parity test injects provenance and does not exercise that production wiring. No live UI provenance wiring was implemented. Hardware calibration parameters and the separate coordinate/fader/UI defects remain unchanged and unresolved.
 
 Verification artifacts use the `clock-boundary-` prefix under `/private/tmp/scratchlab-motion-provenance-20260906/`: exact test/build command JSONs, logs/xcresults, focused summary, tested-source hashes, before/after preservation, verification receipt and final diff. Original reports/results remain historical evidence. Final preservation checks cover all 108 protected files and inventory, eleven configurations, all six other existing worktrees and the complete fourteen-file candidate with empty index. No Take009, hardware interaction, interactive app launch, deployment, recording, real approval, export, installation, publication, training, staging, commit or push. The only next action is the fresh read-only checkpoint review in AI_HANDOFF/next_prompt.md and SAFE-NEXT-PROMPT.md.
+
+# 2026-09-06 — Take 008 `crossfaderTakeStartState` correction: absent field, not recorded unknown (read-only evidence audit)
+
+Correcting a characterisation only. No historical line above is rewritten, no artifact was modified, and Take 008's recorded fingerprint (55 platter movement events, 19,097 mixer MIDI events, ZERO mapped crossfader samples, linked Watch capture `786056BA-4C08-4277-9422-43FE0BF88E2D`, completed/manual stop) stands unchanged and correct.
+
+A working note in the parked-fader recovery brief stated that Take 008's `crossfaderTakeStartState` "existed but was unknown". The artifact does not support that. Read read-only from `~/Library/Containers/com.machelpnz.scratchlab/Data/Library/Application Support/ScratchLab/RoutineCaptures/41949897-5458-449d-9280-65508a4f6600_take008_routine.json`, the top-level key `crossfaderTakeStartState` is ABSENT.
+
+Three states must not be conflated:
+
+- **Absent key** — no `crossfaderTakeStartState` in the JSON. `CaptureCore.swift` declares it as an `Optional` on `LocalRecordingSidecar` with synthesized `Codable` and no custom `CodingKeys`, so `JSONEncoder` omits it when nil. Absent is therefore indistinguishable from, and equivalent to, nil.
+- **Decoded nil** — what an absent key becomes on read. `ReferenceCrossfaderTakeStart.correlate` maps it with `guard let state else { return .rejected(.notRecorded) }`, i.e. `.notRecorded`.
+- **Recorded unknown** — a NON-nil record whose `provenance == .unknown` and whose `unknownReason` is populated. It serialises as a PRESENT key and maps to a different rejection, `.recordedUnknown`.
+
+Take 008 is the first case. The timing settles why: it was recorded `startedAt 2026-09-05T21:45:42Z` (2026-09-06 09:45 NZST), whereas the field was introduced by `d0e9ac6` authored 2026-09-06T16:36:42+12:00 — roughly six hours and fifty minutes AFTER the recording. The code path that emits an explicit `unknown` did not exist when Take 008 was written, so the field could not have been populated at all. This is exactly the case the field's own doc comment anticipates: "a sidecar written before this field existed decodes as `nil`, meaning 'not recorded'."
+
+Consequence for the parked-fader work: Take 008 remains valid evidence for the zero-mapped-crossfader/parked-fader SHAPE, but it is NOT evidence of an `unknown` take-start classification and must not be cited as such. The connection-generation defect it was invoked to justify is established independently, from the code path and deterministic regression tests, not from this artifact.
+
+No take was recorded, parsed for training, altered, approved, exported, installed, published or promoted. Production container file count unchanged at 954 with no modification in the audit window.

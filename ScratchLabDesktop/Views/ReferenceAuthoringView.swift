@@ -426,7 +426,14 @@ struct ReferenceAuthoringView: View {
                         .disabled(!calibration.isUsable || viewModel.isWorking)
                     }
                 } else if let calibration = viewModel.session.confirmedCalibration {
-                    Text("Committed: \(calibration.address.displayName), \(calibration.activeDeck.displayName), \(calibration.openEnd.displayName).")
+                    // Truthful for BOTH ways a calibration reaches this state:
+                    // swept and committed in this session, or adopted unchanged
+                    // from the store. Calling an adopted one "Committed"
+                    // overstates what the operator actually did here. HOW it
+                    // was obtained is already stated by the
+                    // `calibrationSourceSummary` caption above, so this line
+                    // names the calibration in force and does not repeat it.
+                    Text("Calibration in force: \(calibration.address.displayName), \(calibration.activeDeck.displayName), \(calibration.openEnd.displayName).")
                         .foregroundStyle(.green)
                 }
             }

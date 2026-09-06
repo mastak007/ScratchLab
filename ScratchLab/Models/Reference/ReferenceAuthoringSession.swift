@@ -512,6 +512,15 @@ struct ReferenceAuthoringSession: Equatable, Sendable {
             throw ReferenceAuthoringError.calibrationIncomplete
         }
         try store.save(calibration, now: now)
+        // The sweep is a DRAFT, and it is now spent. Clearing it is what makes
+        // the panel truthful: while a completed sweep is still held, the UI
+        // keeps asking the operator to "commit it before recording" for a
+        // calibration that is already saved. It also closes a real hazard —
+        // `ingestCalibrationObservation` keeps feeding a held sweep, so
+        // further fader motion could overwrite `confirmedCalibration` after
+        // the commit. Recalibration stays explicit: only `beginCalibration`
+        // mints a new sweep.
+        calibrationSweep = nil
         phase = .readyToRecord
     }
 

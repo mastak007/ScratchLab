@@ -11,6 +11,7 @@
 // Nothing here treats any recorded take as valid reference data — these
 // tests only prove the bridge maps and fails correctly.
 
+import CoreMIDI
 import XCTest
 @testable import ScratchLab
 
@@ -857,6 +858,105 @@ final class CrossfaderTakeStartStateTests: XCTestCase {
         let state = classify(observation: observation(channel: 0, controller: 6))
         XCTAssertEqual(state.provenance, .unknown)
         XCTAssertEqual(state.unknownReason, "the cached observation is not on the learned crossfader address")
+    }
+
+    // MARK: The recording-start reconnect must not retire a parked observation
+
+    private func endpoint(
+        sourceID: String = "midi_rane_one_mkii",
+        endpointRef: MIDIEndpointRef = 4_210
+    ) -> MacCaptureEngine.MIDIConnectionEndpointIdentity {
+        MacCaptureEngine.MIDIConnectionEndpointIdentity(sourceID: sourceID, endpointRef: endpointRef)
+    }
+
+    /// Recording start closes and reopens the input port on purpose
+    /// (`openMIDIInputForRecording`), and so does finalization. Both target
+    /// the SAME endpoint of the SAME selected source, so neither changes
+    /// anything an earlier reading was correlated against, and neither may
+    /// retire it.
+    func testASameEndpointInternalReconnectDoesNotAdvanceTheConnectionGeneration() {
+        XCTAssertEqual(
+            MacCaptureEngine.nextMIDIConnectionGeneration(
+                current: 3,
+                previous: endpoint(),
+                next: endpoint()
+            ),
+            3
+        )
+    }
+
+    /// Take 008's exact failure, now passing.
+    ///
+    /// The fader was parked hard open before recording, the operator correctly
+    /// touched nothing, and recording start reconnected MIDI. The snapshot
+    /// survives on the evidence that was genuinely there — no CC8 event is
+    /// invented to carry it.
+    func testAParkedObservationSurvivesTheRecordingStartReconnect() throws {
+        let generationAtMediaStart = MacCaptureEngine.nextMIDIConnectionGeneration(
+            current: 3,
+            previous: endpoint(),
+            next: endpoint()
+        )
+        let state = classify(
+            connectionGeneration: generationAtMediaStart,
+            observation: observation(connectionGeneration: 3)
+        )
+        XCTAssertEqual(state.provenance, .preTakeSnapshot)
+        XCTAssertEqual(state.rawValue, 127)
+        XCTAssertNil(state.unknownReason)
+        // The ORIGINAL negative instant, preserved — never re-timed to media
+        // start and never presented as an in-take packet.
+        XCTAssertEqual(try XCTUnwrap(state.observedTakeRelativeTime), -0.4, accuracy: 1e-9)
+        // The generation it records is the one still open, so the stop-time
+        // correlation in `ReferenceCrossfaderTakeStart.correlate` matches too.
+        XCTAssertEqual(state.midiConnectionGeneration, 3)
+    }
+
+    /// Every way the device session can ACTUALLY change still fails closed.
+    func testAGenuineConnectionChangeAdvancesTheGenerationAndRetiresTheObservation() {
+        // Unplug/replug: same source name and identifier, but Core MIDI mints
+        // a fresh endpoint reference for the new device session.
+        let replugged = MacCaptureEngine.nextMIDIConnectionGeneration(
+            current: 3,
+            previous: endpoint(),
+            next: endpoint(endpointRef: 4_211)
+        )
+        XCTAssertEqual(replugged, 4)
+        // A different controller selected entirely.
+        let replacedSource = MacCaptureEngine.nextMIDIConnectionGeneration(
+            current: 3,
+            previous: endpoint(),
+            next: endpoint(sourceID: "midi_ddj_grv6")
+        )
+        XCTAssertEqual(replacedSource, 4)
+        // The selection resolved to no endpoint at all — a genuine disconnect.
+        XCTAssertEqual(
+            MacCaptureEngine.nextMIDIConnectionGeneration(
+                current: 3,
+                previous: endpoint(),
+                next: nil
+            ),
+            4
+        )
+        // Absent identity on either side is a change, never a match: the very
+        // first connect of the process advances too.
+        XCTAssertEqual(
+            MacCaptureEngine.nextMIDIConnectionGeneration(current: 0, previous: nil, next: endpoint()),
+            1
+        )
+
+        // ...and the classifier refuses the now-stale observation at each one.
+        for advanced in [replugged, replacedSource] {
+            let state = classify(
+                connectionGeneration: advanced,
+                observation: observation(connectionGeneration: 3)
+            )
+            XCTAssertEqual(state.provenance, .unknown)
+            XCTAssertEqual(
+                state.unknownReason,
+                "the cached observation predates the current MIDI device connection"
+            )
+        }
     }
 
     /// A message that landed at or after media start belongs to the take's own

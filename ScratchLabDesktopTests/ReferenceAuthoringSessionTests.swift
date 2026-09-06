@@ -211,6 +211,52 @@ final class ReferenceAuthoringSessionTests: XCTestCase {
         XCTAssertNotNil(store.calibration(deviceIdentifier: "Rane ONE MKII", channel: 15, controller: 8))
     }
 
+    /// After a commit the sweep is a spent DRAFT, and holding it made the
+    /// panel untruthful: it kept asking the operator to "commit it before
+    /// recording" for a calibration already saved to the store. Clearing it
+    /// also closes a real hazard — `ingestCalibrationObservation` keeps
+    /// feeding a held sweep, so fader motion after the commit could overwrite
+    /// the value that was just committed.
+    func testCommittingACalibrationClearsTheSpentSweepAndShowsTheCommittedCalibration() throws {
+        var session = makeConfiguredSession()
+        session.beginCalibration(address: calibration.address, openEnd: .left, activeDeck: .rightDeck)
+        Self.sweepThroughAllThreePositions(&session)
+        // Before the commit the panel is correctly asking for one.
+        XCTAssertNotNil(session.calibrationSweep)
+        XCTAssertEqual(session.calibrationSweep?.state.calibration?.isUsable, true)
+
+        try session.commitCalibration(store: try makeStore())
+
+        // The draft is gone, so the panel falls through to the committed
+        // calibration instead of repeating "Commit it before recording".
+        XCTAssertNil(session.calibrationSweep)
+        let committed = try XCTUnwrap(session.confirmedCalibration)
+        XCTAssertEqual(session.confirmedCalibrationSource, .sweptInThisSession)
+        XCTAssertEqual(session.phase, .readyToRecord)
+
+        // Fader motion after the commit no longer rewrites the committed value.
+        session.ingestCalibrationObservation(
+            CrossfaderCalibrationObservation(rawValue: 3, observationSequence: 9_999)
+        )
+        XCTAssertNil(session.calibrationSweep)
+        XCTAssertEqual(session.confirmedCalibration, committed)
+    }
+
+    /// A committed calibration is superseded only by an EXPLICIT
+    /// recalibration. Nothing is ever synthesized from a fader response curve.
+    func testRecalibrationAfterACommitIsExplicitAndStartsAFreshSweep() throws {
+        var session = makeConfiguredSession()
+        session.beginCalibration(address: calibration.address, openEnd: .left, activeDeck: .rightDeck)
+        Self.sweepThroughAllThreePositions(&session)
+        try session.commitCalibration(store: try makeStore())
+        XCTAssertNil(session.calibrationSweep)
+
+        session.beginCalibration(address: calibration.address, openEnd: .left, activeDeck: .rightDeck)
+        XCTAssertNotNil(session.calibrationSweep)
+        XCTAssertNil(session.confirmedCalibration, "Recalibration must retire the superseded calibration.")
+        XCTAssertNil(session.confirmedCalibrationSource)
+    }
+
     /// Capture eligibility and canonical-reference eligibility are separate
     /// gates. A take recorded with no calibration must still record, finalize
     /// and be retained; what it loses is its fader evidence and its ability to
@@ -2106,6 +2152,82 @@ final class ReferenceTearAuthoringSliceTests: XCTestCase {
         XCTAssertEqual(take.evidence.metadata.technique, .tear)
         XCTAssertEqual(take.autoDetectedTechnique, .babyScratch)
         XCTAssertTrue(take.autoDetectionDisagreesWithSelection)
+    }
+
+    // MARK: A parked baseline never becomes a recorded sample
+
+    /// The parked-fader path end to end: the snapshot is adopted for the
+    /// derivation ONLY, and the take's recorded samples are handed through
+    /// untouched. No synthetic CC8 is appended to stand in for it.
+    func testAnAdoptedParkedBaselineAddsNoRecordedCrossfaderSample() throws {
+        var session = makeConfiguredTearSession()
+        let store = try makeStore()
+        try store.save(calibration)
+        _ = session.adoptPersistedCalibrationIfExact(
+            store: store,
+            openEnd: .right,
+            activeDeck: .rightDeck,
+            address: calibration.address
+        )
+        let artifacts = parkedArtifacts(
+            takeStartState: parkedTakeStartState(),
+            takeStartCorrelation: correlation()
+        )
+        let recordingHooks = hooks(artifacts: artifacts)
+        guard case .success = session.beginRecording(using: recordingHooks) else {
+            return XCTFail("Expected recording to start.")
+        }
+        guard case .success = session.finishRecording(using: recordingHooks) else {
+            return XCTFail("Expected the take to finalize.")
+        }
+        let take = try XCTUnwrap(session.takeInReview)
+        XCTAssertEqual(
+            take.evidence.crossfaderTakeStartOutcome,
+            .adopted(rawValue: 127, observedTakeRelativeTime: -0.4)
+        )
+        XCTAssertTrue(
+            take.evidence.crossfaderRawSamples.isEmpty,
+            "A pre-take snapshot must never be persisted as an in-take measurement."
+        )
+    }
+
+    /// A REAL in-take message is the stronger evidence and the only one
+    /// allowed to speak for the take's start. The snapshot stands down rather
+    /// than minting a duplicate, potentially contradictory, claim.
+    func testARealInTakeSampleSupersedesTheParkedBaselineWithoutDuplicatingIt() throws {
+        var session = makeConfiguredTearSession()
+        let store = try makeStore()
+        try store.save(calibration)
+        _ = session.adoptPersistedCalibrationIfExact(
+            store: store,
+            openEnd: .right,
+            activeDeck: .rightDeck,
+            address: calibration.address
+        )
+        let inTakeSample = CrossfaderPositionSample(
+            takeRelativeTime: 0,
+            rawValue: 127,
+            normalizedPosition: 1
+        )
+        let artifacts = parkedArtifacts(
+            takeStartState: parkedTakeStartState(),
+            takeStartCorrelation: correlation(),
+            crossfaderRawSamples: [inTakeSample]
+        )
+        let recordingHooks = hooks(artifacts: artifacts)
+        guard case .success = session.beginRecording(using: recordingHooks) else {
+            return XCTFail("Expected recording to start.")
+        }
+        guard case .success = session.finishRecording(using: recordingHooks) else {
+            return XCTFail("Expected the take to finalize.")
+        }
+        let take = try XCTUnwrap(session.takeInReview)
+        XCTAssertEqual(take.evidence.crossfaderTakeStartOutcome, .notNeeded)
+        XCTAssertEqual(
+            take.evidence.crossfaderRawSamples,
+            [inTakeSample],
+            "The take's own MIDI stream must be handed through exactly as recorded."
+        )
     }
 
     // MARK: Crossfader setup reuse

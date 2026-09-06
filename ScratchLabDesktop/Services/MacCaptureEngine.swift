@@ -907,6 +907,19 @@ final class MacCaptureEngine: NSObject, ObservableObject {
         let name: String
     }
 
+    /// Identity of the MIDI endpoint a connection was actually made to.
+    ///
+    /// A new connection continues the previous one only when BOTH halves
+    /// match: the selected source identifier, and the Core MIDI endpoint
+    /// reference that identifier resolved to. Core MIDI mints a fresh
+    /// endpoint reference when a device is unplugged and replugged, so a
+    /// replaced device is never mistaken for a still-open one even though it
+    /// reports the same name.
+    struct MIDIConnectionEndpointIdentity: Equatable {
+        let sourceID: String
+        let endpointRef: MIDIEndpointRef
+    }
+
     enum MIDILearnState: Equatable {
         case idle
         case listening
@@ -4641,15 +4654,28 @@ final class MacCaptureEngine: NSObject, ObservableObject {
     private let midiCaptureLock = NSLock()
     private var midiRecordingStartTime: CFTimeInterval = 0
     private var midiConnectedSourceName: String = ""
-    /// Monotonic count of MIDI input connections this process has made.
+    /// Monotonic identity of the MIDI input DEVICE SESSION this process is
+    /// currently reading from.
     ///
-    /// Bumped once per successful `MIDIPortConnectSource`. It is what lets a
-    /// later consumer tell "this reading came from the device session that is
-    /// still open" from "this reading came from a device that has since been
-    /// unplugged and replugged", which a bare cached value cannot. Guarded by
-    /// `midiCaptureLock`, like every other field the Core MIDI read thread
-    /// touches.
+    /// It is what lets a later consumer tell "this reading came from the
+    /// device session that is still open" from "this reading came from a
+    /// device that has since been unplugged and replugged", which a bare
+    /// cached value cannot.
+    ///
+    /// Deliberately NOT a count of `MIDIPortConnectSource` calls. Recording
+    /// start closes and reopens the input port on purpose
+    /// (`openMIDIInputForRecording`), and so does finalization; both target
+    /// the same endpoint and change nothing a reading was correlated
+    /// against. Counting them retired an operator's parked-fader observation
+    /// captured seconds earlier, which is the whole reason a pre-take
+    /// snapshot exists. See `nextMIDIConnectionGeneration` for the exact
+    /// advance rule — it fails closed on every case that is not a
+    /// same-endpoint reconnect. Guarded by `midiCaptureLock`, like every
+    /// other field the Core MIDI read thread touches.
     private var midiConnectionGenerationStorage: UInt64 = 0
+    /// The endpoint `midiConnectionGenerationStorage` currently identifies,
+    /// or `nil` when no input is connected. Guarded by `midiCaptureLock`.
+    private var midiConnectionEndpointIdentityStorage: MIDIConnectionEndpointIdentity?
     /// The crossfader control state observed at the CURRENT take's media-start
     /// boundary, awaiting the sidecar write at finalization. Cleared with the
     /// rest of the per-take state. Guarded by `midiCaptureLock`.
@@ -10937,6 +10963,13 @@ final class MacCaptureEngine: NSObject, ObservableObject {
         midiCaptureLock.unlock()
     }
 
+    /// Disconnect every source from the input port.
+    ///
+    /// Deliberately leaves `midiConnectionEndpointIdentityStorage` alone: its
+    /// only caller reconnects immediately, and that call is what decides
+    /// whether the new connection continues the previous device session or
+    /// retires it. Any future caller that does NOT reconnect must clear the
+    /// identity itself, or a cached observation would outlive its connection.
     private func closeMIDIInput() {
         guard midiInputPort != 0 else { return }
         for endpoint in midiSourceEndpoints.values {
@@ -11922,11 +11955,48 @@ final class MacCaptureEngine: NSObject, ObservableObject {
         }
     }
 
+    /// The MIDI connection generation a connection to `next` must carry,
+    /// given that the port was last connected to `previous`.
+    ///
+    /// Returns `current` unchanged for the ONE case that is not a change of
+    /// device session: reconnecting to the exact same endpoint of the exact
+    /// same selected source. That reconnect is an implementation detail of
+    /// arming the port for a take, and an observation captured just before it
+    /// describes the same physical control on the same open device.
+    ///
+    /// Advances — retiring every cached observation — for everything else,
+    /// which is every way the device session can actually have changed:
+    /// a different selected source, a different endpoint reference behind the
+    /// same source (an unplug/replug, which Core MIDI gives a fresh ref), a
+    /// connect that resolved no endpoint at all, and the first connect of the
+    /// process. Absent identity on either side is treated as a change, never
+    /// as a match.
+    static func nextMIDIConnectionGeneration(
+        current: UInt64,
+        previous: MIDIConnectionEndpointIdentity?,
+        next: MIDIConnectionEndpointIdentity?
+    ) -> UInt64 {
+        guard let next, let previous, next == previous else { return current &+ 1 }
+        return current
+    }
+
     private func reconnectSelectedMIDIInput() {
         guard midiInputPort != 0 else { return }
         closeMIDIInput()
         guard let selectedSource = availableMIDISources.first(where: { $0.id == selectedMIDIInputSourceID }),
               let endpoint = midiSourceEndpoints[selectedSource] else {
+            // The selection resolved to nothing, so there is no open device
+            // session any more. Retire the generation and the identity
+            // together: a cached reading must never outlive the connection it
+            // arrived on.
+            midiCaptureLock.lock()
+            midiConnectionGenerationStorage = Self.nextMIDIConnectionGeneration(
+                current: midiConnectionGenerationStorage,
+                previous: midiConnectionEndpointIdentityStorage,
+                next: nil
+            )
+            midiConnectionEndpointIdentityStorage = nil
+            midiCaptureLock.unlock()
             publishOnMainAsync(field: "midiListeningState") { [weak self] in
                 guard let self else { return }
                 let next = self.availableMIDISources.isEmpty ? "Not Connected" : "Source Missing"
@@ -11935,9 +12005,18 @@ final class MacCaptureEngine: NSObject, ObservableObject {
             return
         }
 
+        let endpointIdentity = MIDIConnectionEndpointIdentity(
+            sourceID: selectedSource.id,
+            endpointRef: endpoint
+        )
         midiCaptureLock.lock()
         midiConnectedSourceName = selectedSource.name
-        midiConnectionGenerationStorage &+= 1
+        midiConnectionGenerationStorage = Self.nextMIDIConnectionGeneration(
+            current: midiConnectionGenerationStorage,
+            previous: midiConnectionEndpointIdentityStorage,
+            next: endpointIdentity
+        )
+        midiConnectionEndpointIdentityStorage = endpointIdentity
         midiCaptureLock.unlock()
         MIDIPortConnectSource(midiInputPort, endpoint, nil)
         // Load any saved device mapping for this source.
