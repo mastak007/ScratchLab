@@ -6535,8 +6535,18 @@ extension ScratchNotation {
         enum CoordinateSpace: String, Codable, Equatable, Sendable {
             /// Fraction of source-sample duration from its cue, not clamped 0...1.
             case samplePosition
-            /// Signed platter displacement in revolutions from the recording origin.
+            /// Signed platter displacement in REVOLUTIONS from the recording
+            /// origin. Only positions divided by an explicitly stated
+            /// steps-per-revolution reference may claim this space.
             case platterRevolutions
+            /// Signed platter displacement normalised over ONE take's own
+            /// decoded range, so the unit is that take and nothing else. It is
+            /// proportional to physical travel but carries no revolution,
+            /// millimetre or degree claim, and two takes' values are not
+            /// comparable. This is what `decodePlatterCore` writes into a
+            /// finalized `DetectedNotationRecordMovementEvent`, and it must
+            /// never be relabelled `platterRevolutions`.
+            case normalizedTakeLocalDisplacement
         }
 
         struct Evidence: Codable, Equatable, Sendable {
@@ -10767,6 +10777,126 @@ enum CaptureCore {
         _ event: DetectedNotationRecordMovementEvent
     ) -> Bool {
         event.source == "controller" || event.source == "live_preview"
+    }
+
+    /// WHICH coordinate a set of movement-event positions is actually
+    /// expressed in, and what established it.
+    ///
+    /// `DetectedNotationRecordMovementEvent` carries positions but no unit, so
+    /// the unit used to be carried only by whichever path happened to build
+    /// the event — while the canonical tear projection hardcoded
+    /// `platterRevolutions` for every one of them. Two producers with two
+    /// different divisors reach that projection:
+    ///
+    /// * `deriveGestureRelativePlatterNotationEvents` and
+    ///   `derivePlatterMovementEventsWithProvisional` divide raw CC6 step
+    ///   displacement by a stated steps-per-revolution. Those positions are
+    ///   genuinely revolutions.
+    /// * `decodePlatterCore` normalises the integrated position over the
+    ///   stream's own range ("Normalize the integrated position to 0…1 over
+    ///   the stream's range"), and that is what finalization persists in
+    ///   `DetectedNotationSnapshot.recordMovementEvents`. Those positions are
+    ///   take-local and are NOT revolutions.
+    ///
+    /// Each boundary that hands positions to notation now states which one it
+    /// holds. Every default is the NON-CLAIMING basis, so a caller that says
+    /// nothing gets take-local normalized displacement: a forgotten argument
+    /// can only understate the claim, never fabricate a calibration.
+    struct PlatterNotationCoordinates: Equatable, Sendable {
+
+        enum Basis: String, Equatable, Sendable, CaseIterable {
+            /// Raw step displacement divided by an explicitly stated
+            /// steps-per-revolution reference.
+            case calibratedPlatterRevolutions
+            /// Span-normalised over one take's own decoded range. Proportional
+            /// to physical travel, but carrying no revolution claim and not
+            /// comparable across takes.
+            case normalizedTakeLocalDisplacement
+        }
+
+        let basis: Basis
+        /// What established the basis, in words a reviewer can check. Never
+        /// empty: a basis with no stated origin is not a contract.
+        let reference: String
+
+        private init(basis: Basis, reference: String) {
+            self.basis = basis
+            self.reference = reference
+        }
+
+        static let takeLocalNormalizerReference =
+            "decodePlatterCore span-normalises this take's integrated platter "
+                + "position over the take's own decoded range"
+
+        /// Positions already divided by `stepsPerRevolution`.
+        ///
+        /// Returns `nil` — rather than a revolution claim — when the divisor
+        /// cannot support one, or when no reference is named. This layer
+        /// cannot verify a calibration and never invents one.
+        static func calibratedRevolutions(
+            stepsPerRevolution: Double,
+            reference: String
+        ) -> PlatterNotationCoordinates? {
+            let trimmed = reference.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard stepsPerRevolution.isFinite, stepsPerRevolution > 0, !trimmed.isEmpty else {
+                return nil
+            }
+            return PlatterNotationCoordinates(
+                basis: .calibratedPlatterRevolutions,
+                reference: trimmed
+            )
+        }
+
+        static func normalizedTakeLocal(
+            reference: String = takeLocalNormalizerReference
+        ) -> PlatterNotationCoordinates {
+            let trimmed = reference.trimmingCharacters(in: .whitespacesAndNewlines)
+            return PlatterNotationCoordinates(
+                basis: .normalizedTakeLocalDisplacement,
+                reference: trimmed.isEmpty ? takeLocalNormalizerReference : trimmed
+            )
+        }
+
+        /// The basis the shared controller decoder produces when it projects a
+        /// run through `PlatterCoordinateSemantics.gestureRelativeNotation`.
+        ///
+        /// Fails CLOSED: an unusable steps-per-revolution yields take-local
+        /// normalized displacement with the reason stated, never a silent
+        /// revolution claim.
+        static func raneOneMKIIDirectMIDI(
+            stepsPerRevolution: Double = PlatterCoordinateSemantics
+                .raneOneMKIIDirectMIDIStepsPerRevolution
+        ) -> PlatterNotationCoordinates {
+            calibratedRevolutions(
+                stepsPerRevolution: stepsPerRevolution,
+                reference: "RANE ONE MKII direct-MIDI CC6 at "
+                    + "\(stepsPerRevolution) steps per revolution"
+            ) ?? normalizedTakeLocal(
+                reference: "steps-per-revolution \(stepsPerRevolution) cannot "
+                    + "support a revolution claim, so positions stay take-local"
+            )
+        }
+
+        var isCalibrated: Bool { basis == .calibratedPlatterRevolutions }
+
+        var coordinateSpace: ScratchNotation.GestureRecord.CoordinateSpace {
+            switch basis {
+            case .calibratedPlatterRevolutions: return .platterRevolutions
+            case .normalizedTakeLocalDisplacement: return .normalizedTakeLocalDisplacement
+            }
+        }
+
+        /// One line naming the unit and its origin, for a review surface that
+        /// must not let the operator guess which of the two they are reading.
+        var detail: String {
+            switch basis {
+            case .calibratedPlatterRevolutions:
+                return "positions are platter revolutions, calibrated by \(reference)"
+            case .normalizedTakeLocalDisplacement:
+                return "positions are normalised over this take's own range and are "
+                    + "not calibrated revolutions — \(reference)"
+            }
+        }
     }
 
     /// Presentation-only projection for one decoder-committed controller run.

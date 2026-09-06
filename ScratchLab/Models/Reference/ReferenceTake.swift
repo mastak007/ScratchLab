@@ -1022,6 +1022,10 @@ struct ReferenceTearSegmentationReview: Equatable, Sendable {
     /// this type filters, reorders, repairs or removes an entry, and no
     /// correction below ever writes back into it.
     let rawMovementEvents: [CaptureCore.DetectedNotationRecordMovementEvent]
+    /// The coordinate `rawMovementEvents` positions are ACTUALLY in, stated by
+    /// the boundary that produced them. Nothing here infers it, and the
+    /// canonical projection reads it rather than assuming revolutions.
+    let platterCoordinates: CaptureCore.PlatterNotationCoordinates
     let platterEvidenceIntervals: [CaptureCore.PlatterEvidenceInterval]
     /// Derived travel and stationary intervals over `rawMovementEvents`.
     let segments: [ReferenceTearMotionSegment]
@@ -1050,10 +1054,14 @@ struct ReferenceTearSegmentationReview: Equatable, Sendable {
         candidates: [ReferenceTearCandidate],
         notes: String = "",
         noteCorrections: [ReferenceTearCorrection] = [],
-        platterEvidenceIntervals: [CaptureCore.PlatterEvidenceInterval] = []
+        platterEvidenceIntervals: [CaptureCore.PlatterEvidenceInterval] = [],
+        // The NON-CLAIMING default: a caller that states nothing gets
+        // take-local normalized displacement, never a revolution claim.
+        platterCoordinates: CaptureCore.PlatterNotationCoordinates = .normalizedTakeLocal()
     ) {
         self.referenceTakeID = referenceTakeID
         self.rawMovementEvents = rawMovementEvents
+        self.platterCoordinates = platterCoordinates
         self.platterEvidenceIntervals = platterEvidenceIntervals
         self.segments = segments
         self.reversals = reversals
@@ -1343,15 +1351,28 @@ enum ReferenceTearSegmentationReviewBuilder {
             movementEvents: evidence.platterMovementEvents,
             platterEvidenceIntervals: evidence.platterEvidenceIntervals,
             derivation: evidence.derivation,
+            // A finalized take's `platterMovementEvents` are the persisted
+            // `DetectedNotationSnapshot.recordMovementEvents`, whose positions
+            // `decodePlatterCore` span-normalised over this take's own decoded
+            // range. The take carries no steps-per-revolution reference, so a
+            // revolution claim would have to be fabricated here — it is not
+            // made. See `CaptureCore.PlatterNotationCoordinates`.
+            coordinates: .normalizedTakeLocal(),
             configuration: configuration
         )
     }
 
+    /// - Parameter coordinates: which coordinate `movementEvents` positions are
+    ///   ACTUALLY in. Defaults to the non-claiming take-local basis, so a
+    ///   caller that says nothing can only understate the claim. Segmentation
+    ///   thresholds are unchanged by this argument: it declares the unit, it
+    ///   does not rescale, filter or re-time any evidence.
     static func build(
         referenceTakeID: String,
         movementEvents: [CaptureCore.DetectedNotationRecordMovementEvent],
         platterEvidenceIntervals: [CaptureCore.PlatterEvidenceInterval] = [],
         derivation: CrossfaderDerivation?,
+        coordinates: CaptureCore.PlatterNotationCoordinates = .normalizedTakeLocal(),
         configuration: ReferenceTearReviewConfiguration = ReferenceTearReviewConfiguration()
     ) -> ReferenceTearSegmentationReview {
 
@@ -1362,7 +1383,9 @@ enum ReferenceTearSegmentationReviewBuilder {
 
         var reviewReasons: [ReferenceTearReviewReason] = []
         if movementEvents.isEmpty { reviewReasons.append(.noMotionEvidence) }
-        else { reviewReasons.append(.uncalibratedPlatterCoordinates) }
+        else if !coordinates.isCalibrated {
+            reviewReasons.append(.uncalibratedPlatterCoordinates)
+        }
         if faderIntervals.isEmpty { reviewReasons.append(.faderUnobserved) }
 
         // Usable travel, in evidence order by time. The raw array is retained
@@ -1550,7 +1573,8 @@ enum ReferenceTearSegmentationReviewBuilder {
             faderClicks: faderClicks,
             reasons: ReferenceTearReviewReason.ordered(reviewReasons),
             candidates: candidates,
-            platterEvidenceIntervals: provenance
+            platterEvidenceIntervals: provenance,
+            platterCoordinates: coordinates
         )
     }
 
@@ -2017,6 +2041,7 @@ enum ReferenceCrossfaderTakeStart {
 enum ReferenceTearProjectionReason: String, Equatable, Sendable, CaseIterable {
     case measuredPlatterTravel
     case gestureLocalPlatterRevolutions
+    case gestureLocalNormalizedDisplacement
     case unsupportedCoordinateSpace
     case lowMovementConfidence
     case releasedPlaybackPresent
@@ -2031,9 +2056,11 @@ enum ReferenceTearProjectionReason: String, Equatable, Sendable, CaseIterable {
         case .measuredPlatterTravel:
             return "subdivision geometry is the take's own decoded platter travel, at its measured durations"
         case .gestureLocalPlatterRevolutions:
-            return "each gesture's travel runs are re-anchored end-to-end into one gesture-local origin; the unit is platter revolutions and every run's measured excursion survives"
+            return "each gesture's travel runs are re-anchored end-to-end into one gesture-local origin; the unit is calibrated platter revolutions and every run's measured excursion survives"
+        case .gestureLocalNormalizedDisplacement:
+            return "each gesture's travel runs are re-anchored end-to-end into one gesture-local origin; the unit is this take's own normalised displacement, NOT calibrated revolutions, so no absolute travel is claimed and values are not comparable with another take"
         case .unsupportedCoordinateSpace:
-            return "at least one backing movement event is not gesture-relative controller telemetry, so its positions are not platter revolutions and no geometry is claimed"
+            return "at least one backing movement event is not gesture-relative controller telemetry, so its positions are in no declared platter coordinate and no geometry is claimed"
         case .lowMovementConfidence:
             return "the weakest decoder confidence backing this gesture is below the review's provisional threshold, so the gesture is projected as unknown"
         case .releasedPlaybackPresent:
@@ -2079,12 +2106,21 @@ struct ReferenceTearCanonicalProjection: Equatable, Sendable {
 
 enum ReferenceTearCanonicalProjectionBuilder {
 
-    /// Gesture-relative controller telemetry is expressed in revolutions
-    /// (`PlatterCoordinateSemantics.gestureRelativeNotation` divides raw steps
-    /// by steps-per-revolution), so that is the only coordinate space this
-    /// projection will ever claim. Camera or DVS movement events use a
-    /// different, un-named coordinate and are projected as unknown instead.
-    static let coordinateSpace: ScratchNotation.GestureRecord.CoordinateSpace = .platterRevolutions
+    /// The coordinate space this projection claims is the one the REVIEW
+    /// states its evidence is in — never a constant.
+    ///
+    /// It used to be hardcoded to `.platterRevolutions` on the reasoning that
+    /// gesture-relative controller telemetry is always divided by
+    /// steps-per-revolution. That holds for the live decoder, but a finalized
+    /// reference take's persisted positions are span-normalised over the take's
+    /// own range, so the same constant relabelled normalized values as
+    /// revolutions. Camera or DVS movement events remain in no declared platter
+    /// coordinate at all and are still projected as unknown.
+    static func declaredCoordinateSpace(
+        for review: ReferenceTearSegmentationReview
+    ) -> ScratchNotation.GestureRecord.CoordinateSpace {
+        review.platterCoordinates.coordinateSpace
+    }
 
     static func project(
         _ review: ReferenceTearSegmentationReview,
@@ -2094,6 +2130,7 @@ enum ReferenceTearCanonicalProjectionBuilder {
         var reasons: [ReferenceTearProjectionReason] = []
         var positions: [Double] = []
         var times: [Double] = []
+        let coordinateSpace = declaredCoordinateSpace(for: review)
 
         for candidate in review.candidates {
             let built = buildRecord(
@@ -2143,6 +2180,7 @@ enum ReferenceTearCanonicalProjectionBuilder {
         platterEvidenceIntervals: [CaptureCore.PlatterEvidenceInterval] = [],
         derivation: CrossfaderDerivation? = nil,
         referenceTakeID: String = "live-preview",
+        coordinates: CaptureCore.PlatterNotationCoordinates = .normalizedTakeLocal(),
         configuration: ReferenceTearReviewConfiguration = ReferenceTearReviewConfiguration()
     ) -> ReferenceTearCanonicalProjection {
         project(
@@ -2151,6 +2189,7 @@ enum ReferenceTearCanonicalProjectionBuilder {
                 movementEvents: movementEvents,
                 platterEvidenceIntervals: platterEvidenceIntervals,
                 derivation: derivation,
+                coordinates: coordinates,
                 configuration: configuration
             ),
             configuration: configuration
@@ -2171,6 +2210,7 @@ enum ReferenceTearCanonicalProjectionBuilder {
         configuration: ReferenceTearReviewConfiguration
     ) -> BuiltRecord {
         var reasons: [ReferenceTearProjectionReason] = []
+        let coordinateSpace = declaredCoordinateSpace(for: review)
         let fader = faderEvidence(candidate: candidate, review: review)
         reasons.append(contentsOf: fader.reasons)
 
@@ -2242,7 +2282,11 @@ enum ReferenceTearCanonicalProjectionBuilder {
             track.append((segment.span.endTime, cursor))
         }
         reasons.append(.measuredPlatterTravel)
-        reasons.append(.gestureLocalPlatterRevolutions)
+        reasons.append(
+            review.platterCoordinates.isCalibrated
+                ? .gestureLocalPlatterRevolutions
+                : .gestureLocalNormalizedDisplacement
+        )
 
         // Surviving platter holds partition the gesture. A struck-out
         // boundary and a boundary renamed a fader click contribute nothing —

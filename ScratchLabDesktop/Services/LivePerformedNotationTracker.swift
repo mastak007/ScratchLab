@@ -138,6 +138,35 @@ final class LivePerformedNotationTracker: ObservableObject {
         Self.renderedEvents(for: state)
     }
 
+    /// Which coordinate `renderedEvents` positions are ACTUALLY in.
+    ///
+    /// The controller branch of `computeState` comes from
+    /// `derivePlatterMovementEventsWithProvisional`, which divides raw CC6 step
+    /// displacement by `PlatterCoordinateSemantics
+    /// .raneOneMKIIDirectMIDIStepsPerRevolution` — genuine revolutions. The
+    /// camera fallback branch emits builder events in no declared platter
+    /// coordinate, and an empty state claims nothing. This declaration is made
+    /// HERE, at the boundary that knows which branch ran, and never inferred
+    /// downstream: an identically-sourced event persisted by finalization is
+    /// span-normalised instead, so `source` alone cannot settle the unit.
+    var platterCoordinates: CaptureCore.PlatterNotationCoordinates {
+        Self.platterCoordinates(for: state)
+    }
+
+    static func platterCoordinates(
+        for state: LiveNotationTrackingState
+    ) -> CaptureCore.PlatterNotationCoordinates {
+        let rendered = renderedEvents(for: state)
+        guard !rendered.isEmpty,
+              rendered.allSatisfy(CaptureCore.usesGestureRelativeControllerNotation) else {
+            return .normalizedTakeLocal(
+                reference: "live movement is not gesture-relative controller "
+                    + "telemetry, so no platter calibration is claimed"
+            )
+        }
+        return .raneOneMKIIDirectMIDI()
+    }
+
     static func renderedEvents(
         for state: LiveNotationTrackingState
     ) -> [CaptureCore.DetectedNotationRecordMovementEvent] {

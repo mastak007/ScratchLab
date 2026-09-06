@@ -1,3 +1,48 @@
+# Current continuation — Checkpoint Prompt C, then Prompt D (hardware acceptance)
+
+Prompt B is COMMITTED as `9bb82d1`. Prompt C is complete and software-verified in `/Users/karlwatson/Downloads/ScratchLab-TTM-Reconstruct`, branch `feature/ttm-crossfader-takestart-reconstruct`, base `9bb82d1`: nine modified files (six production + three existing test files) at +1,075 / −23, plus the four workflow records. Evidence is macOS build, macOS build-for-testing and unsigned generic iOS build, with 328 + 318 focused test executions and zero failures. Do not rerun those gates. Proposed subject: `fix(notation): declare the platter coordinate contract and state Review limits`.
+
+Prompt C summary. `ScratchNotation.GestureRecord.CoordinateSpace` gained `normalizedTakeLocalDisplacement`; `CaptureCore.PlatterNotationCoordinates` is the named contract each boundary states, always defaulting to the non-claiming basis and failing closed rather than inventing a calibration. Finalized reference takes declare NORMALIZED (their evidence carries no steps-per-revolution reference); live declares CALIBRATED from `LivePerformedNotationTracker.platterCoordinates`. Live and finalized agree on time, grid, direction and hold structure and draw the same shape after each is rescaled onto its own span. The Baby-only audio detector is labelled LIMITED — not a disagreement — on Tear-selected takes and never overwrites the selected technique. Review overload is reduced by grouping and lazy disclosure only. No threshold, gate, export schema or approval/training rule changed.
+
+Prompt D is the first hardware step and is still NOT authorized by this file. Before it, a fresh build with a UNIQUE bundle id and its own container is required, following the `com.machelpnz.scratchlab.previewsmoke.*` precedent — `~/Library/Developer/Xcode/DerivedData/Build/Products/Debug/ScratchLab.app` is a mutable, worktree-agnostic path and remains unauthorized as an isolated hardware candidate. It historically carried the production bundle id `com.machelpnz.scratchlab`, resolving to the container holding Takes 001–008; the first Prompt C isolation attempt supplied `-derivedDataPath` without explicit `SYMROOT`/`OBJROOT`, and Xcode overwrote that shared app with its currently verified bundle id `com.machelpnz.scratchlab.promptcverify.20260906`.
+
+Prompt D PRECONDITIONS. Every one of these must hold before any Prompt D recording instruction below is executed. They are not advisory.
+
+1. **Prompt C must be checkpointed first.** Prompt D does not begin while this candidate is uncommitted.
+2. **A uniquely identified preview-smoke bundle and its own separate container must be used**, following the `com.machelpnz.scratchlab.previewsmoke.*` precedent. `~/Library/Developer/Xcode/DerivedData/Build/Products/Debug/ScratchLab.app` remains unauthorized because the shared path is mutable and worktree-agnostic. It historically carried `com.machelpnz.scratchlab` and resolved to the production container holding Takes 001–008; the first Prompt C isolation attempt overwrote it with `com.machelpnz.scratchlab.promptcverify.20260906`, its currently verified bundle id, because `-derivedDataPath` alone did not isolate products. Explicit `SYMROOT`/`OBJROOT` were used for the subsequent isolated rerun. Note that an app-hosted XCTest run under the production bundle id also writes to that production container — Prompt C's focused run 2 refreshed 27 derived `AuditSummaries/relayedWatch` JSON files that way.
+3. **The five-cycle preview acceptance gate must pass, in full, BEFORE any recording:**
+   - enter and leave Advanced → CXL Reference Authoring — Hardware Test five times;
+   - navigate away during camera configuration, start and stop, then return;
+   - exercise a safe camera-device change;
+   - resize the window;
+   - close and reopen the window;
+   - verify restoration after a separately authorized normal quit and relaunch.
+4. **If any beachball occurs, stop interacting and collect three ten-second samples from the verified PID before any termination.** Verify the PID and its path first.
+5. **Recheck production evidence hashes and confirm Take 009 is absent from protected session `41949897-5458-449d-9280-65508a4f6600`.** Unrelated historical Take 009 artifacts exist in other sessions and are not this check.
+6. **Record nothing until the preview gate passes AND Karl separately authorizes recording.** Live-camera and window-restoration hardware acceptance is still PENDING (see the camera checkpoint entry below); passing the preview gate does not by itself authorize a take.
+
+Exact hardware-acceptance prompt for Prompt D, once every precondition above holds, Karl authorizes it and an isolated build exists:
+
+```text
+Open the isolated ScratchLabDesktop build (unique bundle id, own container) on the Rane ONE MKII rig with the paired Watch and camera connected. In the DEBUG Reference Authoring screen:
+
+1. Select Tear, set deck and open end to match the physical wiring, apply the setup, and confirm the saved Ch16 CC8 calibration is adopted automatically with no sweep requested. Do not press Recalibrate.
+2. With the crossfader PARKED OPEN and untouched, record one take of four Tear repetitions. Do not wiggle the fader before or after pressing Record.
+3. While recording, read the line under "YOUR MOTION — LIVE (TEAR STRUCTURE)". Report VERBATIM whether it says the unit is calibrated platter revolutions or this take's own normalised displacement, and whether the chart shows same-direction subdivisions separated by horizontal holds or still alternating diagonals.
+4. Stop and finalize. Under "CANONICAL TEAR STRUCTURE — FINALIZED TAKE", report the "Platter coordinates:" line VERBATIM. It must say normalised and NOT calibrated revolutions. Report whether the live and finalized charts show the same gesture count, the same hold placement and the same direction per gesture.
+5. Report the take's scratchTypeID, the mapped crossfader sample count, whether the sidecar carries a crossfaderTakeStartState with provenance preTakeSnapshot and a NEGATIVE observedTakeRelativeTime, and what approvalBlockReason says about the fader state.
+6. Report the "Advisory auto-detection:" line VERBATIM. On a Tear take it must read LIMITED and must not present Baby Scratch as a mismatch. Confirm the selected technique still reads Tear.
+7. Report the review group headlines and their counts, then open each group and confirm the total gesture count across all groups equals the "gesture" count in the aggregate row, with no gesture missing.
+8. Report every gesture drawn as MOTION UNKNOWN or FADER UNKNOWN and the reason lines given.
+9. Press Save Capture..., save the ZIP, and confirm export succeeded with no repetition selected and approval still blocked.
+
+Do not approve, publish, install, commit or push anything. Report exact numbers and exact strings.
+```
+
+If the parked-fader path yields no `preTakeSnapshot` record, capture the sidecar JSON and its `unknownReason` before changing code: the correlation fails closed and the reason string names which identity did not line up.
+
+---
+
 # Current continuation — Checkpoint Prompt B, then Prompt C (coordinate contract and Review truth)
 
 Prompt B MUST BE CHECKPOINTED FIRST. Its candidate is complete and software-verified in `/Users/karlwatson/Downloads/ScratchLab-TTM-Reconstruct`, branch `feature/ttm-crossfader-takestart-reconstruct`, base `cb4adc5512d1af5fa3f2a95824f10e187f0e6a1e`: nine modified files — the five-file code boundary at +326/−9 plus DEV_LOG.md, AI_HANDOFF.md, AI_HANDOFF/next_prompt.md and TASKS.md. Evidence is 150 focused executions with zero failures, plus macOS build-for-testing, iOS build and macOS build. Do not rerun those gates. Proposed subject: `fix(capture): preserve parked fader state and calibration status`.

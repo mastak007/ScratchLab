@@ -873,6 +873,27 @@ final class ReferenceAuthoringCaptureBridge {
         )
     }
 
+    /// The COMPLETE vocabulary the finalized-take automatic detector can emit.
+    ///
+    /// `MacScratchDetector.process` runs exactly one matcher,
+    /// `matchBabyScratch`, and that matcher hardcodes
+    /// `scratchID: "baby_scratch"` / `scratchName: "Baby Scratch"`. The
+    /// registry in `ScratchClassifying` currently registers only
+    /// `BabyScratchClassifier`. So the detector cannot express Tear, Chirp,
+    /// Transform or Flare AT ALL — a Baby Scratch result against one of those
+    /// selected techniques is the detector's limit, not evidence that the
+    /// operator chose wrongly. Callers must say so rather than render a
+    /// mismatch warning; see
+    /// `ReferenceAuthoringViewModel.advisoryDetectionStatement(for:)`.
+    static let advisoryDetectorVocabulary: Set<ReferenceTechnique> = [.babyScratch]
+
+    /// Whether the advisory detector is even able to agree or disagree about
+    /// `technique`. `false` means any result it produced is uninformative
+    /// about this take.
+    static func advisoryDetectorCanExpress(_ technique: ReferenceTechnique) -> Bool {
+        advisoryDetectorVocabulary.contains(technique)
+    }
+
     /// Advisory-only mapping from what auto-detection believed to
     /// `ReferenceTechnique`. NEVER called anywhere that writes into
     /// `ReferenceAuthoringSession.selectedTechnique` — see the file header.

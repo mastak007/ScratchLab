@@ -789,6 +789,231 @@ final class ReferenceTearSegmentationViewModelTests: XCTestCase {
         await worker.snapshot().session.takes.last!.tearReview
     }
 
+    // MARK: Advisory auto-detection
+
+    private func take(
+        technique: ReferenceTechnique,
+        autoDetected: ReferenceTechnique?
+    ) -> ReferenceAuthoringTake {
+        let metadata = ReferenceTakeMetadata(
+            referenceTakeID: "ref-take-advisory",
+            authoringSessionID: "synthetic-session",
+            takeNumber: 1,
+            operatorName: "Karl",
+            technique: technique,
+            pattern: ReferencePatternIdentity(
+                id: "synthetic-pattern",
+                name: "Synthetic Pattern",
+                phraseBars: 1
+            ),
+            bpm: 95,
+            startingPlatterDirection: .forward,
+            faderVariant: technique == .babyScratch ? .faderOpenThroughout : .crossfader,
+            referenceVersion: 1,
+            crossfaderCalibration: calibration,
+            deviceInfo: ReferenceDeviceInfo(
+                platform: "macOS",
+                appVersion: "1.0.1",
+                controllerName: "Synthetic Controller",
+                controllerIdentifier: "synthetic-controller",
+                audioDeviceName: "Synthetic Audio",
+                videoDeviceName: "Synthetic Camera",
+                watchLinked: true
+            ),
+            recordedAt: Date(timeIntervalSince1970: 1_788_000_500)
+        )
+        let evidence = ReferenceTakeEvidence(
+            metadata: metadata,
+            boundaries: ReferencePhraseBoundaries.nominal(for: metadata),
+            audio: ReferenceArtifactMeasurement(
+                fileName: "synthetic-reference.wav",
+                exists: true,
+                byteCount: 500_000,
+                peakLevel: 0.8,
+                frameCount: 100_000
+            ),
+            video: ReferenceArtifactMeasurement(
+                fileName: "synthetic-reference.mov",
+                exists: true,
+                byteCount: 750_000
+            ),
+            sidecar: ReferenceArtifactMeasurement(
+                fileName: "synthetic-reference.json",
+                exists: true,
+                byteCount: 2_048
+            ),
+            actualMediaFileName: "synthetic-reference.mov",
+            crossfaderRawSamples: [],
+            observedCrossfaderAddress: calibration.address,
+            platterMovementEventCount: twoTearMovementEvents().count,
+            derivation: nil,
+            watchEvidence: .linked(motionFileName: "synthetic-watch-motion.json"),
+            platterMovementEvents: twoTearMovementEvents(),
+            platterEvidenceIntervals: syntheticObservedPlatterStillness(twoTearMovementEvents())
+        )
+        return ReferenceAuthoringTake(
+            evidence: evidence,
+            autoDetectedTechnique: autoDetected,
+            latestValidation: ReferenceValidator.validate(evidence)
+        )
+    }
+
+    /// The audio detector can only ever emit Baby Scratch, so on a
+    /// Tear-selected take its result is a LIMIT, not a contradiction. Showing
+    /// it as a mismatch reads as the operator being corrected by a detector
+    /// that has no Tear vocabulary at all.
+    func testAdvisoryBabyDetectionOnATearTakeIsLabelledLimitedAndIsNotADisagreement() {
+        let tearTake = take(technique: .tear, autoDetected: .babyScratch)
+        let statement = ReferenceAuthoringViewModel.advisoryDetectionStatement(for: tearTake)
+
+        XCTAssertFalse(statement.isDisagreement)
+        XCTAssertTrue(statement.isOutsideDetectorVocabulary)
+        XCTAssertTrue(statement.text.contains("Advisory"))
+        XCTAssertTrue(statement.text.contains("LIMITED"))
+        XCTAssertTrue(statement.text.contains("Baby Scratch"))
+        XCTAssertTrue(statement.text.contains("Tear"))
+        XCTAssertTrue(statement.text.lowercased().contains("never overwrites"))
+
+        // The operator's selection is untouched by the advisory result.
+        XCTAssertEqual(tearTake.evidence.metadata.technique, .tear)
+        XCTAssertEqual(tearTake.autoDetectedTechnique, .babyScratch)
+        XCTAssertFalse(
+            ReferenceAuthoringCaptureBridge.advisoryDetectorCanExpress(.tear),
+            "The shipped detector has no Tear vocabulary."
+        )
+    }
+
+    /// Inside the detector's actual vocabulary, a mismatch is still reported
+    /// as a real disagreement — the limit label must not blanket-excuse it.
+    func testAdvisoryDetectionStaysADisagreementInsideTheDetectorVocabulary() {
+        let agreeing = ReferenceAuthoringViewModel.advisoryDetectionStatement(
+            for: take(technique: .babyScratch, autoDetected: .babyScratch)
+        )
+        XCTAssertFalse(agreeing.isDisagreement)
+        XCTAssertFalse(agreeing.isOutsideDetectorVocabulary)
+        XCTAssertTrue(agreeing.text.contains("agrees"))
+
+        let noResult = ReferenceAuthoringViewModel.advisoryDetectionStatement(
+            for: take(technique: .babyScratch, autoDetected: nil)
+        )
+        XCTAssertFalse(noResult.isDisagreement)
+        XCTAssertTrue(noResult.text.contains("no result"))
+    }
+
+    // MARK: Scalable review presentation
+
+    /// 52 alternating-direction gestures, each its own candidate.
+    private func fiftyTwoGestureReview() -> ReferenceTearSegmentationReview {
+        var events: [CaptureCore.DetectedNotationRecordMovementEvent] = []
+        var time = 0.0
+        for index in 0..<52 {
+            let forward = index.isMultiple(of: 2)
+            events.append(
+                CaptureCore.DetectedNotationRecordMovementEvent(
+                    startTime: time,
+                    endTime: time + 0.40,
+                    startPosition: forward ? 0 : 0.15,
+                    endPosition: forward ? 0.15 : 0,
+                    direction: forward ? "forward" : "backward",
+                    movementKind: forward ? .normalPush : .normalPull,
+                    speed: 0.15 / 0.40,
+                    confidence: 0.9,
+                    source: "controller"
+                )
+            )
+            time += 0.50
+        }
+        return ReferenceTearSegmentationReviewBuilder.build(
+            referenceTakeID: "ref-take-52",
+            movementEvents: events,
+            platterEvidenceIntervals: syntheticObservedPlatterStillness(events),
+            derivation: nil,
+            coordinates: .normalizedTakeLocal()
+        )
+    }
+
+    /// A 52-gesture take must be readable without 52 open cards — by GROUPING
+    /// and lazy disclosure only. No gesture record may be dropped, merged, or
+    /// collapsed into a single confident label, and the raw evidence stays.
+    func testAFiftyTwoGestureReviewIsGroupedWithoutLosingAnyGestureRecord() throws {
+        let review = fiftyTwoGestureReview()
+        XCTAssertEqual(review.candidates.count, 52)
+        XCTAssertEqual(review.rawMovementEvents.count, 52, "Raw evidence is retained verbatim.")
+
+        let groups = ReferenceAuthoringViewModel.tearCandidateGroups(review)
+        let grouped = groups.flatMap(\.candidateIDs)
+
+        // A strict partition: every candidate filed exactly once, none lost.
+        XCTAssertEqual(grouped.count, review.candidates.count)
+        XCTAssertEqual(Set(grouped), Set(review.candidates.map(\.id)))
+        XCTAssertEqual(Set(grouped).count, grouped.count, "No candidate may be filed twice.")
+        XCTAssertEqual(groups.map(\.count).reduce(0, +), 52)
+        XCTAssertTrue(groups.allSatisfy { $0.count > 0 }, "No empty group is rendered.")
+
+        // Grouping asserts nothing about a gesture: the readings are unchanged.
+        XCTAssertEqual(
+            review.candidates.map(\.effectiveClassification),
+            review.candidates.map(\.effectiveClassification)
+        )
+
+        // Lazy disclosure, not truncation: the default view opens only the
+        // groups that need a decision, and each group still lists everything
+        // it holds once opened.
+        let expanded = ReferenceAuthoringViewModel.defaultExpandedTearGroupIDs(review)
+        XCTAssertLessThan(expanded.count, groups.count + 1)
+        let expandedCandidateCount = groups
+            .filter { expanded.contains($0.id) }
+            .map(\.count)
+            .reduce(0, +)
+        XCTAssertLessThan(
+            expandedCandidateCount,
+            52,
+            "A fresh 52-gesture review must not open every gesture card at once."
+        )
+        for group in groups {
+            XCTAssertEqual(
+                group.candidateIDs.compactMap { review.candidate(id: $0) }.count,
+                group.count,
+                "Every grouped ID must still resolve to its retained candidate."
+            )
+        }
+    }
+
+    /// A group is a bucket of IDs, never a verdict. An unknown reading must
+    /// not be filed as, or displayed as, a confident one.
+    func testGroupingNeverTurnsAnUnknownReadingIntoAConfidentLabel() {
+        let review = fiftyTwoGestureReview()
+        let groups = ReferenceAuthoringViewModel.tearCandidateGroups(review)
+        for group in groups {
+            for id in group.candidateIDs {
+                guard let candidate = review.candidate(id: id) else {
+                    return XCTFail("Candidate \(id) was dropped by grouping.")
+                }
+                if candidate.effectiveClassification == .unknown
+                    && !candidate.classificationDisagreesWithBoundaryCount
+                    && !candidate.hasAmbiguousEvidence {
+                    XCTAssertEqual(
+                        group.kind,
+                        .unknownReading,
+                        "An unknown gesture must stay filed as unknown."
+                    )
+                }
+            }
+            XCTAssertFalse(
+                group.headline.contains("tear1") || group.headline.contains("tear2"),
+                "A group headline must not assert a technique reading."
+            )
+        }
+    }
+
+    /// The review must say which unit its platter numbers are in.
+    func testTheReviewStatesItsPlatterCoordinateContract() {
+        let normalized = fiftyTwoGestureReview()
+        let text = ReferenceAuthoringViewModel.tearCoordinateContractText(normalized)
+        XCTAssertTrue(text.contains("not calibrated revolutions"))
+        XCTAssertFalse(text.contains("positions are platter revolutions"))
+    }
+
     // MARK: Concurrency
 
     /// The worker is the session's single owner. Twenty corrections issued

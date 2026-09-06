@@ -1543,6 +1543,379 @@ final class ReferenceTearCanonicalProjectionTests: XCTestCase {
                       "Issues: \(record.motionValidationIssues())")
     }
 
+    // MARK: - Coordinate contract
+
+    /// One decoder run projected the way the LIVE path projects it: raw CC6
+    /// step displacement divided by a stated steps-per-revolution.
+    private func calibratedRun(
+        start: Double,
+        end: Double,
+        direction: String,
+        steps: Double
+    ) -> CaptureCore.DetectedNotationRecordMovementEvent {
+        let signed = direction == "forward" ? steps : -steps
+        let coordinates = PlatterCoordinateSemantics.gestureRelativeNotation(
+            signedDisplacementSteps: signed
+        )
+        return CaptureCore.DetectedNotationRecordMovementEvent(
+            startTime: start,
+            endTime: end,
+            startPosition: coordinates.startPosition,
+            endPosition: coordinates.endPosition,
+            direction: direction,
+            movementKind: direction == "forward" ? .normalPush : .normalPull,
+            speed: steps / max(1e-6, end - start),
+            confidence: 1,
+            source: "controller"
+        )
+    }
+
+    /// The same run as FINALIZATION persists it: `decodePlatterCore`
+    /// span-normalises the integrated position over the take's own range, so
+    /// the endpoints are 0…1 fractions of this take and nothing else.
+    private func normalizedRun(
+        start: Double,
+        end: Double,
+        direction: String,
+        from startPosition: Double,
+        to endPosition: Double
+    ) -> CaptureCore.DetectedNotationRecordMovementEvent {
+        CaptureCore.DetectedNotationRecordMovementEvent(
+            startTime: start,
+            endTime: end,
+            startPosition: startPosition,
+            endPosition: endPosition,
+            direction: direction,
+            movementKind: direction == "forward" ? .normalPush : .normalPull,
+            speed: abs(endPosition - startPosition) / max(1e-6, end - start),
+            confidence: 1,
+            source: "controller"
+        )
+    }
+
+    /// forward 540 steps → bounded hold → forward 360 steps.
+    private var calibratedTearEvents: [CaptureCore.DetectedNotationRecordMovementEvent] {
+        [
+            calibratedRun(start: 0.00, end: 0.20, direction: "forward", steps: 540),
+            calibratedRun(start: 0.40, end: 0.60, direction: "forward", steps: 360)
+        ]
+    }
+
+    /// The identical physical gesture after span normalisation over the take's
+    /// own integrated range (0 → 540 → 900 steps, span 900).
+    private var normalizedTearEvents: [CaptureCore.DetectedNotationRecordMovementEvent] {
+        [
+            normalizedRun(start: 0.00, end: 0.20, direction: "forward", from: 0.0, to: 0.6),
+            normalizedRun(start: 0.40, end: 0.60, direction: "forward", from: 0.6, to: 1.0)
+        ]
+    }
+
+    private func positionTrack(
+        _ projection: ReferenceTearCanonicalProjection
+    ) -> [Double] {
+        projection.records.flatMap { record in
+            record.subdivisions.compactMap(\.measuredCurve).flatMap { $0.points.map(\.position) }
+        }
+    }
+
+    /// Positions rescaled onto their own 0…1 span, which is exactly what the
+    /// renderer's `CanonicalFrame` does at draw time. Two tracks that agree
+    /// here draw the same shape whatever unit each is measured in.
+    private func rescaledToOwnSpan(_ positions: [Double]) -> [Double] {
+        guard let low = positions.min(), let high = positions.max(), high > low else {
+            return positions.map { _ in 0 }
+        }
+        return positions.map { ($0 - low) / (high - low) }
+    }
+
+    /// The audited defect: a finalized take's positions are span-normalised
+    /// over that take's own range, and the projection used to hand them to a
+    /// record whose declared space said "platter revolutions".
+    func testFinalizedNormalizedPositionsAreNeverLabelledPlatterRevolutions() throws {
+        let review = ReferenceTearSegmentationReviewBuilder.build(
+            referenceTakeID: "ref-take-0008",
+            movementEvents: normalizedTearEvents,
+            platterEvidenceIntervals: syntheticObservedPlatterStillness(normalizedTearEvents),
+            derivation: derivation(openFrom: 0, to: 0.60),
+            coordinates: .normalizedTakeLocal()
+        )
+        let projection = ReferenceTearCanonicalProjectionBuilder.project(review)
+
+        XCTAssertEqual(projection.coordinateSpace, .normalizedTakeLocalDisplacement)
+        XCTAssertNotEqual(projection.coordinateSpace, .platterRevolutions)
+        XCTAssertTrue(
+            projection.records.allSatisfy { $0.coordinateSpace == .normalizedTakeLocalDisplacement },
+            "Every record must carry the space its positions are actually in."
+        )
+        XCTAssertTrue(projection.reasons.contains(.gestureLocalNormalizedDisplacement))
+        XCTAssertFalse(
+            projection.reasons.contains(.gestureLocalPlatterRevolutions),
+            "An uncalibrated take must not state a revolution unit."
+        )
+        // Uncertainty stays stated, not silently dropped.
+        XCTAssertTrue(review.reasons.contains(.uncalibratedPlatterCoordinates))
+        // The structure itself is unaffected: this is a units repair, not a
+        // segmentation change.
+        let record = try XCTUnwrap(projection.records.first)
+        XCTAssertEqual(record.subdivisions.count, 2)
+        XCTAssertEqual(record.internalHolds.count, 1)
+        XCTAssertEqual(record.tearLabel, "tear1")
+    }
+
+    func testCalibratedInputIsProjectedAsPlatterRevolutionsAndStatesItsReference() throws {
+        let coordinates = CaptureCore.PlatterNotationCoordinates.raneOneMKIIDirectMIDI()
+        XCTAssertTrue(coordinates.isCalibrated)
+        let review = ReferenceTearSegmentationReviewBuilder.build(
+            referenceTakeID: "live-preview",
+            movementEvents: calibratedTearEvents,
+            platterEvidenceIntervals: syntheticObservedPlatterStillness(calibratedTearEvents),
+            derivation: nil,
+            coordinates: coordinates
+        )
+        let projection = ReferenceTearCanonicalProjectionBuilder.project(review)
+
+        XCTAssertEqual(projection.coordinateSpace, .platterRevolutions)
+        XCTAssertTrue(projection.reasons.contains(.gestureLocalPlatterRevolutions))
+        XCTAssertFalse(projection.reasons.contains(.gestureLocalNormalizedDisplacement))
+        XCTAssertFalse(
+            review.reasons.contains(.uncalibratedPlatterCoordinates),
+            "A calibrated basis must not also claim its coordinates are uncalibrated."
+        )
+        XCTAssertTrue(
+            review.platterCoordinates.reference.contains("3600.0")
+                || review.platterCoordinates.reference.contains("steps per revolution"),
+            "The calibration reference must be stated: \(review.platterCoordinates.reference)"
+        )
+        // 540 steps / 3600 steps-per-revolution = 0.15 revolutions.
+        let hold = try XCTUnwrap(projection.records.first?.internalHolds.first?.position)
+        XCTAssertEqual(hold, 0.15, accuracy: 1e-9)
+    }
+
+    /// A calibration is never invented. An unusable steps-per-revolution must
+    /// fail CLOSED to the take-local basis with the reason stated, never to a
+    /// silent revolution claim.
+    func testARevolutionClaimCannotBeMadeWithoutAUsableReference() {
+        XCTAssertNil(
+            CaptureCore.PlatterNotationCoordinates.calibratedRevolutions(
+                stepsPerRevolution: 0,
+                reference: "anything"
+            )
+        )
+        XCTAssertNil(
+            CaptureCore.PlatterNotationCoordinates.calibratedRevolutions(
+                stepsPerRevolution: .nan,
+                reference: "anything"
+            )
+        )
+        XCTAssertNil(
+            CaptureCore.PlatterNotationCoordinates.calibratedRevolutions(
+                stepsPerRevolution: 3600,
+                reference: "   "
+            )
+        )
+        let failedClosed = CaptureCore.PlatterNotationCoordinates
+            .raneOneMKIIDirectMIDI(stepsPerRevolution: 0)
+        XCTAssertFalse(failedClosed.isCalibrated)
+        XCTAssertEqual(failedClosed.coordinateSpace, .normalizedTakeLocalDisplacement)
+        XCTAssertTrue(failedClosed.reference.contains("cannot"))
+    }
+
+    /// Live (calibrated revolutions) and finalized (take-local normalized) are
+    /// the SAME physical gesture measured in two different units. They must
+    /// agree on time, grid, direction and hold structure, and must draw the
+    /// same shape once each is rescaled onto its own span — which is exactly
+    /// what `CanonicalFrame` does. Neither may borrow the other's unit label.
+    func testLiveAndFinalizedRenderEquivalentFixturesOnTheSameTimeGridAndDirection() throws {
+        let live = ReferenceTearCanonicalProjectionBuilder.project(
+            movementEvents: calibratedTearEvents,
+            platterEvidenceIntervals: syntheticObservedPlatterStillness(calibratedTearEvents),
+            derivation: nil,
+            referenceTakeID: "live-preview",
+            coordinates: .raneOneMKIIDirectMIDI()
+        )
+        let finalizedReview = ReferenceTearSegmentationReviewBuilder.build(
+            referenceTakeID: "ref-take-0008",
+            movementEvents: normalizedTearEvents,
+            platterEvidenceIntervals: syntheticObservedPlatterStillness(normalizedTearEvents),
+            derivation: derivation(openFrom: 0, to: 0.60),
+            coordinates: .normalizedTakeLocal()
+        )
+        let finalized = ReferenceTearCanonicalProjectionBuilder.project(finalizedReview)
+
+        // Each states its own true unit — and they are different units.
+        XCTAssertEqual(live.coordinateSpace, .platterRevolutions)
+        XCTAssertEqual(finalized.coordinateSpace, .normalizedTakeLocalDisplacement)
+
+        // Same time grid.
+        XCTAssertEqual(live.timeRange, finalized.timeRange)
+        XCTAssertEqual(live.records.count, finalized.records.count)
+        for (liveRecord, finalRecord) in zip(live.records, finalized.records) {
+            XCTAssertEqual(liveRecord.direction, finalRecord.direction)
+            XCTAssertEqual(liveRecord.timingDomain, finalRecord.timingDomain)
+            XCTAssertEqual(liveRecord.subdivisions.map(\.span), finalRecord.subdivisions.map(\.span))
+            XCTAssertEqual(liveRecord.internalHolds.map(\.span), finalRecord.internalHolds.map(\.span))
+            XCTAssertEqual(liveRecord.tearLabel, finalRecord.tearLabel)
+        }
+
+        // Same drawn shape, in each one's own declared unit.
+        let liveTrack = rescaledToOwnSpan(positionTrack(live))
+        let finalizedTrack = rescaledToOwnSpan(positionTrack(finalized))
+        XCTAssertEqual(liveTrack.count, finalizedTrack.count)
+        for (a, b) in zip(liveTrack, finalizedTrack) {
+            XCTAssertEqual(a, b, accuracy: 1e-9)
+        }
+        // The raw magnitudes really are different, so the agreement above is
+        // not an accident of identical fixtures.
+        XCTAssertNotEqual(
+            try XCTUnwrap(live.records.first?.internalHolds.first?.position),
+            try XCTUnwrap(finalized.records.first?.internalHolds.first?.position)
+        )
+    }
+
+    /// A record whose declared space differs from the frame's is drawn as
+    /// explicit MOTION UNKNOWN through the SHARED renderer — the units repair
+    /// cannot silently mix two coordinates into one curve.
+    func testAMismatchedCoordinateSpaceRendersAsUnknownThroughTheSharedGeometry() throws {
+        let projection = ReferenceTearCanonicalProjectionBuilder.project(
+            movementEvents: normalizedTearEvents,
+            platterEvidenceIntervals: syntheticObservedPlatterStillness(normalizedTearEvents),
+            derivation: derivation(openFrom: 0, to: 0.60),
+            referenceTakeID: "ref-take-0008",
+            coordinates: .normalizedTakeLocal()
+        )
+        let matching = try XCTUnwrap(
+            ScratchStrokeGeometry.CanonicalFrame(
+                timeRange: 0...0.60,
+                positionRange: try XCTUnwrap(projection.positionRange),
+                coordinateSpace: projection.coordinateSpace,
+                beatsPerMinute: 95
+            )
+        )
+        XCTAssertTrue(
+            ScratchStrokeGeometry.canonicalGeometry(
+                records: projection.records, layer: .performance, frame: matching
+            ).missingMotion.isEmpty
+        )
+
+        let mismatched = try XCTUnwrap(
+            ScratchStrokeGeometry.CanonicalFrame(
+                timeRange: 0...0.60,
+                positionRange: try XCTUnwrap(projection.positionRange),
+                coordinateSpace: .platterRevolutions,
+                beatsPerMinute: 95
+            )
+        )
+        let geometry = ScratchStrokeGeometry.canonicalGeometry(
+            records: projection.records, layer: .performance, frame: mismatched
+        )
+        XCTAssertFalse(
+            geometry.missingMotion.isEmpty,
+            "Normalized records placed on a revolutions frame must read UNKNOWN."
+        )
+        XCTAssertTrue(
+            geometry.motion.segments.filter(\.isHold).isEmpty,
+            "An unknown region must never acquire a horizontal tear hold."
+        )
+    }
+
+    /// Curve samples that contradict the gesture's direction stay UNKNOWN.
+    /// They are never flattened into a horizontal hold to make the tear
+    /// structure look clean.
+    func testAContraryDirectionCurveStaysUnknownAndManufacturesNoHold() throws {
+        let projection = ReferenceTearCanonicalProjectionBuilder.project(
+            movementEvents: normalizedTearEvents,
+            platterEvidenceIntervals: syntheticObservedPlatterStillness(normalizedTearEvents),
+            derivation: derivation(openFrom: 0, to: 0.60),
+            referenceTakeID: "ref-take-0008",
+            coordinates: .normalizedTakeLocal()
+        )
+        let original = try XCTUnwrap(projection.records.first)
+        let evidence = ScratchNotation.GestureRecord.Evidence(
+            provenance: .measured,
+            observation: ScratchNotationEvidence(
+                source: .platterTimeline,
+                confidence: 1,
+                reason: "contrary_direction_fixture",
+                rawSampleCount: 2
+            )
+        )
+        // A FORWARD gesture whose first subdivision actually travels backward.
+        let contrary = ScratchNotation.GestureRecord(
+            id: original.id,
+            direction: .forward,
+            timingDomain: .seconds,
+            coordinateSpace: original.coordinateSpace,
+            evidence: original.evidence,
+            subdivisions: [
+                ScratchNotation.GestureRecord.Subdivision(
+                    id: "\(original.id)#contrary",
+                    span: .init(startTime: 0.0, endTime: 0.20),
+                    evidence: evidence,
+                    measuredCurve: ScratchNotation.GestureRecord.MotionCurve(
+                        points: [
+                            .init(time: 0.00, position: 0.6),
+                            .init(time: 0.20, position: 0.0)
+                        ],
+                        evidence: evidence
+                    )
+                )
+            ],
+            internalHolds: [],
+            faderTransitions: original.faderTransitions,
+            faderIntervals: original.faderIntervals
+        )
+        let frame = try XCTUnwrap(
+            ScratchStrokeGeometry.CanonicalFrame(
+                timeRange: 0...0.60,
+                positionRange: 0...1,
+                coordinateSpace: original.coordinateSpace,
+                beatsPerMinute: 95
+            )
+        )
+        let geometry = ScratchStrokeGeometry.canonicalGeometry(
+            records: [contrary], layer: .performance, frame: frame
+        )
+        XCTAssertFalse(geometry.missingMotion.isEmpty, "A contrary curve must read UNKNOWN.")
+        XCTAssertTrue(
+            geometry.motion.segments.filter(\.isHold).isEmpty,
+            "No horizontal hold may be manufactured from contrary evidence."
+        )
+    }
+
+    /// The finalized boundary must DECLARE its unit at the source, not leave
+    /// it to be inferred, and the projection must no longer carry a hardcoded
+    /// coordinate-space constant.
+    func testTheCoordinateContractIsDeclaredAtItsSourceBoundaries() throws {
+        let referenceTake = try String(
+            contentsOf: URL(fileURLWithPath: #filePath)
+                .deletingLastPathComponent()
+                .deletingLastPathComponent()
+                .appendingPathComponent("ScratchLab/Models/Reference/ReferenceTake.swift"),
+            encoding: .utf8
+        )
+        XCTAssertTrue(
+            referenceTake.contains("coordinates: .normalizedTakeLocal()"),
+            "build(for: evidence) must state that persisted positions are take-local."
+        )
+        XCTAssertFalse(
+            referenceTake.contains(
+                "static let coordinateSpace: ScratchNotation.GestureRecord.CoordinateSpace = .platterRevolutions"
+            ),
+            "The projection must not hardcode a coordinate space."
+        )
+        let captureCore = try String(
+            contentsOf: URL(fileURLWithPath: #filePath)
+                .deletingLastPathComponent()
+                .deletingLastPathComponent()
+                .appendingPathComponent("ScratchLab/Models/CaptureCore.swift"),
+            encoding: .utf8
+        )
+        XCTAssertTrue(
+            captureCore.contains("case normalizedTakeLocalDisplacement"),
+            "The normalized take-local space must exist as a named coordinate."
+        )
+    }
+
     func testAHoldRenamedAFaderClickStopsCountingWithoutDeletingAnything() throws {
         var review = ReferenceTearSegmentationReviewBuilder.build(
             referenceTakeID: "synthetic-tear",

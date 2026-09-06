@@ -1237,6 +1237,187 @@ final class ReferenceAuthoringViewModel: ObservableObject {
         return parts.joined(separator: " · ")
     }
 
+    // MARK: Scalable tear review presentation
+
+    /// One bucket of gesture candidates in the review list.
+    ///
+    /// Grouping is PRESENTATION ONLY. It reorders nothing inside a bucket,
+    /// deletes no candidate, merges no evidence, and asserts no classification:
+    /// each bucket carries the candidate IDs it contains, and
+    /// `tearCandidateGroups` is a strict partition of `review.candidates`, so a
+    /// 52-gesture take stays fully inspectable without 52 open cards.
+    struct TearCandidateGroup: Equatable, Sendable, Identifiable {
+        enum Kind: String, Equatable, Sendable, CaseIterable {
+            /// The reading in force contradicts the surviving hold count.
+            case disagreeing
+            /// At least one surviving boundary is marked ambiguous evidence.
+            case ambiguousEvidence
+            /// The reading in force is `unknown` — nothing is asserted.
+            case unknownReading
+            /// Proposed automatically, still awaiting an operator reading.
+            case awaitingOperatorReading
+            /// The operator has given this gesture a reading.
+            case operatorReviewed
+
+            var title: String {
+                switch self {
+                case .disagreeing: return "Reading disagrees with boundaries"
+                case .ambiguousEvidence: return "Ambiguous evidence"
+                case .unknownReading: return "Unknown — nothing asserted"
+                case .awaitingOperatorReading: return "Awaiting an operator reading"
+                case .operatorReviewed: return "Operator reviewed"
+                }
+            }
+
+            /// Whether this bucket is expanded by default. Only the buckets
+            /// that need a decision open themselves; everything else stays one
+            /// click away and nothing is hidden.
+            var isExpandedByDefault: Bool {
+                switch self {
+                case .disagreeing, .ambiguousEvidence: return true
+                case .unknownReading, .awaitingOperatorReading, .operatorReviewed: return false
+                }
+            }
+        }
+
+        let kind: Kind
+        /// In review order. Never deduplicated across groups: a candidate
+        /// appears in exactly one.
+        let candidateIDs: [String]
+
+        var id: String { kind.rawValue }
+        var count: Int { candidateIDs.count }
+        var headline: String { "\(kind.title) · \(count)" }
+    }
+
+    /// A strict partition of `review.candidates`, in bucket order, omitting
+    /// empty buckets.
+    ///
+    /// First matching rule wins, so the most decision-worthy statement about a
+    /// gesture is the one that files it. Every candidate is filed exactly once
+    /// and none is dropped — `tearCandidateGroups(review).flatMap(\.candidateIDs)`
+    /// is a permutation of `review.candidates.map(\.id)`.
+    static func tearCandidateGroups(
+        _ review: ReferenceTearSegmentationReview
+    ) -> [TearCandidateGroup] {
+        var buckets: [TearCandidateGroup.Kind: [String]] = [:]
+        for candidate in review.candidates {
+            let kind: TearCandidateGroup.Kind
+            if candidate.classificationDisagreesWithBoundaryCount {
+                kind = .disagreeing
+            } else if candidate.hasAmbiguousEvidence {
+                kind = .ambiguousEvidence
+            } else if candidate.effectiveClassification == .unknown {
+                kind = .unknownReading
+            } else if !candidate.isManuallyClassified {
+                kind = .awaitingOperatorReading
+            } else {
+                kind = .operatorReviewed
+            }
+            buckets[kind, default: []].append(candidate.id)
+        }
+        return TearCandidateGroup.Kind.allCases.compactMap { kind in
+            guard let ids = buckets[kind], !ids.isEmpty else { return nil }
+            return TearCandidateGroup(kind: kind, candidateIDs: ids)
+        }
+    }
+
+    /// The group IDs a freshly-opened review expands, so a long take does not
+    /// render every gesture card at once. Disclosure only: collapsed groups
+    /// keep their full candidate lists and one click restores them.
+    static func defaultExpandedTearGroupIDs(
+        _ review: ReferenceTearSegmentationReview
+    ) -> Set<String> {
+        Set(
+            tearCandidateGroups(review)
+                .filter(\.kind.isExpandedByDefault)
+                .map(\.id)
+        )
+    }
+
+    /// One line naming the unit the review's platter positions are in, so the
+    /// operator is never left to guess whether a number is a revolution.
+    static func tearCoordinateContractText(
+        _ review: ReferenceTearSegmentationReview
+    ) -> String {
+        "Platter coordinates: \(review.platterCoordinates.detail)."
+    }
+
+    // MARK: Advisory auto-detection
+
+    /// What the take's automatic audio detection may be read as, and whether
+    /// it is a genuine disagreement with the operator's selected technique.
+    ///
+    /// The detector is limited to Baby Scratch
+    /// (`ReferenceAuthoringCaptureBridge.advisoryDetectorVocabulary`). Showing
+    /// "Baby Scratch (does not match CXL selection)" on a Tear take reads as
+    /// the operator being contradicted, when in fact the detector has no Tear
+    /// vocabulary and cannot speak to the take at all. It never writes into
+    /// `evidence.metadata.technique` in either case: `autoDetectedTechnique`
+    /// is a `let` on `ReferenceAuthoringTake` with no writer anywhere.
+    struct AdvisoryDetectionStatement: Equatable, Sendable {
+        let text: String
+        /// `true` ONLY when the detector could have expressed the selected
+        /// technique and said something else. A limited detector is never a
+        /// disagreement.
+        let isDisagreement: Bool
+        /// `true` when the detector cannot express the selected technique, so
+        /// its result is uninformative about this take.
+        let isOutsideDetectorVocabulary: Bool
+    }
+
+    static func advisoryDetectionStatement(
+        for take: ReferenceAuthoringTake
+    ) -> AdvisoryDetectionStatement {
+        let selected = take.evidence.metadata.technique
+        let canExpressSelection = ReferenceAuthoringCaptureBridge
+            .advisoryDetectorCanExpress(selected)
+        let vocabulary = ReferenceAuthoringCaptureBridge.advisoryDetectorVocabulary
+            .map(\.displayName)
+            .sorted()
+            .joined(separator: ", ")
+
+        guard let detected = take.autoDetectedTechnique else {
+            let limit = canExpressSelection
+                ? ""
+                : " The automatic audio detector recognises \(vocabulary) only, so it "
+                    + "cannot confirm or contradict \(selected.displayName)."
+            return AdvisoryDetectionStatement(
+                text: "Advisory auto-detection: no result." + limit,
+                isDisagreement: false,
+                isOutsideDetectorVocabulary: !canExpressSelection
+            )
+        }
+
+        if detected == selected {
+            return AdvisoryDetectionStatement(
+                text: "Advisory auto-detection: \(detected.displayName) — agrees with the "
+                    + "selected technique. Advisory only; the selected technique stands.",
+                isDisagreement: false,
+                isOutsideDetectorVocabulary: false
+            )
+        }
+
+        if !canExpressSelection {
+            return AdvisoryDetectionStatement(
+                text: "Advisory auto-detection: \(detected.displayName) — LIMITED. The "
+                    + "automatic audio detector recognises \(vocabulary) only, so it cannot "
+                    + "confirm or contradict \(selected.displayName). This is not a "
+                    + "disagreement, and it never overwrites the selected technique.",
+                isDisagreement: false,
+                isOutsideDetectorVocabulary: true
+            )
+        }
+
+        return AdvisoryDetectionStatement(
+            text: "Advisory auto-detection: \(detected.displayName) — does not match the "
+                + "selected \(selected.displayName). Advisory only; the selected technique "
+                + "stands and is never overwritten.",
+            isDisagreement: true,
+            isOutsideDetectorVocabulary: false
+        )
+    }
+
     static func tearCandidateHeadline(_ candidate: ReferenceTearCandidate) -> String {
         var text = "Gesture \(candidate.gestureIndex + 1) · \(candidate.direction.rawValue)"
         text += " · proposed \(candidate.proposedClassification.displayName)"

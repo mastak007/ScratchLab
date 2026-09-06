@@ -22,6 +22,9 @@ struct ReferenceAuthoringView: View {
     /// one is ever expanded, and none by default, so a noisy take never
     /// renders dozens of open cards.
     @State private var selectedTearCandidateID: String?
+    /// Which review groups are open. `nil` until the first review is shown, so
+    /// the default set can be derived from that review's own groups.
+    @State private var expandedTearGroupIDs: Set<String>?
     /// The EXISTING session-archive pipeline, reused verbatim for the raw
     /// diagnostic export. This screen adds no second archive format.
     @StateObject private var exportCoordinator = SessionExportCoordinator()
@@ -222,7 +225,8 @@ struct ReferenceAuthoringView: View {
                     canonicalTearChart(
                         title: "YOUR MOTION — LIVE (TEAR STRUCTURE)",
                         projection: ReferenceTearCanonicalProjectionBuilder.project(
-                            movementEvents: liveNotationTracker.renderedEvents
+                            movementEvents: liveNotationTracker.renderedEvents,
+                            coordinates: liveNotationTracker.platterCoordinates
                         ),
                         emptyMessage: "Waiting for tear motion…"
                     )
@@ -589,13 +593,14 @@ struct ReferenceAuthoringView: View {
                 VStack(alignment: .leading, spacing: 12) {
                     evidenceSummary(take)
 
-                    if let detected = take.autoDetectedTechnique {
-                        Text("Advisory auto-detection: \(detected.displayName)\(take.autoDetectionDisagreesWithSelection ? " (does not match CXL selection)" : "")")
-                        .foregroundStyle(take.autoDetectionDisagreesWithSelection ? Color.orange : Color.secondary)
-                    } else {
-                        Text("Advisory auto-detection: no result")
-                            .foregroundStyle(.secondary)
-                    }
+                    // The detector is limited to Baby Scratch, so on a Tear
+                    // take a "does not match" warning would read as the
+                    // operator being contradicted by something that has no
+                    // Tear vocabulary at all. State the limit instead.
+                    let advisory = ReferenceAuthoringViewModel
+                        .advisoryDetectionStatement(for: take)
+                    Text(advisory.text)
+                        .foregroundStyle(advisory.isDisagreement ? Color.orange : Color.secondary)
 
                     Divider()
                     Text("Validation findings").font(.headline)
@@ -749,8 +754,23 @@ struct ReferenceAuthoringView: View {
                     .font(.callout)
                     .foregroundStyle(.secondary)
             } else {
-                ForEach(review.candidates) { candidate in
-                    tearCandidateCard(candidate, review: review)
+                // Grouped disclosure, not truncation: every candidate is filed
+                // in exactly one group and every group lists all of its
+                // gestures once opened. Nothing is deleted, merged, or
+                // relabelled to shorten the list.
+                ForEach(ReferenceAuthoringViewModel.tearCandidateGroups(review)) { group in
+                    DisclosureGroup(isExpanded: tearGroupExpandedBinding(for: group, review: review)) {
+                        VStack(alignment: .leading, spacing: 6) {
+                            ForEach(group.candidateIDs, id: \.self) { candidateID in
+                                if let candidate = review.candidate(id: candidateID) {
+                                    tearCandidateCard(candidate, review: review)
+                                }
+                            }
+                        }
+                    } label: {
+                        Text(group.headline)
+                            .font(.callout.weight(.semibold))
+                    }
                 }
             }
 
@@ -820,6 +840,25 @@ struct ReferenceAuthoringView: View {
         }
     }
 
+    private func tearGroupExpandedBinding(
+        for group: ReferenceAuthoringViewModel.TearCandidateGroup,
+        review: ReferenceTearSegmentationReview
+    ) -> Binding<Bool> {
+        Binding(
+            get: {
+                (expandedTearGroupIDs
+                    ?? ReferenceAuthoringViewModel.defaultExpandedTearGroupIDs(review))
+                    .contains(group.id)
+            },
+            set: { isExpanded in
+                var ids = expandedTearGroupIDs
+                    ?? ReferenceAuthoringViewModel.defaultExpandedTearGroupIDs(review)
+                if isExpanded { ids.insert(group.id) } else { ids.remove(group.id) }
+                expandedTearGroupIDs = ids
+            }
+        )
+    }
+
     private func tearCandidateExpandedBinding(
         for candidate: ReferenceTearCandidate
     ) -> Binding<Bool> {
@@ -836,6 +875,7 @@ struct ReferenceAuthoringView: View {
     /// (drawn separately by `tearOverviewChart`).
     private func tearEvidenceSummary(_ review: ReferenceTearSegmentationReview) -> some View {
         VStack(alignment: .leading, spacing: 3) {
+            Text(ReferenceAuthoringViewModel.tearCoordinateContractText(review))
             Text("Raw platter movement events: \(review.rawMovementEvents.count)")
             Text("Derived intervals: \(review.travelIntervals.count) travel · \(review.stationaryIntervals.count) stationary · \(review.reversals.count) direction reversal\(review.reversals.count == 1 ? "" : "s")")
             Text("Fader evidence: \(review.faderIntervals.count) state interval\(review.faderIntervals.count == 1 ? "" : "s") · \(review.faderClicks.count) click\(review.faderClicks.count == 1 ? "" : "s")")

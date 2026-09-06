@@ -742,6 +742,15 @@ final class LivePerformedNotationTrackerTests: XCTestCase {
             source.contains("ReferenceTearCanonicalProjectionBuilder.project(review)"),
             "the finalized review must project through the same builder"
         )
+        // The live boundary must also DECLARE which coordinate its positions
+        // are in. Without this the projection falls back to the non-claiming
+        // take-local basis and the live chart silently stops saying
+        // "revolutions" even though the decoder really did divide by
+        // steps-per-revolution.
+        XCTAssertTrue(
+            source.contains("coordinates: liveNotationTracker.platterCoordinates"),
+            "the live preview must state its platter coordinate basis"
+        )
     }
 
     /// The card this slice wires up is the one that renders through the
