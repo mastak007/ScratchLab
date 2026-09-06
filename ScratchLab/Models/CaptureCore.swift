@@ -11502,6 +11502,57 @@ enum CaptureCore {
     /// Stage-by-stage counts of a platter telemetry decode, so the exact
     /// pipeline reduction (filtered → raw runs → noise-filtered → normalized)
     /// is observable and testable rather than a black box.
+    /// A derived view over raw packet indices; never written back into raw MIDI
+    /// or the persisted/exported movement event schema.
+    struct PlatterEvidenceInterval: Equatable, Sendable {
+        enum Kind: String, Equatable, Sendable {
+            case observedStillness, packetGap, clockDiscontinuity
+            case discardedMotion, insufficientSampling, unknown
+        }
+        enum Stage: String, Equatable, Sendable { case decoder, normalization }
+        let startTime: Double
+        let endTime: Double
+        let kind: Kind
+        var stage: Stage = .decoder
+        var firstPacketIndex: Int? = nil
+        var lastPacketIndex: Int? = nil
+        var signedSteps: Double? = nil
+    }
+
+    struct PlatterMotionEvidence: Equatable, Sendable {
+        let events: [DetectedNotationRecordMovementEvent]
+        let intervals: [PlatterEvidenceInterval]
+
+        /// Retain every decoded run omitted by a later filter. A retained
+        /// endpoint-only event cannot prove stillness in the omitted region.
+        func retaining(normalizedEvents: [DetectedNotationRecordMovementEvent]) -> Self {
+            let discarded = events.filter { event in
+                !normalizedEvents.contains {
+                    $0.direction == event.direction && $0.startTime <= event.startTime + 1e-9
+                        && $0.endTime >= event.endTime - 1e-9
+                }
+            }.map {
+                PlatterEvidenceInterval(startTime: $0.startTime, endTime: $0.endTime,
+                                        kind: .discardedMotion, stage: .normalization)
+            }
+            return Self(events: normalizedEvents, intervals: intervals + discarded)
+        }
+    }
+
+    static func derivePlatterMotionEvidence(
+        from mixerMidiEvents: [RawMixerMIDIEvent],
+        controller: Int = 6, channel: Int? = 1, deviceName: String? = nil,
+        ringModulus: Int = 128, minRunDuration: Double = 0.08,
+        minRunSteps: Int = 8, maxEventGap: Double = 0.10
+    ) -> PlatterMotionEvidence {
+        let core = decodePlatterCore(
+            from: mixerMidiEvents, controller: controller, channel: channel,
+            deviceName: deviceName, ringModulus: ringModulus,
+            minRunDuration: minRunDuration, minRunSteps: minRunSteps,
+            maxEventGap: maxEventGap)
+        return PlatterMotionEvidence(events: core.events, intervals: core.intervals)
+    }
+
     struct PlatterDecodeDiagnostics: Equatable {
         /// CC6 events that matched controller/channel/device filters.
         let filteredEventCount: Int
@@ -11630,71 +11681,109 @@ enum CaptureCore {
         minRunSteps: Int,
         maxEventGap: Double,
         forceCloseTrailingRun: Bool = true
-    ) -> (events: [DetectedNotationRecordMovementEvent], diagnostics: PlatterDecodeDiagnostics, trailingRun: TrailingPlatterRun?) {
-        let events = mixerMidiEvents
-            .filter {
-                $0.controller == controller
-                    && (channel == nil || $0.channel == channel)
-                    && (deviceName == nil || $0.deviceName == deviceName)
-            }
-            .sorted { $0.takeRelativeTime < $1.takeRelativeTime }
+    ) -> (events: [DetectedNotationRecordMovementEvent], diagnostics: PlatterDecodeDiagnostics,
+          trailingRun: TrailingPlatterRun?, intervals: [PlatterEvidenceInterval]) {
+        // Preserve receive order. Sorting by time hides clock regressions.
+        let selected = mixerMidiEvents.enumerated().filter {
+            $0.element.controller == controller
+                && (channel == nil || $0.element.channel == channel)
+                && (deviceName == nil || $0.element.deviceName == deviceName)
+        }
+        let events = selected.map(\.element)
         let filteredEventCount = events.count
-        guard events.count >= 2 else {
-            return ([], PlatterDecodeDiagnostics(
-                filteredEventCount: filteredEventCount, rawRunCount: 0,
-                noiseFilteredRunCount: 0), nil)
+        var intervals: [PlatterEvidenceInterval] = []
+        func interval(_ first: Int, _ last: Int, _ kind: PlatterEvidenceInterval.Kind,
+                      steps: Double? = nil) -> PlatterEvidenceInterval {
+            let a = events[first].takeRelativeTime
+            let b = events[last].takeRelativeTime
+            return PlatterEvidenceInterval(
+                startTime: a.isFinite ? min(a, b.isFinite ? b : a) : (b.isFinite ? b : 0),
+                endTime: b.isFinite ? max(a.isFinite ? a : b, b) : (a.isFinite ? a : 0),
+                kind: kind, firstPacketIndex: selected[first].offset,
+                lastPacketIndex: selected[last].offset, signedSteps: steps)
+        }
+        guard events.count >= 2, ringModulus > 1 else {
+            let time = events.first?.takeRelativeTime ?? 0
+            intervals.append(PlatterEvidenceInterval(
+                startTime: time.isFinite ? time : 0, endTime: time.isFinite ? time : 0,
+                kind: .insufficientSampling, firstPacketIndex: selected.first?.offset,
+                lastPacketIndex: selected.last?.offset))
+            return ([], PlatterDecodeDiagnostics(filteredEventCount: filteredEventCount,
+                    rawRunCount: 0, noiseFilteredRunCount: 0), nil, intervals)
         }
 
+        // An unspecified source must still resolve uniquely. Mixed sources
+        // cannot establish stillness or a shared ring-counter baseline.
+        if Set(events.map { "\($0.deviceName)/\($0.channel)" }).count != 1 {
+            let times = events.map(\.takeRelativeTime).filter(\.isFinite)
+            intervals.append(PlatterEvidenceInterval(startTime: times.min() ?? 0,
+                endTime: times.max() ?? 0, kind: .unknown))
+            return ([], PlatterDecodeDiagnostics(filteredEventCount: filteredEventCount,
+                rawRunCount: 0, noiseFilteredRunCount: 0), nil, intervals)
+        }
         let half = ringModulus / 2
-
-        // 1. Unwrap modular signed deltas and integrate a cumulative position
-        //    (steps). positions[i] = cumulative steps at event i.
-        var cumulative = 0
-        var positions: [Double] = [0]
-        var deltas: [Int] = []
-        deltas.reserveCapacity(events.count - 1)
-        for i in 1..<events.count {
-            var delta = events[i].value - events[i - 1].value
-            if delta > half { delta -= ringModulus }
-            else if delta < -half { delta += ringModulus }
-            cumulative += delta
-            deltas.append(delta)
-            positions.append(Double(cumulative))
-        }
-
-        // 2. Segment deltas into same-sign runs. A zero delta is ignored; a gap
-        //    larger than maxEventGap, or a sign flip, closes the current run.
+        var positions = [Double](repeating: 0, count: events.count)
         struct Run { let startIdx: Int; let endIdx: Int }
         var runs: [Run] = []
         var runSign = 0
         var runStart = 0
-        for i in 0..<deltas.count {
-            let sign = deltas[i] > 0 ? 1 : (deltas[i] < 0 ? -1 : 0)
-            if sign == 0 { continue }
-            let gap = events[i + 1].takeRelativeTime - events[i].takeRelativeTime
-            let breaksRun = gap > maxEventGap || (runSign != 0 && sign != runSign)
-            if runSign != 0 && breaksRun {
-                runs.append(Run(startIdx: runStart, endIdx: i))
-                runStart = i
-                runSign = sign
+        var stillStart: Int?
+        func finishStillness(at end: Int) {
+            guard let start = stillStart else { return }
+            intervals.append(interval(start, end,
+                end - start >= 2 ? .observedStillness : .insufficientSampling, steps: 0))
+            stillStart = nil
+        }
+        for i in 0..<(events.count - 1) {
+            positions[i + 1] = positions[i]
+            let a = events[i]
+            let b = events[i + 1]
+            let gap = b.takeRelativeTime - a.takeRelativeTime
+            let clockGap = b.timestamp - a.timestamp
+            let invalidClock = !gap.isFinite || !clockGap.isFinite || gap < 0 || clockGap < 0
+                || abs(gap - clockGap) > maxEventGap
+            let sourceChanged = a.deviceName != b.deviceName || a.channel != b.channel
+            let invalidCounter = !(0..<ringModulus).contains(a.value)
+                || !(0..<ringModulus).contains(b.value)
+            var delta = b.value - a.value
+            if delta > half { delta -= ringModulus }
+            else if delta < -half { delta += ringModulus }
+            let ambiguousDelta = abs(delta) == half
+            if invalidClock || sourceChanged || invalidCounter || ambiguousDelta
+                || gap > maxEventGap || gap == 0 {
+                if runSign != 0 { runs.append(Run(startIdx: runStart, endIdx: i)) }
+                runSign = 0
+                finishStillness(at: i)
+                let kind: PlatterEvidenceInterval.Kind = invalidClock ? .clockDiscontinuity
+                    : (sourceChanged || invalidCounter || ambiguousDelta) ? .unknown
+                    : gap == 0 ? .insufficientSampling : .packetGap
+                intervals.append(interval(i, i + 1, kind))
+                // No displacement can be timed across missing/invalid packets.
+                // The first post-boundary packet is a NEW counter baseline.
+                continue
+            }
+            positions[i + 1] += Double(delta)
+            let sign = delta > 0 ? 1 : delta < 0 ? -1 : 0
+            if sign == 0 {
+                if runSign != 0 { runs.append(Run(startIdx: runStart, endIdx: i)) }
+                runSign = 0
+                if stillStart == nil { stillStart = i }
             } else {
+                finishStillness(at: i)
+                if runSign != 0 && sign != runSign {
+                    runs.append(Run(startIdx: runStart, endIdx: i))
+                    runSign = 0
+                }
                 if runSign == 0 { runStart = i }
                 runSign = sign
             }
         }
-        // The run still open when the input ends (`runSign != 0` after the
-        // loop): force-closed into `runs` for finalization (unchanged
-        // behavior), or reserved separately as `trailingRunCandidate` for a
-        // live/provisional caller — never both, so a trailing run can never
-        // be double-counted as both committed and provisional.
+        finishStillness(at: events.count - 1)
         var trailingRunCandidate: Run?
         if runSign != 0 {
-            let trailing = Run(startIdx: runStart, endIdx: deltas.count)
-            if forceCloseTrailingRun {
-                runs.append(trailing)
-            } else {
-                trailingRunCandidate = trailing
-            }
+            let trailing = Run(startIdx: runStart, endIdx: events.count - 1)
+            if forceCloseTrailingRun { runs.append(trailing) }
+            else { trailingRunCandidate = trailing }
         }
         let rawRunCount = runs.count
 
@@ -11713,9 +11802,14 @@ enum CaptureCore {
             let startPos = (positions[run.startIdx] - minPos) / span
             let endPos = (positions[run.endIdx] - minPos) / span
             let displacement = positions[run.endIdx] - positions[run.startIdx]
-            guard duration > 0,
+            guard duration > 0, run.endIdx - run.startIdx >= 2,
                   duration >= minRunDuration,
-                  abs(displacement) >= Double(minRunSteps) else { continue }
+                  abs(displacement) >= Double(minRunSteps) else {
+                intervals.append(interval(run.startIdx, run.endIdx,
+                    run.endIdx - run.startIdx < 2 ? .insufficientSampling : .discardedMotion,
+                    steps: displacement))
+                continue
+            }
             let direction = displacement > 0 ? "forward" : "backward"
             let speed = abs(displacement) / duration
             // High-confidence direct telemetry: floor 0.7, rising toward 1.0 for
@@ -11754,12 +11848,12 @@ enum CaptureCore {
                 direction: direction,
                 movementKind: direction == "forward" ? .normalPush : .normalPull,
                 displacement: displacement,
-                meetsNoiseGates: duration > 0 && duration >= minRunDuration && abs(displacement) >= Double(minRunSteps)
+                meetsNoiseGates: trailing.endIdx - trailing.startIdx >= 2 && duration > 0 && duration >= minRunDuration && abs(displacement) >= Double(minRunSteps)
             )
         }
         return (result, PlatterDecodeDiagnostics(
             filteredEventCount: filteredEventCount, rawRunCount: rawRunCount,
-            noiseFilteredRunCount: result.count), trailingRun)
+            noiseFilteredRunCount: result.count), trailingRun, intervals)
     }
 
     struct ProvisionalPlatterMovement: Equatable, Sendable {

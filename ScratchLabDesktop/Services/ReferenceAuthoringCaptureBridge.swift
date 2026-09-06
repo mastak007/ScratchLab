@@ -653,9 +653,8 @@ final class ReferenceAuthoringCaptureBridge {
         let detectedNotation = sidecar.detectedNotation
         let mixerMidiEvents = detectedNotation?.mixerMidiEvents ?? []
         let crossfaderEvents = mixerMidiEvents.filter { $0.mappedControl == "crossfader" }
-        // Read once and handed through both as a count and in full. Tear
-        // review needs the events themselves; nothing here re-decodes the
-        // platter, so the count can never disagree with the evidence.
+        // Keep saved events/counts verbatim. Reuse the shared raw decoder only
+        // for a companion provenance view, including runs lost by old filters.
         let platterMovementEvents = detectedNotation?.recordMovementEvents ?? []
 
         return .success(
@@ -673,6 +672,9 @@ final class ReferenceAuthoringCaptureBridge {
                 ),
                 watchEvidence: watchEvidence(in: sidecar, expectedIdentity: expectedIdentity),
                 platterMovementEvents: platterMovementEvents,
+                platterEvidenceIntervals: CaptureCore.derivePlatterMotionEvidence(
+                    from: mixerMidiEvents
+                ).retaining(normalizedEvents: platterMovementEvents).intervals,
                 // Handed through VERBATIM. Whether it may seed this take's
                 // fader baseline is decided once, by
                 // `ReferenceCrossfaderTakeStart.correlate`, in the session —

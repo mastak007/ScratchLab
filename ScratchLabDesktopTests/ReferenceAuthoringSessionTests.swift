@@ -849,6 +849,15 @@ final class ReferenceAuthoringSessionTests: XCTestCase {
 /// that corrects anything also asserts the take stayed un-approved: this
 /// review layer exists to record disagreement with the automatic pass, not to
 /// sign a take off.
+/// These authored fixtures explicitly stipulate repeated equal-position
+/// observations in their gaps. Production event gaps never imply this evidence.
+func syntheticObservedPlatterStillness(_ events: [CaptureCore.DetectedNotationRecordMovementEvent]) -> [CaptureCore.PlatterEvidenceInterval] {
+    zip(events, events.dropFirst()).compactMap { before, after in
+        guard after.startTime > before.endTime else { return nil }
+        return .init(startTime: before.endTime, endTime: after.startTime, kind: .observedStillness, signedSteps: 0)
+    }
+}
+
 final class ReferenceTearSegmentationReviewTests: XCTestCase {
 
     private let calibration = CrossfaderCalibration(
@@ -925,6 +934,7 @@ final class ReferenceTearSegmentationReviewTests: XCTestCase {
         ReferenceTearSegmentationReviewBuilder.build(
             referenceTakeID: "auth-0001-take-001",
             movementEvents: movementEvents ?? twoTearMovementEvents(),
+            platterEvidenceIntervals: syntheticObservedPlatterStillness(movementEvents ?? twoTearMovementEvents()),
             derivation: derivation ?? openFaderDerivation()
         )
     }
@@ -983,7 +993,7 @@ final class ReferenceTearSegmentationReviewTests: XCTestCase {
         XCTAssertNil(review.stationaryIntervals.first?.confidence)
         XCTAssertTrue(
             review.stationaryIntervals.allSatisfy {
-                $0.reasons.contains(.gapDerivedStationaryInterval)
+                $0.reasons.contains(.observedStationarySamples)
             }
         )
         XCTAssertTrue(
@@ -1366,7 +1376,8 @@ final class ReferenceTearSegmentationReviewTests: XCTestCase {
             recordedAt: Date(timeIntervalSince1970: 1_788_000_500),
             autoDetectedTechnique: nil,
             watchEvidence: .linked(motionFileName: "watch-motion.json"),
-            platterMovementEvents: movementEvents
+            platterMovementEvents: movementEvents,
+            platterEvidenceIntervals: syntheticObservedPlatterStillness(movementEvents)
         )
     }
 
@@ -1530,34 +1541,24 @@ final class ReferenceTearSegmentationReviewTests: XCTestCase {
     }
 }
 
-// MARK: - Phase 1 root-cause proof (Take 007 real-hardware segmentation failure)
+// MARK: - Direction chatter and evidence-boundary regressions
 
-/// Reproduces, with a small synthetic fixture, the exact failure mode Take 007
-/// exposed on real hardware: legitimate but noisy direction alternation at a
-/// gesture boundary (turnaround jitter, hand tremor, mechanical backlash)
-/// produces one `DetectedNotationRecordMovementEvent` per micro-run — each of
-/// which already cleared `decodePlatterCore`'s own noise gates upstream — and
-/// `ReferenceTearSegmentationReviewBuilder` currently promotes EVERY
-/// direction change between temporally-adjacent decoded runs into a real
-/// reversal with no minimum sustained-opposite-direction requirement. This is
-/// the "first incorrect boundary": the reversal-detection loop in
-/// `ReferenceTearSegmentationReviewBuilder.build` (ReferenceTake.swift, the
-/// unconditional `reversals.append` over every direction-differing
-/// consecutive pair), which cascades directly into `makeCandidates` ending a
-/// gesture at every such reversal.
+/// Synthetic regressions for direction grouping. Duration and a gap alone
+/// cannot establish physical intent or stationary platter evidence.
 final class ReferenceTearSegmentationChatterRootCauseTests: XCTestCase {
 
     private func movement(
         _ startTime: Double,
         _ endTime: Double,
         _ direction: String,
-        confidence: Double = 0.9
+        confidence: Double = 0.9,
+        excursion: Double = 1
     ) -> CaptureCore.DetectedNotationRecordMovementEvent {
         CaptureCore.DetectedNotationRecordMovementEvent(
             startTime: startTime,
             endTime: endTime,
-            startPosition: 0,
-            endPosition: direction == "forward" ? 1 : 0,
+            startPosition: direction == "forward" ? 0 : excursion,
+            endPosition: direction == "forward" ? excursion : 0,
             direction: direction,
             movementKind: direction == "forward" ? .normalPush : .normalPull,
             speed: 1,
@@ -1566,12 +1567,7 @@ final class ReferenceTearSegmentationChatterRootCauseTests: XCTestCase {
         )
     }
 
-    /// One physical Baby Scratch: a sustained forward stroke, a noisy
-    /// turnaround (six short alternating runs — each individually a
-    /// plausible decodePlatterCore-gated run, none longer than 60 ms, none
-    /// shorter than decodePlatterCore's own 80 ms floor would even allow if
-    /// this were raw MIDI — here they stand in for already-decoded evidence),
-    /// then a sustained backward stroke. Physically this is ONE reversal.
+    /// Synthetic low-amplitude turnaround chatter, with no physical label.
     private func noisyBabyScratchMovementEvents() -> [CaptureCore.DetectedNotationRecordMovementEvent] {
         var events: [CaptureCore.DetectedNotationRecordMovementEvent] = [
             movement(0.00, 1.00, "forward")
@@ -1583,7 +1579,7 @@ final class ReferenceTearSegmentationChatterRootCauseTests: XCTestCase {
         let chatterStarts = stride(from: 1.00, to: 1.36, by: 0.06)
         var direction = "backward"
         for start in chatterStarts {
-            events.append(movement(start, start + 0.06, direction))
+            events.append(movement(start, start + 0.06, direction, excursion: 0.005))
             direction = direction == "backward" ? "forward" : "backward"
         }
         let lastChatterEnd = events.last!.endTime
@@ -1591,17 +1587,9 @@ final class ReferenceTearSegmentationChatterRootCauseTests: XCTestCase {
         return events
     }
 
-    /// PROOF: before any repair, this physically-one-reversal take produces
-    /// far more gestures and reversals than exist in reality — the same
-    /// shape Take 007 exhibited (approximately one gesture per raw event
-    /// through the noisy region).
-    /// The regression this whole repair exists for. BEFORE the fix, this
-    /// fixture produced 8 gestures / 7 reversals from 9 raw events (proven
-    /// empirically before the repair landed) — the same near-1:1 shape Take
-    /// 007 exposed (83 raw events -> 81 gestures, 80 reversals). AFTER the
-    /// fix: physical reality is 2 gestures, 1 reversal, and every raw event
-    /// is still cited from `rawMovementEvents` and from a segment.
-    func testNoisyBabyScratchWithSignChatterCollapsesToTwoGesturesOneReversal() {
+    /// Raw counter-motion remains inspectable as unknown and never becomes
+    /// a monotonic curve under the surrounding direction.
+    func testLowAmplitudeTurnaroundChatterRemainsUnknownWithOneConfirmedReversal() {
         let events = noisyBabyScratchMovementEvents()
         let review = ReferenceTearSegmentationReviewBuilder.build(
             referenceTakeID: "root-cause-proof",
@@ -1612,10 +1600,11 @@ final class ReferenceTearSegmentationChatterRootCauseTests: XCTestCase {
         XCTAssertEqual(review.rawMovementEvents.count, events.count, "raw evidence must never be filtered")
         XCTAssertEqual(review.segments.filter { $0.movementEventIndex != nil }.count, events.count,
             "every raw event must still surface as its own inspectable segment")
-        XCTAssertEqual(review.candidates.count, 2, "a Baby fixture must not produce approximately one gesture per raw event")
+        XCTAssertGreaterThanOrEqual(review.candidates.count, 2)
+        XCTAssertTrue(review.segments.contains { $0.state == .unknown && $0.reasons.contains(.mergedDirectionChatter) })
         XCTAssertEqual(review.reversals.count, 1)
         XCTAssertEqual(review.candidates[0].direction, .forward)
-        XCTAssertEqual(review.candidates[1].direction, .backward)
+        XCTAssertEqual(review.candidates.last?.direction, .backward)
         XCTAssertTrue(
             review.segments.contains { $0.reasons.contains(.mergedDirectionChatter) },
             "the absorbed chatter runs must say so, not disappear silently"
@@ -1635,38 +1624,36 @@ final class ReferenceTearSegmentationChatterRootCauseTests: XCTestCase {
         XCTAssertFalse(review.reasons.contains(.mergedDirectionChatter))
     }
 
-    /// A short INTENTIONAL hold (a real, gap-derived stationary interval)
+    /// A short INTENTIONAL hold (a real, explicitly observed stationary interval)
     /// sitting right next to turnaround jitter must survive as a hold — the
     /// repair targets opposite-direction TRAVEL chatter only, never a
     /// stationary gap, however short.
     func testShortIntentionalHoldBesideReversalJitterIsPreserved() {
         var events = [movement(0.0, 1.0, "backward")]
-        // A genuine 90 ms hold: a real time gap between two same-direction
-        // backward runs, bounding a tear hold exactly as `decodePlatterCore`
-        // would report it (a gap in telemetry, not a measured deceleration).
+        // This synthetic fixture supplies explicit observed stillness below;
+        // the time gap in the travel array is insufficient on its own.
         events.append(movement(1.09, 1.50, "backward"))
         // Turnaround jitter immediately after, then the real backward-to-
         // forward reversal.
-        events.append(movement(1.50, 1.56, "forward"))
+        events.append(movement(1.50, 1.56, "forward", excursion: 0.005))
         events.append(movement(1.56, 1.62, "backward"))
         events.append(movement(1.62, 2.60, "forward"))
         let review = ReferenceTearSegmentationReviewBuilder.build(
-            referenceTakeID: "hold-beside-jitter", movementEvents: events, derivation: nil
+            referenceTakeID: "hold-beside-jitter", movementEvents: events,
+            platterEvidenceIntervals: [.init(startTime: 1, endTime: 1.09, kind: .observedStillness)], derivation: nil
         )
-        XCTAssertEqual(review.candidates.count, 2, "one backward gesture (with its hold), one forward gesture")
+        XCTAssertEqual(review.candidates.count, 3, "unknown counter-motion splits measured curves")
         let tear = review.candidates[0]
         XCTAssertEqual(tear.direction, .backward)
-        XCTAssertEqual(tear.boundaries.count, 1, "the genuine gap-derived hold must survive, uncounted as chatter")
+        XCTAssertEqual(tear.boundaries.count, 1, "the genuine explicitly observed hold must survive, uncounted as chatter")
         XCTAssertEqual(tear.countedTearHoldCount, 1)
-        XCTAssertEqual(review.candidates[1].direction, .forward)
+        XCTAssertEqual(review.candidates.last?.direction, .forward)
         XCTAssertEqual(review.reversals.count, 1)
     }
 
-    /// A same-direction pause beside absorbed chatter: a gap between a
-    /// sustained run and a brief opposite run that repair then folds back
-    /// into the same gesture. The gap is a same-direction pause (a hold), not
-    /// a reversal, and the whole thing stays one gesture.
-    func testSameDirectionPauseBesideAbsorbedChatterStaysOneGestureWithAHold() {
+    /// Missing packets beside high-excursion opposing travel must stay
+    /// unknown rather than becoming a same-direction hold.
+    func testSilenceBesideOpposingTravelDoesNotBecomeAHold() {
         let events = [
             movement(0.0, 1.0, "backward"),
             movement(1.10, 1.16, "forward"), // 60 ms chatter, after a gap
@@ -1675,11 +1662,11 @@ final class ReferenceTearSegmentationChatterRootCauseTests: XCTestCase {
         let review = ReferenceTearSegmentationReviewBuilder.build(
             referenceTakeID: "pause-beside-chatter", movementEvents: events, derivation: nil
         )
-        XCTAssertEqual(review.candidates.count, 1, "the chatter must not split a same-direction pause into two gestures")
-        XCTAssertEqual(review.candidates[0].direction, .backward)
-        XCTAssertEqual(review.candidates[0].countedTearHoldCount, 1, "the gap is a same-direction hold, not a reversal")
-        XCTAssertEqual(review.reversals.count, 0)
-        XCTAssertTrue(review.reasons.contains(.mergedDirectionChatter))
+        XCTAssertEqual(review.candidates.count, 3)
+        XCTAssertEqual(review.totalCountedTearHoldCount, 0)
+        XCTAssertEqual(review.stationaryIntervals.count, 0)
+        XCTAssertEqual(review.reversals.count, 2)
+        XCTAssertFalse(review.reasons.contains(.mergedDirectionChatter))
     }
 
     /// 1/2/3-tears (clean, no chatter) must still report their exact hold
@@ -1692,7 +1679,7 @@ final class ReferenceTearSegmentationChatterRootCauseTests: XCTestCase {
                 events.append(movement(t, t + 0.4, "backward"))
                 t += 0.4
                 if i < holdCount {
-                    // Gap-derived hold, not a travel event.
+                    // Explicitly observed hold, not a travel event.
                     t += 0.15
                 }
             }
@@ -1701,7 +1688,8 @@ final class ReferenceTearSegmentationChatterRootCauseTests: XCTestCase {
         }
         for holdCount in 1...3 {
             let review = ReferenceTearSegmentationReviewBuilder.build(
-                referenceTakeID: "tear-\(holdCount)", movementEvents: tearEvents(holdCount: holdCount), derivation: nil
+                referenceTakeID: "tear-\(holdCount)", movementEvents: tearEvents(holdCount: holdCount),
+                platterEvidenceIntervals: syntheticObservedPlatterStillness(tearEvents(holdCount: holdCount)), derivation: nil
             )
             XCTAssertEqual(review.candidates.count, 2, "holdCount \(holdCount)")
             XCTAssertEqual(review.candidates[0].countedTearHoldCount, holdCount, "holdCount \(holdCount)")
@@ -1722,7 +1710,8 @@ final class ReferenceTearSegmentationChatterRootCauseTests: XCTestCase {
             movement(1.80, 2.20, "forward")
         ]
         let review = ReferenceTearSegmentationReviewBuilder.build(
-            referenceTakeID: "unequal-subdivisions", movementEvents: events, derivation: nil
+            referenceTakeID: "unequal-subdivisions", movementEvents: events,
+            platterEvidenceIntervals: syntheticObservedPlatterStillness(events), derivation: nil
         )
         XCTAssertEqual(review.candidates.count, 2)
         XCTAssertEqual(review.candidates[0].countedTearHoldCount, 1)
@@ -1757,23 +1746,19 @@ final class ReferenceTearSegmentationChatterRootCauseTests: XCTestCase {
         XCTAssertEqual(review.candidates.count, 2)
     }
 
-    /// A dropped event leaves a genuine time gap, read as a stationary
-    /// interval exactly as before — the repair must not touch gap handling.
-    func testDroppedEventsStillProduceAGapDerivedStationaryInterval() {
+    /// Missing retained events cannot establish stationary evidence.
+    func testDroppedEventsLeaveUnknownInsteadOfStationaryInterval() {
         let events = [movement(0.0, 1.0, "forward"), movement(1.30, 2.0, "forward")]
         let review = ReferenceTearSegmentationReviewBuilder.build(
             referenceTakeID: "dropped-event", movementEvents: events, derivation: nil
         )
-        XCTAssertEqual(review.candidates.count, 1)
-        XCTAssertEqual(review.candidates[0].boundaries.count, 1)
-        XCTAssertTrue(
-            review.candidates[0].boundaries[0].proposal?.reasons.contains(.gapDerivedStationaryInterval) ?? false
-        )
+        XCTAssertEqual(review.candidates.count, 2)
+        XCTAssertEqual(review.totalCountedTearHoldCount, 0)
+        XCTAssertEqual(review.stationaryIntervals.count, 0)
+        XCTAssertTrue(review.segments.contains { $0.state == .unknown })
     }
 
-    /// Quantized positions must not affect direction/duration-based repair:
-    /// the repair reads only `event.direction`/timestamps, never re-derives
-    /// sign from `startPosition`/`endPosition`.
+    /// A lone quantized travel event retains its recorded direction.
     func testQuantizedPositionsDoNotAffectChatterRepair() {
         let coarse = CaptureCore.DetectedNotationRecordMovementEvent(
             startTime: 0.0, endTime: 1.0, startPosition: 0.0, endPosition: 0.0,
@@ -1794,8 +1779,8 @@ final class ReferenceTearSegmentationChatterRootCauseTests: XCTestCase {
     func testQuickGenuineReversalIsNeverMergedAway() {
         let events = [
             movement(0.0, 1.0, "forward"),
-            movement(1.0, 1.35, "backward"), // 350 ms: above the sustained floor, not chatter
-            movement(1.35, 2.5, "forward")
+            movement(1.0, 1.15, "backward"), // 150 ms, high displacement
+            movement(1.15, 2.5, "forward")
         ]
         let review = ReferenceTearSegmentationReviewBuilder.build(
             referenceTakeID: "quick-genuine-reversal", movementEvents: events, derivation: nil
@@ -1828,13 +1813,14 @@ final class ReferenceTearSegmentationChatterRootCauseTests: XCTestCase {
     func testIsolatedOpposingDeltaIsAbsorbedNotAReversal() {
         let events = [
             movement(0.0, 1.0, "forward"),
-            movement(1.0, 1.04, "backward"), // 40 ms: isolated, not sustained
+            movement(1.0, 1.04, "backward", excursion: 0.005), // 40 ms: isolated, not sustained
             movement(1.04, 2.0, "forward")
         ]
         let review = ReferenceTearSegmentationReviewBuilder.build(
             referenceTakeID: "isolated-opposing-delta", movementEvents: events, derivation: nil
         )
-        XCTAssertEqual(review.candidates.count, 1, "one isolated opposing delta must not end the gesture")
+        XCTAssertEqual(review.candidates.count, 2, "unknown counter-motion must separate measured curves")
+        XCTAssertTrue(review.segments.contains { $0.state == .unknown })
         XCTAssertEqual(review.candidates[0].direction, .forward)
         XCTAssertEqual(review.reversals.count, 0)
         XCTAssertTrue(review.reasons.contains(.mergedDirectionChatter))
@@ -1855,14 +1841,11 @@ final class ReferenceTearSegmentationChatterRootCauseTests: XCTestCase {
         let review = ReferenceTearSegmentationReviewBuilder.build(
             referenceTakeID: "clock-discontinuity", movementEvents: events, derivation: nil
         )
-        XCTAssertEqual(review.candidates.count, 2)
-        let hold = review.candidates[0].boundaries.first
-        XCTAssertNotNil(hold)
-        XCTAssertTrue(
-            hold?.proposal?.reasons.contains(.gapDerivedStationaryInterval) ?? false,
-            "a clock-discontinuous gap must stay an unknown absence of telemetry"
-        )
-        XCTAssertEqual(review.reversals.count, 1, "the repair must not fabricate a reversal across the gap")
+        XCTAssertEqual(review.candidates.count, 3)
+        XCTAssertEqual(review.totalCountedTearHoldCount, 0)
+        XCTAssertEqual(review.stationaryIntervals.count, 0)
+        XCTAssertTrue(review.segments.contains { $0.state == .unknown })
+        XCTAssertEqual(review.reversals.count, 1)
     }
 }
 

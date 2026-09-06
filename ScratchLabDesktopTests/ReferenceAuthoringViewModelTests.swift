@@ -712,7 +712,8 @@ final class ReferenceTearSegmentationViewModelTests: XCTestCase {
             recordedAt: Date(timeIntervalSince1970: 1_788_000_500),
             autoDetectedTechnique: nil,
             watchEvidence: .linked(motionFileName: "synthetic-watch-motion.json"),
-            platterMovementEvents: twoTearMovementEvents()
+            platterMovementEvents: twoTearMovementEvents(),
+            platterEvidenceIntervals: syntheticObservedPlatterStillness(twoTearMovementEvents())
         )
     }
 
@@ -941,6 +942,7 @@ final class ReferenceTearSegmentationViewModelTests: XCTestCase {
         let review = ReferenceTearSegmentationReviewBuilder.build(
             referenceTakeID: "take-001",
             movementEvents: twoTearMovementEvents(),
+            platterEvidenceIntervals: syntheticObservedPlatterStillness(twoTearMovementEvents()),
             derivation: nil
         )
         let text = ReferenceAuthoringViewModel.tearReviewStatusText(review)
@@ -967,6 +969,7 @@ final class ReferenceTearSegmentationViewModelTests: XCTestCase {
         var review = ReferenceTearSegmentationReviewBuilder.build(
             referenceTakeID: "take-001",
             movementEvents: twoTearMovementEvents(),
+            platterEvidenceIntervals: syntheticObservedPlatterStillness(twoTearMovementEvents()),
             derivation: nil
         )
         let candidateID = review.candidates[0].id
@@ -995,6 +998,7 @@ final class ReferenceTearSegmentationViewModelTests: XCTestCase {
         var review = ReferenceTearSegmentationReviewBuilder.build(
             referenceTakeID: "take-001",
             movementEvents: twoTearMovementEvents(),
+            platterEvidenceIntervals: syntheticObservedPlatterStillness(twoTearMovementEvents()),
             derivation: nil
         )
         let candidateID = review.candidates[0].id
@@ -1052,6 +1056,7 @@ final class ReferenceTearSegmentationViewModelTests: XCTestCase {
         var review = ReferenceTearSegmentationReviewBuilder.build(
             referenceTakeID: "take-001",
             movementEvents: twoTearMovementEvents(),
+            platterEvidenceIntervals: syntheticObservedPlatterStillness(twoTearMovementEvents()),
             derivation: nil
         )
         let candidateID = review.candidates[0].id

@@ -2039,7 +2039,11 @@ final class MacCaptureEngine: NSObject, ObservableObject {
             for event in events.dropFirst() {
                 let sameDirection = event.direction == active.direction
                 let gap = max(0, event.startTime - active.endTime)
-                if sameDirection && gap <= Self.maxMergeGap {
+                // Controller endpoint runs must never bridge uncovered time:
+                // the missing interval may contain discarded opposing motion.
+                let controllerBoundary = active.source == "controller" || event.source == "controller"
+                let contiguous = abs(event.startTime - active.endTime) <= 1e-9
+                if sameDirection && gap <= Self.maxMergeGap && (!controllerBoundary || contiguous) {
                     #if DEBUG
                     debugSession?.recordMerge()
                     #endif

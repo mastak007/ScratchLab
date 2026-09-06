@@ -1302,6 +1302,7 @@ final class ReferenceTearCanonicalProjectionTests: XCTestCase {
     ) -> ReferenceTearCanonicalProjection {
         ReferenceTearCanonicalProjectionBuilder.project(
             movementEvents: events,
+            platterEvidenceIntervals: syntheticObservedPlatterStillness(events),
             derivation: derivation,
             referenceTakeID: "synthetic-tear"
         )
@@ -1390,6 +1391,7 @@ final class ReferenceTearCanonicalProjectionTests: XCTestCase {
         let review = ReferenceTearSegmentationReviewBuilder.build(
             referenceTakeID: "synthetic-tear",
             movementEvents: tearEvents,
+            platterEvidenceIntervals: syntheticObservedPlatterStillness(tearEvents),
             derivation: clicked
         )
         XCTAssertEqual(review.totalCountedTearHoldCount, 1, "Two fader clicks add no platter holds.")
@@ -1480,12 +1482,14 @@ final class ReferenceTearCanonicalProjectionTests: XCTestCase {
     func testLiveAndFinalizedProjectionsShareTheSameCanonicalStructure() throws {
         let live = ReferenceTearCanonicalProjectionBuilder.project(
             movementEvents: tearEvents,
+            platterEvidenceIntervals: syntheticObservedPlatterStillness(tearEvents),
             derivation: nil,
             referenceTakeID: "live-preview"
         )
         let finalizedReview = ReferenceTearSegmentationReviewBuilder.build(
             referenceTakeID: "ref-take-0008",
             movementEvents: tearEvents,
+            platterEvidenceIntervals: syntheticObservedPlatterStillness(tearEvents),
             derivation: derivation(openFrom: 0, to: 0.60)
         )
         let finalized = ReferenceTearCanonicalProjectionBuilder.project(finalizedReview)
@@ -1512,6 +1516,7 @@ final class ReferenceTearCanonicalProjectionTests: XCTestCase {
         var review = ReferenceTearSegmentationReviewBuilder.build(
             referenceTakeID: "synthetic-tear",
             movementEvents: tearEvents,
+            platterEvidenceIntervals: syntheticObservedPlatterStillness(tearEvents),
             derivation: derivation(openFrom: 0, to: 0.60)
         )
         let candidate = try XCTUnwrap(review.candidates.first)
@@ -1542,6 +1547,7 @@ final class ReferenceTearCanonicalProjectionTests: XCTestCase {
         var review = ReferenceTearSegmentationReviewBuilder.build(
             referenceTakeID: "synthetic-tear",
             movementEvents: tearEvents,
+            platterEvidenceIntervals: syntheticObservedPlatterStillness(tearEvents),
             derivation: derivation(openFrom: 0, to: 0.60)
         )
         let candidate = try XCTUnwrap(review.candidates.first)

@@ -343,14 +343,11 @@ struct ReferenceTakeEvidence: Equatable, Sendable {
     /// The recorded platter movement events themselves, exactly as the
     /// finalized sidecar carries them.
     ///
-    /// Retained beside the count because tear-segmentation review has to show
-    /// the operator the motion, not a number. Nothing derives a second
-    /// platter decode from these: they are the output of
-    /// `CaptureCore.derivePlatterMovementEvents` as written at finalization,
-    /// and every review over them is a pure grouping of that evidence.
-    /// Defaults to empty so a take measured before this field existed decodes
-    /// and validates unchanged.
+    /// Retained verbatim. A companion raw-packet provenance view explains
+    /// omitted motion and packet absence without rewriting historical events.
     let platterMovementEvents: [CaptureCore.DetectedNotationRecordMovementEvent]
+    /// Derived from retained raw MIDI; never rewrites the sidecar or export.
+    let platterEvidenceIntervals: [CaptureCore.PlatterEvidenceInterval]
     /// The crossfader control state the engine recorded at this take's
     /// media-start boundary, VERBATIM, or `nil` when the take carries none.
     ///
@@ -385,6 +382,7 @@ struct ReferenceTakeEvidence: Equatable, Sendable {
         derivation: CrossfaderDerivation?,
         watchEvidence: ReferenceWatchEvidence = .missing(syncState: "notRequested"),
         platterMovementEvents: [CaptureCore.DetectedNotationRecordMovementEvent] = [],
+        platterEvidenceIntervals: [CaptureCore.PlatterEvidenceInterval] = [],
         crossfaderTakeStartState: CaptureCore.CrossfaderTakeStartState? = nil,
         crossfaderTakeStartOutcome: ReferenceCrossfaderTakeStart.Outcome? = nil
     ) {
@@ -399,6 +397,7 @@ struct ReferenceTakeEvidence: Equatable, Sendable {
         self.observedCrossfaderAddress = observedCrossfaderAddress
         self.platterMovementEventCount = platterMovementEventCount
         self.platterMovementEvents = platterMovementEvents
+        self.platterEvidenceIntervals = platterEvidenceIntervals
         self.crossfaderTakeStartState = crossfaderTakeStartState
         self.crossfaderTakeStartOutcome = crossfaderTakeStartOutcome
         self.derivation = derivation

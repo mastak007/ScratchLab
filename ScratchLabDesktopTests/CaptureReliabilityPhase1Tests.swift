@@ -16715,12 +16715,9 @@ final class ControllerPlatterDecoderTests: XCTestCase {
         XCTAssertEqual(snapshot.mixerMidiEvents, canonicalMIDI)
     }
 
-    func testSavedPresentationDoesNotDuplicateFusionMergedControllerRuns() {
-        // The four-step reversal fails the decoder's existing 8-step/80ms
-        // gates. Its two surrounding forward runs survive, then fusion merges
-        // those same-direction records across the 40ms gap into one canonical
-        // record. Presentation must use the two accepted decoder runs once —
-        // never the merged record plus both raw runs.
+    func testSavedPresentationPreservesRunsSeparatedByDiscardedCounterMotion() {
+        // The discarded four-step reversal must stay uncovered. Fusion and
+        // presentation retain the two surrounding runs once each.
         let fixture = wrappedRuns(
             signedSteps: [20, -4, 20],
             maximumPacketDelta: 1,
@@ -16737,8 +16734,8 @@ final class ControllerPlatterDecoderTests: XCTestCase {
             labelSource: "unknown",
             labelConfidence: nil
         ).withMixerMidiEvents(rawMIDI)
-        XCTAssertEqual(snapshot.recordMovementEvents.count, 1,
-                       "fixture must exercise fusion's same-direction merge")
+        XCTAssertEqual(snapshot.recordMovementEvents.count, 2,
+                       "fusion must preserve the gap containing discarded opposing motion")
         let canonicalEvents = snapshot.recordMovementEvents
 
         let presentation = CaptureCore
@@ -16772,9 +16769,10 @@ final class ControllerPlatterDecoderTests: XCTestCase {
             XCTAssertGreaterThan(event.endTime, event.startTime, "non-zero duration")
             XCTAssertEqual(event.source, "controller", "controller provenance")
         }
-        // Reversal boundaries: each run starts where the previous ended.
+        // Repeated endpoint values occupy two observed 20 ms intervals;
+        // neither belongs to the neighboring travel duration.
         for i in 1..<decoded.count {
-            XCTAssertEqual(decoded[i].startTime, decoded[i - 1].endTime, accuracy: 1e-9)
+            XCTAssertEqual(decoded[i].startTime - decoded[i - 1].endTime, 0.02, accuracy: 1e-9)
         }
     }
 
@@ -23907,5 +23905,250 @@ final class ReferencePackageIORoundTripTests: XCTestCase {
             entries, ["baby_scratch__quarter_notes_v1", "source-sidecar.json"],
             "Writing a package must create nothing outside the parent directory it was given."
         )
+    }
+}
+
+
+/// Synthetic receive-order fixtures. The audited timing is a regression shape,
+/// not a physical Tear label or a hardware calibration source.
+final class RaneMotionProvenanceTests: XCTestCase {
+    private typealias Event = CaptureCore.RawMixerMIDIEvent
+    private func packets(_ steps: Int, count: Int = 30, start: Double = 0,
+                         duration: Double = 0.3, phase: Int = 0) -> [Event] {
+        (0...count).map { i in
+            let value = ((phase + i * steps) % 128 + 128) % 128
+            let t = start + Double(i) * duration / Double(count)
+            return Event(timestamp: t, takeRelativeTime: t, deviceName: "Rane ONE MKII",
+                         channel: 1, controller: 6, value: value,
+                         normalizedValue: Double(value) / 127, mappedControl: nil)
+        }
+    }
+    private func normalized(_ packets: [Event]) -> CaptureCore.PlatterMotionEvidence {
+        let decoded = CaptureCore.derivePlatterMotionEvidence(from: packets)
+        let events = MacCaptureEngine.RoutineNotationEventNormalizer().normalize(events: decoded.events, audioEvents: [])
+        return decoded.retaining(normalizedEvents: events)
+    }
+    private func review(_ evidence: CaptureCore.PlatterMotionEvidence) -> ReferenceTearSegmentationReview {
+        ReferenceTearSegmentationReviewBuilder.build(referenceTakeID: "synthetic-rane",
+            movementEvents: evidence.events, platterEvidenceIntervals: evidence.intervals, derivation: nil)
+    }
+    func testAudited17745SecondGapDoesNotConsumeResumedTravel() throws {
+        let before = 16.385179208344198
+        let after = 34.130196916667046
+        let end = 34.623292166666944
+        let raw = packets(2, start: before - 0.3) + packets(5, count: 163, start: after,
+            duration: end - after, phase: 100)
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.sortedKeys]
+        let bytes = try encoder.encode(raw)
+        let result = normalized(raw)
+        XCTAssertEqual(result.events.count, 2)
+        let resumed = try XCTUnwrap(result.events.last)
+        XCTAssertEqual(resumed.startTime, after, accuracy: 1e-9)
+        XCTAssertEqual(resumed.endTime - resumed.startTime, 0.493095249999898, accuracy: 1e-9)
+        let gap = try XCTUnwrap(result.intervals.first { $0.kind == .packetGap })
+        XCTAssertEqual(gap.endTime - gap.startTime, 17.745017708322848, accuracy: 1e-9)
+        XCTAssertEqual(gap.firstPacketIndex, 30)
+        XCTAssertEqual(gap.lastPacketIndex, 31)
+        XCTAssertEqual(review(result).totalCountedTearHoldCount, 0)
+        XCTAssertEqual(try encoder.encode(raw), bytes)
+    }
+    func testGapFollowedBySameDirectionTravelIsUnknown() {
+        let result = normalized(packets(1) + packets(1, start: 1, phase: 30))
+        XCTAssertEqual(result.events.map(\.direction), ["forward", "forward"])
+        XCTAssertEqual(result.events.map(\.startTime), [0, 1])
+        XCTAssertEqual(review(result).candidates.count, 2)
+        XCTAssertEqual(review(result).stationaryIntervals.count, 0)
+        XCTAssertTrue(review(result).segments.contains { $0.state == .unknown && $0.reasons.contains(.packetGap) })
+    }
+    func testGapFollowedByOppositeDirectionTravelIsNotAHold() {
+        let result = normalized(packets(1) + packets(-1, start: 1, phase: 30))
+        XCTAssertEqual(result.events.map(\.direction), ["forward", "backward"])
+        XCTAssertEqual(review(result).reversals.count, 1)
+        XCTAssertEqual(review(result).totalCountedTearHoldCount, 0)
+    }
+    func testFilteredOpposingMotionCannotBecomeStationaryOrMergeAcrossGap() {
+        let raw = packets(1) + packets(-1, count: 4, start: 0.3, duration: 0.04, phase: 30).dropFirst()
+            + packets(1, start: 0.34, phase: 26).dropFirst()
+        let result = normalized(raw)
+        XCTAssertEqual(result.events.count, 2)
+        XCTAssertTrue(result.intervals.contains { $0.kind == .discardedMotion && $0.signedSteps == -4 })
+        XCTAssertEqual(review(result).stationaryIntervals.count, 0)
+        XCTAssertEqual(review(result).totalCountedTearHoldCount, 0)
+    }
+    func testMeasuredBoundedSameDirectionStillnessProducesOneTearHold() {
+        let raw = packets(1) + packets(0, count: 5, start: 0.3, duration: 0.2, phase: 30).dropFirst()
+            + packets(1, start: 0.5, phase: 30).dropFirst()
+        let result = normalized(raw)
+        XCTAssertEqual(result.events.map(\.startTime), [0, 0.5])
+        XCTAssertEqual(result.events[0].endTime, 0.3, accuracy: 1e-9)
+        let reviewed = review(result)
+        XCTAssertEqual(reviewed.candidates.count, 1)
+        XCTAssertEqual(reviewed.totalCountedTearHoldCount, 1)
+        XCTAssertEqual(reviewed.travelIntervals.count, 2)
+        XCTAssertEqual(reviewed.stationaryIntervals.count, 1)
+        XCTAssertEqual(reviewed.platterEvidenceIntervals, result.intervals)
+    }
+    func testDisconnectReconnectSilenceCannotEstablishContinuity() {
+        // No connection-generation record exists in this raw schema. Identical
+        // device names and values after reconnect therefore still mean unknown.
+        let result = normalized(packets(1) + packets(1, start: 8, phase: 30))
+        XCTAssertTrue(result.intervals.contains { $0.kind == .packetGap })
+        XCTAssertEqual(result.events.last?.startTime, 8)
+        XCTAssertEqual(review(result).stationaryIntervals.count, 0)
+        XCTAssertEqual(review(result).totalCountedTearHoldCount, 0)
+    }
+    func testClockRegressionIsNotSortedAway() {
+        let result = normalized(packets(1, start: 1) + packets(1, start: 0.5, phase: 30))
+        XCTAssertTrue(result.intervals.contains { $0.kind == .clockDiscontinuity })
+        XCTAssertTrue(review(result).reasons.contains(.clockDiscontinuity))
+        XCTAssertEqual(review(result).stationaryIntervals.count, 0)
+    }
+    func testModularWrappingInBothDirectionsPreservesTravel() {
+        let raw = packets(1, phase: 120) + packets(-1, start: 0.3, phase: 150).dropFirst()
+        let result = normalized(raw)
+        XCTAssertEqual(result.events.map(\.direction), ["forward", "backward"])
+        XCTAssertTrue(result.intervals.isEmpty)
+        XCTAssertEqual(review(result).reversals.count, 1)
+    }
+    func testHighDisplacementShortReversalSurvives() {
+        let raw = packets(5) + packets(-5, start: 0.3, duration: 0.15, phase: 150).dropFirst()
+            + packets(5, start: 0.45).dropFirst()
+        let reviewed = review(normalized(raw))
+        XCTAssertEqual(reviewed.candidates.map(\.direction), [.forward, .backward, .forward])
+        XCTAssertEqual(reviewed.reversals.count, 2)
+        XCTAssertFalse(reviewed.reasons.contains(.mergedDirectionChatter))
+    }
+    func testLowAmplitudeSignChatterRetainsUnknownCounterMotion() {
+        let raw = packets(1) + packets(-1, count: 2, start: 0.3, duration: 0.02, phase: 30).dropFirst()
+            + packets(1, start: 0.32, phase: 28).dropFirst()
+        let reviewed = review(normalized(raw))
+        XCTAssertEqual(reviewed.stationaryIntervals.count, 0)
+        XCTAssertEqual(reviewed.totalCountedTearHoldCount, 0)
+        XCTAssertTrue(reviewed.segments.contains { $0.state == .unknown && $0.reasons.contains(.discardedMotion) })
+    }
+    func testInsufficientSamplingAndEmptyInputEmitUnknown() {
+        for raw in [[], Array(packets(1).prefix(1)), Array(packets(1).prefix(2))] {
+            let result = normalized(raw)
+            XCTAssertTrue(result.events.isEmpty)
+            XCTAssertTrue(result.intervals.contains { $0.kind == .insufficientSampling })
+            XCTAssertEqual(review(result).segments.first?.state, .unknown)
+            XCTAssertEqual(review(result).totalCountedTearHoldCount, 0)
+        }
+    }
+    func testBabyTurnaroundRemainsTwoTravelRunsWithoutHold() {
+        let result = normalized(packets(1) + packets(-1, start: 0.3, phase: 30).dropFirst())
+        XCTAssertEqual(result.events.count, 2)
+        XCTAssertEqual(result.events[0].endTime, result.events[1].startTime)
+        XCTAssertEqual(review(result).candidates.count, 2)
+        XCTAssertEqual(review(result).reversals.count, 1)
+        XCTAssertEqual(review(result).totalCountedTearHoldCount, 0)
+    }
+    func testNormalizerDiscardAndSecondPassRetainProvenance() {
+        // The short forward stroke clears decoder gates but its normalized
+        // excursion is under the existing 0.015 floor beside the large pull.
+        let raw = packets(1, count: 10, duration: 0.2)
+            + packets(-30, count: 100, start: 0.2, duration: 1, phase: 10).dropFirst()
+        let decoded = CaptureCore.derivePlatterMotionEvidence(from: raw)
+        XCTAssertEqual(decoded.events.count, 2)
+        let retained = normalized(raw)
+        XCTAssertEqual(retained.events.count, 1)
+        XCTAssertTrue(retained.intervals.contains { $0.kind == .discardedMotion && $0.stage == .normalization })
+        let second = MacCaptureEngine.RoutineNotationEventNormalizer().normalize(events: retained.events, audioEvents: [])
+        XCTAssertEqual(retained.retaining(normalizedEvents: second), retained)
+        XCTAssertTrue(review(retained).segments.contains { $0.state == .unknown && $0.reasons.contains(.discardedMotion) })
+    }
+    func testClockMismatchAndMixedSourcesFailClosed() {
+        let raw = packets(1)
+        let last = raw.last!
+        let clockJump = Event(timestamp: last.timestamp + 4, takeRelativeTime: last.takeRelativeTime + 0.01,
+            deviceName: last.deviceName, channel: 1, controller: 6, value: last.value,
+            normalizedValue: last.normalizedValue, mappedControl: nil)
+        XCTAssertTrue(normalized(raw + [clockJump]).intervals.contains { $0.kind == .clockDiscontinuity })
+        let other = Event(timestamp: 0.31, takeRelativeTime: 0.31,
+            deviceName: "Other Controller", channel: 1, controller: 6, value: 30,
+            normalizedValue: 30.0 / 127, mappedControl: nil)
+        let ambiguous = normalized(raw + [other])
+        XCTAssertTrue(ambiguous.events.isEmpty)
+        XCTAssertTrue(ambiguous.intervals.contains { $0.kind == .unknown })
+        XCTAssertEqual(review(ambiguous).stationaryIntervals.count, 0)
+    }
+    func testGapClosesLiveRunBeforePostGapProvisionalTravel() {
+        let raw = packets(1) + packets(1, start: 2, phase: 30)
+        let live = CaptureCore.derivePlatterMovementEventsWithProvisional(from: raw, controller: 6, channel: 1)
+        XCTAssertEqual(live.committedEvents.count, 1)
+        XCTAssertEqual(live.committedEvents.first?.endTime, 0.3)
+        XCTAssertEqual(live.provisionalMovement?.startTime, 2)
+    }
+    func testSingleRepeatedPairIsInsufficientToProveHold() {
+        let raw = packets(1) + packets(0, count: 1, start: 0.3, duration: 0.05, phase: 30).dropFirst()
+            + packets(1, start: 0.35, phase: 30).dropFirst()
+        let result = normalized(raw)
+        XCTAssertTrue(result.intervals.contains { $0.kind == .insufficientSampling })
+        XCTAssertEqual(review(result).stationaryIntervals.count, 0)
+        XCTAssertEqual(review(result).totalCountedTearHoldCount, 0)
+    }
+    func testTwentyFiveHighDisplacementAlternatingRunsAreNotOneGesture() {
+        var raw = packets(5, duration: 0.15)
+        var phase = 150
+        for index in 1..<25 {
+            let step = index.isMultiple(of: 2) ? 5 : -5
+            raw += packets(step, start: Double(index) * 0.15, duration: 0.15, phase: phase).dropFirst()
+            phase += step * 30
+        }
+        let reviewed = review(normalized(raw))
+        XCTAssertEqual(reviewed.candidates.count, 25)
+        XCTAssertEqual(reviewed.reversals.count, 24)
+        XCTAssertFalse(reviewed.reasons.contains(.mergedDirectionChatter))
+        XCTAssertEqual(reviewed.totalCountedTearHoldCount, 0)
+    }
+    func testClockRegressionWithOpposingTravelDoesNotConfirmReversal() {
+        let result = normalized(packets(1, start: 1) + packets(-1, start: 0.5, phase: 30))
+        let reviewed = review(result)
+        XCTAssertEqual(reviewed.reversals.count, 0)
+        XCTAssertTrue(reviewed.segments.contains { $0.state == .unknown && $0.reasons.contains(.clockDiscontinuity) })
+    }
+    func testClockDiscontinuitySolelyAtTransitionDoesNotConfirmReversal() throws {
+        // Cover the 0.30–0.31 transition and a clock break at the shared instant.
+        for backwardStart in [0.31, 0.30] {
+            let backward = packets(-1, start: backwardStart, phase: 30).map { packet in
+                Event(timestamp: packet.timestamp + 4, takeRelativeTime: packet.takeRelativeTime,
+                    deviceName: packet.deviceName, channel: packet.channel, controller: packet.controller,
+                    value: packet.value, normalizedValue: packet.normalizedValue, mappedControl: nil)
+            }
+            let result = normalized(packets(1) + backward)
+            XCTAssertEqual(result.events.map(\.direction), ["forward", "backward"])
+            XCTAssertEqual(result.events.map(\.startTime), [0, backwardStart])
+            XCTAssertEqual(result.events[0].endTime, 0.30, accuracy: 1e-9)
+            XCTAssertEqual(result.events[1].endTime, backwardStart + 0.30, accuracy: 1e-9)
+            let clock = try XCTUnwrap(result.intervals.first { $0.kind == .clockDiscontinuity })
+            XCTAssertEqual(clock.startTime, 0.30, accuracy: 1e-9)
+            XCTAssertEqual(clock.endTime, backwardStart, accuracy: 1e-9)
+            let reviewed = review(result)
+            XCTAssertEqual(reviewed.travelIntervals.count, 2)
+            XCTAssertTrue(reviewed.segments.contains {
+                $0.state == .unknown && $0.reasons.contains(.clockDiscontinuity)
+                    && $0.span.startTime == clock.startTime && $0.span.endTime == clock.endTime
+            })
+            XCTAssertEqual(reviewed.reversals.count, 0)
+            XCTAssertEqual(reviewed.totalCountedTearHoldCount, 0)
+        }
+    }
+    func testLeadingAndTrailingObservedStillnessAreNotBoundedHolds() {
+        let raw = packets(0, count: 5, duration: 0.2)
+            + packets(1, start: 0.2).dropFirst()
+            + packets(0, count: 5, start: 0.5, duration: 0.2, phase: 30).dropFirst()
+        let reviewed = review(normalized(raw))
+        XCTAssertEqual(reviewed.stationaryIntervals.count, 2)
+        XCTAssertTrue(reviewed.stationaryIntervals.allSatisfy { $0.reasons.contains(.observedStationarySamples) })
+        XCTAssertFalse(reviewed.stationaryIntervals.contains { $0.reasons.contains(.boundedStationaryInterval) })
+        XCTAssertEqual(reviewed.totalCountedTearHoldCount, 0)
+    }
+    func testLegacyGapWithoutPacketProvenanceIsUnknown() {
+        let events = normalized(packets(1) + packets(1, start: 1, phase: 30)).events
+        let reviewed = ReferenceTearSegmentationReviewBuilder.build(referenceTakeID: "legacy", movementEvents: events, derivation: nil)
+        XCTAssertEqual(reviewed.stationaryIntervals.count, 0)
+        XCTAssertEqual(reviewed.totalCountedTearHoldCount, 0)
+        XCTAssertTrue(reviewed.segments.contains { $0.reasons.contains(.unknownMotionRegion) })
     }
 }

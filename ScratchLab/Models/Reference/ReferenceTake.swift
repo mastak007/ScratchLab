@@ -596,7 +596,9 @@ enum ReferenceTearReviewReason: String, CaseIterable, Codable, Equatable, Sendab
     case overlappingMovementEvents
     case uncalibratedPlatterCoordinates
     case gapDerivedStationaryInterval
+    case packetGap, clockDiscontinuity, discardedMotion, insufficientSampling, unknownMotionRegion
     case boundedStationaryInterval
+    case observedStationarySamples
     case shortStationaryInterval
     case directionReversal
     case contiguousSameDirectionRuns
@@ -620,8 +622,20 @@ enum ReferenceTearReviewReason: String, CaseIterable, Codable, Equatable, Sendab
             return "consecutive movement events overlap in time, so no stationary interval is claimed between them"
         case .uncalibratedPlatterCoordinates:
             return "recorded platter positions are normalised over this take's own range and are not calibrated revolutions, so no absolute travel is claimed"
+        case .packetGap:
+            return "packets are absent here; physical stillness and source interruption cannot be distinguished"
+        case .clockDiscontinuity:
+            return "packet clocks are discontinuous; travel timing is unknown"
+        case .discardedMotion:
+            return "raw or decoded movement was filtered here; this is not stationary evidence"
+        case .insufficientSampling:
+            return "too few timed samples support motion or stillness here"
+        case .unknownMotionRegion:
+            return "no continuous measured platter evidence supports this region"
         case .gapDerivedStationaryInterval:
-            return "this stationary interval is the absence of platter telemetry between two observed runs, not a measured zero-velocity sample"
+            return "legacy gap-derived interval; packet absence alone does not establish stillness"
+        case .observedStationarySamples:
+            return "repeated equal counter samples support stillness with continuous packet timing"
         case .boundedStationaryInterval:
             return "a stationary interval bounded on both sides by observed same-direction travel"
         case .shortStationaryInterval:
@@ -707,12 +721,11 @@ struct ReferenceTearMotionSegment: Equatable, Sendable, Identifiable {
     let index: Int
     let span: ReferenceTearTimeSpan
     let state: ScratchNotationMotionState
-    /// Decoder confidence for a travel interval. `nil` for a stationary
-    /// interval, which is inferred from an ABSENCE of platter telemetry and
-    /// therefore has no measured confidence of its own.
+    /// Decoder confidence for travel; nil for observed stillness or unknown
+    /// intervals, which carry their own provenance rather than travel confidence.
     let confidence: Double?
     /// Index into `ReferenceTearSegmentationReview.rawMovementEvents`, or
-    /// `nil` for a stationary interval, which no single event produced.
+    /// nil for a raw-packet provenance interval.
     let movementEventIndex: Int?
     let reasons: [ReferenceTearReviewReason]
 
@@ -1009,6 +1022,7 @@ struct ReferenceTearSegmentationReview: Equatable, Sendable {
     /// this type filters, reorders, repairs or removes an entry, and no
     /// correction below ever writes back into it.
     let rawMovementEvents: [CaptureCore.DetectedNotationRecordMovementEvent]
+    let platterEvidenceIntervals: [CaptureCore.PlatterEvidenceInterval]
     /// Derived travel and stationary intervals over `rawMovementEvents`.
     let segments: [ReferenceTearMotionSegment]
     let reversals: [ReferenceTearReversal]
@@ -1035,10 +1049,12 @@ struct ReferenceTearSegmentationReview: Equatable, Sendable {
         reasons: [ReferenceTearReviewReason],
         candidates: [ReferenceTearCandidate],
         notes: String = "",
-        noteCorrections: [ReferenceTearCorrection] = []
+        noteCorrections: [ReferenceTearCorrection] = [],
+        platterEvidenceIntervals: [CaptureCore.PlatterEvidenceInterval] = []
     ) {
         self.referenceTakeID = referenceTakeID
         self.rawMovementEvents = rawMovementEvents
+        self.platterEvidenceIntervals = platterEvidenceIntervals
         self.segments = segments
         self.reversals = reversals
         self.faderIntervals = faderIntervals
@@ -1278,49 +1294,33 @@ struct ReferenceTearReviewConfiguration: Equatable, Sendable {
     var lowMovementConfidence: Double = 0.75
     /// Times closer than this are the same instant.
     var timeTolerance: Double = 1e-6
-    /// A travel run must reach this duration, in a direction opposite the
-    /// gesture currently in force, before it is confirmed as a REAL
-    /// reversal. Below it, an opposite-direction run is attributed to the
-    /// surrounding gesture as sign chatter instead of ending it.
-    ///
-    /// Real hardware turnaround jitter and hand tremor routinely clear
-    /// `decodePlatterCore`'s own noise gates (independently short and
-    /// independently sustained enough to be reported at all) while still
-    /// being far shorter than any deliberate technique-level direction
-    /// change — this is the threshold that tells the two apart at the
-    /// review layer, one level coarser than the raw decoder's own gates.
-    /// PROVISIONAL, on the same terms as `CrossfaderStateDeriver`'s
-    /// defaults: a generic default, not derived from any recorded take.
+    /// Both duration AND small measured excursion are needed for chatter.
+    /// The amplitude floor matches the existing normalized-motion noise floor;
+    /// it is provisional until hardware calibration, not a physical unit.
     var reversalConfirmationDuration: Double = 0.25
+    var maximumChatterPositionDelta: Double = 0.015
 
     init(
         ambiguousStationaryDuration: Double = 0.12,
         lowMovementConfidence: Double = 0.75,
         timeTolerance: Double = 1e-6,
-        reversalConfirmationDuration: Double = 0.25
+        reversalConfirmationDuration: Double = 0.25,
+        maximumChatterPositionDelta: Double = 0.015
     ) {
         self.ambiguousStationaryDuration = ambiguousStationaryDuration
         self.lowMovementConfidence = lowMovementConfidence
         self.timeTolerance = timeTolerance
         self.reversalConfirmationDuration = reversalConfirmationDuration
+        self.maximumChatterPositionDelta = maximumChatterPositionDelta
     }
 }
 
 /// The automatic pass: a PURE derivation of tear candidates from one take's
 /// already-recorded evidence.
 ///
-/// It re-decodes nothing. Platter movement events come from the take's
-/// finalized sidecar exactly as `CaptureCore.derivePlatterMovementEvents`
-/// wrote them, and fader spans and clicks come from the take's own
-/// `CrossfaderDerivation`. This builder therefore adds no second decoder and
-/// no second calibration: it only groups, correlates and cites.
-///
-/// `PlatterMotionSegmenter` is deliberately NOT used here. Its input contract
-/// is CALIBRATED platter samples with an externally established reference,
-/// and a reference take's persisted movement positions are normalised over
-/// the take's own step range — supplying them would fabricate a calibration
-/// the take does not carry. Every review it produces therefore states
-/// `.uncalibratedPlatterCoordinates`, and no absolute travel is claimed.
+/// Saved travel stays verbatim. The companion provenance view is derived by
+/// the existing packet decoder and follows discarded motion through filters.
+/// Missing provenance fails closed; fader evidence never supplies structure.
 enum ReferenceTearSegmentationReviewBuilder {
 
     /// One usable decoded travel run, in evidence order by time. Carries the
@@ -1331,6 +1331,7 @@ enum ReferenceTearSegmentationReviewBuilder {
         let span: ReferenceTearTimeSpan
         let direction: ScratchNotationDirection
         let confidence: Double
+        let displacement: Double
     }
 
     static func build(
@@ -1340,6 +1341,7 @@ enum ReferenceTearSegmentationReviewBuilder {
         build(
             referenceTakeID: evidence.metadata.referenceTakeID,
             movementEvents: evidence.platterMovementEvents,
+            platterEvidenceIntervals: evidence.platterEvidenceIntervals,
             derivation: evidence.derivation,
             configuration: configuration
         )
@@ -1348,6 +1350,7 @@ enum ReferenceTearSegmentationReviewBuilder {
     static func build(
         referenceTakeID: String,
         movementEvents: [CaptureCore.DetectedNotationRecordMovementEvent],
+        platterEvidenceIntervals: [CaptureCore.PlatterEvidenceInterval] = [],
         derivation: CrossfaderDerivation?,
         configuration: ReferenceTearReviewConfiguration = ReferenceTearReviewConfiguration()
     ) -> ReferenceTearSegmentationReview {
@@ -1379,7 +1382,8 @@ enum ReferenceTearSegmentationReviewBuilder {
                     eventIndex: index,
                     span: ReferenceTearTimeSpan(startTime: event.startTime, endTime: event.endTime),
                     direction: direction,
-                    confidence: event.confidence
+                    confidence: event.confidence,
+                    displacement: abs(event.endPosition - event.startPosition)
                 )
             )
         }
@@ -1398,93 +1402,92 @@ enum ReferenceTearSegmentationReviewBuilder {
         // — every raw run is still reported at its own measured direction;
         // only the REVERSAL and GESTURE decisions read the confirmed group.
         let groups = mergeDirectionChatter(travels: travels, configuration: configuration)
-        var travelPositionToGroup: [Int: Int] = [:]
-        for (groupIndex, group) in groups.enumerated() {
-            for travelPosition in group.travelPositions {
-                travelPositionToGroup[travelPosition] = groupIndex
-            }
-        }
         let chatterTravelPositions: Set<Int> = Set(
             groups.enumerated().flatMap { groupIndex, group -> [Int] in
                 group.travelPositions.filter { travels[$0].direction != group.direction }
             }
         )
 
-        // Interleave the travel runs with the intervals between them. An
-        // interval is stationary only when it is a real, positive-width gap in
-        // the platter telemetry; abutting or overlapping runs claim nothing.
+        func reason(_ kind: CaptureCore.PlatterEvidenceInterval.Kind) -> ReferenceTearReviewReason {
+            switch kind {
+            case .observedStillness: return .observedStationarySamples
+            case .packetGap: return .packetGap
+            case .clockDiscontinuity: return .clockDiscontinuity
+            case .discardedMotion: return .discardedMotion
+            case .insufficientSampling: return .insufficientSampling
+            case .unknown: return .unknownMotionRegion
+            }
+        }
+        let provenance = platterEvidenceIntervals.filter {
+            $0.startTime.isFinite && $0.endTime.isFinite && $0.endTime >= $0.startTime
+        }
+        reviewReasons += provenance.filter { $0.kind != .observedStillness }.map { reason($0.kind) }
         var segments: [ReferenceTearMotionSegment] = []
-        // The CONFIRMED gesture direction a travel segment was ultimately
-        // attributed to, keyed by final segment index — set only for travel
-        // segments whose own raw direction was overridden by chatter repair.
-        // A travel segment absent from this map simply keeps its own raw
-        // direction as its confirmed direction (the common case).
-        var segmentGroupDirection: [Int: ScratchNotationDirection] = [:]
         var sawOverlap = false
+        func overlaps(_ interval: CaptureCore.PlatterEvidenceInterval, _ span: ReferenceTearTimeSpan) -> Bool {
+            if interval.startTime == interval.endTime {
+                return interval.startTime > span.startTime && interval.startTime < span.endTime
+            }
+            return interval.startTime < span.endTime - configuration.timeTolerance
+                && interval.endTime > span.startTime + configuration.timeTolerance
+        }
+        func appendUncovered(_ start: Double, _ end: Double, sameDirection: Bool? = nil) {
+            guard end >= start else { return }
+            let span = ReferenceTearTimeSpan(startTime: start, endTime: end)
+            let supporting = provenance.filter { overlaps($0, span) || (start == end && $0.startTime == start) }
+            var coveredThrough = start
+            for interval in supporting.filter({ $0.kind == .observedStillness }).sorted(by: { $0.startTime < $1.startTime }) {
+                if interval.startTime <= coveredThrough + configuration.timeTolerance {
+                    coveredThrough = max(coveredThrough, interval.endTime)
+                }
+            }
+            let still = end > start && coveredThrough >= end - configuration.timeTolerance
+                && supporting.allSatisfy { $0.kind == .observedStillness }
+            var reasons = supporting.map { reason($0.kind) }
+            if !still { reasons.append(.unknownMotionRegion) }
+            if still && sameDirection == true { reasons.append(.boundedStationaryInterval) }
+            if still && sameDirection == false { reasons.append(.directionReversal) }
+            if still && span.duration < configuration.ambiguousStationaryDuration { reasons.append(.shortStationaryInterval) }
+            segments.append(ReferenceTearMotionSegment(index: segments.count, span: span,
+                state: still ? .stationary : .unknown, confidence: nil, movementEventIndex: nil,
+                reasons: ReferenceTearReviewReason.ordered(reasons)))
+        }
+        if let first = travels.first, let lower = provenance.map(\.startTime).min(), lower < first.span.startTime {
+            appendUncovered(lower, first.span.startTime)
+        }
         for (position, travel) in travels.enumerated() {
             if position > 0 {
                 let previous = travels[position - 1]
                 let gap = travel.span.startTime - previous.span.endTime
-                if gap < -configuration.timeTolerance {
-                    sawOverlap = true
-                } else if gap > configuration.timeTolerance {
-                    let span = ReferenceTearTimeSpan(
-                        startTime: previous.span.endTime,
-                        endTime: travel.span.startTime
-                    )
-                    var reasons: [ReferenceTearReviewReason] = [.gapDerivedStationaryInterval]
-                    // Whether this gap separates two confirmed directions, or
-                    // sits inside one confirmed gesture. Uses the CONFIRMED
-                    // group rather than the raw run direction, so a gap beside
-                    // an absorbed chatter run still reads as a same-direction
-                    // pause (a hold), not a reversal.
-                    if travelPositionToGroup[position - 1] == travelPositionToGroup[position] {
-                        reasons.append(.boundedStationaryInterval)
-                    } else {
-                        reasons.append(.directionReversal)
-                    }
-                    if span.duration < configuration.ambiguousStationaryDuration {
-                        reasons.append(.shortStationaryInterval)
-                    }
-                    segments.append(
-                        ReferenceTearMotionSegment(
-                            index: segments.count,
-                            span: span,
-                            state: .stationary,
-                            confidence: nil,
-                            movementEventIndex: nil,
-                            reasons: ReferenceTearReviewReason.ordered(reasons)
-                        )
-                    )
+                if gap < -configuration.timeTolerance { sawOverlap = true }
+                else if gap > configuration.timeTolerance {
+                    appendUncovered(previous.span.endTime, travel.span.startTime,
+                                    sameDirection: previous.direction == travel.direction)
+                } else if provenance.contains(where: {
+                    $0.kind != .observedStillness && $0.startTime == $0.endTime
+                        && abs($0.startTime - travel.span.startTime) <= configuration.timeTolerance
+                }) {
+                    appendUncovered(travel.span.startTime, travel.span.startTime)
                 } else if previous.direction == travel.direction {
-                    // Two same-direction runs with nothing between them: the
-                    // decoder only splits on a gap or a sign flip, so this is
-                    // not evidence of a pause and must not become one.
-                    segments.append(
-                        contiguityMarker(index: segments.count, at: travel.span.startTime)
-                    )
+                    segments.append(contiguityMarker(index: segments.count, at: travel.span.startTime))
                 }
             }
-            var reasons: [ReferenceTearReviewReason] = []
-            if travel.confidence <= configuration.lowMovementConfidence {
-                reasons.append(.lowMovementConfidence)
-            }
-            if chatterTravelPositions.contains(position) {
-                reasons.append(.mergedDirectionChatter)
-                if let groupIndex = travelPositionToGroup[position] {
-                    segmentGroupDirection[segments.count] = groups[groupIndex].direction
-                }
-            }
-            segments.append(
-                ReferenceTearMotionSegment(
-                    index: segments.count,
-                    span: travel.span,
-                    state: ScratchNotationMotionState(direction: travel.direction),
-                    confidence: travel.confidence,
-                    movementEventIndex: travel.eventIndex,
-                    reasons: ReferenceTearReviewReason.ordered(reasons)
-                )
-            )
+            let conflicts = provenance.filter { $0.kind != .observedStillness && overlaps($0, travel.span) }
+            var reasons = conflicts.map { reason($0.kind) }
+            if travel.confidence <= configuration.lowMovementConfidence { reasons.append(.lowMovementConfidence) }
+            let chatter = chatterTravelPositions.contains(position)
+            if chatter { reasons.append(.mergedDirectionChatter) }
+            let unknown = chatter || !conflicts.isEmpty
+            if unknown { reasons.append(.unknownMotionRegion) }
+            segments.append(ReferenceTearMotionSegment(index: segments.count, span: travel.span,
+                state: unknown ? .unknown : ScratchNotationMotionState(direction: travel.direction),
+                confidence: travel.confidence, movementEventIndex: travel.eventIndex,
+                reasons: ReferenceTearReviewReason.ordered(reasons)))
+        }
+        if let last = travels.last, let upper = provenance.map(\.endTime).max(), upper > last.span.endTime {
+            appendUncovered(last.span.endTime, upper)
+        } else if travels.isEmpty {
+            appendUncovered(provenance.map(\.startTime).min() ?? 0, provenance.map(\.endTime).max() ?? 0)
         }
         if sawOverlap { reviewReasons.append(.overlappingMovementEvents) }
         if !chatterTravelPositions.isEmpty { reviewReasons.append(.mergedDirectionChatter) }
@@ -1497,13 +1500,24 @@ enum ReferenceTearSegmentationReviewBuilder {
         for (position, group) in groups.enumerated() where position > 0 {
             let previous = groups[position - 1]
             guard previous.direction != group.direction else { continue }
+            let involved = previous.travelPositions + group.travelPositions
+            let transition = ReferenceTearTimeSpan(
+                startTime: previous.endTime,
+                endTime: max(previous.endTime, group.startTime)
+            )
+            guard !provenance.contains(where: { interval in
+                guard interval.kind == .clockDiscontinuity || interval.kind == .unknown else { return false }
+                // A clock break can lie solely between the travel spans or
+                // exactly at their shared endpoint. Neither confirms a reversal.
+                return involved.contains { overlaps(interval, travels[$0].span) }
+                    || (interval.kind == .clockDiscontinuity
+                        && interval.startTime <= transition.endTime
+                        && interval.endTime >= transition.startTime)
+            }) else { continue }
             reversals.append(
                 ReferenceTearReversal(
                     index: reversals.count,
-                    span: ReferenceTearTimeSpan(
-                        startTime: previous.endTime,
-                        endTime: max(previous.endTime, group.startTime)
-                    ),
+                    span: transition,
                     from: previous.direction,
                     to: group.direction
                 )
@@ -1516,7 +1530,6 @@ enum ReferenceTearSegmentationReviewBuilder {
 
         let candidates = makeCandidates(
             segments: segments,
-            segmentGroupDirection: segmentGroupDirection,
             faderIntervals: faderIntervals,
             faderClicks: faderClicks,
             configuration: configuration
@@ -1536,7 +1549,8 @@ enum ReferenceTearSegmentationReviewBuilder {
             faderIntervals: faderIntervals,
             faderClicks: faderClicks,
             reasons: ReferenceTearReviewReason.ordered(reviewReasons),
-            candidates: candidates
+            candidates: candidates,
+            platterEvidenceIntervals: provenance
         )
     }
 
@@ -1566,33 +1580,9 @@ enum ReferenceTearSegmentationReviewBuilder {
         var duration: Double { endTime - startTime }
     }
 
-    /// Confirmed per-gesture direction groups over the sorted travel runs.
-    ///
-    /// A single forward sweep with hysteresis on the CONFIRMED direction,
-    /// directly analogous to `PlatterMotionSegmenter`'s own hysteresis band
-    /// on this same problem class (`state = previous == sign ? previous :
-    /// .unknown` — a reading below the moving threshold never overrides an
-    /// established state), applied here to whole already-decoded travel runs
-    /// rather than raw per-sample speeds:
-    ///
-    /// The confirmed direction starts as the first run's direction. Each
-    /// subsequent run either matches it (trivially extends the current
-    /// group), or opposes it — and an opposing run only overrides the
-    /// confirmed direction once it reaches `reversalConfirmationDuration` on
-    /// its own; a shorter opposing run is folded into the CURRENT group
-    /// without changing its direction, exactly like a same-direction run.
-    /// This is why a run's neighbors on both sides need not already be
-    /// "established": chatter is measured against the confirmed direction in
-    /// force, not against its immediate neighbors, so an unbroken run of
-    /// short alternating jitter between two real strokes collapses to
-    /// exactly one reversal regardless of how many times it flips sign.
-    ///
-    /// A short run at the very START of the take has no confirmed direction
-    /// yet to be measured against; it seeds the first group as-is, and only
-    /// a later sustained-or-longer run can end up overriding it as a
-    /// reversal. Unknown evidence is not fabricated — this can leave a short
-    /// leading group, which is reported plainly rather than guessed into
-    /// whichever side looks more likely.
+    /// Only bounded, contiguous, low-amplitude short counter-motion may be
+    /// attributed to chatter. Its segment remains UNKNOWN, never a monotonic
+    /// travel curve or stationary hold under the surrounding direction.
     private static func mergeDirectionChatter(
         travels: [Travel],
         configuration: ReferenceTearReviewConfiguration
@@ -1609,14 +1599,19 @@ enum ReferenceTearSegmentationReviewBuilder {
         for position in 1..<travels.count {
             let travel = travels[position]
             let confirmed = groups[groups.count - 1]
-            if travel.direction == confirmed.direction
-                || travel.span.duration + configuration.timeTolerance < configuration.reversalConfirmationDuration {
-                // Same direction, or opposite but not yet sustained enough to
-                // confirm a real reversal: absorbed into the current group.
+            let boundedChatter = position + 1 < travels.count
+                && travels[position + 1].direction == confirmed.direction
+                && abs(travel.span.startTime - confirmed.endTime) <= configuration.timeTolerance
+                && abs(travels[position + 1].span.startTime - travel.span.endTime) <= configuration.timeTolerance
+                && travel.displacement.isFinite && travel.displacement <= configuration.maximumChatterPositionDelta
+                && travel.span.duration + configuration.timeTolerance < configuration.reversalConfirmationDuration
+            if travel.direction == confirmed.direction || boundedChatter {
+                // Direction summary only. Counter-motion remains an unknown
+                // segment and cannot be rendered as same-direction travel.
                 groups[groups.count - 1].endTime = travel.span.endTime
                 groups[groups.count - 1].travelPositions.append(position)
             } else {
-                // Opposite direction AND sustained: a real, confirmed reversal.
+                // Opposing travel without bounded low-amplitude chatter evidence.
                 groups.append(
                     DirectionGroup(
                         direction: travel.direction,
@@ -1632,7 +1627,6 @@ enum ReferenceTearSegmentationReviewBuilder {
 
     private static func makeCandidates(
         segments: [ReferenceTearMotionSegment],
-        segmentGroupDirection: [Int: ScratchNotationDirection],
         faderIntervals: [CrossfaderStateInterval],
         faderClicks: [CrossfaderSemanticEvent],
         configuration: ReferenceTearReviewConfiguration
@@ -1650,13 +1644,9 @@ enum ReferenceTearSegmentationReviewBuilder {
             var pendingHold: Int?
             while cursor < segments.count {
                 let segment = segments[cursor]
-                // A travel segment continues THIS gesture when its own raw
-                // direction matches (the ordinary case, including resuming
-                // after a genuine gap-derived hold), OR when it is a brief
-                // opposite-direction chatter run that repair attributed to a
-                // group whose CONFIRMED direction matches this gesture.
-                if segment.state.travelDirection == direction
-                    || segmentGroupDirection[cursor] == direction {
+                // Only measured travel in this direction continues the curve.
+                // Chatter and unknown provenance terminate it without a hold.
+                if segment.state.travelDirection == direction {
                     if let hold = pendingHold {
                         holdIndices.append(hold)
                         pendingHold = nil
@@ -2150,6 +2140,7 @@ enum ReferenceTearCanonicalProjectionBuilder {
     /// projection for live preview.
     static func project(
         movementEvents: [CaptureCore.DetectedNotationRecordMovementEvent],
+        platterEvidenceIntervals: [CaptureCore.PlatterEvidenceInterval] = [],
         derivation: CrossfaderDerivation? = nil,
         referenceTakeID: String = "live-preview",
         configuration: ReferenceTearReviewConfiguration = ReferenceTearReviewConfiguration()
@@ -2158,6 +2149,7 @@ enum ReferenceTearCanonicalProjectionBuilder {
             ReferenceTearSegmentationReviewBuilder.build(
                 referenceTakeID: referenceTakeID,
                 movementEvents: movementEvents,
+                platterEvidenceIntervals: platterEvidenceIntervals,
                 derivation: derivation,
                 configuration: configuration
             ),

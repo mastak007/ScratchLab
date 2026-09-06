@@ -89,6 +89,8 @@ struct ReferenceRecordedTakeArtifacts: Equatable, Sendable {
     /// untouched so tear-segmentation review can show the operator the motion
     /// rather than a count; see `ReferenceTakeEvidence.platterMovementEvents`.
     let platterMovementEvents: [CaptureCore.DetectedNotationRecordMovementEvent]
+    /// Derived from retained raw MIDI; never rewrites the sidecar or export.
+    let platterEvidenceIntervals: [CaptureCore.PlatterEvidenceInterval]
     let recordedAt: Date
     /// The crossfader control state the ENGINE recorded at this take's
     /// media-start boundary, verbatim, or `nil` when none was written.
@@ -125,6 +127,7 @@ struct ReferenceRecordedTakeArtifacts: Equatable, Sendable {
             syncState: CaptureWatchSyncState.notRequested.rawValue
         ),
         platterMovementEvents: [CaptureCore.DetectedNotationRecordMovementEvent] = [],
+        platterEvidenceIntervals: [CaptureCore.PlatterEvidenceInterval] = [],
         crossfaderTakeStartState: CaptureCore.CrossfaderTakeStartState? = nil,
         crossfaderTakeStartCorrelation: ReferenceCrossfaderTakeStart.Correlation? = nil
     ) {
@@ -136,6 +139,7 @@ struct ReferenceRecordedTakeArtifacts: Equatable, Sendable {
         self.observedCrossfaderAddress = observedCrossfaderAddress
         self.platterMovementEventCount = platterMovementEventCount
         self.platterMovementEvents = platterMovementEvents
+        self.platterEvidenceIntervals = platterEvidenceIntervals
         self.recordedAt = recordedAt
         self.crossfaderTakeStartState = crossfaderTakeStartState
         self.crossfaderTakeStartCorrelation = crossfaderTakeStartCorrelation
@@ -663,6 +667,7 @@ struct ReferenceAuthoringSession: Equatable, Sendable {
             derivation: derivation,
             watchEvidence: artifacts.watchEvidence,
             platterMovementEvents: artifacts.platterMovementEvents,
+            platterEvidenceIntervals: artifacts.platterEvidenceIntervals,
             crossfaderTakeStartState: artifacts.crossfaderTakeStartState,
             crossfaderTakeStartOutcome: takeStartOutcome
         )
