@@ -2357,3 +2357,632 @@ struct TearGestureRecordCompatibilityTests {
         #expect(ScratchNotation.canonicalBeatPattern(forScratchID: "tear2") == nil)
     }
 }
+
+// MARK: - Prompt 6: conservative derived structure classification
+
+fileprivate typealias DerivedStructure = ScratchNotationDerivedStructure
+fileprivate typealias StructureClassifier = ScratchNotationStructureClassifier
+fileprivate typealias StructureReason = ScratchNotationStructureReason
+fileprivate typealias StructureReference = ScratchNotationEvidenceReference
+
+/// `N` internal holds → `2N + 1` segments of same-direction travel separated
+/// by bounded stationary intervals, one beat each, starting at beat 0.
+private func tearShapePattern(holds: Int,
+                              direction: ScratchNotationMotionState = .forward,
+                              faderOverride: [ScratchNotation.FaderInterval]? = nil,
+                              clicks: [ScratchNotation.FaderClick] = [])
+-> ScratchNotation.GesturePattern {
+    var segments: [ScratchNotation.PlatterMotionSegment] = []
+    for index in 0...(2 * holds) {
+        let start = Double(index)
+        segments.append(motion(start, start + 1, index.isMultiple(of: 2) ? direction : .stationary))
+    }
+    let end = Double(2 * holds + 1)
+    return gesturePattern(motionSegments: segments,
+                          faderIntervals: faderOverride ?? [fader(0, end, .open)],
+                          faderClicks: clicks)
+}
+
+private func soleCandidate(_ proposal: ScratchNotationStructureProposal) throws
+-> ScratchNotationStructureProposal.Candidate {
+    try #require(proposal.soleCandidate)
+}
+
+@Suite("Derived structure vocabulary boundaries")
+struct DerivedStructureVocabularyTests {
+
+    @Test("The proposable vocabulary is closed and excludes Chirp and Transformer")
+    func vocabularyIsClosed() {
+        #expect(Set(DerivedStructure.allCases.map(\.rawValue)) == [
+            "baby", "tear1_candidate", "tear2_candidate", "tear3_candidate",
+            "hold", "ghost", "ghost_hold"
+        ])
+        #expect(DerivedStructure.allCases.count == 7)
+        for structure in DerivedStructure.allCases {
+            #expect(structure.rawValue.contains("chirp") == false)
+            #expect(structure.rawValue.contains("transform") == false)
+        }
+    }
+
+    @Test("Tear candidates exist only for the supported 1...3 hold vocabulary")
+    func tearCandidateRange() {
+        #expect(DerivedStructure.tearCandidate(holdCount: 1) == .tear1Candidate)
+        #expect(DerivedStructure.tearCandidate(holdCount: 2) == .tear2Candidate)
+        #expect(DerivedStructure.tearCandidate(holdCount: 3) == .tear3Candidate)
+        for unsupported in [-1, 0, 4, 9] {
+            #expect(DerivedStructure.tearCandidate(holdCount: unsupported) == nil)
+        }
+        #expect(DerivedStructure.tear2Candidate.assertedTearHoldCount == 2)
+        #expect(DerivedStructure.baby.assertedTearHoldCount == nil)
+        #expect(DerivedStructure.hold.assertedTearHoldCount == nil)
+        #expect(DerivedStructure.ghost.isTearCandidate == false)
+        #expect(DerivedStructure.ghostHold.isTearCandidate == false)
+    }
+
+    @Test("Evidence references cite a stream and index without copying evidence")
+    func referencesAreCitations() {
+        #expect(StructureReference.motionSegment(index: 3).detail == "motionSegment[3]")
+        #expect(StructureReference.faderInterval(index: 0).detail == "faderInterval[0]")
+        #expect(StructureReference.faderClick(index: 7).detail == "faderClick[7]")
+        #expect(StructureReference.motionSegment(index: 1) != StructureReference.faderInterval(index: 1))
+    }
+
+    @Test("Every reason carries a human-readable explanation")
+    func reasonsAreReadable() {
+        for reason in StructureReason.allCases {
+            #expect(reason.detail.isEmpty == false)
+            #expect(reason.detail != reason.rawValue)
+        }
+    }
+}
+
+@Suite("Derived structure classification — supported structures")
+struct DerivedStructureClassificationTests {
+
+    @Test("The canonical Baby cycle derives exactly one Baby and no tear")
+    func canonicalBaby() throws {
+        let pattern = try #require(ScratchNotation.babyScratchGesturePattern)
+        let classification = StructureClassifier.classify(pattern)
+        #expect(classification.proposals.count == 1)
+        let proposal = try #require(classification.proposals.first)
+        #expect(proposal.scope == .reversal(fromGestureIndex: 0, toGestureIndex: 1))
+        #expect(proposal.span == ScratchNotation.BeatSpan(startBeat: 0, endBeat: 1))
+        let candidate = try soleCandidate(proposal)
+        #expect(candidate.structure == .baby)
+        #expect(approximatelyEqual(candidate.confidence, 1))
+        #expect(proposal.reasons.contains(.directReversal))
+        #expect(proposal.reasons.contains(.faderOpenThroughout))
+        #expect(proposal.isAmbiguous == false)
+        #expect(proposal.isUnknown == false)
+        #expect(classification.tearCandidateProposals.isEmpty)
+        #expect(classification.acceptedStructures == [.baby])
+        #expect(classification.counts.tearHoldCountsByGesture == [0, 0])
+        #expect(classification.counts.soundingRegionCount == 1)
+        #expect(classification.counts.faderClickCount == 0)
+    }
+
+    @Test("One, two and three bounded holds derive the matching tear candidate",
+          arguments: [(1, ScratchNotationDerivedStructure.tear1Candidate),
+                      (2, .tear2Candidate), (3, .tear3Candidate)])
+    func supportedTearCandidates(holds: Int, expected: ScratchNotationDerivedStructure) throws {
+        let pattern = tearShapePattern(holds: holds)
+        let classification = StructureClassifier.classify(pattern)
+        let gestureProposal = try #require(classification.proposals.first { $0.scope == .gesture(index: 0) })
+        let candidate = try soleCandidate(gestureProposal)
+        #expect(candidate.structure == expected)
+        #expect(candidate.structure.assertedTearHoldCount == holds)
+        #expect(approximatelyEqual(candidate.confidence, 0.9))
+        #expect(gestureProposal.reasons.contains(.sameDirectionPauseResume))
+        #expect(gestureProposal.reasons.contains(.tearCountIsPlatterOnly))
+        // N holds → N+1 sounding subdivisions, and the holds themselves are
+        // separately proposed at segment scope.
+        #expect(classification.counts.tearHoldCountsByGesture == [holds])
+        #expect(classification.counts.soundingRegionCount == holds + 1)
+        #expect(classification.proposals.filter { $0.soleCandidate?.structure == .hold }.count == holds)
+    }
+
+    @Test("A backward tear derives the same candidate as a forward one")
+    func backwardTear() throws {
+        let classification = StructureClassifier.classify(tearShapePattern(holds: 2, direction: .backward))
+        #expect(classification.acceptedStructures.contains(.tear2Candidate))
+        #expect(classification.counts.tearHoldCountsByGesture == [2])
+    }
+
+    @Test("Stationary with the fader open derives a Hold, never a tear on its own")
+    func standaloneHold() throws {
+        let pattern = gesturePattern(motionSegments: [motion(0, 1, .stationary), motion(1, 2, .forward)],
+                                     faderIntervals: [fader(0, 2, .open)])
+        let classification = StructureClassifier.classify(pattern)
+        #expect(classification.proposals.count == 1)
+        let proposal = try #require(classification.proposals.first)
+        #expect(proposal.scope == .motionSegment(index: 0))
+        let candidate = try soleCandidate(proposal)
+        #expect(candidate.structure == .hold)
+        #expect(approximatelyEqual(candidate.confidence, 0.9))
+        #expect(proposal.reasons.contains(.boundedStationaryInterval))
+        #expect(proposal.reasons.contains(.faderOpenThroughout))
+        #expect(proposal.evidenceReferences == [.motionSegment(index: 0), .faderInterval(index: 0)])
+        #expect(classification.counts.tearHoldCountsByGesture == [0])
+    }
+
+    @Test("A closed fader derives Ghost over travel and Ghost-Hold over stationary")
+    func ghostAndGhostHold() throws {
+        let pattern = gesturePattern(motionSegments: [motion(0, 1, .forward), motion(1, 2, .stationary)],
+                                     faderIntervals: [fader(0, 2, .closed)])
+        let classification = StructureClassifier.classify(pattern)
+        #expect(classification.acceptedStructures == [.ghost, .ghostHold])
+        for proposal in classification.proposals {
+            #expect(proposal.reasons.contains(.faderClosedThroughout))
+            let candidate = try soleCandidate(proposal)
+            #expect(approximatelyEqual(candidate.confidence, 0.9))
+        }
+        #expect(classification.counts.soundingRegionCount == 0)
+    }
+
+    @Test("A sounding stroke alone names no structure")
+    func soundingStrokeAssertsNothing() throws {
+        let pattern = gesturePattern(motionSegments: [motion(0, 1, .forward)],
+                                     faderIntervals: [fader(0, 1, .open)])
+        let classification = StructureClassifier.classify(pattern)
+        #expect(classification.proposals.isEmpty)
+        #expect(classification.counts.soundingRegionCount == 1)
+        #expect(classification.counts.tearHoldCountsByGesture == [0])
+    }
+}
+
+@Suite("Derived structure classification — ambiguity stays ambiguous")
+struct DerivedStructureAmbiguityTests {
+
+    @Test("A fader that opens and closes inside one hold offers both readings")
+    func mixedFaderOverHold() throws {
+        let pattern = gesturePattern(
+            motionSegments: [motion(0, 1, .stationary), motion(1, 2, .forward)],
+            faderIntervals: [fader(0, 0.5, .open), fader(0.5, 1, .closed)]
+        )
+        let classification = StructureClassifier.classify(pattern)
+        let proposal = try #require(classification.proposals.first { $0.scope == .motionSegment(index: 0) })
+        #expect(proposal.isAmbiguous)
+        #expect(proposal.soleCandidate == nil)
+        #expect(proposal.candidates.map(\.structure) == [.hold, .ghostHold])
+        for candidate in proposal.candidates {
+            #expect(approximatelyEqual(candidate.confidence, 0.9 * StructureClassifier.ambiguousCandidatePenalty))
+        }
+        #expect(proposal.reasons.contains(.faderStateVariesWithinRegion))
+        #expect(proposal.reasons.contains(.ambiguousCandidates))
+        #expect(classification.reasons.contains(.ambiguousCandidates))
+        // An ambiguous proposal contributes no accepted reading.
+        #expect(classification.acceptedStructures.contains(.hold) == false)
+        #expect(classification.acceptedStructures.contains(.ghostHold) == false)
+    }
+
+    @Test("A fader that varies over travel names nothing rather than guessing Ghost")
+    func mixedFaderOverTravel() throws {
+        let pattern = gesturePattern(
+            motionSegments: [motion(0, 1, .forward), motion(1, 2, .stationary)],
+            faderIntervals: [fader(0, 0.5, .closed), fader(0.5, 1, .open)]
+        )
+        let classification = StructureClassifier.classify(pattern)
+        let proposal = try #require(classification.proposals.first { $0.scope == .motionSegment(index: 0) })
+        #expect(proposal.isUnknown)
+        #expect(proposal.candidates.isEmpty)
+        #expect(proposal.reasons.contains(.faderStateVariesWithinRegion))
+        #expect(classification.acceptedStructures.contains(.ghost) == false)
+    }
+
+    @Test("An unobserved fader is unknown and is never read as open")
+    func unobservedFader() throws {
+        let pattern = gesturePattern(motionSegments: [motion(0, 1, .stationary), motion(1, 2, .forward)])
+        let classification = StructureClassifier.classify(pattern)
+        let everyProposalUnknown = classification.proposals.allSatisfy { $0.isUnknown }
+        #expect(everyProposalUnknown)
+        #expect(classification.proposals.isEmpty == false)
+        #expect(classification.acceptedStructures.isEmpty)
+        for proposal in classification.proposals {
+            #expect(proposal.reasons.contains(.faderUnobserved))
+            #expect(proposal.reasons.contains(.faderOpenThroughout) == false)
+        }
+        #expect(classification.counts.soundingRegionCount == 0)
+    }
+
+    @Test("Partial fader coverage keeps one reading but lowers its confidence")
+    func partialFaderCoverage() throws {
+        let pattern = gesturePattern(motionSegments: [motion(0, 1, .stationary), motion(1, 2, .forward)],
+                                     faderIntervals: [fader(0, 0.5, .closed)])
+        let classification = StructureClassifier.classify(pattern)
+        let proposal = try #require(classification.proposals.first { $0.scope == .motionSegment(index: 0) })
+        let candidate = try soleCandidate(proposal)
+        #expect(candidate.structure == .ghostHold)
+        #expect(approximatelyEqual(candidate.confidence, 0.9 * StructureClassifier.partialFaderCoveragePenalty))
+        #expect(proposal.reasons.contains(.partialFaderCoverage))
+        #expect(proposal.reasons.contains(.faderClosedThroughout))
+    }
+
+    @Test("Confidence never exceeds the weakest canonical observation it rests on")
+    func confidenceIsBoundedByEvidence() throws {
+        let pattern = gesturePattern(
+            motionSegments: [motion(0, 1, .stationary, evidence: platterEvidence(confidence: 0.4)),
+                             motion(1, 2, .forward)],
+            faderIntervals: [fader(0, 2, .open, evidence: faderEvidence(confidence: 0.95))]
+        )
+        let classification = StructureClassifier.classify(pattern)
+        let proposal = try #require(classification.proposals.first)
+        let candidate = try soleCandidate(proposal)
+        #expect(candidate.structure == .hold)
+        #expect(approximatelyEqual(candidate.confidence, 0.4))
+    }
+
+    @Test("A hold count outside 1...3 is unknown, never rounded to a supported tear")
+    func unsupportedHoldCount() throws {
+        let classification = StructureClassifier.classify(tearShapePattern(holds: 4))
+        let proposal = try #require(classification.proposals.first { $0.scope == .gesture(index: 0) })
+        #expect(proposal.isUnknown)
+        #expect(proposal.reasons.contains(.holdCountOutsideSupportedRange))
+        #expect(classification.tearCandidateProposals.isEmpty)
+        #expect(classification.acceptedStructures.contains(.tear3Candidate) == false)
+        // The platter count itself is still reported truthfully.
+        #expect(classification.counts.tearHoldCountsByGesture == [4])
+    }
+
+    @Test("A silent turnaround is two Ghosts, never a Baby")
+    func closedFaderReversal() throws {
+        let pattern = gesturePattern(motionSegments: [motion(0, 1, .forward), motion(1, 2, .backward)],
+                                     faderIntervals: [fader(0, 2, .closed)])
+        let classification = StructureClassifier.classify(pattern)
+        let reversal = try #require(classification.proposals.first {
+            $0.scope == .reversal(fromGestureIndex: 0, toGestureIndex: 1)
+        })
+        #expect(reversal.isUnknown)
+        #expect(reversal.reasons.contains(.faderClosedThroughout))
+        #expect(classification.acceptedStructures == [.ghost, .ghost])
+    }
+
+    @Test("A reversal with unobserved fader proposes no Baby")
+    func unobservedFaderReversal() throws {
+        let pattern = gesturePattern(motionSegments: [motion(0, 1, .forward), motion(1, 2, .backward)])
+        let classification = StructureClassifier.classify(pattern)
+        let reversal = try #require(classification.proposals.first {
+            $0.scope == .reversal(fromGestureIndex: 0, toGestureIndex: 1)
+        })
+        #expect(reversal.isUnknown)
+        #expect(reversal.reasons.contains(.faderUnobserved))
+        #expect(classification.acceptedStructures.contains(.baby) == false)
+    }
+
+    @Test("A stationary interval between opposite directions is not a Baby turnaround")
+    func pausedTurnaroundIsNotBaby() throws {
+        let pattern = gesturePattern(
+            motionSegments: [motion(0, 1, .forward), motion(1, 2, .stationary), motion(2, 3, .backward)],
+            faderIntervals: [fader(0, 3, .open)]
+        )
+        let classification = StructureClassifier.classify(pattern)
+        #expect(classification.proposals.contains { if case .reversal = $0.scope { return true } else { return false } } == false)
+        #expect(classification.acceptedStructures == [.hold])
+        #expect(classification.counts.tearHoldCountsByGesture == [0, 0])
+    }
+
+    @Test("Alternating gestures pair into whole cycles without sharing a gesture")
+    func alternatingRunPairsGreedily() throws {
+        let pattern = gesturePattern(
+            motionSegments: [motion(0, 1, .forward), motion(1, 2, .backward),
+                             motion(2, 3, .forward), motion(3, 4, .backward)],
+            faderIntervals: [fader(0, 4, .open)]
+        )
+        let classification = StructureClassifier.classify(pattern)
+        #expect(classification.acceptedStructures == [.baby, .baby])
+        #expect(classification.proposals.map(\.scope) == [.reversal(fromGestureIndex: 0, toGestureIndex: 1),
+                                                          .reversal(fromGestureIndex: 2, toGestureIndex: 3)])
+    }
+}
+
+@Suite("Derived structure classification — adversarial evidence")
+struct DerivedStructureAdversarialTests {
+
+    private func clicks(at beats: [Double],
+                        kind: ScratchNotationFaderClickKind = .cut) -> [ScratchNotation.FaderClick] {
+        beats.map { .init(beat: $0, kind: kind, evidence: faderEvidence()) }
+    }
+
+    @Test("Fader clicks during a tear are cited but never counted as tear holds")
+    func clicksDuringTear() throws {
+        let clean = StructureClassifier.classify(tearShapePattern(holds: 2))
+        let clicked = StructureClassifier.classify(
+            tearShapePattern(holds: 2, clicks: clicks(at: [0.5, 1.5, 2.5, 3.5, 4.5]))
+        )
+        let cleanTear = try soleCandidate(try #require(clean.proposals.first { $0.scope == .gesture(index: 0) }))
+        let clickedProposal = try #require(clicked.proposals.first { $0.scope == .gesture(index: 0) })
+        let clickedTear = try soleCandidate(clickedProposal)
+
+        // Five clicks did not become a fifth hold, a third tear, or any
+        // change in confidence: the tear label is platter-only.
+        #expect(clickedTear.structure == .tear2Candidate)
+        #expect(clickedTear.structure == cleanTear.structure)
+        #expect(approximatelyEqual(clickedTear.confidence, cleanTear.confidence))
+        #expect(clicked.counts.tearHoldCountsByGesture == clean.counts.tearHoldCountsByGesture)
+        #expect(clickedProposal.reasons.contains(.faderClicksPresentNotCounted))
+        #expect(clickedProposal.reasons.contains(.tearCountIsPlatterOnly))
+        #expect(clickedProposal.evidenceReferences.filter {
+            if case .faderClick = $0 { return true } else { return false }
+        }.count == 5)
+    }
+
+    @Test("Click count, sound count and tear count stay three independent numbers")
+    func threeCountsNeverCollapse() throws {
+        let counts = StructureClassifier.classify(
+            tearShapePattern(holds: 2, clicks: clicks(at: [0.5, 1.5, 2.5, 3.5, 4.5]))
+        ).counts
+        #expect(counts.faderClickCount == 5)
+        #expect(counts.soundingRegionCount == 3)
+        #expect(counts.tearHoldCountsByGesture == [2])
+        #expect(counts.totalTearHoldCount == 2)
+        #expect(Set([counts.faderClickCount, counts.soundingRegionCount, counts.totalTearHoldCount]).count == 3)
+
+        // The same independence on a Baby: many clicks, one sounding region,
+        // no tear holds at all.
+        let baby = gesturePattern(motionSegments: [motion(0, 1, .forward), motion(1, 2, .backward)],
+                                  faderIntervals: [fader(0, 2, .open)],
+                                  faderClicks: clicks(at: [0.25, 0.75, 1.25], kind: .transformPulse))
+        let babyCounts = StructureClassifier.classify(baby).counts
+        #expect(babyCounts.faderClickCount == 3)
+        #expect(babyCounts.soundingRegionCount == 1)
+        #expect(babyCounts.tearHoldCountsByGesture == [0, 0])
+    }
+
+    @Test("Clicks alone can never mint a structure")
+    func clicksAloneAssertNothing() throws {
+        let pattern = gesturePattern(motionSegments: [motion(0, 4, .forward)],
+                                     faderIntervals: [fader(0, 4, .open)],
+                                     faderClicks: clicks(at: [0.5, 1, 1.5, 2, 2.5, 3, 3.5]))
+        let classification = StructureClassifier.classify(pattern)
+        #expect(classification.proposals.isEmpty)
+        #expect(classification.acceptedStructures.isEmpty)
+        #expect(classification.counts.faderClickCount == 7)
+        #expect(classification.counts.tearHoldCountsByGesture == [0])
+        #expect(classification.counts.soundingRegionCount == 1)
+    }
+
+    @Test("Transform-style clicks never propose Chirp or Transformer")
+    func transformClicksProposeNothingNew() throws {
+        let pattern = gesturePattern(motionSegments: [motion(0, 1, .forward), motion(1, 2, .backward)],
+                                     faderIntervals: [fader(0, 2, .open)],
+                                     faderClicks: clicks(at: [0.2, 0.4, 0.6, 0.8, 1.2, 1.4],
+                                                         kind: .transformPulse))
+        let classification = StructureClassifier.classify(pattern)
+        #expect(classification.acceptedStructures == [.baby])
+        // Chirp/Transformer keep their untouched capture-side identity and
+        // still have no canonical target notation of their own.
+        #expect(CaptureSessionScratchType.chirp.title == "Chirp")
+        #expect(CaptureSessionScratchType.transform.title == "Transform")
+        #expect(ScratchNotation.canonicalBeatPattern(forScratchID: "chirp") == nil)
+        #expect(ScratchNotation.canonicalBeatPattern(forScratchID: "transform") == nil)
+        #expect(ScratchNotation.canonicalBeatPatterns.map(\.scratchID) == ["baby_scratch"])
+    }
+
+    @Test("Free playback between same-direction travel is not a tear hold")
+    func releasedBreaksTheGesture() throws {
+        let pattern = gesturePattern(
+            motionSegments: [motion(0, 1, .forward), motion(1, 2, .released), motion(2, 3, .forward)],
+            faderIntervals: [fader(0, 3, .open)]
+        )
+        let classification = StructureClassifier.classify(pattern)
+        #expect(classification.tearCandidateProposals.isEmpty)
+        #expect(classification.proposals.isEmpty)
+        #expect(classification.reasons.contains(.releasedMotionPresent))
+        #expect(classification.counts.tearHoldCountsByGesture == [0, 0])
+        #expect(classification.counts.soundingRegionCount == 2)
+    }
+
+    @Test("Unobserved motion between same-direction travel is not a tear hold")
+    func unknownBreaksTheGesture() throws {
+        let pattern = gesturePattern(
+            motionSegments: [motion(0, 1, .forward), motion(1, 2, .unknown), motion(2, 3, .forward)],
+            faderIntervals: [fader(0, 3, .open)]
+        )
+        let classification = StructureClassifier.classify(pattern)
+        #expect(classification.tearCandidateProposals.isEmpty)
+        #expect(classification.reasons.contains(.unknownMotionPresent))
+        #expect(classification.counts.tearHoldCountsByGesture == [0, 0])
+        #expect(classification.counts.soundingRegionCount == 2)
+    }
+
+    @Test("A pattern that fails its own validation is not classified at all")
+    func invalidPatternIsNotClassified() throws {
+        let pattern = gesturePattern(motionSegments: [motion(0, 1, .forward), motion(2, 3, .backward)],
+                                     faderIntervals: [fader(0, 3, .open)],
+                                     faderClicks: clicks(at: [0.5, 1.5]))
+        #expect(pattern.validationIssues().isEmpty == false)
+        let classification = StructureClassifier.classify(pattern)
+        #expect(classification.proposals.isEmpty)
+        #expect(classification.reasons == [.invalidPattern])
+        #expect(classification.counts.soundingRegionCount == 0)
+        #expect(classification.counts.tearHoldCountsByGesture.isEmpty)
+        // The raw click count is still reported honestly rather than zeroed.
+        #expect(classification.counts.faderClickCount == 2)
+    }
+
+    @Test("A manual motion correction changes the reading and keeps the derivation")
+    func correctedMotionLabelDrivesTheReading() throws {
+        let corrected = ScratchNotation.PlatterMotionSegment(
+            span: .init(startBeat: 1, endBeat: 2),
+            label: .init(derived: .forward, correction: .stationary),
+            evidence: platterEvidence()
+        )
+        let pattern = gesturePattern(motionSegments: [motion(0, 1, .forward), corrected, motion(2, 3, .forward)],
+                                     faderIntervals: [fader(0, 3, .open)])
+        let classification = StructureClassifier.classify(pattern)
+        let gestureProposal = try #require(classification.proposals.first { $0.scope == .gesture(index: 0) })
+        let tearCandidate = try soleCandidate(gestureProposal)
+        #expect(tearCandidate.structure == .tear1Candidate)
+        #expect(gestureProposal.reasons.contains(.correctedMotionLabel))
+        #expect(classification.reasons.contains(.correctedMotionLabel))
+        // The machine derivation survives the correction verbatim.
+        #expect(pattern.motionSegments[1].label.derived == .forward)
+        #expect(pattern.motionSegments[1].label.effective == .stationary)
+        #expect(pattern.motionSegments[1].label.isCorrected)
+    }
+}
+
+@Suite("Derived structure classification — invariants")
+struct DerivedStructureInvariantTests {
+
+    @Test("Classifying never mutates the canonical pattern or Baby Scratch")
+    func classificationIsPure() throws {
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = .sortedKeys
+        let pattern = tearShapePattern(holds: 2,
+                                       clicks: [.init(beat: 1.5, kind: .cut, evidence: faderEvidence())])
+        let patternBefore = try encoder.encode(pattern)
+        let cycleBefore = try encoder.encode(ScratchNotation.babyScratchCycle)
+        let babyPattern = try #require(ScratchNotation.babyScratchGesturePattern)
+        let babyPatternBefore = try encoder.encode(babyPattern)
+        _ = StructureClassifier.classify(pattern)
+        _ = StructureClassifier.classify(babyPattern)
+        let patternAfter = try encoder.encode(pattern)
+        let cycleAfter = try encoder.encode(ScratchNotation.babyScratchCycle)
+        let babyPatternAfter = try encoder.encode(try #require(ScratchNotation.babyScratchGesturePattern))
+        #expect(patternAfter == patternBefore)
+        #expect(cycleAfter == cycleBefore)
+        #expect(babyPatternAfter == babyPatternBefore)
+    }
+
+    @Test("Classifying is deterministic and repeatable")
+    func classificationIsDeterministic() throws {
+        let pattern = tearShapePattern(holds: 3, clicks: [.init(beat: 2.5, kind: .flareClick,
+                                                                evidence: faderEvidence())])
+        #expect(StructureClassifier.classify(pattern) == StructureClassifier.classify(pattern))
+    }
+
+    @Test("Every evidence reference resolves to the untouched canonical observation")
+    func referencesResolve() throws {
+        let pattern = tearShapePattern(holds: 2,
+                                       clicks: [.init(beat: 1.5, kind: .cut, evidence: faderEvidence())])
+        let classification = StructureClassifier.classify(pattern)
+        #expect(classification.proposals.isEmpty == false)
+        for proposal in classification.proposals {
+            #expect(proposal.evidenceReferences.isEmpty == false)
+            for reference in proposal.evidenceReferences {
+                switch reference {
+                case .motionSegment(let index):
+                    #expect(pattern.motionSegments.indices.contains(index))
+                    #expect(pattern.motionSegments[index].evidence == platterEvidence())
+                case .faderInterval(let index):
+                    #expect(pattern.faderIntervals.indices.contains(index))
+                    #expect(pattern.faderIntervals[index].evidence == faderEvidence())
+                case .faderClick(let index):
+                    #expect(pattern.faderClicks.indices.contains(index))
+                    #expect(pattern.faderClicks[index].evidence == faderEvidence())
+                }
+            }
+        }
+    }
+
+    @Test("Proposals are ordered by beat then by scope, and every one reads back")
+    func proposalsAreOrderedAndReadable() throws {
+        let classification = StructureClassifier.classify(tearShapePattern(holds: 2))
+        let starts = classification.proposals.map(\.span.startBeat)
+        #expect(starts == starts.sorted())
+        for proposal in classification.proposals {
+            #expect(proposal.narrative.isEmpty == false)
+            #expect(proposal.reasons.isEmpty == false)
+            for candidate in proposal.candidates {
+                #expect(candidate.narrative.contains(candidate.structure.rawValue))
+                #expect((0...1).contains(candidate.confidence))
+            }
+        }
+        #expect(classification.narrative.count == classification.proposals.count)
+    }
+
+    @Test("A classification round-trips through Codable unchanged")
+    func classificationRoundTrips() throws {
+        let classification = StructureClassifier.classify(
+            tearShapePattern(holds: 2, clicks: [.init(beat: 1.5, kind: .cut, evidence: faderEvidence())])
+        )
+        let data = try JSONEncoder().encode(classification)
+        let decoded = try JSONDecoder().decode(StructureClassifier.Classification.self, from: data)
+        #expect(decoded == classification)
+    }
+}
+
+@Suite("Manual structure annotation authority")
+struct DerivedStructureAnnotationTests {
+
+    private func holdProposal() throws -> ScratchNotationStructureProposal {
+        let pattern = gesturePattern(motionSegments: [motion(0, 1, .stationary), motion(1, 2, .forward)],
+                                     faderIntervals: [fader(0, 2, .open)])
+        return try #require(StructureClassifier.classify(pattern).proposals.first)
+    }
+
+    private func manualEvidence(
+        source: ScratchNotationEvidenceSource = .manualCorrection,
+        provenance: ScratchNotationProvenance = .manuallyCorrected,
+        reason: String = "reviewer_marked_ghost_hold"
+    ) -> ScratchNotation.GestureRecord.Evidence {
+        .init(provenance: provenance,
+              observation: ScratchNotationEvidence(source: source, confidence: 1, reason: reason))
+    }
+
+    @Test("With no manual label the sole candidate is the effective reading")
+    func unannotatedProposal() throws {
+        let annotation = ScratchNotationStructureAnnotation(proposal: try holdProposal())
+        #expect(annotation.effective == .hold)
+        #expect(annotation.isManuallyLabelled == false)
+        #expect(annotation.manualLabelDisagreesWithProposal == false)
+        #expect(annotation.validationIssues().isEmpty)
+    }
+
+    @Test("An ambiguous proposal supplies no effective reading on its own")
+    func ambiguousProposalHasNoEffectiveReading() throws {
+        let pattern = gesturePattern(
+            motionSegments: [motion(0, 1, .stationary), motion(1, 2, .forward)],
+            faderIntervals: [fader(0, 0.5, .open), fader(0.5, 1, .closed)]
+        )
+        let proposal = try #require(StructureClassifier.classify(pattern).proposals.first)
+        #expect(ScratchNotationStructureAnnotation(proposal: proposal).effective == nil)
+        let annotated = ScratchNotationStructureAnnotation(proposal: proposal,
+                                                          manualLabel: .ghostHold,
+                                                          manualEvidence: manualEvidence())
+        #expect(annotated.effective == .ghostHold)
+        // The machine did offer ghostHold, so this is a choice, not a dispute.
+        #expect(annotated.manualLabelDisagreesWithProposal == false)
+        #expect(annotated.validationIssues().isEmpty)
+    }
+
+    @Test("A manual label wins while the machine proposal is retained verbatim")
+    func manualLabelIsAuthoritative() throws {
+        let proposal = try holdProposal()
+        let annotation = ScratchNotationStructureAnnotation(proposal: proposal,
+                                                            manualLabel: .ghost,
+                                                            manualEvidence: manualEvidence())
+        #expect(annotation.effective == .ghost)
+        #expect(annotation.isManuallyLabelled)
+        #expect(annotation.manualLabelDisagreesWithProposal)
+        // Provenance on both sides survives the disagreement.
+        #expect(annotation.proposal == proposal)
+        #expect(annotation.proposal.soleCandidate?.structure == .hold)
+        #expect(annotation.manualEvidence?.provenance == .manuallyCorrected)
+        #expect(annotation.validationIssues().isEmpty)
+        let decoded = try JSONDecoder().decode(ScratchNotationStructureAnnotation.self,
+                                               from: JSONEncoder().encode(annotation))
+        #expect(decoded == annotation)
+    }
+
+    @Test("A manual label without usable provenance is a validation issue")
+    func manualLabelRequiresProvenance() throws {
+        let proposal = try holdProposal()
+        #expect(ScratchNotationStructureAnnotation(proposal: proposal, manualLabel: .ghost)
+            .validationIssues().isEmpty == false)
+        #expect(ScratchNotationStructureAnnotation(proposal: proposal, manualEvidence: manualEvidence())
+            .validationIssues().isEmpty == false)
+        #expect(ScratchNotationStructureAnnotation(
+            proposal: proposal, manualLabel: .ghost,
+            manualEvidence: manualEvidence(provenance: .inferred)
+        ).validationIssues().isEmpty == false)
+        #expect(ScratchNotationStructureAnnotation(
+            proposal: proposal, manualLabel: .ghost,
+            manualEvidence: manualEvidence(source: .audioOnset)
+        ).validationIssues().isEmpty == false)
+        #expect(ScratchNotationStructureAnnotation(
+            proposal: proposal, manualLabel: .ghost,
+            manualEvidence: manualEvidence(reason: "")
+        ).validationIssues().isEmpty == false)
+    }
+}

@@ -7402,6 +7402,669 @@ extension ScratchNotation {
     }
 }
 
+// MARK: - Conservative derived structure classification
+
+/// The finite set of structures the conservative classifier is permitted to
+/// propose. It is deliberately CLOSED and deliberately small: it covers only
+/// what the canonical layer already supports — the Baby turnaround, the
+/// 1/2/3-hold plain tear, and the three correlated non-sounding regions.
+///
+/// Chirp and Transformer are absent on purpose. Nothing in the canonical
+/// layer models them (`ScratchNotationFaderClickKind.transformPulse` is a raw
+/// fader observation, not a technique assertion), so proposing them would be
+/// a guess. Their existing capture/demo behaviour is untouched by this layer.
+///
+/// A tear entry is named a CANDIDATE because the platter shape that produces
+/// it — same-direction travel interrupted by bounded stationary intervals —
+/// is necessary but not sufficient evidence for a performed tear. The name
+/// keeps the uncertainty visible at every call site.
+enum ScratchNotationDerivedStructure: String, Codable, Equatable, Sendable, CaseIterable {
+    /// One direct reversal joining two non-tear travel gestures, sounding.
+    case baby
+    case tear1Candidate = "tear1_candidate"
+    case tear2Candidate = "tear2_candidate"
+    case tear3Candidate = "tear3_candidate"
+    /// Bounded stationary interval, fader open.
+    case hold
+    /// Travel, fader closed — a silent move.
+    case ghost
+    /// Bounded stationary interval, fader closed.
+    case ghostHold = "ghost_hold"
+
+    /// The supported tear candidate for `holdCount`, or `nil` when the count
+    /// is outside the authored 1...3 plain-tear vocabulary. `nil` is reported
+    /// as unknown; it is never rounded down to the nearest supported tear.
+    static func tearCandidate(holdCount: Int) -> ScratchNotationDerivedStructure? {
+        switch holdCount {
+        case 1: return .tear1Candidate
+        case 2: return .tear2Candidate
+        case 3: return .tear3Candidate
+        default: return nil
+        }
+    }
+
+    /// Bounded internal tear holds this structure asserts, or `nil` when it
+    /// asserts none. This is a PLATTER count. It is not a fader click count
+    /// and it is not a count of audible sounds; those three numbers are
+    /// reported separately and are never derived from one another.
+    var assertedTearHoldCount: Int? {
+        switch self {
+        case .tear1Candidate: return 1
+        case .tear2Candidate: return 2
+        case .tear3Candidate: return 3
+        case .baby, .hold, .ghost, .ghostHold: return nil
+        }
+    }
+
+    var isTearCandidate: Bool { assertedTearHoldCount != nil }
+}
+
+/// A pointer INTO the canonical streams. The classifier cites evidence, it
+/// never copies or restates it: a reference stays valid only against the
+/// pattern it was produced from, and reading it back always yields the
+/// original, unmodified observation with its own provenance intact.
+enum ScratchNotationEvidenceReference: Codable, Equatable, Hashable, Sendable {
+    case motionSegment(index: Int)
+    case faderInterval(index: Int)
+    case faderClick(index: Int)
+
+    var detail: String {
+        switch self {
+        case .motionSegment(let index): return "motionSegment[\(index)]"
+        case .faderInterval(let index): return "faderInterval[\(index)]"
+        case .faderClick(let index):    return "faderClick[\(index)]"
+        }
+    }
+}
+
+/// Machine-readable justifications. Every proposal states why it reached the
+/// reading it did, including why it declined to reach one.
+enum ScratchNotationStructureReason: String, CaseIterable, Codable, Equatable, Sendable {
+    case invalidPattern
+    case noMotionEvidence
+    case unknownMotionPresent
+    case releasedMotionPresent
+    case correctedMotionLabel
+    case boundedStationaryInterval
+    case sameDirectionPauseResume
+    case directReversal
+    case holdCountOutsideSupportedRange
+    case faderOpenThroughout
+    case faderClosedThroughout
+    case faderStateVariesWithinRegion
+    case partialFaderCoverage
+    case faderUnobserved
+    case faderClicksPresentNotCounted
+    case tearCountIsPlatterOnly
+    case ambiguousCandidates
+
+    var detail: String {
+        switch self {
+        case .invalidPattern:
+            return "the canonical pattern failed its own validation, so nothing was classified"
+        case .noMotionEvidence:
+            return "the pattern carries no platter motion segments"
+        case .unknownMotionPresent:
+            return "at least one platter interval was unobserved and terminates any gesture it meets"
+        case .releasedMotionPresent:
+            return "at least one platter interval is free-running playback, which is motion and never a hold"
+        case .correctedMotionLabel:
+            return "a manual motion correction overrides the derived motion state in this region"
+        case .boundedStationaryInterval:
+            return "a true zero-velocity interval bounded on both sides by observation"
+        case .sameDirectionPauseResume:
+            return "same-direction travel resumed after a bounded stationary interval"
+        case .directReversal:
+            return "travel polarity flipped with no intervening stationary, released or unobserved interval"
+        case .holdCountOutsideSupportedRange:
+            return "the internal tear hold count lies outside the supported 1...3 plain-tear vocabulary"
+        case .faderOpenThroughout:
+            return "every fader observation covering this region reports open"
+        case .faderClosedThroughout:
+            return "every fader observation covering this region reports closed"
+        case .faderStateVariesWithinRegion:
+            return "the fader is observed both open and closed inside this region"
+        case .partialFaderCoverage:
+            return "fader observations cover only part of this region; the remainder is unknown"
+        case .faderUnobserved:
+            return "no fader interval covers this region, which means unknown and never implicitly open"
+        case .faderClicksPresentNotCounted:
+            return "fader clicks occur inside this region; they are cited as evidence and never counted as tear holds"
+        case .tearCountIsPlatterOnly:
+            return "the tear hold count derives from the platter stream alone; fader evidence cannot change it"
+        case .ambiguousCandidates:
+            return "the evidence supports more than one structure, so no single reading is asserted"
+        }
+    }
+}
+
+/// One conservative structural proposal over a bounded beat region.
+///
+/// `candidates` is ordered and may be empty (unknown) or hold more than one
+/// entry (ambiguous). It never contains a silently chosen winner: only
+/// `soleCandidate` — exactly one candidate — is an accepted machine reading.
+struct ScratchNotationStructureProposal: Codable, Equatable, Sendable {
+
+    typealias Reason = ScratchNotationStructureReason
+
+    /// Which canonical unit the proposal describes. Scopes are independent
+    /// layers, not competing readings: a tear hold correctly appears both as
+    /// a segment-scope `.hold` and inside a gesture-scope tear candidate.
+    enum Scope: Codable, Equatable, Sendable {
+        case motionSegment(index: Int)
+        case gesture(index: Int)
+        case reversal(fromGestureIndex: Int, toGestureIndex: Int)
+
+        var detail: String {
+            switch self {
+            case .motionSegment(let index):
+                return "motion segment \(index)"
+            case .gesture(let index):
+                return "gesture \(index)"
+            case .reversal(let from, let to):
+                return "reversal between gesture \(from) and gesture \(to)"
+            }
+        }
+    }
+
+    struct Candidate: Codable, Equatable, Sendable {
+        let structure: ScratchNotationDerivedStructure
+        /// Conservative support in `[0, 1]`. Never exceeds the weakest piece
+        /// of canonical evidence the proposal rests on.
+        let confidence: Double
+        let reasons: [Reason]
+
+        init(structure: ScratchNotationDerivedStructure,
+             confidence: Double,
+             reasons: [Reason]) {
+            self.structure = structure
+            self.confidence = confidence.isFinite ? min(1, max(0, confidence)) : 0
+            self.reasons = reasons
+        }
+
+        var narrative: String {
+            "\(structure.rawValue) (confidence \(String(format: "%.2f", confidence))): "
+                + reasons.map(\.detail).joined(separator: "; ")
+        }
+    }
+
+    let scope: Scope
+    let span: ScratchNotation.BeatSpan
+    let candidates: [Candidate]
+    /// Region-level reasons, including the reasons a reading was declined.
+    let reasons: [Reason]
+    /// Pointers into the canonical streams this proposal rests on.
+    let evidenceReferences: [ScratchNotationEvidenceReference]
+
+    /// No candidate survived the conservative rules.
+    var isUnknown: Bool { candidates.isEmpty }
+    /// More than one structure remains supportable.
+    var isAmbiguous: Bool { candidates.count > 1 }
+    /// The only accepted machine reading. Ambiguous and unknown proposals
+    /// deliberately have none — a consumer must handle that, not guess.
+    var soleCandidate: Candidate? { candidates.count == 1 ? candidates[0] : nil }
+
+    var narrative: String {
+        let heading = isUnknown
+            ? "unknown"
+            : candidates.map { "\($0.structure.rawValue)@\(String(format: "%.2f", $0.confidence))" }
+                .joined(separator: " | ")
+        return "\(scope.detail) [\(span.startBeat), \(span.endBeat)) → \(heading)"
+            + " — " + reasons.map(\.detail).joined(separator: "; ")
+            + " — evidence: " + evidenceReferences.map(\.detail).joined(separator: ", ")
+    }
+}
+
+/// A machine proposal plus its optional human label.
+///
+/// The manual label is AUTHORITATIVE, and the proposal is retained verbatim
+/// beside it — the same doctrine `ScratchNotationMotionLabel` follows, so a
+/// reviewer's disagreement with the machine stays inspectable instead of
+/// overwriting it. Neither the proposal nor the canonical evidence it cites
+/// is rewritten by annotating.
+struct ScratchNotationStructureAnnotation: Codable, Equatable, Sendable {
+    let proposal: ScratchNotationStructureProposal
+    let manualLabel: ScratchNotationDerivedStructure?
+    /// Provenance for the manual label. Required whenever a label is present.
+    let manualEvidence: ScratchNotation.GestureRecord.Evidence?
+
+    init(proposal: ScratchNotationStructureProposal,
+         manualLabel: ScratchNotationDerivedStructure? = nil,
+         manualEvidence: ScratchNotation.GestureRecord.Evidence? = nil) {
+        self.proposal = proposal
+        self.manualLabel = manualLabel
+        self.manualEvidence = manualEvidence
+    }
+
+    /// The label every consumer must read. A manual label always wins; with
+    /// none, only an unambiguous proposal supplies a reading.
+    var effective: ScratchNotationDerivedStructure? {
+        manualLabel ?? proposal.soleCandidate?.structure
+    }
+
+    var isManuallyLabelled: Bool { manualLabel != nil }
+
+    /// True only when the human asserted something the machine did not offer
+    /// at all — an ambiguous proposal that happens to list the manual label
+    /// is not a disagreement.
+    var manualLabelDisagreesWithProposal: Bool {
+        guard let manualLabel else { return false }
+        return !proposal.candidates.contains { $0.structure == manualLabel }
+    }
+
+    /// Pure invariant check, separate from decoding, as everywhere else in
+    /// this layer.
+    func validationIssues() -> [String] {
+        var issues: [String] = []
+        switch (manualLabel, manualEvidence) {
+        case (nil, nil):
+            break
+        case (nil, .some):
+            issues.append("manual evidence requires a manual label")
+        case (.some, nil):
+            issues.append("a manual label requires manual evidence")
+        case (.some, .some(let evidence)):
+            if evidence.provenance != .manuallyCorrected {
+                issues.append("a manual label must carry manuallyCorrected provenance, got '\(evidence.provenance.rawValue)'")
+            }
+            issues.append(contentsOf: ScratchNotation.GestureRecord.evidenceIssues(evidence, platter: true))
+        }
+        return issues
+    }
+}
+
+/// Conservative, PURE derivation of supported structures from canonical
+/// evidence.
+///
+/// Everything it reads is a `ScratchNotation.GesturePattern`; everything it
+/// returns is new derived value. Raw capture, canonical motion segments,
+/// fader intervals and fader clicks are never mutated, reordered, widened,
+/// repaired or discarded — the classifier only cites them by index.
+///
+/// Three counts stay deliberately independent and are never derived from one
+/// another: fader clicks come from the fader stream, sounding regions come
+/// from correlating both streams, and tear hold counts come from the platter
+/// stream alone. A tear performed with fader clicks over it has three
+/// different numbers, and collapsing any two of them would be a fabrication.
+enum ScratchNotationStructureClassifier {
+
+    typealias Reason = ScratchNotationStructureReason
+    typealias Proposal = ScratchNotationStructureProposal
+    typealias Reference = ScratchNotationEvidenceReference
+
+    /// Shared with `GesturePattern` so beat-axis comparisons agree exactly.
+    static let tolerance = ScratchNotation.GesturePattern.beatContinuityTolerance
+
+    /// Applied once per candidate when more than one structure survives.
+    static let ambiguousCandidatePenalty = 0.5
+    /// Applied when fader observations cover only part of a correlated region.
+    static let partialFaderCoveragePenalty = 0.5
+
+    /// Independently derived counts. Three numbers, three sources.
+    struct Counts: Codable, Equatable, Sendable {
+        /// Fader stream only.
+        let faderClickCount: Int
+        /// Maximal correlated `.sounding` regions across BOTH streams.
+        /// Clicks are instants and never split a sustained region, so a click
+        /// can never inflate this number.
+        let soundingRegionCount: Int
+        /// Platter stream only, per derived gesture, in gesture order.
+        let tearHoldCountsByGesture: [Int]
+
+        var totalTearHoldCount: Int { tearHoldCountsByGesture.reduce(0, +) }
+    }
+
+    struct Classification: Codable, Equatable, Sendable {
+        let proposals: [Proposal]
+        let counts: Counts
+        /// Pattern-level reasons.
+        let reasons: [Reason]
+
+        var tearCandidateProposals: [Proposal] {
+            proposals.filter { $0.candidates.contains { $0.structure.isTearCandidate } }
+        }
+        var unknownProposals: [Proposal] { proposals.filter(\.isUnknown) }
+        var ambiguousProposals: [Proposal] { proposals.filter(\.isAmbiguous) }
+        /// Only unambiguous readings, in proposal order.
+        var acceptedStructures: [ScratchNotationDerivedStructure] {
+            proposals.compactMap { $0.soleCandidate?.structure }
+        }
+        var narrative: [String] { proposals.map(\.narrative) }
+    }
+
+    /// The only entry point. A pattern that fails its own validation is not
+    /// classified at all — conservative by construction, since a malformed
+    /// stream cannot support any structural claim.
+    static func classify(_ pattern: ScratchNotation.GesturePattern) -> Classification {
+        guard pattern.validationIssues().isEmpty else {
+            return Classification(proposals: [],
+                                  counts: Counts(faderClickCount: pattern.faderClicks.count,
+                                                 soundingRegionCount: 0,
+                                                 tearHoldCountsByGesture: []),
+                                  reasons: [.invalidPattern])
+        }
+        guard !pattern.motionSegments.isEmpty else {
+            return Classification(proposals: [],
+                                  counts: Counts(faderClickCount: pattern.faderClicks.count,
+                                                 soundingRegionCount: 0,
+                                                 tearHoldCountsByGesture: []),
+                                  reasons: [.noMotionEvidence])
+        }
+
+        let gestures = pattern.gestures
+        var proposals = segmentProposals(pattern)
+        proposals += gestureProposals(pattern, gestures: gestures)
+        proposals += reversalProposals(pattern, gestures: gestures)
+        proposals.sort { lhs, rhs in
+            if lhs.span.startBeat != rhs.span.startBeat { return lhs.span.startBeat < rhs.span.startBeat }
+            return scopeRank(lhs.scope) < scopeRank(rhs.scope)
+        }
+
+        var reasons: [Reason] = []
+        if pattern.motionSegments.contains(where: { $0.state == .unknown }) { reasons.append(.unknownMotionPresent) }
+        if pattern.motionSegments.contains(where: { $0.state == .released }) { reasons.append(.releasedMotionPresent) }
+        if pattern.motionSegments.contains(where: { $0.label.isCorrected }) { reasons.append(.correctedMotionLabel) }
+        if !pattern.faderClicks.isEmpty { reasons.append(.faderClicksPresentNotCounted) }
+        if gestures.contains(where: \.isTear) { reasons.append(.tearCountIsPlatterOnly) }
+        if proposals.contains(where: \.isAmbiguous) { reasons.append(.ambiguousCandidates) }
+
+        let counts = Counts(faderClickCount: pattern.faderClicks.count,
+                            soundingRegionCount: correlatedRegions(pattern)
+                                .filter { $0.state == .sounding }.count,
+                            tearHoldCountsByGesture: gestures.map(\.tearHoldCount))
+        return Classification(proposals: proposals, counts: counts, reasons: ordered(reasons))
+    }
+
+    // MARK: Correlated regions
+
+    /// Maximal correlated regions over the platter stream's span, split at
+    /// every boundary of BOTH streams. Fader clicks are deliberately excluded
+    /// as boundaries: a click is an instant, not sustained state.
+    static func correlatedRegions(
+        _ pattern: ScratchNotation.GesturePattern
+    ) -> [(span: ScratchNotation.BeatSpan, state: ScratchNotationCorrelatedState)] {
+        guard let start = pattern.motionSegments.first?.startBeat,
+              let end = pattern.motionSegments.last?.endBeat, end > start else { return [] }
+        var edges = pattern.motionSegments.flatMap { [$0.startBeat, $0.endBeat] }
+        edges += pattern.faderIntervals.flatMap { [$0.startBeat, $0.endBeat] }
+        let boundaries = Array(Set(edges.filter { $0 >= start && $0 <= end })).sorted()
+        var regions: [(span: ScratchNotation.BeatSpan, state: ScratchNotationCorrelatedState)] = []
+        for (lower, upper) in zip(boundaries, boundaries.dropFirst()) where upper > lower {
+            let state = pattern.correlatedState(atBeat: lower + (upper - lower) / 2)
+            if let last = regions.last, last.state == state {
+                regions[regions.count - 1] = (.init(startBeat: last.span.startBeat, endBeat: upper), state)
+            } else {
+                regions.append((.init(startBeat: lower, endBeat: upper), state))
+            }
+        }
+        return regions
+    }
+
+    // MARK: Segment scope — hold, ghost, ghost hold
+
+    /// Correlated, non-sounding readings for one bounded platter interval.
+    ///
+    /// A sounding travel interval gets NO segment proposal: it is described
+    /// at gesture or reversal scope, and emitting a structure for it here
+    /// would claim a technique from a single stroke.
+    private static func segmentProposals(_ pattern: ScratchNotation.GesturePattern) -> [Proposal] {
+        pattern.motionSegments.enumerated().compactMap { index, segment -> Proposal? in
+            let stationary = segment.state.isStationary
+            guard stationary || segment.state.isTravel else { return nil }
+
+            let coverage = faderCoverage(of: segment.span, in: pattern)
+            var references: [Reference] = [.motionSegment(index: index)]
+            references += coverage.intervalIndices.map { Reference.faderInterval(index: $0) }
+            let clicks = faderClickIndices(within: segment.span, in: pattern)
+            references += clicks.map { Reference.faderClick(index: $0) }
+
+            var reasons: [Reason] = stationary ? [.boundedStationaryInterval] : []
+            if segment.label.isCorrected { reasons.append(.correctedMotionLabel) }
+            if !clicks.isEmpty { reasons.append(.faderClicksPresentNotCounted) }
+
+            let base = minimumConfidence([segment.evidence] + coverage.intervalIndices.map {
+                pattern.faderIntervals[$0].evidence
+            })
+
+            var candidates: [Proposal.Candidate] = []
+            switch coverage.reading {
+            case .unobserved:
+                reasons.append(.faderUnobserved)
+            case .open, .closed:
+                let open = coverage.reading == .open
+                reasons.append(open ? .faderOpenThroughout : .faderClosedThroughout)
+                // Travel with the fader open is the audible scratch, not one
+                // of the structures this scope may name.
+                guard stationary || !open else { return nil }
+                let structure: ScratchNotationDerivedStructure = stationary
+                    ? (open ? .hold : .ghostHold)
+                    : .ghost
+                var factor = 1.0
+                if !coverage.isComplete {
+                    reasons.append(.partialFaderCoverage)
+                    factor *= partialFaderCoveragePenalty
+                }
+                candidates = [.init(structure: structure, confidence: base * factor, reasons: ordered(reasons))]
+            case .mixed:
+                reasons.append(.faderStateVariesWithinRegion)
+                if !coverage.isComplete { reasons.append(.partialFaderCoverage) }
+                if stationary {
+                    // Both readings stay on the table rather than one being
+                    // picked; a mixed fader over one bounded stationary
+                    // interval is real ambiguity, not a weak preference.
+                    reasons.append(.ambiguousCandidates)
+                    candidates = [ScratchNotationDerivedStructure.hold, .ghostHold].map {
+                        .init(structure: $0,
+                              confidence: base * ambiguousCandidatePenalty,
+                              reasons: ordered(reasons))
+                    }
+                }
+                // Travel: the competing reading is an audible stroke, which
+                // this scope may not name, so nothing is asserted at all.
+            }
+
+            return Proposal(scope: .motionSegment(index: index),
+                            span: segment.span,
+                            candidates: candidates,
+                            reasons: ordered(reasons),
+                            evidenceReferences: references)
+        }
+    }
+
+    // MARK: Gesture scope — tear candidates
+
+    /// A gesture proposal exists only where a tear SHAPE exists — at least
+    /// one internal hold. A plain single-direction stroke asserts nothing.
+    ///
+    /// The hold count comes from the platter stream alone. Fader evidence,
+    /// including clicks inside the gesture, is cited but can never raise,
+    /// lower or invalidate it.
+    private static func gestureProposals(_ pattern: ScratchNotation.GesturePattern,
+                                         gestures: [ScratchNotation.PlatterGesture]) -> [Proposal] {
+        gestures.enumerated().compactMap { index, gesture -> Proposal? in
+            guard gesture.isTear else { return nil }
+
+            let segmentIndices = motionSegmentIndices(overlapping: gesture.span, in: pattern)
+            let coverage = faderCoverage(of: gesture.span, in: pattern)
+            let clicks = faderClickIndices(within: gesture.span, in: pattern)
+            var references: [Reference] = segmentIndices.map { .motionSegment(index: $0) }
+            references += coverage.intervalIndices.map { Reference.faderInterval(index: $0) }
+            references += clicks.map { Reference.faderClick(index: $0) }
+
+            var reasons: [Reason] = [.sameDirectionPauseResume, .boundedStationaryInterval, .tearCountIsPlatterOnly]
+            if segmentIndices.contains(where: { pattern.motionSegments[$0].label.isCorrected }) {
+                reasons.append(.correctedMotionLabel)
+            }
+            if !clicks.isEmpty { reasons.append(.faderClicksPresentNotCounted) }
+            switch coverage.reading {
+            case .unobserved: reasons.append(.faderUnobserved)
+            case .open:       reasons.append(.faderOpenThroughout)
+            case .closed:     reasons.append(.faderClosedThroughout)
+            case .mixed:      reasons.append(.faderStateVariesWithinRegion)
+            }
+
+            var candidates: [Proposal.Candidate] = []
+            if let structure = ScratchNotationDerivedStructure.tearCandidate(holdCount: gesture.tearHoldCount) {
+                // Confidence rests on platter evidence only, for the same
+                // reason the label does.
+                let base = minimumConfidence(segmentIndices.map { pattern.motionSegments[$0].evidence })
+                candidates = [.init(structure: structure, confidence: base, reasons: ordered(reasons))]
+            } else {
+                reasons.append(.holdCountOutsideSupportedRange)
+            }
+
+            return Proposal(scope: .gesture(index: index),
+                            span: gesture.span,
+                            candidates: candidates,
+                            reasons: ordered(reasons),
+                            evidenceReferences: references)
+        }
+    }
+
+    // MARK: Reversal scope — Baby
+
+    /// A Baby turnaround is a DIRECT reversal joining two non-tear travel
+    /// gestures that are audible throughout.
+    ///
+    /// Gestures are paired greedily and never shared, so an alternating run
+    /// yields whole cycles rather than overlapping claims. A tear consumes
+    /// its own gesture and can never be half of a Baby. A stationary,
+    /// released or unobserved interval between the two directions breaks
+    /// adjacency, so no proposal is made there at all — the intervening
+    /// interval is already described at segment scope.
+    private static func reversalProposals(_ pattern: ScratchNotation.GesturePattern,
+                                          gestures: [ScratchNotation.PlatterGesture]) -> [Proposal] {
+        var proposals: [Proposal] = []
+        var index = 0
+        while index + 1 < gestures.count {
+            let first = gestures[index]
+            let second = gestures[index + 1]
+            guard !first.isTear else { index += 1; continue }
+            guard !second.isTear,
+                  first.direction != second.direction,
+                  abs(second.span.startBeat - first.span.endBeat) <= tolerance else { index += 1; continue }
+
+            let span = ScratchNotation.BeatSpan(startBeat: first.span.startBeat, endBeat: second.span.endBeat)
+            let segmentIndices = motionSegmentIndices(overlapping: span, in: pattern)
+            let coverage = faderCoverage(of: span, in: pattern)
+            let clicks = faderClickIndices(within: span, in: pattern)
+            var references: [Reference] = segmentIndices.map { .motionSegment(index: $0) }
+            references += coverage.intervalIndices.map { Reference.faderInterval(index: $0) }
+            references += clicks.map { Reference.faderClick(index: $0) }
+
+            var reasons: [Reason] = [.directReversal]
+            if segmentIndices.contains(where: { pattern.motionSegments[$0].label.isCorrected }) {
+                reasons.append(.correctedMotionLabel)
+            }
+            if !clicks.isEmpty { reasons.append(.faderClicksPresentNotCounted) }
+
+            var candidates: [Proposal.Candidate] = []
+            switch coverage.reading {
+            case .open:
+                reasons.append(.faderOpenThroughout)
+                let base = minimumConfidence(segmentIndices.map { pattern.motionSegments[$0].evidence }
+                                             + coverage.intervalIndices.map { pattern.faderIntervals[$0].evidence })
+                var factor = 1.0
+                if !coverage.isComplete {
+                    reasons.append(.partialFaderCoverage)
+                    factor *= partialFaderCoveragePenalty
+                }
+                candidates = [.init(structure: .baby, confidence: base * factor, reasons: ordered(reasons))]
+            case .closed:
+                // A silent turnaround is not a Baby, and the canonical layer
+                // has no "ghost Baby". Each half is already a segment-scope
+                // ghost; nothing further is asserted here.
+                reasons.append(.faderClosedThroughout)
+            case .mixed:
+                reasons.append(.faderStateVariesWithinRegion)
+            case .unobserved:
+                reasons.append(.faderUnobserved)
+            }
+
+            proposals.append(Proposal(scope: .reversal(fromGestureIndex: index, toGestureIndex: index + 1),
+                                      span: span,
+                                      candidates: candidates,
+                                      reasons: ordered(reasons),
+                                      evidenceReferences: references))
+            index += 2
+        }
+        return proposals
+    }
+
+    // MARK: Evidence lookups
+
+    private enum FaderReading: Equatable {
+        case unobserved, open, closed, mixed
+    }
+
+    private struct FaderCoverage {
+        let reading: FaderReading
+        let intervalIndices: [Int]
+        let isComplete: Bool
+    }
+
+    /// Fader observations intersecting `span`, with no gap ever read as a
+    /// state. Intervals are validated non-overlapping, so covered length is a
+    /// plain sum of intersections.
+    private static func faderCoverage(of span: ScratchNotation.BeatSpan,
+                                      in pattern: ScratchNotation.GesturePattern) -> FaderCoverage {
+        var indices: [Int] = []
+        var states: Set<ScratchNotationFaderState> = []
+        var covered = 0.0
+        for (index, interval) in pattern.faderIntervals.enumerated() {
+            let lower = max(interval.startBeat, span.startBeat)
+            let upper = min(interval.endBeat, span.endBeat)
+            guard upper - lower > tolerance else { continue }
+            indices.append(index)
+            states.insert(interval.state)
+            covered += upper - lower
+        }
+        let reading: FaderReading
+        switch (states.count, states.first) {
+        case (0, _):            reading = .unobserved
+        case (1, .some(.open)):   reading = .open
+        case (1, .some(.closed)): reading = .closed
+        default:                reading = .mixed
+        }
+        return FaderCoverage(reading: reading,
+                             intervalIndices: indices,
+                             isComplete: covered >= span.durationBeats - tolerance)
+    }
+
+    private static func motionSegmentIndices(overlapping span: ScratchNotation.BeatSpan,
+                                             in pattern: ScratchNotation.GesturePattern) -> [Int] {
+        pattern.motionSegments.indices.filter { index in
+            let segment = pattern.motionSegments[index]
+            return min(segment.endBeat, span.endBeat) - max(segment.startBeat, span.startBeat) > tolerance
+        }
+    }
+
+    /// Half-open, matching `BeatSpan.contains`, so a click on a shared
+    /// boundary is cited by exactly one region.
+    private static func faderClickIndices(within span: ScratchNotation.BeatSpan,
+                                          in pattern: ScratchNotation.GesturePattern) -> [Int] {
+        pattern.faderClicks.indices.filter { span.contains(pattern.faderClicks[$0].beat) }
+    }
+
+    /// The weakest supporting observation. No evidence at all supports
+    /// nothing, so it reports zero rather than a default.
+    private static func minimumConfidence(_ evidence: [ScratchNotationEvidence]) -> Double {
+        evidence.map(\.confidence).min() ?? 0
+    }
+
+    private static func ordered(_ reasons: [Reason]) -> [Reason] {
+        Reason.allCases.filter { reasons.contains($0) }
+    }
+
+    private static func scopeRank(_ scope: Proposal.Scope) -> Int {
+        switch scope {
+        case .motionSegment: return 0
+        case .gesture:       return 1
+        case .reversal:      return 2
+        }
+    }
+}
+
 struct BabyScratchExtractedStrokeResource: Decodable, Equatable, Sendable {
     struct Stroke: Decodable, Equatable, Sendable {
         let startTime: TimeInterval
