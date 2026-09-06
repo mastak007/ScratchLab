@@ -2268,12 +2268,15 @@ enum ReferenceTearCanonicalProjectionBuilder {
             return unknownRecord(.lowMovementConfidence)
         }
 
-        // Cumulative gesture-local position track. Each decoded run is
-        // rebased to its own origin by `PlatterCoordinateSemantics`, so the
-        // runs are joined end-to-end here: the platter did not teleport
-        // across the stationary interval between them.
+        // Cumulative gesture-local position track. A Tear subdivision is NOT
+        // a new platter origin: the track must begin at the first run's
+        // measured start position and advance by each run's measured
+        // displacement, so forward travel, a reversal apex, and reverse
+        // travel stay one position-continuous trajectory. For gesture-relative
+        // runs that origin is 0; for continuous (global) source coordinates it
+        // is the first run's true global position — `startPosition` covers both.
         var track: [(time: Double, position: Double)] = []
-        var cursor: Double = 0
+        var cursor: Double = backingEvents.first?.startPosition ?? 0
         for (segment, event) in zip(travelSegments, backingEvents) {
             let displacement = event.endPosition - event.startPosition
             guard displacement.isFinite else { return unknownRecord(.noPlacedMotion) }

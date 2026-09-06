@@ -451,7 +451,7 @@ final class LivePerformedNotationTrackerTests: XCTestCase {
             cameraMovementEventsSnapshot: { _ in cameraEvents }
         )
         let state = LivePerformedNotationTracker.computeState(dataSource: dataSource, baselineTimestamp: 0)
-        guard case .tracking(let committed, let provisional) = state else {
+        guard case .tracking(let committed, let provisional, _, _) = state else {
             return XCTFail("expected .tracking via camera fallback, got \(state)")
         }
         XCTAssertEqual(committed, cameraEvents)
@@ -466,13 +466,48 @@ final class LivePerformedNotationTrackerTests: XCTestCase {
             displacement: 0.6
         )
         let events = LivePerformedNotationTracker.renderedEvents(
-            for: .tracking(committed: [], provisional: openStroke)
+            for: .tracking(committed: [], provisional: openStroke, continuousCommitted: [], continuousProvisional: nil)
         )
 
         XCTAssertEqual(events.count, 1)
         XCTAssertEqual(events[0].startPosition, 0.2)
         XCTAssertEqual(events[0].endPosition, 0.8)
         XCTAssertEqual(events[0].source, "live_preview")
+    }
+
+    /// Regression: exposing continuous positions for the Tear projection must
+    /// not alter the ordinary `.performedPlatter` feed. `renderedEvents` stays
+    /// gesture-relative (each run rebased to its own origin), while the new
+    /// `continuousRenderedEvents` carries the global span-normalised track.
+    func testContinuousExposureLeavesGestureRelativePerformedPlatterUnchanged() {
+        let committed = [
+            CaptureCore.DetectedNotationRecordMovementEvent(
+                startTime: 0, endTime: 0.5, startPosition: 0, endPosition: 0.7,
+                direction: "forward", movementKind: .normalPush,
+                speed: 1.4, confidence: 0.9, source: "controller"
+            )
+        ]
+        let continuous = [
+            CaptureCore.DetectedNotationRecordMovementEvent(
+                startTime: 0, endTime: 0.5, startPosition: 0.3, endPosition: 1.0,
+                direction: "forward", movementKind: .normalPush,
+                speed: 1.4, confidence: 0.9, source: "controller"
+            )
+        ]
+        let state = LiveNotationTrackingState.tracking(
+            committed: committed,
+            provisional: nil,
+            continuousCommitted: continuous,
+            continuousProvisional: nil
+        )
+        XCTAssertEqual(
+            LivePerformedNotationTracker.renderedEvents(for: state), committed,
+            "the gesture-relative feed used by .performedPlatter must not change"
+        )
+        XCTAssertEqual(
+            LivePerformedNotationTracker.continuousRenderedEvents(for: state), continuous,
+            "the continuous feed must carry the global positions"
+        )
     }
 
     func testFreezePreservesLastVisibleTrace() {
@@ -488,7 +523,7 @@ final class LivePerformedNotationTrackerTests: XCTestCase {
         )
         let tracker = LivePerformedNotationTracker(dataSource: dataSource, pollInterval: 60)
         let visibleBeforeFreeze = LivePerformedNotationTracker.renderedEvents(
-            for: .tracking(committed: [event], provisional: nil)
+            for: .tracking(committed: [event], provisional: nil, continuousCommitted: [], continuousProvisional: nil)
         )
 
         tracker.freeze()
@@ -568,7 +603,7 @@ final class LivePerformedNotationTrackerTests: XCTestCase {
             dataSource: engineBackedDataSource(engine: engine, deviceName: deviceName),
             baselineTimestamp: baseline
         )
-        guard case .tracking(let committed, let provisional) = state else {
+        guard case .tracking(let committed, let provisional, _, _) = state else {
             return XCTFail("expected .tracking from real captured platter telemetry, got \(state)")
         }
         XCTAssertFalse(
@@ -782,8 +817,8 @@ final class LivePerformedNotationTrackerTests: XCTestCase {
     func testAuthoringLiveAndReviewShareOneTearProjection() throws {
         let source = try authoringViewSource()
         XCTAssertTrue(
-            source.contains("ReferenceTearCanonicalProjectionBuilder.project(\n                            movementEvents: liveNotationTracker.renderedEvents\n                        )")
-                || source.contains("movementEvents: liveNotationTracker.renderedEvents"),
+            source.contains("ReferenceTearCanonicalProjectionBuilder.project(\n                            movementEvents: liveNotationTracker.continuousRenderedEvents\n                        )")
+                || source.contains("movementEvents: liveNotationTracker.continuousRenderedEvents"),
             "the live preview must project through ReferenceTearCanonicalProjectionBuilder"
         )
         XCTAssertTrue(
@@ -796,7 +831,7 @@ final class LivePerformedNotationTrackerTests: XCTestCase {
         // "revolutions" even though the decoder really did divide by
         // steps-per-revolution.
         XCTAssertTrue(
-            source.contains("coordinates: liveNotationTracker.platterCoordinates"),
+            source.contains("coordinates: liveNotationTracker.continuousPlatterCoordinates"),
             "the live preview must state its platter coordinate basis"
         )
     }
@@ -905,7 +940,9 @@ final class LivePerformedNotationTrackerTests: XCTestCase {
 
         let state = LiveNotationTrackingState.tracking(
             committed: decoded.committedEvents,
-            provisional: decoded.provisionalMovement
+            provisional: decoded.provisionalMovement,
+            continuousCommitted: decoded.continuousEvents,
+            continuousProvisional: decoded.continuousProvisionalMovement
         )
         let strokes = LivePerformedNotationTracker.renderedEvents(for: state)
             .compactMap(PerformedStrokeAdapter.laneStroke(from:))
@@ -964,7 +1001,9 @@ final class LivePerformedNotationTrackerTests: XCTestCase {
         let strokes = LivePerformedNotationTracker
             .renderedEvents(for: .tracking(
                 committed: decoded.committedEvents,
-                provisional: decoded.provisionalMovement
+                provisional: decoded.provisionalMovement,
+                continuousCommitted: [],
+                continuousProvisional: nil
             ))
             .compactMap(PerformedStrokeAdapter.laneStroke(from:))
         let values = strokes.flatMap { stroke -> [Double] in
@@ -1054,7 +1093,9 @@ final class LivePerformedNotationTrackerTests: XCTestCase {
         let strokes = LivePerformedNotationTracker
             .renderedEvents(for: .tracking(
                 committed: decoded.committedEvents,
-                provisional: decoded.provisionalMovement
+                provisional: decoded.provisionalMovement,
+                continuousCommitted: [],
+                continuousProvisional: nil
             ))
             .compactMap(PerformedStrokeAdapter.laneStroke(from:))
         let starts = strokes.compactMap(\.measuredStartPosition)
@@ -1115,7 +1156,7 @@ final class LivePerformedNotationTrackerTests: XCTestCase {
         let provisional = try? XCTUnwrap(decoded.provisionalMovement)
         XCTAssertNotNil(provisional)
         let rendered = LivePerformedNotationTracker.renderedEvents(
-            for: .tracking(committed: [], provisional: decoded.provisionalMovement)
+            for: .tracking(committed: [], provisional: decoded.provisionalMovement, continuousCommitted: [], continuousProvisional: nil)
         )
         XCTAssertEqual(rendered.count, 1)
         XCTAssertGreaterThan(
@@ -2589,11 +2630,11 @@ final class LivePerformedNotationTrackerTests: XCTestCase {
             "the finalized review must still project through the shared builder"
         )
         XCTAssertTrue(
-            source.contains("movementEvents: liveNotationTracker.renderedEvents"),
+            source.contains("movementEvents: liveNotationTracker.continuousRenderedEvents"),
             "and the live lane through the same one"
         )
         XCTAssertTrue(
-            source.contains("coordinates: liveNotationTracker.platterCoordinates"),
+            source.contains("coordinates: liveNotationTracker.continuousPlatterCoordinates"),
             "the live boundary must still declare its coordinate basis"
         )
         // No second engine, decoder, model or renderer was introduced.

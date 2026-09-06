@@ -68,7 +68,9 @@ enum LiveNotationTrackingState: Equatable {
     case waiting
     case tracking(
         committed: [CaptureCore.DetectedNotationRecordMovementEvent],
-        provisional: CaptureCore.ProvisionalPlatterMovement?
+        provisional: CaptureCore.ProvisionalPlatterMovement?,
+        continuousCommitted: [CaptureCore.DetectedNotationRecordMovementEvent],
+        continuousProvisional: CaptureCore.ProvisionalPlatterMovement?
     )
 }
 
@@ -170,7 +172,7 @@ final class LivePerformedNotationTracker: ObservableObject {
     static func renderedEvents(
         for state: LiveNotationTrackingState
     ) -> [CaptureCore.DetectedNotationRecordMovementEvent] {
-        guard case .tracking(let committed, let provisional) = state else { return [] }
+        guard case .tracking(let committed, let provisional, _, _) = state else { return [] }
         guard let provisional else { return committed }
         let duration = max(0, provisional.currentTime - provisional.startTime)
         // Keep controller speed in raw steps/second, matching committed
@@ -191,6 +193,50 @@ final class LivePerformedNotationTracker: ObservableObject {
             source: "live_preview"
         )
         return committed + [preview]
+    }
+
+    /// Continuous (global span-normalised) renderer input for the canonical
+    /// Tear projection. Unlike `renderedEvents` these positions are NOT
+    /// gesture-relative: each run keeps its measured global position, so a
+    /// reversal apex shared between a forward and a backward run stays one
+    /// position-continuous trajectory instead of fragmenting into re-anchored
+    /// ramps. Presentation-only, like `renderedEvents`.
+    static func continuousRenderedEvents(
+        for state: LiveNotationTrackingState
+    ) -> [CaptureCore.DetectedNotationRecordMovementEvent] {
+        guard case .tracking(_, _, let continuousCommitted, let continuousProvisional) = state else { return [] }
+        guard let continuousProvisional else { return continuousCommitted }
+        let duration = max(0, continuousProvisional.currentTime - continuousProvisional.startTime)
+        let distance = abs(continuousProvisional.displacement)
+        let preview = CaptureCore.DetectedNotationRecordMovementEvent(
+            startTime: continuousProvisional.startTime,
+            endTime: continuousProvisional.currentTime,
+            startPosition: continuousProvisional.startPosition,
+            endPosition: continuousProvisional.currentPosition,
+            direction: continuousProvisional.direction,
+            movementKind: continuousProvisional.movementKind,
+            speed: duration > 0 ? distance / duration : 0,
+            confidence: 0.5,
+            source: "live_preview"
+        )
+        return continuousCommitted + [preview]
+    }
+
+    /// Continuous global span-normalised platter telemetry for the canonical
+    /// Tear projection, exposed as an instance convenience alongside
+    /// `renderedEvents`.
+    var continuousRenderedEvents: [CaptureCore.DetectedNotationRecordMovementEvent] {
+        Self.continuousRenderedEvents(for: state)
+    }
+
+    /// Coordinate `continuousRenderedEvents` positions are ACTUALLY in: the
+    /// global span-normalised take-local basis (0..1), never per-run
+    /// gesture-relative revolutions.
+    var continuousPlatterCoordinates: CaptureCore.PlatterNotationCoordinates {
+        .normalizedTakeLocal(
+            reference: "continuous global span-normalised platter telemetry "
+                + "for the canonical Tear projection"
+        )
     }
 
     private func startPolling(interval: TimeInterval) {
@@ -234,7 +280,7 @@ final class LivePerformedNotationTracker: ObservableObject {
         let span = (positions.max() ?? 0) - (positions.min() ?? 0)
         let committedCount: Int
         let hasProvisional: Bool
-        if case .tracking(let committed, let provisional) = state {
+        if case .tracking(let committed, let provisional, _, _) = state {
             committedCount = committed.count
             hasProvisional = provisional != nil
         } else {
@@ -283,11 +329,21 @@ final class LivePerformedNotationTracker: ObservableObject {
         )
         let usesController = !controllerResult.committedEvents.isEmpty || controllerResult.provisionalMovement != nil
         if usesController {
-            return .tracking(committed: controllerResult.committedEvents, provisional: controllerResult.provisionalMovement)
+            return .tracking(
+                committed: controllerResult.committedEvents,
+                provisional: controllerResult.provisionalMovement,
+                continuousCommitted: controllerResult.continuousEvents,
+                continuousProvisional: controllerResult.continuousProvisionalMovement
+            )
         }
 
         if let cameraEvents, !cameraEvents.isEmpty {
-            return .tracking(committed: cameraEvents, provisional: nil)
+            return .tracking(
+                committed: cameraEvents,
+                provisional: nil,
+                continuousCommitted: cameraEvents,
+                continuousProvisional: nil
+            )
         }
 
         return .waiting

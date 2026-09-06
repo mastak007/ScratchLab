@@ -360,8 +360,8 @@ struct ReferenceAuthoringView: View {
                     canonicalTearChart(
                         title: "YOUR MOTION — LIVE (TEAR STRUCTURE)",
                         projection: ReferenceTearCanonicalProjectionBuilder.project(
-                            movementEvents: liveNotationTracker.renderedEvents,
-                            coordinates: liveNotationTracker.platterCoordinates
+                            movementEvents: liveNotationTracker.continuousRenderedEvents,
+                            coordinates: liveNotationTracker.continuousPlatterCoordinates
                         ),
                         emptyMessage: "Waiting for tear motion…"
                     )

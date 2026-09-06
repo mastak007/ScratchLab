@@ -12006,6 +12006,31 @@ enum CaptureCore {
         /// nil if the platter is idle / has produced no run yet. Never fed
         /// into finalization — preview-only.
         let provisionalMovement: ProvisionalPlatterMovement?
+        /// Continuous (global span-normalised) committed events — the raw
+        /// `decodePlatterCore` positions before any gesture-relative
+        /// re-anchoring. A Tear subdivision is NOT a new platter origin, so
+        /// the canonical Tear projection consumes these rather than the
+        /// per-run gesture-relative `committedEvents`.
+        let continuousEvents: [DetectedNotationRecordMovementEvent]
+        /// Continuous (global span-normalised) open stroke, mirroring
+        /// `provisionalMovement` but preserving measured global positions
+        /// for the live Tear card.
+        let continuousProvisionalMovement: ProvisionalPlatterMovement?
+
+        /// The continuous fields are optional trailing arguments so the
+        /// engine's fail-closed empty constructor and the iOS call sites keep
+        /// compiling unchanged.
+        init(
+            committedEvents: [DetectedNotationRecordMovementEvent],
+            provisionalMovement: ProvisionalPlatterMovement?,
+            continuousEvents: [DetectedNotationRecordMovementEvent] = [],
+            continuousProvisionalMovement: ProvisionalPlatterMovement? = nil
+        ) {
+            self.committedEvents = committedEvents
+            self.provisionalMovement = provisionalMovement
+            self.continuousEvents = continuousEvents
+            self.continuousProvisionalMovement = continuousProvisionalMovement
+        }
     }
 
     /// Live/provisional variant of `derivePlatterMovementEvents`, sharing
@@ -12059,9 +12084,26 @@ enum CaptureCore {
                 displacement: $0.displacement
             )
         }
+        // Continuous positions are `core.events` (already global, span-
+        // normalised) and the trailing run's measured global positions —
+        // exactly what a position-continuous Tear needs, and untouched by
+        // the gesture-relative re-anchoring above.
+        let continuousProvisional = core.trailingRun.map {
+            ProvisionalPlatterMovement(
+                startTime: $0.startTime,
+                currentTime: $0.currentTime,
+                startPosition: $0.startPosition,
+                currentPosition: $0.currentPosition,
+                direction: $0.direction,
+                movementKind: $0.movementKind,
+                displacement: $0.displacement
+            )
+        }
         return PlatterMovementDecodeResult(
             committedEvents: committed,
-            provisionalMovement: provisional
+            provisionalMovement: provisional,
+            continuousEvents: core.events,
+            continuousProvisionalMovement: continuousProvisional
         )
     }
 

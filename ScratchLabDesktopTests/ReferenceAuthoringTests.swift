@@ -1382,6 +1382,210 @@ final class ReferenceTearCanonicalProjectionTests: XCTestCase {
         XCTAssertTrue(projection.records.allSatisfy { $0.tearLabel == nil })
     }
 
+    // MARK: - Tear topology (continuous platter trajectory)
+
+    private func firstSubdivisionStart(_ record: ScratchNotation.GestureRecord) -> Double? {
+        record.subdivisions.first?.measuredCurve?.startPosition
+    }
+
+    private func lastSubdivisionEnd(_ record: ScratchNotation.GestureRecord) -> Double? {
+        record.subdivisions.last?.measuredCurve?.endPosition
+    }
+
+    /// A Tear subdivision is NOT a new platter origin. A clean forward →
+    /// backward turnaround must depart from the physical apex the forward run
+    /// ended on, so the shared apex cannot be re-anchored to zero.
+    func testADirectionReversalPreservesOnePositionContinuousApex() throws {
+        let events = [
+            normalizedRun(start: 0.00, end: 0.30, direction: "forward", from: 0.0, to: 0.5),
+            normalizedRun(start: 0.30, end: 0.90, direction: "backward", from: 0.5, to: 0.0)
+        ]
+        let projection = project(events)
+
+        XCTAssertEqual(projection.records.count, 2)
+        let forward = projection.records[0]
+        let backward = projection.records[1]
+        XCTAssertEqual(forward.direction, .forward)
+        XCTAssertEqual(backward.direction, .backward)
+
+        // The apex is one physical position: forward's terminal equals
+        // backward's initial, not a fresh zero-anchored ramp.
+        let forwardApex = try XCTUnwrap(lastSubdivisionEnd(forward))
+        let backwardApex = try XCTUnwrap(firstSubdivisionStart(backward))
+        XCTAssertEqual(forwardApex, 0.5, accuracy: 1e-9)
+        XCTAssertEqual(backwardApex, 0.5, accuracy: 1e-9)
+
+        // The combined track is one continuous up-down V, not two diagonal
+        // ramps separated by a teleport back to the origin.
+        let track = rescaledToOwnSpan(positionTrack(projection))
+        let expected = [0.0, 1.0, 1.0, 0.0]
+        XCTAssertEqual(track.count, expected.count)
+        for (a, b) in zip(track, expected) {
+            XCTAssertEqual(a, b, accuracy: 1e-9)
+        }
+    }
+
+    /// forward → bounded hold → forward, but the second run DEPARTS from the
+    /// first run's terminal position (0.6), not from a fresh origin.
+    func testAForwardTearArticulationKeepsOneContinuousPosition() throws {
+        let events = [
+            normalizedRun(start: 0.00, end: 0.20, direction: "forward", from: 0.3, to: 0.6),
+            normalizedRun(start: 0.40, end: 0.60, direction: "forward", from: 0.6, to: 0.9)
+        ]
+        let projection = project(events)
+
+        XCTAssertEqual(projection.records.count, 1)
+        let record = try XCTUnwrap(projection.records.first)
+        XCTAssertEqual(record.direction, .forward)
+        XCTAssertEqual(record.subdivisions.count, 2)
+        XCTAssertEqual(record.internalHolds.count, 1)
+
+        // The hold sits at the continuous apex (0.6), not the per-run
+        // excursion (0.3).
+        let holdPosition = try XCTUnwrap(record.internalHolds.first?.position)
+        XCTAssertEqual(holdPosition, 0.6, accuracy: 1e-9)
+
+        // The two subdivisions share one boundary and preserve the absolute
+        // start of the gesture.
+        XCTAssertEqual(try XCTUnwrap(record.subdivisions[0].measuredCurve?.startPosition), 0.3, accuracy: 1e-9)
+        XCTAssertEqual(try XCTUnwrap(record.subdivisions[0].measuredCurve?.endPosition), 0.6, accuracy: 1e-9)
+        XCTAssertEqual(try XCTUnwrap(record.subdivisions[1].measuredCurve?.startPosition), 0.6, accuracy: 1e-9)
+        XCTAssertEqual(try XCTUnwrap(record.subdivisions[1].measuredCurve?.endPosition), 0.9, accuracy: 1e-9)
+    }
+
+    /// The mirror image: backward → bounded hold → backward stays one continuous
+    /// descending trajectory instead of two zero-anchored negative ramps.
+    func testAReverseTearArticulationKeepsOneContinuousPosition() throws {
+        let events = [
+            normalizedRun(start: 0.00, end: 0.20, direction: "backward", from: 0.9, to: 0.6),
+            normalizedRun(start: 0.40, end: 0.60, direction: "backward", from: 0.6, to: 0.3)
+        ]
+        let projection = project(events)
+
+        XCTAssertEqual(projection.records.count, 1)
+        let record = try XCTUnwrap(projection.records.first)
+        XCTAssertEqual(record.direction, .backward)
+        XCTAssertEqual(record.subdivisions.count, 2)
+        XCTAssertEqual(record.internalHolds.count, 1)
+
+        let holdPosition = try XCTUnwrap(record.internalHolds.first?.position)
+        XCTAssertEqual(holdPosition, 0.6, accuracy: 1e-9)
+
+        XCTAssertEqual(try XCTUnwrap(record.subdivisions[0].measuredCurve?.startPosition), 0.9, accuracy: 1e-9)
+        XCTAssertEqual(try XCTUnwrap(record.subdivisions[0].measuredCurve?.endPosition), 0.6, accuracy: 1e-9)
+        XCTAssertEqual(try XCTUnwrap(record.subdivisions[1].measuredCurve?.startPosition), 0.6, accuracy: 1e-9)
+        XCTAssertEqual(try XCTUnwrap(record.subdivisions[1].measuredCurve?.endPosition), 0.3, accuracy: 1e-9)
+    }
+
+    /// A clover tear: forward hold forward, then a direct reversal into a
+    /// backward hold backward. The ascent apex must be the descent's starting
+    /// position, so the whole gesture is one continuous up-then-down shape.
+    func testACloverTearPreservesTheAscentApexIntoTheDescent() throws {
+        let events = [
+            normalizedRun(start: 0.00, end: 0.15, direction: "forward", from: 0.00, to: 0.25),
+            normalizedRun(start: 0.20, end: 0.35, direction: "forward", from: 0.25, to: 0.50),
+            normalizedRun(start: 0.35, end: 0.50, direction: "backward", from: 0.50, to: 0.25),
+            normalizedRun(start: 0.55, end: 0.70, direction: "backward", from: 0.25, to: 0.00)
+        ]
+        let projection = project(events)
+
+        XCTAssertEqual(projection.records.count, 2)
+        let forward = projection.records[0]
+        let backward = projection.records[1]
+        XCTAssertEqual(forward.direction, .forward)
+        XCTAssertEqual(backward.direction, .backward)
+
+        // The ascent apex and descent start are one physical position (0.50).
+        let forwardApex = try XCTUnwrap(lastSubdivisionEnd(forward))
+        let backwardStart = try XCTUnwrap(firstSubdivisionStart(backward))
+        XCTAssertEqual(forwardApex, 0.50, accuracy: 1e-9)
+        XCTAssertEqual(backwardStart, 0.50, accuracy: 1e-9)
+
+        let track = rescaledToOwnSpan(positionTrack(projection))
+        let expected = [0.0, 0.5, 0.5, 1.0, 1.0, 0.5, 0.5, 0.0]
+        XCTAssertEqual(track.count, expected.count)
+        for (a, b) in zip(track, expected) {
+            XCTAssertEqual(a, b, accuracy: 1e-9)
+        }
+    }
+
+    /// A brief backward twitch (0.30 → 0.29) between two forward runs is
+    /// absorbed as sign chatter; the following forward run must still join the
+    /// measured trajectory, not re-anchor to zero.
+    func testAbsorbedChatterDoesNotReAnchorTheFollowingSameDirectionRamp() throws {
+        let events = [
+            normalizedRun(start: 0.00, end: 0.20, direction: "forward", from: 0.00, to: 0.30),
+            normalizedRun(start: 0.20, end: 0.25, direction: "backward", from: 0.30, to: 0.29),
+            normalizedRun(start: 0.25, end: 0.60, direction: "forward", from: 0.29, to: 0.59)
+        ]
+        let projection = project(events)
+
+        XCTAssertEqual(projection.records.count, 2)
+        XCTAssertEqual(projection.records.map(\.direction), [.forward, .forward])
+
+        let firstEnd = try XCTUnwrap(lastSubdivisionEnd(projection.records[0]))
+        let secondStart = try XCTUnwrap(firstSubdivisionStart(projection.records[1]))
+
+        // The second ramp departs from the measured 0.29, not from zero; the
+        // 0.01 gap is exactly the absorbed chatter dip and stays unknown.
+        XCTAssertEqual(firstEnd, 0.30, accuracy: 1e-9)
+        XCTAssertEqual(secondStart, 0.29, accuracy: 1e-9)
+    }
+
+    /// The live preview and finalized review must draw the same REVERSAL
+    /// topology: each records a forward-then-backward with a shared apex in
+    /// its own declared unit, not two disconnected zero-anchored ramps.
+    func testLiveAndFinalizedReversalShareTheSameApexAndShape() throws {
+        // Live: gesture-relative calibrated revolutions.
+        let liveReversal = [
+            calibratedRun(start: 0.00, end: 0.30, direction: "forward", steps: 540),
+            calibratedRun(start: 0.30, end: 0.90, direction: "backward", steps: 540)
+        ]
+        // Finalized: the same physical gesture span-normalised.
+        let finalizedReversal = [
+            normalizedRun(start: 0.00, end: 0.30, direction: "forward", from: 0.0, to: 0.5),
+            normalizedRun(start: 0.30, end: 0.90, direction: "backward", from: 0.5, to: 0.0)
+        ]
+        let live = ReferenceTearCanonicalProjectionBuilder.project(
+            movementEvents: liveReversal,
+            platterEvidenceIntervals: syntheticObservedPlatterStillness(liveReversal),
+            derivation: nil,
+            referenceTakeID: "live-preview",
+            coordinates: .raneOneMKIIDirectMIDI()
+        )
+        let finalized = ReferenceTearCanonicalProjectionBuilder.project(
+            movementEvents: finalizedReversal,
+            platterEvidenceIntervals: syntheticObservedPlatterStillness(finalizedReversal),
+            derivation: derivation(openFrom: 0, to: 0.90),
+            referenceTakeID: "ref-take-0008",
+            coordinates: .normalizedTakeLocal()
+        )
+
+        // Each states its own unit.
+        XCTAssertEqual(live.coordinateSpace, .platterRevolutions)
+        XCTAssertEqual(finalized.coordinateSpace, .normalizedTakeLocalDisplacement)
+
+        // Same reversal topology: forward then backward.
+        XCTAssertEqual(live.records.count, 2)
+        XCTAssertEqual(finalized.records.count, 2)
+        XCTAssertEqual(live.records.map(\.direction), finalized.records.map(\.direction))
+
+        // The apex is shared WITHIN each projection (the audited defect).
+        for projection in [live, finalized] {
+            let forwardApex = try XCTUnwrap(lastSubdivisionEnd(projection.records[0]))
+            let backwardApex = try XCTUnwrap(firstSubdivisionStart(projection.records[1]))
+            XCTAssertEqual(forwardApex, backwardApex, "reversal must not reset to zero")
+        }
+
+        // Same drawn V shape in each unit.
+        let liveTrack = rescaledToOwnSpan(positionTrack(live))
+        let finalizedTrack = rescaledToOwnSpan(positionTrack(finalized))
+        XCTAssertEqual(liveTrack.count, finalizedTrack.count)
+        for (a, b) in zip(liveTrack, finalizedTrack) {
+            XCTAssertEqual(a, b, accuracy: 1e-9)
+        }
+    }
+
     func testFaderClicksNeverIncrementTheTearHoldCount() throws {
         let clicked = derivation(
             openFrom: 0,
