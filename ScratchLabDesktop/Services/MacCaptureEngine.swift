@@ -4926,12 +4926,24 @@ final class MacCaptureEngine: NSObject, ObservableObject {
         if midiClient != 0 { MIDIClientDispose(midiClient) }
     }
 
+#if DEBUG
+    /// Replaces hardware discovery, permission requests and playback polling
+    /// in deterministic tests. The real per-engine start guard still runs.
+    var liveInputStartupOverride: (() -> Void)?
+#endif
+
     func start() {
         guard !isRunning else { return }
         isRunning = true
         isCameraActive = true
         isRoutineCaptureReady = false
         resetAudioSignalLevel()
+#if DEBUG
+        if let liveInputStartupOverride {
+            liveInputStartupOverride()
+            return
+        }
+#endif
         refreshDevices()
         requestPermissionsAndConfigure()
         startPlaybackPositionPoll()

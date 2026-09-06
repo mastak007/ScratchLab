@@ -368,12 +368,13 @@ final class MacCameraPreviewViewTests: XCTestCase {
         )
     }
 
-    /// Opening or leaving the DEBUG route must not touch capture. The only
-    /// teardown the screen performs is its own transient work and its own
-    /// notation tracker.
-    func testReferenceAuthoringAppearanceAndDisappearanceTouchNoCaptureState() throws {
+    /// Route activation requests live input; recording, approval and shared
+    /// engine teardown remain owned elsewhere.
+    func testReferenceAuthoringAppearanceAndDisappearancePreserveCaptureOwnership() throws {
         let source = try authoringViewSource()
+        XCTAssertTrue(source.contains(".task {\n            activateCaptureInput()"))
         for forbidden in [
+            "captureEngine.stop()",
             "startRoutineRecording",
             "stopRoutineRecording",
             "toggleRoutineRecording",
@@ -570,3 +571,129 @@ private final class PreviewSessionAssignmentProbe: @unchecked Sendable {
         assign(layer, session)
     }
 }
+
+#if DEBUG
+/// Executes the same activation method as the route's SwiftUI task, with a
+/// real engine and its real start guard. Only external startup work is replaced.
+@MainActor
+final class ReferenceAuthoringRouteActivationTests: XCTestCase {
+    private final class StartupSpy {
+        var requests = 0
+    }
+
+    private func withStoppedEngine(
+        liveInputEnabled: Bool = false,
+        body: (MacCaptureEngine, StartupSpy) -> Void
+    ) {
+        let defaults = UserDefaults.standard // The verified, isolated test host domain.
+        let cameraKey = "scratchlab.mac.selectedVideoDeviceUniqueID"
+        let liveKey = "scratchlab.mac.liveInputEnabled"
+        let oldCamera = defaults.object(forKey: cameraKey)
+        let oldLive = defaults.object(forKey: liveKey)
+        defaults.set("saved-authoring-camera", forKey: cameraKey)
+        defaults.set(liveInputEnabled, forKey: liveKey)
+        defer {
+            defaults.set(oldCamera, forKey: cameraKey)
+            defaults.set(oldLive, forKey: liveKey)
+        }
+        let spy = StartupSpy()
+        let engine = MacCaptureEngine(autoRefreshDevices: false)
+        engine.liveInputStartupOverride = { spy.requests += 1 }
+        XCTAssertFalse(engine.captureSession.isRunning)
+        XCTAssertFalse(engine.isRoutineRecording)
+        XCTAssertEqual(spy.requests, 0)
+        body(engine, spy)
+        XCTAssertEqual(defaults.bool(forKey: liveKey), liveInputEnabled)
+        XCTAssertEqual(defaults.string(forKey: cameraKey), "saved-authoring-camera")
+        XCTAssertEqual(engine.selectedVideoDeviceUniqueID, "saved-authoring-camera")
+        XCTAssertFalse(engine.isRoutineRecording)
+        XCTAssertFalse(engine.isRoutineFinalizationPending)
+        XCTAssertNil(engine.lastRoutineRecordingURL)
+    }
+
+    private func route(_ engine: MacCaptureEngine) -> ReferenceAuthoringView {
+        ReferenceAuthoringView(engine: engine, companionReceiver: nil, operatorName: "Route test")
+    }
+
+    func testRestoredRouteStartsFreshEngineWithSavedCameraAndLiveInputDisabled() {
+        withStoppedEngine { engine, spy in
+            let restoredRoute = route(engine)
+            restoredRoute.activateCaptureInput()
+            XCTAssertEqual(spy.requests, 1)
+        }
+    }
+
+    func testDirectEntryRequestsStartupWithoutBeginningRecording() {
+        withStoppedEngine { engine, spy in
+            route(engine).activateCaptureInput()
+            XCTAssertEqual(spy.requests, 1)
+        }
+    }
+
+    func testRepeatedAppearanceRequestsOnlyOneStartup() {
+        withStoppedEngine { engine, spy in
+            let authoringRoute = route(engine)
+            for _ in 0..<25 { authoringRoute.activateCaptureInput() }
+            XCTAssertEqual(spy.requests, 1)
+        }
+    }
+
+    func testWindowRecreationAndRouteReentryReuseTheAuthoritativeSession() {
+        withStoppedEngine { engine, spy in
+            let originalSession = engine.captureSession
+            for _ in 0..<5 {
+                let recreatedRoute = route(engine)
+                recreatedRoute.activateCaptureInput()
+            }
+            XCTAssertEqual(spy.requests, 1)
+            XCTAssertTrue(engine.captureSession === originalSession)
+            XCTAssertTrue(originalSession.inputs.isEmpty)
+            XCTAssertTrue(originalSession.outputs.isEmpty)
+        }
+    }
+
+    func testFreshEngineAfterRelaunchReceivesItsOwnStartupRequest() {
+        withStoppedEngine { firstEngine, firstSpy in
+            route(firstEngine).activateCaptureInput()
+            withStoppedEngine { freshEngine, freshSpy in
+                route(freshEngine).activateCaptureInput()
+                route(freshEngine).activateCaptureInput()
+                XCTAssertEqual(firstSpy.requests, 1)
+                XCTAssertEqual(freshSpy.requests, 1)
+                XCTAssertFalse(firstEngine.captureSession === freshEngine.captureSession)
+            }
+        }
+    }
+
+    func testExistingGlobalStartupAndAuthoringEntryShareTheStartGuard() {
+        withStoppedEngine(liveInputEnabled: true) { engine, spy in
+            engine.start()
+            route(engine).activateCaptureInput()
+            XCTAssertEqual(spy.requests, 1)
+        }
+    }
+
+    func testReentrantActivationDuringStartupDoesNotCompete() {
+        withStoppedEngine { engine, spy in
+            engine.liveInputStartupOverride = { [weak engine] in
+                spy.requests += 1
+                engine?.start()
+            }
+            route(engine).activateCaptureInput()
+            XCTAssertEqual(spy.requests, 1)
+        }
+    }
+
+    func testReentryAfterAnOwnerStopsTheEngineRequestsStartupAgain() {
+        withStoppedEngine { engine, spy in
+            let originalSession = engine.captureSession
+            route(engine).activateCaptureInput()
+            engine.stop() // Simulates the existing lifecycle owner, not route disappearance.
+            route(engine).activateCaptureInput()
+            route(engine).activateCaptureInput()
+            XCTAssertEqual(spy.requests, 2)
+            XCTAssertTrue(engine.captureSession === originalSession)
+        }
+    }
+}
+#endif

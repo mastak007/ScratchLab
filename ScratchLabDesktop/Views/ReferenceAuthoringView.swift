@@ -102,6 +102,7 @@ struct ReferenceAuthoringView: View {
             .frame(maxWidth: 860, alignment: .leading)
         }
         .task {
+            activateCaptureInput()
             viewModel.refreshAutofilledPatternIdentity()
             viewModel.startPreflightPolling()
             // Reuse an exactly-matching saved calibration rather than asking
@@ -139,6 +140,15 @@ struct ReferenceAuthoringView: View {
             // owned by the engine and are deliberately left alone.
             syncLiveNotationTracker(isRecording: false)
         }
+    }
+
+    /// Entry and restoration both need live authoring input, regardless of
+    /// the global live-input preference. The engine owns the idempotent start
+    /// guard, so recreating this view cannot start a second session. Leaving
+    /// this route does not own stopping the shared engine.
+    @MainActor
+    func activateCaptureInput() {
+        captureEngine.start()
     }
 
     /// The ONE place the live-notation tracker is created or dropped.

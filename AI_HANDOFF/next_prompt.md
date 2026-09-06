@@ -1,3 +1,30 @@
+# Current continuation — Read-only restored-camera-start candidate review
+
+This section supersedes earlier continuation instructions below. No hardware acceptance or commit is authorized.
+
+```text
+Read-only candidate review only. Do not edit, stage, commit, merge, push, rebuild, rerun tests, launch an interactive app, terminate/relaunch PID 35367, change cameras, record, calibrate, export, approve, install, publish or train.
+
+Candidate: /Users/karlwatson/Downloads/ScratchLab-TTM-CameraRestore
+Branch: fix/reference-authoring-restored-camera-start
+Exact unchanged HEAD/base: ae4d1ca9ab81f1e43f92259e1b40f65fd6e38e8d
+Canonical source: /Users/karlwatson/Downloads/ScratchLab-TTM-Reconstruct (must remain clean and unchanged)
+Protected live process: PID 35367, /private/tmp/scratchlab-hardware-20260907d/Products/Debug/ScratchLab.app/Contents/MacOS/ScratchLab
+Evidence: /private/tmp/scratchlab-camera-restore-20260907a/
+
+Read AGENTS.md, SOUL.md, PROFILE.md and the current workflow records. Verify the base, branch, empty index, zero untracked files, exact seven-file candidate and ancestry through Prompt A cb4adc5, Prompt B 9bb82d1, Prompt C ae4d1ca and camera repair 63e2898. Inspect the complete diff against that base and final-source-sha256.json/candidate.diff/final-review-receipt.json.
+
+Review the ReferenceAuthoringView task-to-activateCaptureInput-to-MacCaptureEngine.start boundary. Confirm direct entry and restored view activation request startup independently of liveInputEnabled, the existing per-engine synchronous isRunning guard owns idempotency, new view instances share it, fresh engines get their own request, and no route-owned stop was added. Confirm the DEBUG seam is nil in normal use and substitutes external startup work only after the real guard. Confirm saved-camera handling, permissions, discovery, authoritative session ownership and queued PreviewAttachment generation/stale/teardown behavior remain unchanged. No recording, MIDI, calibration, Watch, export, approval, publication, training or live-notation change is allowed.
+
+Review eight deterministic route tests and all 25 camera-preview regressions: 33 discovered/passed per configuration, 66 total executions, zero failed/skipped/runtime warnings in test.xcresult/test-summary.json. Inspect prepare-command.json, test-command.json, compile-command.json and identity-verified.json; host ID is com.machelpnz.scratchlab.camerarestore.20260907a.ScratchLabDesktop, test bundle ID is the same prefix ending ScratchLabDesktopTests. Host signature proves App Sandbox; tests run inside that host. Container absence was proven before execution. All products/caches/results use explicit isolated paths. macOS Debug compile passed; iOS, Watch, Release and full scripts/build.sh gates were intentionally not run. The initial test compile error and sandboxed signature-verification failure were corrected/resolved before tests; retained initial evidence is not passing evidence.
+
+Review before.json, after.json and after-comparison.json for zero additions/removals/changes in production, hardware container/output, protected preview evidence and shared products, and unchanged canonical/all other existing worktrees. Inspect final-review-receipt.json for eleven unchanged protected configuration files, empty index, zero untracked files and diff-check success. Report exact findings and limitations; do not claim hardware camera-restoration acceptance. Return approve-for-separately-authorized-checkpoint-review or request-changes, with concrete file/line evidence. This review authorizes no checkpoint or hardware action.
+
+Remaining Phase 1 hardware checks are separately authorized work: a fresh isolated candidate, five route entry/exit cycles including navigation during camera configuration/start/stop, safe camera-device change, resizing, window close/reopen, and saved-camera restoration with liveInputEnabled false after normal quit/relaunch. On a beachball, stop interaction and obtain three ten-second samples from the verified PID before any separately authorized termination. Recording stays prohibited until preview acceptance passes and Karl explicitly authorizes it.
+```
+
+---
+
 # Current continuation — Checkpoint Prompt C, then Prompt D (hardware acceptance)
 
 Prompt B is COMMITTED as `9bb82d1`. Prompt C is complete and software-verified in `/Users/karlwatson/Downloads/ScratchLab-TTM-Reconstruct`, branch `feature/ttm-crossfader-takestart-reconstruct`, base `9bb82d1`: nine modified files (six production + three existing test files) at +1,075 / −23, plus the four workflow records. Evidence is macOS build, macOS build-for-testing and unsigned generic iOS build, with 328 + 318 focused test executions and zero failures. Do not rerun those gates. Proposed subject: `fix(notation): declare the platter coordinate contract and state Review limits`.
