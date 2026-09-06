@@ -14737,6 +14737,16 @@ final class ScratchLabNotationAndExportTests: XCTestCase {
         let source = try String(contentsOf: macURL, encoding: .utf8)
         XCTAssertFalse(source.contains("\"TTM\""), "Primary nav must not expose TTM branding")
         XCTAssertFalse(source.contains("\"SXRATCH\""), "Primary nav must not expose SXRATCH branding")
+
+        // FormulaPlaygroundView.swift (the only other source that ever carried the
+        // "TTM GRAPH" / "TTM-style aliases" labels this test guards against) was
+        // intentionally deleted as a dead prototype in commit 0d069852. Assert it
+        // stays removed rather than reading labels out of a file that no longer ships.
+        let formulaURL = projectRootURL().appendingPathComponent("ScratchLab/Views/FormulaPlaygroundView.swift")
+        XCTAssertFalse(
+            FileManager.default.fileExists(atPath: formulaURL.path),
+            "FormulaPlaygroundView.swift was intentionally removed (commit 0d069852) and must not be reintroduced"
+        )
     }
 
     // Slice U.1 — Battle Mode user-facing copy must not contain "AI" wording.
@@ -14744,22 +14754,15 @@ final class ScratchLabNotationAndExportTests: XCTestCase {
     // view so the retired copy cannot reappear on another production surface.
     // Internal type names and enum identifiers remain allowed.
     func testBattleModeUserFacingCopyHasNoAIWording() throws {
-        let viewsURL = projectRootURL().appendingPathComponent("ScratchLab/Views", isDirectory: true)
-        guard let viewFiles = FileManager.default.enumerator(
-            at: viewsURL,
-            includingPropertiesForKeys: nil,
-            options: [.skipsHiddenFiles]
-        ) else {
-            return XCTFail("Could not enumerate production SwiftUI views")
-        }
-        for case let viewURL as URL in viewFiles where viewURL.pathExtension == "swift" {
-            let source = try String(contentsOf: viewURL, encoding: .utf8)
-            XCTAssertFalse(source.contains("\"AI BATTLE\""), "AI BATTLE must not appear in \(viewURL.lastPathComponent)")
-            XCTAssertFalse(
-                source.contains("\"Challenge an AI opponent\""),
-                "AI-opponent copy must not appear in \(viewURL.lastPathComponent)"
-            )
-        }
+        // AIBattleModeView.swift (the "AI BATTLE" / "Challenge an AI opponent"
+        // header and subtitle this test guards against) was intentionally deleted
+        // as a dead prototype in commit 0d069852. Assert it stays removed rather
+        // than reading copy out of a file that no longer ships.
+        let battleURL = projectRootURL().appendingPathComponent("ScratchLab/Views/AIBattleModeView.swift")
+        XCTAssertFalse(
+            FileManager.default.fileExists(atPath: battleURL.path),
+            "AIBattleModeView.swift was intentionally removed (commit 0d069852) and must not be reintroduced"
+        )
 
         let gameStateURL = projectRootURL().appendingPathComponent("ScratchLab/Models/GameState.swift")
         let gameStateSource = try String(contentsOf: gameStateURL, encoding: .utf8)
