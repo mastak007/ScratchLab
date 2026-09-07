@@ -375,9 +375,25 @@ extension ScratchStrokeGeometry {
     /// Preserves every supplied curve point and hold position. No speed bucket,
     /// ratio template, release assumption, click threshold or curve fallback.
     /// Piecewise linear clipping at stream boundaries preserves the local slope.
+    /// - Parameter wrapPeriod: PRESENTATION ONLY. When supplied, platter
+    ///   position is drawn as bounded sample-loop PHASE instead of unbounded
+    ///   displacement: the lane's bottom is phase 0 and its top is one loop
+    ///   period, and a measured span that crosses a loop boundary is emitted
+    ///   as two separate segments meeting at the top and the bottom. No
+    ///   segment is emitted BETWEEN them, and that absence is the pen-up —
+    ///   the renderer strokes each segment's own path, so nothing connects
+    ///   the top back down to the bottom.
+    ///
+    ///   This never reaches the physical decoder, never becomes a movement
+    ///   event, never changes a record's `direction`, and never mints a hold,
+    ///   a reversal or a MOTION UNKNOWN band: a wrap is a discontinuity in
+    ///   how measured travel is DRAWN, not evidence of anything happening on
+    ///   the platter. `nil` (the default) keeps the unbounded behaviour
+    ///   byte-for-byte, which is what every finalized, Practice and iOS
+    ///   caller gets.
     static func canonicalGeometry(
         records: [ScratchNotation.GestureRecord], layer: CanonicalLayer,
-        frame: CanonicalFrame
+        frame: CanonicalFrame, wrapPeriod: Double? = nil
     ) -> CanonicalGeometry {
         typealias Record = ScratchNotation.GestureRecord
         var candidates: [MotionSegment] = []
@@ -389,6 +405,99 @@ extension ScratchStrokeGeometry {
         func normalized(_ position: Double) -> CGFloat {
             CGFloat((position - frame.positionRange.lowerBound)
                 / (frame.positionRange.upperBound - frame.positionRange.lowerBound))
+        }
+        // A period must be usable before it can bound anything; an absent,
+        // non-finite or non-positive one leaves the lane exactly as it was.
+        let loopPeriod: Double? = {
+            guard let wrapPeriod, wrapPeriod.isFinite, wrapPeriod > 0 else { return nil }
+            return wrapPeriod
+        }()
+        // Bound presentation expansion before the shared partition below.
+        // Any unsafe numeric step or excessive split count reuses the complete
+        // unwrapped geometry; it never drops evidence or returns a partial loop.
+        var remainingLoopPieces = 4_096
+        /// Position -> lane fraction. With a loop period the lane spans ONE
+        /// period, so the fraction is the wrapped phase; without one this is
+        /// the existing frame mapping, unchanged.
+        func laneNormalized(_ position: Double) -> CGFloat {
+            guard let loopPeriod else { return normalized(position) }
+            var phase = position.truncatingRemainder(dividingBy: loopPeriod)
+            if phase < 0 { phase += loopPeriod }
+            return CGFloat(phase / loopPeriod)
+        }
+        /// Which loop this span sits in. Read from the span's OWN start so a
+        /// forward span ending exactly on a boundary reads as the top of the
+        /// loop it travelled through rather than the bottom of the next one,
+        /// and a backward span starting exactly on one reads as the top of
+        /// the loop below.
+        func lapIndex(startPosition: Double, forward: Bool, period: Double) -> Double {
+            forward
+                ? (startPosition / period).rounded(.down)
+                : (startPosition / period).rounded(.up) - 1
+        }
+        /// One measured curve pair, split at every loop boundary it crosses.
+        /// Time is interpolated linearly in position, so each piece keeps the
+        /// measured slope it actually had. Nil requests a complete unwrapped fallback.
+        func loopSpans(
+            from a: ScratchNotation.GestureRecord.CurvePoint,
+            to b: ScratchNotation.GestureRecord.CurvePoint,
+            period: Double
+        ) -> [(startTime: Double, endTime: Double, startPosition: CGFloat, endPosition: CGFloat)]? {
+            let travel = b.position - a.position
+            let startLap = a.position / period
+            let endLap = b.position / period
+            let estimatedPieces = abs(endLap - startLap).rounded(.up) + 1
+            guard travel.isFinite, startLap.isFinite, endLap.isFinite,
+                  estimatedPieces.isFinite, estimatedPieces <= Double(remainingLoopPieces) else {
+                return nil
+            }
+            let forward = travel >= 0
+            var cuts: [Double] = []
+            if travel != 0 {
+                let base = forward ? startLap.rounded(.down) : startLap.rounded(.up)
+                var k = base + (forward ? 1 : -1)
+                guard forward ? k > base : k < base else {
+                    return nil
+                }
+                while true {
+                    let cut = k * period
+                    guard cut.isFinite else {
+                        return nil
+                    }
+                    if forward ? cut >= b.position : cut <= b.position { break }
+                    guard (forward ? cut > (cuts.last ?? a.position) : cut < (cuts.last ?? a.position)),
+                          cuts.count + 1 < remainingLoopPieces else {
+                        return nil
+                    }
+                    cuts.append(cut)
+                    let next = k + (forward ? 1 : -1)
+                    guard forward ? next > k : next < k else {
+                        return nil
+                    }
+                    k = next
+                }
+            }
+            var pieces: [(Double, Double, Double, Double)] = []
+            var startTime = a.time, startPosition = a.position
+            for cut in cuts {
+                let fraction = (cut - a.position) / travel
+                let time = a.time + (b.time - a.time) * fraction
+                guard time.isFinite, time > startTime, time < b.time else {
+                    return nil
+                }
+                pieces.append((startTime, time, startPosition, cut))
+                startTime = time; startPosition = cut
+            }
+            pieces.append((startTime, b.time, startPosition, b.position))
+            remainingLoopPieces -= pieces.count
+            return pieces.compactMap { piece in
+                let lap = lapIndex(startPosition: piece.2, forward: forward, period: period)
+                func fraction(_ position: Double) -> CGFloat {
+                    CGFloat((position - lap * period) / period)
+                }
+                guard piece.1 > piece.0 else { return nil }
+                return (piece.0, piece.1, fraction(piece.2), fraction(piece.3))
+            }
         }
         func bounded(_ span: Record.TimeSpan, scale: Double) -> ClosedRange<Double>? {
             let start = span.startTime * scale, end = span.endTime * scale
@@ -435,26 +544,38 @@ extension ScratchStrokeGeometry {
                           pairs.allSatisfy({ a, b in
                         let delta = b.position - a.position
                         return delta.isFinite && (record.direction == .forward ? delta >= 0 : delta <= 0)
-                            && normalized(a.position).isFinite && normalized(b.position).isFinite
+                            && laneNormalized(a.position).isFinite && laneNormalized(b.position).isFinite
                             && (a.time * scale).isFinite && (b.time * scale).isFinite
                     }) else { invalidMotion.append(range); continue }
                     for (a, b) in pairs {
-                        candidates.append(MotionSegment(kind: .stroke(record.direction),
-                            startTime: a.time * scale, endTime: b.time * scale,
-                            startPosition: normalized(a.position), endPosition: normalized(b.position),
-                            speed: .medium, isGhost: false, evidenceStyle: .unknownFader))
+                        guard let loopPeriod else {
+                            candidates.append(MotionSegment(kind: .stroke(record.direction),
+                                startTime: a.time * scale, endTime: b.time * scale,
+                                startPosition: normalized(a.position), endPosition: normalized(b.position),
+                                speed: .medium, isGhost: false, evidenceStyle: .unknownFader))
+                            continue
+                        }
+                        guard let pieces = loopSpans(from: a, to: b, period: loopPeriod) else {
+                            return canonicalGeometry(records: records, layer: layer, frame: frame)
+                        }
+                        for piece in pieces {
+                            candidates.append(MotionSegment(kind: .stroke(record.direction),
+                                startTime: piece.startTime * scale, endTime: piece.endTime * scale,
+                                startPosition: piece.startPosition, endPosition: piece.endPosition,
+                                speed: .medium, isGhost: false, evidenceStyle: .unknownFader))
+                        }
                     }
                 }
                 for hold in record.internalHolds {
                     guard let range = bounded(hold.span, scale: scale) else {
                         invalidMotion.append(recordRange); unplaced = true; continue
                     }
-                    guard let position = hold.position, normalized(position).isFinite else {
+                    guard let position = hold.position, laneNormalized(position).isFinite else {
                         invalidMotion.append(range); continue
                     }
                     candidates.append(MotionSegment(kind: .hold,
                         startTime: range.lowerBound, endTime: range.upperBound,
-                        startPosition: normalized(position), endPosition: normalized(position),
+                        startPosition: laneNormalized(position), endPosition: laneNormalized(position),
                         speed: .medium, isGhost: false, evidenceStyle: .unknownFader))
                 }
             }

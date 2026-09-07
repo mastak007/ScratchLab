@@ -365,7 +365,10 @@ struct ReferenceAuthoringView: View {
                             derivation: liveNotationTracker.faderDerivation,
                             coordinates: liveNotationTracker.continuousPlatterCoordinates
                         ),
-                        emptyMessage: "Waiting for tear motion…"
+                        emptyMessage: "Waiting for tear motion…",
+                        // LIVE ONLY. The finalized card below states no loop,
+                        // so it keeps drawing the take's own unbounded travel.
+                        wrapPeriod: liveNotationTracker.continuousWrapPeriod
                     )
                     .frame(maxWidth: .infinity, minHeight: Self.liveNotationMinimumHeight)
                 }
@@ -818,7 +821,8 @@ struct ReferenceAuthoringView: View {
     private func canonicalTearChart(
         title: String,
         projection: ReferenceTearCanonicalProjection,
-        emptyMessage: String
+        emptyMessage: String,
+        wrapPeriod: Double? = nil
     ) -> some View {
         VStack(alignment: .leading, spacing: 6) {
             Text(title)
@@ -831,6 +835,7 @@ struct ReferenceAuthoringView: View {
                 ScratchPhraseChartView(
                     source: .canonical(projection.records, layer: .performance, frame: frame),
                     bpm: Double(viewModel.bpm),
+                    wrapPeriod: wrapPeriod,
                     backgroundColor: .clear
                 )
                 // Bounded, never `maxHeight: .infinity`: this card also lives

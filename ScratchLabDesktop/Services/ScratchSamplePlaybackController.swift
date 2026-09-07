@@ -335,7 +335,14 @@ final class ScratchSamplePlaybackController {
     /// `MacCaptureEngine` then falls back to calling the untouched legacy
     /// `positionDidChange` grain path for right-deck CC6 — a hardware
     /// rollback lever independent of `dvsUsesContinuousRenderer`.
-    var midiUsesContinuousRenderer = true
+    var midiUsesContinuousRenderer = true {
+        didSet {
+            guard oldValue != midiUsesContinuousRenderer else { return }
+            runSynchronouslyOnAudioQueue {
+                invalidatePlaybackLoopContext(at: schedulingClock())
+            }
+        }
+    }
 
     /// Which control source currently owns `dvsContinuousRenderer`'s single
     /// publication surface. DVS always outranks MIDI. Confined to
@@ -391,13 +398,47 @@ final class ScratchSamplePlaybackController {
     /// Left-deck (channel 0) steps are never read here: the isolation rule
     /// is structural, not a runtime check.
     private var rightDeckAccumulatedStepsProvider: (() -> Int)?
+    private var rightDeckObservationProvider: (() -> MIDIPlatterStepObservation?)?
+    private var playbackLoopContext: PlaybackLoopContext?
+    private var playbackLoopGeneration: UInt64 = 0
+    private var playbackLoopValidFrom: Double = 0
+    private var playbackLoopInput: MIDIPlatterInputIdentity?
+
+    private func invalidatePlaybackLoopContext(at timestamp: Double) {
+        playbackLoopGeneration &+= 1
+        playbackLoopContext = nil
+        playbackLoopInput = nil
+        playbackLoopValidFrom = timestamp.isFinite ? timestamp : .infinity
+    }
+
+    /// Only the direct-MIDI publication path establishes this correspondence.
+    /// The observation provider additionally retires a disconnected input even
+    /// before a replacement device has delivered its first packet.
+    func currentPlaybackLoopContext() -> PlaybackLoopContext? {
+        audioQueue.sync {
+            guard midiUsesContinuousRenderer, !dvsOwnershipActive,
+                  platterRenderOwner == .midi,
+                  let context = playbackLoopContext,
+                  context.sampleID == loadedSampleID,
+                  let current = rightDeckObservationProvider?(),
+                  current.input.deviceName == context.anchor.deviceName,
+                  current.input.connectionGeneration == context.anchor.connectionGeneration,
+                  current.input.timestamp >= context.anchor.timestamp
+            else { return nil }
+            return context
+        }
+    }
 
     /// Wires the right-deck steps provider and starts the real-time
     /// coalescing timer (idempotent). Safe to call from any thread.
-    func configureMIDIPlatterProvider(rightDeckAccumulatedSteps provider: @escaping () -> Int) {
+    func configureMIDIPlatterProvider(
+        rightDeckAccumulatedSteps provider: @escaping () -> Int,
+        observation: (() -> MIDIPlatterStepObservation?)? = nil
+    ) {
         audioQueue.async { [weak self] in
             guard let self else { return }
             self.rightDeckAccumulatedStepsProvider = provider
+            self.rightDeckObservationProvider = observation
             if self.midiCoalescingTimer == nil {
                 self.startMIDICoalescingTimer()
             }
@@ -465,6 +506,7 @@ final class ScratchSamplePlaybackController {
         // re-run the handoff side effects below.
         guard dvsOwnershipActive != active else { return }
         dvsOwnershipActive = active
+        invalidatePlaybackLoopContext(at: schedulingClock())
 
         if active {
             if platterRenderOwner == .midi {
@@ -544,7 +586,34 @@ final class ScratchSamplePlaybackController {
         guard hotCueLoopFrames > 0, forward.frameLength > 0 else { return }
 
         let now = schedulingClock()
+        // Preserve the existing scalar read and playback computation. Metadata
+        // only qualifies presentation, and a racing observation fails closed.
+        let observationBefore = rightDeckObservationProvider?()
         let steps = provider()
+        let observationAfter = rightDeckObservationProvider?()
+        let observation: MIDIPlatterStepObservation? = {
+            guard let before = observationBefore, before == observationAfter,
+                  before.accumulatedSteps == steps,
+                  before.input.channel == ScratchPlatterTracker.rightChannel,
+                  (0..<128).contains(before.input.value),
+                  before.input.timestamp.isFinite, before.input.timestamp <= now,
+                  before.input.timestamp >= (playbackLoopInput?.timestamp ?? before.input.timestamp),
+                  !before.input.deviceName.isEmpty else { return nil }
+            return before
+        }()
+        if let observation {
+            let input = observation.input
+            if playbackLoopInput?.deviceName != input.deviceName
+                || playbackLoopInput?.connectionGeneration != input.connectionGeneration {
+                let earliest = max(playbackLoopValidFrom, input.timestamp)
+                invalidatePlaybackLoopContext(at: earliest)
+            }
+            playbackLoopInput = input
+        } else {
+            // A lost correlation does not establish a new sample/input origin.
+            // The next matching publication can restore the same affine map.
+            playbackLoopContext = nil
+        }
         guard let result = midiContinuousDrive.tick(accumulatedSteps: steps, now: now) else {
             return // Priming: baseline captured, nothing to publish yet.
         }
@@ -566,6 +635,9 @@ final class ScratchSamplePlaybackController {
         }
 
         guard result.velocity != 0 else {
+            if result.deltaSteps != 0 {
+                playbackLoopContext = nil
+            }
             // No sane motion this tick: publish idle promptly — the
             // control side owns this decision on its own bounded cadence,
             // rather than waiting on the renderer's 0.25 s staleness
@@ -631,14 +703,37 @@ final class ScratchSamplePlaybackController {
             playerNode.play()
         }
         currentSampleFrame = Int(phase)
+        if let observation,
+           observation.input.timestamp >= playbackLoopValidFrom,
+           midiContinuousAccumulatedSteps.isFinite, midiFramesPerStep.isFinite,
+           midiFramesPerStep > 0, hotCueLoopFrames.isFinite, hotCueLoopFrames > 0,
+           let sampleID = loadedSampleID {
+            let loopSteps = hotCueLoopFrames / midiFramesPerStep
+            if loopSteps.isFinite, loopSteps > 0 {
+                playbackLoopContext = PlaybackLoopContext(
+                    generation: playbackLoopGeneration,
+                    sampleID: sampleID,
+                    validFromTimestamp: playbackLoopValidFrom,
+                    anchor: observation.input,
+                    phaseSteps: midiContinuousAccumulatedSteps,
+                    loopLengthInSteps: loopSteps
+                )
+            }
+        }
     }
 
 #if DEBUG
     /// Test-only: injects the right-deck steps provider without starting
     /// the real-time coalescing timer, so deterministic tests can drive
     /// `testOnly_midiCoalescingTick()` on their own schedule.
-    func testOnly_setRightDeckAccumulatedStepsProvider(_ provider: @escaping () -> Int) {
-        audioQueue.sync { self.rightDeckAccumulatedStepsProvider = provider }
+    func testOnly_setRightDeckAccumulatedStepsProvider(
+        _ provider: @escaping () -> Int,
+        observation: (() -> MIDIPlatterStepObservation?)? = nil
+    ) {
+        audioQueue.sync {
+            self.rightDeckAccumulatedStepsProvider = provider
+            self.rightDeckObservationProvider = observation
+        }
     }
 
     /// Test-only: drives exactly one coalesced MIDI control tick
@@ -2211,6 +2306,7 @@ final class ScratchSamplePlaybackController {
     /// production reset path instead of duplicating it. Must run on
     /// `audioQueue`.
     private func applyLoadedBufferState(_ buffer: AVAudioPCMBuffer, sampleID: String, generation: UInt64) {
+        invalidatePlaybackLoopContext(at: schedulingClock())
         #if DEBUG
         // Intermittent hot-cue-retrigger investigation (2026-08-14): captured
         // before any state below is reset for the new load, so it reflects
@@ -3550,6 +3646,7 @@ final class ScratchSamplePlaybackController {
             self.cancelStopRamp()
             self.playerNode.stop()
             self.playerNode.volume = 1.0
+            self.invalidatePlaybackLoopContext(at: self.schedulingClock())
             self.forwardBuffer = nil
             self.playbackWaveformSnapshot = nil
             self.loadedSampleID = nil

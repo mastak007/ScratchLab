@@ -52,6 +52,169 @@ final class ScratchSamplePlaybackControllerMIDIPlatterTests: XCTestCase {
         return (controller, { clock.now = $0 }, { steps.value = $0 })
     }
 
+    private final class LoopInput {
+        var now = 1.0
+        var steps = 0
+        var connectionGeneration: UInt64 = 7
+        var deviceName = "Rane ONE MKII"
+        var metadataReads = 0
+        var raceMetadata = false
+        var mismatchSteps = false
+        var metadataAvailable = true
+
+        func observation() -> MIDIPlatterStepObservation? {
+            metadataReads += 1
+            guard metadataAvailable else { return nil }
+            let identity = MIDIPlatterInputIdentity(
+                timestamp: now, deviceName: deviceName, channel: 1,
+                value: ((steps % 128) + 128) % 128,
+                connectionGeneration: connectionGeneration
+                    + (raceMetadata && metadataReads.isMultiple(of: 2) ? 1 : 0)
+            )
+            return MIDIPlatterStepObservation(input: identity, accumulatedSteps: steps + (mismatchSteps ? 1 : 0))
+        }
+    }
+
+    private func makeLoopContextController(loaded: Bool = true) throws -> (ScratchSamplePlaybackController, LoopInput) {
+        let input = LoopInput()
+        let controller = ScratchSamplePlaybackController(schedulingClock: { input.now })
+        if loaded {
+            controller.testOnly_installSyntheticSample(try makeSyntheticLoopBuffer(), sampleID: "loop-context")
+        }
+        controller.testOnly_setRightDeckAccumulatedStepsProvider({ input.steps }, observation: { input.observation() })
+        return (controller, input)
+    }
+
+    private func advanceLoopContext(_ controller: ScratchSamplePlaybackController, _ input: LoopInput,
+                                    steps: Int, time: Double) {
+        input.steps = steps
+        input.now = time
+        controller.testOnly_midiCoalescingTick()
+    }
+
+    func testPlaybackLoopContextRequiresLoadedSampleAndPublishedMIDIMotion() throws {
+        let (controller, input) = try makeLoopContextController(loaded: false)
+        XCTAssertNil(controller.currentPlaybackLoopContext())
+        advanceLoopContext(controller, input, steps: 0, time: 1)
+        XCTAssertNil(controller.currentPlaybackLoopContext())
+        controller.testOnly_installSyntheticSample(try makeSyntheticLoopBuffer(), sampleID: "loop-context")
+        advanceLoopContext(controller, input, steps: 0, time: 1.01)
+        XCTAssertNil(controller.currentPlaybackLoopContext(), "priming is not a publication")
+        advanceLoopContext(controller, input, steps: 40, time: 1.03)
+        let context = try XCTUnwrap(controller.currentPlaybackLoopContext())
+        XCTAssertEqual(context.anchor.value, 40)
+        XCTAssertEqual(context.anchor.timestamp, 1.03)
+        XCTAssertEqual(context.phaseSteps, 40, accuracy: 1e-9)
+        XCTAssertEqual(context.validFromTimestamp, 1.01)
+        XCTAssertGreaterThan(context.loopLengthInSteps, 0)
+        XCTAssertEqual(context.sampleID, "loop-context")
+    }
+
+    func testPlaybackLoopContextRejectsRacingOrMismatchedMetadataWithoutChangingPlayback() throws {
+        for mismatchSteps in [false, true] {
+            let (controller, input) = try makeLoopContextController()
+            advanceLoopContext(controller, input, steps: 0, time: 1)
+            input.raceMetadata = !mismatchSteps
+            input.mismatchSteps = mismatchSteps
+            advanceLoopContext(controller, input, steps: 40, time: 1.02)
+            XCTAssertNil(controller.currentPlaybackLoopContext())
+            XCTAssertEqual(controller.testOnly_midiContinuousAccumulatedSteps, 40)
+            XCTAssertEqual(controller.dvsContinuousRenderer.lastPublishedActive, true)
+            XCTAssertGreaterThan(try XCTUnwrap(controller.dvsContinuousRenderer.lastPublishedVelocity), 0)
+        }
+    }
+
+    func testPlaybackLoopContextRecoversAfterMetadataRaceWithoutChangingOrigin() throws {
+        let (controller, input) = try makeLoopContextController()
+        advanceLoopContext(controller, input, steps: 0, time: 1)
+        advanceLoopContext(controller, input, steps: 40, time: 1.02)
+        let before = try XCTUnwrap(controller.currentPlaybackLoopContext())
+        input.raceMetadata = true
+        advanceLoopContext(controller, input, steps: 80, time: 1.04)
+        XCTAssertNil(controller.currentPlaybackLoopContext())
+        input.raceMetadata = false
+        advanceLoopContext(controller, input, steps: 120, time: 1.06)
+        let after = try XCTUnwrap(controller.currentPlaybackLoopContext())
+        XCTAssertEqual(after.generation, before.generation)
+        XCTAssertEqual(after.validFromTimestamp, before.validFromTimestamp)
+        XCTAssertEqual(after.phaseSteps, 120, accuracy: 1e-9)
+        XCTAssertEqual(after.anchor.timestamp, 1.06)
+    }
+
+    func testPlaybackLoopContextRetiresMissingInputAndLegacyMode() throws {
+        let (controller, input) = try makeLoopContextController()
+        advanceLoopContext(controller, input, steps: 0, time: 1)
+        advanceLoopContext(controller, input, steps: 40, time: 1.02)
+        XCTAssertNotNil(controller.currentPlaybackLoopContext())
+        input.metadataAvailable = false
+        XCTAssertNil(controller.currentPlaybackLoopContext())
+        advanceLoopContext(controller, input, steps: 80, time: 1.04)
+        input.metadataAvailable = true
+        XCTAssertNil(controller.currentPlaybackLoopContext())
+        advanceLoopContext(controller, input, steps: 120, time: 1.06)
+        XCTAssertNotNil(controller.currentPlaybackLoopContext())
+        controller.midiUsesContinuousRenderer = false
+        XCTAssertNil(controller.currentPlaybackLoopContext())
+        controller.midiUsesContinuousRenderer = true
+        XCTAssertNil(controller.currentPlaybackLoopContext(), "a routing reset needs a new publication")
+    }
+
+    func testPlaybackLoopContextRetiresOnSameSampleReloadAndUnload() throws {
+        let (controller, input) = try makeLoopContextController()
+        advanceLoopContext(controller, input, steps: 0, time: 1)
+        advanceLoopContext(controller, input, steps: 40, time: 1.02)
+        let old = try XCTUnwrap(controller.currentPlaybackLoopContext())
+        input.now = 1.04
+        controller.testOnly_installSyntheticSample(try makeSyntheticLoopBuffer(), sampleID: "loop-context")
+        XCTAssertNil(controller.currentPlaybackLoopContext())
+        advanceLoopContext(controller, input, steps: 80, time: 1.05)
+        XCTAssertNil(controller.currentPlaybackLoopContext())
+        advanceLoopContext(controller, input, steps: 120, time: 1.07)
+        let reloaded = try XCTUnwrap(controller.currentPlaybackLoopContext())
+        XCTAssertGreaterThan(reloaded.generation, old.generation)
+        XCTAssertEqual(reloaded.phaseSteps, 40, accuracy: 1e-9)
+        XCTAssertGreaterThanOrEqual(reloaded.validFromTimestamp, 1.04)
+        controller.unload()
+        XCTAssertNil(controller.currentPlaybackLoopContext())
+    }
+
+    func testPlaybackLoopContextRetiresDVSOwnershipAndReanchorsOnMIDIReentry() throws {
+        let (controller, input) = try makeLoopContextController()
+        advanceLoopContext(controller, input, steps: 0, time: 1)
+        advanceLoopContext(controller, input, steps: 40, time: 1.02)
+        let before = try XCTUnwrap(controller.currentPlaybackLoopContext())
+        input.now = 1.03
+        controller.setDVSOwnership(active: true)
+        XCTAssertNil(controller.currentPlaybackLoopContext())
+        advanceLoopContext(controller, input, steps: 400, time: 1.04)
+        XCTAssertNil(controller.currentPlaybackLoopContext())
+        input.now = 1.05
+        controller.setDVSOwnership(active: false)
+        XCTAssertNil(controller.currentPlaybackLoopContext())
+        advanceLoopContext(controller, input, steps: 400, time: 1.06)
+        XCTAssertNil(controller.currentPlaybackLoopContext())
+        advanceLoopContext(controller, input, steps: 440, time: 1.08)
+        let after = try XCTUnwrap(controller.currentPlaybackLoopContext())
+        XCTAssertGreaterThan(after.generation, before.generation)
+        XCTAssertGreaterThanOrEqual(after.validFromTimestamp, 1.05)
+        XCTAssertEqual(after.anchor.timestamp, 1.08)
+    }
+
+    func testPlaybackLoopContextRetiresInputConnectionAndStalledPublication() throws {
+        let (controller, input) = try makeLoopContextController()
+        advanceLoopContext(controller, input, steps: 0, time: 1)
+        advanceLoopContext(controller, input, steps: 40, time: 1.02)
+        let before = try XCTUnwrap(controller.currentPlaybackLoopContext())
+        input.connectionGeneration += 1
+        XCTAssertNil(controller.currentPlaybackLoopContext())
+        advanceLoopContext(controller, input, steps: 80, time: 1.04)
+        let reconnected = try XCTUnwrap(controller.currentPlaybackLoopContext())
+        XCTAssertGreaterThan(reconnected.generation, before.generation)
+        XCTAssertEqual(reconnected.anchor.connectionGeneration, input.connectionGeneration)
+        advanceLoopContext(controller, input, steps: 120, time: 2)
+        XCTAssertNil(controller.currentPlaybackLoopContext(), "sanitized velocity did not publish the advanced phase")
+    }
+
     // MARK: - Forward / backward phase advancement
 
     func testMIDIContinuousForwardMotionAdvancesPhaseAndPublishesPositiveVelocity() throws {

@@ -158,6 +158,31 @@ struct PlatterSamplePositionProjection: Equatable, Sendable {
     }
 }
 
+/// Identity of one transient direct-MIDI observation.
+struct MIDIPlatterInputIdentity: Equatable, Sendable {
+    let timestamp: Double
+    let deviceName: String
+    let channel: Int
+    let value: Int
+    let connectionGeneration: UInt64
+}
+
+struct MIDIPlatterStepObservation: Equatable, Sendable {
+    let input: MIDIPlatterInputIdentity
+    let accumulatedSteps: Int
+}
+
+/// Transient presentation correspondence from an actual MIDI audio publication.
+/// Neither the packet identity nor the sample epoch is persisted as take data.
+struct PlaybackLoopContext: Equatable, Sendable {
+    let generation: UInt64
+    let sampleID: String
+    let validFromTimestamp: Double
+    let anchor: MIDIPlatterInputIdentity
+    let phaseSteps: Double
+    let loopLengthInSteps: Double
+}
+
 /// Accumulated platter position from CC6 ring-counter events, per deck.
 /// Thread-safe. Call `ingest(channel:value:)` from the MIDI receive thread
 /// and read position/velocity from any thread.
@@ -168,6 +193,8 @@ final class ScratchPlatterTracker {
     private var rightSteps: Int32 = 0
     private var leftPrevValue: Int32 = -1     // -1 = uninitialised
     private var rightPrevValue: Int32 = -1
+    private var leftObservation: MIDIPlatterStepObservation?
+    private var rightObservation: MIDIPlatterStepObservation?
 
     /// Recent-direction tracking for velocity estimation.
     private var leftRecentDeltas: [Int32] = []
@@ -197,7 +224,7 @@ final class ScratchPlatterTracker {
     /// - Returns: The signed delta applied (normally ±1), or nil if the channel
     ///   is not a known platter channel.
     @discardableResult
-    func ingest(channel: Int, value: Int) -> Int? {
+    func ingest(channel: Int, value: Int, inputIdentity: MIDIPlatterInputIdentity? = nil) -> Int? {
         guard channel == Self.leftChannel || channel == Self.rightChannel else {
             return nil
         }
@@ -205,7 +232,20 @@ final class ScratchPlatterTracker {
         let delta: Int32
 
         lock.lock()
-        defer { lock.unlock() }
+        defer {
+            let input = inputIdentity.flatMap { identity -> MIDIPlatterInputIdentity? in
+                guard identity.channel == channel, identity.value == value,
+                      identity.timestamp.isFinite, !identity.deviceName.isEmpty,
+                      (0..<128).contains(value) else { return nil }
+                return identity
+            }
+            if channel == Self.leftChannel {
+                leftObservation = input.map { MIDIPlatterStepObservation(input: $0, accumulatedSteps: Int(leftSteps)) }
+            } else {
+                rightObservation = input.map { MIDIPlatterStepObservation(input: $0, accumulatedSteps: Int(rightSteps)) }
+            }
+            lock.unlock()
+        }
 
         if channel == Self.leftChannel {
             if leftPrevValue == Self.uninitialisedPrev {
@@ -245,6 +285,17 @@ final class ScratchPlatterTracker {
     }
 
     // MARK: - Velocity / Direction
+
+    /// Reads identity and the existing integrator's result under the same lock.
+    func latestObservation(for channel: Int) -> MIDIPlatterStepObservation? {
+        lock.lock()
+        defer { lock.unlock() }
+        switch channel {
+        case Self.leftChannel: return leftObservation
+        case Self.rightChannel: return rightObservation
+        default: return nil
+        }
+    }
 
     /// Net direction of recent movement. Returns nil if no movement data exists.
     func recentDirection(for channel: Int) -> ScratchPlatterDirection? {
@@ -321,11 +372,13 @@ final class ScratchPlatterTracker {
             leftSteps = 0
             leftPrevValue = Self.uninitialisedPrev
             leftRecentDeltas.removeAll()
+            leftObservation = nil
         }
         if channel == nil || channel == Self.rightChannel {
             rightSteps = 0
             rightPrevValue = Self.uninitialisedPrev
             rightRecentDeltas.removeAll()
+            rightObservation = nil
         }
     }
 

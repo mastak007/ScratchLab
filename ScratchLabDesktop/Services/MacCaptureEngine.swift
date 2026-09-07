@@ -4961,6 +4961,13 @@ final class MacCaptureEngine: NSObject, ObservableObject {
         scratchPlaybackController.configureMIDIPlatterProvider(
             rightDeckAccumulatedSteps: { [platterTracker] in
                 platterTracker.accumulatedSteps(for: ScratchPlatterTracker.rightChannel)
+            },
+            observation: { [weak self, platterTracker] in
+                guard let self,
+                      let observation = platterTracker.latestObservation(for: ScratchPlatterTracker.rightChannel),
+                      observation.input.connectionGeneration == self.midiConnectionGeneration
+                else { return nil }
+                return observation
             }
         )
         NSWorkspace.shared.notificationCenter.addObserver(
@@ -11573,6 +11580,9 @@ final class MacCaptureEngine: NSObject, ObservableObject {
                     channel: mapping.channel,
                     controller: mapping.controller
                 )
+            },
+            activePlaybackLoopContext: { [weak self] in
+                self?.scratchPlaybackController.currentPlaybackLoopContext()
             }
         )
     }
@@ -11593,6 +11603,7 @@ final class MacCaptureEngine: NSObject, ObservableObject {
         // packet.
         let ingressTicket = lockedMIDICaptureWindowTicket()
         let deviceName = midiConnectedSourceName
+        let inputConnectionGeneration = midiConnectionGenerationStorage
         midiCaptureLock.unlock()
 
         // CONFIRMED root cause: the original code obtained the first packet
@@ -11646,7 +11657,8 @@ final class MacCaptureEngine: NSObject, ObservableObject {
                     message,
                     deviceName: deviceName,
                     ingressTicket: ingressTicket,
-                    now: now
+                    now: now,
+                    inputConnectionGeneration: inputConnectionGeneration
                 )
             }
             packetPtr = MIDIPacketNext(packetPtr)
@@ -11698,7 +11710,8 @@ final class MacCaptureEngine: NSObject, ObservableObject {
         _ message: MIDIChannelMessageParser.Message,
         deviceName: String,
         ingressTicket: MIDICaptureWindowTicket,
-        now: CFTimeInterval
+        now: CFTimeInterval,
+        inputConnectionGeneration: UInt64
     ) {
         let statusByte = message.status
         let rawChannel = Int(statusByte & 0x0F)
@@ -11738,7 +11751,13 @@ final class MacCaptureEngine: NSObject, ObservableObject {
             // platter (channel 0) stays tracked/diagnostic-only and never
             // reaches the playback controller.
             if controller == 6, channel == 0 || channel == 1 {
-                platterTracker.ingest(channel: channel, value: value)
+                platterTracker.ingest(
+                    channel: channel, value: value,
+                    inputIdentity: MIDIPlatterInputIdentity(
+                        timestamp: now, deviceName: deviceName, channel: channel,
+                        value: value, connectionGeneration: inputConnectionGeneration
+                    )
+                )
                 let steps = platterTracker.accumulatedSteps(for: channel)
                 let direction = platterTracker.recentDirection(for: channel)
                 let bridgeNow = CACurrentMediaTime()
@@ -12375,7 +12394,8 @@ final class MacCaptureEngine: NSObject, ObservableObject {
     /// `completeRoutineFinalization`.
     static func resolvedControllerMovementEventsWithProvisional(
         selectedMIDISourceName: String,
-        capturedMidi: [CaptureCore.RawMixerMIDIEvent]
+        capturedMidi: [CaptureCore.RawMixerMIDIEvent],
+        referencePacket: CaptureCore.RawMixerMIDIEvent? = nil
     ) -> CaptureCore.PlatterMovementDecodeResult {
         guard let deviceName = platterDeviceNameForDecode(
             selectedMIDISourceName: selectedMIDISourceName,
@@ -12384,7 +12404,8 @@ final class MacCaptureEngine: NSObject, ObservableObject {
             return CaptureCore.PlatterMovementDecodeResult(committedEvents: [], provisionalMovement: nil)
         }
         return CaptureCore.derivePlatterMovementEventsWithProvisional(
-            from: capturedMidi, controller: 6, channel: 1, deviceName: deviceName)
+            from: capturedMidi, controller: 6, channel: 1, deviceName: deviceName,
+            referencePacket: referencePacket)
     }
 
     // MARK: - Scratch Bank Pad Monitor Label

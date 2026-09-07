@@ -1143,17 +1143,35 @@ enum ArtifactPreflight {
         fileManager: FileManager = .default,
         configuration: Configuration = .exportDefault
     ) -> FileCheckResult {
-        let deadline = Date().addingTimeInterval(configuration.timeout)
+        checkFileReady(
+            url: url,
+            fileManager: fileManager,
+            configuration: configuration,
+            now: Date.init,
+            sleep: Thread.sleep(forTimeInterval:)
+        )
+    }
+
+    /// Per-call time and waiting dependencies let tests observe real file
+    /// changes without relying on background writes meeting wall-clock deadlines.
+    static func checkFileReady(
+        url: URL,
+        fileManager: FileManager,
+        configuration: Configuration,
+        now: () -> Date,
+        sleep: (TimeInterval) -> Void
+    ) -> FileCheckResult {
+        let deadline = now().addingTimeInterval(configuration.timeout)
         var lastObservedSize: Int64 = 0
         var lastObservedExists = false
 
-        while Date() <= deadline {
+        while now() <= deadline {
             let current = fileState(at: url, fileManager: fileManager)
             lastObservedExists = current.exists
             lastObservedSize = current.bytes
 
             if current.exists, current.bytes > 0 {
-                Thread.sleep(forTimeInterval: configuration.stabilityInterval)
+                sleep(configuration.stabilityInterval)
                 let stabilized = fileState(at: url, fileManager: fileManager)
                 if stabilized.exists, stabilized.bytes == current.bytes, stabilized.bytes > 0 {
                     return FileCheckResult(
@@ -1167,7 +1185,7 @@ enum ArtifactPreflight {
                 lastObservedSize = stabilized.bytes
             }
 
-            Thread.sleep(forTimeInterval: configuration.pollInterval)
+            sleep(configuration.pollInterval)
         }
 
         return FileCheckResult(

@@ -11724,22 +11724,87 @@ final class CaptureRecoveryPhase2CoreTests: XCTestCase {
         let url = root.appendingPathComponent("changing.wav")
         try self.writePlaceholderFile(at: url, contents: Data("a".utf8))
 
-        let writer = DispatchQueue(label: "artifact-preflight-writer")
-        writer.asyncAfter(deadline: .now() + 0.03) {
-            try? Data("ab".utf8).write(to: url, options: .atomic)
-        }
-        writer.asyncAfter(deadline: .now() + 0.11) {
-            try? Data("abc".utf8).write(to: url, options: .atomic)
-        }
-
+        let configuration = ArtifactPreflight.Configuration(
+            timeout: 0.12, pollInterval: 0.02, stabilityInterval: 0.05
+        )
+        var now = Date(timeIntervalSinceReferenceDate: 0)
+        var successfulWrites = 0
+        var writeError: Error?
         let result = ArtifactPreflight.checkFileReady(
             url: url,
-            configuration: .init(timeout: 0.12, pollInterval: 0.02, stabilityInterval: 0.05)
+            fileManager: .default,
+            configuration: configuration,
+            now: { now },
+            sleep: { interval in
+                // Each real second observation sees a larger file, without
+                // depending on another queue waking inside a wall-clock window.
+                if interval == configuration.stabilityInterval {
+                    do {
+                        try Data(repeating: 0x61, count: successfulWrites + 2)
+                            .write(to: url, options: .atomic)
+                        successfulWrites += 1
+                    } catch {
+                        writeError = error
+                    }
+                }
+                now = now.addingTimeInterval(interval)
+            }
         )
+        if let writeError { throw writeError }
+        let finalContents = try Data(contentsOf: url)
 
         XCTAssertTrue(result.exists)
         XCTAssertFalse(result.isStable)
-        XCTAssertGreaterThan(result.bytes, 0)
+        XCTAssertGreaterThanOrEqual(successfulWrites, 2)
+        XCTAssertEqual(finalContents, Data(repeating: 0x61, count: successfulWrites + 1))
+        XCTAssertEqual(result.bytes, Int64(finalContents.count))
+    }
+
+    func testArtifactPreflightAcceptsFileSettlingAfterEnteredObservationPassesDeadline() throws {
+        let root = try self.makeTemporaryDirectory()
+        let url = root.appendingPathComponent("settling.wav")
+        try self.writePlaceholderFile(at: url, contents: Data("a".utf8))
+
+        let configuration = ArtifactPreflight.Configuration(
+            timeout: 0.10, pollInterval: 0.02, stabilityInterval: 0.05
+        )
+        let startedAt = Date(timeIntervalSinceReferenceDate: 0)
+        var now = startedAt
+        var lastStabilityStartedAt: Date?
+        var successfulWrites = 0
+        var writeError: Error?
+        let result = ArtifactPreflight.checkFileReady(
+            url: url,
+            fileManager: .default,
+            configuration: configuration,
+            now: { now },
+            sleep: { interval in
+                if interval == configuration.stabilityInterval {
+                    lastStabilityStartedAt = now
+                    if successfulWrites == 0 {
+                        do {
+                            try Data("ab".utf8).write(to: url, options: .atomic)
+                            successfulWrites += 1
+                        } catch {
+                            writeError = error
+                        }
+                    }
+                }
+                now = now.addingTimeInterval(interval)
+            }
+        )
+        if let writeError { throw writeError }
+        let finalContents = try Data(contentsOf: url)
+
+        XCTAssertTrue(result.exists)
+        XCTAssertTrue(result.isStable)
+        XCTAssertEqual(successfulWrites, 1)
+        XCTAssertEqual(finalContents, Data("ab".utf8))
+        XCTAssertEqual(result.bytes, Int64(finalContents.count))
+        XCTAssertLessThan(try XCTUnwrap(lastStabilityStartedAt).timeIntervalSince(startedAt),
+                          configuration.timeout)
+        XCTAssertGreaterThan(now.timeIntervalSince(startedAt), configuration.timeout,
+                             "the deadline gates iteration entry, not completion of its stability observation")
     }
 
     func testLocalRecordingArtifactStatusMarksMissingAudioNotReady() throws {

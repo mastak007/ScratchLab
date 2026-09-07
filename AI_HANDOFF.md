@@ -1,3 +1,47 @@
+# Current slice complete — deterministic artifact preflight, 2026-09-07
+
+Completed the user-selected regression slice in `/private/tmp/scratchlab-artifact-preflight-20260907T092826Z/candidate`, branch `codex/deterministic-artifact-preflight`, unchanged base `8aaf55f1e2045417b4ca9127a70a452c5c39163c`. The predecessor candidate, its exact incoming patch and failed full-gate evidence remain preserved. Relative to that candidate, this slice changes two production/test files and four workflow records; the full inherited candidate has eighteen modified files, an empty index and no untracked files.
+
+Root cause: the old changing-file fixture depended on unsynchronized delayed writes and real-time polling, while suppressing write errors. Those assumptions did not guarantee different file sizes at the actual observations. The exact scheduling/I/O interleaving behind the historical failure remains unproven. The existing ArtifactPreflight.checkFileReady signature now delegates to an internal per-call nonescaping now/sleep overload with Date.init and Thread.sleep defaults. The actual loop, FileManager observations, inclusive iteration-entry deadline, full wait intervals and last-observed result are unchanged; in particular a check entered before the deadline may finish after it and still accept stability.
+
+The changing-file test now performs synchronous atomic growth during controlled stability waits and verifies successful real mutations and observed bytes, propagating write errors. One new real-file test verifies settling across an entered observation that finishes after the deadline. Exactly one test updated, one added and zero removed; the existing real-clock stable-file integration test is byte-identical to the predecessor.
+
+Fresh verification: focused CaptureRecoveryPhase2CoreTests, 61 unique cases and 122 executions, all passed with zero skips/failures. The unchanged scripts/build.sh all passed through the isolated harness: Python 82/82; full desktop plan 4,378 unique cases (4,322 passed, 56 skipped, zero failed), 8,952 executions (8,840 passed, 112 skipped, zero failed) across both default configurations. The test build and iOS, macOS and Watch builds passed. The predecessor's failed full result remains failed and retained; this is a new gate on the changed source. No Release or physical acceptance was established.
+
+Warnings: full xcresult reports two main-thread warnings in the passing testCalibrationModeExportMetadataDisablesClickTrack method. That method is unchanged; its containing test file and SessionExportCoordinator.swift both changed in this slice. No stack or causal attribution is available. Focused xcresult has zero runtime warnings but four raw startup Security diagnostic lines; full raw output has forty such lines (four startup and thirty-six in the calibration-export method). Other source warnings and AppIntents metadata notices remain inventoried in ../diagnostics.json. No ScratchStrokeGeometry.swift compiler warning appears in fresh logs.
+
+Preservation: all 90,956 entries under 47 protected roots match with zero changes; all thirteen original worktrees, refs, indexes, diffs and dirty-file hashes match, with zero ordinary or Codex bookkeeping ref changes. The 662 source inputs stayed frozen during verification; only these four workflow records were finalized afterward. Exact source comparisons, final patch hashes, gate accounting and retained warnings are in ../REPORT.md and parent receipts. No staging, commit, push, merge, interactive deployment, hardware capture, calibration, export/publication, recovery hydration/retirement or cleanup occurred. Next action is read-only review of this exact candidate; a checkpoint requires explicit authorization.
+
+---
+
+# Current slice complete — explicit loop fallback, 2026-09-07
+
+Completed the user-selected warning cleanup in `/private/tmp/scratchlab-ahhh-fallback-20260907T090237Z/candidate`, branch `codex/ahhh-explicit-loop-fallback`, unchanged base `8aaf55f1e2045417b4ca9127a70a452c5c39163c`. The old reviewed candidate and receipts remain unchanged. Only `ScratchStrokeGeometry.swift` changed in production relative to that candidate (+12/-21 lines); these four workflow records also changed. The full inherited candidate remains sixteen modified files and uncommitted, with an empty index.
+
+The prior new compiler warning came from a captured fallback Boolean mutated inside `loopSpans` and inspected later. Splitting now returns optional pieces; six existing numeric rejection paths return nil and the caller immediately recomputes the entire unwrapped geometry using all original records. Successful wrapping, the 4,096-piece budget, default unwrapped rendering, fader evidence and gaps are unchanged. No test source changed; independent source review found no correctness issue.
+
+Fresh verification: focused 60 unique cases / 120 passes / zero skips or failures across both configurations; Python 82/82. Full desktop plan FAILED: 4,377 unique cases / 8,950 executions = 8,837 passed, 112 skipped, one failed in Configuration 2 (`CaptureRecoveryPhase2CoreTests.testArtifactPreflightKeepsChangingFileFinalizing`, assertion at unchanged test file line 11741). Its other configuration passed; exact-method diagnostic recheck passed in both configurations (two executions). The full failure remains a failure. Its wall-clock writes and polling are timing-sensitive; exact scheduling/I/O cause is unproven. The test and readiness service are byte-identical to the reviewed candidate and do not call geometry.
+
+Because that failure stopped `scripts/build.sh all` before platform legs, iOS, macOS and Watch builds were run separately and all passed. Test build passed; the geometry compiler warning is absent in every fresh build log. Two full xcresult main-thread warnings remain in the passing unchanged calibration-export fixture; focused and diagnostic results record zero xcresult warnings but each raw log contains four startup Security diagnostics. Other warnings from unchanged sources remain. No Release or hardware verification is claimed.
+
+All 70,675 protected entries match with zero differences, including the original 69,974 and 701 predecessor candidate/receipt entries. Original worktree/ref/index/diff and dirty-file comparisons are recorded in `../worktrees-comparison.json`; inspect any Codex bookkeeping-only ref differences separately. Exact patches, source freshness, diagnostics and gate results are in the parent report/receipts. Workflow documentation was finalized after execution; every tested non-workflow input remains unchanged. No checkpoint, push, merge, deployment, physical capture, calibration, export/publication or cleanup occurred. Next action is read-only assessment of this exact slice and the retained unrelated test failure.
+
+---
+
+# Current isolated AHHH correction — 2026-09-07
+
+Software implementation and required gate are complete. Candidate: `/private/tmp/scratchlab-ahhh-correction-20260907T081557Z/candidate`, branch `codex/ahhh-coordinate-correction`, unchanged base `8aaf55f1e2045417b4ca9127a70a452c5c39163c`; index empty. All original worktrees remain unchanged. The parent contains the incoming patch, correction/full patches, hashes, preservation receipts and `REPORT.md`.
+
+The live projection now shares an exact correlated MIDI playback anchor, owner/sample/connection epoch, calibrated revolution scale and phase origin. Missing/ambiguous/stale context or uncertain packet continuity retains unwrapped rendering; DVS and legacy playback deliberately stay unwrapped. Decoder output, audio playback math and persisted/export schemas are unchanged. Loop splitting is bounded with an entire-unwrapped fallback for unsafe numeric input.
+
+Focused: 286 unique cases; 572 executions, 570 passed/two skipped/zero failed, zero runtime warnings. Full gate: Python 82/82; desktop 4,377 unique cases, 8,950 executions, 8,838 passed/112 skipped/zero failed. Debug test build, iOS, macOS and Watch builds passed. Two main-thread warnings occurred in an unchanged calibration-export fixture; no stack or baseline proof is available. Exact evidence is in `../verification`; its focused report-tool path correction is retained. All 69,974 protected entries and original refs/statuses/indexes/diffs/138 dirty hashes remain unchanged; 40 absent files remain absent.
+
+Twelve production/test files include the preserved incoming presentation and corrective code; four workflow documents record the completed work. Documentation was finalized after gates; `../final-source-verification.json` proves every tested non-workflow input is unchanged. Hardware alignment/acceptance remains pending. No staging, commit, push, merge, deployment, physical recording, calibration, recovery hydration/retirement or cleanup occurred.
+
+Next action: read-only candidate review using the exact patches, source receipts and results. No further implementation or checkpoint is authorized by this handoff alone.
+
+---
+
 # Current handoff — Second correction completed; independent review pending
 
 This record supersedes the earlier first-correction claims. No checkpoint or hardware action is authorized.

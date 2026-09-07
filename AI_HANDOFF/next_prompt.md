@@ -1,3 +1,39 @@
+# Current continuation — read-only deterministic artifact-preflight review
+
+Review `/private/tmp/scratchlab-artifact-preflight-20260907T092826Z/candidate`, branch `codex/deterministic-artifact-preflight`, unchanged base `8aaf55f1e2045417b4ca9127a70a452c5c39163c`. Read ../REPORT.md, slice-only.patch, candidate.patch, patch-sha256.json, algorithm-preservation.json, test-delta.json, warning-method-preservation.json, final-source-verification.json, diagnostics.json, worktrees-comparison.json and verification receipts before judging the slice. Preserve both predecessor candidates and the old failed full-test evidence.
+
+Confirm the delta from the explicit-fallback candidate is exactly SessionExportCoordinator.swift, CaptureReliabilityPhase1Tests.swift and four workflow records; eighteen files are modified in the full inherited candidate, with empty index and no untracked files. Confirm the original production signature/defaults delegate through per-call nonescaping now/sleep dependencies without changing the polling loop, real FileManager observations, interval lengths or inclusive iteration-entry deadline. No timeout-policy change is intended. Review the repaired changing-file fixture's actual synchronous atomic writes, explicit write-error propagation, successful mutation count and exact observed bytes; review the single added settling-file case that finishes an entered observation after the deadline. The real-clock stable-file integration test must remain byte-identical. Test delta is one updated, one added, zero removed.
+
+Verify focused 61 unique / 122 passes / zero skips or failures; unchanged scripts/build.sh all exit 0, Python 82/82, full desktop 4,378 unique / 8,952 executions = 8,840 passed, 112 skipped, zero failed, plus successful iOS/macOS/Watch builds. Confirm the predecessor's full failure is retained separately and is never recast as passing. The historical failure's precise scheduling/I/O cause was not observed. Keep the two full xcresult warnings and raw Security diagnostics distinct; only the implicated calibration-export test method is byte-identical, not its containing file or the service file. Geometry warnings are absent; other recorded source warnings remain.
+
+Verify all 90,956 protected entries and all thirteen original worktree/ref/index/diff/dirty-file states match, and all 662 tested inputs match except the four workflow documents finalized afterward. Return concrete findings and checkpoint readiness for this exact patch. Do not edit, stage, commit, push, merge, rerun completed gates, launch/install, record, calibrate, export/publish, hydrate/retire recovery data or clean up. No checkpoint, Release or physical acceptance is implied; further implementation or checkpointing requires a separately authorized action.
+
+---
+
+# Current continuation — read-only explicit fallback checkpoint assessment
+
+Read-only review of `/private/tmp/scratchlab-ahhh-fallback-20260907T090237Z/candidate`, branch `codex/ahhh-explicit-loop-fallback`, unchanged base `8aaf55f1e2045417b4ca9127a70a452c5c39163c`. Read `../REPORT.md`, `../slice-only.patch`, `../candidate.patch`, `../patch-sha256.json`, `../final-source-verification.json`, `../diagnostics.json`, `../worktrees-comparison.json` and `../verification` results. Preserve the predecessor `/private/tmp/scratchlab-ahhh-correction-20260907T081557Z` and every original worktree.
+
+Confirm exactly one production file changed relative to the reviewed candidate: ScratchStrokeGeometry.swift (+12/-21), plus four workflow records; sixteen modified files in the complete inherited candidate, empty index and no untracked files. Review explicit optional failure from loopSpans, unchanged six numeric guards and total 4,096-piece budget, immediate complete unwrapped fallback with original records/layer/frame, one-level recursion, and unchanged normal/default geometry. Existing test sources are byte-identical to the reviewed candidate.
+
+Verify focused 60 unique / 120 passed / zero skipped or failed; all four numeric fallback tests pass in both focused and full configurations; Python 82/82. The full desktop gate FAILED: 4,377 unique / 8,950 executions, 8,837 passed / 112 skipped / ONE failed in Configuration 2, testArtifactPreflightKeepsChangingFileFinalizing at unchanged CaptureReliabilityPhase1Tests.swift:11741. Inspect its unobserved timed writes and readiness polling without asserting a proven scheduling cause. Its other configuration passed; the exact-method diagnostic recheck passed twice. Do not erase the full failure or claim a clean full gate. The script stopped before its platform legs; separate iOS/macOS/Watch builds all passed. The new geometry compiler warning is absent; two full xcresult runtime warnings, focused/diagnostic startup Security diagnostics, and other unchanged-source warnings remain recorded. Release and hardware acceptance are unverified.
+
+Verify signed isolated host identity and both configurations, source freshness with only four documentation files changed after execution, zero differences in 70,675 protected entries, and original worktree/ref/index/diff/dirty hashes with any Codex bookkeeping-only refs explicitly separated. Return concrete findings, checkpoint readiness and the smallest separately scoped follow-up for the artifact-readiness fixture. Do not edit, stage, commit, push, merge, rebuild/rerun tests, launch/install, record, calibrate, export/publish, hydrate/retire recovery data or clean up. This continuation grants no checkpoint or hardware authorization.
+
+---
+
+# Current continuation: read-only isolated AHHH correction review
+
+Review only `/private/tmp/scratchlab-ahhh-correction-20260907T081557Z/candidate` at base `8aaf55f1e2045417b4ca9127a70a452c5c39163c`, branch `codex/ahhh-coordinate-correction`. Read `../REPORT.md`, the retained incoming patch, correction-only/full candidate patches and SHA-256 receipt, `../final-source-verification.json`, original-worktree preservation comparison and `../verification` results. Do not infer approval from passing software gates.
+
+Audit exact packet/step correlation at existing lock-owned ingestion, connection identity captured at ingress, scalar-provider/observation consistency, owner/sample/mode epoch invalidation, race recovery, unique admitted anchor matching, one decoder-derived affine transform into calibrated revolutions, and phase continuity when the rolling window or anchor advances. Confirm DVS/legacy/unknown/gap/clock contexts remain unwrapped and physical decoding, playback math and exported/finalized evidence remain unchanged. Review bounded numeric splitting and whole-geometry fallback.
+
+Verify focused 286 unique / 572 executions (570 passed/two skipped/zero failed), full 4,377 unique / 8,950 executions (8,838 passed/112 skipped/zero failed), Python 82/82 and all three platform builds. Inspect the two full-plan main-thread warnings in the unchanged calibration-export fixture; no baseline proves their provenance. Preserve the report-helper incident and all skips. Verify signed isolated host identities and both test configurations, unchanged tested non-workflow source, zero differences in 69,974 protected entries and all original worktree/ref/index/diff/dirty hashes.
+
+Return concrete findings and residual acceptance limits. This continuation authorizes no edits, tests, builds, stage, commit, push, merge, deployment, hardware capture, calibration, export, publication, recovery hydration/retirement or cleanup. Any later checkpoint or physical acceptance requires its own explicit scope.
+
+---
+
 # Current continuation — Independent read-only checkpoint review
 
 This prompt supersedes earlier eight-file, test-count and repetition claims.

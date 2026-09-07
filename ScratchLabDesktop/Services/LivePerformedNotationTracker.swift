@@ -41,17 +41,23 @@ struct LivePerformedNotationDataSource {
     /// the existing `CrossfaderStateDeriver`. Defaults to `nil` so synthetic
     /// data sources that only exercise platter motion stay source-compatible.
     let activeCrossfaderCalibration: () -> CrossfaderCalibration?
+    /// Correlated MIDI packet and sample-relative phase, captured by the
+    /// active playback owner. Nil means the loop cannot be aligned truthfully.
+    /// Transient presentation input; never supplied to physical decoding.
+    let activePlaybackLoopContext: () -> PlaybackLoopContext?
 
     init(
         selectedMIDISourceName: @escaping () -> String,
         capturedMidiCCEventsSnapshot: @escaping () -> [CaptureCore.RawMixerMIDIEvent],
         cameraMovementEventsSnapshot: @escaping (_ now: CFTimeInterval) -> [CaptureCore.DetectedNotationRecordMovementEvent]?,
-        activeCrossfaderCalibration: @escaping () -> CrossfaderCalibration? = { nil }
+        activeCrossfaderCalibration: @escaping () -> CrossfaderCalibration? = { nil },
+        activePlaybackLoopContext: @escaping () -> PlaybackLoopContext? = { nil }
     ) {
         self.selectedMIDISourceName = selectedMIDISourceName
         self.capturedMidiCCEventsSnapshot = capturedMidiCCEventsSnapshot
         self.cameraMovementEventsSnapshot = cameraMovementEventsSnapshot
         self.activeCrossfaderCalibration = activeCrossfaderCalibration
+        self.activePlaybackLoopContext = activePlaybackLoopContext
     }
 }
 
@@ -90,7 +96,10 @@ enum LiveNotationTrackingState: Equatable {
         continuousCommitted: [CaptureCore.DetectedNotationRecordMovementEvent],
         continuousProvisional: CaptureCore.ProvisionalPlatterMovement?,
         platterEvidenceIntervals: [CaptureCore.PlatterEvidenceInterval],
-        faderDerivation: CrossfaderDerivation?
+        faderDerivation: CrossfaderDerivation?,
+        /// Sample-loop length in the same calibrated platter revolutions as
+        /// the aligned continuous positions; nil when alignment is unknown.
+        wrapPeriod: Double?
     )
 }
 
@@ -192,7 +201,7 @@ final class LivePerformedNotationTracker: ObservableObject {
     static func renderedEvents(
         for state: LiveNotationTrackingState
     ) -> [CaptureCore.DetectedNotationRecordMovementEvent] {
-        guard case .tracking(let committed, let provisional, _, _, _, _) = state else { return [] }
+        guard case .tracking(let committed, let provisional, _, _, _, _, _) = state else { return [] }
         guard let provisional else { return committed }
         let duration = max(0, provisional.currentTime - provisional.startTime)
         // Keep controller speed in raw steps/second, matching committed
@@ -218,14 +227,13 @@ final class LivePerformedNotationTracker: ObservableObject {
     /// Continuous renderer input for the canonical Tear projection. Unlike
     /// `renderedEvents` these positions are NOT gesture-relative, so a
     /// reversal apex shared between a forward and a backward run stays one
-    /// position-continuous trajectory. Positions are re-normalised over a
-    /// rolling presentation window so a free-running platter (several
-    /// off-screen revolutions) cannot permanently pin the current Tear at the
-    /// top of the lane. Presentation-only, like `renderedEvents`.
+    /// position-continuous trajectory. An aligned sample loop retains its
+    /// playback scale and origin; otherwise the rolling window is fitted to
+    /// visible motion. Presentation-only, like `renderedEvents`.
     static func continuousRenderedEvents(
         for state: LiveNotationTrackingState
     ) -> [CaptureCore.DetectedNotationRecordMovementEvent] {
-        guard case .tracking(_, _, let continuousCommitted, let continuousProvisional, _, _) = state else { return [] }
+        guard case .tracking(_, _, let continuousCommitted, let continuousProvisional, _, _, let period) = state else { return [] }
         var events = continuousCommitted
         if let continuousProvisional {
             let duration = max(0, continuousProvisional.currentTime - continuousProvisional.startTime)
@@ -242,25 +250,30 @@ final class LivePerformedNotationTracker: ObservableObject {
                 source: "live_preview"
             ))
         }
-        return windowNormalized(events)
+        // A correlated loop projection already has a stable scale and origin.
+        // Min/max fitting here would destroy both. Unaligned previews retain
+        // their established rolling normalization.
+        return period == nil ? windowNormalized(events) : windowVisible(events)
     }
 
     /// Rolling window (seconds) over which continuous live Tear positions are
     /// re-normalised, matching `LivePerformedNotationCard.renderedDomain`.
     private static let continuousTearWindowSeconds: TimeInterval = 3.2
 
-    /// Re-normalise the continuous trajectory over the rolling presentation
-    /// window, dropping motion older than the window so historical free-spin
-    /// cannot bias the current Tear's vertical scale. One affine transform is
-    /// applied to the whole visible trajectory — preserving ordering, signed
-    /// direction, relative displacement, and reversal-apex continuity — never
-    /// a per-run or per-candidate transform.
-    private static func windowNormalized(
+    /// Retain the established rolling time window without changing coordinates.
+    private static func windowVisible(
         _ events: [CaptureCore.DetectedNotationRecordMovementEvent]
     ) -> [CaptureCore.DetectedNotationRecordMovementEvent] {
         guard let latest = events.map(\.endTime).max() else { return [] }
         let windowStart = max(0, latest - continuousTearWindowSeconds)
-        let visible = events.filter { $0.endTime >= windowStart }
+        return events.filter { $0.endTime >= windowStart }
+    }
+
+    /// Fit unaligned telemetry with one affine transform over visible motion.
+    private static func windowNormalized(
+        _ events: [CaptureCore.DetectedNotationRecordMovementEvent]
+    ) -> [CaptureCore.DetectedNotationRecordMovementEvent] {
+        let visible = windowVisible(events)
         let positions = visible.flatMap { [$0.startPosition, $0.endPosition] }
         guard let low = positions.min(), let high = positions.max(), high > low else {
             return visible
@@ -282,27 +295,23 @@ final class LivePerformedNotationTracker: ObservableObject {
         }
     }
 
-    /// Continuous global span-normalised platter telemetry for the canonical
-    /// Tear projection, exposed as an instance convenience alongside
-    /// `renderedEvents`.
+    /// Continuous presentation input for the canonical Tear projection.
     var continuousRenderedEvents: [CaptureCore.DetectedNotationRecordMovementEvent] {
         Self.continuousRenderedEvents(for: state)
     }
 
-    /// Coordinate `continuousRenderedEvents` positions are ACTUALLY in: the
-    /// global span-normalised take-local basis (0..1), never per-run
-    /// gesture-relative revolutions.
+    /// The aligned path reconstructs raw steps and divides by the established
+    /// direct-MIDI steps/revolution calibration. The fallback remains fitted.
     var continuousPlatterCoordinates: CaptureCore.PlatterNotationCoordinates {
-        .normalizedTakeLocal(
-            reference: "continuous window-normalised platter telemetry "
-                + "for the canonical Tear projection"
-        )
+        continuousWrapPeriod == nil
+            ? .normalizedTakeLocal(reference: "continuous window-normalised platter telemetry for the canonical Tear projection")
+            : .raneOneMKIIDirectMIDI()
     }
 
     /// `decodePlatterCore`'s provenance intervals (observed stillness, packet
     /// gaps, clock discontinuities) for the canonical live Tear projection.
     var platterEvidenceIntervals: [CaptureCore.PlatterEvidenceInterval] {
-        if case .tracking(_, _, _, _, let intervals, _) = state { return intervals }
+        if case .tracking(_, _, _, _, let intervals, _, _) = state { return intervals }
         return []
     }
 
@@ -310,8 +319,90 @@ final class LivePerformedNotationTracker: ObservableObject {
     /// Tear projection, or `nil` when no usable calibration / CC8 evidence
     /// exists (the projection then truthfully reports FADER UNKNOWN).
     var faderDerivation: CrossfaderDerivation? {
-        if case .tracking(_, _, _, _, _, let derivation) = state { return derivation }
+        if case .tracking(_, _, _, _, _, let derivation, _) = state { return derivation }
         return nil
+    }
+
+    /// Loop length in calibrated revolutions, retaining the playback origin.
+    /// An unknown alignment keeps the existing unwrapped presentation.
+    var continuousWrapPeriod: Double? {
+        if case .tracking(_, _, _, _, _, _, let period) = state { return period }
+        return nil
+    }
+
+    /// Convert the existing decoder's coordinates with ONE affine transform.
+    /// The requested anchor position comes from that same decoder pass; this
+    /// method never integrates MIDI or estimates phase from a ring value.
+    private static func loopAlignedContinuous(
+        result: CaptureCore.PlatterMovementDecodeResult,
+        context: PlaybackLoopContext?,
+        confirmedContext: PlaybackLoopContext?,
+        anchorPacket: CaptureCore.RawMixerMIDIEvent?
+    ) -> (events: [CaptureCore.DetectedNotationRecordMovementEvent], provisional: CaptureCore.ProvisionalPlatterMovement?, period: Double)? {
+        guard let context, let confirmedContext, let anchorPacket,
+              context.generation == confirmedContext.generation,
+              context.sampleID == confirmedContext.sampleID,
+              context.validFromTimestamp == confirmedContext.validFromTimestamp,
+              context.anchor.connectionGeneration == confirmedContext.anchor.connectionGeneration,
+              context.anchor.deviceName == confirmedContext.anchor.deviceName,
+              context.anchor.channel == 1, confirmedContext.anchor.channel == 1,
+              !context.sampleID.isEmpty,
+              context.phaseSteps.isFinite,
+              context.loopLengthInSteps.isFinite, context.loopLengthInSteps > 0,
+              context.loopLengthInSteps == confirmedContext.loopLengthInSteps,
+              context.validFromTimestamp.isFinite,
+              anchorPacket.timestamp.isFinite, anchorPacket.takeRelativeTime.isFinite,
+              anchorPacket.timestamp >= context.validFromTimestamp,
+              let referenceSteps = result.referencePositionSteps, referenceSteps.isFinite,
+              result.normalizationOriginSteps.isFinite,
+              result.normalizationSpanSteps.isFinite, result.normalizationSpanSteps > 0 else { return nil }
+
+        var intervals = result.continuousEvents.map { $0.startTime...$0.endTime }
+        if let provisional = result.continuousProvisionalMovement {
+            intervals.append(provisional.startTime...provisional.currentTime)
+        }
+        guard let latest = intervals.map(\.upperBound).max() else { return nil }
+        let visible = intervals.filter { $0.upperBound >= max(0, latest - continuousTearWindowSeconds) }
+        guard let first = visible.map(\.lowerBound).min() else { return nil }
+        let hostOrigin = anchorPacket.timestamp - anchorPacket.takeRelativeTime
+        // Never apply a newly loaded sample or ownership epoch to older motion.
+        guard first + hostOrigin >= context.validFromTimestamp else { return nil }
+        let connectedStart = min(first, anchorPacket.takeRelativeTime)
+        let connectedEnd = max(latest, anchorPacket.takeRelativeTime)
+        let hasUncertainConnection = result.platterEvidenceIntervals.contains { interval in
+            guard interval.endTime >= connectedStart, interval.startTime <= connectedEnd else { return false }
+            switch interval.kind {
+            case .observedStillness, .discardedMotion: return false
+            case .packetGap, .clockDiscontinuity, .insufficientSampling, .unknown: return true
+            }
+        }
+        guard !hasUncertainConnection else { return nil }
+        let stepsPerRevolution = PlatterCoordinateSemantics.raneOneMKIIDirectMIDIStepsPerRevolution
+        let period = context.loopLengthInSteps / stepsPerRevolution
+        guard period.isFinite, period > 0 else { return nil }
+        func position(_ normalized: Double) -> Double {
+            (context.phaseSteps + result.normalizationOriginSteps
+                + normalized * result.normalizationSpanSteps - referenceSteps) / stepsPerRevolution
+        }
+        let events = result.continuousEvents.map { event in
+            CaptureCore.DetectedNotationRecordMovementEvent(
+                startTime: event.startTime, endTime: event.endTime,
+                startPosition: position(event.startPosition), endPosition: position(event.endPosition),
+                direction: event.direction, movementKind: event.movementKind,
+                speed: event.speed, confidence: event.confidence, source: event.source
+            )
+        }
+        let provisional = result.continuousProvisionalMovement.map { event in
+            CaptureCore.ProvisionalPlatterMovement(
+                startTime: event.startTime, currentTime: event.currentTime,
+                startPosition: position(event.startPosition), currentPosition: position(event.currentPosition),
+                direction: event.direction, movementKind: event.movementKind,
+                displacement: event.displacement
+            )
+        }
+        guard events.allSatisfy({ $0.startPosition.isFinite && $0.endPosition.isFinite }),
+              provisional.map({ $0.startPosition.isFinite && $0.currentPosition.isFinite }) ?? true else { return nil }
+        return (events, provisional, period)
     }
 
     private func startPolling(interval: TimeInterval) {
@@ -355,7 +446,7 @@ final class LivePerformedNotationTracker: ObservableObject {
         let span = (positions.max() ?? 0) - (positions.min() ?? 0)
         let committedCount: Int
         let hasProvisional: Bool
-        if case .tracking(let committed, let provisional, _, _, _, _) = state {
+        if case .tracking(let committed, let provisional, _, _, _, _, _) = state {
             committedCount = committed.count
             hasProvisional = provisional != nil
         } else {
@@ -395,12 +486,25 @@ final class LivePerformedNotationTracker: ObservableObject {
             return .unavailable
         }
 
+        let loopContext = dataSource.activePlaybackLoopContext()
         let midiSnapshot = dataSource.capturedMidiCCEventsSnapshot()
             .filter { $0.timestamp > baselineTimestamp }
+        let matchingAnchors = midiSnapshot.filter { packet in
+            guard let anchor = loopContext?.anchor else { return false }
+            return packet.controller == 6 && packet.channel == anchor.channel
+                && packet.deviceName == anchor.deviceName && packet.timestamp == anchor.timestamp
+                && packet.value == anchor.value
+        }
+        let anchorPacket = matchingAnchors.count == 1 ? matchingAnchors[0] : nil
 
         let controllerResult = MacCaptureEngine.resolvedControllerMovementEventsWithProvisional(
             selectedMIDISourceName: sourceName,
-            capturedMidi: midiSnapshot
+            capturedMidi: midiSnapshot,
+            referencePacket: anchorPacket
+        )
+        let aligned = loopAlignedContinuous(
+            result: controllerResult, context: loopContext,
+            confirmedContext: dataSource.activePlaybackLoopContext(), anchorPacket: anchorPacket
         )
         let usesController = !controllerResult.committedEvents.isEmpty || controllerResult.provisionalMovement != nil
 
@@ -417,10 +521,11 @@ final class LivePerformedNotationTracker: ObservableObject {
             return .tracking(
                 committed: controllerResult.committedEvents,
                 provisional: controllerResult.provisionalMovement,
-                continuousCommitted: controllerResult.continuousEvents,
-                continuousProvisional: controllerResult.continuousProvisionalMovement,
+                continuousCommitted: aligned?.events ?? controllerResult.continuousEvents,
+                continuousProvisional: aligned?.provisional ?? controllerResult.continuousProvisionalMovement,
                 platterEvidenceIntervals: controllerResult.platterEvidenceIntervals,
-                faderDerivation: faderDerivation
+                faderDerivation: faderDerivation,
+                wrapPeriod: aligned?.period
             )
         }
 
@@ -431,7 +536,10 @@ final class LivePerformedNotationTracker: ObservableObject {
                 continuousCommitted: cameraEvents,
                 continuousProvisional: nil,
                 platterEvidenceIntervals: [],
-                faderDerivation: faderDerivation
+                faderDerivation: faderDerivation,
+                // Camera evidence carries no platter-step basis, so there is
+                // nothing to state a loop period against.
+                wrapPeriod: nil
             )
         }
 

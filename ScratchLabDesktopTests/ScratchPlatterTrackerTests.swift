@@ -6,6 +6,36 @@ import XCTest
 /// Platter channels: 0 = left, 1 = right (NOT 4/5 — those are pad channels).
 final class ScratchPlatterTrackerTests: XCTestCase {
 
+    func testObservationIsPairedWithTheSameIntegratedPacket() throws {
+        let tracker = ScratchPlatterTracker()
+        let first = MIDIPlatterInputIdentity(timestamp: 1, deviceName: "Rane", channel: 1,
+                                            value: 127, connectionGeneration: 8)
+        tracker.ingest(channel: 1, value: 127, inputIdentity: first)
+        XCTAssertEqual(tracker.latestObservation(for: 1),
+                       MIDIPlatterStepObservation(input: first, accumulatedSteps: 0))
+        let second = MIDIPlatterInputIdentity(timestamp: 1.01, deviceName: "Rane", channel: 1,
+                                             value: 0, connectionGeneration: 8)
+        tracker.ingest(channel: 1, value: 0, inputIdentity: second)
+        XCTAssertEqual(tracker.latestObservation(for: 1),
+                       MIDIPlatterStepObservation(input: second, accumulatedSteps: 1))
+        XCTAssertNil(tracker.latestObservation(for: 0))
+        tracker.reset(channel: 1)
+        XCTAssertNil(tracker.latestObservation(for: 1))
+    }
+
+    func testUnidentifiedOrMismatchedPacketRetiresObservationWithoutChangingSteps() {
+        let tracker = ScratchPlatterTracker()
+        let identity = MIDIPlatterInputIdentity(timestamp: 1, deviceName: "Rane", channel: 1,
+                                               value: 40, connectionGeneration: 8)
+        tracker.ingest(channel: 1, value: 40, inputIdentity: identity)
+        tracker.ingest(channel: 1, value: 41, inputIdentity: identity)
+        XCTAssertNil(tracker.latestObservation(for: 1))
+        XCTAssertEqual(tracker.accumulatedSteps(for: 1), 1)
+        tracker.ingest(channel: 1, value: 42)
+        XCTAssertNil(tracker.latestObservation(for: 1))
+        XCTAssertEqual(tracker.accumulatedSteps(for: 1), 2)
+    }
+
     // MARK: - Signed sample-position projection
 
     func testSampleProjectionKeepsBackwardTravelBeforeStartWithoutWrapping() {

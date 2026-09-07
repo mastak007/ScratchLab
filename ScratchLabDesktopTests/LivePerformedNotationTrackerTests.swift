@@ -451,7 +451,7 @@ final class LivePerformedNotationTrackerTests: XCTestCase {
             cameraMovementEventsSnapshot: { _ in cameraEvents }
         )
         let state = LivePerformedNotationTracker.computeState(dataSource: dataSource, baselineTimestamp: 0)
-        guard case .tracking(let committed, let provisional, _, _, _, _) = state else {
+        guard case .tracking(let committed, let provisional, _, _, _, _, _) = state else {
             return XCTFail("expected .tracking via camera fallback, got \(state)")
         }
         XCTAssertEqual(committed, cameraEvents)
@@ -466,7 +466,7 @@ final class LivePerformedNotationTrackerTests: XCTestCase {
             displacement: 0.6
         )
         let events = LivePerformedNotationTracker.renderedEvents(
-            for: .tracking(committed: [], provisional: openStroke, continuousCommitted: [], continuousProvisional: nil, platterEvidenceIntervals: [], faderDerivation: nil)
+            for: .tracking(committed: [], provisional: openStroke, continuousCommitted: [], continuousProvisional: nil, platterEvidenceIntervals: [], faderDerivation: nil, wrapPeriod: nil)
         )
 
         XCTAssertEqual(events.count, 1)
@@ -500,7 +500,8 @@ final class LivePerformedNotationTrackerTests: XCTestCase {
             continuousCommitted: continuous,
             continuousProvisional: nil,
             platterEvidenceIntervals: [],
-            faderDerivation: nil
+            faderDerivation: nil,
+            wrapPeriod: nil
         )
         XCTAssertEqual(
             LivePerformedNotationTracker.renderedEvents(for: state), committed,
@@ -543,7 +544,8 @@ final class LivePerformedNotationTrackerTests: XCTestCase {
             continuousCommitted: [freeSpin, tearForward, tearReverse],
             continuousProvisional: nil,
             platterEvidenceIntervals: [],
-            faderDerivation: nil
+            faderDerivation: nil,
+            wrapPeriod: nil
         )
 
         let rendered = LivePerformedNotationTracker.continuousRenderedEvents(for: state)
@@ -583,14 +585,16 @@ final class LivePerformedNotationTrackerTests: XCTestCase {
             continuousCommitted: [freeSpin, tearForward, tearReverse],
             continuousProvisional: nil,
             platterEvidenceIntervals: [],
-            faderDerivation: nil
+            faderDerivation: nil,
+            wrapPeriod: nil
         )
         let withoutSpin = LiveNotationTrackingState.tracking(
             committed: [], provisional: nil,
             continuousCommitted: [tearForward, tearReverse],
             continuousProvisional: nil,
             platterEvidenceIntervals: [],
-            faderDerivation: nil
+            faderDerivation: nil,
+            wrapPeriod: nil
         )
 
         let a = LivePerformedNotationTracker.continuousRenderedEvents(for: withSpin)
@@ -637,7 +641,8 @@ final class LivePerformedNotationTrackerTests: XCTestCase {
             continuousCommitted: [freeSpin, ascent1, ascent2, descent1, descent2],
             continuousProvisional: nil,
             platterEvidenceIntervals: [],
-            faderDerivation: nil
+            faderDerivation: nil,
+            wrapPeriod: nil
         )
 
         let rendered = LivePerformedNotationTracker.continuousRenderedEvents(for: state)
@@ -672,7 +677,8 @@ final class LivePerformedNotationTrackerTests: XCTestCase {
             continuousCommitted: [freeSpin, tearForward],
             continuousProvisional: provisional,
             platterEvidenceIntervals: [],
-            faderDerivation: nil
+            faderDerivation: nil,
+            wrapPeriod: nil
         )
 
         let rendered = LivePerformedNotationTracker.continuousRenderedEvents(for: state)
@@ -753,7 +759,7 @@ final class LivePerformedNotationTrackerTests: XCTestCase {
             activeCrossfaderCalibration: { calibration }
         )
         let state = LivePerformedNotationTracker.computeState(dataSource: dataSource, baselineTimestamp: 0)
-        guard case .tracking(_, _, _, _, let platterIntervals, let faderDerivation) = state else {
+        guard case .tracking(_, _, _, _, let platterIntervals, let faderDerivation, _) = state else {
             return XCTFail("expected .tracking, got \(state)")
         }
         XCTAssertTrue(
@@ -777,7 +783,7 @@ final class LivePerformedNotationTrackerTests: XCTestCase {
             activeCrossfaderCalibration: { calibration }
         )
         let state = LivePerformedNotationTracker.computeState(dataSource: dataSource, baselineTimestamp: 0)
-        guard case .tracking(_, _, _, _, _, let faderDerivation) = state else {
+        guard case .tracking(_, _, _, _, _, let faderDerivation, _) = state else {
             return XCTFail("expected .tracking, got \(state)")
         }
         XCTAssertNotNil(faderDerivation)
@@ -797,7 +803,7 @@ final class LivePerformedNotationTrackerTests: XCTestCase {
             activeCrossfaderCalibration: { nil }
         )
         let state = LivePerformedNotationTracker.computeState(dataSource: dataSource, baselineTimestamp: 0)
-        guard case .tracking(_, _, _, _, _, let faderDerivation) = state else {
+        guard case .tracking(_, _, _, _, _, let faderDerivation, _) = state else {
             return XCTFail("expected .tracking, got \(state)")
         }
         XCTAssertNil(faderDerivation, "no usable calibration must yield no fader derivation (UNKNOWN, not fabricated OPEN)")
@@ -817,7 +823,7 @@ final class LivePerformedNotationTrackerTests: XCTestCase {
             activeCrossfaderCalibration: { calibration }
         )
         let state = LivePerformedNotationTracker.computeState(dataSource: dataSource, baselineTimestamp: 0.0)
-        guard case .tracking(_, _, _, _, _, let faderDerivation) = state else {
+        guard case .tracking(_, _, _, _, _, let faderDerivation, _) = state else {
             return XCTFail("expected .tracking, got \(state)")
         }
         XCTAssertNil(faderDerivation, "pre-baseline CC8 must not enter the live take's fader derivation")
@@ -887,7 +893,7 @@ final class LivePerformedNotationTrackerTests: XCTestCase {
         let state = LivePerformedNotationTracker.computeState(
             dataSource: dataSource, baselineTimestamp: baseline
         )
-        guard case .tracking(_, _, _, _, let platterIntervals, let faderDerivation) = state else {
+        guard case .tracking(_, _, _, _, let platterIntervals, let faderDerivation, _) = state else {
             return XCTFail("expected .tracking, got \(state)")
         }
 
@@ -921,6 +927,370 @@ final class LivePerformedNotationTrackerTests: XCTestCase {
         )
     }
 
+    // MARK: - Connected sample-loop projection
+
+    /// Exact signed travel at the observed Rane packet cadence. Host and take
+    /// clocks intentionally differ; neither a raw CC value nor a take time is
+    /// sufficient to identify the playback anchor.
+    private func loopStream(
+        _ runs: [Int], epoch: Double = 10_000, closeTrailingRun: Bool = true
+    ) -> [CaptureCore.RawMixerMIDIEvent] {
+        var events = platterEvents(signedRunSteps: runs, interval: 0.00125).map { event in
+            midiEvent(value: event.value, takeRelativeTime: event.takeRelativeTime,
+                      deviceName: "Rane ONE MKII")
+        }
+        // Real stationary packets close the last run. The existing open
+        // preview deliberately has confidence 0.5 and cannot be asserted as
+        // a canonical measured curve (whose confidence gate is 0.75).
+        if closeTrailingRun, let last = events.last {
+            events += (1...8).map { index in
+                midiEvent(value: last.value, takeRelativeTime: last.takeRelativeTime + Double(index) * 0.00125,
+                          deviceName: last.deviceName)
+            }
+        }
+        return shiftedToHostEpoch(events, epoch: epoch)
+    }
+
+    private func loopContext(
+        anchor: CaptureCore.RawMixerMIDIEvent,
+        phase: Double = 0,
+        length: Double = 3_600,
+        validFrom: Double = 10_000,
+        generation: UInt64 = 1,
+        sampleID: String = "ahhh",
+        connectionGeneration: UInt64 = 1
+    ) -> PlaybackLoopContext {
+        PlaybackLoopContext(
+            generation: generation, sampleID: sampleID, validFromTimestamp: validFrom,
+            anchor: MIDIPlatterInputIdentity(
+                timestamp: anchor.timestamp, deviceName: anchor.deviceName,
+                channel: anchor.channel, value: anchor.value,
+                connectionGeneration: connectionGeneration
+            ),
+            phaseSteps: phase, loopLengthInSteps: length
+        )
+    }
+
+    private func loopState(
+        _ stream: [CaptureCore.RawMixerMIDIEvent],
+        context: PlaybackLoopContext?,
+        baseline: Double = 9_999
+    ) -> LiveNotationTrackingState {
+        LivePerformedNotationTracker.computeState(
+            dataSource: LivePerformedNotationDataSource(
+                selectedMIDISourceName: { "Rane ONE MKII" },
+                capturedMidiCCEventsSnapshot: { stream },
+                cameraMovementEventsSnapshot: { _ in nil },
+                activePlaybackLoopContext: { context }
+            ), baselineTimestamp: baseline
+        )
+    }
+
+    private func connectedLoopGeometry(
+        _ state: LiveNotationTrackingState
+    ) throws -> (events: [CaptureCore.DetectedNotationRecordMovementEvent],
+                 projection: ReferenceTearCanonicalProjection,
+                 geometry: ScratchStrokeGeometry.CanonicalGeometry) {
+        guard case .tracking(_, _, _, _, let intervals, let fader, let period) = state else {
+            XCTFail("expected real controller tracking")
+            throw NSError(domain: "LoopFixture", code: 1)
+        }
+        let events = LivePerformedNotationTracker.continuousRenderedEvents(for: state)
+        let projection = ReferenceTearCanonicalProjectionBuilder.project(
+            movementEvents: events, platterEvidenceIntervals: intervals,
+            derivation: fader, referenceTakeID: "live-preview",
+            coordinates: period == nil ? .normalizedTakeLocal() : .raneOneMKIIDirectMIDI()
+        )
+        let firstTime = try XCTUnwrap(events.map(\.startTime).min())
+        let lastTime = try XCTUnwrap(events.map(\.endTime).max())
+        let frame = try XCTUnwrap(ScratchStrokeGeometry.CanonicalFrame(
+            timeRange: firstTime...lastTime,
+            positionRange: try XCTUnwrap(projection.positionRange),
+            coordinateSpace: projection.coordinateSpace, beatsPerMinute: 95
+        ))
+        return (events, projection, ScratchStrokeGeometry.canonicalGeometry(
+            records: projection.records, layer: .performance, frame: frame, wrapPeriod: period
+        ))
+    }
+
+    private func assertUnwrappedFallback(
+        _ stream: [CaptureCore.RawMixerMIDIEvent], context: PlaybackLoopContext?,
+        baseline: Double = 9_999, file: StaticString = #filePath, line: UInt = #line
+    ) throws {
+        let actual = loopState(stream, context: context, baseline: baseline)
+        let original = loopState(stream, context: nil, baseline: baseline)
+        XCTAssertEqual(actual, original, "uncorrelated evidence retains the complete old state", file: file, line: line)
+        let rendered = try connectedLoopGeometry(actual)
+        let unwrapped = try connectedLoopGeometry(original)
+        XCTAssertEqual(rendered.events, unwrapped.events, file: file, line: line)
+        XCTAssertEqual(rendered.geometry, unwrapped.geometry, file: file, line: line)
+    }
+
+    func testSampleLoopHistoryScalePreservesQuarterLoopVisibleTravel() throws {
+        let stream = loopStream([7_200, -900, 900, -900, 900])
+        let context = loopContext(anchor: try XCTUnwrap(stream.last), phase: 1_800)
+        let state = loopState(stream, context: context)
+        guard case .tracking(_, _, _, _, _, _, let period) = state else { return XCTFail("expected tracking") }
+        XCTAssertEqual(period, 1)
+        let rendered = try connectedLoopGeometry(state)
+        XCTAssertEqual(rendered.events.count, 3, "the long free spin and first return have left the rolling window")
+        XCTAssertEqual(rendered.events.map(\.direction), ["forward", "backward", "forward"])
+        for event in rendered.events {
+            XCTAssertEqual(abs(event.endPosition - event.startPosition), 0.25, accuracy: 1e-9)
+        }
+        let travel = rendered.geometry.motion.segments.filter { !$0.isHold }
+        XCTAssertEqual(travel.count, 3, "a 900-step sweep of a 3600-step sample never becomes two loops")
+        XCTAssertEqual(try XCTUnwrap(travel.first).startPosition, 0.25, accuracy: 1e-9)
+        XCTAssertEqual(try XCTUnwrap(travel.first).endPosition, 0.5, accuracy: 1e-9)
+        XCTAssertTrue(rendered.geometry.missingMotion.isEmpty)
+    }
+
+    func testSampleLoopNegativeMinimumDoesNotMovePlaybackOrigin() throws {
+        let stream = loopStream([-900, 900])
+        let rendered = try connectedLoopGeometry(loopState(
+            stream, context: loopContext(anchor: try XCTUnwrap(stream.last))
+        ))
+        XCTAssertEqual(rendered.events.count, 2)
+        XCTAssertEqual(rendered.events[0].startPosition, 0, accuracy: 1e-9)
+        XCTAssertEqual(rendered.events[0].endPosition, -0.25, accuracy: 1e-9)
+        XCTAssertEqual(rendered.events[1].endPosition, 0, accuracy: 1e-9)
+        XCTAssertEqual(rendered.projection.records.map(\.direction), [.backward, .forward])
+        let travel = rendered.geometry.motion.segments.filter { !$0.isHold }
+        XCTAssertEqual(travel.count, 2)
+        XCTAssertEqual(travel[0].startPosition, 1, accuracy: 1e-9)
+        XCTAssertEqual(travel[0].endPosition, 0.75, accuracy: 1e-9)
+        XCTAssertEqual(travel[1].startPosition, 0.75, accuracy: 1e-9)
+        XCTAssertEqual(travel[1].endPosition, 1, accuracy: 1e-9)
+    }
+
+    func testSampleLoopRollingWindowAdvanceKeepsSharedStrokePhase() throws {
+        let early = loopStream([7_200, -900, 900])
+        let later = loopStream([7_200, -900, 900, -900, 900])
+        // Both endpoints are physically at step 7200 and sample phase 1/2.
+        let a = try connectedLoopGeometry(loopState(early,
+            context: loopContext(anchor: try XCTUnwrap(early.last), phase: 1_800)))
+        let b = try connectedLoopGeometry(loopState(later,
+            context: loopContext(anchor: try XCTUnwrap(later.last), phase: 1_800)))
+        let sharedStart = 10.125
+        let old = try XCTUnwrap(a.events.first { abs($0.startTime - sharedStart) < 1e-8 })
+        let new = try XCTUnwrap(b.events.first { abs($0.startTime - sharedStart) < 1e-8 })
+        XCTAssertEqual(old.startPosition, new.startPosition, accuracy: 1e-9)
+        XCTAssertEqual(old.endPosition, new.endPosition, accuracy: 1e-9)
+        XCTAssertEqual(new.startPosition, 0.25, accuracy: 1e-9)
+        XCTAssertEqual(new.endPosition, 0.5, accuracy: 1e-9)
+        let oldSegment = try XCTUnwrap(a.geometry.motion.segments.first { abs($0.startTime - sharedStart) < 1e-8 })
+        let newSegment = try XCTUnwrap(b.geometry.motion.segments.first { abs($0.startTime - sharedStart) < 1e-8 })
+        XCTAssertEqual(oldSegment.startPosition, newSegment.startPosition, accuracy: 1e-9)
+        XCTAssertEqual(oldSegment.endPosition, newSegment.endPosition, accuracy: 1e-9)
+    }
+
+    func testSampleLoopArbitraryPreviewBaselineUsesCorrelatedHostPacketPhase() throws {
+        let stream = loopStream([900, -900, 900])
+        let firstVisible = stream[320]
+        let state = loopState(stream,
+            context: loopContext(anchor: try XCTUnwrap(stream.last), phase: 1_800),
+            baseline: firstVisible.timestamp - 0.0001)
+        let rendered = try connectedLoopGeometry(state)
+        let first = try XCTUnwrap(rendered.events.first)
+        XCTAssertEqual(first.startTime, firstVisible.takeRelativeTime, accuracy: 1e-9)
+        XCTAssertEqual(first.startPosition, (320 - 900 + 1_800) / 3_600.0, accuracy: 1e-9)
+        XCTAssertEqual(first.endPosition, 0.5, accuracy: 1e-9)
+        let segment = try XCTUnwrap(rendered.geometry.motion.segments.first)
+        XCTAssertEqual(segment.startPosition, CGFloat(first.startPosition), accuracy: 1e-9)
+        XCTAssertEqual(segment.endPosition, 0.5, accuracy: 1e-9)
+    }
+
+    func testSampleLoopConnectedForwardWrapsHavePenUpsWithoutReversals() throws {
+        let stream = loopStream([360])
+        let rendered = try connectedLoopGeometry(loopState(stream,
+            context: loopContext(anchor: try XCTUnwrap(stream.last), length: 120)))
+        let travel = rendered.geometry.motion.segments.filter { !$0.isHold }
+        XCTAssertEqual(rendered.projection.records.map(\.direction), [.forward])
+        XCTAssertEqual(travel.count, 3)
+        for segment in travel {
+            XCTAssertEqual(segment.startPosition, 0, accuracy: 1e-9)
+            XCTAssertEqual(segment.endPosition, 1, accuracy: 1e-9)
+            XCTAssertEqual(segment.kind, .stroke(.forward))
+        }
+        for (previous, next) in zip(travel, travel.dropFirst()) {
+            XCTAssertEqual(previous.endTime, next.startTime, accuracy: 1e-9)
+            XCTAssertEqual(previous.endPosition, 1, accuracy: 1e-9)
+            XCTAssertEqual(next.startPosition, 0, accuracy: 1e-9,
+                           "separate segments lift the pen between sample end and beginning")
+        }
+        XCTAssertTrue(rendered.geometry.missingMotion.isEmpty)
+    }
+
+    func testSampleLoopConnectedBackwardWrapKeepsDescendingSegments() throws {
+        let stream = loopStream([-1_800])
+        let rendered = try connectedLoopGeometry(loopState(stream,
+            context: loopContext(anchor: try XCTUnwrap(stream.last), phase: 2_700)))
+        XCTAssertEqual(rendered.projection.records.map(\.direction), [.backward])
+        let travel = rendered.geometry.motion.segments.filter { !$0.isHold }
+        XCTAssertEqual(travel.count, 2)
+        let first = try XCTUnwrap(travel.first)
+        let last = try XCTUnwrap(travel.last)
+        XCTAssertEqual(first.startPosition, 0.25, accuracy: 1e-9)
+        XCTAssertEqual(first.endPosition, 0, accuracy: 1e-9)
+        XCTAssertEqual(last.startPosition, 1, accuracy: 1e-9)
+        XCTAssertEqual(last.endPosition, 0.75, accuracy: 1e-9)
+        XCTAssertEqual(first.endTime, last.startTime, accuracy: 1e-9)
+        XCTAssertTrue(travel.allSatisfy { $0.kind == .stroke(.backward) && $0.endPosition < $0.startPosition })
+        XCTAssertTrue(rendered.geometry.missingMotion.isEmpty)
+    }
+
+    func testSampleLoopMissingAmbiguousOrWrongSourceAnchorFallsBack() throws {
+        let stream = loopStream([900, -900])
+        let anchor = try XCTUnwrap(stream.last)
+        try assertUnwrappedFallback(stream, context: nil)
+        let missing = midiEvent(value: anchor.value, takeRelativeTime: anchor.takeRelativeTime,
+                                timestamp: anchor.timestamp + 1, deviceName: anchor.deviceName)
+        try assertUnwrappedFallback(stream, context: loopContext(anchor: missing))
+        let wrongSource = midiEvent(value: anchor.value, takeRelativeTime: anchor.takeRelativeTime,
+                                    timestamp: anchor.timestamp, deviceName: "Other Rane")
+        try assertUnwrappedFallback(stream, context: loopContext(anchor: wrongSource))
+        try assertUnwrappedFallback(stream + [anchor], context: loopContext(anchor: anchor))
+        try assertUnwrappedFallback(stream, context: loopContext(anchor: stream[0]),
+                                    baseline: stream[0].timestamp)
+    }
+
+    func testSampleLoopNewSampleEpochWaitsUntilOlderVisibleMotionExpires() throws {
+        let early = loopStream([7_200, -900, 900])
+        let later = loopStream([7_200, -900, 900, -900, 900])
+        let epoch = 10_009.0
+        try assertUnwrappedFallback(early, context: loopContext(
+            anchor: try XCTUnwrap(early.last), phase: 1_800, validFrom: epoch,
+            generation: 2, sampleID: "fresh-ahhh"))
+        let state = loopState(later, context: loopContext(
+            anchor: try XCTUnwrap(later.last), phase: 1_800, validFrom: epoch,
+            generation: 2, sampleID: "fresh-ahhh"))
+        guard case .tracking(_, _, _, _, _, _, let period) = state else { return XCTFail("expected tracking") }
+        XCTAssertEqual(period, 1, "raw history may predate the sample once every visible stroke belongs to its epoch")
+        let rendered = try connectedLoopGeometry(state)
+        XCTAssertEqual(try XCTUnwrap(rendered.events.first).startPosition, 0.25, accuracy: 1e-9)
+    }
+
+    func testSampleLoopContextChangeDuringPollFallsBack() throws {
+        let stream = loopStream([900, -900])
+        let anchor = try XCTUnwrap(stream.last)
+        let before = loopContext(anchor: anchor)
+        let changes: [PlaybackLoopContext?] = [
+            nil,
+            loopContext(anchor: anchor, generation: 2),
+            loopContext(anchor: anchor, sampleID: "other-sample"),
+            loopContext(anchor: anchor, connectionGeneration: 2),
+            loopContext(anchor: anchor, length: 1_800),
+            loopContext(anchor: anchor, validFrom: 10_000.1)
+        ]
+        for after in changes {
+            var reads = 0
+            let state = LivePerformedNotationTracker.computeState(
+                dataSource: LivePerformedNotationDataSource(
+                    selectedMIDISourceName: { "Rane ONE MKII" },
+                    capturedMidiCCEventsSnapshot: { stream },
+                    cameraMovementEventsSnapshot: { _ in nil },
+                    activePlaybackLoopContext: {
+                        reads += 1
+                        return reads == 1 ? before : after
+                    }
+                ), baselineTimestamp: 9_999
+            )
+            XCTAssertEqual(state, loopState(stream, context: nil))
+            XCTAssertEqual(try connectedLoopGeometry(state).geometry,
+                           try connectedLoopGeometry(loopState(stream, context: nil)).geometry)
+        }
+    }
+
+    func testSampleLoopAdvancingAnchorDuringPollPreservesFirstCorrelatedPhase() throws {
+        let stream = loopStream([900, -900, 900])
+        // The audio owner advances by 450 measured steps while the poll is
+        // decoding. Both correspondences describe the same sample origin.
+        let before = loopContext(anchor: stream[450], phase: 1_350)
+        let after = loopContext(anchor: stream[900], phase: 1_800)
+        var reads = 0
+        let state = LivePerformedNotationTracker.computeState(
+            dataSource: LivePerformedNotationDataSource(
+                selectedMIDISourceName: { "Rane ONE MKII" },
+                capturedMidiCCEventsSnapshot: { stream },
+                cameraMovementEventsSnapshot: { _ in nil },
+                activePlaybackLoopContext: {
+                    reads += 1
+                    return reads == 1 ? before : after
+                }
+            ), baselineTimestamp: 9_999
+        )
+        XCTAssertEqual(reads, 2)
+        XCTAssertEqual(state, loopState(stream, context: before),
+                       "the confirmation may advance without mixing its phase with the first anchor")
+        let rendered = try connectedLoopGeometry(state)
+        let confirmed = try connectedLoopGeometry(loopState(stream, context: after))
+        XCTAssertEqual(rendered.events, confirmed.events)
+        XCTAssertEqual(rendered.geometry, confirmed.geometry)
+        let first = try XCTUnwrap(rendered.geometry.motion.segments.first)
+        XCTAssertEqual(first.startPosition, 0.25, accuracy: 1e-9)
+        XCTAssertEqual(first.endPosition, 0.5, accuracy: 1e-9)
+        XCTAssertTrue(rendered.geometry.missingMotion.isEmpty)
+    }
+
+    func testSampleLoopInvalidScaleOrPhaseFallsBack() throws {
+        let stream = loopStream([900, -900])
+        let anchor = try XCTUnwrap(stream.last)
+        for length in [0, -1, Double.infinity, Double.nan] {
+            try assertUnwrappedFallback(stream, context: loopContext(anchor: anchor, length: length))
+        }
+        try assertUnwrappedFallback(stream, context: loopContext(anchor: anchor, phase: .nan))
+        try assertUnwrappedFallback(stream, context: loopContext(anchor: anchor, sampleID: ""))
+    }
+
+    func testSampleLoopGapAndClockDiscontinuityKeepUnwrappedEvidence() throws {
+        let stream = loopStream([900, -900])
+        for clockOnly in [false, true] {
+            let interrupted = stream.enumerated().map { index, event in
+                let offset = index > 450 ? 0.3 : 0
+                return midiEvent(value: event.value,
+                    takeRelativeTime: event.takeRelativeTime + (clockOnly ? 0 : offset),
+                    timestamp: event.timestamp + offset, deviceName: event.deviceName)
+            }
+            let state = loopState(interrupted, context: nil)
+            guard case .tracking(_, _, _, _, let evidence, _, _) = state else { return XCTFail("expected tracking") }
+            XCTAssertTrue(evidence.contains { $0.kind == (clockOnly ? .clockDiscontinuity : .packetGap) })
+            try assertUnwrappedFallback(interrupted,
+                context: loopContext(anchor: try XCTUnwrap(interrupted.last)))
+            XCTAssertFalse(try connectedLoopGeometry(state).geometry.missingMotion.isEmpty,
+                           "an unknown connection must remain a gap, never become a loop reset")
+        }
+    }
+
+    func testSampleLoopProjectionLeavesPhysicalGestureAndFinalizedDecodeUnchanged() throws {
+        let stream = loopStream([900, -900, 900], closeTrailingRun: false)
+        let finalBefore = CaptureCore.derivePlatterMovementEvents(
+            from: stream, controller: 6, channel: 1, deviceName: "Rane ONE MKII")
+        let decodedBefore = MacCaptureEngine.resolvedControllerMovementEventsWithProvisional(
+            selectedMIDISourceName: "Rane ONE MKII", capturedMidi: stream)
+        let unwrapped = loopState(stream, context: nil)
+        let wrapped = loopState(stream, context: loopContext(anchor: try XCTUnwrap(stream.last), phase: 1_800))
+        guard case .tracking(let physical, let open, _, _, let evidence, let fader, _) = wrapped,
+              case .tracking(let oldPhysical, let oldOpen, _, _, let oldEvidence, let oldFader, _) = unwrapped else {
+            return XCTFail("expected tracking")
+        }
+        XCTAssertEqual(physical, oldPhysical)
+        XCTAssertNotNil(open, "this fixture keeps the physical trailing gesture explicitly provisional")
+        XCTAssertEqual(open, oldOpen)
+        XCTAssertEqual(evidence, oldEvidence)
+        XCTAssertEqual(fader, oldFader)
+        XCTAssertEqual(physical, decodedBefore.committedEvents)
+        XCTAssertEqual(open, decodedBefore.provisionalMovement)
+        XCTAssertNotEqual(try connectedLoopGeometry(wrapped).events,
+                          try connectedLoopGeometry(unwrapped).events,
+                          "only the transient continuous presentation receives the sample transform")
+        XCTAssertEqual(finalBefore, CaptureCore.derivePlatterMovementEvents(
+            from: stream, controller: 6, channel: 1, deviceName: "Rane ONE MKII"))
+        let decodedAfter = MacCaptureEngine.resolvedControllerMovementEventsWithProvisional(
+            selectedMIDISourceName: "Rane ONE MKII", capturedMidi: stream)
+        XCTAssertEqual(decodedBefore.continuousEvents, decodedAfter.continuousEvents)
+        XCTAssertEqual(decodedBefore.continuousProvisionalMovement, decodedAfter.continuousProvisionalMovement)
+    }
+
     func testFreezePreservesLastVisibleTrace() {
         let event = CaptureCore.DetectedNotationRecordMovementEvent(
             startTime: 0, endTime: 0.5, startPosition: 0, endPosition: 0.7,
@@ -934,7 +1304,7 @@ final class LivePerformedNotationTrackerTests: XCTestCase {
         )
         let tracker = LivePerformedNotationTracker(dataSource: dataSource, pollInterval: 60)
         let visibleBeforeFreeze = LivePerformedNotationTracker.renderedEvents(
-            for: .tracking(committed: [event], provisional: nil, continuousCommitted: [], continuousProvisional: nil, platterEvidenceIntervals: [], faderDerivation: nil)
+            for: .tracking(committed: [event], provisional: nil, continuousCommitted: [], continuousProvisional: nil, platterEvidenceIntervals: [], faderDerivation: nil, wrapPeriod: nil)
         )
 
         tracker.freeze()
@@ -1014,7 +1384,7 @@ final class LivePerformedNotationTrackerTests: XCTestCase {
             dataSource: engineBackedDataSource(engine: engine, deviceName: deviceName),
             baselineTimestamp: baseline
         )
-        guard case .tracking(let committed, let provisional, _, _, _, _) = state else {
+        guard case .tracking(let committed, let provisional, _, _, _, _, _) = state else {
             return XCTFail("expected .tracking from real captured platter telemetry, got \(state)")
         }
         XCTAssertFalse(
@@ -1355,7 +1725,8 @@ final class LivePerformedNotationTrackerTests: XCTestCase {
             continuousCommitted: decoded.continuousEvents,
             continuousProvisional: decoded.continuousProvisionalMovement,
             platterEvidenceIntervals: decoded.platterEvidenceIntervals,
-            faderDerivation: nil
+            faderDerivation: nil,
+            wrapPeriod: nil
         )
         let strokes = LivePerformedNotationTracker.renderedEvents(for: state)
             .compactMap(PerformedStrokeAdapter.laneStroke(from:))
@@ -1418,7 +1789,8 @@ final class LivePerformedNotationTrackerTests: XCTestCase {
                 continuousCommitted: [],
                 continuousProvisional: nil,
                 platterEvidenceIntervals: [],
-                faderDerivation: nil
+                faderDerivation: nil,
+                wrapPeriod: nil
             ))
             .compactMap(PerformedStrokeAdapter.laneStroke(from:))
         let values = strokes.flatMap { stroke -> [Double] in
@@ -1512,7 +1884,8 @@ final class LivePerformedNotationTrackerTests: XCTestCase {
                 continuousCommitted: [],
                 continuousProvisional: nil,
                 platterEvidenceIntervals: [],
-                faderDerivation: nil
+                faderDerivation: nil,
+                wrapPeriod: nil
             ))
             .compactMap(PerformedStrokeAdapter.laneStroke(from:))
         let starts = strokes.compactMap(\.measuredStartPosition)
@@ -1573,7 +1946,7 @@ final class LivePerformedNotationTrackerTests: XCTestCase {
         let provisional = try? XCTUnwrap(decoded.provisionalMovement)
         XCTAssertNotNil(provisional)
         let rendered = LivePerformedNotationTracker.renderedEvents(
-            for: .tracking(committed: [], provisional: decoded.provisionalMovement, continuousCommitted: [], continuousProvisional: nil, platterEvidenceIntervals: [], faderDerivation: nil)
+            for: .tracking(committed: [], provisional: decoded.provisionalMovement, continuousCommitted: [], continuousProvisional: nil, platterEvidenceIntervals: [], faderDerivation: nil, wrapPeriod: nil)
         )
         XCTAssertEqual(rendered.count, 1)
         XCTAssertGreaterThan(
