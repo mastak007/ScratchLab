@@ -87,20 +87,16 @@ final class LivePerformedNotationTrackerTests: XCTestCase {
         value: Int,
         takeRelativeTime: Double,
         timestamp: Double? = nil,
-        deviceName: String = "Test Device",
-        valueIsRaw: Bool = false
+        deviceName: String = "Test Device"
     ) -> CaptureCore.RawMixerMIDIEvent {
-        // Helpers describe logical travel; the right ONE MKII counts down
-        // for forward. Explicit hardware-byte tests bypass this helper.
-        let rawValue = deviceName == "Rane ONE MKII" && !valueIsRaw ? ((-value % 128) + 128) % 128 : value
-        return CaptureCore.RawMixerMIDIEvent(
+        CaptureCore.RawMixerMIDIEvent(
             timestamp: timestamp ?? takeRelativeTime,
             takeRelativeTime: takeRelativeTime,
             deviceName: deviceName,
             channel: 1,
             controller: 6,
-            value: rawValue,
-            normalizedValue: Double(rawValue) / 127.0,
+            value: value,
+            normalizedValue: Double(value) / 127.0,
             mappedControl: nil
         )
     }
@@ -1236,7 +1232,7 @@ final class LivePerformedNotationTrackerTests: XCTestCase {
         if closeTrailingRun, let last = events.last {
             events += (1...8).map { index in
                 midiEvent(value: last.value, takeRelativeTime: last.takeRelativeTime + Double(index) * 0.00125,
-                          deviceName: last.deviceName, valueIsRaw: true)
+                          deviceName: last.deviceName)
             }
         }
         return shiftedToHostEpoch(events, epoch: epoch)
@@ -1596,7 +1592,7 @@ final class LivePerformedNotationTrackerTests: XCTestCase {
                 let offset = index > 450 ? 0.3 : 0
                 return midiEvent(value: event.value,
                     takeRelativeTime: event.takeRelativeTime + (clockOnly ? 0 : offset),
-                    timestamp: event.timestamp + offset, deviceName: event.deviceName, valueIsRaw: true)
+                    timestamp: event.timestamp + offset, deviceName: event.deviceName)
             }
             let state = loopState(interrupted, context: nil)
             guard case .tracking(_, _, _, _, let evidence, _, _) = state else { return XCTFail("expected tracking") }
@@ -2103,7 +2099,7 @@ final class LivePerformedNotationTrackerTests: XCTestCase {
         var value = startValue
         var t = 0.0
         for run in 0..<runs {
-            let step = run.isMultiple(of: 2) ? -1 : 1
+            let step = run.isMultiple(of: 2) ? 1 : -1
             for _ in 0..<stepsPerRun {
                 value = ((value + step) % 128 + 128) % 128
                 t += interval

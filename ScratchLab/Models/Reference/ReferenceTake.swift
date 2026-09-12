@@ -2806,35 +2806,63 @@ enum ReferenceTearEvidenceCodec {
             rawSidecarData: rawSidecarData, rawSidecarSHA256: sha256(rawSidecarData))
     }
 
-    /// Stop acknowledgements can arrive after media/review finalization. Only
-    /// that take's stop diagnostics and appended watch_stop audit entries may
-    /// advance an export binding. Every captured observation, source identity,
-    /// Watch association and metadata field must remain unchanged, including
-    /// fields unknown to this version of the decoder. Review stays immutable.
+    /// Watch Stop replies and motion transfers can arrive after review. Rebind
+    /// only these additions, verifying the actual motion document before accepting
+    /// a new association. All other evidence (including unknown JSON fields and
+    /// prior audit entries) and the review remain unchanged.
     static func exportBinding(
         from original: ReferenceTearEvidenceSourceBinding,
-        currentSidecarData: Data
+        currentSidecarData: Data,
+        linkedWatchData: Data? = nil
     ) throws -> ReferenceTearEvidenceSourceBinding {
         guard currentSidecarData != original.rawSidecarData else { return original }
         let previous = try sourceSidecar(original.rawSidecarData)
         let current = try sourceSidecar(currentSidecarData)
-        guard let stop = current.watchStopDiagnostics,
-              stop != previous.watchStopDiagnostics,
-              stop.sessionID == original.capturedSessionID,
-              stop.takeID == original.capturedTakeID,
-              let commandID = stop.commandID, !commandID.isEmpty,
-              previous.watchStopDiagnostics?.commandID.map({ $0 == commandID }) ?? true,
+        let stopChanged = current.watchStopDiagnostics != previous.watchStopDiagnostics
+        if stopChanged {
+            guard let stop = current.watchStopDiagnostics,
+                  stop.sessionID == original.capturedSessionID,
+                  stop.takeID == original.capturedTakeID,
+                  let commandID = stop.commandID, !commandID.isEmpty,
+                  previous.watchStopDiagnostics?.commandID.map({ $0 == commandID }) ?? true else {
+                throw Error.identityMismatch("Watch Stop diagnostics belong to another command or take")
+            }
+        }
+        var allowedKeys = ["watchStopDiagnostics", "auditTrail"]
+        var allowedAuditCategories: Set<String> = ["watch_stop"]
+        let associationChanged = current.linkedMotionCaptureID != previous.linkedMotionCaptureID
+            || current.linkedMotionFileName != previous.linkedMotionFileName
+            || current.watchSyncState != previous.watchSyncState
+            || current.watchAcknowledgedAt != previous.watchAcknowledgedAt
+        if associationChanged {
+            guard let data = linkedWatchData,
+                  let capture = try? WatchMotionCaptureCodec.decoder.decode(WatchMotionCaptureSession.self, from: data),
+                  capture.id == current.linkedMotionCaptureID,
+                  let fileName = current.linkedMotionFileName, isLeafName(fileName),
+                  previous.linkedMotionCaptureID.map({ $0 == capture.id }) ?? true,
+                  previous.linkedMotionFileName.map({ $0 == fileName }) ?? true,
+                  let commandID = previous.watchCommandID, !commandID.isEmpty,
+                  capture.commandID == commandID,
+                  WatchAssociationResolver.isLinkedCaptureValid(sessionID: original.capturedSessionID,
+                      takeID: original.capturedTakeID, captureSession: capture),
+                  current.watchSyncState == previous.watchSyncState || current.watchSyncState == .acknowledged else {
+                throw Error.identityMismatch("late Watch motion could not be verified for this take")
+            }
+            allowedKeys += ["linkedMotionCaptureID", "linkedMotionFileName", "watchSyncState", "watchAcknowledgedAt"]
+            allowedAuditCategories.formUnion(["watch_linked", "watch_reconciled"])
+        }
+        guard stopChanged || associationChanged,
               current.auditTrail.count > previous.auditTrail.count,
               Array(current.auditTrail.prefix(previous.auditTrail.count)) == previous.auditTrail,
-              current.auditTrail.dropFirst(previous.auditTrail.count).allSatisfy({ $0.category == "watch_stop" }),
+              current.auditTrail.dropFirst(previous.auditTrail.count).allSatisfy({ allowedAuditCategories.contains($0.category) }),
               var before = try JSONSerialization.jsonObject(with: original.rawSidecarData) as? [String: Any],
               var after = try JSONSerialization.jsonObject(with: currentSidecarData) as? [String: Any],
               let previousAudit = before["auditTrail"] as? [[String: Any]],
               let currentAudit = after["auditTrail"] as? [[String: Any]],
               NSArray(array: previousAudit).isEqual(to: Array(currentAudit.prefix(previousAudit.count))) else {
-            throw Error.identityMismatch("the finalized sidecar changed beyond this take's Watch Stop diagnostics")
+            throw Error.identityMismatch("the finalized sidecar changed beyond this take's verified Watch updates")
         }
-        for key in ["watchStopDiagnostics", "auditTrail"] {
+        for key in allowedKeys {
             before.removeValue(forKey: key)
             after.removeValue(forKey: key)
         }

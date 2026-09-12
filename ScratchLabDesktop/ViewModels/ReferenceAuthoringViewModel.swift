@@ -275,8 +275,14 @@ final class ReferenceAuthoringWorker: @unchecked Sendable {
                         }
                         let canonicalURL = sourceURL.standardizedFileURL.resolvingSymlinksInPath()
                         if canonicalURL == group.seedSidecarURL || group.sidecarURLsByTakeID.values.contains(canonicalURL) {
+                            let currentData = try Data(contentsOf: sourceURL)
+                            let decoder = JSONDecoder()
+                            decoder.dateDecodingStrategy = .iso8601
+                            let sidecar = try decoder.decode(CaptureCore.LocalRecordingSidecar.self, from: currentData)
                             binding = try ReferenceTearEvidenceCodec.exportBinding(from: binding,
-                                currentSidecarData: Data(contentsOf: sourceURL))
+                                currentSidecarData: currentData,
+                                linkedWatchData: ReferenceAuthoringCaptureBridge.verifiedWatchData(
+                                    sidecar: sidecar, takeDirectory: sourceURL.deletingLastPathComponent()))
                         }
                         guard try group.includes(sourceBinding: binding, sourceSidecarURL: sourceURL) else {
                             excluded.append(take.id)

@@ -205,10 +205,10 @@ final class RoutineReviewMovieMuxerTests: XCTestCase {
 final class ReferenceTearEvidencePipelineTests: XCTestCase {
 
     func testPhysicalRightPlatterForwardPushRisesInLiveAndFinalizedNotation() throws {
-        // Take004 begins 36,35,34...; Karl confirmed this was a forward push.
-        // Extend that observed counter direction across a wrap and reversal.
-        let values = (0...100).map { (36 - $0 + 128) % 128 }
-            + (1...100).map { (64 + $0) % 128 }
+        // The fresh take at 22:51 has an increasing counter through its first
+        // long stroke, now explicitly confirmed as forward. Test both wraps.
+        let values = (0...100).map { (36 + $0) % 128 }
+            + (1...100).map { (8 - $0 + 128) % 128 }
         let raw = values.enumerated().map { index, value in
             Raw(timestamp: Double(index) * 0.01, takeRelativeTime: Double(index) * 0.01,
                 deviceName: "Rane ONE MKII", channel: 1, controller: 6,
@@ -318,6 +318,66 @@ final class ReferenceTearEvidencePipelineTests: XCTestCase {
         }
     }
 
+    func testLateWatchLinkExportsExactCaptureAndImmutableReview() async throws {
+        let initial = try await fixture(Self.withFader(Self.tear(holds: 1)))
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .iso8601
+        var previous = try decoder.decode(CaptureCore.LocalRecordingSidecar.self, from: initial.sidecarData)
+        previous.watchCommandID = "start-this-take"
+        let original = try previous.encodedData()
+        try original.write(to: initial.sidecarURL, options: .atomic)
+        let files = Fixture(directory: initial.directory, mediaURL: initial.mediaURL,
+            sidecarURL: initial.sidecarURL, sidecarData: original, config: initial.config, raw: initial.raw)
+        let owner = worker([files])
+        let take = try await record(owner)
+        let binding = try XCTUnwrap(take.tearEvidenceSourceBinding)
+        let sample = WatchMotionSample(elapsedTime: 0, attitudeRoll: 0, attitudePitch: 0, attitudeYaw: 0,
+            quaternionX: 0, quaternionY: 0, quaternionZ: 0, quaternionW: 1,
+            gravityX: 0, gravityY: 0, gravityZ: 1, userAccelerationX: 0, userAccelerationY: 0,
+            userAccelerationZ: 0, rotationRateX: 0, rotationRateY: 0, rotationRateZ: 0)
+        let capture = WatchMotionCaptureSession(sessionID: previous.sessionID, takeID: previous.takeID,
+            commandID: previous.watchCommandID, requestedAt: previous.startedAt, acknowledgedAt: previous.startedAt,
+            syncState: .acknowledged, sourceDeviceName: "Synthetic Watch", sampleRateHz: 100,
+            startedAt: previous.startedAt, endedAt: previous.startedAt.addingTimeInterval(1),
+            deviceRecordedAtStart: previous.startedAt, deviceRecordedAtEnd: previous.startedAt.addingTimeInterval(1),
+            appVersion: "test", timingMetadata: nil, samples: Array(repeating: sample, count: 10))
+        let motionData = try WatchMotionCaptureCodec.encoder.encode(capture)
+        let name = "late-watch-\(UUID()).json"
+        let relayDirectory = try XCTUnwrap(FileManager.default.urls(for: .applicationSupportDirectory,
+            in: .userDomainMask).first).appendingPathComponent("ScratchLab/RelayedWatchCaptures", isDirectory: true)
+        try FileManager.default.createDirectory(at: relayDirectory, withIntermediateDirectories: true)
+        let motionURL = relayDirectory.appendingPathComponent(name)
+        try motionData.write(to: motionURL)
+        defer { try? FileManager.default.removeItem(at: motionURL) }
+        let linked = previous.linkingWatchCapture(id: capture.id, fileName: name)
+        let current = try linked.encodedData()
+        try current.write(to: files.sidecarURL, options: .atomic)
+        let optionalSnapshot = try await owner.rawCaptureExportSnapshot(config: files.config)
+        let snapshot = try XCTUnwrap(optionalSnapshot)
+        let archived = try await Task.detached { try Self.archive(snapshot.source, in: files.directory) }.value
+        let document = try ReferenceTearEvidenceCodec.decodeDocument(XCTUnwrap(archived.companions[previous.takeID]))
+        XCTAssertEqual(document.sourceBinding.rawSidecarData, current)
+        XCTAssertEqual(document.review, take.tearReview)
+        XCTAssertEqual(document.projection, take.tearProjection)
+        XCTAssertThrowsError(try ReferenceTearEvidenceCodec.exportBinding(from: binding, currentSidecarData: current))
+        var wrong = try XCTUnwrap(JSONSerialization.jsonObject(with: motionData) as? [String: Any])
+        for field in ["id", "sessionID", "takeID", "commandID"] {
+            var invalid = wrong
+            invalid[field] = field == "id" ? UUID().uuidString : "other"
+            XCTAssertThrowsError(try ReferenceTearEvidenceCodec.exportBinding(from: binding,
+                currentSidecarData: current, linkedWatchData: JSONSerialization.data(withJSONObject: invalid)), field)
+        }
+        wrong["samples"] = []
+        XCTAssertThrowsError(try ReferenceTearEvidenceCodec.exportBinding(from: binding,
+            currentSidecarData: current, linkedWatchData: JSONSerialization.data(withJSONObject: wrong)))
+        var mutated = try XCTUnwrap(JSONSerialization.jsonObject(with: current) as? [String: Any])
+        mutated["unknownFutureEvidenceField"] = "changed"
+        XCTAssertThrowsError(try ReferenceTearEvidenceCodec.exportBinding(from: binding,
+            currentSidecarData: JSONSerialization.data(withJSONObject: mutated), linkedWatchData: motionData))
+        let state = await owner.snapshot()
+        XCTAssertEqual(state.session.takeInReview, take)
+    }
+
     func testFinalizedVideoAndWAVPlayTogetherWithoutOptionalBeatAssetsAndStopCancelsSeek() async throws {
         let files = try await fixture([])
         let take = try await record(worker([files]))
@@ -370,8 +430,7 @@ final class ReferenceTearEvidencePipelineTests: XCTestCase {
     private nonisolated static func packets(_ steps: Int, count: Int = 80, start: Double = 0.1,
         duration: Double = 0.3, phase: Int = 20) -> [Raw] {
         (0...count).map { index in
-            // Logical forward test travel uses the observed decreasing counter.
-            let value = ((-phase - index * steps) % 128 + 128) % 128
+            let value = ((phase + index * steps) % 128 + 128) % 128
             let time = ((start + Double(index) * duration / Double(count)) * 1_000_000_000).rounded() / 1_000_000_000
             return Raw(timestamp: time, takeRelativeTime: time, deviceName: "Rane ONE MKII",
                 channel: 1, controller: 6, value: value,

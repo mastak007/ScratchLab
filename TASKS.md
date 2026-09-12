@@ -1,3 +1,7 @@
+- [x] Implement and install the CXL follow-up: verified late Watch-attachment export, independent direct Mac primary output, and removal of the counter inversion contradicted by the fresh forward-push take.191unique checks/382executions=380pass/2optional skips; Python84/84; all platform builds pass. Mac installed SHA4a2f67da. Karl confirms direct Mac audio works; fresh Save/direction retest remains pending.
+- [ ] Resolve CXL Appshot helper crash. Reproduced in OpenAI SkyComputerUseService Array.remove(at:), including after CXL restart. Finder capture works. Diagnostic report prepared locally; no verified repair.
+- [ ] Establish reliable pause evidence for the Rane pilot: current raw counter continues changing through the reported pause; do not fabricate stationary holds from missing or filtered packets.
+
 - [ ] Run the fresh-worktree CXL pilot batch: one Movement check(no beat), parked fader/open state, physical response, Mac/Watch Stop, whole-take playback, export and Retake/New scratch. See AI_HANDOFF.md; canonical approval is not part of this diagnostic.
 
 - [x] Correct CXL parked-fader evidence, idle preflight, MIDI stop position and WAV/MOV tail mismatch; fix permanent audio-tap teardown crash (2026-09-12 SOFTWARE VERIFIED AND INSTALLED).540unique passes/2skips, Python84passes, universal Mac and signed iPhone/Watch builds; all three installed. Physical pilot verification remains below.

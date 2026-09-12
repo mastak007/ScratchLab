@@ -14,6 +14,7 @@ import ImageIO
 private enum ScratchLabDesktopDefaultsKey {
     static let selectedAudioDeviceUniqueID = "scratchlab.mac.selectedAudioDeviceUniqueID"
     static let selectedAudioDeviceWasExplicit = "scratchlab.mac.selectedAudioDeviceWasExplicit"
+    static let scratchPrimaryOutput = "scratchlab.mac.scratchPrimaryOutput"
     static let selectedVideoDeviceUniqueID = "scratchlab.mac.selectedVideoDeviceUniqueID"
     static let selectedVideoDeviceWasExplicit = "scratchlab.mac.selectedVideoDeviceWasExplicit"
     static let calibrationLocked = "scratchlab.mac.calibrationLocked"
@@ -874,6 +875,19 @@ struct ScratchHardwareOutputSelection: Equatable {
             return explicitSelection ? selected ?? intended : intended
         }
         return selected ?? availableRaneOutputs.first
+    }
+}
+
+enum ScratchPrimaryOutput: String, CaseIterable, Identifiable {
+    case rane
+    case macSystemOutput
+
+    var id: String { rawValue }
+    var label: String {
+        switch self {
+        case .rane: "Rane"
+        case .macSystemOutput: "Mac (system output)"
+        }
     }
 }
 
@@ -2908,6 +2922,7 @@ final class MacCaptureEngine: NSObject, ObservableObject {
     @Published private(set) var playbackWaveformSnapshot: ScratchSamplePlaybackController.PlaybackWaveformSnapshot?
     @Published private(set) var scratchOutputMeterSnapshot: ScratchSamplePlaybackController.ScratchOutputMeterSnapshot?
     @Published private(set) var scratchOutputRoutingSnapshot: ScratchSamplePlaybackController.OutputRoutingSnapshot?
+    @Published private(set) var scratchPrimaryOutput: ScratchPrimaryOutput = .rane
     private static let playbackPositionPollInterval: TimeInterval = 0.04
     private var playbackPositionPollTimer: DispatchSourceTimer?
     private var playbackPositionPollGeneration: UInt64 = 0
@@ -3533,7 +3548,18 @@ final class MacCaptureEngine: NSObject, ObservableObject {
 
     func setScratchMacMonitorEnabled(_ enabled: Bool) {
         guard !isAudioInputSelectionLocked else { return }
+        guard !enabled || scratchPrimaryOutput == .rane else { return }
         scratchPlaybackController.setMacMonitorEnabled(enabled)
+    }
+
+    func setScratchPrimaryOutput(_ output: ScratchPrimaryOutput) {
+        guard !isAudioInputSelectionLocked, output != scratchPrimaryOutput else { return }
+        scratchPrimaryOutput = output
+        midiPersistenceDefaults.set(output.rawValue, forKey: ScratchLabDesktopDefaultsKey.scratchPrimaryOutput)
+        if output == .macSystemOutput {
+            scratchPlaybackController.setMacMonitorEnabled(false)
+        }
+        syncScratchPlaybackOutputRoute()
     }
 
     static func scratchOutputRoutingAuditEvent(
@@ -5414,6 +5440,8 @@ final class MacCaptureEngine: NSObject, ObservableObject {
     }
 
     private func configureInitialState() {
+        scratchPrimaryOutput = midiPersistenceDefaults.string(forKey: ScratchLabDesktopDefaultsKey.scratchPrimaryOutput)
+            .flatMap(ScratchPrimaryOutput.init(rawValue:)) ?? .rane
         scratchPlaybackController.routineOutputLevelHandler = { [weak self] level in
             Task { @MainActor in
                 guard let self else { return }
@@ -6509,12 +6537,14 @@ final class MacCaptureEngine: NSObject, ObservableObject {
         pendingVideoSelectionOrigin = .automatic
     }
 
-    /// Standalone scratch audio must leave through the real Rane interface so
-    /// the controller's hardware signal meters represent the sound ScratchLab
-    /// is producing. Never bind playback to a Serato virtual endpoint. The
-    /// system default is used only before any Rane has been selected in this
-    /// session. A disconnected intended Rane never falls back automatically.
+    /// Primary playback is independent of recording input. Selecting Mac uses
+    /// the existing direct output graph, with no delayed monitoring copy.
+    /// A disconnected intended Rane never falls back automatically.
     private func syncScratchPlaybackOutputRoute(using audioDevices: [AVCaptureDevice]? = nil) {
+        if scratchPrimaryOutput == .macSystemOutput {
+            scratchPlaybackController.setPreferredOutputDevice(deviceID: nil, deviceName: "System Default")
+            return
+        }
         let devices = audioDevices ?? availableAudioDevices
         let available = devices.filter { Self.isRaneHardwareDeviceName($0.localizedName) }
             .map { ScratchHardwareOutputSelection(uid: $0.uniqueID, name: $0.localizedName) }

@@ -19,6 +19,27 @@ import XCTest
 @MainActor
 final class MacCameraPreviewViewTests: XCTestCase {
 
+    func testPrimaryMacOutputPersistsWithoutChangingInputAndLocksDuringTake() throws {
+        let suite = "ScratchPrimaryOutputTests.\(UUID())"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let engine = MacCaptureEngine(autoRefreshDevices: false, midiDefaults: defaults)
+        let input = engine.selectedAudioDeviceUniqueID
+        XCTAssertEqual(engine.scratchPrimaryOutput, .rane)
+        engine.setScratchPrimaryOutput(.macSystemOutput)
+        XCTAssertEqual(engine.selectedAudioDeviceUniqueID, input)
+        XCTAssertEqual(engine.scratchPrimaryOutput, .macSystemOutput)
+        let token = engine.testOnly_armTakeMIDIWindow()
+        engine.setScratchPrimaryOutput(.rane)
+        XCTAssertEqual(engine.scratchPrimaryOutput, .macSystemOutput)
+        let restored = MacCaptureEngine(autoRefreshDevices: false, midiDefaults: defaults)
+        XCTAssertEqual(restored.scratchPrimaryOutput, .macSystemOutput)
+        XCTAssertTrue(engine.testOnly_releaseAbandonedTakeMIDIWindow(token: token))
+        engine.setScratchPrimaryOutput(.rane)
+        XCTAssertEqual(engine.scratchPrimaryOutput, .rane)
+        XCTAssertEqual(engine.selectedAudioDeviceUniqueID, input)
+    }
+
     func testMissingIntendedRaneNeverFallsBackToAnotherInputOrOutput() {
         let intended = ScratchHardwareOutputSelection(uid: "rane-original", name: "Rane ONE MKII")
         let other = ScratchHardwareOutputSelection(uid: "rane-other", name: "Rane ONE")

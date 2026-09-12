@@ -491,6 +491,16 @@ struct ReferenceAuthoringView: View {
 
     private var scratchOutputRoutingControls: some View {
         VStack(alignment: .leading, spacing: 6) {
+            Picker("AHHH output", selection: Binding(
+                get: { captureEngine.scratchPrimaryOutput },
+                set: { captureEngine.setScratchPrimaryOutput($0) }
+            )) {
+                ForEach(ScratchPrimaryOutput.allCases) { output in
+                    Text(output.label).tag(output)
+                }
+            }
+            .disabled(audioSelectionIsLocked)
+            .accessibilityIdentifier("cxl.hardware.primaryOutput")
             if let route = captureEngine.scratchOutputRoutingSnapshot {
                 Text("AHHH playback: \(route.primaryDeviceName ?? "Not ready")\(route.outputChannelPair.map { " · " + $0 } ?? "")")
                     .font(.caption.weight(.semibold))
@@ -501,21 +511,25 @@ struct ReferenceAuthoringView: View {
                     Text("Output change queued until this take has finished.")
                         .font(.caption).foregroundStyle(.orange)
                 }
-                Toggle("Also hear AHHH on Mac (delayed)", isOn: Binding(
-                    get: { captureEngine.scratchOutputRoutingSnapshot?.monitorEnabled ?? false },
-                    set: { captureEngine.setScratchMacMonitorEnabled($0) }
-                ))
-                .disabled(audioSelectionIsLocked || route.status != "ready")
-                .accessibilityIdentifier("cxl.hardware.macMonitor")
-                if route.monitorEnabled {
-                    Text(route.monitorError ?? route.monitorStatus)
-                        .font(.caption).foregroundStyle(.secondary)
+                if captureEngine.scratchPrimaryOutput == .rane {
+                    Toggle("Also hear AHHH on Mac (delayed)", isOn: Binding(
+                        get: { captureEngine.scratchOutputRoutingSnapshot?.monitorEnabled ?? false },
+                        set: { captureEngine.setScratchMacMonitorEnabled($0) }
+                    ))
+                    .disabled(audioSelectionIsLocked || route.status != "ready")
+                    .accessibilityIdentifier("cxl.hardware.macMonitor")
+                    if route.monitorEnabled {
+                        Text(route.monitorError ?? route.monitorStatus)
+                            .font(.caption).foregroundStyle(.secondary)
+                    }
                 }
             } else {
                 Text("AHHH playback: waiting for audio setup.")
                     .font(.caption).foregroundStyle(.secondary)
             }
-            Text("Listen through the Rane to check scratch timing. Mac monitoring has extra delay.")
+            Text(captureEngine.scratchPrimaryOutput == .macSystemOutput
+                 ? "AHHH plays directly through the macOS sound output. Choose Mac speakers in Sound settings to hear it there."
+                 : "AHHH plays through the Rane. The optional Mac monitor adds delay.")
                 .font(.caption).foregroundStyle(.secondary)
             Text("Beat and count-in: macOS default output. Their Rane routing has not been verified; use Movement check (no beat) for the next scratch test.")
                 .font(.caption).foregroundStyle(.orange)
