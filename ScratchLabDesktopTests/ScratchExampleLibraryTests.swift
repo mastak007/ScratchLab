@@ -7,7 +7,11 @@ final class ScratchExampleLibraryTests: XCTestCase {
         let library = try await ScratchExampleLibrary.loadBundled()
         let examples = library.manifest.examples
         XCTAssertFalse(examples.isEmpty)
-        XCTAssertEqual(Set(examples.map(\.classLabel)).count, examples.count)
+        XCTAssertEqual(examples.count, 24)
+        XCTAssertEqual(examples.filter { $0.classLabel == "tears" }.count, 2)
+        XCTAssertEqual(examples.filter { $0.classLabel != "tears" }.count, 22)
+        XCTAssertEqual(examples.compactMap(\.sequence).count, 24)
+        XCTAssertEqual(examples.filter { $0.sequence?.audioRolesConfirmed == false }.count, 9)
         XCTAssertEqual(Set(examples.map(\.classLabel)), Set(ScratchClassLabel.allCases.map(\.rawValue)))
         XCTAssertTrue(examples.allSatisfy { !$0.canonicalApproval && $0.labelStatus == "sourceLabelUnreviewed" })
         XCTAssertEqual(Set(library.manifest.models.map(\.modality)), Set(["audio", "motion"]))
@@ -44,7 +48,7 @@ final class ScratchExampleLibraryTests: XCTestCase {
 
     func testRehashedUnsupportedSchemaAndFalseTrustClaimsAreRejected() async throws {
         let mutations: [(String, (inout [String: Any]) -> Void)] = [
-            ("schema", { $0["schema"] = "scratchlab_reference_examples_v2" }),
+            ("schema", { $0["schema"] = "scratchlab_reference_examples_v99" }),
             ("canonical approval", { manifest in
                 var examples = manifest["examples"] as! [[String: Any]]
                 examples[0]["canonicalApproval"] = true
@@ -146,6 +150,130 @@ final class ScratchExampleLibraryTests: XCTestCase {
         addTeardownBlock { try? FileManager.default.removeItem(at: outside) }
         try FileManager.default.createSymbolicLink(at: manifest, withDestinationURL: outside)
         await assertLoadFails(fixture.root)
+    }
+
+    func testUnconfirmedSequenceAudioUsesSourceTrackChoicesAndPreservesWholeRange() async throws {
+        let fixture = try makeSequenceFixture()
+        let library = try await ScratchExampleLibrary.load(rootURL: fixture.root)
+        let example = try XCTUnwrap(library.manifest.examples.first)
+        XCTAssertEqual(example.audioOptions.map(\.id), ["track0", "track1", "track2"])
+        XCTAssertEqual(example.preferredAudioID, "track0")
+        XCTAssertTrue(example.audioOptions.allSatisfy { $0.title.contains("unconfirmed") })
+        XCTAssertEqual(example.sequence?.performanceID, "cxl-mkv:baby:79")
+        XCTAssertEqual(example.sequence?.startSeconds, 35.035)
+        XCTAssertEqual(example.sequence?.endSeconds, 59.2592)
+        XCTAssertTrue(example.displayName.contains("Baby (Original Scratch)"))
+        for id in example.audioAssetIDs.values { _ = try await library.verifiedURL(assetID: id) }
+    }
+
+    func testSequenceRejectsFalseAudioRolesOldCachesAndTimingClaims() async throws {
+        let mutations: [(inout [String: Any]) -> Void] = [
+            { $0["audioRolesConfirmed"] = true },
+            { $0["pairedSyncStatus"] = "verified" },
+            { $0["performanceID"] = "a different performance" },
+            { $0["endSeconds"] = 12 },
+            { $0["sourcePass"] = 2 },
+            { $0["lessonTitle"] = " " },
+            { $0["warnings"] = [] }
+        ]
+        for mutate in mutations {
+            let fixture = try makeSequenceFixture()
+            try fixture.rewrite { manifest in
+                var examples = manifest["examples"] as! [[String: Any]]
+                var sequence = examples[0]["sequence"] as! [String: Any]
+                mutate(&sequence)
+                examples[0]["sequence"] = sequence
+                manifest["examples"] = examples
+            }
+            await assertLoadFails(fixture.root)
+        }
+        let fixture = try makeSequenceFixture()
+        try fixture.rewrite { manifest in
+            var examples = manifest["examples"] as! [[String: Any]]
+            examples[0]["angles"] = [["id": "angle_1", "videoAssetID": "video", "handCacheAssetID": "old-cache"]]
+            manifest["examples"] = examples
+        }
+        await assertLoadFails(fixture.root)
+    }
+
+    func testSequenceProvenanceCannotBeChangedOrRemovedAfterItsManifestWasWritten() async throws {
+        let fixture = try makeSequenceFixture()
+        let provenance = fixture.root.appendingPathComponent("evidence/provenance.json")
+        _ = try await ScratchExampleLibrary.load(rootURL: fixture.root)
+        try Data("altered source observation".utf8).write(to: provenance)
+        await assertLoadFails(fixture.root)
+        try FileManager.default.removeItem(at: provenance)
+        await assertLoadFails(fixture.root)
+    }
+
+    func testUnresolvedSourceDifferenceRequiresBothPassesWithOnePerformanceIdentity() async throws {
+        let fixture = try makeSequenceFixture()
+        try fixture.rewrite { manifest in
+            var examples = manifest["examples"] as! [[String: Any]]
+            var sequence = examples[0]["sequence"] as! [String: Any]
+            sequence["pairedSyncStatus"] = "unresolvedSourceDifference"
+            examples[0]["sequence"] = sequence
+            manifest["examples"] = examples
+        }
+        await assertLoadFails(fixture.root, message: "The other unresolved source pass is missing")
+        try fixture.rewrite { manifest in
+            var examples = manifest["examples"] as! [[String: Any]]
+            var second = examples[0]
+            var sequence = second["sequence"] as! [String: Any]
+            second["take"] = "take02"
+            second["id"] = "cxl-mkv-v2:baby:79:take02"
+            sequence["sourcePass"] = 2
+            sequence["startSeconds"] = 59.2592
+            sequence["endSeconds"] = 83.450033
+            second["sequence"] = sequence
+            examples.append(second)
+            manifest["examples"] = examples
+        }
+        let library = try await ScratchExampleLibrary.load(rootURL: fixture.root)
+        XCTAssertEqual(Set(library.manifest.examples.compactMap { $0.sequence?.performanceID }).count, 1)
+        XCTAssertTrue(library.manifest.examples[0].displayName.contains("Source pass 1"))
+        XCTAssertTrue(library.manifest.examples[1].displayName.contains("Source pass 2"))
+        try fixture.rewrite { manifest in
+            var examples = manifest["examples"] as! [[String: Any]]
+            var sequence = examples[1]["sequence"] as! [String: Any]
+            sequence["startSeconds"] = 60.0
+            examples[1]["sequence"] = sequence
+            manifest["examples"] = examples
+        }
+        await assertLoadFails(fixture.root, message: "Do not lose a section between source passes")
+    }
+
+    private func makeSequenceFixture() throws -> Fixture {
+        let fixture = try makeFixture()
+        let provenance = Data("[]".utf8)
+        try FileManager.default.createDirectory(at: fixture.root.appendingPathComponent("evidence"), withIntermediateDirectories: true)
+        try provenance.write(to: fixture.root.appendingPathComponent("evidence/provenance.json"))
+        for id in ["audio2", "audio3"] {
+            try FileManager.default.copyItem(at: fixture.root.appendingPathComponent("assets/audio.wav"),
+                                            to: fixture.root.appendingPathComponent("assets/\(id).wav"))
+        }
+        try fixture.rewrite { manifest in
+            manifest["schema"] = "scratchlab_reference_examples_v2"
+            manifest["sourceManifestSHA256"] = SHA256.hash(data: provenance).map { String(format: "%02x", $0) }.joined()
+            var assets = manifest["assets"] as! [[String: Any]]
+            let audio = assets.first { $0["id"] as? String == "audio" }!
+            for id in ["audio2", "audio3"] {
+                var copy = audio
+                copy["id"] = id; copy["relativePath"] = "assets/\(id).wav"
+                assets.append(copy)
+            }
+            manifest["assets"] = assets
+            var example = (manifest["examples"] as! [[String: Any]])[0]
+            example["id"] = "cxl-mkv-v2:baby:79:take01"
+            example["audioAssetIDs"] = ["track0": "audio", "track1": "audio2", "track2": "audio3"]
+            example["sequence"] = ["performanceID": "cxl-mkv:baby:79", "sourcePass": 1,
+                                   "lessonTitle": "Baby (Original Scratch)",
+                                   "startSeconds": 35.035, "endSeconds": 59.2592, "repeatOffsetFrames": 726,
+                                   "audioRolesConfirmed": false, "pairedSyncStatus": "notEstablished",
+                                   "warnings": ["Source roles unconfirmed."]]
+            manifest["examples"] = [example]
+        }
+        return fixture
     }
 
     private func assertLoadFails(_ root: URL, message: String = "", file: StaticString = #filePath, line: UInt = #line) async {

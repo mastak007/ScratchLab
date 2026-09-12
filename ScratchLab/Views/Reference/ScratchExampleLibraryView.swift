@@ -77,7 +77,7 @@ struct ScratchExampleLibraryView: View {
         VStack(alignment: .leading) {
             Picker("Technique example", selection: $review.exampleID) {
                 ForEach(library.manifest.examples) { example in
-                    Text("\(ScratchClassLabel(rawValue: example.classLabel)?.displayName ?? example.classLabel) · \(example.bpm) BPM")
+                    Text(example.displayName)
                         .tag(example.id)
                 }
             }.onChange(of: review.exampleID) { _, _ in review.changeExample() }
@@ -87,15 +87,23 @@ struct ScratchExampleLibraryView: View {
                         ForEach(example.angles) { angle in Text(angle.id.replacingOccurrences(of: "_", with: " ")).tag(angle.id) }
                     }
                     Picker("Audio", selection: $review.audioVariant) {
-                        Text("Scratch only").tag("noBeat")
-                        Text("With beat").tag("withBeat")
-                        Text("Beat only").tag("beatOnly")
+                        ForEach(example.audioOptions) { option in Text(option.title).tag(option.id) }
                     }
                 }
                 .onChange(of: review.angleID) { _, _ in review.prepareReference() }
                 .onChange(of: review.audioVariant) { _, _ in review.prepareReference() }
-                Text("Source take: \(example.take) · \(example.angles.count) camera views")
-                    .font(.caption).foregroundStyle(.secondary)
+                if let sequence = example.sequence {
+                    Text("Whole sequence · \(example.angles.count) camera views · \(sequence.endSeconds - sequence.startSeconds, specifier: "%.1f") seconds")
+                        .font(.caption).foregroundStyle(.secondary)
+                    Text("The sequence keeps the scratch performances and their breaks together. Source timing is preserved; exact hand-to-sound alignment remains unverified.")
+                        .font(.caption).foregroundStyle(.secondary)
+                    ForEach(sequence.warnings, id: \.self) { warning in
+                        Text(warning).font(.callout).foregroundStyle(.orange)
+                    }
+                } else {
+                    Text("Source take: \(example.take) · \(example.angles.count) camera views")
+                        .font(.caption).foregroundStyle(.secondary)
+                }
             }
         }
     }
@@ -236,6 +244,9 @@ private final class ScratchExampleReviewState: ObservableObject {
 
     func changeExample() {
         angleID = example?.angles.first?.id ?? ""
+        if let example, example.audioAssetIDs[audioVariant] == nil {
+            audioVariant = example.preferredAudioID
+        }
         prepareReference()
     }
 

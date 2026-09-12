@@ -1,4 +1,32 @@
-Latest clarification: user wants four4-beat scratch slots with4rest beats between. Current2-bar phrase setting gives4scratch+4rest beats per slot, repeated4times, with rest after the fourth slot plus the existing tail bar. At95BPM the whole sequence including count-in is25.263s; saved media~22.737s. Explained that canonical workflow currently treats slots as repeats of one variation; no rest/variation schema or capture timing was changed.
+# Current handoff — reference library complete, 13 September 2026
+
+Worktree: `/Users/karlwatson/.codex/worktrees/a4aa/ScratchLab`.
+Branch: `codex/finish-reference-library-20260913`, based on673b3ee.
+Status: software verified; signed CXL candidate staged; installed apps/captures unchanged.
+Result: `/Users/karlwatson/Developer/ScratchLab-Reference-Library-20260913/RESULT.md`.
+
+The library now contains23 techniques,24 whole source sequences (both unresolved Tears source versions),95 available camera videos,72 exact source-PCM tracks and2 unchanged advisory models. Claude's completed repeat/camera audit was consumed, never rerun. The original MKVs, previous libraries and review observations remain intact. Final payload is `library-v2-checked/ReferenceExamples` under the result root; manifest SHA-256 `5583667aa9469a6d3f6e8a65e93dad2d331eba40145500068e003bc1ec553bc5`. The ignored LocalReferenceLibrary symlink points there. No source drive is needed to build with this prepared payload; rebuilding derivatives does require the originals and audit.
+
+Shared V2 catalogue/view supports source lesson titles, full-sequence playback, generic audio choices when roles are unknown, and both Tears source passes. V1 remains supported. Metadata checks support all23 existing nominal integer BPM labels, including both Tears passes. Original title aliases clarify Orbits as2-click flare(orbit), Dicing asDicing(transform tears), and Long-short tips asLong-short tip tears; legacy class/model IDs are unchanged. Full tempo candidates, title-card/source hashes and original observation scopes are in the final provenance. Nothing was trained, filtered for hum, canonically approved, or assigned a guessed sync correction. Nine unconfirmed audio roles, Cutting's absent camera2, unresolved Tears pairing, unobserved speech-free boundaries and physical absolute A/V sync remain explicit.
+
+Verification completed: new builder6, metadata3, legacy builder5, capture fixtures84 Python tests pass.25 unique XCTest /50 executions pass,0 failures/skips;285 actual camera/audio compositions decoded and compared in EACH configuration(570 total). Shared advisory service8 and actual rebuilt-Baby model compatibility1 pass; the latter produced71 advisory windows with0issues and does not prove accuracy. scripts/build.sh all passed with isolated output/cache/test-host paths and two affected XCTest suites; separate iOS Release passed. Full Mac and CXL are universal arm64+x86_64; standalone Watch also passed. All169 assets and final manifest verified inside iOSDebug/Release, fullMacRelease and signedCXL. Full XCTest suite, UI/speaker and hardware acceptance were not run. Existing compile warnings and test-host linkd diagnostics remain in logs. No new Xcode builds are planned in this completed turn.
+
+Signed candidate: `staged/ScratchLab CXL.app` under result root, executable SHA-256 `af50444f378327896691173510fcf18a2f04117fa0ce5346ee42763c59351dcb`. Mandatory stage_cxl_mac.py retained team2DDKGL33BU, bundlecom.machelpnz.scratchlab.cxl-authoring, Apple certificate chain, designated requirement, permissions and entitlements. Receipt beside app. This is an Apple Development internal candidate, not a notarized public distribution. Installed CXL remains SHA`1567a41bacd9e76508235132cfce77ec8bc8929c6c667608571fc01d9a1b5eb7`; last observed PID91078. Do not overwrite an active capture. Coordinate deployment after reviewing the capture fixes below to avoid repeated installs.
+
+## Claude follow-up prepared at Karl's request
+
+Karl asked if CXL can identify the best1st/2nd/3rd/4th repetition. Existing Select for Approval and Save for Later retain the selection/review notes locally without canonical approval, but the general choice/notes are omitted from the raw Save Capture ZIP. This gap is not repaired by the library work.
+
+Karl then requested a Claude prompt to use his remaining subscription. Prepared clean worktree `/Users/karlwatson/Developer/ScratchLab-CXL-Claude-Followup-20260913/source`, branch`codex/cxl-claude-followup-20260913`, from673b3ee, with the old V1 resource symlink deliberately retained for that branch's reader/tests. Prompt: `../CLAUDE_TASK.md`. It assigns, sequentially:
+1. Fix actual generated AHHH app metering on direct Mac output; no delayed monitor or fake input/MIDI meter.
+2. Reuse the existing optional preferred repetition state, clarify its UI and preserve the recommendation/notes in validated portable review/export metadata without approval or changes to raw media.
+3. Run isolated affected tests and platform builds, review the combined diff, make local verified commits and write `../HANDOFF_TO_CODEX.md`.
+
+The prompt was supplied to Karl; Codex did not launch Claude or claim it is running. Its build coordinator file now exists: `/Users/karlwatson/Developer/ScratchLab-Reference-Library-20260913/evidence/CODEX_XCODEBUILD_COMPLETE`. Claude can use the Xcode slot. Do not duplicate its capture work in this root; inspect its handoff and commits when Karl returns them, merge only reviewed changes, and preserve both branches' workflow notes. Root commits/pushes are authorized by the session. Claude was asked to leave local commits for integration, not push.
+
+Latest earlier timing clarification remains unchanged: a2-bar reference phrase at95BPM allows4scratch beats plus4rest beats per slot, repeated4times, including rest after the fourth slot and the existing tail. This branch adds no new capture timing or variation schema.
+
+--- Previous CXL delivery context ---
 
 ## Current — CXL second camera installed, 13 September 2026
 

@@ -136,18 +136,18 @@ final class ScratchExampleReviewTests: XCTestCase {
     }
 
     @MainActor
-    func testEveryReferenceCameraCarriesItsMatchingScratchOnlyPCM() async throws {
-        try await assertReferenceCameraPlayback(audioVariant: "noBeat")
+    func testEveryReferenceCameraCarriesSourceAudioTrackTwoPCM() async throws {
+        try await assertReferenceCameraPlayback(sourceOrdinal: 1)
     }
 
     @MainActor
-    func testEveryReferenceCameraCarriesItsMatchingWithBeatPCM() async throws {
-        try await assertReferenceCameraPlayback(audioVariant: "withBeat")
+    func testEveryReferenceCameraCarriesSourceAudioTrackOnePCM() async throws {
+        try await assertReferenceCameraPlayback(sourceOrdinal: 0)
     }
 
     @MainActor
-    func testEveryReferenceCameraCarriesItsMatchingBeatOnlyPCM() async throws {
-        try await assertReferenceCameraPlayback(audioVariant: "beatOnly")
+    func testEveryReferenceCameraCarriesSourceAudioTrackThreePCM() async throws {
+        try await assertReferenceCameraPlayback(sourceOrdinal: 2)
     }
 
     @MainActor
@@ -187,17 +187,21 @@ final class ScratchExampleReviewTests: XCTestCase {
         catch is CancellationError {} catch { XCTFail("Unexpected error instead of cancellation: \(error)") }
     }
 
-    /// Three callers cover all 91 bundled camera selections in each of the
-    /// three variants (273 compositions). The WAV is decoded independently
+    /// Three callers cover all 95 bundled camera selections in each of the
+    /// three tracks (285 compositions). Unconfirmed roles retain source ordinals.
+    /// The WAV is decoded independently
     /// once per example; every resulting composition is actually decoded and
     /// compared with that selected source. No speaker/device playback occurs.
     @MainActor
-    private func assertReferenceCameraPlayback(audioVariant: String) async throws {
+    private func assertReferenceCameraPlayback(sourceOrdinal: Int) async throws {
         let library = try await ScratchExampleLibrary.loadBundled()
-        XCTAssertEqual(library.manifest.examples.count, 23, "The required bundled corpus must be present; do not silently skip it")
+        XCTAssertEqual(library.manifest.examples.count, 24, "23 techniques, including both Tears source passes, must be present")
         var verifiedCameras = 0
         for example in library.manifest.examples {
-            let audioID = try XCTUnwrap(example.audioAssetIDs[audioVariant])
+            let selectedKey = example.sequence?.audioRolesConfirmed == false
+                ? "track\(sourceOrdinal)"
+                : ["withBeat", "noBeat", "beatOnly"][sourceOrdinal]
+            let audioID = try XCTUnwrap(example.audioAssetIDs[selectedKey])
             let audioURL = try await library.verifiedURL(assetID: audioID)
             let sourceAudio = AVURLAsset(url: audioURL)
             let audioTracks = try await sourceAudio.loadTracks(withMediaType: .audio)
@@ -205,11 +209,11 @@ final class ScratchExampleReviewTests: XCTestCase {
             let originalAudioRange = try await originalAudioTrack.load(.timeRange)
             let audioAssetDuration = try await sourceAudio.load(.duration)
             let expectedPCM = try decodeFirstTwoSecondsOfPCM(asset: sourceAudio, audioTracks: audioTracks)
-            XCTAssertGreaterThan(expectedPCM.count, 1_000, "\(example.id)/\(audioVariant): decoded WAV samples are required")
+            XCTAssertGreaterThan(expectedPCM.count, 1_000, "\(example.id)/\(selectedKey): decoded WAV samples are required")
             XCTAssertGreaterThan(expectedPCM.map { abs($0) }.max() ?? 0, 0.0001,
-                                 "\(example.id)/\(audioVariant): the selected WAV must contain audible signal")
+                                 "\(example.id)/\(selectedKey): the selected WAV must contain audible signal")
             for angle in example.angles {
-                let context = "\(example.id)/\(angle.id)/\(audioVariant)"
+                let context = "\(example.id)/\(angle.id)/\(selectedKey)"
                 let videoURL = try await library.verifiedURL(assetID: angle.videoAssetID)
                 let sourceVideo = AVURLAsset(url: videoURL)
                 let sourceVideoTracks = try await sourceVideo.loadTracks(withMediaType: .video)
@@ -245,7 +249,7 @@ final class ScratchExampleReviewTests: XCTestCase {
                 verifiedCameras += 1
             }
         }
-        XCTAssertEqual(verifiedCameras, 91, "Each available camera must be checked with \(audioVariant), without skipping missing resources")
+        XCTAssertEqual(verifiedCameras, 95, "Each available camera must be checked with source track \(sourceOrdinal + 1), without skipping missing resources")
     }
 
     private func assertCompositionSegment(
@@ -258,7 +262,8 @@ final class ScratchExampleReviewTests: XCTestCase {
         XCTAssertEqual(segment.sourceURL?.resolvingSymlinksInPath().standardizedFileURL,
                        sourceURL.resolvingSymlinksInPath().standardizedFileURL, context)
         XCTAssertEqual(CMTimeCompare(segment.timeMapping.source.start, sourceRange.start), 0, "\(context): no inferred source offset")
-        XCTAssertEqual(CMTimeCompare(segment.timeMapping.target.start, .zero), 0, "\(context): common playback starts at zero")
+        XCTAssertEqual(CMTimeCompare(segment.timeMapping.target.start, sourceRange.start), 0,
+                       "\(context): preserve the source stream offset within the common playback timeline")
         // MP4's movie duration can include a fractional-frame tail beyond the
         // last video sample. Preserve all available media and the full movie
         // timeline without requiring that empty tail to be a nonempty segment.

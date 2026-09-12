@@ -25,6 +25,43 @@ struct ScratchExampleLibrary: Sendable {
         let canonicalApproval: Bool
         let angles: [Angle]
         let audioAssetIDs: [String: String]
+        let sequence: SourceSequence?
+
+        var audioOptions: [AudioOption] {
+            if sequence?.audioRolesConfirmed == false {
+                return (0..<3).map { AudioOption(id: "track\($0)", title: "Track \($0 + 1) (role unconfirmed)") }
+            }
+            return [AudioOption(id: "noBeat", title: "Scratch only"),
+                    AudioOption(id: "withBeat", title: "With beat"), AudioOption(id: "beatOnly", title: "Beat only")]
+        }
+
+        var preferredAudioID: String { audioOptions[0].id }
+
+        var displayName: String {
+            let title = sequence?.lessonTitle ?? ScratchClassLabel(rawValue: classLabel)?.displayName ?? classLabel
+            let name = "\(title) · \(bpm) BPM"
+            guard let sequence, sequence.pairedSyncStatus == "unresolvedSourceDifference" else { return name }
+            return name + " · Source pass \(sequence.sourcePass)"
+        }
+    }
+
+    struct AudioOption: Identifiable, Sendable {
+        let id: String
+        let title: String
+    }
+
+    /// A source sequence groups its camera views and audio tracks. Repeated
+    /// source passes retain one performance identity and never imply new takes.
+    struct SourceSequence: Codable, Sendable {
+        let performanceID: String
+        let lessonTitle: String?
+        let sourcePass: Int
+        let startSeconds: Double
+        let endSeconds: Double
+        let repeatOffsetFrames: Int
+        let audioRolesConfirmed: Bool
+        let pairedSyncStatus: String
+        let warnings: [String]
     }
 
     struct Angle: Codable, Sendable, Identifiable {
@@ -89,6 +126,13 @@ struct ScratchExampleLibrary: Sendable {
             }
             let manifest = try JSONDecoder().decode(Manifest.self, from: bytes)
             try validate(manifest, root: root)
+            if manifest.schema == "scratchlab_reference_examples_v2" {
+                let provenance = try containedURL("evidence/provenance.json", root: root)
+                try requireRegularFile(provenance)
+                guard digest(try Data(contentsOf: provenance)) == manifest.sourceManifestSHA256 else {
+                    throw LibraryError.invalid("the source-sequence provenance checksum does not match.")
+                }
+            }
             return ScratchExampleLibrary(
                 manifest: manifest,
                 rootURL: root,
@@ -133,7 +177,8 @@ struct ScratchExampleLibrary: Sendable {
     }
 
     private static func validate(_ manifest: Manifest, root: URL) throws {
-        guard manifest.schema == "scratchlab_reference_examples_v1",
+        let sourceSequences = manifest.schema == "scratchlab_reference_examples_v2"
+        guard ["scratchlab_reference_examples_v1", "scratchlab_reference_examples_v2"].contains(manifest.schema),
               !manifest.id.isEmpty, !manifest.title.isEmpty, !manifest.selection.isEmpty,
               validSHA256(manifest.sourceManifestSHA256),
               !manifest.limitations.isEmpty, manifest.limitations.allSatisfy({ !$0.isEmpty }),
@@ -164,11 +209,33 @@ struct ScratchExampleLibrary: Sendable {
                   example.bpm > 0, example.take.hasPrefix("take"),
                   example.take.dropFirst(4).allSatisfy(\.isNumber),
                   (Int(example.take.dropFirst(4)) ?? 0) > 0,
-                  example.id == "pro-dj-v1:\(example.classLabel):\(example.bpm):\(example.take)",
+                  example.id == "\(sourceSequences ? "cxl-mkv-v2" : "pro-dj-v1"):\(example.classLabel):\(example.bpm):\(example.take)",
                   example.labelStatus == "sourceLabelUnreviewed", !example.canonicalApproval,
-                  !example.angles.isEmpty,
-                  Set(example.audioAssetIDs.keys) == Set(["noBeat", "withBeat", "beatOnly"]) else {
+                  !example.angles.isEmpty else {
                 throw LibraryError.invalid("unsupported example identity or approval state: \(example.id).")
+            }
+            if sourceSequences {
+                guard let sequence = example.sequence,
+                      sequence.performanceID == "cxl-mkv:\(example.classLabel):\(example.bpm)",
+                      sequence.lessonTitle.map({ !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && $0.count <= 120 }) ?? true,
+                      (1...2).contains(sequence.sourcePass),
+                      example.take == String(format: "take%02d", sequence.sourcePass),
+                      sequence.startSeconds.isFinite, sequence.endSeconds.isFinite,
+                      sequence.startSeconds >= 0, sequence.endSeconds > sequence.startSeconds,
+                      sequence.repeatOffsetFrames > 0,
+                      ["notEstablished", "unresolvedSourceDifference"].contains(sequence.pairedSyncStatus),
+                      sequence.sourcePass == 1 || sequence.pairedSyncStatus == "unresolvedSourceDifference",
+                      sequence.warnings.allSatisfy({ !$0.isEmpty }),
+                      (sequence.audioRolesConfirmed && sequence.pairedSyncStatus == "notEstablished") || !sequence.warnings.isEmpty,
+                      example.angles.allSatisfy({ $0.handCacheAssetID == nil }),
+                      Set(example.audioAssetIDs.values).count == 3 else {
+                    throw LibraryError.invalid("invalid source sequence or unsupported timing/approval claim: \(example.id).")
+                }
+            } else if example.sequence != nil {
+                throw LibraryError.invalid("source sequence metadata requires a version 2 catalogue.")
+            }
+            guard Set(example.audioAssetIDs.keys) == Set(example.audioOptions.map(\.id)) else {
+                throw LibraryError.invalid("audio selections disagree with their source roles: \(example.id).")
             }
             try requireUnique(example.angles.map(\.id), field: "camera angles")
             for angle in example.angles {
@@ -181,6 +248,23 @@ struct ScratchExampleLibrary: Sendable {
                 }
             }
             for id in example.audioAssetIDs.values { try requireAsset(id, role: "audio") }
+        }
+        if sourceSequences {
+            let groups = Dictionary(grouping: manifest.examples, by: { $0.sequence!.performanceID })
+            for group in groups.values {
+                let sequences = group.compactMap(\.sequence).sorted { $0.sourcePass < $1.sourcePass }
+                if sequences[0].pairedSyncStatus == "unresolvedSourceDifference" {
+                    guard sequences.count == 2, sequences.map(\.sourcePass) == [1, 2],
+                          sequences[1].pairedSyncStatus == "unresolvedSourceDifference",
+                          sequences[0].repeatOffsetFrames == sequences[1].repeatOffsetFrames,
+                          sequences[0].audioRolesConfirmed == sequences[1].audioRolesConfirmed,
+                          abs(sequences[0].endSeconds - sequences[1].startSeconds) < 0.000001 else {
+                        throw LibraryError.invalid("an unresolved source difference requires both adjoining source passes.")
+                    }
+                } else if sequences.count != 1 || sequences[0].sourcePass != 1 {
+                    throw LibraryError.invalid("duplicate source passes cannot be represented as separate performances.")
+                }
+            }
         }
         for model in manifest.models {
             guard ["audio", "motion"].contains(model.modality), model.advisoryOnly,
