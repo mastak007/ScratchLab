@@ -409,6 +409,38 @@ struct ReferenceAuthoringSession: Equatable, Sendable {
         return takes[index]
     }
 
+    /// Reopen recorded evidence without invoking capture hooks or inventing a
+    /// calibration from the currently connected rig. Validation is always fresh.
+    init(reviewing draft: ReferenceSavedDraft, operatorName: String) throws {
+        self.init(authoringSessionID: draft.evidence.metadata.authoringSessionID,
+                  operatorName: operatorName)
+        let metadata = draft.evidence.metadata
+        guard metadata.lifecycleState == .draft || metadata.lifecycleState == .reviewed
+                || metadata.lifecycleState == .approvedCanonical else {
+            throw ReferenceAuthoringError.recordingFailed("This saved take cannot be reopened for review.")
+        }
+        selectedTechnique = metadata.technique
+        selectedPattern = metadata.pattern
+        selectedBPM = metadata.bpm
+        selectedStartingDirection = metadata.startingPlatterDirection
+        selectedFaderVariant = metadata.faderVariant
+        selectedHandedness = metadata.handedness
+        notes = metadata.notes
+        selectedCapturePurpose = metadata.captureIntent?.purpose ?? .canonicalReference
+        captureIntent = metadata.captureIntent
+        selectedBeatSpec = metadata.captureIntent?.beatSpec
+        confirmedCalibration = metadata.crossfaderCalibration
+        var take = ReferenceAuthoringTake(
+            evidence: draft.evidence, autoDetectedTechnique: draft.autoDetectedTechnique,
+            latestValidation: ReferenceValidator.validate(draft.evidence),
+            tearReview: draft.tearReview, tearEvidenceSourceBinding: draft.sourceBinding,
+            rawSidecarURL: draft.sidecarURL)
+        take.restoredTearProjection = draft.projection
+        take.restoredTearPerformedLimitations = draft.performedLimitations
+        takes = [take]
+        phase = metadata.lifecycleState == .approvedCanonical ? .complete : .reviewing(takeIndex: 0)
+    }
+
     // MARK: Step 1–3: configuration
 
     mutating func selectTechnique(_ technique: ReferenceTechnique) {

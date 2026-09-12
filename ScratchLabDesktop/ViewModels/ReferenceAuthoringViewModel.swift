@@ -10,6 +10,12 @@ import Foundation
 struct ReferenceAuthoringViewState: Equatable, Sendable {
     let session: ReferenceAuthoringSession
     let latestCalibrationRawValue: Int?
+    var savedDrafts: [ReferenceSavedDraftSummary] = []
+    var draftSaveError: String? = nil
+    var draftLibraryError: String? = nil
+    var reviewingSavedDraft: Bool = false
+    var finalizedMediaURL: URL? = nil
+    var savedReviewNotes: String = ""
 }
 
 struct ReferenceAuthoringWorkerUpdate: Equatable, Sendable {
@@ -24,7 +30,7 @@ struct ReferenceAuthoringRawExportSnapshot: Sendable {
 }
 
 struct ReferenceAuthoringNavigationRequest: Equatable {
-    enum Destination: String { case setup, capture }
+    enum Destination: String { case setup, capture, review }
     let id = UUID()
     let destination: Destination
 }
@@ -121,21 +127,133 @@ final class ReferenceAuthoringWorker: @unchecked Sendable {
     private let calibrationStore: CrossfaderCalibrationStore
     private var session: ReferenceAuthoringSession
     private var latestCalibrationRawValue: Int?
+    private let draftStore: ReferenceDraftStore?
+    private var draftSaveError: String?
+    private var draftLibraryError: String?
+    private var lastPersistedTake: ReferenceAuthoringTake?
+    private var lastPersistedNotes: String?
+    private var reviewingSavedDraft = false
+    private var savedReviewNotes = ""
 
     init(
         session: ReferenceAuthoringSession,
         driver: ReferenceAuthoringWorkerDriver,
         calibrationStore: CrossfaderCalibrationStore,
-        queueLabel: String = "com.machelpnz.scratchlab.reference-authoring"
+        queueLabel: String = "com.machelpnz.scratchlab.reference-authoring",
+        draftStore: ReferenceDraftStore? = nil
     ) {
         self.session = session
         self.driver = driver
         self.calibrationStore = calibrationStore
         self.queue = DispatchQueue(label: queueLabel, qos: .userInitiated)
+        self.draftStore = draftStore
     }
 
     func snapshot() async -> ReferenceAuthoringViewState {
         await enqueue { worker in worker.makeState() }
+    }
+
+    func refreshSavedDrafts() async -> ReferenceAuthoringWorkerUpdate {
+        await enqueue { worker in
+            do { _ = try worker.draftStore?.refresh(); worker.draftLibraryError = nil }
+            catch { worker.draftLibraryError = Self.message(for: error) }
+            return worker.makeUpdate()
+        }
+    }
+
+    func saveDraft(reviewNotes: String, expectedTakeID: String? = nil) async -> ReferenceAuthoringWorkerUpdate {
+        await enqueue { worker in
+            if let expectedTakeID,
+               (worker.session.takeInReview ?? (worker.session.phase == .complete ? worker.session.takes.last : nil))?.id != expectedTakeID {
+                return worker.makeUpdate()
+            }
+            worker.savedReviewNotes = reviewNotes
+            worker.lastPersistedTake = nil
+            return worker.makeUpdate()
+        }
+    }
+
+    func reopenDraft(id: String) async -> ReferenceAuthoringWorkerUpdate {
+        await enqueue { worker in
+            do {
+                guard worker.session.phase != .recording, let store = worker.draftStore else {
+                    throw ReferenceDraftStoreError.invalid("finish recording before reopening a draft")
+                }
+                try worker.persistCurrentDraft()
+                let draft = try store.load(id: id)
+                var restored = try ReferenceAuthoringSession(reviewing: draft, operatorName: worker.session.operatorName)
+                try worker.verifyDraftFiles(in: &restored, draft: draft)
+                worker.session = restored
+                worker.reviewingSavedDraft = true
+                worker.savedReviewNotes = draft.reviewNotes
+                worker.draftSaveError = nil
+                return worker.makeUpdate()
+            } catch { return worker.makeUpdate(errorMessage: Self.message(for: error)) }
+        }
+    }
+
+    /// Check immutable media plus the existing narrowly allowed late Watch
+    /// additions. Current hardware/preflight is never substituted for a take.
+    private func verifyDraftFiles(in target: inout ReferenceAuthoringSession, draft: ReferenceSavedDraft) throws {
+        let binding = draft.sourceBinding
+        let data = try Data(contentsOf: draft.sidecarURL)
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .iso8601
+        let sidecar = try decoder.decode(CaptureCore.LocalRecordingSidecar.self, from: data)
+        let refreshed = try ReferenceTearEvidenceCodec.exportBinding(from: binding, currentSidecarData: data,
+            linkedWatchData: ReferenceAuthoringCaptureBridge.verifiedWatchData(sidecar: sidecar,
+                takeDirectory: draft.mediaURL.deletingLastPathComponent()))
+        let identity = TakeIdentity(sessionID: binding.capturedSessionID, takeID: binding.capturedTakeID,
+                                    takeNumber: binding.capturedTakeNumber)
+        if let watch = ReferenceAuthoringCaptureBridge.refreshWatchEvidence(mediaURL: draft.mediaURL,
+                expectedIdentity: identity) {
+            if draft.evidence.watchEvidence.isLinked && !watch.evidence.isLinked {
+                throw ReferenceDraftStoreError.invalid("the linked Watch recording is missing or no longer matches")
+            }
+            if case .linked(let oldIdentity, let oldName, let oldHash) = draft.evidence.metadata.sourceState {
+                guard case .linked(let newIdentity, let newName, let newHash) = watch.sourceState,
+                      oldIdentity == newIdentity, oldName == newName,
+                      oldHash == nil || oldHash == newHash else {
+                    throw ReferenceDraftStoreError.invalid("the linked Watch recording changed after saving")
+                }
+            }
+            target.updateWatchEvidenceForTakeInReview(watch.evidence,
+                refreshedSourceBinding: refreshed, sourceState: watch.sourceState)
+        }
+        target.revalidateTakeInReview()
+    }
+
+    private func persistCurrentDraft() throws {
+        guard let store = draftStore,
+              let take = session.takeInReview ?? (session.phase == .complete ? session.takes.last : nil),
+              let mediaURL = currentReviewMediaURL else { return }
+        if take == lastPersistedTake, savedReviewNotes == lastPersistedNotes, draftSaveError == nil { return }
+        _ = try store.save(take: take, mediaURL: mediaURL, reviewNotes: savedReviewNotes)
+        lastPersistedTake = take
+        lastPersistedNotes = savedReviewNotes
+        draftSaveError = nil
+    }
+
+    func verifiedTakeForExport() async throws -> ReferenceAuthoringTake {
+        let result: Result<ReferenceAuthoringTake, Error> = await enqueue { worker in Result {
+            try worker.persistCurrentDraft()
+            guard let take = worker.session.takes.last else { throw ReferenceAuthoringError.noActiveRecording }
+            if let store = worker.draftStore {
+                let draft = try store.load(id: take.id)
+                var checked = worker.session
+                try worker.verifyDraftFiles(in: &checked, draft: draft)
+            }
+            return take
+        } }
+        return try result.get()
+    }
+
+    private var currentReviewMediaURL: URL? {
+        if let take = session.takeInReview ?? (session.phase == .complete ? session.takes.last : nil),
+           let sidecarURL = take.rawSidecarURL, let name = take.evidence.actualMediaFileName {
+            return sidecarURL.deletingLastPathComponent().appendingPathComponent(name)
+        }
+        return driver.lastFinalizedRecordingURL
     }
 
     func currentRecordingHasStopped() async -> Bool {
@@ -263,7 +381,7 @@ final class ReferenceAuthoringWorker: @unchecked Sendable {
         let result: Result<ReferenceAuthoringRawExportSnapshot?, Error> = await enqueue { worker in
             Result {
                 guard worker.session.rawCaptureExportBlockReason() == nil,
-                      let url = worker.driver.lastFinalizedRecordingURL else { return nil }
+                      let url = worker.currentReviewMediaURL else { return nil }
                 let boundTakes = worker.session.takes.filter { $0.tearEvidenceSourceBinding != nil }
                 var companions: [String: Data] = [:]
                 var excluded: [String] = []
@@ -299,7 +417,7 @@ final class ReferenceAuthoringWorker: @unchecked Sendable {
                 }
                 return ReferenceAuthoringRawExportSnapshot(
                     source: .localRecordingSession(lastRecordingURL: url,
-                        sessionName: "Reference Authoring Capture", config: config,
+                        sessionName: "Reference Authoring Capture", config: worker.reviewingSavedDraft ? nil : config,
                         referenceTearEvidenceByTakeID: companions),
                     excludedReferenceTakeIDs: excluded
                 )
@@ -335,6 +453,9 @@ final class ReferenceAuthoringWorker: @unchecked Sendable {
 
     func startRecording() async -> ReferenceAuthoringWorkerUpdate {
         await enqueue { worker in
+            guard !worker.reviewingSavedDraft else {
+                return worker.makeUpdate(errorMessage: "Choose New scratch before recording after a saved draft.")
+            }
             guard let technique = worker.session.selectedTechnique,
                   let bpm = worker.session.selectedBPM else {
                 return worker.makeUpdate(errorMessage: "Select and apply a complete authoring setup before recording.")
@@ -415,7 +536,16 @@ final class ReferenceAuthoringWorker: @unchecked Sendable {
     func rejectTake(notes: String) async -> ReferenceAuthoringWorkerUpdate {
         await enqueue { worker in
             do {
-                try worker.session.rejectTakeInReview(notes: notes)
+                var rejected = worker.session
+                try rejected.rejectTakeInReview(notes: notes)
+                if let store = worker.draftStore, let take = rejected.takes.last,
+                   let sidecar = take.rawSidecarURL, let media = take.evidence.actualMediaFileName {
+                    _ = try store.save(take: take, mediaURL: sidecar.deletingLastPathComponent()
+                        .appendingPathComponent(media), reviewNotes: notes)
+                }
+                worker.session = rejected
+                worker.savedReviewNotes = ""
+                worker.draftSaveError = nil
                 return worker.makeUpdate()
             } catch {
                 return worker.makeUpdate(errorMessage: Self.message(for: error))
@@ -426,10 +556,15 @@ final class ReferenceAuthoringWorker: @unchecked Sendable {
     func retake(afterTakeID: String? = nil) async -> ReferenceAuthoringWorkerUpdate {
         await enqueue { worker in
             do {
+                guard !worker.reviewingSavedDraft else {
+                    throw ReferenceDraftStoreError.invalid("choose New scratch to return to recording")
+                }
+                try worker.persistCurrentDraft()
                 guard let id = afterTakeID ?? worker.session.latestRecordedTake?.id else {
                     throw ReferenceAuthoringError.noActiveRecording
                 }
                 try worker.session.retake(afterTakeID: id)
+                worker.savedReviewNotes = ""
                 return worker.makeUpdate()
             } catch { return worker.makeUpdate(errorMessage: Self.message(for: error)) }
         }
@@ -438,7 +573,18 @@ final class ReferenceAuthoringWorker: @unchecked Sendable {
     func prepareNewScratchSetup(afterTakeID: String) async -> ReferenceAuthoringWorkerUpdate {
         await enqueue { worker in
             do {
-                try worker.session.prepareNewScratchSetup(afterTakeID: afterTakeID)
+                try worker.persistCurrentDraft()
+                if worker.reviewingSavedDraft {
+                    guard worker.session.latestRecordedTake?.id == afterTakeID,
+                          worker.session.phase != .recording else { throw ReferenceAuthoringError.noActiveRecording }
+                    worker.session = ReferenceAuthoringSession(
+                        authoringSessionID: "reference-\(UUID().uuidString.lowercased())",
+                        operatorName: worker.session.operatorName)
+                    worker.reviewingSavedDraft = false
+                } else {
+                    try worker.session.prepareNewScratchSetup(afterTakeID: afterTakeID)
+                }
+                worker.savedReviewNotes = ""
                 return worker.makeUpdate()
             } catch { return worker.makeUpdate(errorMessage: Self.message(for: error)) }
         }
@@ -447,6 +593,18 @@ final class ReferenceAuthoringWorker: @unchecked Sendable {
     func approveCanonical(notes: String) async -> ReferenceAuthoringWorkerUpdate {
         await enqueue { worker in
             do {
+                worker.savedReviewNotes = notes
+                try worker.persistCurrentDraft()
+                if let store = worker.draftStore, let take = worker.session.takeInReview {
+                    let draft = try store.load(id: take.id)
+                    var checked = worker.session
+                    try worker.verifyDraftFiles(in: &checked, draft: draft)
+                    if let beat = take.evidence.metadata.captureIntent?.beatSpec {
+                        _ = try ReferenceBeatAssetStore.resolve(binding: beat,
+                            rootURL: draft.mediaURL.deletingLastPathComponent().appendingPathComponent("beat_assets"))
+                    }
+                    worker.session = checked
+                }
                 // `approveTakeInReview` revalidates and re-checks every gate
                 // itself; the caller does not get to pre-authorise it.
                 try worker.session.approveTakeInReview(notes: notes)
@@ -460,7 +618,12 @@ final class ReferenceAuthoringWorker: @unchecked Sendable {
     func prepareNextTake(afterApprovedTakeID expectedTakeID: String) async -> ReferenceAuthoringWorkerUpdate {
         await enqueue { worker in
             do {
+                guard !worker.reviewingSavedDraft else {
+                    throw ReferenceDraftStoreError.invalid("choose New scratch to return to recording")
+                }
+                try worker.persistCurrentDraft()
                 try worker.session.prepareNextTake(afterApprovedTakeID: expectedTakeID)
+                worker.savedReviewNotes = ""
                 return worker.makeUpdate()
             } catch {
                 return worker.makeUpdate(errorMessage: Self.message(for: error))
@@ -604,6 +767,15 @@ final class ReferenceAuthoringWorker: @unchecked Sendable {
     /// moved. Returns the resulting state so the caller can stop when terminal.
     func refreshWatchEvidenceOnce() async -> (update: ReferenceAuthoringWorkerUpdate, isTerminal: Bool) {
         await enqueue { worker in
+            if worker.reviewingSavedDraft, let store = worker.draftStore, let take = worker.session.takeInReview {
+                do {
+                    let draft = try store.load(id: take.id)
+                    var checked = worker.session
+                    try worker.verifyDraftFiles(in: &checked, draft: draft)
+                    worker.session = checked
+                    return (worker.makeUpdate(), checked.takeInReview?.evidence.watchEvidence.isTerminal ?? true)
+                } catch { return (worker.makeUpdate(errorMessage: Self.message(for: error)), true) }
+            }
             guard let refresh = worker.driver.hooks.refreshWatchEvidence() else {
                 return (worker.makeUpdate(), true)
             }
@@ -627,14 +799,23 @@ final class ReferenceAuthoringWorker: @unchecked Sendable {
     }
 
     private func makeState() -> ReferenceAuthoringViewState {
-        ReferenceAuthoringViewState(
+        var state = ReferenceAuthoringViewState(
             session: session,
             latestCalibrationRawValue: latestCalibrationRawValue
         )
+        state.savedDrafts = draftStore?.summaries ?? []
+        state.draftSaveError = draftSaveError
+        state.draftLibraryError = draftLibraryError
+        state.reviewingSavedDraft = reviewingSavedDraft
+        state.finalizedMediaURL = currentReviewMediaURL
+        state.savedReviewNotes = savedReviewNotes
+        return state
     }
 
     private func makeUpdate(errorMessage: String? = nil) -> ReferenceAuthoringWorkerUpdate {
-        ReferenceAuthoringWorkerUpdate(state: makeState(), errorMessage: errorMessage)
+        do { try persistCurrentDraft() }
+        catch { draftSaveError = "Draft was not saved: \(Self.message(for: error))" }
+        return ReferenceAuthoringWorkerUpdate(state: makeState(), errorMessage: errorMessage ?? draftSaveError)
     }
 
     private static func message(for error: Error) -> String {
@@ -688,7 +869,10 @@ final class ReferenceAuthoringViewModel: ObservableObject {
     @Published var crossfaderOpenEndRawValue = CrossfaderOpenEnd.right.rawValue
     @Published var activeDeckRawValue = CrossfaderActiveDeck.rightDeck.rawValue
     @Published var notes = ""
-    @Published var reviewNotes = ""
+    @Published var reviewNotes = "" {
+        didSet { if reviewNotes != oldValue { scheduleReviewNotesSave() } }
+    }
+    private var reviewNotesSaveTask: Task<Void, Never>?
 
     /// The last values `refreshAutofilledPatternIdentity()` wrote.
     ///
@@ -720,6 +904,7 @@ final class ReferenceAuthoringViewModel: ObservableObject {
     /// domain method enforces — plus this screen's transient-work state. The
     /// button being disabled is a courtesy; the domain method is the boundary.
     var approvalBlockReason: String? {
+        if draftSaveError != nil { return "Save the current review successfully before approving." }
         if isWorking { return "An operation is still running." }
         if isWaitingForWatchTransfer { return "Waiting for the Apple Watch motion transfer to complete." }
         switch mediaReview.state {
@@ -747,11 +932,75 @@ final class ReferenceAuthoringViewModel: ObservableObject {
 
     var canApprove: Bool { approvalBlockReason == nil }
 
+    var savedDrafts: [ReferenceSavedDraftSummary] { state.savedDrafts }
+    var draftSaveError: String? { state.draftSaveError }
+    var draftLibraryError: String? { state.draftLibraryError }
+    var isReviewingSavedDraft: Bool { state.reviewingSavedDraft }
+    var canOpenSavedDraft: Bool {
+        !isWorking && !isExportingApprovedPackage && !isPreparingRawCaptureExport
+            && !isWaitingForWatchTransfer && session.phase != .recording
+    }
+
+    func refreshSavedDrafts() async { apply(await worker.refreshSavedDrafts()) }
+
+    private func scheduleReviewNotesSave() {
+        guard !isWorking, let takeID = reviewedTake?.id else { return }
+        reviewNotesSaveTask?.cancel()
+        let notes = reviewNotes
+        reviewNotesSaveTask = Task { [weak self] in
+            do { try await Task.sleep(for: .milliseconds(300)) } catch { return }
+            guard let self else { return }
+            let update = await worker.saveDraft(reviewNotes: notes, expectedTakeID: takeID)
+            guard !Task.isCancelled else { return }
+            apply(update)
+        }
+    }
+
+    func saveDraftForLater() {
+        guard canOpenSavedDraft, reviewedTake != nil else { return }
+        isWorking = true
+        Task { [weak self] in
+            guard let self else { return }
+            let update = await worker.saveDraft(reviewNotes: reviewNotes)
+            apply(update)
+            visibleMessage = update.errorMessage ?? "Draft saved on this Mac. Reopen it from Saved drafts to continue reviewing."
+            isWorking = false
+        }
+    }
+
+    func reopenDraft(_ id: String) {
+        guard canOpenSavedDraft else { return }
+        isWorking = true
+        stopBeatPreview()
+        mediaReview.stop()
+        cancelWatchTransferWait()
+        Task { [weak self] in
+            guard let self else { return }
+            _ = await worker.saveDraft(reviewNotes: reviewNotes)
+            let update = await worker.reopenDraft(id: id)
+            apply(update)
+            if update.errorMessage == nil, let take = reviewedTake {
+                reviewNotes = state.savedReviewNotes
+                tearReviewNotes = take.tearReview.notes
+                approvedPackageURL = nil
+                mediaReview.load(take: take, mediaURL: lastFinalizedRecordingURL, beatRootURL: nil)
+                visibleMessage = "Saved draft reopened. Review it and select a repetition when ready."
+                navigationRequest = .init(destination: .review)
+            }
+            isWorking = false
+            startWatchTransferWaitIfPending()
+        }
+    }
+
     func continuationBlockReason(newScratch: Bool, isExportPreparing: Bool = false) -> String? {
         if isWorking || isExportingApprovedPackage || isExportPreparing {
             return "Wait for the current operation to finish."
         }
         if isWaitingForWatchTransfer { return "Wait for the Watch motion transfer to finish." }
+        if draftSaveError != nil { return "Save the current draft successfully before moving on." }
+        if isReviewingSavedDraft {
+            return newScratch ? nil : "Choose New scratch to return to recording."
+        }
         return newScratch ? session.newScratchSetupBlockReason() : session.retakeBlockReason()
     }
 
@@ -774,6 +1023,8 @@ final class ReferenceAuthoringViewModel: ObservableObject {
     }
 
     func nextTakeBlockReason(isExportPreparing: Bool) -> String? {
+        if isReviewingSavedDraft { return "Choose New scratch to return to recording." }
+        if draftSaveError != nil { return "Save the current draft successfully before moving on." }
         if isWorking { return "Wait for the current operation to finish." }
         if isWaitingForWatchTransfer {
             return "Wait for the Apple Watch motion transfer to complete."
@@ -804,7 +1055,8 @@ final class ReferenceAuthoringViewModel: ObservableObject {
         self.worker = ReferenceAuthoringWorker(
             session: session,
             driver: ReferenceAuthoringWorkerDriver(bridge: bridge, engine: engine),
-            calibrationStore: engine.crossfaderCalibrationStore
+            calibrationStore: engine.crossfaderCalibrationStore,
+            draftStore: ReferenceDraftStore(directory: ReferenceDraftStore.defaultDirectory)
         )
         self.state = ReferenceAuthoringViewState(
             session: session,
@@ -1049,7 +1301,7 @@ final class ReferenceAuthoringViewModel: ObservableObject {
     @Published private(set) var isPreparingRawCaptureExport = false
 
     /// The finalized media URL of the raw capture this session produced.
-    var lastFinalizedRecordingURL: URL? { worker.lastFinalizedRecordingURL }
+    var lastFinalizedRecordingURL: URL? { state.finalizedMediaURL }
 
     /// The export source for the raw diagnostic capture, or `nil` when there
     /// is nothing stable to export. Reuses the existing session-archive
@@ -1499,13 +1751,21 @@ final class ReferenceAuthoringViewModel: ObservableObject {
 
     func rejectTake() {
         guard canRejectReviewedTake else { return }
+        isWorking = true
         mediaReview.stop()
         visibleMessage = nil
         Task { [weak self] in
             guard let self else { return }
             let update = await worker.rejectTake(notes: reviewNotes)
             apply(update)
-            visibleMessage = update.errorMessage ?? "Take rejected. Ready to record a new take."
+            if update.errorMessage == nil {
+                reviewNotes = ""
+                tearReviewNotes = ""
+            }
+            visibleMessage = update.errorMessage ?? (isReviewingSavedDraft
+                ? "Take rejected. Choose New scratch to return to recording."
+                : "Take rejected. Ready to record a new take.")
+            isWorking = false
         }
     }
 
@@ -1521,6 +1781,7 @@ final class ReferenceAuthoringViewModel: ObservableObject {
         isWorking = true
         Task { [weak self] in
             guard let self else { return }
+            _ = await worker.saveDraft(reviewNotes: reviewNotes, expectedTakeID: takeID)
             let update = await worker.retake(afterTakeID: takeID)
             apply(update)
             visibleMessage = update.errorMessage ?? "Ready for a retake. The prior draft evidence remains retained."
@@ -1545,6 +1806,7 @@ final class ReferenceAuthoringViewModel: ObservableObject {
         isWorking = true
         Task { [weak self] in
             guard let self else { return }
+            _ = await worker.saveDraft(reviewNotes: reviewNotes, expectedTakeID: takeID)
             let update = await worker.prepareNewScratchSetup(afterTakeID: takeID)
             apply(update)
             if update.errorMessage == nil {
@@ -1592,9 +1854,11 @@ final class ReferenceAuthoringViewModel: ObservableObject {
         Task { [weak self] in
             guard let self else { return }
             do {
+                let verified = try await worker.verifiedTakeForExport()
+                guard verified.id == take.id else { throw ReferenceAuthoringError.noActiveRecording }
                 let packageURL = try await Task.detached(priority: .userInitiated) {
                     try ReferenceApprovedPackageCoordinator.export(
-                        take: take, finalizedMediaURL: mediaURL, parentDirectory: parentDirectory
+                        take: verified, finalizedMediaURL: mediaURL, parentDirectory: parentDirectory
                     )
                 }.value
                 approvedPackageURL = packageURL

@@ -232,7 +232,7 @@ struct ReferenceValidationReport: Equatable, Sendable {
 
 /// Measured facts about one artifact. The caller measures; the validator
 /// judges.
-struct ReferenceArtifactMeasurement: Equatable, Sendable {
+struct ReferenceArtifactMeasurement: Codable, Equatable, Sendable {
     let fileName: String
     let exists: Bool
     let byteCount: Int64
@@ -284,7 +284,7 @@ struct ReferenceArtifactMeasurement: Equatable, Sendable {
 ///
 /// `linked` is set ONLY from evidence whose session/take identity matches the
 /// take it is being attached to.
-enum ReferenceWatchEvidence: Equatable, Sendable {
+enum ReferenceWatchEvidence: Codable, Equatable, Sendable {
     /// Matching motion evidence has landed and is attached to this take.
     case linked(motionFileName: String?)
     /// Acknowledged for this exact identity; the motion transfer has not
@@ -328,7 +328,7 @@ enum ReferenceWatchEvidence: Equatable, Sendable {
     }
 }
 
-struct ReferenceTakeEvidence: Equatable, Sendable {
+struct ReferenceTakeEvidence: Codable, Equatable, Sendable {
     /// `var`, not `let`: `ReferenceAuthoringSession` advances
     /// `metadata.lifecycleState` and sets `metadata.reviewDecision` in place
     /// as the operator moves a take through review — every other field stays

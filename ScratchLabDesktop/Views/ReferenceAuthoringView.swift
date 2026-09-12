@@ -133,16 +133,20 @@ struct ReferenceAuthoringView: View {
                     .foregroundStyle(.secondary)
 
                 messagePanel
-                stageHeading("Setup")
-                    .id(ReferenceAuthoringNavigationRequest.Destination.setup.rawValue)
-                hardwareSetupSection
-                setupSection
-                calibrationSection
-                preflightSection
-                stageHeading("Capture")
-                    .id(ReferenceAuthoringNavigationRequest.Destination.capture.rawValue)
-                recordingSection
+                savedDraftsSection
+                if !viewModel.isReviewingSavedDraft {
+                    stageHeading("Setup")
+                        .id(ReferenceAuthoringNavigationRequest.Destination.setup.rawValue)
+                    hardwareSetupSection
+                    setupSection
+                    calibrationSection
+                    preflightSection
+                    stageHeading("Capture")
+                        .id(ReferenceAuthoringNavigationRequest.Destination.capture.rawValue)
+                    recordingSection
+                }
                 stageHeading("Review & Export")
+                    .id(ReferenceAuthoringNavigationRequest.Destination.review.rawValue)
                 reviewSection
             }
             .padding(20)
@@ -153,6 +157,7 @@ struct ReferenceAuthoringView: View {
             withAnimation { scroll.scrollTo(request.destination.rawValue, anchor: .top) }
         }
         .task {
+            await viewModel.refreshSavedDrafts()
             await captureEngine.startDeviceDiscoveryAfterViewMount(
                 allowSeratoDirectCapture: false,
                 requiresExplicitVideoSelection: true
@@ -766,6 +771,39 @@ struct ReferenceAuthoringView: View {
         }
     }
 
+    private var savedDraftsSection: some View {
+        GroupBox {
+            DisclosureGroup("Saved drafts (\(viewModel.savedDrafts.count))") {
+                VStack(alignment: .leading, spacing: 10) {
+                    Text("Finalized takes are saved on this Mac. Record now and reopen a draft here for review later. Keep the original recordings in the capture library.")
+                        .font(.caption).foregroundStyle(.secondary)
+                    if viewModel.savedDrafts.isEmpty {
+                        Text("No saved drafts yet. New finalized takes will appear here.")
+                            .font(.caption)
+                    }
+                    ForEach(viewModel.savedDrafts) { draft in
+                        HStack {
+                            VStack(alignment: .leading, spacing: 3) {
+                                Text(draft.title).font(.callout)
+                                Text("\(draft.status) · \(draft.savedAt.formatted(date: .abbreviated, time: .shortened))")
+                                    .font(.caption).foregroundStyle(.secondary)
+                            }
+                            Spacer()
+                            Button("Open for Review") { viewModel.reopenDraft(draft.id) }
+                                .disabled(!viewModel.canOpenSavedDraft || exportCoordinator.isPreparing || draft.status == "Rejected")
+                        }
+                    }
+                }.padding(.top, 8)
+            }
+            if let error = viewModel.draftSaveError {
+                Text(error).font(.callout).foregroundStyle(.orange).textSelection(.enabled)
+            }
+            if let error = viewModel.draftLibraryError {
+                Text(error).font(.callout).foregroundStyle(.orange).textSelection(.enabled)
+            }
+        }
+    }
+
     private var setupSection: some View {
         GroupBox("1. Technique, pattern and variant") {
             VStack(alignment: .leading, spacing: 10) {
@@ -1216,6 +1254,15 @@ struct ReferenceAuthoringView: View {
             GroupBox("5. Finalized take review") {
                 VStack(alignment: .leading, spacing: 12) {
                     continuationControls
+                    HStack {
+                        Button("Save for Later") { viewModel.saveDraftForLater() }
+                            .disabled(!viewModel.canOpenSavedDraft || exportCoordinator.isPreparing)
+                        if viewModel.draftSaveError == nil,
+                           viewModel.savedDrafts.contains(where: { $0.id == take.id }) {
+                            Text("Draft saved on this Mac. Detailed review can wait.")
+                                .font(.caption).foregroundStyle(.secondary)
+                        }
+                    }
                     evidenceSummary(take)
                     ReferenceMediaReviewStatus(controller: viewModel.mediaReview)
                     if viewModel.session.takeInReview == nil {

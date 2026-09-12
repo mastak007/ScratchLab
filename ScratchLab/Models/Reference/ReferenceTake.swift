@@ -2380,7 +2380,7 @@ enum ReferenceCrossfaderTakeStart {
     ///
     /// A closed vocabulary. Every case names a correlation that failed or a
     /// piece of evidence that was absent — never performer content.
-    enum RejectionReason: String, Equatable, Sendable {
+    enum RejectionReason: String, Codable, Equatable, Sendable {
         /// No control-state record was written for this take at all.
         case notRecorded
         /// The engine recorded an explicit "we did not know".
@@ -2437,7 +2437,7 @@ enum ReferenceCrossfaderTakeStart {
         }
     }
 
-    enum Outcome: Equatable, Sendable {
+    enum Outcome: Codable, Equatable, Sendable {
         /// Usable. `rawValue` may seed the take's fader baseline at t = 0.
         /// `observedTakeRelativeTime` is the observation's ORIGINAL (negative)
         /// instant, retained so nothing downstream can present it as an

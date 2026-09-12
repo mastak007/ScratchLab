@@ -107,7 +107,7 @@ struct CrossfaderHysteresis: Equatable, Sendable {
 // MARK: - Samples and edges
 
 /// One calibrated crossfader position at one take-relative instant.
-struct CrossfaderPositionSample: Equatable, Sendable {
+struct CrossfaderPositionSample: Codable, Equatable, Sendable {
     let takeRelativeTime: Double
     let rawValue: Int
     /// Physical position across the calibrated throw, 0…1.
@@ -180,7 +180,7 @@ struct CrossfaderSemanticEvent: Codable, Equatable, Sendable {
 }
 
 /// The derivation result, including the quality figure publishing gates on.
-struct CrossfaderDerivation: Equatable, Sendable {
+struct CrossfaderDerivation: Codable, Equatable, Sendable {
     let intervals: [CrossfaderStateInterval]
     let events: [CrossfaderSemanticEvent]
 

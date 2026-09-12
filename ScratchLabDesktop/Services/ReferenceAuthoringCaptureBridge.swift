@@ -1178,6 +1178,11 @@ final class ReferenceAuthoringCaptureBridge {
     /// evidence. Pure file read; attaches nothing itself.
     private func refreshWatchEvidence() -> ReferenceWatchEvidenceRefresh? {
         guard let mediaURL = lastFinalizedMediaURL else { return nil }
+        return Self.refreshWatchEvidence(mediaURL: mediaURL, expectedIdentity: lastFinalizedIdentity)
+    }
+
+    /// Reopening a draft reads its own recording, never the bridge's latest take.
+    static func refreshWatchEvidence(mediaURL: URL, expectedIdentity: TakeIdentity?) -> ReferenceWatchEvidenceRefresh? {
         let sidecarURL = CaptureCore.LocalRecordingFiles.sidecarURL(forMediaURL: mediaURL)
         guard let data = try? Data(contentsOf: sidecarURL) else { return nil }
         let decoder = JSONDecoder()
@@ -1191,8 +1196,8 @@ final class ReferenceAuthoringCaptureBridge {
             fileName: sidecarURL.lastPathComponent
         )
         let sourceState = Self.makePerTakeSourceState(sidecar: sidecar,
-            expectedIdentity: lastFinalizedIdentity, takeDirectory: mediaURL.deletingLastPathComponent())
-        let evidence = Self.watchEvidence(in: sidecar, expectedIdentity: lastFinalizedIdentity)
+            expectedIdentity: expectedIdentity, takeDirectory: mediaURL.deletingLastPathComponent())
+        let evidence = Self.watchEvidence(in: sidecar, expectedIdentity: expectedIdentity)
         if case .linked = sourceState {
             return .init(evidence: evidence, sourceBinding: sourceBinding, sourceState: sourceState)
         }

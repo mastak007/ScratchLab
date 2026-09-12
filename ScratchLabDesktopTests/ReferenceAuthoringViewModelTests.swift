@@ -570,20 +570,266 @@ final class ReferenceTearEvidencePipelineTests: XCTestCase {
         private let lock = NSLock()
         private var index = 0
         private var finalized: URL?
-        init(_ fixtures: [Fixture]) { self.fixtures = fixtures }
+        let bindIdentity: Bool
+        init(_ fixtures: [Fixture], bindIdentity: Bool = false) { self.fixtures = fixtures; self.bindIdentity = bindIdentity }
         var lastURL: URL? { lock.lock(); defer { lock.unlock() }; return finalized }
         func stop() -> Result<ReferenceRecordedTakeArtifacts, ReferenceAuthoringError> {
             lock.lock()
             defer { lock.unlock() }
             guard fixtures.indices.contains(index) else { return .failure(.recordingFailed("No synthetic take remains.")) }
             let fixture = fixtures[index]
-            let result = ReferenceAuthoringCaptureBridge.buildArtifacts(mediaURL: fixture.mediaURL, expectedIdentity: nil)
+            let identity = bindIdentity ? CaptureCore.LocalRecordingNaming.takeIdentity(sessionID: fixture.config.sessionID, takeNumber: 1) : nil
+            let result = ReferenceAuthoringCaptureBridge.buildArtifacts(mediaURL: fixture.mediaURL, expectedIdentity: identity)
             if case .success = result { finalized = fixture.mediaURL; index += 1 }
             return result
         }
     }
-    private func worker(_ fixtures: [Fixture]) -> ReferenceAuthoringWorker {
-        let sequence = RecordingSequence(fixtures)
+    func testSavedDraftCanBeApprovedAndExportedAfterRestartWithExactEvidence() async throws {
+        // Reversals distinguish performed strokes from steady platter rotation
+        // in the real capture fusion path.
+        let strokes = (0..<10).flatMap { index in
+            Self.packets(index.isMultiple(of: 2) ? 1 : -1, start: 0.1 + Double(index), duration: 0.8)
+        }
+        let unbound = try Self.withFader(strokes)
+        var packets = try XCTUnwrap(JSONSerialization.jsonObject(with: JSONEncoder().encode(unbound)) as? [[String: Any]])
+        for index in packets.indices { packets[index]["deviceIdentifier"] = "Rane ONE MKII" }
+        let bound = try JSONDecoder().decode([Raw].self, from: JSONSerialization.data(withJSONObject: packets))
+        let files = try await fixture(bound)
+        let root = files.directory.appendingPathComponent("drafts")
+        let beatRoot = files.directory.appendingPathComponent("beat_assets")
+        let beat = try ReferenceBeatAssetStore.prepare(mode: .boomBapTrainer, bpm: 120, loopBeats: 4, rootURL: beatRoot)
+        let owner = worker([files], draftStore: ReferenceDraftStore(directory: root), preparedBeat: beat)
+        var configured = await owner.snapshot().session
+        configured.bindBeatSpec(beat.binding)
+        let intent = try configured.prepareCaptureIntentForRecording()
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .iso8601
+        var object = try XCTUnwrap(JSONSerialization.jsonObject(with: files.sidecarData) as? [String: Any])
+        var config = try XCTUnwrap(object["sessionConfig"] as? [String: Any])
+        config["referenceCaptureIntent"] = try JSONSerialization.jsonObject(with: JSONEncoder().encode(intent))
+        object["sessionConfig"] = config
+        object["captureTiming"] = ["clickStartHostTime": UInt64(1_000),
+            "recordingStartHostTime": UInt64(1_000) + AVAudioTime.hostTime(forSeconds: 2),
+            "recordingStartOffsetSeconds": 2] as [String: Any]
+        object["watchCommandID"] = "saved-draft-start"
+        object["watchSyncState"] = "acknowledged"
+        let unlinked = try decoder.decode(CaptureCore.LocalRecordingSidecar.self,
+            from: JSONSerialization.data(withJSONObject: object))
+        try unlinked.encodedData().write(to: files.sidecarURL)
+        let recorded = try await record(owner)
+        XCTAssertEqual(recorded.evidence.metadata.captureIntent, intent)
+        XCTAssertFalse(recorded.evidence.watchEvidence.isLinked)
+        // The exact acknowledged Watch transfer lands after the draft was
+        // saved, while the authoring host is no longer reviewing it.
+        let samples = (0..<100).map { index in
+            WatchMotionSample(elapsedTime: Double(index) / 10, attitudeRoll: 0, attitudePitch: 0, attitudeYaw: 0,
+                quaternionX: 0, quaternionY: 0, quaternionZ: 0, quaternionW: 1,
+                gravityX: 0, gravityY: 0, gravityZ: 1, userAccelerationX: 0, userAccelerationY: 0,
+                userAccelerationZ: 0, rotationRateX: 0, rotationRateY: 0, rotationRateZ: 0)
+        }
+        let capture = WatchMotionCaptureSession(sessionID: unlinked.sessionID, takeID: unlinked.takeID,
+            commandID: unlinked.watchCommandID, requestedAt: unlinked.startedAt, acknowledgedAt: unlinked.startedAt,
+            syncState: .acknowledged, sourceDeviceName: "Synthetic Watch", sampleRateHz: 10,
+            startedAt: unlinked.startedAt, endedAt: unlinked.startedAt.addingTimeInterval(10),
+            deviceRecordedAtStart: unlinked.startedAt, deviceRecordedAtEnd: unlinked.startedAt.addingTimeInterval(10),
+            appVersion: "test", timingMetadata: nil, samples: samples)
+        let motionData = try WatchMotionCaptureCodec.encoder.encode(capture)
+        let name = "saved-draft-watch-\(UUID()).json"
+        let relay = try XCTUnwrap(FileManager.default.urls(for: .applicationSupportDirectory,
+            in: .userDomainMask).first).appendingPathComponent("ScratchLab/RelayedWatchCaptures", isDirectory: true)
+        try FileManager.default.createDirectory(at: relay, withIntermediateDirectories: true)
+        let motionURL = relay.appendingPathComponent(name)
+        try motionData.write(to: motionURL)
+        defer { try? FileManager.default.removeItem(at: motionURL) }
+        let raw = try unlinked.linkingWatchCapture(id: capture.id, fileName: name).encodedData()
+        try raw.write(to: files.sidecarURL)
+        let fresh = worker([files], draftStore: ReferenceDraftStore(directory: root))
+        let reopened = await fresh.reopenDraft(id: recorded.id)
+        XCTAssertNil(reopened.errorMessage)
+        XCTAssertTrue(reopened.state.session.takeInReview?.evidence.watchEvidence.isLinked == true)
+        XCTAssertEqual(reopened.state.session.takeInReview?.evidence.metadata.lifecycleState, .draft)
+        let beforeSelection = await fresh.approveCanonical(notes: "No selection must reject")
+        XCTAssertNotNil(beforeSelection.errorMessage)
+        _ = await fresh.selectRepetitionForApproval(0)
+        let approved = await fresh.approveCanonical(notes: "Reviewed later; synthetic evidence only")
+        guard approved.errorMessage == nil else {
+            XCTFail(approved.errorMessage ?? "Approval failed")
+            return
+        }
+        let take = try XCTUnwrap(approved.state.session.takes.last)
+        XCTAssertEqual(take.evidence.metadata.lifecycleState, .approvedCanonical)
+        XCTAssertEqual(take.evidence.metadata.reviewDecision?.notes, "Reviewed later; synthetic evidence only")
+        let checked = try await fresh.verifiedTakeForExport()
+        let destination = files.directory.appendingPathComponent("approved")
+        let package = try await Task.detached {
+            try ReferenceApprovedPackageCoordinator.export(take: checked, finalizedMediaURL: files.mediaURL,
+                parentDirectory: destination)
+        }.value
+        XCTAssertEqual(ReferencePackageIO.verify(packageURL: package), [])
+        let manifest = try ReferencePackageIO.readManifest(atPackageURL: package)
+        XCTAssertEqual(manifest.metadata.captureIntent, intent)
+        XCTAssertEqual(manifest.approval.notes, "Reviewed later; synthetic evidence only")
+        XCTAssertEqual(try Data(contentsOf: files.sidecarURL), raw)
+        // Reopening an already approved draft preserves its decision but still checks files.
+        let third = worker([files], draftStore: ReferenceDraftStore(directory: root))
+        let retained = await third.reopenDraft(id: take.id)
+        XCTAssertNil(retained.errorMessage)
+        XCTAssertEqual(retained.state.session.takes.last?.evidence.metadata.reviewDecision,
+            take.evidence.metadata.reviewDecision)
+        try Data("changed Watch recording".utf8).write(to: motionURL)
+        let refused = await third.reopenDraft(id: take.id)
+        XCTAssertNotNil(refused.errorMessage)
+    }
+
+    func testSavedMovementCheckReopensForReviewButCannotBecomeCanonical() async throws {
+        let files = try await fixture(Self.withFader(Self.tear(holds: 1)))
+        let root = files.directory.appendingPathComponent("drafts")
+        let owner = worker([files], draftStore: ReferenceDraftStore(directory: root))
+        _ = await owner.configure(technique: .tear,
+            pattern: ReferencePatternIdentity(id: "movement", name: "Movement", phraseBars: 1),
+            bpm: 120, startingDirection: .forward, faderVariant: .faderOpenThroughout,
+            handedness: .right, notes: "Review later", capturePurpose: .movementCheck)
+        let recorded = try await record(owner)
+        let fresh = worker([files], draftStore: ReferenceDraftStore(directory: root))
+        let reopened = await fresh.reopenDraft(id: recorded.id)
+        XCTAssertNil(reopened.errorMessage)
+        XCTAssertEqual(reopened.state.savedDrafts.first?.status, "Movement check")
+        XCTAssertTrue(reopened.state.session.takeInReview?.evidence.boundaries.repetitions.isEmpty == true)
+        let refused = await fresh.approveCanonical(notes: "Must remain a movement check")
+        XCTAssertNotNil(refused.errorMessage)
+        XCTAssertEqual(refused.state.session.takeInReview?.evidence.metadata.lifecycleState, .draft)
+    }
+
+    func testSavedDraftSurvivesNewWorkerAndLaterTakesWithExactReview() async throws {
+        let first = try await fixture(Self.withFader(Self.tear(holds: 1)))
+        let second = try await fixture(Self.withFader(Self.tear(holds: 2)), directory: first.directory, number: 2)
+        let root = first.directory.appendingPathComponent("drafts")
+        let owner = worker([first, second], draftStore: ReferenceDraftStore(directory: root))
+        let original = try await record(owner)
+        let candidate = try XCTUnwrap(original.tearReview.candidates.first)
+        _ = await owner.classifyTearCandidate(candidate.id, as: .unknown, notes: "Review this with the performer")
+        _ = await owner.selectRepetitionForApproval(2)
+        _ = await owner.adjustRepetitionBoundary(repetitionIndex: 2, startBeat: 12.1, endBeat: 15.9)
+        let saved = await owner.saveDraft(reviewNotes: "Deferred approval notes")
+        XCTAssertNil(saved.errorMessage)
+        let expected = try XCTUnwrap(saved.state.session.takeInReview)
+        XCTAssertEqual(saved.state.savedDrafts.count, 1)
+        _ = await owner.retake()
+        let staleNotes = await owner.saveDraft(reviewNotes: "Delayed edit for the old take", expectedTakeID: original.id)
+        XCTAssertEqual(staleNotes.state.savedReviewNotes, "")
+        _ = try await record(owner)
+        let fresh = worker([second], draftStore: ReferenceDraftStore(directory: root))
+        let listed = await fresh.refreshSavedDrafts()
+        XCTAssertEqual(listed.state.savedDrafts.count, 2)
+        let reopened = await fresh.reopenDraft(id: original.id)
+        XCTAssertNil(reopened.errorMessage)
+        XCTAssertEqual(reopened.state.finalizedMediaURL, first.mediaURL)
+        XCTAssertTrue(reopened.state.reviewingSavedDraft)
+        let actual = try XCTUnwrap(reopened.state.session.takeInReview)
+        XCTAssertEqual(actual.evidence, expected.evidence)
+        XCTAssertEqual(actual.tearReview, expected.tearReview)
+        XCTAssertEqual(actual.tearProjection, expected.tearProjection)
+        XCTAssertEqual(actual.tearPerformedLimitations, expected.tearPerformedLimitations)
+        XCTAssertEqual(reopened.state.savedReviewNotes, "Deferred approval notes")
+        XCTAssertEqual(actual.evidence.metadata.lifecycleState, .draft)
+        let pendingSource = try await fresh.rawCaptureExportSnapshot(config: second.config)
+        let source = try XCTUnwrap(pendingSource)
+        let archive = try await Task.detached { try Self.archive(source.source, in: first.directory) }.value
+        let document = try ReferenceTearEvidenceCodec.decodeDocument(XCTUnwrap(archive.companions["take-001"]))
+        XCTAssertEqual(document.review, expected.tearReview)
+        XCTAssertEqual(try Data(contentsOf: first.sidecarURL), first.sidecarData)
+        let rejectedStart = await fresh.startRecording()
+        XCTAssertNotNil(rejectedStart.errorMessage)
+        let returned = await fresh.prepareNewScratchSetup(afterTakeID: original.id)
+        XCTAssertNil(returned.errorMessage)
+        XCTAssertFalse(returned.state.reviewingSavedDraft)
+        XCTAssertEqual(returned.state.session.phase, .configuring)
+        XCTAssertEqual(returned.state.savedDrafts.count, 2)
+        XCTAssertNotEqual(returned.state.session.authoringSessionID, expected.evidence.metadata.authoringSessionID)
+    }
+
+    func testSavedDraftRejectsChangedMediaAndSidecarWithoutReplacingCurrentReview() async throws {
+        let files = try await fixture(Self.withFader(Self.tear(holds: 1)))
+        let root = files.directory.appendingPathComponent("drafts")
+        let owner = worker([files], draftStore: ReferenceDraftStore(directory: root))
+        let take = try await record(owner)
+        let fresh = worker([files], draftStore: ReferenceDraftStore(directory: root))
+        let before = await fresh.snapshot()
+        let audio = files.mediaURL.deletingPathExtension().appendingPathExtension("wav")
+        let bytes = try Data(contentsOf: audio)
+        try Data("changed".utf8).write(to: audio)
+        let changed = await fresh.reopenDraft(id: take.id)
+        XCTAssertTrue(changed.errorMessage?.contains("changed after saving") == true)
+        XCTAssertEqual(changed.state.session, before.session)
+        try bytes.write(to: audio)
+        var object = try XCTUnwrap(JSONSerialization.jsonObject(with: files.sidecarData) as? [String: Any])
+        object["unexpectedMetadata"] = "Not a Watch update"
+        try JSONSerialization.data(withJSONObject: object).write(to: files.sidecarURL)
+        let sidecar = await fresh.reopenDraft(id: take.id)
+        XCTAssertNotNil(sidecar.errorMessage)
+        XCTAssertEqual(sidecar.state.session, before.session)
+        try files.sidecarData.write(to: files.sidecarURL)
+        let restored = await fresh.reopenDraft(id: take.id)
+        XCTAssertNil(restored.errorMessage)
+        try FileManager.default.removeItem(at: audio)
+        let approval = await fresh.approveCanonical(notes: "Must reject missing audio")
+        XCTAssertNotNil(approval.errorMessage)
+        XCTAssertEqual(approval.state.session.takeInReview?.evidence.metadata.lifecycleState, .draft)
+    }
+
+    func testSavedDraftWriteFailureKeepsFinalizedTakeAndBlocksContinuation() async throws {
+        let files = try await fixture(Self.withFader(Self.tear(holds: 1)))
+        let occupied = files.directory.appendingPathComponent("not-a-directory")
+        try Data("occupied".utf8).write(to: occupied)
+        let owner = worker([files], draftStore: ReferenceDraftStore(directory: occupied))
+        _ = await owner.startRecording()
+        let finished = await owner.stopRecording()
+        XCTAssertNotNil(finished.state.session.takeInReview)
+        XCTAssertNotNil(finished.state.draftSaveError)
+        XCTAssertNotNil(finished.errorMessage)
+        let continued = await owner.retake()
+        XCTAssertNotNil(continued.errorMessage)
+        XCTAssertEqual(continued.state.session.phase, finished.state.session.phase)
+        let rejected = await owner.rejectTake(notes: "Cannot lose a review on a failed save")
+        XCTAssertNotNil(rejected.errorMessage)
+        XCTAssertEqual(rejected.state.session.phase, finished.state.session.phase)
+        XCTAssertEqual(try Data(contentsOf: files.sidecarURL), files.sidecarData)
+        try FileManager.default.removeItem(at: occupied)
+        let retry = await owner.saveDraft(reviewNotes: "Retried successfully")
+        XCTAssertNil(retry.errorMessage)
+        XCTAssertEqual(retry.state.savedDrafts.count, 1)
+        let rejectedSaved = await owner.rejectTake(notes: "Rejected after saving was restored")
+        XCTAssertNil(rejectedSaved.errorMessage)
+        XCTAssertEqual(rejectedSaved.state.savedDrafts.first?.status, "Rejected")
+        XCTAssertEqual(rejectedSaved.state.savedReviewNotes, "")
+        let stored = try ReferenceDraftStore(directory: occupied).load(id: XCTUnwrap(finished.state.session.takeInReview?.id))
+        XCTAssertEqual(stored.evidence.metadata.lifecycleState, .rejected)
+        XCTAssertEqual(stored.reviewNotes, "Rejected after saving was restored")
+    }
+
+    func testSavedDraftCorruptionIsReportedAndDoesNotOverwriteValidDrafts() async throws {
+        let files = try await fixture(Self.withFader(Self.tear(holds: 1)))
+        let root = files.directory.appendingPathComponent("drafts")
+        let store = ReferenceDraftStore(directory: root)
+        let owner = worker([files], draftStore: store)
+        let take = try await record(owner)
+        let draftURL = store.fileURL(for: take.id)
+        let original = try Data(contentsOf: draftURL)
+        let corruptURL = root.appendingPathComponent("broken.json")
+        try Data("broken".utf8).write(to: corruptURL)
+        let freshStore = ReferenceDraftStore(directory: root)
+        XCTAssertThrowsError(try freshStore.refresh())
+        XCTAssertEqual(freshStore.summaries.count, 1)
+        XCTAssertEqual(try freshStore.load(id: take.id).evidence, take.evidence)
+        var envelope = try XCTUnwrap(JSONSerialization.jsonObject(with: original) as? [String: Any])
+        envelope["sha256"] = "wrong"
+        try JSONSerialization.data(withJSONObject: envelope).write(to: draftURL)
+        XCTAssertThrowsError(try ReferenceDraftStore(directory: root).load(id: take.id))
+        try original.write(to: draftURL)
+    }
+
+    private func worker(_ fixtures: [Fixture], draftStore: ReferenceDraftStore? = nil, preparedBeat: ReferencePreparedBeat? = nil) -> ReferenceAuthoringWorker {
+        let sequence = RecordingSequence(fixtures, bindIdentity: preparedBeat != nil)
         let calibration = Self.calibration
         var session = ReferenceAuthoringSession(authoringSessionID: "pipeline-authoring", operatorName: "Synthetic Reviewer")
         session.selectTechnique(.tear)
@@ -600,8 +846,10 @@ final class ReferenceTearEvidencePipelineTests: XCTestCase {
                     cameraDeviceName: "Synthetic Camera", cameraIsActive: true, crossfaderSecondsSinceLastMessage: 0.01)
             }, latestCalibrationObservation: { nil })
         return ReferenceAuthoringWorker(session: session,
-            driver: ReferenceAuthoringWorkerDriver(hooks: hooks, lastFinalizedRecordingURLProvider: { sequence.lastURL }),
-            calibrationStore: CrossfaderCalibrationStore(directoryURL: fixtures[0].directory.appendingPathComponent("calibration")))
+            driver: ReferenceAuthoringWorkerDriver(hooks: hooks, lastFinalizedRecordingURLProvider: { sequence.lastURL },
+                prepareBeatHandler: { _, _, _ in preparedBeat }),
+            calibrationStore: CrossfaderCalibrationStore(directoryURL: fixtures[0].directory.appendingPathComponent("calibration")),
+            draftStore: draftStore)
     }
     private func record(_ worker: ReferenceAuthoringWorker) async throws -> ReferenceAuthoringTake {
         let started = await worker.startRecording()
@@ -2426,9 +2674,11 @@ final class ReferenceAuthoringViewModelTests: XCTestCase {
         sourceState: ReferencePerTakeSourceState? = nil
     ) -> ReferenceRecordedTakeArtifacts {
         let artifactStem = suffix.map { "synthetic-reference-\($0)" } ?? "synthetic-reference"
+        // This successful approval fixture must cover the complete 95 BPM
+        // reference plan, not just its first 0.799 seconds.
         let samples = (0..<800).map { index in
             CrossfaderPositionSample(
-                takeRelativeTime: Double(index) * 0.001,
+                takeRelativeTime: Double(index) * 0.02,
                 rawValue: 0,
                 normalizedPosition: 1
             )
