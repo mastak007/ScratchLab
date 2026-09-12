@@ -1385,11 +1385,14 @@ final class ReferenceAuthoringCaptureBridge {
 
         return DispatchQueue.main.sync {
             let controllerName = engine.selectedMIDIInputSourceName
-            let hasController = !controllerName.isEmpty && controllerName != "Not Connected"
+            let connectedMIDI = engine.currentConnectedMIDIObservationsSnapshot()
+            let currentObservations = connectedMIDI?.observations ?? []
+            let hasController = connectedMIDI != nil && !controllerName.isEmpty && controllerName != "Not Connected"
 
             let crossfaderMapping = engine.persistedCrossfaderMappingSnapshot
             let crossfaderObservation = crossfaderMapping.map {
-                engine.latestCCObservation(channel: $0.channel, controller: $0.controller)
+                let mapping = $0
+                return currentObservations.first { $0.channel == mapping.channel && $0.controller == mapping.controller }
             } ?? nil
             let observedAddress = crossfaderObservation.map {
                 CrossfaderMIDIAddress(
@@ -1407,10 +1410,9 @@ final class ReferenceAuthoringCaptureBridge {
                 )
             }
 
-            let platterObservation = engine.latestCCObservation(
-                channel: Self.platterChannel,
-                controller: Self.platterController
-            )
+            let platterObservation = currentObservations.first {
+                $0.channel == Self.platterChannel && $0.controller == Self.platterController
+            }
             let now = CACurrentMediaTime()
             let platterIsMoving = platterObservation.map {
                 now - $0.observedAt < Self.recentActivityWindow
@@ -1436,7 +1438,7 @@ final class ReferenceAuthoringCaptureBridge {
             } else {
                 takeScopedCrossfaderCount = 0
             }
-            let observedAddresses = engine.allLiveCCObservations().map { observation in
+            let observedAddresses = currentObservations.map { observation in
                 ReferenceLiveMIDIAddressObservation(
                     deviceName: observation.deviceName,
                     channel: observation.channel,

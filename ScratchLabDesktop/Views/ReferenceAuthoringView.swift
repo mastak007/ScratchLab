@@ -972,16 +972,24 @@ struct ReferenceAuthoringView: View {
         GroupBox("3. Live preflight") {
             VStack(alignment: .leading, spacing: 8) {
                 if let preflight = viewModel.session.latestPreflight {
-                    ForEach(preflight.checks) { check in
-                        HStack(alignment: .top) {
-                            Image(systemName: preflightSymbol(check.status))
-                                .foregroundStyle(preflightColor(check.status))
-                                .frame(width: 18)
-                            VStack(alignment: .leading, spacing: 2) {
-                                Text(check.title).font(.callout.weight(.semibold))
-                                Text(check.detail).font(.caption).foregroundStyle(.secondary)
-                            }
+                    let satisfied = preflight.checks.filter { $0.status == .satisfied }
+                    let blocking = preflight.checks.filter { $0.status == .blocking }
+                    let advisory = preflight.checks.filter { $0.status == .advisory }
+                    if !satisfied.isEmpty {
+                        ViewThatFits(in: .horizontal) {
+                            preflightGrid(satisfied, columnCount: 2)
+                                .frame(minWidth: 560)
+                            preflightGrid(satisfied, columnCount: 1)
                         }
+                    }
+                    if !satisfied.isEmpty && (!blocking.isEmpty || !advisory.isEmpty) {
+                        Divider()
+                    }
+                    ForEach(blocking) { check in
+                        preflightRow(check)
+                    }
+                    ForEach(advisory) { check in
+                        preflightRow(check)
                     }
                 } else {
                     Text("Apply the setup to begin live checks.")
@@ -992,6 +1000,43 @@ struct ReferenceAuthoringView: View {
             }
             .frame(maxWidth: .infinity, alignment: .leading)
             .padding(.top, 4)
+        }
+    }
+
+    private func preflightGrid(_ checks: [ReferencePreflightCheck], columnCount: Int) -> some View {
+        LazyVGrid(
+            columns: Array(repeating: GridItem(.flexible(), alignment: .topLeading), count: columnCount),
+            alignment: .leading,
+            spacing: 8
+        ) {
+            ForEach(checks) { check in
+                preflightRow(check)
+            }
+        }
+    }
+
+    private func preflightRow(_ check: ReferencePreflightCheck) -> some View {
+        HStack(alignment: .top) {
+            Image(systemName: preflightSymbol(check.status))
+                .foregroundStyle(preflightColor(check.status))
+                .frame(width: 18)
+                .accessibilityHidden(true)
+            VStack(alignment: .leading, spacing: 2) {
+                Text(check.title).font(.callout.weight(.semibold))
+                Text(check.detail).font(.caption).foregroundStyle(.secondary)
+            }
+            .fixedSize(horizontal: false, vertical: true)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel("\(preflightStatusLabel(check.status)): \(check.title). \(check.detail)")
+    }
+
+    private func preflightStatusLabel(_ status: ReferencePreflightCheck.Status) -> String {
+        switch status {
+        case .satisfied: return "Passed"
+        case .blocking: return "Blocking error"
+        case .advisory: return "Warning"
         }
     }
 

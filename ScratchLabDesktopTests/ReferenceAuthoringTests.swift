@@ -1288,18 +1288,56 @@ final class ReferenceAuthoringTests: XCTestCase {
 
     // MARK: - Crossfader liveness in the preflight panel
 
-    /// The row used to report only a lifetime total and call any non-zero
-    /// count "satisfied". That total never decreases, so after one message it
-    /// read as working for the rest of the session — which is how the
-    /// 2026-09-04 smoke recorded a take with no crossfader traffic at all
-    /// while the panel showed 1,089 events.
-    func testALifetimeCrossfaderCountWithNoRecentMessageIsNotSatisfied() {
+    func testAParkedCrossfaderOnTheCurrentConnectionStaysReady() {
         let snapshot = makeSnapshot(crossfaderSecondsSinceLastMessage: 90)
         let result = ReferenceCapturePreflight.evaluate(snapshot: snapshot, technique: .babyScratch)
         let row = result.checks.first { $0.id == "crossfaderEvents" }
-        XCTAssertEqual(row?.status, .advisory)
-        XCTAssertTrue(row?.detail.contains("currently silent") ?? false, row?.detail ?? "")
+        XCTAssertEqual(row?.status, .satisfied)
+        XCTAssertTrue(row?.detail.contains("Ready — idle") ?? false, row?.detail ?? "")
         XCTAssertTrue(row?.detail.contains("120 since launch") ?? false, row?.detail ?? "")
+        XCTAssertTrue(row?.detail.contains("90.0s ago") ?? false, row?.detail ?? "")
+        XCTAssertFalse(ReferenceCapturePreflight.crossfaderIsRecentlyActive(snapshot: snapshot))
+    }
+
+    func testAStillPlatterOnTheCurrentConnectionStaysReady() {
+        let result = ReferenceCapturePreflight.evaluate(
+            snapshot: makeSnapshot(platterMoving: false), technique: .tear)
+        let row = result.checks.first { $0.id == "platter" }
+        XCTAssertEqual(row?.status, .satisfied)
+        XCTAssertTrue(row?.detail.contains("Ready — idle") ?? false)
+    }
+
+    func testDisconnectedSourceCannotStayReadyFromNonzeroCachedCounts() {
+        let result = ReferenceCapturePreflight.evaluate(
+            snapshot: makeSnapshot(controllerName: nil, platterMoving: false), technique: .tear)
+        XCTAssertNotEqual(result.checks.first { $0.id == "crossfaderEvents" }?.status, .satisfied)
+        XCTAssertNotEqual(result.checks.first { $0.id == "platter" }?.status, .satisfied)
+    }
+
+    func testNeverObservedPlatterDoesNotBecomeReadyJustBecauseItIsIdle() {
+        let result = ReferenceCapturePreflight.evaluate(
+            snapshot: makeSnapshot(platterEvents: 0, platterMoving: false), technique: .tear)
+        XCTAssertNotEqual(result.checks.first { $0.id == "platter" }?.status, .satisfied)
+    }
+
+    func testCrossfaderObservationFromAnotherSourceCannotClaimReady() {
+        let result = ReferenceCapturePreflight.evaluate(
+            snapshot: makeSnapshot(controllerName: "Different MIDI source"), technique: .tear)
+        XCTAssertEqual(result.checks.first { $0.id == "crossfaderEvents" }?.status, .advisory)
+    }
+
+    func testNoRawObservationCannotClaimCrossfaderReady() {
+        let result = ReferenceCapturePreflight.evaluate(
+            snapshot: makeSnapshot(rawValue: nil), technique: .tear)
+        XCTAssertEqual(result.checks.first { $0.id == "crossfaderEvents" }?.status, .advisory)
+    }
+
+    func testInvalidRawCrossfaderCannotClaimReady() {
+        for raw in [-1, 128] {
+            let result = ReferenceCapturePreflight.evaluate(
+                snapshot: makeSnapshot(rawValue: raw), technique: .tear)
+            XCTAssertEqual(result.checks.first { $0.id == "crossfaderEvents" }?.status, .advisory)
+        }
     }
 
     func testARecentCrossfaderMessageIsSatisfied() {
@@ -1341,8 +1379,8 @@ final class ReferenceAuthoringTests: XCTestCase {
         let row = result.checks.first { $0.id == "crossfaderEvents" }
         XCTAssertTrue(row?.detail.contains("0 in this take") ?? false, row?.detail ?? "")
         XCTAssertEqual(
-            row?.status, .advisory,
-            "1,089 lifetime messages and none in 42 seconds is not a working crossfader."
+            row?.status, .satisfied,
+            "A parked, observed control stays ready; its separate zero take count must remain visible."
         )
     }
 
@@ -1366,6 +1404,67 @@ final class ReferenceAuthoringTests: XCTestCase {
             .provenContinuouslyOpen
         )
         XCTAssertTrue(report.passes, report.failureMessages.description)
+    }
+
+    func testZeroDurationOpenBaselineCannotProveTheRecordedRepetition() {
+        let evidence = makeEvidence(metadata: makeMetadata(technique: .tear),
+            crossfaderSampleCount: 0, derivation: derivation([(.open, 0, 0)]))
+        guard case .unknown = ReferenceValidator.faderOpenEvidence(for: evidence) else {
+            return XCTFail("A sampled point has no positive coverage and must not prove an open repetition.")
+        }
+        XCTAssertTrue(ReferenceValidator.validate(evidence).findings.contains {
+            if case .faderOpenStateUnknown = $0 { return true }; return false
+        })
+    }
+
+    func testOpenFaderCoverageMustReachTheSelectedRepetitionEnd() {
+        let evidence = makeEvidence(metadata: makeMetadata(technique: .tear),
+            derivation: derivation([(.open, 0, 3)]))
+        guard case .unknown = ReferenceValidator.faderOpenEvidence(for: evidence) else {
+            return XCTFail("Open evidence ending at 3s does not cover the selected 2.526–5.053s repetition.")
+        }
+    }
+
+    func testOpenFaderIntervalsCannotBridgeAnInternalGap() {
+        let evidence = makeEvidence(metadata: makeMetadata(technique: .tear),
+            derivation: derivation([(.open, 0, 3), (.open, 3.01, 20)]))
+        guard case .unknown = ReferenceValidator.faderOpenEvidence(for: evidence) else {
+            return XCTFail("The baseline allowance must not erase an internal 10ms evidence gap.")
+        }
+    }
+
+    func testAdjacentPositiveOpenIntervalsCoverTheSelectedRepetition() {
+        let evidence = makeEvidence(metadata: makeMetadata(technique: .tear),
+            derivation: derivation([(.open, 3, 20), (.open, 0, 3)]))
+        XCTAssertEqual(ReferenceValidator.faderOpenEvidence(for: evidence), .provenContinuouslyOpen)
+    }
+
+    func testOpenCoverageUsesSelectedRepetitionAndRecordedMediaOrigin() {
+        let origin = ReferenceMediaTimeOrigin(clickStartHostTime: 100, recordingStartHostTime: 200,
+            recordingStartOffsetSeconds: 4)
+        let metadata = makeMetadata(technique: .tear, bpm: 60, mediaTimeOrigin: origin)
+        var boundaries = ReferencePhraseBoundaries.nominal(for: metadata)
+        boundaries.selectedRepetitionIndex = 1 // Beats 8–12 are recorded seconds 4–8.
+        let covered = makeEvidence(metadata: metadata, boundaries: boundaries,
+            derivation: derivation([(.open, 0, 8)]))
+        XCTAssertEqual(ReferenceValidator.faderOpenEvidence(for: covered), .provenContinuouslyOpen)
+        let short = makeEvidence(metadata: metadata, boundaries: boundaries,
+            derivation: derivation([(.open, 0, 7.99)]))
+        guard case .unknown = ReferenceValidator.faderOpenEvidence(for: short) else {
+            return XCTFail("The selected repetition's recorded end remains required, without a 0.5s tail allowance.")
+        }
+    }
+
+    func testMalformedFaderTimingCannotProveContinuousOpen() {
+        let cases: [[(CrossfaderGateState, Double, Double)]] = [
+            [(.open, 0, .infinity)], [(.open, .nan, 20)], [(.open, 3, 2)]
+        ]
+        for pieces in cases {
+            let evidence = makeEvidence(metadata: makeMetadata(technique: .tear), derivation: derivation(pieces))
+            guard case .unknown = ReferenceValidator.faderOpenEvidence(for: evidence) else {
+                return XCTFail("Invalid timing must fail closed.")
+            }
+        }
     }
 
     func testBabyScratchNeverFailsForCrossfaderEvidenceMissingWhenMovementIsSimplyZero() {

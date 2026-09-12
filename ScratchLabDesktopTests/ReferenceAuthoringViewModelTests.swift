@@ -5,6 +5,200 @@ import XCTest
 import AVFoundation
 @testable import ScratchLab
 
+/// Real-file mux regression coverage; no capture devices or playback are used.
+@MainActor
+final class RoutineReviewMovieMuxerTests: XCTestCase {
+    func testCameraOnlyTailIsTrimmedWithoutMovingStartOrChangingWAV() async throws {
+        // The reported take had 181 camera frames and 260190 WAV frames.
+        let files = try await fixture(videoFrames: 181, audioFrames: 260_190)
+        let originalWAV = try Data(contentsOf: files.audio)
+        try await MacCaptureEngine.muxRoutineReviewMovieForTesting(videoURL: files.video, audioURL: files.audio)
+
+        let movie = AVURLAsset(url: files.video)
+        let duration = try await movie.load(.duration).seconds
+        XCTAssertEqual(duration, 5.9, accuracy: 1.0 / 30)
+        XCTAssertLessThanOrEqual(abs(duration - 5.9), ReferenceWitnessedTimingValidator.durationToleranceSeconds)
+        XCTAssertEqual(try Data(contentsOf: files.audio), originalWAV)
+        let videoTracks = try await movie.loadTracks(withMediaType: .video)
+        let audioTracks = try await movie.loadTracks(withMediaType: .audio)
+        let video = try XCTUnwrap(videoTracks.first)
+        let audio = try XCTUnwrap(audioTracks.first)
+        let videoRange = try await video.load(.timeRange)
+        let audioRange = try await audio.load(.timeRange)
+        XCTAssertEqual(videoRange.start, .zero)
+        XCTAssertEqual(audioRange.start, .zero)
+        XCTAssertEqual(audioRange.duration.seconds, 5.9, accuracy: 0.001)
+        let first = try firstVideoPixel(in: movie, track: video)
+        XCTAssertEqual(first.time, .zero)
+        XCTAssertGreaterThan(first.red, 180, "The red opening marker must survive; trimming the beginning is incorrect.")
+        XCTAssertLessThan(first.blue, 60)
+    }
+
+    func testShortCameraDoesNotPadPictureOrRewriteLongerWAV() async throws {
+        let files = try await fixture(videoFrames: 30, audioFrames: 52_920)
+        let originalWAV = try Data(contentsOf: files.audio)
+        try await MacCaptureEngine.muxRoutineReviewMovieForTesting(videoURL: files.video, audioURL: files.audio)
+        let movie = AVURLAsset(url: files.video)
+        let duration = try await movie.load(.duration).seconds
+        XCTAssertEqual(duration, 1, accuracy: 1.0 / 30)
+        XCTAssertEqual(try Data(contentsOf: files.audio), originalWAV)
+        XCTAssertGreaterThan(abs(1.2 - duration), ReferenceWitnessedTimingValidator.durationToleranceSeconds,
+            "A camera that ended too early must still fail duration validation; muxing cannot repair missing picture.")
+        let tracks = try await movie.loadTracks(withMediaType: .audio)
+        let track = try XCTUnwrap(tracks.first)
+        let range = try await track.load(.timeRange)
+        XCTAssertEqual(range.start, .zero)
+        XCTAssertEqual(range.duration.seconds, 1, accuracy: 0.001)
+    }
+
+    func testMissingAudioTrackFailsWithoutReplacingOriginalMovie() async throws {
+        let files = try await fixture(videoFrames: 30, audioFrames: 44_100)
+        let originalMovie = try Data(contentsOf: files.video)
+        do {
+            try await MacCaptureEngine.muxRoutineReviewMovieForTesting(videoURL: files.video, audioURL: files.video)
+            XCTFail("A video-only file cannot stand in for captured audio.")
+        } catch {
+            XCTAssertTrue(error.localizedDescription.contains("no audio track"))
+        }
+        XCTAssertEqual(try Data(contentsOf: files.video), originalMovie)
+    }
+
+    func testLateVideoOriginFailsInsteadOfShiftingOrTruncatingStart() async throws {
+        let files = try await fixture(videoFrames: 30, audioFrames: 44_100, videoStart: 0.2)
+        let asset = AVURLAsset(url: files.video)
+        let tracks = try await asset.loadTracks(withMediaType: .video)
+        let track = try XCTUnwrap(tracks.first)
+        let range = try await track.load(.timeRange)
+        XCTAssertEqual(range.start, .zero, "The bounding track range includes its empty leading edit.")
+        let segments = try await track.load(.segments)
+        let empty = try XCTUnwrap(segments.first(where: \.isEmpty))
+        XCTAssertEqual(empty.timeMapping.target.start, .zero)
+        XCTAssertEqual(empty.timeMapping.target.duration.seconds, 0.2, accuracy: 0.001)
+        let media = try XCTUnwrap(segments.first(where: { !$0.isEmpty }))
+        XCTAssertEqual(media.timeMapping.target.start.seconds, 0.2, accuracy: 0.001)
+        let originalMovie = try Data(contentsOf: files.video)
+        let originalWAV = try Data(contentsOf: files.audio)
+        do {
+            try await MacCaptureEngine.muxRoutineReviewMovieForTesting(videoURL: files.video, audioURL: files.audio)
+            XCTFail("There is no picture at the audio origin; do not silently shift either track.")
+        } catch {
+            XCTAssertTrue(error.localizedDescription.contains("coverage from the start"))
+        }
+        XCTAssertEqual(try Data(contentsOf: files.video), originalMovie)
+        XCTAssertEqual(try Data(contentsOf: files.audio), originalWAV)
+    }
+
+    func testFailedExportPreservesOriginalMovieAndWAV() async throws {
+        let files = try await fixture(videoFrames: 30, audioFrames: 44_100)
+        let originalMovie = try Data(contentsOf: files.video)
+        let originalWAV = try Data(contentsOf: files.audio)
+        let directory = files.video.deletingLastPathComponent()
+        try FileManager.default.setAttributes([.posixPermissions: 0o555], ofItemAtPath: directory.path)
+        defer { try? FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: directory.path) }
+        do {
+            try await MacCaptureEngine.muxRoutineReviewMovieForTesting(videoURL: files.video, audioURL: files.audio)
+            XCTFail("A read-only destination must fail export without deleting the camera original.")
+        } catch {
+            XCTAssertTrue(error.localizedDescription.contains("could not attach onboard AHHH"))
+        }
+        XCTAssertEqual(try Data(contentsOf: files.video), originalMovie)
+        XCTAssertEqual(try Data(contentsOf: files.audio), originalWAV)
+    }
+
+    private func fixture(videoFrames: Int, audioFrames: Int, videoStart: Double = 0) async throws
+        -> (video: URL, audio: URL) {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent("RoutineMux-\(UUID())")
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        addTeardownBlock { try? FileManager.default.removeItem(at: directory) }
+        let video = directory.appendingPathComponent("take.mov")
+        let audio = directory.appendingPathComponent("take.wav")
+        try await Task.detached {
+            try Self.writeAudio(audio, frames: audioFrames)
+            try Self.writeVideo(video, frames: videoFrames, start: videoStart)
+        }.value
+        return (video, audio)
+    }
+
+    private nonisolated static func writeAudio(_ url: URL, frames: Int) throws {
+        let format = try XCTUnwrap(AVAudioFormat(standardFormatWithSampleRate: 44_100, channels: 2))
+        let buffer = try XCTUnwrap(AVAudioPCMBuffer(pcmFormat: format, frameCapacity: AVAudioFrameCount(frames)))
+        buffer.frameLength = AVAudioFrameCount(frames)
+        let channels = try XCTUnwrap(buffer.floatChannelData)
+        for index in 0..<frames {
+            let sample = Float(sin(Double(index) * 2 * .pi * 440 / 44_100) * 0.25)
+            channels[0][index] = sample
+            channels[1][index] = sample
+        }
+        let file = try AVAudioFile(forWriting: url, settings: format.settings)
+        try file.write(from: buffer)
+    }
+
+    private nonisolated static func writeVideo(_ url: URL, frames: Int, start: Double) throws {
+        let writer = try AVAssetWriter(outputURL: url, fileType: .mov)
+        let input = AVAssetWriterInput(mediaType: .video, outputSettings: [
+            AVVideoCodecKey: AVVideoCodecType.h264, AVVideoWidthKey: 64, AVVideoHeightKey: 64])
+        input.expectsMediaDataInRealTime = false
+        let adaptor = AVAssetWriterInputPixelBufferAdaptor(assetWriterInput: input,
+            sourcePixelBufferAttributes: [kCVPixelBufferPixelFormatTypeKey as String: kCVPixelFormatType_32BGRA,
+                kCVPixelBufferWidthKey as String: 64, kCVPixelBufferHeightKey as String: 64])
+        guard writer.canAdd(input) else { throw SessionExportError.unableToPrepareExport }
+        writer.add(input)
+        guard writer.startWriting() else { throw writer.error ?? SessionExportError.unableToPrepareExport }
+        writer.startSession(atSourceTime: .zero)
+        for frame in 0..<frames {
+            let deadline = Date().addingTimeInterval(5)
+            while !input.isReadyForMoreMediaData, writer.status == .writing, Date() < deadline {
+                Thread.sleep(forTimeInterval: 0.002)
+            }
+            guard input.isReadyForMoreMediaData else { throw writer.error ?? SessionExportError.unableToPrepareExport }
+            var optionalBuffer: CVPixelBuffer?
+            guard CVPixelBufferCreate(kCFAllocatorDefault, 64, 64, kCVPixelFormatType_32BGRA,
+                nil, &optionalBuffer) == kCVReturnSuccess else { throw SessionExportError.unableToPrepareExport }
+            let pixelBuffer = try XCTUnwrap(optionalBuffer)
+            CVPixelBufferLockBaseAddress(pixelBuffer, [])
+            let base = try XCTUnwrap(CVPixelBufferGetBaseAddress(pixelBuffer)).assumingMemoryBound(to: UInt8.self)
+            for row in 0..<64 {
+                for column in 0..<64 {
+                    let offset = row * CVPixelBufferGetBytesPerRow(pixelBuffer) + column * 4
+                    base[offset] = frame < 3 ? 0 : 255
+                    base[offset + 1] = 0
+                    base[offset + 2] = frame < 3 ? 255 : 0
+                    base[offset + 3] = 255
+                }
+            }
+            CVPixelBufferUnlockBaseAddress(pixelBuffer, [])
+            let time = CMTime(seconds: start, preferredTimescale: 30) + CMTime(value: Int64(frame), timescale: 30)
+            guard adaptor.append(pixelBuffer, withPresentationTime: time) else {
+                throw writer.error ?? SessionExportError.unableToPrepareExport
+            }
+        }
+        writer.endSession(atSourceTime: CMTime(seconds: start, preferredTimescale: 30)
+            + CMTime(value: Int64(frames), timescale: 30))
+        input.markAsFinished()
+        let completed = DispatchSemaphore(value: 0)
+        writer.finishWriting { completed.signal() }
+        guard completed.wait(timeout: .now() + 10) == .success, writer.status == .completed else {
+            throw writer.error ?? SessionExportError.unableToPrepareExport
+        }
+    }
+
+    private func firstVideoPixel(in asset: AVAsset, track: AVAssetTrack) throws
+        -> (time: CMTime, red: UInt8, blue: UInt8) {
+        let reader = try AVAssetReader(asset: asset)
+        let output = AVAssetReaderTrackOutput(track: track,
+            outputSettings: [kCVPixelBufferPixelFormatTypeKey as String: kCVPixelFormatType_32BGRA])
+        reader.add(output)
+        guard reader.startReading() else { throw reader.error ?? SessionExportError.unableToPrepareExport }
+        defer { reader.cancelReading() }
+        let sample = try XCTUnwrap(output.copyNextSampleBuffer())
+        let pixel = try XCTUnwrap(CMSampleBufferGetImageBuffer(sample))
+        CVPixelBufferLockBaseAddress(pixel, .readOnly)
+        defer { CVPixelBufferUnlockBaseAddress(pixel, .readOnly) }
+        let base = try XCTUnwrap(CVPixelBufferGetBaseAddress(pixel)).assumingMemoryBound(to: UInt8.self)
+        return (CMSampleBufferGetPresentationTimeStamp(sample), base[2], base[0])
+    }
+}
+
 /// Connected software evidence only: synthetic packets and valid synthetic media,
 /// through the actual finalized bridge, serial owner and default archive probes.
 @MainActor

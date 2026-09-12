@@ -2569,6 +2569,52 @@ enum ReferenceCrossfaderTakeStart {
         guard let baseline = outcome.adoptedRawValue else { return recorded }
         return [(takeRelativeTime: 0, rawValue: baseline)] + recorded
     }
+
+    /// Extend only an explicitly sealed, unchanged control state from a NEW
+    /// take. The interval is derived held coverage; raw MIDI stays untouched.
+    /// Legacy start-only snapshots never qualify, even if a device is connected
+    /// now. Moving controls keep the ordinary sample-bounded derivation.
+    static func applyingParkedHold(
+        to derivation: CrossfaderDerivation,
+        state: CaptureCore.CrossfaderTakeStartState?,
+        outcome: Outcome,
+        recordedSamples: [CrossfaderPositionSample],
+        calibration: CrossfaderCalibration,
+        measuredMediaDuration: Double?
+    ) -> CrossfaderDerivation {
+        guard recordedSamples.isEmpty,
+              let rawValue = outcome.adoptedRawValue,
+              let state, state.isUsableSnapshot, state.crossfaderCurveResponse != nil,
+              let hold = state.parkedHold,
+              hold.schemaVersion == CaptureCore.CrossfaderTakeStartState.ParkedHold.currentSchemaVersion,
+              hold.sessionID == state.sessionID, !hold.sessionID.isEmpty,
+              hold.takeID == state.takeID, !hold.takeID.isEmpty,
+              hold.takeGeneration == state.takeGeneration,
+              hold.midiSourceID == state.midiSourceID, !hold.midiSourceID.isEmpty,
+              hold.midiConnectionGeneration == state.midiConnectionGeneration,
+              hold.observationSequence == state.observationSequence,
+              hold.observationSequence > 0,
+              hold.rawValue == rawValue, hold.rawValue == state.rawValue,
+              hold.calibration == calibration, calibration.isUsable,
+              calibration.id == state.calibrationID,
+              calibration.address.deviceIdentifier == hold.midiSourceID,
+              calibration.address.channel == state.channel,
+              calibration.address.controller == state.controller,
+              hold.mediaStartHostTime.isFinite, hold.mediaStartHostTime > 0,
+              hold.captureEndHostTime.isFinite,
+              hold.captureEndHostTime > hold.mediaStartHostTime,
+              let measuredMediaDuration, measuredMediaDuration.isFinite,
+              measuredMediaDuration > 0,
+              derivation.intervals.count == 1,
+              let baseline = derivation.intervals.first,
+              baseline.startTime == 0, baseline.endTime == 0,
+              derivation.events.isEmpty else { return derivation }
+        let end = min(measuredMediaDuration, hold.captureEndHostTime - hold.mediaStartHostTime)
+        return CrossfaderDerivation(intervals: [CrossfaderStateInterval(
+            state: baseline.state, startTime: 0, endTime: end,
+            startPosition: baseline.startPosition, endPosition: baseline.endPosition
+        )], events: [])
+    }
 }
 
 // MARK: - Canonical projection of a tear review

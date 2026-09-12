@@ -59,6 +59,122 @@ final class ScratchSamplePlaybackControllerMIDIPlatterTests: XCTestCase {
         }
     }
 
+    /// The physical counter is sampled after each real elapsed control slot;
+    /// the audio renderer runs through that slot before receiving the next
+    /// measurement. This differs from tests that advance the target after
+    /// rendering and can therefore hide a lasting stop-position error.
+    private enum IdleObservationFault: CaseIterable {
+        case missing, racing, wrongCounter, newConnection, newDevice, stale
+    }
+
+    private func physicalMIDIRenderResult(
+        stepDeltas: [Int], idleFault: IdleObservationFault? = nil
+    ) throws -> (
+        stoppedErrorFrames: Double, peakPCM: Float, maximumMovingErrorFrames: Double
+    ) {
+        final class Clock { var now = 0.0 }
+        let clock = Clock()
+        let tracker = ScratchPlatterTracker()
+        let controller = ScratchSamplePlaybackController(schedulingClock: { clock.now })
+        controller.testOnly_installSyntheticSample(try makeSyntheticLoopBuffer(), sampleID: "physical-position")
+        var testingIdle = false
+        var observationReads = 0
+        controller.testOnly_setRightDeckAccumulatedStepsProvider({
+            tracker.accumulatedSteps(for: ScratchPlatterTracker.rightChannel)
+        }, observation: {
+            guard let observed = tracker.latestObservation(for: ScratchPlatterTracker.rightChannel) else { return nil }
+            guard testingIdle, let idleFault else { return observed }
+            observationReads += 1
+            if idleFault == .missing { return nil }
+            let input = observed.input
+            return MIDIPlatterStepObservation(input: MIDIPlatterInputIdentity(
+                timestamp: input.timestamp,
+                deviceName: idleFault == .newDevice ? "Other controller" : input.deviceName,
+                channel: input.channel, value: input.value,
+                connectionGeneration: input.connectionGeneration
+                    + (idleFault == .newConnection || (idleFault == .racing && observationReads.isMultiple(of: 2)) ? 1 : 0)),
+                accumulatedSteps: observed.accumulatedSteps + (idleFault == .wrongCounter ? 1 : 0))
+        })
+        var rawValue = 64
+        func ingestValue() {
+            tracker.ingest(channel: ScratchPlatterTracker.rightChannel, value: rawValue,
+                inputIdentity: MIDIPlatterInputIdentity(timestamp: clock.now, deviceName: "Rane ONE MKII",
+                    channel: ScratchPlatterTracker.rightChannel, value: rawValue, connectionGeneration: 7))
+        }
+        ingestValue()
+        controller.testOnly_midiCoalescingTick()
+        var peak: Float = 0
+        var maximumMovingError = 0.0
+        func renderSlot() {
+            var pcm = [Float](repeating: 0, count: 735)
+            pcm.withUnsafeMutableBufferPointer { output in
+                controller.dvsContinuousRenderer.testOnly_render(
+                    left: output.baseAddress!, right: nil, frameCount: output.count)
+            }
+            peak = max(peak, pcm.map(abs).max() ?? 0)
+            clock.now += 735 / Self.rate
+        }
+        for delta in stepDeltas {
+            renderSlot()
+            for _ in 0..<abs(delta) {
+                rawValue = (rawValue + (delta > 0 ? 1 : 127)) % 128
+                ingestValue()
+            }
+            controller.testOnly_midiCoalescingTick()
+            let physical = controller.currentPlaybackPositionSnapshot().unwrappedFramePosition
+            let error = DVSContinuousVinylRenderCore.wrappedSignedDelta(
+                controller.dvsContinuousRenderer.testOnly_corePhase - Double(controller.hotCueOnsetFrame) - physical,
+                loop: controller.continuousLoopFrames)
+            maximumMovingError = max(maximumMovingError, abs(error))
+        }
+        // No more physical movement: the next quiet tick owns stop, followed
+        // by six render slots so the existing 3 ms gain ramp is fully silent.
+        testingIdle = true
+        if idleFault == .stale { clock.now += 0.3 }
+        for _ in 0..<7 {
+            renderSlot()
+            controller.testOnly_midiCoalescingTick()
+        }
+        let physical = controller.currentPlaybackPositionSnapshot().unwrappedFramePosition
+        let error = DVSContinuousVinylRenderCore.wrappedSignedDelta(
+            controller.dvsContinuousRenderer.testOnly_corePhase - Double(controller.hotCueOnsetFrame) - physical,
+            loop: controller.continuousLoopFrames)
+        return (error, peak, maximumMovingError)
+    }
+
+    func testPhysicalMIDISlowPushStopsAtMeasuredSamplePosition() throws {
+        let result = try physicalMIDIRenderResult(stepDeltas: Array(repeating: 4, count: 30))
+        XCTAssertGreaterThan(result.peakPCM, 0.1, "Exercise actual sample PCM, not only a control target.")
+        XCTAssertEqual(result.stoppedErrorFrames, 0, accuracy: 1,
+            "Stopped physical/render offset=\(result.stoppedErrorFrames) frames; maximum moving error=\(result.maximumMovingErrorFrames).")
+    }
+
+    func testPhysicalMIDIReversalStopsAtMeasuredSamplePosition() throws {
+        let result = try physicalMIDIRenderResult(
+            stepDeltas: Array(repeating: 4, count: 12) + Array(repeating: -3, count: 8))
+        XCTAssertGreaterThan(result.peakPCM, 0.1)
+        XCTAssertEqual(result.stoppedErrorFrames, 0, accuracy: 1,
+            "Reversed physical/render offset=\(result.stoppedErrorFrames) frames; maximum moving error=\(result.maximumMovingErrorFrames).")
+    }
+
+    func testPhysicalMIDINetZeroRoundTripStopsAtOriginalSamplePosition() throws {
+        let result = try physicalMIDIRenderResult(
+            stepDeltas: Array(repeating: 4, count: 30) + Array(repeating: -4, count: 30))
+        XCTAssertGreaterThan(result.peakPCM, 0.1)
+        XCTAssertEqual(result.stoppedErrorFrames, 0, accuracy: 1,
+            "Net-zero physical/render offset=\(result.stoppedErrorFrames) frames; maximum moving error=\(result.maximumMovingErrorFrames).")
+    }
+
+    func testPhysicalMIDIIdleRejectsUntrustedEndpointObservations() throws {
+        for fault in IdleObservationFault.allCases {
+            let result = try physicalMIDIRenderResult(
+                stepDeltas: Array(repeating: 4, count: 30), idleFault: fault)
+            XCTAssertGreaterThan(result.peakPCM, 0.1)
+            XCTAssertGreaterThan(abs(result.stoppedErrorFrames), 1,
+                "\(fault) must keep ordinary idle phase instead of repositioning from untrusted MIDI metadata.")
+        }
+    }
+
     func testRenderedCursorRequiresCurrentContinuousOwnerAndPreservesLogicalPosition() throws {
         let (controller, setNow, setSteps) = try makeController()
         XCTAssertNil(controller.currentPlaybackPositionSnapshot().renderedFramePosition)

@@ -11123,6 +11123,42 @@ enum CaptureCore {
     /// never "unknown position observed".
     struct CrossfaderTakeStartState: Codable, Equatable, Sendable {
 
+        /// A take-owned seal for a control that received NO further CC messages
+        /// before the MIDI capture window closed. This is held control state,
+        /// never an extra MIDI packet or a fresh physical measurement.
+        struct ParkedHold: Codable, Equatable, Sendable {
+            static let currentSchemaVersion = 1
+            let schemaVersion: Int
+            let sessionID: String
+            let takeID: String
+            let takeGeneration: UInt64
+            let midiSourceID: String
+            let midiConnectionGeneration: UInt64
+            let observationSequence: Int
+            let rawValue: Int
+            let calibration: CrossfaderCalibration
+            let mediaStartHostTime: Double
+            let captureEndHostTime: Double
+
+            init(sessionID: String, takeID: String, takeGeneration: UInt64,
+                 midiSourceID: String, midiConnectionGeneration: UInt64,
+                 observationSequence: Int, rawValue: Int,
+                 calibration: CrossfaderCalibration,
+                 mediaStartHostTime: Double, captureEndHostTime: Double) {
+                schemaVersion = Self.currentSchemaVersion
+                self.sessionID = sessionID
+                self.takeID = takeID
+                self.takeGeneration = takeGeneration
+                self.midiSourceID = midiSourceID
+                self.midiConnectionGeneration = midiConnectionGeneration
+                self.observationSequence = observationSequence
+                self.rawValue = rawValue
+                self.calibration = calibration
+                self.mediaStartHostTime = mediaStartHostTime
+                self.captureEndHostTime = captureEndHostTime
+            }
+        }
+
         /// Bumped only when the MEANING of a persisted field changes.
         static let currentSchemaVersion = 1
 
@@ -11170,6 +11206,9 @@ enum CaptureCore {
         let observedTakeRelativeTime: Double?
         /// Why the state is unknown. `nil` for a usable snapshot.
         let unknownReason: String?
+        /// Absent in older takes and whenever this take's uninterrupted parked
+        /// state could not be sealed. Absence never permits extrapolation.
+        var parkedHold: ParkedHold?
 
         init(
             schemaVersion: Int = CrossfaderTakeStartState.currentSchemaVersion,
@@ -11188,7 +11227,8 @@ enum CaptureCore {
             crossfaderCurveResponse: FaderCurveResponse? = nil,
             observationSequence: Int?,
             observedTakeRelativeTime: Double?,
-            unknownReason: String?
+            unknownReason: String?,
+            parkedHold: ParkedHold? = nil
         ) {
             self.schemaVersion = schemaVersion
             self.provenance = provenance
@@ -11207,6 +11247,7 @@ enum CaptureCore {
             self.observationSequence = observationSequence
             self.observedTakeRelativeTime = observedTakeRelativeTime
             self.unknownReason = unknownReason
+            self.parkedHold = parkedHold
         }
 
         /// An explicit "we do not know" record. Written whenever no live

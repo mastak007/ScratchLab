@@ -1,3 +1,7 @@
+- [ ] Run the fresh-worktree CXL pilot batch: one Movement check(no beat), parked fader/open state, physical response, Mac/Watch Stop, whole-take playback, export and Retake/New scratch. See AI_HANDOFF.md; canonical approval is not part of this diagnostic.
+
+- [x] Correct CXL parked-fader evidence, idle preflight, MIDI stop position and WAV/MOV tail mismatch; fix permanent audio-tap teardown crash (2026-09-12 SOFTWARE VERIFIED AND INSTALLED).540unique passes/2skips, Python84passes, universal Mac and signed iPhone/Watch builds; all three installed. Physical pilot verification remains below.
+
 - [ ] Validate one no-beat Rane ONE capture, playback and export with the new direct output; then establish separate beat routing and Rane72/Twelve production mapping before CXL reference capture.
 - [x] Correct CXL output meter and direct Rane ONE routing (2026-09-12, SOFTWARE VERIFIED AND INSTALLED). Actual PCM peak/dBFS, verified USB3/4 primary, optional delayed Mac monitor, stable intended UID on disconnect and separate output audit.271 unique passes/2 skips, universal Release/signature passed; see ../evidence/cxl-output-meter-20260912/RESULT.md. Physical capture and beat routing remain pending.
 - [ ] Check new CXL guides, AHHH cursor and continuous motion with one slow right-platter movement; no recording needed.

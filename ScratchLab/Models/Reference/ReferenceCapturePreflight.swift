@@ -68,10 +68,10 @@ struct ReferencePreflightSnapshot: Equatable, Sendable {
     let latestCrossfaderRawValue: Int?
     /// The calibration on file for the observed address, if any.
     let calibration: CrossfaderCalibration?
-    /// Crossfader MIDI messages seen SINCE APP LAUNCH — a lifetime total, not
-    /// a take-scoped or panel-scoped one. On its own it says nothing about
-    /// whether the fader is transmitting now; read it with
-    /// `crossfaderSecondsSinceLastMessage`.
+    /// Running crossfader message count carried by an observation from the
+    /// CURRENT connected MIDI source/generation. Callers must exclude cached
+    /// observations from an earlier connection. The counter may include earlier
+    /// traffic, so it does not prove movement now or samples in this take.
     let crossfaderEventCount: Int
     /// Age of the most recent crossfader message, in seconds. `nil` when none
     /// has ever arrived.
@@ -90,7 +90,8 @@ struct ReferencePreflightSnapshot: Equatable, Sendable {
     /// Every MIDI address that has carried traffic since launch, most recently
     /// active first. Diagnostic only — never a mapping or a decision.
     let observedMIDIAddresses: [ReferenceLiveMIDIAddressObservation]
-    /// Platter MIDI messages seen since the panel opened.
+    /// Running platter message count from a current-connection observation.
+    /// Zero until this connected source/generation has actually sent traffic.
     let platterEventCount: Int
     /// Whether the platter has moved recently enough to count as live.
     let platterIsMoving: Bool
@@ -228,27 +229,44 @@ enum ReferenceCapturePreflight {
     static func crossfaderIsRecentlyActive(snapshot: ReferencePreflightSnapshot) -> Bool {
         guard snapshot.crossfaderEventCount > 0,
               let age = snapshot.crossfaderSecondsSinceLastMessage else { return false }
-        return age < recentActivityWindow
+        return age.isFinite && age >= 0 && age < recentActivityWindow
     }
 
-    /// Row text that always distinguishes lifetime traffic from live traffic,
-    /// and — while a take is recording — reports the take-scoped count, which
-    /// is the number that actually reaches the sidecar.
+    /// Readiness belongs to a valid observation on the selected connection,
+    /// not to whether the operator is moving their hand at this instant.
+    static func controllerIsConnected(snapshot: ReferencePreflightSnapshot) -> Bool {
+        guard let name = snapshot.controllerName,
+              !name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+              let identifier = snapshot.controllerIdentifier,
+              !identifier.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return false }
+        return true
+    }
+
+    static func crossfaderIsReady(snapshot: ReferencePreflightSnapshot) -> Bool {
+        guard controllerIsConnected(snapshot: snapshot),
+              snapshot.crossfaderEventCount > 0,
+              let address = snapshot.observedCrossfaderAddress,
+              address.deviceIdentifier == snapshot.controllerIdentifier,
+              let raw = snapshot.latestCrossfaderRawValue, (0...127).contains(raw) else { return false }
+        return true
+    }
+
+    /// Activity and take-scoped counts remain explicit even when readiness
+    /// stays green for a parked control. Readiness never proves take evidence.
     static func crossfaderDetail(snapshot: ReferencePreflightSnapshot) -> String {
         var parts: [String] = []
-        if snapshot.crossfaderEventCount > 0 {
+        if crossfaderIsReady(snapshot: snapshot) {
+            parts.append(crossfaderIsRecentlyActive(snapshot: snapshot) ? "Ready — moving now" : "Ready — idle")
             parts.append("\(snapshot.crossfaderEventCount) since launch")
-            if let age = snapshot.crossfaderSecondsSinceLastMessage {
-                parts.append(
-                    crossfaderIsRecentlyActive(snapshot: snapshot)
-                        ? "moving now"
-                        : String(format: "last message %.1fs ago — currently silent", age)
-                )
+            if let age = snapshot.crossfaderSecondsSinceLastMessage, age.isFinite, age >= 0 {
+                if !crossfaderIsRecentlyActive(snapshot: snapshot) {
+                    parts.append(String(format: "last message %.1fs ago", age))
+                }
             } else {
-                parts.append("last message age unknown — treat as silent")
+                parts.append("last message age unavailable")
             }
         } else {
-            parts.append("No crossfader traffic since launch. Move the crossfader.")
+            parts.append("No valid crossfader traffic for the selected connection. Move the crossfader after connecting.")
         }
         if snapshot.isRecordingTake {
             parts.append("\(snapshot.takeScopedCrossfaderEventCount) in this take")
@@ -398,34 +416,30 @@ enum ReferenceCapturePreflight {
             )
         }
 
-        // Crossfader liveness.
-        //
-        // The lifetime count alone is NOT evidence the fader is transmitting:
-        // it never decreases and is never reset, so it keeps reading
-        // "satisfied" for the rest of the app's life after a single message.
-        // Satisfied requires a message inside `recentActivityWindow`, the same
-        // rule the platter row already applies.
+        // A parked control stays ready after a valid current-connection
+        // observation; movement and take evidence remain separate diagnostics.
         checks.append(
             ReferencePreflightCheck(
                 id: "crossfaderEvents",
                 title: "Crossfader events",
                 detail: Self.crossfaderDetail(snapshot: snapshot),
-                status: Self.crossfaderIsRecentlyActive(snapshot: snapshot) ? .satisfied : .advisory
+                status: Self.crossfaderIsReady(snapshot: snapshot) ? .satisfied : .advisory
             )
         )
 
-        // Platter
-        let platterSatisfied = snapshot.platterEventCount > 0 && snapshot.platterIsMoving
+        // Platter readiness survives ordinary stillness, but not a source or
+        // connection change. The bridge only supplies current-generation traffic.
+        let platterReady = controllerIsConnected(snapshot: snapshot) && snapshot.platterEventCount > 0
         checks.append(
             ReferencePreflightCheck(
                 id: "platter",
                 title: "Platter",
-                detail: snapshot.platterEventCount > 0
+                detail: platterReady
                     ? (snapshot.platterIsMoving
-                        ? "\(snapshot.platterEventCount) events, moving."
-                        : "\(snapshot.platterEventCount) events, currently still.")
-                    : "No platter traffic detected. Touch the platter.",
-                status: platterSatisfied
+                        ? "Ready — moving · \(snapshot.platterEventCount) messages seen."
+                        : "Ready — idle · \(snapshot.platterEventCount) messages seen.")
+                    : "No platter traffic for the selected connection. Touch the platter after connecting.",
+                status: platterReady
                     ? .satisfied
                     : (expectation.requiresPlatterMotion && snapshot.platterEventCount == 0
                         ? .blocking

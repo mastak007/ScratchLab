@@ -643,12 +643,13 @@ enum ReferenceValidator {
     /// there; absence of KNOWLEDGE is not, and the two were being reported as
     /// the same thing.
     enum FaderOpenEvidence: Equatable, Sendable {
-        /// Trustworthy calibrated intervals exist, they begin at the take's
-        /// start, and every one of them is open.
+        /// Trustworthy positive-duration calibrated intervals cover the
+        /// reviewed repetition, satisfy the initial baseline policy, and
+        /// every measured interval is open.
         case provenContinuouslyOpen
         /// Trustworthy calibrated intervals exist and at least one is not open.
         case provenClosedAtSomePoint(closedIntervalCount: Int)
-        /// No trustworthy calibrated interval covers the take's start. NEVER
+        /// Trustworthy calibrated coverage is incomplete. NEVER
         /// treated as open — an unmeasured fader is unknown, not compliant.
         case unknown(detail: String)
     }
@@ -668,8 +669,15 @@ enum ReferenceValidator {
         guard let derivation = evidence.derivation else {
             return .unknown(detail: "no calibrated fader stream could be derived for this take.")
         }
-        guard let first = derivation.intervals.min(by: { $0.startTime < $1.startTime }) else {
-            return .unknown(detail: "no crossfader position was recorded at any point in this take.")
+        guard derivation.intervals.allSatisfy({
+            $0.startTime.isFinite && $0.endTime.isFinite && $0.startTime >= 0 && $0.endTime >= $0.startTime
+        }) else {
+            return .unknown(detail: "the calibrated fader intervals contain invalid timing.")
+        }
+        let intervals = derivation.intervals.filter { $0.endTime > $0.startTime }
+            .sorted { $0.startTime < $1.startTime }
+        guard let first = intervals.first else {
+            return .unknown(detail: "no calibrated crossfader interval covers a positive duration in this take.")
         }
         guard first.startTime <= baselineTolerance else {
             return .unknown(
@@ -680,9 +688,48 @@ enum ReferenceValidator {
             )
         }
         let closedCount = derivation.intervals.filter { $0.state != .open }.count
-        return closedCount == 0
-            ? .provenContinuouslyOpen
-            : .provenClosedAtSomePoint(closedIntervalCount: closedCount)
+        guard closedCount == 0 else {
+            return .provenClosedAtSomePoint(closedIntervalCount: closedCount)
+        }
+
+        let repetitions: [ReferenceRepetitionBoundary]
+        if evidence.boundaries.selectedRepetitionIndex != nil {
+            guard let selected = evidence.boundaries.selectedRepetition else {
+                return .unknown(detail: "the selected repetition has no recorded review range.")
+            }
+            repetitions = [selected]
+        } else {
+            // Selection is separately required for approval. Until then, do
+            // not claim the declared repetitions are covered from a singleton.
+            repetitions = evidence.boundaries.repetitions
+        }
+        let ranges = repetitions.map { repetition in
+            (start: repetition.startSeconds(metadata: evidence.metadata),
+             end: repetition.endSeconds(metadata: evidence.metadata))
+        }
+        guard !ranges.isEmpty,
+              ranges.allSatisfy({ $0.start.isFinite && $0.end.isFinite && $0.end > max(0, $0.start) }),
+              let start = ranges.map({ max(0, $0.start) }).min(),
+              let end = ranges.map(\.end).max() else {
+            return .unknown(detail: "the repetition's recorded media range could not be established.")
+        }
+        // Only numerical roundoff is tolerated between measured intervals;
+        // the existing baseline allowance never fills internal/end gaps.
+        let roundingTolerance = 1e-9
+        var coveredUntil = start
+        for interval in intervals where interval.endTime > coveredUntil {
+            if interval.startTime > coveredUntil + roundingTolerance {
+                let isInitialBaselineAllowance = coveredUntil == start
+                    && interval.startTime == first.startTime
+                    && first.startTime <= baselineTolerance
+                guard isInitialBaselineAllowance else {
+                    return .unknown(detail: "calibrated crossfader evidence has a gap in the reviewed repetition.")
+                }
+            }
+            coveredUntil = max(coveredUntil, interval.endTime)
+            if coveredUntil + roundingTolerance >= end { return .provenContinuouslyOpen }
+        }
+        return .unknown(detail: "calibrated crossfader evidence does not reach the end of the reviewed repetition.")
     }
 
     // MARK: Recorded evidence

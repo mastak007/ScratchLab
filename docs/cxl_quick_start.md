@@ -25,6 +25,10 @@ Timed reference captures use a saved, verified backing asset set (runtime v2). R
 
 Reuse the saved crossfader calibration when it already matches the device, MIDI address, deck and open end. Calibration applies to new recordings; it cannot repair unknown fader evidence in an older take. The [Watch crown-wake workaround](cxl_capture_run_sheets.md#watch-setup-before-the-next-pilot-capture) remains provisional; verify actual sample continuity, Stop and transfer for each acceptance take.
 
+Live preflight groups green checks at the top in two columns, with errors and warnings underneath. After a real platter or crossfader message arrives on the current connection, **Ready — idle** stays green when you stop moving. **Moving** describes recent activity only. Reconnecting a controller requires a new observed message; old readings cannot certify the new connection. Green readiness does not certify the contents of a recorded take.
+
+A freshly recorded, calibrated fader that stays parked can now retain its observed state through Stop. This requires the same connection, mapping and calibration throughout; changing them or receiving an unresolved MIDI update leaves coverage unknown. Existing recordings with only a take-start reading are not repaired. Selecting an open position today cannot change an older take.
+
 ## Capture
 
 For a simple test, choose **Movement check (no beat)** and apply the setup. Press **Record movement check** directly above the video. Wait for **Recording started**, perform one slow movement, then press **Stop and Finalize**. Use **Play whole take** to review it. This mode saves diagnostic evidence and does not produce a canonical reference.

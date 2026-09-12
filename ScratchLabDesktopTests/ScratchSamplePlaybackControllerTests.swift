@@ -9,6 +9,30 @@ final class ScratchSamplePlaybackControllerTests: XCTestCase {
 
     // MARK: - Actual post-fader output metering (no audio hardware)
 
+    func testOutputTapCannotBecomeTheControllersFinalOwner() throws {
+        var controller: ScratchSamplePlaybackController? = ScratchSamplePlaybackController()
+        weak var observedController = controller
+        var reachedPublication = false
+        let handler = try XCTUnwrap(controller).testOnly_scratchOutputTapHandler {
+            reachedPublication = true
+            // Release the external owner while the exact production tap
+            // handler is executing. A temporary strong `self` in that handler
+            // would defer destruction until AVFoundation's callback returns.
+            controller = nil
+            XCTAssertNil(observedController,
+                "The tap must not retain the controller and run its engine teardown on AVFoundation's service queue.")
+        }
+        let format = try XCTUnwrap(AVAudioFormat(standardFormatWithSampleRate: 44_100, channels: 2))
+        let buffer = try XCTUnwrap(AVAudioPCMBuffer(pcmFormat: format, frameCapacity: 16))
+        buffer.frameLength = 16
+        for channel in 0..<2 {
+            for frame in 0..<16 { buffer.floatChannelData![channel][frame] = 0.25 }
+        }
+        handler(buffer, AVAudioTime(sampleTime: 0, atRate: 44_100))
+        XCTAssertTrue(reachedPublication)
+        XCTAssertNil(observedController)
+    }
+
     func testOutputMeterDistinguishesSilenceFromMissingCallbacks() throws {
         let meter = ScratchOutputPeakMeter()
         XCTAssertNil(meter.consume(now: 10))

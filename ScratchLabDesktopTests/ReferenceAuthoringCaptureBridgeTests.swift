@@ -13,6 +13,7 @@
 
 import AVFoundation
 import CoreMIDI
+import QuartzCore
 import XCTest
 @testable import ScratchLab
 
@@ -1396,4 +1397,436 @@ final class CrossfaderTakeStartStateTests: XCTestCase {
         )
     }
 
+}
+
+final class ParkedCrossfaderTakeCoverageTests: XCTestCase {
+    private let sourceID = "midi_parked_coverage_fixture"
+    private let mapping = MacCaptureEngine.CrossfaderCCMapping(channel: 15, controller: 8)
+
+    private func calibration(center: Int = 63) -> CrossfaderCalibration {
+        CrossfaderCalibration(address: .init(deviceIdentifier: sourceID, deviceName: "Rane ONE MKII",
+            channel: 15, controller: 8), fullLeftRawValue: 0, centerRawValue: center, fullRightRawValue: 127,
+            openEnd: .right, activeDeck: .rightDeck,
+            calibratedAt: Date(timeIntervalSince1970: 1_788_000_000))
+    }
+
+    private func record(_ engine: MacCaptureEngine, time: Double, generation: UInt64 = 3) {
+        engine.recordReceivedMIDICCEvent(sourceIdentifier: sourceID, sourceName: "Rane ONE MKII",
+            channel: 15, controller: 8, value: 127, timestamp: time, inputConnectionGeneration: generation)
+    }
+
+    private func begin() throws -> (MacCaptureEngine, MacCaptureEngine.MIDICaptureTakeToken) {
+        let suite = "com.machelpnz.scratchlab.tests.parked-coverage.\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        addTeardownBlock { defaults.removePersistentDomain(forName: suite) }
+        let engine = MacCaptureEngine(autoRefreshDevices: false, midiDefaults: defaults)
+        engine.selectedMIDIInputSourceID = sourceID
+        // Arming runs the real reconnect path, which correctly retires a fake
+        // source absent from device discovery. Install the synthetic connected
+        // input AFTER arming, while the admission epoch is still closed.
+        let token = engine.testOnly_armTakeMIDIWindow()
+        engine.testOnly_setLiveFaderContext(sourceID: sourceID, connectionGeneration: 3,
+            mapping: mapping, calibrations: [calibration()])
+        let control = MIDILearnedControl(action: .crossfader, messageType: .controlChange,
+            channel: 15, controlNumber: 8)
+        engine.testOnly_setDeviceMapping(MIDIDeviceMapping(deviceIdentifier: sourceID,
+            deviceName: "Rane ONE MKII", controls: [control]))
+        record(engine, time: 99)
+        let observation = try XCTUnwrap(engine.latestCCObservation(channel: 15, controller: 8))
+        engine.testOnly_openTakeMIDIEpoch(at: 100)
+        _ = try XCTUnwrap(engine.makeLivePerformedNotationDataSource().activeCrossfaderState?(),
+            "The fixture must establish a current connected observation before testing its invalidation.")
+        let state = MacCaptureEngine.crossfaderTakeStartState(sessionID: "parked-session", takeID: "parked-take",
+            takeGeneration: 8, midiSourceID: sourceID, connectionGeneration: 3, mapping: mapping,
+            observation: observation,
+            curveResponse: control.resolvedCurveConfig.resolvedResponse(for: control),
+            mediaStartHostTime: 100)
+        engine.testOnly_beginParkedCrossfaderCoverage(state: state, at: 100)
+        return (engine, token)
+    }
+
+    private func finish(_ engine: MacCaptureEngine, token: MacCaptureEngine.MIDICaptureTakeToken,
+                        at time: Double = 104) throws -> CaptureCore.CrossfaderTakeStartState {
+        engine.testOnly_closeTakeMIDIEpoch(at: time, token: token)
+        let state = try XCTUnwrap(engine.testOnly_takeCrossfaderTakeStartState())
+        XCTAssertNotNil(engine.testOnly_drainTakeMIDIWindow(token: token))
+        return state
+    }
+
+    private func sealedState() throws -> CaptureCore.CrossfaderTakeStartState {
+        let (engine, token) = try begin()
+        return try finish(engine, token: token)
+    }
+
+    private func base() -> CrossfaderDerivation {
+        CrossfaderDerivation(intervals: [.init(state: .open, startTime: 0, endTime: 0,
+            startPosition: 1, endPosition: 1)], events: [])
+    }
+
+    private func derive(_ state: CaptureCore.CrossfaderTakeStartState?, duration: Double? = 4,
+                        samples: [CrossfaderPositionSample] = [],
+                        using calibration: CrossfaderCalibration? = nil) -> CrossfaderDerivation {
+        ReferenceCrossfaderTakeStart.applyingParkedHold(to: base(), state: state,
+            outcome: .adopted(rawValue: 127, observedTakeRelativeTime: -1),
+            recordedSamples: samples, calibration: calibration ?? self.calibration(),
+            measuredMediaDuration: duration)
+    }
+
+    func testParkedControlSealsAtStopWithoutFabricatingAnInTakePacket() throws {
+        let (engine, token) = try begin()
+        XCTAssertTrue(engine.capturedMidiCCEventsSnapshot().isEmpty)
+        let state = try finish(engine, token: token)
+        let hold = try XCTUnwrap(state.parkedHold)
+        XCTAssertEqual(state.observedTakeRelativeTime, -1)
+        XCTAssertEqual(hold.mediaStartHostTime, 100)
+        XCTAssertEqual(hold.captureEndHostTime, 104)
+        XCTAssertEqual(hold.calibration, calibration())
+        XCTAssertEqual(derive(state).intervals.first?.endTime, 4)
+        XCTAssertTrue(derive(state).events.isEmpty)
+    }
+
+    func testDuplicateStopCannotExtendTheSealedInterval() throws {
+        let (engine, token) = try begin()
+        engine.testOnly_closeTakeMIDIEpoch(at: 104, token: token)
+        let state = try finish(engine, token: token, at: 110)
+        XCTAssertEqual(state.parkedHold?.captureEndHostTime, 104)
+    }
+
+    func testNewCC8EvenAtTheSamePositionRetiresParkedOnlyCoverage() throws {
+        let (engine, token) = try begin()
+        record(engine, time: 102)
+        XCTAssertEqual(engine.capturedMidiCCEventsSnapshot().count, 1)
+        XCTAssertNil(try finish(engine, token: token).parkedHold)
+    }
+
+    func testUnrelatedPlatterPacketsDoNotRetireParkedFaderCoverage() throws {
+        let (engine, token) = try begin()
+        engine.recordReceivedMIDICCEvent(sourceIdentifier: sourceID, sourceName: "Rane ONE MKII",
+            channel: 1, controller: 6, value: 32, timestamp: 102, inputConnectionGeneration: 3)
+        XCTAssertNotNil(try finish(engine, token: token).parkedHold)
+    }
+
+    func testStopDuringAdmittedButUnobservedCC8CannotSealTheOldCachedValue() throws {
+        let (engine, token) = try begin()
+        engine.testOnly_midiObservationIngressHook = {
+            engine.testOnly_midiObservationIngressHook = nil
+            engine.testOnly_closeTakeMIDIEpoch(at: 102, token: token)
+        }
+        record(engine, time: 101)
+        XCTAssertTrue(engine.capturedMidiCCEventsSnapshot().isEmpty,
+            "The callback's old admission ticket must be refused after Stop.")
+        XCTAssertNil(try finish(engine, token: token).parkedHold,
+            "A packet pending observation at Stop makes parked continuity unknown.")
+    }
+
+    func testDisconnectAndReconnectCannotRestoreTheTakeCandidate() throws {
+        let (engine, token) = try begin()
+        engine.testOnly_setLiveFaderContext(sourceID: nil, connectionGeneration: 4,
+            mapping: mapping, calibrations: [calibration()])
+        engine.testOnly_setLiveFaderContext(sourceID: sourceID, connectionGeneration: 5,
+            mapping: mapping, calibrations: [calibration()])
+        record(engine, time: 102, generation: 5)
+        XCTAssertNil(try finish(engine, token: token).parkedHold)
+    }
+
+    func testMappingRemovalAndRestoreCannotRestoreTheTakeCandidate() throws {
+        let (engine, token) = try begin()
+        engine.testOnly_setLiveFaderContext(sourceID: sourceID, connectionGeneration: 3,
+            mapping: nil, calibrations: [calibration()])
+        engine.testOnly_setLiveFaderContext(sourceID: sourceID, connectionGeneration: 3,
+            mapping: mapping, calibrations: [calibration()])
+        record(engine, time: 102)
+        XCTAssertNil(try finish(engine, token: token).parkedHold)
+    }
+
+    func testSameIDFullCalibrationChangeAndRestoreRetiresTheTakeCandidate() throws {
+        let (engine, token) = try begin()
+        XCTAssertEqual(calibration().id, calibration(center: 60).id)
+        engine.testOnly_setLiveFaderContext(sourceID: sourceID, connectionGeneration: 3,
+            mapping: mapping, calibrations: [calibration(center: 60)])
+        engine.testOnly_setLiveFaderContext(sourceID: sourceID, connectionGeneration: 3,
+            mapping: mapping, calibrations: [calibration()])
+        record(engine, time: 102)
+        XCTAssertNil(try finish(engine, token: token).parkedHold)
+    }
+
+    func testLearnedControlMutationRetiresTheTakeCandidate() throws {
+        let (engine, token) = try begin()
+        engine.testOnly_setDeviceMapping(nil)
+        XCTAssertNil(try finish(engine, token: token).parkedHold)
+    }
+
+    func testChangingSelectedSourceRetiresTheTakeCandidate() throws {
+        let (engine, token) = try begin()
+        engine.selectedMIDIInputSourceID = "different-source"
+        engine.selectedMIDIInputSourceID = sourceID
+        XCTAssertNil(try finish(engine, token: token).parkedHold)
+    }
+
+    func testPostStopDisconnectDoesNotRewriteAlreadySealedEvidence() throws {
+        let (engine, token) = try begin()
+        engine.testOnly_closeTakeMIDIEpoch(at: 104, token: token)
+        engine.testOnly_setLiveFaderContext(sourceID: nil, connectionGeneration: 4,
+            mapping: mapping, calibrations: [calibration()])
+        XCTAssertNotNil(try finish(engine, token: token).parkedHold)
+    }
+
+    func testHeldCoverageIsBoundedByBothMediaAndActualStop() throws {
+        let state = try sealedState()
+        XCTAssertEqual(derive(state, duration: 2.5).intervals.first?.endTime, 2.5)
+        XCTAssertEqual(derive(state, duration: 12).intervals.first?.endTime, 4)
+        for invalidDuration in [Double.nan, .infinity, 0, -1] {
+            XCTAssertEqual(derive(state, duration: invalidDuration), base())
+        }
+        XCTAssertEqual(derive(state, duration: nil), base())
+    }
+
+    func testLegacyOrMissingSealNeverExtendsTheBaseline() throws {
+        var state = try sealedState()
+        state.parkedHold = nil
+        let encoded = try JSONEncoder().encode(state)
+        let decoded = try JSONDecoder().decode(CaptureCore.CrossfaderTakeStartState.self, from: encoded)
+        XCTAssertNil(decoded.parkedHold)
+        XCTAssertEqual(derive(decoded), base())
+        XCTAssertEqual(derive(nil), base())
+    }
+
+    func testTerminalSealRoundTripsWithoutAddingRawMIDI() throws {
+        let state = try sealedState()
+        let sidecar = CaptureCore.LocalRecordingSidecar(sessionID: "parked-session", takeID: "parked-take",
+            appLocalTakeNumber: 1, recordingRole: "mac_routine_capture", platform: "macOS",
+            appSurface: "CXL", sourceDeviceName: "Fixture", startedAt: Date(timeIntervalSince1970: 1_788_000_000),
+            recordingStatus: "completed", mediaFileName: "take.mov", sidecarFileName: "take.json",
+            crossfaderTakeStartState: state)
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .iso8601
+        let decoded = try decoder.decode(CaptureCore.LocalRecordingSidecar.self, from: sidecar.encodedData())
+        XCTAssertEqual(decoded.crossfaderTakeStartState, state)
+        XCTAssertNil(decoded.detectedNotation)
+    }
+
+    func testRawSamplesOrDifferentFullCalibrationPreventHeldExtension() throws {
+        let state = try sealedState()
+        XCTAssertEqual(derive(state, samples: [.init(takeRelativeTime: 1, rawValue: 127,
+            normalizedPosition: 1)]), base())
+        XCTAssertEqual(derive(state, using: calibration(center: 60)), base())
+    }
+
+    func testMismatchedTerminalIdentityAndInvalidTimesNeverExtendCoverage() throws {
+        let state = try sealedState()
+        let encoded = try JSONEncoder().encode(state)
+        let mutations: [(String, Any)] = [("takeID", "other"), ("sessionID", "other"),
+            ("takeGeneration", 99), ("midiSourceID", "other"), ("midiConnectionGeneration", 99),
+            ("observationSequence", 99), ("rawValue", 0), ("schemaVersion", 99),
+            ("mediaStartHostTime", 0), ("captureEndHostTime", 99)]
+        for (key, value) in mutations {
+            var document = try XCTUnwrap(JSONSerialization.jsonObject(with: encoded) as? [String: Any])
+            var seal = try XCTUnwrap(document["parkedHold"] as? [String: Any])
+            seal[key] = value
+            document["parkedHold"] = seal
+            let decoded = try JSONDecoder().decode(CaptureCore.CrossfaderTakeStartState.self,
+                from: JSONSerialization.data(withJSONObject: document))
+            XCTAssertEqual(derive(decoded), base(), "Malformed terminal field \(key) must fail closed")
+        }
+    }
+}
+
+final class MacLiveCrossfaderStateTests: XCTestCase {
+    private let sourceID = "midi_live_fader_fixture"
+    private let mapping = MacCaptureEngine.CrossfaderCCMapping(channel: 15, controller: 8)
+
+    private func calibration(center: Int = 58, right: Int = 126, dateOffset: Double = 0) -> CrossfaderCalibration {
+        CrossfaderCalibration(address: .init(deviceIdentifier: sourceID, deviceName: "Rane ONE MKII",
+            channel: 15, controller: 8), fullLeftRawValue: 0, centerRawValue: center, fullRightRawValue: right,
+            openEnd: .right, activeDeck: .rightDeck,
+            calibratedAt: Date(timeIntervalSince1970: 1_788_000_000 + dateOffset))
+    }
+
+    private func makeEngine() -> MacCaptureEngine {
+        let suite = "com.machelpnz.scratchlab.tests.live-fader.\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: suite)!
+        addTeardownBlock { defaults.removePersistentDomain(forName: suite) }
+        let engine = MacCaptureEngine(autoRefreshDevices: false, midiDefaults: defaults)
+        engine.selectedMIDIInputSourceID = sourceID
+        engine.testOnly_setLiveFaderContext(sourceID: sourceID, connectionGeneration: 3,
+            mapping: mapping, calibrations: [calibration()])
+        return engine
+    }
+
+    private func snapshot(_ engine: MacCaptureEngine) -> LiveCrossfaderStateSnapshot? {
+        engine.makeLivePerformedNotationDataSource().activeCrossfaderState?()
+    }
+
+    private func record(_ engine: MacCaptureEngine, time: Double, value: Int = 127,
+                        source: String? = nil, generation: UInt64 = 3,
+                        channel: Int = 15, controller: Int = 8) {
+        engine.recordReceivedMIDICCEvent(sourceIdentifier: source ?? sourceID,
+            sourceName: "Rane ONE MKII", channel: channel, controller: controller, value: value,
+            timestamp: time, inputConnectionGeneration: generation)
+    }
+
+    func testRealParkedFaderBeforePreviewIsAdoptedOnlyAfterWindowOpens() throws {
+        let engine = makeEngine()
+        let observed = CACurrentMediaTime() - 1
+        XCTAssertNil(snapshot(engine))
+        record(engine, time: observed)
+        XCTAssertNil(snapshot(engine), "an idle window cannot display held control state")
+        engine.beginLiveMIDICapture()
+        let state = try XCTUnwrap(snapshot(engine))
+        XCTAssertEqual(state.rawValue, 127)
+        XCTAssertEqual(state.calibration.normalized(rawValue: state.rawValue), 1)
+        XCTAssertEqual(state.observedHostTime, observed)
+        XCTAssertEqual(state.validFromHostTime, observed)
+        XCTAssertGreaterThan(state.windowStartHostTime, observed)
+        XCTAssertEqual(state.connectionGeneration, 3)
+        XCTAssertTrue(engine.capturedMidiCCEventsSnapshot().isEmpty,
+            "a pre-window parked observation must not be fabricated as a captured MIDI packet")
+        engine.endLiveMIDICaptureIfIdle()
+        XCTAssertNil(snapshot(engine))
+    }
+
+    func testPlatterTrafficAndPreviewTrimmingDoNotExpireParkedFader() throws {
+        let engine = makeEngine()
+        engine.beginLiveMIDICapture()
+        let observed = CACurrentMediaTime() + 0.01
+        record(engine, time: observed)
+        let initial = try XCTUnwrap(snapshot(engine))
+        for index in 0..<20 {
+            record(engine, time: observed + 120 + Double(index), value: index,
+                channel: 1, controller: 6)
+        }
+        XCTAssertEqual(snapshot(engine), initial)
+        XCTAssertFalse(engine.capturedMidiCCEventsSnapshot().contains { $0.controller == 8 },
+            "the independently retained observation must survive trimming its original preview packet")
+    }
+
+    func testWrongSourceAndWrongAddressCannotEstablishHeldState() {
+        let engine = makeEngine()
+        engine.beginLiveMIDICapture()
+        let now = CACurrentMediaTime()
+        record(engine, time: now, source: "different-source")
+        record(engine, time: now + 1, channel: 14)
+        record(engine, time: now + 2, controller: 6)
+        XCTAssertNil(snapshot(engine))
+        record(engine, time: now + 3)
+        XCTAssertEqual(snapshot(engine)?.rawValue, 127)
+    }
+
+    func testDisconnectAndNewConnectionRequireNewRealFaderObservation() throws {
+        let engine = makeEngine()
+        engine.beginLiveMIDICapture()
+        let now = CACurrentMediaTime()
+        record(engine, time: now)
+        XCTAssertNotNil(snapshot(engine))
+        engine.testOnly_setLiveFaderContext(sourceID: nil, connectionGeneration: 4,
+            mapping: mapping, calibrations: [calibration()])
+        XCTAssertNil(snapshot(engine))
+        engine.testOnly_setLiveFaderContext(sourceID: sourceID, connectionGeneration: 5,
+            mapping: mapping, calibrations: [calibration()])
+        XCTAssertNil(snapshot(engine))
+        record(engine, time: now + 1, generation: 5, channel: 1, controller: 6)
+        XCTAssertNil(snapshot(engine))
+        record(engine, time: now + 2, generation: 5)
+        let newState = try XCTUnwrap(snapshot(engine))
+        XCTAssertEqual(newState.connectionGeneration, 5)
+        XCTAssertEqual(newState.validFromHostTime, now + 2)
+    }
+
+    func testRetiredIngressGenerationCannotRestoreOrOverwriteCurrentState() throws {
+        let engine = makeEngine()
+        engine.beginLiveMIDICapture()
+        let now = CACurrentMediaTime()
+        record(engine, time: now)
+        engine.testOnly_setLiveFaderContext(sourceID: sourceID, connectionGeneration: 4,
+            mapping: mapping, calibrations: [calibration()])
+        record(engine, time: now + 1, value: 0, generation: 3)
+        XCTAssertNil(snapshot(engine))
+        record(engine, time: now + 2, generation: 4)
+        let current = try XCTUnwrap(snapshot(engine))
+        record(engine, time: now + 3, value: 0, generation: 3)
+        XCTAssertEqual(snapshot(engine), current)
+    }
+
+    func testRemovedMappingCannotResurrectOldObservationWhenRestored() {
+        let engine = makeEngine()
+        engine.beginLiveMIDICapture()
+        let now = CACurrentMediaTime()
+        record(engine, time: now)
+        XCTAssertNotNil(snapshot(engine))
+        engine.testOnly_setLiveFaderContext(sourceID: sourceID, connectionGeneration: 3,
+            mapping: nil, calibrations: [calibration()])
+        XCTAssertNil(snapshot(engine))
+        engine.testOnly_setLiveFaderContext(sourceID: sourceID, connectionGeneration: 3,
+            mapping: mapping, calibrations: [calibration()])
+        XCTAssertNil(snapshot(engine))
+        record(engine, time: now + 1)
+        XCTAssertEqual(snapshot(engine)?.validFromHostTime, now + 1)
+    }
+
+    func testRemovedCalibrationRequiresNewObservationAfterRestore() {
+        let engine = makeEngine()
+        engine.beginLiveMIDICapture()
+        let now = CACurrentMediaTime()
+        record(engine, time: now)
+        engine.testOnly_setLiveFaderContext(sourceID: sourceID, connectionGeneration: 3,
+            mapping: mapping, calibrations: [])
+        XCTAssertNil(snapshot(engine))
+        engine.testOnly_setLiveFaderContext(sourceID: sourceID, connectionGeneration: 3,
+            mapping: mapping, calibrations: [calibration()])
+        XCTAssertNil(snapshot(engine))
+        record(engine, time: now + 1)
+        XCTAssertEqual(snapshot(engine)?.validFromHostTime, now + 1)
+    }
+
+    func testSameAddressCalibrationReplacementInvalidatesUntilRealCC8() throws {
+        let engine = makeEngine()
+        engine.beginLiveMIDICapture()
+        let now = CACurrentMediaTime()
+        record(engine, time: now)
+        let replacement = calibration(center: 60, right: 127, dateOffset: 60)
+        XCTAssertEqual(replacement.id, calibration().id)
+        engine.testOnly_setLiveFaderContext(sourceID: sourceID, connectionGeneration: 3,
+            mapping: mapping, calibrations: [replacement])
+        XCTAssertNil(snapshot(engine))
+        record(engine, time: now + 1)
+        let updated = try XCTUnwrap(snapshot(engine))
+        XCTAssertEqual(updated.calibration, replacement)
+        XCTAssertEqual(updated.validFromHostTime, now + 1)
+    }
+
+    func testOlderSameConnectionPacketCannotRewindHeldPosition() throws {
+        let engine = makeEngine()
+        engine.beginLiveMIDICapture()
+        let now = CACurrentMediaTime()
+        record(engine, time: now)
+        let current = try XCTUnwrap(snapshot(engine))
+        record(engine, time: now - 1, value: 0)
+        XCTAssertEqual(snapshot(engine), current)
+        let ready = try XCTUnwrap(engine.currentConnectedMIDIObservationsSnapshot()?.observations.first)
+        XCTAssertEqual(ready.value, 127)
+        XCTAssertEqual(ready.observedAt, now)
+        XCTAssertEqual(engine.latestCCObservation(channel: 15, controller: 8)?.value, 127)
+    }
+
+    func testConnectedReadinessRetainsQuietObservationButRejectsRetiredGeneration() throws {
+        let engine = makeEngine()
+        let now = CACurrentMediaTime()
+        record(engine, time: now - 60)
+        let connected = try XCTUnwrap(engine.currentConnectedMIDIObservationsSnapshot())
+        XCTAssertEqual(connected.sourceID, sourceID)
+        XCTAssertEqual(connected.observations.first?.value, 127)
+        engine.testOnly_setLiveFaderContext(sourceID: sourceID, connectionGeneration: 3,
+            mapping: mapping, calibrations: [calibration()])
+        XCTAssertEqual(engine.currentConnectedMIDIObservationsSnapshot()?.observations, connected.observations)
+        engine.testOnly_setLiveFaderContext(sourceID: nil, connectionGeneration: 4,
+            mapping: mapping, calibrations: [calibration()])
+        XCTAssertNil(engine.currentConnectedMIDIObservationsSnapshot())
+        engine.testOnly_setLiveFaderContext(sourceID: sourceID, connectionGeneration: 5,
+            mapping: mapping, calibrations: [calibration()])
+        XCTAssertTrue(try XCTUnwrap(engine.currentConnectedMIDIObservationsSnapshot()).observations.isEmpty)
+        record(engine, time: now, generation: 3)
+        XCTAssertTrue(try XCTUnwrap(engine.currentConnectedMIDIObservationsSnapshot()).observations.isEmpty)
+        record(engine, time: now + 1, generation: 5)
+        XCTAssertEqual(engine.currentConnectedMIDIObservationsSnapshot()?.observations.first?.connectionGeneration, 5)
+    }
 }

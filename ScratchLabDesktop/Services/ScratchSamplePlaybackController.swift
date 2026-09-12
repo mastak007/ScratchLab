@@ -64,7 +64,22 @@ final class ScratchSamplePlaybackController {
     private var appliedOutputRoute: MacScratchOutputRoute.Applied?
     private var outputRouteNeedsApply = true
     private var outputRoutingError: String?
-    private let monitorRoutingState = Mutex(MacScratchMonitorRouteState())
+    /// Captured independently by the tap so AVFoundation's service callback
+    /// never becomes the playback controller's final owner.
+    private final class MonitorRoutingState: Sendable {
+        let value = Mutex(MacScratchMonitorRouteState())
+
+        func withLock<Result>(_ body: (inout MacScratchMonitorRouteState) -> Result) -> Result {
+            value.withLock { body(&$0) }
+        }
+    }
+    private let monitorRoutingState = MonitorRoutingState()
+    /// The callbacks capture this weak slot without loading it. Only the
+    /// monitor queue reads the slot and temporarily owns the controller.
+    private final class MonitorTapTarget: @unchecked Sendable {
+        weak var controller: ScratchSamplePlaybackController?
+        init(_ controller: ScratchSamplePlaybackController) { self.controller = controller }
+    }
 
     struct OutputRoutingSnapshot: Equatable, Sendable {
         var primaryDeviceID: UInt32?
@@ -688,8 +703,9 @@ final class ScratchSamplePlaybackController {
         guard hotCueLoopFrames > 0, forward.frameLength > 0 else { return }
 
         let now = schedulingClock()
-        // Preserve the existing scalar read and playback computation. Metadata
-        // only qualifies presentation, and a racing observation fails closed.
+        // Preserve the existing scalar read and playback computation. A
+        // correlated observation qualifies presentation and a silent endpoint
+        // reconciliation; racing metadata qualifies neither.
         let observationBefore = rightDeckObservationProvider?()
         let steps = provider()
         let observationAfter = rightDeckObservationProvider?()
@@ -748,7 +764,25 @@ final class ScratchSamplePlaybackController {
             if midiContinuousWasActive {
                 midiContinuousWasActive = false
                 platterRenderOwner = .midi
-                dvsContinuousRenderer.publishIdle()
+                // Only a recent, correlated endpoint from this sample and
+                // MIDI connection may reconcile residual render drift once
+                // silent. A stale counter, reconnect or sanitized movement
+                // retains ordinary idle behavior rather than inventing a cue.
+                let idleAnchor: MIDIIdlePhaseAnchor? = {
+                    guard let observation, let context = playbackLoopContext,
+                          let identity = loadedRenderSampleIdentity,
+                          context.generation == playbackLoopGeneration,
+                          context.sampleID == loadedSampleID,
+                          context.phaseSteps == midiContinuousAccumulatedSteps,
+                          context.anchor.deviceName == observation.input.deviceName,
+                          context.anchor.connectionGeneration == observation.input.connectionGeneration,
+                          observation.input.timestamp >= playbackLoopValidFrom,
+                          now - observation.input.timestamp <= MIDIPlatterContinuousDrive.maximumControlWindow
+                    else { return nil }
+                    return MIDIIdlePhaseAnchor(sampleIdentity: identity,
+                        sourceFrame: hotCueLoopPhaseFrame(forAccumulatedSteps: midiContinuousAccumulatedSteps))
+                }()
+                dvsContinuousRenderer.publishIdle(midiAnchor: idleAnchor)
             }
             return
         }
@@ -2014,20 +2048,43 @@ final class ScratchSamplePlaybackController {
         scratchOutputMixerNode.installTap(
             onBus: 0,
             bufferSize: 128,
-            format: format
-        ) { [weak self] buffer, _ in
-            guard let self else { return }
-            let token = self.scratchOutputPeakMeter.currentToken
+            format: format,
+            block: makeScratchOutputTapHandler()
+        )
+        macMonitorTapInstalled = true
+    }
+
+    private func makeScratchOutputTapHandler(afterMeterPublication: (() -> Void)? = nil) -> AVAudioNodeTapBlock {
+        let meter = scratchOutputPeakMeter
+        let routing = monitorRoutingState
+        let queue = macMonitorQueue
+        let target = MonitorTapTarget(self)
+        return { buffer, _ in
+            let token = meter.currentToken
             // Tap hostTime may be a future presentation timestamp. Meter
             // freshness describes callback arrival, not output/playhead time.
             let receivedAt = CACurrentMediaTime()
             if let peak = Self.scratchOutputPeak(in: buffer) {
-                self.scratchOutputPeakMeter.publish(peak: peak, receivedAt: receivedAt, token: token)
+                meter.publish(peak: peak, receivedAt: receivedAt, token: token)
             }
-            self.enqueueMacMonitorBuffer(buffer)
+            afterMeterPublication?()
+            let route = routing.withLock { $0 }
+            guard route.enabled, route.deviceID != nil,
+                  let copiedBuffer = Self.copyMacMonitorBuffer(buffer) else { return }
+            // Acquiring the controller on the tap's RealtimeMessenger queue
+            // could run deinit -> player.stop() on that same AVFoundation
+            // queue and trap. Only the independent monitor queue may acquire it.
+            queue.async {
+                target.controller?.scheduleMacMonitorBuffer(copiedBuffer, route: route)
+            }
         }
-        macMonitorTapInstalled = true
     }
+
+#if DEBUG
+    func testOnly_scratchOutputTapHandler(afterMeterPublication: @escaping () -> Void) -> AVAudioNodeTapBlock {
+        makeScratchOutputTapHandler(afterMeterPublication: afterMeterPublication)
+    }
+#endif
 
     private func removeMacMonitorTapIfNeeded() {
         scratchOutputPeakMeter.reset(now: CACurrentMediaTime())
@@ -2070,12 +2127,10 @@ final class ScratchSamplePlaybackController {
         }
     }
 
-    private func enqueueMacMonitorBuffer(_ sourceBuffer: AVAudioPCMBuffer) {
-        let route = monitorRoutingState.withLock { $0 }
-        guard route.enabled, route.deviceID != nil else { return }
+    private static func copyMacMonitorBuffer(_ sourceBuffer: AVAudioPCMBuffer) -> AVAudioPCMBuffer? {
         guard let copiedBuffer = AVAudioPCMBuffer(
             pcmFormat: sourceBuffer.format, frameCapacity: sourceBuffer.frameLength
-        ) else { return }
+        ) else { return nil }
         copiedBuffer.frameLength = sourceBuffer.frameLength
         let sourceBuffers = UnsafeMutableAudioBufferListPointer(sourceBuffer.mutableAudioBufferList)
         let destinationBuffers = UnsafeMutableAudioBufferListPointer(copiedBuffer.mutableAudioBufferList)
@@ -2086,20 +2141,25 @@ final class ScratchSamplePlaybackController {
             memcpy(destinationData, sourceData, byteCount)
             destinationBuffers[index].mDataByteSize = UInt32(byteCount)
         }
-        macMonitorQueue.async { [weak self] in
-            guard let self,
-                  self.monitorRoutingState.withLock({ $0.accepts(epoch: route.epoch) }),
-                  self.prepareMacMonitorIfNeeded(for: copiedBuffer.format, route: route),
-                  self.macMonitorPendingBufferCount < self.macMonitorMaximumPendingBufferCount else { return }
-            self.macMonitorPendingBufferCount += 1
-            self.macMonitorPlayerNode.scheduleBuffer(copiedBuffer, completionCallbackType: .dataPlayedBack) { [weak self] _ in
-                self?.macMonitorQueue.async { [weak self] in
-                    guard let self, self.monitorRoutingState.withLock({ $0.accepts(epoch: route.epoch) }) else { return }
-                    self.macMonitorPendingBufferCount = max(0, self.macMonitorPendingBufferCount - 1)
-                }
+        return copiedBuffer
+    }
+
+    /// Runs on macMonitorQueue; PCM is already copied before leaving the tap.
+    private func scheduleMacMonitorBuffer(_ copiedBuffer: AVAudioPCMBuffer, route: MacScratchMonitorRouteState) {
+        guard monitorRoutingState.withLock({ $0.accepts(epoch: route.epoch) }),
+              prepareMacMonitorIfNeeded(for: copiedBuffer.format, route: route),
+              macMonitorPendingBufferCount < macMonitorMaximumPendingBufferCount else { return }
+        macMonitorPendingBufferCount += 1
+        let queue = macMonitorQueue
+        let target = MonitorTapTarget(self)
+        macMonitorPlayerNode.scheduleBuffer(copiedBuffer, completionCallbackType: .dataPlayedBack) { _ in
+            queue.async {
+                guard let controller = target.controller,
+                      controller.monitorRoutingState.withLock({ $0.accepts(epoch: route.epoch) }) else { return }
+                controller.macMonitorPendingBufferCount = max(0, controller.macMonitorPendingBufferCount - 1)
             }
-            if !self.macMonitorPlayerNode.isPlaying { self.macMonitorPlayerNode.play() }
         }
+        if !macMonitorPlayerNode.isPlaying { macMonitorPlayerNode.play() }
     }
 
     private func prepareMacMonitorIfNeeded(for format: AVAudioFormat, route: MacScratchMonitorRouteState) -> Bool {

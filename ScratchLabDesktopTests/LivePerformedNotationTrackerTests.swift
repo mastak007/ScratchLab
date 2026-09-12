@@ -930,6 +930,192 @@ final class LivePerformedNotationTrackerTests: XCTestCase {
 
     // MARK: - Clock basis (host-time scoping vs take-relative derivation)
 
+    private func rightOpenLiveCalibration() -> CrossfaderCalibration {
+        CrossfaderCalibration(address: .init(deviceIdentifier: "midi_rane", deviceName: "Rane ONE MKII",
+            channel: 15, controller: 8), fullLeftRawValue: 0, centerRawValue: 58, fullRightRawValue: 126,
+            openEnd: .right, activeDeck: .rightDeck, calibratedAt: Date(timeIntervalSince1970: 1_788_000_000))
+    }
+
+    private func liveHeldState(
+        source: String = "midi_rane", channel: Int = 15, connection: UInt64 = 3,
+        calibrationID: String? = nil, rawValue: Int = 127, observedTime: Double = 999,
+        validFrom: Double = 999
+    ) -> LiveCrossfaderStateSnapshot {
+        .init(sourceIdentifier: source, channel: channel, controller: 8, connectionGeneration: connection,
+            calibrationID: calibrationID ?? rightOpenLiveCalibration().id,
+            calibration: rightOpenLiveCalibration(), rawValue: rawValue,
+            observedHostTime: observedTime, observationSequence: 42, windowStartHostTime: 1_000,
+            validFromHostTime: validFrom)
+    }
+
+    private func liveHeldProjection(
+        packets: [CaptureCore.RawMixerMIDIEvent]? = nil,
+        calibration: CrossfaderCalibration? = nil,
+        calibrationAvailable: Bool = true,
+        source: String = "midi_rane",
+        takeStart: CaptureCore.CrossfaderTakeStartState? = nil,
+        snapshot: @escaping () -> LiveCrossfaderStateSnapshot?
+    ) throws -> (ReferenceTearCanonicalProjection, CrossfaderDerivation?) {
+        let stream = packets ?? shiftedToHostEpoch(Self.raneRingStream(runs: 4, stepsPerRun: 120), epoch: 1_000)
+        let activeCalibration = calibration ?? rightOpenLiveCalibration()
+        let state = LivePerformedNotationTracker.computeState(dataSource: LivePerformedNotationDataSource(
+            selectedMIDISourceName: { "Rane ONE MKII" }, selectedMIDISourceIdentifier: { source },
+            capturedMidiCCEventsSnapshot: { stream }, cameraMovementEventsSnapshot: { _ in nil },
+            activeCrossfaderCalibration: { calibrationAvailable ? activeCalibration : nil },
+            activeCrossfaderTakeStartState: { takeStart }, activeCrossfaderState: snapshot
+        ), baselineTimestamp: 1_000)
+        guard case .tracking(_, _, _, _, let evidence, let derivation, _) = state else {
+            XCTFail("expected controller movement")
+            throw NSError(domain: "LiveHeldFaderFixture", code: 1)
+        }
+        let projection = ReferenceTearCanonicalProjectionBuilder.project(
+            movementEvents: LivePerformedNotationTracker.continuousRenderedEvents(for: state),
+            platterEvidenceIntervals: evidence, derivation: derivation)
+        XCTAssertFalse(projection.records.isEmpty)
+        return (projection, derivation)
+    }
+
+    func testParkedRight127BeforePreviewHasPositiveCanonicalOpenCoverage() throws {
+        let (projection, derivation) = try liveHeldProjection { self.liveHeldState() }
+        let rails = projection.records.flatMap(\.faderIntervals)
+        XCTAssertFalse(rails.isEmpty)
+        XCTAssertTrue(rails.allSatisfy { $0.state == .open && $0.span.endTime > $0.span.startTime })
+        XCTAssertFalse(projection.reasons.contains(.faderUnobserved))
+        XCTAssertGreaterThan(try XCTUnwrap(derivation?.intervals.last?.endTime), 0.5)
+        XCTAssertEqual(derivation?.events.count, 0, "a held observation does not invent fader clicks")
+    }
+
+    func testParkedLiveFaderSurvivesGenericPreviewPacketTrimming() throws {
+        let all = shiftedToHostEpoch(Self.raneRingStream(runs: 4, stepsPerRun: 120), epoch: 1_000)
+        let trimmed = all.filter { $0.timestamp >= 1_000.35 }
+        let (projection, _) = try liveHeldProjection(packets: trimmed) {
+            self.liveHeldState(observedTime: 1_000.01, validFrom: 1_000.01)
+        }
+        XCTAssertFalse(projection.reasons.contains(.faderUnobserved))
+        XCTAssertTrue(projection.records.flatMap(\.faderIntervals).allSatisfy { $0.state == .open })
+        XCTAssertGreaterThan(projection.records.flatMap(\.faderIntervals).count, 0)
+    }
+
+    func testDisconnectedLiveStateRejectsEvenPreviouslyCalibratedBufferedPackets() throws {
+        let calibration = rightOpenLiveCalibration()
+        let prior = CaptureCore.RawMixerMIDIEvent(timestamp: 1_000.01, takeRelativeTime: 0.01,
+            deviceIdentifier: "midi_rane", deviceName: "Rane ONE MKII", channel: 15, controller: 8,
+            value: 127, normalizedValue: 1, mappedControl: "crossfader",
+            calibratedPosition: 1, calibrationID: calibration.id)
+        let packets = shiftedToHostEpoch(Self.raneRingStream(runs: 4, stepsPerRun: 120), epoch: 1_000) + [prior]
+        let (projection, derivation) = try liveHeldProjection(packets: packets, snapshot: { nil })
+        XCTAssertNil(derivation)
+        XCTAssertTrue(projection.records.flatMap(\.faderIntervals).isEmpty)
+        XCTAssertTrue(projection.reasons.contains(.faderUnobserved))
+    }
+
+    func testLiveHeldFaderRejectsSourceMappingCalibrationAndInvalidConnection() throws {
+        let invalid = [liveHeldState(source: "midi_other"), liveHeldState(channel: 14),
+            liveHeldState(calibrationID: "old-calibration"), liveHeldState(connection: 0),
+            liveHeldState(rawValue: 128)]
+        for observation in invalid {
+            let (projection, derivation) = try liveHeldProjection { observation }
+            XCTAssertNil(derivation)
+            XCTAssertTrue(projection.records.flatMap(\.faderIntervals).isEmpty)
+        }
+    }
+
+    func testLiveHeldFaderRejectsConnectionChangeDuringSnapshotRead() throws {
+        var reads = 0
+        let (projection, derivation) = try liveHeldProjection {
+            reads += 1
+            return self.liveHeldState(connection: reads == 1 ? 3 : 4)
+        }
+        XCTAssertNil(derivation)
+        XCTAssertTrue(projection.records.flatMap(\.faderIntervals).isEmpty)
+    }
+
+    func testLiveHeldFaderBecomesUnknownWhenCalibrationDisappears() throws {
+        let (projection, derivation) = try liveHeldProjection(calibrationAvailable: false) {
+            self.liveHeldState()
+        }
+        XCTAssertNil(derivation)
+        XCTAssertTrue(projection.records.flatMap(\.faderIntervals).isEmpty)
+    }
+
+    func testLiveHeldFaderRejectsChangedCalibrationWithSameAddressID() throws {
+        let original = rightOpenLiveCalibration()
+        let revised = CrossfaderCalibration(address: original.address, fullLeftRawValue: 0,
+            centerRawValue: 60, fullRightRawValue: 127, openEnd: .right, activeDeck: .rightDeck,
+            calibratedAt: original.calibratedAt.addingTimeInterval(60))
+        XCTAssertEqual(original.id, revised.id)
+        let (projection, derivation) = try liveHeldProjection(calibration: revised) { self.liveHeldState() }
+        XCTAssertNil(derivation)
+        XCTAssertTrue(projection.records.flatMap(\.faderIntervals).isEmpty)
+    }
+
+    func testNewConnectionHeldStateDoesNotBackfillEarlierMotion() throws {
+        let oldConnectionPacket = CaptureCore.RawMixerMIDIEvent(timestamp: 1_000.02, takeRelativeTime: 0.02,
+            deviceIdentifier: "midi_rane", deviceName: "Rane ONE MKII", channel: 15, controller: 8,
+            value: 0, normalizedValue: 0, mappedControl: "crossfader", calibratedPosition: 0,
+            calibrationID: rightOpenLiveCalibration().id)
+        let packets = shiftedToHostEpoch(Self.raneRingStream(runs: 4, stepsPerRun: 120), epoch: 1_000)
+            + [oldConnectionPacket]
+        let (projection, derivation) = try liveHeldProjection(packets: packets) {
+            self.liveHeldState(connection: 4, observedTime: 1_000.4, validFrom: 1_000.4)
+        }
+        let rails = projection.records.flatMap(\.faderIntervals)
+        XCTAssertFalse(rails.isEmpty)
+        XCTAssertTrue(rails.allSatisfy { $0.span.startTime >= 0.4 - 1e-9 })
+        XCTAssertTrue(projection.reasons.contains(.faderUnobserved))
+        XCTAssertGreaterThan(try XCTUnwrap(derivation?.intervals.last?.endTime), 0.5)
+    }
+
+    func testLiveHeldTailPreservesActualFaderTransitions() throws {
+        let calibration = rightOpenLiveCalibration()
+        let values = [(0.02, 0), (0.08, 127)]
+        let faderPackets = values.map { time, value in
+            CaptureCore.RawMixerMIDIEvent(timestamp: 1_000 + time, takeRelativeTime: time,
+                deviceIdentifier: "midi_rane", deviceName: "Rane ONE MKII", channel: 15, controller: 8,
+                value: value, normalizedValue: Double(value) / 127, mappedControl: "crossfader",
+                calibratedPosition: calibration.normalized(rawValue: value), calibrationID: calibration.id)
+        }
+        let packets = shiftedToHostEpoch(Self.raneRingStream(runs: 4, stepsPerRun: 120), epoch: 1_000)
+            + faderPackets
+        let (_, live) = try liveHeldProjection(packets: packets) {
+            self.liveHeldState(observedTime: 1_000.08, validFrom: 1_000.02)
+        }
+        let rawDerivation = try XCTUnwrap(CrossfaderStateDeriver.derive(
+            rawEvents: values.map { (takeRelativeTime: $0.0, rawValue: $0.1) }, calibration: calibration))
+        XCTAssertEqual(live?.events, rawDerivation.events)
+        XCTAssertEqual(live?.intervals.first, rawDerivation.intervals.first)
+        XCTAssertEqual(live?.intervals.last?.state, .open)
+        XCTAssertGreaterThan(try XCTUnwrap(live?.intervals.last?.endTime), 0.5)
+    }
+
+    func testLiveHeldStateCannotReuseTakeStartSeedFromRetiredConnection() throws {
+        let oldState = CaptureCore.CrossfaderTakeStartState(provenance: .preTakeSnapshot,
+            sessionID: "session", takeID: "take", takeGeneration: 7, midiSourceID: "midi_rane",
+            deviceName: "Rane ONE MKII", midiConnectionGeneration: 3, channel: 15, controller: 8,
+            rawValue: 127, calibratedPosition: 1, calibrationID: rightOpenLiveCalibration().id,
+            observationSequence: 40, observedTakeRelativeTime: -1, unknownReason: nil)
+        let (_, derivation) = try liveHeldProjection(takeStart: oldState) {
+            self.liveHeldState(connection: 4, observedTime: 1_000.4, validFrom: 1_000.4)
+        }
+        let intervals = try XCTUnwrap(derivation?.intervals)
+        XCTAssertFalse(intervals.isEmpty)
+        XCTAssertTrue(intervals.allSatisfy { $0.startTime >= 0.4 - 1e-9 },
+            "a retired connection cannot provide even a zero-duration seed or its response curve")
+    }
+
+    func testLiveHeldCoverageDoesNotChangeFinalizedDeriverOrRawPackets() throws {
+        let calibration = rightOpenLiveCalibration()
+        let packets = shiftedToHostEpoch(Self.raneRingStream(runs: 4, stepsPerRun: 120), epoch: 1_000)
+        let unchanged = packets
+        _ = try liveHeldProjection(packets: packets) { self.liveHeldState() }
+        XCTAssertEqual(packets, unchanged)
+        let finalized = try XCTUnwrap(CrossfaderStateDeriver.derive(
+            rawEvents: [(takeRelativeTime: 0, rawValue: 127)], calibration: calibration))
+        XCTAssertEqual(finalized.intervals.first?.duration, 0,
+            "finalized evidence still requires its existing bounded coverage")
+        XCTAssertTrue(finalized.events.isEmpty)
+    }
+
     /// Re-stamp a fixture's host clock so `timestamp` and `takeRelativeTime`
     /// are NOT the same number.
     ///

@@ -104,9 +104,11 @@ final class ReferenceAuthoringSessionTests: XCTestCase {
         sourceState: ReferencePerTakeSourceState? = nil,
         sourceBinding: ReferenceTearEvidenceSourceBinding? = nil
     ) -> ReferenceRecordedTakeArtifacts {
+        // This successful-workflow fixture must observe the complete declared
+        // repetitions; 0.799s of readings cannot prove a later selected range.
         let samples: [CrossfaderPositionSample] = (0..<800).map { index in
             CrossfaderPositionSample(
-                takeRelativeTime: Double(index) * 0.001,
+                takeRelativeTime: Double(index) * 20 / 799,
                 rawValue: crossfaderStaysOpen ? 1 : (index % 100 < 50 ? 1 : 104),
                 normalizedPosition: crossfaderStaysOpen ? 1 : (index % 100 < 50 ? 1 : 0)
             )
@@ -1981,7 +1983,7 @@ final class ReferenceTearSegmentationReviewTests: XCTestCase {
     ) -> ReferenceRecordedTakeArtifacts {
         let samples: [CrossfaderPositionSample] = (0..<800).map { index in
             CrossfaderPositionSample(
-                takeRelativeTime: Double(index) * 0.001,
+                takeRelativeTime: Double(index) * 20 / 799,
                 rawValue: 1,
                 normalizedPosition: 1
             )
@@ -2598,7 +2600,8 @@ final class ReferenceTearAuthoringSliceTests: XCTestCase {
         rawValue: Int? = 127,
         calibrationID: String? = "midi_rane_one_mkii#15#8",
         observedTakeRelativeTime: Double? = -0.4,
-        provenance: CaptureCore.CrossfaderTakeStartState.Provenance = .preTakeSnapshot
+        provenance: CaptureCore.CrossfaderTakeStartState.Provenance = .preTakeSnapshot,
+        curveResponse: FaderCurveResponse? = nil
     ) -> CaptureCore.CrossfaderTakeStartState {
         CaptureCore.CrossfaderTakeStartState(
             provenance: provenance,
@@ -2613,6 +2616,7 @@ final class ReferenceTearAuthoringSliceTests: XCTestCase {
             rawValue: rawValue,
             calibratedPosition: 1,
             calibrationID: calibrationID,
+            crossfaderCurveResponse: curveResponse,
             observationSequence: 412,
             observedTakeRelativeTime: observedTakeRelativeTime,
             unknownReason: nil
@@ -2625,7 +2629,8 @@ final class ReferenceTearAuthoringSliceTests: XCTestCase {
         autoDetected: ReferenceTechnique? = nil,
         takeStartState: CaptureCore.CrossfaderTakeStartState? = nil,
         takeStartCorrelation: ReferenceCrossfaderTakeStart.Correlation? = nil,
-        crossfaderRawSamples: [CrossfaderPositionSample] = []
+        crossfaderRawSamples: [CrossfaderPositionSample] = [],
+        measuredAudioDuration: Double? = nil
     ) -> ReferenceRecordedTakeArtifacts {
         ReferenceRecordedTakeArtifacts(
             audio: ReferenceArtifactMeasurement(
@@ -2633,7 +2638,8 @@ final class ReferenceTearAuthoringSliceTests: XCTestCase {
                 exists: true,
                 byteCount: 500_000,
                 peakLevel: 0.8,
-                frameCount: 100_000
+                frameCount: measuredAudioDuration.map { Int64(($0 * 44_100).rounded()) } ?? 100_000,
+                sampleRate: measuredAudioDuration == nil ? nil : 44_100
             ),
             video: nil,
             sidecar: ReferenceArtifactMeasurement(fileName: "take.json", exists: true, byteCount: 2_048),
@@ -3078,7 +3084,7 @@ final class ReferenceTearAuthoringSliceTests: XCTestCase {
         )
     }
 
-    func testAParkedTakeProvesItsOpenFaderWithoutAnArtificialWiggle() throws {
+    func testLegacyParkedBaselineAloneCannotProveTheWholeRepetition() throws {
         var session = makeConfiguredTearSession()
         let store = try makeStore()
         try store.save(calibration)
@@ -3103,10 +3109,37 @@ final class ReferenceTearAuthoringSliceTests: XCTestCase {
         )
         XCTAssertEqual(take.evidence.crossfaderTakeStartOutcome?.adoptedRawValue, 127)
         XCTAssertNotNil(take.evidence.derivation)
-        XCTAssertEqual(
-            ReferenceValidator.faderOpenEvidence(for: take.evidence),
-            .provenContinuouslyOpen
-        )
+        guard case .unknown = ReferenceValidator.faderOpenEvidence(for: take.evidence) else {
+            return XCTFail("An adopted historical baseline does not prove how long its connection remained valid.")
+        }
+    }
+
+    func testSealedParkedHoldProvesOpenCoverageWithoutInventingMIDIPackets() throws {
+        var session = makeConfiguredTearSession()
+        let store = try makeStore()
+        try store.save(calibration)
+        _ = session.adoptPersistedCalibrationIfExact(store: store, openEnd: .right,
+            activeDeck: .rightDeck, address: calibration.address)
+        var state = parkedTakeStartState(curveResponse: FaderCurveResponse(zeroAt: 0,
+            oneAt: MIDIFaderCurveConstants.sharpScratchCutInWidth, shape: .linear))
+        state.parkedHold = .init(sessionID: state.sessionID, takeID: state.takeID, takeGeneration: 8,
+            midiSourceID: calibration.address.deviceIdentifier, midiConnectionGeneration: 3,
+            observationSequence: 412, rawValue: 127, calibration: calibration,
+            mediaStartHostTime: 100, captureEndHostTime: 120)
+        let recordingHooks = hooks(artifacts: parkedArtifacts(takeStartState: state,
+            takeStartCorrelation: correlation(), measuredAudioDuration: 15))
+        try session.beginRecording(using: recordingHooks).get()
+        _ = try session.finishRecording(using: recordingHooks).get()
+        session.selectRepetitionForApproval(0)
+        let take = try XCTUnwrap(session.takeInReview)
+        XCTAssertTrue(take.evidence.crossfaderRawSamples.isEmpty)
+        let intervals = try XCTUnwrap(take.evidence.derivation).intervals
+        XCTAssertEqual(intervals.count, 1)
+        XCTAssertEqual(intervals.first?.state, .open)
+        XCTAssertEqual(intervals.first?.startTime, 0)
+        XCTAssertEqual(intervals.first?.endTime, 15, "Held coverage is bounded by actual measured WAV frames.")
+        XCTAssertTrue(take.evidence.derivation?.events.isEmpty == true)
+        XCTAssertEqual(ReferenceValidator.faderOpenEvidence(for: take.evidence), .provenContinuouslyOpen)
     }
 
     func testAnUncorrelatedSnapshotLeavesFaderEvidenceExplicitlyUnknown() throws {
@@ -3295,7 +3328,9 @@ final class ReferenceTearAuthoringSliceTests: XCTestCase {
         XCTAssertEqual(take.evidence.metadata.deviceInfo.controllerName, calibration.address.deviceName)
         XCTAssertTrue(take.evidence.crossfaderRawSamples.isEmpty, "A parked baseline must not fabricate CC8 packets.")
         XCTAssertEqual(take.evidence.crossfaderTakeStartOutcome?.adoptedRawValue, 127)
-        XCTAssertEqual(ReferenceValidator.faderOpenEvidence(for: take.evidence), .provenContinuouslyOpen)
+        guard case .unknown = ReferenceValidator.faderOpenEvidence(for: take.evidence) else {
+            return XCTFail("A calibration and start snapshot without a terminal seal cannot prove duration.")
+        }
     }
 
     func testLaterCalibrationMutationCannotReinterpretTheRecordingTake() throws {
@@ -3310,7 +3345,9 @@ final class ReferenceTearAuthoringSliceTests: XCTestCase {
         _ = try session.finishRecording(using: recordingHooks).get()
         let take = try XCTUnwrap(session.takeInReview)
         XCTAssertEqual(take.evidence.metadata.crossfaderCalibration, calibration)
-        XCTAssertEqual(ReferenceValidator.faderOpenEvidence(for: take.evidence), .provenContinuouslyOpen)
+        guard case .unknown = ReferenceValidator.faderOpenEvidence(for: take.evidence) else {
+            return XCTFail("Freezing calibration does not manufacture missing held-state coverage.")
+        }
     }
 
     func testMissingCalibrationStillBlocksTheRecordBoundary() throws {

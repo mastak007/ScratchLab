@@ -846,7 +846,7 @@ struct ReferenceAuthoringSession: Equatable, Sendable {
             takeStartOutcome = .rejected(.notRecorded)
         }
         let derivation = calibration.flatMap { calibration in
-            CrossfaderStateDeriver.derive(
+            guard let sampleDerivation = CrossfaderStateDeriver.derive(
                 rawEvents: ReferenceCrossfaderTakeStart.derivationInput(
                     recordedSamples: artifacts.crossfaderRawSamples,
                     outcome: takeStartOutcome
@@ -858,6 +858,18 @@ struct ReferenceAuthoringSession: Equatable, Sendable {
                         oneAt: MIDIFaderCurveConstants.sharpScratchCutInWidth,
                         shape: .linear
                     )
+            ) else { return nil as CrossfaderDerivation? }
+            let measuredDuration: Double?
+            if let frames = artifacts.audio.frameCount, frames > 0,
+               let rate = artifacts.audio.sampleRate, rate.isFinite, rate > 0 {
+                measuredDuration = Double(frames) / rate
+            } else {
+                measuredDuration = nil
+            }
+            return ReferenceCrossfaderTakeStart.applyingParkedHold(
+                to: sampleDerivation, state: artifacts.crossfaderTakeStartState,
+                outcome: takeStartOutcome, recordedSamples: artifacts.crossfaderRawSamples,
+                calibration: calibration, measuredMediaDuration: measuredDuration
             )
         }
 

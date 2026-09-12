@@ -1505,6 +1505,7 @@ final class MacCaptureEngine: NSObject, ObservableObject {
         enum MuxError: LocalizedError {
             case missingVideoTrack
             case missingAudioTrack
+            case unsupportedMediaRange
             case unableToCreateCompositionTrack
             case unableToCreateExporter
             case exportFailed(String)
@@ -1515,6 +1516,8 @@ final class MacCaptureEngine: NSObject, ObservableObject {
                     return "The recorded camera file contains no video track."
                 case .missingAudioTrack:
                     return "The captured onboard AHHH file contains no audio track."
+                case .unsupportedMediaRange:
+                    return "The recorded camera and audio tracks do not have usable coverage from the start of the take."
                 case .unableToCreateCompositionTrack:
                     return "ScratchLab could not prepare the final review movie tracks."
                 case .unableToCreateExporter:
@@ -1550,20 +1553,38 @@ final class MacCaptureEngine: NSObject, ObservableObject {
                 throw MuxError.unableToCreateCompositionTrack
             }
 
-            let videoDuration = try await videoAsset.load(.duration)
-            let audioDuration = CMTimeMinimum(
-                try await audioAsset.load(.duration),
-                videoDuration
-            )
+            let videoRange = try await sourceVideoTrack.load(.timeRange)
+            let audioRange = try await sourceAudioTrack.load(.timeRange)
+            guard videoRange.start == .zero, audioRange.start == .zero,
+                  videoRange.duration.isNumeric, audioRange.duration.isNumeric,
+                  videoRange.duration > .zero, audioRange.duration > .zero else {
+                throw MuxError.unsupportedMediaRange
+            }
+            // The camera and output tap can stop on different callbacks. Keep
+            // their existing zero origin and only their real shared coverage:
+            // retaining the camera-only tail makes the MOV longer than its WAV.
+            // This does not establish host-clock alignment or alter the WAV;
+            // a shorter camera still faces the existing duration validation.
+            let sharedRange = CMTimeRange(start: .zero,
+                duration: CMTimeMinimum(videoRange.duration, audioRange.duration))
+            // A track's bounding range includes empty edits. In particular,
+            // a movie can report start zero while its first 200ms contains
+            // no picture. Require actual media coverage, not just bounds.
+            let videoSegments = try await sourceVideoTrack.load(.segments)
+            let audioSegments = try await sourceAudioTrack.load(.segments)
+            guard hasMediaCoverage(videoSegments, over: sharedRange),
+                  hasMediaCoverage(audioSegments, over: sharedRange) else {
+                throw MuxError.unsupportedMediaRange
+            }
             let preferredTransform = try await sourceVideoTrack.load(.preferredTransform)
-                try compositionVideo.insertTimeRange(
-                CMTimeRange(start: .zero, duration: videoDuration),
+            try compositionVideo.insertTimeRange(
+                sharedRange,
                 of: sourceVideoTrack,
                 at: .zero
             )
             compositionVideo.preferredTransform = preferredTransform
             try audioTrack.insertTimeRange(
-                CMTimeRange(start: .zero, duration: audioDuration),
+                sharedRange,
                 of: sourceAudioTrack,
                 at: .zero
             )
@@ -1587,16 +1608,35 @@ final class MacCaptureEngine: NSObject, ObservableObject {
             }
 
             do {
-                try FileManager.default.removeItem(at: videoURL)
-                try FileManager.default.moveItem(at: temporaryURL, to: videoURL)
+                // Both files are siblings, so replacement is atomic. A failed
+                // install must not remove the original camera recording.
+                _ = try FileManager.default.replaceItemAt(videoURL, withItemAt: temporaryURL)
             } catch {
                 try? FileManager.default.removeItem(at: temporaryURL)
                 throw error
             }
         }
+
+        private static func hasMediaCoverage(_ segments: [AVAssetTrackSegment], over range: CMTimeRange) -> Bool {
+            let end = CMTimeRangeGetEnd(range)
+            var coveredUntil = range.start
+            for segment in segments.sorted(by: { $0.timeMapping.target.start < $1.timeMapping.target.start }) {
+                let target = segment.timeMapping.target
+                guard target.start.isNumeric, target.duration.isNumeric, target.duration >= .zero else { return false }
+                let segmentEnd = CMTimeRangeGetEnd(target)
+                guard target.duration > .zero, segmentEnd > range.start, target.start < end else { continue }
+                guard !segment.isEmpty, target.start <= coveredUntil else { return false }
+                coveredUntil = CMTimeMaximum(coveredUntil, segmentEnd)
+            }
+            return coveredUntil >= end
+        }
     }
 
 #if DEBUG
+    static func muxRoutineReviewMovieForTesting(videoURL: URL, audioURL: URL) async throws {
+        try await RoutineReviewMovieMuxer.replaceAudioTrack(videoURL: videoURL, onboardAudioURL: audioURL)
+    }
+
     static func writeRoutineAudioSampleBufferForTesting(
         _ sampleBuffer: CMSampleBuffer,
         to destinationURL: URL
@@ -2502,6 +2542,9 @@ final class MacCaptureEngine: NSObject, ObservableObject {
                 midiSelectionDefaults.set(selectedMIDIInputSourceID, forKey: ScratchLabDesktopDefaultsKey.selectedMIDIInputSourceID)
             }
             guard oldValue != selectedMIDIInputSourceID else { return }
+            midiCaptureLock.lock()
+            activeRoutineParkedCrossfaderCoverage = nil
+            midiCaptureLock.unlock()
             resetMIDIMonitoringState()
             reconnectSelectedMIDIInput()
         }
@@ -2557,7 +2600,18 @@ final class MacCaptureEngine: NSObject, ObservableObject {
     /// on-disk/in-memory snapshot.
     private let midiMappingPersistenceQueue = DispatchQueue(label: "scratchlab.midi.mapping.persistence", qos: .utility)
     /// The current device's learned mapping profile, keyed by the selected source.
-    @Published private(set) var currentMIDIDeviceMapping: MIDIDeviceMapping? = nil
+    @Published private(set) var currentMIDIDeviceMapping: MIDIDeviceMapping? = nil {
+        didSet {
+            let response = currentMIDIDeviceMapping?.control(for: .crossfader)
+                .map { $0.resolvedCurveConfig.resolvedResponse(for: $0) }
+            midiCaptureLock.lock()
+            parkedCrossfaderCurveResponseStorage = response
+            if oldValue?.control(for: .crossfader) != currentMIDIDeviceMapping?.control(for: .crossfader) {
+                activeRoutineParkedCrossfaderCoverage = nil
+            }
+            midiCaptureLock.unlock()
+        }
+    }
     /// Set when loading, saving, or resolving a device mapping fails (corrupt file,
     /// unsupported schema, or a hot-cue's assigned sample no longer exists). Cleared
     /// on the next successful operation. Surfaced in the MIDI Learn UI.
@@ -4719,10 +4773,8 @@ final class MacCaptureEngine: NSObject, ObservableObject {
         let identity = activeRoutineRecordingSidecar.map {
             (sessionID: $0.sessionID, takeID: $0.takeID)
         }
-        let curveResponse = currentMIDIDeviceMapping?
-            .control(for: .crossfader)
-            .map { $0.resolvedCurveConfig.resolvedResponse(for: $0) }
         midiCaptureLock.lock()
+        let curveResponse = parkedCrossfaderCurveResponseStorage
         let mapping = persistedCrossfaderMapping
         let connectionGeneration = midiConnectionGenerationStorage
         let observation = mapping.flatMap {
@@ -4730,8 +4782,6 @@ final class MacCaptureEngine: NSObject, ObservableObject {
                 Self.ccObservationKey(channel: $0.channel, controller: $0.controller)
             ]
         }
-        midiCaptureLock.unlock()
-
         let state = Self.crossfaderTakeStartState(
             sessionID: identity?.sessionID,
             takeID: identity?.takeID,
@@ -4743,9 +4793,76 @@ final class MacCaptureEngine: NSObject, ObservableObject {
             curveResponse: curveResponse,
             mediaStartHostTime: mediaStartHostTime
         )
-        midiCaptureLock.lock()
         activeRoutineCrossfaderTakeStartState = state
+        lockedBeginParkedCrossfaderCoverage(state: state, mediaStartHostTime: mediaStartHostTime)
         midiCaptureLock.unlock()
+    }
+
+    /// Only a genuinely parked control is eligible. Any subsequent observation
+    /// or provenance interruption permanently retires this take's candidate.
+    /// Call with midiCaptureLock held.
+    private func lockedBeginParkedCrossfaderCoverage(
+        state: CaptureCore.CrossfaderTakeStartState, mediaStartHostTime: Double
+    ) {
+        activeRoutineParkedCrossfaderCoverage = nil
+        guard midiWindowOwnerStorage == .take, let token = midiWindowTakeTokenStorage,
+              midiRecordingStartTime == mediaStartHostTime,
+              state.isUsableSnapshot, state.takeGeneration != nil,
+              let response = state.crossfaderCurveResponse,
+              response == parkedCrossfaderCurveResponseStorage,
+              let observation = liveCrossfaderObservationState,
+              state.midiSourceID == selectedMIDIInputSourceID,
+              state.midiSourceID == midiConnectionEndpointIdentityStorage?.sourceID,
+              !midiConnectedSourceName.isEmpty,
+              state.midiConnectionGeneration == midiConnectionGenerationStorage,
+              state.midiSourceID == observation.sourceIdentifier,
+              state.midiConnectionGeneration == observation.connectionGeneration,
+              state.channel == observation.channel, state.controller == observation.controller,
+              persistedCrossfaderMapping?.channel == observation.channel,
+              persistedCrossfaderMapping?.controller == observation.controller,
+              state.rawValue == observation.rawValue,
+              state.observationSequence == observation.observationSequence,
+              state.calibrationID == observation.calibrationID,
+              observation.observedHostTime < mediaStartHostTime,
+              observation.validFromHostTime <= mediaStartHostTime,
+              observation.calibration.isUsable,
+              cachedCrossfaderCalibrations.first(where: {
+                  $0.address.matches(deviceIdentifier: observation.sourceIdentifier,
+                      channel: observation.channel, controller: observation.controller)
+              }) == observation.calibration else { return }
+        activeRoutineParkedCrossfaderCoverage = RoutineParkedCrossfaderCoverage(
+            token: token, observation: observation, mediaStartHostTime: mediaStartHostTime
+        )
+    }
+
+    /// Seal before closing the MIDI admission epoch, never from the current
+    /// device after finalization. Repeated Stop cannot extend an earlier seal.
+    private func lockedSealParkedCrossfaderCoverage(token: MIDICaptureTakeToken, at endHostTime: Double) {
+        defer { activeRoutineParkedCrossfaderCoverage = nil }
+        guard let coverage = activeRoutineParkedCrossfaderCoverage,
+              coverage.token == token, midiWindowTakeTokenStorage == token,
+              midiWindowOwnerStorage == .take,
+              midiRecordingStartTime == coverage.mediaStartHostTime,
+              midiObservationIngressCount == 0,
+              endHostTime.isFinite, endHostTime > coverage.mediaStartHostTime,
+              let state = activeRoutineCrossfaderTakeStartState,
+              let generation = state.takeGeneration,
+              let response = state.crossfaderCurveResponse,
+              response == parkedCrossfaderCurveResponseStorage,
+              state.parkedHold == nil,
+              liveCrossfaderObservationState == coverage.observation,
+              state.midiSourceID == selectedMIDIInputSourceID,
+              state.midiSourceID == midiConnectionEndpointIdentityStorage?.sourceID,
+              !midiConnectedSourceName.isEmpty,
+              state.midiConnectionGeneration == midiConnectionGenerationStorage else { return }
+        activeRoutineCrossfaderTakeStartState?.parkedHold = .init(
+            sessionID: state.sessionID, takeID: state.takeID, takeGeneration: generation,
+            midiSourceID: coverage.observation.sourceIdentifier,
+            midiConnectionGeneration: coverage.observation.connectionGeneration,
+            observationSequence: coverage.observation.observationSequence,
+            rawValue: coverage.observation.rawValue, calibration: coverage.observation.calibration,
+            mediaStartHostTime: coverage.mediaStartHostTime, captureEndHostTime: endHostTime
+        )
     }
 
     /// Pure classification of one live observation into a take-start control
@@ -4823,6 +4940,7 @@ final class MacCaptureEngine: NSObject, ObservableObject {
         midiCaptureLock.lock()
         defer {
             activeRoutineCrossfaderTakeStartState = nil
+            activeRoutineParkedCrossfaderCoverage = nil
             midiCaptureLock.unlock()
         }
         return activeRoutineCrossfaderTakeStartState
@@ -4841,6 +4959,31 @@ final class MacCaptureEngine: NSObject, ObservableObject {
               state.midiConnectionGeneration == midiConnectionGenerationStorage,
               state.observedTakeRelativeTime.map({ $0 < 0 }) == true else { return nil }
         return state
+    }
+
+    /// One coherent live control/window read. A missing or changed connection,
+    /// mapping or calibration invalidates held evidence immediately.
+    private func activeLiveCrossfaderStateSnapshot() -> LiveCrossfaderStateSnapshot? {
+        midiCaptureLock.lock()
+        defer { midiCaptureLock.unlock() }
+        guard midiWindowOwnerStorage != .idle,
+              midiRecordingStartTime.isFinite, midiRecordingStartTime > 0,
+              let state = liveCrossfaderObservationState,
+              let mapping = persistedCrossfaderMapping,
+              state.sourceIdentifier == selectedMIDIInputSourceID,
+              state.sourceIdentifier == midiConnectionEndpointIdentityStorage?.sourceID,
+              !midiConnectedSourceName.isEmpty,
+              state.connectionGeneration == midiConnectionGenerationStorage,
+              state.channel == mapping.channel, state.controller == mapping.controller,
+              cachedCrossfaderCalibrations.contains(state.calibration) && state.calibration.isUsable
+        else { return nil }
+        return LiveCrossfaderStateSnapshot(
+            sourceIdentifier: state.sourceIdentifier, channel: state.channel, controller: state.controller,
+            connectionGeneration: state.connectionGeneration, calibrationID: state.calibrationID,
+            calibration: state.calibration, rawValue: state.rawValue, observedHostTime: state.observedHostTime,
+            observationSequence: state.observationSequence, windowStartHostTime: midiRecordingStartTime,
+            validFromHostTime: state.validFromHostTime
+        )
     }
 
     /// Rebases every take-relative clock onto the confirmed media-start epoch
@@ -5054,7 +5197,11 @@ final class MacCaptureEngine: NSObject, ObservableObject {
     /// advance rule — it fails closed on every case that is not a
     /// same-endpoint reconnect. Guarded by `midiCaptureLock`, like every
     /// other field the Core MIDI read thread touches.
-    private var midiConnectionGenerationStorage: UInt64 = 0
+    private var midiConnectionGenerationStorage: UInt64 = 0 {
+        didSet {
+            if oldValue != midiConnectionGenerationStorage { liveCrossfaderObservationState = nil }
+        }
+    }
     /// The endpoint `midiConnectionGenerationStorage` currently identifies,
     /// or `nil` when no input is connected. Guarded by `midiCaptureLock`.
     private var midiConnectionEndpointIdentityStorage: MIDIConnectionEndpointIdentity?
@@ -5062,6 +5209,23 @@ final class MacCaptureEngine: NSObject, ObservableObject {
     /// boundary, awaiting the sidecar write at finalization. Cleared with the
     /// rest of the per-take state. Guarded by `midiCaptureLock`.
     private var activeRoutineCrossfaderTakeStartState: CaptureCore.CrossfaderTakeStartState?
+    private struct RoutineParkedCrossfaderCoverage {
+        let token: MIDICaptureTakeToken
+        let observation: LiveCrossfaderStateSnapshot
+        let mediaStartHostTime: Double
+    }
+    /// Lock-owned, cleared permanently for this take on any continuity loss.
+    private var activeRoutineParkedCrossfaderCoverage: RoutineParkedCrossfaderCoverage?
+    /// Resolved on main when the learned control changes, read under the MIDI
+    /// lock at capture boundaries instead of racing its published profile.
+    private var parkedCrossfaderCurveResponseStorage: FaderCurveResponse?
+    /// A callback may own an open ticket before it has updated the live cache.
+    /// Stop refuses parked coverage while one is in flight; it never waits on
+    /// the Core MIDI callback or treats the old cached value as a final value.
+    private var midiObservationIngressCount = 0
+    #if DEBUG
+    var testOnly_midiObservationIngressHook: (() -> Void)?
+    #endif
     /// MIDI monitor UI-publish throttle: all incoming MIDI CC events are
     /// still captured at full fidelity; only the @Published SwiftUI
     /// monitor properties below are rate-limited to ~4 Hz so the main
@@ -5094,10 +5258,35 @@ final class MacCaptureEngine: NSObject, ObservableObject {
     /// (e.g. a queued "no MIDI received" warning) can detect it no longer
     /// applies. Lock-protected alongside `learnSessionAction`.
     private var midiLearnRequestID: UInt64 = 0
-    private var persistedCrossfaderMapping: CrossfaderCCMapping? = nil
+    private var persistedCrossfaderMapping: CrossfaderCCMapping? = nil {
+        didSet {
+            if oldValue != persistedCrossfaderMapping { liveCrossfaderObservationState = nil }
+        }
+    }
+    /// Real change-only control state, retained beyond preview-buffer trimming.
+    /// Never appended to recorded MIDI or exported as a new observation.
+    /// All access is guarded by midiCaptureLock.
+    private var liveCrossfaderObservationState: LiveCrossfaderStateSnapshot? {
+        didSet {
+            if let coverage = activeRoutineParkedCrossfaderCoverage,
+               liveCrossfaderObservationState != coverage.observation {
+                activeRoutineParkedCrossfaderCoverage = nil
+            }
+        }
+    }
     /// Calibrations cached for the MIDI read thread. Guarded by
     /// `midiCaptureLock`, refreshed only by `reloadCrossfaderCalibrations()`.
-    private var cachedCrossfaderCalibrations: [CrossfaderCalibration] = []
+    private var cachedCrossfaderCalibrations: [CrossfaderCalibration] = [] {
+        didSet {
+            if let coverage = activeRoutineParkedCrossfaderCoverage,
+               cachedCrossfaderCalibrations.first(where: {
+                   $0.address.matches(deviceIdentifier: coverage.observation.sourceIdentifier,
+                       channel: coverage.observation.channel, controller: coverage.observation.controller)
+               }) != coverage.observation.calibration {
+                activeRoutineParkedCrossfaderCoverage = nil
+            }
+        }
+    }
     /// Test seam: redirects calibration persistence to a temporary directory.
     var crossfaderCalibrationDirectoryOverride: URL? = nil
     private var pendingRoutineTakeIdentity: TakeIdentity?
@@ -11703,6 +11892,7 @@ final class MacCaptureEngine: NSObject, ObservableObject {
         // A previous take's take-start observation must never survive into
         // this one. It is re-observed at this take's own media-start boundary.
         activeRoutineCrossfaderTakeStartState = nil
+        activeRoutineParkedCrossfaderCoverage = nil
         let token = MIDICaptureTakeToken(
             value: midiWindowGenerationStorage + 1, mediaURL: mediaURL
         )
@@ -11750,10 +11940,11 @@ final class MacCaptureEngine: NSObject, ObservableObject {
     /// flight when Stop begins: it was admitted under the open-epoch window,
     /// that window is now retired, so it is dropped at the append site instead
     /// of being appended after the media has stopped.
-    private func closeMIDIRecordingWindow(token: MIDICaptureTakeToken?) {
+    private func closeMIDIRecordingWindow(token: MIDICaptureTakeToken?, endHostTime: Double = CACurrentMediaTime()) {
         midiCaptureLock.lock()
         if midiWindowOwnerStorage == .take, let token, midiWindowTakeTokenStorage == token,
            midiRecordingStartTime != 0 {
+            lockedSealParkedCrossfaderCoverage(token: token, at: endHostTime)
             lockedSetMIDICaptureWindow(owner: .take, epochStartHostTime: 0, takeToken: token)
         }
         midiCaptureLock.unlock()
@@ -11774,6 +11965,7 @@ final class MacCaptureEngine: NSObject, ObservableObject {
         midiCaptureLock.lock()
         let released = midiWindowOwnerStorage == .take && midiWindowTakeTokenStorage == token
         if released {
+            activeRoutineParkedCrossfaderCoverage = nil
             lockedClearCapturedMidiCCEvents()
             lockedSetMIDICaptureWindow(owner: .idle, epochStartHostTime: 0, takeToken: nil)
         }
@@ -11791,6 +11983,11 @@ final class MacCaptureEngine: NSObject, ObservableObject {
     /// identity itself, or a cached observation would outlive its connection.
     private func closeMIDIInput() {
         guard midiInputPort != 0 else { return }
+        midiCaptureLock.lock()
+        // Even a same-endpoint mid-take port rebind interrupts observation.
+        // The media-start candidate is created only after the normal arm rebind.
+        activeRoutineParkedCrossfaderCoverage = nil
+        midiCaptureLock.unlock()
         for endpoint in midiSourceEndpoints.values {
             MIDIPortDisconnectSource(midiInputPort, endpoint)
         }
@@ -12093,6 +12290,7 @@ final class MacCaptureEngine: NSObject, ObservableObject {
             activeCrossfaderTakeStartState: { [weak self] in
                 self?.activeCrossfaderTakeStartStateSnapshot()
             },
+            activeCrossfaderState: { [weak self] in self?.activeLiveCrossfaderStateSnapshot() },
             activePlaybackLoopContext: playbackLoopContext
         )
     }
@@ -12104,6 +12302,7 @@ final class MacCaptureEngine: NSObject, ObservableObject {
         )
         let now = CACurrentMediaTime()
         midiCaptureLock.lock()
+        midiObservationIngressCount += 1
         // The WHOLE window identity, taken atomically at ingress. This
         // deliberately replaces a bare `midiRecordingStartTime` read: an epoch
         // on its own carries no owner and no generation, so a cached epoch
@@ -12116,6 +12315,11 @@ final class MacCaptureEngine: NSObject, ObservableObject {
         let deviceIdentifier = midiConnectionEndpointIdentityStorage?.sourceID
         let inputConnectionGeneration = midiConnectionGenerationStorage
         midiCaptureLock.unlock()
+        defer {
+            midiCaptureLock.lock()
+            midiObservationIngressCount -= 1
+            midiCaptureLock.unlock()
+        }
 
         // CONFIRMED root cause: the original code obtained the first packet
         // pointer via `withUnsafePointer(to: packetListPtr.pointee.packet)`.
@@ -12178,6 +12382,45 @@ final class MacCaptureEngine: NSObject, ObservableObject {
     }
 
     #if DEBUG
+    /// Installs only MIDI provenance for tests; never opens a device or changes
+    /// calibration persistence. Production observations still use the normal path.
+    func testOnly_setLiveFaderContext(
+        sourceID: String?, connectionGeneration: UInt64,
+        mapping: CrossfaderCCMapping?, calibrations: [CrossfaderCalibration]
+    ) {
+        midiCaptureLock.lock()
+        defer { midiCaptureLock.unlock() }
+        midiConnectionGenerationStorage = connectionGeneration
+        midiConnectionEndpointIdentityStorage = sourceID.map {
+            MIDIConnectionEndpointIdentity(sourceID: $0, endpointRef: 1)
+        }
+        midiConnectedSourceName = sourceID == nil ? "" : "Test controller"
+        persistedCrossfaderMapping = mapping
+        if let state = liveCrossfaderObservationState,
+           !calibrations.contains(state.calibration) {
+            liveCrossfaderObservationState = nil
+        }
+        cachedCrossfaderCalibrations = calibrations
+    }
+
+    /// Hardware-free drivers for the production take-owned parked-state seal.
+    func testOnly_beginParkedCrossfaderCoverage(
+        state: CaptureCore.CrossfaderTakeStartState, at mediaStartHostTime: Double
+    ) {
+        midiCaptureLock.lock()
+        activeRoutineCrossfaderTakeStartState = state
+        lockedBeginParkedCrossfaderCoverage(state: state, mediaStartHostTime: mediaStartHostTime)
+        midiCaptureLock.unlock()
+    }
+
+    func testOnly_closeTakeMIDIEpoch(at endHostTime: Double, token: MIDICaptureTakeToken) {
+        closeMIDIRecordingWindow(token: token, endHostTime: endHostTime)
+    }
+
+    func testOnly_takeCrossfaderTakeStartState() -> CaptureCore.CrossfaderTakeStartState? {
+        takeCrossfaderTakeStartState()
+    }
+
     /// Test-only seam: `receiveMIDIPacketList` is private and is the only
     /// entry point that reads a real `MIDIPacketList`/`MIDIPacket`
     /// allocation the way CoreMIDI actually delivers one — a synthetic
@@ -12311,7 +12554,8 @@ final class MacCaptureEngine: NSObject, ObservableObject {
                 mappedControl: mappedControl,
                 timestamp: now,
                 ingressTicket: ingressTicket,
-                consumedByLearn: learnResult.consumedByLearn
+                consumedByLearn: learnResult.consumedByLearn,
+                inputConnectionGeneration: inputConnectionGeneration
             )
 #if DEBUG
             // Raw pad diagnostic — only for non-platter, non-crossfader CCs.
@@ -12449,6 +12693,10 @@ final class MacCaptureEngine: NSObject, ObservableObject {
     func reloadCrossfaderCalibrations() {
         let loaded = crossfaderCalibrationStore.load().calibrations
         midiCaptureLock.lock()
+        if let state = liveCrossfaderObservationState,
+           !loaded.contains(state.calibration) {
+            liveCrossfaderObservationState = nil
+        }
         cachedCrossfaderCalibrations = loaded
         midiCaptureLock.unlock()
     }
@@ -12542,17 +12790,33 @@ final class MacCaptureEngine: NSObject, ObservableObject {
     /// function's recording-window gate — see the doc comment on
     /// `latestCCObservationsByAddress`.
     private func recordLiveCCObservation(
+        sourceIdentifier: String?,
+        connectionGeneration: UInt64,
         deviceName: String,
         channel: Int,
         controller: Int,
         value: Int,
         calibratedPosition: Double?,
         calibrationID: String?,
+        calibration: CrossfaderCalibration?,
         observedAt: CFTimeInterval
     ) {
         let key = Self.ccObservationKey(channel: channel, controller: controller)
         midiCaptureLock.lock()
-        let priorCount = latestCCObservationsByAddress[key]?.eventCount ?? 0
+        guard connectionGeneration == midiConnectionGenerationStorage,
+              midiConnectionEndpointIdentityStorage == nil
+                || sourceIdentifier == midiConnectionEndpointIdentityStorage?.sourceID else {
+            midiCaptureLock.unlock()
+            return
+        }
+        let previous = latestCCObservationsByAddress[key]
+        guard observedAt.isFinite,
+              previous?.connectionGeneration != connectionGeneration
+                || observedAt >= (previous?.observedAt ?? observedAt) else {
+            midiCaptureLock.unlock()
+            return
+        }
+        let priorCount = previous?.eventCount ?? 0
         latestCCObservationsByAddress[key] = LiveCCObservation(
             deviceName: deviceName,
             channel: channel,
@@ -12561,9 +12825,32 @@ final class MacCaptureEngine: NSObject, ObservableObject {
             calibratedPosition: calibratedPosition,
             observedAt: observedAt,
             eventCount: priorCount + 1,
-            connectionGeneration: midiConnectionGenerationStorage,
+            connectionGeneration: connectionGeneration,
             calibrationID: calibrationID
         )
+        if let sourceIdentifier, let calibrationID, let calibration,
+           sourceIdentifier == midiConnectionEndpointIdentityStorage?.sourceID,
+           connectionGeneration == midiConnectionGenerationStorage,
+           persistedCrossfaderMapping?.channel == channel,
+           persistedCrossfaderMapping?.controller == controller,
+           observedAt.isFinite, calibratedPosition != nil,
+           cachedCrossfaderCalibrations.contains(calibration) && calibration.isUsable {
+            let prior = liveCrossfaderObservationState
+            let sameIdentity = prior?.sourceIdentifier == sourceIdentifier
+                && prior?.connectionGeneration == connectionGeneration
+                && prior?.channel == channel && prior?.controller == controller
+                && prior?.calibrationID == calibrationID && prior?.calibration == calibration
+            // An older callback must never rewind the latest observed control.
+            if !sameIdentity || observedAt >= (prior?.observedHostTime ?? observedAt) {
+                liveCrossfaderObservationState = LiveCrossfaderStateSnapshot(
+                    sourceIdentifier: sourceIdentifier, channel: channel, controller: controller,
+                    connectionGeneration: connectionGeneration, calibrationID: calibrationID,
+                    calibration: calibration, rawValue: value, observedHostTime: observedAt, observationSequence: priorCount + 1,
+                    windowStartHostTime: 0,
+                    validFromHostTime: sameIdentity ? (prior?.validFromHostTime ?? observedAt) : observedAt
+                )
+            }
+        }
         midiCaptureLock.unlock()
     }
 
@@ -12573,6 +12860,20 @@ final class MacCaptureEngine: NSObject, ObservableObject {
         midiCaptureLock.lock()
         defer { midiCaptureLock.unlock() }
         return latestCCObservationsByAddress[Self.ccObservationKey(channel: channel, controller: controller)]
+    }
+
+    /// Readiness is retained while an observed device is still connected;
+    /// inactivity alone is not a disconnect. Old connection readings never
+    /// certify a replacement endpoint. All fields are correlated under one lock.
+    func currentConnectedMIDIObservationsSnapshot() -> (sourceID: String, observations: [LiveCCObservation])? {
+        midiCaptureLock.lock()
+        defer { midiCaptureLock.unlock() }
+        guard let endpoint = midiConnectionEndpointIdentityStorage,
+              endpoint.sourceID == selectedMIDIInputSourceID,
+              !midiConnectedSourceName.isEmpty else { return nil }
+        return (endpoint.sourceID, latestCCObservationsByAddress.values.filter {
+            $0.connectionGeneration == midiConnectionGenerationStorage
+        }.sorted { $0.observedAt > $1.observedAt })
     }
 
     /// Every address observed since app launch, most-recent first. Used to
@@ -12598,7 +12899,8 @@ final class MacCaptureEngine: NSObject, ObservableObject {
         mappedControl: String? = nil,
         timestamp: Double = CACurrentMediaTime(),
         ingressTicket: MIDICaptureWindowTicket? = nil,
-        consumedByLearn: Bool = false
+        consumedByLearn: Bool = false,
+        inputConnectionGeneration: UInt64? = nil
     ) {
         // Window identity at INGRESS. `receiveMIDIPacketList` already took one
         // for the whole packet list; a direct caller takes its own here. There
@@ -12607,14 +12909,25 @@ final class MacCaptureEngine: NSObject, ObservableObject {
         // one to override the ticket was how a preview packet could be
         // admitted into a take whose epoch was still zero.
         midiCaptureLock.lock()
+        midiObservationIngressCount += 1
         let effectiveMapping = persistedCrossfaderMapping
+        let observationConnectionGeneration = inputConnectionGeneration ?? midiConnectionGenerationStorage
         let admissionTicket = ingressTicket ?? lockedMIDICaptureWindowTicket()
         let effectiveSourceIdentifier = sourceIdentifier
             ?? midiConnectionEndpointIdentityStorage?.sourceID
         #if DEBUG
         let interleavingHook = testOnly_midiAppendInterleavingHook
+        let observationIngressHook = testOnly_midiObservationIngressHook
         #endif
         midiCaptureLock.unlock()
+        defer {
+            midiCaptureLock.lock()
+            midiObservationIngressCount -= 1
+            midiCaptureLock.unlock()
+        }
+        #if DEBUG
+        observationIngressHook?()
+        #endif
 
         let effectiveMappedControl = mappedControl
             ?? ((effectiveMapping?.channel == channel && effectiveMapping?.controller == controller) ? "crossfader" : nil)
@@ -12636,12 +12949,15 @@ final class MacCaptureEngine: NSObject, ObservableObject {
         let calibratedPosition = activeCalibration?.normalized(rawValue: value)
         let calibrationID = calibratedPosition == nil ? nil : activeCalibration?.id
         recordLiveCCObservation(
+            sourceIdentifier: effectiveSourceIdentifier,
+            connectionGeneration: observationConnectionGeneration,
             deviceName: sourceName,
             channel: channel,
             controller: controller,
             value: value,
             calibratedPosition: calibratedPosition,
             calibrationID: calibrationID,
+            calibration: activeCalibration,
             observedAt: timestamp
         )
         // Rane ONE MK2 pad candidate labelling — diagnostic only; no routing, no scoring.
@@ -13141,7 +13457,22 @@ final class MacCaptureEngine: NSObject, ObservableObject {
         )
         midiConnectionEndpointIdentityStorage = endpointIdentity
         midiCaptureLock.unlock()
-        MIDIPortConnectSource(midiInputPort, endpoint, nil)
+        let connectStatus = MIDIPortConnectSource(midiInputPort, endpoint, nil)
+        guard connectStatus == noErr else {
+            midiCaptureLock.lock()
+            if midiConnectionEndpointIdentityStorage == endpointIdentity {
+                midiConnectionGenerationStorage = Self.nextMIDIConnectionGeneration(
+                    current: midiConnectionGenerationStorage, previous: endpointIdentity, next: nil
+                )
+                midiConnectionEndpointIdentityStorage = nil
+                midiConnectedSourceName = ""
+            }
+            midiCaptureLock.unlock()
+            publishOnMainAsync(field: "midiListeningState") { [weak self] in
+                self?.midiListeningState = "Connection failed (\(connectStatus))"
+            }
+            return
+        }
         // Load any saved device mapping for this source.
         loadDeviceMappingForCurrentSource()
         publishOnMainAsync(field: "midiListeningState") { [weak self] in
