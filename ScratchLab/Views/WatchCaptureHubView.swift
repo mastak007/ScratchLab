@@ -107,6 +107,17 @@ struct WatchCaptureHubView: View {
                 ? "Mac capture host detected."
                 : "Waiting for ScratchLab Capture on the Mac."
         )
+        if !macConnected && !localNetworkRationaleAccepted {
+            Text("Local network access lets ScratchLab find your Mac and relay Watch motion. Nothing is uploaded.")
+                .font(ScratchLabDesign.Typo.bodySmall)
+                .foregroundStyle(ScratchLabDesign.Sem.textSecondary)
+            Button("Connect Mac") {
+                localNetworkRationaleAccepted = true
+                broadcaster.startRelayAdvertisingIfNeeded()
+            }
+            .buttonStyle(.borderedProminent)
+            .accessibilityIdentifier("watchRelay.connectMac")
+        }
         if watchConnected != macConnected {
             relayStatusCard(
                 title: "Motion Relay",

@@ -4788,7 +4788,7 @@ final class CaptureReliabilityPhase1CoreTests: XCTestCase {
         XCTAssertTrue(recorderSource.contains("func requestPairedPhoneCapture("))
         XCTAssertTrue(viewSource.contains("recorder.requestPairedPhoneCapture("))
         XCTAssertTrue(viewSource.contains("recorder.isPhoneCaptureCommandPending || !canSendCaptureCommand"))
-        XCTAssertTrue(viewSource.contains("Open Capture on iPhone. Start Take becomes available when Transfer says Connected."))
+        XCTAssertTrue(viewSource.contains("Open Capture on iPhone. Start Take becomes available when iPhone link says Connected."))
         XCTAssertFalse(viewSource.contains("recorder.startCapture()"))
     }
 
@@ -16797,7 +16797,7 @@ final class MovementTraceDiagnosticsTests: XCTestCase {
 final class ControllerPlatterDecoderTests: XCTestCase {
 
     private func midiEvent(_ value: Int, _ time: Double) -> CaptureCore.RawMixerMIDIEvent {
-        .init(timestamp: time, takeRelativeTime: time, deviceName: "Rane ONE MKII",
+        .init(timestamp: time, takeRelativeTime: time, deviceName: "Increasing-counter decoder fixture",
               channel: 1, controller: 6, value: value,
               normalizedValue: Double(value) / 127.0, mappedControl: nil)
     }
@@ -17117,7 +17117,7 @@ final class ControllerPlatterDecoderTests: XCTestCase {
     func testChannelAndDeviceIsolation() {
         // A second device / the other deck's CC6 stream must never corrupt the
         // selected (ch 1, Rane ONE MKII) stream.
-        let ch1 = run(0, 12, from: 0.0)  // forward, selected channel
+        let ch1 = (0..<12).map { (50 - $0, Double($0) * 0.01) } // forward, decreasing right counter
         let ch0 = (0..<12).map { (50 - $0, 0.0 + Double($0) * 0.01) }  // backward, other deck
         let otherDevice = run(100, 12, from: 0.0)  // forward, another device
         let ch1Events = ch1.map { (v, t) in (v, t, 1, "Rane ONE MKII") }
@@ -17163,7 +17163,7 @@ final class ControllerPlatterDecoderTests: XCTestCase {
         var selectedSecond: [CaptureCore.RawMixerMIDIEvent] = []
         for i in 0..<12 {
             let t = 0.20 + Double(i) * 0.01
-            let v = 50 - i
+            let v = 50 + i // backward on the observed right ONE MKII
             selectedSecond.append(CaptureCore.RawMixerMIDIEvent(
                 timestamp: t, takeRelativeTime: t, deviceName: "Rane ONE MKII",
                 channel: 1, controller: 6, value: v,

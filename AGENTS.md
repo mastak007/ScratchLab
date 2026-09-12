@@ -112,6 +112,12 @@ A task is complete only when:
 - Platform-specific builds allowed during iteration
 - Full build required before completion unless blocked
 
+### CXL Mac installation identity
+
+- Stage CXL Mac updates with `scripts/stage_cxl_mac.py` before installation. Do not reuse external ad hoc `codesign --sign -` recipes: Apple documents unreliable Local Network identity tracking for these across builds.
+- Retain `com.machelpnz.scratchlab.cxl-authoring`, the existing permissions/entitlements, and signing team `2DDKGL33BU`. Use a valid Apple-issued certificate from that team. A successful `codesign --verify` alone is insufficient; retain the staging receipt proving the team and designated requirement.
+- Preserve captures and the previous app before an authorized in-place update. Verify the running executable matches the staged receipt. Connected iPhone/Watch status is not proof of Mac relay or captured Watch motion; confirm those separately.
+
 ---
 
 # Product & Architecture Rules

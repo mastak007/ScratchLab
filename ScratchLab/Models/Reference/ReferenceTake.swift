@@ -2806,6 +2806,44 @@ enum ReferenceTearEvidenceCodec {
             rawSidecarData: rawSidecarData, rawSidecarSHA256: sha256(rawSidecarData))
     }
 
+    /// Stop acknowledgements can arrive after media/review finalization. Only
+    /// that take's stop diagnostics and appended watch_stop audit entries may
+    /// advance an export binding. Every captured observation, source identity,
+    /// Watch association and metadata field must remain unchanged, including
+    /// fields unknown to this version of the decoder. Review stays immutable.
+    static func exportBinding(
+        from original: ReferenceTearEvidenceSourceBinding,
+        currentSidecarData: Data
+    ) throws -> ReferenceTearEvidenceSourceBinding {
+        guard currentSidecarData != original.rawSidecarData else { return original }
+        let previous = try sourceSidecar(original.rawSidecarData)
+        let current = try sourceSidecar(currentSidecarData)
+        guard let stop = current.watchStopDiagnostics,
+              stop != previous.watchStopDiagnostics,
+              stop.sessionID == original.capturedSessionID,
+              stop.takeID == original.capturedTakeID,
+              let commandID = stop.commandID, !commandID.isEmpty,
+              previous.watchStopDiagnostics?.commandID.map({ $0 == commandID }) ?? true,
+              current.auditTrail.count > previous.auditTrail.count,
+              Array(current.auditTrail.prefix(previous.auditTrail.count)) == previous.auditTrail,
+              current.auditTrail.dropFirst(previous.auditTrail.count).allSatisfy({ $0.category == "watch_stop" }),
+              var before = try JSONSerialization.jsonObject(with: original.rawSidecarData) as? [String: Any],
+              var after = try JSONSerialization.jsonObject(with: currentSidecarData) as? [String: Any],
+              let previousAudit = before["auditTrail"] as? [[String: Any]],
+              let currentAudit = after["auditTrail"] as? [[String: Any]],
+              NSArray(array: previousAudit).isEqual(to: Array(currentAudit.prefix(previousAudit.count))) else {
+            throw Error.identityMismatch("the finalized sidecar changed beyond this take's Watch Stop diagnostics")
+        }
+        for key in ["watchStopDiagnostics", "auditTrail"] {
+            before.removeValue(forKey: key)
+            after.removeValue(forKey: key)
+        }
+        guard NSDictionary(dictionary: before).isEqual(to: after) else {
+            throw Error.identityMismatch("recorded evidence or session metadata changed after review")
+        }
+        return try makeSourceBinding(rawSidecarData: currentSidecarData, fileName: original.rawSidecarFileName)
+    }
+
     static func encode(
         sourceBinding: ReferenceTearEvidenceSourceBinding,
         review: ReferenceTearSegmentationReview,

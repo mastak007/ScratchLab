@@ -204,6 +204,120 @@ final class RoutineReviewMovieMuxerTests: XCTestCase {
 @MainActor
 final class ReferenceTearEvidencePipelineTests: XCTestCase {
 
+    func testPhysicalRightPlatterForwardPushRisesInLiveAndFinalizedNotation() throws {
+        // Take004 begins 36,35,34...; Karl confirmed this was a forward push.
+        // Extend that observed counter direction across a wrap and reversal.
+        let values = (0...100).map { (36 - $0 + 128) % 128 }
+            + (1...100).map { (64 + $0) % 128 }
+        let raw = values.enumerated().map { index, value in
+            Raw(timestamp: Double(index) * 0.01, takeRelativeTime: Double(index) * 0.01,
+                deviceName: "Rane ONE MKII", channel: 1, controller: 6,
+                value: value, normalizedValue: Double(value) / 127, mappedControl: nil)
+        }
+        let frozen = try JSONEncoder().encode(raw)
+        let final = CaptureCore.derivePlatterMotionEvidence(from: raw)
+        XCTAssertEqual(final.events.map(\.direction), ["forward", "backward"])
+        XCTAssertLessThan(final.events[0].startPosition, final.events[0].endPosition)
+        XCTAssertGreaterThan(final.events[1].startPosition, final.events[1].endPosition)
+        let live = CaptureCore.derivePlatterMovementEventsWithProvisional(
+            from: Array(raw.prefix(101)), controller: 6, channel: 1)
+        XCTAssertEqual(live.provisionalMovement?.direction, "forward")
+        XCTAssertGreaterThan(try XCTUnwrap(live.provisionalMovement?.displacement), 0)
+        let projection = ReferenceTearCanonicalProjectionBuilder.project(
+            movementEvents: final.events, platterEvidenceIntervals: final.intervals,
+            derivation: nil, coordinates: .normalizedTakeLocal())
+        XCTAssertEqual(projection.records.map(\.direction), [.forward, .backward])
+        let frame = try XCTUnwrap(ScratchStrokeGeometry.CanonicalFrame(timeRange: 0...2,
+            positionRange: try XCTUnwrap(projection.positionRange),
+            coordinateSpace: projection.coordinateSpace, beatsPerMinute: 95))
+        let geometry = ScratchStrokeGeometry.canonicalGeometry(records: projection.records,
+            layer: .performance, frame: frame)
+        let pixels = ScratchMotionRenderer.projectedSegments(geometry.motion,
+            viewport: LaneViewport(size: CGSize(width: 600, height: 140), now: 0,
+                axis: .horizontal, actionLineFraction: 0, secondsAhead: 2))
+        let push = try XCTUnwrap(pixels.first)
+        XCTAssertLessThan(push.b.y, push.a.y, "Forward must rise on the actual Canvas input.")
+        XCTAssertEqual(try JSONEncoder().encode(raw), frozen)
+    }
+
+    func testWholeTakePlaybackAdvancesAfterSeek() async throws {
+        let files = try await fixture([])
+        let take = try await record(worker([files]))
+        let controller = ReferenceFinalizedMediaReviewController()
+        controller.load(take: take, mediaURL: files.mediaURL, beatRootURL: nil)
+        for _ in 0..<100 where controller.state == .loading {
+            try await Task.sleep(for: .milliseconds(50))
+        }
+        XCTAssertTrue(controller.canPlay)
+        let player = try XCTUnwrap(controller.videoPlayer)
+        player.isMuted = true
+        controller.playWholeTake()
+        for _ in 0..<100 where player.currentTime().seconds < 0.2 {
+            try await Task.sleep(for: .milliseconds(50))
+        }
+        XCTAssertGreaterThan(player.currentTime().seconds, 0.15)
+        controller.stop()
+    }
+
+    func testLateWatchStopTimeoutStillExportsExactRawCaptureAndReview() async throws {
+        let files = try await fixture(Self.withFader(Self.tear(holds: 1)))
+        let owner = worker([files])
+        let take = try await record(owner)
+        let binding = try XCTUnwrap(take.tearEvidenceSourceBinding)
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .iso8601
+        let sidecar = try decoder.decode(CaptureCore.LocalRecordingSidecar.self, from: files.sidecarData)
+        let changed = try sidecar.withWatchStopDiagnostics(.init(outcome: .timedOut,
+            sessionID: sidecar.sessionID, takeID: sidecar.takeID,
+            commandID: "late-stop", detail: "Watch motion stop timed out.",
+            resolvedAt: Date(timeIntervalSince1970: 1_788_000_005), attemptCount: 1)).encodedData()
+        try changed.write(to: files.sidecarURL, options: .atomic)
+        let optional = try await owner.rawCaptureExportSnapshot(config: files.config)
+        let snapshot = try XCTUnwrap(optional)
+        let archived = try await Task.detached { try Self.archive(snapshot.source, in: files.directory) }.value
+        let document = try ReferenceTearEvidenceCodec.decodeDocument(XCTUnwrap(archived.companions[sidecar.takeID]))
+        XCTAssertEqual(document.sourceBinding.rawSidecarData, changed)
+        XCTAssertEqual(document.review, take.tearReview)
+        XCTAssertEqual(document.projection, take.tearProjection)
+        XCTAssertEqual(try Data(contentsOf: files.sidecarURL), changed)
+        let state = await owner.snapshot()
+        XCTAssertEqual(state.session.takeInReview, take, "Export does not alter review or approve new evidence.")
+        XCTAssertEqual(binding.rawSidecarData, files.sidecarData)
+    }
+
+    func testWatchStopExportRefreshRejectsOtherIdentityAndUnknownFieldChanges() async throws {
+        let files = try await fixture([])
+        let binding = try ReferenceTearEvidenceCodec.makeSourceBinding(
+            rawSidecarData: files.sidecarData, fileName: files.sidecarURL.lastPathComponent)
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .iso8601
+        let sidecar = try decoder.decode(CaptureCore.LocalRecordingSidecar.self, from: files.sidecarData)
+        let changed = try sidecar.withWatchStopDiagnostics(.init(outcome: .timedOut,
+            sessionID: sidecar.sessionID, takeID: sidecar.takeID, commandID: "late-stop")).encodedData()
+        let valid = try XCTUnwrap(JSONSerialization.jsonObject(with: changed) as? [String: Any])
+        XCTAssertEqual(try ReferenceTearEvidenceCodec.exportBinding(from: binding,
+            currentSidecarData: changed).rawSidecarData, changed)
+        for field in ["sessionID", "unknownFutureEvidenceField", "auditTrail", "existingAuditField", "watchStopDiagnostics"] {
+            var invalid = valid
+            switch field {
+            case "auditTrail": invalid[field] = []
+            case "existingAuditField":
+                var audit = try XCTUnwrap(invalid["auditTrail"] as? [[String: Any]])
+                XCTAssertFalse(sidecar.auditTrail.isEmpty)
+                audit[0]["unknownFutureEvidenceField"] = "changed"
+                invalid["auditTrail"] = audit
+            case "watchStopDiagnostics":
+                var stop = try XCTUnwrap(invalid[field] as? [String: Any])
+                stop["takeID"] = "another-take"
+                invalid[field] = stop
+            default: invalid[field] = "changed"
+            }
+            let data = try JSONSerialization.data(withJSONObject: invalid, options: [.sortedKeys])
+            XCTAssertThrowsError(try ReferenceTearEvidenceCodec.exportBinding(from: binding,
+                currentSidecarData: data), field)
+        }
+    }
+
     func testFinalizedVideoAndWAVPlayTogetherWithoutOptionalBeatAssetsAndStopCancelsSeek() async throws {
         let files = try await fixture([])
         let take = try await record(worker([files]))
@@ -256,7 +370,8 @@ final class ReferenceTearEvidencePipelineTests: XCTestCase {
     private nonisolated static func packets(_ steps: Int, count: Int = 80, start: Double = 0.1,
         duration: Double = 0.3, phase: Int = 20) -> [Raw] {
         (0...count).map { index in
-            let value = ((phase + index * steps) % 128 + 128) % 128
+            // Logical forward test travel uses the observed decreasing counter.
+            let value = ((-phase - index * steps) % 128 + 128) % 128
             let time = ((start + Double(index) * duration / Double(count)) * 1_000_000_000).rounded() / 1_000_000_000
             return Raw(timestamp: time, takeRelativeTime: time, deviceName: "Rane ONE MKII",
                 channel: 1, controller: 6, value: value,
@@ -898,6 +1013,11 @@ final class ReferenceTearEvidencePipelineTests: XCTestCase {
         } catch {
             XCTAssertFalse(error.localizedDescription.isEmpty)
         }
+        let model = ReferenceAuthoringViewModel(worker: owner, initialState: await owner.snapshot())
+        let rejected = await model.rawCaptureExportSource(config: fixture.config)
+        XCTAssertNil(rejected)
+        XCTAssertNotNil(model.rawCaptureExportError)
+        XCTAssertFalse(model.isPreparingRawCaptureExport)
         let state = await owner.snapshot()
         XCTAssertEqual(state.session.takeInReview, before)
         XCTAssertEqual(before.tearEvidenceSourceBinding?.rawSidecarData, fixture.sidecarData)

@@ -270,8 +270,13 @@ final class ReferenceAuthoringWorker: @unchecked Sendable {
                 if !boundTakes.isEmpty {
                     let group = try SessionArchiveBuilder().localRecordingExportGroup(lastRecordingURL: url)
                     for take in boundTakes {
-                        guard let binding = take.tearEvidenceSourceBinding, let sourceURL = take.rawSidecarURL else {
+                        guard var binding = take.tearEvidenceSourceBinding, let sourceURL = take.rawSidecarURL else {
                             throw ReferenceAuthoringError.recordingFailed("Bound tear evidence has no original sidecar location.")
+                        }
+                        let canonicalURL = sourceURL.standardizedFileURL.resolvingSymlinksInPath()
+                        if canonicalURL == group.seedSidecarURL || group.sidecarURLsByTakeID.values.contains(canonicalURL) {
+                            binding = try ReferenceTearEvidenceCodec.exportBinding(from: binding,
+                                currentSidecarData: Data(contentsOf: sourceURL))
                         }
                         guard try group.includes(sourceBinding: binding, sourceSidecarURL: sourceURL) else {
                             excluded.append(take.id)
@@ -1034,6 +1039,9 @@ final class ReferenceAuthoringViewModel: ObservableObject {
 
     var canExportRawCapture: Bool { rawCaptureExportBlockReason == nil }
 
+    @Published private(set) var rawCaptureExportError: String?
+    @Published private(set) var isPreparingRawCaptureExport = false
+
     /// The finalized media URL of the raw capture this session produced.
     var lastFinalizedRecordingURL: URL? { worker.lastFinalizedRecordingURL }
 
@@ -1041,18 +1049,30 @@ final class ReferenceAuthoringViewModel: ObservableObject {
     /// is nothing stable to export. Reuses the existing session-archive
     /// pipeline; this screen builds no second archive format.
     func rawCaptureExportSource(config: CaptureSessionConfig?) async -> SessionExportSource? {
-        guard canExportRawCapture else { return nil }
+        rawCaptureExportError = nil
+        guard canExportRawCapture else {
+            rawCaptureExportError = rawCaptureExportBlockReason
+            return nil
+        }
         isWorking = true
-        defer { isWorking = false }
+        isPreparingRawCaptureExport = true
+        defer {
+            isWorking = false
+            isPreparingRawCaptureExport = false
+        }
         do {
-            let snapshot = try await worker.rawCaptureExportSnapshot(config: config)
-            if let excluded = snapshot?.excludedReferenceTakeIDs, !excluded.isEmpty {
-                visibleMessage = "Earlier authoring takes belong to another capture export group and remain in the session: "
-                    + excluded.joined(separator: ", ")
+            guard let snapshot = try await worker.rawCaptureExportSnapshot(config: config) else {
+                rawCaptureExportError = "The finalized capture is no longer available for export."
+                return nil
             }
-            return snapshot?.source
+            if !snapshot.excludedReferenceTakeIDs.isEmpty {
+                visibleMessage = "Earlier authoring takes belong to another capture export group and remain in the session: "
+                    + snapshot.excludedReferenceTakeIDs.joined(separator: ", ")
+            }
+            return snapshot.source
         } catch {
-            visibleMessage = error.localizedDescription
+            rawCaptureExportError = SessionExportFailureText.issue(for: error, while: "preparing the capture")
+            visibleMessage = rawCaptureExportError
             return nil
         }
     }

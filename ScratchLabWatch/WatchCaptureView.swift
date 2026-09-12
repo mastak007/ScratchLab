@@ -50,12 +50,16 @@ struct WatchCaptureView: View {
                         tone: recorder.isPhonePaired ? .info : .muted
                     )
                     infoRow(
-                        label: "Transfer",
+                        label: "iPhone link",
                         value: recorder.isPhoneReachable ? "Connected" : "Searching",
                         tone: recorder.isPhoneReachable ? .info : .muted
                     )
                 }
                 .font(.caption2)
+
+                Text("Connected describes the iPhone link. Check Mac relay status on iPhone.")
+                    .font(.caption2)
+                    .foregroundStyle(ScratchLabCoreColor.textTertiary)
 
                 Text(watchInstruction)
                     .font(.caption2)
@@ -161,7 +165,7 @@ struct WatchCaptureView: View {
             return "Watch motion capture is unavailable"
         }
         if !recorder.isPhoneReachable {
-            return "Open Capture on iPhone and wait for Transfer Connected"
+            return "Open Capture on iPhone and wait for iPhone link Connected"
         }
         return "Start Take"
     }
@@ -172,7 +176,7 @@ struct WatchCaptureView: View {
         }
         return recorder.isPhoneReachable
             ? "Keep the watch app open during recording."
-            : "Open Capture on iPhone. Start Take becomes available when Transfer says Connected."
+            : "Open Capture on iPhone. Start Take becomes available when iPhone link says Connected."
     }
 }
 

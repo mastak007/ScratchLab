@@ -11927,6 +11927,15 @@ enum CaptureCore {
                 rawRunCount: 0, noiseFilteredRunCount: 0), nil, intervals, 0, 1, nil)
         }
         let half = ringModulus / 2
+        // Operator-verified pilot, 2026-09-12, session 54d8c669 take004:
+        // the right ONE MKII platter counts DOWN during a forward push.
+        // Interpret direction here, before both live and finalized notation
+        // are derived. Raw MIDI bytes and the audio counter remain untouched.
+        // Do not extrapolate this polarity to other devices or the left deck.
+        let forwardSign = controller == 6 && ringModulus == 128
+            && events[0].channel == 1
+            && events[0].deviceName.trimmingCharacters(in: .whitespacesAndNewlines)
+                .caseInsensitiveCompare("Rane ONE MKII") == .orderedSame ? -1 : 1
         var positions = [Double](repeating: 0, count: events.count)
         struct Run { let startIdx: Int; let endIdx: Int }
         var runs: [Run] = []
@@ -11967,6 +11976,7 @@ enum CaptureCore {
                 // The first post-boundary packet is a NEW counter baseline.
                 continue
             }
+            delta *= forwardSign
             positions[i + 1] += Double(delta)
             let sign = delta > 0 ? 1 : delta < 0 ? -1 : 0
             if sign == 0 {

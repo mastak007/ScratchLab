@@ -1168,10 +1168,14 @@ struct ReferenceAuthoringView: View {
         HStack {
             Button("Save Capture…") { saveRawCapture() }
                 .disabled(!viewModel.canExportRawCapture || exportCoordinator.isPreparing)
-            if exportCoordinator.isPreparing {
+            if viewModel.isPreparingRawCaptureExport || exportCoordinator.isPreparing {
                 ProgressView().controlSize(.small)
             }
-            if let status = exportCoordinator.statusMessage {
+            if viewModel.isPreparingRawCaptureExport {
+                Text("Preparing capture…").font(.caption).foregroundStyle(.secondary)
+            } else if let error = viewModel.rawCaptureExportError {
+                Text(error).font(.caption).foregroundStyle(.orange).textSelection(.enabled)
+            } else if let status = exportCoordinator.statusMessage {
                 Text(status).font(.caption).foregroundStyle(.secondary)
             }
         }
