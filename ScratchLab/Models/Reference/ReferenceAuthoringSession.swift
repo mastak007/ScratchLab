@@ -437,6 +437,7 @@ struct ReferenceAuthoringSession: Equatable, Sendable {
             rawSidecarURL: draft.sidecarURL)
         take.restoredTearProjection = draft.projection
         take.restoredTearPerformedLimitations = draft.performedLimitations
+        take.preferenceMark = draft.evidence.boundaries.selectedRepetitionIndex == nil ? nil : draft.preferenceMark
         takes = [take]
         phase = metadata.lifecycleState == .approvedCanonical ? .complete : .reviewing(takeIndex: 0)
     }
@@ -967,11 +968,37 @@ struct ReferenceAuthoringSession: Equatable, Sendable {
         takes[takeIndex].updateBoundaries(boundaries)
     }
 
-    mutating func selectRepetitionForApproval(_ repetitionIndex: Int) {
-        guard case .reviewing(let takeIndex) = phase, takes.indices.contains(takeIndex) else { return }
-        var boundaries = takes[takeIndex].evidence.boundaries
+    /// Marks CXL's optional preferred repetition (zero-based `index`; the
+    /// operator sees `index + 1`). This is the same single selection approval
+    /// reads, but marking never approves, publishes, trims or changes
+    /// lifecycle. Unrecorded indices and movement checks are refused.
+    @discardableResult
+    mutating func markPreferredRepetition(_ repetitionIndex: Int, now: Date = Date()) -> Bool {
+        guard case .reviewing(let takeIndex) = phase, takes.indices.contains(takeIndex) else { return false }
+        let take = takes[takeIndex]
+        guard take.evidence.metadata.captureIntent?.isMovementCheck != true,
+              take.evidence.boundaries.repetitions.contains(where: { $0.index == repetitionIndex }) else { return false }
+        var boundaries = take.evidence.boundaries
         boundaries.selectedRepetitionIndex = repetitionIndex
         takes[takeIndex].updateBoundaries(boundaries)
+        takes[takeIndex].preferenceMark = ReferenceRepetitionPreferenceMark(markedBy: operatorName, markedAt: now)
+        return true
+    }
+
+    mutating func selectRepetitionForApproval(_ repetitionIndex: Int) {
+        markPreferredRepetition(repetitionIndex)
+    }
+
+    /// Removes the optional preference before approval. The recording and all
+    /// repetitions are unchanged; approval simply requires a new choice.
+    @discardableResult
+    mutating func clearPreferredRepetition() -> Bool {
+        guard case .reviewing(let takeIndex) = phase, takes.indices.contains(takeIndex) else { return false }
+        var boundaries = takes[takeIndex].evidence.boundaries
+        boundaries.selectedRepetitionIndex = nil
+        takes[takeIndex].updateBoundaries(boundaries)
+        takes[takeIndex].preferenceMark = nil
+        return true
     }
 
     /// Attach a newly-observed Watch evidence state to the take in review.
@@ -1601,6 +1628,9 @@ struct ReferenceAuthoringTake: Equatable, Sendable, Identifiable {
     /// not consult it, no lifecycle transition depends on it, and correcting
     /// it can neither approve this take nor make it available to training.
     fileprivate(set) var tearReview: ReferenceTearSegmentationReview
+    /// Reviewer and time for `evidence.boundaries.selectedRepetitionIndex`;
+    /// nil whenever no repetition is preferred. Not read by validation.
+    fileprivate(set) var preferenceMark: ReferenceRepetitionPreferenceMark?
 
     var id: String { evidence.metadata.referenceTakeID }
 

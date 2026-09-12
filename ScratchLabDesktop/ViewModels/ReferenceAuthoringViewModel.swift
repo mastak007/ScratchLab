@@ -384,6 +384,9 @@ final class ReferenceAuthoringWorker: @unchecked Sendable {
                       let url = worker.currentReviewMediaURL else { return nil }
                 let boundTakes = worker.session.takes.filter { $0.tearEvidenceSourceBinding != nil }
                 var companions: [String: Data] = [:]
+                var reviews: [String: Data] = [:]
+                let currentTakeID = (worker.session.takeInReview
+                    ?? (worker.session.phase == .complete ? worker.session.takes.last : nil))?.id
                 var excluded: [String] = []
                 if !boundTakes.isEmpty {
                     let group = try SessionArchiveBuilder().localRecordingExportGroup(lastRecordingURL: url)
@@ -413,12 +416,35 @@ final class ReferenceAuthoringWorker: @unchecked Sendable {
                             sourceBinding: binding, review: take.tearReview, projection: take.tearProjection,
                             performedLimitations: take.tearPerformedLimitations
                         )
+                        // The recommendation and notes travel beside, never inside, the
+                        // finalized sidecar, bound to the same refreshed source bytes.
+                        let sidecarDecoder = JSONDecoder()
+                        sidecarDecoder.dateDecodingStrategy = .iso8601
+                        let boundSidecar = try sidecarDecoder.decode(CaptureCore.LocalRecordingSidecar.self,
+                            from: binding.rawSidecarData)
+                        let primaryURL = sourceURL.deletingLastPathComponent().appendingPathComponent(boundSidecar.mediaFileName)
+                        let media = try ReferenceReviewMetadataCodec.originalMedia(primaryMediaURL: primaryURL,
+                            sidecarData: binding.rawSidecarData)
+                        if let store = worker.draftStore, FileManager.default.fileExists(atPath: store.fileURL(for: take.id).path) {
+                            let saved = try store.load(id: take.id).artifacts.map {
+                                ReferenceReviewMetadataDocument.OriginalMedia(fileName: $0.url.lastPathComponent, sha256: $0.sha256)
+                            }
+                            guard Set(saved.map(\.fileName)) == Set(media.map(\.fileName)), saved.allSatisfy(media.contains) else {
+                                throw ReferenceAuthoringError.recordingFailed("The original recording changed after review, so its review metadata cannot be exported.")
+                            }
+                        }
+                        let notes = take.id == currentTakeID
+                            ? worker.savedReviewNotes : (take.evidence.metadata.reviewDecision?.notes ?? "")
+                        if let document = try ReferenceReviewMetadataCodec.makeDocument(evidence: take.evidence,
+                            preferenceMark: take.preferenceMark, reviewNotes: notes, sourceBinding: binding, originalMedia: media) {
+                            reviews[binding.capturedTakeID] = try ReferenceReviewMetadataCodec.encode(document)
+                        }
                     }
                 }
                 return ReferenceAuthoringRawExportSnapshot(
                     source: .localRecordingSession(lastRecordingURL: url,
                         sessionName: "Reference Authoring Capture", config: worker.reviewingSavedDraft ? nil : config,
-                        referenceTearEvidenceByTakeID: companions),
+                        referenceTearEvidenceByTakeID: companions, referenceReviewMetadataByTakeID: reviews),
                     excludedReferenceTakeIDs: excluded
                 )
             }
@@ -528,6 +554,26 @@ final class ReferenceAuthoringWorker: @unchecked Sendable {
     func selectRepetitionForApproval(_ repetitionIndex: Int) async -> ReferenceAuthoringWorkerUpdate {
         await enqueue { worker in
             worker.session.selectRepetitionForApproval(repetitionIndex)
+            worker.session.revalidateTakeInReview()
+            return worker.makeUpdate()
+        }
+    }
+
+    /// Optional recommendation only; persisted with the draft and exported by
+    /// Save Capture. Never approves, publishes or changes lifecycle.
+    func markPreferredRepetition(_ repetitionIndex: Int) async -> ReferenceAuthoringWorkerUpdate {
+        await enqueue { worker in
+            guard worker.session.markPreferredRepetition(repetitionIndex) else {
+                return worker.makeUpdate(errorMessage: "Choose one of this take's recorded repetitions. Movement checks have no timed repetitions.")
+            }
+            worker.session.revalidateTakeInReview()
+            return worker.makeUpdate()
+        }
+    }
+
+    func clearPreferredRepetition() async -> ReferenceAuthoringWorkerUpdate {
+        await enqueue { worker in
+            worker.session.clearPreferredRepetition()
             worker.session.revalidateTakeInReview()
             return worker.makeUpdate()
         }
@@ -1319,6 +1365,10 @@ final class ReferenceAuthoringViewModel: ObservableObject {
             isPreparingRawCaptureExport = false
         }
         do {
+            if let takeID = reviewedTake?.id {
+                // Export the notes currently shown, not a debounced older copy.
+                apply(await worker.saveDraft(reviewNotes: reviewNotes, expectedTakeID: takeID))
+            }
             guard let snapshot = try await worker.rawCaptureExportSnapshot(config: config) else {
                 rawCaptureExportError = "The finalized capture is no longer available for export."
                 return nil
@@ -1746,6 +1796,22 @@ final class ReferenceAuthoringViewModel: ObservableObject {
         Task { [weak self] in
             guard let self else { return }
             apply(await worker.selectRepetitionForApproval(index))
+        }
+    }
+
+    func markPreferredRepetition(_ index: Int) {
+        Task { [weak self] in
+            guard let self else { return }
+            let update = await worker.markPreferredRepetition(index)
+            apply(update)
+            if let message = update.errorMessage { visibleMessage = message }
+        }
+    }
+
+    func clearPreferredRepetition() {
+        Task { [weak self] in
+            guard let self else { return }
+            apply(await worker.clearPreferredRepetition())
         }
     }
 

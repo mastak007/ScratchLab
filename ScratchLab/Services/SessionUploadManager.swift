@@ -918,7 +918,7 @@ final class SessionUploadManager: NSObject, ObservableObject {
         switch source {
         case .package(let package):
             return package.metadata.sessionID
-        case .localRecordingSession(let lastRecordingURL, _, _, _):
+        case .localRecordingSession(let lastRecordingURL, _, _, _, _):
             let sidecarURL = CaptureCore.LocalRecordingFiles.sidecarURL(forMediaURL: lastRecordingURL)
             if let sidecar = try? decodeSidecar(at: sidecarURL) {
                 return sidecar.sessionID
@@ -931,7 +931,7 @@ final class SessionUploadManager: NSObject, ObservableObject {
         switch source {
         case .package(let package):
             return package.metadata.sessionName
-        case .localRecordingSession(_, let sessionName, _, _):
+        case .localRecordingSession(_, let sessionName, _, _, _):
             return sessionName
         }
     }

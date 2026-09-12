@@ -16,6 +16,8 @@ struct ReferenceSavedDraft: Codable, Equatable, Sendable, Identifiable {
     let performedLimitations: [String: [CanonicalTearComparison.UnavailableReason]]
     let reviewNotes: String
     let artifacts: [Artifact]
+    /// Optional and absent from drafts saved before preferences existed.
+    let preferenceMark: ReferenceRepetitionPreferenceMark?
 
     var id: String { evidence.metadata.referenceTakeID }
 
@@ -110,6 +112,7 @@ final class ReferenceDraftStore {
             }
             if old.evidence == take.evidence, old.tearReview == take.tearReview,
                old.sourceBinding == binding, old.reviewNotes == reviewNotes,
+               old.preferenceMark == take.preferenceMark,
                old.projection == take.tearProjection, old.performedLimitations == take.tearPerformedLimitations,
                FileManager.default.fileExists(atPath: fileURL(for: take.id).path) {
                 cached[old.id] = old
@@ -123,7 +126,8 @@ final class ReferenceDraftStore {
             mediaURL: mediaURL, sidecarURL: sidecarURL, evidence: take.evidence,
             autoDetectedTechnique: take.autoDetectedTechnique, sourceBinding: binding,
             tearReview: take.tearReview, projection: take.tearProjection,
-            performedLimitations: take.tearPerformedLimitations, reviewNotes: reviewNotes, artifacts: artifacts)
+            performedLimitations: take.tearPerformedLimitations, reviewNotes: reviewNotes, artifacts: artifacts,
+            preferenceMark: take.evidence.boundaries.selectedRepetitionIndex == nil ? nil : take.preferenceMark)
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.sortedKeys]
         let payload = try encoder.encode(draft)
@@ -163,6 +167,7 @@ final class ReferenceDraftStore {
               draft.mediaURL.lastPathComponent == draft.evidence.actualMediaFileName,
               draft.sidecarURL.lastPathComponent == draft.sourceBinding.rawSidecarFileName,
               draft.mediaURL.deletingLastPathComponent() == draft.sidecarURL.deletingLastPathComponent(),
+              draft.preferenceMark == nil || draft.evidence.boundaries.selectedRepetitionIndex != nil,
               Set(draft.artifacts.map(\.url)).count == draft.artifacts.count,
               Set(draft.artifacts.map(\.url)) == Set(try Self.mediaURLs(primary: draft.mediaURL,
                 sidecarData: draft.sourceBinding.rawSidecarData)) else {

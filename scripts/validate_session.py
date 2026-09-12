@@ -68,8 +68,13 @@ REFERENCE_BEAT_SOURCES = {
     "reference_beat_master", "reference_beat_analysis", "reference_beat_manifest",
     "reference_beat_rights", "reference_take_sidecar",
 }
-OPTIONAL_MANIFEST_FILE_SOURCES = {"notation", "scratch_only", "raw_original"} | REFERENCE_BEAT_SOURCES
-OPTIONAL_MANIFEST_ARTIFACT_SOURCES = {"scratch_only", "raw_original"} | REFERENCE_BEAT_SOURCES
+# Optional CXL recommendation/review notes companion written by Save Capture.
+REFERENCE_REVIEW_METADATA_SOURCE = "reference_review_metadata"
+REFERENCE_REVIEW_METADATA_SCHEMA = "scratchlab_reference_review_metadata_v1"
+REFERENCE_REVIEW_NUMBERING = "repetitionNumber_1_based_repetitionIndex_0_based"
+OPTIONAL_MANIFEST_FILE_SOURCES = ({"notation", "scratch_only", "raw_original", REFERENCE_REVIEW_METADATA_SOURCE}
+                                  | REFERENCE_BEAT_SOURCES)
+OPTIONAL_MANIFEST_ARTIFACT_SOURCES = {"scratch_only", "raw_original", REFERENCE_REVIEW_METADATA_SOURCE} | REFERENCE_BEAT_SOURCES
 
 
 def reference_artifact_record(session_dir: Path, path: Path, source: str) -> dict[str, Any]:
@@ -82,6 +87,85 @@ def reference_artifact_record(session_dir: Path, path: Path, source: str) -> dic
     data = path.read_bytes()
     return {"path": path.relative_to(session_dir).as_posix(), "bytes": len(data),
             "sha256": hashlib.sha256(data).hexdigest(), "probe": {"kind": "json"}}
+
+
+def review_metadata_artifact_record(session_dir: Path, path: Path) -> dict[str, Any]:
+    """Same byte/hash contract and JSON probe as the Swift exporter."""
+    payload = read_json(path)
+    if not isinstance(payload, dict):
+        raise ValueError("review metadata must be a JSON object")
+    data = path.read_bytes()
+    return {"path": path.relative_to(session_dir).as_posix(), "bytes": len(data),
+            "sha256": hashlib.sha256(data).hexdigest(),
+            "probe": {"kind": "json", "schema_version": payload.get("schemaVersion")}}
+
+
+def _valid_review_repetition(value: Any) -> bool:
+    if not isinstance(value, dict):
+        return False
+    index, number = value.get("repetitionIndex"), value.get("repetitionNumber")
+    start, end = value.get("startBeat"), value.get("endBeat")
+    return (isinstance(index, int) and not isinstance(index, bool) and index >= 0
+            and isinstance(number, int) and not isinstance(number, bool) and number == index + 1
+            and isinstance(start, (int, float)) and isinstance(end, (int, float))
+            and math.isfinite(start) and math.isfinite(end) and start <= end)
+
+
+def validate_reference_review_metadata(
+    take: dict[str, Any], session_dir: Path, take_label: str, errors: list[str]
+) -> None:
+    """CXL's optional preferred repetition: repetitionNumber is 1-based, repetitionIndex 0-based.
+
+    Absent metadata (older exports, no recommendation) is valid. Present metadata must be bound
+    to this take number and to the exported camA bytes, and must never invent repetitions.
+    """
+    files, artifacts = take.get("files", {}), take.get("artifacts", {})
+    if not isinstance(files, dict) or not isinstance(artifacts, dict):
+        return
+    source = REFERENCE_REVIEW_METADATA_SOURCE
+    if source not in files and source not in artifacts:
+        return
+    try:
+        relative = files.get(source)
+        record = artifacts.get(source)
+        if (not isinstance(relative, str) or not relative.startswith("notation/")
+                or not isinstance(record, dict) or record.get("path") != relative):
+            raise ValueError("files and artifacts must declare the same notation/ path")
+        path = session_dir / relative
+        if not path.resolve().is_relative_to(session_dir.resolve()):
+            raise ValueError("path escapes the session")
+        document = read_json(path)
+        if not isinstance(document, dict) or document.get("schemaVersion") != REFERENCE_REVIEW_METADATA_SCHEMA:
+            raise ValueError("unsupported schema")
+        if document.get("repetitionNumbering") != REFERENCE_REVIEW_NUMBERING:
+            raise ValueError("unknown repetition numbering")
+        binding = document.get("sourceBinding")
+        if not isinstance(binding, dict) or str(binding.get("capturedTakeNumber")) != str(take.get("take_number")):
+            raise ValueError("bound to a different captured take")
+        recorded = document.get("recordedRepetitions")
+        if not isinstance(recorded, list):
+            raise ValueError("recordedRepetitions must be a list")
+        for position, repetition in enumerate(recorded):
+            if not _valid_review_repetition(repetition) or repetition["repetitionIndex"] != position:
+                raise ValueError("recorded repetitions are not contiguous zero-based ranges")
+        preferred = document.get("preferredRepetition")
+        if document.get("isMovementCheck") is True and (recorded or preferred is not None):
+            raise ValueError("movement checks have no timed repetitions")
+        if preferred is not None and (not _valid_review_repetition(preferred) or preferred not in recorded):
+            raise ValueError("preferred repetition is out of range or differs from its recorded range")
+        if preferred is None and document.get("preferenceMark") is not None:
+            raise ValueError("a preference mark requires a preferred repetition")
+        media = document.get("originalMedia")
+        hashes = {item.get("sha256") for item in media if isinstance(item, dict)} if isinstance(media, list) else set()
+        if not hashes:
+            raise ValueError("original media hashes are missing")
+        cam_a = artifacts.get("camA")
+        if isinstance(cam_a, dict) and cam_a.get("sha256") not in hashes:
+            raise ValueError("exported camA does not match the reviewed original media")
+        if preferred is None and not str(document.get("reviewNotes", "")).strip():
+            raise ValueError("review metadata without a preference or notes must be omitted")
+    except Exception as exc:  # reported as a validation error, never ignored
+        errors.append(f"{take_label}: reference review metadata is invalid: {exc}")
 
 
 def validate_reference_beat_evidence(
@@ -681,6 +765,7 @@ def validate_manifest(
             )
 
         validate_reference_beat_evidence(take, session_dir, take_label, errors)
+        validate_reference_review_metadata(take, session_dir, take_label, errors)
 
         for source, artifact in artifacts.items():
             if not isinstance(artifact, dict):
@@ -700,6 +785,8 @@ def validate_manifest(
             try:
                 if source in REFERENCE_BEAT_SOURCES:
                     expected_artifact = reference_artifact_record(session_dir, artifact_path, source)
+                elif source == REFERENCE_REVIEW_METADATA_SOURCE:
+                    expected_artifact = review_metadata_artifact_record(session_dir, artifact_path)
                 else:
                     expected_artifact = build_artifact_record(
                         session_dir,

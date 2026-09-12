@@ -3548,3 +3548,250 @@ enum ReferenceTearCanonicalProjectionBuilder {
         ReferenceTearProjectionReason.allCases.filter(reasons.contains)
     }
 }
+
+// MARK: - Optional preferred repetition and review metadata
+
+/// Who marked CXL's preferred repetition, and when. The index itself remains
+/// `ReferencePhraseBoundaries.selectedRepetitionIndex` — the one selection
+/// approval also reads. A mark never approves, publishes, trims or trains.
+struct ReferenceRepetitionPreferenceMark: Codable, Equatable, Sendable {
+    let markedBy: String
+    let markedAt: Date
+}
+
+/// Optional Save Capture companion carrying CXL's recommendation and review
+/// notes for one exact captured take. It is separate from the immutable
+/// finalized sidecar, which is embedded byte-for-byte in `sourceBinding`.
+///
+/// Numbering: `repetitionNumber` is what the operator sees (1-based) and
+/// `repetitionIndex` is the internal zero-based `ReferenceRepetitionBoundary`
+/// index. Both are serialized and must satisfy `number == index + 1`.
+/// Dates use Foundation reference-date seconds, as tear evidence v1 does.
+struct ReferenceReviewMetadataDocument: Codable, Equatable, Sendable {
+    static let currentSchemaVersion = "scratchlab_reference_review_metadata_v1"
+    static let repetitionNumbering = "repetitionNumber_1_based_repetitionIndex_0_based"
+    static let maximumNotesLength = 10_000
+
+    struct OriginalMedia: Codable, Hashable, Sendable {
+        let fileName: String
+        let sha256: String
+    }
+
+    struct Repetition: Codable, Equatable, Sendable {
+        let repetitionIndex: Int
+        let repetitionNumber: Int
+        let startBeat: Double
+        let endBeat: Double
+        /// Take-media seconds, absent when the recorded timing origin is invalid.
+        let startSeconds: Double?
+        let endSeconds: Double?
+    }
+
+    let schemaVersion: String
+    let repetitionNumbering: String
+    let sourceBinding: ReferenceTearEvidenceSourceBinding
+    let referenceTakeID: String
+    let authoringSessionID: String
+    let isMovementCheck: Bool
+    /// Informational. Exporting this document never changes lifecycle.
+    let lifecycleStateAtExport: ReferenceLifecycleState
+    /// Hashes of the original recorded media at export (video, WAV, optional second camera).
+    let originalMedia: [OriginalMedia]
+    let recordedRepetitions: [Repetition]
+    let preferredRepetition: Repetition?
+    let preferenceMark: ReferenceRepetitionPreferenceMark?
+    let reviewNotes: String
+}
+
+/// Pure construction, serialization and self-consistency validation. Export
+/// additionally binds the document to the current sidecar and media files.
+enum ReferenceReviewMetadataCodec {
+    typealias Document = ReferenceReviewMetadataDocument
+
+    enum Error: Swift.Error, LocalizedError, Equatable, Sendable {
+        case unsupportedSchema(String)
+        case invalid(String)
+        case identityMismatch(String)
+
+        var errorDescription: String? {
+            switch self {
+            case .unsupportedSchema(let value): return "Unsupported reference review metadata schema: \(value)."
+            case .invalid(let detail): return "Invalid reference review metadata: \(detail)"
+            case .identityMismatch(let detail): return "Reference review metadata identity mismatch: \(detail)"
+            }
+        }
+    }
+
+    /// Nil when there is nothing to record (no preference and blank notes), so
+    /// exports without a recommendation keep their existing shape.
+    static func makeDocument(
+        evidence: ReferenceTakeEvidence,
+        preferenceMark: ReferenceRepetitionPreferenceMark?,
+        reviewNotes: String,
+        sourceBinding: ReferenceTearEvidenceSourceBinding,
+        originalMedia: [Document.OriginalMedia]
+    ) throws -> Document? {
+        let metadata = evidence.metadata
+        let isMovementCheck = metadata.captureIntent?.isMovementCheck == true
+        let recorded = isMovementCheck ? [] : evidence.boundaries.repetitions.map { repetition($0, metadata: metadata) }
+        var preferred: Document.Repetition?
+        if let index = evidence.boundaries.selectedRepetitionIndex {
+            guard !isMovementCheck, let boundary = evidence.boundaries.selectedRepetition else {
+                throw Error.invalid("preferred repetition \(index + 1) is not a recorded repetition of this take")
+            }
+            preferred = repetition(boundary, metadata: metadata)
+        }
+        let notes = reviewNotes.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? "" : reviewNotes
+        guard preferred != nil || !notes.isEmpty else { return nil }
+        let document = Document(schemaVersion: Document.currentSchemaVersion,
+            repetitionNumbering: Document.repetitionNumbering, sourceBinding: sourceBinding,
+            referenceTakeID: metadata.referenceTakeID, authoringSessionID: metadata.authoringSessionID,
+            isMovementCheck: isMovementCheck, lifecycleStateAtExport: metadata.lifecycleState,
+            originalMedia: originalMedia, recordedRepetitions: recorded, preferredRepetition: preferred,
+            preferenceMark: preferred == nil ? nil : preferenceMark, reviewNotes: notes)
+        try validate(document)
+        return document
+    }
+
+    static func encode(_ document: Document) throws -> Data {
+        try validate(document)
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.sortedKeys]
+        encoder.dateEncodingStrategy = .deferredToDate
+        do { return try encoder.encode(document) }
+        catch { throw Error.invalid("payload cannot be represented as finite JSON: \(error.localizedDescription)") }
+    }
+
+    static func decodeDocument(_ data: Data) throws -> Document {
+        struct Header: Decodable { let schemaVersion: String }
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .deferredToDate
+        let version: String
+        do { version = try decoder.decode(Header.self, from: data).schemaVersion }
+        catch { throw Error.invalid(error.localizedDescription) }
+        guard version == Document.currentSchemaVersion else { throw Error.unsupportedSchema(version) }
+        let document: Document
+        do { document = try decoder.decode(Document.self, from: data) }
+        catch { throw Error.invalid(error.localizedDescription) }
+        try validate(document)
+        return document
+    }
+
+    /// Nil data means no review metadata (older exports). Present data must be
+    /// valid and bound to exactly `expectedSource`.
+    static func decode(_ data: Data?, expectedSource: ReferenceTearEvidenceSourceBinding) throws -> Document? {
+        guard let data else { return nil }
+        let document = try decodeDocument(data)
+        guard document.sourceBinding == expectedSource else {
+            throw Error.identityMismatch("the review metadata belongs to another captured take or sidecar")
+        }
+        return document
+    }
+
+    static func validate(_ document: Document) throws {
+        guard document.schemaVersion == Document.currentSchemaVersion else {
+            throw Error.unsupportedSchema(document.schemaVersion)
+        }
+        guard document.repetitionNumbering == Document.repetitionNumbering else {
+            throw Error.invalid("unknown repetition numbering")
+        }
+        let binding = document.sourceBinding
+        let derived: ReferenceTearEvidenceSourceBinding
+        do {
+            derived = try ReferenceTearEvidenceCodec.makeSourceBinding(
+                rawSidecarData: binding.rawSidecarData, fileName: binding.rawSidecarFileName)
+        } catch {
+            throw Error.identityMismatch("the embedded sidecar cannot be bound: \(error.localizedDescription)")
+        }
+        guard derived == binding else {
+            throw Error.identityMismatch("embedded sidecar bytes, hash or captured identities disagree")
+        }
+        guard !isBlank(document.referenceTakeID), !isBlank(document.authoringSessionID) else {
+            throw Error.invalid("reference identities are empty")
+        }
+        let names = document.originalMedia.map(\.fileName)
+        guard !names.isEmpty, Set(names).count == names.count, names.allSatisfy(isLeafName),
+              document.originalMedia.allSatisfy({ isSHA256($0.sha256) }) else {
+            throw Error.invalid("original media names or hashes are malformed")
+        }
+        let recorded = document.recordedRepetitions
+        guard recorded.enumerated().allSatisfy({ $0.offset == $0.element.repetitionIndex }),
+              recorded.allSatisfy(isConsistent) else {
+            throw Error.invalid("recorded repetitions are not contiguous zero-based ranges")
+        }
+        if document.isMovementCheck, !recorded.isEmpty || document.preferredRepetition != nil {
+            throw Error.invalid("movement checks have no timed repetitions to prefer")
+        }
+        if let preferred = document.preferredRepetition {
+            guard isConsistent(preferred), recorded.contains(preferred) else {
+                throw Error.invalid("the preferred repetition is out of range or differs from its recorded range")
+            }
+        } else if document.preferenceMark != nil {
+            throw Error.invalid("a preference mark requires a preferred repetition")
+        }
+        if let mark = document.preferenceMark {
+            guard !isBlank(mark.markedBy), mark.markedAt.timeIntervalSinceReferenceDate.isFinite else {
+                throw Error.invalid("the preference reviewer or time is missing")
+            }
+        }
+        guard document.reviewNotes.count <= Document.maximumNotesLength else {
+            throw Error.invalid("review notes are too long")
+        }
+        guard document.preferredRepetition != nil || !isBlank(document.reviewNotes) else {
+            throw Error.invalid("review metadata without a preference or notes must be omitted")
+        }
+    }
+
+    /// SHA-256 of the take's original recorded files: the primary media, its
+    /// WAV when present and a verified second camera. One implementation for
+    /// every host, so Mac and iOS bind review metadata to identical files.
+    static func originalMedia(primaryMediaURL: URL, sidecarData: Data) throws -> [Document.OriginalMedia] {
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .iso8601
+        let sidecar: CaptureCore.LocalRecordingSidecar
+        do { sidecar = try decoder.decode(CaptureCore.LocalRecordingSidecar.self, from: sidecarData) }
+        catch { throw Error.invalid("the original sidecar cannot be decoded: \(error.localizedDescription)") }
+        guard primaryMediaURL.isFileURL, sidecar.mediaFileName == primaryMediaURL.lastPathComponent else {
+            throw Error.identityMismatch("the primary media is not this take's recorded media")
+        }
+        var urls = [primaryMediaURL]
+        let wav = primaryMediaURL.deletingPathExtension().appendingPathExtension("wav")
+        if FileManager.default.fileExists(atPath: wav.path) { urls.append(wav) }
+        if let camera = try sidecar.secondaryCamera?.verifiedURL(beside: primaryMediaURL) { urls.append(camera) }
+        return try urls.map { url in
+            let data: Data
+            do { data = try Data(contentsOf: url, options: .mappedIfSafe) }
+            catch { throw Error.identityMismatch("\(url.lastPathComponent) is missing or unreadable") }
+            return Document.OriginalMedia(fileName: url.lastPathComponent,
+                sha256: SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined())
+        }
+    }
+
+    private static func repetition(_ boundary: ReferenceRepetitionBoundary, metadata: ReferenceTakeMetadata) -> Document.Repetition {
+        let start = metadata.mediaSeconds(forBeat: boundary.startBeat)
+        let end = metadata.mediaSeconds(forBeat: boundary.endBeat)
+        return Document.Repetition(repetitionIndex: boundary.index, repetitionNumber: boundary.index + 1,
+            startBeat: boundary.startBeat, endBeat: boundary.endBeat,
+            startSeconds: start.isFinite ? start : nil, endSeconds: end.isFinite ? end : nil)
+    }
+
+    private static func isConsistent(_ repetition: Document.Repetition) -> Bool {
+        repetition.repetitionIndex >= 0 && repetition.repetitionNumber == repetition.repetitionIndex + 1
+            && repetition.startBeat.isFinite && repetition.endBeat.isFinite
+            && repetition.startBeat <= repetition.endBeat
+            && (repetition.startSeconds?.isFinite ?? true) && (repetition.endSeconds?.isFinite ?? true)
+    }
+
+    private static func isBlank(_ value: String) -> Bool {
+        value.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    }
+
+    private static func isLeafName(_ value: String) -> Bool {
+        !isBlank(value) && value != "." && value != ".."
+            && !value.contains("/") && !value.contains("\\") && !value.contains("\0")
+    }
+
+    private static func isSHA256(_ value: String) -> Bool {
+        value.count == 64 && value.allSatisfy { $0.isHexDigit && !$0.isUppercase }
+    }
+}

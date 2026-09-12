@@ -1346,8 +1346,16 @@ struct ReferenceAuthoringView: View {
                             .font(.caption).foregroundStyle(.secondary)
                     } else {
                     Text("Four repetitions").font(.headline)
-                    Text("Play each repetition to check it. Start and End beat trim its review range; Select for Approval chooses your best repetition. These controls do not change the original recording.")
+                    Text("Play each repetition to check it. Start and End beat trim its review range. Mark as Preferred records CXL's best repetition (1–4); it is saved with the draft, included in Save Capture and used if you approve. Marking does not approve the take or change the original recording.")
                         .font(.caption).foregroundStyle(.secondary)
+                    if let preferred = take.evidence.boundaries.selectedRepetitionIndex {
+                        Text("Preferred: repetition \(preferred + 1)" + (take.preferenceMark.map {
+                            " · marked by \($0.markedBy) · \($0.markedAt.formatted(date: .abbreviated, time: .shortened))"
+                        } ?? ""))
+                        .font(.caption.weight(.semibold))
+                    } else {
+                        Text("No preferred repetition marked.").font(.caption).foregroundStyle(.secondary)
+                    }
                     Text("Beat \(take.evidence.metadata.countInBars * take.evidence.metadata.pattern.beatsPerBar) is the first beat after count-in. Review uses the recorded timing to find that beat in the media.")
                         .font(.caption).foregroundStyle(.secondary)
                     ForEach(take.evidence.boundaries.repetitions) { boundary in
@@ -1366,7 +1374,7 @@ struct ReferenceAuthoringView: View {
                         recordedMotionSection(take)
                     }
 
-                    TextField("Approval or rejection notes", text: $viewModel.reviewNotes, axis: .vertical)
+                    TextField("Review notes (saved with the draft and Save Capture)", text: $viewModel.reviewNotes, axis: .vertical)
                         .lineLimit(2...4)
 
                     // Approval's scope, stated wherever approval is offered.
@@ -2090,11 +2098,15 @@ struct ReferenceAuthoringView: View {
                 Button(focusedBoundary(for: take)?.index == boundary.index ? "Notation highlighted" : "Show notation") {
                     focusMotion(on: boundary, take: take)
                 }
-                Button(take.evidence.boundaries.selectedRepetitionIndex == boundary.index ? "Selected" : "Select for Approval") {
+                Button(take.evidence.boundaries.selectedRepetitionIndex == boundary.index ? "Preferred" : "Mark as Preferred") {
                     focusMotion(on: boundary, take: take)
-                    viewModel.selectRepetitionForApproval(boundary.index)
+                    viewModel.markPreferredRepetition(boundary.index)
                 }
                 .disabled(!viewModel.canEditReviewedTake || take.evidence.boundaries.selectedRepetitionIndex == boundary.index)
+                if take.evidence.boundaries.selectedRepetitionIndex == boundary.index {
+                    Button("Clear") { viewModel.clearPreferredRepetition() }
+                        .disabled(!viewModel.canEditReviewedTake)
+                }
             }
             HStack {
                 ReferenceRepetitionPlaybackControls(controller: viewModel.mediaReview, boundary: boundary, take: take,

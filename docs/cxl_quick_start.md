@@ -33,9 +33,9 @@ The meter shows captured/generated audio, not proof of sound from the physical s
 
 ## Review can wait
 
-Finalized drafts are saved on this Mac. **Save for Later** also saves the current review notes. Use **Saved drafts → Open for Review** on this same Mac later, keeping the original recording files and beat assets available. A raw capture ZIP is an export, not a portable importable saved draft.
+Finalized drafts are saved on this Mac. **Save for Later** also saves the current review notes. In review, **Mark as Preferred** records CXL's best repetition (1–4) for a four-repetition take; **Clear** removes it. The preference, who marked it and when, and the review notes are saved with the draft and included in **Save Capture…** as a separate `notation/*_reference_review_metadata.json` file bound to that exact take and its original media hashes. Marking a preference does not approve, publish, trim or train anything, and the original recording keeps all four repetitions. Movement checks have no numbered repetitions; only notes are exported. Use **Saved drafts → Open for Review** on this same Mac later, keeping the original recording files and beat assets available. A raw capture ZIP is an export, not a portable importable saved draft.
 
-You do not need to press **Approve Canonical Draft** to save or send a raw capture. Later approval requires a complete reference take, a selected repetition and the technique's evidence checks. No Watch is required, but a requested Watch transfer that is pending, failed or inconsistent must still be resolved. Approval never creates missing fader, movement or timing evidence.
+You do not need to press **Approve Canonical Draft** to save or send a raw capture. Later approval requires a complete reference take, a preferred (selected) repetition and the technique's evidence checks. No Watch is required, but a requested Watch transfer that is pending, failed or inconsistent must still be resolved. Approval never creates missing fader, movement or timing evidence.
 
 After approval, **Export Approved Package…** creates the separate verified reference package. **Reopen & Verify Last Export** checks that package. Approval does not publish, install or authorize model training.
 

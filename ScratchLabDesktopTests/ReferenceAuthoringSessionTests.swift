@@ -213,6 +213,52 @@ final class ReferenceAuthoringSessionTests: XCTestCase {
         XCTAssertEqual(session.selectedBPM, prepared.bpm)
     }
 
+    // MARK: - Optional preferred repetition (CXL recommendation)
+
+    func testPreferredRepetitionIsOptionalChangeableClearableAndNeverApproves() throws {
+        var session = makeConfiguredSession()
+        try calibrateSession(&session)
+        let hooks = ReferenceAuthoringRecordingHooks(startRecording: { .success(()) },
+            stopRecording: { .success(self.goodArtifacts()) },
+            currentPreflightSnapshot: { self.passingSnapshot() }, latestCalibrationObservation: { nil })
+        _ = try session.beginRecording(using: hooks).get()
+        _ = try session.finishRecording(using: hooks).get()
+        let initial = try XCTUnwrap(session.takeInReview)
+        XCTAssertEqual(initial.evidence.boundaries.repetitions.map(\.index), [0, 1, 2, 3])
+        XCTAssertNil(initial.evidence.boundaries.selectedRepetitionIndex, "No preference is ever defaulted.")
+        XCTAssertNil(initial.preferenceMark)
+        XCTAssertNotNil(session.approvalBlockReason())
+
+        for index in 0..<4 {
+            let markedAt = Date(timeIntervalSince1970: 1_788_100_000 + Double(index))
+            XCTAssertTrue(session.markPreferredRepetition(index, now: markedAt))
+            let take = try XCTUnwrap(session.takeInReview)
+            XCTAssertEqual(take.evidence.boundaries.selectedRepetitionIndex, index)
+            XCTAssertEqual(take.preferenceMark, ReferenceRepetitionPreferenceMark(markedBy: "Karl", markedAt: markedAt))
+            XCTAssertEqual(take.evidence.metadata.lifecycleState, .draft)
+            XCTAssertNil(take.evidence.metadata.reviewDecision)
+            XCTAssertEqual(take.evidence.boundaries.repetitions, initial.evidence.boundaries.repetitions)
+        }
+        let beforeRefusals = try XCTUnwrap(session.takeInReview)
+        for invalid in [-1, 4, 99] {
+            XCTAssertFalse(session.markPreferredRepetition(invalid, now: Date(timeIntervalSince1970: 1_788_200_000)))
+        }
+        XCTAssertEqual(session.takeInReview, beforeRefusals, "Out-of-range choices change nothing.")
+
+        XCTAssertTrue(session.clearPreferredRepetition())
+        XCTAssertNil(session.takeInReview?.evidence.boundaries.selectedRepetitionIndex)
+        XCTAssertNil(session.takeInReview?.preferenceMark)
+        XCTAssertThrowsError(try session.approveTakeInReview(notes: "Clearing removes the approval choice"))
+        XCTAssertEqual(session.takeInReview?.evidence.metadata.lifecycleState, .draft)
+
+        XCTAssertTrue(session.markPreferredRepetition(2, now: Date(timeIntervalSince1970: 1_788_100_100)))
+        try session.approveTakeInReview(notes: "Approval reads the one preferred selection")
+        XCTAssertEqual(session.latestRecordedTake?.evidence.metadata.reviewDecision?.selectedRepetitionIndex, 2)
+        XCTAssertFalse(session.markPreferredRepetition(1), "An approved take's selection is no longer editable.")
+        XCTAssertFalse(session.clearPreferredRepetition())
+        XCTAssertEqual(session.latestRecordedTake?.evidence.boundaries.selectedRepetitionIndex, 2)
+    }
+
     func testMeasuredMediaOriginSurvivesFinalizationWatchRefreshApprovalAndNextTake() throws {
         let origin = ReferenceMediaTimeOrigin(clickStartHostTime: 100, recordingStartHostTime: 200,
             recordingStartOffsetSeconds: 4 * 60.0 / 95)

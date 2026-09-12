@@ -781,6 +781,8 @@ struct SessionExportPackage: Sendable {
     let takes: [SessionExportTake]
     let calibrationData: Data?
     var referenceTearEvidenceByTakeID: [String: Data] = [:]
+    /// Optional CXL recommendation/notes companions, bound like tear evidence.
+    var referenceReviewMetadataByTakeID: [String: Data] = [:]
 }
 
 enum SessionExportSource: Sendable {
@@ -789,7 +791,8 @@ enum SessionExportSource: Sendable {
         lastRecordingURL: URL,
         sessionName: String,
         config: CaptureSessionConfig?,
-        referenceTearEvidenceByTakeID: [String: Data] = [:]
+        referenceTearEvidenceByTakeID: [String: Data] = [:],
+        referenceReviewMetadataByTakeID: [String: Data] = [:]
     )
 }
 
@@ -873,6 +876,10 @@ enum SessionExportValidationReason: String, Equatable, Sendable {
     case referenceTearEvidenceSourceMismatch
     case unmatchedReferenceTearEvidence
     case stagedReferenceTearEvidenceMismatch
+    case referenceReviewMetadataInvalid
+    case referenceReviewMetadataSourceMismatch
+    case unmatchedReferenceReviewMetadata
+    case stagedReferenceReviewMetadataMismatch
 
     var detailText: String {
         switch self {
@@ -902,6 +909,14 @@ enum SessionExportValidationReason: String, Equatable, Sendable {
             return "Export blocked: requested Reference Tear evidence does not match a take in this archive."
         case .stagedReferenceTearEvidenceMismatch:
             return "Export blocked: staged Reference Tear evidence did not match its validated source and document."
+        case .referenceReviewMetadataInvalid:
+            return "Export blocked: the saved repetition recommendation or review notes could not be validated."
+        case .referenceReviewMetadataSourceMismatch:
+            return "Export blocked: the review recommendation belongs to a different take, sidecar or original media."
+        case .unmatchedReferenceReviewMetadata:
+            return "Export blocked: review metadata does not match a take in this archive."
+        case .stagedReferenceReviewMetadataMismatch:
+            return "Export blocked: staged review metadata did not match its validated source and document."
         case .capturedAudioHasNoDynamicChannelPair:
             return "Export blocked: no dynamic audio was captured in any channel pair — every pair was silent or a constant DC signal, so no scratch stem could be written."
         }
@@ -1721,7 +1736,7 @@ final class SessionExportCoordinator: ObservableObject {
     }
 
     private func recordValidationBlockIfNeeded(for source: SessionExportSource, report: SessionValidationReport) {
-        guard case .localRecordingSession(let lastRecordingURL, _, _, _) = source else { return }
+        guard case .localRecordingSession(let lastRecordingURL, _, _, _, _) = source else { return }
         let sidecarURL = CaptureCore.LocalRecordingFiles.sidecarURL(forMediaURL: lastRecordingURL)
         guard let sidecar = try? SessionArchiveBuilder().decodeSidecarForAudit(at: sidecarURL) else { return }
         guard let storageKind = Self.storageKind(for: lastRecordingURL) else { return }
@@ -2494,6 +2509,37 @@ struct SessionArchiveBuilder: Sendable {
         }
     }
 
+    /// Review metadata must be valid, bound to the take's current sidecar bytes
+    /// and name exactly the take's original media with unchanged hashes.
+    private static func validatedReviewMetadataSource(
+        _ data: Data, rawSidecarData: Data, take: SessionExportTake
+    ) throws -> ReferenceTearEvidenceSourceBinding {
+        let expectedSource: ReferenceTearEvidenceSourceBinding
+        let document: ReferenceReviewMetadataDocument
+        do {
+            expectedSource = try ReferenceTearEvidenceCodec.makeSourceBinding(
+                rawSidecarData: rawSidecarData, fileName: take.sidecarURL.lastPathComponent)
+            document = try ReferenceReviewMetadataCodec.decodeDocument(data)
+        } catch {
+            throw SessionExportValidationFailure(.referenceReviewMetadataInvalid)
+        }
+        guard document.sourceBinding == expectedSource else {
+            throw SessionExportValidationFailure(.referenceReviewMetadataSourceMismatch)
+        }
+        let current: [ReferenceReviewMetadataDocument.OriginalMedia]
+        do {
+            current = try ReferenceReviewMetadataCodec.originalMedia(
+                primaryMediaURL: take.mediaURL, sidecarData: rawSidecarData)
+        } catch {
+            throw SessionExportValidationFailure(.referenceReviewMetadataSourceMismatch)
+        }
+        guard Set(document.originalMedia.map(\.fileName)) == Set(current.map(\.fileName)),
+              document.originalMedia.allSatisfy(current.contains) else {
+            throw SessionExportValidationFailure(.referenceReviewMetadataSourceMismatch)
+        }
+        return expectedSource
+    }
+
     private struct ResolvedReferenceTearEvidence {
         let data: Data
         let sourceBinding: ReferenceTearEvidenceSourceBinding
@@ -2514,6 +2560,7 @@ struct SessionArchiveBuilder: Sendable {
         let notationFileName: String
         let notationDocument: SessionExportNotationDocument
         let referenceTearEvidence: ResolvedReferenceTearEvidence?
+        let referenceReviewMetadata: ResolvedReferenceTearEvidence?
         let captureMetadata: SessionExportTakeCaptureMetadata
         let verbalSlateUsed: Bool
         let syncClapUsed: Bool
@@ -2528,7 +2575,8 @@ struct SessionArchiveBuilder: Sendable {
 
         var boundSidecars: [String: CaptureCore.LocalRecordingSidecar] {
             Dictionary(uniqueKeysWithValues: takes.compactMap { context in
-                context.referenceTearEvidence == nil ? nil : (context.take.takeID, context.sidecar)
+                context.referenceTearEvidence == nil && context.referenceReviewMetadata == nil
+                    ? nil : (context.take.takeID, context.sidecar)
             })
         }
     }
@@ -2628,13 +2676,15 @@ struct SessionArchiveBuilder: Sendable {
             }
             try validatePackageContents(hydratedPackage)
             return hydratedPackage
-        case .localRecordingSession(let lastRecordingURL, let sessionName, let config, let referenceTearEvidenceByTakeID):
+        case .localRecordingSession(let lastRecordingURL, let sessionName, let config,
+                                    let referenceTearEvidenceByTakeID, let referenceReviewMetadataByTakeID):
             if let report = validationReport(
                 for: .localRecordingSession(
                     lastRecordingURL: lastRecordingURL,
                     sessionName: sessionName,
                     config: config,
-                    referenceTearEvidenceByTakeID: referenceTearEvidenceByTakeID
+                    referenceTearEvidenceByTakeID: referenceTearEvidenceByTakeID,
+                    referenceReviewMetadataByTakeID: referenceReviewMetadataByTakeID
                 )
             ) {
                 throw report.suggestedError
@@ -2643,7 +2693,8 @@ struct SessionArchiveBuilder: Sendable {
                 lastRecordingURL: lastRecordingURL,
                 sessionName: sessionName,
                 config: config,
-                referenceTearEvidenceByTakeID: referenceTearEvidenceByTakeID
+                referenceTearEvidenceByTakeID: referenceTearEvidenceByTakeID,
+                referenceReviewMetadataByTakeID: referenceReviewMetadataByTakeID
             )
             try validatePackageContents(package)
             return package
@@ -2654,7 +2705,8 @@ struct SessionArchiveBuilder: Sendable {
         switch source {
         case .package(let package):
             return packageValidationReport(for: hydratePackageForExport(package))
-        case .localRecordingSession(let lastRecordingURL, _, let config, let referenceTearEvidenceByTakeID):
+        case .localRecordingSession(let lastRecordingURL, _, let config, let referenceTearEvidenceByTakeID,
+                                    let referenceReviewMetadataByTakeID):
             do {
                 let sessionDirectory = lastRecordingURL.deletingLastPathComponent()
                 let seedSidecarURL = CaptureCore.LocalRecordingFiles.sidecarURL(forMediaURL: lastRecordingURL)
@@ -2687,7 +2739,8 @@ struct SessionArchiveBuilder: Sendable {
                     lastRecordingURL: lastRecordingURL,
                     sessionName: "",
                     config: config,
-                    referenceTearEvidenceByTakeID: referenceTearEvidenceByTakeID
+                    referenceTearEvidenceByTakeID: referenceTearEvidenceByTakeID,
+                    referenceReviewMetadataByTakeID: referenceReviewMetadataByTakeID
                 )
                 let issues = packageValidationIssues(package)
                 return issues.isEmpty ? nil : SessionValidationReport(
@@ -3063,7 +3116,8 @@ struct SessionArchiveBuilder: Sendable {
         lastRecordingURL: URL,
         sessionName: String,
         config providedConfig: CaptureSessionConfig?,
-        referenceTearEvidenceByTakeID: [String: Data] = [:]
+        referenceTearEvidenceByTakeID: [String: Data] = [:],
+        referenceReviewMetadataByTakeID: [String: Data] = [:]
     ) throws -> SessionExportPackage {
         let fileManager = FileManager.default
         guard fileManager.fileExists(atPath: lastRecordingURL.path) else {
@@ -3193,7 +3247,8 @@ struct SessionArchiveBuilder: Sendable {
 
         return SessionExportPackage(
             metadata: metadata, takes: takes, calibrationData: nil,
-            referenceTearEvidenceByTakeID: referenceTearEvidenceByTakeID
+            referenceTearEvidenceByTakeID: referenceTearEvidenceByTakeID,
+            referenceReviewMetadataByTakeID: referenceReviewMetadataByTakeID
         )
     }
 
@@ -3319,6 +3374,12 @@ struct SessionArchiveBuilder: Sendable {
                     options: .atomic
                 )
             }
+            if let reviewMetadata = takeContext.referenceReviewMetadata {
+                try reviewMetadata.data.write(
+                    to: stagedSessionURL.appendingPathComponent("notation/\(reviewMetadata.fileName)"),
+                    options: .atomic
+                )
+            }
 
 #if DEBUG
             // Copy DEBUG companion files (raw-platter debug, per-observation
@@ -3428,6 +3489,10 @@ struct SessionArchiveBuilder: Sendable {
                sidecarData != evidence.sourceBinding.rawSidecarData {
                 throw SessionExportValidationFailure(.referenceTearEvidenceSourceMismatch)
             }
+            if let reviewMetadata = takeContext.referenceReviewMetadata,
+               sidecarData != reviewMetadata.sourceBinding.rawSidecarData {
+                throw SessionExportValidationFailure(.referenceReviewMetadataSourceMismatch)
+            }
             let sourceSidecar: CaptureCore.LocalRecordingSidecar
             do {
                 sourceSidecar = try decoder.decode(
@@ -3467,6 +3532,24 @@ struct SessionArchiveBuilder: Sendable {
             } else if manifestTake.files["reference_tear_evidence"] != nil
                         || manifestTake.artifacts["reference_tear_evidence"] != nil {
                 throw SessionExportValidationFailure(.stagedReferenceTearEvidenceMismatch)
+            }
+            if let reviewMetadata = takeContext.referenceReviewMetadata {
+                let relativePath = "notation/\(reviewMetadata.fileName)"
+                guard manifestTake.files["reference_review_metadata"] == relativePath,
+                      manifestTake.artifacts["reference_review_metadata"]?.path == relativePath else {
+                    throw SessionExportValidationFailure(.stagedReferenceReviewMetadataMismatch)
+                }
+                let stagedReview = try nonemptyData(
+                    at: stagedSessionURL.appendingPathComponent(relativePath),
+                    fileManager: fileManager, missingError: .missingRequiredFiles
+                )
+                guard stagedReview == reviewMetadata.data,
+                      (try? ReferenceReviewMetadataCodec.decode(stagedReview, expectedSource: reviewMetadata.sourceBinding)) != nil else {
+                    throw SessionExportValidationFailure(.stagedReferenceReviewMetadataMismatch)
+                }
+            } else if manifestTake.files["reference_review_metadata"] != nil
+                        || manifestTake.artifacts["reference_review_metadata"] != nil {
+                throw SessionExportValidationFailure(.stagedReferenceReviewMetadataMismatch)
             }
 
             let uniqueFiles = Set(manifestTake.files.values)
@@ -5289,7 +5372,8 @@ struct SessionArchiveBuilder: Sendable {
             metadata: package.metadata,
             takes: hydratedTakes,
             calibrationData: package.calibrationData,
-            referenceTearEvidenceByTakeID: package.referenceTearEvidenceByTakeID
+            referenceTearEvidenceByTakeID: package.referenceTearEvidenceByTakeID,
+            referenceReviewMetadataByTakeID: package.referenceReviewMetadataByTakeID
         )
     }
 
@@ -5493,6 +5577,9 @@ struct SessionArchiveBuilder: Sendable {
         guard Set(package.referenceTearEvidenceByTakeID.keys).isSubset(of: Set(package.takes.map(\.takeID))) else {
             throw SessionExportValidationFailure(.unmatchedReferenceTearEvidence)
         }
+        guard Set(package.referenceReviewMetadataByTakeID.keys).isSubset(of: Set(package.takes.map(\.takeID))) else {
+            throw SessionExportValidationFailure(.unmatchedReferenceReviewMetadata)
+        }
         let exportScratchTypeToken = CaptureCanonicalFormatting.exportScratchTypeToken(
             scratchTypeID: package.metadata.scratchTypeID,
             scratchTypeName: package.metadata.scratchTypeName,
@@ -5554,29 +5641,39 @@ struct SessionArchiveBuilder: Sendable {
             // A requested companion and every generated document use this one
             // snapshot. Later source writes fail explicitly during validation.
             let companionData = package.referenceTearEvidenceByTakeID[take.takeID]
+            let reviewMetadataData = package.referenceReviewMetadataByTakeID[take.takeID]
             let boundSource: ReferenceTearEvidenceSourceBinding?
+            let reviewSource: ReferenceTearEvidenceSourceBinding?
             let sidecar: CaptureCore.LocalRecordingSidecar
-            if let companionData {
+            if companionData != nil || reviewMetadataData != nil {
                 let rawData = try Data(contentsOf: take.sidecarURL)
                 sidecar = try Self.decodeSidecar(data: rawData)
-                do {
-                    let expectedSource = try ReferenceTearEvidenceCodec.makeSourceBinding(
-                        rawSidecarData: rawData, fileName: take.sidecarURL.lastPathComponent
-                    )
-                    let document = try ReferenceTearEvidenceCodec.decodeDocument(companionData)
-                    guard document.sourceBinding == expectedSource else {
-                        throw SessionExportValidationFailure(.referenceTearEvidenceSourceMismatch)
+                reviewSource = try reviewMetadataData.map {
+                    try Self.validatedReviewMetadataSource($0, rawSidecarData: rawData, take: take)
+                }
+                if let companionData {
+                    do {
+                        let expectedSource = try ReferenceTearEvidenceCodec.makeSourceBinding(
+                            rawSidecarData: rawData, fileName: take.sidecarURL.lastPathComponent
+                        )
+                        let document = try ReferenceTearEvidenceCodec.decodeDocument(companionData)
+                        guard document.sourceBinding == expectedSource else {
+                            throw SessionExportValidationFailure(.referenceTearEvidenceSourceMismatch)
+                        }
+                        _ = try ReferenceTearEvidenceCodec.decode(companionData, expectedSource: expectedSource)
+                        boundSource = expectedSource
+                    } catch let failure as SessionExportValidationFailure {
+                        throw failure
+                    } catch {
+                        throw SessionExportValidationFailure(.referenceTearEvidenceInvalid)
                     }
-                    _ = try ReferenceTearEvidenceCodec.decode(companionData, expectedSource: expectedSource)
-                    boundSource = expectedSource
-                } catch let failure as SessionExportValidationFailure {
-                    throw failure
-                } catch {
-                    throw SessionExportValidationFailure(.referenceTearEvidenceInvalid)
+                } else {
+                    boundSource = nil
                 }
             } else {
                 sidecar = try decodeSidecar(at: take.sidecarURL)
                 boundSource = nil
+                reviewSource = nil
             }
             let captureValues = resolvedTakeCaptureValues(
                 for: take,
@@ -5705,6 +5802,17 @@ struct SessionArchiveBuilder: Sendable {
             } else {
                 referenceTearEvidence = nil
             }
+            let referenceReviewMetadata: ResolvedReferenceTearEvidence?
+            if let reviewMetadataData, let reviewSource {
+                let stem = URL(fileURLWithPath: notationExport.fileName)
+                    .deletingPathExtension().lastPathComponent
+                referenceReviewMetadata = ResolvedReferenceTearEvidence(
+                    data: reviewMetadataData, sourceBinding: reviewSource,
+                    fileName: stem + "_reference_review_metadata.json"
+                )
+            } else {
+                referenceReviewMetadata = nil
+            }
 
             decodedSidecars.append(sidecar)
             bpmCoverage.insert(canonicalBPM)
@@ -5727,6 +5835,7 @@ struct SessionArchiveBuilder: Sendable {
                     notationFileName: notationExport.fileName,
                     notationDocument: notationExport.document,
                     referenceTearEvidence: referenceTearEvidence,
+                    referenceReviewMetadata: referenceReviewMetadata,
                     captureMetadata: captureMetadata,
                     verbalSlateUsed: verbalSlateUsed,
                     syncClapUsed: syncClapUsed,
@@ -5873,6 +5982,9 @@ struct SessionArchiveBuilder: Sendable {
         if let evidence = context.referenceTearEvidence {
             files["reference_tear_evidence"] = "notation/\(evidence.fileName)"
         }
+        if let reviewMetadata = context.referenceReviewMetadata {
+            files["reference_review_metadata"] = "notation/\(reviewMetadata.fileName)"
+        }
         if let beatOnlyFileName = context.beatOnlyFileName {
             files["beat_only"] = "audio/\(beatOnlyFileName)"
         }
@@ -5916,6 +6028,12 @@ struct SessionArchiveBuilder: Sendable {
             artifacts["reference_tear_evidence"] = try artifactRecord(
                 source: "reference_tear_evidence", generatedData: evidence.data,
                 stagedURL: sessionRootURL.appendingPathComponent("notation/\(evidence.fileName)")
+            )
+        }
+        if let reviewMetadata = context.referenceReviewMetadata {
+            artifacts["reference_review_metadata"] = try artifactRecord(
+                source: "reference_review_metadata", generatedData: reviewMetadata.data,
+                stagedURL: sessionRootURL.appendingPathComponent("notation/\(reviewMetadata.fileName)")
             )
         }
 
@@ -6060,6 +6178,15 @@ struct SessionArchiveBuilder: Sendable {
                 return ["kind": .string("json"), "schema_version": .string(document.schemaVersion)]
             } catch {
                 throw SessionExportValidationFailure(.referenceTearEvidenceInvalid)
+            }
+        }
+        if source == "reference_review_metadata" {
+            guard let generatedData else { throw SessionExportError.missingRequiredFiles }
+            do {
+                let document = try ReferenceReviewMetadataCodec.decodeDocument(generatedData)
+                return ["kind": .string("json"), "schema_version": .string(document.schemaVersion)]
+            } catch {
+                throw SessionExportValidationFailure(.referenceReviewMetadataInvalid)
             }
         }
         if let artifactProbeOverride {

@@ -285,6 +285,35 @@ final class ReferenceTearEvidencePipelineTests: XCTestCase {
         XCTAssertEqual(binding.rawSidecarData, files.sidecarData)
     }
 
+    func testLateWatchStopRebindsReviewMetadataToRefreshedSidecarAndKeepsPreference() async throws {
+        let files = try await fixture(Self.withFader(Self.tear(holds: 1)))
+        let owner = worker([files])
+        let take = try await record(owner)
+        let marked = await owner.markPreferredRepetition(1)
+        XCTAssertNil(marked.errorMessage)
+        let saved = await owner.saveDraft(reviewNotes: "Second repetition, before the Watch replied")
+        XCTAssertNil(saved.errorMessage)
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .iso8601
+        let sidecar = try decoder.decode(CaptureCore.LocalRecordingSidecar.self, from: files.sidecarData)
+        let changed = try sidecar.withWatchStopDiagnostics(.init(outcome: .timedOut,
+            sessionID: sidecar.sessionID, takeID: sidecar.takeID,
+            commandID: "late-stop", detail: "Watch motion stop timed out.",
+            resolvedAt: Date(timeIntervalSince1970: 1_788_000_005), attemptCount: 1)).encodedData()
+        try changed.write(to: files.sidecarURL, options: .atomic)
+        let optional = try await owner.rawCaptureExportSnapshot(config: files.config)
+        let snapshot = try XCTUnwrap(optional)
+        let archived = try await Task.detached { try Self.archive(snapshot.source, in: files.directory) }.value
+        let review = try ReferenceReviewMetadataCodec.decodeDocument(XCTUnwrap(archived.reviews[sidecar.takeID]))
+        let tear = try ReferenceTearEvidenceCodec.decodeDocument(XCTUnwrap(archived.companions[sidecar.takeID]))
+        XCTAssertEqual(review.sourceBinding.rawSidecarData, changed, "Late Watch additions rebind, never strand, the review.")
+        XCTAssertEqual(review.sourceBinding, tear.sourceBinding)
+        XCTAssertEqual(review.preferredRepetition?.repetitionNumber, 2)
+        XCTAssertEqual(review.reviewNotes, "Second repetition, before the Watch replied")
+        XCTAssertEqual(try Data(contentsOf: files.sidecarURL), changed)
+        XCTAssertEqual(take.tearEvidenceSourceBinding?.rawSidecarData, files.sidecarData)
+    }
+
     func testWatchStopExportRefreshRejectsOtherIdentityAndUnknownFieldChanges() async throws {
         let files = try await fixture([])
         let binding = try ReferenceTearEvidenceCodec.makeSourceBinding(
@@ -417,6 +446,7 @@ final class ReferenceTearEvidencePipelineTests: XCTestCase {
         let metadata: SessionExportMetadataDocument
         let notationByTakeID: [String: SessionExportNotationDocument]
         let replay: SessionExportReplayDocument
+        let reviews: [String: Data]
     }
     private nonisolated static var calibration: CrossfaderCalibration {
         CrossfaderCalibration(address: CrossfaderMIDIAddress(deviceIdentifier: "Rane ONE MKII",
@@ -606,14 +636,236 @@ final class ReferenceTearEvidencePipelineTests: XCTestCase {
         let fresh = worker([files], draftStore: ReferenceDraftStore(directory: root))
         let reopened = await fresh.reopenDraft(id: take.id)
         XCTAssertNil(reopened.errorMessage)
+        let markPreferredRepetitionUpdate1 = await fresh.markPreferredRepetition(0)
+        XCTAssertNil(markPreferredRepetitionUpdate1.errorMessage)
         let optionalSnapshot = try await fresh.rawCaptureExportSnapshot(config: files.config)
         let snapshot = try XCTUnwrap(optionalSnapshot)
         let archive = try await Task.detached { try Self.archive(snapshot.source, in: files.directory) }.value
         let id = try XCTUnwrap(take.tearEvidenceSourceBinding).capturedTakeID
         XCTAssertEqual(archive.boundSidecarDataByTakeID[id], data)
         XCTAssertEqual(try Data(contentsOf: secondURL), original)
+        let review = try ReferenceReviewMetadataCodec.decodeDocument(XCTUnwrap(archive.reviews[id]))
+        XCTAssertEqual(review.preferredRepetition?.repetitionNumber, 1)
+        XCTAssertTrue(review.originalMedia.contains(.init(fileName: secondURL.lastPathComponent,
+            sha256: ReferencePackageIO.sha256Hex(original))), "The optional second camera is bound by hash.")
         try Data("changed".utf8).write(to: secondURL)
         XCTAssertThrowsError(try ReferenceDraftStore(directory: root).load(id: take.id))
+    }
+
+    func testPreferredRepetitionAndNotesSurviveRestartAndRealArchiveWithoutApproval() async throws {
+        let files = try await fixture(Self.withFader(Self.tear(holds: 1)))
+        let wavURL = files.mediaURL.deletingPathExtension().appendingPathExtension("wav")
+        let originalMovie = try Data(contentsOf: files.mediaURL)
+        let originalWAV = try Data(contentsOf: wavURL)
+        let root = files.directory.appendingPathComponent("drafts")
+        let owner = worker([files], draftStore: ReferenceDraftStore(directory: root))
+        let take = try await record(owner)
+        let binding = try XCTUnwrap(take.tearEvidenceSourceBinding)
+        XCTAssertEqual(take.evidence.boundaries.repetitions.count, 4)
+
+        let plainOptional = try await owner.rawCaptureExportSnapshot(config: files.config)
+        let plain = try XCTUnwrap(plainOptional)
+        let plainArchive = try await Task.detached { try Self.archive(plain.source, in: files.directory) }.value
+        XCTAssertTrue(plainArchive.reviews.isEmpty, "No choice and no notes keeps the existing archive shape.")
+
+        for index in 0..<4 {
+            let update = await owner.markPreferredRepetition(index)
+            XCTAssertNil(update.errorMessage)
+            XCTAssertEqual(update.state.session.takeInReview?.evidence.boundaries.selectedRepetitionIndex, index)
+            let saved = try ReferenceDraftStore(directory: root).load(id: take.id)
+            XCTAssertEqual(saved.evidence.boundaries.selectedRepetitionIndex, index)
+            XCTAssertEqual(saved.preferenceMark?.markedBy, "Synthetic Reviewer")
+        }
+        let refused = await owner.markPreferredRepetition(4)
+        XCTAssertNotNil(refused.errorMessage)
+        XCTAssertEqual(refused.state.session.takeInReview?.evidence.boundaries.selectedRepetitionIndex, 3)
+        let cleared = await owner.clearPreferredRepetition()
+        XCTAssertNil(cleared.state.session.takeInReview?.evidence.boundaries.selectedRepetitionIndex)
+        XCTAssertNil(try ReferenceDraftStore(directory: root).load(id: take.id).preferenceMark)
+        let markPreferredRepetitionUpdate2 = await owner.markPreferredRepetition(2)
+        XCTAssertNil(markPreferredRepetitionUpdate2.errorMessage)
+        let saveDraftUpdate3 = await owner.saveDraft(reviewNotes: "Third scratch is CXL's pick")
+        XCTAssertNil(saveDraftUpdate3.errorMessage)
+
+        let fresh = worker([files], draftStore: ReferenceDraftStore(directory: root))
+        let reopened = await fresh.reopenDraft(id: take.id)
+        XCTAssertNil(reopened.errorMessage)
+        let restored = try XCTUnwrap(reopened.state.session.takeInReview)
+        XCTAssertEqual(restored.evidence.boundaries.selectedRepetitionIndex, 2)
+        let mark = try XCTUnwrap(restored.preferenceMark)
+        XCTAssertEqual(mark.markedBy, "Synthetic Reviewer")
+        XCTAssertEqual(reopened.state.savedReviewNotes, "Third scratch is CXL's pick")
+        XCTAssertEqual(restored.evidence.metadata.lifecycleState, .draft)
+
+        let optional = try await fresh.rawCaptureExportSnapshot(config: files.config)
+        let source = try XCTUnwrap(optional)
+        let archive = try await Task.detached { try Self.archive(source.source, in: files.directory) }.value
+        let document = try ReferenceReviewMetadataCodec.decodeDocument(XCTUnwrap(archive.reviews[binding.capturedTakeID]))
+        XCTAssertEqual(document.sourceBinding.capturedSessionID, binding.capturedSessionID)
+        XCTAssertEqual(document.sourceBinding.capturedTakeID, binding.capturedTakeID)
+        XCTAssertEqual(document.sourceBinding.rawSidecarData, files.sidecarData)
+        XCTAssertEqual(document.referenceTakeID, take.id)
+        XCTAssertEqual(document.recordedRepetitions.map(\.repetitionNumber), [1, 2, 3, 4])
+        XCTAssertEqual(document.recordedRepetitions.map(\.repetitionIndex), [0, 1, 2, 3])
+        XCTAssertEqual(document.preferredRepetition?.repetitionNumber, 3)
+        XCTAssertEqual(document.preferredRepetition?.repetitionIndex, 2)
+        XCTAssertEqual(document.preferredRepetition, document.recordedRepetitions[2])
+        XCTAssertEqual(document.preferredRepetition?.startBeat, restored.evidence.boundaries.repetitions[2].startBeat)
+        XCTAssertEqual(document.preferenceMark, mark)
+        XCTAssertEqual(document.reviewNotes, "Third scratch is CXL's pick")
+        XCTAssertEqual(document.lifecycleStateAtExport, .draft)
+        XCTAssertEqual(Set(document.originalMedia), [
+            .init(fileName: files.mediaURL.lastPathComponent, sha256: ReferencePackageIO.sha256Hex(originalMovie)),
+            .init(fileName: wavURL.lastPathComponent, sha256: ReferencePackageIO.sha256Hex(originalWAV))
+        ])
+        XCTAssertEqual(archive.boundSidecarDataByTakeID[binding.capturedTakeID], files.sidecarData)
+        XCTAssertEqual(try Data(contentsOf: files.mediaURL), originalMovie)
+        XCTAssertEqual(try Data(contentsOf: wavURL), originalWAV)
+        XCTAssertEqual(try Data(contentsOf: files.sidecarURL), files.sidecarData)
+        let after = await fresh.snapshot()
+        XCTAssertEqual(after.session.takeInReview?.evidence.metadata.lifecycleState, .draft)
+        XCTAssertEqual(after.session.takeInReview?.evidence.boundaries.repetitions.count, 4)
+        XCTAssertFalse(after.session.takes.contains {
+            $0.evidence.metadata.lifecycleState.isPlayableByLearner || $0.evidence.metadata.reviewDecision != nil
+        }, "Exporting a recommendation neither approves nor makes a take servable.")
+    }
+
+    func testDraftSavedBeforePreferencesReopensAndExportsOlderShape() async throws {
+        let files = try await fixture(Self.withFader(Self.tear(holds: 1)))
+        let root = files.directory.appendingPathComponent("drafts")
+        let owner = worker([files], draftStore: ReferenceDraftStore(directory: root))
+        let take = try await record(owner)
+        let markPreferredRepetitionUpdate4 = await owner.markPreferredRepetition(1)
+        XCTAssertNil(markPreferredRepetitionUpdate4.errorMessage)
+        let draftURL = ReferenceDraftStore(directory: root).fileURL(for: take.id)
+        var envelope = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(contentsOf: draftURL)) as? [String: Any])
+        let payloadData = try XCTUnwrap(Data(base64Encoded: XCTUnwrap(envelope["payload"] as? String)))
+        var payload = try XCTUnwrap(JSONSerialization.jsonObject(with: payloadData) as? [String: Any])
+        XCTAssertNotNil(payload.removeValue(forKey: "preferenceMark"), "Rewrite exactly as a pre-preference build saved it.")
+        let legacyPayload = try JSONSerialization.data(withJSONObject: payload, options: [.sortedKeys])
+        envelope["payload"] = legacyPayload.base64EncodedString()
+        envelope["sha256"] = ReferencePackageIO.sha256Hex(legacyPayload)
+        try JSONSerialization.data(withJSONObject: envelope, options: [.sortedKeys]).write(to: draftURL)
+
+        let fresh = worker([files], draftStore: ReferenceDraftStore(directory: root))
+        let reopened = await fresh.reopenDraft(id: take.id)
+        XCTAssertNil(reopened.errorMessage)
+        let restored = try XCTUnwrap(reopened.state.session.takeInReview)
+        XCTAssertEqual(restored.evidence.boundaries.selectedRepetitionIndex, 1)
+        XCTAssertNil(restored.preferenceMark, "An older draft has no reviewer identity or time to invent.")
+        let optional = try await fresh.rawCaptureExportSnapshot(config: files.config)
+        let source = try XCTUnwrap(optional)
+        let archive = try await Task.detached { try Self.archive(source.source, in: files.directory) }.value
+        let document = try ReferenceReviewMetadataCodec.decodeDocument(XCTUnwrap(archive.reviews.values.first))
+        XCTAssertEqual(document.preferredRepetition?.repetitionNumber, 2)
+        XCTAssertNil(document.preferenceMark)
+
+        let clearPreferredRepetitionUpdate5 = await fresh.clearPreferredRepetition()
+
+        XCTAssertNil(clearPreferredRepetitionUpdate5.errorMessage)
+        let clearedOptional = try await fresh.rawCaptureExportSnapshot(config: files.config)
+        let cleared = try XCTUnwrap(clearedOptional)
+        let clearedArchive = try await Task.detached { try Self.archive(cleared.source, in: files.directory) }.value
+        XCTAssertTrue(clearedArchive.reviews.isEmpty)
+        XCTAssertEqual(clearedArchive.companions.count, 1)
+    }
+
+    func testMovementCheckRefusesNumberedPreferenceButExportsNotes() async throws {
+        let files = try await fixture(Self.withFader(Self.tear(holds: 1)))
+        let root = files.directory.appendingPathComponent("drafts")
+        let owner = worker([files], draftStore: ReferenceDraftStore(directory: root))
+        _ = await owner.configure(technique: .tear,
+            pattern: ReferencePatternIdentity(id: "movement", name: "Movement", phraseBars: 1),
+            bpm: 120, startingDirection: .forward, faderVariant: .faderOpenThroughout,
+            handedness: .right, notes: "Review later", capturePurpose: .movementCheck)
+        let recorded = try await record(owner)
+        XCTAssertTrue(recorded.evidence.boundaries.repetitions.isEmpty)
+        for index in 0..<4 {
+            let refused = await owner.markPreferredRepetition(index)
+            XCTAssertNotNil(refused.errorMessage)
+            XCTAssertNil(refused.state.session.takeInReview?.evidence.boundaries.selectedRepetitionIndex)
+            XCTAssertNil(refused.state.session.takeInReview?.preferenceMark)
+        }
+        let saveDraftUpdate6 = await owner.saveDraft(reviewNotes: "Slow movement looked clean")
+        XCTAssertNil(saveDraftUpdate6.errorMessage)
+        let optional = try await owner.rawCaptureExportSnapshot(config: files.config)
+        let source = try XCTUnwrap(optional)
+        let archive = try await Task.detached { try Self.archive(source.source, in: files.directory) }.value
+        let document = try ReferenceReviewMetadataCodec.decodeDocument(XCTUnwrap(archive.reviews.values.first))
+        XCTAssertTrue(document.isMovementCheck)
+        XCTAssertTrue(document.recordedRepetitions.isEmpty, "Movement checks never gain numbered slots.")
+        XCTAssertNil(document.preferredRepetition)
+        XCTAssertNil(document.preferenceMark)
+        XCTAssertEqual(document.reviewNotes, "Slow movement looked clean")
+    }
+
+    func testReviewMetadataRejectsOutOfRangeWrongTakeUnmatchedInvalidAndChangedMedia() async throws {
+        let first = try await fixture(Self.withFader(Self.tear(holds: 1)))
+        let second = try await fixture(Self.withFader(Self.tear(holds: 2)), directory: first.directory, number: 2)
+        let root = first.directory.appendingPathComponent("drafts")
+        let owner = worker([first, second], draftStore: ReferenceDraftStore(directory: root))
+        let take = try await record(owner)
+        let markPreferredRepetitionUpdate7 = await owner.markPreferredRepetition(3)
+        XCTAssertNil(markPreferredRepetitionUpdate7.errorMessage)
+        let binding = try XCTUnwrap(take.tearEvidenceSourceBinding)
+        let optional = try await owner.rawCaptureExportSnapshot(config: first.config)
+        let snapshot = try XCTUnwrap(optional)
+        let builder = SessionArchiveBuilder()
+        let package = try builder.preparePackage(from: snapshot.source)
+        let data = try XCTUnwrap(package.referenceReviewMetadataByTakeID[binding.capturedTakeID])
+        XCTAssertNoThrow(try builder.canonicalPreview(for: package))
+        let document = try ReferenceReviewMetadataCodec.decodeDocument(data)
+        let last = try XCTUnwrap(document.preferredRepetition)
+        XCTAssertEqual(last.repetitionNumber, 4)
+
+        func rebuilt(preferred: ReferenceReviewMetadataDocument.Repetition?,
+            source: ReferenceTearEvidenceSourceBinding? = nil) -> ReferenceReviewMetadataDocument {
+            ReferenceReviewMetadataDocument(schemaVersion: document.schemaVersion,
+                repetitionNumbering: document.repetitionNumbering, sourceBinding: source ?? document.sourceBinding,
+                referenceTakeID: document.referenceTakeID, authoringSessionID: document.authoringSessionID,
+                isMovementCheck: document.isMovementCheck, lifecycleStateAtExport: document.lifecycleStateAtExport,
+                originalMedia: document.originalMedia, recordedRepetitions: document.recordedRepetitions,
+                preferredRepetition: preferred, preferenceMark: document.preferenceMark, reviewNotes: document.reviewNotes)
+        }
+        let fifth = ReferenceReviewMetadataDocument.Repetition(repetitionIndex: 4, repetitionNumber: 5,
+            startBeat: last.endBeat, endBeat: last.endBeat + 4, startSeconds: nil, endSeconds: nil)
+        let numberMismatch = ReferenceReviewMetadataDocument.Repetition(repetitionIndex: 3, repetitionNumber: 3,
+            startBeat: last.startBeat, endBeat: last.endBeat, startSeconds: last.startSeconds, endSeconds: last.endSeconds)
+        for invalid in [rebuilt(preferred: fifth), rebuilt(preferred: numberMismatch), rebuilt(preferred: nil)] {
+            XCTAssertThrowsError(try ReferenceReviewMetadataCodec.encode(invalid))
+        }
+        var outOfRange = take.evidence
+        outOfRange.boundaries.selectedRepetitionIndex = 4
+        XCTAssertThrowsError(try ReferenceReviewMetadataCodec.makeDocument(evidence: outOfRange,
+            preferenceMark: nil, reviewNotes: "", sourceBinding: binding, originalMedia: document.originalMedia))
+
+        let secondBinding = try ReferenceTearEvidenceCodec.makeSourceBinding(
+            rawSidecarData: second.sidecarData, fileName: second.sidecarURL.lastPathComponent)
+        let wrongTake = try ReferenceReviewMetadataCodec.encode(rebuilt(preferred: last, source: secondBinding))
+        XCTAssertThrowsError(try ReferenceReviewMetadataCodec.decode(wrongTake, expectedSource: binding))
+        var mismatched = package
+        mismatched.referenceReviewMetadataByTakeID[binding.capturedTakeID] = wrongTake
+        Self.assertExportFailure(.referenceReviewMetadataSourceMismatch) { _ = try builder.canonicalPreview(for: mismatched) }
+        var unmatched = package
+        unmatched.referenceReviewMetadataByTakeID["not-in-this-archive"] = data
+        Self.assertExportFailure(.unmatchedReferenceReviewMetadata) { _ = try builder.canonicalPreview(for: unmatched) }
+        var invalid = package
+        invalid.referenceReviewMetadataByTakeID[binding.capturedTakeID] = Data("{}".utf8)
+        Self.assertExportFailure(.referenceReviewMetadataInvalid) { _ = try builder.canonicalPreview(for: invalid) }
+
+        let wavURL = first.mediaURL.deletingPathExtension().appendingPathExtension("wav")
+        let originalWAV = try Data(contentsOf: wavURL)
+        try (originalWAV + Data([0])).write(to: wavURL)
+        Self.assertExportFailure(.referenceReviewMetadataSourceMismatch) { _ = try builder.canonicalPreview(for: package) }
+        try originalWAV.write(to: wavURL)
+        XCTAssertNoThrow(try builder.canonicalPreview(for: package))
+    }
+
+    private nonisolated static func assertExportFailure(_ reason: SessionExportValidationReason,
+        file: StaticString = #filePath, line: UInt = #line, _ action: () throws -> Void) {
+        XCTAssertThrowsError(try action(), file: file, line: line) { error in
+            XCTAssertEqual((error as? SessionExportValidationFailure)?.reason, reason, "\(error)", file: file, line: line)
+        }
     }
 
     func testEveryCaptureTechniqueSurvivesFinalizationDraftReopenAndRawArchive() async throws {
@@ -934,6 +1186,7 @@ final class ReferenceTearEvidencePipelineTests: XCTestCase {
         let replay = try decoder.decode(SessionExportReplayDocument.self,
             from: Data(contentsOf: root.appendingPathComponent("manifests/session_replay.json")))
         var companions: [String: Data] = [:]
+        var reviews: [String: Data] = [:]
         var boundSidecars: [String: Data] = [:]
         var notation: [String: SessionExportNotationDocument] = [:]
         for take in takes {
@@ -949,6 +1202,17 @@ final class ReferenceTearEvidencePipelineTests: XCTestCase {
             let notationDocument = try decoder.decode(SessionExportNotationDocument.self,
                 from: Data(contentsOf: root.appendingPathComponent(notationPath)))
             notation[notationDocument.takeID] = notationDocument
+            if let reviewPath = files["reference_review_metadata"] {
+                let record = try XCTUnwrap(artifacts["reference_review_metadata"])
+                XCTAssertEqual(record["path"] as? String, reviewPath)
+                let data = try Data(contentsOf: root.appendingPathComponent(reviewPath))
+                XCTAssertEqual(record["bytes"] as? Int, data.count)
+                XCTAssertEqual(record["sha256"] as? String, ReferencePackageIO.sha256Hex(data))
+                let review = try ReferenceReviewMetadataCodec.decodeDocument(data)
+                XCTAssertNil(reviews.updateValue(data, forKey: review.sourceBinding.capturedTakeID))
+            } else {
+                XCTAssertNil(artifacts["reference_review_metadata"])
+            }
             guard let path = files["reference_tear_evidence"] else {
                 XCTAssertNil(artifacts["reference_tear_evidence"])
                 continue
@@ -965,7 +1229,7 @@ final class ReferenceTearEvidencePipelineTests: XCTestCase {
             boundSidecars[document.sourceBinding.capturedTakeID] = document.sourceBinding.rawSidecarData
         }
         return Archived(companions: companions, boundSidecarDataByTakeID: boundSidecars,
-            metadata: metadata, notationByTakeID: notation, replay: replay)
+            metadata: metadata, notationByTakeID: notation, replay: replay, reviews: reviews)
     }
     private func geometry(_ take: ReferenceAuthoringTake) throws -> ScratchStrokeGeometry.CanonicalGeometry {
         let projection = take.tearProjection

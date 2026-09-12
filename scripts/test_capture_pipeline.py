@@ -1747,5 +1747,98 @@ class ExactReferenceBeatEvidenceTests(unittest.TestCase):
             self.assertTrue(any("recording origin" in item for item in errors))
 
 
+class ReferenceReviewMetadataEvidenceTests(unittest.TestCase):
+    """Optional CXL preferred-repetition companion in Save Capture ZIPs."""
+
+    def fixture(self, root: Path, preferred_index: int | None = 2) -> tuple[dict, Path]:
+        import hashlib
+        from validate_session import (REFERENCE_REVIEW_METADATA_SCHEMA, REFERENCE_REVIEW_NUMBERING,
+                                      review_metadata_artifact_record)
+        video = root / "video" / "take_001.mov"
+        video.parent.mkdir(parents=True, exist_ok=True)
+        video.write_bytes(b"original recorded movie bytes")
+        video_hash = hashlib.sha256(video.read_bytes()).hexdigest()
+        recorded = [{"repetitionIndex": index, "repetitionNumber": index + 1, "startBeat": 4 + 4 * index,
+                     "endBeat": 8 + 4 * index, "startSeconds": 2.5 + 2 * index, "endSeconds": 4.5 + 2 * index}
+                    for index in range(4)]
+        document = {
+            "schemaVersion": REFERENCE_REVIEW_METADATA_SCHEMA, "repetitionNumbering": REFERENCE_REVIEW_NUMBERING,
+            "sourceBinding": {"capturedSessionID": "session", "capturedTakeID": "session-take-001", "capturedTakeNumber": 1,
+                              "rawSidecarFileName": "take_routine.json", "rawSidecarData": "e30=", "rawSidecarSHA256": "0" * 64},
+            "referenceTakeID": "reference-1", "authoringSessionID": "authoring", "isMovementCheck": False,
+            "lifecycleStateAtExport": "draft",
+            "originalMedia": [{"fileName": "take_routine.mov", "sha256": video_hash}],
+            "recordedRepetitions": recorded,
+            "preferredRepetition": None if preferred_index is None else recorded[preferred_index],
+            "preferenceMark": None if preferred_index is None else {"markedBy": "Karl", "markedAt": 810000000.5},
+            "reviewNotes": "Third scratch is the pick",
+        }
+        path = root / "notation" / "take_001_reference_review_metadata.json"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps(document, sort_keys=True))
+        take = {"take_number": 1,
+                "files": {"camA": "video/take_001.mov", "reference_review_metadata": path.relative_to(root).as_posix()},
+                "artifacts": {"camA": {"path": "video/take_001.mov", "sha256": video_hash},
+                              "reference_review_metadata": review_metadata_artifact_record(root, path)}}
+        return take, path
+
+    def rewrite(self, path: Path, mutate) -> None:
+        document = json.loads(path.read_text())
+        mutate(document)
+        path.write_text(json.dumps(document, sort_keys=True))
+
+    def validate(self, take: dict, root: Path) -> list[str]:
+        from validate_session import validate_reference_review_metadata
+        errors: list[str] = []
+        validate_reference_review_metadata(take, root, "Take1", errors)
+        return errors
+
+    def test_preference_is_optional_additive_and_bound(self) -> None:
+        from validate_session import (OPTIONAL_MANIFEST_ARTIFACT_SOURCES, OPTIONAL_MANIFEST_FILE_SOURCES,
+                                      REFERENCE_REVIEW_METADATA_SCHEMA)
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            take, _ = self.fixture(root)
+            self.assertIn("reference_review_metadata", OPTIONAL_MANIFEST_FILE_SOURCES)
+            self.assertIn("reference_review_metadata", OPTIONAL_MANIFEST_ARTIFACT_SOURCES)
+            self.assertEqual(take["artifacts"]["reference_review_metadata"]["probe"],
+                             {"kind": "json", "schema_version": REFERENCE_REVIEW_METADATA_SCHEMA})
+            self.assertEqual(self.validate(take, root), [])
+            legacy = {"take_number": 1, "files": {"camA": take["files"]["camA"]}, "artifacts": {"camA": take["artifacts"]["camA"]}}
+            self.assertEqual(self.validate(legacy, root), [], "Older exports without review metadata stay valid.")
+        for index in range(4):
+            with tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                take, _ = self.fixture(root, preferred_index=index)
+                self.assertEqual(self.validate(take, root), [])
+
+    def test_out_of_range_mismatched_wrong_take_and_changed_media_are_rejected(self) -> None:
+        mutations = {
+            "fifth repetition": lambda d: d.update(preferredRepetition={**d["recordedRepetitions"][3], "repetitionIndex": 4, "repetitionNumber": 5}),
+            "number/index mismatch": lambda d: d.update(preferredRepetition={**d["preferredRepetition"], "repetitionNumber": 2}),
+            "changed range": lambda d: d.update(preferredRepetition={**d["preferredRepetition"], "endBeat": 99}),
+            "wrong take": lambda d: d["sourceBinding"].update(capturedTakeNumber=2),
+            "changed media": lambda d: d.update(originalMedia=[{"fileName": "take_routine.mov", "sha256": "f" * 64}]),
+            "movement slots": lambda d: d.update(isMovementCheck=True),
+            "mark without preference": lambda d: d.update(preferredRepetition=None),
+            "future schema": lambda d: d.update(schemaVersion="scratchlab_reference_review_metadata_v2"),
+        }
+        for label, mutate in mutations.items():
+            with self.subTest(label), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                take, path = self.fixture(root)
+                self.rewrite(path, mutate)
+                self.assertTrue(any("reference review metadata is invalid" in item for item in self.validate(take, root)))
+
+    def test_notes_only_movement_check_is_valid_without_numbered_slots(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            take, path = self.fixture(root, preferred_index=None)
+            self.rewrite(path, lambda d: d.update(isMovementCheck=True, recordedRepetitions=[]))
+            self.assertEqual(self.validate(take, root), [])
+            self.rewrite(path, lambda d: d.update(reviewNotes="  "))
+            self.assertTrue(self.validate(take, root))
+
+
 if __name__ == "__main__":
     unittest.main()

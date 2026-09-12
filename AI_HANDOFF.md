@@ -1,3 +1,22 @@
+# CXL capture integration — in progress, 13 September 2026
+
+Claude's final handoff and clean local commits3558128/5d7bd19 are now available. Karl authorised review and integration with the completed V2 reference library. Production source applied without conflicts; workflow conflicts are reconciled below, preserving the free learner decision and historical evidence. Review identified missing older unapproved-take notes in session exports; reproduce and repair before the combined gate. Meter diagnosis still requires the installed-app observation; the app has been opened at Karl's request. No installation or hardware acceptance yet.
+
+## Current — Claude follow-up complete in software, 13 September 2026
+
+Source: /Users/karlwatson/Developer/ScratchLab-CXL-Claude-Followup-20260913/source, branch codex/cxl-claude-followup-20260913 (base 673b3ee). Local commits only, no push/merge. Codex integrates and pushes. LocalReferenceLibrary is the unchanged V1 external symlink; never stage it.
+
+1. Direct-Mac AHHH meter: NOT reproduced in software, no production change. Real controller meters System Default (MacBook Pro Speakers) with fresh silent callbacks and across explicit-device to System Default rebinds; Mac-route WAVs are finite full-scale PCM; installed CXL source equals this branch. Regressions in commit 3558128. Needed physical check: AHHH output = Mac, AHHH loaded, scratch, read the meter label (Unavailable / Silent / frozen dBFS / moving) and the "AHHH playback:" route line. Result decides the layer. ../evidence/task1/RESULT.md.
+2. Preferred repetition: Mark as Preferred / Clear (single selectedRepetitionIndex; approval unchanged), mark persisted in drafts, Save Capture adds bound notation/*_reference_review_metadata.json (1-based number + 0-based index, original media hashes, notes, late-Watch rebinding, second camera). Movement checks: notes only. ../evidence/task2/RESULT.md.
+3. Gate: scripts/build.sh all via ../evidence/bin/xcodebuild exit 0 — Python 87 OK; 455 selected tests x2, 0 failures, 2 pre-existing skips; iOS/full Mac/CXL/Watch builds. Three ReferenceTearEvidencePipelineTests fail identically at 3558128 before task 2 and were skipped (not investigated). Full XCTest suite not run. Not installed.
+4. Open: python validate_session.py rejects reference_tear_evidence/camB_metadata in current CXL ZIPs (pre-existing); physical meter check; physical Mark/Clear/Save Capture check on the installed build after Codex installs.
+
+--- Earlier handoffs (historical state) ---
+
+Latest clarification: user wants four4-beat scratch slots with4rest beats between. Current2-bar phrase setting gives4scratch+4rest beats per slot, repeated4times, with rest after the fourth slot plus the existing tail bar. At95BPM the whole sequence including count-in is25.263s; saved media~22.737s. Explained that canonical workflow currently treats slots as repeats of one variation; no rest/variation schema or capture timing was changed.
+
+--- Preserved reference library and product decisions ---
+
 # Current handoff — reference library complete, 13 September 2026
 
 ## Latest product decision and Claude progress
