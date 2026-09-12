@@ -628,6 +628,24 @@
 		REFVM0MAC0001 /* ReferenceAuthoringViewModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = REFVM0FREF0001 /* ReferenceAuthoringViewModel.swift */; };
 		REFVIEW0MAC001 /* ReferenceAuthoringView.swift in Sources */ = {isa = PBXBuildFile; fileRef = REFERENCEVIEW001 /* ReferenceAuthoringView.swift */; };
 		REFVMT0TST0001 /* ReferenceAuthoringViewModelTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = REFVMT0FREF0001 /* ReferenceAuthoringViewModelTests.swift */; };
+		B2AEAD881EF26DDCA0D74A39 /* ScratchMotionFrame.swift in Sources */ = {isa = PBXBuildFile; fileRef = DF0F4A0977AC29E3558843B7 /* ScratchMotionFrame.swift */; };
+		F82ADFAAED3EEF964A1B478E /* ScratchMotionFrame.swift in Sources */ = {isa = PBXBuildFile; fileRef = DF0F4A0977AC29E3558843B7 /* ScratchMotionFrame.swift */; };
+		F94F2683E84695F5DBFA6D35 /* MotionWindowBuilder.swift in Sources */ = {isa = PBXBuildFile; fileRef = 44B4D65935CA52916D63AD7C /* MotionWindowBuilder.swift */; };
+		B1635F3885EC591F4A8D5F90 /* MotionWindowBuilder.swift in Sources */ = {isa = PBXBuildFile; fileRef = 44B4D65935CA52916D63AD7C /* MotionWindowBuilder.swift */; };
+		C1032EEABE5CBC6FFA5DC98E /* ActionTrainerFeatures.swift in Sources */ = {isa = PBXBuildFile; fileRef = 21E99E735D0F92A4E1A6FD4C /* ActionTrainerFeatures.swift */; };
+		93A2C62CF41FDA1635E6CB5E /* ActionTrainerFeatures.swift in Sources */ = {isa = PBXBuildFile; fileRef = 21E99E735D0F92A4E1A6FD4C /* ActionTrainerFeatures.swift */; };
+		172C2858D593E3640B2D16BB /* ScratchHandPoseFrameExtractor.swift in Sources */ = {isa = PBXBuildFile; fileRef = CB005F9D793DF3011342A3D7 /* ScratchHandPoseFrameExtractor.swift */; };
+		040835607CB63DAEBA40F98B /* ScratchHandPoseFrameExtractor.swift in Sources */ = {isa = PBXBuildFile; fileRef = CB005F9D793DF3011342A3D7 /* ScratchHandPoseFrameExtractor.swift */; };
+		B5DD68C0FBB29078B178D060 /* OfflineScratchAdvisory.swift in Sources */ = {isa = PBXBuildFile; fileRef = 91CC302EB8FC61DAB6F93D04 /* OfflineScratchAdvisory.swift */; };
+		85152E11F5EFCD868CCFE66C /* OfflineScratchAdvisory.swift in Sources */ = {isa = PBXBuildFile; fileRef = 91CC302EB8FC61DAB6F93D04 /* OfflineScratchAdvisory.swift */; };
+		97E459A72AA35734FE882873 /* ScratchExampleLibrary.swift in Sources */ = {isa = PBXBuildFile; fileRef = 828B6960CCF300FCE42DA14E /* ScratchExampleLibrary.swift */; };
+		D595623DC46ECF984577879E /* ScratchExampleLibrary.swift in Sources */ = {isa = PBXBuildFile; fileRef = 828B6960CCF300FCE42DA14E /* ScratchExampleLibrary.swift */; };
+		708E12C48DBB35B9E5F6348C /* ScratchExampleLibraryView.swift in Sources */ = {isa = PBXBuildFile; fileRef = FD61E3264990D2426532F9D7 /* ScratchExampleLibraryView.swift */; };
+		41506097F616F7E879F16853 /* ScratchExampleLibraryView.swift in Sources */ = {isa = PBXBuildFile; fileRef = FD61E3264990D2426532F9D7 /* ScratchExampleLibraryView.swift */; };
+		89C461ED345103E19C39F552 /* ScratchExampleLibraryTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = EC728221716BE6CB459F9375 /* ScratchExampleLibraryTests.swift */; };
+		1FAA36479025DA730287DCDF /* ReferenceExamples in Resources */ = {isa = PBXBuildFile; fileRef = 6C298CA3B9C8C704842435BF /* ReferenceExamples */; };
+		ED16A5AC12C038BDBAB4A2D1 /* ReferenceExamples in Resources */ = {isa = PBXBuildFile; fileRef = 6C298CA3B9C8C704842435BF /* ReferenceExamples */; };
+		24ADAE74DFC1CF02482965AD /* ScratchExampleReviewTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5265CFE12A44A84B549A52DB /* ScratchExampleReviewTests.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -1115,6 +1133,16 @@
 		REFVM0FREF0001 /* ReferenceAuthoringViewModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ReferenceAuthoringViewModel.swift; sourceTree = "<group>"; };
 		REFERENCEVIEW001 /* ReferenceAuthoringView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ReferenceAuthoringView.swift; sourceTree = "<group>"; };
 		REFVMT0FREF0001 /* ReferenceAuthoringViewModelTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ReferenceAuthoringViewModelTests.swift; sourceTree = "<group>"; };
+		DF0F4A0977AC29E3558843B7 /* ScratchMotionFrame.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "ScratchLab/ML/ScratchMotionFrame.swift"; sourceTree = SOURCE_ROOT; };
+		44B4D65935CA52916D63AD7C /* MotionWindowBuilder.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "ScratchLab/ML/MotionWindowBuilder.swift"; sourceTree = SOURCE_ROOT; };
+		21E99E735D0F92A4E1A6FD4C /* ActionTrainerFeatures.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "ScratchLab/ML/ActionTrainerFeatures.swift"; sourceTree = SOURCE_ROOT; };
+		CB005F9D793DF3011342A3D7 /* ScratchHandPoseFrameExtractor.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "ScratchLab/ML/ScratchHandPoseFrameExtractor.swift"; sourceTree = SOURCE_ROOT; };
+		91CC302EB8FC61DAB6F93D04 /* OfflineScratchAdvisory.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "ScratchLab/ML/OfflineScratchAdvisory.swift"; sourceTree = SOURCE_ROOT; };
+		828B6960CCF300FCE42DA14E /* ScratchExampleLibrary.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "ScratchLab/Models/Reference/ScratchExampleLibrary.swift"; sourceTree = SOURCE_ROOT; };
+		FD61E3264990D2426532F9D7 /* ScratchExampleLibraryView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "ScratchLab/Views/Reference/ScratchExampleLibraryView.swift"; sourceTree = SOURCE_ROOT; };
+		EC728221716BE6CB459F9375 /* ScratchExampleLibraryTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "ScratchLabDesktopTests/ScratchExampleLibraryTests.swift"; sourceTree = SOURCE_ROOT; };
+		6C298CA3B9C8C704842435BF /* ReferenceExamples */ = {isa = PBXFileReference; lastKnownFileType = folder; path = "LocalReferenceLibrary/ReferenceExamples"; sourceTree = SOURCE_ROOT; };
+		5265CFE12A44A84B549A52DB /* ScratchExampleReviewTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "ScratchLabDesktopTests/ScratchExampleReviewTests.swift"; sourceTree = SOURCE_ROOT; };
 /* End PBXFileReference section */
 
 /* Begin PBXFileSystemSynchronizedRootGroup section */
@@ -1159,6 +1187,8 @@
 		2010DD0010DD0010DD0010DD /* ScratchLabDesktopTests */ = {
 			isa = PBXGroup;
 			children = (
+				5265CFE12A44A84B549A52DB /* ScratchExampleReviewTests.swift */,
+				EC728221716BE6CB459F9375 /* ScratchExampleLibraryTests.swift */,
 				REFVMT0FREF0001 /* ReferenceAuthoringViewModelTests.swift */,
 				REFBRGT0FREF0001 /* ReferenceAuthoringCaptureBridgeTests.swift */,
 				REFAUST0FREF0001 /* ReferenceAuthoringSessionTests.swift */,
@@ -1377,6 +1407,7 @@
 		A5000002 /* ScratchLab */ = {
 			isa = PBXGroup;
 			children = (
+				6C298CA3B9C8C704842435BF /* ReferenceExamples */,
 				SLCORE00000000000000FR06 /* Analysis/ScratchAnalysis.swift */,
 				SLCORE00000000000000FR09 /* Analysis/ScratchAnalysisFixtureAdapter.swift */,
 				SLCORE00000000000000FR11 /* Analysis/ScratchAnalysisTimelineAdapter.swift */,
@@ -1435,6 +1466,7 @@
 		A5000004 /* Views */ = {
 			isa = PBXGroup;
 			children = (
+				FD61E3264990D2426532F9D7 /* ScratchExampleLibraryView.swift */,
 				A2000002 /* MainMenuView.swift */,
 				51C2E5852F9F900000E87B79 /* CoachPreviewView.swift */,
 				A2000003 /* LevelSelectView.swift */,
@@ -1604,6 +1636,11 @@
 		A5000050 /* ML */ = {
 			isa = PBXGroup;
 			children = (
+				91CC302EB8FC61DAB6F93D04 /* OfflineScratchAdvisory.swift */,
+				CB005F9D793DF3011342A3D7 /* ScratchHandPoseFrameExtractor.swift */,
+				21E99E735D0F92A4E1A6FD4C /* ActionTrainerFeatures.swift */,
+				44B4D65935CA52916D63AD7C /* MotionWindowBuilder.swift */,
+				DF0F4A0977AC29E3558843B7 /* ScratchMotionFrame.swift */,
 				A5000051 /* ScratchClassLabel.swift */,
 				A5000052 /* NotationCandidate.swift */,
 				A5000053 /* AudioOnsetDetector.swift */,
@@ -1900,6 +1937,7 @@
 		REFAU0GRP0001 /* Reference */ = {
 			isa = PBXGroup;
 			children = (
+				828B6960CCF300FCE42DA14E /* ScratchExampleLibrary.swift */,
 				REFAU0FREF0009 /* ReferenceAuthoringSession.swift */,
 				REFAU0FREF0008 /* LegacyReferenceInventory.swift */,
 				REFAU0FREF0007 /* ReferenceCapturePreflight.swift */,
@@ -2046,6 +2084,7 @@
 		09C738A56A342FC5A7BBBEA3 /* Resources */ = {
 			isa = PBXResourcesBuildPhase;
 			files = (
+				1FAA36479025DA730287DCDF /* ReferenceExamples in Resources */,
 				A11CE0000000000000000002 /* ScratchLabLogo.svg in Resources */,
 				B9AF9ED5370241CF8BEFDB7C /* Resources/CoachInstructions in Resources */,
 				51C2E59D2FA1B00000E87B79 /* Resources/Coach/Coach.usdz in Resources */,
@@ -2071,6 +2110,7 @@
 		A6000003 /* Resources */ = {
 			isa = PBXResourcesBuildPhase;
 			files = (
+				ED16A5AC12C038BDBAB4A2D1 /* ReferenceExamples in Resources */,
 				219D8D60A93840FC9A724C11 /* Resources/CoachInstructions in Resources */,
 				51C2E59E2FA1B00000E87B79 /* Resources/Coach/Coach.usdz in Resources */,
 				219D8D61A93840FC9A724C11 /* Resources/CoachDemoAudio in Resources */,
@@ -2112,6 +2152,13 @@
 		4137724FB3900E509AAF6EDF /* Sources */ = {
 			isa = PBXSourcesBuildPhase;
 			files = (
+				708E12C48DBB35B9E5F6348C /* ScratchExampleLibraryView.swift in Sources */,
+				97E459A72AA35734FE882873 /* ScratchExampleLibrary.swift in Sources */,
+				B5DD68C0FBB29078B178D060 /* OfflineScratchAdvisory.swift in Sources */,
+				172C2858D593E3640B2D16BB /* ScratchHandPoseFrameExtractor.swift in Sources */,
+				C1032EEABE5CBC6FFA5DC98E /* ActionTrainerFeatures.swift in Sources */,
+				F94F2683E84695F5DBFA6D35 /* MotionWindowBuilder.swift in Sources */,
+				B2AEAD881EF26DDCA0D74A39 /* ScratchMotionFrame.swift in Sources */,
 				REFVIEW0MAC001 /* ReferenceAuthoringView.swift in Sources */,
 				REFVM0MAC0001 /* ReferenceAuthoringViewModel.swift in Sources */,
 				REFBRG0MAC0001 /* ReferenceAuthoringCaptureBridge.swift in Sources */,
@@ -2360,6 +2407,13 @@
 		A6000002 /* Sources */ = {
 			isa = PBXSourcesBuildPhase;
 			files = (
+				41506097F616F7E879F16853 /* ScratchExampleLibraryView.swift in Sources */,
+				D595623DC46ECF984577879E /* ScratchExampleLibrary.swift in Sources */,
+				85152E11F5EFCD868CCFE66C /* OfflineScratchAdvisory.swift in Sources */,
+				040835607CB63DAEBA40F98B /* ScratchHandPoseFrameExtractor.swift in Sources */,
+				93A2C62CF41FDA1635E6CB5E /* ActionTrainerFeatures.swift in Sources */,
+				B1635F3885EC591F4A8D5F90 /* MotionWindowBuilder.swift in Sources */,
+				F82ADFAAED3EEF964A1B478E /* ScratchMotionFrame.swift in Sources */,
 				REFAU0IOS0009 /* ReferenceAuthoringSession.swift in Sources */,
 				REFIO0IOS0001 /* ReferencePackageIO.swift in Sources */,
 				REFDR1IOS0001 /* ReferenceDraftStore.swift in Sources */,
@@ -2563,6 +2617,8 @@
 		F9TESTSRC10AA0010AA10AA /* Sources */ = {
 			isa = PBXSourcesBuildPhase;
 			files = (
+				24ADAE74DFC1CF02482965AD /* ScratchExampleReviewTests.swift in Sources */,
+				89C461ED345103E19C39F552 /* ScratchExampleLibraryTests.swift in Sources */,
 				REFVMT0TST0001 /* ReferenceAuthoringViewModelTests.swift in Sources */,
 				REFBRGT0TST0001 /* ReferenceAuthoringCaptureBridgeTests.swift in Sources */,
 				REFAUST0TST0001 /* ReferenceAuthoringSessionTests.swift in Sources */,
@@ -2875,7 +2931,7 @@
 				);
 				MACOSX_DEPLOYMENT_TARGET = 15.0;
 				MARKETING_VERSION = 1.0.1;
-				PRODUCT_BUNDLE_IDENTIFIER = com.machelpnz.scratchlab.cxl-authoring;
+				PRODUCT_BUNDLE_IDENTIFIER = com.machelpnz.scratchlab;
 				PRODUCT_NAME = ScratchLab;
 				SDKROOT = macosx;
 				SUPPORTED_PLATFORMS = macosx;
@@ -3122,6 +3178,105 @@
 			};
 			name = Release;
 		};
+		6D5B3601B9724C19B431CB8E /* CXLRelease configuration for PBXNativeTarget "ScratchLabDesktop" */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
+				ASSETCATALOG_COMPILER_INCLUDE_ALL_APPICON_ASSETS = YES;
+				CODE_SIGN_ENTITLEMENTS = ScratchLabDesktop/ScratchLabDesktop.entitlements;
+				CODE_SIGN_STYLE = Automatic;
+				COMBINE_HIDPI_IMAGES = YES;
+				CURRENT_PROJECT_VERSION = 21;
+				DEAD_CODE_STRIPPING = YES;
+				DEVELOPMENT_TEAM = 2DDKGL33BU;
+				ENABLE_HARDENED_RUNTIME = YES;
+				ENABLE_PREVIEWS = YES;
+				GENERATE_INFOPLIST_FILE = NO;
+				HEADER_SEARCH_PATHS = (
+					"$(inherited)",
+					"$(SRCROOT)/ScratchLabCore",
+					"$(SRCROOT)/ScratchLabCoreBridge",
+				);
+				INFOPLIST_FILE = ScratchLabDesktop/Info.plist;
+				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.music";
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/../Frameworks",
+				);
+				MACOSX_DEPLOYMENT_TARGET = 15.0;
+				MARKETING_VERSION = 1.0.1;
+				PRODUCT_BUNDLE_IDENTIFIER = com.machelpnz.scratchlab.cxl-authoring;
+				PRODUCT_NAME = ScratchLab;
+				SDKROOT = macosx;
+				SUPPORTED_PLATFORMS = macosx;
+				SWIFT_ACTIVE_COMPILATION_CONDITIONS = "$(inherited) CXL_AUTHORING";
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_OBJC_BRIDGING_HEADER = "ScratchLabDesktop/ScratchLabDesktop-Bridging-Header.h";
+				SWIFT_VERSION = 5.0;
+			};
+			name = CXLRelease;
+		};
+		3B689CC314D3408D82CC63C1 /* CXLRelease configuration for PBXProject "ScratchLab" */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				ASSETCATALOG_COMPILER_GENERATE_SWIFT_ASSET_SYMBOL_EXTENSIONS = YES;
+				CLANG_ANALYZER_NONNULL = YES;
+				CLANG_ANALYZER_NUMBER_OBJECT_CONVERSION = YES_AGGRESSIVE;
+				CLANG_CXX_LANGUAGE_STANDARD = "gnu++20";
+				CLANG_ENABLE_MODULES = YES;
+				CLANG_ENABLE_OBJC_ARC = YES;
+				CLANG_ENABLE_OBJC_WEAK = YES;
+				CLANG_WARN_BLOCK_CAPTURE_AUTORELEASING = YES;
+				CLANG_WARN_BOOL_CONVERSION = YES;
+				CLANG_WARN_COMMA = YES;
+				CLANG_WARN_CONSTANT_CONVERSION = YES;
+				CLANG_WARN_DEPRECATED_OBJC_IMPLEMENTATIONS = YES;
+				CLANG_WARN_DIRECT_OBJC_ISA_USAGE = YES_ERROR;
+				CLANG_WARN_DOCUMENTATION_COMMENTS = YES;
+				CLANG_WARN_EMPTY_BODY = YES;
+				CLANG_WARN_ENUM_CONVERSION = YES;
+				CLANG_WARN_INFINITE_RECURSION = YES;
+				CLANG_WARN_INT_CONVERSION = YES;
+				CLANG_WARN_NON_LITERAL_NULL_CONVERSION = YES;
+				CLANG_WARN_OBJC_IMPLICIT_RETAIN_SELF = YES;
+				CLANG_WARN_OBJC_LITERAL_CONVERSION = YES;
+				CLANG_WARN_OBJC_ROOT_CLASS = YES_ERROR;
+				CLANG_WARN_QUOTED_INCLUDE_IN_FRAMEWORK_HEADER = YES;
+				CLANG_WARN_RANGE_LOOP_ANALYSIS = YES;
+				CLANG_WARN_STRICT_PROTOTYPES = YES;
+				CLANG_WARN_SUSPICIOUS_MOVE = YES;
+				CLANG_WARN_UNGUARDED_AVAILABILITY = YES_AGGRESSIVE;
+				CLANG_WARN_UNREACHABLE_CODE = YES;
+				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
+				COPY_PHASE_STRIP = NO;
+				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
+				DEVELOPMENT_TEAM = 2DDKGL33BU;
+				ENABLE_NS_ASSERTIONS = NO;
+				ENABLE_STRICT_OBJC_MSGSEND = YES;
+				ENABLE_USER_SCRIPT_SANDBOXING = YES;
+				GCC_C_LANGUAGE_STANDARD = gnu11;
+				GCC_NO_COMMON_BLOCKS = YES;
+				GCC_WARN_64_TO_32_BIT_CONVERSION = YES;
+				GCC_WARN_ABOUT_RETURN_TYPE = YES_ERROR;
+				GCC_WARN_UNDECLARED_SELECTOR = YES;
+				GCC_WARN_UNINITIALIZED_AUTOS = YES_AGGRESSIVE;
+				GCC_WARN_UNUSED_FUNCTION = YES;
+				GCC_WARN_UNUSED_VARIABLE = YES;
+				IPHONEOS_DEPLOYMENT_TARGET = 26.0;
+				MTL_ENABLE_DEBUG_INFO = NO;
+				MTL_FAST_MATH = YES;
+				NEW_SETTING = "";
+				SDKROOT = iphoneos;
+				STRING_CATALOG_GENERATE_SYMBOLS = YES;
+				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator";
+				SWIFT_COMPILATION_MODE = wholemodule;
+				SWIFT_OPTIMIZATION_LEVEL = "-O";
+				VALIDATE_PRODUCT = YES;
+			};
+			name = CXLRelease;
+		};
 /* End XCBuildConfiguration section */
 
 /* Begin XCConfigurationList section */
@@ -3138,6 +3293,7 @@
 			buildConfigurations = (
 				A7000002 /* Debug configuration for PBXProject "ScratchLab" */,
 				A7000004 /* Release configuration for PBXProject "ScratchLab" */,
+				3B689CC314D3408D82CC63C1 /* CXLRelease configuration for PBXProject "ScratchLab" */,
 			);
 			defaultConfigurationName = Release;
 		};
@@ -3153,6 +3309,7 @@
 			isa = XCConfigurationList;
 			buildConfigurations = (
 				91AC8DEE4C1E0E1CB26D90C6 /* Release configuration for PBXNativeTarget "ScratchLabDesktop" */,
+				6D5B3601B9724C19B431CB8E /* CXLRelease configuration for PBXNativeTarget "ScratchLabDesktop" */,
 				3A736F4180F83313301E9FDB /* Debug configuration for PBXNativeTarget "ScratchLabDesktop" */,
 			);
 			defaultConfigurationName = Release;

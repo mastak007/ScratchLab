@@ -682,6 +682,7 @@ struct MacAnalyzerView: View {
     @State private var reviewMetadataByTakeID: [String: CaptureCore.CaptureReviewMetadata] = [:]
     @State private var reviewStateSelection: CaptureCore.SessionReviewState = .unreviewed
     @State private var reviewNotesDraft: String = ""
+    @State private var showingReferenceExamples = false
     @State private var reviewerNameDraft: String = ""
     @State private var showNotationOverlay = false
     @State private var showCameraPassthrough = false
@@ -947,6 +948,13 @@ struct MacAnalyzerView: View {
             }
         }
         .background(ScratchLabDesign.Surface.canvas)
+        .sheet(isPresented: $showingReferenceExamples) {
+            ScratchExampleLibraryView(
+                initialAudioURL: captureEngine.lastRoutineRecordingURL?
+                    .deletingPathExtension().appendingPathExtension("wav"),
+                initialVideoURL: captureEngine.lastRoutineRecordingURL
+            )
+        }
         .background(
             SessionSharePresenter(
                 request: exportShareRequestBinding,
@@ -2373,6 +2381,11 @@ struct MacAnalyzerView: View {
                     .font(.system(size: 12, weight: .semibold))
                     .foregroundStyle(ScratchLabDesign.Sem.textPrimary)
                     .lineLimit(1)
+                Button { showingReferenceExamples = true } label: {
+                    Label("Reference examples", systemImage: "play.rectangle.on.rectangle")
+                }
+                .buttonStyle(.bordered)
+                .disabled(captureEngine.isRoutineRecording || captureEngine.isRoutineFinalizationPending)
             }
             .padding(.top, 12)
         }

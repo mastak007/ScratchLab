@@ -32,10 +32,10 @@ struct ScratchLabDesktopApp: App {
     init() {
         let isRunningTests = ProcessInfo.processInfo.environment["XCTestConfigurationFilePath"] != nil
         self.isRunningTests = isRunningTests
-        #if DEBUG
-        let activateAuxiliaryServices = !isRunningTests
-        #else
+        #if CXL_AUTHORING
         let activateAuxiliaryServices = false
+        #else
+        let activateAuxiliaryServices = !isRunningTests
         #endif
         let watchCaptureStore = RelayedWatchCaptureStore()
         _relayedWatchCaptureStore = StateObject(wrappedValue: watchCaptureStore)
@@ -63,7 +63,16 @@ struct ScratchLabDesktopApp: App {
     }
 
     var body: some Scene {
-        #if DEBUG
+        #if CXL_AUTHORING
+        Window("ScratchLab CXL", id: ScratchLabDesktopWindowID.mainWindow) {
+            cxlReleaseContent
+        }
+        .defaultSize(
+            width: CXLReleaseRouteContract.normalWidth,
+            height: CXLReleaseRouteContract.normalHeight
+        )
+        .windowResizability(.contentMinSize)
+        #else
         Window("ScratchLab", id: ScratchLabDesktopWindowID.mainWindow) {
             rootContent
         }
@@ -90,15 +99,6 @@ struct ScratchLabDesktopApp: App {
         }
         .windowResizability(.contentSize)
         #endif
-        #else
-        Window("ScratchLab CXL", id: ScratchLabDesktopWindowID.mainWindow) {
-            cxlReleaseContent
-        }
-        .defaultSize(
-            width: CXLReleaseRouteContract.normalWidth,
-            height: CXLReleaseRouteContract.normalHeight
-        )
-        .windowResizability(.contentMinSize)
         #endif
     }
 

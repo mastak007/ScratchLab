@@ -72,6 +72,9 @@ training_runs_*/
 local_dataset_cache/
 local_dataset_cache_*/
 offline_eval_outputs/
+# Generated app viewing/advisory library. Prepared from explicitly supplied
+# local material; source media/models and provenance remain outside Git.
+LocalReferenceLibrary/
 
 # Local-only fixture-generation scratch dir (frames, timestamps, axis, clicks).
 # Drives Tools/Fixtures/* and Tests/Fixtures/LocalOnly/*; never bundled.

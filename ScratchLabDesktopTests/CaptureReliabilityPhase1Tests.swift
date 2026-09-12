@@ -4165,10 +4165,15 @@ final class CaptureReliabilityPhase1CoreTests: XCTestCase {
             ),
             encoding: .utf8
         )
-        let release = try sourceSlice(
+        let cxlRelease = try sourceSlice(
             in: source,
-            from: "#else\n        Window(\"ScratchLab CXL\"",
-            through: ".windowResizability(.contentMinSize)\n        #endif"
+            from: "#if CXL_AUTHORING\n        Window(\"ScratchLab CXL\"",
+            through: ".windowResizability(.contentMinSize)\n        #else"
+        )
+        let fullApp = try sourceSlice(
+            in: source,
+            from: "#else\n        Window(\"ScratchLab\"",
+            through: "// DEBUG-only: a separate window"
         )
         let workspaceHandler = try sourceSlice(
             in: engineSource,
@@ -4176,13 +4181,17 @@ final class CaptureReliabilityPhase1CoreTests: XCTestCase {
             through: "private func shouldTrackSeratoApplication"
         )
 
-        XCTAssertTrue(release.contains("cxlReleaseContent"))
-        XCTAssertFalse(release.contains("MacAnalyzerView()"))
-        XCTAssertFalse(release.contains("WindowGroup(\"Performer Monitor\""))
-        XCTAssertFalse(release.contains("TravelLaneDebugView()"))
+        XCTAssertTrue(cxlRelease.contains("cxlReleaseContent"))
+        XCTAssertFalse(cxlRelease.contains("rootContent"))
+        XCTAssertFalse(cxlRelease.contains("WindowGroup(\"Performer Monitor\""))
+        XCTAssertFalse(cxlRelease.contains("TravelLaneDebugView()"))
+        XCTAssertTrue(fullApp.contains("rootContent"))
+        XCTAssertTrue(fullApp.contains("ScratchLabDesktopCommands("))
+        XCTAssertTrue(fullApp.contains("WindowGroup(\"Performer Monitor\""))
+        XCTAssertTrue(fullApp.contains("#if DEBUG\n        // DEBUG-only:"))
         XCTAssertTrue(source.contains("private var cxlReleaseContent"))
         XCTAssertTrue(source.contains("ReferenceAuthoringView("))
-        XCTAssertTrue(source.contains("let activateAuxiliaryServices = false"))
+        XCTAssertTrue(source.contains("#if CXL_AUTHORING\n        let activateAuxiliaryServices = false\n        #else\n        let activateAuxiliaryServices = !isRunningTests\n        #endif"))
         XCTAssertTrue(source.contains("allowsSeratoDirectCaptureDiscovery: activateAuxiliaryServices"))
         XCTAssertTrue(source.contains("prefersPhysicalCaptureAudio: true"))
         XCTAssertTrue(source.contains("autoStartBrowsing: activateAuxiliaryServices"))
@@ -4221,13 +4230,36 @@ final class CaptureReliabilityPhase1CoreTests: XCTestCase {
             contentsOf: projectRootURL().appendingPathComponent("ScratchLab.xcodeproj/project.pbxproj"),
             encoding: .utf8
         )
-        let releaseConfiguration = try sourceSlice(
+        let cxlConfiguration = try sourceSlice(
+            in: project,
+            from: "6D5B3601B9724C19B431CB8E /* CXLRelease configuration for PBXNativeTarget \"ScratchLabDesktop\" */",
+            through: "name = CXLRelease;"
+        )
+        let fullConfiguration = try sourceSlice(
             in: project,
             from: "91AC8DEE4C1E0E1CB26D90C6 /* Release configuration for PBXNativeTarget \"ScratchLabDesktop\" */",
             through: "name = Release;"
         )
-        XCTAssertTrue(releaseConfiguration.contains("com.machelpnz.scratchlab.cxl-authoring"))
-        XCTAssertFalse(releaseConfiguration.contains("ENABLE_TIMECODE_LIVE_TAP"))
+        XCTAssertTrue(cxlConfiguration.contains("PRODUCT_BUNDLE_IDENTIFIER = com.machelpnz.scratchlab.cxl-authoring;"))
+        XCTAssertTrue(cxlConfiguration.contains("DEVELOPMENT_TEAM = 2DDKGL33BU;"))
+        XCTAssertTrue(cxlConfiguration.contains("PRODUCT_NAME = ScratchLab;"))
+        XCTAssertTrue(cxlConfiguration.contains("CODE_SIGN_ENTITLEMENTS = ScratchLabDesktop/ScratchLabDesktop.entitlements;"))
+        XCTAssertTrue(cxlConfiguration.contains("SWIFT_ACTIVE_COMPILATION_CONDITIONS = \"$(inherited) CXL_AUTHORING\";"))
+        XCTAssertFalse(cxlConfiguration.contains("ENABLE_TIMECODE_LIVE_TAP"))
+        XCTAssertFalse(cxlConfiguration.contains("DEBUG"))
+        XCTAssertTrue(fullConfiguration.contains("PRODUCT_BUNDLE_IDENTIFIER = com.machelpnz.scratchlab;"))
+        XCTAssertFalse(fullConfiguration.contains("CXL_AUTHORING"))
+        XCTAssertFalse(fullConfiguration.contains("ENABLE_TIMECODE_LIVE_TAP"))
+
+        let scheme = try String(
+            contentsOf: projectRootURL().appendingPathComponent(
+                "ScratchLab.xcodeproj/xcshareddata/xcschemes/ScratchLabCXL.xcscheme"
+            ),
+            encoding: .utf8
+        )
+        XCTAssertEqual(scheme.components(separatedBy: "buildConfiguration = \"CXLRelease\"").count - 1, 4)
+        XCTAssertFalse(scheme.contains("buildConfiguration = \"Release\""))
+        XCTAssertFalse(scheme.contains("buildConfiguration = \"Debug\""))
 
         let plist = try String(
             contentsOf: projectRootURL().appendingPathComponent("ScratchLabDesktop/Info.plist"),

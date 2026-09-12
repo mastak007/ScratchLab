@@ -40,10 +40,21 @@ build_ios() {
 }
 
 build_mac() {
-  echo "==> Building ScratchLabDesktop (macOS)"
+  echo "==> Building ScratchLabDesktop (full macOS Release)"
   xcodebuild \
     -project "$PROJECT_PATH" \
     -scheme ScratchLabDesktop \
+    -configuration Release \
+    -destination 'platform=macOS' \
+    build
+}
+
+build_cxl() {
+  echo "==> Building ScratchLabCXL (macOS capture app)"
+  xcodebuild \
+    -project "$PROJECT_PATH" \
+    -scheme ScratchLabCXL \
+    -configuration CXLRelease \
     -destination 'platform=macOS' \
     build
 }
@@ -69,6 +80,12 @@ case "$MODE" in
     run_capture_pipeline_fixtures
     run_mac_tests
     build_mac
+    build_cxl
+    ;;
+  cxl)
+    run_capture_pipeline_fixtures
+    run_mac_tests
+    build_cxl
     ;;
   watch)
     run_capture_pipeline_fixtures
@@ -80,10 +97,11 @@ case "$MODE" in
     run_mac_tests
     build_ios
     build_mac
+    build_cxl
     build_watch
     ;;
   *)
-    echo "Usage: scripts/build.sh [ios|mac|watch|all]"
+    echo "Usage: scripts/build.sh [ios|mac|cxl|watch|all]"
     exit 1
     ;;
 esac

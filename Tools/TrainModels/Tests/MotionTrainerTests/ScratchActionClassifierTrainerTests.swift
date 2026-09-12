@@ -94,6 +94,23 @@ final class ScratchActionClassifierTrainerTests: XCTestCase {
         XCTAssertEqual(row["dominantHandPresent_rate"], 1.0)
     }
 
+    func testRuntimeAndTrainerAdapterUseIdenticalFeatureRows() throws {
+        let raw = (0..<60).map { index in
+            ScratchMotionFrame(timestamp: Double(index) / 30,
+                               dominantHand: index % 3 == 0 ? nil : CGPoint(x: Double(index) / 59, y: 0.8))
+        }
+        let window = try XCTUnwrap(MotionWindowBuilder().windows(
+            forFrames: raw, classLabel: "baby", sourceFile: "same-source.jsonl"
+        ).first)
+        let loaded = LoadedActionWindow(
+            classLabel: window.classLabel, sourceFile: window.sourceFile,
+            windowIndex: window.windowIndex, sessionID: "fixture",
+            frames: window.frames, aggregates: window.aggregates
+        )
+        XCTAssertEqual(ScratchLabML.ActionTrainerFeatures.projectToRow(window),
+                       MotionTrainer.ActionTrainerFeatures.projectToRow(loaded))
+    }
+
     func test_actionTrainingReport_roundTripsThroughJSON() throws {
         let cells = [
             ActionConfusionMatrixCell(actual: "baby", predicted: "baby", count: 12),

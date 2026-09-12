@@ -25,6 +25,7 @@ struct MainMenuView: View {
     @State private var showingPracticeHub = false
     @State private var showingCaptureHub = false
     @State private var showingAdvancedHub = false
+    @State private var showingReferenceExamples = false
     @State private var selectedWorkspaceTab: WorkspaceTab = .home
 
     var body: some View {
@@ -36,7 +37,8 @@ struct MainMenuView: View {
                         AdaptiveSidebarView(
                             showingPracticeHub: $showingPracticeHub,
                             showingCaptureHub: $showingCaptureHub,
-                            showingAdvancedHub: $showingAdvancedHub
+                            showingAdvancedHub: $showingAdvancedHub,
+                            showingReferenceExamples: $showingReferenceExamples
                         )
                         .frame(width: 240)
 
@@ -54,6 +56,9 @@ struct MainMenuView: View {
         }
         .sheet(isPresented: $showingSettings) {
             SettingsView()
+        }
+        .sheet(isPresented: $showingReferenceExamples) {
+            ScratchExampleLibraryView()
         }
         .onAppear {
             if progressManager.playerProfile == nil {
@@ -142,6 +147,7 @@ struct MainMenuView: View {
                 Text("Mic or wired USB input · results stay on device")
                     .font(ScratchLabDesign.Typo.caption)
                     .foregroundStyle(ScratchLabDesign.Sem.textSecondary)
+                referenceExamplesButton
             }
             .scratchLabCard(.standard)
         }
@@ -208,6 +214,7 @@ struct MainMenuView: View {
                     .font(ScratchLabDesign.Typo.bodySmall)
                     .foregroundStyle(ScratchLabDesign.Sem.textSecondary)
                     .fixedSize(horizontal: false, vertical: true)
+                referenceExamplesButton
             }
             .scratchLabCard(.standard)
         }
@@ -232,6 +239,14 @@ struct MainMenuView: View {
                 }
             }
         )
+    }
+
+    private var referenceExamplesButton: some View {
+        Button { showingReferenceExamples = true } label: {
+            Label("Reference examples", systemImage: "play.rectangle.on.rectangle")
+                .frame(maxWidth: .infinity)
+        }
+        .scratchLabSecondaryButton(fillsWidth: true)
     }
 
     private func workspaceOpeningView(_ title: String) -> some View {
@@ -839,6 +854,8 @@ struct MainMenuView: View {
             }
             .scratchLabSecondaryButton(fillsWidth: true)
             .accessibilityHint("Opens Capture; Review follows after recording a take")
+
+            referenceExamplesButton
         }
         .scratchLabCard(.standard)
     }
@@ -2449,6 +2466,7 @@ private struct AdaptiveSidebarView: View {
     @Binding var showingPracticeHub: Bool
     @Binding var showingCaptureHub: Bool
     @Binding var showingAdvancedHub: Bool
+    @Binding var showingReferenceExamples: Bool
 
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
@@ -2463,6 +2481,7 @@ private struct AdaptiveSidebarView: View {
             sidebarLink("Practice", systemImage: "waveform") { showingPracticeHub = true }
             sidebarLink("Capture", systemImage: "record.circle") { showingCaptureHub = true }
             sidebarLink("Review via Capture", systemImage: "checkmark.seal") { showingCaptureHub = true }
+            sidebarLink("Reference examples", systemImage: "play.rectangle.on.rectangle") { showingReferenceExamples = true }
             sidebarLink("Advanced / Mac Companion", systemImage: "slider.horizontal.3") { showingAdvancedHub = true }
 
             Spacer()

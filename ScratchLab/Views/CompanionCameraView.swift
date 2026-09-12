@@ -5565,6 +5565,7 @@ private struct TakeReviewView: View {
     let onKeepAndNext: () -> Void
     let onRetry: () -> Void
     let onDiscard: () -> Void
+    @State private var showingReferenceExamples = false
 
     var body: some View {
         GeometryReader { proxy in
@@ -5584,6 +5585,12 @@ private struct TakeReviewView: View {
                     .padding(.bottom, ScratchLabDesign.Spacing.xl)
                 }
             }
+        }
+        .sheet(isPresented: $showingReferenceExamples) {
+            ScratchExampleLibraryView(
+                initialAudioURL: review.scratchAudioURL,
+                initialVideoURL: review.summary.mediaURL
+            )
         }
     }
 
@@ -5673,6 +5680,8 @@ private struct TakeReviewView: View {
 
     private var landscapeActions: some View {
         VStack(spacing: ScratchLabDesign.Spacing.sm) {
+            referenceExamplesButton
+
             Button("Keep and Next", action: onKeepAndNext)
                 .scratchLabPrimaryButton(fillsWidth: true)
 
@@ -5766,6 +5775,8 @@ private struct TakeReviewView: View {
                 }
             }
 
+            referenceExamplesButton
+
             Button("Keep and Next", action: onKeepAndNext)
                 .scratchLabPrimaryButton(fillsWidth: true)
                 .keyboardShortcut(.return, modifiers: [])
@@ -5794,6 +5805,13 @@ private struct TakeReviewView: View {
         Button("Retry", action: onRetry)
             .scratchLabSecondaryButton(fillsWidth: true)
             .keyboardShortcut("r", modifiers: [])
+    }
+
+    private var referenceExamplesButton: some View {
+        Button { showingReferenceExamples = true } label: {
+            Label("Reference examples", systemImage: "play.rectangle.on.rectangle")
+        }
+        .scratchLabSecondaryButton(fillsWidth: true)
     }
 
     private var detailColumns: [GridItem] {
