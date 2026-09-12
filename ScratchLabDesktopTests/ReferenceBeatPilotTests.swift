@@ -356,3 +356,109 @@ final class ReferencePerTakeSourceStateTests: XCTestCase {
         XCTAssertEqual(try decoder.decode(ReferencePerTakeSourceState.self, from: encoder.encode(waiting)), waiting)
     }
 }
+
+@MainActor
+final class CXLBeatOutputRoutingTests: XCTestCase {
+    private final class RouteSpy: BeatPlaybackOutputRouting {
+        var prepared = 0
+        var verified = 0
+        var failPrepare = false
+        var failVerify = false
+        var route: BeatPlaybackOutputRoute?
+        private(set) var audioEngine: AVAudioEngine?
+        func prepare(_ engine: AVAudioEngine) throws {
+            prepared += 1
+            audioEngine = engine
+            route = nil
+            if failPrepare { throw MacScratchOutputRoute.Failure(message: "Selected Rane disconnected") }
+            XCTAssertFalse(engine.isRunning)
+        }
+        func verify(_ engine: AVAudioEngine) throws {
+            verified += 1
+            XCTAssertTrue(engine.isRunning)
+            if failVerify { throw MacScratchOutputRoute.Failure(message: "Output changed during count-in") }
+            route = .init(deviceID: 42, deviceUID: "fixture.rane", deviceName: "Rane ONE MKII",
+                          channelPair: "1/2", channelMap: [0, 1, -1, -1])
+        }
+    }
+
+    func testBeatMapUsesLeftDeckAndKeepsScratchRightDeckUnchanged() throws {
+        XCTAssertEqual(try MacScratchOutputRoute.channelMap(deviceName: "Rane ONE MKII",
+            deviceChannels: 10, nodeChannels: 10, raneDeck: .left), [0, 1, -1, -1, -1, -1, -1, -1, -1, -1])
+        XCTAssertEqual(try MacScratchOutputRoute.channelMap(deviceName: "Rane ONE MKII",
+            deviceChannels: 10, nodeChannels: 10), [-1, -1, 0, 1, -1, -1, -1, -1, -1, -1])
+        XCTAssertThrowsError(try MacScratchOutputRoute.channelMap(deviceName: "Rane Seventy-Two",
+            deviceChannels: 10, nodeChannels: 10, raneDeck: .left))
+        XCTAssertThrowsError(try MacScratchOutputRoute.channelMap(deviceName: "Rane ONE MKII",
+            deviceChannels: 1, nodeChannels: 1, raneDeck: .left))
+    }
+
+    func testEveryPreviewModeRoutesBeforePlaybackIncludingClickOnly() throws {
+        for mode in BeatEngineMode.practiceModes {
+            let route = RouteSpy()
+            let engine = ScratchLabBeatEngine(outputRouting: route)
+            engine.setOutputGain(0)
+            let started = try engine.start(mode: mode, bpm: 95, usesClickCountIn: true)
+            defer { engine.stop() }
+            XCTAssertEqual(route.prepared, 1, mode.rawValue)
+            XCTAssertEqual(route.verified, 1, mode.rawValue)
+            XCTAssertEqual(started.outputRoute, route.route)
+            XCTAssertGreaterThan(started.recordingStartHostTime, started.clickStartHostTime)
+        }
+    }
+
+    func testPreparedCaptureRechecksRouteAndKeepsBoundPCMUnchanged() throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let beat = try ReferenceBeatAssetStore.prepare(mode: .boomBapTrainer, bpm: 95, loopBeats: 4, rootURL: root)
+        let original = try Data(contentsOf: beat.productionMasterURL)
+        let router = RouteSpy()
+        let engine = ScratchLabBeatEngine(outputRouting: router)
+        defer { engine.stop() }
+        engine.setOutputGain(0)
+        let started = try engine.start(preparedBeat: beat, mode: .boomBapTrainer, bpm: 95)
+        XCTAssertEqual(started.outputRoute?.channelPair, "1/2")
+        XCTAssertEqual(try engine.verifiedPreparedOutputRoute(), started.outputRoute)
+        XCTAssertEqual(router.verified, 2)
+        XCTAssertEqual(AVAudioTime.seconds(forHostTime: started.recordingStartHostTime - started.clickStartHostTime),
+            Double(beat.binding.countInFrameCount) / Double(beat.binding.sampleRate), accuracy: 0.000001)
+        router.failVerify = true
+        XCTAssertThrowsError(try engine.verifiedPreparedOutputRoute())
+        XCTAssertEqual(try Data(contentsOf: beat.productionMasterURL), original)
+    }
+
+    func testUnavailableRouteNeverSchedulesCountInOrRecording() throws {
+        for mode in BeatEngineMode.practiceModes {
+            let route = RouteSpy()
+            route.failPrepare = true
+            let engine = ScratchLabBeatEngine(outputRouting: route)
+            defer { engine.stop() }
+            XCTAssertThrowsError(try engine.start(mode: mode, bpm: 95, usesClickCountIn: true,
+                onCountInBeat: { _ in XCTFail("No count-in on a failed route") },
+                onRecordingStart: { XCTFail("No recording on a failed route") })) { error in
+                    XCTAssertTrue(error.localizedDescription.contains("disconnected"))
+                }
+            XCTAssertEqual(route.prepared, 1)
+            XCTAssertEqual(route.verified, 0)
+            XCTAssertFalse(route.audioEngine?.isRunning ?? true)
+        }
+    }
+
+    func testActualMacOutputReadbackSurvivesRestart() throws {
+        let router = MacReferenceBeatOutputRouter {
+            .init(deviceID: nil, deviceName: "System Default", deviceUID: nil)
+        }
+        let engine = ScratchLabBeatEngine(outputRouting: router)
+        defer { engine.stop() }
+        engine.setOutputGain(0)
+        for _ in 0..<2 {
+            let started = try engine.start(mode: .boomBapTrainer, bpm: 95, usesClickCountIn: true)
+            let route = try XCTUnwrap(started.outputRoute)
+            XCTAssertEqual(route.deviceID, MacScratchOutputRoute.defaultOutputDeviceID())
+            XCTAssertEqual(route.deviceUID, MacScratchOutputRoute.deviceUID(route.deviceID))
+            XCTAssertEqual(route.channelPair, "1/2")
+            XCTAssertEqual(Array(route.channelMap.prefix(2)), [0, 1])
+            engine.stop()
+        }
+    }
+}

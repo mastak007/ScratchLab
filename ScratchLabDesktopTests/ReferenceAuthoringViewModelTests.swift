@@ -1007,6 +1007,41 @@ final class ReferenceTearEvidencePipelineTests: XCTestCase {
         XCTAssertEqual(refused.state.session.takeInReview?.evidence.metadata.lifecycleState, .draft)
     }
 
+    func testSessionExportKeepsEarlierDraftNotesAndPreferencesAfterRetake() async throws {
+        let first = try await fixture(Self.withFader(Self.tear(holds: 1)))
+        let second = try await fixture(Self.withFader(Self.tear(holds: 2)), directory: first.directory, number: 2)
+        let store = ReferenceDraftStore(directory: first.directory.appendingPathComponent("drafts"))
+        let owner = worker([first, second], draftStore: store)
+        let firstTake = try await record(owner)
+        let marked = await owner.markPreferredRepetition(2)
+        XCTAssertNil(marked.errorMessage)
+        let firstSaved = await owner.saveDraft(reviewNotes: "First take: third repetition has the clearest pause")
+        XCTAssertNil(firstSaved.errorMessage)
+        let continued = await owner.retake()
+        XCTAssertNil(continued.errorMessage)
+        let secondTake = try await record(owner)
+        let secondSaved = await owner.saveDraft(reviewNotes: "Second take: keep all four for comparison")
+        XCTAssertNil(secondSaved.errorMessage)
+
+        let pending = try await owner.rawCaptureExportSnapshot(config: second.config)
+        let snapshot = try XCTUnwrap(pending)
+        let archive = try await Task.detached { try Self.archive(snapshot.source, in: first.directory) }.value
+        XCTAssertEqual(Set(archive.reviews.keys), ["take-001", "take-002"])
+        let firstReview = try ReferenceReviewMetadataCodec.decodeDocument(XCTUnwrap(archive.reviews["take-001"]))
+        let secondReview = try ReferenceReviewMetadataCodec.decodeDocument(XCTUnwrap(archive.reviews["take-002"]))
+        XCTAssertEqual(firstReview.referenceTakeID, firstTake.id)
+        XCTAssertEqual(firstReview.reviewNotes, "First take: third repetition has the clearest pause")
+        XCTAssertEqual(firstReview.preferredRepetition?.repetitionNumber, 3)
+        XCTAssertEqual(firstReview.preferenceMark, try store.load(id: firstTake.id).preferenceMark)
+        XCTAssertEqual(secondReview.referenceTakeID, secondTake.id)
+        XCTAssertEqual(secondReview.reviewNotes, "Second take: keep all four for comparison")
+        XCTAssertNil(secondReview.preferredRepetition)
+        XCTAssertEqual(firstReview.lifecycleStateAtExport, .draft)
+        XCTAssertEqual(secondReview.lifecycleStateAtExport, .draft)
+        XCTAssertEqual(try Data(contentsOf: first.sidecarURL), first.sidecarData)
+        XCTAssertEqual(try Data(contentsOf: second.sidecarURL), second.sidecarData)
+    }
+
     func testSavedDraftSurvivesNewWorkerAndLaterTakesWithExactReview() async throws {
         let first = try await fixture(Self.withFader(Self.tear(holds: 1)))
         let second = try await fixture(Self.withFader(Self.tear(holds: 2)), directory: first.directory, number: 2)

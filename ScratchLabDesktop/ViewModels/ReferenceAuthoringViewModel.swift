@@ -425,16 +425,21 @@ final class ReferenceAuthoringWorker: @unchecked Sendable {
                         let primaryURL = sourceURL.deletingLastPathComponent().appendingPathComponent(boundSidecar.mediaFileName)
                         let media = try ReferenceReviewMetadataCodec.originalMedia(primaryMediaURL: primaryURL,
                             sidecarData: binding.rawSidecarData)
+                        var earlierReviewNotes = take.evidence.metadata.reviewDecision?.notes ?? ""
                         if let store = worker.draftStore, FileManager.default.fileExists(atPath: store.fileURL(for: take.id).path) {
-                            let saved = try store.load(id: take.id).artifacts.map {
+                            let draft = try store.load(id: take.id)
+                            let saved = draft.artifacts.map {
                                 ReferenceReviewMetadataDocument.OriginalMedia(fileName: $0.url.lastPathComponent, sha256: $0.sha256)
                             }
                             guard Set(saved.map(\.fileName)) == Set(media.map(\.fileName)), saved.allSatisfy(media.contains) else {
                                 throw ReferenceAuthoringError.recordingFailed("The original recording changed after review, so its review metadata cannot be exported.")
                             }
+                            // Retake clears the current editor. An earlier unapproved
+                            // take's notes remain in its saved draft, not reviewDecision.
+                            earlierReviewNotes = draft.reviewNotes
                         }
                         let notes = take.id == currentTakeID
-                            ? worker.savedReviewNotes : (take.evidence.metadata.reviewDecision?.notes ?? "")
+                            ? worker.savedReviewNotes : earlierReviewNotes
                         if let document = try ReferenceReviewMetadataCodec.makeDocument(evidence: take.evidence,
                             preferenceMark: take.preferenceMark, reviewNotes: notes, sourceBinding: binding, originalMedia: media) {
                             reviews[binding.capturedTakeID] = try ReferenceReviewMetadataCodec.encode(document)
@@ -1086,10 +1091,10 @@ final class ReferenceAuthoringViewModel: ObservableObject {
         engine: MacCaptureEngine,
         companionReceiver: CompanionCameraReceiver?,
         operatorName: String,
-        beatPreviewEngine: any PracticeBeatPlaybackEngine = ScratchLabBeatEngine()
+        beatPreviewEngine: (any PracticeBeatPlaybackEngine)? = nil
     ) {
         self.mediaReview = ReferenceFinalizedMediaReviewController()
-        self.beatPreviewEngine = beatPreviewEngine
+        self.beatPreviewEngine = beatPreviewEngine ?? engine.makeReferenceBeatEngine()
         let session = ReferenceAuthoringSession(
             authoringSessionID: "reference-\(UUID().uuidString.lowercased())",
             operatorName: operatorName

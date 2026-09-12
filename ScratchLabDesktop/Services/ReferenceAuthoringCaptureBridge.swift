@@ -179,11 +179,11 @@ final class ReferenceAuthoringCaptureBridge {
     init(
         engine: MacCaptureEngine,
         companionReceiver: CompanionCameraReceiver? = nil,
-        beatEngine: ScratchLabBeatEngine = ScratchLabBeatEngine()
+        beatEngine: ScratchLabBeatEngine? = nil
     ) {
         self.engine = engine
         self.companionReceiver = companionReceiver
-        self.beatEngine = beatEngine
+        self.beatEngine = beatEngine ?? engine.makeReferenceBeatEngine()
     }
 
     /// Set immediately before calling
@@ -320,6 +320,14 @@ final class ReferenceAuthoringCaptureBridge {
                     mode: configuration.beatEngineMode,
                     bpm: configuration.bpm,
                     onRecordingStart: { [engine, beatEngine] in
+                        let outputRoute: BeatPlaybackOutputRoute?
+                        do {
+                            outputRoute = try beatEngine.verifiedPreparedOutputRoute()
+                        } catch {
+                            beatEngine.stop()
+                            timedStart.fail(SessionExportFailureText.describe(error))
+                            return
+                        }
                         let captureTiming = CaptureTimingMetadata(
                             clickStartHostTime: beatStartMetadata?.clickStartHostTime,
                             recordingStartHostTime: beatStartMetadata?.recordingStartHostTime
@@ -328,7 +336,8 @@ final class ReferenceAuthoringCaptureBridge {
                                 AVAudioTime.seconds(forHostTime: $0.recordingStartHostTime - $0.clickStartHostTime)
                             }
                         )
-                        let token = engine.startRoutineRecording(captureTiming: captureTiming)
+                        let token = engine.startRoutineRecording(captureTiming: captureTiming,
+                            beatOutputRoute: outputRoute)
                         if timedStart.complete(with: token) {
                             beatEngine.stop()
                             _ = engine.requestRoutineRecordingStop(for: token, reason: .interrupted)
@@ -366,7 +375,7 @@ final class ReferenceAuthoringCaptureBridge {
             }
             reservedTakeIdentity = nil
             return .failure(.recordingFailed(
-                "The audible count-in finished, but recording did not start."
+                timedStart.failureMessage ?? "The audible count-in finished, but recording did not start."
             ))
         }
 
@@ -495,6 +504,20 @@ final class ReferenceAuthoringCaptureBridge {
         private let semaphore = DispatchSemaphore(value: 0)
         private var token: RoutineRecordingRequestToken?
         private var waiterAbandoned = false
+        private var failure: String?
+
+        var failureMessage: String? {
+            lock.lock()
+            defer { lock.unlock() }
+            return failure
+        }
+
+        func fail(_ message: String) {
+            lock.lock()
+            failure = message
+            lock.unlock()
+            semaphore.signal()
+        }
 
         func complete(with token: RoutineRecordingRequestToken) -> Bool {
             lock.lock()

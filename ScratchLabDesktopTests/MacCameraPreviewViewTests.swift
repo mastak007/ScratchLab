@@ -80,7 +80,8 @@ final class MacCameraPreviewViewTests: XCTestCase {
         XCTAssertEqual(fields["channelMap"] as? [Int], route.channelMap)
         XCTAssertEqual(fields["physicalMasterReturnVerified"] as? Bool, false)
         XCTAssertEqual(fields["recordedSignal"] as? String, "scratchlab_internal_post_software_fader_pre_hardware_mixer")
-        XCTAssertEqual(fields["beatAndCountInRouting"] as? String, "separate_engine_system_default_output")
+        XCTAssertEqual(fields["beatAndCountInRouting"] as? String, "separate_engine_system_default_output_or_not_requested")
+        XCTAssertTrue(fields["beatOutputRoute"] is NSNull)
     }
 
     func testUnavailableScratchOutputAuditNeverInheritsSelectedInputAsOutput() throws {

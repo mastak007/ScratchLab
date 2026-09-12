@@ -3563,11 +3563,33 @@ final class MacCaptureEngine: NSObject, ObservableObject {
         syncScratchPlaybackOutputRoute()
     }
 
+    /// Re-resolve the selected destination for every preview/take. A selected
+    /// Rane must remain that exact device; never fall back to Mac speakers.
+    func makeReferenceBeatEngine() -> ScratchLabBeatEngine {
+        ScratchLabBeatEngine(outputRouting: MacReferenceBeatOutputRouter { [weak self] in
+            guard let self else {
+                throw MacScratchOutputRoute.Failure(message: "The capture audio setup is unavailable.")
+            }
+            if self.scratchPrimaryOutput == .macSystemOutput {
+                return .init(deviceID: nil, deviceName: "System Default", deviceUID: nil)
+            }
+            guard let target = self.intendedScratchHardwareOutput else {
+                throw MacScratchOutputRoute.Failure(message: "Select and enable the Rane audio input before playing the backing sound, or choose Mac output.")
+            }
+            return .init(deviceID: Self.audioDeviceID(forUID: target.uid) ?? AudioDeviceID(kAudioObjectUnknown),
+                         deviceName: target.name, deviceUID: target.uid)
+        })
+    }
+
     static func scratchOutputRoutingAuditEvent(
         snapshot: ScratchSamplePlaybackController.OutputRoutingSnapshot,
         selectedInputUID: String,
-        at timestamp: Date
+        at timestamp: Date,
+        beatOutputRoute: BeatPlaybackOutputRoute? = nil
     ) throws -> CaptureAuditEvent {
+        let beatRoute: Any = try beatOutputRoute.map {
+            try JSONSerialization.jsonObject(with: JSONEncoder().encode($0))
+        } ?? NSNull()
         let fields: [String: Any] = [
             "version": 1,
             "selectedInputUID": selectedInputUID,
@@ -3587,7 +3609,8 @@ final class MacCaptureEngine: NSObject, ObservableObject {
             "recordedWAVChannels": "mono_downmix_of_internal_stereo",
             "meterSignal": "scratchlab_internal_stereo_peak_post_software_fader",
             "physicalMasterReturnVerified": false,
-            "beatAndCountInRouting": "separate_engine_system_default_output"
+            "beatAndCountInRouting": beatOutputRoute == nil ? "separate_engine_system_default_output_or_not_requested" : "verified_separate_engine_output",
+            "beatOutputRoute": beatRoute
         ]
         let data = try JSONSerialization.data(withJSONObject: fields, options: [.sortedKeys])
         return CaptureAuditEvent(timestamp: timestamp, category: "scratch_output_route",
@@ -5974,7 +5997,8 @@ final class MacCaptureEngine: NSObject, ObservableObject {
 
     @discardableResult
     func startRoutineRecording(
-        captureTiming: CaptureTimingMetadata? = nil
+        captureTiming: CaptureTimingMetadata? = nil,
+        beatOutputRoute: BeatPlaybackOutputRoute? = nil
     ) -> RoutineRecordingRequestToken {
         let recordingToken = routineRecordingBoundaryLedger.beginRequest()
         // Refuse before touching any camera, duration, sidecar or audio state.
@@ -6132,7 +6156,8 @@ final class MacCaptureEngine: NSObject, ObservableObject {
                     selectedAudioID: selectedAudioID,
                     videoDevices: videoDevices,
                     audioDevices: audioDevices,
-                    captureTiming: captureTiming
+                    captureTiming: captureTiming,
+                    beatOutputRoute: beatOutputRoute
                 )
                 self.routineRecordingBoundaryLedger.prepare(
                     token: recordingToken,
@@ -7731,7 +7756,8 @@ final class MacCaptureEngine: NSObject, ObservableObject {
         selectedAudioID: String,
         videoDevices: [AVCaptureDevice],
         audioDevices: [AVCaptureDevice],
-        captureTiming: CaptureTimingMetadata?
+        captureTiming: CaptureTimingMetadata?,
+        beatOutputRoute: BeatPlaybackOutputRoute?
     ) throws -> PreparedRoutineRecording {
         let directory = try recordingsDirectoryURL()
         let startedAt = Date()
@@ -7780,7 +7806,8 @@ final class MacCaptureEngine: NSObject, ObservableObject {
         sidecar.auditTrail.append(try Self.scratchOutputRoutingAuditEvent(
             snapshot: scratchPlaybackController.outputRoutingSnapshot(),
             selectedInputUID: selectedAudioID,
-            at: startedAt
+            at: startedAt,
+            beatOutputRoute: beatOutputRoute
         ))
         let syncedSidecar = pendingWatchReply.map { sidecar.withWatchSync($0) } ?? sidecar
         pendingRoutineTakeIdentity = nil

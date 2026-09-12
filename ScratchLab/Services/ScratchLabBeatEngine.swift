@@ -3,6 +3,22 @@ import CryptoKit
 import Darwin
 import Foundation
 
+/// A verified playback destination, independent of the recorded scratch stem.
+struct BeatPlaybackOutputRoute: Codable, Equatable, Sendable {
+    var deviceID: UInt32
+    var deviceUID: String
+    var deviceName: String
+    var channelPair: String
+    var channelMap: [Int]
+}
+
+/// Hardware routing is supplied by the host; scheduling and PCM stay shared.
+protocol BeatPlaybackOutputRouting: AnyObject {
+    var route: BeatPlaybackOutputRoute? { get }
+    func prepare(_ engine: AVAudioEngine) throws
+    func verify(_ engine: AVAudioEngine) throws
+}
+
 protocol ClickTrackTimingEngine: AnyObject {
     func start(
         bpm requestedBPM: Int,
@@ -33,6 +49,7 @@ struct BeatEngineStartMetadata: Equatable, Sendable {
     let beatPatternVersion: String
     let swingAmount: Double
     let engineVersion: String
+    var outputRoute: BeatPlaybackOutputRoute? = nil
 }
 
 enum ScratchLabBeatEngineError: LocalizedError {
@@ -88,6 +105,7 @@ final class ScratchLabBeatEngine: ObservableObject {
     }
 
     private let clickTrackEngine: ClickTrackTimingEngine
+    private let outputRouting: (any BeatPlaybackOutputRouting)?
     private let audioEngine = AVAudioEngine()
     private let playerNode = AVAudioPlayerNode()
     private let schedulingQueue = DispatchQueue(label: "scratchlab.beatengine.scheduler")
@@ -107,8 +125,10 @@ final class ScratchLabBeatEngine: ObservableObject {
     private var isRunning = false
     private var pendingUIWorkItems: [DispatchWorkItem] = []
 
-    init(clickTrackEngine: ClickTrackTimingEngine = ClickTrackEngine()) {
-        self.clickTrackEngine = clickTrackEngine
+    init(clickTrackEngine: ClickTrackTimingEngine? = nil,
+         outputRouting: (any BeatPlaybackOutputRouting)? = nil) {
+        self.outputRouting = outputRouting
+        self.clickTrackEngine = clickTrackEngine ?? ClickTrackEngine(outputRouting: outputRouting)
         audioEngine.attach(playerNode)
         if let playerFormat {
             audioEngine.connect(playerNode, to: audioEngine.mainMixerNode, format: playerFormat)
@@ -183,7 +203,8 @@ final class ScratchLabBeatEngine: ObservableObject {
                 beatPatternName: nil,
                 beatPatternVersion: CaptureBeatEngineDefaults.beatPatternVersion,
                 swingAmount: 0,
-                engineVersion: CaptureBeatEngineDefaults.engineVersion
+                engineVersion: CaptureBeatEngineDefaults.engineVersion,
+                outputRoute: outputRouting?.route
             )
         }
 
@@ -194,11 +215,14 @@ final class ScratchLabBeatEngine: ObservableObject {
 
         do {
             try configurePlayerFormat(sampleRate: sampleRate)
+            try outputRouting?.prepare(audioEngine)
             if !audioEngine.isRunning {
                 try audioEngine.start()
             }
+            try outputRouting?.verify(audioEngine)
         } catch {
-            throw ScratchLabBeatEngineError.unableToStartAudio
+            stop()
+            throw error
         }
 
         currentMode = mode
@@ -257,7 +281,8 @@ final class ScratchLabBeatEngine: ObservableObject {
             beatPatternName: mode.beatPatternName,
             beatPatternVersion: CaptureBeatEngineDefaults.beatPatternVersion,
             swingAmount: mode.defaultSwingAmount,
-            engineVersion: CaptureBeatEngineDefaults.engineVersion
+            engineVersion: CaptureBeatEngineDefaults.engineVersion,
+            outputRoute: outputRouting?.route
         )
         scheduleUICallbacks(
             generation: generation,
@@ -286,7 +311,9 @@ final class ScratchLabBeatEngine: ObservableObject {
             let playback = try Self.loadPreparedPlayback(preparedBeat: preparedBeat, mode: mode, bpm: bpm)
             let sampleRate = playback.loopBuffer.format.sampleRate
             try configurePlayerFormat(sampleRate: sampleRate, channelCount: playback.loopBuffer.format.channelCount)
+            try outputRouting?.prepare(audioEngine)
             try audioEngine.start()
+            try outputRouting?.verify(audioEngine)
             currentMode = mode
             currentBPM = bpm
             currentSwingAmount = mode.defaultSwingAmount
@@ -324,7 +351,8 @@ final class ScratchLabBeatEngine: ObservableObject {
                 beatPatternName: mode.beatPatternName,
                 beatPatternVersion: CaptureBeatEngineDefaults.beatPatternVersion,
                 swingAmount: mode.defaultSwingAmount,
-                engineVersion: CaptureBeatEngineDefaults.engineVersion
+                engineVersion: CaptureBeatEngineDefaults.engineVersion,
+                outputRoute: outputRouting?.route
             )
         } catch {
             stop()
@@ -379,6 +407,12 @@ final class ScratchLabBeatEngine: ObservableObject {
             throw ReferenceBeatAssetError.invalid("the production WAV changed while playback was loading")
         }
         return PreparedPlayback(countInBuffer: countIn, loopBuffer: loop)
+    }
+
+    /// Recheck after the count-in, immediately before the capture is armed.
+    func verifiedPreparedOutputRoute() throws -> BeatPlaybackOutputRoute? {
+        try outputRouting?.verify(audioEngine)
+        return outputRouting?.route
     }
 
     func stop() {

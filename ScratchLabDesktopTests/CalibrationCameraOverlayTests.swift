@@ -376,6 +376,21 @@ final class MacScratchPrimaryOutputRoutingTests: XCTestCase {
             deviceID: 42, channelMap: rane.channelMap))
     }
 
+    func testBeatOutputIdentitySurvivesCaptureAuditRoundTrip() throws {
+        let beat = BeatPlaybackOutputRoute(deviceID: 42, deviceUID: "usb.rane.pilot",
+            deviceName: "Rane ONE MKII", channelPair: "1/2", channelMap: [0, 1, -1, -1])
+        let controller = ScratchSamplePlaybackController()
+        let event = try MacCaptureEngine.scratchOutputRoutingAuditEvent(
+            snapshot: controller.outputRoutingSnapshot(), selectedInputUID: "capture.input",
+            at: Date(timeIntervalSince1970: 100), beatOutputRoute: beat)
+        let roundTrip = try JSONDecoder().decode(CaptureAuditEvent.self, from: JSONEncoder().encode(event))
+        let detail = try XCTUnwrap(try JSONSerialization.jsonObject(with: Data(roundTrip.detail.utf8)) as? [String: Any])
+        let routeData = try JSONSerialization.data(withJSONObject: XCTUnwrap(detail["beatOutputRoute"]))
+        XCTAssertEqual(try JSONDecoder().decode(BeatPlaybackOutputRoute.self, from: routeData), beat)
+        XCTAssertEqual(detail["recordedSignal"] as? String, "scratchlab_internal_post_software_fader_pre_hardware_mixer")
+        XCTAssertEqual(detail["physicalMasterReturnVerified"] as? Bool, false)
+    }
+
     func testRoutineAndDiagnosticCapturesBothFreezeOutputRebinding() {
         XCTAssertFalse(MacScratchOutputRoute.canRebind(routineCaptureArmed: true, diagnosticCaptureArmed: false))
         XCTAssertFalse(MacScratchOutputRoute.canRebind(routineCaptureArmed: false, diagnosticCaptureArmed: true))

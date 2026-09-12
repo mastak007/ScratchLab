@@ -519,7 +519,7 @@ struct ReferenceAuthoringView: View {
         VStack(alignment: .leading, spacing: 6) {
             Picker("AHHH output", selection: Binding(
                 get: { captureEngine.scratchPrimaryOutput },
-                set: { captureEngine.setScratchPrimaryOutput($0) }
+                set: { viewModel.stopBeatPreview(); captureEngine.setScratchPrimaryOutput($0) }
             )) {
                 ForEach(ScratchPrimaryOutput.allCases) { output in
                     Text(output.label).tag(output)
@@ -557,8 +557,12 @@ struct ReferenceAuthoringView: View {
                  ? "AHHH plays directly through the macOS sound output. Choose Mac speakers in Sound settings to hear it there."
                  : "AHHH plays through the Rane. The optional Mac monitor adds delay.")
                 .font(.caption).foregroundStyle(.secondary)
-            Text("Beat and count-in: macOS default output. Their Rane routing has not been verified; use Movement check (no beat) for the next scratch test.")
-                .font(.caption).foregroundStyle(.orange)
+            Text(captureEngine.scratchPrimaryOutput == .rane
+                 ? "Beat and count-in: Rane left deck (USB 1/2). AHHH: right deck (USB 3/4). Cue both decks in headphones; use the left channel level for the beat."
+                 : "Beat and count-in follow the Mac output. Choose Rane output to hear both decks through the Rane headphones.")
+                .font(.caption).foregroundStyle(.secondary)
+            Text("Capture keeps scratch and beat separate for scratch-only, beat-only and scratch-with-beat export.")
+                .font(.caption).foregroundStyle(.secondary)
             Text("This meter and the saved take use ScratchLab's generated scratch audio. The Rane's physical mixer can change the sound afterward.")
                 .font(.caption).foregroundStyle(.secondary)
         }
@@ -887,7 +891,7 @@ struct ReferenceAuthoringView: View {
                 Button(viewModel.isPreviewingBeat ? "Stop preview" : "Preview backing sound") {
                     viewModel.toggleBeatPreview()
                 }
-                Text("Boom Bap Trainer is a straight drum beat. Minimal Funk adds swing; Battle Loop is more forceful. Click track plays metronome clicks only. Preview uses the Mac's selected sound output and does not record.")
+                Text("Boom Bap Trainer is a straight drum beat. Minimal Funk adds swing; Battle Loop is more forceful. Click track plays metronome clicks only. Preview follows the chosen output and does not record.")
                     .font(.caption).foregroundStyle(.secondary)
                 }
 

@@ -4884,6 +4884,7 @@ final class ScratchOutputPeakMeter {
 /// Device binding used by the standalone renderer. No graph is started here.
 /// Input-channel selection is deliberately independent of these output maps.
 enum MacScratchOutputRoute {
+    enum RaneDeck { case left, right }
     struct Applied: Equatable, Sendable {
         var deviceID: AudioDeviceID
         var deviceUID: String
@@ -4920,10 +4921,19 @@ enum MacScratchOutputRoute {
         return result
     }
 
-    static func channelMap(deviceName: String, deviceChannels: Int, nodeChannels: Int) throws -> [Int] {
+    static func channelMap(deviceName: String, deviceChannels: Int, nodeChannels: Int, raneDeck: RaneDeck = .right) throws -> [Int] {
         if deviceName.lowercased().contains("rane") {
             guard RanePlaybackRoutingPolicy.matchesRaneRoute(portName: deviceName) else {
                 throw Failure(message: "The playback output pair for \(deviceName) has not been validated. This build supports Rane ONE playback on USB outputs 3/4.")
+            }
+            if raneDeck == .left {
+                guard deviceChannels >= 2, nodeChannels >= 2 else {
+                    throw Failure(message: "The Rane has no usable left-deck output pair (USB 1/2).")
+                }
+                var map = Array(repeating: -1, count: nodeChannels)
+                map[0] = 0
+                map[1] = 1
+                return map
             }
             switch RanePlaybackRoutingPolicy.decide(portName: deviceName,
                 grantedOutputChannels: deviceChannels, outputNodeChannels: nodeChannels) {
@@ -4950,7 +4960,7 @@ enum MacScratchOutputRoute {
         }
     }
 
-    static func prepare(engine: AVAudioEngine, preferredDeviceID: AudioDeviceID?, preferredDeviceName: String?, expectedDeviceUID: String? = nil, stereoOutputNode: AVAudioNode? = nil) throws -> Applied {
+    static func prepare(engine: AVAudioEngine, preferredDeviceID: AudioDeviceID?, preferredDeviceName: String?, expectedDeviceUID: String? = nil, stereoOutputNode: AVAudioNode? = nil, raneDeck: RaneDeck = .right) throws -> Applied {
         guard !engine.isRunning else {
             throw Failure(message: "Stop capture before changing the playback output.")
         }
@@ -4960,7 +4970,7 @@ enum MacScratchOutputRoute {
         }
         try validateIdentity(expectedDeviceUID: expectedDeviceUID, actualDeviceUID: uid)
         // Reject an unsupported selected Rane before touching the output unit.
-        _ = try channelMap(deviceName: name, deviceChannels: outputChannelCount(deviceID), nodeChannels: outputChannelCount(deviceID))
+        _ = try channelMap(deviceName: name, deviceChannels: outputChannelCount(deviceID), nodeChannels: outputChannelCount(deviceID), raneDeck: raneDeck)
         guard let unit = engine.outputNode.audioUnit else {
             throw Failure(message: "The playback output audio unit is unavailable.")
         }
@@ -4968,7 +4978,7 @@ enum MacScratchOutputRoute {
         let deviceStatus = AudioUnitSetProperty(unit, kAudioOutputUnitProperty_CurrentDevice,
             kAudioUnitScope_Global, 0, &selected, UInt32(MemoryLayout<AudioDeviceID>.size))
         guard deviceStatus == noErr else {
-            throw Failure(message: "Could not route AHHH to \(name) (audio error \(deviceStatus)).")
+            throw Failure(message: "Could not route audio to \(name) (audio error \(deviceStatus)).")
         }
         let hardwareFormat = engine.outputNode.outputFormat(forBus: 0)
         guard hardwareFormat.sampleRate.isFinite, hardwareFormat.sampleRate > 0,
@@ -4981,7 +4991,7 @@ enum MacScratchOutputRoute {
         engine.connect(outputSource, to: engine.outputNode, format: stereo)
         engine.prepare()
         let map = try channelMap(deviceName: name, deviceChannels: outputChannelCount(deviceID),
-            nodeChannels: Int(engine.outputNode.outputFormat(forBus: 0).channelCount))
+            nodeChannels: Int(engine.outputNode.outputFormat(forBus: 0).channelCount), raneDeck: raneDeck)
         var rawMap = map.map(Int32.init)
         let mapStatus = rawMap.withUnsafeMutableBytes {
             AudioUnitSetProperty(unit, kAudioOutputUnitProperty_ChannelMap, kAudioUnitScope_Input,
@@ -4991,7 +5001,8 @@ enum MacScratchOutputRoute {
             throw Failure(message: "Could not assign the playback channels on \(name) (audio error \(mapStatus)).")
         }
         let route = Applied(deviceID: deviceID, deviceUID: uid, deviceName: name,
-            channelMap: map, channelPair: RanePlaybackRoutingPolicy.matchesRaneRoute(portName: name) ? "3/4" : (map.count > 1 ? "1/2" : "1"))
+            channelMap: map, channelPair: RanePlaybackRoutingPolicy.matchesRaneRoute(portName: name)
+                ? (raneDeck == .left ? "1/2" : "3/4") : (map.count > 1 ? "1/2" : "1"))
         try verify(engine: engine, route: route)
         return route
     }
@@ -5062,5 +5073,41 @@ struct MacScratchMonitorRouteState: Sendable {
 
     func accepts(epoch candidate: UInt64) -> Bool {
         enabled && deviceID != nil && epoch == candidate
+    }
+}
+
+/// The CXL beat has its own engine and left-deck destination. It never enters
+/// the scratch controller's output tap, so scratch-only captures stay dry.
+final class MacReferenceBeatOutputRouter: BeatPlaybackOutputRouting {
+    struct Target {
+        var deviceID: AudioDeviceID?
+        var deviceName: String?
+        var deviceUID: String?
+    }
+
+    private let target: () throws -> Target
+    private var applied: MacScratchOutputRoute.Applied?
+    private(set) var route: BeatPlaybackOutputRoute?
+
+    init(target: @escaping () throws -> Target) { self.target = target }
+
+    func prepare(_ engine: AVAudioEngine) throws {
+        applied = nil
+        route = nil
+        let target = try target()
+        applied = try MacScratchOutputRoute.prepare(engine: engine,
+            preferredDeviceID: target.deviceID, preferredDeviceName: target.deviceName,
+            expectedDeviceUID: target.deviceUID, raneDeck: .left)
+    }
+
+    func verify(_ engine: AVAudioEngine) throws {
+        route = nil
+        guard let applied else {
+            throw MacScratchOutputRoute.Failure(message: "The beat output has not been prepared.")
+        }
+        try MacScratchOutputRoute.validateRunning(engine.isRunning)
+        try MacScratchOutputRoute.verify(engine: engine, route: applied)
+        route = BeatPlaybackOutputRoute(deviceID: applied.deviceID, deviceUID: applied.deviceUID,
+            deviceName: applied.deviceName, channelPair: applied.channelPair, channelMap: applied.channelMap)
     }
 }

@@ -50,7 +50,7 @@ Before outreach, prepare a concrete scope, costed budget, audience definition, d
 
 ### 1. Close CXL capture and collect a small teaching set
 
-Review Claude's completed handoff and exact commits before integration. As inspected on 13 September, only the route-regression commit `3558128` is complete. Preferred-repetition/export changes are still dirty, the all-platform gate is running, and `HANDOFF_TO_CODEX.md` is absent. The pasted transcript is progress evidence, not proof of completion. The Mac meter task remains open: Claude did not reproduce the operator failure and made no production meter fix.
+Claude's completed handoff and commits `3558128`/`5d7bd19` have now been reviewed and integrated with the finished V2 library. Integration found and corrected missing earlier unapproved-take notes in multi-take exports. Karl then identified missing Rane backing audio; preview/count-in routing is now implemented in the verified and installed combined candidate; headphone acceptance is pending. The Mac meter task remains open: Claude did not reproduce the operator failure and made no production meter fix. Use the current AI_HANDOFF.md for exact build and installation status.
 
 After integration and appropriate software checks, make one supported-rig physical check of direct sound and the actual app meter, primary/optional secondary recording, finalized playback, preference/notes export and draft reopening. Preserve recordings and stable CXL signing identity. Do not replace an app during capture or treat a Rane ONE pilot as Seventy-Two/Twelve acceptance. Do not repeat Claude's completed source-video audit.
 

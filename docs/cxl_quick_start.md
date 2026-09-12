@@ -10,6 +10,16 @@ This app is for recording scratch references. You can record and save now, and l
 4. Watch motion is optional. Leave **Enable iPhone & Watch Relay** off when recording without a Watch. If you choose to use it, check the Mac's connection and each take's actual motion status; the Watch's paired status alone is not proof of captured motion.
 5. Choose the technique, BPM, phrase length, starting direction, handedness and fader variant, then **Apply Authoring Setup**. Learn/calibrate the crossfader if needed; choose the correct active deck and open end. Check the live calibrated fader state before recording.
 
+## Hearing scratch and beat through the Rane
+
+The **AHHH output** choice also controls the backing preview, count-in and reference beat. On the Rane ONE/MKII, choose **Rane**: AHHH uses the right deck (USB 3/4), and the beat uses the left deck (USB 1/2). Select the USB source and cue both decks in the Rane headphones. Headphone cue lets you hear the backing while the crossfader is at the scratch deck's open end; the physical faders and headphone mix still control what you hear on the mixer.
+
+Try **Preview backing sound** before recording. A missing or mismatched selected output blocks playback instead of silently sending it to Mac speakers. **Mac (system output)** sends both AHHH and backing through the selected macOS sound output. Stop preview before changing the output; output selection is locked during capture.
+
+The Rane monitor mix is separate from the stored audio. The app retains the dry generated scratch and exact backing audio/timing so a timed reference can export **scratch only**, **beat only** and **scratch with beat**. The physical mixer/master sound is not claimed to be that exported mix. A no-beat movement check has no backing stem.
+
+Confirm both sounds in the actual headphones before a teaching take. Rane ONE channel mapping does not establish the Seventy-Two/Twelve route.
+
 ## Optional second camera
 
 After enabling the main camera, choose **Second camera (optional)** in Setup. For a body-and-decks view, mount the iPhone upright in portrait and select its Continuity Camera. Both devices must use the same Apple Account; a USB connection can improve connection stability. Keep the landscape main camera aimed at the hands, platter and fader. Check both previews before recording.
@@ -41,9 +51,9 @@ After approval, **Export Approved Package…** creates the separate verified ref
 
 ## Scope of this pilot
 
-- Includes the existing 23 starter reference examples, with matching audio for each available camera angle. It does not include every recorded performance or the rebuilt original-MKV routines.
+- Includes the rebuilt 23-technique reference library: 24 whole sequences, retaining both unresolved Tears versions, with 95 available camera videos and 72 source audio tracks. It does not treat the duplicated second halves as new performances.
 - Automatic detection is advisory. A question mark in notation means uncertain or missing evidence; it is not a confirmed platter pause.
-- Source-video cleanup, the unresolved Tears source discrepancy, full routine coverage and future avatar motion remain separate work.
+- The unresolved Tears source discrepancy, remaining audio-role and absolute-sync observations, and future avatar motion remain separate work. The completed source audit and rebuild do not need repeating.
 - Saved-draft reopening and the production rig still need an operator check on the Mac being used for capture.
 
 ## Installing this candidate
