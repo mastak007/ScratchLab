@@ -347,6 +347,10 @@ struct ReferenceAuthoringView: View {
                     .textSelection(.enabled)
                 }
 
+                SecondaryCameraSetupView(recorder: captureEngine.secondaryCamera,
+                    devices: captureEngine.availableVideoDevices,
+                    primaryID: captureEngine.selectedVideoDeviceUniqueID, locked: hardwareSelectionIsLocked)
+
                 Picker("Audio input", selection: audioInputSelectionBinding) {
                     if captureEngine.availableAudioDevices.isEmpty {
                         Text("No audio input detected").tag("")
@@ -726,6 +730,8 @@ struct ReferenceAuthoringView: View {
                 captureInProgress: viewModel.isWorking || viewModel.session.phase == .recording
             )
 
+            SecondaryCameraLiveView(recorder: captureEngine.secondaryCamera)
+
             if !captureEngine.isCameraActive {
                 Text("Camera preview is not running. Recording is blocked until the selected camera is active.")
                     .font(.caption)
@@ -896,7 +902,7 @@ struct ReferenceAuthoringView: View {
                         Text(handedness.rawValue.capitalized).tag(handedness.rawValue)
                     }
                 }
-                Text("Starting direction is your first record movement: push forward or pull back. Handedness is the hand moving the record and wearing the Watch.")
+                Text("Starting direction is your first record movement: push forward or pull back. Handedness is the hand moving the record. If using a Watch, wear it on that wrist.")
                     .font(.caption).foregroundStyle(.secondary)
                 Picker("Fader variant", selection: $viewModel.faderVariantRawValue) {
                     Text("Select fader variant").tag("")
@@ -2051,7 +2057,7 @@ struct ReferenceAuthoringView: View {
                 .foregroundStyle(
                     take.evidence.watchEvidence.isLinked
                         ? Color.secondary
-                        : (take.evidence.watchEvidence.isTransferPending ? Color.orange : Color.red)
+                        : ((take.evidence.watchEvidence.isTransferPending || take.evidence.watchEvidence.isAbsent) ? Color.orange : Color.red)
                 )
             if viewModel.isWaitingForWatchTransfer {
                 Text("Waiting for the Watch motion transfer to complete…")
@@ -2268,6 +2274,9 @@ private struct ReferenceMediaReviewStatus: View {
             }
             Text(summary).font(.caption)
                 .foregroundStyle(isBlocking ? Color.orange : Color.secondary)
+            if let message = controller.secondaryCameraMessage {
+                Text(message).font(.caption).foregroundStyle(.secondary)
+            }
             if let message = controller.playbackMessage {
                 Text(message).font(.caption).foregroundStyle(.orange)
             }

@@ -248,8 +248,43 @@ enum CaptureSessionScratchType: String, CaseIterable, Codable, Sendable {
     case comboL4 = "combo_l4"
     case comboL5 = "combo_l5"
 
+    // Additional reference collection identities. Keep distinct performances
+    // such as Original Flare and 1-Click Flare separately labelled.
+    case chirpFlare = "chirp_flare"
+    case cloverTears = "clover_tears"
+    case crescentFlare = "crescent_flare"
+    case cutting = "cutting"
+    case dicing = "dicing"
+    case drags = "drags"
+    case lazers = "lazers"
+    case longShortTips = "long_short_tips"
+    case marches = "marches"
+    case needleDropping = "needle_dropping"
+    case originalFlare = "original_flare"
+    case reverseCutting = "reverse_cutting"
+    case swipes = "swipes"
+    case tips = "tips"
+    case waves = "waves"
+    case zigzags = "zigzags"
+
     var title: String {
         switch self {
+        case .chirpFlare: return "Chirp Flare"
+        case .cloverTears: return "Clover Tears"
+        case .crescentFlare: return "Crescent Flare"
+        case .cutting: return "Cutting"
+        case .dicing: return "Dicing"
+        case .drags: return "Drags"
+        case .lazers: return "Lazers"
+        case .longShortTips: return "Long-Short Tips"
+        case .marches: return "Marches"
+        case .needleDropping: return "Needle Dropping"
+        case .originalFlare: return "Original Flare"
+        case .reverseCutting: return "Reverse Cutting"
+        case .swipes: return "Swipes"
+        case .tips: return "Tips"
+        case .waves: return "Waves"
+        case .zigzags: return "Zig Zags"
         case .unknown: return "Unknown"
         case .babyScratch: return "Baby Scratch"
         case .forwardScratch: return "Forward Scratch"
@@ -281,6 +316,9 @@ enum CaptureSessionScratchType: String, CaseIterable, Codable, Sendable {
 
     var trainingBPMList: [Int] {
         switch self {
+        case .chirpFlare, .cloverTears, .crescentFlare, .cutting, .dicing, .drags, .lazers, .longShortTips, .marches, .needleDropping, .originalFlare, .reverseCutting, .swipes, .tips, .waves, .zigzags:
+            // Capture availability does not introduce training presets.
+            return []
         case .tear, .stab, .transform:
             return [110, 120, 130]
         case .crab, .flare1Click, .orbit, .flare2Click, .twiddle:
@@ -12491,6 +12529,7 @@ enum CaptureCore {
         /// never be mistaken for one of `mixerMidiEvents`. See
         /// `CrossfaderTakeStartState`.
         var crossfaderTakeStartState: CrossfaderTakeStartState?
+        var secondaryCamera: SecondaryCameraEvidence?
         var auditTrail: [CaptureAuditEvent]
 
         init(
@@ -12564,6 +12603,7 @@ enum CaptureCore {
             self.reviewMetadata = reviewMetadata
             self.detectedNotation = detectedNotation
             self.crossfaderTakeStartState = crossfaderTakeStartState
+            self.secondaryCamera = nil
             self.auditTrail = auditTrail
         }
 
@@ -13443,5 +13483,49 @@ struct AdvancedOverviewSummary: Equatable, Sendable {
         }
 
         return AdvancedOverviewSummary(items: items, nextAction: nextAction)
+    }
+}
+
+/// Optional angle evidence. File clocks are relative to the main take's existing
+/// media-start boundary; no physical/optical synchronization claim is implied.
+struct SecondaryCameraEvidence: Codable, Equatable, Sendable {
+    enum Status: String, Codable, Sendable { case recording, captured, partial, unavailable, failed }
+    let deviceID: String
+    let deviceName: String
+    let rotationDegrees: Double
+    var status: Status
+    var fileName: String?
+    var sha256: String?
+    var firstFrameSeconds: Double?
+    var lastFrameSeconds: Double?
+    var frameCount = 0
+    var droppedFrameCount = 0
+    var maximumFrameGapSeconds: Double = 0
+    var detail: String?
+    var timingBasis = "mac_host_clock_relative_to_primary_media_start"
+
+    static func url(beside primaryURL: URL) -> URL {
+        primaryURL.deletingPathExtension().appendingPathExtension("second-camera.mov")
+    }
+
+    func verifiedURL(beside primaryURL: URL) throws -> URL? {
+        guard status != .recording, rotationDegrees.isFinite,
+              frameCount >= 0, droppedFrameCount >= 0,
+              maximumFrameGapSeconds.isFinite, maximumFrameGapSeconds >= 0,
+              timingBasis == "mac_host_clock_relative_to_primary_media_start" else {
+            throw CocoaError(.fileReadCorruptFile)
+        }
+        guard status == .captured || status == .partial else {
+            guard fileName == nil, sha256 == nil else { throw CocoaError(.fileReadCorruptFile) }
+            return nil
+        }
+        let url = Self.url(beside: primaryURL)
+        guard fileName == url.lastPathComponent, let sha256, frameCount > 0,
+              let firstFrameSeconds, firstFrameSeconds.isFinite, firstFrameSeconds >= 0,
+              let lastFrameSeconds, lastFrameSeconds.isFinite, lastFrameSeconds >= firstFrameSeconds,
+              ReferencePackageIO.sha256Hex(try Data(contentsOf: url)) == sha256 else {
+            throw CocoaError(.fileReadCorruptFile)
+        }
+        return url
     }
 }

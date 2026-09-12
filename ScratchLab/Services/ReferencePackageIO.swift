@@ -268,6 +268,46 @@ enum ReferencePackageIO {
                 issues.append("Packaged beat evidence is invalid: \(error.localizedDescription)")
             }
         }
+        if let record = manifest.artifact(role: .takeSidecar) {
+            do {
+                let sidecar = try decoder.decode(CaptureCore.LocalRecordingSidecar.self,
+                    from: Data(contentsOf: packageURL.appendingPathComponent(record.path)))
+                let artifact = manifest.artifact(role: .secondaryVideo)
+                if let camera = sidecar.secondaryCamera,
+                   camera.status == .captured || camera.status == .partial {
+                    guard let artifact, artifact.sha256 == camera.sha256,
+                          camera.fileName == SecondaryCameraEvidence.url(beside: URL(fileURLWithPath: sidecar.mediaFileName)).lastPathComponent else {
+                        throw CocoaError(.fileReadCorruptFile)
+                    }
+                } else if artifact != nil { throw CocoaError(.fileReadCorruptFile) }
+            } catch {
+                // Older synthetic/legacy packages may have opaque sidecars;
+                // validate new camera claims whenever either side declares them.
+                if manifest.artifact(role: .secondaryVideo) != nil ||
+                    (try? Data(contentsOf: packageURL.appendingPathComponent(record.path)))
+                        .flatMap({ try? JSONSerialization.jsonObject(with: $0) as? [String: Any] })?["secondaryCamera"] != nil {
+                    issues.append("Second-camera file and take-sidecar evidence do not match.")
+                }
+            }
+        }
+        if manifest.requiresExactSourceEvidence && !manifest.requiresExactWatchArtifact,
+           let sidecarRecord = manifest.artifact(role: .takeSidecar) {
+            do {
+                let data = try Data(contentsOf: packageURL.appendingPathComponent(sidecarRecord.path))
+                let sidecar = try decoder.decode(CaptureCore.LocalRecordingSidecar.self, from: data)
+                let matchingAbsence: Bool
+                switch manifest.metadata.sourceState {
+                case .notRequested: matchingAbsence = sidecar.watchSyncState == .notRequested
+                case .unavailable: matchingAbsence = sidecar.watchSyncState == .unavailable
+                default: matchingAbsence = false
+                }
+                if !matchingAbsence || sidecar.linkedMotionCaptureID != nil || sidecar.linkedMotionFileName != nil {
+                    issues.append("Packaged sidecar contradicts the declared absence of optional Watch motion.")
+                }
+            } catch {
+                issues.append("Packaged sidecar could not verify optional Watch absence: \(error.localizedDescription)")
+            }
+        }
         if let artifact = manifest.artifact(role: .watchMotion),
            case .linked(let identity, let motionFileName, _) = manifest.metadata.sourceState {
             do {

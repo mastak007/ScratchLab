@@ -117,7 +117,7 @@ final class ReferenceDraftStore {
             }
         }
         // Retain the original media fingerprints across all review edits.
-        let artifacts = try old?.artifacts ?? [mediaURL, mediaURL.deletingPathExtension().appendingPathExtension("wav")]
+        let artifacts = try old?.artifacts ?? Self.mediaURLs(primary: mediaURL, sidecarData: binding.rawSidecarData)
             .map { ReferenceSavedDraft.Artifact(url: $0, sha256: try Self.hash($0)) }
         let draft = ReferenceSavedDraft(schemaVersion: ReferenceSavedDraft.version, savedAt: Date(),
             mediaURL: mediaURL, sidecarURL: sidecarURL, evidence: take.evidence,
@@ -163,9 +163,9 @@ final class ReferenceDraftStore {
               draft.mediaURL.lastPathComponent == draft.evidence.actualMediaFileName,
               draft.sidecarURL.lastPathComponent == draft.sourceBinding.rawSidecarFileName,
               draft.mediaURL.deletingLastPathComponent() == draft.sidecarURL.deletingLastPathComponent(),
-              draft.artifacts.count == 2,
-              Set(draft.artifacts.map(\.url)) == Set([draft.mediaURL,
-                draft.mediaURL.deletingPathExtension().appendingPathExtension("wav")]) else {
+              Set(draft.artifacts.map(\.url)).count == draft.artifacts.count,
+              Set(draft.artifacts.map(\.url)) == Set(try Self.mediaURLs(primary: draft.mediaURL,
+                sidecarData: draft.sourceBinding.rawSidecarData)) else {
             throw ReferenceDraftStoreError.invalid("unsupported version or inconsistent recording identity")
         }
         // Reuse the existing strict companion validator, including correction
@@ -175,6 +175,14 @@ final class ReferenceDraftStore {
         _ = try ReferenceTearEvidenceCodec.decode(companion, expectedSource: draft.sourceBinding,
             expectedReferenceTakeID: draft.id)
         return draft
+    }
+
+    private static func mediaURLs(primary: URL, sidecarData: Data) throws -> [URL] {
+        var urls = [primary, primary.deletingPathExtension().appendingPathExtension("wav")]
+        let decoder = JSONDecoder(); decoder.dateDecodingStrategy = .iso8601
+        let sidecar = try decoder.decode(CaptureCore.LocalRecordingSidecar.self, from: sidecarData)
+        if let url = try sidecar.secondaryCamera?.verifiedURL(beside: primary) { urls.append(url) }
+        return urls
     }
 
     private static func hash(_ url: URL) throws -> String {

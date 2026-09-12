@@ -495,15 +495,14 @@ enum ReferenceCapturePreflight {
             )
         }
 
-        // Watch absence allows diagnostic capture. Canonical approval still
-        // requires linked motion through ReferenceValidator.watchEvidenceMissing.
+        // Watch motion is optional; source identity remains strict if attached.
         checks.append(
             ReferencePreflightCheck(
                 id: "watch",
                 title: "Apple Watch",
                 detail: snapshot.watchIsReachable
                     ? (snapshot.watchMotionIsStreaming ? "Connected, motion streaming." : "Connected, motion idle.")
-                    : "Not connected. Recording can continue without Watch motion; canonical approval requires linked motion.",
+                    : "Not connected. Watch motion is optional for recording and scratch reference approval.",
                 status: snapshot.watchIsReachable ? .satisfied : .advisory
             )
         )

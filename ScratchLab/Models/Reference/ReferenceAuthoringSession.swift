@@ -1435,9 +1435,6 @@ struct ReferenceAuthoringSession: Equatable, Sendable {
         guard report.passes else {
             return "Cannot approve: " + report.failureMessages.joined(separator: " ")
         }
-        guard take.evidence.watchEvidence.isLinked else {
-            return "Cannot approve: " + take.evidence.watchEvidence.operatorSummary
-        }
         guard take.evidence.boundaries.selectedRepetitionIndex != nil else {
             return "No repetition has been selected for approval."
         }

@@ -632,6 +632,15 @@ enum ReferencePerTakeSourceState: Codable, Equatable, Sendable {
     case timedOut(identity: ReferenceTakeSourceIdentity)
     case conflict(identity: ReferenceTakeSourceIdentity?, detail: String)
 
+    /// Explicit optional-Watch absence is different from an unresolved transfer.
+    var explicitlyOmitsWatch: Bool {
+        switch self {
+        case .notRequested(let policy), .unavailable(let policy):
+            return !policy.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        default: return false
+        }
+    }
+
     var isTerminal: Bool {
         if case .waitingForLateTransfer = self { return false }
         return true

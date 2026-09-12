@@ -97,19 +97,25 @@ enum ReferenceApprovedPackageCoordinator {
             binding: take.evidence.metadata.captureIntent!.beatSpec!,
             rootURL: finalizedMediaURL.deletingLastPathComponent().appendingPathComponent("beat_assets", isDirectory: true)
         ))
-        guard case .linked(let identity, let motionName, let motionHash) = take.evidence.metadata.sourceState,
-              let motionName, let motionHash,
-              let sidecar = try? SessionArchiveBuilder().decodeSidecarForAudit(at: sidecarURL),
-              sidecar.sessionID == identity.sessionID, sidecar.takeID == identity.takeID,
-              sidecar.linkedMotionFileName == motionName,
-              let motion = SessionArchiveBuilder().resolveLinkedWatchCaptureArtifact(for: sidecar) else {
-            throw ReferencePackageIOError.packageRejected(["The exact linked Watch recording is unavailable for this approved take."])
+        if take.evidence.metadata.sourceState?.explicitlyOmitsWatch != true {
+            guard case .linked(let identity, let motionName, let motionHash) = take.evidence.metadata.sourceState,
+                  let motionName, let motionHash,
+                  let sidecar = try? SessionArchiveBuilder().decodeSidecarForAudit(at: sidecarURL),
+                  sidecar.sessionID == identity.sessionID, sidecar.takeID == identity.takeID,
+                  sidecar.linkedMotionFileName == motionName,
+                  let motion = SessionArchiveBuilder().resolveLinkedWatchCaptureArtifact(for: sidecar) else {
+                throw ReferencePackageIOError.packageRejected(["The exact linked Watch recording is unavailable for this approved take."])
+            }
+            let motionData = try Data(contentsOf: motion.fileURL)
+            guard ReferencePackageIO.sha256Hex(motionData) == motionHash else {
+                throw ReferencePackageIOError.packageRejected(["The linked Watch recording no longer matches the approved source hash."])
+            }
+            inputs.append(.init(role: .watchMotion, packagePath: "evidence/watch_motion.json", data: motionData))
         }
-        let motionData = try Data(contentsOf: motion.fileURL)
-        guard ReferencePackageIO.sha256Hex(motionData) == motionHash else {
-            throw ReferencePackageIOError.packageRejected(["The linked Watch recording no longer matches the approved source hash."])
+        let capturedSidecar = try SessionArchiveBuilder().decodeSidecarForAudit(at: sidecarURL)
+        if let secondURL = try capturedSidecar.secondaryCamera?.verifiedURL(beside: finalizedMediaURL) {
+            inputs.append(.init(role: .secondaryVideo, packagePath: "video/second_camera.mov", sourceURL: secondURL))
         }
-        inputs.append(.init(role: .watchMotion, packagePath: "evidence/watch_motion.json", data: motionData))
         if FileManager.default.fileExists(atPath: finalizedMediaURL.path) {
             inputs.append(.init(role: .referenceVideo, packagePath: "video/full_take.mov", sourceURL: finalizedMediaURL))
         }

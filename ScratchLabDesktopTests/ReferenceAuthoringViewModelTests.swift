@@ -584,6 +584,61 @@ final class ReferenceTearEvidencePipelineTests: XCTestCase {
             return result
         }
     }
+    func testSecondCameraSurvivesDraftReopenAndRawArchiveAndRejectsChangedMedia() async throws {
+        let first = try await fixture(Self.withFader(Self.tear(holds: 1)))
+        let secondURL = SecondaryCameraEvidence.url(beside: first.mediaURL)
+        try FileManager.default.copyItem(at: first.mediaURL, to: secondURL)
+        let original = try Data(contentsOf: secondURL)
+        let decoder = JSONDecoder(); decoder.dateDecodingStrategy = .iso8601
+        var sidecar = try decoder.decode(CaptureCore.LocalRecordingSidecar.self, from: first.sidecarData)
+        var camera = SecondaryCameraEvidence(deviceID: "fixture-phone", deviceName: "Portrait Phone", rotationDegrees: 90, status: .captured)
+        camera.fileName = secondURL.lastPathComponent; camera.sha256 = ReferencePackageIO.sha256Hex(original)
+        camera.frameCount = 30; camera.firstFrameSeconds = 0.03; camera.lastFrameSeconds = 1
+        sidecar.secondaryCamera = camera
+        let data = try sidecar.encodedData(); try data.write(to: first.sidecarURL)
+        let files = Fixture(directory: first.directory, mediaURL: first.mediaURL, sidecarURL: first.sidecarURL,
+            sidecarData: data, config: first.config, raw: first.raw)
+        let root = files.directory.appendingPathComponent("drafts")
+        let owner = worker([files], draftStore: ReferenceDraftStore(directory: root))
+        let take = try await record(owner)
+        let draft = try ReferenceDraftStore(directory: root).load(id: take.id)
+        XCTAssertTrue(draft.artifacts.contains { $0.url == secondURL && $0.sha256 == camera.sha256 })
+        let fresh = worker([files], draftStore: ReferenceDraftStore(directory: root))
+        let reopened = await fresh.reopenDraft(id: take.id)
+        XCTAssertNil(reopened.errorMessage)
+        let optionalSnapshot = try await fresh.rawCaptureExportSnapshot(config: files.config)
+        let snapshot = try XCTUnwrap(optionalSnapshot)
+        let archive = try await Task.detached { try Self.archive(snapshot.source, in: files.directory) }.value
+        let id = try XCTUnwrap(take.tearEvidenceSourceBinding).capturedTakeID
+        XCTAssertEqual(archive.boundSidecarDataByTakeID[id], data)
+        XCTAssertEqual(try Data(contentsOf: secondURL), original)
+        try Data("changed".utf8).write(to: secondURL)
+        XCTAssertThrowsError(try ReferenceDraftStore(directory: root).load(id: take.id))
+    }
+
+    func testEveryCaptureTechniqueSurvivesFinalizationDraftReopenAndRawArchive() async throws {
+        for technique in ReferenceTechnique.authorableSet {
+            let files = try await fixture(Self.withFader(Self.tear(holds: 1)), scratchType: technique.scratchType)
+            let root = files.directory.appendingPathComponent("drafts")
+            let owner = worker([files], draftStore: ReferenceDraftStore(directory: root), technique: technique)
+            let take = try await record(owner)
+            XCTAssertEqual(take.evidence.metadata.technique, technique)
+            XCTAssertEqual(take.evidence.metadata.lifecycleState, .draft)
+            let fresh = worker([files], draftStore: ReferenceDraftStore(directory: root))
+            let reopened = await fresh.reopenDraft(id: take.id)
+            XCTAssertNil(reopened.errorMessage, technique.displayName)
+            XCTAssertEqual(reopened.state.session.selectedTechnique, technique)
+            XCTAssertEqual(reopened.state.session.takeInReview?.evidence.metadata.technique, technique)
+            let optionalSnapshot = try await fresh.rawCaptureExportSnapshot(config: files.config)
+            let snapshot = try XCTUnwrap(optionalSnapshot)
+            let archived = try await Task.detached { try Self.archive(snapshot.source, in: files.directory) }.value
+            XCTAssertEqual(archived.metadata.session.scratchTypeID, technique.id)
+            let binding = try XCTUnwrap(take.tearEvidenceSourceBinding)
+            XCTAssertEqual(archived.boundSidecarDataByTakeID[binding.capturedTakeID], files.sidecarData)
+            XCTAssertEqual(try Data(contentsOf: files.sidecarURL), files.sidecarData)
+        }
+    }
+
     func testSavedDraftCanBeApprovedAndExportedAfterRestartWithExactEvidence() async throws {
         // Reversals distinguish performed strokes from steady platter rotation
         // in the real capture fusion path.
@@ -828,11 +883,11 @@ final class ReferenceTearEvidencePipelineTests: XCTestCase {
         try original.write(to: draftURL)
     }
 
-    private func worker(_ fixtures: [Fixture], draftStore: ReferenceDraftStore? = nil, preparedBeat: ReferencePreparedBeat? = nil) -> ReferenceAuthoringWorker {
+    private func worker(_ fixtures: [Fixture], draftStore: ReferenceDraftStore? = nil, preparedBeat: ReferencePreparedBeat? = nil, technique: ReferenceTechnique = .tear) -> ReferenceAuthoringWorker {
         let sequence = RecordingSequence(fixtures, bindIdentity: preparedBeat != nil)
         let calibration = Self.calibration
         var session = ReferenceAuthoringSession(authoringSessionID: "pipeline-authoring", operatorName: "Synthetic Reviewer")
-        session.selectTechnique(.tear)
+        session.selectTechnique(technique)
         session.selectPattern(ReferencePatternIdentity(id: "pipeline", name: "Pipeline", phraseBars: 1), bpm: 120)
         session.declareVariant(startingDirection: .forward, faderVariant: .faderOpenThroughout, handedness: .right)
         session.confirmedCalibration = calibration
@@ -884,6 +939,12 @@ final class ReferenceTearEvidencePipelineTests: XCTestCase {
         for take in takes {
             let files = try XCTUnwrap(take["files"] as? [String: String])
             let artifacts = try XCTUnwrap(take["artifacts"] as? [String: [String: Any]])
+            if let cameraPath = files["camB"] {
+                let camera = try Data(contentsOf: root.appendingPathComponent(cameraPath))
+                let record = try XCTUnwrap(artifacts["camB"])
+                XCTAssertEqual(record["sha256"] as? String, ReferencePackageIO.sha256Hex(camera))
+                XCTAssertNotNil(files["camB_metadata"])
+            }
             let notationPath = try XCTUnwrap(files["notation"])
             let notationDocument = try decoder.decode(SessionExportNotationDocument.self,
                 from: Data(contentsOf: root.appendingPathComponent(notationPath)))

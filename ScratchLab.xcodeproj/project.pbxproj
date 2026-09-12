@@ -623,6 +623,7 @@
 		REFAUST0TST0001 /* ReferenceAuthoringSessionTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = REFAUST0FREF0001 /* ReferenceAuthoringSessionTests.swift */; };
 		REFBRG0MAC0001 /* ReferenceAuthoringCaptureBridge.swift in Sources */ = {isa = PBXBuildFile; fileRef = REFBRG0FREF0001 /* ReferenceAuthoringCaptureBridge.swift */; };
 		CXLMD0MAC0001 /* ReferenceFinalizedMediaReviewController.swift in Sources */ = {isa = PBXBuildFile; fileRef = CXLMD0FREF001 /* ReferenceFinalizedMediaReviewController.swift */; };
+		CXLSECONDARYCAMBUILD00001 /* SecondaryCameraRecorder.swift in Sources */ = {isa = PBXBuildFile; fileRef = CXLSECONDARYCAMFILE00001 /* SecondaryCameraRecorder.swift */; };
 		CXLPK0MAC0001 /* ReferenceApprovedPackageCoordinator.swift in Sources */ = {isa = PBXBuildFile; fileRef = CXLPK0FREF001 /* ReferenceApprovedPackageCoordinator.swift */; };
 		REFBRGT0TST0001 /* ReferenceAuthoringCaptureBridgeTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = REFBRGT0FREF0001 /* ReferenceAuthoringCaptureBridgeTests.swift */; };
 		REFVM0MAC0001 /* ReferenceAuthoringViewModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = REFVM0FREF0001 /* ReferenceAuthoringViewModel.swift */; };
@@ -1128,6 +1129,7 @@
 		REFAUST0FREF0001 /* ReferenceAuthoringSessionTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ReferenceAuthoringSessionTests.swift; sourceTree = "<group>"; };
 		REFBRG0FREF0001 /* ReferenceAuthoringCaptureBridge.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ReferenceAuthoringCaptureBridge.swift; sourceTree = "<group>"; };
 		CXLMD0FREF001 /* ReferenceFinalizedMediaReviewController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ReferenceFinalizedMediaReviewController.swift; sourceTree = "<group>"; };
+		CXLSECONDARYCAMFILE00001 /* SecondaryCameraRecorder.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SecondaryCameraRecorder.swift; sourceTree = "<group>"; };
 		CXLPK0FREF001 /* ReferenceApprovedPackageCoordinator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ReferenceApprovedPackageCoordinator.swift; sourceTree = "<group>"; };
 		REFBRGT0FREF0001 /* ReferenceAuthoringCaptureBridgeTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ReferenceAuthoringCaptureBridgeTests.swift; sourceTree = "<group>"; };
 		REFVM0FREF0001 /* ReferenceAuthoringViewModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ReferenceAuthoringViewModel.swift; sourceTree = "<group>"; };
@@ -1707,6 +1709,7 @@
 				REFBRG0FREF0001 /* ReferenceAuthoringCaptureBridge.swift */,
 				CXLMD0FREF001 /* ReferenceFinalizedMediaReviewController.swift */,
 				CXLPK0FREF001 /* ReferenceApprovedPackageCoordinator.swift */,
+				CXLSECONDARYCAMFILE00001 /* SecondaryCameraRecorder.swift */,
 				B2000005 /* MacCaptureEngine.swift */,
 				TRIR0000000TRIR0FILEPROD /* TimecodeRealtimeIngressRing.swift */,
 				SBPA0001FREF /* ScratchBankPadAudioPlayer.swift */,
@@ -2164,6 +2167,7 @@
 				REFBRG0MAC0001 /* ReferenceAuthoringCaptureBridge.swift in Sources */,
 				CXLMD0MAC0001 /* ReferenceFinalizedMediaReviewController.swift in Sources */,
 				CXLPK0MAC0001 /* ReferenceApprovedPackageCoordinator.swift in Sources */,
+				CXLSECONDARYCAMBUILD00001 /* SecondaryCameraRecorder.swift in Sources */,
 				REFAU0MAC0009 /* ReferenceAuthoringSession.swift in Sources */,
 				REFIO0MAC0001 /* ReferencePackageIO.swift in Sources */,
 				REFDR1MAC0001 /* ReferenceDraftStore.swift in Sources */,
@@ -3207,7 +3211,9 @@
 				MACOSX_DEPLOYMENT_TARGET = 15.0;
 				MARKETING_VERSION = 1.0.1;
 				PRODUCT_BUNDLE_IDENTIFIER = com.machelpnz.scratchlab.cxl-authoring;
-				PRODUCT_NAME = ScratchLab;
+				PRODUCT_NAME = "ScratchLab CXL";
+				PRODUCT_MODULE_NAME = ScratchLab;
+				EXECUTABLE_NAME = ScratchLab;
 				SDKROOT = macosx;
 				SUPPORTED_PLATFORMS = macosx;
 				SWIFT_ACTIVE_COMPILATION_CONDITIONS = "$(inherited) CXL_AUTHORING";

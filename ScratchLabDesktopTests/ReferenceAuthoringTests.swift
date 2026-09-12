@@ -107,6 +107,80 @@ final class ReferenceExactBeatExportTests: XCTestCase {
         XCTAssertFalse(ReferencePackageIO.verify(packageURL: packageURL).isEmpty)
     }
 
+    func testExactReferenceWithoutWatchExportsAndReopensWithExplicitAbsence() throws {
+        let root = try temporaryRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let library = root.appendingPathComponent("library")
+        let beat = try ReferenceBeatAssetStore.prepare(mode: .boomBapTrainer, bpm: 95, loopBeats: 4, rootURL: library).binding
+        let sidecar = CaptureCore.LocalRecordingSidecar(sessionID: "session",
+            sessionConfig: CaptureSessionConfig(referenceCaptureIntent: intent(beat: beat)),
+            takeID: "take-001", appLocalTakeNumber: 1, recordingRole: "reference_authoring", platform: "fixture",
+            appSurface: "reference_authoring", sourceDeviceName: "Fixture", startedAt: Date(),
+            recordingStatus: "completed", mediaFileName: "take.mov", sidecarFileName: "take.json", watchSyncState: .notRequested)
+        var inputs = try ReferenceApprovedPackageCoordinator.boundBeatInputs(binding: beat, rootURL: library)
+        inputs += try ReferencePackageManifest.requiredArtifactRoles.enumerated().map { index, role in
+            ReferencePackageInput(role: role, packagePath: "fixture/evidence_\(index).json",
+                data: role == .takeSidecar ? try ReferencePackageIO.encoder.encode(sidecar) : Data("evidence".utf8))
+        }
+        let package = try ReferencePackageIO.writePackage(inputs: inputs, parentDirectory: root.appendingPathComponent("out"),
+            packageDirectoryName: "tear.exact_beat_v1") { records in
+                self.manifest(beat: beat, artifacts: records,
+                    sourceState: .notRequested(policy: "Optional wrist motion not requested"), watchLinked: false)
+            }
+        let reopened = try ReferencePackageIO.readManifest(atPackageURL: package)
+        let records = reopened.artifacts
+        var contradictorySidecar = sidecar
+        contradictorySidecar.watchSyncState = .acknowledged
+        let contradictoryInputs = try inputs.map { input in
+            input.role == .takeSidecar
+                ? ReferencePackageInput(role: input.role, packagePath: input.packagePath,
+                    data: try ReferencePackageIO.encoder.encode(contradictorySidecar)) : input
+        }
+        let contradictoryPackage = try ReferencePackageIO.writePackage(inputs: contradictoryInputs,
+            parentDirectory: root.appendingPathComponent("contradictory"), packageDirectoryName: "tear.exact_beat_v1") { records in
+                self.manifest(beat: beat, artifacts: records,
+                    sourceState: .notRequested(policy: "Optional"), watchLinked: false)
+            }
+        XCTAssertTrue(ReferencePackageIO.verify(packageURL: contradictoryPackage).contains {
+            $0.contains("contradicts the declared absence")
+        })
+        var twoCameraSidecar = sidecar
+        let angle = Data("second camera artifact".utf8)
+        var camera = SecondaryCameraEvidence(deviceID: "phone", deviceName: "Phone", rotationDegrees: 90, status: .captured)
+        camera.fileName = "take.second-camera.mov"; camera.sha256 = ReferencePackageIO.sha256Hex(angle)
+        camera.frameCount = 30; camera.firstFrameSeconds = 0.03; camera.lastFrameSeconds = 1
+        twoCameraSidecar.secondaryCamera = camera
+        var twoCameraInputs = try inputs.map { input in
+            input.role == .takeSidecar ? ReferencePackageInput(role: input.role, packagePath: input.packagePath,
+                data: try ReferencePackageIO.encoder.encode(twoCameraSidecar)) : input
+        }
+        twoCameraInputs.append(.init(role: .secondaryVideo, packagePath: "video/second_camera.mov", data: angle))
+        let twoCameraPackage = try ReferencePackageIO.writePackage(inputs: twoCameraInputs,
+            parentDirectory: root.appendingPathComponent("two-camera"), packageDirectoryName: "tear.exact_beat_v1") { records in
+                self.manifest(beat: beat, artifacts: records, sourceState: .notRequested(policy: "Optional"), watchLinked: false)
+            }
+        XCTAssertTrue(ReferencePackageIO.verify(packageURL: twoCameraPackage).isEmpty)
+        let missingCameraPackage = try ReferencePackageIO.writePackage(inputs: twoCameraInputs.filter { $0.role != .secondaryVideo },
+            parentDirectory: root.appendingPathComponent("missing-camera"), packageDirectoryName: "tear.exact_beat_v1") { records in
+                self.manifest(beat: beat, artifacts: records, sourceState: .notRequested(policy: "Optional"), watchLinked: false)
+            }
+        XCTAssertTrue(ReferencePackageIO.verify(packageURL: missingCameraPackage).contains {
+            $0.contains("Second-camera file and take-sidecar evidence do not match")
+        })
+        try FileManager.default.removeItem(at: library)
+        XCTAssertTrue(ReferencePackageIO.verify(packageURL: twoCameraPackage).isEmpty)
+        XCTAssertFalse(reopened.requiresExactWatchArtifact)
+        XCTAssertFalse(reopened.metadata.deviceInfo.watchLinked)
+        XCTAssertNil(reopened.artifact(role: .watchMotion))
+        XCTAssertTrue(ReferencePackageIO.verify(packageURL: package).isEmpty)
+        let contradictory = manifest(beat: beat, artifacts: records,
+            sourceState: .notRequested(policy: "Optional"), watchLinked: true)
+        XCTAssertFalse(ReferencePackageValidator.manifestIssues(contradictory).isEmpty)
+        let unresolved = manifest(beat: beat, artifacts: records,
+            sourceState: .timedOut(identity: watchIdentity), watchLinked: false)
+        XCTAssertFalse(ReferencePackageValidator.manifestIssues(unresolved).isEmpty)
+    }
+
     func testRawBoundAssetCopyPreservesBindingAndHasNoGlobalLibraryFallback() throws {
         let root = try temporaryRoot()
         defer { try? FileManager.default.removeItem(at: root) }
@@ -172,7 +246,7 @@ final class ReferenceExactBeatExportTests: XCTestCase {
     }
 
     private func manifest(beat: ReferenceBeatSpecBinding, artifacts: [ReferenceArtifactRecord],
-                          sourceState: ReferencePerTakeSourceState? = nil) -> ReferencePackageManifest {
+                          sourceState: ReferencePerTakeSourceState? = nil, watchLinked: Bool = true) -> ReferencePackageManifest {
         let date = Date(timeIntervalSince1970: 1_788_000_000)
         let origin = ReferenceMediaTimeOrigin(clickStartHostTime: 100, recordingStartHostTime: 200,
             recordingStartOffsetSeconds: Double(beat.countInFrameCount) / 48_000)
@@ -192,7 +266,7 @@ final class ReferenceExactBeatExportTests: XCTestCase {
                 sha256: artifacts.first { $0.role == .watchMotion }?.sha256),
             referenceVersion: 1, crossfaderCalibration: nil,
             deviceInfo: .init(platform: "fixture", appVersion: "1", controllerName: "fixture", controllerIdentifier: "fixture",
-                audioDeviceName: nil, videoDeviceName: nil, watchLinked: true),
+                audioDeviceName: nil, videoDeviceName: nil, watchLinked: watchLinked),
             recordedAt: date, lifecycleState: .approvedCanonical, reviewDecision: decision)
         return ReferencePackageManifest(referenceID: "tear.exact_beat", referenceVersion: 1, packageBuiltAt: date,
             metadata: metadata, boundaries: .nominal(for: metadata), selectedRepetitionIndex: 0,
@@ -443,6 +517,63 @@ final class ReferenceAuthoringTests: XCTestCase {
     }
 
     // MARK: - Technique identity
+
+    func testCaptureCatalogueCoversEveryCollectionLabelWithoutMergingDistinctExamples() throws {
+        let catalogue = ReferenceTechnique.authorableSet
+        XCTAssertEqual(catalogue.count, 23)
+        XCTAssertEqual(Set(catalogue.map(\.id)).count, catalogue.count)
+        let mapped = ScratchClassLabel.allCases.map { ReferenceTechnique(exampleLabel: $0) }
+        XCTAssertEqual(mapped.count, 23)
+        XCTAssertEqual(Set(mapped).count, mapped.count)
+        XCTAssertEqual(Set(catalogue), Set(mapped))
+        XCTAssertFalse(catalogue.contains(.flare(.twoClick)))
+        XCTAssertFalse(catalogue.contains(.flare(.threeClick)))
+        XCTAssertNotEqual(ReferenceTechnique.originalFlare, .flare(.oneClick))
+        XCTAssertNotEqual(ReferenceTechnique.tips.scratchType, .stab)
+        XCTAssertNotEqual(ReferenceTechnique.reverseCutting.scratchType, .backwardScratch)
+    }
+
+    func testSelectableAndLegacyReferenceTechniquesRetainIdentityThroughMetadataEncoding() throws {
+        let techniques = ReferenceTechnique.authorableSet + [.flare(.twoClick), .flare(.threeClick)]
+        for technique in techniques {
+            XCTAssertEqual(ReferenceTechnique(scratchType: technique.scratchType), technique)
+            XCTAssertEqual(ReferenceTechnique(scratchTypeID: technique.id), technique)
+            let original = makeMetadata(technique: technique)
+            let decoded = try JSONDecoder().decode(ReferenceTakeMetadata.self, from: JSONEncoder().encode(original))
+            XCTAssertEqual(decoded.technique, technique)
+            XCTAssertEqual(decoded.lifecycleState, .draft)
+            XCTAssertNil(decoded.reviewDecision)
+        }
+        XCTAssertNil(ReferenceTechnique(scratchType: .unknown))
+        XCTAssertNil(ReferenceTechnique(scratchTypeID: "unrecognised"))
+    }
+
+    func testExpandedCaptureDoesNotExpandTrainingOrInventCutRequirements() {
+        XCTAssertEqual(ReferenceTechnique.minimumRequiredSet,
+            [.babyScratch, .chirp, .transform, .flare(.oneClick), .flare(.twoClick), .flare(.threeClick)])
+        for technique in ReferenceTechnique.authorableSet
+            where !ReferenceTechnique.minimumRequiredSet.contains(technique) && technique != .tear {
+            let rule = technique.defaultFaderExpectation
+            XCTAssertFalse(rule.source.isOperatorConfirmed)
+            XCTAssertFalse(rule.requiresContinuouslyOpenFader)
+            XCTAssertEqual(rule.minimumCutEventsPerRepetition, 0)
+            XCTAssertTrue(rule.requiresOperatorApproval)
+            XCTAssertTrue(technique.requiresCalibratedCrossfader)
+            XCTAssertFalse(ReferenceCapturePreflight.evaluate(snapshot: makeSnapshot(), technique: technique).blocksRecording)
+            XCTAssertTrue(ReferenceCapturePreflight.evaluate(snapshot: makeSnapshot(calibration: nil), technique: technique).blocksRecording)
+        }
+    }
+
+    func testLegacyTechniqueEncodingStillDecodes() throws {
+        let legacy: [(String, ReferenceTechnique)] = [
+            (#"{"babyScratch":{}}"#, .babyScratch), (#"{"tear":{}}"#, .tear),
+            (#"{"chirp":{}}"#, .chirp), (#"{"transform":{}}"#, .transform),
+            (#"{"flare":{"_0":2}}"#, .flare(.twoClick))
+        ]
+        for (json, technique) in legacy {
+            XCTAssertEqual(try JSONDecoder().decode(ReferenceTechnique.self, from: Data(json.utf8)), technique)
+        }
+    }
 
     func testFlareCannotExistWithoutAClickCount() {
         // A generic "flare" token is not a technique and must not resolve.
@@ -1588,6 +1719,27 @@ final class ReferenceAuthoringTests: XCTestCase {
     }
 
     // MARK: - Watch evidence states (D1)
+
+    func testAbsentOptionalWatchWarnsWithoutBlockingOtherwiseValidReference() {
+        var metadata = makeMetadata(technique: .babyScratch)
+        metadata.deviceInfo = .init(platform: "fixture", appVersion: "1", controllerName: "Rane ONE MKII",
+            controllerIdentifier: "Rane ONE MKII", audioDeviceName: nil, videoDeviceName: nil, watchLinked: false)
+        for source in [ReferencePerTakeSourceState.notRequested(policy: "Optional Watch"), .unavailable(policy: "No Watch connected")] {
+            metadata.sourceState = source
+            let evidence = makeEvidence(metadata: metadata, watchEvidence: .missing(syncState: "unavailable"))
+            let report = ReferenceValidator.validate(evidence)
+            XCTAssertTrue(report.passes, report.failureMessages.joined(separator: "; "))
+            XCTAssertTrue(report.findings.contains(.watchEvidenceMissing))
+            XCTAssertEqual(ReferenceValidationFinding.watchEvidenceMissing.severity, .warning)
+        }
+    }
+
+    func testMissingWatchCannotHideClaimedOrConflictingSource() {
+        let evidence = makeEvidence(metadata: makeMetadata(), watchEvidence: .missing(syncState: "notRequested"))
+        let report = ReferenceValidator.validate(evidence)
+        XCTAssertFalse(report.passes)
+        XCTAssertTrue(report.findings.contains(.watchEvidenceStateInconsistent))
+    }
 
     func testAPendingWatchTransferBlocksButIsReportedAsPendingNotMissing() {
         let evidence = makeEvidence(
@@ -3644,5 +3796,133 @@ final class ReferenceTearEvidenceCodecTests: XCTestCase {
                                     performedLimitations: review.requiredIntrinsicComparisonLimitations))
         XCTAssertTrue(review.noteCorrections[0].correctedAt.timeIntervalSinceReferenceDate.isNaN)
         XCTAssertEqual(review.rawMovementEvents, f.review.rawMovementEvents)
+    }
+}
+
+final class SecondaryCameraTests: XCTestCase {
+
+    func testTimeoutRejectsLateMediaCommitAndDuplicateCompletion() throws {
+        var results: [SecondaryCameraEvidence?] = []
+        let gate = SecondaryCameraFinishGate { results.append($0) }
+        var failed = SecondaryCameraEvidence(deviceID: "phone", deviceName: "Phone", rotationDegrees: 90, status: .failed)
+        failed.detail = "Timed out"
+        XCTAssertTrue(gate.complete(failed))
+        var replaced = false
+        XCTAssertThrowsError(try gate.commitIfPending { replaced = true })
+        XCTAssertFalse(replaced)
+        XCTAssertFalse(gate.complete(nil))
+        XCTAssertEqual(results.count, 1)
+        XCTAssertEqual(results[0]?.status, .failed)
+    }
+
+    func testConcurrentFinalizationOnlyPublishesOneResult() {
+        let lock = NSLock()
+        var count = 0
+        let gate = SecondaryCameraFinishGate { _ in lock.lock(); count += 1; lock.unlock() }
+        DispatchQueue.concurrentPerform(iterations: 100) { _ in gate.complete(nil) }
+        XCTAssertEqual(count, 1)
+        XCTAssertTrue(gate.isFinished)
+    }
+
+    func testLateStartEarlyEndAndFrameGapsArePartialCoverage() {
+        var evidence = SecondaryCameraEvidence(deviceID: "phone", deviceName: "Phone", rotationDegrees: 90, status: .captured)
+        evidence.firstFrameSeconds = 0.03; evidence.lastFrameSeconds = 0.97
+        XCTAssertFalse(SecondaryCameraRecorder.hasIncompleteCoverage(evidence, duration: 1))
+        evidence.firstFrameSeconds = 0.4
+        XCTAssertTrue(SecondaryCameraRecorder.hasIncompleteCoverage(evidence, duration: 1))
+        evidence.firstFrameSeconds = 0.03; evidence.lastFrameSeconds = 0.6
+        XCTAssertTrue(SecondaryCameraRecorder.hasIncompleteCoverage(evidence, duration: 1))
+        evidence.lastFrameSeconds = 0.97; evidence.maximumFrameGapSeconds = 0.3
+        XCTAssertTrue(SecondaryCameraRecorder.hasIncompleteCoverage(evidence, duration: 1))
+    }
+    func testOptionalAbsenceAndFailedCameraHaveNoExportArtifact() throws {
+        let primary = URL(fileURLWithPath: "/tmp/take.mov")
+        var evidence = SecondaryCameraEvidence(deviceID: "phone", deviceName: "Phone", rotationDegrees: 90, status: .unavailable)
+        XCTAssertNil(try evidence.verifiedURL(beside: primary))
+        evidence.status = .failed
+        XCTAssertNil(try evidence.verifiedURL(beside: primary))
+        evidence.fileName = "some-other-take.mov"
+        XCTAssertThrowsError(try evidence.verifiedURL(beside: primary))
+    }
+
+    func testSecondCameraRejectsWrongTakeChangedBytesAndInvalidTiming() throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let primary = root.appendingPathComponent("take01.mov")
+        let url = SecondaryCameraEvidence.url(beside: primary)
+        let data = Data("recorded angle".utf8)
+        try data.write(to: url)
+        var evidence = SecondaryCameraEvidence(deviceID: "phone", deviceName: "Phone", rotationDegrees: 90, status: .captured)
+        evidence.fileName = url.lastPathComponent; evidence.sha256 = ReferencePackageIO.sha256Hex(data)
+        evidence.frameCount = 30; evidence.firstFrameSeconds = 0.03; evidence.lastFrameSeconds = 1
+        XCTAssertEqual(try evidence.verifiedURL(beside: primary), url)
+        XCTAssertThrowsError(try evidence.verifiedURL(beside: root.appendingPathComponent("take02.mov")))
+        evidence.firstFrameSeconds = -0.1
+        XCTAssertThrowsError(try evidence.verifiedURL(beside: primary))
+        evidence.firstFrameSeconds = 0.03
+        try Data("changed angle".utf8).write(to: url)
+        XCTAssertThrowsError(try evidence.verifiedURL(beside: primary))
+    }
+
+    @MainActor
+    func testPortraitAndRotatedLandscapeFitWithoutCroppingOrMirroring() {
+        let cell = CGRect(x: 1280, y: 0, width: 408, height: 720)
+        for (size, sourceTransform) in [
+            (CGSize(width: 1080, height: 1920), CGAffineTransform.identity),
+            (CGSize(width: 1920, height: 1080), CGAffineTransform(rotationAngle: .pi / 2))
+        ] {
+            let transform = ReferenceFinalizedMediaReviewController.aspectFitTransform(size: size, transform: sourceTransform, in: cell)
+            let bounds = CGRect(origin: .zero, size: size).applying(transform)
+            XCTAssertEqual(bounds.height, 720, accuracy: 0.001)
+            XCTAssertEqual(bounds.width, 405, accuracy: 0.001)
+            XCTAssertEqual(bounds.midX, cell.midX, accuracy: 0.001)
+            XCTAssertGreaterThan(transform.a * transform.d - transform.b * transform.c, 0)
+        }
+    }
+
+    func testPhoneMovieKeepsPortraitTimingAndGetsTheTakeAudio() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let movie = root.appendingPathComponent("phone.mov"), wav = root.appendingPathComponent("take.wav")
+        let writer = try AVAssetWriter(outputURL: movie, fileType: .mov)
+        let input = AVAssetWriterInput(mediaType: .video, outputSettings: [AVVideoCodecKey: AVVideoCodecType.h264,
+            AVVideoWidthKey: 80, AVVideoHeightKey: 144])
+        let adaptor = AVAssetWriterInputPixelBufferAdaptor(assetWriterInput: input, sourcePixelBufferAttributes: [
+            kCVPixelBufferPixelFormatTypeKey as String: kCVPixelFormatType_32BGRA,
+            kCVPixelBufferWidthKey as String: 80, kCVPixelBufferHeightKey as String: 144])
+        writer.add(input); XCTAssertTrue(writer.startWriting()); writer.startSession(atSourceTime: .zero)
+        for frame in 3..<30 {
+            while !input.isReadyForMoreMediaData { try await Task.sleep(nanoseconds: 1_000_000) }
+            var pixel: CVPixelBuffer?
+            XCTAssertEqual(CVPixelBufferPoolCreatePixelBuffer(nil, try XCTUnwrap(adaptor.pixelBufferPool), &pixel), kCVReturnSuccess)
+            let buffer = try XCTUnwrap(pixel)
+            CVPixelBufferLockBaseAddress(buffer, [])
+            memset(CVPixelBufferGetBaseAddress(buffer), Int32(frame * 7), CVPixelBufferGetDataSize(buffer))
+            CVPixelBufferUnlockBaseAddress(buffer, [])
+            XCTAssertTrue(adaptor.append(buffer, withPresentationTime: CMTime(value: Int64(frame), timescale: 30)))
+        }
+        input.markAsFinished(); await writer.finishWriting(); XCTAssertEqual(writer.status, .completed)
+        let format = try XCTUnwrap(AVAudioFormat(standardFormatWithSampleRate: 48_000, channels: 2))
+        let audio = try XCTUnwrap(AVAudioPCMBuffer(pcmFormat: format, frameCapacity: 48_000)); audio.frameLength = 48_000
+        for ch in 0..<2 { for i in 0..<48_000 { audio.floatChannelData![ch][i] = Float(sin(Double(i) * 0.1)) * 0.25 } }
+        do { let file = try AVAudioFile(forWriting: wav, settings: format.settings); try file.write(from: audio) }
+        let before = AVURLAsset(url: movie)
+        let beforeTracks = try await before.loadTracks(withMediaType: .video)
+        let beforeTrack = try XCTUnwrap(beforeTracks.first)
+        let beforeRange = try await beforeTrack.load(.timeRange)
+        try await SecondaryCameraRecorder.attachAudio(videoURL: movie, audioURL: wav)
+        let asset = AVURLAsset(url: movie)
+        let videos = try await asset.loadTracks(withMediaType: .video)
+        let audios = try await asset.loadTracks(withMediaType: .audio)
+        let video = try XCTUnwrap(videos.first)
+        let audioTrack = try XCTUnwrap(audios.first)
+        let size = try await video.load(.naturalSize), range = try await video.load(.timeRange)
+        XCTAssertEqual(size, CGSize(width: 80, height: 144))
+        XCTAssertEqual(range.start.seconds, beforeRange.start.seconds, accuracy: 0.001)
+        let audioRange = try await audioTrack.load(.timeRange)
+        XCTAssertEqual(audioRange.start.seconds, 0, accuracy: 0.001)
+        XCTAssertGreaterThan(audioRange.duration.seconds, 0.8)
     }
 }

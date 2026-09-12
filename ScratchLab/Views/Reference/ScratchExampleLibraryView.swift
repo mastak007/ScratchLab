@@ -106,14 +106,12 @@ struct ScratchExampleLibraryView: View {
             if review.preparing { ProgressView("Checking reference files…") }
             if let player = review.referenceVideo {
                 VideoPlayer(player: player).frame(height: 270)
-            }
-            if let player = review.referenceAudio {
                 HStack {
-                    Button("Play reference audio") { review.pauseAll(); player.seek(to: .zero); player.play() }
-                    Button("Stop audio") { player.pause() }
+                    Button("Play reference") { review.pauseAll(); player.seek(to: .zero); player.play() }
+                    Button("Stop reference") { player.pause() }
                 }
             }
-            Text("Video is muted. Audio has its own playback control; synchronization between source files is unverified.")
+            Text("The selected audio plays with every camera angle.")
                 .font(.caption).foregroundStyle(.secondary)
             if !review.handFrames.isEmpty {
                 DisclosureGroup("Estimated hand paths") {
@@ -202,7 +200,6 @@ private final class ScratchExampleReviewState: ObservableObject {
     @Published var analyzing = false
     @Published var error: String?
     @Published var referenceVideo: AVPlayer?
-    @Published var referenceAudio: AVPlayer?
     @Published var takeVideo: AVPlayer?
     @Published var takeAudio: AVPlayer?
     @Published var audioURL: URL?
@@ -244,8 +241,8 @@ private final class ScratchExampleReviewState: ObservableObject {
 
     func prepareReference() {
         referenceTask?.cancel()
-        releasePlayer(referenceVideo, key: "referenceVideo"); releasePlayer(referenceAudio, key: "referenceAudio")
-        referenceVideo = nil; referenceAudio = nil; handFrames = []
+        releasePlayer(referenceVideo, key: "referenceVideo")
+        referenceVideo = nil; handFrames = []; preparing = false
         guard let library, let example,
               let angle = example.angles.first(where: { $0.id == angleID }),
               let audioID = example.audioAssetIDs[audioVariant] else { return }
@@ -254,8 +251,7 @@ private final class ScratchExampleReviewState: ObservableObject {
             do {
                 let video = try await library.verifiedURL(assetID: angle.videoAssetID)
                 let audio = try await library.verifiedURL(assetID: audioID)
-                _ = try await ScratchExampleMediaImporter.validateMedia(at: video, video: true)
-                _ = try await ScratchExampleMediaImporter.validateMedia(at: audio, video: false)
+                let item = try await ScratchExampleReferencePlayback.makePlayerItem(videoURL: video, audioURL: audio)
                 var frames: [ScratchMotionFrame] = []
                 if let cacheID = angle.handCacheAssetID {
                     let cache = try await library.verifiedURL(assetID: cacheID)
@@ -266,11 +262,9 @@ private final class ScratchExampleReviewState: ObservableObject {
                 }
                 try Task.checkCancellation()
                 guard !closed else { return }
-                let videoPlayer = AVPlayer(url: video); videoPlayer.isMuted = true
+                let videoPlayer = AVPlayer(playerItem: item)
                 referenceVideo = videoPlayer
-                let audioPlayer = AVPlayer(url: audio); referenceAudio = audioPlayer
-                observePlayback(videoPlayer, key: "referenceVideo", name: "Reference video")
-                observePlayback(audioPlayer, key: "referenceAudio", name: "Reference audio")
+                observePlayback(videoPlayer, key: "referenceVideo", name: "Reference playback")
                 handFrames = frames
                 preparing = false
             } catch is CancellationError {} catch {
@@ -392,7 +386,7 @@ private final class ScratchExampleReviewState: ObservableObject {
     }
 
     func cancelAnalysis() { analysisTask?.cancel() }
-    func pauseAll() { [referenceVideo, referenceAudio, takeVideo, takeAudio].forEach { $0?.pause() } }
+    func pauseAll() { [referenceVideo, takeVideo, takeAudio].forEach { $0?.pause() } }
     func clearTake() {
         guard !analyzing, !importing else { return }
         releasePlayer(takeVideo, key: "takeVideo"); releasePlayer(takeAudio, key: "takeAudio")
@@ -409,9 +403,9 @@ private final class ScratchExampleReviewState: ObservableObject {
     func close() {
         guard !closed else { return }
         closed = true; referenceTask?.cancel(); analysisTask?.cancel(); importTask?.cancel(); pauseAll()
-        releasePlayer(referenceVideo, key: "referenceVideo"); releasePlayer(referenceAudio, key: "referenceAudio")
+        releasePlayer(referenceVideo, key: "referenceVideo")
         releasePlayer(takeVideo, key: "takeVideo"); releasePlayer(takeAudio, key: "takeAudio")
-        referenceVideo = nil; referenceAudio = nil; takeVideo = nil; takeAudio = nil
+        referenceVideo = nil; takeVideo = nil; takeAudio = nil
         let pending = [analysisTask, importTask].compactMap { $0 }
         let directory = ownedDirectory
         Task {
@@ -440,12 +434,46 @@ private final class ScratchExampleReviewState: ObservableObject {
             let message = item.error?.localizedDescription ?? "The media could not be played."
             Task { @MainActor [weak self, weak player] in
                 guard let self, let player, !self.closed,
-                      [self.referenceVideo, self.referenceAudio, self.takeVideo, self.takeAudio].contains(where: { $0 === player }) else { return }
+                      [self.referenceVideo, self.takeVideo, self.takeAudio].contains(where: { $0 === player }) else { return }
                 self.error = "\(name): \(message)"
             }
         }
     }
 
+}
+
+/// The reference WAV is the sole soundtrack for every view of that performance.
+/// A single item keeps native play/pause/seek on one timeline, without modifying
+/// source files or inventing a camera/audio synchronization correction.
+@MainActor
+enum ScratchExampleReferencePlayback {
+    static func makePlayerItem(videoURL: URL, audioURL: URL) async throws -> AVPlayerItem {
+        try Task.checkCancellation()
+        let video = AVURLAsset(url: videoURL)
+        let audio = AVURLAsset(url: audioURL)
+        guard try await video.load(.isPlayable), try await audio.load(.isPlayable),
+              let sourceVideo = try await video.loadTracks(withMediaType: .video).first,
+              let sourceAudio = try await audio.loadTracks(withMediaType: .audio).first else {
+            throw ScratchExampleReviewError.invalid("The reference needs a playable camera video and its matching audio file.")
+        }
+        let videoDuration = try await video.load(.duration)
+        let audioDuration = try await audio.load(.duration)
+        guard videoDuration.seconds.isFinite, videoDuration.seconds > 0,
+              audioDuration.seconds.isFinite, audioDuration.seconds > 0 else {
+            throw ScratchExampleReviewError.invalid("The reference video or audio has no finite playback duration.")
+        }
+        let transform = try await sourceVideo.load(.preferredTransform)
+        try Task.checkCancellation()
+        let composition = AVMutableComposition()
+        guard let videoTrack = composition.addMutableTrack(withMediaType: .video, preferredTrackID: kCMPersistentTrackID_Invalid),
+              let audioTrack = composition.addMutableTrack(withMediaType: .audio, preferredTrackID: kCMPersistentTrackID_Invalid) else {
+            throw ScratchExampleReviewError.invalid("Could not prepare reference video and audio for playback.")
+        }
+        try videoTrack.insertTimeRange(CMTimeRange(start: .zero, duration: videoDuration), of: sourceVideo, at: .zero)
+        try audioTrack.insertTimeRange(CMTimeRange(start: .zero, duration: audioDuration), of: sourceAudio, at: .zero)
+        videoTrack.preferredTransform = transform
+        return AVPlayerItem(asset: composition)
+    }
 }
 
 private struct ScratchExampleHandPaths: View {

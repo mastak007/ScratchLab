@@ -1,71 +1,61 @@
-# CXL capture controls
+# ScratchLab CXL — capture pilot
 
-This guide covers the CXL operator capture flow. The Rane ONE MKII is the test rig; acceptance on the production Rane Seventy-Two plus Rane Twelve remains a separate run.
+This app is for recording scratch references. You can record and save now, and leave detailed review and canonical approval until later. The reference-example library is a starter set; completing or watching it is not required to capture new material.
 
-## Session Setup
+## Set up once
 
-CXL automatically prefers a connected physical Rane audio input unless you previously chose a different input yourself. Check **MIDI source** and **Audio input** before enabling capture. If you select Serato Virtual Audio by mistake, choose your Rane in **Audio input** between takes. The enabled camera/audio session reconnects automatically; you do not need to restart the app. Wait for the connection to finish before recording. If activation fails, select the correct input and press **Enable Selected Camera & Audio** again. Device selection alone does not verify the physical recording channel pair.
+1. Connect the controller and camera. Open **ScratchLab CXL** and select the actual MIDI source, camera and audio input in **Setup**.
+2. Press **Enable Selected Camera & Audio** and allow the requested camera/microphone access. Check that the camera preview moves. A single front camera at about 45 degrees is fine; frame both hands, the platter and fader clearly.
+3. Press **Load AHHH** if the sample is not loaded. Choose the intended **AHHH output**. For Mac speakers, select **Mac (system output)** and choose the Mac speakers in macOS Sound settings.
+4. Watch motion is optional. Leave **Enable iPhone & Watch Relay** off when recording without a Watch. If you choose to use it, check the Mac's connection and each take's actual motion status; the Watch's paired status alone is not proof of captured motion.
+5. Choose the technique, BPM, phrase length, starting direction, handedness and fader variant, then **Apply Authoring Setup**. Learn/calibrate the crossfader if needed; choose the correct active deck and open end. Check the live calibrated fader state before recording.
 
-| Control | What to choose or do |
-| --- | --- |
-| Capture | Choose **Movement check (no beat)** for one slow movement, or a timed canonical reference for four repetitions. |
-| Technique | Choose what you intend to perform, such as Tear. Detection does not choose it for you. |
-| Pattern ID / name | Leave the automatically filled values unless you need your own naming. |
-| Phrase length | Length of **one repetition**. One bar = four beats. Use more bars if your slow phrase needs more time; repeat it four times. |
-| BPM | Speed of the clicks and backing beat. |
-| Backing sound | Boom Bap Trainer is a straight drum pattern; Minimal Funk adds swing; Battle Loop is more forceful. Click track is metronome-only. |
-| Preview backing sound | Hear the choice before recording. Uses the Mac's selected sound output. Press Stop preview to finish. |
-| Starting direction | Your first platter movement: push forward or pull back. |
-| Handedness | The hand moving the record and wearing the Watch. |
-| Fader variant | For plain Tear, choose **Fader open throughout**. Choose a cut variant only when you actually use it. |
-| Active deck / Open end | The platter being scratched and the fader side where that deck is audible. Match your existing calibration. |
-| Apply Authoring Setup | Apply the form before Record. For timed references, ScratchLab prepares and verifies the exact backing audio. Movement checks have no backing or count-in. Setup becomes fixed when Record begins. |
+## Optional second camera
 
-Timed reference captures use a saved, verified backing asset set (runtime v2). Record checks those files again before fixing the take's capture intent and starting capture. The take keeps the identity of the audio actually played and a copy of its assets for review and export. If preparation or verification fails, resolve the displayed error before recording.
+After enabling the main camera, choose **Second camera (optional)** in Setup. For a body-and-decks view, mount the iPhone upright in portrait and select its Continuity Camera. Both devices must use the same Apple Account; a USB connection can improve connection stability. Keep the landscape main camera aimed at the hands, platter and fader. Check both previews before recording.
 
-Reuse the saved crossfader calibration when it already matches the device, MIDI address, deck and open end. Calibration applies to new recordings; it cannot repair unknown fader evidence in an older take. The [Watch crown-wake workaround](cxl_capture_run_sheets.md#watch-setup-before-the-next-pilot-capture) remains provisional; verify actual sample continuity, Stop and transfer for each acceptance take.
+Record and Stop on the Mac control both views. The second movie retains its measured timing and orientation, plays beside the main view with the take's audio, and is included in saved drafts and exports. Missing frames or an unavailable second camera are reported; they do not block the main recording. Physical alignment still needs a short two-camera recording check.
 
-Live preflight groups green checks at the top in two columns, with errors and warnings underneath. After a real platter or crossfader message arrives on the current connection, **Ready — idle** stays green when you stop moving. **Moving** describes recent activity only. Reconnecting a controller requires a new observed message; old readings cannot certify the new connection. Green readiness does not certify the contents of a recorded take.
+Do not rely on that same iPhone for uninterrupted Watch relay while it serves as a Continuity Camera. Apple requires it to stay locked; unlocking pauses the camera, and ScratchLab's relay can suspend in the background. USB does not establish reliable background relay. Use another camera when the paired iPhone must stay available for Watch relay, or capture without optional Watch motion. See [Apple's Continuity Camera instructions](https://support.apple.com/en-us/102546).
 
-A freshly recorded, calibrated fader that stays parked can now retain its observed state through Stop. This requires the same connection, mapping and calibration throughout; changing them or receiving an unresolved MIDI update leaves coverage unknown. Existing recordings with only a take-start reading are not repaired. Selecting an open position today cannot change an older take.
+## Make one short check first
 
-## Capture
+Choose **Movement check (no beat)** before applying the setup. Record a short scratch, then **Stop and Finalize**. Use **Play whole take** to check the saved picture and sound, then **Save Capture…** to export the recording. A movement check cannot become a canonical reference by approving it later.
 
-For a simple test, choose **Movement check (no beat)** and apply the setup. Press **Record movement check** directly above the video. Wait for **Recording started**, perform one slow movement, then press **Stop and Finalize**. Use **Play whole take** to review it. This mode saves diagnostic evidence and does not produce a canonical reference.
+The meter shows captured/generated audio, not proof of sound from the physical speakers or mixer. Confirm the actual sound and saved playback once. The Seventy-Two/Twelve rig needs its own input, MIDI and output check; the Rane ONE MKII pilot does not establish that rig's routing.
 
-The camera starts with left-platter, wide-mixer and right-platter boxes filling the image. These are manual framing estimates. Use **Adjust camera boxes**, drag or resize to match the equipment, then **Lock camera boxes**. **Fit full frame** restores the CXL layout. Adjustments are retained separately from the main app and are fixed during capture; the take keeps the guide snapshot in its audit metadata.
+## Capture the references
 
-The **AHHH PLAYHEAD** waveform below the camera shows the loaded ScratchLab sample and the latest rendered audio-engine position. If unloaded, press **Load AHHH**; loading itself does not audition it. Move the right platter to play. **Platter from cue** separately shows physical movement relative to the sample start, including negative positions. The playback cursor may wrap while this physical position remains continuous. The display refreshes around 25 times a second and does not compensate for speaker or interface latency.
+1. Press **New scratch**, choose **Reference take (four repetitions)**, set the technique and phrase, then **Apply Authoring Setup**.
+2. Press **Record Draft**. Follow the count-in and perform the same chosen phrase in the four timed repetition slots. The app finishes automatically after the repetitions and tail bar. Stopping early produces diagnostic evidence, not a complete four-repetition reference.
+3. Check **Play whole take**, then **Save Capture…**. Give each archive a clear name and keep it.
+4. Use **Retake this scratch** for the same setup or **New scratch** to change technique/setup. Keep spoken explanations separate from the clean scratch performance.
 
-The main meter shows ScratchLab's generated AHHH output in dBFS before and during capture. Silent means real zero-valued audio; Unavailable means no fresh output measurement. Hardware input activity remains a separate preflight check. The saved scratch WAV contains the software fader's result; the physical Rane mixer can change the sound afterward.
+## Review can wait
 
-AHHH playback uses the selected Rane ONE directly on USB3/4. Listen through the Rane to check timing. **Also hear AHHH on Mac (delayed)** enables an optional second monitor; it is off by default and cannot validate Rane timing. Disconnecting the intended Rane reports unavailable rather than silently moving playback to another device.
+Finalized drafts are saved on this Mac. **Save for Later** also saves the current review notes. Use **Saved drafts → Open for Review** on this same Mac later, keeping the original recording files and beat assets available. A raw capture ZIP is an export, not a portable importable saved draft.
 
-Beat and count-in remain on the macOS default output. Their independent Rane bus has not been verified. Use **Movement check (no beat)** for the next diagnostic: record one slow movement, Stop and Finalize on Mac, play the whole take, then save and inspect the export. Timed reference and Seventy-Two/Twelve acceptance remain pending. A valid quiet input and any known fader position allow diagnostic recording; missing Watch is advisory.
+You do not need to press **Approve Canonical Draft** to save or send a raw capture. Later approval requires a complete reference take, a selected repetition and the technique's evidence checks. No Watch is required, but a requested Watch transfer that is pending, failed or inconsistent must still be resolved. Approval never creates missing fader, movement or timing evidence.
 
-Press **Record Draft**. After four count-in clicks, perform the same phrase four times over the selected backing sound, then leave one clean tail bar. Recording stops automatically at the end of that plan. **Stop and Finalize** is still available to end a diagnostic take early.
+After approval, **Export Approved Package…** creates the separate verified reference package. **Reopen & Verify Last Export** checks that package. Approval does not publish, install or authorize model training.
 
-Wait for finalization and any pending Watch transfer before saving or moving to another take. Saved raw evidence is separate from canonical approval.
+## Scope of this pilot
 
-An unavailable Watch does not prevent a diagnostic recording; its missing motion is recorded explicitly. **Stop and Finalize** normally stops the Watch too. If the Watch remains recording, press **Stop** on the Watch once. With the updated phone and Watch apps, the phone retains a received Stop request and retries when the Watch becomes reachable. This cannot force the Watch awake or recover a command that never reached the phone. Verify Stop and motion transfer on a fresh take.
+- Includes the existing 23 starter reference examples, with matching audio for each available camera angle. It does not include every recorded performance or the rebuilt original-MKV routines.
+- Automatic detection is advisory. A question mark in notation means uncertain or missing evidence; it is not a confirmed platter pause.
+- Source-video cleanup, the unresolved Tears source discrepancy, full routine coverage and future avatar motion remain separate work.
+- Saved-draft reopening and the production rig still need an operator check on the Mac being used for capture.
 
-## Review & Export
+## Installing this candidate
 
-- **Play whole take** plays the actual recorded WAV and available video from the beginning. A missing beat-library binding does not prevent listening to your recording.
-- **Play repetition** plays only that repetition's range. **Stop playback** stops playback; it does not stop a new recording.
-- **Show notation** highlights the repetition and dims either side. **Zoom to repetition** enlarges its time range; **Whole take** restores the overview. Looking at or playing a repetition does not select it for approval.
-- **Start / End beat** adjust that repetition's review range, without changing the original media. Beat 4 is the first beat after a four-click count-in. New captures retain the measured recording offset, so review does not count those clicks twice. Older takes without that origin keep their existing ranges; use Play whole take to hear all of the old recording. A range outside the recorded take shows an explanation.
-- **Select for Approval** chooses your best repetition while the take is actively under review. **Approve Canonical Draft** requires the exact beat binding and the other evidence checks to pass. The screen lists any approval blockers separately from recorded-evidence findings; playback alone does not make a take valid.
-- **Save Capture…** preserves the raw diagnostic take independently of approval. Keep the archive even when validation reports a problem.
-- **Export Approved Package…** saves the selected reference and its supporting evidence after approval, checking the package as it is written. Approval itself does not export, publish or install anything.
+Requires macOS 15 or later. The app includes Apple silicon and Intel builds.
 
-The review uses the technique saved with that take. Tear correction controls appear only for Tear; a Chirp take has a Chirp motion review.
+Use the supplied signed app as an internal pilot. This candidate is Apple Development signed, not Developer ID notarized. Quit any existing CXL app before replacing it, retain the previous app and recordings, and keep using the same app name/location for later updates.
 
-## Another take or another scratch
+If macOS blocks this trusted candidate after you try opening it, follow Apple's app-specific **Privacy & Security → Open Anyway** instructions: [Open apps safely on your Mac](https://support.apple.com/en-gb/102445). Do not disable Gatekeeper or reset privacy permissions globally. If the Mac still rejects it, retain the exact message for diagnosis.
 
-- **Retake this scratch** keeps the technique, tempo and backing choice and returns to Capture. Press Record Draft when ready.
-- **New scratch** returns to Setup so you can choose another technique and apply its settings.
+## Choosing a scratch to capture
 
-Neither action requires approval of the previous take. Both retain its saved media and evidence, and wait while finalization, export or a Watch transfer is pending. A retained previous take is read-only but can still be played or saved.
+The Technique menu contains exactly the 23 techniques in the reference collection. Extra practice types and combo levels are excluded. Previously saved 2-Click and 3-Click Flare drafts remain readable. Collection names such as Original Flare, Tips and Reverse Cutting keep separate identities. Choose the technique, then use Pattern name and Session notes to describe the variation. The same choice is retained in saved drafts and exports.
 
-An older capture without an exact beat binding cannot acquire one afterward. Changing settings or installing this build cannot establish which audio played in that old take. Keep its raw archive and use Retake this scratch to make a new capture with verified backing assets.
+Every choice can be recorded; availability does not claim automatic recognition, verified target notation or training eligibility. New techniques keep the existing capture-integrity and operator-approval checks, without invented technique-specific cut counts. Older app builds may not read newly introduced technique identities; use this build or newer to reopen those takes.

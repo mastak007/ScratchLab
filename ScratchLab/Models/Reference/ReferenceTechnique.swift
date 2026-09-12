@@ -79,6 +79,25 @@ enum ReferenceTechnique: Codable, Equatable, Sendable, Hashable, Identifiable {
     case chirp
     case transform
     case flare(FlareClickCount)
+    case crab
+    case orbit
+    case chirpFlare
+    case cloverTears
+    case crescentFlare
+    case cutting
+    case dicing
+    case drags
+    case lazers
+    case longShortTips
+    case marches
+    case needleDropping
+    case originalFlare
+    case reverseCutting
+    case swipes
+    case tips
+    case waves
+    case zigzags
+
 
     var id: String { scratchType.rawValue }
 
@@ -89,6 +108,25 @@ enum ReferenceTechnique: Codable, Equatable, Sendable, Hashable, Identifiable {
         case .chirp: return .chirp
         case .transform: return .transform
         case .flare(let clicks): return clicks.scratchType
+        case .crab: return .crab
+        case .orbit: return .orbit
+        case .chirpFlare: return .chirpFlare
+        case .cloverTears: return .cloverTears
+        case .crescentFlare: return .crescentFlare
+        case .cutting: return .cutting
+        case .dicing: return .dicing
+        case .drags: return .drags
+        case .lazers: return .lazers
+        case .longShortTips: return .longShortTips
+        case .marches: return .marches
+        case .needleDropping: return .needleDropping
+        case .originalFlare: return .originalFlare
+        case .reverseCutting: return .reverseCutting
+        case .swipes: return .swipes
+        case .tips: return .tips
+        case .waves: return .waves
+        case .zigzags: return .zigzags
+
         }
     }
 
@@ -112,27 +150,18 @@ enum ReferenceTechnique: Codable, Equatable, Sendable, Hashable, Identifiable {
         .flare(.threeClick)
     ]
 
-    /// Every technique CXL may author a reference take for, in teaching order.
-    ///
-    /// This is the authoring picker's source. It is a superset of
-    /// `minimumRequiredSet` and confers nothing beyond the ability to RECORD a
-    /// draft: no entry here is published, installed, registered, or training
-    /// eligible by virtue of appearing in it.
-    static let authorableSet: [ReferenceTechnique] = [
-        .babyScratch,
-        .tear,
-        .chirp,
-        .transform,
-        .flare(.oneClick),
-        .flare(.twoClick),
-        .flare(.threeClick)
-    ]
+    /// CXL captures exactly the 23 techniques in the reference collection.
+    /// Legacy counted-flare drafts remain decodable even when their technique
+    /// is outside this capture menu. Recording does not confer recognition,
+    /// publication, installation or training eligibility.
+    static let authorableSet: [ReferenceTechnique] = ScratchClassLabel.allCases.map {
+        ReferenceTechnique(exampleLabel: $0)
+    }
 
     /// Recover a technique from a persisted scratch-type token.
     ///
-    /// Returns `nil` for every type outside the authorable set, including a
-    /// bare `"flare"` token — an ambiguous flare label is rejected rather than
-    /// defaulted to 1-click.
+    /// Unknown identities are rejected. A bare "flare" token still cannot
+    /// silently become a 1-click reference.
     init?(scratchType: CaptureSessionScratchType) {
         switch scratchType {
         case .babyScratch: self = .babyScratch
@@ -142,7 +171,55 @@ enum ReferenceTechnique: Codable, Equatable, Sendable, Hashable, Identifiable {
         case .flare1Click: self = .flare(.oneClick)
         case .flare2Click: self = .flare(.twoClick)
         case .flare3Click: self = .flare(.threeClick)
+        case .crab: self = .crab
+        case .orbit: self = .orbit
+        case .chirpFlare: self = .chirpFlare
+        case .cloverTears: self = .cloverTears
+        case .crescentFlare: self = .crescentFlare
+        case .cutting: self = .cutting
+        case .dicing: self = .dicing
+        case .drags: self = .drags
+        case .lazers: self = .lazers
+        case .longShortTips: self = .longShortTips
+        case .marches: self = .marches
+        case .needleDropping: self = .needleDropping
+        case .originalFlare: self = .originalFlare
+        case .reverseCutting: self = .reverseCutting
+        case .swipes: self = .swipes
+        case .tips: self = .tips
+        case .waves: self = .waves
+        case .zigzags: self = .zigzags
         default: return nil
+        }
+    }
+
+    /// Collection labels are aliases for capture identity only. They do not
+    /// assert that a model can recognise or approve a new performance.
+    init(exampleLabel: ScratchClassLabel) {
+        switch exampleLabel {
+        case .oneClickFlare: self = .flare(.oneClick)
+        case .baby: self = .babyScratch
+        case .chirpFlare: self = .chirpFlare
+        case .chirps: self = .chirp
+        case .cloverTears: self = .cloverTears
+        case .crabs: self = .crab
+        case .crescentFlare: self = .crescentFlare
+        case .cutting: self = .cutting
+        case .dicing: self = .dicing
+        case .drags: self = .drags
+        case .lazers: self = .lazers
+        case .longShortTips: self = .longShortTips
+        case .marches: self = .marches
+        case .needledropping: self = .needleDropping
+        case .orbits: self = .orbit
+        case .originalFlare: self = .originalFlare
+        case .reverseCutting: self = .reverseCutting
+        case .swipes: self = .swipes
+        case .tears: self = .tear
+        case .tips: self = .tips
+        case .transformer: self = .transform
+        case .waves: self = .waves
+        case .zigzags: self = .zigzags
         }
     }
 
@@ -266,6 +343,19 @@ extension ReferenceTechnique {
     ///   adjudicate technique.
     var defaultFaderExpectation: ReferenceFaderExpectation {
         switch self {
+        case .crab, .orbit, .chirpFlare, .cloverTears, .crescentFlare,
+             .cutting, .dicing, .drags, .lazers, .longShortTips, .marches,
+             .needleDropping, .originalFlare, .reverseCutting, .swipes, .tips,
+             .waves, .zigzags:
+            // Capture and review the real evidence without inventing an
+            // unverified technique-specific cut count or open-fader rule.
+            // Calibration, readable fader/motion, media and human approval
+            // requirements remain in force.
+            return ReferenceFaderExpectation(
+                requiresContinuouslyOpenFader: false,
+                minimumCutEventsPerRepetition: 0,
+                maximumUnknownEventRatio: 0.10
+            )
         case .babyScratch:
             return ReferenceFaderExpectation(
                 requiresContinuouslyOpenFader: true,

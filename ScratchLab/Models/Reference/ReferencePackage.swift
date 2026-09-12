@@ -45,6 +45,7 @@ struct ReferenceArtifactRecord: Codable, Equatable, Sendable, Identifiable {
         case referenceAudio
         case fullTakeAudio
         case referenceVideo
+        case secondaryVideo
         case takeSidecar
         case rawMIDI
         case platterTimeline
@@ -325,9 +326,15 @@ struct ReferencePackageManifest: Codable, Equatable, Sendable, Identifiable {
         artifacts.first { $0.role == role }
     }
 
-    var requiresExactWatchArtifact: Bool {
+    var requiresExactSourceEvidence: Bool {
         guard let beat = metadata.captureIntent?.beatSpec else { return false }
         return beat.version >= 2 && beat.id.hasPrefix("cxl_runtime_v2_")
+    }
+
+    var requiresExactWatchArtifact: Bool {
+        guard requiresExactSourceEvidence else { return false }
+        if case .linked = metadata.sourceState { return true }
+        return metadata.deviceInfo.watchLinked
     }
 
     /// Roles that must be present for a package to be importable. Video is
@@ -443,6 +450,14 @@ enum ReferencePackageValidator {
                 }
             }
         }
+        if manifest.requiresExactSourceEvidence && !manifest.requiresExactWatchArtifact {
+            if manifest.metadata.sourceState?.explicitlyOmitsWatch != true {
+                issues.append(.sourceStateInvalid(detail: "An exact CXL reference must explicitly record that optional Watch motion was not requested or unavailable."))
+            }
+            if manifest.artifact(role: .watchMotion) != nil {
+                issues.append(.sourceStateInvalid(detail: "Watch motion cannot be packaged while the source declares no Watch."))
+            }
+        }
         if manifest.requiresExactWatchArtifact {
             if case .linked(_, let fileName, let hash) = manifest.metadata.sourceState,
                let fileName, !fileName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
@@ -452,7 +467,7 @@ enum ReferencePackageValidator {
                     issues.append(.missingRequiredArtifact(role: ReferenceArtifactRecord.Role.watchMotion.rawValue))
                 }
             } else {
-                issues.append(.sourceStateInvalid(detail: "An exact CXL reference requires linked Watch identity, filename and SHA-256."))
+                issues.append(.sourceStateInvalid(detail: "An attached Watch source requires matching identity, filename and SHA-256."))
             }
         }
         if case .linked(_, _, let hash) = manifest.metadata.sourceState, let hash {

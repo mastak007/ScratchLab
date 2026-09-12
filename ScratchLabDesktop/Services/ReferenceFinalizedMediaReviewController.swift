@@ -25,6 +25,7 @@ final class ReferenceFinalizedMediaReviewController: ObservableObject {
     private var audioPlayer: AVPlayer?
     @Published private(set) var videoPlayer: AVPlayer?
     @Published private(set) var beatBindingIssue: String?
+    @Published private(set) var secondaryCameraMessage: String?
     @Published private(set) var playbackMessage: String?
     private(set) var durationSeconds: Double = 0
     private var seekTask: Task<Void, Never>?
@@ -50,6 +51,7 @@ final class ReferenceFinalizedMediaReviewController: ObservableObject {
         boundSparseAnalysisURL = nil
         beatBindingIssue = nil
         playbackMessage = nil
+        secondaryCameraMessage = nil
         durationSeconds = 0
         guard let mediaURL else {
             state = .missingAudio
@@ -108,7 +110,37 @@ final class ReferenceFinalizedMediaReviewController: ObservableObject {
                         of: sourceVideo, at: .zero)
                     videoTrack.preferredTransform = try await sourceVideo.load(.preferredTransform)
                     try Task.checkCancellation()
-                    let player = AVPlayer(playerItem: AVPlayerItem(asset: composition))
+                    let item = AVPlayerItem(asset: composition)
+                    if let sidecarURL = take.rawSidecarURL {
+                        var secondTrack: AVMutableCompositionTrack?
+                        do {
+                            let sidecar = try SessionArchiveBuilder().decodeSidecarForAudit(at: sidecarURL)
+                            if let camera = sidecar.secondaryCamera {
+                                secondaryCameraMessage = camera.detail ?? "Second camera: \(camera.deviceName) · \(camera.status.rawValue)"
+                                if let secondURL = try camera.verifiedURL(beside: mediaURL) {
+                                    let asset = AVURLAsset(url: secondURL)
+                                    if let source = try await asset.loadTracks(withMediaType: .video).first,
+                                       let track = composition.addMutableTrack(withMediaType: .video, preferredTrackID: kCMPersistentTrackID_Invalid) {
+                                        secondTrack = track
+                                        let range = try await source.load(.timeRange)
+                                        let end = CMTimeMinimum(CMTimeRangeGetEnd(range), CMTime(seconds: wavDuration, preferredTimescale: 48_000))
+                                        guard end > range.start else { throw ReviewError("Second camera has no playable overlap.") }
+                                        do {
+                                            try track.insertTimeRange(CMTimeRange(start: range.start, end: end), of: source, at: range.start)
+                                            track.preferredTransform = try await source.load(.preferredTransform)
+                                            item.videoComposition = try await Self.twoCameraComposition(primary: videoTrack, second: track,
+                                                duration: CMTime(seconds: wavDuration, preferredTimescale: 48_000), secondEnd: end)
+                                        }
+                                    }
+                                }
+                            }
+                        } catch {
+                            if let secondTrack { composition.removeTrack(secondTrack) }
+                            item.videoComposition = nil
+                            secondaryCameraMessage = "Second camera unavailable for review: \(error.localizedDescription). Main take remains playable."
+                        }
+                    }
+                    let player = AVPlayer(playerItem: item)
                     audioPlayer = player
                     videoPlayer = player
                 }
@@ -140,6 +172,38 @@ final class ReferenceFinalizedMediaReviewController: ObservableObject {
             guard generation == loadGeneration else { return }
             loadTask = nil
         }
+    }
+
+    static func twoCameraComposition(primary: AVCompositionTrack, second: AVCompositionTrack,
+        duration: CMTime, secondEnd: CMTime) async throws -> AVVideoComposition {
+        let composition = AVMutableVideoComposition()
+        composition.renderSize = CGSize(width: 1688, height: 720)
+        composition.frameDuration = CMTime(value: 1, timescale: 30)
+        let instruction = AVMutableVideoCompositionInstruction()
+        instruction.timeRange = CMTimeRange(start: .zero, duration: duration)
+        var layers: [AVVideoCompositionLayerInstruction] = []
+        for (track, rect) in [(primary, CGRect(x: 0, y: 0, width: 1280, height: 720)),
+                              (second, CGRect(x: 1280, y: 0, width: 408, height: 720))] {
+            let size = try await track.load(.naturalSize)
+            let transform = try await track.load(.preferredTransform)
+            let layer = AVMutableVideoCompositionLayerInstruction(assetTrack: track)
+            layer.setTransform(Self.aspectFitTransform(size: size, transform: transform, in: rect), at: .zero)
+            if track === second { layer.setOpacity(0, at: secondEnd) }
+            layers.append(layer)
+        }
+        instruction.layerInstructions = layers
+        composition.instructions = [instruction]
+        return composition
+    }
+
+    static func aspectFitTransform(size: CGSize, transform: CGAffineTransform, in rect: CGRect) -> CGAffineTransform {
+        let bounds = CGRect(origin: .zero, size: size).applying(transform)
+        guard bounds.width > 0, bounds.height > 0 else { return transform }
+        let scale = min(rect.width / bounds.width, rect.height / bounds.height)
+        return transform.concatenating(CGAffineTransform(translationX: -bounds.minX, y: -bounds.minY))
+            .concatenating(CGAffineTransform(scaleX: scale, y: scale))
+            .concatenating(CGAffineTransform(translationX: rect.minX + (rect.width - bounds.width * scale) / 2,
+                                           y: rect.minY + (rect.height - bounds.height * scale) / 2))
     }
 
     var canPlay: Bool {

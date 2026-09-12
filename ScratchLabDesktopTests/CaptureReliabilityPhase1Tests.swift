@@ -24132,6 +24132,7 @@ final class ReferencePackageIORoundTripTests: XCTestCase {
         case .notationEvidence: return "notation/evidence.json"
         case .validationReport: return "validation/report.json"
         case .referenceVideo: return "video/reference.mov"
+        case .secondaryVideo: return "video/second_camera.mov"
         case .beatProductionMaster: return "beat/production_master.wav"
         case .beatSparseAnalysis: return "beat/sparse_analysis.wav"
         case .beatManifest: return "beat/manifest.json"

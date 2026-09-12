@@ -1075,7 +1075,7 @@ final class ReferenceAuthoringSessionTests: XCTestCase {
     /// Media can finalize while the wrist evidence goes missing. That take
     /// must never become approvable — a reference with no wrist data is not
     /// the thing this workflow produces.
-    func testATakeWithNoLinkedWatchMotionCannotBeApproved() throws {
+    func testOptionalWatchAbsenceDoesNotRemoveRepetitionSelectionRequirement() throws {
         var session = makeConfiguredSession()
         try calibrateSession(&session)
         let hooks = ReferenceAuthoringRecordingHooks(
@@ -1093,17 +1093,15 @@ final class ReferenceAuthoringSessionTests: XCTestCase {
         _ = session.beginRecording(using: hooks)
         let report = try session.finishRecording(using: hooks).get()
         XCTAssertFalse(report.passes)
-        XCTAssertTrue(
-            report.failureMessages.contains { $0.contains("no linked Apple Watch motion") },
-            report.failureMessages.description
-        )
+        XCTAssertTrue(report.warnings.contains(.watchEvidenceMissing))
+        XCTAssertTrue(report.failureMessages.contains { $0.contains("No repetition") })
         session.selectRepetitionForApproval(1)
         session.revalidateTakeInReview()
-        XCTAssertThrowsError(try session.approveTakeInReview(notes: ""))
+        XCTAssertNoThrow(try session.approveTakeInReview(notes: ""))
         XCTAssertEqual(
             session.takes.last?.evidence.metadata.lifecycleState,
-            .draft,
-            "A take that cannot be approved must stay a draft."
+            .approvedCanonical,
+            "An otherwise valid selected reference does not require optional wrist motion."
         )
     }
 
@@ -1125,11 +1123,12 @@ final class ReferenceAuthoringSessionTests: XCTestCase {
 
     func testDiagnosticTakeRecordsWithAClosedFaderQuietAudioAndNoWatch() throws {
         var session = makeConfiguredSession()
+        session.selectCapturePurpose(.movementCheck)
         try calibrateSession(&session)
         var startCount = 0
         let hooks = ReferenceAuthoringRecordingHooks(
             startRecording: { startCount += 1; return .success(()) },
-            stopRecording: { .success(self.goodArtifacts(watchEvidence: .missing(syncState: "unavailable"))) },
+            stopRecording: { .success(self.goodArtifacts(crossfaderStaysOpen: false, watchEvidence: .missing(syncState: "unavailable"))) },
             currentPreflightSnapshot: { self.watchUnreachableSnapshot(rawValue: 52, audioPeak: 0) },
             latestCalibrationObservation: { nil }
         )
@@ -1143,6 +1142,25 @@ final class ReferenceAuthoringSessionTests: XCTestCase {
         session.selectRepetitionForApproval(1)
         XCTAssertFalse(session.canApproveTakeInReview(), "Diagnostic capture must not imply canonical eligibility.")
         XCTAssertNotNil(session.approvalBlockReason())
+    }
+
+    func testReferenceCanBeApprovedWithoutOptionalWatchAndKeepsAbsence() throws {
+        var session = makeConfiguredSession()
+        try calibrateSession(&session)
+        let hooks = ReferenceAuthoringRecordingHooks(
+            startRecording: { .success(()) },
+            stopRecording: { .success(self.goodArtifacts(watchEvidence: .missing(syncState: "notRequested"),
+                sourceState: .notRequested(policy: "Optional wrist motion not requested"))) },
+            currentPreflightSnapshot: { self.passingSnapshot() }, latestCalibrationObservation: { nil })
+        try session.beginRecording(using: hooks).get()
+        _ = try session.finishRecording(using: hooks).get()
+        session.selectRepetitionForApproval(1)
+        XCTAssertNil(session.approvalBlockReason())
+        try session.approveTakeInReview(notes: "Scratch reference without wrist motion")
+        let take = try XCTUnwrap(session.takes.last)
+        XCTAssertEqual(take.evidence.metadata.lifecycleState, .approvedCanonical)
+        XCTAssertFalse(take.evidence.metadata.deviceInfo.watchLinked)
+        XCTAssertEqual(take.evidence.watchEvidence, .missing(syncState: "notRequested"))
     }
 
     // MARK: - Watch transfer completes after macOS finalization (D1)

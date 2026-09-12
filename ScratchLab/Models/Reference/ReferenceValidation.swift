@@ -56,6 +56,7 @@ enum ReferenceValidationFinding: Equatable, Sendable {
     case faderOpenStateUnknown(technique: String, detail: String)
     case platterEvidenceMissing
     case watchEvidenceMissing
+    case watchEvidenceStateInconsistent
     /// The Watch acknowledged and stopped for this exact take, but its motion
     /// file has not finished transferring yet. Distinct from missing: waiting
     /// is a state that resolves, absence is not.
@@ -94,6 +95,8 @@ enum ReferenceValidationFinding: Equatable, Sendable {
 
     var severity: ReferenceValidationSeverity {
         switch self {
+        case .watchEvidenceMissing:
+            return .warning
         case .programAudioSilent:
             // A silent program stem is always fatal: the whole point of a
             // reference is the audio the learner copies.
@@ -143,7 +146,9 @@ enum ReferenceValidationFinding: Equatable, Sendable {
         case .platterEvidenceMissing:
             return "No platter movement was recorded for this take. Check the platter MIDI mapping, then re-record."
         case .watchEvidenceMissing:
-            return "This take carries no linked Apple Watch motion, so its wrist evidence is absent. A canonical reference must be recorded with the paired Watch acknowledged and linked; re-record with the Watch capture running."
+            return "No Watch motion was captured. Watch is optional for scratch reference approval; this take has no wrist-motion evidence."
+        case .watchEvidenceStateInconsistent:
+            return "Watch evidence and its recorded source state disagree. Resolve the source identity before approval."
         case .watchEvidenceTransferPending:
             return "The Apple Watch acknowledged and stopped for this take, but its motion file has not finished transferring yet. Wait for the transfer to complete; approval stays blocked until the matching wrist evidence has landed."
         case .watchEvidenceTransferFailed(let detail):
@@ -297,6 +302,11 @@ enum ReferenceWatchEvidence: Codable, Equatable, Sendable {
     /// No Watch association at all — the start was never acknowledged, or no
     /// Watch was involved.
     case missing(syncState: String)
+
+    var isAbsent: Bool {
+        if case .missing = self { return true }
+        return false
+    }
 
     var isLinked: Bool {
         if case .linked = self { return true }
@@ -761,11 +771,9 @@ enum ReferenceValidator {
         if expectation.requiresPlatterMotion, evidence.platterMovementEventCount <= 0 {
             findings.append(.platterEvidenceMissing)
         }
-        // Watch motion is REQUIRED evidence for a canonical reference. The
-        // states are kept apart deliberately: a transfer still in flight is
-        // not the same as wrist data that never existed, and reporting the
-        // first as the second made every acknowledged take look failed at
-        // finalization (2026-09-05 take-003).
+        // Watch is optional for ordinary scratch references. Missing motion
+        // remains visible; attempted, conflicting or partial linkage never
+        // becomes an implicit opt-out from source integrity checks.
         switch evidence.watchEvidence {
         case .linked:
             break
@@ -777,6 +785,10 @@ enum ReferenceValidator {
             findings.append(.watchEvidenceIdentityMismatch(expected: expected, found: found))
         case .missing:
             findings.append(.watchEvidenceMissing)
+            if evidence.metadata.deviceInfo.watchLinked
+                || evidence.metadata.sourceState.map({ !$0.explicitlyOmitsWatch }) == true {
+                findings.append(.watchEvidenceStateInconsistent)
+            }
         }
         if let derivation = evidence.derivation, !derivation.events.isEmpty {
             let ratio = derivation.unknownEventRatio

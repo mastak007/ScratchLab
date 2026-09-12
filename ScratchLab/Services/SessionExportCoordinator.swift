@@ -3244,6 +3244,14 @@ struct SessionArchiveBuilder: Sendable {
                 .appendingPathComponent("notation", isDirectory: true)
                 .appendingPathComponent(takeContext.notationFileName)
             try fileManager.copyItem(at: takeContext.take.mediaURL, to: videoURL)
+            if let camera = takeContext.sidecar.secondaryCamera {
+                if let secondURL = try camera.verifiedURL(beside: takeContext.take.mediaURL) {
+                    try fileManager.copyItem(at: secondURL, to: SecondaryCameraEvidence.url(beside: videoURL))
+                }
+                let encoder = JSONEncoder()
+                encoder.outputFormatting = [.sortedKeys, .prettyPrinted]
+                try encoder.encode(camera).write(to: videoURL.deletingPathExtension().appendingPathExtension("second-camera.json"), options: .atomic)
+            }
             guard let audioArtifactURL = takeContext.take.audioArtifactURL else {
                 throw SessionExportError.missingRequiredFiles
             }
@@ -5855,6 +5863,13 @@ struct SessionArchiveBuilder: Sendable {
             "scratch_only": context.scratchOnlyRelativePath,
             "notation": "notation/\(context.notationFileName)"
         ]
+        if let camera = context.sidecar.secondaryCamera {
+            let primary = URL(fileURLWithPath: context.videoFileName)
+            files["camB_metadata"] = "video/" + primary.deletingPathExtension().appendingPathExtension("second-camera.json").lastPathComponent
+            if try camera.verifiedURL(beside: context.take.mediaURL) != nil {
+                files["camB"] = "video/" + SecondaryCameraEvidence.url(beside: primary).lastPathComponent
+            }
+        }
         if let evidence = context.referenceTearEvidence {
             files["reference_tear_evidence"] = "notation/\(evidence.fileName)"
         }
@@ -5910,6 +5925,17 @@ struct SessionArchiveBuilder: Sendable {
             fileURL: context.take.mediaURL,
             stagedURL: videoTargetURL
         )
+
+        if let camera = context.sidecar.secondaryCamera {
+            let encoder = JSONEncoder()
+            encoder.outputFormatting = [.sortedKeys, .prettyPrinted]
+            artifacts["camB_metadata"] = try artifactRecord(source: "camB_metadata", generatedData: encoder.encode(camera),
+                stagedURL: videoTargetURL.deletingPathExtension().appendingPathExtension("second-camera.json"))
+            if let secondURL = try camera.verifiedURL(beside: context.take.mediaURL) {
+                artifacts["camB"] = try artifactRecord(source: "camB", fileURL: secondURL,
+                    stagedURL: SecondaryCameraEvidence.url(beside: videoTargetURL))
+            }
+        }
 
         guard let audioArtifactURL = context.take.audioArtifactURL else {
             throw SessionExportError.missingRequiredFiles
@@ -6019,6 +6045,14 @@ struct SessionArchiveBuilder: Sendable {
     ) throws -> [String: SessionExportProbeValue] {
         // JSON evidence is always validated, including media-fixture overrides.
         // The generic unknown-artifact rejection remains unchanged.
+        if source == "camB_metadata" {
+            guard let generatedData else { throw SessionExportError.missingRequiredFiles }
+            guard let camera = try? JSONDecoder().decode(SecondaryCameraEvidence.self, from: generatedData),
+                  camera.status != .recording else {
+                throw SessionExportError.invalidSessionMetadata
+            }
+            return ["kind": .string("json")]
+        }
         if source == "reference_tear_evidence" {
             guard let generatedData else { throw SessionExportError.missingRequiredFiles }
             do {
@@ -6039,7 +6073,7 @@ struct SessionArchiveBuilder: Sendable {
             return try artifactProbeOverride(overrideSource, fileURL, generatedData)
         }
         switch source {
-        case "camA":
+        case "camA", "camB":
             guard let fileURL else { throw SessionExportError.missingRequiredFiles }
             return try probeVideo(url: fileURL)
         case "serato", "scratch_only", "beat_only", "scratch_with_beat", "raw_original":
