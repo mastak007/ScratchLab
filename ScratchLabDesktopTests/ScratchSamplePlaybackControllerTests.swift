@@ -1,5 +1,6 @@
 import XCTest
 import AVFoundation
+import CoreAudio
 @testable import ScratchLab
 
 /// ScratchSamplePlaybackController tests.
@@ -127,6 +128,92 @@ final class ScratchSamplePlaybackControllerTests: XCTestCase {
         XCTAssertGreaterThan(unloaded.generation, reloaded.generation)
         XCTAssertNil(unloaded.sampleID)
         XCTAssertNil(unloaded.peak)
+    }
+
+    // MARK: - Real engine output routes (uses this Mac's audio devices; skips when absent)
+
+    /// The direct Mac route is System Default. Without scheduled PCM, real
+    /// silent callbacks must read as fresh zero, never as unavailable, and
+    /// unloading must return to unavailable under a newer generation.
+    func testSystemDefaultRouteMetersFreshSilentCallbacksAndClearsOnUnload() throws {
+        guard MacScratchOutputRoute.defaultOutputDeviceID() != nil else { throw XCTSkip("No system output device.") }
+        let controller = ScratchSamplePlaybackController()
+        controller.setPreferredOutputDevice(deviceID: nil, deviceName: "System Default")
+        XCTAssertTrue(controller.load(sampleID: "dvs_ahhh", playDiagnosticPreview: false))
+        controller.waitForAudioQueue()
+        XCTAssertEqual(controller.outputRoutingSnapshot().status, "ready")
+        let observed = Self.sampleOutputMeter(controller, seconds: 1.5)
+        XCTAssertEqual(observed.peaks.last ?? nil, 0, "Silent System Default callbacks must read as silence.")
+        XCTAssertTrue(observed.peaks.allSatisfy { $0 == nil || $0 == 0 }, "No PCM was scheduled.")
+        XCTAssertGreaterThan(observed.receipts.count, 5, "The post-fader tap must deliver on the Mac route.")
+        let gaps = zip(observed.receipts.dropFirst(), observed.receipts).map { $0 - $1 }
+        XCTAssertLessThanOrEqual(gaps.max() ?? 0, ScratchOutputPeakMeter.freshnessInterval,
+            "Tap cadence on the Mac route must stay inside the meter freshness window.")
+        let loaded = controller.currentScratchOutputMeterSnapshot()
+        controller.unload()
+        controller.waitForAudioQueue()
+        let unloaded = controller.currentScratchOutputMeterSnapshot()
+        XCTAssertNil(unloaded.peak)
+        XCTAssertNil(unloaded.sampleID)
+        XCTAssertGreaterThan(unloaded.generation, loaded.generation)
+    }
+
+    /// Rebinding from an explicit device (the Rane path) to System Default (the
+    /// Mac path) keeps the actual post-fader meter available and never carries
+    /// an earlier generated peak across the route change. Uses the inaudible
+    /// Serato Virtual Audio output for the explicit device when present.
+    func testExplicitDeviceToSystemDefaultRebindKeepsMeterAvailableWithoutStalePeak() throws {
+        guard MacScratchOutputRoute.defaultOutputDeviceID() != nil,
+              let virtualID = Self.outputDevice(named: "Serato Virtual Audio"),
+              MacScratchOutputRoute.defaultOutputDeviceID() != virtualID,
+              let virtualUID = MacScratchOutputRoute.deviceUID(virtualID) else {
+            throw XCTSkip("Requires a system output plus the Serato Virtual Audio output.")
+        }
+        let controller = ScratchSamplePlaybackController()
+        controller.setPreferredOutputDevice(deviceID: virtualID, deviceName: "Serato Virtual Audio", expectedDeviceUID: virtualUID)
+        XCTAssertTrue(controller.load(sampleID: "dvs_ahhh", playDiagnosticPreview: true))
+        controller.waitForAudioQueue()
+        let explicit = Self.sampleOutputMeter(controller, seconds: 1.0)
+        XCTAssertEqual(controller.outputRoutingSnapshot().primaryDeviceName, "Serato Virtual Audio")
+        XCTAssertTrue(explicit.peaks.contains { ($0 ?? 0) > 0 }, "Generated preview PCM must reach the meter.")
+        for _ in 0..<2 {
+            controller.setPreferredOutputDevice(deviceID: nil, deviceName: "System Default")
+            controller.waitForAudioQueue()
+            let direct = Self.sampleOutputMeter(controller, seconds: 1.0)
+            XCTAssertEqual(controller.outputRoutingSnapshot().status, "ready")
+            XCTAssertNotEqual(controller.outputRoutingSnapshot().primaryDeviceName, "Serato Virtual Audio")
+            XCTAssertEqual(direct.peaks.last ?? nil, 0, "The direct Mac route must meter after rebinding.")
+            XCTAssertFalse(direct.peaks.contains { ($0 ?? 0) > 0 }, "No earlier generated peak survives the rebind.")
+            controller.setPreferredOutputDevice(deviceID: virtualID, deviceName: "Serato Virtual Audio", expectedDeviceUID: virtualUID)
+            controller.waitForAudioQueue()
+            XCTAssertEqual(Self.sampleOutputMeter(controller, seconds: 0.6).peaks.last ?? nil, 0)
+        }
+        controller.unload()
+        controller.waitForAudioQueue()
+    }
+
+    private static func sampleOutputMeter(_ controller: ScratchSamplePlaybackController,
+        seconds: TimeInterval) -> (peaks: [Float?], receipts: [TimeInterval]) {
+        var peaks: [Float?] = []
+        var receipts: [TimeInterval] = []
+        let start = CACurrentMediaTime()
+        while CACurrentMediaTime() - start < seconds {
+            let snapshot = controller.currentScratchOutputMeterSnapshot()
+            peaks.append(snapshot.peak)
+            if let receivedAt = snapshot.receivedAt, receipts.last != receivedAt { receipts.append(receivedAt) }
+            Thread.sleep(forTimeInterval: 0.01)
+        }
+        return (peaks, receipts)
+    }
+
+    private static func outputDevice(named name: String) -> AudioDeviceID? {
+        var address = AudioObjectPropertyAddress(mSelector: kAudioHardwarePropertyDevices,
+            mScope: kAudioObjectPropertyScopeGlobal, mElement: kAudioObjectPropertyElementMain)
+        var size: UInt32 = 0
+        guard AudioObjectGetPropertyDataSize(AudioObjectID(kAudioObjectSystemObject), &address, 0, nil, &size) == noErr else { return nil }
+        var ids = [AudioDeviceID](repeating: 0, count: Int(size) / MemoryLayout<AudioDeviceID>.size)
+        guard AudioObjectGetPropertyData(AudioObjectID(kAudioObjectSystemObject), &address, 0, nil, &size, &ids) == noErr else { return nil }
+        return ids.first { MacScratchOutputRoute.deviceName($0) == name }
     }
 
     private func makeOutputMeterBuffer() throws -> AVAudioPCMBuffer {
