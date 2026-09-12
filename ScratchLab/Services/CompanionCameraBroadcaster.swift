@@ -3,6 +3,7 @@ import AVFoundation
 import UIKit
 import MultipeerConnectivity
 import CoreImage
+import Network
 
 final class CompanionCameraBroadcaster: NSObject, ObservableObject {
     enum CameraPosition: String, CaseIterable, Identifiable {
@@ -180,6 +181,7 @@ final class CompanionCameraBroadcaster: NSObject, ObservableObject {
     let captureSession = AVCaptureSession()
 
     private let serviceType = "scrcamfeed"
+    private let directServiceType = "_scrcamfeed._tcp"
     private let peerID = MCPeerID(displayName: UIDevice.current.name)
     private lazy var session = MCSession(peer: peerID, securityIdentity: nil, encryptionPreference: .required)
     private lazy var advertiser = MCNearbyServiceAdvertiser(
@@ -198,6 +200,10 @@ final class CompanionCameraBroadcaster: NSObject, ObservableObject {
     /// that acknowledgement behind the video pipeline and is why the Mac's stop
     /// handshake timed out while the watch had in fact already stopped.
     private let controlQueue = DispatchQueue(label: "scratchlab.companion.control")
+    private let relayQueue = DispatchQueue(label: "scratchlab.companion.relay")
+    private let directConnectionLock = NSLock()
+    private var directListener: NWListener?
+    private var directConnection: NWConnection?
     private let videoOutput = AVCaptureVideoDataOutput()
     private let movieOutput = AVCaptureMovieFileOutput()
     private let ciContext = CIContext()
@@ -249,7 +255,7 @@ final class CompanionCameraBroadcaster: NSObject, ObservableObject {
     func startRelayAdvertisingIfNeeded() {
         guard !isAdvertising else { return }
         isAdvertising = true
-        advertiser.startAdvertisingPeer()
+        startDirectRelayListener()
     }
 
     func stopCaptureServices() {
@@ -273,6 +279,9 @@ final class CompanionCameraBroadcaster: NSObject, ObservableObject {
     func stop() {
         stopCaptureServices()
         advertiser.stopAdvertisingPeer()
+        directListener?.cancel()
+        directListener = nil
+        replaceDirectConnection(nil)
         isAdvertising = false
     }
 
@@ -355,7 +364,7 @@ final class CompanionCameraBroadcaster: NSObject, ObservableObject {
 
     func sendWatchCaptureSession(_ captureSession: WatchMotionCaptureSession, fileName: String) {
         captureQueue.async {
-            guard !self.session.connectedPeers.isEmpty else {
+            guard self.hasConnectedRelay else {
                 #if DEBUG
                 print("[WATCH-DEBUG] transfer failed/retrying — no Mac peer connected, sessionID=\(captureSession.sessionID) takeID=\(captureSession.takeID ?? "nil") id=\(captureSession.id)")
                 #endif
@@ -368,11 +377,9 @@ final class CompanionCameraBroadcaster: NSObject, ObservableObject {
             print("[WATCH-DEBUG] forwarding watch file to Mac sessionID=\(captureSession.sessionID) takeID=\(captureSession.takeID ?? "nil") id=\(captureSession.id)")
             #endif
 
-            do {
-                try self.session.send(encoded, toPeers: self.session.connectedPeers, with: .reliable)
-            } catch {
+            if !self.sendRelayPacket(encoded, reliability: .reliable) {
                 #if DEBUG
-                print("[WATCH-DEBUG] transfer failed/retrying — forward to Mac failed: \(error.localizedDescription) id=\(captureSession.id)")
+                print("[WATCH-DEBUG] transfer failed/retrying — forward to Mac failed id=\(captureSession.id)")
                 #endif
                 DispatchQueue.main.async {
                     self.connectionStatus = "Unable to relay watch motion to Mac. Check connection."
@@ -383,14 +390,12 @@ final class CompanionCameraBroadcaster: NSObject, ObservableObject {
 
     func sendWatchMotionBatch(_ batch: WatchMotionRelayBatch) {
         captureQueue.async {
-            guard !self.session.connectedPeers.isEmpty,
+            guard self.hasConnectedRelay,
                   let encoded = try? PropertyListEncoder().encode(batch) else { return }
-            do {
-                // Five small batches per second is low enough for reliable delivery, and a
-                // missing sequence prevents the Mac assembler from producing an exportable
-                // Watch artifact. Capture integrity is more important than shaving latency.
-                try self.session.send(encoded, toPeers: self.session.connectedPeers, with: .reliable)
-            } catch {
+            // Five small batches per second is low enough for reliable delivery, and a
+            // missing sequence prevents the Mac assembler from producing an exportable
+            // Watch artifact. Capture integrity is more important than shaving latency.
+            if !self.sendRelayPacket(encoded, reliability: .reliable) {
                 DispatchQueue.main.async {
                     self.connectionStatus = "Live watch motion relay was interrupted."
                 }
@@ -404,10 +409,10 @@ final class CompanionCameraBroadcaster: NSObject, ObservableObject {
         detail: String?
     ) {
         controlQueue.async {
-            guard !self.session.connectedPeers.isEmpty else { return }
+            guard self.hasConnectedRelay else { return }
             let packet = WatchRelayLifecyclePacket(event: event, context: context, detail: detail)
             guard let encoded = try? PropertyListEncoder().encode(packet) else { return }
-            try? self.session.send(encoded, toPeers: self.session.connectedPeers, with: .reliable)
+            _ = self.sendRelayPacket(encoded, reliability: .reliable)
         }
     }
 
@@ -455,7 +460,7 @@ final class CompanionCameraBroadcaster: NSObject, ObservableObject {
     /// the Mac, so macOS never has to (and never does) infer reachability merely from pairing.
     func sendWatchAvailability(isPaired: Bool, isInstalled: Bool, isReachable: Bool) {
         controlQueue.async {
-            guard !self.session.connectedPeers.isEmpty else { return }
+            guard self.hasConnectedRelay else { return }
             let packet = WatchAvailabilityPacket(isPaired: isPaired, isInstalled: isInstalled, isReachable: isReachable)
             guard let encoded = try? PropertyListEncoder().encode(packet) else { return }
 
@@ -463,11 +468,9 @@ final class CompanionCameraBroadcaster: NSObject, ObservableObject {
             print("[WATCH-DEBUG] forwarding watch availability to Mac paired=\(isPaired) installed=\(isInstalled) reachable=\(isReachable)")
             #endif
 
-            do {
-                try self.session.send(encoded, toPeers: self.session.connectedPeers, with: .reliable)
-            } catch {
+            if !self.sendRelayPacket(encoded, reliability: .reliable) {
                 #if DEBUG
-                print("[WATCH-DEBUG] transfer failed/retrying — forward watch availability to Mac failed: \(error.localizedDescription)")
+                print("[WATCH-DEBUG] transfer failed/retrying — forward watch availability to Mac failed")
                 #endif
             }
         }
@@ -475,13 +478,11 @@ final class CompanionCameraBroadcaster: NSObject, ObservableObject {
 
     func sendWatchControlStatus(_ reply: WatchCaptureControlReply) {
         controlQueue.async {
-            guard !self.session.connectedPeers.isEmpty else { return }
+            guard self.hasConnectedRelay else { return }
             let packet = WatchControlStatusPacket(reply: reply)
             guard let encoded = try? PropertyListEncoder().encode(packet) else { return }
 
-            do {
-                try self.session.send(encoded, toPeers: self.session.connectedPeers, with: .reliable)
-            } catch {
+            if !self.sendRelayPacket(encoded, reliability: .reliable) {
                 DispatchQueue.main.async {
                     self.connectionStatus = "Unable to relay watch status to Mac. Check connection."
                 }
@@ -879,7 +880,7 @@ final class CompanionCameraBroadcaster: NSObject, ObservableObject {
     }
 
     private func sendFrame(_ sampleBuffer: CMSampleBuffer) {
-        guard !session.connectedPeers.isEmpty else { return }
+        guard hasConnectedRelay else { return }
 
         let now = CACurrentMediaTime()
         guard now - lastSentFrameTime >= previewFrameInterval else { return }
@@ -915,15 +916,200 @@ final class CompanionCameraBroadcaster: NSObject, ObservableObject {
 
             guard let encoded = try? PropertyListEncoder().encode(packet) else { return }
 
-            do {
-                try session.send(encoded, toPeers: session.connectedPeers, with: .unreliable)
+            if self.sendRelayPacket(encoded, reliability: .unreliable) {
                 DispatchQueue.main.async {
                     self.isBroadcasting = true
                 }
-            } catch {
+            } else {
                 DispatchQueue.main.async {
                     self.connectionStatus = "Unable to send video. Check connection."
                 }
+            }
+        }
+    }
+
+    private var hasConnectedRelay: Bool {
+        directConnectionLock.lock()
+        let hasDirectConnection = directConnection != nil
+        directConnectionLock.unlock()
+        return hasDirectConnection || !session.connectedPeers.isEmpty
+    }
+
+    private func replaceDirectConnection(_ connection: NWConnection?) {
+        directConnectionLock.lock()
+        let previous = directConnection
+        directConnection = connection
+        directConnectionLock.unlock()
+        if previous !== connection {
+            previous?.cancel()
+        }
+    }
+
+    private func directConnectionSnapshot() -> NWConnection? {
+        directConnectionLock.lock()
+        defer { directConnectionLock.unlock() }
+        return directConnection
+    }
+
+    private func startDirectRelayListener() {
+        do {
+            let parameters = NWParameters.tcp
+            parameters.includePeerToPeer = true
+            let listener = try NWListener(using: parameters)
+            listener.service = NWListener.Service(
+                name: UIDevice.current.name,
+                type: directServiceType
+            )
+            listener.stateUpdateHandler = { [weak self, weak listener] state in
+                guard let self, let listener else { return }
+                switch state {
+                case .ready:
+                    DispatchQueue.main.async {
+                        if self.connectedPeerNames.isEmpty {
+                            self.connectionStatus = "Waiting for ScratchLab CXL"
+                        }
+                    }
+                case .failed(let error):
+                    DispatchQueue.main.async {
+                        self.connectionStatus = "Unable to start companion relay: \(error.localizedDescription)"
+                    }
+                    listener.cancel()
+                default:
+                    break
+                }
+            }
+            listener.newConnectionHandler = { [weak self] connection in
+                self?.acceptDirectConnection(connection)
+            }
+            directListener = listener
+            listener.start(queue: relayQueue)
+        } catch {
+            connectionStatus = "Unable to start companion relay: \(error.localizedDescription)"
+        }
+    }
+
+    private func acceptDirectConnection(_ connection: NWConnection) {
+        replaceDirectConnection(connection)
+        connection.stateUpdateHandler = { [weak self, weak connection] state in
+            guard let self, let connection else { return }
+            switch state {
+            case .ready:
+                let peerName = self.directPeerName(connection.endpoint)
+                DispatchQueue.main.async {
+                    self.connectedPeerNames = [peerName]
+                    self.connectionStatus = self.isRunning
+                        ? "Streaming \(self.selectedCameraPosition.title.lowercased()) camera to \(peerName)"
+                        : "Watch relay connected to \(peerName)"
+                }
+                self.receiveDirectPacketLength(on: connection, peerName: peerName)
+            case .failed, .cancelled:
+                if self.directConnectionSnapshot() === connection {
+                    self.replaceDirectConnection(nil)
+                    DispatchQueue.main.async {
+                        self.connectedPeerNames = []
+                        self.isBroadcasting = false
+                        self.connectionStatus = "Waiting for ScratchLab CXL"
+                    }
+                }
+            default:
+                break
+            }
+        }
+        connection.start(queue: relayQueue)
+    }
+
+    private func directPeerName(_ endpoint: NWEndpoint) -> String {
+        if case .hostPort(let host, _) = endpoint {
+            return host.debugDescription
+        }
+        return "ScratchLab CXL"
+    }
+
+    private func receiveDirectPacketLength(on connection: NWConnection, peerName: String) {
+        connection.receive(minimumIncompleteLength: 4, maximumLength: 4) { [weak self, weak connection] data, _, isComplete, error in
+            guard let self, let connection else { return }
+            guard error == nil, !isComplete, let data, data.count == 4 else {
+                connection.cancel()
+                return
+            }
+            let length = data.withUnsafeBytes { rawBuffer in
+                Int(UInt32(bigEndian: rawBuffer.loadUnaligned(as: UInt32.self)))
+            }
+            guard length > 0, length <= 16_000_000 else {
+                connection.cancel()
+                return
+            }
+            self.receiveDirectPacketBody(length: length, on: connection, peerName: peerName)
+        }
+    }
+
+    private func receiveDirectPacketBody(length: Int, on connection: NWConnection, peerName: String) {
+        connection.receive(minimumIncompleteLength: length, maximumLength: length) { [weak self, weak connection] data, _, isComplete, error in
+            guard let self, let connection else { return }
+            guard error == nil, !isComplete, let data, data.count == length else {
+                connection.cancel()
+                return
+            }
+            self.session(
+                self.session,
+                didReceive: data,
+                fromPeer: MCPeerID(displayName: peerName)
+            )
+            self.receiveDirectPacketLength(on: connection, peerName: peerName)
+        }
+    }
+
+    private func sendRelayPacket(_ data: Data, reliability: MCSessionSendDataMode) -> Bool {
+        if let connection = directConnectionSnapshot() {
+            guard data.count <= Int(UInt32.max) else { return false }
+            var length = UInt32(data.count).bigEndian
+            var framed = Data(bytes: &length, count: MemoryLayout<UInt32>.size)
+            framed.append(data)
+            connection.send(content: framed, completion: .contentProcessed { [weak self] error in
+                guard error != nil else { return }
+                DispatchQueue.main.async {
+                    self?.connectionStatus = "Companion relay connection was interrupted."
+                }
+            })
+            return true
+        }
+
+        guard !session.connectedPeers.isEmpty else { return false }
+        do {
+            try session.send(data, toPeers: session.connectedPeers, with: reliability)
+            return true
+        } catch {
+            return false
+        }
+    }
+
+    private func handleReceivedRelayPacket(_ data: Data) {
+        if let commandPacket = try? PropertyListDecoder().decode(WatchControlCommandPacket.self, from: data),
+           commandPacket.payload.kind == WatchCaptureCommandPayload.packetKind {
+            DispatchQueue.main.async {
+                self.sendWatchControlStatus(
+                    WatchCaptureControlReply(
+                        commandID: commandPacket.payload.commandID,
+                        sessionID: commandPacket.payload.sessionID,
+                        takeID: commandPacket.payload.takeID,
+                        syncState: .requested,
+                        detail: "Relay received the command and is forwarding it to the watch.",
+                        acknowledgedAt: Date()
+                    )
+                )
+                self.pendingWatchControlCommand = WatchControlCommandEvent(
+                    payload: commandPacket.payload,
+                    requestedAt: Date()
+                )
+                self.onWatchControlCommand?(commandPacket.payload)
+            }
+            return
+        }
+
+        if let ackPacket = try? PropertyListDecoder().decode(WatchCaptureRelayAckPacket.self, from: data),
+           ackPacket.kind == WatchCaptureRelayAckPacket.packetKind {
+            DispatchQueue.main.async {
+                self.onWatchCaptureAcknowledged?(ackPacket.captureID)
             }
         }
     }
@@ -1155,43 +1341,7 @@ extension CompanionCameraBroadcaster: MCSessionDelegate {
     }
 
     func session(_ session: MCSession, didReceive data: Data, fromPeer peerID: MCPeerID) {
-        if let commandPacket = try? PropertyListDecoder().decode(WatchControlCommandPacket.self, from: data),
-           commandPacket.payload.kind == WatchCaptureCommandPayload.packetKind {
-            DispatchQueue.main.async {
-                // Tell the Mac the relay has the command before doing anything
-                // with it. A stop that later times out can then say whether the
-                // phone never heard it or the watch never answered — states an
-                // unqualified `timedOut` cannot tell apart.
-                self.sendWatchControlStatus(
-                    WatchCaptureControlReply(
-                        commandID: commandPacket.payload.commandID,
-                        sessionID: commandPacket.payload.sessionID,
-                        takeID: commandPacket.payload.takeID,
-                        syncState: .requested,
-                        detail: "Relay received the command and is forwarding it to the watch.",
-                        acknowledgedAt: Date()
-                    )
-                )
-                // Published for the UI and for debugging only; delivery is the
-                // closure's job.
-                self.pendingWatchControlCommand = WatchControlCommandEvent(
-                    payload: commandPacket.payload,
-                    requestedAt: Date()
-                )
-                self.onWatchControlCommand?(commandPacket.payload)
-            }
-            return
-        }
-
-        if let ackPacket = try? PropertyListDecoder().decode(WatchCaptureRelayAckPacket.self, from: data),
-           ackPacket.kind == WatchCaptureRelayAckPacket.packetKind {
-            #if DEBUG
-            print("[WATCH-DEBUG] Mac acknowledged import id=\(ackPacket.captureID)")
-            #endif
-            DispatchQueue.main.async {
-                self.onWatchCaptureAcknowledged?(ackPacket.captureID)
-            }
-        }
+        handleReceivedRelayPacket(data)
     }
 
     func session(_ session: MCSession, didReceive stream: InputStream, withName streamName: String, fromPeer peerID: MCPeerID) {}

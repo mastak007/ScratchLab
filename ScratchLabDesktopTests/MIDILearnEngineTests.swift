@@ -226,12 +226,39 @@ final class MIDILearnEngineTests: XCTestCase {
         engine.selectedMIDIInputSourceID = deviceID
         defer { cleanUpMIDIMapping(deviceIdentifier: deviceID) }
 
+        func waitForMappingPublication(_ stage: String) -> Bool {
+            engine.testOnly_waitForMappingPersistenceQueue()
+            let published = expectation(description: stage)
+            DispatchQueue.main.async { published.fulfill() }
+            return XCTWaiter.wait(for: [published], timeout: 2) == .completed
+        }
+
         engine.startMIDILearn(for: .hotCue4)
         engine.receiveNoteOnPadEvent(channel: 6, noteNumber: 20, velocity: 127)
-        RunLoop.main.run(until: Date().addingTimeInterval(0.05))
+        guard waitForMappingPublication("Hot Cue 4 learning published") else {
+            return XCTFail("Hot Cue 4 learning did not finish publishing before assignment")
+        }
+        guard let learnedMapping = engine.currentMIDIDeviceMapping,
+              learnedMapping.deviceIdentifier == deviceID,
+              let learned = learnedMapping.control(for: .hotCue4),
+              learned.messageType == .note,
+              learned.channel == 6,
+              learned.controlNumber == 20 else {
+            return XCTFail("Expected the learned Hot Cue 4 note on device \(deviceID), channel 6, note 20 before assignment")
+        }
         engine.assignSampleToHotCue("check_it_out", hotCueIndex: 4)
-        engine.testOnly_waitForMappingPersistenceQueue()
-        RunLoop.main.run(until: Date().addingTimeInterval(0.05))
+        guard waitForMappingPublication("Hot Cue 4 sample assignment published") else {
+            return XCTFail("Hot Cue 4 sample assignment did not finish publishing before the press")
+        }
+        guard let assignedMapping = engine.currentMIDIDeviceMapping,
+              assignedMapping.deviceIdentifier == deviceID,
+              let assigned = assignedMapping.control(for: .hotCue4),
+              assigned.messageType == .note,
+              assigned.channel == 6,
+              assigned.controlNumber == 20,
+              assigned.assignedSampleID == "check_it_out" else {
+            return XCTFail("Expected check_it_out assigned to the learned Hot Cue 4 note before the press")
+        }
 
         engine.receiveNoteOnPadEvent(channel: 6, noteNumber: 20, velocity: 127)
         engine.testOnly_waitForPlaybackQueue()

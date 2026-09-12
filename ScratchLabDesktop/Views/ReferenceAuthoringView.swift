@@ -2,14 +2,21 @@
 // ScratchLabDesktop
 
 import Combine
+import AppKit
+import AVKit
 import SwiftUI
 
 struct ReferenceAuthoringView: View {
     @StateObject private var viewModel: ReferenceAuthoringViewModel
-    /// Held for the two live surfaces this screen renders: the camera preview
-    /// (`captureSession`) and the live-notation tracker's data source. Neither
-    /// starts, stops, or configures capture from here.
-    private let captureEngine: MacCaptureEngine
+    /// Observed because this route owns the visible hardware selectors as well
+    /// as the camera preview and live-notation data source. Device discovery
+    /// remains owned by `MacCaptureEngine`; this view only presents and applies
+    /// the operator's explicit choices.
+    @ObservedObject private var captureEngine: MacCaptureEngine
+    /// Optional because the DEBUG hardware route and focused view tests can
+    /// run without a companion. Release injects the app-owned receiver, but
+    /// nearby browsing remains off until the operator enables it in Setup.
+    private let companionReceiver: CompanionCameraReceiver?
 
     /// Live performed-notation tracker for whatever the notation lane is
     /// currently showing, or `nil` when the route is not active. A FRESH
@@ -40,6 +47,8 @@ struct ReferenceAuthoringView: View {
     /// Which review groups are open. `nil` until the first review is shown, so
     /// the default set can be derived from that review's own groups.
     @State private var expandedTearGroupIDs: Set<String>?
+    /// Inspection focus is local to this view and never selects an approval.
+    @State private var motionReviewFocus: ReferenceMotionReviewFocus?
     /// The EXISTING session-archive pipeline, reused verbatim for the raw
     /// diagnostic export. This screen adds no second archive format.
     @StateObject private var exportCoordinator = SessionExportCoordinator()
@@ -103,7 +112,8 @@ struct ReferenceAuthoringView: View {
         companionReceiver: CompanionCameraReceiver?,
         operatorName: String
     ) {
-        self.captureEngine = engine
+        _captureEngine = ObservedObject(wrappedValue: engine)
+        self.companionReceiver = companionReceiver
         _viewModel = StateObject(
             wrappedValue: ReferenceAuthoringViewModel(
                 engine: engine,
@@ -114,30 +124,39 @@ struct ReferenceAuthoringView: View {
     }
 
     var body: some View {
+        ScrollViewReader { scroll in
         ScrollView {
             VStack(alignment: .leading, spacing: 16) {
                 Text("CXL Reference Authoring")
                     .font(.title2.weight(.semibold))
-                Text("Record a diagnostic draft, review four repetitions, and explicitly approve one canonical draft. Approval does not install or publish training data.")
+                Text("Check one movement without a beat, or record four timed repetitions for reference review. Approval does not install or publish training data.")
                     .foregroundStyle(.secondary)
 
                 messagePanel
+                stageHeading("Setup")
+                    .id(ReferenceAuthoringNavigationRequest.Destination.setup.rawValue)
+                hardwareSetupSection
                 setupSection
                 calibrationSection
                 preflightSection
+                stageHeading("Capture")
+                    .id(ReferenceAuthoringNavigationRequest.Destination.capture.rawValue)
                 recordingSection
-                // Directly under the Record controls on purpose: while a take
-                // is running this is the only thing the operator watches, and
-                // at the top of the page it sat off-screen behind a scroll.
-                // Collapsible so it can be folded away during setup.
-                framingSection
+                stageHeading("Review & Export")
                 reviewSection
             }
             .padding(20)
             .frame(maxWidth: 860, alignment: .leading)
         }
+        .onChange(of: viewModel.navigationRequest) { _, request in
+            guard let request else { return }
+            withAnimation { scroll.scrollTo(request.destination.rawValue, anchor: .top) }
+        }
         .task {
-            activateCaptureInput()
+            await captureEngine.startDeviceDiscoveryAfterViewMount(
+                allowSeratoDirectCapture: false,
+                requiresExplicitVideoSelection: true
+            )
             viewModel.refreshAutofilledPatternIdentity()
             viewModel.startPreflightPolling()
             // Reuse an exactly-matching saved calibration rather than asking
@@ -150,6 +169,12 @@ struct ReferenceAuthoringView: View {
             // away from.
             syncLiveNotationTracker(mode: resolvedLiveNotationMode)
         }
+        .modifier(
+            MacAnalyzerView.WatchStopDispatchInstaller(
+                captureEngine: captureEngine,
+                companionReceiver: companionReceiver
+            )
+        )
         .onChange(of: viewModel.selectedTechnique) { _, _ in
             viewModel.refreshAutofilledPatternIdentity()
         }
@@ -168,6 +193,9 @@ struct ReferenceAuthoringView: View {
         .onChange(of: viewModel.session.phase == .recording) { _, _ in
             syncLiveNotationTracker(mode: resolvedLiveNotationMode)
         }
+        .onChange(of: captureEngine.isRoutineRecording) { wasRecording, isRecording in
+            if wasRecording && !isRecording { viewModel.captureRecordingDidStop() }
+        }
         // A stopped take is not a finished one. It keeps ownership of the
         // engine's MIDI accumulation window until that window is RELEASED —
         // by the finalization drain, or by an abandonment release on a path
@@ -179,13 +207,10 @@ struct ReferenceAuthoringView: View {
         // so never publish a transition to observe; without this the lane
         // would stay blank for the rest of the session after take 1.
         //
-        // `onReceive` on the engine's own publisher, NOT `onChange` of a
-        // property: `captureEngine` is a plain `let`, not an `@ObservedObject`
-        // or `@StateObject`, so this view is not a subscriber to its
-        // `objectWillChange` and reading a property in `onChange` would
-        // establish no observation at all — the handler would simply never
-        // run. Engine ownership is deliberately unchanged; only the
-        // observation boundary is made explicit.
+        // Use the engine's release publisher directly: this lifecycle edge is
+        // an event count, not state to infer from a view refresh. Observing the
+        // engine also keeps the hardware selectors current, while ownership
+        // remains with the app's `StateObject`.
         .onReceive(captureEngine.$midiCaptureWindowReleaseCount) { releaseCount in
             Self.handleMIDIWindowRelease(
                 releaseCount,
@@ -205,15 +230,318 @@ struct ReferenceAuthoringView: View {
             // the MIDI window, decided under the engine's own lock.
             syncLiveNotationTracker(mode: .off)
         }
+        }
     }
 
-    /// Entry and restoration both need live authoring input, regardless of
-    /// the global live-input preference. The engine owns the idempotent start
-    /// guard, so recreating this view cannot start a second session. Leaving
-    /// this route does not own stopping the shared engine.
+    private func stageHeading(_ title: String) -> some View {
+        Text(title)
+            .font(.title3.weight(.semibold))
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(.top, 4)
+            .accessibilityAddTraits(.isHeader)
+    }
+
+    private var hardwareSetupSection: some View {
+        GroupBox("Hardware inputs") {
+            VStack(alignment: .leading, spacing: 10) {
+                Picker("MIDI source", selection: midiSourceSelectionBinding) {
+                    if captureEngine.availableMIDISources.isEmpty {
+                        Text("No MIDI source detected").tag("")
+                    } else {
+                        ForEach(captureEngine.availableMIDISources) { source in
+                            Text(source.name).tag(source.id)
+                        }
+                    }
+                }
+                .pickerStyle(.menu)
+                .disabled(
+                    captureEngine.availableMIDISources.isEmpty
+                        || hardwareSelectionIsLocked
+                )
+                .accessibilityIdentifier("cxl.hardware.midiSource")
+
+                Text(
+                    "MIDI: \(captureEngine.selectedMIDIInputSourceName) "
+                        + "[\(captureEngine.selectedMIDIInputSourceID)] · "
+                        + "\(captureEngine.midiListeningState) · "
+                        + captureEngine.lastMIDICCMessage
+                )
+                .font(.caption.monospaced())
+                .foregroundStyle(.secondary)
+                .textSelection(.enabled)
+
+                HStack(spacing: 8) {
+                    Text(crossfaderLearnStatusText)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                    Spacer()
+                    switch captureEngine.midiLearnState {
+                    case .idle:
+                        Button("Learn Crossfader") {
+                            captureEngine.startMIDILearn()
+                        }
+                        .disabled(hardwareSelectionIsLocked)
+                    case .listening:
+                        Button("Cancel Learn") {
+                            captureEngine.cancelMIDILearn()
+                        }
+                    case .learned:
+                        Button("Learn Crossfader") {
+                            captureEngine.startMIDILearn()
+                        }
+                        .disabled(hardwareSelectionIsLocked)
+                        Button("Clear Crossfader Mapping") {
+                            captureEngine.clearCrossfaderMapping()
+                        }
+                        .disabled(hardwareSelectionIsLocked)
+                    case .listeningFor:
+                        Button("Cancel Learn") {
+                            captureEngine.cancelMIDILearn()
+                        }
+                    }
+                }
+
+                Picker("Camera input", selection: videoInputSelectionBinding) {
+                    Text("Choose a camera…").tag("")
+                    ForEach(captureEngine.availableVideoDevices, id: \.uniqueID) { device in
+                        Text(device.localizedName).tag(device.uniqueID)
+                    }
+                }
+                .pickerStyle(.menu)
+                .disabled(hardwareSelectionIsLocked)
+                .accessibilityIdentifier("cxl.hardware.videoInput")
+
+                if captureEngine.selectedVideoDeviceUniqueID.isEmpty {
+                    Text("Camera: not selected")
+                        .font(.caption.monospaced())
+                        .foregroundStyle(.secondary)
+                } else {
+                    Text(
+                        "Camera: \(captureEngine.selectedVideoDeviceName) "
+                            + "[\(captureEngine.selectedVideoDeviceUniqueID)]"
+                    )
+                    .font(.caption.monospaced())
+                    .foregroundStyle(.secondary)
+                    .textSelection(.enabled)
+                }
+
+                Picker("Audio input", selection: audioInputSelectionBinding) {
+                    if captureEngine.availableAudioDevices.isEmpty {
+                        Text("No audio input detected").tag("")
+                    } else {
+                        ForEach(captureEngine.availableAudioDevices, id: \.uniqueID) { device in
+                            Text(device.localizedName).tag(device.uniqueID)
+                        }
+                    }
+                }
+                .pickerStyle(.menu)
+                .disabled(
+                    captureEngine.availableAudioDevices.isEmpty
+                        || audioSelectionIsLocked
+                )
+                .accessibilityIdentifier("cxl.hardware.audioInput")
+
+                captureAudioMeter
+
+                scratchOutputRoutingControls
+
+                Text(
+                    "Audio: \(captureEngine.selectedAudioDeviceName) "
+                        + "[\(captureEngine.selectedAudioDeviceUniqueID)]"
+                )
+                .font(.caption.monospaced())
+                .foregroundStyle(.secondary)
+                .textSelection(.enabled)
+
+                Text("This selects the audio device only. This screen does not yet prove a specific input pair or physical master-return signal.")
+                    .font(.caption)
+                    .foregroundStyle(.orange)
+
+                Text("Audio input can be changed between takes. It reconnects automatically; no app restart is needed.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+
+                Button(captureInputActivationButtonTitle) {
+                    activateCaptureInput()
+                }
+                .disabled(!canActivateCaptureInput)
+                .accessibilityIdentifier("cxl.hardware.activateCaptureInput")
+
+                Text("Camera and microphone permission are requested only after you choose a camera and press Enable Selected Camera & Audio.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+
+                if let companionReceiver {
+                    CompanionRelaySetupView(receiver: companionReceiver)
+                }
+
+                Button("Refresh Hardware Inputs") {
+                    captureEngine.refreshDevices(
+                        allowSeratoDirectCapture: false,
+                        requiresExplicitVideoSelection: true
+                    )
+                }
+                .disabled(hardwareSelectionIsLocked)
+
+                Text("Select the exact connected sources for this rig. The IDs shown here let the operator verify the source used by preflight and captured evidence; a pass on one controller does not validate a different controller setup.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(.top, 4)
+        }
+    }
+
+    private var hardwareSelectionIsLocked: Bool {
+        viewModel.isWorking
+            || captureEngine.isCaptureInputStarting
+            || captureEngine.isRoutineCaptureReady
+            || captureEngine.isRoutineRecording
+            || captureEngine.isRoutineFinalizationPending
+    }
+
+    private var audioSelectionIsLocked: Bool {
+        viewModel.isWorking
+            || viewModel.session.phase == .recording
+            || captureEngine.isAudioInputSelectionLocked
+    }
+
+    private var canActivateCaptureInput: Bool {
+        !captureEngine.selectedVideoDeviceUniqueID.isEmpty
+            && !captureEngine.selectedAudioDeviceUniqueID.isEmpty
+            && !hardwareSelectionIsLocked
+    }
+
+    private var captureInputActivationButtonTitle: String {
+        if captureEngine.isRoutineCaptureReady {
+            return "Selected Camera & Audio Enabled"
+        }
+        if captureEngine.isCaptureInputStarting {
+            return "Enabling Selected Camera & Audio…"
+        }
+        return "Enable Selected Camera & Audio"
+    }
+
+    private var crossfaderLearnStatusText: String {
+        switch captureEngine.midiLearnState {
+        case .idle:
+            return captureEngine.midiCrossfaderMappingStatus
+        case .listening:
+            return captureEngine.midiLearnFeedback.isEmpty
+                ? "Move only the crossfader now."
+                : captureEngine.midiLearnFeedback
+        case .learned(let mapping):
+            return "Learned crossfader: \(mapping.displayName)"
+        case .listeningFor(let action):
+            return "Learning \(action.displayName)…"
+        }
+    }
+
+    private var midiSourceSelectionBinding: Binding<String> {
+        Binding(
+            get: { captureEngine.selectedMIDIInputSourceID },
+            set: { captureEngine.selectedMIDIInputSourceID = $0 }
+        )
+    }
+
+    private var audioInputSelectionBinding: Binding<String> {
+        Binding(
+            get: { captureEngine.selectedAudioDeviceUniqueID },
+            set: { captureEngine.selectAudioInput(uniqueID: $0) }
+        )
+    }
+
+    /// The internal scratch output actually feeding standalone capture.
+    /// Raw Rane input activity remains a separate preflight signal.
+    private var captureAudioMeter: some View {
+        let level = captureEngine.activeScratchOutputSignalLevel
+        let litSegments = CXLScratchOutputMeter.litSegments(peak: level)
+        let levelText = CXLScratchOutputMeter.label(peak: level)
+
+        return VStack(alignment: .leading, spacing: 6) {
+            HStack {
+                Text(captureEngine.scratchOutputSignalSourceLabel)
+                    .font(.caption.weight(.semibold))
+                Spacer()
+                Text(levelText)
+                    .font(.caption.monospacedDigit())
+                    .foregroundStyle(level == nil ? Color.orange : Color.secondary)
+            }
+            HStack(spacing: 3) {
+                ForEach(0..<20, id: \.self) { index in
+                    RoundedRectangle(cornerRadius: 2)
+                        .fill(index >= 19 ? Color.red : index >= 17 ? Color.yellow : Color.green)
+                        .opacity(index < litSegments ? 1 : 0.15)
+                        .frame(maxWidth: .infinity)
+                        .frame(height: 12)
+                }
+            }
+            .accessibilityElement(children: .ignore)
+            .accessibilityLabel("ScratchLab AHHH output level")
+            .accessibilityValue(levelText)
+
+            if level == nil {
+                Text("Waiting for ScratchLab output. Load AHHH if no sample is loaded.")
+                    .font(.caption)
+                    .foregroundStyle(.orange)
+            }
+        }
+        .accessibilityIdentifier("cxl.capture.audioMeter")
+    }
+
+    private var scratchOutputRoutingControls: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            if let route = captureEngine.scratchOutputRoutingSnapshot {
+                Text("AHHH playback: \(route.primaryDeviceName ?? "Not ready")\(route.outputChannelPair.map { " · " + $0 } ?? "")")
+                    .font(.caption.weight(.semibold))
+                if let error = route.error {
+                    Text(error).font(.caption).foregroundStyle(.orange)
+                }
+                if route.pendingChange {
+                    Text("Output change queued until this take has finished.")
+                        .font(.caption).foregroundStyle(.orange)
+                }
+                Toggle("Also hear AHHH on Mac (delayed)", isOn: Binding(
+                    get: { captureEngine.scratchOutputRoutingSnapshot?.monitorEnabled ?? false },
+                    set: { captureEngine.setScratchMacMonitorEnabled($0) }
+                ))
+                .disabled(audioSelectionIsLocked || route.status != "ready")
+                .accessibilityIdentifier("cxl.hardware.macMonitor")
+                if route.monitorEnabled {
+                    Text(route.monitorError ?? route.monitorStatus)
+                        .font(.caption).foregroundStyle(.secondary)
+                }
+            } else {
+                Text("AHHH playback: waiting for audio setup.")
+                    .font(.caption).foregroundStyle(.secondary)
+            }
+            Text("Listen through the Rane to check scratch timing. Mac monitoring has extra delay.")
+                .font(.caption).foregroundStyle(.secondary)
+            Text("Beat and count-in: macOS default output. Their Rane routing has not been verified; use Movement check (no beat) for the next scratch test.")
+                .font(.caption).foregroundStyle(.orange)
+            Text("This meter and the saved take use ScratchLab's generated scratch audio. The Rane's physical mixer can change the sound afterward.")
+                .font(.caption).foregroundStyle(.secondary)
+        }
+        .accessibilityIdentifier("cxl.hardware.scratchOutputRouting")
+    }
+
+    private var videoInputSelectionBinding: Binding<String> {
+        Binding(
+            get: { captureEngine.selectedVideoDeviceUniqueID },
+            set: { captureEngine.selectVideoInput(uniqueID: $0) }
+        )
+    }
+
+    /// Explicit operator action is the only CXL path that requests camera and
+    /// microphone permission or starts the selected devices. The engine owns
+    /// the idempotent start guard, so repeated button presses cannot start a
+    /// second session. Leaving this route does not own stopping the engine.
     @MainActor
     func activateCaptureInput() {
-        captureEngine.start()
+        captureEngine.start(
+            allowSeratoDirectCapture: false,
+            requiresExplicitVideoSelection: true
+        )
     }
 
     /// Which mode the lane should be in right now.
@@ -237,10 +565,10 @@ struct ReferenceAuthoringView: View {
     /// one, which is what re-anchors the trace to the take's own start.
     /// Dropping the instance cancels its poll timer through `deinit`.
     ///
-    /// Capture ownership is untouched throughout: nothing here starts, stops
-    /// or configures the session, the camera, or recording. The only engine
-    /// state this touches is the MIDI accumulation window, and only through
-    /// the two accessors that act solely while the preview owns that window.
+    /// This lifecycle helper does not start, stop or configure the session,
+    /// camera, or recording. The only engine state it touches is the MIDI
+    /// accumulation window, and only through the two accessors that act solely
+    /// while the preview owns that window.
     private func syncLiveNotationTracker(mode: LiveNotationMode) {
         Self.syncLiveNotationTracker(
             mode: mode,
@@ -272,7 +600,12 @@ struct ReferenceAuthoringView: View {
                 captureEngine.beginLiveMIDICapture()
             }
             liveNotationTracker = LivePerformedNotationTracker(
-                dataSource: captureEngine.makeLivePerformedNotationDataSource()
+                // CXL notation describes the physical gesture. It must keep
+                // one take-local coordinate basis even when the AHHH sample
+                // loops, stops, reloads, or briefly loses its playback anchor.
+                dataSource: captureEngine.makeLivePerformedNotationDataSource(
+                    includePlaybackLoopContext: false
+                )
             )
         }
     }
@@ -300,38 +633,62 @@ struct ReferenceAuthoringView: View {
         return true
     }
 
+    /// Reuses the main app's loaded PCM overview with the current renderer
+    /// cursor. Merely displaying it neither loads nor starts audio.
+    private var samplePositionContent: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            MacSamplePositionWaveformView(
+                waveform: captureEngine.playbackWaveformSnapshot,
+                position: captureEngine.playbackPositionSnapshot,
+                positionLabel: "PLAYHEAD",
+                usesRenderedPlayhead: true
+            )
+            .frame(height: 112)
+
+            if captureEngine.playbackWaveformSnapshot == nil {
+                HStack {
+                    Button("Load AHHH") { captureEngine.loadPlatterTestSample() }
+                        .disabled(viewModel.isWorking || captureEngine.isAudioInputSelectionLocked)
+                    Text("Load the ScratchLab sample, then move the right platter.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+                if !captureEngine.platterTestLoadStatus.isEmpty {
+                    Text(captureEngine.platterTestLoadStatus)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+            } else {
+                if let waveform = captureEngine.playbackWaveformSnapshot,
+                   let position = captureEngine.playbackPositionSnapshot,
+                   position.loadedSampleID == waveform.sampleID,
+                   waveform.sampleRate > 0 {
+                    let seconds = position.unwrappedFramePosition / waveform.sampleRate
+                    Text(String(format: "Platter from cue: %+.2f s · The playhead above follows sample playback.", seconds))
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .monospacedDigit()
+                }
+            }
+        }
+    }
+
     /// Camera framing + live performed notation.
     ///
-    /// Both are PRESENTATION ONLY. The preview renders the same
+    /// The preview renders the same
     /// `AVCaptureSession` the take is recorded from, so what CXL frames here
     /// is exactly what lands in the take's video; the notation card is the
     /// canonical `ScratchPhraseChartView` motion renderer Practice and Capture
     /// already use, reading the same live evidence
-    /// `completeRoutineFinalization` reads. Neither is scored, persisted,
-    /// reviewed or exported, and neither is a second renderer.
-    private var framingSection: some View {
-        GroupBox {
-            DisclosureGroup(isExpanded: $isShowingFramingPanel) {
-                framingContent
-            } label: {
-                Text("Framing and live motion")
-                    .font(.callout.weight(.semibold))
-            }
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .padding(.top, 4)
-        }
-    }
-
+    /// `completeRoutineFinalization` reads. Camera guides configure the same
+    /// measured image regions used by capture; live notation remains a preview.
     private var framingContent: some View {
         VStack(alignment: .leading, spacing: 8) {
-            MacCameraPreviewView(
+            CXLCameraCalibrationPreview(
                 captureEngine: captureEngine,
-                videoGravity: .resizeAspect
+                previewHeight: Self.cameraPreviewMaximumHeight,
+                captureInProgress: viewModel.isWorking || viewModel.session.phase == .recording
             )
-            .aspectRatio(16.0 / 9.0, contentMode: .fit)
-            .frame(maxWidth: .infinity, maxHeight: Self.cameraPreviewMaximumHeight)
-            .background(Color.black)
-            .clipShape(RoundedRectangle(cornerRadius: 6))
 
             if !captureEngine.isCameraActive {
                 Text("Camera preview is not running. Recording is blocked until the selected camera is active.")
@@ -339,39 +696,29 @@ struct ReferenceAuthoringView: View {
                     .foregroundStyle(.orange)
             }
 
+            samplePositionContent
+
             if let liveNotationTracker {
-                if viewModel.selectedTechnique != .tear {
-                    LivePerformedNotationCard(
-                        tracker: liveNotationTracker,
-                        bpm: Double(viewModel.bpm)
-                    )
-                    // The minimum applies to the CARD only. The DEBUG diagnostics
-                    // row below is a sibling in this stack, so it can never eat
-                    // into the notation's guaranteed height.
-                    .frame(maxWidth: .infinity, minHeight: Self.liveNotationMinimumHeight)
-                } else {
-                    // The LIVE view of a tear goes through the SAME canonical
-                    // projection the finalized review uses, so a
-                    // forward → hold → forward gesture cannot be drawn one way
-                    // here and another way afterwards — and can never be drawn
-                    // as a Baby-style reversal or as one uninterrupted
-                    // diagonal. Presentation only: nothing here is persisted,
-                    // scored, reviewed or exported.
+                // All CXL techniques share one measured position track. The
+                // legacy performed card rebases each gesture independently,
+                // which detaches unequal push/pull strokes at a reversal.
+                // Keep real packet gaps and fader uncertainty in the existing
+                // canonical projection; sample playback never wraps this lane.
+                ReferenceLiveMotionContent(tracker: liveNotationTracker) { liveNotationTracker in
                     canonicalTearChart(
-                        title: "YOUR MOTION — LIVE (TEAR STRUCTURE)",
+                        title: viewModel.selectedTechnique.map {
+                            "YOUR MOTION — LIVE (\($0.displayName.uppercased()))"
+                        } ?? "YOUR MOTION — LIVE",
                         projection: ReferenceTearCanonicalProjectionBuilder.project(
                             movementEvents: liveNotationTracker.continuousRenderedEvents,
                             platterEvidenceIntervals: liveNotationTracker.platterEvidenceIntervals,
                             derivation: liveNotationTracker.faderDerivation,
                             coordinates: liveNotationTracker.continuousPlatterCoordinates
                         ),
-                        emptyMessage: "Waiting for tear motion…",
-                        // LIVE ONLY. The finalized card below states no loop,
-                        // so it keeps drawing the take's own unbounded travel.
-                        wrapPeriod: liveNotationTracker.continuousWrapPeriod
+                        emptyMessage: "Waiting for movement…"
                     )
-                    .frame(maxWidth: .infinity, minHeight: Self.liveNotationMinimumHeight)
                 }
+                .frame(maxWidth: .infinity, minHeight: Self.liveNotationMinimumHeight)
                 #if DEBUG
                 LiveNotationDiagnosticsRow(tracker: liveNotationTracker)
                 #endif
@@ -412,6 +759,16 @@ struct ReferenceAuthoringView: View {
                     .font(.caption)
                     .foregroundStyle(.secondary)
 
+                Picker("Capture", selection: $viewModel.capturePurpose) {
+                    ForEach(ReferenceCapturePurpose.allCases) { purpose in
+                        Text(purpose.displayName).tag(purpose)
+                    }
+                }
+                if viewModel.capturePurpose == .movementCheck {
+                    Text("Record one movement at your own pace, then stop. No beat or count-in plays. You can play and save the result; it is a movement check, not a canonical reference.")
+                        .font(.caption).foregroundStyle(.secondary)
+                }
+
                 Picker("Technique", selection: $viewModel.selectedTechnique) {
                     Text("Select a technique").tag(Optional<ReferenceTechnique>.none)
                     ForEach(ReferenceTechnique.authorableSet) { technique in
@@ -438,12 +795,26 @@ struct ReferenceAuthoringView: View {
                 Text("Both fill in from the technique and phrase length. Edit either one and it stays yours.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
+                if viewModel.capturePurpose == .canonicalReference {
                 Stepper("Phrase length: \(viewModel.phraseBars) bar(s)", value: $viewModel.phraseBars, in: 1...16)
+                Text("Length of one repetition. One bar is four beats; perform the same phrase four times.")
+                    .font(.caption).foregroundStyle(.secondary)
                 Stepper(
                     "BPM: \(viewModel.bpm)",
                     value: $viewModel.bpm,
                     in: CaptureClickTrackDefaults.supportedBPMRange
                 )
+                Picker("Backing sound", selection: $viewModel.beatEngineMode) {
+                    ForEach(BeatEngineMode.practiceModes) { mode in
+                        Text(mode.title).tag(mode)
+                    }
+                }
+                Button(viewModel.isPreviewingBeat ? "Stop preview" : "Preview backing sound") {
+                    viewModel.toggleBeatPreview()
+                }
+                Text("Boom Bap Trainer is a straight drum beat. Minimal Funk adds swing; Battle Loop is more forceful. Click track plays metronome clicks only. Preview uses the Mac's selected sound output and does not record.")
+                    .font(.caption).foregroundStyle(.secondary)
+                }
 
                 Picker("Starting direction", selection: $viewModel.startingDirectionRawValue) {
                     Text("Select direction").tag("")
@@ -456,12 +827,16 @@ struct ReferenceAuthoringView: View {
                         Text(handedness.rawValue.capitalized).tag(handedness.rawValue)
                     }
                 }
+                Text("Starting direction is your first record movement: push forward or pull back. Handedness is the hand moving the record and wearing the Watch.")
+                    .font(.caption).foregroundStyle(.secondary)
                 Picker("Fader variant", selection: $viewModel.faderVariantRawValue) {
                     Text("Select fader variant").tag("")
                     ForEach(ReferenceFaderVariant.allCases, id: \.rawValue) { variant in
                         Text(variant.displayName).tag(variant.rawValue)
                     }
                 }
+                Text("For a plain Tear, choose Fader open throughout. Choose a cut variant only when intentionally using the fader.")
+                    .font(.caption).foregroundStyle(.secondary)
                 TextField("Session notes", text: $viewModel.notes, axis: .vertical)
                     .lineLimit(2...4)
 
@@ -472,6 +847,11 @@ struct ReferenceAuthoringView: View {
             }
             .frame(maxWidth: .infinity, alignment: .leading)
             .padding(.top, 4)
+            .disabled(viewModel.isWorking || viewModel.session.captureIntent != nil)
+            if viewModel.session.captureIntent != nil {
+                Text("Setup is fixed after the first Record. Retake keeps the same technique, tempo and backing sound.")
+                    .font(.caption).foregroundStyle(.secondary)
+            }
         }
     }
 
@@ -511,6 +891,8 @@ struct ReferenceAuthoringView: View {
                 Text("A saved calibration for this exact device, channel, CC, deck and open end is adopted automatically — the learned MIDI mapping is never relearned and no new sweep is required. Recalibrate only when the hardware or its wiring has changed.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
+                Text("Active deck is the platter being scratched. Open end is the fader side where that deck is audible; keep the settings matching your completed calibration.")
+                    .font(.caption).foregroundStyle(.secondary)
 
                 if let sweep = viewModel.session.calibrationSweep {
                     Text("Live raw value: \(viewModel.state.latestCalibrationRawValue.map(String.init) ?? "No traffic")")
@@ -662,10 +1044,20 @@ struct ReferenceAuthoringView: View {
     private var recordingSection: some View {
         GroupBox("4. Record") {
             VStack(alignment: .leading, spacing: 10) {
+                captureAudioMeter
+                if viewModel.session.selectedCapturePurpose == .movementCheck {
+                    Text("Perform one slow movement, then press Stop and Finalize.")
+                        .foregroundStyle(.secondary)
+                    Text("Wait for Recording started before moving. No beat or count-in plays. Press Stop and Finalize when finished.")
+                        .font(.caption).foregroundStyle(.secondary)
+                } else {
                 Text("One count-in bar, four identical repetitions, then one clean tail bar.")
                     .foregroundStyle(.secondary)
+                Text("Four count-in clicks, then \(viewModel.session.selectedBeatEngineMode.title) at \(viewModel.session.selectedBPM ?? viewModel.bpm) BPM. Recording finishes automatically after four repetitions and the tail bar. Stop and Finalize ends a diagnostic take early.")
+                    .font(.caption).foregroundStyle(.secondary)
+                }
                 HStack {
-                    Button("Record Draft") {
+                    Button(viewModel.session.selectedCapturePurpose == .movementCheck ? "Record movement check" : "Record Draft") {
                         viewModel.startRecording()
                     }
                     .disabled(!canRecord)
@@ -677,12 +1069,16 @@ struct ReferenceAuthoringView: View {
                         .font(.caption.monospaced())
                         .foregroundStyle(.secondary)
                 }
+                framingContent
                 if viewModel.session.confirmedCalibration == nil {
-                    Text("No crossfader calibration is in force. This take will still record, finalize and export — its fader evidence will be recorded as explicitly unknown, and it cannot be approved as a canonical reference until a calibration is in place.")
+                    Text("Check Calibration in Live preflight before recording. A matching saved calibration is adopted when the take starts. An older take with unknown fader evidence cannot be repaired by calibrating afterward.")
                         .font(.caption)
                         .foregroundStyle(.orange)
                 }
                 rawExportControls
+                if viewModel.session.latestRecordedTake != nil {
+                    continuationControls
+                }
             }
             .frame(maxWidth: .infinity, alignment: .leading)
             .padding(.top, 4)
@@ -690,6 +1086,29 @@ struct ReferenceAuthoringView: View {
     }
 
     // MARK: - Raw diagnostic export
+
+    private var continuationControls: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            HStack {
+                Button("Retake this scratch") {
+                    viewModel.retake(isExportPreparing: exportCoordinator.isPreparing)
+                }
+                .disabled(viewModel.continuationBlockReason(newScratch: false,
+                    isExportPreparing: exportCoordinator.isPreparing) != nil)
+                Button("New scratch") {
+                    viewModel.prepareNewScratch(isExportPreparing: exportCoordinator.isPreparing)
+                }
+                .disabled(viewModel.continuationBlockReason(newScratch: true,
+                    isExportPreparing: exportCoordinator.isPreparing) != nil)
+            }
+            Text("Retake keeps the same setup. New scratch lets you choose a different technique. Previous takes stay saved; approval is separate.")
+                .font(.caption).foregroundStyle(.secondary)
+            if let reason = viewModel.continuationBlockReason(newScratch: true,
+                isExportPreparing: exportCoordinator.isPreparing) {
+                Text(reason).font(.caption).foregroundStyle(.secondary)
+            }
+        }
+    }
 
     /// Export the RAW capture, separately from canonical approval.
     ///
@@ -720,10 +1139,12 @@ struct ReferenceAuthoringView: View {
     }
 
     private func saveRawCapture() {
-        guard let source = viewModel.rawCaptureExportSource(
-            config: captureEngine.recordingSessionConfig
-        ) else { return }
-        exportCoordinator.saveArchiveCopy(for: source)
+        Task {
+            guard let source = await viewModel.rawCaptureExportSource(
+                config: captureEngine.recordingSessionConfig
+            ) else { return }
+            exportCoordinator.saveArchiveCopy(for: source)
+        }
     }
 
     @ViewBuilder
@@ -731,7 +1152,13 @@ struct ReferenceAuthoringView: View {
         if let take = viewModel.reviewedTake {
             GroupBox("5. Finalized take review") {
                 VStack(alignment: .leading, spacing: 12) {
+                    continuationControls
                     evidenceSummary(take)
+                    ReferenceMediaReviewStatus(controller: viewModel.mediaReview)
+                    if viewModel.session.takeInReview == nil {
+                        Text("Previous take — read-only. You can play or save it; recording a new take starts a new review.")
+                            .font(.callout).foregroundStyle(.secondary)
+                    }
 
                     // The detector is limited to Baby Scratch, so on a Tear
                     // take a "does not match" warning would read as the
@@ -743,30 +1170,68 @@ struct ReferenceAuthoringView: View {
                         .foregroundStyle(advisory.isDisagreement ? Color.orange : Color.secondary)
 
                     Divider()
-                    Text("Validation findings").font(.headline)
-                    if take.latestValidation.findings.isEmpty {
-                        Text("No validation findings.").foregroundStyle(.green)
-                    } else {
-                        ForEach(Array(take.latestValidation.findings.enumerated()), id: \.offset) { _, finding in
-                            HStack(alignment: .top) {
-                                Image(systemName: finding.severity == .failure ? "xmark.circle.fill" : "exclamationmark.triangle.fill")
-                                    .foregroundStyle(finding.severity == .failure ? .red : .orange)
-                                Text(finding.message).font(.callout)
+                    if take.evidence.metadata.captureIntent?.isMovementCheck == true {
+                        Text("Movement check — play and save").font(.headline)
+                        Text("This check does not request canonical approval.")
+                            .font(.caption).foregroundStyle(.secondary)
+                        validationFindings(take.latestValidation.findings.filter { finding in
+                            switch finding {
+                            case .audioArtifactMissing, .audioArtifactUnreadable, .audioArtifactEmpty,
+                                 .videoArtifactMissing, .videoArtifactUnreadable, .programAudioSilent,
+                                 .sidecarMissing, .sidecarUnreadable, .fileNameSidecarMismatch,
+                                 .artifactHashMismatch:
+                                true
+                            default:
+                                false
                             }
+                        })
+                        DisclosureGroup("Reference approval checks") {
+                            validationFindings(take.latestValidation.findings)
+                        }
+                    } else {
+                        Text("Validation findings").font(.headline)
+                        if take.latestValidation.findings.isEmpty {
+                            Text("Recorded-evidence checks have no findings. Approval checks are shown below.")
+                                .foregroundStyle(.secondary)
+                        } else {
+                            validationFindings(take.latestValidation.findings)
+                        }
+                    }
+
+                    if take.evidence.metadata.lifecycleState != .approvedCanonical,
+                       !viewModel.approvalBlockReasons.isEmpty {
+                        Text("Approval unavailable").font(.headline)
+                        ForEach(viewModel.approvalBlockReasons, id: \.self) { reason in
+                            Text(reason).font(.callout).foregroundStyle(.orange)
                         }
                     }
 
                     Divider()
+                    if take.evidence.metadata.captureIntent?.isMovementCheck == true {
+                        Text("Movement check").font(.headline)
+                        Text("Use Play whole take to review this movement. Save Capture exports the recorded files. No timed repetitions or canonical approval are assigned to this check.")
+                            .font(.caption).foregroundStyle(.secondary)
+                    } else {
                     Text("Four repetitions").font(.headline)
-                    Text("Audition is omitted: the existing lightweight player only resolves bundled Scratch Bank IDs and cannot safely play finalized WAV/MOV repetition ranges without a broader playback refactor.")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
+                    Text("Play each repetition to check it. Start and End beat trim its review range; Select for Approval chooses your best repetition. These controls do not change the original recording.")
+                        .font(.caption).foregroundStyle(.secondary)
+                    Text("Beat \(take.evidence.metadata.countInBars * take.evidence.metadata.pattern.beatsPerBar) is the first beat after count-in. Review uses the recorded timing to find that beat in the media.")
+                        .font(.caption).foregroundStyle(.secondary)
                     ForEach(take.evidence.boundaries.repetitions) { boundary in
                         repetitionRow(boundary, take: take)
                     }
+                    }
 
                     Divider()
-                    tearSegmentationSection(take)
+                    if take.evidence.metadata.technique == .tear {
+                        tearSegmentationSection(take)
+                        #if DEBUG
+                        Divider()
+                        tearComparisonSection(take)
+                        #endif
+                    } else {
+                        recordedMotionSection(take)
+                    }
 
                     TextField("Approval or rejection notes", text: $viewModel.reviewNotes, axis: .vertical)
                         .lineLimit(2...4)
@@ -783,10 +1248,45 @@ struct ReferenceAuthoringView: View {
                         Text("Approved canonical draft. Not published, not installed, not eligible for training.")
                             .font(.headline)
                             .foregroundStyle(.green)
+                        HStack {
+                            Button("Export Approved Package…") { exportApprovedPackage() }
+                                .buttonStyle(.borderedProminent)
+                                .disabled(viewModel.approvedPackageExportBlockReason != nil)
+                            Button("Reopen & Verify Last Export") {
+                                viewModel.reopenLastApprovedPackage()
+                            }
+                            .disabled(viewModel.approvedPackageURL == nil || viewModel.isExportingApprovedPackage)
+                            if viewModel.isExportingApprovedPackage {
+                                ProgressView().controlSize(.small)
+                            }
+                        }
+                        if let reason = viewModel.approvedPackageExportBlockReason {
+                            Text(reason).font(.caption).foregroundStyle(.secondary)
+                        }
+                        Text("This creates a versioned, hashed reference package. It does not install or publish it.")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                        Button("Next take") {
+                            viewModel.prepareNextTake(isExportPreparing: exportCoordinator.isPreparing)
+                        }
+                        .buttonStyle(.borderedProminent)
+                        .disabled(viewModel.nextTakeBlockReason(
+                            isExportPreparing: exportCoordinator.isPreparing
+                        ) != nil)
+                        Text("Keeps this approved draft and returns to Record. Press Record Draft when ready.")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                        if let reason = viewModel.nextTakeBlockReason(
+                            isExportPreparing: exportCoordinator.isPreparing
+                        ) {
+                            Text(reason)
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        }
                     } else {
                         HStack {
                             Button("Reject Take") { viewModel.rejectTake() }
-                            Button("Retake") { viewModel.retake() }
+                                .disabled(!viewModel.canRejectReviewedTake)
                             Button("Approve Canonical Draft") { viewModel.approveCanonical() }
                                 .buttonStyle(.borderedProminent)
                                 .disabled(!viewModel.canApprove)
@@ -807,6 +1307,18 @@ struct ReferenceAuthoringView: View {
         }
     }
 
+    private func exportApprovedPackage() {
+        let panel = NSOpenPanel()
+        panel.title = "Choose Approved Package Destination"
+        panel.prompt = "Export Here"
+        panel.canChooseDirectories = true
+        panel.canChooseFiles = false
+        panel.canCreateDirectories = true
+        panel.allowsMultipleSelection = false
+        guard panel.runModal() == .OK, let directory = panel.url else { return }
+        viewModel.exportApprovedPackage(to: directory)
+    }
+
     // MARK: - Canonical tear notation
 
     /// One canonical chart over projected `ScratchNotation.GestureRecord`s.
@@ -822,19 +1334,49 @@ struct ReferenceAuthoringView: View {
         title: String,
         projection: ReferenceTearCanonicalProjection,
         emptyMessage: String,
-        wrapPeriod: Double? = nil
+        wrapPeriod: Double? = nil,
+        recordedBPM: Int? = nil,
+        reviewTake: ReferenceAuthoringTake? = nil
     ) -> some View {
+        let chartBPM = Double(recordedBPM ?? viewModel.bpm)
         VStack(alignment: .leading, spacing: 6) {
             Text(title)
                 .font(.system(size: 10, weight: .bold, design: .monospaced))
                 .foregroundStyle(Color(white: 0.55))
-            if let frame = ReferenceAuthoringViewModel.canonicalFrame(
+            if let fullFrame = ReferenceAuthoringViewModel.canonicalFrame(
                 for: projection,
-                bpm: Double(viewModel.bpm)
+                bpm: chartBPM
             ), !projection.isEmpty {
+                let boundary = reviewTake.flatMap { focusedBoundary(for: $0) }
+                let selectedRange = reviewTake.flatMap { take in
+                    boundary.flatMap {
+                        ReferenceMotionReviewViewport.range(for: $0, metadata: take.evidence.metadata,
+                            recordedEnd: take.evidence.metadata.witnessedTiming?.measuredWAVDurationSeconds
+                                ?? fullFrame.timeRange.upperBound)
+                    }
+                }
+                let zoomed = selectedRange != nil && (reviewTake.map { motionReviewFocus?.takeID == $0.id
+                    && motionReviewFocus?.isZoomed == true } ?? false)
+                let frame = ReferenceMotionReviewViewport.frame(fullFrame, selectedRange: selectedRange, zoomed: zoomed)
+                if let take = reviewTake, let boundary {
+                    HStack {
+                        Text("Highlighted repetition \(boundary.index + 1) · beats \(boundary.startBeat, specifier: "%.2f")–\(boundary.endBeat, specifier: "%.2f")")
+                            .font(.caption)
+                        Spacer()
+                        Button(zoomed ? "Whole take" : "Zoom to repetition") {
+                            motionReviewFocus = .init(takeID: take.id, repetitionIndex: boundary.index, isZoomed: !zoomed)
+                        }
+                        .disabled(selectedRange == nil)
+                    }
+                    if selectedRange == nil {
+                        Text("This repetition is outside the recorded range. Adjust its Start and End beats.")
+                            .font(.caption).foregroundStyle(.orange)
+                    }
+                }
                 ScratchPhraseChartView(
                     source: .canonical(projection.records, layer: .performance, frame: frame),
-                    bpm: Double(viewModel.bpm),
+                    bpm: chartBPM,
+                    showBeatGrid: reviewTake?.evidence.metadata.captureIntent?.isMovementCheck != true,
                     wrapPeriod: wrapPeriod,
                     backgroundColor: .clear
                 )
@@ -843,10 +1385,17 @@ struct ReferenceAuthoringView: View {
                 // to the IDEAL height and collapses the lane — the same trap
                 // documented on `liveNotationMinimumHeight`.
                 .frame(maxWidth: .infinity, minHeight: Self.canonicalTearChartMinimumHeight)
+                .clipped()
+                .overlay {
+                    if let selectedRange, !zoomed {
+                        ReferenceMotionSelectionOverlay(selectedRange: selectedRange, viewport: frame.timeRange)
+                            .allowsHitTesting(false)
+                    }
+                }
             } else {
                 ScratchPhraseChartView(
                     source: .empty(emptyMessage),
-                    bpm: Double(viewModel.bpm),
+                    bpm: chartBPM,
                     backgroundColor: .clear
                 )
                 .frame(maxWidth: .infinity, minHeight: Self.canonicalTearChartMinimumHeight)
@@ -859,7 +1408,107 @@ struct ReferenceAuthoringView: View {
         }
     }
 
+    /// The recorded technique owns its review, independently of the next Setup.
+    /// Shared motion geometry remains available without offering Tear corrections
+    /// or labeling a different technique as a canonical Tear.
+    private func recordedMotionSection(_ take: ReferenceAuthoringTake) -> some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text("\(take.evidence.metadata.technique.displayName) motion review").font(.headline)
+            canonicalTearChart(
+                title: "RECORDED PLATTER AND FADER MOTION",
+                projection: take.tearProjection,
+                emptyMessage: "No recorded platter motion is available.",
+                recordedBPM: take.evidence.metadata.bpm,
+                reviewTake: take
+            )
+            Text("\(take.tearReview.rawMovementEvents.count) platter movements · \(take.tearReview.faderIntervals.count) fader state intervals · \(take.tearReview.faderClicks.count) fader clicks")
+                .font(.caption).foregroundStyle(.secondary)
+        }
+    }
+
     // MARK: - Tear segmentation review
+
+    #if DEBUG
+    /// Explicit internal comparison of the current take; no capture or approval mutation.
+    @ViewBuilder
+    private func tearComparisonSection(_ take: ReferenceAuthoringTake) -> some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text("Tear comparison preview").font(.headline)
+            Text("Internal provisional comparison: choose an authored teaching target and the performed gestures to compare. This preview does not approve a take or enable training.")
+                .font(.caption).foregroundStyle(.secondary)
+            Text(ReferenceAuthoringViewModel.tearComparisonToleranceText)
+                .font(.caption).foregroundStyle(.secondary)
+            Picker("Authored target", selection: Binding(
+                get: { viewModel.tearComparisonTargetID },
+                set: { viewModel.selectTearComparisonTarget($0) }
+            )) {
+                Text("Choose a target").tag(String?.none)
+                ForEach(viewModel.tearComparisonTargets) { target in
+                    Text(ReferenceAuthoringViewModel.tearComparisonTargetTitle(target)).tag(Optional(target.id))
+                }
+            }
+            Picker("First performed gesture", selection: Binding(
+                get: { viewModel.tearComparisonStartID },
+                set: { viewModel.selectTearComparisonStart($0) }
+            )) {
+                Text("Choose a gesture").tag(String?.none)
+                ForEach(viewModel.tearComparisonCandidates) { candidate in
+                    Text(ReferenceAuthoringViewModel.tearComparisonCandidateTitle(candidate)).tag(Optional(candidate.id))
+                }
+            }
+            Picker("Last performed gesture", selection: Binding(
+                get: { viewModel.tearComparisonEndID },
+                set: { viewModel.selectTearComparisonEnd($0) }
+            )) {
+                Text("Choose the range end").tag(String?.none)
+                ForEach(viewModel.tearComparisonEndCandidates) { candidate in
+                    Text(ReferenceAuthoringViewModel.tearComparisonCandidateTitle(candidate)).tag(Optional(candidate.id))
+                }
+            }
+            .disabled(viewModel.tearComparisonStartID == nil)
+            Text("Every gesture between the selected endpoints is included, in recorded order.")
+                .font(.caption).foregroundStyle(.secondary)
+            if let first = viewModel.tearComparisonSelectedCandidates.first {
+                Text(String(format: "Alignment: %.3f s in this take → target beat 0, at %d BPM. Timing is relative to the selected start.",
+                            first.span.startTime, take.evidence.metadata.bpm))
+                    .font(.caption).foregroundStyle(.secondary)
+            }
+            Button("Compare from selected start") { viewModel.compareSelectedTear() }
+                .disabled(viewModel.tearComparisonBlockReason != nil)
+            if let reason = viewModel.tearComparisonBlockReason {
+                Text(reason).font(.caption).foregroundStyle(.secondary)
+            }
+            if let result = viewModel.tearComparisonResult {
+                ForEach(Array(result.dimensions.enumerated()), id: \.offset) { _, dimension in
+                    VStack(alignment: .leading, spacing: 3) {
+                        HStack {
+                            Text(dimension.axis.title).font(.callout.weight(.semibold))
+                            Spacer()
+                            Text(dimension.assessment.title)
+                            if let score = dimension.scorePercentage {
+                                Text(String(format: "%.0f%%", score))
+                            }
+                        }
+                        ForEach(Array(dimension.unavailableReasons.enumerated()), id: \.offset) { _, reason in
+                            Text(reason.title).font(.caption).foregroundStyle(.secondary)
+                        }
+                        if !dimension.measurements.isEmpty {
+                            DisclosureGroup("Evidence and differences") {
+                                ForEach(Array(dimension.measurements.enumerated()), id: \.offset) { _, measurement in
+                                    Text(measurement.detail).font(.caption).textSelection(.enabled)
+                                }
+                            }
+                        }
+                    }
+                }
+                SemanticErrorListView(errors: result.semanticErrors, maxErrors: result.semanticErrors.count)
+                ForEach(Array(result.coaching.enumerated()), id: \.offset) { _, message in
+                    Text(message).font(.callout)
+                }
+            }
+        }
+    }
+    #endif
 
     /// Inspect and correct one take's tear segmentation.
     ///
@@ -875,8 +1524,10 @@ struct ReferenceAuthoringView: View {
             Text("Tear segmentation review").font(.headline)
             canonicalTearChart(
                 title: "CANONICAL TEAR STRUCTURE — FINALIZED TAKE",
-                projection: ReferenceTearCanonicalProjectionBuilder.project(review),
-                emptyMessage: "No tear structure could be placed from this take's evidence."
+                projection: take.tearProjection,
+                emptyMessage: "No tear structure could be placed from this take's evidence.",
+                recordedBPM: take.evidence.metadata.bpm,
+                reviewTake: take
             )
             .frame(maxWidth: .infinity, minHeight: Self.liveNotationMinimumHeight)
             Text(ReferenceAuthoringViewModel.tearReviewStatusText(review))
@@ -1285,6 +1936,16 @@ struct ReferenceAuthoringView: View {
         .textSelection(.enabled)
     }
 
+    private func validationFindings(_ findings: [ReferenceValidationFinding]) -> some View {
+        ForEach(Array(findings.enumerated()), id: \.offset) { _, finding in
+            HStack(alignment: .top) {
+                Image(systemName: finding.severity == .failure ? "xmark.circle.fill" : "exclamationmark.triangle.fill")
+                    .foregroundStyle(finding.severity == .failure ? .red : .orange)
+                Text(finding.message).font(.callout)
+            }
+        }
+    }
+
     private func repetitionRow(
         _ boundary: ReferenceRepetitionBoundary,
         take: ReferenceAuthoringTake
@@ -1293,29 +1954,53 @@ struct ReferenceAuthoringView: View {
             HStack {
                 Text("Repetition \(boundary.index + 1)").font(.callout.weight(.semibold))
                 Spacer()
+                Button(focusedBoundary(for: take)?.index == boundary.index ? "Notation highlighted" : "Show notation") {
+                    focusMotion(on: boundary, take: take)
+                }
                 Button(take.evidence.boundaries.selectedRepetitionIndex == boundary.index ? "Selected" : "Select for Approval") {
+                    focusMotion(on: boundary, take: take)
                     viewModel.selectRepetitionForApproval(boundary.index)
                 }
-                .disabled(take.evidence.boundaries.selectedRepetitionIndex == boundary.index)
+                .disabled(!viewModel.canEditReviewedTake || take.evidence.boundaries.selectedRepetitionIndex == boundary.index)
             }
             HStack {
+                ReferenceRepetitionPlaybackControls(controller: viewModel.mediaReview, boundary: boundary, take: take,
+                    onPlay: { focusMotion(on: boundary, take: take) })
                 Stepper(
                     "Start beat \(boundary.startBeat, specifier: "%.2f")",
                     value: startBeatBinding(for: boundary),
                     in: 0...Double(take.evidence.metadata.totalBeats),
                     step: 0.25
                 )
+                .disabled(!viewModel.canEditReviewedTake)
                 Stepper(
                     "End beat \(boundary.endBeat, specifier: "%.2f")",
                     value: endBeatBinding(for: boundary),
                     in: 0...Double(take.evidence.metadata.totalBeats),
                     step: 0.25
                 )
+                .disabled(!viewModel.canEditReviewedTake)
             }
         }
         .padding(10)
         .background(Color(nsColor: .controlBackgroundColor))
         .clipShape(RoundedRectangle(cornerRadius: 8))
+        .overlay {
+            if focusedBoundary(for: take)?.index == boundary.index {
+                RoundedRectangle(cornerRadius: 8).stroke(Color.accentColor, lineWidth: 1.5)
+            }
+        }
+    }
+
+    private func focusedBoundary(for take: ReferenceAuthoringTake) -> ReferenceRepetitionBoundary? {
+        let index = motionReviewFocus?.takeID == take.id
+            ? motionReviewFocus?.repetitionIndex : take.evidence.boundaries.selectedRepetitionIndex
+        return take.evidence.boundaries.repetitions.first { $0.index == index }
+    }
+
+    private func focusMotion(on boundary: ReferenceRepetitionBoundary, take: ReferenceAuthoringTake) {
+        motionReviewFocus = .init(takeID: take.id, repetitionIndex: boundary.index,
+            isZoomed: motionReviewFocus?.takeID == take.id && motionReviewFocus?.isZoomed == true)
     }
 
     private func startBeatBinding(for boundary: ReferenceRepetitionBoundary) -> Binding<Double> {
@@ -1411,6 +2096,116 @@ struct ReferenceAuthoringView: View {
         }
     }
 
+}
+
+private struct CompanionRelaySetupView: View {
+    @ObservedObject var receiver: CompanionCameraReceiver
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Button(
+                receiver.isBrowsingForPeers
+                    ? "iPhone & Watch Relay Enabled"
+                    : "Enable iPhone & Watch Relay"
+            ) {
+                receiver.startBrowsingForCompanionIfNeeded()
+            }
+            .disabled(receiver.isBrowsingForPeers)
+            .accessibilityIdentifier("cxl.hardware.enableCompanionRelay")
+
+            Text(receiver.connectionStatus)
+                .font(.caption)
+                .foregroundStyle(.secondary)
+            Text("Nearby-device discovery and its local-network permission start only after this button is pressed.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+}
+
+private struct ReferenceMediaReviewStatus: View {
+    @ObservedObject var controller: ReferenceFinalizedMediaReviewController
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            HStack {
+                Button("Play whole take") { controller.playWholeTake() }
+                    .disabled(!controller.canPlay)
+                Button("Stop playback") { controller.stop() }
+                    .disabled(!controller.canPlay)
+            }
+            if let player = controller.videoPlayer {
+                ReferenceRecordedVideo(player: player)
+                    .frame(height: 240)
+            }
+            Text(summary).font(.caption)
+                .foregroundStyle(isBlocking ? Color.orange : Color.secondary)
+            if let message = controller.playbackMessage {
+                Text(message).font(.caption).foregroundStyle(.orange)
+            }
+            if let issue = controller.beatBindingIssue {
+                Text("Recorded audio/video can be played. Beat validation for approval is unavailable: \(issue)")
+                    .font(.caption).foregroundStyle(.orange)
+            }
+            if let beat = controller.boundBeatID {
+                Text("Exact beat binding: \(beat) · production and sparse mix hashes verified")
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+            }
+        }
+    }
+
+    private var isBlocking: Bool {
+        switch controller.state {
+        case .ready, .playing, .playingTake, .stopped, .missingVideo: false
+        default: true
+        }
+    }
+
+    private var summary: String {
+        switch controller.state {
+        case .loading: "Loading the recorded audio and video…"
+        case .ready: "Recorded audio and video are ready to play."
+        case .playing(let repetition): "Playing repetition \(repetition + 1) from finalized media."
+        case .playingTake: "Playing the whole recorded take."
+        case .stopped: "Finalized-media audition stopped."
+        case .missingAudio: "Required finalized WAV is missing; approval is blocked."
+        case .missingVideo: "Optional finalized MOV is absent; WAV audition remains available."
+        case .unreadableMedia(let file): "Finalized media is unreadable: \(file)."
+        case .durationMismatch(let wav, let mov):
+            String(format: "WAV/MOV duration mismatch: %.3f s / %.3f s.", wav, mov)
+        case .synchronizationUnavailable(let detail): "Synchronization unavailable: \(detail)"
+        }
+    }
+}
+
+private struct ReferenceRepetitionPlaybackControls: View {
+    @ObservedObject var controller: ReferenceFinalizedMediaReviewController
+    let boundary: ReferenceRepetitionBoundary
+    let take: ReferenceAuthoringTake
+    var onPlay: () -> Void = {}
+
+    var body: some View {
+        HStack {
+            Button("Play repetition") {
+                onPlay()
+                controller.play(repetition: boundary, take: take)
+            }
+                .disabled(!controller.canPlay)
+            Button("Stop") { controller.stop() }
+                .disabled(!controller.canPlay)
+        }
+    }
+}
+
+/// The route owns the tracker's lifetime; this child observes its bounded
+/// publications so live geometry refreshes even when hardware UI is quiet.
+private struct ReferenceLiveMotionContent<Content: View>: View {
+    @ObservedObject var tracker: LivePerformedNotationTracker
+    let content: (LivePerformedNotationTracker) -> Content
+
+    var body: some View { content(tracker) }
 }
 
 #if DEBUG
@@ -1547,5 +2342,97 @@ struct TearReviewTimelineChart: View {
         .frame(height: 110)
         .background(Color(nsColor: .textBackgroundColor).opacity(0.35))
         .clipShape(RoundedRectangle(cornerRadius: 6))
+    }
+}
+
+/// The buttons above own audition ranges; hide competing native transport
+/// controls so seeking or pausing cannot invalidate a selected repetition.
+private struct ReferenceRecordedVideo: NSViewRepresentable {
+    let player: AVPlayer
+    func makeNSView(context: Context) -> AVPlayerView {
+        let view = AVPlayerView()
+        view.controlsStyle = .none
+        view.player = player
+        return view
+    }
+    func updateNSView(_ view: AVPlayerView, context: Context) { view.player = player }
+    static func dismantleNSView(_ view: AVPlayerView, coordinator: ()) { view.player = nil }
+}
+
+
+private struct ReferenceMotionReviewFocus {
+    let takeID: String
+    let repetitionIndex: Int
+    let isZoomed: Bool
+}
+
+/// Presentation-only coordinates. Full records and their vertical frame stay
+/// unchanged; beats use the same measured media origin as audio audition.
+enum ReferenceMotionReviewViewport {
+    static func range(for boundary: ReferenceRepetitionBoundary,
+                      metadata: ReferenceTakeMetadata, recordedEnd: Double) -> ClosedRange<Double>? {
+        ReferenceMediaTimeRange.clamped(start: boundary.startSeconds(metadata: metadata),
+            end: boundary.endSeconds(metadata: metadata), duration: recordedEnd)
+    }
+
+    static func frame(_ fullFrame: ScratchStrokeGeometry.CanonicalFrame,
+                      selectedRange: ClosedRange<Double>?, zoomed: Bool) -> ScratchStrokeGeometry.CanonicalFrame {
+        guard zoomed, let selectedRange else { return fullFrame }
+        return ScratchStrokeGeometry.CanonicalFrame(timeRange: selectedRange,
+            positionRange: fullFrame.positionRange, coordinateSpace: fullFrame.coordinateSpace,
+            beatsPerMinute: fullFrame.beatsPerMinute) ?? fullFrame
+    }
+
+    static func visibleFractions(_ selection: ClosedRange<Double>,
+                                 in viewport: ClosedRange<Double>) -> ClosedRange<Double>? {
+        let span = viewport.upperBound - viewport.lowerBound
+        guard span.isFinite, span > 0 else { return nil }
+        let start = max(selection.lowerBound, viewport.lowerBound)
+        let end = min(selection.upperBound, viewport.upperBound)
+        guard start.isFinite, end.isFinite, end > start else { return nil }
+        return ((start - viewport.lowerBound) / span)...((end - viewport.lowerBound) / span)
+    }
+}
+
+private struct ReferenceMotionSelectionOverlay: View {
+    let selectedRange: ClosedRange<Double>
+    let viewport: ClosedRange<Double>
+
+    var body: some View {
+        Canvas { context, size in
+            let fractions = ReferenceMotionReviewViewport.visibleFractions(selectedRange, in: viewport)
+            let startX = CGFloat(fractions?.lowerBound ?? 1) * size.width
+            let endX = CGFloat(fractions?.upperBound ?? 1) * size.width
+            var outside = Path()
+            outside.addRect(CGRect(x: 0, y: 0, width: startX, height: size.height))
+            outside.addRect(CGRect(x: endX, y: 0, width: max(0, size.width - endX), height: size.height))
+            context.fill(outside, with: .color(.black.opacity(0.5)))
+            if fractions != nil {
+                let selection = Path(CGRect(x: startX, y: 0, width: endX - startX, height: size.height))
+                context.stroke(selection, with: .color(.accentColor.opacity(0.75)), lineWidth: 1.5)
+            }
+        }
+        .accessibilityHidden(true)
+    }
+}
+
+/// Digital sample-peak display, independent of Rane input gain or cue position.
+/// The source reports true zero separately from an unavailable/stale callback.
+enum CXLScratchOutputMeter {
+    static func decibels(peak: Float?) -> Double? {
+        guard let peak, peak.isFinite, peak >= 0 else { return nil }
+        return peak == 0 ? -.infinity : 20 * log10(Double(peak))
+    }
+
+    static func litSegments(peak: Float?) -> Int {
+        guard let db = decibels(peak: peak), db > -60 else { return 0 }
+        return min(20, max(0, Int(ceil((min(db, 0) + 60) / 3))))
+    }
+
+    static func label(peak: Float?) -> String {
+        guard let db = decibels(peak: peak) else { return "Unavailable" }
+        if db == -.infinity { return "Silent" }
+        if db < -60 { return "Below −60 dBFS" }
+        return String(format: "%.1f dBFS", db)
     }
 }

@@ -126,7 +126,8 @@ struct CaptureGuideEditModel {
         translation: CGSize,
         canvasSize: CGSize,
         offsetRange: ClosedRange<Double>,
-        scaleRange: ClosedRange<Double>
+        scaleRange: ClosedRange<Double>,
+        normalizedBounds: CGRect = CaptureGuideEditModel.normalizedBounds
     ) -> MacCaptureEngine.ZoneAdjustment {
         let deltaWidth = Double(translation.width / max(canvasSize.width, 1))
         let deltaHeight = Double(translation.height / max(canvasSize.height, 1))
@@ -145,7 +146,45 @@ struct CaptureGuideEditModel {
             proposed,
             boundingBox: snapshot.boundingBox,
             offsetRange: offsetRange,
-            scaleRange: scaleRange
+            scaleRange: scaleRange,
+            normalizedBounds: normalizedBounds
+        )
+    }
+
+    /// CXL snapshots already contain the previous adjustment. Resize that
+    /// displayed rectangle once, then encode against its original full-frame
+    /// zone; never apply an absolute persisted scale to the snapshot again.
+    static func cxlResizedGeometry(
+        from snapshot: ZoneResizeSnapshot,
+        baseBoundingBox: CGRect,
+        translation: CGSize,
+        canvasSize: CGSize,
+        scaleRange: ClosedRange<Double>
+    ) -> (adjustment: MacCaptureEngine.ZoneAdjustment, boundingBox: CGRect) {
+        let bounds = CGRect(x: 0, y: 0, width: 1, height: 1)
+        let width = min(max(snapshot.boundingBox.width + translation.width / max(canvasSize.width, 1),
+                            baseBoundingBox.width * CGFloat(scaleRange.lowerBound)),
+                        min(baseBoundingBox.width * CGFloat(scaleRange.upperBound), bounds.width))
+        let height = min(max(snapshot.boundingBox.height + translation.height / max(canvasSize.height, 1),
+                             baseBoundingBox.height * CGFloat(scaleRange.lowerBound)),
+                         min(baseBoundingBox.height * CGFloat(scaleRange.upperBound), bounds.height))
+        // The green corner is bottom-right in the displayed image. Hold its
+        // opposite top-left corner until image/adjustment bounds are reached.
+        // CXL dragging can use the whole image; resizing must retain that
+        // placement instead of reapplying the ordinary app's ±0.28 limits.
+        let centerX = min(max(snapshot.boundingBox.minX + width / 2,
+                              bounds.minX + width / 2), bounds.maxX - width / 2)
+        let centerY = min(max(snapshot.boundingBox.maxY - height / 2,
+                              bounds.minY + height / 2), bounds.maxY - height / 2)
+        let rect = CGRect(x: centerX - width / 2, y: centerY - height / 2, width: width, height: height)
+        return (
+            MacCaptureEngine.ZoneAdjustment(
+                offsetX: Double(centerX - baseBoundingBox.midX),
+                offsetY: Double(centerY - baseBoundingBox.midY),
+                widthScale: Double(width / baseBoundingBox.width),
+                heightScale: Double(height / baseBoundingBox.height)
+            ),
+            rect
         )
     }
 
@@ -153,7 +192,8 @@ struct CaptureGuideEditModel {
         _ adjustment: MacCaptureEngine.ZoneAdjustment,
         boundingBox: CGRect,
         offsetRange: ClosedRange<Double>,
-        scaleRange: ClosedRange<Double>
+        scaleRange: ClosedRange<Double>,
+        normalizedBounds: CGRect = CaptureGuideEditModel.normalizedBounds
     ) -> MacCaptureEngine.ZoneAdjustment {
         let widthScale = clamp(adjustment.widthScale, within: scaleRange)
         let heightScale = clamp(adjustment.heightScale, within: scaleRange)
@@ -193,6 +233,9 @@ struct DeckGamificationOverlay: View {
     /// `CalibrationCameraOverlay` passes ~0.15–0.20 for a subtle,
     /// non-obstructive persistent guide instead.
     var lockedOpacity: Double = 0
+    /// A capture caller can suppress pointer editing without changing saved
+    /// calibration. CXL also guards the engine mutation at the take boundary.
+    var allowsEditing: Bool = true
     // Slice X.1.1: this used to be a hardcoded `false`, which collapsed
     // every overlay box to opacity 0 and disabled hit-testing — meaning
     // the deck/mixer calibration boxes were INVISIBLE everywhere even
@@ -201,9 +244,9 @@ struct DeckGamificationOverlay: View {
     // from the same `CaptureGuideEditModel.isEditable` helper that gates
     // the interactive layer.
     private var isCalibrationEditMode: Bool {
-        CaptureGuideEditModel.isEditable(
+        allowsEditing && CaptureGuideEditModel.isEditable(
             showRigGuides: detector.showRigGuides,
-            calibrationLocked: detector.calibrationLocked,
+            calibrationLocked: detector.cameraGuideCalibrationLocked,
             isUsingManualRigGuide: detector.isUsingManualRigGuide
         )
     }
@@ -239,9 +282,9 @@ struct DeckGamificationOverlay: View {
     }
 
     private var isInteractiveCalibrationVisible: Bool {
-        CaptureGuideEditModel.isEditable(
+        allowsEditing && CaptureGuideEditModel.isEditable(
             showRigGuides: detector.showRigGuides,
-            calibrationLocked: detector.calibrationLocked,
+            calibrationLocked: detector.cameraGuideCalibrationLocked,
             isUsingManualRigGuide: detector.isUsingManualRigGuide
         )
     }
@@ -427,6 +470,7 @@ struct DeckGamificationOverlay: View {
     private func interactiveCalibrationGesture(layout: DJRigLayout, size: CGSize) -> some Gesture {
         DragGesture(minimumDistance: 0)
             .onChanged { value in
+                guard isCalibrationEditMode else { return }
                 if activeZoneInteraction == nil {
                     activeZoneInteraction = zoneInteraction(at: value.startLocation, layout: layout, size: size)
                 }
@@ -444,7 +488,7 @@ struct DeckGamificationOverlay: View {
             .onEnded { _ in
                 if let activeZoneInteraction {
                     let role = activeZoneInteraction.role
-                    if let finalAdjustment = zoneDraftAdjustments[role] {
+                    if isCalibrationEditMode, let finalAdjustment = zoneDraftAdjustments[role] {
                         // Preserve the existing engine contract: publish the
                         // final adjustment once, then persist once. Keeping
                         // intermediate pointer movement view-local prevents
@@ -523,13 +567,13 @@ struct DeckGamificationOverlay: View {
             pixelSnapshot: pixelSnapshot,
             translation: value.translation,
             canvasSize: size,
-            inset: CaptureGuideEditModel.canvasInset
+            inset: detector.cameraGuideCanvasInset
         )
 
         zoneDraftRects[role] = CaptureGuideEditModel.clampRect(
             pixelSnapshot.offsetBy(dx: value.translation.width, dy: value.translation.height),
             to: size,
-            inset: CaptureGuideEditModel.canvasInset
+            inset: detector.cameraGuideCanvasInset
         )
         zoneDraftAdjustments[role] = MacCaptureEngine.ZoneAdjustment(
             offsetX: adjustmentSnapshot.offsetX + deltaX,
@@ -548,12 +592,27 @@ struct DeckGamificationOverlay: View {
         )
         zoneResizeSnapshots[zone.role] = snapshot
 
+        if detector.cxlCameraGuideEnabled,
+           let baseZone = DJRigLayout.cxlFullFrameGuide.zone(for: zone.role) {
+            let geometry = CaptureGuideEditModel.cxlResizedGeometry(
+                from: snapshot,
+                baseBoundingBox: baseZone.boundingBox,
+                translation: value.translation,
+                canvasSize: size,
+                scaleRange: detector.calibrationScaleRange
+            )
+            zoneDraftAdjustments[zone.role] = geometry.adjustment
+            zoneDraftRects[zone.role] = convert(geometry.boundingBox, in: size)
+            return
+        }
+
         let adjustment = CaptureGuideEditModel.resizedAdjustment(
             from: snapshot,
             translation: value.translation,
             canvasSize: size,
             offsetRange: detector.calibrationOffsetRange,
-            scaleRange: detector.calibrationScaleRange
+            scaleRange: detector.calibrationScaleRange,
+            normalizedBounds: detector.cameraGuideNormalizedBounds
         )
         zoneDraftAdjustments[zone.role] = adjustment
         zoneDraftRects[zone.role] = resizePreviewRect(

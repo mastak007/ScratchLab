@@ -7,6 +7,115 @@ import AVFoundation
 /// Full audio engine tests require hardware; these are logic-level tests.
 final class ScratchSamplePlaybackControllerTests: XCTestCase {
 
+    // MARK: - Actual post-fader output metering (no audio hardware)
+
+    func testOutputMeterDistinguishesSilenceFromMissingCallbacks() throws {
+        let meter = ScratchOutputPeakMeter()
+        XCTAssertNil(meter.consume(now: 10))
+        meter.reset(now: 10)
+        XCTAssertNil(meter.consume(now: 10.01))
+        meter.publish(peak: 0, receivedAt: 10.01, token: meter.currentToken)
+        XCTAssertEqual(try XCTUnwrap(meter.consume(now: 10.02)).peak, 0)
+        XCTAssertEqual(try XCTUnwrap(meter.consume(now: 10.10)).peak, 0)
+        XCTAssertNil(meter.consume(now: 10.30), "Lost callbacks must become unavailable, not silent.")
+        meter.publish(peak: 0.6, receivedAt: 10.31, token: meter.currentToken)
+        XCTAssertEqual(try XCTUnwrap(meter.consume(now: 10.32)).peak, 0.6)
+    }
+
+    func testOutputMeterRetainsBriefCutAttackUntilPollThenAcceptsRealSilence() throws {
+        let meter = ScratchOutputPeakMeter()
+        meter.reset(now: 10)
+        let token = meter.currentToken
+        meter.publish(peak: 0, receivedAt: 10.005, token: token)
+        meter.publish(peak: 0.875, receivedAt: 10.010, token: token)
+        meter.publish(peak: 0, receivedAt: 10.015, token: token)
+        XCTAssertEqual(try XCTUnwrap(meter.consume(now: 10.040)).peak, 0.875,
+            "Every tap buffer between the 25 Hz polls contributes its actual peak.")
+        XCTAssertEqual(try XCTUnwrap(meter.consume(now: 10.041)).peak, 0.875,
+            "A poll without another callback must not fabricate silence.")
+        meter.publish(peak: 0, receivedAt: 10.045, token: token)
+        XCTAssertEqual(try XCTUnwrap(meter.consume(now: 10.080)).peak, 0,
+            "The first poll containing an actual silent buffer clears the cached peak.")
+        XCTAssertNil(meter.consume(now: 10.300), "A cached silent value expires when callback delivery stops.")
+    }
+
+    func testOutputMeterReloadRejectsDelayedCallbacksAndOldPCM() throws {
+        let meter = ScratchOutputPeakMeter()
+        meter.reset(now: 10)
+        let oldToken = meter.currentToken
+        meter.publish(peak: 0.9, receivedAt: 10.01, token: oldToken)
+        meter.reset(now: 11)
+        let newToken = meter.currentToken
+        XCTAssertGreaterThan(newToken.generation, oldToken.generation)
+        meter.publish(peak: 0.99, receivedAt: 10.99, token: oldToken)
+        meter.publish(peak: 0.99, receivedAt: 10.99, token: newToken)
+        XCTAssertNil(meter.consume(now: 11.01), "A reload cannot reuse the previous sample's signal.")
+        meter.publish(peak: 0.2, receivedAt: 11.02, token: newToken)
+        meter.publish(peak: 0.99, receivedAt: 11.03, token: oldToken)
+        XCTAssertEqual(try XCTUnwrap(meter.consume(now: 11.04)).peak, 0.2)
+        meter.reset(now: 12)
+        meter.publish(peak: 0.8, receivedAt: 12.01, token: newToken)
+        XCTAssertNil(meter.consume(now: 12.02), "Stop/unload invalidation also rejects a pending tap.")
+    }
+
+    func testOutputMeterInvalidSamplesDoNotRefreshAndPeakIsUnscaled() throws {
+        let meter = ScratchOutputPeakMeter()
+        meter.reset(now: 10)
+        let token = meter.currentToken
+        meter.publish(peak: 1.25, receivedAt: 10.01, token: token)
+        XCTAssertEqual(try XCTUnwrap(meter.consume(now: 10.02)).peak, 1.25,
+            "Do not apply input RMS x10 scaling or clamp an over-full-scale PCM peak.")
+        meter.publish(peak: .nan, receivedAt: 10.20, token: token)
+        meter.publish(peak: .infinity, receivedAt: 10.20, token: token)
+        meter.publish(peak: -0.2, receivedAt: 10.20, token: token)
+        meter.publish(peak: 0.8, receivedAt: .infinity, token: token)
+        XCTAssertNil(meter.consume(now: 10.30))
+    }
+
+    func testPostFaderPCMScanFindsSingleFrameAttackOnEitherChannel() throws {
+        let buffer = try makeOutputMeterBuffer()
+        let channels = try XCTUnwrap(buffer.floatChannelData)
+        XCTAssertEqual(ScratchSamplePlaybackController.scratchOutputPeak(in: buffer), 0)
+        channels[1][127] = -0.75
+        XCTAssertEqual(ScratchSamplePlaybackController.scratchOutputPeak(in: buffer), 0.75)
+        channels[0][0] = 1.125
+        XCTAssertEqual(ScratchSamplePlaybackController.scratchOutputPeak(in: buffer), 1.125)
+        channels[1][64] = .nan
+        XCTAssertNil(ScratchSamplePlaybackController.scratchOutputPeak(in: buffer))
+        buffer.frameLength = 0
+        XCTAssertNil(ScratchSamplePlaybackController.scratchOutputPeak(in: buffer))
+    }
+
+    func testLoadedSampleWithoutOutputCallbacksNeverClaimsSilentOutputAndReloadInvalidates() throws {
+        let controller = ScratchSamplePlaybackController()
+        XCTAssertNil(controller.currentScratchOutputMeterSnapshot().peak)
+        controller.testOnly_installSyntheticSample(try makeOutputMeterBuffer(), sampleID: "meter-a")
+        let first = controller.currentScratchOutputMeterSnapshot()
+        XCTAssertEqual(first.sampleID, "meter-a")
+        XCTAssertNil(first.peak)
+        controller.testOnly_installSyntheticSample(try makeOutputMeterBuffer(), sampleID: "meter-a")
+        let reloaded = controller.currentScratchOutputMeterSnapshot()
+        XCTAssertGreaterThan(reloaded.generation, first.generation)
+        XCTAssertNil(reloaded.peak)
+        controller.unload()
+        controller.waitForAudioQueue()
+        let unloaded = controller.currentScratchOutputMeterSnapshot()
+        XCTAssertGreaterThan(unloaded.generation, reloaded.generation)
+        XCTAssertNil(unloaded.sampleID)
+        XCTAssertNil(unloaded.peak)
+    }
+
+    private func makeOutputMeterBuffer() throws -> AVAudioPCMBuffer {
+        let format = try XCTUnwrap(AVAudioFormat(standardFormatWithSampleRate: 48_000, channels: 2))
+        let buffer = try XCTUnwrap(AVAudioPCMBuffer(pcmFormat: format, frameCapacity: 128))
+        buffer.frameLength = 128
+        let channels = try XCTUnwrap(buffer.floatChannelData)
+        for channel in 0..<2 {
+            for frame in 0..<128 { channels[channel][frame] = 0 }
+        }
+        return buffer
+    }
+
     // MARK: - sampleFrame mapping
 
     func testSampleFrameAtZero() {

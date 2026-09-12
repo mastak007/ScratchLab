@@ -1674,5 +1674,78 @@ class AppExportValidationTests(unittest.TestCase):
         )
 
 
+class ExactReferenceBeatEvidenceTests(unittest.TestCase):
+    def fixture(self, root: Path) -> tuple[dict, dict]:
+        import hashlib
+        from validate_session import reference_artifact_record
+
+        directory = root / "beat_assets" / "take_001" / "exact95"
+        directory.mkdir(parents=True)
+        files = {}
+        for source, name, value in [("reference_beat_master", "production_master.wav", 1000),
+                                    ("reference_beat_analysis", "sparse_analysis.wav", 500)]:
+            path = directory / name
+            with wave.open(str(path), "wb") as audio:
+                audio.setnchannels(2)
+                audio.setsampwidth(2)
+                audio.setframerate(48_000)
+                audio.writeframes(struct.pack("<hh", value, value) * 64)
+            files[source] = path.relative_to(root).as_posix()
+        binding = {"id": "exact95", "sampleRate": 48_000, "countInFrameCount": 16,
+                   "loopStartFrame": 16, "loopFrameCount": 48,
+                   "productionMasterFileName": "production_master.wav", "sparseAnalysisMixFileName": "sparse_analysis.wav",
+                   "productionMasterSHA256": hashlib.sha256((directory / "production_master.wav").read_bytes()).hexdigest(),
+                   "sparseAnalysisMixSHA256": hashlib.sha256((directory / "sparse_analysis.wav").read_bytes()).hexdigest()}
+        rights_path = directory / "rights_receipt.json"
+        rights_path.write_text(json.dumps({"candidateID": "exact95", "rightsState": "procedurallyGeneratedOriginal",
+                                          "externalRecordingUsed": False}))
+        (directory / "manifest.json").write_text(json.dumps({"schemaVersion": "scratchlab_runtime_beat_assets_v2",
+            "binding": binding, "rightsReceipt": {"sha256": hashlib.sha256(rights_path.read_bytes()).hexdigest()}}))
+        sidecar_path = directory.parent / "take_sidecar.json"
+        sidecar_path.write_text(json.dumps({"sessionConfig": {"referenceCaptureIntent": {"beatSpec": binding}},
+            "captureTiming": {"recordingStartOffsetSeconds": 16 / 48_000}}))
+        files.update({"reference_beat_manifest": (directory / "manifest.json").relative_to(root).as_posix(),
+                      "reference_beat_rights": rights_path.relative_to(root).as_posix(),
+                      "reference_take_sidecar": sidecar_path.relative_to(root).as_posix()})
+        artifacts = {source: reference_artifact_record(root, root / path, source) for source, path in files.items()}
+        return {"files": files, "artifacts": artifacts}, binding
+
+    def test_exact_reference_assets_are_additive_and_hash_bound(self) -> None:
+        from validate_session import (OPTIONAL_MANIFEST_FILE_SOURCES, OPTIONAL_MANIFEST_ARTIFACT_SOURCES,
+                                      validate_reference_beat_evidence)
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            take, _ = self.fixture(root)
+            self.assertTrue(set(take["files"]) <= OPTIONAL_MANIFEST_FILE_SOURCES)
+            self.assertTrue(set(take["artifacts"]) <= OPTIONAL_MANIFEST_ARTIFACT_SOURCES)
+            errors = []
+            validate_reference_beat_evidence(take, root, "Take1", errors)
+            self.assertEqual(errors, [])
+            validate_reference_beat_evidence({"files": {}, "artifacts": {}}, root, "Legacy", errors)
+            self.assertEqual(errors, [])
+            master = root / take["files"]["reference_beat_master"]
+            master.write_bytes(master.read_bytes() + b"changed")
+            validate_reference_beat_evidence(take, root, "Take1", errors)
+            self.assertTrue(any("exact BeatSpec" in item for item in errors))
+
+    def test_missing_receipt_and_nonfinite_origin_fail_closed(self) -> None:
+        from validate_session import validate_reference_beat_evidence
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            take, _ = self.fixture(root)
+            incomplete = {"files": dict(take["files"]), "artifacts": take["artifacts"]}
+            del incomplete["files"]["reference_beat_rights"]
+            errors = []
+            validate_reference_beat_evidence(incomplete, root, "Take1", errors)
+            self.assertTrue(any("incomplete" in item for item in errors))
+            sidecar_path = root / take["files"]["reference_take_sidecar"]
+            sidecar = json.loads(sidecar_path.read_text())
+            sidecar["captureTiming"]["recordingStartOffsetSeconds"] = float("nan")
+            sidecar_path.write_text(json.dumps(sidecar))
+            errors = []
+            validate_reference_beat_evidence(take, root, "Take1", errors)
+            self.assertTrue(any("recording origin" in item for item in errors))
+
+
 if __name__ == "__main__":
     unittest.main()

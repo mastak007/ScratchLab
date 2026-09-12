@@ -8,6 +8,14 @@ private enum ScratchLabDesktopWindowID {
     #endif
 }
 
+enum CXLReleaseRouteContract {
+    static let minimumWidth: CGFloat = 900
+    static let minimumHeight: CGFloat = 700
+    static let normalWidth: CGFloat = 1180
+    static let normalHeight: CGFloat = 820
+    static let stages = ["Setup", "Capture", "Review & Export"]
+}
+
 @main
 struct ScratchLabDesktopApp: App {
     @StateObject private var relayedWatchCaptureStore: RelayedWatchCaptureStore
@@ -24,26 +32,38 @@ struct ScratchLabDesktopApp: App {
     init() {
         let isRunningTests = ProcessInfo.processInfo.environment["XCTestConfigurationFilePath"] != nil
         self.isRunningTests = isRunningTests
+        #if DEBUG
+        let activateAuxiliaryServices = !isRunningTests
+        #else
+        let activateAuxiliaryServices = false
+        #endif
         let watchCaptureStore = RelayedWatchCaptureStore()
         _relayedWatchCaptureStore = StateObject(wrappedValue: watchCaptureStore)
-        _captureEngine = StateObject(wrappedValue: MacCaptureEngine(autoRefreshDevices: !isRunningTests))
+        _captureEngine = StateObject(
+            wrappedValue: MacCaptureEngine(
+                autoRefreshDevices: !isRunningTests,
+                allowsSeratoDirectCaptureDiscovery: activateAuxiliaryServices,
+                prefersPhysicalCaptureAudio: true
+            )
+        )
         _companionReceiver = StateObject(
             wrappedValue: CompanionCameraReceiver(
                 relayedWatchCaptureStore: watchCaptureStore,
-                autoStartBrowsing: !isRunningTests
+                autoStartBrowsing: activateAuxiliaryServices
             )
         )
         _performerBroadcaster = StateObject(
-            wrappedValue: PerformerMonitorBroadcaster(startImmediately: !isRunningTests)
+            wrappedValue: PerformerMonitorBroadcaster(startImmediately: activateAuxiliaryServices)
         )
         _sessionUploadManager = StateObject(
-            wrappedValue: SessionUploadManager(activateImmediately: !isRunningTests)
+            wrappedValue: SessionUploadManager(activateImmediately: activateAuxiliaryServices)
         )
         _routineSessionStore = StateObject(wrappedValue: RoutineSessionStore())
         _progressManager = StateObject(wrappedValue: ProgressManager())
     }
 
     var body: some Scene {
+        #if DEBUG
         Window("ScratchLab", id: ScratchLabDesktopWindowID.mainWindow) {
             rootContent
         }
@@ -70,6 +90,33 @@ struct ScratchLabDesktopApp: App {
         }
         .windowResizability(.contentSize)
         #endif
+        #else
+        Window("ScratchLab CXL", id: ScratchLabDesktopWindowID.mainWindow) {
+            cxlReleaseContent
+        }
+        .defaultSize(
+            width: CXLReleaseRouteContract.normalWidth,
+            height: CXLReleaseRouteContract.normalHeight
+        )
+        .windowResizability(.contentMinSize)
+        #endif
+    }
+
+    @ViewBuilder
+    private var cxlReleaseContent: some View {
+        if isRunningTests {
+            Color.clear.frame(width: 1, height: 1)
+        } else {
+            ReferenceAuthoringView(
+                engine: captureEngine,
+                companionReceiver: companionReceiver,
+                operatorName: NSFullUserName()
+            )
+            .frame(
+                minWidth: CXLReleaseRouteContract.minimumWidth,
+                minHeight: CXLReleaseRouteContract.minimumHeight
+            )
+        }
     }
 
     @ViewBuilder

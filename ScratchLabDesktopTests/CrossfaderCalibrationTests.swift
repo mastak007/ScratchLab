@@ -65,8 +65,8 @@ final class CrossfaderCalibrationTests: XCTestCase {
         static let calibration = CrossfaderCalibration(
             address: address,
             fullLeftRawValue: 0,
-            centerRawValue: 52,
-            fullRightRawValue: 104,
+            centerRawValue: 26,
+            fullRightRawValue: 52,
             openEnd: .left,
             activeDeck: .rightDeck,
             calibratedAt: Date(timeIntervalSince1970: 1_788_000_000)
@@ -84,8 +84,8 @@ final class CrossfaderCalibrationTests: XCTestCase {
 
         static let calibration = CrossfaderCalibration(
             address: address,
-            fullLeftRawValue: 0,
-            centerRawValue: 64,
+            fullLeftRawValue: 64,
+            centerRawValue: 96,
             fullRightRawValue: 127,
             openEnd: .right,
             activeDeck: .leftDeck,
@@ -99,14 +99,12 @@ final class CrossfaderCalibrationTests: XCTestCase {
         let calibration = RaneRightDeck.calibration
         XCTAssertEqual(calibration.openRawValue, 0)
         XCTAssertEqual(calibration.closedRawValue, 52)
-        XCTAssertEqual(calibration.beyondClosedRawValue, 104)
     }
 
     func testOpenEndRightPutsTheOpenEndAtTheRightEndStop() {
         let calibration = ConventionalLeftOpenRight.calibration
         XCTAssertEqual(calibration.openRawValue, 127)
         XCTAssertEqual(calibration.closedRawValue, 64)
-        XCTAssertEqual(calibration.beyondClosedRawValue, 0)
     }
 
     func testNormalizationRunsClosedToOpenRegardlessOfOrientation() {
@@ -132,6 +130,57 @@ final class CrossfaderCalibrationTests: XCTestCase {
         // or wrapped position.
         XCTAssertEqual(RaneRightDeck.calibration.normalized(rawValue: 104), 0.0)
         XCTAssertEqual(RaneRightDeck.calibration.normalized(rawValue: 127), 0.0)
+    }
+
+    func testNormalRightDeckSharpCurveOpensAtFivePercentAndStaysOpen() {
+        let calibration = CrossfaderCalibration(
+            address: RaneRightDeck.address,
+            fullLeftRawValue: 0,
+            centerRawValue: 52,
+            fullRightRawValue: 104,
+            openEnd: .right,
+            activeDeck: .rightDeck,
+            calibratedAt: Date(timeIntervalSince1970: 1_788_000_000)
+        )
+        let response = FaderCurveResponse(
+            zeroAt: 0,
+            oneAt: MIDIFaderCurveConstants.sharpScratchCutInWidth,
+            shape: .linear
+        )
+        let samples = CrossfaderStateDeriver.positionSamples(
+            rawEvents: [(0, 0), (0.01, 4), (0.02, 5), (0.03, 6), (0.04, 52), (0.05, 104)],
+            calibration: calibration,
+            response: response
+        )!
+        XCTAssertEqual(samples[0].audibleGain, 0)
+        XCTAssertLessThan(samples[1].audibleGain ?? 1, 1)
+        XCTAssertGreaterThanOrEqual(samples[2].audibleGain ?? 0, 0.9)
+        XCTAssertEqual(samples[3].audibleGain, 1)
+        XCTAssertEqual(samples[4].audibleGain, 1)
+        XCTAssertEqual(samples[5].audibleGain, 1)
+        XCTAssertEqual(samples[4].normalizedPosition, 0.5, accuracy: 0.0001)
+    }
+
+    func testReverseMirrorsNormalRightDeckAndCustomCurveControlsGate() {
+        let reverse = CrossfaderCalibration(
+            address: RaneRightDeck.address,
+            fullLeftRawValue: 0,
+            centerRawValue: 52,
+            fullRightRawValue: 104,
+            openEnd: .left,
+            activeDeck: .rightDeck,
+            calibratedAt: Date(timeIntervalSince1970: 1_788_000_000)
+        )
+        let custom = FaderCurveResponse(zeroAt: 0.20, oneAt: 0.40, shape: .linear)
+        let samples = CrossfaderStateDeriver.positionSamples(
+            rawEvents: [(0, 104), (0.01, 84), (0.02, 62), (0.03, 0)],
+            calibration: reverse,
+            response: custom
+        )!
+        XCTAssertEqual(samples[0].audibleGain, 0)
+        XCTAssertEqual(samples[1].audibleGain ?? -1, 0, accuracy: 0.0001)
+        XCTAssertEqual(samples[2].audibleGain ?? -1, 1, accuracy: 0.0001)
+        XCTAssertEqual(samples[3].audibleGain, 1)
     }
 
     // MARK: - Half-range controllers (the actual defect)
@@ -201,8 +250,8 @@ final class CrossfaderCalibrationTests: XCTestCase {
         let calibration = CrossfaderCalibration(
             address: RaneRightDeck.address,
             fullLeftRawValue: 0,
-            centerRawValue: 8,
-            fullRightRawValue: 127,
+            centerRawValue: 4,
+            fullRightRawValue: 8,
             openEnd: .left,
             activeDeck: .rightDeck,
             calibratedAt: Date()
@@ -310,7 +359,8 @@ final class CrossfaderCalibrationTests: XCTestCase {
         }
         XCTAssertTrue(calibration.isUsable)
         XCTAssertEqual(calibration.normalized(rawValue: 0), 1.0)
-        XCTAssertEqual(calibration.normalized(rawValue: 52), 0.0)
+        XCTAssertEqual(calibration.normalized(rawValue: 52), 0.5)
+        XCTAssertEqual(calibration.normalized(rawValue: 104), 0.0)
     }
 
     func testSweepIgnoresOutOfRangeMIDIValues() {
@@ -959,5 +1009,65 @@ final class CrossfaderCalibrationTests: XCTestCase {
         let sweep = d4Sweep().armed(at: 10)
         let again = sweep.arming(atObservationSequence: 999)
         XCTAssertEqual(again.armBoundarySequence, 10)
+    }
+
+    func testExportedFaderDocumentRoundTripsSnapshottedCurveAndAudibleGain() throws {
+        let response = FaderCurveResponse(zeroAt: 0.18, oneAt: 0.44, shape: .smoothstep)
+        let document = ReferenceCalibratedFaderDocument(
+            calibration: ConventionalLeftOpenRight.calibration,
+            curveResponse: response,
+            hysteresis: .default,
+            maximumCutDurationSeconds: 0.28,
+            maximumPulseGapSeconds: 0.20,
+            samples: [
+                ReferenceCalibratedFaderSample(
+                    takeRelativeTime: 0.125,
+                    rawValue: 83,
+                    normalizedPosition: 0.65,
+                    audibleGain: 0.91
+                )
+            ],
+            derivation: CrossfaderDerivation(intervals: [], events: [])
+        )
+
+        let decoded = try JSONDecoder().decode(
+            ReferenceCalibratedFaderDocument.self,
+            from: JSONEncoder().encode(document)
+        )
+
+        XCTAssertEqual(decoded, document)
+        XCTAssertEqual(decoded.curveResponse, response)
+        XCTAssertEqual(decoded.samples.first?.audibleGain, 0.91)
+    }
+
+    func testLegacyFaderDocumentWithoutCurveOrAudibleGainStillDecodes() throws {
+        let document = ReferenceCalibratedFaderDocument(
+            calibration: ConventionalLeftOpenRight.calibration,
+            hysteresis: .default,
+            maximumCutDurationSeconds: 0.28,
+            maximumPulseGapSeconds: 0.20,
+            samples: [
+                ReferenceCalibratedFaderSample(
+                    takeRelativeTime: 0.125,
+                    rawValue: 83,
+                    normalizedPosition: 0.65
+                )
+            ],
+            derivation: CrossfaderDerivation(intervals: [], events: [])
+        )
+        let encoded = try JSONEncoder().encode(document)
+        var json = try XCTUnwrap(JSONSerialization.jsonObject(with: encoded) as? [String: Any])
+        json.removeValue(forKey: "curveResponse")
+        var samples = try XCTUnwrap(json["samples"] as? [[String: Any]])
+        samples[0].removeValue(forKey: "audibleGain")
+        json["samples"] = samples
+
+        let decoded = try JSONDecoder().decode(
+            ReferenceCalibratedFaderDocument.self,
+            from: JSONSerialization.data(withJSONObject: json)
+        )
+
+        XCTAssertNil(decoded.curveResponse)
+        XCTAssertNil(decoded.samples.first?.audibleGain)
     }
 }

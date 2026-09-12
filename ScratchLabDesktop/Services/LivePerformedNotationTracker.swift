@@ -28,6 +28,8 @@ struct LivePerformedNotationDataSource {
     /// `MacCaptureEngine.selectedMIDIInputSourceName` ("Not Connected" when
     /// none selected).
     let selectedMIDISourceName: () -> String
+    /// Stable Core MIDI identity for exact calibration/event correlation.
+    let selectedMIDISourceIdentifier: () -> String
     /// Queue-confined, non-destructive snapshot of accumulated MIDI CC
     /// telemetry — mirrors `MacCaptureEngine.capturedMidiCCEventsSnapshot()`.
     let capturedMidiCCEventsSnapshot: () -> [CaptureCore.RawMixerMIDIEvent]
@@ -41,6 +43,8 @@ struct LivePerformedNotationDataSource {
     /// the existing `CrossfaderStateDeriver`. Defaults to `nil` so synthetic
     /// data sources that only exercise platter motion stay source-compatible.
     let activeCrossfaderCalibration: () -> CrossfaderCalibration?
+    /// Immutable state captured at this take's media-start boundary.
+    let activeCrossfaderTakeStartState: () -> CaptureCore.CrossfaderTakeStartState?
     /// Correlated MIDI packet and sample-relative phase, captured by the
     /// active playback owner. Nil means the loop cannot be aligned truthfully.
     /// Transient presentation input; never supplied to physical decoding.
@@ -48,15 +52,19 @@ struct LivePerformedNotationDataSource {
 
     init(
         selectedMIDISourceName: @escaping () -> String,
+        selectedMIDISourceIdentifier: @escaping () -> String = { "" },
         capturedMidiCCEventsSnapshot: @escaping () -> [CaptureCore.RawMixerMIDIEvent],
         cameraMovementEventsSnapshot: @escaping (_ now: CFTimeInterval) -> [CaptureCore.DetectedNotationRecordMovementEvent]?,
         activeCrossfaderCalibration: @escaping () -> CrossfaderCalibration? = { nil },
+        activeCrossfaderTakeStartState: @escaping () -> CaptureCore.CrossfaderTakeStartState? = { nil },
         activePlaybackLoopContext: @escaping () -> PlaybackLoopContext? = { nil }
     ) {
         self.selectedMIDISourceName = selectedMIDISourceName
+        self.selectedMIDISourceIdentifier = selectedMIDISourceIdentifier
         self.capturedMidiCCEventsSnapshot = capturedMidiCCEventsSnapshot
         self.cameraMovementEventsSnapshot = cameraMovementEventsSnapshot
         self.activeCrossfaderCalibration = activeCrossfaderCalibration
+        self.activeCrossfaderTakeStartState = activeCrossfaderTakeStartState
         self.activePlaybackLoopContext = activePlaybackLoopContext
     }
 }
@@ -235,7 +243,10 @@ final class LivePerformedNotationTracker: ObservableObject {
     ) -> [CaptureCore.DetectedNotationRecordMovementEvent] {
         guard case .tracking(_, _, let continuousCommitted, let continuousProvisional, _, _, let period) = state else { return [] }
         var events = continuousCommitted
-        if let continuousProvisional {
+        // The general preview may show any open run. Canonical Tear review
+        // only sees it after the shared decoder's evidence gates pass, so an
+        // unfinished tail cannot invalidate already committed gestures.
+        if let continuousProvisional, continuousProvisional.meetsNoiseGates {
             let duration = max(0, continuousProvisional.currentTime - continuousProvisional.startTime)
             let distance = abs(continuousProvisional.displacement)
             events.append(CaptureCore.DetectedNotationRecordMovementEvent(
@@ -246,7 +257,7 @@ final class LivePerformedNotationTracker: ObservableObject {
                 direction: continuousProvisional.direction,
                 movementKind: continuousProvisional.movementKind,
                 speed: duration > 0 ? distance / duration : 0,
-                confidence: 0.5,
+                confidence: 0.80,
                 source: "live_preview"
             ))
         }
@@ -397,7 +408,8 @@ final class LivePerformedNotationTracker: ObservableObject {
                 startTime: event.startTime, currentTime: event.currentTime,
                 startPosition: position(event.startPosition), currentPosition: position(event.currentPosition),
                 direction: event.direction, movementKind: event.movementKind,
-                displacement: event.displacement
+                displacement: event.displacement,
+                meetsNoiseGates: event.meetsNoiseGates
             )
         }
         guard events.allSatisfy({ $0.startPosition.isFinite && $0.endPosition.isFinite }),
@@ -514,7 +526,9 @@ final class LivePerformedNotationTracker: ObservableObject {
         // and the Tear projection truthfully reports FADER UNKNOWN.
         let faderDerivation = Self.deriveCrossfader(
             midiSnapshot: midiSnapshot,
-            calibration: dataSource.activeCrossfaderCalibration()
+            selectedSourceIdentifier: dataSource.selectedMIDISourceIdentifier(),
+            calibration: dataSource.activeCrossfaderCalibration(),
+            takeStartState: dataSource.activeCrossfaderTakeStartState()
         )
 
         if usesController {
@@ -552,18 +566,45 @@ final class LivePerformedNotationTracker: ObservableObject {
     /// fabricated state.
     private static func deriveCrossfader(
         midiSnapshot: [CaptureCore.RawMixerMIDIEvent],
-        calibration: CrossfaderCalibration?
+        selectedSourceIdentifier: String,
+        calibration: CrossfaderCalibration?,
+        takeStartState: CaptureCore.CrossfaderTakeStartState?
     ) -> CrossfaderDerivation? {
-        guard let calibration, calibration.isUsable else { return nil }
-        let rawEvents = midiSnapshot
+        guard let calibration, calibration.isUsable,
+              !selectedSourceIdentifier.isEmpty,
+              calibration.address.deviceIdentifier == selectedSourceIdentifier else { return nil }
+        var rawEvents = midiSnapshot
             .filter {
                 $0.channel == calibration.address.channel
                     && $0.controller == calibration.address.controller
-                    && $0.deviceName == calibration.address.deviceIdentifier
+                    && $0.deviceIdentifier == selectedSourceIdentifier
             }
             .map { (takeRelativeTime: $0.takeRelativeTime, rawValue: $0.value) }
+        if rawEvents.isEmpty,
+           let state = takeStartState,
+           state.isUsableSnapshot,
+           state.takeGeneration != nil,
+           state.midiConnectionGeneration != nil,
+           state.midiSourceID == selectedSourceIdentifier,
+           state.channel == calibration.address.channel,
+           state.controller == calibration.address.controller,
+           state.calibrationID == calibration.id,
+           let rawValue = state.rawValue,
+           let observedTime = state.observedTakeRelativeTime,
+           observedTime < 0 {
+            rawEvents = [(takeRelativeTime: 0, rawValue: rawValue)]
+        }
         guard !rawEvents.isEmpty else { return nil }
-        return CrossfaderStateDeriver.derive(rawEvents: rawEvents, calibration: calibration)
+        let response = takeStartState?.crossfaderCurveResponse ?? FaderCurveResponse(
+            zeroAt: 0,
+            oneAt: MIDIFaderCurveConstants.sharpScratchCutInWidth,
+            shape: .linear
+        )
+        return CrossfaderStateDeriver.derive(
+            rawEvents: rawEvents,
+            calibration: calibration,
+            response: response
+        )
     }
 }
 

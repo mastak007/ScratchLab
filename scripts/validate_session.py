@@ -3,6 +3,8 @@ from __future__ import annotations
 
 import argparse
 import csv
+import hashlib
+import math
 import re
 import sys
 from datetime import datetime
@@ -62,8 +64,78 @@ MAX_STEM_PEAK_SAMPLE = 1.0
 GENERATED_STEM_PEAK_CEILING_DBFS = -1.0
 GENERATED_STEM_SOURCES = ("beat_only",)
 FULL_SCALE_STEM_SOURCES = ("scratch_only", "beat_only", "scratch_with_beat", "serato")
-OPTIONAL_MANIFEST_FILE_SOURCES = {"notation", "scratch_only", "raw_original"}
-OPTIONAL_MANIFEST_ARTIFACT_SOURCES = {"scratch_only", "raw_original"}
+REFERENCE_BEAT_SOURCES = {
+    "reference_beat_master", "reference_beat_analysis", "reference_beat_manifest",
+    "reference_beat_rights", "reference_take_sidecar",
+}
+OPTIONAL_MANIFEST_FILE_SOURCES = {"notation", "scratch_only", "raw_original"} | REFERENCE_BEAT_SOURCES
+OPTIONAL_MANIFEST_ARTIFACT_SOURCES = {"scratch_only", "raw_original"} | REFERENCE_BEAT_SOURCES
+
+
+def reference_artifact_record(session_dir: Path, path: Path, source: str) -> dict[str, Any]:
+    """Additional CXL evidence keeps the ordinary measured byte/hash contract."""
+    if source in {"reference_beat_master", "reference_beat_analysis"}:
+        return build_artifact_record(session_dir, path, "serato")
+    payload = read_json(path)
+    if not isinstance(payload, dict):
+        raise ValueError("reference evidence must be a JSON object")
+    data = path.read_bytes()
+    return {"path": path.relative_to(session_dir).as_posix(), "bytes": len(data),
+            "sha256": hashlib.sha256(data).hexdigest(), "probe": {"kind": "json"}}
+
+
+def validate_reference_beat_evidence(
+    take: dict[str, Any], session_dir: Path, take_label: str, errors: list[str]
+) -> None:
+    files, artifacts = take.get("files", {}), take.get("artifacts", {})
+    if not isinstance(files, dict) or not isinstance(artifacts, dict):
+        return
+    if not ((set(files) | set(artifacts)) & REFERENCE_BEAT_SOURCES):
+        return
+    if not REFERENCE_BEAT_SOURCES <= set(files) or not REFERENCE_BEAT_SOURCES <= set(artifacts):
+        errors.append(f"{take_label}: exact reference beat evidence is incomplete.")
+        return
+    try:
+        for source in REFERENCE_BEAT_SOURCES:
+            relative = files[source]
+            path = session_dir / relative
+            if not path.resolve().is_relative_to(session_dir.resolve()):
+                raise ValueError("reference evidence path escapes the session")
+            if artifacts[source].get("path") != relative:
+                raise ValueError("reference evidence files/artifacts paths disagree")
+        sidecar = read_json(session_dir / files["reference_take_sidecar"])
+        binding = sidecar["sessionConfig"]["referenceCaptureIntent"]["beatSpec"]
+        offset = sidecar["captureTiming"]["recordingStartOffsetSeconds"]
+        expected_offset = binding["countInFrameCount"] / binding["sampleRate"]
+        if (not isinstance(offset, (int, float)) or not math.isfinite(offset) or offset < 0
+                or abs(offset - expected_offset) > 1 / binding["sampleRate"]):
+            raise ValueError("reference recording origin does not match the bound count-in")
+        for source, name_key, hash_key in [
+            ("reference_beat_master", "productionMasterFileName", "productionMasterSHA256"),
+            ("reference_beat_analysis", "sparseAnalysisMixFileName", "sparseAnalysisMixSHA256"),
+        ]:
+            path = session_dir / files[source]
+            if path.name != binding[name_key] or hashlib.sha256(path.read_bytes()).hexdigest() != binding[hash_key]:
+                raise ValueError(f"{source} does not match the exact BeatSpec")
+            probe = reference_artifact_record(session_dir, path, source)["probe"]
+            if (probe.get("sample_rate_hz") != binding["sampleRate"]
+                    or probe.get("channel_count") != 2
+                    or probe.get("frame_count") != binding["countInFrameCount"] + binding["loopFrameCount"]):
+                raise ValueError(f"{source} does not match the BeatSpec frame contract")
+        if binding["loopStartFrame"] != binding["countInFrameCount"] or binding["sampleRate"] != 48_000:
+            raise ValueError("reference beat frame contract is invalid")
+        asset_manifest = read_json(session_dir / files["reference_beat_manifest"])
+        rights_path = session_dir / files["reference_beat_rights"]
+        rights = read_json(rights_path)
+        if asset_manifest.get("schemaVersion") != "scratchlab_runtime_beat_assets_v2" or asset_manifest.get("binding") != binding:
+            raise ValueError("reference asset manifest does not carry this take's BeatSpec")
+        if (asset_manifest["rightsReceipt"]["sha256"] != hashlib.sha256(rights_path.read_bytes()).hexdigest()
+                or rights.get("candidateID") != binding["id"]
+                or rights.get("rightsState") != "procedurallyGeneratedOriginal"
+                or rights.get("externalRecordingUsed") is not False):
+            raise ValueError("reference beat rights receipt is invalid")
+    except (OSError, ValueError, KeyError, TypeError, ZeroDivisionError) as exc:
+        errors.append(f"{take_label}: invalid exact reference beat evidence: {exc}")
 
 
 def expected_camera_id(sources: dict[str, dict[str, Any]]) -> str | None:
@@ -608,6 +680,8 @@ def validate_manifest(
                 f"{take_label}: manifest artifacts include unexpected source entries: {', '.join(unexpected_artifact_sources)}."
             )
 
+        validate_reference_beat_evidence(take, session_dir, take_label, errors)
+
         for source, artifact in artifacts.items():
             if not isinstance(artifact, dict):
                 errors.append(f"{take_label}: artifact record for {source} must be an object.")
@@ -624,11 +698,14 @@ def validate_manifest(
                 continue
 
             try:
-                expected_artifact = build_artifact_record(
-                    session_dir,
-                    artifact_path,
-                    "serato" if source == "scratch_only" else source,
-                )
+                if source in REFERENCE_BEAT_SOURCES:
+                    expected_artifact = reference_artifact_record(session_dir, artifact_path, source)
+                else:
+                    expected_artifact = build_artifact_record(
+                        session_dir,
+                        artifact_path,
+                        "serato" if source == "scratch_only" else source,
+                    )
             except Exception as exc:
                 errors.append(f"{take_label}: could not probe artifact metadata for {source}: {exc}")
                 continue

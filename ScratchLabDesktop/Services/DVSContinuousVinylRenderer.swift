@@ -523,8 +523,15 @@ private final class DVSVinylRenderMailbox {
     let renderIngestCount = Atomic<UInt64>(0)
     let lastIngestedTableIdentity = Atomic<UInt64>(0)
     let lastIngestedInitialPhaseBits = Atomic<UInt64>(Double.zero.bitPattern)
-    let renderPhaseBits = Atomic<UInt64>(Double.zero.bitPattern)
     #endif
+
+    // Coherent, read-only render -> UI telemetry. Sequence odd means a
+    // publication is in progress. All accesses are sequentially consistent;
+    // the reader makes at most two attempts and never blocks the callback.
+    let renderPositionSequence = Atomic<UInt64>(0)
+    let renderPhaseBits = Atomic<UInt64>(Double.zero.bitPattern)
+    let renderPositionTableIdentity = Atomic<UInt64>(0)
+    let renderPositionControlEpoch = Atomic<UInt64>(0)
 
     /// Render-owned core; after init, touched only by the render path
     /// (`DVSContinuousVinylRenderer.performRender`).
@@ -676,10 +683,49 @@ final class DVSContinuousVinylRenderer {
             Double(bitPattern: mailbox.userMixerGainBits.load(ordering: .relaxed))
         )
         let silent = mailbox.core.pointee.render(left: left, right: right, frameCount: frameCount)
-        #if DEBUG
-        mailbox.renderPhaseBits.store(mailbox.core.pointee.phase.bitPattern, ordering: .relaxed)
-        #endif
+        if frameCount > 0 {
+            mailbox.renderPositionSequence.wrappingAdd(1, ordering: .sequentiallyConsistent)
+            mailbox.renderPhaseBits.store(mailbox.core.pointee.phase.bitPattern, ordering: .sequentiallyConsistent)
+            mailbox.renderPositionTableIdentity.store(mailbox.core.pointee.sampleIdentity, ordering: .sequentiallyConsistent)
+            mailbox.renderPositionControlEpoch.store(epoch, ordering: .sequentiallyConsistent)
+            mailbox.renderPositionSequence.wrappingAdd(1, ordering: .sequentiallyConsistent)
+        }
         return silent
+    }
+
+    /// Source read-head phase after the latest rendered block, not the
+    /// control target or a speaker-latency-compensated presentation timestamp.
+    struct RenderPositionSnapshot: Equatable {
+        let sampleIdentity: UInt64
+        let controlEpoch: UInt64
+        let sourceFrame: Double
+    }
+
+    /// Control-side boundary used to reject telemetry from an earlier owner.
+    var currentControlEpoch: UInt64 { mailbox.controlEpoch.load(ordering: .acquiring) }
+
+    var currentInstalledSampleIdentity: UInt64? {
+        guard let raw = mailbox.sampleTablePointer.load(ordering: .acquiring) else { return nil }
+        return raw.assumingMemoryBound(to: DVSVinylSampleTable.self).pointee.identity
+    }
+
+    /// No render-core reads on the UI/control thread. A reload remains
+    /// unavailable until that exact immutable table has actually rendered.
+    func currentRenderPositionSnapshot() -> RenderPositionSnapshot? {
+        for _ in 0..<2 {
+            let before = mailbox.renderPositionSequence.load(ordering: .sequentiallyConsistent)
+            guard before > 0, before.isMultiple(of: 2) else { continue }
+            let phase = Double(bitPattern: mailbox.renderPhaseBits.load(ordering: .sequentiallyConsistent))
+            let identity = mailbox.renderPositionTableIdentity.load(ordering: .sequentiallyConsistent)
+            let epoch = mailbox.renderPositionControlEpoch.load(ordering: .sequentiallyConsistent)
+            let after = mailbox.renderPositionSequence.load(ordering: .sequentiallyConsistent)
+            guard before == after, phase.isFinite, identity != 0 else { continue }
+            guard let raw = mailbox.sampleTablePointer.load(ordering: .acquiring) else { return nil }
+            let table = raw.assumingMemoryBound(to: DVSVinylSampleTable.self).pointee
+            guard table.identity == identity, phase >= 0, phase < table.loopFrames else { return nil }
+            return RenderPositionSnapshot(sampleIdentity: identity, controlEpoch: epoch, sourceFrame: phase)
+        }
+        return nil
     }
 
     // MARK: - Control-side API (controller audio queue only)
@@ -839,6 +885,6 @@ final class DVSContinuousVinylRenderer {
     var renderIngestCount: UInt64 { mailbox.renderIngestCount.load(ordering: .relaxed) }
     var lastIngestedTableIdentity: UInt64 { mailbox.lastIngestedTableIdentity.load(ordering: .relaxed) }
     var lastIngestedInitialPhase: Double { Double(bitPattern: mailbox.lastIngestedInitialPhaseBits.load(ordering: .relaxed)) }
-    var currentRenderPhase: Double { Double(bitPattern: mailbox.renderPhaseBits.load(ordering: .relaxed)) }
+    var currentRenderPhase: Double { Double(bitPattern: mailbox.renderPhaseBits.load(ordering: .sequentiallyConsistent)) }
 #endif
 }

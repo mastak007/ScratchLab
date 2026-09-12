@@ -20,16 +20,16 @@ import Foundation
 
 /// Pure response-shape primitive. Two shapes cover every preset and custom
 /// curve — no preset needs anything more expressive than these.
-enum FaderCurveResponseShape: String, Codable, Equatable {
+enum FaderCurveResponseShape: String, Codable, Equatable, Sendable {
     case linear
     case smoothstep
 }
 
 /// A fully-resolved, ready-to-evaluate curve: two normalized endpoints and a
-/// shape. Never persisted itself — always computed on demand from a preset,
-/// or from a raw capture re-applied through the control's CURRENT
-/// calibration (see `MIDIFaderCurveConfig.resolvedResponse(for:)`).
-struct FaderCurveResponse: Equatable {
+/// shape. Audio computes this from the active learned mapping. Reference
+/// capture also snapshots the resolved value so later review/export does not
+/// reinterpret old fader evidence through a mapping changed after the take.
+struct FaderCurveResponse: Codable, Equatable, Sendable {
     let zeroAt: Double
     let oneAt: Double
     let shape: FaderCurveResponseShape

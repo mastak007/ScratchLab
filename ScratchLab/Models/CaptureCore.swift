@@ -479,6 +479,11 @@ struct SessionExportOptions: Equatable, Sendable {
 enum CaptureSessionCaptureMode: String, CaseIterable, Codable, Sendable, Identifiable {
     case calibrationNoClick = "calibration_no_click"
     case timedClick = "timed_click"
+    case movementCheck = "movement_check"
+
+    /// The standard Capture screens retain their established workflows.
+    /// CXL offers movement checks through its explicit capture-purpose setup.
+    static let standardCaptureModes: [Self] = [.calibrationNoClick, .timedClick]
 
     var id: String { rawValue }
 
@@ -488,6 +493,8 @@ enum CaptureSessionCaptureMode: String, CaseIterable, Codable, Sendable, Identif
             return "Calibration"
         case .timedClick:
             return "Timed capture"
+        case .movementCheck:
+            return "Movement check"
         }
     }
 
@@ -499,6 +506,9 @@ enum CaptureSessionCaptureMode: String, CaseIterable, Codable, Sendable, Identif
 struct CaptureTimingMetadata: Codable, Equatable, Sendable {
     var clickStartHostTime: UInt64?
     var recordingStartHostTime: UInt64?
+    /// Measured on the capture device, so another Mac can place the recorded
+    /// media against the bound beat without interpreting foreign host ticks.
+    var recordingStartOffsetSeconds: Double? = nil
 }
 
 // MARK: - Capture motion evidence
@@ -1454,6 +1464,8 @@ struct CaptureSessionConfig: Codable, Equatable, Sendable {
     var takeCount: Int
     var handedness: CaptureSessionHandedness?
     var notes: String
+    /// Immutable CXL Setup snapshot. Legacy and ordinary capture configs omit it.
+    var referenceCaptureIntent: ReferenceCaptureIntent?
     var sessionID: String
     var createdAt: Date
     var updatedAt: Date
@@ -1484,6 +1496,7 @@ struct CaptureSessionConfig: Codable, Equatable, Sendable {
         case takeCount
         case handedness
         case notes
+        case referenceCaptureIntent
         case sessionID
         case createdAt
         case updatedAt
@@ -1511,6 +1524,7 @@ struct CaptureSessionConfig: Codable, Equatable, Sendable {
         takeCount: Int = 0,
         handedness: CaptureSessionHandedness? = .right,
         notes: String = "",
+        referenceCaptureIntent: ReferenceCaptureIntent? = nil,
         sessionID: String = CaptureCore.LocalRecordingNaming.sessionID(),
         createdAt: Date = Date(),
         updatedAt: Date = Date()
@@ -1536,6 +1550,7 @@ struct CaptureSessionConfig: Codable, Equatable, Sendable {
         self.takeCount = takeCount
         self.handedness = handedness
         self.notes = notes
+        self.referenceCaptureIntent = referenceCaptureIntent
         self.sessionID = sessionID
         self.createdAt = createdAt
         self.updatedAt = updatedAt
@@ -1628,11 +1643,11 @@ struct CaptureSessionConfig: Codable, Equatable, Sendable {
     }
 
     var clickEnabled: Bool {
-        captureMode != .calibrationNoClick && beatEngineMode.clickEnabled
+        captureMode == .timedClick && beatEngineMode.clickEnabled
     }
 
     var beatEnabled: Bool {
-        captureMode != .calibrationNoClick && beatEngineMode.beatEnabled
+        captureMode == .timedClick && beatEngineMode.beatEnabled
     }
 
     var normalizedBeatEngineMode: String {
@@ -1686,7 +1701,7 @@ struct CaptureSessionConfig: Codable, Equatable, Sendable {
                   clickEnabled {
             beatEngineMode = .clickTrack
         } else {
-            beatEngineMode = captureMode == .calibrationNoClick ? .silent : .clickTrack
+            beatEngineMode = captureMode == .timedClick ? .clickTrack : .silent
         }
         countInBeats = try container.decodeIfPresent(Int.self, forKey: .countInBeats)
             ?? CaptureClickTrackDefaults.countInBeats
@@ -1706,7 +1721,7 @@ struct CaptureSessionConfig: Codable, Equatable, Sendable {
            let decodedTimingPrinted = TimingPrintedToRecordingState(rawValue: timingPrintedValue) {
             timingPrintedToRecording = decodedTimingPrinted
         } else {
-            timingPrintedToRecording = captureMode == .calibrationNoClick ? .notPrinted : .unknown
+            timingPrintedToRecording = captureMode == .timedClick ? .unknown : .notPrinted
         }
         takeDurationSeconds = try container.decodeIfPresent(Double.self, forKey: .takeDurationSeconds)
         // Decoded faithfully: absent stays absent. Migrating the legacy
@@ -1742,6 +1757,10 @@ struct CaptureSessionConfig: Codable, Equatable, Sendable {
             handedness = nil
         }
         notes = try container.decodeIfPresent(String.self, forKey: .notes) ?? ""
+        referenceCaptureIntent = try container.decodeIfPresent(
+            ReferenceCaptureIntent.self,
+            forKey: .referenceCaptureIntent
+        )
         sessionID = try container.decodeIfPresent(String.self, forKey: .sessionID)
             ?? CaptureCore.LocalRecordingNaming.sessionID()
         createdAt = try container.decodeIfPresent(Date.self, forKey: .createdAt) ?? Date()
@@ -1776,6 +1795,7 @@ struct CaptureSessionConfig: Codable, Equatable, Sendable {
         try container.encode(takeCount, forKey: .takeCount)
         try container.encodeIfPresent(handedness?.rawValue, forKey: .handedness)
         try container.encode(notes, forKey: .notes)
+        try container.encodeIfPresent(referenceCaptureIntent, forKey: .referenceCaptureIntent)
         try container.encode(sessionID, forKey: .sessionID)
         try container.encode(createdAt, forKey: .createdAt)
         try container.encode(updatedAt, forKey: .updatedAt)
@@ -1787,7 +1807,7 @@ struct CaptureSessionConfig: Codable, Equatable, Sendable {
     }
 
     static func normalizeCaptureSettings(in config: inout CaptureSessionConfig) {
-        config.countInBeats = CaptureClickTrackDefaults.countInBeats
+        config.countInBeats = config.captureMode == .movementCheck ? 0 : CaptureClickTrackDefaults.countInBeats
         config.beatsPerBar = CaptureClickTrackDefaults.beatsPerBar
         if config.clickAccentPattern.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
             config.clickAccentPattern = CaptureClickTrackDefaults.clickAccentPattern
@@ -1801,7 +1821,7 @@ struct CaptureSessionConfig: Codable, Equatable, Sendable {
         if config.engineVersion.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
             config.engineVersion = CaptureBeatEngineDefaults.engineVersion
         }
-        if config.captureMode == .calibrationNoClick {
+        if config.captureMode != .timedClick {
             config.beatEngineMode = .silent
             config.swingAmount = 0
             config.timingPrintedToRecording = .notPrinted
@@ -10802,9 +10822,9 @@ enum CaptureCore {
     /// holds. Every default is the NON-CLAIMING basis, so a caller that says
     /// nothing gets take-local normalized displacement: a forgotten argument
     /// can only understate the claim, never fabricate a calibration.
-    struct PlatterNotationCoordinates: Equatable, Sendable {
+    struct PlatterNotationCoordinates: Codable, Equatable, Sendable {
 
-        enum Basis: String, Equatable, Sendable, CaseIterable {
+        enum Basis: String, Codable, Equatable, Sendable, CaseIterable {
             /// Raw step displacement divided by an explicitly stated
             /// steps-per-revolution reference.
             case calibratedPlatterRevolutions
@@ -11005,6 +11025,10 @@ enum CaptureCore {
     struct RawMixerMIDIEvent: Codable, Equatable, Sendable {
         let timestamp: Double
         let takeRelativeTime: Double
+        /// Stable Core MIDI source identity captured at ingress. Optional for
+        /// backward compatibility; a missing legacy identity remains unknown
+        /// to consumers that require exact source binding.
+        let deviceIdentifier: String?
         let deviceName: String
         let channel: Int
         let controller: Int
@@ -11042,6 +11066,7 @@ enum CaptureCore {
         init(
             timestamp: Double,
             takeRelativeTime: Double,
+            deviceIdentifier: String? = nil,
             deviceName: String,
             channel: Int,
             controller: Int,
@@ -11054,6 +11079,7 @@ enum CaptureCore {
         ) {
             self.timestamp = timestamp
             self.takeRelativeTime = takeRelativeTime
+            self.deviceIdentifier = deviceIdentifier
             self.deviceName = deviceName
             self.channel = channel
             self.controller = controller
@@ -11132,6 +11158,9 @@ enum CaptureCore {
         let calibratedPosition: Double?
         /// Identity of the calibration that produced `calibratedPosition`.
         let calibrationID: String?
+        /// Audible response resolved from the learned mapping at take start.
+        /// Optional for backward-compatible decoding of older sidecars.
+        let crossfaderCurveResponse: FaderCurveResponse?
         /// Lifetime message count on that address at the moment of
         /// observation, so a later consumer can tell a held control from a
         /// silent one exactly as the calibration sweep does.
@@ -11156,6 +11185,7 @@ enum CaptureCore {
             rawValue: Int?,
             calibratedPosition: Double?,
             calibrationID: String?,
+            crossfaderCurveResponse: FaderCurveResponse? = nil,
             observationSequence: Int?,
             observedTakeRelativeTime: Double?,
             unknownReason: String?
@@ -11173,6 +11203,7 @@ enum CaptureCore {
             self.rawValue = rawValue
             self.calibratedPosition = calibratedPosition
             self.calibrationID = calibrationID
+            self.crossfaderCurveResponse = crossfaderCurveResponse
             self.observationSequence = observationSequence
             self.observedTakeRelativeTime = observedTakeRelativeTime
             self.unknownReason = unknownReason
@@ -11199,6 +11230,7 @@ enum CaptureCore {
                 rawValue: nil,
                 calibratedPosition: nil,
                 calibrationID: nil,
+                crossfaderCurveResponse: nil,
                 observationSequence: nil,
                 observedTakeRelativeTime: nil,
                 unknownReason: reason
@@ -11634,12 +11666,12 @@ enum CaptureCore {
     /// is observable and testable rather than a black box.
     /// A derived view over raw packet indices; never written back into raw MIDI
     /// or the persisted/exported movement event schema.
-    struct PlatterEvidenceInterval: Equatable, Sendable {
-        enum Kind: String, Equatable, Sendable {
+    struct PlatterEvidenceInterval: Codable, Equatable, Sendable {
+        enum Kind: String, Codable, Equatable, Sendable {
             case observedStillness, packetGap, clockDiscontinuity
             case discardedMotion, insufficientSampling, unknown
         }
-        enum Stage: String, Equatable, Sendable { case decoder, normalization }
+        enum Stage: String, Codable, Equatable, Sendable { case decoder, normalization }
         let startTime: Double
         let endTime: Double
         let kind: Kind
@@ -11944,8 +11976,10 @@ enum CaptureCore {
             }
             let direction = displacement > 0 ? "forward" : "backward"
             let speed = abs(displacement) / duration
-            // High-confidence direct telemetry: floor 0.7, rising toward 1.0 for
-            // longer runs — never 1.0 merely because a source was detected.
+            // Direct telemetry confidence remains a measured function of the
+            // committed run's travel. Short qualifying runs may stay below
+            // the review threshold and remain explicitly low confidence;
+            // longer measured runs rise toward, but never claim, certainty.
             let confidence = min(0.95, 0.7 + Double(abs(displacement)) / 1000.0)
             result.append(DetectedNotationRecordMovementEvent(
                 startTime: startTime,
@@ -12000,6 +12034,27 @@ enum CaptureCore {
         let direction: String
         let movementKind: ScratchMovementKind
         let displacement: Double
+        let meetsNoiseGates: Bool
+
+        init(
+            startTime: Double,
+            currentTime: Double,
+            startPosition: Double,
+            currentPosition: Double,
+            direction: String,
+            movementKind: ScratchMovementKind,
+            displacement: Double,
+            meetsNoiseGates: Bool = false
+        ) {
+            self.startTime = startTime
+            self.currentTime = currentTime
+            self.startPosition = startPosition
+            self.currentPosition = currentPosition
+            self.direction = direction
+            self.movementKind = movementKind
+            self.displacement = displacement
+            self.meetsNoiseGates = meetsNoiseGates
+        }
     }
 
     struct PlatterMovementDecodeResult: Equatable, Sendable {
@@ -12123,7 +12178,8 @@ enum CaptureCore {
                 currentPosition: coordinates.endPosition,
                 direction: $0.direction,
                 movementKind: $0.movementKind,
-                displacement: $0.displacement
+                displacement: $0.displacement,
+                meetsNoiseGates: $0.meetsNoiseGates
             )
         }
         // Continuous positions are `core.events` (already global, span-
@@ -12138,7 +12194,8 @@ enum CaptureCore {
                 currentPosition: $0.currentPosition,
                 direction: $0.direction,
                 movementKind: $0.movementKind,
-                displacement: $0.displacement
+                displacement: $0.displacement,
+                meetsNoiseGates: $0.meetsNoiseGates
             )
         }
         return PlatterMovementDecodeResult(

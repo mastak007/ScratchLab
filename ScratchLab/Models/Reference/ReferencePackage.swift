@@ -52,6 +52,11 @@ struct ReferenceArtifactRecord: Codable, Equatable, Sendable, Identifiable {
         case crossfaderCalibrated
         case notationEvidence
         case validationReport
+        case beatProductionMaster
+        case beatSparseAnalysis
+        case beatManifest
+        case beatRightsReceipt
+        case watchMotion
     }
 
     var id: String { path }
@@ -88,6 +93,20 @@ struct ReferenceCalibratedFaderSample: Codable, Equatable, Sendable {
     let takeRelativeTime: Double
     let rawValue: Int
     let normalizedPosition: Double
+    /// Audible gain after the snapshotted curve. Legacy documents omit it.
+    let audibleGain: Double?
+
+    init(
+        takeRelativeTime: Double,
+        rawValue: Int,
+        normalizedPosition: Double,
+        audibleGain: Double? = nil
+    ) {
+        self.takeRelativeTime = takeRelativeTime
+        self.rawValue = rawValue
+        self.normalizedPosition = normalizedPosition
+        self.audibleGain = audibleGain
+    }
 }
 
 /// One derived semantic fader event, as exported.
@@ -123,6 +142,9 @@ struct ReferenceCalibratedFaderDocument: Codable, Equatable, Sendable {
 
     let schemaVersion: String
     let calibration: CrossfaderCalibration
+    /// Exact learned response used for gate derivation. Legacy absence means
+    /// the migration-safe sharp scratch response.
+    let curveResponse: FaderCurveResponse?
     let hysteresisClosedAtOrBelow: Double
     let hysteresisOpenAtOrAbove: Double
     let hysteresisMinimumDwellSeconds: Double
@@ -137,6 +159,7 @@ struct ReferenceCalibratedFaderDocument: Codable, Equatable, Sendable {
     init(
         schemaVersion: String = ReferenceCalibratedFaderDocument.currentSchemaVersion,
         calibration: CrossfaderCalibration,
+        curveResponse: FaderCurveResponse? = nil,
         hysteresis: CrossfaderHysteresis,
         maximumCutDurationSeconds: Double,
         maximumPulseGapSeconds: Double,
@@ -145,6 +168,7 @@ struct ReferenceCalibratedFaderDocument: Codable, Equatable, Sendable {
     ) {
         self.schemaVersion = schemaVersion
         self.calibration = calibration
+        self.curveResponse = curveResponse
         self.hysteresisClosedAtOrBelow = hysteresis.closedAtOrBelow
         self.hysteresisOpenAtOrAbove = hysteresis.openAtOrAbove
         self.hysteresisMinimumDwellSeconds = hysteresis.minimumDwellSeconds
@@ -301,6 +325,11 @@ struct ReferencePackageManifest: Codable, Equatable, Sendable, Identifiable {
         artifacts.first { $0.role == role }
     }
 
+    var requiresExactWatchArtifact: Bool {
+        guard let beat = metadata.captureIntent?.beatSpec else { return false }
+        return beat.version >= 2 && beat.id.hasPrefix("cxl_runtime_v2_")
+    }
+
     /// Roles that must be present for a package to be importable. Video is
     /// deliberately absent: it is useful, not required.
     static let requiredArtifactRoles: [ReferenceArtifactRecord.Role] = [
@@ -338,6 +367,11 @@ enum ReferencePackageIssue: Equatable, Sendable {
     case validationDidNotPass(failureCount: Int)
     case selectedRepetitionMissing(index: Int)
     case publishedPhraseEmpty
+    case captureIntentInvalid(detail: String)
+    case witnessedTimingInvalid(detail: String)
+    case sourceStateInvalid(detail: String)
+    case identityMismatch(detail: String)
+    case unsafeArtifactPath(path: String)
 
     var message: String {
         switch self {
@@ -361,6 +395,12 @@ enum ReferencePackageIssue: Equatable, Sendable {
             return "Reference package names repetition \(index + 1) as approved, but its boundaries do not contain it."
         case .publishedPhraseEmpty:
             return "Reference package declares a published phrase of zero length."
+        case .captureIntentInvalid(let detail):
+            return "Reference package capture intent is invalid: \(detail)"
+        case .witnessedTimingInvalid(let detail): return "Reference package timing is invalid: \(detail)"
+        case .sourceStateInvalid(let detail): return "Reference package source state is invalid: \(detail)"
+        case .identityMismatch(let detail): return "Reference package identity mismatch: \(detail)"
+        case .unsafeArtifactPath(let path): return "Reference package artifact path is unsafe: \(path)"
         }
     }
 }
@@ -388,6 +428,53 @@ enum ReferencePackageValidator {
         where manifest.artifact(role: role) == nil {
             issues.append(.missingRequiredArtifact(role: role.rawValue))
         }
+        if let beat = manifest.metadata.captureIntent?.beatSpec {
+            for role in [ReferenceArtifactRecord.Role.beatProductionMaster, .beatSparseAnalysis,
+                         .beatManifest, .beatRightsReceipt] where manifest.artifact(role: role) == nil {
+                issues.append(.missingRequiredArtifact(role: role.rawValue))
+            }
+            for (role, fileName, expectedHash) in [
+                (ReferenceArtifactRecord.Role.beatProductionMaster, beat.productionMasterFileName, beat.productionMasterSHA256),
+                (.beatSparseAnalysis, beat.sparseAnalysisMixFileName, beat.sparseAnalysisMixSHA256)
+            ] {
+                if let artifact = manifest.artifact(role: role),
+                   artifact.path != "beat_assets/\(beat.id)/\(fileName)" || artifact.sha256 != expectedHash {
+                    issues.append(.captureIntentInvalid(detail: "\(role.rawValue) does not match the exact bound beat asset"))
+                }
+            }
+        }
+        if manifest.requiresExactWatchArtifact {
+            if case .linked(_, let fileName, let hash) = manifest.metadata.sourceState,
+               let fileName, !fileName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+               let hash, hash.count == 64,
+               hash.allSatisfy({ $0.isHexDigit && !$0.isUppercase }), manifest.metadata.deviceInfo.watchLinked {
+                if manifest.artifact(role: .watchMotion) == nil {
+                    issues.append(.missingRequiredArtifact(role: ReferenceArtifactRecord.Role.watchMotion.rawValue))
+                }
+            } else {
+                issues.append(.sourceStateInvalid(detail: "An exact CXL reference requires linked Watch identity, filename and SHA-256."))
+            }
+        }
+        if case .linked(_, _, let hash) = manifest.metadata.sourceState, let hash {
+            if let artifact = manifest.artifact(role: .watchMotion) {
+                if artifact.sha256 != hash {
+                    issues.append(.sourceStateInvalid(detail: "Watch artifact does not match the linked source hash"))
+                }
+            } else {
+                issues.append(.missingRequiredArtifact(role: ReferenceArtifactRecord.Role.watchMotion.rawValue))
+            }
+        }
+        let expectedReferenceID = ReferencePackageManifest.makeReferenceID(
+            technique: manifest.metadata.technique,
+            patternID: manifest.metadata.pattern.id
+        )
+        if manifest.referenceID != expectedReferenceID
+            || manifest.referenceVersion != manifest.metadata.referenceVersion {
+            issues.append(.identityMismatch(detail: "manifest and take metadata name different references"))
+        }
+        for artifact in manifest.artifacts where !ReferencePackageIO.isSafeRelativePath(artifact.path) {
+            issues.append(.unsafeArtifactPath(path: artifact.path))
+        }
         if manifest.metadata.lifecycleState != .approvedCanonical
             && manifest.metadata.lifecycleState != .published {
             issues.append(.notApproved(lifecycleState: manifest.metadata.lifecycleState.rawValue))
@@ -410,6 +497,34 @@ enum ReferencePackageValidator {
         }
         if manifest.publishedPhraseEndSeconds <= manifest.publishedPhraseStartSeconds {
             issues.append(.publishedPhraseEmpty)
+        }
+        if let origin = manifest.metadata.mediaTimeOrigin {
+            issues.append(contentsOf: origin.validationIssues.map { .witnessedTimingInvalid(detail: $0) })
+        }
+        if manifest.metadata.captureIntent != nil {
+            issues.append(contentsOf: ReferenceCaptureIntentValidator.issues(
+                intent: manifest.metadata.captureIntent,
+                metadata: manifest.metadata,
+                requireBeatSpec: false
+            ).map { .captureIntentInvalid(detail: String(describing: $0)) })
+            if manifest.metadata.captureIntent?.beatSpec != nil {
+                issues.append(contentsOf: ReferenceWitnessedTimingValidator.issues(
+                    manifest.metadata.witnessedTiming,
+                    intent: manifest.metadata.captureIntent,
+                    mediaTimeOrigin: manifest.metadata.mediaTimeOrigin
+                ).map { .witnessedTimingInvalid(detail: $0) })
+            }
+        }
+        if let sourceState = manifest.metadata.sourceState {
+            if !sourceState.isTerminal {
+                issues.append(.sourceStateInvalid(detail: "late transfer is still pending"))
+            }
+            switch sourceState {
+            case .identityMismatch, .timedOut, .conflict:
+                issues.append(.sourceStateInvalid(detail: sourceState.operatorSummary))
+            case .linked, .notRequested, .unavailable, .waitingForLateTransfer:
+                break
+            }
         }
         return issues
     }

@@ -17,6 +17,18 @@ struct ReferenceAuthoringWorkerUpdate: Equatable, Sendable {
     let errorMessage: String?
 }
 
+struct ReferenceAuthoringRawExportSnapshot: Sendable {
+    let source: SessionExportSource
+    /// Preserved takes outside the seed capture's existing archive group.
+    let excludedReferenceTakeIDs: [String]
+}
+
+struct ReferenceAuthoringNavigationRequest: Equatable {
+    enum Destination: String { case setup, capture }
+    let id = UUID()
+    let destination: Destination
+}
+
 /// Owns the non-Sendable hook closures behind one serial queue. The queue is
 /// the only caller, so the bridge's blocking hooks can never run on main.
 final class ReferenceAuthoringWorkerDriver: @unchecked Sendable {
@@ -29,9 +41,22 @@ final class ReferenceAuthoringWorkerDriver: @unchecked Sendable {
     /// provenance for the RAW export action; it starts, stops, approves and
     /// publishes nothing.
     private let lastFinalizedRecordingURLProvider: () -> URL?
+    private let prepareBeatHandler: (BeatEngineMode, Int, ReferenceBeatSpecBinding?) throws -> ReferencePreparedBeat?
+    private let recordingHasStoppedProvider: () -> Bool
 
     init(bridge: ReferenceAuthoringCaptureBridge, engine: MacCaptureEngine) {
         hooks = bridge.hooks
+        recordingHasStoppedProvider = { bridge.activeRecordingHasStopped }
+        prepareBeatHandler = { mode, bpm, binding in
+            if let binding {
+                let prepared = try ReferenceBeatAssetStore.resolve(binding: binding)
+                guard prepared.mode == mode, binding.bpm == bpm else {
+                    throw ReferenceAuthoringError.recordingFailed("The backing sound no longer matches this setup.")
+                }
+                return prepared
+            }
+            return try ReferenceBeatAssetStore.prepare(mode: mode, bpm: bpm)
+        }
         lastFinalizedRecordingURLProvider = { bridge.lastFinalizedRecordingURL }
         pendingConfigurationHandler = { configuration in
             bridge.setPendingConfiguration(configuration)
@@ -55,16 +80,25 @@ final class ReferenceAuthoringWorkerDriver: @unchecked Sendable {
         pendingConfigurationHandler: @escaping (ReferenceAuthoringBridgeTakeConfiguration) -> Void = { _ in },
         calibrationCommittedHandler: @escaping () -> Void = {},
         finalizationWaitCancellationHandler: @escaping () -> Void = {},
-        lastFinalizedRecordingURLProvider: @escaping () -> URL? = { nil }
+        lastFinalizedRecordingURLProvider: @escaping () -> URL? = { nil },
+        prepareBeatHandler: @escaping (BeatEngineMode, Int, ReferenceBeatSpecBinding?) throws -> ReferencePreparedBeat? = { _, _, _ in nil },
+        recordingHasStoppedProvider: @escaping () -> Bool = { false }
     ) {
         self.hooks = hooks
         self.pendingConfigurationHandler = pendingConfigurationHandler
         self.calibrationCommittedHandler = calibrationCommittedHandler
         self.finalizationWaitCancellationHandler = finalizationWaitCancellationHandler
         self.lastFinalizedRecordingURLProvider = lastFinalizedRecordingURLProvider
+        self.prepareBeatHandler = prepareBeatHandler
+        self.recordingHasStoppedProvider = recordingHasStoppedProvider
     }
 
     var lastFinalizedRecordingURL: URL? { lastFinalizedRecordingURLProvider() }
+    var recordingHasStopped: Bool { recordingHasStoppedProvider() }
+
+    func prepareBeat(mode: BeatEngineMode, bpm: Int, binding: ReferenceBeatSpecBinding?) throws -> ReferencePreparedBeat? {
+        try prepareBeatHandler(mode, bpm, binding)
+    }
 
     func setPendingConfiguration(_ configuration: ReferenceAuthoringBridgeTakeConfiguration) {
         pendingConfigurationHandler(configuration)
@@ -104,6 +138,10 @@ final class ReferenceAuthoringWorker: @unchecked Sendable {
         await enqueue { worker in worker.makeState() }
     }
 
+    func currentRecordingHasStopped() async -> Bool {
+        await enqueue { worker in worker.driver.recordingHasStopped }
+    }
+
     func configure(
         technique: ReferenceTechnique,
         pattern: ReferencePatternIdentity,
@@ -111,7 +149,9 @@ final class ReferenceAuthoringWorker: @unchecked Sendable {
         startingDirection: ReferenceStartingPlatterDirection,
         faderVariant: ReferenceFaderVariant,
         handedness: CaptureSessionHandedness,
-        notes: String
+        notes: String,
+        beatEngineMode: BeatEngineMode = .boomBapTrainer,
+        capturePurpose: ReferenceCapturePurpose = .canonicalReference
     ) async -> ReferenceAuthoringWorkerUpdate {
         await enqueue { worker in
             worker.session.selectTechnique(technique)
@@ -122,7 +162,18 @@ final class ReferenceAuthoringWorker: @unchecked Sendable {
                 handedness: handedness
             )
             worker.session.notes = notes
-            return worker.makeUpdate()
+            worker.session.selectCapturePurpose(capturePurpose)
+            worker.session.selectBeatEngineMode(beatEngineMode)
+            do {
+                let beat = worker.session.selectedCapturePurpose == .movementCheck ? nil
+                    : try worker.driver.prepareBeat(mode: beatEngineMode, bpm: bpm,
+                        binding: worker.session.captureIntent?.beatSpec)
+                worker.session.bindBeatSpec(beat?.binding)
+                return worker.makeUpdate()
+            } catch {
+                worker.session.bindBeatSpec(nil)
+                return worker.makeUpdate(errorMessage: Self.message(for: error))
+            }
         }
     }
 
@@ -207,6 +258,58 @@ final class ReferenceAuthoringWorker: @unchecked Sendable {
 
     var lastFinalizedRecordingURL: URL? { driver.lastFinalizedRecordingURL }
 
+    /// File reads and encoding share the same serial owner as review mutations.
+    func rawCaptureExportSnapshot(config: CaptureSessionConfig?) async throws -> ReferenceAuthoringRawExportSnapshot? {
+        let result: Result<ReferenceAuthoringRawExportSnapshot?, Error> = await enqueue { worker in
+            Result {
+                guard worker.session.rawCaptureExportBlockReason() == nil,
+                      let url = worker.driver.lastFinalizedRecordingURL else { return nil }
+                let boundTakes = worker.session.takes.filter { $0.tearEvidenceSourceBinding != nil }
+                var companions: [String: Data] = [:]
+                var excluded: [String] = []
+                if !boundTakes.isEmpty {
+                    let group = try SessionArchiveBuilder().localRecordingExportGroup(lastRecordingURL: url)
+                    for take in boundTakes {
+                        guard let binding = take.tearEvidenceSourceBinding, let sourceURL = take.rawSidecarURL else {
+                            throw ReferenceAuthoringError.recordingFailed("Bound tear evidence has no original sidecar location.")
+                        }
+                        guard try group.includes(sourceBinding: binding, sourceSidecarURL: sourceURL) else {
+                            excluded.append(take.id)
+                            continue
+                        }
+                        guard companions[binding.capturedTakeID] == nil else {
+                            throw ReferenceAuthoringError.recordingFailed("Two authoring takes claim the same captured tear evidence.")
+                        }
+                        companions[binding.capturedTakeID] = try ReferenceTearEvidenceCodec.encode(
+                            sourceBinding: binding, review: take.tearReview, projection: take.tearProjection,
+                            performedLimitations: take.tearPerformedLimitations
+                        )
+                    }
+                }
+                return ReferenceAuthoringRawExportSnapshot(
+                    source: .localRecordingSession(lastRecordingURL: url,
+                        sessionName: "Reference Authoring Capture", config: config,
+                        referenceTearEvidenceByTakeID: companions),
+                    excludedReferenceTakeIDs: excluded
+                )
+            }
+        }
+        return try result.get()
+    }
+
+    func restoreTearEvidence(_ data: Data?) async -> (
+        update: ReferenceAuthoringWorkerUpdate, result: ReferenceTearEvidenceCodec.ReadResult?
+    ) {
+        await enqueue { worker in
+            do {
+                let result = try worker.session.restoreTearEvidence(data)
+                return (worker.makeUpdate(), result)
+            } catch {
+                return (worker.makeUpdate(errorMessage: Self.message(for: error)), nil)
+            }
+        }
+    }
+
     func commitCalibration() async -> ReferenceAuthoringWorkerUpdate {
         await enqueue { worker in
             do {
@@ -225,12 +328,29 @@ final class ReferenceAuthoringWorker: @unchecked Sendable {
                   let bpm = worker.session.selectedBPM else {
                 return worker.makeUpdate(errorMessage: "Select and apply a complete authoring setup before recording.")
             }
+            let captureIntent: ReferenceCaptureIntent
+            let preparedBeat: ReferencePreparedBeat?
+            do {
+                preparedBeat = worker.session.selectedCapturePurpose == .movementCheck ? nil
+                    : try worker.driver.prepareBeat(mode: worker.session.selectedBeatEngineMode,
+                        bpm: bpm, binding: worker.session.selectedBeatSpec)
+                worker.session.bindBeatSpec(preparedBeat?.binding)
+                captureIntent = try worker.session.prepareCaptureIntentForRecording()
+                if let preparedBeat, captureIntent.beatSpec != preparedBeat.binding {
+                    throw ReferenceAuthoringError.recordingFailed("Use Retake to prepare a new take with the selected backing sound.")
+                }
+            } catch {
+                return worker.makeUpdate(errorMessage: Self.message(for: error))
+            }
             worker.driver.setPendingConfiguration(
                 ReferenceAuthoringBridgeTakeConfiguration(
                     technique: technique,
                     bpm: bpm,
+                    beatEngineMode: worker.session.selectedBeatEngineMode,
                     handedness: worker.session.selectedHandedness,
-                    notes: worker.session.notes
+                    notes: worker.session.notes,
+                    captureIntent: captureIntent,
+                    preparedBeat: preparedBeat
                 )
             )
             switch worker.session.beginRecording(using: worker.driver.hooks) {
@@ -292,10 +412,24 @@ final class ReferenceAuthoringWorker: @unchecked Sendable {
         }
     }
 
-    func retake() async -> ReferenceAuthoringWorkerUpdate {
+    func retake(afterTakeID: String? = nil) async -> ReferenceAuthoringWorkerUpdate {
         await enqueue { worker in
-            worker.session.retake()
-            return worker.makeUpdate()
+            do {
+                guard let id = afterTakeID ?? worker.session.latestRecordedTake?.id else {
+                    throw ReferenceAuthoringError.noActiveRecording
+                }
+                try worker.session.retake(afterTakeID: id)
+                return worker.makeUpdate()
+            } catch { return worker.makeUpdate(errorMessage: Self.message(for: error)) }
+        }
+    }
+
+    func prepareNewScratchSetup(afterTakeID: String) async -> ReferenceAuthoringWorkerUpdate {
+        await enqueue { worker in
+            do {
+                try worker.session.prepareNewScratchSetup(afterTakeID: afterTakeID)
+                return worker.makeUpdate()
+            } catch { return worker.makeUpdate(errorMessage: Self.message(for: error)) }
         }
     }
 
@@ -305,6 +439,17 @@ final class ReferenceAuthoringWorker: @unchecked Sendable {
                 // `approveTakeInReview` revalidates and re-checks every gate
                 // itself; the caller does not get to pre-authorise it.
                 try worker.session.approveTakeInReview(notes: notes)
+                return worker.makeUpdate()
+            } catch {
+                return worker.makeUpdate(errorMessage: Self.message(for: error))
+            }
+        }
+    }
+
+    func prepareNextTake(afterApprovedTakeID expectedTakeID: String) async -> ReferenceAuthoringWorkerUpdate {
+        await enqueue { worker in
+            do {
+                try worker.session.prepareNextTake(afterApprovedTakeID: expectedTakeID)
                 return worker.makeUpdate()
             } catch {
                 return worker.makeUpdate(errorMessage: Self.message(for: error))
@@ -339,7 +484,8 @@ final class ReferenceAuthoringWorker: @unchecked Sendable {
         endTime: Double,
         kind: ReferenceTearBoundaryKind,
         evidenceQuality: ReferenceTearEvidenceQuality,
-        notes: String
+        notes: String,
+        now: Date = Date()
     ) async -> ReferenceAuthoringWorkerUpdate {
         await enqueue { worker in
             let applied = worker.session.addTearBoundary(
@@ -348,7 +494,8 @@ final class ReferenceAuthoringWorker: @unchecked Sendable {
                 endTime: endTime,
                 kind: kind,
                 evidenceQuality: evidenceQuality,
-                notes: notes
+                notes: notes,
+                now: now
             )
             return worker.makeUpdate(
                 errorMessage: applied
@@ -363,7 +510,8 @@ final class ReferenceAuthoringWorker: @unchecked Sendable {
         boundaryID: String,
         startTime: Double,
         endTime: Double,
-        notes: String
+        notes: String,
+        now: Date = Date()
     ) async -> ReferenceAuthoringWorkerUpdate {
         await enqueue { worker in
             let applied = worker.session.moveTearBoundary(
@@ -371,7 +519,8 @@ final class ReferenceAuthoringWorker: @unchecked Sendable {
                 boundaryID: boundaryID,
                 startTime: startTime,
                 endTime: endTime,
-                notes: notes
+                notes: notes,
+                now: now
             )
             return worker.makeUpdate(errorMessage: applied ? nil : Self.tearCorrectionRefused)
         }
@@ -415,14 +564,16 @@ final class ReferenceAuthoringWorker: @unchecked Sendable {
         candidateID: String,
         boundaryID: String,
         removed: Bool,
-        notes: String
+        notes: String,
+        now: Date = Date()
     ) async -> ReferenceAuthoringWorkerUpdate {
         await enqueue { worker in
             let applied = worker.session.setTearBoundaryRemoved(
                 inCandidate: candidateID,
                 boundaryID: boundaryID,
                 removed: removed,
-                notes: notes
+                notes: notes,
+                now: now
             )
             return worker.makeUpdate(errorMessage: applied ? nil : Self.tearCorrectionRefused)
         }
@@ -442,11 +593,15 @@ final class ReferenceAuthoringWorker: @unchecked Sendable {
     /// moved. Returns the resulting state so the caller can stop when terminal.
     func refreshWatchEvidenceOnce() async -> (update: ReferenceAuthoringWorkerUpdate, isTerminal: Bool) {
         await enqueue { worker in
-            guard let evidence = worker.driver.hooks.refreshWatchEvidence() else {
+            guard let refresh = worker.driver.hooks.refreshWatchEvidence() else {
                 return (worker.makeUpdate(), true)
             }
-            worker.session.updateWatchEvidenceForTakeInReview(evidence)
-            return (worker.makeUpdate(), evidence.isTerminal)
+            worker.session.updateWatchEvidenceForTakeInReview(
+                refresh.evidence,
+                refreshedSourceBinding: refresh.sourceBinding,
+                sourceState: refresh.sourceState
+            )
+            return (worker.makeUpdate(), refresh.evidence.isTerminal)
         }
     }
 
@@ -483,11 +638,18 @@ final class ReferenceAuthoringWorker: @unchecked Sendable {
 
 @MainActor
 final class ReferenceAuthoringViewModel: ObservableObject {
+    let mediaReview: ReferenceFinalizedMediaReviewController
+    private let beatPreviewEngine: any PracticeBeatPlaybackEngine
+    private var mediaReviewObservation: AnyCancellable?
+    @Published private(set) var isPreviewingBeat = false
     @Published private(set) var state: ReferenceAuthoringViewState
     @Published private(set) var visibleMessage: String?
     @Published private(set) var isWorking = false
     @Published private(set) var isPreflightPolling = false
     @Published private(set) var isCalibrationPolling = false
+    @Published private(set) var approvedPackageURL: URL?
+    @Published private(set) var isExportingApprovedPackage = false
+    @Published private(set) var navigationRequest: ReferenceAuthoringNavigationRequest?
 
     /// Identifies the one transient operation whose wording must be distinct
     /// from the session's persistent `.configuring` workflow phase. Mutated
@@ -499,11 +661,20 @@ final class ReferenceAuthoringViewModel: ObservableObject {
     @Published var patternID = ""
     @Published var patternName = ""
     @Published var phraseBars = 1
-    @Published var bpm = 95
+    @Published var capturePurpose: ReferenceCapturePurpose = .canonicalReference {
+        didSet { if capturePurpose != oldValue { stopBeatPreview() } }
+    }
+    @Published var bpm = 95 {
+        didSet { if bpm != oldValue { stopBeatPreview() } }
+    }
+    @Published var beatEngineMode: BeatEngineMode = .boomBapTrainer {
+        didSet { if beatEngineMode != oldValue { stopBeatPreview() } }
+    }
     @Published var startingDirectionRawValue = ""
     @Published var faderVariantRawValue = ""
     @Published var handednessRawValue = CaptureSessionHandedness.right.rawValue
-    @Published var crossfaderOpenEndRawValue = CrossfaderOpenEnd.left.rawValue
+    /// Normal RANE right-deck orientation: left rail silent, rightward throw audible.
+    @Published var crossfaderOpenEndRawValue = CrossfaderOpenEnd.right.rawValue
     @Published var activeDeckRawValue = CrossfaderActiveDeck.rightDeck.rawValue
     @Published var notes = ""
     @Published var reviewNotes = ""
@@ -540,16 +711,77 @@ final class ReferenceAuthoringViewModel: ObservableObject {
     var approvalBlockReason: String? {
         if isWorking { return "An operation is still running." }
         if isWaitingForWatchTransfer { return "Waiting for the Apple Watch motion transfer to complete." }
+        switch mediaReview.state {
+        case .loading: return "Finalized media is still loading."
+        case .missingAudio: return "The finalized WAV is missing."
+        case .unreadableMedia(let file): return "Finalized media is unreadable: \(file)."
+        case .durationMismatch: return "The finalized WAV and MOV durations do not match."
+        case .synchronizationUnavailable(let detail): return detail
+        case .ready, .playing, .stopped, .missingVideo: break
+        case .playingTake: break
+        }
+        if let issue = mediaReview.beatBindingIssue { return issue }
         return session.approvalBlockReason()
     }
 
+    /// Keep partial validation and the playback/beat gate visible together.
+    var approvalBlockReasons: [String] {
+        var seen = Set<String>()
+        return [session.approvalBlockReason(), approvalBlockReason, mediaReview.beatBindingIssue]
+            .compactMap { $0 }
+            .filter { seen.insert($0).inserted }
+    }
+
+    var canEditReviewedTake: Bool { session.takeInReview != nil && !isWorking }
+
     var canApprove: Bool { approvalBlockReason == nil }
+
+    func continuationBlockReason(newScratch: Bool, isExportPreparing: Bool = false) -> String? {
+        if isWorking || isExportingApprovedPackage || isExportPreparing {
+            return "Wait for the current operation to finish."
+        }
+        if isWaitingForWatchTransfer { return "Wait for the Watch motion transfer to finish." }
+        return newScratch ? session.newScratchSetupBlockReason() : session.retakeBlockReason()
+    }
+
+    var canRejectReviewedTake: Bool {
+        canEditReviewedTake && !isWaitingForWatchTransfer
+            && reviewedTake?.evidence.watchEvidence.isTransferPending != true
+            && reviewedTake?.evidence.metadata.sourceState?.isTerminal != false
+    }
+
+    var approvedPackageExportBlockReason: String? {
+        if isWorking || isExportingApprovedPackage { return "Wait for the current operation to finish." }
+        guard let take = reviewedTake else { return "No finalized take is available." }
+        guard take.evidence.metadata.lifecycleState == .approvedCanonical,
+              take.evidence.metadata.reviewDecision?.outcome == .approved else {
+            return "Approve one selected repetition before exporting a reference package."
+        }
+        guard take.latestValidation.passes else { return "The approved take no longer passes validation." }
+        guard lastFinalizedRecordingURL != nil else { return "The finalized capture file is unavailable." }
+        return nil
+    }
+
+    func nextTakeBlockReason(isExportPreparing: Bool) -> String? {
+        if isWorking { return "Wait for the current operation to finish." }
+        if isWaitingForWatchTransfer {
+            return "Wait for the Apple Watch motion transfer to complete."
+        }
+        if isExportPreparing { return "Wait for the capture export to finish." }
+        guard session.canPrepareNextTake else {
+            return "Approve the current draft before preparing another take."
+        }
+        return nil
+    }
 
     init(
         engine: MacCaptureEngine,
         companionReceiver: CompanionCameraReceiver?,
-        operatorName: String
+        operatorName: String,
+        beatPreviewEngine: any PracticeBeatPlaybackEngine = ScratchLabBeatEngine()
     ) {
+        self.mediaReview = ReferenceFinalizedMediaReviewController()
+        self.beatPreviewEngine = beatPreviewEngine
         let session = ReferenceAuthoringSession(
             authoringSessionID: "reference-\(UUID().uuidString.lowercased())",
             operatorName: operatorName
@@ -567,11 +799,34 @@ final class ReferenceAuthoringViewModel: ObservableObject {
             session: session,
             latestCalibrationRawValue: nil
         )
+        observeMediaReview()
     }
 
-    init(worker: ReferenceAuthoringWorker, initialState: ReferenceAuthoringViewState) {
+    init(worker: ReferenceAuthoringWorker, initialState: ReferenceAuthoringViewState,
+         beatPreviewEngine: any PracticeBeatPlaybackEngine = ScratchLabBeatEngine()) {
+        self.mediaReview = ReferenceFinalizedMediaReviewController()
+        self.beatPreviewEngine = beatPreviewEngine
         self.worker = worker
         self.state = initialState
+        let applied = initialState.session
+        selectedTechnique = applied.selectedTechnique
+        patternID = applied.selectedPattern?.id ?? ""
+        patternName = applied.selectedPattern?.name ?? ""
+        phraseBars = applied.selectedPattern?.phraseBars ?? 1
+        bpm = applied.selectedBPM ?? 95
+        beatEngineMode = applied.selectedBeatEngineMode
+        capturePurpose = applied.selectedCapturePurpose
+        startingDirectionRawValue = applied.selectedStartingDirection?.rawValue ?? ""
+        faderVariantRawValue = applied.selectedFaderVariant?.rawValue ?? ""
+        handednessRawValue = applied.selectedHandedness.rawValue
+        notes = applied.notes
+        observeMediaReview()
+    }
+
+    private func observeMediaReview() {
+        mediaReviewObservation = mediaReview.objectWillChange.sink { [weak self] in
+            self?.objectWillChange.send()
+        }
     }
 
     var session: ReferenceAuthoringSession { state.session }
@@ -655,6 +910,7 @@ final class ReferenceAuthoringViewModel: ObservableObject {
     }
 
     func applySetup() {
+        stopBeatPreview()
         visibleMessage = nil
         guard let technique = selectedTechnique else {
             visibleMessage = "Select an authorable technique. Flare references must name an explicit click count."
@@ -693,7 +949,9 @@ final class ReferenceAuthoringViewModel: ObservableObject {
                 startingDirection: startingDirection,
                 faderVariant: faderVariant,
                 handedness: handedness,
-                notes: notes
+                notes: notes,
+                beatEngineMode: beatEngineMode,
+                capturePurpose: capturePurpose
             )
             apply(update)
             visibleMessage = update.errorMessage ?? "Authoring setup applied."
@@ -782,13 +1040,32 @@ final class ReferenceAuthoringViewModel: ObservableObject {
     /// The export source for the raw diagnostic capture, or `nil` when there
     /// is nothing stable to export. Reuses the existing session-archive
     /// pipeline; this screen builds no second archive format.
-    func rawCaptureExportSource(config: CaptureSessionConfig?) -> SessionExportSource? {
-        guard canExportRawCapture, let url = lastFinalizedRecordingURL else { return nil }
-        return .localRecordingSession(
-            lastRecordingURL: url,
-            sessionName: Self.rawCaptureExportSessionName,
-            config: config
-        )
+    func rawCaptureExportSource(config: CaptureSessionConfig?) async -> SessionExportSource? {
+        guard canExportRawCapture else { return nil }
+        isWorking = true
+        defer { isWorking = false }
+        do {
+            let snapshot = try await worker.rawCaptureExportSnapshot(config: config)
+            if let excluded = snapshot?.excludedReferenceTakeIDs, !excluded.isEmpty {
+                visibleMessage = "Earlier authoring takes belong to another capture export group and remain in the session: "
+                    + excluded.joined(separator: ", ")
+            }
+            return snapshot?.source
+        } catch {
+            visibleMessage = error.localizedDescription
+            return nil
+        }
+    }
+
+    /// Existing-take restore seam; no import flow or lifecycle transition.
+    func restoreTearEvidence(_ data: Data?) async -> ReferenceTearEvidenceCodec.ReadResult? {
+        guard !isWorking else { return nil }
+        isWorking = true
+        defer { isWorking = false }
+        let restored = await worker.restoreTearEvidence(data)
+        apply(restored.update)
+        visibleMessage = restored.update.errorMessage
+        return restored.result
     }
 
     static let rawCaptureExportSessionName = "Reference Authoring Capture"
@@ -796,19 +1073,137 @@ final class ReferenceAuthoringViewModel: ObservableObject {
     /// Stated wherever export is offered. Exporting is not approval,
     /// publication, installation or training eligibility.
     static let rawCaptureExportDisclaimer =
-        "Saving the capture copies the recorded files only. It does not approve, publish, "
+        "Saving the capture copies recorded files and available tear review evidence. It does not approve, publish, "
             + "install, or make any reference eligible for training."
 
     // MARK: - Canonical tear notation
 
-    /// The take under review, projected into canonical gesture records.
-    ///
-    /// The live preview projects the SAME way (see
-    /// `ReferenceTearCanonicalProjectionBuilder.project(movementEvents:)`), so
-    /// the two views cannot disagree about a gesture's structure.
+    /// Stored canonical output remains authoritative after restore. A later
+    /// semantic correction resumes the current projector used by live review.
     var reviewTearProjection: ReferenceTearCanonicalProjection? {
-        tearReview.map { ReferenceTearCanonicalProjectionBuilder.project($0) }
+        reviewedTake?.tearProjection
     }
+
+    #if DEBUG
+    // Selection and alignment belong to this preview, never to capture or approval.
+    @Published private(set) var tearComparisonTargetID: String?
+    @Published private(set) var tearComparisonStartID: String?
+    @Published private(set) var tearComparisonEndID: String?
+    @Published private(set) var tearComparisonOriginSeconds: Double?
+
+    var tearComparisonTargets: [ScratchNotation.TearTemplate] {
+        ScratchNotation.internalCanonicalTearTemplates
+    }
+
+    var tearComparisonCandidates: [ReferenceTearCandidate] { tearReview?.candidates ?? [] }
+
+    /// Captured tempo, independent of the editable setup for a later take.
+    var tearComparisonBPM: Double? { reviewedTake.map { Double($0.evidence.metadata.bpm) } }
+
+    var tearComparisonEndCandidates: [ReferenceTearCandidate] {
+        guard let start = tearComparisonCandidates.firstIndex(where: { $0.id == tearComparisonStartID }) else {
+            return []
+        }
+        return Array(tearComparisonCandidates[start...])
+    }
+
+    var tearComparisonSelectedCandidates: [ReferenceTearCandidate] {
+        let candidates = tearComparisonCandidates
+        guard let start = candidates.firstIndex(where: { $0.id == tearComparisonStartID }),
+              let end = candidates.firstIndex(where: { $0.id == tearComparisonEndID }), end >= start else {
+            return []
+        }
+        // Keep every intervening gesture, including a contrary direction or unknown evidence.
+        return Array(candidates[start...end])
+    }
+
+    var tearComparisonBlockReason: String? {
+        guard !isWorking else { return "Wait for the current operation to finish." }
+        guard case .reviewing = session.phase, reviewedTake != nil else { return "Choose a finalized take under review." }
+        guard tearComparisonTargets.contains(where: { $0.id == tearComparisonTargetID }) else {
+            return "Choose an authored target explicitly."
+        }
+        guard !tearComparisonSelectedCandidates.isEmpty else { return "Choose a performed gesture or consecutive gesture range." }
+        return nil
+    }
+
+    func selectTearComparisonTarget(_ id: String?) {
+        tearComparisonTargetID = tearComparisonTargets.contains { $0.id == id } ? id : nil
+        tearComparisonOriginSeconds = nil
+    }
+
+    func selectTearComparisonStart(_ id: String?) {
+        tearComparisonStartID = tearComparisonCandidates.contains { $0.id == id } ? id : nil
+        // Selecting a start explicitly selects that single gesture; extending it is a separate choice.
+        tearComparisonEndID = tearComparisonStartID
+        tearComparisonOriginSeconds = nil
+    }
+
+    func selectTearComparisonEnd(_ id: String?) {
+        tearComparisonEndID = tearComparisonEndCandidates.contains { $0.id == id } ? id : nil
+        tearComparisonOriginSeconds = nil
+    }
+
+    func compareSelectedTear() {
+        guard tearComparisonBlockReason == nil else { return }
+        tearComparisonOriginSeconds = tearComparisonSelectedCandidates.first?.span.startTime
+    }
+
+    /// Recomputed from the current immutable review. No cached capture or corrected record can survive a refresh.
+    var tearComparisonResult: CanonicalTearComparison.Result? {
+        guard tearComparisonBlockReason == nil,
+              let origin = tearComparisonOriginSeconds,
+              let targetID = tearComparisonTargetID,
+              let targets = ScratchNotation.internalCanonicalGestureRecords(forTemplateID: targetID),
+              let projection = reviewTearProjection, let review = tearReview,
+              let capturedBPM = tearComparisonBPM else { return nil }
+        let candidates = tearComparisonSelectedCandidates
+        let records = candidates.compactMap { candidate in projection.records.first { $0.id == candidate.id } }
+        guard records.count == candidates.count else { return nil }
+        let intrinsic = reviewedTake?.tearPerformedLimitations ?? [:]
+        let limitations = Dictionary(uniqueKeysWithValues: candidates.enumerated().map { index, candidate in
+            var reasons = intrinsic[candidate.id] ?? []
+            // Include both adjacent inter-gesture intervals. They are not separate projected
+            // records, but packet loss or a clock break must not disappear when selecting a phrase.
+            let lower = index > 0 ? candidates[index - 1].span.endTime : candidate.span.startTime
+            let upper = index + 1 < candidates.count ? candidates[index + 1].span.startTime : candidate.span.endTime
+            if review.hasInterruptedEvidence(
+                in: ReferenceTearTimeSpan(startTime: lower, endTime: upper)
+            ), !reasons.contains(.unknownEvidence) {
+                reasons.append(.unknownEvidence)
+            }
+            return (candidate.id, reasons)
+        })
+        return CanonicalTearComparison.compare(
+            target: targets, performed: records, bpm: capturedBPM,
+            performedOriginSeconds: origin, performedLimitations: limitations
+        )
+    }
+
+    static func tearComparisonTargetTitle(_ target: ScratchNotation.TearTemplate) -> String {
+        let ratio = target.subdivisionRatio.map { String(format: "%g", $0) }.joined(separator: ":")
+        return "\(target.holdCount)-tear · \(target.form.rawValue) · \(ratio)"
+    }
+
+    static var tearComparisonToleranceText: String {
+        let configuration = CanonicalTearComparison.Configuration.internalReview
+        return String(format: "Provisional tolerances: hold/fader timing ±%.0f ms; moving-duration share ±%.0f percentage points. Minimum motion confidence: %.2f.",
+                      configuration.timingToleranceMilliseconds, configuration.ratioShareTolerance * 100,
+                      configuration.minimumMotionConfidence)
+    }
+
+    static func tearComparisonCandidateTitle(_ candidate: ReferenceTearCandidate) -> String {
+        String(format: "Gesture %d · %@ · %.3f–%.3f s", candidate.gestureIndex + 1,
+               candidate.direction.rawValue, candidate.span.startTime, candidate.span.endTime)
+    }
+
+    private func resetTearComparison() {
+        tearComparisonTargetID = nil
+        tearComparisonStartID = nil
+        tearComparisonEndID = nil
+        tearComparisonOriginSeconds = nil
+    }
+    #endif
 
     /// Shared time/position frame for a canonical chart.
     ///
@@ -939,18 +1334,44 @@ final class ReferenceAuthoringViewModel: ObservableObject {
     }
 
     func startRecording() {
+        guard !isWorking else { return }
+        stopBeatPreview()
+        mediaReview.stop()
+        guard session.selectedTechnique == selectedTechnique,
+              session.selectedPattern?.id == patternID.trimmingCharacters(in: .whitespacesAndNewlines),
+              session.selectedPattern?.name == patternName.trimmingCharacters(in: .whitespacesAndNewlines),
+              session.selectedPattern?.phraseBars == phraseBars,
+              session.selectedBPM == bpm,
+              session.selectedBeatEngineMode == beatEngineMode,
+              session.selectedCapturePurpose == capturePurpose,
+              session.selectedStartingDirection?.rawValue == startingDirectionRawValue,
+              session.selectedFaderVariant?.rawValue == faderVariantRawValue,
+              session.selectedHandedness.rawValue == handednessRawValue,
+              session.notes == notes else {
+            visibleMessage = "Apply Authoring Setup after changing the capture settings."
+            return
+        }
         visibleMessage = nil
         isWorking = true
         Task { [weak self] in
             guard let self else { return }
             let update = await worker.startRecording()
             apply(update)
-            visibleMessage = update.errorMessage ?? "Recording started. Perform the same phrase four times."
+            visibleMessage = update.errorMessage ?? (session.selectedCapturePurpose == .movementCheck
+                ? "Recording started. Perform one slow movement, then press Stop and Finalize."
+                : "Recording started. Perform the same phrase four times.")
             isWorking = false
+            // An engine stop can arrive before the async start update reaches
+            // this view model. Reconcile the bridge's exact active token so a
+            // dropped UI edge cannot leave a completed take stuck recording.
+            if update.errorMessage == nil, await worker.currentRecordingHasStopped() {
+                captureRecordingDidStop()
+            }
         }
     }
 
     func stopRecording() {
+        guard session.phase == .recording, !isWorking else { return }
         visibleMessage = nil
         isWorking = true
         finalizationTask?.cancel()
@@ -959,11 +1380,27 @@ final class ReferenceAuthoringViewModel: ObservableObject {
             let update = await worker.stopRecording()
             guard !Task.isCancelled else { return }
             apply(update)
+            if let take = reviewedTake {
+                let beatRoot = ProcessInfo.processInfo.environment["CXL_BEAT_PILOT_ROOT"]
+                    .map { URL(fileURLWithPath: $0, isDirectory: true) }
+                mediaReview.load(
+                    take: take,
+                    mediaURL: lastFinalizedRecordingURL,
+                    beatRootURL: beatRoot
+                )
+            }
             visibleMessage = update.errorMessage ?? "Take finalized. Review all evidence and validation findings."
             isWorking = false
             finalizationTask = nil
             startWatchTransferWaitIfPending()
         }
+    }
+
+    /// The capture engine owns the timed stop. This only brings its completed
+    /// take through the same serial finalization/review path as manual Stop.
+    func captureRecordingDidStop() {
+        guard session.phase == .recording, !isWorking else { return }
+        stopRecording()
     }
 
     /// Wait, bounded and cancellably, for this take's Watch motion transfer.
@@ -1035,6 +1472,8 @@ final class ReferenceAuthoringViewModel: ObservableObject {
     }
 
     func rejectTake() {
+        guard canRejectReviewedTake else { return }
+        mediaReview.stop()
         visibleMessage = nil
         Task { [weak self] in
             guard let self else { return }
@@ -1044,23 +1483,155 @@ final class ReferenceAuthoringViewModel: ObservableObject {
         }
     }
 
-    func retake() {
+    func retake(isExportPreparing: Bool = false) {
+        if let reason = continuationBlockReason(newScratch: false, isExportPreparing: isExportPreparing) {
+            visibleMessage = reason
+            return
+        }
+        guard let takeID = session.latestRecordedTake?.id else { return }
+        stopBeatPreview()
+        mediaReview.stop()
         visibleMessage = nil
+        isWorking = true
         Task { [weak self] in
             guard let self else { return }
-            let update = await worker.retake()
+            let update = await worker.retake(afterTakeID: takeID)
             apply(update)
             visibleMessage = update.errorMessage ?? "Ready for a retake. The prior draft evidence remains retained."
+            if update.errorMessage == nil {
+                reviewNotes = ""
+                tearReviewNotes = ""
+                navigationRequest = .init(destination: .capture)
+            }
+            isWorking = false
+        }
+    }
+
+    func prepareNewScratch(isExportPreparing: Bool = false) {
+        if let reason = continuationBlockReason(newScratch: true, isExportPreparing: isExportPreparing) {
+            visibleMessage = reason
+            return
+        }
+        guard let takeID = session.latestRecordedTake?.id else { return }
+        stopBeatPreview()
+        mediaReview.stop()
+        visibleMessage = nil
+        isWorking = true
+        Task { [weak self] in
+            guard let self else { return }
+            let update = await worker.prepareNewScratchSetup(afterTakeID: takeID)
+            apply(update)
+            if update.errorMessage == nil {
+                selectedTechnique = nil
+                patternID = ""
+                patternName = ""
+                lastAutofilledPatternID = ""
+                lastAutofilledPatternName = ""
+                startingDirectionRawValue = ""
+                faderVariantRawValue = ""
+                notes = ""
+                reviewNotes = ""
+                tearReviewNotes = ""
+                visibleMessage = "Previous takes retained. Choose the next scratch and apply its setup."
+                navigationRequest = .init(destination: .setup)
+            } else { visibleMessage = update.errorMessage }
+            isWorking = false
         }
     }
 
     func approveCanonical() {
+        if let reason = approvalBlockReason {
+            visibleMessage = reason
+            return
+        }
         visibleMessage = nil
+        isWorking = true
         Task { [weak self] in
             guard let self else { return }
             let update = await worker.approveCanonical(notes: reviewNotes)
             apply(update)
             visibleMessage = update.errorMessage ?? "Approved canonical draft. Not installed for training."
+            isWorking = false
+        }
+    }
+
+    func exportApprovedPackage(to parentDirectory: URL) {
+        visibleMessage = nil
+        if let reason = approvedPackageExportBlockReason {
+            visibleMessage = reason
+            return
+        }
+        guard let take = reviewedTake, let mediaURL = lastFinalizedRecordingURL else { return }
+        isExportingApprovedPackage = true
+        Task { [weak self] in
+            guard let self else { return }
+            do {
+                let packageURL = try await Task.detached(priority: .userInitiated) {
+                    try ReferenceApprovedPackageCoordinator.export(
+                        take: take, finalizedMediaURL: mediaURL, parentDirectory: parentDirectory
+                    )
+                }.value
+                approvedPackageURL = packageURL
+                visibleMessage = "Approved package exported: \(packageURL.lastPathComponent)."
+            } catch {
+                visibleMessage = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
+            }
+            isExportingApprovedPackage = false
+        }
+    }
+
+    func reopenLastApprovedPackage() {
+        visibleMessage = nil
+        guard let packageURL = approvedPackageURL else {
+            visibleMessage = "Export an approved package before reopening it."
+            return
+        }
+        isExportingApprovedPackage = true
+        Task { [weak self] in
+            guard let self else { return }
+            do {
+                let manifest = try await Task.detached(priority: .userInitiated) {
+                    let secondRoot = FileManager.default.temporaryDirectory
+                        .appendingPathComponent("reference-package-reopen-\(UUID().uuidString)", isDirectory: true)
+                    return try ReferenceApprovedPackageCoordinator.copyAndReopen(
+                        packageURL: packageURL, secondRoot: secondRoot
+                    )
+                }.value
+                visibleMessage = "Reopened and rehashed \(manifest.artifacts.count) package artifacts."
+            } catch {
+                visibleMessage = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
+            }
+            isExportingApprovedPackage = false
+        }
+    }
+
+    /// Preserve the approved draft and return to ready. Recording remains a
+    /// separate explicit action through `startRecording()`.
+    func prepareNextTake(isExportPreparing: Bool) {
+        mediaReview.stop()
+        visibleMessage = nil
+        if let reason = nextTakeBlockReason(isExportPreparing: isExportPreparing) {
+            visibleMessage = reason
+            return
+        }
+        guard let expectedTakeID = session.latestRecordedTake?.id else {
+            visibleMessage = "Approve the current draft before preparing another take."
+            return
+        }
+
+        isWorking = true
+        Task { [weak self] in
+            guard let self else { return }
+            let update = await worker.prepareNextTake(afterApprovedTakeID: expectedTakeID)
+            apply(update)
+            if update.errorMessage == nil {
+                reviewNotes = ""
+                tearReviewNotes = ""
+                visibleMessage = "Approved take \(expectedTakeID) retained. Ready for the next take; press Record Draft when ready."
+            } else {
+                visibleMessage = update.errorMessage
+            }
+            isWorking = false
         }
     }
 
@@ -1473,6 +2044,8 @@ final class ReferenceAuthoringViewModel: ObservableObject {
     /// persist/approve a reference; it merely abandons any wait begun by an
     /// explicit Stop action while the engine finishes that take on its own.
     func cancelTransientWorkForViewDisappearance() {
+        stopBeatPreview()
+        mediaReview.stop()
         stopPolling()
         finalizationTask?.cancel()
         finalizationTask = nil
@@ -1484,7 +2057,37 @@ final class ReferenceAuthoringViewModel: ObservableObject {
         isWorking = false
     }
 
+    func toggleBeatPreview() {
+        if isPreviewingBeat { stopBeatPreview(); return }
+        guard !isWorking, session.phase != .recording else { return }
+        mediaReview.stop()
+        do {
+            try beatPreviewEngine.start(mode: beatEngineMode, bpm: bpm)
+            isPreviewingBeat = true
+            visibleMessage = "Previewing \(beatEngineMode.title) at \(bpm) BPM. Nothing is being recorded."
+        } catch {
+            beatPreviewEngine.stop()
+            isPreviewingBeat = false
+            visibleMessage = "Could not play the backing preview: \(error.localizedDescription)"
+        }
+    }
+
+    func stopBeatPreview() {
+        beatPreviewEngine.stop()
+        isPreviewingBeat = false
+    }
+
     private func apply(_ update: ReferenceAuthoringWorkerUpdate) {
+        #if DEBUG
+        let nextTake = update.state.session.takeInReview ?? update.state.session.takes.last
+        if reviewedTake?.id != nextTake?.id || tearReview != nextTake?.tearReview
+            || reviewedTake?.restoredTearProjection != nextTake?.restoredTearProjection
+            || reviewedTake?.restoredTearPerformedLimitations != nextTake?.restoredTearPerformedLimitations
+            || reviewedTake?.evidence.metadata.bpm != nextTake?.evidence.metadata.bpm
+            || session.phase != update.state.session.phase {
+            resetTearComparison()
+        }
+        #endif
         state = update.state
         if let error = update.errorMessage {
             visibleMessage = error

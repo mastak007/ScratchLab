@@ -2,10 +2,1030 @@
 // ScratchLabDesktopTests
 
 import XCTest
+import AVFoundation
 @testable import ScratchLab
+
+/// Connected software evidence only: synthetic packets and valid synthetic media,
+/// through the actual finalized bridge, serial owner and default archive probes.
+@MainActor
+final class ReferenceTearEvidencePipelineTests: XCTestCase {
+
+    func testFinalizedVideoAndWAVPlayTogetherWithoutOptionalBeatAssetsAndStopCancelsSeek() async throws {
+        let files = try await fixture([])
+        let take = try await record(worker([files]))
+        let controller = ReferenceFinalizedMediaReviewController()
+        controller.load(take: take, mediaURL: files.mediaURL, beatRootURL: nil)
+        for _ in 0..<100 where controller.state == .loading {
+            try await Task.sleep(for: .milliseconds(50))
+        }
+        XCTAssertEqual(controller.state, .ready)
+        XCTAssertTrue(controller.canPlay)
+        XCTAssertNotNil(controller.beatBindingIssue)
+        let player = try XCTUnwrap(controller.videoPlayer)
+        let asset = try XCTUnwrap(player.currentItem?.asset)
+        let audioTracks = try await asset.loadTracks(withMediaType: .audio)
+        let videoTracks = try await asset.loadTracks(withMediaType: .video)
+        XCTAssertEqual(audioTracks.count, 1, "Exactly one finalized WAV audio track; no duplicate camera audio.")
+        XCTAssertEqual(videoTracks.count, 1)
+        player.isMuted = true
+        controller.playWholeTake()
+        controller.stop() // Cancel before an asynchronous seek can restart playback.
+        try await Task.sleep(for: .milliseconds(100))
+        XCTAssertFalse(controller.isPlaying)
+        XCTAssertEqual(player.rate, 0)
+    }
+    private typealias Raw = CaptureCore.RawMixerMIDIEvent
+    private struct Fixture: Sendable {
+        let directory: URL
+        let mediaURL: URL
+        let sidecarURL: URL
+        let sidecarData: Data
+        let config: CaptureSessionConfig
+        let raw: [Raw]
+    }
+    private struct Archived: Sendable {
+        let companions: [String: Data]
+        let boundSidecarDataByTakeID: [String: Data]
+        let metadata: SessionExportMetadataDocument
+        let notationByTakeID: [String: SessionExportNotationDocument]
+        let replay: SessionExportReplayDocument
+    }
+    private nonisolated static var calibration: CrossfaderCalibration {
+        CrossfaderCalibration(address: CrossfaderMIDIAddress(deviceIdentifier: "Rane ONE MKII",
+            deviceName: "Rane ONE MKII", channel: 15, controller: 8),
+            fullLeftRawValue: 0, centerRawValue: 52, fullRightRawValue: 104,
+            openEnd: .left, activeDeck: .rightDeck,
+            calibratedAt: Date(timeIntervalSince1970: 1_788_000_000))
+    }
+    // Eighty observed one-step increments clear the existing .75 confidence
+    // gate via the real decoder (.7 + 80/1000); no confidence is injected.
+    private nonisolated static func packets(_ steps: Int, count: Int = 80, start: Double = 0.1,
+        duration: Double = 0.3, phase: Int = 20) -> [Raw] {
+        (0...count).map { index in
+            let value = ((phase + index * steps) % 128 + 128) % 128
+            let time = ((start + Double(index) * duration / Double(count)) * 1_000_000_000).rounded() / 1_000_000_000
+            return Raw(timestamp: time, takeRelativeTime: time, deviceName: "Rane ONE MKII",
+                channel: 1, controller: 6, value: value,
+                normalizedValue: Double(value) / 127, mappedControl: nil)
+        }
+    }
+    private nonisolated static func tear(holds: Int, direction: Int = 1,
+        durations: [Double]? = nil, holdDuration: Double = 0.2, runPacketCount: Int = 80) -> [Raw] {
+        var result: [Raw] = []
+        var start = 0.1
+        var phase = 20
+        for index in 0...holds {
+            let duration = durations?[index] ?? 0.3
+            let run = packets(direction, count: runPacketCount, start: start, duration: duration, phase: phase)
+            result.append(contentsOf: result.isEmpty ? run : Array(run.dropFirst()))
+            start += duration
+            phase += runPacketCount * direction
+            if index < holds {
+                result.append(contentsOf: packets(0, count: max(3, Int(ceil(holdDuration / 0.02))),
+                    start: start, duration: holdDuration, phase: phase).dropFirst())
+                start += holdDuration
+            }
+        }
+        return result
+    }
+    private nonisolated static func withFader(_ platter: [Raw], closed: [ClosedRange<Double>] = [],
+        alwaysClosed: Bool = false) throws -> [Raw] {
+        let end = (platter.map(\.takeRelativeTime).max() ?? 0) + 0.1
+        let fader = try (0...Int(ceil(end * 1_000))).map { index -> Raw in
+            let time = Double(index) / 1_000
+            let value = alwaysClosed || closed.contains { $0.contains(time) } ? 104 : 0
+            let position = try XCTUnwrap(calibration.normalized(rawValue: value))
+            return Raw(timestamp: time, takeRelativeTime: time, deviceName: "Rane ONE MKII",
+                channel: 15, controller: 8, value: value, normalizedValue: Double(value) / 127,
+                mappedControl: "crossfader", calibratedPosition: position, calibrationID: calibration.id)
+        }
+        // Only chronological fixtures use this merge. Clock-regression fixtures
+        // retain their original receive order and deliberately omit this helper.
+        return (platter + fader).enumerated().sorted {
+            $0.element.timestamp == $1.element.timestamp ? $0.offset < $1.offset
+                : $0.element.timestamp < $1.element.timestamp
+        }.map(\.element)
+    }
+    private func fixture(_ raw: [Raw], directory: URL? = nil,
+        sessionID: String = "pipeline-session", number: Int = 1, notes: String = "synthetic evidence",
+        scratchType: CaptureSessionScratchType = .tear) async throws -> Fixture {
+        let folder = directory ?? FileManager.default.temporaryDirectory
+            .appendingPathComponent("ReferenceTearPipeline-\(UUID())", isDirectory: true)
+        if directory == nil { addTeardownBlock { try? FileManager.default.removeItem(at: folder) } }
+        return try await Task.detached {
+            try Self.writeFixture(raw, directory: folder, sessionID: sessionID, number: number, notes: notes, scratchType: scratchType)
+        }.value
+    }
+    private nonisolated static func writeFixture(_ raw: [Raw], directory: URL, sessionID: String,
+        number: Int, notes: String, scratchType: CaptureSessionScratchType) throws -> Fixture {
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        let identity = CaptureCore.LocalRecordingNaming.takeIdentity(sessionID: sessionID, takeNumber: number)
+        let baseName = CaptureCore.LocalRecordingNaming.baseName(sessionID: sessionID, takeNumber: number, roleLabel: "routine")
+        let mediaURL = directory.appendingPathComponent(baseName).appendingPathExtension("mov")
+        let sidecarURL = CaptureCore.LocalRecordingFiles.sidecarURL(forMediaURL: mediaURL)
+        let frameCount = max(30, Int(ceil(((raw.map(\.takeRelativeTime).max() ?? 0) + 0.1) * 30)))
+        let duration = Double(frameCount) / 30
+        try writeMedia(mediaURL: mediaURL, videoFrames: frameCount)
+        let date = Date(timeIntervalSince1970: 1_788_000_000)
+        let config = CaptureSessionConfig(performerName: "Synthetic Pipeline", bpm: 120, scratchType: scratchType,
+            drillMode: .fullCapture, captureMode: .timedClick, takeDurationSeconds: duration,
+            takeCount: 1, handedness: .right, notes: notes, sessionID: sessionID, createdAt: date, updatedAt: date)
+        let decoded = MacCaptureEngine.resolvedControllerMovementEvents(
+            selectedMIDISourceName: "Rane ONE MKII", capturedMidi: raw)
+        let snapshot = MacCaptureEngine.RoutineNotationFusionEngine().snapshot(
+            audioSnapshot: ScratchAudioNotationSnapshot(audioEvents: [], confidence: nil),
+            motionEvents: decoded, detectedLabel: nil, labelSource: "unknown", labelConfidence: nil,
+            capturedAt: date).withMixerMidiEvents(raw)
+        let sidecar = CaptureCore.LocalRecordingSidecar.recording(sessionID: sessionID,
+            sessionConfig: config, takeIdentity: identity,
+            files: CaptureCore.LocalRecordingFiles(baseName: baseName, mediaURL: mediaURL, sidecarURL: sidecarURL),
+            recordingRole: "routine_capture", platform: "macOS", appSurface: "mac_desktop",
+            sourceDeviceName: "Synthetic Pipeline", startedAt: date)
+            .finalized(endedAt: date.addingTimeInterval(duration), mediaFileName: mediaURL.lastPathComponent,
+                captureErrorDescription: nil)
+            .withDetectedNotation(snapshot, recordedAt: date.addingTimeInterval(duration))
+        let data = try sidecar.encodedData()
+        try data.write(to: sidecarURL, options: .atomic)
+        return Fixture(directory: directory, mediaURL: mediaURL, sidecarURL: sidecarURL,
+            sidecarData: data, config: config, raw: raw)
+    }
+    private nonisolated static func writeMedia(mediaURL: URL, videoFrames: Int) throws {
+        let sampleRate = 44_100.0
+        let frames = AVAudioFrameCount(Double(videoFrames) / 30 * sampleRate)
+        let format = try XCTUnwrap(AVAudioFormat(standardFormatWithSampleRate: sampleRate, channels: 1))
+        let buffer = try XCTUnwrap(AVAudioPCMBuffer(pcmFormat: format, frameCapacity: frames))
+        buffer.frameLength = frames
+        let samples = try XCTUnwrap(buffer.floatChannelData)[0]
+        for index in 0..<Int(frames) { samples[index] = Float(sin(Double(index) * 2 * .pi * 440 / sampleRate) * 0.25) }
+        let audio = try AVAudioFile(forWriting: mediaURL.deletingPathExtension().appendingPathExtension("wav"),
+            settings: format.settings)
+        try audio.write(from: buffer)
+        let writer = try AVAssetWriter(outputURL: mediaURL, fileType: .mov)
+        let input = AVAssetWriterInput(mediaType: .video, outputSettings: [AVVideoCodecKey: AVVideoCodecType.h264,
+            AVVideoWidthKey: 64, AVVideoHeightKey: 64])
+        input.expectsMediaDataInRealTime = false
+        let adaptor = AVAssetWriterInputPixelBufferAdaptor(assetWriterInput: input,
+            sourcePixelBufferAttributes: [kCVPixelBufferPixelFormatTypeKey as String: kCVPixelFormatType_32BGRA,
+                kCVPixelBufferWidthKey as String: 64, kCVPixelBufferHeightKey as String: 64])
+        guard writer.canAdd(input) else { throw SessionExportError.unableToPrepareExport }
+        writer.add(input)
+        guard writer.startWriting() else { throw writer.error ?? SessionExportError.unableToPrepareExport }
+        writer.startSession(atSourceTime: .zero)
+        for frame in 0..<videoFrames {
+            let deadline = Date().addingTimeInterval(5)
+            while !input.isReadyForMoreMediaData, writer.status == .writing, Date() < deadline {
+                Thread.sleep(forTimeInterval: 0.002)
+            }
+            guard input.isReadyForMoreMediaData else { throw writer.error ?? SessionExportError.unableToPrepareExport }
+            var optionalBuffer: CVPixelBuffer?
+            guard CVPixelBufferCreate(kCFAllocatorDefault, 64, 64, kCVPixelFormatType_32BGRA,
+                nil, &optionalBuffer) == kCVReturnSuccess else { throw SessionExportError.unableToPrepareExport }
+            let pixelBuffer = try XCTUnwrap(optionalBuffer)
+            CVPixelBufferLockBaseAddress(pixelBuffer, [])
+            let base = try XCTUnwrap(CVPixelBufferGetBaseAddress(pixelBuffer))
+            memset(base, Int32(40 + frame % 100), CVPixelBufferGetDataSize(pixelBuffer))
+            CVPixelBufferUnlockBaseAddress(pixelBuffer, [])
+            guard adaptor.append(pixelBuffer, withPresentationTime: CMTime(value: Int64(frame), timescale: 30)) else {
+                throw writer.error ?? SessionExportError.unableToPrepareExport
+            }
+        }
+        writer.endSession(atSourceTime: CMTime(value: Int64(videoFrames), timescale: 30))
+        input.markAsFinished()
+        let completed = DispatchSemaphore(value: 0)
+        writer.finishWriting { completed.signal() }
+        guard completed.wait(timeout: .now() + 10) == .success, writer.status == .completed else {
+            throw writer.error ?? SessionExportError.unableToPrepareExport
+        }
+    }
+    private final class RecordingSequence: @unchecked Sendable {
+        let fixtures: [Fixture]
+        private let lock = NSLock()
+        private var index = 0
+        private var finalized: URL?
+        init(_ fixtures: [Fixture]) { self.fixtures = fixtures }
+        var lastURL: URL? { lock.lock(); defer { lock.unlock() }; return finalized }
+        func stop() -> Result<ReferenceRecordedTakeArtifacts, ReferenceAuthoringError> {
+            lock.lock()
+            defer { lock.unlock() }
+            guard fixtures.indices.contains(index) else { return .failure(.recordingFailed("No synthetic take remains.")) }
+            let fixture = fixtures[index]
+            let result = ReferenceAuthoringCaptureBridge.buildArtifacts(mediaURL: fixture.mediaURL, expectedIdentity: nil)
+            if case .success = result { finalized = fixture.mediaURL; index += 1 }
+            return result
+        }
+    }
+    private func worker(_ fixtures: [Fixture]) -> ReferenceAuthoringWorker {
+        let sequence = RecordingSequence(fixtures)
+        let calibration = Self.calibration
+        var session = ReferenceAuthoringSession(authoringSessionID: "pipeline-authoring", operatorName: "Synthetic Reviewer")
+        session.selectTechnique(.tear)
+        session.selectPattern(ReferencePatternIdentity(id: "pipeline", name: "Pipeline", phraseBars: 1), bpm: 120)
+        session.declareVariant(startingDirection: .forward, faderVariant: .faderOpenThroughout, handedness: .right)
+        session.confirmedCalibration = calibration
+        session.phase = .readyToRecord
+        let hooks = ReferenceAuthoringRecordingHooks(startRecording: { .success(()) }, stopRecording: { sequence.stop() },
+            currentPreflightSnapshot: {
+                ReferencePreflightSnapshot(controllerName: "Rane ONE MKII", controllerIdentifier: "Rane ONE MKII",
+                    observedCrossfaderAddress: calibration.address, latestCrossfaderRawValue: 0, calibration: calibration,
+                    crossfaderEventCount: 40, platterEventCount: 80, platterIsMoving: true, audioInputPeakLevel: 0.5,
+                    audioDeviceName: "Synthetic Audio", watchIsReachable: true, watchMotionIsStreaming: true,
+                    cameraDeviceName: "Synthetic Camera", cameraIsActive: true, crossfaderSecondsSinceLastMessage: 0.01)
+            }, latestCalibrationObservation: { nil })
+        return ReferenceAuthoringWorker(session: session,
+            driver: ReferenceAuthoringWorkerDriver(hooks: hooks, lastFinalizedRecordingURLProvider: { sequence.lastURL }),
+            calibrationStore: CrossfaderCalibrationStore(directoryURL: fixtures[0].directory.appendingPathComponent("calibration")))
+    }
+    private func record(_ worker: ReferenceAuthoringWorker) async throws -> ReferenceAuthoringTake {
+        let started = await worker.startRecording()
+        XCTAssertNil(started.errorMessage)
+        let stopped = await worker.stopRecording()
+        XCTAssertNil(stopped.errorMessage)
+        return try XCTUnwrap(stopped.state.session.takeInReview)
+    }
+    private nonisolated static func archive(_ source: SessionExportSource, in directory: URL) throws -> Archived {
+        let builder = SessionArchiveBuilder()
+        let package = try builder.preparePackage(from: source)
+        let output = directory.appendingPathComponent("archive-\(UUID())", isDirectory: true)
+        try FileManager.default.createDirectory(at: output, withIntermediateDirectories: true)
+        let result = try builder.createArchive(from: package, in: output)
+        let unpacked = output.appendingPathComponent("unpacked", isDirectory: true)
+        try FileManager.default.createDirectory(at: unpacked, withIntermediateDirectories: true)
+        try FileManager.default.unzipItem(at: result.archiveURL, to: unpacked)
+        let roots = try FileManager.default.contentsOfDirectory(at: unpacked, includingPropertiesForKeys: nil)
+        let root = try XCTUnwrap(roots.first)
+        let manifestData = try Data(contentsOf: root.appendingPathComponent("manifests/session_manifest.json"))
+        let manifest = try XCTUnwrap(try JSONSerialization.jsonObject(with: manifestData) as? [String: Any])
+        let takes = try XCTUnwrap(manifest["takes"] as? [[String: Any]])
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .iso8601
+        let metadata = try decoder.decode(SessionExportMetadataDocument.self,
+            from: Data(contentsOf: root.appendingPathComponent("manifests/session_metadata.json")))
+        let replay = try decoder.decode(SessionExportReplayDocument.self,
+            from: Data(contentsOf: root.appendingPathComponent("manifests/session_replay.json")))
+        var companions: [String: Data] = [:]
+        var boundSidecars: [String: Data] = [:]
+        var notation: [String: SessionExportNotationDocument] = [:]
+        for take in takes {
+            let files = try XCTUnwrap(take["files"] as? [String: String])
+            let artifacts = try XCTUnwrap(take["artifacts"] as? [String: [String: Any]])
+            let notationPath = try XCTUnwrap(files["notation"])
+            let notationDocument = try decoder.decode(SessionExportNotationDocument.self,
+                from: Data(contentsOf: root.appendingPathComponent(notationPath)))
+            notation[notationDocument.takeID] = notationDocument
+            guard let path = files["reference_tear_evidence"] else {
+                XCTAssertNil(artifacts["reference_tear_evidence"])
+                continue
+            }
+            let artifact = try XCTUnwrap(artifacts["reference_tear_evidence"])
+            XCTAssertEqual(artifact["path"] as? String, path)
+            let data = try Data(contentsOf: root.appendingPathComponent(path))
+            XCTAssertEqual(artifact["bytes"] as? Int, data.count)
+            XCTAssertEqual(artifact["sha256"] as? String, ReferencePackageIO.sha256Hex(data))
+            let document = try ReferenceTearEvidenceCodec.decodeDocument(data)
+            XCTAssertNil(companions.updateValue(data, forKey: document.sourceBinding.capturedTakeID))
+            // Original sidecar bytes live inside the declared companion. The
+            // established archive does not add a second raw-sidecar file.
+            boundSidecars[document.sourceBinding.capturedTakeID] = document.sourceBinding.rawSidecarData
+        }
+        return Archived(companions: companions, boundSidecarDataByTakeID: boundSidecars,
+            metadata: metadata, notationByTakeID: notation, replay: replay)
+    }
+    private func geometry(_ take: ReferenceAuthoringTake) throws -> ScratchStrokeGeometry.CanonicalGeometry {
+        let projection = take.tearProjection
+        let frame = try XCTUnwrap(ReferenceAuthoringViewModel.canonicalFrame(for: projection, bpm: 120))
+        return ScratchStrokeGeometry.canonicalGeometry(records: projection.records, layer: .performance, frame: frame)
+    }
+    @discardableResult
+    private func roundTrip(_ fixture: Fixture, worker suppliedWorker: ReferenceAuthoringWorker? = nil,
+        targetHolds: Int = 1, direction: String = "forward", rhythm: String = "equal",
+        expectUnplacedClockEvidence: Bool = false) async throws -> ReferenceAuthoringTake {
+        let owner = suppliedWorker ?? worker([fixture])
+        let before: ReferenceAuthoringTake
+        if suppliedWorker == nil { before = try await record(owner) }
+        else {
+            let state = await owner.snapshot()
+            before = try XCTUnwrap(state.session.takeInReview)
+        }
+        let binding = try XCTUnwrap(before.tearEvidenceSourceBinding)
+        XCTAssertEqual(binding.rawSidecarData, fixture.sidecarData)
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .iso8601
+        let sidecar = try decoder.decode(CaptureCore.LocalRecordingSidecar.self, from: binding.rawSidecarData)
+        XCTAssertEqual(sidecar.detectedNotation?.mixerMidiEvents, fixture.raw)
+        XCTAssertEqual(before.tearReview.rawMovementEvents, sidecar.detectedNotation?.recordMovementEvents)
+        let beforeGeometry: ScratchStrokeGeometry.CanonicalGeometry?
+        if expectUnplacedClockEvidence {
+            XCTAssertFalse(before.tearReview.rawMovementEvents.isEmpty)
+            XCTAssertTrue(before.tearReview.reasons.contains(.clockDiscontinuity))
+            XCTAssertTrue(before.tearReview.candidates.isEmpty)
+            XCTAssertTrue(before.tearProjection.records.isEmpty)
+            XCTAssertNil(before.tearProjection.timeRange)
+            XCTAssertNil(ReferenceAuthoringViewModel.canonicalFrame(for: before.tearProjection, bpm: 120))
+            beforeGeometry = nil
+        } else {
+            beforeGeometry = try geometry(before)
+        }
+        let viewModel = ReferenceAuthoringViewModel(worker: owner, initialState: await owner.snapshot())
+        #if DEBUG
+        viewModel.selectTearComparisonTarget("scratchlab.tear.\(targetHolds).\(direction).\(rhythm).v1")
+        viewModel.selectTearComparisonStart(viewModel.tearComparisonCandidates.first?.id)
+        viewModel.compareSelectedTear()
+        let comparison: CanonicalTearComparison.Result?
+        if expectUnplacedClockEvidence {
+            XCTAssertTrue(viewModel.tearComparisonCandidates.isEmpty)
+            XCTAssertNil(viewModel.tearComparisonStartID)
+            XCTAssertNil(viewModel.tearComparisonOriginSeconds)
+            XCTAssertNotNil(viewModel.tearComparisonBlockReason)
+            XCTAssertNil(viewModel.tearComparisonResult)
+            comparison = nil
+        } else {
+            let result = try XCTUnwrap(viewModel.tearComparisonResult)
+            XCTAssertEqual(result.dimensions.first { $0.axis == .faderTiming }?.assessment, .notRequested)
+            comparison = result
+        }
+        #endif
+        // A real serial-owner note correction participates in every connected fixture.
+        let noted = await owner.setTearReviewNotes("Synthetic round-trip review")
+        XCTAssertNil(noted.errorMessage)
+        let exportedTake = try XCTUnwrap(noted.state.session.takeInReview)
+        let optionalSnapshot = try await owner.rawCaptureExportSnapshot(config: fixture.config)
+        let snapshot = try XCTUnwrap(optionalSnapshot)
+        XCTAssertTrue(snapshot.excludedReferenceTakeIDs.isEmpty)
+        let archived = try await Task.detached { try Self.archive(snapshot.source, in: fixture.directory) }.value
+        let bytes = try XCTUnwrap(archived.companions[binding.capturedTakeID])
+        XCTAssertEqual(archived.boundSidecarDataByTakeID[binding.capturedTakeID], fixture.sidecarData)
+        XCTAssertEqual(try Data(contentsOf: fixture.sidecarURL), fixture.sidecarData)
+        let repeated = try ReferenceTearEvidenceCodec.encode(sourceBinding: binding,
+            review: exportedTake.tearReview, projection: exportedTake.tearProjection,
+            performedLimitations: exportedTake.tearPerformedLimitations)
+        XCTAssertEqual(bytes, repeated)
+        let restored = await viewModel.restoreTearEvidence(bytes)
+        guard case .restored = restored else { XCTFail("The archive's declared companion did not restore."); return before }
+        let after = try XCTUnwrap(viewModel.reviewedTake)
+        XCTAssertEqual(after.evidence, exportedTake.evidence)
+        XCTAssertEqual(after.latestValidation, exportedTake.latestValidation)
+        XCTAssertEqual(after.tearReview, exportedTake.tearReview)
+        XCTAssertEqual(after.tearProjection, exportedTake.tearProjection)
+        XCTAssertNotNil(after.restoredTearProjection)
+        if expectUnplacedClockEvidence {
+            XCTAssertTrue(after.tearReview.candidates.isEmpty)
+            XCTAssertTrue(after.tearProjection.records.isEmpty)
+            XCTAssertNil(ReferenceAuthoringViewModel.canonicalFrame(for: after.tearProjection, bpm: 120))
+        } else {
+            XCTAssertEqual(try geometry(after), beforeGeometry)
+        }
+        XCTAssertEqual(viewModel.reviewTearProjection, after.restoredTearProjection)
+        XCTAssertEqual(after.evidence.metadata.lifecycleState, .draft)
+        XCTAssertNil(after.evidence.boundaries.selectedRepetitionIndex)
+        #if DEBUG
+        XCTAssertNil(viewModel.tearComparisonTargetID)
+        viewModel.selectTearComparisonTarget("scratchlab.tear.\(targetHolds).\(direction).\(rhythm).v1")
+        viewModel.selectTearComparisonStart(viewModel.tearComparisonCandidates.first?.id)
+        viewModel.compareSelectedTear()
+        XCTAssertEqual(viewModel.tearComparisonResult, comparison)
+        if expectUnplacedClockEvidence {
+            XCTAssertNotNil(viewModel.tearComparisonBlockReason)
+            XCTAssertNil(viewModel.tearComparisonStartID)
+            XCTAssertNil(viewModel.tearComparisonOriginSeconds)
+        }
+        #endif
+        return after
+    }
+
+    func testOneTwoThreeHoldsInBothDirectionsSurviveTheRealArchive() async throws {
+        for direction in [1, -1] {
+            for count in 1...3 {
+                let fixture = try await fixture(Self.withFader(Self.tear(holds: count, direction: direction)))
+                let take = try await roundTrip(fixture, targetHolds: count, direction: direction == 1 ? "forward" : "backward")
+                XCTAssertEqual(take.tearReview.candidates.count, 1)
+                XCTAssertEqual(take.tearReview.totalCountedTearHoldCount, count)
+                XCTAssertEqual(take.tearReview.rawMovementEvents.count, count + 1)
+                for movement in take.tearReview.rawMovementEvents {
+                    XCTAssertEqual(movement.confidence, 0.78, accuracy: 1e-9)
+                    XCTAssertEqual(movement.source, "controller")
+                }
+                let record = try XCTUnwrap(take.tearProjection.records.first)
+                XCTAssertEqual(record.evidence.provenance, .measured)
+                XCTAssertEqual(record.direction.rawValue, direction == 1 ? "forward" : "backward")
+                XCTAssertEqual(record.internalHolds.count, count)
+                XCTAssertEqual(record.subdivisions.count, count + 1)
+                XCTAssertTrue(record.internalHolds.allSatisfy { $0.evidence.provenance == .inferred })
+                XCTAssertEqual(take.tearReview.stationaryIntervals.count, count)
+                XCTAssertTrue(try geometry(take).missingMotion.isEmpty)
+            }
+        }
+    }
+    func testBabyTurnaroundDoesNotBecomeATearHoldAfterArchiveRestore() async throws {
+        let raw = Self.packets(1) + Self.packets(-1, start: 0.4, phase: 100).dropFirst()
+        let take = try await roundTrip(fixture(Self.withFader(raw)))
+        XCTAssertEqual(take.tearReview.candidates.map(\.direction), [.forward, .backward])
+        XCTAssertEqual(take.tearReview.reversals.count, 1)
+        XCTAssertEqual(take.tearReview.totalCountedTearHoldCount, 0)
+        XCTAssertTrue(take.tearProjection.records.allSatisfy { $0.internalHolds.isEmpty })
+    }
+    func testUnequalMovingDurationsAndLongObservedHoldRetainInferredEvidence() async throws {
+        let take = try await roundTrip(fixture(Self.withFader(Self.tear(holds: 1,
+            durations: [0.2, 0.4], holdDuration: 1))), rhythm: "unequal")
+        let record = try XCTUnwrap(take.tearProjection.records.first)
+        XCTAssertEqual(record.subdivisions.count, 2)
+        let firstSubdivision = try XCTUnwrap(record.subdivisions.first)
+        let secondSubdivision = try XCTUnwrap(record.subdivisions.dropFirst().first)
+        XCTAssertEqual(firstSubdivision.span.duration, 0.2, accuracy: 1e-9)
+        XCTAssertEqual(secondSubdivision.span.duration, 0.4, accuracy: 1e-9)
+        let movingDuration = record.subdivisions.reduce(0) { $0 + $1.span.duration }
+        XCTAssertEqual(firstSubdivision.span.duration / movingDuration, 1.0 / 3, accuracy: 1e-9)
+        XCTAssertEqual(take.tearReview.stationaryIntervals.first?.span.duration ?? 0, 1, accuracy: 1e-9)
+        XCTAssertFalse(take.tearReview.platterEvidenceIntervals.contains { $0.kind == .packetGap })
+        XCTAssertEqual(record.internalHolds.first?.evidence.provenance, .inferred)
+    }
+    func testJitterAndPacketSilenceNeverRoundTripAsHolds() async throws {
+        let jitter = Self.packets(1) + Self.packets(-1, count: 2, start: 0.4, duration: 0.02, phase: 100).dropFirst()
+            + Self.packets(1, start: 0.42, phase: 98).dropFirst()
+        let gap = Self.packets(1) + Self.packets(1, start: 1, phase: 100)
+        for (raw, kind) in [(jitter, CaptureCore.PlatterEvidenceInterval.Kind.discardedMotion), (gap, .packetGap)] {
+            let take = try await roundTrip(fixture(Self.withFader(raw)))
+            XCTAssertEqual(take.tearReview.totalCountedTearHoldCount, 0)
+            XCTAssertTrue(take.tearReview.platterEvidenceIntervals.contains { $0.kind == kind })
+            XCTAssertTrue(take.tearReview.segments.contains { $0.state == .unknown })
+        }
+    }
+    func testReversalBesideObservedStillnessRemainsAReversal() async throws {
+        let raw = Self.packets(1) + Self.packets(0, count: 10, start: 0.4, duration: 0.2, phase: 100).dropFirst()
+            + Self.packets(-1, start: 0.6, phase: 100).dropFirst()
+        let take = try await roundTrip(fixture(Self.withFader(raw)))
+        XCTAssertEqual(take.tearReview.candidates.map(\.direction), [.forward, .backward])
+        XCTAssertEqual(take.tearReview.totalCountedTearHoldCount, 0)
+        XCTAssertEqual(take.tearReview.reversals.count, 1)
+        XCTAssertTrue(take.tearReview.platterEvidenceIntervals.contains { $0.kind == .observedStillness })
+    }
+    func testClockRegressionKeepsReceiveOrderAndUnknownTiming() async throws {
+        let raw = Self.packets(1, start: 1) + Self.packets(1, start: 0.5, phase: 100)
+        let take = try await roundTrip(fixture(raw), expectUnplacedClockEvidence: true)
+        XCTAssertTrue(take.tearReview.platterEvidenceIntervals.contains { $0.kind == .clockDiscontinuity })
+        XCTAssertTrue(take.tearReview.reasons.contains(.clockDiscontinuity))
+        XCTAssertEqual(take.tearReview.totalCountedTearHoldCount, 0)
+    }
+
+    func testLowConfidenceThirtyStepHoldProposalRemainsUnavailableAfterArchiveRestore() async throws {
+        let fixture = try await fixture(Self.withFader(Self.tear(holds: 1, runPacketCount: 30)))
+        let owner = worker([fixture])
+        _ = try await record(owner)
+        let take = try await roundTrip(fixture, worker: owner)
+        let candidate = try XCTUnwrap(take.tearReview.candidates.first)
+        XCTAssertEqual(take.tearReview.totalCountedTearHoldCount, 1)
+        XCTAssertEqual(take.tearReview.rawMovementEvents.count, 2)
+        for movement in take.tearReview.rawMovementEvents {
+            XCTAssertEqual(movement.confidence, 0.73, accuracy: 1e-9)
+            XCTAssertEqual(movement.source, "controller")
+        }
+        XCTAssertEqual(try XCTUnwrap(candidate.proposedConfidence), 0.73, accuracy: 1e-9)
+        XCTAssertTrue(take.tearProjection.reasons.contains(.lowMovementConfidence))
+        let record = try XCTUnwrap(take.tearProjection.records.first)
+        XCTAssertEqual(record.evidence.provenance, .unknown)
+        XCTAssertTrue(record.internalHolds.isEmpty)
+        let geometry = try geometry(take)
+        XCTAssertTrue(geometry.motion.segments.isEmpty)
+        XCTAssertFalse(geometry.missingMotion.isEmpty)
+        #if DEBUG
+        let viewModel = ReferenceAuthoringViewModel(worker: owner, initialState: await owner.snapshot())
+        viewModel.selectTearComparisonTarget("scratchlab.tear.1.forward.equal.v1")
+        viewModel.selectTearComparisonStart(candidate.id)
+        viewModel.compareSelectedTear()
+        let result = try XCTUnwrap(viewModel.tearComparisonResult)
+        for axis in [CanonicalTearComparison.Axis.directionOrder, .holdCount, .holdTiming, .subdivisionRatios, .motionShape] {
+            let dimension = try XCTUnwrap(result.dimensions.first { $0.axis == axis })
+            XCTAssertEqual(dimension.assessment, .unavailable)
+            XCTAssertNil(dimension.scorePercentage)
+        }
+        #endif
+    }
+    func testOpenAndClosedFaderKeepMotionIndependentOfAudibility() async throws {
+        for closed in [false, true] {
+            let take = try await roundTrip(fixture(Self.withFader(Self.tear(holds: 1), alwaysClosed: closed)))
+            XCTAssertEqual(take.tearReview.totalCountedTearHoldCount, 1)
+            let geometry = try geometry(take)
+            XCTAssertFalse(geometry.motion.segments.isEmpty)
+            XCTAssertTrue(geometry.motion.segments.allSatisfy { $0.evidenceStyle == (closed ? .closed : .open) })
+            XCTAssertTrue(geometry.motion.segments.contains { $0.kind == .hold })
+            XCTAssertTrue(geometry.faderEdges.isEmpty)
+            if closed { XCTAssertTrue(take.tearProjection.reasons.contains(.ghostMovementPresent)) }
+        }
+    }
+    func testClicksAtHoldAndGestureEdgesRetainIndependentTimes() async throws {
+        // The production projector places a completed cut at its landing time.
+        // Witnessed preroll makes the first landing exactly the gesture start.
+        let raw = try Self.withFader(Self.tear(holds: 1), closed: [0.06...0.099, 0.45...0.489, 0.86...0.899])
+        let take = try await roundTrip(fixture(raw))
+        XCTAssertEqual(take.tearReview.totalCountedTearHoldCount, 1)
+        XCTAssertFalse(take.tearReview.faderClicks.isEmpty)
+        let geometry = try geometry(take)
+        XCTAssertTrue(geometry.faderEdges.contains { abs($0.time - 0.1) < 1e-9 })
+        XCTAssertTrue(geometry.faderEdges.contains { abs($0.time - 0.49) < 1e-9 })
+        XCTAssertTrue(geometry.faderEdges.contains { abs($0.time - 0.9) < 1e-9 })
+        XCTAssertEqual(geometry.faderEdges.map(\.time), geometry.faderEdges.map(\.time).sorted())
+    }
+    func testMissingFaderRemainsUnavailableThroughTheWholeRoute() async throws {
+        let take = try await roundTrip(fixture(Self.tear(holds: 1)))
+        XCTAssertTrue(take.tearReview.faderIntervals.isEmpty)
+        XCTAssertTrue(take.tearProjection.records.allSatisfy { $0.faderTransitions.isEmpty && $0.faderIntervals.isEmpty })
+        XCTAssertTrue(try geometry(take).motion.segments.allSatisfy { $0.evidenceStyle == .unknownFader })
+    }
+
+    func testCorrectionsTombstonesAndFractionalDatesSurviveAndContinueEditing() async throws {
+        let fixture = try await fixture(Self.withFader(Self.tear(holds: 2)))
+        let owner = worker([fixture])
+        let original = try await record(owner)
+        let candidate = try XCTUnwrap(original.tearReview.candidates.first)
+        let hold = try XCTUnwrap(candidate.boundaries.first { $0.origin == .automatic && $0.countsAsTearHold })
+        let originalBoundaryIDs = Set(candidate.boundaries.map(\.id))
+        let date = Date(timeIntervalSinceReferenceDate: 812_345_678.1234567)
+        let moved = await owner.moveTearBoundary(candidateID: candidate.id, boundaryID: hold.id,
+            startTime: hold.span.startTime + 0.01, endTime: hold.span.endTime - 0.01,
+            notes: "Inspect the observed stop", now: date)
+        XCTAssertNil(moved.errorMessage)
+        let added = await owner.addTearBoundary(candidateID: candidate.id, startTime: 0.15, endTime: 0.18,
+            kind: .faderClick, evidenceQuality: .clear, notes: "Operator annotation", now: date.addingTimeInterval(0.125))
+        XCTAssertNil(added.errorMessage)
+        let addedCandidate = try XCTUnwrap(added.state.session.takeInReview?.tearReview.candidate(id: candidate.id))
+        let newBoundaries = addedCandidate.boundaries.filter { $0.origin == .operatorAdded && !originalBoundaryIDs.contains($0.id) }
+        XCTAssertEqual(newBoundaries.count, 1)
+        let addedBoundary = try XCTUnwrap(newBoundaries.first)
+        let removed = await owner.setTearBoundaryRemoved(candidateID: candidate.id, boundaryID: addedBoundary.id,
+            removed: true, notes: "Keep the tombstone", now: date.addingTimeInterval(0.25))
+        XCTAssertNil(removed.errorMessage)
+        let restored = try await roundTrip(fixture, worker: owner, targetHolds: 2)
+        let boundaries = try XCTUnwrap(restored.tearReview.candidate(id: candidate.id)).boundaries
+        let restoredHold = try XCTUnwrap(boundaries.first { $0.id == hold.id })
+        let restoredAnnotation = try XCTUnwrap(boundaries.first { $0.id == addedBoundary.id })
+        XCTAssertEqual(restoredHold.proposal, hold.proposal)
+        XCTAssertEqual(restoredHold.origin, .automatic)
+        XCTAssertEqual(restoredHold.corrections.count, 1)
+        XCTAssertEqual(restoredHold.corrections.first?.correctedAt, date)
+        XCTAssertEqual(restoredAnnotation.origin, .operatorAdded)
+        XCTAssertNil(restoredAnnotation.proposal)
+        XCTAssertEqual(restoredAnnotation.corrections.count, 2)
+        XCTAssertEqual(restoredAnnotation.corrections.map(\.correctedAt),
+            [date.addingTimeInterval(0.125), date.addingTimeInterval(0.25)])
+        XCTAssertTrue(restoredAnnotation.isRemoved)
+        XCTAssertEqual(restored.tearReview.rawMovementEvents, original.tearReview.rawMovementEvents)
+        let noted = await owner.setTearReviewNotes("Notes after restore")
+        XCTAssertEqual(noted.state.session.takeInReview?.restoredTearProjection, restored.restoredTearProjection)
+        XCTAssertEqual(noted.state.session.takeInReview?.restoredTearPerformedLimitations, restored.restoredTearPerformedLimitations)
+        let continued = await owner.addTearBoundary(candidateID: candidate.id, startTime: 0.2, endTime: 0.22,
+            kind: .faderClick, evidenceQuality: .clear, notes: "Continue the same review")
+        let continuedTake = try XCTUnwrap(continued.state.session.takeInReview)
+        XCTAssertNil(continued.errorMessage)
+        XCTAssertNil(continuedTake.restoredTearProjection)
+        XCTAssertNil(continuedTake.restoredTearPerformedLimitations)
+        XCTAssertEqual(continuedTake.tearProjection,
+            ReferenceTearCanonicalProjectionBuilder.project(continuedTake.tearReview))
+        let continuedBoundaries = try XCTUnwrap(continuedTake.tearReview.candidate(id: candidate.id)).boundaries
+        let restoredIDs = Set(boundaries.map(\.id))
+        let laterAnnotations = continuedBoundaries.filter { $0.origin == .operatorAdded && !restoredIDs.contains($0.id) }
+        XCTAssertEqual(laterAnnotations.count, 1)
+        let laterAnnotation = try XCTUnwrap(laterAnnotations.first)
+        XCTAssertNotEqual(laterAnnotation.id, addedBoundary.id)
+        XCTAssertEqual(continuedBoundaries.first { $0.id == addedBoundary.id }, restoredAnnotation)
+        XCTAssertEqual(Set(continuedBoundaries.map(\.id)).count, continuedBoundaries.count)
+        XCTAssertEqual(continuedTake.evidence, original.evidence)
+        XCTAssertEqual(continuedTake.latestValidation, original.latestValidation)
+    }
+
+    func testManualUnknownAndAmbiguousReviewCannotLoseRequiredFlagsOnRestore() async throws {
+        let fixture = try await fixture(Self.withFader(Self.tear(holds: 1)))
+        let owner = worker([fixture])
+        let original = try await record(owner)
+        let candidate = try XCTUnwrap(original.tearReview.candidates.first)
+        let boundary = try XCTUnwrap(candidate.boundaries.first)
+        _ = await owner.classifyTearCandidate(candidate.id, as: .unknown, notes: "Unknown reading")
+        _ = await owner.setTearBoundaryEvidenceQuality(candidateID: candidate.id, boundaryID: boundary.id,
+            quality: .ambiguous, notes: "Uncertain stop")
+        let restored = try await roundTrip(fixture, worker: owner)
+        XCTAssertEqual(restored.tearReview.candidates.first?.effectiveClassification, .unknown)
+        XCTAssertTrue(restored.tearPerformedLimitations[candidate.id]?.contains(.unknownEvidence) == true)
+        XCTAssertTrue(restored.tearPerformedLimitations[candidate.id]?.contains(.ambiguousEvidence) == true)
+        let binding = try XCTUnwrap(restored.tearEvidenceSourceBinding)
+        let valid = try ReferenceTearEvidenceCodec.encode(sourceBinding: binding, review: restored.tearReview,
+            projection: restored.tearProjection, performedLimitations: restored.tearPerformedLimitations)
+        var object = try XCTUnwrap(try JSONSerialization.jsonObject(with: valid) as? [String: Any])
+        object["performedLimitations"] = [:] as [String: Any]
+        let omitted = try JSONSerialization.data(withJSONObject: object, options: [.sortedKeys])
+        let before = await owner.snapshot()
+        let rejected = await owner.restoreTearEvidence(omitted)
+        XCTAssertNil(rejected.result)
+        XCTAssertNotNil(rejected.update.errorMessage)
+        XCTAssertEqual(rejected.update.state, before)
+        #if DEBUG
+        let viewModel = ReferenceAuthoringViewModel(worker: owner, initialState: before)
+        viewModel.selectTearComparisonTarget("scratchlab.tear.1.forward.equal.v1")
+        viewModel.selectTearComparisonStart(candidate.id)
+        viewModel.compareSelectedTear()
+        let result = try XCTUnwrap(viewModel.tearComparisonResult)
+        XCTAssertEqual(result.dimensions.first { $0.axis == .directionOrder }?.assessment, .unavailable)
+        #endif
+    }
+
+    func testRestoredSingleCandidateDoesNotInheritAnotherSelectedGap() async throws {
+        let raw = Self.tear(holds: 1) + Self.packets(1, start: 1.3, phase: 180)
+        let fixture = try await fixture(Self.withFader(raw))
+        let owner = worker([fixture])
+        let before = try await record(owner)
+        XCTAssertEqual(before.tearReview.candidates.count, 2)
+        let firstID = try XCTUnwrap(before.tearReview.candidates.first).id
+        let secondID = try XCTUnwrap(before.tearReview.candidates.dropFirst().first).id
+        XCTAssertFalse(before.tearPerformedLimitations[firstID]?.contains(.unknownEvidence) == true)
+        let restored = try await roundTrip(fixture, worker: owner)
+        XCTAssertEqual(restored.tearPerformedLimitations[firstID], before.tearPerformedLimitations[firstID])
+        #if DEBUG
+        let viewModel = ReferenceAuthoringViewModel(worker: owner, initialState: await owner.snapshot())
+        viewModel.selectTearComparisonTarget("scratchlab.tear.1.forward.equal.v1")
+        viewModel.selectTearComparisonStart(firstID)
+        viewModel.compareSelectedTear()
+        let single = try XCTUnwrap(viewModel.tearComparisonResult)
+        XCTAssertEqual(single.dimensions.first { $0.axis == .directionOrder }?.assessment, .withinTolerance)
+        let restoredSecond = try XCTUnwrap(restored.tearReview.candidate(id: secondID))
+        viewModel.selectTearComparisonEnd(restoredSecond.id)
+        viewModel.compareSelectedTear()
+        let phrase = try XCTUnwrap(viewModel.tearComparisonResult)
+        XCTAssertTrue(phrase.dimensions.flatMap(\.unavailableReasons).contains(.unknownEvidence))
+        XCTAssertTrue(phrase.dimensions.flatMap(\.unavailableReasons).contains(.unobservedInterGestureInterval))
+        viewModel.selectTearComparisonStart(firstID)
+        viewModel.compareSelectedTear()
+        XCTAssertEqual(viewModel.tearComparisonResult, single)
+        #endif
+    }
+
+    func testExportSnapshotUsesCapturedFolderSessionAndMetadataGroup() async throws {
+        let first = try await fixture(Self.withFader(Self.tear(holds: 1)))
+        let otherGroup = try await fixture(Self.withFader(Self.tear(holds: 1)), directory: first.directory,
+            number: 2, notes: "another valid group")
+        let third = try await fixture(Self.withFader(Self.tear(holds: 1)), directory: first.directory, number: 3)
+        let otherFolder = try await fixture(Self.withFader(Self.tear(holds: 1)), sessionID: "another-captured-session")
+        let owner = worker([first, otherGroup, third, otherFolder])
+        let firstTake = try await record(owner)
+        _ = await owner.retake()
+        let excludedTake = try await record(owner)
+        _ = await owner.retake()
+        let thirdTake = try await record(owner)
+        let pending = try await owner.rawCaptureExportSnapshot(config: third.config)
+        let snapshot = try XCTUnwrap(pending)
+        XCTAssertEqual(snapshot.excludedReferenceTakeIDs, [excludedTake.id])
+        let archived = try await Task.detached { try Self.archive(snapshot.source, in: first.directory) }.value
+        XCTAssertEqual(Set(archived.companions.keys), Set(["take-001", "take-003"]))
+        XCTAssertEqual(try ReferenceTearEvidenceCodec.decodeDocument(XCTUnwrap(archived.companions["take-001"])).referenceTakeID, firstTake.id)
+        XCTAssertEqual(try ReferenceTearEvidenceCodec.decodeDocument(XCTUnwrap(archived.companions["take-003"])).referenceTakeID, thirdTake.id)
+        _ = await owner.retake()
+        let finalTake = try await record(owner)
+        let pendingOther = try await owner.rawCaptureExportSnapshot(config: otherFolder.config)
+        let otherSnapshot = try XCTUnwrap(pendingOther)
+        XCTAssertEqual(otherSnapshot.excludedReferenceTakeIDs, [firstTake.id, excludedTake.id, thirdTake.id])
+        let otherArchive = try await Task.detached { try Self.archive(otherSnapshot.source, in: otherFolder.directory) }.value
+        XCTAssertEqual(otherArchive.companions.count, 1)
+        let finalDocument = try ReferenceTearEvidenceCodec.decodeDocument(XCTUnwrap(otherArchive.companions["take-001"]))
+        XCTAssertEqual(finalDocument.referenceTakeID, finalTake.id)
+        let state = await owner.snapshot()
+        XCTAssertEqual(state.session.takes.count, 4)
+        XCTAssertEqual(try XCTUnwrap(state.session.takes.first).evidence, firstTake.evidence)
+    }
+
+    func testLateSourceGroupingRewriteRejectsCompanionWithoutRebinding() async throws {
+        let fixture = try await fixture(Self.withFader(Self.tear(holds: 1)))
+        let owner = worker([fixture])
+        let before = try await record(owner)
+        var object = try XCTUnwrap(try JSONSerialization.jsonObject(with: fixture.sidecarData) as? [String: Any])
+        var config = try XCTUnwrap(object["sessionConfig"] as? [String: Any])
+        config["notes"] = "Late grouping metadata change"
+        object["sessionConfig"] = config
+        let changed = try JSONSerialization.data(withJSONObject: object, options: [.sortedKeys])
+        try changed.write(to: fixture.sidecarURL, options: .atomic)
+        do {
+            _ = try await owner.rawCaptureExportSnapshot(config: fixture.config)
+            XCTFail("A changed seed may not silently exclude its requested companion.")
+        } catch {
+            XCTAssertFalse(error.localizedDescription.isEmpty)
+        }
+        let state = await owner.snapshot()
+        XCTAssertEqual(state.session.takeInReview, before)
+        XCTAssertEqual(before.tearEvidenceSourceBinding?.rawSidecarData, fixture.sidecarData)
+        // Existing exports with no requested companion still use the current raw source.
+        let source = SessionExportSource.localRecordingSession(lastRecordingURL: fixture.mediaURL,
+            sessionName: "Legacy raw export", config: nil)
+        let archived = try await Task.detached { try Self.archive(source, in: fixture.directory) }.value
+        XCTAssertTrue(archived.companions.isEmpty)
+        XCTAssertEqual(try Data(contentsOf: fixture.sidecarURL), changed)
+    }
+
+    func testMissingMalformedUnsupportedAndOtherTakeCompanionsPreserveCurrentOwner() async throws {
+        let fixture = try await fixture(Self.withFader(Self.tear(holds: 1)))
+        let second = try await self.fixture(Self.withFader(Self.tear(holds: 2)), directory: fixture.directory, number: 2)
+        let owner = worker([fixture, second])
+        let firstTake = try await record(owner)
+        let firstBytes = try ReferenceTearEvidenceCodec.encode(sourceBinding: XCTUnwrap(firstTake.tearEvidenceSourceBinding),
+            review: firstTake.tearReview, projection: firstTake.tearProjection,
+            performedLimitations: firstTake.tearPerformedLimitations)
+        _ = await owner.retake()
+        let current = try await record(owner)
+        let legacy = await owner.restoreTearEvidence(nil)
+        XCTAssertEqual(legacy.result, .notAnalysed)
+        XCTAssertEqual(legacy.update.state.session.takeInReview, current)
+        var unsupported = try XCTUnwrap(try JSONSerialization.jsonObject(with: firstBytes) as? [String: Any])
+        unsupported["schemaVersion"] = "scratchlab_reference_tear_evidence_v999"
+        for data in [Data("{".utf8), try JSONSerialization.data(withJSONObject: unsupported), firstBytes] {
+            let rejected = await owner.restoreTearEvidence(data)
+            XCTAssertNil(rejected.result)
+            XCTAssertNotNil(rejected.update.errorMessage)
+            XCTAssertEqual(rejected.update.state.session.takeInReview, current)
+        }
+        _ = await owner.retake()
+        let wrongPhase = await owner.restoreTearEvidence(firstBytes)
+        XCTAssertNil(wrongPhase.result)
+        XCTAssertNotNil(wrongPhase.update.errorMessage)
+    }
+
+    func testLegacyBabyChirpAndTransformerPacketShapesKeepDecodeAndRenderParity() async throws {
+        let baby = Self.packets(1) + Self.packets(-1, start: 0.4, phase: 100).dropFirst()
+        let cases: [(CaptureSessionScratchType, [Raw])] = [(.babyScratch, try Self.withFader(baby)),
+            (.chirp, try Self.withFader(baby, closed: [0.36...0.439])),
+            (.transform, try Self.withFader(Self.packets(1, duration: 0.6), closed: [0.2...0.249, 0.4...0.449, 0.6...0.649]))]
+        for (scratchType, raw) in cases {
+            let fixture = try await fixture(raw, scratchType: scratchType)
+            let owner = worker([fixture])
+            let before = try await record(owner)
+            let source = SessionExportSource.localRecordingSession(lastRecordingURL: fixture.mediaURL,
+                sessionName: "Legacy diagnostic", config: fixture.config)
+            let archive = try await Task.detached { try Self.archive(source, in: fixture.directory) }.value
+            XCTAssertTrue(archive.companions.isEmpty)
+            XCTAssertEqual(archive.metadata.session.scratchTypeID, fixture.config.normalizedScratchTypeID)
+            XCTAssertEqual(archive.metadata.session.scratchTypeName, fixture.config.normalizedScratchTypeName)
+            XCTAssertEqual(archive.metadata.session.sessionName, "Legacy diagnostic")
+            let decoder = JSONDecoder()
+            decoder.dateDecodingStrategy = .iso8601
+            let sourceSidecar = try decoder.decode(CaptureCore.LocalRecordingSidecar.self, from: fixture.sidecarData)
+            let sourceNotation = try XCTUnwrap(sourceSidecar.detectedNotation)
+            let notation = try XCTUnwrap(archive.notationByTakeID[sourceSidecar.takeID])
+            XCTAssertEqual(notation.scratchType, scratchType.rawValue)
+            XCTAssertEqual(notation.recordMovementEvents, sourceNotation.recordMovementEvents.map(SessionExportRecordMovementEvent.init(from:)))
+            XCTAssertEqual(notation.faderEvents, sourceNotation.faderEvents.map {
+                SessionExportFaderEvent(startTime: $0.startTime, endTime: $0.endTime,
+                    eventKind: $0.eventKind.rawValue, control: $0.control, fromValue: $0.fromValue,
+                    toValue: $0.toValue, source: $0.source, confidence: $0.confidence)
+            })
+            XCTAssertEqual(notation.mixerMidiEvents, sourceNotation.mixerMidiEvents.map {
+                SessionExportMixerMidiEvent(takeRelativeTime: $0.takeRelativeTime, deviceName: $0.deviceName,
+                    channel: $0.channel, controller: $0.controller, value: $0.value,
+                    normalizedValue: $0.normalizedValue, mappedControl: $0.mappedControl)
+            })
+            XCTAssertEqual(archive.replay.sessionID, sourceSidecar.sessionID)
+            let timeline = try XCTUnwrap(archive.replay.takes.first?.timeline)
+            XCTAssertEqual(timeline, SessionReplayTimeline.build(from: sourceNotation, takeDuration: timeline.takeDurationSeconds))
+            let legacy = await owner.restoreTearEvidence(nil)
+            XCTAssertEqual(legacy.result, .notAnalysed)
+            let after = try XCTUnwrap(legacy.update.state.session.takeInReview)
+            XCTAssertEqual(after, before)
+            XCTAssertEqual(try geometry(after), try geometry(before))
+            XCTAssertEqual(after.tearReview.totalCountedTearHoldCount, 0)
+            XCTAssertEqual(try Data(contentsOf: fixture.sidecarURL), fixture.sidecarData)
+        }
+    }
+}
 
 @MainActor
 final class ReferenceAuthoringViewModelTests: XCTestCase {
+
+    func testMovementCheckSkipsBeatPreparationPersistsPurposeAndHasNoInventedRepetitions() async throws {
+        let calls = LockedBox<[String]>([])
+        let configuration = LockedBox<ReferenceAuthoringBridgeTakeConfiguration?>(nil)
+        let hooks = ReferenceAuthoringRecordingHooks(
+            startRecording: { calls.update { $0.append("start") }; return .success(()) },
+            stopRecording: { calls.update { $0.append("stop") }; return .success(self.goodArtifacts()) },
+            currentPreflightSnapshot: { self.passingSnapshot() }, latestCalibrationObservation: { nil })
+        let driver = ReferenceAuthoringWorkerDriver(hooks: hooks,
+            pendingConfigurationHandler: { value in configuration.update { $0 = value } },
+            prepareBeatHandler: { _, _, _ in
+                calls.update { $0.append("beat") }
+                throw ReferenceBeatAssetError.invalid("A movement check must never prepare a beat")
+            })
+        let worker = makeWorker(session: readySession(), hooks: hooks, driver: driver)
+        let configured = await worker.configure(technique: .tear,
+            pattern: ReferencePatternIdentity(id: "movement", name: "One movement", phraseBars: 1),
+            bpm: 60, startingDirection: .forward, faderVariant: .faderOpenThroughout,
+            handedness: .right, notes: "Unpaced", capturePurpose: .movementCheck)
+        XCTAssertNil(configured.errorMessage)
+        let started = await worker.startRecording()
+        XCTAssertNil(started.errorMessage)
+        XCTAssertEqual(started.state.session.phase, .recording)
+        XCTAssertEqual(calls.read(), ["start"])
+        let capture = try XCTUnwrap(configuration.read())
+        XCTAssertTrue(capture.isMovementCheck)
+        XCTAssertNil(capture.preparedBeat)
+        XCTAssertNil(capture.plannedRecordingDurationSeconds)
+        let config = capture.recordingSessionConfig(existing: nil, now: Date())
+        XCTAssertEqual(config.captureMode, .movementCheck)
+        XCTAssertEqual(config.beatEngineMode, .silent)
+        XCTAssertEqual(config.countInBeats, 0)
+        XCTAssertFalse(config.clickEnabled)
+        XCTAssertFalse(config.beatEnabled)
+        XCTAssertEqual(config.timingPrintedToRecording, .notPrinted)
+        XCTAssertNil(RoutineCaptureDefaults.plannedTakeDurationSeconds(for: config))
+        XCTAssertEqual(RoutineCaptureDefaults.stopReasonForBoundReached(for: config), .mediaLimit)
+        let reopened = try JSONDecoder().decode(CaptureSessionConfig.self, from: JSONEncoder().encode(config))
+        XCTAssertEqual(reopened, config)
+        XCTAssertEqual(reopened.referenceCaptureIntent?.capturePurpose, .movementCheck)
+        XCTAssertEqual(reopened.referenceCaptureIntent?.plan,
+            ReferenceCapturePlan(countInBars: 0, repetitionCount: 0, tailBars: 0))
+        XCTAssertNil(reopened.referenceCaptureIntent?.beatSpec)
+        XCTAssertEqual(ReferenceCaptureIntentValidator.issues(intent: reopened.referenceCaptureIntent,
+            requireBeatSpec: false), [])
+        let stopped = await worker.stopRecording()
+        XCTAssertNil(stopped.errorMessage)
+        XCTAssertEqual(calls.read(), ["start", "stop"])
+        let take = try XCTUnwrap(stopped.state.session.takeInReview)
+        XCTAssertEqual(take.evidence.metadata.repetitionCount, 0)
+        XCTAssertEqual(take.evidence.metadata.countInBars, 0)
+        XCTAssertEqual(take.evidence.metadata.tailBars, 0)
+        XCTAssertEqual(take.evidence.boundaries.repetitions, [])
+        XCTAssertNil(take.evidence.boundaries.selectedRepetitionIndex)
+        XCTAssertEqual(take.evidence.metadata.captureIntent, reopened.referenceCaptureIntent)
+        XCTAssertTrue(stopped.state.session.approvalBlockReason()?.contains("Movement checks") == true)
+        var reviewed = stopped.state.session
+        XCTAssertThrowsError(try reviewed.approveTakeInReview(notes: "Cannot make a check canonical"))
+        XCTAssertNotEqual(reviewed.takeInReview?.evidence.metadata.lifecycleState, .approvedCanonical)
+    }
+
+    func testLegacyIntentWithoutPurposeRetainsCanonicalMeaning() throws {
+        var session = readySession()
+        let intent = try session.prepareCaptureIntentForRecording()
+        var json = try XCTUnwrap(JSONSerialization.jsonObject(with: JSONEncoder().encode(intent)) as? [String: Any])
+        json.removeValue(forKey: "purpose")
+        let legacy = try JSONDecoder().decode(ReferenceCaptureIntent.self,
+            from: JSONSerialization.data(withJSONObject: json))
+        XCTAssertNil(legacy.purpose)
+        XCTAssertEqual(legacy.capturePurpose, .canonicalReference)
+        XCTAssertFalse(legacy.isMovementCheck)
+        XCTAssertEqual(legacy.plan.repetitionCount, 4)
+        XCTAssertEqual(ReferenceCaptureIntentValidator.issues(intent: legacy, requireBeatSpec: false), [])
+        XCTAssertEqual(try JSONDecoder().decode(ReferenceCaptureIntent.self,
+            from: JSONEncoder().encode(legacy)), legacy)
+        XCTAssertEqual(CaptureSessionCaptureMode.standardCaptureModes, [.calibrationNoClick, .timedClick])
+    }
+
+    func testUnappliedTechniqueAndEveryOtherCaptureSettingPreventStaleTakeStart() async {
+        let changes: [(String, (ReferenceAuthoringViewModel) -> Void)] = [
+            ("technique", { $0.selectedTechnique = .chirp }),
+            ("pattern ID", { $0.patternID += "-changed" }),
+            ("pattern name", { $0.patternName += " changed" }),
+            ("phrase length", { $0.phraseBars += 1 }),
+            ("BPM", { $0.bpm = 60 }),
+            ("backing", { $0.beatEngineMode = .battleLoop }),
+            ("purpose", { $0.capturePurpose = .movementCheck }),
+            ("direction", { $0.startingDirectionRawValue = "changed" }),
+            ("fader", { $0.faderVariantRawValue = ReferenceFaderVariant.crossfader.rawValue }),
+            ("handedness", { $0.handednessRawValue = CaptureSessionHandedness.left.rawValue }),
+            ("notes", { $0.notes = "changed" })
+        ]
+        for (name, change) in changes {
+            let starts = LockedBox(0)
+            let hooks = ReferenceAuthoringRecordingHooks(
+                startRecording: { starts.update { $0 += 1 }; return .success(()) },
+                stopRecording: { .success(self.goodArtifacts()) },
+                currentPreflightSnapshot: { self.passingSnapshot() }, latestCalibrationObservation: { nil })
+            let worker = makeWorker(session: readySession(), hooks: hooks)
+            let model = ReferenceAuthoringViewModel(worker: worker, initialState: await worker.snapshot())
+            change(model)
+            model.startRecording()
+            XCTAssertEqual(model.visibleMessage, "Apply Authoring Setup after changing the capture settings.", name)
+            XCTAssertFalse(model.isWorking, name)
+            XCTAssertEqual(starts.read(), 0, name)
+            XCTAssertEqual(model.session.selectedTechnique, .babyScratch, name)
+        }
+    }
+
+    @MainActor private final class BeatPreviewSpy: PracticeBeatPlaybackEngine {
+        var modes: [BeatEngineMode] = []
+        var playing = false
+        var shouldFail = false
+        func start(mode: BeatEngineMode, bpm: Int) throws {
+            if shouldFail { throw ScratchLabBeatEngineError.unableToStartAudio }
+            modes.append(mode)
+            playing = true
+        }
+        func stop() { playing = false }
+        func hardResetBeatPlayback() { stop() }
+    }
+
+    func testSelectedBackingSurvivesWorkerBridgeAndSessionPersistence() async throws {
+        let configuration = LockedBox<ReferenceAuthoringBridgeTakeConfiguration?>(nil)
+        let hooks = ReferenceAuthoringRecordingHooks(
+            startRecording: { .success(()) }, stopRecording: { .success(self.goodArtifacts()) },
+            currentPreflightSnapshot: { self.passingSnapshot() }, latestCalibrationObservation: { nil })
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        var session = readySession()
+        session.selectBeatEngineMode(.minimalFunk)
+        let worker = ReferenceAuthoringWorker(session: session,
+            driver: ReferenceAuthoringWorkerDriver(hooks: hooks,
+                pendingConfigurationHandler: { value in configuration.update { $0 = value } }),
+            calibrationStore: CrossfaderCalibrationStore(directoryURL: directory))
+        let started = await worker.startRecording()
+        XCTAssertNil(started.errorMessage)
+        let chosen = try XCTUnwrap(configuration.read())
+        XCTAssertEqual(chosen.beatEngineMode, .minimalFunk)
+        let config = chosen.recordingSessionConfig(existing: nil, now: Date())
+        let restored = try JSONDecoder().decode(CaptureSessionConfig.self, from: JSONEncoder().encode(config))
+        XCTAssertEqual(restored.beatEngineMode, .minimalFunk)
+        XCTAssertTrue(restored.beatEnabled)
+        XCTAssertEqual(restored.swingAmount, BeatEngineMode.minimalFunk.defaultSwingAmount)
+        XCTAssertEqual(restored.bpm, 95)
+        var frozen = started.state.session
+        frozen.selectBeatEngineMode(.battleLoop)
+        XCTAssertEqual(frozen.selectedBeatEngineMode, .minimalFunk, "A later form edit must not rewrite an in-flight take's backing.")
+    }
+
+    func testBackingPreviewStopsOnSelectionChangeCaptureAndViewExit() async {
+        let spy = BeatPreviewSpy()
+        let hooks = ReferenceAuthoringRecordingHooks(startRecording: { .success(()) },
+            stopRecording: { .success(self.goodArtifacts()) },
+            currentPreflightSnapshot: { self.passingSnapshot() }, latestCalibrationObservation: { nil })
+        let worker = makeWorker(session: readySession(), hooks: hooks)
+        let model = ReferenceAuthoringViewModel(worker: worker, initialState: await worker.snapshot(), beatPreviewEngine: spy)
+        model.toggleBeatPreview()
+        XCTAssertTrue(spy.playing)
+        XCTAssertEqual(spy.modes, [.boomBapTrainer])
+        model.bpm = 90
+        XCTAssertFalse(spy.playing)
+        XCTAssertFalse(model.isPreviewingBeat)
+        model.toggleBeatPreview()
+        model.startRecording() // Unapplied tempo is refused, but preview must still stop.
+        XCTAssertFalse(spy.playing)
+        XCTAssertTrue(model.visibleMessage?.contains("Apply Authoring Setup") == true)
+        model.toggleBeatPreview()
+        model.cancelTransientWorkForViewDisappearance()
+        XCTAssertFalse(spy.playing)
+        spy.shouldFail = true
+        model.toggleBeatPreview()
+        XCTAssertFalse(model.isPreviewingBeat)
+        XCTAssertTrue(model.visibleMessage?.contains("Could not play") == true)
+    }
+
+    func testRecordedAudioIsPlayableWithoutBeatBindingAndNewLoadClearsOldMedia() async throws {
+        let hooks = ReferenceAuthoringRecordingHooks(startRecording: { .success(()) },
+            stopRecording: { .success(self.goodArtifacts()) },
+            currentPreflightSnapshot: { self.passingSnapshot() }, latestCalibrationObservation: { nil })
+        let worker = makeWorker(session: readySession(), hooks: hooks)
+        _ = await worker.startRecording()
+        let stopped = await worker.stopRecording()
+        let take = try XCTUnwrap(stopped.state.session.takeInReview)
+        let folder = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: folder) }
+        let mediaURL = folder.appendingPathComponent("recorded.mov")
+        let format = try XCTUnwrap(AVAudioFormat(standardFormatWithSampleRate: 48_000, channels: 1))
+        let buffer = try XCTUnwrap(AVAudioPCMBuffer(pcmFormat: format, frameCapacity: 24_000))
+        buffer.frameLength = 24_000
+        buffer.floatChannelData![0].initialize(repeating: 0, count: 24_000)
+        do {
+            let file = try AVAudioFile(forWriting: mediaURL.deletingPathExtension().appendingPathExtension("wav"), settings: format.settings)
+            try file.write(from: buffer)
+        }
+        let controller = ReferenceFinalizedMediaReviewController()
+        controller.load(take: take, mediaURL: mediaURL, beatRootURL: nil)
+        let loaded = await waitUntil { controller.state != .loading }
+        XCTAssertTrue(loaded)
+        XCTAssertEqual(controller.state, .missingVideo)
+        XCTAssertTrue(controller.canPlay)
+        XCTAssertNotNil(controller.beatBindingIssue, "Playback must not silently satisfy beat approval.")
+        XCTAssertNil(controller.boundBeatID)
+        let model = ReferenceAuthoringViewModel(worker: worker, initialState: stopped.state)
+        model.mediaReview.load(take: take, mediaURL: mediaURL, beatRootURL: nil)
+        _ = await waitUntil { model.mediaReview.state != .loading }
+        model.approveCanonical()
+        XCTAssertTrue(model.visibleMessage?.contains("BeatSpec") == true)
+        XCTAssertNotEqual(model.reviewedTake?.evidence.metadata.lifecycleState, .approvedCanonical)
+        XCTAssertTrue(model.canEditReviewedTake)
+        XCTAssertTrue(model.approvalBlockReasons.contains { $0.contains("BeatSpec") })
+        model.retake()
+        let retained = await waitUntil { model.session.phase == .readyToRecord && !model.isWorking }
+        XCTAssertTrue(retained)
+        XCTAssertEqual(model.reviewedTake?.id, take.id)
+        XCTAssertFalse(model.canEditReviewedTake)
+        XCTAssertTrue(model.approvalBlockReasons.contains("This session is not reviewing a take."))
+        controller.load(take: take, mediaURL: folder.appendingPathComponent("missing.mov"), beatRootURL: nil)
+        XCTAssertEqual(controller.state, .missingAudio)
+        XCTAssertFalse(controller.canPlay)
+        XCTAssertNil(controller.videoPlayer)
+        XCTAssertNil(controller.beatBindingIssue)
+    }
+
+    func testReviewRangesCannotSeekBeyondTheMeasuredTake() {
+        XCTAssertEqual(ReferenceFinalizedMediaReviewController.playableRange(start: 0, end: 20, duration: 10.5), 0...10.5)
+        XCTAssertEqual(ReferenceFinalizedMediaReviewController.playableRange(start: 5, end: 9, duration: 10.5), 5...9)
+        XCTAssertEqual(ReferenceFinalizedMediaReviewController.playableRange(start: -0.00001, end: 2.526, duration: 10.5), 0...2.526)
+        XCTAssertNil(ReferenceFinalizedMediaReviewController.playableRange(start: -2, end: -1, duration: 10.5))
+        for start in [10.5, .infinity, .nan] {
+            XCTAssertNil(ReferenceFinalizedMediaReviewController.playableRange(start: start, end: 20, duration: 10.5))
+        }
+        XCTAssertNil(ReferenceFinalizedMediaReviewController.playableRange(start: 5, end: 4, duration: 10.5))
+    }
     private final class LockedBox<Value>: @unchecked Sendable {
         private let lock = NSLock()
         private var storage: Value
@@ -385,15 +1405,591 @@ final class ReferenceAuthoringViewModelTests: XCTestCase {
         }
     }
 
+    func testPreparingNextTakeRetainsSetupAndClearsOnlyTransientReviewState() async throws {
+        let startCount = LockedBox(0)
+        let hooks = ReferenceAuthoringRecordingHooks(
+            startRecording: {
+                startCount.update { $0 += 1 }
+                return .success(())
+            },
+            stopRecording: { .success(self.goodArtifacts()) },
+            currentPreflightSnapshot: { self.passingSnapshot() },
+            latestCalibrationObservation: { nil }
+        )
+        let worker = makeWorker(session: readySession(), hooks: hooks)
+        _ = await worker.startRecording()
+        _ = await worker.stopRecording()
+        _ = await worker.selectRepetitionForApproval(0)
+        _ = await worker.approveCanonical(notes: "Retained approval")
+        let approvedState = await worker.snapshot()
+        let viewModel = ReferenceAuthoringViewModel(worker: worker, initialState: approvedState)
+        viewModel.reviewNotes = "future approval input"
+        viewModel.tearReviewNotes = "future correction input"
+        var expected = approvedState.session
+        expected.phase = .readyToRecord
+
+        XCTAssertNil(viewModel.nextTakeBlockReason(isExportPreparing: false))
+        viewModel.prepareNextTake(isExportPreparing: false)
+        let prepared = await waitUntil { !viewModel.isWorking && viewModel.session.phase == .readyToRecord }
+
+        XCTAssertTrue(prepared)
+        XCTAssertEqual(viewModel.session, expected)
+        XCTAssertEqual(viewModel.reviewNotes, "")
+        XCTAssertEqual(viewModel.tearReviewNotes, "")
+        XCTAssertEqual(startCount.read(), 1, "Next take must not start recording")
+        XCTAssertEqual(
+            viewModel.visibleMessage,
+            "Approved take \(approvedState.session.takes[0].id) retained. Ready for the next take; press Record Draft when ready."
+        )
+    }
+
+    func testPreparingNextTakeRejectsBusyOrPreparingExportWithoutLosingInputs() async {
+        let preflightEntered = expectation(description: "busy preflight entered")
+        let releasePreflight = DispatchSemaphore(value: 0)
+        let startCount = LockedBox(0)
+        let blockNextPreflight = LockedBox(false)
+        let blocked = ReferencePreflightSnapshot(
+            controllerName: nil,
+            controllerIdentifier: nil,
+            observedCrossfaderAddress: nil,
+            latestCrossfaderRawValue: nil,
+            calibration: nil,
+            crossfaderEventCount: 0,
+            platterEventCount: 0,
+            platterIsMoving: false,
+            audioInputPeakLevel: nil,
+            audioDeviceName: nil,
+            watchIsReachable: false,
+            watchMotionIsStreaming: false
+        )
+        let hooks = ReferenceAuthoringRecordingHooks(
+            startRecording: {
+                startCount.update { $0 += 1 }
+                return .success(())
+            },
+            stopRecording: { .success(self.goodArtifacts()) },
+            currentPreflightSnapshot: {
+                if blockNextPreflight.read() {
+                    preflightEntered.fulfill()
+                    _ = releasePreflight.wait(timeout: .now() + 2)
+                    return blocked
+                }
+                return self.passingSnapshot()
+            },
+            latestCalibrationObservation: { nil }
+        )
+        let worker = makeWorker(session: readySession(), hooks: hooks)
+        _ = await worker.startRecording()
+        _ = await worker.stopRecording()
+        _ = await worker.selectRepetitionForApproval(0)
+        _ = await worker.approveCanonical(notes: "Retained approval")
+        let approvedState = await worker.snapshot()
+        let initialStartCount = startCount.read()
+        let viewModel = ReferenceAuthoringViewModel(worker: worker, initialState: approvedState)
+        viewModel.reviewNotes = "keep approval input"
+        viewModel.tearReviewNotes = "keep correction input"
+
+        blockNextPreflight.update { $0 = true }
+        viewModel.startRecording()
+        await fulfillment(of: [preflightEntered], timeout: 2)
+        XCTAssertTrue(viewModel.isWorking)
+        XCTAssertEqual(viewModel.nextTakeBlockReason(isExportPreparing: false), "Wait for the current operation to finish.")
+        viewModel.prepareNextTake(isExportPreparing: false)
+        XCTAssertEqual(viewModel.session, approvedState.session)
+        XCTAssertEqual(viewModel.reviewNotes, "keep approval input")
+        XCTAssertEqual(viewModel.tearReviewNotes, "keep correction input")
+        XCTAssertEqual(viewModel.visibleMessage, "Wait for the current operation to finish.")
+        releasePreflight.signal()
+        let busyFinished = await waitUntil { !viewModel.isWorking }
+        XCTAssertTrue(busyFinished)
+        XCTAssertEqual(viewModel.session.phase, .complete)
+        XCTAssertEqual(viewModel.session.takes, approvedState.session.takes)
+        XCTAssertEqual(viewModel.session.selectedTechnique, approvedState.session.selectedTechnique)
+        XCTAssertEqual(viewModel.session.selectedPattern, approvedState.session.selectedPattern)
+        XCTAssertEqual(viewModel.session.selectedBPM, approvedState.session.selectedBPM)
+        XCTAssertEqual(viewModel.session.confirmedCalibration, approvedState.session.confirmedCalibration)
+        XCTAssertEqual(viewModel.reviewNotes, "keep approval input")
+        XCTAssertEqual(viewModel.tearReviewNotes, "keep correction input")
+        XCTAssertEqual(startCount.read(), initialStartCount)
+        let postBusySession = viewModel.session
+
+        XCTAssertEqual(
+            viewModel.nextTakeBlockReason(isExportPreparing: true),
+            "Wait for the capture export to finish."
+        )
+        viewModel.prepareNextTake(isExportPreparing: true)
+
+        XCTAssertEqual(viewModel.session, postBusySession)
+        XCTAssertEqual(viewModel.reviewNotes, "keep approval input")
+        XCTAssertEqual(viewModel.tearReviewNotes, "keep correction input")
+        XCTAssertEqual(viewModel.visibleMessage, "Wait for the capture export to finish.")
+        XCTAssertFalse(viewModel.isWorking)
+    }
+
+    func testPreparingNextTakeRejectsDuplicateAndStaleApprovedTakeRequests() async throws {
+        let hooks = ReferenceAuthoringRecordingHooks(
+            startRecording: { .success(()) },
+            stopRecording: { .success(self.goodArtifacts()) },
+            currentPreflightSnapshot: { self.passingSnapshot() },
+            latestCalibrationObservation: { nil }
+        )
+        let worker = makeWorker(session: readySession(), hooks: hooks)
+        _ = await worker.startRecording()
+        _ = await worker.stopRecording()
+        _ = await worker.selectRepetitionForApproval(0)
+        _ = await worker.approveCanonical(notes: "First approval")
+        let firstComplete = await worker.snapshot()
+        let firstApproved = try XCTUnwrap(firstComplete.session.latestRecordedTake?.id)
+
+        let firstRequest = Task { await worker.prepareNextTake(afterApprovedTakeID: firstApproved) }
+        let duplicateRequest = Task { await worker.prepareNextTake(afterApprovedTakeID: firstApproved) }
+        let responses = [await firstRequest.value, await duplicateRequest.value]
+        XCTAssertEqual(responses.filter { $0.errorMessage == nil }.count, 1)
+        XCTAssertEqual(responses.filter { $0.errorMessage != nil }.count, 1)
+        let afterDuplicate = await worker.snapshot()
+        XCTAssertEqual(afterDuplicate.session.phase, .readyToRecord)
+        XCTAssertEqual(afterDuplicate.session.takes.count, 1)
+
+        _ = await worker.startRecording()
+        _ = await worker.stopRecording()
+        _ = await worker.selectRepetitionForApproval(1)
+        _ = await worker.approveCanonical(notes: "Second approval")
+        let secondComplete = await worker.snapshot()
+        XCTAssertNotEqual(secondComplete.session.latestRecordedTake?.id, firstApproved)
+        let stale = await worker.prepareNextTake(afterApprovedTakeID: firstApproved)
+        XCTAssertNotNil(stale.errorMessage)
+        let afterStale = await worker.snapshot()
+        XCTAssertEqual(afterStale.session, secondComplete.session)
+    }
+
+    func testFourExplicitApprovalsRetainDistinctTakesAndImmutableIntent() async throws {
+        let artifactIndex = LockedBox(0)
+        let hooks = ReferenceAuthoringRecordingHooks(
+            startRecording: { .success(()) },
+            stopRecording: {
+                var index = 0
+                artifactIndex.update {
+                    index = $0
+                    $0 += 1
+                }
+                return .success(self.goodArtifacts(
+                    suffix: "take-\(index + 1)",
+                    recordedAt: Date(timeIntervalSince1970: 1_788_020_000 + Double(index))
+                ))
+            },
+            currentPreflightSnapshot: { self.passingSnapshot() },
+            latestCalibrationObservation: { nil }
+        )
+        let worker = makeWorker(session: readySession(), hooks: hooks)
+        let tempos = [80, 80, 110, 110]
+        var retained: [ReferenceAuthoringTake] = []
+
+        for (index, bpm) in tempos.enumerated() {
+            _ = await worker.configure(
+                technique: .babyScratch,
+                pattern: ReferencePatternIdentity(id: "quarter_notes", name: "Quarter notes", phraseBars: 1),
+                bpm: bpm,
+                startingDirection: index.isMultiple(of: 2) ? .forward : .backward,
+                faderVariant: .faderOpenThroughout,
+                handedness: .right,
+                notes: "take \(index + 1)"
+            )
+            let started = await worker.startRecording()
+            XCTAssertNil(started.errorMessage)
+            let stopped = await worker.stopRecording()
+            XCTAssertNil(stopped.errorMessage)
+            _ = await worker.selectRepetitionForApproval(index % 4)
+            let approved = await worker.approveCanonical(notes: "Approved take \(index + 1)")
+            XCTAssertNil(approved.errorMessage)
+            let snapshot = await worker.snapshot()
+            retained.append(try XCTUnwrap(snapshot.session.latestRecordedTake))
+            XCTAssertEqual(snapshot.session.takes, retained)
+            if index < tempos.count - 1 {
+                let prepared = await worker.prepareNextTake(afterApprovedTakeID: retained[index].id)
+                XCTAssertNil(prepared.errorMessage)
+            }
+        }
+
+        let session = (await worker.snapshot()).session
+        XCTAssertEqual(session.phase, .complete)
+        XCTAssertEqual(session.takes.map(\.evidence.metadata.bpm), [80, 80, 80, 80])
+        XCTAssertEqual(session.takes.map(\.evidence.metadata.startingPlatterDirection), [.forward, .forward, .forward, .forward])
+        let immutableIntent = try XCTUnwrap(session.takes.first?.evidence.metadata.captureIntent)
+        XCTAssertTrue(session.takes.allSatisfy { $0.evidence.metadata.captureIntent == immutableIntent })
+        XCTAssertEqual(session.takes.map(\.evidence.audio.fileName), (1...4).map { "synthetic-reference-take-\($0).wav" })
+        XCTAssertEqual(Set(session.takes.map(\.id)).count, 4)
+        XCTAssertEqual(Set(session.takes.map(\.evidence.metadata.takeNumber)).count, 4)
+        XCTAssertEqual(artifactIndex.read(), 4)
+        XCTAssertTrue(session.takes.allSatisfy {
+            $0.evidence.metadata.lifecycleState == .approvedCanonical
+                && !$0.evidence.metadata.lifecycleState.isPlayableByLearner
+        })
+    }
+
+    func testUnapprovedContinuationRetainsCaptureHistoryAndRequestsTheSuccessfulDestination() async throws {
+        for newScratch in [false, true] {
+            let starts = LockedBox(0)
+            let finalizedURL = FileManager.default.temporaryDirectory.appendingPathComponent("retained-\(UUID()).mov")
+            let hooks = ReferenceAuthoringRecordingHooks(
+                startRecording: { starts.update { $0 += 1 }; return .success(()) },
+                stopRecording: { .success(self.goodArtifacts(watchEvidence: .missing(syncState: "unavailable"))) },
+                currentPreflightSnapshot: { self.passingSnapshot() }, latestCalibrationObservation: { nil }
+            )
+            var session = readySession()
+            session.notes = "Notes belonging to the finalized capture"
+            let driver = ReferenceAuthoringWorkerDriver(hooks: hooks, lastFinalizedRecordingURLProvider: { finalizedURL })
+            let worker = makeWorker(session: session, hooks: hooks, driver: driver)
+            _ = await worker.startRecording()
+            let finalized = await worker.stopRecording()
+            let retained = try XCTUnwrap(finalized.state.session.latestRecordedTake)
+            let model = ReferenceAuthoringViewModel(worker: worker, initialState: finalized.state, beatPreviewEngine: BeatPreviewSpy())
+            model.notes = session.notes
+            model.reviewNotes = "Transient review input"
+            model.tearReviewNotes = "Transient tear input"
+            XCTAssertFalse(model.canApprove)
+            XCTAssertNil(model.continuationBlockReason(newScratch: newScratch))
+            XCTAssertNil(model.navigationRequest)
+
+            if newScratch { model.prepareNewScratch() } else { model.retake() }
+            let finished = await waitUntil { !model.isWorking }
+            XCTAssertTrue(finished)
+            XCTAssertEqual(model.navigationRequest?.destination, newScratch ? .setup : .capture)
+            XCTAssertEqual(model.session.takes, finalized.state.session.takes)
+            XCTAssertEqual(model.reviewedTake, retained)
+            XCTAssertEqual(model.lastFinalizedRecordingURL, finalizedURL)
+            XCTAssertTrue(model.canExportRawCapture)
+            XCTAssertEqual(model.session.confirmedCalibration, session.confirmedCalibration)
+            XCTAssertEqual(model.session.latestPreflightSnapshot, finalized.state.session.latestPreflightSnapshot)
+            XCTAssertEqual(model.session.takes[0].evidence.metadata.notes, session.notes)
+            XCTAssertNil(model.session.takes[0].evidence.metadata.reviewDecision)
+            XCTAssertEqual(model.notes, newScratch ? "" : session.notes)
+            XCTAssertEqual(model.reviewNotes, "")
+            XCTAssertEqual(model.tearReviewNotes, "")
+            XCTAssertEqual(starts.read(), 1, "Navigation must never start another capture.")
+            let request = model.navigationRequest
+            if newScratch {
+                model.prepareNewScratch()
+                XCTAssertEqual(model.navigationRequest, request, "Refused repeated input must not request another scroll.")
+            } else {
+                let ready = model.session
+                model.retake()
+                let repeated = await waitUntil { !model.isWorking }
+                XCTAssertTrue(repeated)
+                XCTAssertEqual(model.session, ready, "Repeating Retake is safe with a legacy nil future intent.")
+                XCTAssertEqual(model.navigationRequest?.destination, .capture)
+            }
+        }
+    }
+
+    func testContinuationExportAndStaleIdentityRefusalsPreserveInputsWithoutNavigation() async throws {
+        for newScratch in [false, true] {
+            let hooks = ReferenceAuthoringRecordingHooks(
+                startRecording: { .success(()) }, stopRecording: { .success(self.goodArtifacts()) },
+                currentPreflightSnapshot: { self.passingSnapshot() }, latestCalibrationObservation: { nil }
+            )
+            let worker = makeWorker(session: readySession(), hooks: hooks)
+            _ = await worker.startRecording()
+            let first = await worker.stopRecording()
+            let firstID = try XCTUnwrap(first.state.session.latestRecordedTake?.id)
+            let model = ReferenceAuthoringViewModel(worker: worker, initialState: first.state, beatPreviewEngine: BeatPreviewSpy())
+            model.notes = "Keep setup input"
+            model.reviewNotes = "Keep review input"
+            model.tearReviewNotes = "Keep tear input"
+            XCTAssertNotNil(model.continuationBlockReason(newScratch: newScratch, isExportPreparing: true))
+            if newScratch { model.prepareNewScratch(isExportPreparing: true) } else { model.retake(isExportPreparing: true) }
+            XCTAssertEqual(model.session, first.state.session)
+            XCTAssertNil(model.navigationRequest)
+            XCTAssertFalse(model.isWorking)
+
+            // The view still offers the first take while the serial owner has
+            // finalized a second one. Its captured action ID must be refused.
+            _ = await worker.retake(afterTakeID: firstID)
+            _ = await worker.startRecording()
+            let second = await worker.stopRecording()
+            XCTAssertNotEqual(second.state.session.latestRecordedTake?.id, firstID)
+            if newScratch { model.prepareNewScratch() } else { model.retake() }
+            let finished = await waitUntil { !model.isWorking }
+            XCTAssertTrue(finished)
+            XCTAssertEqual(model.session, second.state.session)
+            XCTAssertNotNil(model.visibleMessage)
+            XCTAssertNil(model.navigationRequest)
+            XCTAssertEqual(model.notes, "Keep setup input")
+            XCTAssertEqual(model.reviewNotes, "Keep review input")
+            XCTAssertEqual(model.tearReviewNotes, "Keep tear input")
+            let owner = await worker.snapshot()
+            XCTAssertEqual(owner.session, second.state.session)
+        }
+    }
+
+    func testPendingWatchOrSourceBlocksViewModelContinuationAndReject() async throws {
+        let identity = ReferenceTakeSourceIdentity(sessionID: "capture", takeID: "take-001", takeNumber: 1, takeToken: "token")
+        let pendingStates: [(ReferenceWatchEvidence, ReferencePerTakeSourceState?)] = [
+            (.acknowledgedTransferPending, nil),
+            (.linked(motionFileName: "watch.json"), .waitingForLateTransfer(identity: identity, deadline: .distantFuture)),
+        ]
+        for (watch, source) in pendingStates {
+            let hooks = ReferenceAuthoringRecordingHooks(
+                startRecording: { .success(()) },
+                stopRecording: { .success(self.goodArtifacts(watchEvidence: watch, sourceState: source)) },
+                currentPreflightSnapshot: { self.passingSnapshot() }, latestCalibrationObservation: { nil }
+            )
+            let worker = makeWorker(session: readySession(), hooks: hooks)
+            _ = await worker.startRecording()
+            let finalized = await worker.stopRecording()
+            let model = ReferenceAuthoringViewModel(worker: worker, initialState: finalized.state, beatPreviewEngine: BeatPreviewSpy())
+            model.reviewNotes = "Retain until transfer resolves"
+            XCTAssertFalse(model.canRejectReviewedTake)
+            XCTAssertNotNil(model.continuationBlockReason(newScratch: true))
+            XCTAssertNotNil(model.continuationBlockReason(newScratch: false))
+            model.prepareNewScratch()
+            model.retake()
+            model.rejectTake()
+            let owner = await worker.snapshot()
+            XCTAssertEqual(owner.session, finalized.state.session)
+            XCTAssertEqual(model.session, finalized.state.session)
+            XCTAssertEqual(model.reviewNotes, "Retain until transfer resolves")
+            XCTAssertNil(model.navigationRequest)
+            XCTAssertFalse(model.isWorking)
+        }
+    }
+
+    func testAutomaticStopFinalizesOnceAndBusyFinalizationRefusesContinuation() async throws {
+        let stopEntered = expectation(description: "automatic stop reached finalization")
+        let releaseStop = DispatchSemaphore(value: 0)
+        defer { releaseStop.signal() }
+        let stops = LockedBox(0)
+        let hooks = ReferenceAuthoringRecordingHooks(
+            startRecording: { .success(()) },
+            stopRecording: {
+                stops.update { $0 += 1 }
+                stopEntered.fulfill()
+                _ = releaseStop.wait(timeout: .now() + 3)
+                return .success(self.goodArtifacts())
+            },
+            currentPreflightSnapshot: { self.passingSnapshot() }, latestCalibrationObservation: { nil }
+        )
+        let worker = makeWorker(session: readySession(), hooks: hooks)
+        let recording = await worker.startRecording()
+        XCTAssertNil(recording.errorMessage)
+        let model = ReferenceAuthoringViewModel(worker: worker, initialState: recording.state, beatPreviewEngine: BeatPreviewSpy())
+        model.reviewNotes = "Preserve while busy"
+        model.captureRecordingDidStop()
+        model.captureRecordingDidStop()
+        model.stopRecording()
+        await fulfillment(of: [stopEntered], timeout: 2)
+        XCTAssertTrue(model.isWorking)
+        XCTAssertFalse(model.canRejectReviewedTake)
+        XCTAssertNotNil(model.continuationBlockReason(newScratch: true))
+        XCTAssertNotNil(model.continuationBlockReason(newScratch: false))
+        model.prepareNewScratch()
+        model.retake()
+        XCTAssertEqual(model.session, recording.state.session)
+        XCTAssertEqual(model.reviewNotes, "Preserve while busy")
+        XCTAssertNil(model.navigationRequest)
+        releaseStop.signal()
+        let finalized = await waitUntil { !model.isWorking && model.session.takes.count == 1 }
+        XCTAssertTrue(finalized)
+        let retained = model.session
+        model.captureRecordingDidStop()
+        model.stopRecording()
+        let owner = await worker.snapshot()
+        XCTAssertEqual(stops.read(), 1)
+        XCTAssertEqual(owner.session, retained)
+        XCTAssertEqual(model.session.phase, .reviewing(takeIndex: 0))
+        XCTAssertNil(model.navigationRequest)
+    }
+
+    func testStopBeforeStartPublicationIsRecoveredByActiveRecordingReconciliationExactlyOnce() async {
+        let startEntered = expectation(description: "start waits before publishing its result")
+        let releaseStart = DispatchSemaphore(value: 0)
+        defer { releaseStart.signal() }
+        let starts = LockedBox(0)
+        let stops = LockedBox(0)
+        let recordingHasStopped = LockedBox(false)
+        let reconciliations = LockedBox(0)
+        let hooks = ReferenceAuthoringRecordingHooks(
+            startRecording: {
+                starts.update { $0 += 1 }
+                startEntered.fulfill()
+                _ = releaseStart.wait(timeout: .now() + 3)
+                return .success(())
+            },
+            stopRecording: {
+                stops.update { $0 += 1 }
+                recordingHasStopped.update { $0 = false }
+                return .success(self.goodArtifacts())
+            },
+            currentPreflightSnapshot: { self.passingSnapshot() }, latestCalibrationObservation: { nil }
+        )
+        let driver = ReferenceAuthoringWorkerDriver(hooks: hooks, recordingHasStoppedProvider: {
+            reconciliations.update { $0 += 1 }
+            return recordingHasStopped.read()
+        })
+        let worker = makeWorker(session: readySession(), hooks: hooks, driver: driver)
+        let initial = await worker.snapshot()
+        let model = ReferenceAuthoringViewModel(worker: worker, initialState: initial, beatPreviewEngine: BeatPreviewSpy())
+        model.startRecording()
+        await fulfillment(of: [startEntered], timeout: 2)
+        XCTAssertTrue(model.isWorking)
+        XCTAssertEqual(model.session.phase, .readyToRecord)
+
+        // The engine has already stopped this capture while the successful
+        // start response is still awaiting publication on the main actor.
+        recordingHasStopped.update { $0 = true }
+        model.captureRecordingDidStop()
+        model.captureRecordingDidStop()
+        XCTAssertEqual(stops.read(), 0, "The busy UI edge must not finalize an unpublished recording.")
+        XCTAssertEqual(reconciliations.read(), 0)
+        releaseStart.signal()
+
+        // No further UI edge is sent: the active-recording provider must
+        // recover the completion once the start response has been applied.
+        let finalized = await waitUntil { !model.isWorking && model.session.takes.count == 1 }
+        XCTAssertTrue(finalized)
+        XCTAssertEqual(model.session.phase, .reviewing(takeIndex: 0))
+        XCTAssertEqual(reconciliations.read(), 1)
+        XCTAssertEqual(starts.read(), 1)
+        XCTAssertEqual(stops.read(), 1)
+        let retained = model.session
+        model.captureRecordingDidStop()
+        model.stopRecording()
+        let owner = await worker.snapshot()
+        XCTAssertEqual(owner.session, retained)
+        XCTAssertEqual(stops.read(), 1)
+    }
+
+    func testExact95BPMBeatIsPreparedAndRevalidatedBeforeConfigurationAndCaptureStart() async throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent("ExactBeatWorker-\(UUID())")
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let events = LockedBox<[String]>([])
+        let configuration = LockedBox<ReferenceAuthoringBridgeTakeConfiguration?>(nil)
+        let prepared = LockedBox<ReferencePreparedBeat?>(nil)
+        let hooks = ReferenceAuthoringRecordingHooks(
+            startRecording: {
+                events.update { $0.append("start") }
+                guard configuration.read()?.captureIntent?.beatSpec == prepared.read()?.binding,
+                      configuration.read()?.preparedBeat == prepared.read(), prepared.read() != nil else {
+                    return .failure(.recordingFailed("Capture began without its exact prepared asset."))
+                }
+                return .success(())
+            },
+            stopRecording: { .success(self.goodArtifacts()) },
+            currentPreflightSnapshot: { self.passingSnapshot() }, latestCalibrationObservation: { nil }
+        )
+        let driver = ReferenceAuthoringWorkerDriver(hooks: hooks,
+            pendingConfigurationHandler: { value in
+                events.update { $0.append("configuration") }
+                configuration.update { $0 = value }
+            },
+            prepareBeatHandler: { mode, bpm, binding in
+                let beat: ReferencePreparedBeat
+                if let binding {
+                    events.update { $0.append("resolve") }
+                    beat = try ReferenceBeatAssetStore.resolve(binding: binding, rootURL: directory)
+                } else {
+                    events.update { $0.append("prepare") }
+                    beat = try ReferenceBeatAssetStore.prepare(mode: mode, bpm: bpm, loopBeats: 4, rootURL: directory)
+                }
+                prepared.update { $0 = beat }
+                return beat
+            })
+        let worker = makeWorker(session: readySession(), hooks: hooks, driver: driver)
+        let configured = await worker.configure(technique: .babyScratch,
+            pattern: ReferencePatternIdentity(id: "exact-95", name: "Exact 95", phraseBars: 1), bpm: 95,
+            startingDirection: .forward, faderVariant: .faderOpenThroughout, handedness: .right,
+            notes: "Exact asset fixture", beatEngineMode: .clickTrack)
+        XCTAssertNil(configured.errorMessage)
+        XCTAssertEqual(events.read(), ["prepare"])
+        XCTAssertNil(configured.state.session.captureIntent)
+        let binding = try XCTUnwrap(configured.state.session.selectedBeatSpec)
+        XCTAssertEqual(binding.bpm, 95)
+        let beat = try XCTUnwrap(prepared.read())
+        XCTAssertTrue(FileManager.default.fileExists(atPath: beat.productionMasterURL.path))
+        let started = await worker.startRecording()
+        XCTAssertNil(started.errorMessage)
+        XCTAssertEqual(events.read(), ["prepare", "resolve", "configuration", "start"])
+        let configuredCapture = try XCTUnwrap(configuration.read())
+        XCTAssertEqual(configuredCapture.captureIntent?.beatSpec, binding)
+        XCTAssertEqual(configuredCapture.preparedBeat, beat)
+        let persisted = configuredCapture.recordingSessionConfig(existing: nil, now: Date())
+        let reopened = try JSONDecoder().decode(CaptureSessionConfig.self, from: JSONEncoder().encode(persisted))
+        XCTAssertEqual(reopened.referenceCaptureIntent?.beatSpec, binding)
+        XCTAssertEqual(reopened.bpm, 95)
+        let finalized = await worker.stopRecording()
+        XCTAssertNil(finalized.errorMessage)
+        XCTAssertEqual(finalized.state.session.latestRecordedTake?.evidence.metadata.captureIntent?.beatSpec, binding)
+    }
+
+    func testBeatPreparationFailurePreventsCaptureAndPendingConfiguration() async {
+        let starts = LockedBox(0)
+        let configurations = LockedBox(0)
+        let hooks = ReferenceAuthoringRecordingHooks(
+            startRecording: { starts.update { $0 += 1 }; return .success(()) },
+            stopRecording: { .success(self.goodArtifacts()) },
+            currentPreflightSnapshot: { self.passingSnapshot() }, latestCalibrationObservation: { nil }
+        )
+        let driver = ReferenceAuthoringWorkerDriver(hooks: hooks,
+            pendingConfigurationHandler: { _ in configurations.update { $0 += 1 } },
+            prepareBeatHandler: { _, _, _ in throw ReferenceBeatAssetError.invalid("Synthetic preparation failure") })
+        let worker = makeWorker(session: readySession(), hooks: hooks, driver: driver)
+        let configured = await worker.configure(technique: .babyScratch,
+            pattern: ReferencePatternIdentity(id: "failed-95", name: "Failed 95", phraseBars: 1), bpm: 95,
+            startingDirection: .forward, faderVariant: .faderOpenThroughout, handedness: .right, notes: "Retain setup")
+        XCTAssertNotNil(configured.errorMessage)
+        let start = await worker.startRecording()
+        XCTAssertTrue(start.errorMessage?.contains("Synthetic preparation failure") == true)
+        XCTAssertNotEqual(start.state.session.phase, .recording)
+        XCTAssertNil(start.state.session.captureIntent)
+        XCTAssertEqual(start.state.session.notes, "Retain setup")
+        XCTAssertEqual(starts.read(), 0)
+        XCTAssertEqual(configurations.read(), 0)
+    }
+
+    func testAssetChangedAfterSetupIsRejectedBeforeCaptureStarts() async throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent("ChangedBeatWorker-\(UUID())")
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let starts = LockedBox(0)
+        let configurations = LockedBox(0)
+        let prepared = LockedBox<ReferencePreparedBeat?>(nil)
+        let hooks = ReferenceAuthoringRecordingHooks(
+            startRecording: { starts.update { $0 += 1 }; return .success(()) },
+            stopRecording: { .success(self.goodArtifacts()) },
+            currentPreflightSnapshot: { self.passingSnapshot() }, latestCalibrationObservation: { nil }
+        )
+        let driver = ReferenceAuthoringWorkerDriver(hooks: hooks,
+            pendingConfigurationHandler: { _ in configurations.update { $0 += 1 } },
+            prepareBeatHandler: { mode, bpm, binding in
+                if let binding { return try ReferenceBeatAssetStore.resolve(binding: binding, rootURL: directory) }
+                let beat = try ReferenceBeatAssetStore.prepare(mode: mode, bpm: bpm, loopBeats: 4, rootURL: directory)
+                prepared.update { $0 = beat }
+                return beat
+            })
+        let worker = makeWorker(session: readySession(), hooks: hooks, driver: driver)
+        let configured = await worker.configure(technique: .babyScratch,
+            pattern: ReferencePatternIdentity(id: "changed-95", name: "Changed 95", phraseBars: 1), bpm: 95,
+            startingDirection: .forward, faderVariant: .faderOpenThroughout, handedness: .right, notes: "", beatEngineMode: .clickTrack)
+        XCTAssertNil(configured.errorMessage)
+        let beat = try XCTUnwrap(prepared.read())
+        try Data("corrupted after Setup".utf8).write(to: beat.productionMasterURL)
+        let start = await worker.startRecording()
+        XCTAssertNotNil(start.errorMessage)
+        XCTAssertNotEqual(start.state.session.phase, .recording)
+        XCTAssertNil(start.state.session.captureIntent)
+        XCTAssertEqual(start.state.session.selectedBeatSpec, configured.state.session.selectedBeatSpec)
+        XCTAssertEqual(starts.read(), 0)
+        XCTAssertEqual(configurations.read(), 0)
+    }
+
     private func makeWorker(
         session: ReferenceAuthoringSession,
-        hooks: ReferenceAuthoringRecordingHooks
+        hooks: ReferenceAuthoringRecordingHooks,
+        driver: ReferenceAuthoringWorkerDriver? = nil
     ) -> ReferenceAuthoringWorker {
         let directory = FileManager.default.temporaryDirectory
             .appendingPathComponent("ReferenceAuthoringViewModelTests-\(UUID().uuidString)")
         return ReferenceAuthoringWorker(
             session: session,
-            driver: ReferenceAuthoringWorkerDriver(hooks: hooks),
+            driver: driver ?? ReferenceAuthoringWorkerDriver(hooks: hooks),
             calibrationStore: CrossfaderCalibrationStore(directoryURL: directory),
             queueLabel: "com.machelpnz.scratchlab.reference-authoring.tests.\(UUID().uuidString)"
         )
@@ -451,8 +2047,12 @@ final class ReferenceAuthoringViewModelTests: XCTestCase {
 
     private func goodArtifacts(
         autoDetectedTechnique: ReferenceTechnique? = nil,
-        watchEvidence: ReferenceWatchEvidence = .linked(motionFileName: "synthetic-watch-motion.json")
+        watchEvidence: ReferenceWatchEvidence = .linked(motionFileName: "synthetic-watch-motion.json"),
+        suffix: String? = nil,
+        recordedAt: Date = Date(timeIntervalSince1970: 1_788_000_500),
+        sourceState: ReferencePerTakeSourceState? = nil
     ) -> ReferenceRecordedTakeArtifacts {
+        let artifactStem = suffix.map { "synthetic-reference-\($0)" } ?? "synthetic-reference"
         let samples = (0..<800).map { index in
             CrossfaderPositionSample(
                 takeRelativeTime: Double(index) * 0.001,
@@ -462,32 +2062,33 @@ final class ReferenceAuthoringViewModelTests: XCTestCase {
         }
         return ReferenceRecordedTakeArtifacts(
             audio: ReferenceArtifactMeasurement(
-                fileName: "synthetic-reference.wav",
+                fileName: "\(artifactStem).wav",
                 exists: true,
                 byteCount: 500_000,
                 peakLevel: 0.8,
                 frameCount: 100_000
             ),
             video: ReferenceArtifactMeasurement(
-                fileName: "synthetic-reference.mov",
+                fileName: "\(artifactStem).mov",
                 exists: true,
                 byteCount: 750_000
             ),
             sidecar: ReferenceArtifactMeasurement(
-                fileName: "synthetic-reference.json",
+                fileName: "\(artifactStem).json",
                 exists: true,
                 byteCount: 2_048
             ),
-            actualMediaFileName: "synthetic-reference.mov",
+            actualMediaFileName: "\(artifactStem).mov",
             crossfaderRawSamples: samples,
             observedCrossfaderAddress: calibration.address,
             platterMovementEventCount: 60,
-            recordedAt: Date(timeIntervalSince1970: 1_788_000_500),
+            recordedAt: recordedAt,
             autoDetectedTechnique: autoDetectedTechnique,
             // Linked wrist motion is required evidence for a canonical
             // reference; the missing-Watch case is covered in
             // `ReferenceAuthoringSessionTests`.
-            watchEvidence: watchEvidence
+            watchEvidence: watchEvidence,
+            sourceState: sourceState
         )
     }
 
@@ -510,9 +2111,11 @@ final class ReferenceAuthoringViewModelTests: XCTestCase {
                     $0 += 1
                     seen = $0
                 }
-                return seen >= landsAfter
-                    ? .linked(motionFileName: "synthetic-watch-motion.json")
-                    : .acknowledgedTransferPending
+                return ReferenceWatchEvidenceRefresh(
+                    evidence: seen >= landsAfter
+                        ? .linked(motionFileName: "synthetic-watch-motion.json")
+                        : .acknowledgedTransferPending
+                )
             }
         )
     }
@@ -540,7 +2143,7 @@ final class ReferenceAuthoringViewModelTests: XCTestCase {
 
     /// The transfer landing AFTER macOS finalization must update the take in
     /// place and make it approvable, without re-recording.
-    func testAMatchingTransferLandingAfterFinalizationUnblocksApproval() async throws {
+    func testAMatchingTransferLandingAfterFinalizationPreservesMediaApprovalGate() async throws {
         let refreshCount = LockedBox(0)
         let worker = makeWorker(
             session: readySession(),
@@ -565,7 +2168,8 @@ final class ReferenceAuthoringViewModelTests: XCTestCase {
         XCTAssertFalse(viewModel.canApprove)
         viewModel.selectRepetitionForApproval(1)
         try await Task.sleep(nanoseconds: 120_000_000)
-        XCTAssertTrue(viewModel.canApprove, viewModel.approvalBlockReason ?? "")
+        XCTAssertFalse(viewModel.canApprove)
+        XCTAssertEqual(viewModel.approvalBlockReason, "The finalized WAV is missing.")
     }
 
     /// Leaving the screen abandons the wait and touches nothing else.
@@ -679,7 +2283,12 @@ final class ReferenceTearSegmentationViewModelTests: XCTestCase {
         ]
     }
 
-    private func artifacts() -> ReferenceRecordedTakeArtifacts {
+    private func artifacts(
+        movementEvents: [CaptureCore.DetectedNotationRecordMovementEvent]? = nil,
+        includeFaderEvidence: Bool = true,
+        additionalPlatterIntervals: [CaptureCore.PlatterEvidenceInterval] = []
+    ) -> ReferenceRecordedTakeArtifacts {
+        let movements = movementEvents ?? twoTearMovementEvents()
         let samples = (0..<800).map { index in
             CrossfaderPositionSample(
                 takeRelativeTime: Double(index) * 0.001,
@@ -706,14 +2315,14 @@ final class ReferenceTearSegmentationViewModelTests: XCTestCase {
                 byteCount: 2_048
             ),
             actualMediaFileName: "synthetic-reference.mov",
-            crossfaderRawSamples: samples,
+            crossfaderRawSamples: includeFaderEvidence ? samples : [],
             observedCrossfaderAddress: calibration.address,
             platterMovementEventCount: 4,
             recordedAt: Date(timeIntervalSince1970: 1_788_000_500),
             autoDetectedTechnique: nil,
             watchEvidence: .linked(motionFileName: "synthetic-watch-motion.json"),
-            platterMovementEvents: twoTearMovementEvents(),
-            platterEvidenceIntervals: syntheticObservedPlatterStillness(twoTearMovementEvents())
+            platterMovementEvents: movements,
+            platterEvidenceIntervals: syntheticObservedPlatterStillness(movements) + additionalPlatterIntervals
         )
     }
 
@@ -788,6 +2397,237 @@ final class ReferenceTearSegmentationViewModelTests: XCTestCase {
     private func tearReview(of worker: ReferenceAuthoringWorker) async -> ReferenceTearSegmentationReview {
         await worker.snapshot().session.takes.last!.tearReview
     }
+
+    #if DEBUG
+    private func comparisonViewModel(
+        includeFaderEvidence: Bool = true,
+        interGestureInterruption: CaptureCore.PlatterEvidenceInterval.Kind? = nil
+    ) async -> ReferenceAuthoringViewModel {
+        // Preserve the older review-only fixture; comparison additionally needs direction-correct curves.
+        let movements = twoTearMovementEvents().enumerated().map { index, event in
+            CaptureCore.DetectedNotationRecordMovementEvent(
+                startTime: event.startTime, endTime: event.endTime,
+                startPosition: index < 3 ? Double(3 - index) / 3 : 0,
+                endPosition: index < 3 ? Double(2 - index) / 3 : 1, direction: event.direction,
+                movementKind: event.movementKind, speed: event.speed, confidence: event.confidence,
+                source: event.source
+            )
+        }
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent("TearComparison-\(UUID())")
+        addTeardownBlock { try? FileManager.default.removeItem(at: directory) }
+        let additionalIntervals = interGestureInterruption.map {
+            [CaptureCore.PlatterEvidenceInterval(startTime: 0.95, endTime: 1.10, kind: $0)]
+        } ?? []
+        let hooks = ReferenceAuthoringRecordingHooks(
+            startRecording: { .success(()) },
+            stopRecording: { .success(self.artifacts(movementEvents: movements, includeFaderEvidence: includeFaderEvidence,
+                                                    additionalPlatterIntervals: additionalIntervals)) },
+            currentPreflightSnapshot: { self.passingSnapshot() }, latestCalibrationObservation: { nil }
+        )
+        let worker = ReferenceAuthoringWorker(
+            session: readySession(), driver: ReferenceAuthoringWorkerDriver(hooks: hooks),
+            calibrationStore: CrossfaderCalibrationStore(directoryURL: directory)
+        )
+        _ = await worker.startRecording()
+        _ = await worker.stopRecording()
+        return ReferenceAuthoringViewModel(worker: worker, initialState: await worker.snapshot())
+    }
+
+    private func selectComparison(_ viewModel: ReferenceAuthoringViewModel, holds: Int = 2) {
+        viewModel.selectTearComparisonTarget("scratchlab.tear.\(holds).backward.equal.v1")
+        viewModel.selectTearComparisonStart(viewModel.tearComparisonCandidates.first?.id)
+        viewModel.compareSelectedTear()
+    }
+
+    func testTearComparisonRequiresExplicitTargetPerformanceAndAlignment() async throws {
+        let viewModel = await comparisonViewModel()
+        XCTAssertNil(viewModel.tearComparisonTargetID)
+        XCTAssertNil(viewModel.tearComparisonStartID)
+        XCTAssertNil(viewModel.tearComparisonResult)
+        viewModel.compareSelectedTear()
+        XCTAssertNil(viewModel.tearComparisonOriginSeconds)
+
+        viewModel.selectTearComparisonTarget("scratchlab.tear.2.backward.equal.v1")
+        XCTAssertNil(viewModel.tearComparisonResult)
+        viewModel.selectTearComparisonStart(viewModel.tearComparisonCandidates[0].id)
+        XCTAssertNil(viewModel.tearComparisonResult, "Selecting evidence must not silently choose an alignment.")
+        viewModel.compareSelectedTear()
+        let result = try XCTUnwrap(viewModel.tearComparisonResult)
+        XCTAssertTrue(viewModel.reviewTearProjection?.records.allSatisfy { $0.motionValidationIssues().isEmpty } == true)
+        XCTAssertEqual(result.dimensions.map(\.axis), CanonicalTearComparison.Axis.allCases)
+        XCTAssertEqual(result.dimensions.first { $0.axis == .directionOrder }?.assessment, .withinTolerance)
+        let projected = try XCTUnwrap(viewModel.reviewTearProjection?.records.first)
+        XCTAssertEqual(projected.internalHolds.map(\.evidence.provenance), [.inferred, .inferred])
+        let count = try XCTUnwrap(result.dimensions.first { $0.axis == .holdCount })
+        XCTAssertEqual(count.assessment, .unavailable, "An inferred hold count is descriptive evidence, not a measured pass.")
+        XCTAssertNil(count.scorePercentage)
+        XCTAssertTrue(count.unavailableReasons.contains(.inferredHoldEvidence))
+        XCTAssertEqual(count.measurements.first { $0.kind == .holdCount }?.observed, 2)
+        XCTAssertEqual(result.dimensions.first { $0.axis == .holdTiming }?.assessment, .unavailable)
+        XCTAssertEqual(result.dimensions.first { $0.axis == .subdivisionRatios }?.assessment, .unavailable)
+        XCTAssertEqual(result.dimensions.first { $0.axis == .faderTiming }?.assessment, .notRequested)
+        XCTAssertTrue(result.dimensions.first { $0.axis == .motionShape }?.unavailableReasons.contains(.interpolatedCurve) == true)
+        XCTAssertEqual(viewModel.tearComparisonOriginSeconds, 0)
+    }
+
+    func testTearComparisonUsesCapturedTempoAndExplicitTargetChanges() async throws {
+        let viewModel = await comparisonViewModel()
+        selectComparison(viewModel)
+        let original = try XCTUnwrap(viewModel.tearComparisonResult)
+        XCTAssertEqual(viewModel.reviewedTake?.evidence.metadata.bpm, 95)
+        XCTAssertEqual(viewModel.tearComparisonBPM, 95)
+        viewModel.bpm = 200
+        XCTAssertEqual(viewModel.tearComparisonBPM, 95)
+        XCTAssertEqual(viewModel.tearComparisonResult, original, "The next-take form must not retime recorded evidence.")
+
+        viewModel.selectTearComparisonTarget("scratchlab.tear.1.forward.equal.v1")
+        XCTAssertNil(viewModel.tearComparisonOriginSeconds)
+        XCTAssertNil(viewModel.tearComparisonResult)
+        viewModel.compareSelectedTear()
+        XCTAssertEqual(viewModel.tearComparisonResult?.dimensions.first { $0.axis == .directionOrder }?.assessment, .outsideTolerance)
+        XCTAssertEqual(viewModel.tearComparisonResult?.dimensions.first { $0.axis == .holdCount }?.assessment, .unavailable)
+        XCTAssertNotEqual(viewModel.tearComparisonResult, original)
+        XCTAssertEqual(viewModel.tearComparisonSelectedCandidates.count, 1)
+    }
+
+    func testTearComparisonKeepsTheExplicitConsecutiveRangeAndWrongDirections() async throws {
+        let viewModel = await comparisonViewModel()
+        viewModel.selectTearComparisonTarget("scratchlab.tear.2.forward-backward.equal.v1")
+        let candidates = viewModel.tearComparisonCandidates
+        viewModel.selectTearComparisonStart(candidates[0].id)
+        viewModel.selectTearComparisonEnd(candidates[1].id)
+        viewModel.compareSelectedTear()
+        XCTAssertEqual(viewModel.tearComparisonSelectedCandidates.map(\.id), candidates.map(\.id))
+        XCTAssertTrue(viewModel.tearComparisonResult?.dimensions.first { $0.axis == .directionOrder }?.measurements.contains { $0.isWithinTolerance == false } == true)
+
+        viewModel.selectTearComparisonStart(candidates[1].id)
+        XCTAssertNil(viewModel.tearComparisonResult)
+        XCTAssertEqual(viewModel.tearComparisonSelectedCandidates.map(\.id), [candidates[1].id])
+        viewModel.selectTearComparisonEnd(candidates[0].id)
+        XCTAssertTrue(viewModel.tearComparisonSelectedCandidates.isEmpty, "A backwards range must not be silently reordered.")
+        viewModel.selectTearComparisonEnd(candidates[1].id)
+        viewModel.compareSelectedTear()
+        XCTAssertEqual(viewModel.tearComparisonOriginSeconds, 1.10)
+    }
+
+    func testTearComparisonCorrectionClearsAlignmentAndRecomputesWithoutApproving() async throws {
+        let viewModel = await comparisonViewModel()
+        selectComparison(viewModel)
+        let before = try XCTUnwrap(viewModel.reviewedTake)
+        let candidate = try XCTUnwrap(viewModel.tearComparisonCandidates.first)
+        let boundary = candidate.boundaries[1]
+        viewModel.setTearBoundaryKind(inCandidate: candidate.id, boundaryID: boundary.id, to: .faderClick)
+        let corrected = await waitUntil {
+            viewModel.tearReview?.candidate(id: candidate.id)?.boundaries[1].kind == .faderClick
+        }
+        XCTAssertTrue(corrected)
+        XCTAssertNil(viewModel.tearComparisonTargetID)
+        XCTAssertNil(viewModel.tearComparisonStartID)
+        XCTAssertNil(viewModel.tearComparisonEndID)
+        XCTAssertNil(viewModel.tearComparisonResult)
+        viewModel.classifyTearCandidate(candidate.id, as: .tear1)
+        let classified = await waitUntil { viewModel.tearReview?.candidate(id: candidate.id)?.manualClassification == .tear1 }
+        XCTAssertTrue(classified)
+        selectComparison(viewModel, holds: 1)
+        let result = try XCTUnwrap(viewModel.tearComparisonResult)
+        XCTAssertEqual(result.dimensions.first { $0.axis == .directionOrder }?.assessment, .withinTolerance)
+        let count = try XCTUnwrap(result.dimensions.first { $0.axis == .holdCount })
+        XCTAssertEqual(count.assessment, .unavailable)
+        XCTAssertNil(count.scorePercentage)
+        XCTAssertEqual(count.measurements.first { $0.kind == .holdCount }?.observed, 1)
+        XCTAssertEqual(viewModel.reviewTearProjection?.records.first?.internalHolds.map(\.evidence.provenance), [.inferred])
+        XCTAssertEqual(viewModel.tearReview?.rawMovementEvents, before.tearReview.rawMovementEvents)
+        XCTAssertEqual(viewModel.reviewedTake?.evidence, before.evidence)
+        XCTAssertEqual(viewModel.reviewedTake?.latestValidation, before.latestValidation)
+    }
+
+    func testTearComparisonManualUnknownAndAmbiguousHoldRemainUnavailable() async throws {
+        let viewModel = await comparisonViewModel()
+        let candidate = try XCTUnwrap(viewModel.tearComparisonCandidates.first)
+        viewModel.classifyTearCandidate(candidate.id, as: .unknown)
+        let unknown = await waitUntil { viewModel.tearReview?.candidate(id: candidate.id)?.manualClassification == .unknown }
+        XCTAssertTrue(unknown)
+        selectComparison(viewModel)
+        let unknownResult = try XCTUnwrap(viewModel.tearComparisonResult)
+        XCTAssertEqual(unknownResult.dimensions.first { $0.axis == .holdCount }?.assessment, .unavailable)
+        XCTAssertTrue(unknownResult.dimensions.first { $0.axis == .holdCount }?.unavailableReasons.contains(.unknownEvidence) == true)
+
+        viewModel.classifyTearCandidate(candidate.id, as: .tear2)
+        let classified = await waitUntil { viewModel.tearReview?.candidate(id: candidate.id)?.manualClassification == .tear2 }
+        XCTAssertTrue(classified)
+        viewModel.setTearBoundaryEvidenceQuality(inCandidate: candidate.id, boundaryID: candidate.boundaries[0].id, to: .ambiguous)
+        let ambiguous = await waitUntil { viewModel.tearReview?.candidate(id: candidate.id)?.hasAmbiguousEvidence == true }
+        XCTAssertTrue(ambiguous)
+        selectComparison(viewModel)
+        XCTAssertTrue(viewModel.tearComparisonResult?.dimensions.first { $0.axis == .holdTiming }?.unavailableReasons.contains(.ambiguousEvidence) == true)
+    }
+
+    func testTearComparisonMovedBoundaryDoesNotClaimMeasuredTiming() async throws {
+        let viewModel = await comparisonViewModel()
+        let candidate = try XCTUnwrap(viewModel.tearComparisonCandidates.first)
+        let boundary = candidate.boundaries[0]
+        viewModel.moveTearBoundary(inCandidate: candidate.id, boundaryID: boundary.id, startTime: 0.22, endTime: 0.34)
+        let moved = await waitUntil { viewModel.tearReview?.candidate(id: candidate.id)?.boundaries[0].span.startTime == 0.22 }
+        XCTAssertTrue(moved)
+        selectComparison(viewModel)
+        let result = try XCTUnwrap(viewModel.tearComparisonResult)
+        XCTAssertEqual(result.dimensions.first { $0.axis == .directionOrder }?.assessment, .withinTolerance)
+        XCTAssertEqual(result.dimensions.first { $0.axis == .holdCount }?.assessment, .unavailable)
+        XCTAssertTrue(viewModel.reviewTearProjection?.records.first?.internalHolds.allSatisfy { $0.evidence.provenance == .inferred } == true)
+        XCTAssertTrue(result.dimensions.first { $0.axis == .holdTiming }?.unavailableReasons.contains(.correctedTiming) == true)
+        XCTAssertEqual(result.dimensions.first { $0.axis == .holdTiming }?.assessment, .unavailable)
+    }
+
+    func testTearComparisonMissingFaderDoesNotInventEvidenceOrRequestPlainTearClicks() async throws {
+        let viewModel = await comparisonViewModel(includeFaderEvidence: false)
+        selectComparison(viewModel)
+        let result = try XCTUnwrap(viewModel.tearComparisonResult)
+        XCTAssertEqual(result.dimensions.first { $0.axis == .faderTiming }?.assessment, .notRequested)
+        XCTAssertTrue(result.dimensions.first { $0.axis == .evidenceQuality }?.unavailableReasons.contains(.missingFaderEvidence) == true)
+        XCTAssertNotEqual(result.dimensions.first { $0.axis == .evidenceQuality }?.assessment, .withinTolerance)
+    }
+
+    func testTearComparisonRetainsPacketAndClockGapsBetweenSelectedGestures() async throws {
+        for interruption in [CaptureCore.PlatterEvidenceInterval.Kind.packetGap, .clockDiscontinuity] {
+            let viewModel = await comparisonViewModel(interGestureInterruption: interruption)
+            viewModel.selectTearComparisonTarget("scratchlab.tear.2.forward-backward.equal.v1")
+            let candidates = viewModel.tearComparisonCandidates
+            XCTAssertEqual(candidates.count, 2)
+            viewModel.selectTearComparisonStart(candidates[0].id)
+            viewModel.selectTearComparisonEnd(candidates[1].id)
+            viewModel.compareSelectedTear()
+            let result = try XCTUnwrap(viewModel.tearComparisonResult)
+            XCTAssertTrue(result.dimensions.first { $0.axis == .evidenceQuality }?.unavailableReasons.contains(.unknownEvidence) == true)
+            XCTAssertTrue(result.dimensions.first { $0.axis == .directionOrder }?.unavailableReasons.contains(.unknownEvidence) == true)
+            XCTAssertTrue(viewModel.tearReview?.platterEvidenceIntervals.contains { $0.kind == interruption } == true)
+        }
+    }
+
+    func testTearComparisonTakeReplacementCannotReuseOldTargetRangeOrResult() async throws {
+        let viewModel = await comparisonViewModel()
+        selectComparison(viewModel)
+        let previousID = try XCTUnwrap(viewModel.reviewedTake?.id)
+        XCTAssertNotNil(viewModel.tearComparisonResult)
+        viewModel.retake()
+        let ready = await waitUntil { viewModel.session.phase == .readyToRecord && !viewModel.isWorking }
+        XCTAssertTrue(ready)
+        XCTAssertNil(viewModel.tearComparisonResult)
+        viewModel.startRecording()
+        let recording = await waitUntil {
+            if case .recording = viewModel.session.phase { return !viewModel.isWorking }
+            return false
+        }
+        XCTAssertTrue(recording)
+        viewModel.stopRecording()
+        let replaced = await waitUntil { viewModel.reviewedTake?.id != previousID && !viewModel.isWorking }
+        XCTAssertTrue(replaced)
+        XCTAssertNil(viewModel.tearComparisonTargetID)
+        XCTAssertNil(viewModel.tearComparisonStartID)
+        XCTAssertNil(viewModel.tearComparisonEndID)
+        XCTAssertNil(viewModel.tearComparisonOriginSeconds)
+        XCTAssertNil(viewModel.tearComparisonResult)
+    }
+    #endif
 
     // MARK: Advisory auto-detection
 
@@ -1493,7 +3333,8 @@ final class ReferenceAuthoringCalibrationReuseAndExportTests: XCTestCase {
         XCTAssertNotNil(viewModel.approvalBlockReason)
         XCTAssertNil(viewModel.rawCaptureExportBlockReason)
         XCTAssertTrue(viewModel.canExportRawCapture)
-        XCTAssertNotNil(viewModel.rawCaptureExportSource(config: nil))
+        let source = await viewModel.rawCaptureExportSource(config: nil)
+        XCTAssertNotNil(source)
         XCTAssertEqual(viewModel.lastFinalizedRecordingURL, url)
     }
 
@@ -1516,5 +3357,56 @@ final class ReferenceAuthoringCalibrationReuseAndExportTests: XCTestCase {
         XCTAssertTrue(text.contains("publish"))
         XCTAssertTrue(text.contains("install"))
         XCTAssertTrue(text.contains("training"))
+    }
+}
+
+
+@MainActor
+final class ReferenceMotionReviewViewportTests: XCTestCase {
+    private func metadata(offset: Double = 4) -> ReferenceTakeMetadata {
+        ReferenceTakeMetadata(referenceTakeID: "motion-review", authoringSessionID: "review", takeNumber: 1,
+            operatorName: "Fixture", technique: .tear,
+            pattern: .init(id: "slow-tear", name: "Slow tear", phraseBars: 1), bpm: 60,
+            startingPlatterDirection: .forward, faderVariant: .faderOpenThroughout,
+            mediaTimeOrigin: .init(clickStartHostTime: 100, recordingStartHostTime: 200,
+                recordingStartOffsetSeconds: offset), referenceVersion: 1, crossfaderCalibration: nil,
+            deviceInfo: .init(platform: "fixture", appVersion: "1", controllerName: "fixture",
+                controllerIdentifier: "fixture", audioDeviceName: nil, videoDeviceName: nil, watchLinked: false),
+            recordedAt: Date(timeIntervalSince1970: 0))
+    }
+
+    func testFirstRepetitionMatchesMediaOriginInsteadOfIncludingCountIn() {
+        let boundary = ReferenceRepetitionBoundary(index: 0, startBeat: 4, endBeat: 8)
+        XCTAssertEqual(ReferenceMotionReviewViewport.range(for: boundary, metadata: metadata(), recordedEnd: 20), 0...4)
+        let later = ReferenceRepetitionBoundary(index: 2, startBeat: 12, endBeat: 16)
+        XCTAssertEqual(ReferenceMotionReviewViewport.range(for: later, metadata: metadata(), recordedEnd: 20), 8...12)
+    }
+
+    func testEarlyStopClipsSelectionAndRejectsUnrecordedRepetitions() {
+        XCTAssertEqual(ReferenceMotionReviewViewport.range(for: .init(index: 0, startBeat: 4, endBeat: 8),
+            metadata: metadata(), recordedEnd: 2.5), 0...2.5)
+        XCTAssertNil(ReferenceMotionReviewViewport.range(for: .init(index: 1, startBeat: 8, endBeat: 12),
+            metadata: metadata(), recordedEnd: 2.5))
+        XCTAssertNil(ReferenceMotionReviewViewport.range(for: .init(index: 0, startBeat: 4, endBeat: 8),
+            metadata: metadata(offset: .nan), recordedEnd: 20))
+    }
+
+    func testZoomPreservesWholeTakeDisplacementCoordinates() throws {
+        let full = try XCTUnwrap(ScratchStrokeGeometry.CanonicalFrame(timeRange: 0...20,
+            positionRange: -3...7, coordinateSpace: .normalizedTakeLocalDisplacement, beatsPerMinute: 60))
+        let zoom = ReferenceMotionReviewViewport.frame(full, selectedRange: 8...12, zoomed: true)
+        XCTAssertEqual(zoom.timeRange, 8...12)
+        XCTAssertEqual(zoom.positionRange, full.positionRange)
+        XCTAssertEqual(zoom.coordinateSpace, full.coordinateSpace)
+        XCTAssertEqual(zoom.beatsPerMinute, full.beatsPerMinute)
+        XCTAssertEqual(ReferenceMotionReviewViewport.frame(full, selectedRange: 8...12, zoomed: false), full)
+        XCTAssertEqual(ReferenceMotionReviewViewport.frame(full, selectedRange: nil, zoomed: true), full)
+    }
+
+    func testHighlightUsesDisplayedTimeWindowAndClipsItsEdges() {
+        XCTAssertEqual(ReferenceMotionReviewViewport.visibleFractions(8...12, in: 0...20), 0.4...0.6)
+        XCTAssertEqual(ReferenceMotionReviewViewport.visibleFractions(8...12, in: 8...12), 0...1)
+        XCTAssertEqual(ReferenceMotionReviewViewport.visibleFractions(0...4, in: 2...10), 0...0.25)
+        XCTAssertNil(ReferenceMotionReviewViewport.visibleFractions(0...4, in: 8...12))
     }
 }

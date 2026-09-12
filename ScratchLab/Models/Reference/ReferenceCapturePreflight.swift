@@ -94,7 +94,9 @@ struct ReferencePreflightSnapshot: Equatable, Sendable {
     let platterEventCount: Int
     /// Whether the platter has moved recently enough to count as live.
     let platterIsMoving: Bool
-    /// Program audio input peak, 0…1. `nil` when no audio device is selected.
+    /// Program audio input peak, 0…1, from the attached input receiving samples.
+    /// Zero is valid silence; `nil` means the selected input is unavailable or
+    /// is not delivering audio samples.
     let audioInputPeakLevel: Double?
     let audioDeviceName: String?
     let watchIsReachable: Bool
@@ -260,7 +262,7 @@ enum ReferenceCapturePreflight {
     /// no controller, no crossfader traffic, no calibration for the observed
     /// address, a calibration measured on a different address, no platter
     /// traffic, a dead audio input, and no active camera. The Watch is
-    /// advisory — a reference take is valid without it.
+    /// advisory for diagnostic recording; canonical approval still requires it.
     static func evaluate(
         snapshot: ReferencePreflightSnapshot,
         technique: ReferenceTechnique,
@@ -353,7 +355,9 @@ enum ReferenceCapturePreflight {
                 )
             )
             let gate = snapshot.crossfaderGateState(hysteresis: hysteresis)
-            let gateIsBlocking = expectation.requiresContinuouslyOpenFader && gate != .open
+            // Starting position does not describe the upcoming performance.
+            // The finalized take still has to satisfy its fader expectation.
+            let needsOpenFaderReminder = expectation.requiresContinuouslyOpenFader && gate != .open
             checks.append(
                 ReferencePreflightCheck(
                     id: "crossfaderState",
@@ -362,7 +366,7 @@ enum ReferenceCapturePreflight {
                         ?? "Unknown — calibrate the crossfader.",
                     status: gate == nil
                         ? .blocking
-                        : (gateIsBlocking ? .blocking : .satisfied)
+                        : (needsOpenFaderReminder ? .advisory : .satisfied)
                 )
             )
         } else {
@@ -430,14 +434,16 @@ enum ReferenceCapturePreflight {
         )
 
         // Audio input
-        if let peak = snapshot.audioInputPeakLevel {
+        if let peak = snapshot.audioInputPeakLevel, peak.isFinite, (0...1).contains(peak) {
             let deviceLabel = snapshot.audioDeviceName ?? "Audio input"
             checks.append(
                 ReferencePreflightCheck(
                     id: "audioInput",
                     title: "Audio input",
-                    detail: String(format: "%@ · peak %.4f", deviceLabel, peak),
-                    status: peak > minimumAudioInputPeak ? .satisfied : .blocking
+                    detail: peak > minimumAudioInputPeak
+                        ? String(format: "%@ · input level %.0f%%", deviceLabel, peak * 100)
+                        : "\(deviceLabel) · receiving quiet audio. Recording can start; check the sound in review.",
+                    status: peak > minimumAudioInputPeak ? .satisfied : .advisory
                 )
             )
         } else {
@@ -445,7 +451,7 @@ enum ReferenceCapturePreflight {
                 ReferencePreflightCheck(
                     id: "audioInput",
                     title: "Audio input",
-                    detail: "No audio input selected.",
+                    detail: "Audio input is unavailable or not delivering valid samples. Check the selected input.",
                     status: .blocking
                 )
             )
@@ -475,24 +481,16 @@ enum ReferenceCapturePreflight {
             )
         }
 
-        // Watch — BLOCKING.
-        //
-        // Was advisory while authoring had no Watch wiring at all, which made
-        // the row read as "we noticed, carry on" for a take that could never
-        // carry wrist evidence. Reference authoring now performs the same
-        // paired start handshake Capture does and refuses to start recording
-        // without an acknowledgement, so an unreachable Watch is a condition
-        // the operator must fix before recording, not one to note afterwards.
-        // `ReferenceValidator.watchEvidenceMissing` is the matching gate on
-        // approval.
+        // Watch absence allows diagnostic capture. Canonical approval still
+        // requires linked motion through ReferenceValidator.watchEvidenceMissing.
         checks.append(
             ReferencePreflightCheck(
                 id: "watch",
                 title: "Apple Watch",
                 detail: snapshot.watchIsReachable
                     ? (snapshot.watchMotionIsStreaming ? "Connected, motion streaming." : "Connected, motion idle.")
-                    : "Not connected. A canonical reference take requires linked watch motion.",
-                status: snapshot.watchIsReachable ? .satisfied : .blocking
+                    : "Not connected. Recording can continue without Watch motion; canonical approval requires linked motion.",
+                status: snapshot.watchIsReachable ? .satisfied : .advisory
             )
         )
 

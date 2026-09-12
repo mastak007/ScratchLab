@@ -57,14 +57,14 @@ struct ReferenceAuthoringRecordingHooks {
     /// finalization, so the value read at finalization is a snapshot, not an
     /// outcome. The host polls this until the state is terminal or the wait is
     /// bounded out. `nil` when there is no finalized take to ask about.
-    let refreshWatchEvidence: () -> ReferenceWatchEvidence?
+    let refreshWatchEvidence: () -> ReferenceWatchEvidenceRefresh?
 
     init(
         startRecording: @escaping () -> Result<Void, ReferenceAuthoringError>,
         stopRecording: @escaping () -> Result<ReferenceRecordedTakeArtifacts, ReferenceAuthoringError>,
         currentPreflightSnapshot: @escaping () -> ReferencePreflightSnapshot,
         latestCalibrationObservation: @escaping () -> CrossfaderCalibrationObservation?,
-        refreshWatchEvidence: @escaping () -> ReferenceWatchEvidence? = { nil }
+        refreshWatchEvidence: @escaping () -> ReferenceWatchEvidenceRefresh? = { nil }
     ) {
         self.startRecording = startRecording
         self.stopRecording = stopRecording
@@ -74,15 +74,41 @@ struct ReferenceAuthoringRecordingHooks {
     }
 }
 
+/// One atomic re-read of a finalized sidecar after the Watch transfer has had
+/// time to land. The evidence state and source binding must describe the same
+/// bytes; returning them together prevents export from retaining the earlier
+/// pre-transfer snapshot while displaying the later linked state.
+struct ReferenceWatchEvidenceRefresh: Equatable, Sendable {
+    let evidence: ReferenceWatchEvidence
+    let sourceBinding: ReferenceTearEvidenceSourceBinding?
+    let sourceState: ReferencePerTakeSourceState?
+
+    init(
+        evidence: ReferenceWatchEvidence,
+        sourceBinding: ReferenceTearEvidenceSourceBinding? = nil,
+        sourceState: ReferencePerTakeSourceState? = nil
+    ) {
+        self.evidence = evidence
+        self.sourceBinding = sourceBinding
+        self.sourceState = sourceState
+    }
+}
+
 /// What the host measured after stopping a draft take. Everything a
 /// `ReferenceValidator` needs, already measured — the session never reads a
 /// file itself.
 struct ReferenceRecordedTakeArtifacts: Equatable, Sendable {
+    let tearEvidenceSourceBinding: ReferenceTearEvidenceSourceBinding?
+    let rawSidecarURL: URL?
     let audio: ReferenceArtifactMeasurement
     let video: ReferenceArtifactMeasurement?
     let sidecar: ReferenceArtifactMeasurement
     let actualMediaFileName: String?
     let crossfaderRawSamples: [CrossfaderPositionSample]
+    /// Every mixer packet preserved by the finalized sidecar. Package export
+    /// writes this stream verbatim; derived fader/platter documents remain
+    /// separate artifacts.
+    let rawMixerMIDIEvents: [CaptureCore.RawMixerMIDIEvent]
     let observedCrossfaderAddress: CrossfaderMIDIAddress?
     let platterMovementEventCount: Int
     /// The recorded platter movement events themselves. Handed through
@@ -112,6 +138,10 @@ struct ReferenceRecordedTakeArtifacts: Equatable, Sendable {
     /// motion file is often still transferring, which is neither "linked" nor
     /// "missing". See `ReferenceWatchEvidence`.
     let watchEvidence: ReferenceWatchEvidence
+    /// Immutable timing observed from the existing capture clock and files.
+    let witnessedTiming: ReferenceWitnessedTiming?
+    let mediaTimeOrigin: ReferenceMediaTimeOrigin?
+    let sourceState: ReferencePerTakeSourceState?
 
     init(
         audio: ReferenceArtifactMeasurement,
@@ -119,6 +149,7 @@ struct ReferenceRecordedTakeArtifacts: Equatable, Sendable {
         sidecar: ReferenceArtifactMeasurement,
         actualMediaFileName: String?,
         crossfaderRawSamples: [CrossfaderPositionSample],
+        rawMixerMIDIEvents: [CaptureCore.RawMixerMIDIEvent] = [],
         observedCrossfaderAddress: CrossfaderMIDIAddress?,
         platterMovementEventCount: Int,
         recordedAt: Date,
@@ -129,13 +160,24 @@ struct ReferenceRecordedTakeArtifacts: Equatable, Sendable {
         platterMovementEvents: [CaptureCore.DetectedNotationRecordMovementEvent] = [],
         platterEvidenceIntervals: [CaptureCore.PlatterEvidenceInterval] = [],
         crossfaderTakeStartState: CaptureCore.CrossfaderTakeStartState? = nil,
-        crossfaderTakeStartCorrelation: ReferenceCrossfaderTakeStart.Correlation? = nil
+        crossfaderTakeStartCorrelation: ReferenceCrossfaderTakeStart.Correlation? = nil,
+        tearEvidenceSourceBinding: ReferenceTearEvidenceSourceBinding? = nil,
+        rawSidecarURL: URL? = nil,
+        witnessedTiming: ReferenceWitnessedTiming? = nil,
+        mediaTimeOrigin: ReferenceMediaTimeOrigin? = nil,
+        sourceState: ReferencePerTakeSourceState? = nil
     ) {
+        self.tearEvidenceSourceBinding = tearEvidenceSourceBinding
+        self.rawSidecarURL = rawSidecarURL
+        self.witnessedTiming = witnessedTiming
+        self.mediaTimeOrigin = mediaTimeOrigin
+        self.sourceState = sourceState
         self.audio = audio
         self.video = video
         self.sidecar = sidecar
         self.actualMediaFileName = actualMediaFileName
         self.crossfaderRawSamples = crossfaderRawSamples
+        self.rawMixerMIDIEvents = rawMixerMIDIEvents
         self.observedCrossfaderAddress = observedCrossfaderAddress
         self.platterMovementEventCount = platterMovementEventCount
         self.platterMovementEvents = platterMovementEvents
@@ -301,11 +343,34 @@ struct ReferenceAuthoringSession: Equatable, Sendable {
     var selectedFaderVariant: ReferenceFaderVariant?
     var selectedHandedness: CaptureSessionHandedness = .right
     var notes: String = ""
+    /// Exact beat selected in Setup. Never inferred from a filename or BPM.
+    private(set) var selectedBeatSpec: ReferenceBeatSpecBinding?
+    /// Procedural backing selected before the first take, persisted through
+    /// the routine session configuration in every sidecar and raw export.
+    private(set) var selectedBeatEngineMode: BeatEngineMode = .boomBapTrainer
+    private(set) var selectedCapturePurpose: ReferenceCapturePurpose = .canonicalReference
+    /// Minted once before the first Record and retained through Next take.
+    private(set) var captureIntent: ReferenceCaptureIntent?
+    /// Each explicitly chosen new scratch gets a distinct immutable intent,
+    /// while take numbering and the retained history span the whole session.
+    private var setupSequence = 1
 
     var calibrationSweep: CrossfaderCalibrationSweep?
     var confirmedCalibration: CrossfaderCalibration?
     /// How `confirmedCalibration` was obtained. `nil` whenever there is none.
     private(set) var confirmedCalibrationSource: ReferenceCalibrationSource?
+    /// The rig orientation requested by Setup, including a reuse attempt made
+    /// before its first crossfader packet arrived.
+    private var requestedCalibrationOpenEnd: CrossfaderOpenEnd?
+    private var requestedCalibrationActiveDeck: CrossfaderActiveDeck?
+    /// Frozen only on a successful start. Later polling/calibration changes
+    /// can never reinterpret the take that is already recording.
+    private struct RecordingFaderContext: Equatable, Sendable {
+        let calibration: CrossfaderCalibration?
+        let controllerIdentifier: String?
+        let controllerName: String?
+    }
+    private var recordingFaderContext: RecordingFaderContext?
     /// Highest `observationSequence` already fed into the sweep. Everything at
     /// or below it is a re-read of a message the sweep has already counted, so
     /// it may keep the settle counter moving but must never count as proof the
@@ -347,6 +412,7 @@ struct ReferenceAuthoringSession: Equatable, Sendable {
     // MARK: Step 1–3: configuration
 
     mutating func selectTechnique(_ technique: ReferenceTechnique) {
+        guard captureIntent == nil else { return }
         selectedTechnique = technique
         // A technique change invalidates any variant/pattern choice bound to
         // the previous technique's assumptions — the operator must reconfirm
@@ -355,6 +421,7 @@ struct ReferenceAuthoringSession: Equatable, Sendable {
     }
 
     mutating func selectPattern(_ pattern: ReferencePatternIdentity, bpm: Int) {
+        guard captureIntent == nil else { return }
         selectedPattern = pattern
         selectedBPM = bpm
     }
@@ -364,9 +431,82 @@ struct ReferenceAuthoringSession: Equatable, Sendable {
         faderVariant: ReferenceFaderVariant,
         handedness: CaptureSessionHandedness
     ) {
+        guard captureIntent == nil else { return }
         selectedStartingDirection = startingDirection
         selectedFaderVariant = faderVariant
         selectedHandedness = handedness
+    }
+
+    mutating func bindBeatSpec(_ beatSpec: ReferenceBeatSpecBinding?) {
+        guard captureIntent == nil else { return }
+        selectedBeatSpec = beatSpec
+    }
+
+    mutating func selectBeatEngineMode(_ mode: BeatEngineMode) {
+        guard captureIntent == nil, mode != .silent else { return }
+        selectedBeatEngineMode = mode
+    }
+
+    mutating func selectCapturePurpose(_ purpose: ReferenceCapturePurpose) {
+        guard captureIntent == nil else { return }
+        selectedCapturePurpose = purpose
+        if purpose == .movementCheck { selectedBeatSpec = nil }
+    }
+
+    /// Freeze validated Setup before the bridge reserves media/Watch identity.
+    /// Repeated calls return the same value and verify mutable form state has
+    /// not drifted away from it.
+    @discardableResult
+    mutating func prepareCaptureIntentForRecording() throws -> ReferenceCaptureIntent {
+        guard let technique = selectedTechnique,
+              let pattern = selectedPattern,
+              let bpm = selectedBPM,
+              let direction = selectedStartingDirection,
+              let fader = selectedFaderVariant,
+              configurationIsComplete else {
+            throw ReferenceAuthoringError.stepOutOfOrder(expected: "complete Setup", actual: "\(phase)")
+        }
+        let variantID = [
+            technique.id,
+            pattern.id,
+            direction.rawValue,
+            fader.rawValue,
+            selectedHandedness.rawValue,
+        ].joined(separator: ".")
+        let proposed = ReferenceCaptureIntent(
+            id: setupSequence == 1
+                ? "\(authoringSessionID).intent.v1"
+                : "\(authoringSessionID).setup-\(setupSequence).intent.v1",
+            parentTechniqueID: technique.id,
+            variantID: variantID,
+            recipeID: pattern.id,
+            startingPlatterDirection: direction,
+            faderForm: fader,
+            bpm: bpm,
+            beatsPerCycle: pattern.phraseBeats,
+            plan: ReferenceCapturePlan(
+                countInBars: selectedCapturePurpose == .movementCheck ? 0 : ReferenceTakeMetadata.defaultCountInBars,
+                repetitionCount: selectedCapturePurpose == .movementCheck ? 0 : ReferenceTakeMetadata.defaultRepetitionCount,
+                tailBars: selectedCapturePurpose == .movementCheck ? 0 : ReferenceTakeMetadata.defaultTailBars
+            ),
+            beatSpec: selectedCapturePurpose == .movementCheck ? nil : selectedBeatSpec,
+            purpose: selectedCapturePurpose
+        )
+        if let captureIntent {
+            guard captureIntent == proposed else {
+                throw ReferenceAuthoringError.recordingFailed("Setup no longer matches the immutable capture intent.")
+            }
+            return captureIntent
+        }
+        let issues = ReferenceCaptureIntentValidator.issues(
+            intent: proposed,
+            requireBeatSpec: false
+        )
+        guard issues.isEmpty else {
+            throw ReferenceAuthoringError.recordingFailed("Capture intent is invalid: \(issues)")
+        }
+        captureIntent = proposed
+        return proposed
     }
 
     // MARK: Step 4–5: preflight + calibration
@@ -386,6 +526,8 @@ struct ReferenceAuthoringSession: Equatable, Sendable {
         openEnd: CrossfaderOpenEnd,
         activeDeck: CrossfaderActiveDeck
     ) {
+        requestedCalibrationOpenEnd = openEnd
+        requestedCalibrationActiveDeck = activeDeck
         calibrationSweep = CrossfaderCalibrationSweep(
             address: address,
             openEnd: openEnd,
@@ -474,6 +616,8 @@ struct ReferenceAuthoringSession: Equatable, Sendable {
         activeDeck: CrossfaderActiveDeck,
         address: CrossfaderMIDIAddress?
     ) -> ReferenceCalibrationReuseOutcome {
+        requestedCalibrationOpenEnd = openEnd
+        requestedCalibrationActiveDeck = activeDeck
         guard confirmedCalibration == nil else { return .alreadyCalibrated }
         guard calibrationSweep == nil else { return .calibrationInProgress }
         guard let address else { return .noObservedAddress }
@@ -532,6 +676,13 @@ struct ReferenceAuthoringSession: Equatable, Sendable {
         guard configurationIsComplete else {
             return .failure(.stepOutOfOrder(expected: "configuring", actual: "\(phase)"))
         }
+        do {
+            _ = try prepareCaptureIntentForRecording()
+        } catch let error as ReferenceAuthoringError {
+            return .failure(error)
+        } catch {
+            return .failure(.recordingFailed(error.localizedDescription))
+        }
         // Deliberately NOT gated on `confirmedCalibration`.
         //
         // Capture eligibility and canonical-reference eligibility are separate
@@ -552,13 +703,39 @@ struct ReferenceAuthoringSession: Equatable, Sendable {
         guard !preflight.blocksRecording else {
             return .failure(.preflightBlocked(summary: preflight.blockingSummary ?? "Required input missing."))
         }
+        let faderContext = faderContextForRecording(snapshot: snapshot)
         switch hooks.startRecording() {
         case .success:
+            recordingFaderContext = faderContext
+            if let calibration = faderContext.calibration, calibration != confirmedCalibration {
+                confirmedCalibration = calibration
+                confirmedCalibrationSource = .reusedPersisted(calibratedAt: calibration.calibratedAt)
+            }
             phase = .recording
             return .success(())
         case .failure(let error):
             return .failure(error)
         }
+    }
+
+    private func faderContextForRecording(snapshot: ReferencePreflightSnapshot) -> RecordingFaderContext {
+        let openEnd = requestedCalibrationOpenEnd ?? confirmedCalibration?.openEnd
+        let activeDeck = requestedCalibrationActiveDeck ?? confirmedCalibration?.activeDeck
+        let calibration: CrossfaderCalibration?
+        if let candidate = snapshot.calibration,
+           candidate.isUsable,
+           candidate.openEnd == openEnd, candidate.activeDeck == activeDeck,
+           let sourceID = snapshot.controllerIdentifier, !sourceID.isEmpty,
+           let address = snapshot.observedCrossfaderAddress,
+           address.deviceIdentifier == sourceID,
+           candidate.address.matches(deviceIdentifier: sourceID,
+                                     channel: address.channel, controller: address.controller) {
+            calibration = candidate
+        } else {
+            calibration = nil
+        }
+        return RecordingFaderContext(calibration: calibration,
+            controllerIdentifier: snapshot.controllerIdentifier, controllerName: snapshot.controllerName)
     }
 
     /// Stop recording, build evidence, validate it, and move into review.
@@ -582,9 +759,9 @@ struct ReferenceAuthoringSession: Equatable, Sendable {
               let faderVariant = selectedFaderVariant else {
             return .failure(.stepOutOfOrder(expected: "configured", actual: "\(phase)"))
         }
-        // May legitimately be nil — see `beginRecording`. The take records what
-        // it actually had; it never borrows a calibration to look complete.
-        let calibration = confirmedCalibration
+        // May legitimately be nil. Only this take's frozen start context may
+        // supply calibration; a later live reading cannot repair an old take.
+        let faderContext = recordingFaderContext
 
         let artifacts: ReferenceRecordedTakeArtifacts
         switch hooks.stopRecording() {
@@ -593,6 +770,21 @@ struct ReferenceAuthoringSession: Equatable, Sendable {
         case .failure(let error):
             return .failure(error)
         }
+
+        let recordedSourceID = artifacts.crossfaderTakeStartCorrelation?.midiSourceID
+            ?? artifacts.observedCrossfaderAddress?.deviceIdentifier
+        let sourceMatchesStart = recordedSourceID == nil
+            || recordedSourceID == faderContext?.controllerIdentifier
+        let observedAddressMatchesCalibration = artifacts.observedCrossfaderAddress.map { address in
+            faderContext?.calibration?.address.matches(deviceIdentifier: address.deviceIdentifier,
+                channel: address.channel, controller: address.controller) ?? true
+        } ?? true
+        let calibration = sourceMatchesStart && observedAddressMatchesCalibration
+            ? faderContext?.calibration : nil
+        let recordedControllerName = artifacts.observedCrossfaderAddress?.deviceName
+            ?? (sourceMatchesStart ? faderContext?.controllerName : nil)
+        let recordedControllerIdentifier = artifacts.observedCrossfaderAddress?.deviceIdentifier
+            ?? recordedSourceID ?? faderContext?.controllerIdentifier
 
         let takeNumber = takes.count + 1
         let metadata = ReferenceTakeMetadata(
@@ -603,10 +795,17 @@ struct ReferenceAuthoringSession: Equatable, Sendable {
             technique: technique,
             pattern: pattern,
             bpm: bpm,
+            repetitionCount: captureIntent?.plan.repetitionCount ?? ReferenceTakeMetadata.defaultRepetitionCount,
+            countInBars: captureIntent?.plan.countInBars ?? ReferenceTakeMetadata.defaultCountInBars,
+            tailBars: captureIntent?.plan.tailBars ?? ReferenceTakeMetadata.defaultTailBars,
             startingPlatterDirection: direction,
             faderVariant: faderVariant,
             handedness: selectedHandedness,
             notes: notes,
+            captureIntent: captureIntent,
+            witnessedTiming: artifacts.witnessedTiming,
+            mediaTimeOrigin: artifacts.mediaTimeOrigin,
+            sourceState: artifacts.sourceState,
             referenceVersion: takeNumber,
             crossfaderCalibration: calibration,
             deviceInfo: ReferenceDeviceInfo(
@@ -615,10 +814,8 @@ struct ReferenceAuthoringSession: Equatable, Sendable {
                 // Falls back to the address the take actually OBSERVED traffic
                 // on when no calibration is in force, so an uncalibrated take
                 // still names its controller truthfully instead of naming none.
-                controllerName: calibration?.address.deviceName
-                    ?? artifacts.observedCrossfaderAddress?.deviceName ?? "",
-                controllerIdentifier: calibration?.address.deviceIdentifier
-                    ?? artifacts.observedCrossfaderAddress?.deviceIdentifier ?? "",
+                controllerName: calibration?.address.deviceName ?? recordedControllerName ?? "",
+                controllerIdentifier: calibration?.address.deviceIdentifier ?? recordedControllerIdentifier ?? "",
                 audioDeviceName: nil,
                 videoDeviceName: nil,
                 // Kept in step with `evidence.watchEvidence` and set from
@@ -654,7 +851,13 @@ struct ReferenceAuthoringSession: Equatable, Sendable {
                     recordedSamples: artifacts.crossfaderRawSamples,
                     outcome: takeStartOutcome
                 ),
-                calibration: calibration
+                calibration: calibration,
+                response: artifacts.crossfaderTakeStartState?.crossfaderCurveResponse
+                    ?? FaderCurveResponse(
+                        zeroAt: 0,
+                        oneAt: MIDIFaderCurveConstants.sharpScratchCutInWidth,
+                        shape: .linear
+                    )
             )
         }
 
@@ -671,6 +874,7 @@ struct ReferenceAuthoringSession: Equatable, Sendable {
             sidecar: artifacts.sidecar,
             actualMediaFileName: artifacts.actualMediaFileName,
             crossfaderRawSamples: artifacts.crossfaderRawSamples,
+            rawMixerMIDIEvents: artifacts.rawMixerMIDIEvents,
             observedCrossfaderAddress: artifacts.observedCrossfaderAddress,
             platterMovementEventCount: artifacts.platterMovementEventCount,
             derivation: derivation,
@@ -690,7 +894,9 @@ struct ReferenceAuthoringSession: Equatable, Sendable {
             // The automatic tear pass runs once, here, from the take's own
             // recorded evidence. It proposes; it approves nothing. See
             // `ReferenceTearSegmentationReview`.
-            tearReview: ReferenceTearSegmentationReviewBuilder.build(for: evidence)
+            tearReview: ReferenceTearSegmentationReviewBuilder.build(for: evidence),
+            tearEvidenceSourceBinding: artifacts.tearEvidenceSourceBinding,
+            rawSidecarURL: artifacts.rawSidecarURL
         )
         takes.append(take)
         let index = takes.count - 1
@@ -737,12 +943,31 @@ struct ReferenceAuthoringSession: Equatable, Sendable {
     /// once matching evidence has landed it is not un-landed by a later poll.
     mutating func updateWatchEvidenceForTakeInReview(
         _ watchEvidence: ReferenceWatchEvidence,
+        refreshedSourceBinding: ReferenceTearEvidenceSourceBinding? = nil,
+        sourceState: ReferencePerTakeSourceState? = nil,
         expectation: ReferenceFaderExpectation? = nil,
         now: Date = Date()
     ) {
         guard case .reviewing(let takeIndex) = phase, takes.indices.contains(takeIndex) else { return }
         guard !takes[takeIndex].evidence.watchEvidence.isLinked || watchEvidence.isLinked else { return }
-        takes[takeIndex].applyWatchEvidence(watchEvidence)
+        guard takes[takeIndex].acceptsWatchEvidence(watchEvidence, sourceState: sourceState) else { return }
+        if case .linked(let identity, _, _) = sourceState, let refreshedSourceBinding {
+            guard refreshedSourceBinding.capturedSessionID == identity.sessionID,
+                  refreshedSourceBinding.capturedTakeID == identity.takeID,
+                  refreshedSourceBinding.capturedTakeNumber == identity.takeNumber else { return }
+            if let existing = takes[takeIndex].tearEvidenceSourceBinding,
+               existing.rawSidecarFileName != refreshedSourceBinding.rawSidecarFileName { return }
+        }
+        if watchEvidence.isLinked,
+           let refreshedSourceBinding,
+           let existing = takes[takeIndex].tearEvidenceSourceBinding,
+           existing.capturedSessionID == refreshedSourceBinding.capturedSessionID,
+           existing.capturedTakeID == refreshedSourceBinding.capturedTakeID,
+           existing.capturedTakeNumber == refreshedSourceBinding.capturedTakeNumber,
+           existing.rawSidecarFileName == refreshedSourceBinding.rawSidecarFileName {
+            takes[takeIndex].tearEvidenceSourceBinding = refreshedSourceBinding
+        }
+        takes[takeIndex].applyWatchEvidence(watchEvidence, sourceState: sourceState)
         revalidateTakeInReview(expectation: expectation, now: now)
     }
 
@@ -926,7 +1151,7 @@ struct ReferenceAuthoringSession: Equatable, Sendable {
     @discardableResult
     mutating func setTearReviewNotes(_ notes: String, now: Date = Date()) -> Bool {
         let correction = tearCorrection(reason: "review_notes", notes: notes, now: now)
-        return mutateTearReview { review in
+        return mutateTearReview(invalidatesProjection: false) { review in
             review.setNotes(notes, correction: correction)
             return true
         }
@@ -945,6 +1170,7 @@ struct ReferenceAuthoringSession: Equatable, Sendable {
     /// `.reviewing` exactly like the repetition-boundary mutators, so a
     /// correction can never be applied to a take that is not in review.
     private mutating func mutateTearReview(
+        invalidatesProjection: Bool = true,
         _ body: (inout ReferenceTearSegmentationReview) -> Bool
     ) -> Bool {
         guard case .reviewing(let takeIndex) = phase, takes.indices.contains(takeIndex) else { return false }
@@ -952,7 +1178,32 @@ struct ReferenceAuthoringSession: Equatable, Sendable {
         let changed = body(&review)
         guard changed else { return false }
         takes[takeIndex].tearReview = review
+        if invalidatesProjection {
+            takes[takeIndex].restoredTearProjection = nil
+            takes[takeIndex].restoredTearPerformedLimitations = nil
+        }
         return true
+    }
+
+    /// Restores evidence only into its already corresponding take. Capture,
+    /// validation, lifecycle and approval fields are deliberately not assigned.
+    mutating func restoreTearEvidence(_ data: Data?) throws -> ReferenceTearEvidenceCodec.ReadResult {
+        guard case .reviewing(let index) = phase, takes.indices.contains(index) else {
+            throw ReferenceAuthoringError.stepOutOfOrder(expected: "reviewing", actual: "\(phase)")
+        }
+        guard let binding = takes[index].tearEvidenceSourceBinding else {
+            if data == nil { return .notAnalysed }
+            throw ReferenceAuthoringError.recordingFailed("This take has no finalized sidecar binding for tear evidence.")
+        }
+        let result = try ReferenceTearEvidenceCodec.decode(
+            data, expectedSource: binding, expectedReferenceTakeID: takes[index].id
+        )
+        if case .restored(let document) = result {
+            takes[index].tearReview = document.review
+            takes[index].restoredTearProjection = document.projection
+            takes[index].restoredTearPerformedLimitations = document.performedLimitations
+        }
+        return result
     }
 
     /// Re-run validation against the take's current boundaries. Call after
@@ -975,6 +1226,11 @@ struct ReferenceAuthoringSession: Equatable, Sendable {
         guard case .reviewing(let takeIndex) = phase, takes.indices.contains(takeIndex) else {
             throw ReferenceAuthoringError.stepOutOfOrder(expected: "reviewing", actual: "\(phase)")
         }
+        // The Watch refresh targets the take in review. Leaving review while
+        // its transfer is pending would strand that evidence and its outcome.
+        if let reason = pendingTakeEvidenceBlockReason(for: takes[takeIndex]) {
+            throw ReferenceAuthoringError.recordingFailed(reason)
+        }
         try takes[takeIndex].transition(to: .rejected)
         takes[takeIndex].evidence.metadata.reviewDecision = ReferenceReviewDecision(
             outcome: .rejected,
@@ -986,9 +1242,104 @@ struct ReferenceAuthoringSession: Equatable, Sendable {
         phase = .readyToRecord
     }
 
-    /// Discard the rejected/current take and go back to recording — "retake".
+    /// Repeat the existing setup, retaining the prior take without changing
+    /// its review decision. Serial callers should use the identity-checked
+    /// overload so an action queued for an older take cannot move a newer one.
     mutating func retake() {
+        guard let takeID = latestRecordedTake?.id else { return }
+        try? retake(afterTakeID: takeID)
+    }
+
+    func retakeBlockReason() -> String? {
+        if let reason = finalizedTakeContinuationBlockReason() { return reason }
+        guard configurationIsComplete else {
+            return "Complete Setup before preparing another take."
+        }
+        return nil
+    }
+
+    mutating func retake(afterTakeID expectedTakeID: String) throws {
+        if let reason = retakeBlockReason() {
+            throw ReferenceAuthoringError.recordingFailed(reason)
+        }
+        try requireLatestTakeIdentity(expectedTakeID)
+        if let captureIntent, !captureIntent.isMovementCheck, captureIntent.beatSpec == nil {
+            // Older raw captures may predate exact beat binding. Prepare only
+            // the next take to bind its assets; the retained take and its
+            // original intent remain unchanged.
+            setupSequence += 1
+            self.captureIntent = nil
+            selectedBeatSpec = nil
+        }
         phase = .readyToRecord
+    }
+
+    func newScratchSetupBlockReason() -> String? {
+        finalizedTakeContinuationBlockReason()
+    }
+
+    /// Return to Setup for another scratch. Finalized takes, their identities,
+    /// calibration and hardware observations remain intact. This allocates no
+    /// take and makes no approval/rejection decision about the previous one.
+    mutating func prepareNewScratchSetup(afterTakeID expectedTakeID: String) throws {
+        if let reason = newScratchSetupBlockReason() {
+            throw ReferenceAuthoringError.recordingFailed(reason)
+        }
+        try requireLatestTakeIdentity(expectedTakeID)
+        setupSequence += 1
+        captureIntent = nil
+        selectedBeatSpec = nil
+        selectedTechnique = nil
+        selectedPattern = nil
+        selectedBPM = nil
+        selectedStartingDirection = nil
+        selectedFaderVariant = nil
+        selectedBeatEngineMode = .boomBapTrainer
+        notes = ""
+        // Preflight depends on the selected technique; retain the hardware
+        // snapshot, but require a fresh evaluation for the next setup.
+        latestPreflight = nil
+        phase = .configuring
+    }
+
+    private func finalizedTakeContinuationBlockReason() -> String? {
+        switch phase {
+        case .recording:
+            return "Wait for the current take to stop and finish finalizing."
+        case .calibrating:
+            return "Finish calibration before changing takes."
+        case .configuring:
+            return "Complete the current setup and record a take first."
+        case .reviewing(let index):
+            guard takes.indices.contains(index), index == takes.count - 1 else {
+                return "Return to the latest finalized take before continuing."
+            }
+        case .readyToRecord, .complete:
+            break
+        }
+        guard let take = latestRecordedTake else {
+            return "No finalized take is available yet."
+        }
+        return pendingTakeEvidenceBlockReason(for: take)
+    }
+
+    private func pendingTakeEvidenceBlockReason(for take: ReferenceAuthoringTake) -> String? {
+        if case .acknowledgedTransferPending = take.evidence.watchEvidence {
+            return "Wait for this take's Apple Watch motion transfer to finish before continuing."
+        }
+        if take.evidence.metadata.sourceState?.isTerminal == false {
+            return "Wait for this take's pending source transfer to finish before continuing."
+        }
+        return nil
+    }
+
+    private func requireLatestTakeIdentity(_ expectedTakeID: String) throws {
+        guard latestRecordedTake?.id == expectedTakeID else {
+            throw ReferenceAuthoringError.stepOutOfOrder(
+                expected: "latest finalized take \(expectedTakeID)",
+                actual: latestRecordedTake?.id ?? "no finalized take"
+            )
+        }
     }
 
     /// Move the take in review from `draft` to `reviewed` — the operator has
@@ -1026,6 +1377,9 @@ struct ReferenceAuthoringSession: Equatable, Sendable {
             return "This session is not reviewing a take."
         }
         let take = takes[takeIndex]
+        if take.evidence.metadata.captureIntent?.isMovementCheck == true {
+            return "Movement checks can be played and saved. Record a reference take to request canonical approval."
+        }
         guard take.evidence.metadata.lifecycleState.canAdvance(to: .reviewed)
             || take.evidence.metadata.lifecycleState == .reviewed else {
             return "This take is \(take.evidence.metadata.lifecycleState.rawValue) and can no longer be approved."
@@ -1065,6 +1419,14 @@ struct ReferenceAuthoringSession: Equatable, Sendable {
     /// Rejected and un-reviewed takes are raw captures too and are retained.
     var latestRecordedTake: ReferenceAuthoringTake? { takes.last }
 
+    /// Whether the completed session can explicitly continue with another
+    /// draft while retaining the approved take. This prepares recording; it
+    /// never starts or reserves the next take.
+    var canPrepareNextTake: Bool {
+        phase == .complete
+            && latestRecordedTake?.evidence.metadata.lifecycleState == .approvedCanonical
+    }
+
     /// Why the latest recorded take cannot be exported as a raw diagnostic
     /// capture right now, or `nil` when it can.
     ///
@@ -1085,6 +1447,9 @@ struct ReferenceAuthoringSession: Equatable, Sendable {
             }
             if let video = evidence.video, video.exists, let readError = video.readError {
                 return "This take's video artifact is not stable yet: \(readError)"
+            }
+            if case .acknowledgedTransferPending = evidence.watchEvidence {
+                return "Apple Watch motion is still transferring. Save Capture will become available when it is linked."
             }
             return nil
         }
@@ -1133,6 +1498,27 @@ struct ReferenceAuthoringSession: Equatable, Sendable {
         phase = .complete
     }
 
+    /// Return a completed session to its existing ready state after the
+    /// operator explicitly chooses to record another take.
+    ///
+    /// The expected ID is captured by the caller before serial dispatch so a
+    /// stale action for an earlier approval cannot advance a later session.
+    mutating func prepareNextTake(afterApprovedTakeID expectedTakeID: String) throws {
+        guard canPrepareNextTake, let approvedTake = latestRecordedTake else {
+            throw ReferenceAuthoringError.stepOutOfOrder(
+                expected: "complete with a latest approved canonical take",
+                actual: "\(phase)"
+            )
+        }
+        guard approvedTake.id == expectedTakeID else {
+            throw ReferenceAuthoringError.stepOutOfOrder(
+                expected: "latest approved take \(expectedTakeID)",
+                actual: "latest approved take \(approvedTake.id)"
+            )
+        }
+        phase = .readyToRecord
+    }
+
     /// Step 10: explicit publish. Only a take already `.approvedCanonical` may
     /// move here — this method builds nothing on disk itself; it hands the
     /// approved take to the caller, which is expected to run
@@ -1158,6 +1544,10 @@ struct ReferenceAuthoringSession: Equatable, Sendable {
 /// One recorded take inside an authoring session, with its live evidence,
 /// advisory auto-detection and latest validation.
 struct ReferenceAuthoringTake: Equatable, Sendable, Identifiable {
+    fileprivate(set) var tearEvidenceSourceBinding: ReferenceTearEvidenceSourceBinding?
+    let rawSidecarURL: URL?
+    fileprivate(set) var restoredTearProjection: ReferenceTearCanonicalProjection?
+    fileprivate(set) var restoredTearPerformedLimitations: [String: [CanonicalTearComparison.UnavailableReason]]?
     fileprivate(set) var evidence: ReferenceTakeEvidence
     /// What automatic detection believed, shown to the operator, never
     /// written into `evidence.metadata.technique`.
@@ -1177,13 +1567,27 @@ struct ReferenceAuthoringTake: Equatable, Sendable, Identifiable {
         evidence: ReferenceTakeEvidence,
         autoDetectedTechnique: ReferenceTechnique?,
         latestValidation: ReferenceValidationReport,
-        tearReview: ReferenceTearSegmentationReview? = nil
+        tearReview: ReferenceTearSegmentationReview? = nil,
+        tearEvidenceSourceBinding: ReferenceTearEvidenceSourceBinding? = nil,
+        rawSidecarURL: URL? = nil
     ) {
+        self.tearEvidenceSourceBinding = tearEvidenceSourceBinding
+        self.rawSidecarURL = rawSidecarURL
         self.evidence = evidence
         self.autoDetectedTechnique = autoDetectedTechnique
         self.latestValidation = latestValidation
         self.tearReview = tearReview
             ?? ReferenceTearSegmentationReviewBuilder.build(for: evidence)
+    }
+
+    var tearProjection: ReferenceTearCanonicalProjection {
+        restoredTearProjection ?? ReferenceTearCanonicalProjectionBuilder.project(tearReview)
+    }
+
+    /// Intrinsic limitations only. Inter-gesture gaps depend on the selected
+    /// phrase and are applied by comparison, never persisted across selections.
+    var tearPerformedLimitations: [String: [CanonicalTearComparison.UnavailableReason]] {
+        restoredTearPerformedLimitations ?? tearReview.requiredIntrinsicComparisonLimitations
     }
 
     /// `true` when auto-detection disagrees with CXL's selected technique.
@@ -1199,8 +1603,71 @@ struct ReferenceAuthoringTake: Equatable, Sendable, Identifiable {
 
     /// The ONLY writer of `watchEvidence` and of the `watchLinked` flag
     /// derived from it, so the two can never disagree.
-    fileprivate mutating func applyWatchEvidence(_ watchEvidence: ReferenceWatchEvidence) {
+    fileprivate func acceptsWatchEvidence(
+        _ watchEvidence: ReferenceWatchEvidence,
+        sourceState: ReferencePerTakeSourceState?
+    ) -> Bool {
+        if case .linked(_, let existingFile, _) = evidence.metadata.sourceState,
+           case .linked(let file) = watchEvidence,
+           existingFile != file { return false }
+        guard let sourceState else { return true }
+        // A verified late file may resolve only the exact pending/linked
+        // capture. An external result cannot resurrect another terminal state.
+        guard case .linked(let incomingIdentity, let incomingFile, let incomingHash) = sourceState,
+              case .linked(let evidenceFile) = watchEvidence,
+              let incomingFile, !incomingFile.isEmpty,
+              incomingFile == evidenceFile else { return false }
+        let currentIdentity: ReferenceTakeSourceIdentity
+        switch evidence.metadata.sourceState {
+        case .waitingForLateTransfer(let identity, _): currentIdentity = identity
+        case .linked(let identity, _, let existingHash):
+            currentIdentity = identity
+            if let existingHash, let incomingHash, existingHash != incomingHash { return false }
+        default: return false
+        }
+        guard incomingIdentity == currentIdentity else { return false }
+        if let binding = tearEvidenceSourceBinding {
+            guard binding.capturedSessionID == incomingIdentity.sessionID,
+                  binding.capturedTakeID == incomingIdentity.takeID,
+                  binding.capturedTakeNumber == incomingIdentity.takeNumber else { return false }
+        }
+        return true
+    }
+
+    fileprivate mutating func applyWatchEvidence(
+        _ watchEvidence: ReferenceWatchEvidence,
+        sourceState: ReferencePerTakeSourceState? = nil
+    ) {
+        guard acceptsWatchEvidence(watchEvidence, sourceState: sourceState) else { return }
         evidence.watchEvidence = watchEvidence
+        if case .linked(let identity, let file, let hash) = sourceState {
+            let retainedHash: String?
+            if case .linked(_, _, let existingHash) = evidence.metadata.sourceState {
+                retainedHash = hash ?? existingHash
+            } else {
+                retainedHash = hash
+            }
+            evidence.metadata.sourceState = .linked(identity: identity, motionFileName: file, sha256: retainedHash)
+        } else if case .waitingForLateTransfer(let identity, _) = evidence.metadata.sourceState {
+            switch watchEvidence {
+            case .linked(let file):
+                evidence.metadata.sourceState = .linked(identity: identity, motionFileName: file, sha256: nil)
+            case .transferFailed(let detail):
+                evidence.metadata.sourceState = detail.localizedCaseInsensitiveContains("timeout")
+                    ? .timedOut(identity: identity)
+                    : .conflict(identity: identity, detail: detail)
+            case .identityMismatch(_, let found):
+                let parts = found.split(separator: "/", maxSplits: 1).map(String.init)
+                evidence.metadata.sourceState = .identityMismatch(
+                    expected: identity,
+                    foundSessionID: parts.first ?? found,
+                    foundTakeID: parts.count > 1 ? parts[1] : "unknown"
+                )
+            case .acknowledgedTransferPending: break
+            case .missing(let state):
+                evidence.metadata.sourceState = .conflict(identity: identity, detail: "source became \(state)")
+            }
+        }
         evidence.metadata.deviceInfo = ReferenceDeviceInfo(
             platform: evidence.metadata.deviceInfo.platform,
             appVersion: evidence.metadata.deviceInfo.appVersion,

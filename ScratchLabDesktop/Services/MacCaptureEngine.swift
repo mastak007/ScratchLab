@@ -15,6 +15,7 @@ private enum ScratchLabDesktopDefaultsKey {
     static let selectedAudioDeviceUniqueID = "scratchlab.mac.selectedAudioDeviceUniqueID"
     static let selectedAudioDeviceWasExplicit = "scratchlab.mac.selectedAudioDeviceWasExplicit"
     static let selectedVideoDeviceUniqueID = "scratchlab.mac.selectedVideoDeviceUniqueID"
+    static let selectedVideoDeviceWasExplicit = "scratchlab.mac.selectedVideoDeviceWasExplicit"
     static let calibrationLocked = "scratchlab.mac.calibrationLocked"
     static let practiceViewEnabled = "scratchlab.mac.practiceViewEnabled"
     static let useDJPerspective = "scratchlab.mac.useDJPerspective"
@@ -25,6 +26,8 @@ private enum ScratchLabDesktopDefaultsKey {
     static let rigHeightScale = "scratchlab.mac.rigHeightScale"
     static let mixerWidthRatio = "scratchlab.mac.mixerWidthRatio"
     static let zoneAdjustmentsData = "scratchlab.mac.zoneAdjustmentsData"
+    static let cxlCameraGuideAdjustmentsData = "scratchlab.mac.cxl.cameraGuideAdjustmentsData"
+    static let cxlCameraGuideLocked = "scratchlab.mac.cxl.cameraGuideLocked"
     static let crossfaderMIDIMapping = "scratchlab.mac.crossfaderMIDIMapping"
     static let selectedMIDIInputSourceID = "scratchlab.mac.selectedMIDIInputSourceID"
 }
@@ -853,6 +856,24 @@ final class RoutineRecordingBoundaryLedger: @unchecked Sendable {
         for token in terminalTokens.prefix(removalCount) where token != activeToken {
             records.removeValue(forKey: token)
         }
+    }
+}
+
+struct ScratchHardwareOutputSelection: Equatable {
+    var uid: String
+    var name: String
+
+    static func resolve(
+        intended: Self?, selectedInputUID: String,
+        availableRaneOutputs: [Self], explicitSelection: Bool
+    ) -> Self? {
+        let selected = availableRaneOutputs.first { $0.uid == selectedInputUID }
+        if let intended {
+            // Discovery/input fallback must not redirect a performance. A new
+            // explicit Rane choice is the only way to replace that intent.
+            return explicitSelection ? selected ?? intended : intended
+        }
+        return selected ?? availableRaneOutputs.first
     }
 }
 
@@ -2831,8 +2852,11 @@ final class MacCaptureEngine: NSObject, ObservableObject {
     /// the MainActor — never mutated from `audioQueue` directly.
     @Published private(set) var playbackPositionSnapshot: ScratchSamplePlaybackController.PlaybackPositionSnapshot?
     @Published private(set) var playbackWaveformSnapshot: ScratchSamplePlaybackController.PlaybackWaveformSnapshot?
+    @Published private(set) var scratchOutputMeterSnapshot: ScratchSamplePlaybackController.ScratchOutputMeterSnapshot?
+    @Published private(set) var scratchOutputRoutingSnapshot: ScratchSamplePlaybackController.OutputRoutingSnapshot?
     private static let playbackPositionPollInterval: TimeInterval = 0.04
     private var playbackPositionPollTimer: DispatchSourceTimer?
+    private var playbackPositionPollGeneration: UInt64 = 0
 
     /// Sample ID armed for DVS-driven playback. Uses the short, continuous
     /// VirtualPlatter Ahhh rather than the pad sample's long silent tail.
@@ -3144,6 +3168,18 @@ final class MacCaptureEngine: NSObject, ObservableObject {
     @Published var selectedVideoDeviceUniqueID: String = UserDefaults.standard.string(forKey: ScratchLabDesktopDefaultsKey.selectedVideoDeviceUniqueID) ?? "" {
         didSet {
             UserDefaults.standard.set(selectedVideoDeviceUniqueID, forKey: ScratchLabDesktopDefaultsKey.selectedVideoDeviceUniqueID)
+            switch pendingVideoSelectionOrigin {
+            case .explicitUserChoice:
+                hasExplicitUserVideoSelection = !selectedVideoDeviceUniqueID.isEmpty
+            case .automatic:
+                if selectedVideoDeviceUniqueID.isEmpty {
+                    hasExplicitUserVideoSelection = false
+                }
+            }
+            UserDefaults.standard.set(
+                hasExplicitUserVideoSelection,
+                forKey: ScratchLabDesktopDefaultsKey.selectedVideoDeviceWasExplicit
+            )
             resetAudioSignalLevel()
             guard oldValue != selectedVideoDeviceUniqueID, isRunning else { return }
             reconfigureSession()
@@ -3164,6 +3200,14 @@ final class MacCaptureEngine: NSObject, ObservableObject {
     @Published var lastScratchDetection: MacScratchDetectionResult?
     @Published var scratchDetectionCount = 0
     @Published var rigLayout: DJRigLayout?
+    /// CXL owns separate manual camera geometry; ordinary Practice calibration
+    /// and its saved adjustments are never overwritten by this route.
+    @Published private(set) var cxlCameraGuideEnabled = false
+    @Published private(set) var cxlCameraGuideLocked = true
+    @Published private var cxlCameraZoneAdjustments: [DJRigZone.Role: ZoneAdjustment] = [:]
+    private let cxlCameraGuideLock = NSLock()
+    private var cxlCameraGuideLayoutStorage: (layout: DJRigLayout, locked: Bool)?
+
     @Published var highlightedZoneRole: DJRigZone.Role = .leftDeck
     @Published var sessionStars = 0
     @Published var calibrationLocked: Bool = UserDefaults.standard.object(forKey: ScratchLabDesktopDefaultsKey.calibrationLocked) as? Bool ?? true {
@@ -3237,9 +3281,14 @@ final class MacCaptureEngine: NSObject, ObservableObject {
     /// written once on `.onEnded`, not on every pointer-move tick.
     var suppressZoneAdjustmentPersistence = false
     @Published private(set) var performerMonitorFrame: PerformerMonitorFrame?
-    @Published var statusMessage = "Requesting camera and microphone access"
+    @Published var statusMessage = "Choose camera and audio inputs, then enable capture."
     @Published private(set) var directCaptureStatus = "Open your DJ app to prepare Direct Capture."
     @Published private(set) var directCaptureDeviceUID: String?
+    /// True only between an explicit input-start request and either a fully
+    /// configured session or a recoverable failure. CXL uses this to lock
+    /// selectors while permission/configuration work is in flight without
+    /// claiming that a camera is already active.
+    @Published private(set) var isCaptureInputStarting = false
     @Published private(set) var isCameraActive = false
     /// True only after the capture session is actually running with the
     /// currently selected camera and audio inputs attached. `isCameraActive`
@@ -3395,6 +3444,83 @@ final class MacCaptureEngine: NSObject, ObservableObject {
 
     var isSelectedAudioInputAvailable: Bool {
         availableAudioDevices.contains(where: { $0.uniqueID == selectedAudioDeviceUniqueID })
+    }
+
+    /// Fresh normalized input activity from the selected, attached capture route.
+    /// A real zero is silent audio; nil is unavailable input or absent samples.
+    var activeCaptureAudioSignalLevel: Float? {
+        guard isRoutineCaptureReady, isSelectedAudioInputAvailable,
+              !activeCaptureAudioDeviceUniqueID.isEmpty,
+              activeCaptureAudioDeviceUniqueID == selectedAudioDeviceUniqueID,
+              hasPublishedAudioLevel, audioLevel.isFinite else { return nil }
+        return min(max(audioLevel, 0), 1)
+    }
+
+    /// Actual ScratchLab post-fader PCM peak, independent of selected hardware
+    /// input activity. Missing callbacks are unavailable; real silence is zero.
+    var activeScratchOutputSignalLevel: Float? {
+        activeScratchOutputSignalLevel(at: CACurrentMediaTime())
+    }
+
+    func activeScratchOutputSignalLevel(at now: TimeInterval) -> Float? {
+        guard isRunning, let snapshot = scratchOutputMeterSnapshot,
+              snapshot.sampleID != nil, let peak = snapshot.peak,
+              peak.isFinite, peak >= 0, let receivedAt = snapshot.receivedAt,
+              receivedAt.isFinite, now.isFinite, now >= receivedAt,
+              now - receivedAt <= ScratchOutputPeakMeter.freshnessInterval else { return nil }
+        return peak
+    }
+
+    var scratchOutputSignalSourceLabel: String {
+        guard let sampleID = scratchOutputMeterSnapshot?.sampleID else { return "ScratchLab output" }
+        let name = sampleID == "ahhh" || sampleID == "dvs_ahhh" ? "AHHH" : sampleID.uppercased()
+        return "ScratchLab \(name) output"
+    }
+
+    func setScratchMacMonitorEnabled(_ enabled: Bool) {
+        guard !isAudioInputSelectionLocked else { return }
+        scratchPlaybackController.setMacMonitorEnabled(enabled)
+    }
+
+    static func scratchOutputRoutingAuditEvent(
+        snapshot: ScratchSamplePlaybackController.OutputRoutingSnapshot,
+        selectedInputUID: String,
+        at timestamp: Date
+    ) throws -> CaptureAuditEvent {
+        let fields: [String: Any] = [
+            "version": 1,
+            "selectedInputUID": selectedInputUID,
+            "observationBoundary": "take_preparation_before_output_tap_armed",
+            "primaryDeviceID": snapshot.primaryDeviceID.map { $0 as Any } ?? NSNull(),
+            "primaryDeviceUID": snapshot.primaryDeviceUID.map { $0 as Any } ?? NSNull(),
+            "primaryDeviceName": snapshot.primaryDeviceName.map { $0 as Any } ?? NSNull(),
+            "outputChannelPair": snapshot.outputChannelPair.map { $0 as Any } ?? NSNull(),
+            "channelMap": snapshot.channelMap.map { $0 as Any } ?? NSNull(),
+            "status": snapshot.status,
+            "error": snapshot.error.map { $0 as Any } ?? NSNull(),
+            "pendingChange": snapshot.pendingChange,
+            "macMonitorEnabled": snapshot.monitorEnabled,
+            "macMonitorStatus": snapshot.monitorStatus,
+            "macMonitorError": snapshot.monitorError.map { $0 as Any } ?? NSNull(),
+            "recordedSignal": "scratchlab_internal_post_software_fader_pre_hardware_mixer",
+            "recordedWAVChannels": "mono_downmix_of_internal_stereo",
+            "meterSignal": "scratchlab_internal_stereo_peak_post_software_fader",
+            "physicalMasterReturnVerified": false,
+            "beatAndCountInRouting": "separate_engine_system_default_output"
+        ]
+        let data = try JSONSerialization.data(withJSONObject: fields, options: [.sortedKeys])
+        return CaptureAuditEvent(timestamp: timestamp, category: "scratch_output_route",
+                                 detail: String(decoding: data, as: UTF8.self))
+    }
+
+    @MainActor
+    func publishScratchOutputMeterSnapshot(_ snapshot: ScratchSamplePlaybackController.ScratchOutputMeterSnapshot) {
+        guard isRunning, snapshot.sampledAt.isFinite else { return }
+        if let previous = scratchOutputMeterSnapshot {
+            guard snapshot.generation >= previous.generation,
+                  snapshot.sampledAt >= previous.sampledAt else { return }
+        }
+        scratchOutputMeterSnapshot = snapshot
     }
 
     var currentAudioSignalLevel: Float {
@@ -3707,6 +3833,13 @@ final class MacCaptureEngine: NSObject, ObservableObject {
 
     private func noteWatchCaptureOwnership(_ identity: TakeIdentity?) {
         watchStopLock.lock()
+        if let identity,
+           dispatchedWatchStopKeys.contains("\(identity.sessionID):\(identity.takeID)") {
+            // A late start reply cannot re-arm a take whose stop was already
+            // dispatched while its handshake was timing out.
+            watchStopLock.unlock()
+            return
+        }
         watchOwnedTakeIdentityStorage = identity
         watchStopLock.unlock()
     }
@@ -3730,11 +3863,15 @@ final class MacCaptureEngine: NSObject, ObservableObject {
     ///   was nothing to stop or a stop was already sent for this take.
     @discardableResult
     func requestWatchStopIfNeeded(reason: CaptureStopReason?) -> TakeIdentity? {
+        guard let identity = watchOwnedTakeIdentity else { return nil }
+        return requestWatchStop(for: identity, reason: reason)
+    }
+
+    /// Cleans up the exact take named by a late start reply without changing
+    /// a newer take's reservation, pending reply or Watch ownership.
+    @discardableResult
+    func requestWatchStop(for identity: TakeIdentity, reason: CaptureStopReason?) -> TakeIdentity? {
         watchStopLock.lock()
-        guard let identity = watchOwnedTakeIdentityStorage else {
-            watchStopLock.unlock()
-            return nil
-        }
         let key = "\(identity.sessionID):\(identity.takeID)"
         guard !dispatchedWatchStopKeys.contains(key) else {
             watchStopLock.unlock()
@@ -3744,7 +3881,10 @@ final class MacCaptureEngine: NSObject, ObservableObject {
         while dispatchedWatchStopKeys.count > Self.maximumRememberedWatchStopKeys {
             dispatchedWatchStopKeys.removeFirst()
         }
-        watchOwnedTakeIdentityStorage = nil
+        if watchOwnedTakeIdentityStorage?.sessionID == identity.sessionID,
+           watchOwnedTakeIdentityStorage?.takeID == identity.takeID {
+            watchOwnedTakeIdentityStorage = nil
+        }
         watchStopLock.unlock()
 
         let requestedAt = Date()
@@ -3801,6 +3941,15 @@ final class MacCaptureEngine: NSObject, ObservableObject {
             )
             if outcome.isDegraded {
                 await MainActor.run {
+                    // A late cleanup belongs to its original take. Keep its
+                    // on-disk diagnostics, but do not replace a newer take's
+                    // current recording status with the old stop's failure.
+                    let currentSessionID = self.pendingRoutineTakeIdentity?.sessionID
+                        ?? self.activeRoutineRecordingSidecar?.sessionID
+                    let currentTakeID = self.pendingRoutineTakeIdentity?.takeID
+                        ?? self.activeRoutineRecordingSidecar?.takeID
+                    guard currentSessionID == identity.sessionID,
+                          currentTakeID == identity.takeID else { return }
                     self.routineRecordingStatus = reply.detail
                         ?? "The Apple Watch did not confirm it stopped recording for this take."
                 }
@@ -3960,12 +4109,105 @@ final class MacCaptureEngine: NSObject, ObservableObject {
         return isPhoneContinuityCamera(device)
     }
 
+    var cameraGuideCalibrationLocked: Bool {
+        cxlCameraGuideEnabled ? cxlCameraGuideLocked || isAudioInputSelectionLocked : calibrationLocked
+    }
+
     var showRigGuides: Bool {
-        !calibrationLocked
+        !cameraGuideCalibrationLocked
+    }
+
+    var cameraGuideNormalizedBounds: CGRect {
+        cxlCameraGuideEnabled ? CGRect(x: 0, y: 0, width: 1, height: 1) : CaptureGuideEditModel.normalizedBounds
+    }
+
+    var cameraGuideCanvasInset: CGFloat {
+        cxlCameraGuideEnabled ? 0 : CaptureGuideEditModel.canvasInset
+    }
+
+    /// The video queue reads one immutable layout for detection, hand ROI and
+    /// classification; the view publishes the same layout after an adjustment.
+    var cxlCameraGuideLayout: DJRigLayout? {
+        cxlCameraGuideLock.lock()
+        defer { cxlCameraGuideLock.unlock() }
+        return cxlCameraGuideLayoutStorage?.layout
+    }
+
+    /// The sidecar keeps the exact visible, adjusted take-start geometry using
+    /// the existing extensible audit trail, without a new shared media schema.
+    func cxlCameraGuideAuditEvent(videoDeviceID: String, at timestamp: Date) throws -> CaptureAuditEvent? {
+        let snapshot = cxlCameraGuideLock.withLock { cxlCameraGuideLayoutStorage }
+        guard let snapshot else { return nil }
+        let fields: [String: Any] = [
+            "version": 1,
+            "videoDeviceID": videoDeviceID,
+            "coordinateSpace": "normalized_camera_unmirrored_bottom_left",
+            "manualEstimate": true,
+            "operatorLocked": snapshot.locked,
+            "geometryFixedDuringTake": true,
+            "zones": snapshot.layout.zones.map { zone -> [String: Any] in
+                ["role": zone.role.rawValue, "x": Double(zone.boundingBox.minX), "y": Double(zone.boundingBox.minY),
+                 "width": Double(zone.boundingBox.width), "height": Double(zone.boundingBox.height)]
+            }
+        ]
+        let data = try JSONSerialization.data(withJSONObject: fields, options: [.sortedKeys])
+        return CaptureAuditEvent(timestamp: timestamp, category: "cxl_camera_guide",
+                                 detail: String(decoding: data, as: UTF8.self))
+    }
+
+    func enableCXLCameraGuide() {
+        guard !cxlCameraGuideEnabled, !isAudioInputSelectionLocked else { return }
+        cxlCameraZoneAdjustments = Self.loadZoneAdjustments(
+            defaults: midiPersistenceDefaults, key: ScratchLabDesktopDefaultsKey.cxlCameraGuideAdjustmentsData
+        )
+        cxlCameraGuideLocked = midiPersistenceDefaults.object(forKey: ScratchLabDesktopDefaultsKey.cxlCameraGuideLocked) as? Bool ?? true
+        cxlCameraGuideEnabled = true
+        publishCXLCameraGuide()
+    }
+
+    func disableCXLCameraGuide() {
+        guard cxlCameraGuideEnabled, !isAudioInputSelectionLocked else { return }
+        cxlCameraGuideEnabled = false
+        cxlCameraGuideLock.lock()
+        cxlCameraGuideLayoutStorage = nil
+        cxlCameraGuideLock.unlock()
+        rigLayout = nil
+        isUsingManualRigGuide = false
+        videoQueue.async { self.resetPublishedVideoState() }
+    }
+
+    func setCXLCameraGuideLocked(_ locked: Bool) {
+        guard cxlCameraGuideEnabled, !isAudioInputSelectionLocked else { return }
+        cxlCameraGuideLocked = locked
+        cxlCameraGuideLock.withLock { cxlCameraGuideLayoutStorage?.locked = locked }
+        midiPersistenceDefaults.set(locked, forKey: ScratchLabDesktopDefaultsKey.cxlCameraGuideLocked)
+    }
+
+    func resetCXLCameraGuideToFullFrame() {
+        guard cxlCameraGuideEnabled, !isAudioInputSelectionLocked else { return }
+        cxlCameraZoneAdjustments = [:]
+        persistCurrentZoneAdjustments()
+        setCXLCameraGuideLocked(false)
+        publishCXLCameraGuide()
+    }
+
+    private func publishCXLCameraGuide() {
+        let guide = DJRigLayout.cxlFullFrameGuide
+        let adjusted = DJRigLayout(zones: guide.zones.map { zone in
+            DJRigZone(role: zone.role, boundingBox: adjustedBoundingBox(
+                zone.boundingBox, using: cxlCameraZoneAdjustments[zone.role] ?? .identity,
+                normalizedBounds: CGRect(x: 0, y: 0, width: 1, height: 1)
+            ))
+        }, confidence: guide.confidence)
+        cxlCameraGuideLock.lock()
+        cxlCameraGuideLayoutStorage = (adjusted, cxlCameraGuideLocked)
+        cxlCameraGuideLock.unlock()
+        rigLayout = adjusted
+        isUsingManualRigGuide = true
     }
 
     func zoneAdjustment(for role: DJRigZone.Role) -> ZoneAdjustment {
-        zoneAdjustments[role] ?? .identity
+        (cxlCameraGuideEnabled ? cxlCameraZoneAdjustments : zoneAdjustments)[role] ?? .identity
     }
 
     func updateZoneAdjustment(for role: DJRigZone.Role, mutate: (inout ZoneAdjustment) -> Void) {
@@ -3986,7 +4228,12 @@ final class MacCaptureEngine: NSObject, ObservableObject {
     /// Persist the current in-memory zone adjustments to UserDefaults.
     /// Call this on drag-end to commit the final position.
     func persistCurrentZoneAdjustments() {
-        Self.persistZoneAdjustments(zoneAdjustments)
+        if cxlCameraGuideEnabled {
+            Self.persistZoneAdjustments(cxlCameraZoneAdjustments, defaults: midiPersistenceDefaults,
+                                        key: ScratchLabDesktopDefaultsKey.cxlCameraGuideAdjustmentsData)
+        } else {
+            Self.persistZoneAdjustments(zoneAdjustments)
+        }
     }
 
     func resetZoneAdjustments() {
@@ -4089,6 +4336,22 @@ final class MacCaptureEngine: NSObject, ObservableObject {
             sessionQueue.async { [self] in
                 guard requestLock.withLock({ generation == request }) else { return }
                 assignSession(layer, attached ? session : nil)
+            }
+        }
+
+        /// CXL maps guides to the captured pixel coordinates, so its preview
+        /// explicitly uses the same unmirrored orientation. Re-check on view
+        /// updates because camera reconfiguration can replace the connection.
+        @MainActor
+        func setVideoMirrored(_ mirrored: Bool) {
+            sessionQueue.async { [self] in
+                guard requestLock.withLock({ requestedAttachment }),
+                      let connection = layer.connection,
+                      connection.isVideoMirroringSupported else { return }
+                if connection.automaticallyAdjustsVideoMirroring {
+                    connection.automaticallyAdjustsVideoMirroring = false
+                }
+                if connection.isVideoMirrored != mirrored { connection.isVideoMirrored = mirrored }
             }
         }
 
@@ -4456,6 +4719,9 @@ final class MacCaptureEngine: NSObject, ObservableObject {
         let identity = activeRoutineRecordingSidecar.map {
             (sessionID: $0.sessionID, takeID: $0.takeID)
         }
+        let curveResponse = currentMIDIDeviceMapping?
+            .control(for: .crossfader)
+            .map { $0.resolvedCurveConfig.resolvedResponse(for: $0) }
         midiCaptureLock.lock()
         let mapping = persistedCrossfaderMapping
         let connectionGeneration = midiConnectionGenerationStorage
@@ -4474,6 +4740,7 @@ final class MacCaptureEngine: NSObject, ObservableObject {
             connectionGeneration: connectionGeneration,
             mapping: mapping,
             observation: observation,
+            curveResponse: curveResponse,
             mediaStartHostTime: mediaStartHostTime
         )
         midiCaptureLock.lock()
@@ -4492,6 +4759,7 @@ final class MacCaptureEngine: NSObject, ObservableObject {
         connectionGeneration: UInt64,
         mapping: CrossfaderCCMapping?,
         observation: LiveCCObservation?,
+        curveResponse: FaderCurveResponse? = nil,
         mediaStartHostTime: CFTimeInterval
     ) -> CaptureCore.CrossfaderTakeStartState {
         let sessionID = sessionID ?? ""
@@ -4543,6 +4811,7 @@ final class MacCaptureEngine: NSObject, ObservableObject {
             rawValue: observation.value,
             calibratedPosition: observation.calibratedPosition,
             calibrationID: observation.calibrationID,
+            crossfaderCurveResponse: curveResponse,
             observationSequence: observation.eventCount,
             observedTakeRelativeTime: observedTakeRelativeTime,
             unknownReason: nil
@@ -4557,6 +4826,21 @@ final class MacCaptureEngine: NSObject, ObservableObject {
             midiCaptureLock.unlock()
         }
         return activeRoutineCrossfaderTakeStartState
+    }
+
+    /// Read-only snapshot for the active take's live notation. The state is
+    /// owned by the current capture window and remains immutable until finalization.
+    private func activeCrossfaderTakeStartStateSnapshot() -> CaptureCore.CrossfaderTakeStartState? {
+        midiCaptureLock.lock()
+        defer { midiCaptureLock.unlock() }
+        guard midiWindowOwnerStorage == .take,
+              let state = activeRoutineCrossfaderTakeStartState,
+              state.isUsableSnapshot,
+              state.takeGeneration != nil,
+              state.midiSourceID == selectedMIDIInputSourceID,
+              state.midiConnectionGeneration == midiConnectionGenerationStorage,
+              state.observedTakeRelativeTime.map({ $0 < 0 }) == true else { return nil }
+        return state
     }
 
     /// Rebases every take-relative clock onto the confirmed media-start epoch
@@ -4822,6 +5106,21 @@ final class MacCaptureEngine: NSObject, ObservableObject {
     private var fixedRigLayout: DJRigLayout?
     private var fixedRigLayoutUsesManualGuide = false
     private let autoRefreshDevicesAfterViewMount: Bool
+    /// Product-level permission boundary. The CXL Release route does not use
+    /// Serato process-tap capture, so workspace launch notifications must not
+    /// create that tap behind its explicit Setup flow.
+    private let allowsSeratoDirectCaptureDiscovery: Bool
+    /// CXL captures the physical rig by default. Keep this separate from
+    /// process-tap permission: an explicit operator selection still wins.
+    private let prefersPhysicalCaptureAudio: Bool
+
+    static var defaultPrefersPhysicalCaptureAudio: Bool {
+#if DEBUG
+        true
+#else
+        false
+#endif
+    }
     /// Keeps hosted XCTest processes from overwriting the real app's selected
     /// controller with synthetic `midi_test_*` identifiers. Production uses
     /// `.standard`; tests get a process-local suite while retaining normal
@@ -4835,13 +5134,16 @@ final class MacCaptureEngine: NSObject, ObservableObject {
     private let audioSignalDecayPollInterval: CFTimeInterval = 0.25
     private var lastReceivedAudioSampleTime: CFTimeInterval = 0
     private var audioSignalDecayTimer: DispatchSourceTimer?
-    private enum AudioSelectionOrigin {
+    private enum DeviceSelectionOrigin {
         case automatic
         case explicitUserChoice
     }
 
-    private var pendingAudioSelectionOrigin: AudioSelectionOrigin = .automatic
+    private var pendingAudioSelectionOrigin: DeviceSelectionOrigin = .automatic
     private var hasExplicitUserAudioSelection = UserDefaults.standard.bool(forKey: ScratchLabDesktopDefaultsKey.selectedAudioDeviceWasExplicit)
+    private var intendedScratchHardwareOutput: ScratchHardwareOutputSelection?
+    private var pendingVideoSelectionOrigin: DeviceSelectionOrigin = .automatic
+    private var hasExplicitUserVideoSelection = UserDefaults.standard.bool(forKey: ScratchLabDesktopDefaultsKey.selectedVideoDeviceWasExplicit)
     private static let routineSidecarDecoder: JSONDecoder = {
         let decoder = JSONDecoder()
         decoder.dateDecodingStrategy = .iso8601
@@ -4852,6 +5154,8 @@ final class MacCaptureEngine: NSObject, ObservableObject {
         let midiSelectionDefaults = Self.makeMIDISelectionDefaults()
         let audioOwnershipMode = ScratchAudioOwnershipMode.load(from: .standard)
         autoRefreshDevicesAfterViewMount = true
+        allowsSeratoDirectCaptureDiscovery = true
+        prefersPhysicalCaptureAudio = Self.defaultPrefersPhysicalCaptureAudio
         self.midiSelectionDefaults = midiSelectionDefaults
         midiPersistenceDefaults = .standard
         scratchPlaybackController = ScratchSamplePlaybackController()
@@ -4866,12 +5170,16 @@ final class MacCaptureEngine: NSObject, ObservableObject {
 
     init(
         autoRefreshDevices: Bool,
+        allowsSeratoDirectCaptureDiscovery: Bool = true,
+        prefersPhysicalCaptureAudio: Bool = MacCaptureEngine.defaultPrefersPhysicalCaptureAudio,
         midiDefaults: UserDefaults? = nil,
         sampleResourceRoot: URL? = Bundle.main.resourceURL
     ) {
         let midiSelectionDefaults = midiDefaults ?? Self.makeMIDISelectionDefaults()
         let audioOwnershipMode = ScratchAudioOwnershipMode.load(from: midiDefaults ?? .standard)
         autoRefreshDevicesAfterViewMount = autoRefreshDevices
+        self.allowsSeratoDirectCaptureDiscovery = allowsSeratoDirectCaptureDiscovery
+        self.prefersPhysicalCaptureAudio = prefersPhysicalCaptureAudio
         self.midiSelectionDefaults = midiSelectionDefaults
         midiPersistenceDefaults = midiDefaults ?? .standard
         scratchPlaybackController = ScratchSamplePlaybackController(
@@ -4994,7 +5302,10 @@ final class MacCaptureEngine: NSObject, ObservableObject {
     }
 
     @MainActor
-    func startDeviceDiscoveryAfterViewMount() async {
+    func startDeviceDiscoveryAfterViewMount(
+        allowSeratoDirectCapture: Bool = true,
+        requiresExplicitVideoSelection: Bool = false
+    ) async {
         guard autoRefreshDevicesAfterViewMount else { return }
         guard !hasStartedDeviceDiscoveryAfterViewMount else { return }
         hasStartedDeviceDiscoveryAfterViewMount = true
@@ -5016,7 +5327,10 @@ final class MacCaptureEngine: NSObject, ObservableObject {
         reloadCrossfaderCalibrations()
 
         rescanRoutineCaptures()
-        refreshDevices()
+        refreshDevices(
+            allowSeratoDirectCapture: allowSeratoDirectCapture,
+            requiresExplicitVideoSelection: requiresExplicitVideoSelection
+        )
     }
 
     deinit {
@@ -5035,31 +5349,51 @@ final class MacCaptureEngine: NSObject, ObservableObject {
     /// Replaces hardware discovery, permission requests and playback polling
     /// in deterministic tests. The real per-engine start guard still runs.
     var liveInputStartupOverride: (() -> Void)?
+    /// Replaces only AVFoundation reconfiguration in deterministic input-change tests.
+    var captureInputReconfigurationOverride: ((String, String) -> Void)?
 #endif
 
-    func start() {
+    func start(
+        allowSeratoDirectCapture: Bool = true,
+        requiresExplicitVideoSelection: Bool = false
+    ) {
         guard !isRunning else { return }
         isRunning = true
-        isCameraActive = true
+        isCaptureInputStarting = true
+        isCameraActive = false
         isRoutineCaptureReady = false
         resetAudioSignalLevel()
 #if DEBUG
         if let liveInputStartupOverride {
+            isCaptureInputStarting = false
             liveInputStartupOverride()
             return
         }
 #endif
-        refreshDevices()
+        refreshDevices(
+            allowSeratoDirectCapture: allowSeratoDirectCapture,
+            requiresExplicitVideoSelection: requiresExplicitVideoSelection
+        )
+        if requiresExplicitVideoSelection && selectedVideoDeviceUniqueID.isEmpty {
+            isRunning = false
+            isCaptureInputStarting = false
+            statusMessage = "Choose a camera before enabling camera and audio."
+            return
+        }
         requestPermissionsAndConfigure()
         startPlaybackPositionPoll()
     }
 
     func stop() {
         isRunning = false
+        playbackPositionPollGeneration &+= 1
         playbackPositionPollTimer?.cancel()
         playbackPositionPollTimer = nil
         playbackPositionSnapshot = nil
         playbackWaveformSnapshot = nil
+        scratchOutputMeterSnapshot = nil
+        scratchOutputRoutingSnapshot = nil
+        isCaptureInputStarting = false
         isCameraActive = false
         isRoutineCaptureReady = false
         activeCaptureAudioDeviceUniqueID = ""
@@ -5175,7 +5509,7 @@ final class MacCaptureEngine: NSObject, ObservableObject {
         bpm: Int? = nil,
         loopDuration: Double? = nil
     ) {
-        let roi = fixedRigLayout.map { layout -> CXLNotationCaptureSession.CXLRect? in
+        let roi = (cxlCameraGuideLayout ?? fixedRigLayout).map { layout -> CXLNotationCaptureSession.CXLRect? in
             let box = layout.unionBox
             return CXLNotationCaptureSession.CXLRect(
                 x: box.origin.x,
@@ -5191,7 +5525,7 @@ final class MacCaptureEngine: NSObject, ObservableObject {
             bpm: bpm,
             loopDuration: loopDuration,
             cameraMode: selectedVideoSourceDescription,
-            calibrationLocked: calibrationLocked,
+            calibrationLocked: cameraGuideCalibrationLocked,
             deckROI: roi,
             appBuildVersion: Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String
         )
@@ -5275,21 +5609,45 @@ final class MacCaptureEngine: NSObject, ObservableObject {
     private func requestPermissionsAndConfigure() {
         requestAccess(for: .video) { [weak self] videoGranted in
             guard let self else { return }
+            guard videoGranted else {
+                Task { @MainActor in
+                    self.capturePermissionRequestFailed(
+                        message: "Grant camera access in System Settings, then try again."
+                    )
+                }
+                return
+            }
             self.requestAccess(for: .audio) { [weak self] audioGranted in
                 guard let self else { return }
-
-                Task { @MainActor in
-                    if !videoGranted || !audioGranted {
-                        self.statusMessage = "Grant camera and microphone access in System Settings"
-                        self.isCameraActive = false
-                    } else {
-                        self.statusMessage = "Configuring capture session"
+                guard audioGranted else {
+                    Task { @MainActor in
+                        self.capturePermissionRequestFailed(
+                            message: "Grant microphone access in System Settings, then try again."
+                        )
                     }
+                    return
                 }
 
+                Task { @MainActor in
+                    self.statusMessage = "Configuring capture session"
+                }
                 self.reconfigureSession()
             }
         }
+    }
+
+    @MainActor
+    private func capturePermissionRequestFailed(message: String) {
+        isRunning = false
+        isCaptureInputStarting = false
+        isCameraActive = false
+        isRoutineCaptureReady = false
+        playbackPositionPollGeneration &+= 1
+        playbackPositionPollTimer?.cancel()
+        playbackPositionPollTimer = nil
+        scratchOutputMeterSnapshot = nil
+        scratchOutputRoutingSnapshot = nil
+        statusMessage = message
     }
 
     private func requestAccess(for mediaType: AVMediaType, completion: @escaping (Bool) -> Void) {
@@ -5323,8 +5681,30 @@ final class MacCaptureEngine: NSObject, ObservableObject {
         directCaptureStatus = "\(seratoDirectCaptureDeviceName) is selected and feeding the analyzer."
     }
 
+    var isAudioInputSelectionLocked: Bool {
+        isCaptureInputStarting || isRoutineRecording || isRoutineFinalizationPending
+            || midiCaptureWindowTicket.owner == .take
+    }
+
+    @MainActor
     func selectAudioInput(uniqueID: String) {
+        guard !isAudioInputSelectionLocked else { return }
+        if isRunning, uniqueID != selectedAudioDeviceUniqueID {
+            // Invalidate preflight before publishing the new selection. The
+            // existing session queue reconnects both inputs; Record must not
+            // see the prior camera readiness while that work is pending.
+            isCaptureInputStarting = true
+            isRoutineCaptureReady = false
+            isCameraActive = false
+        }
         setSelectedAudioDeviceUniqueID(uniqueID, origin: .explicitUserChoice)
+    }
+
+    /// Records that the operator deliberately chose this exact camera. The
+    /// CXL route uses this bit to distinguish a prior silent first-device
+    /// fallback from a camera the operator actually reviewed in Setup.
+    func selectVideoInput(uniqueID: String) {
+        setSelectedVideoDeviceUniqueID(uniqueID, origin: .explicitUserChoice)
     }
 
     func autoSelectCaptureAudioDeviceIfNeeded() {
@@ -5698,11 +6078,16 @@ final class MacCaptureEngine: NSObject, ObservableObject {
         }
     }
 
-    func refreshDevices() {
+    func refreshDevices(
+        allowSeratoDirectCapture: Bool = true,
+        requiresExplicitVideoSelection: Bool = false
+    ) {
         var audioDevices = discoverAudioDevices()
-        refreshSeratoDirectCaptureState(discoveredAudioDevices: audioDevices)
-        if directCaptureRoute == .privateProcessTap {
-            audioDevices = discoverAudioDevices()
+        if allowSeratoDirectCapture && allowsSeratoDirectCaptureDiscovery {
+            refreshSeratoDirectCaptureState(discoveredAudioDevices: audioDevices)
+            if directCaptureRoute == .privateProcessTap {
+                audioDevices = discoverAudioDevices()
+            }
         }
 
         let videoDiscovery = AVCaptureDevice.DiscoverySession(
@@ -5724,8 +6109,15 @@ final class MacCaptureEngine: NSObject, ObservableObject {
         refreshAudioInputSelection(using: audioDevices)
         syncScratchPlaybackOutputRoute(using: audioDevices)
 
-        if !videoDevices.contains(where: { $0.uniqueID == selectedVideoDeviceUniqueID }) {
-            selectedVideoDeviceUniqueID = videoDevices.first?.uniqueID ?? ""
+        let selectedVideoIsAvailable = videoDevices.contains {
+            $0.uniqueID == selectedVideoDeviceUniqueID
+        }
+        if !selectedVideoIsAvailable
+            || (requiresExplicitVideoSelection && !hasExplicitUserVideoSelection) {
+            pendingVideoSelectionOrigin = .automatic
+            selectedVideoDeviceUniqueID = requiresExplicitVideoSelection
+                ? ""
+                : (videoDevices.first?.uniqueID ?? "")
         }
 
         syncDirectCaptureStatus(using: audioDevices)
@@ -5744,6 +6136,11 @@ final class MacCaptureEngine: NSObject, ObservableObject {
     }
 
     @objc private func handleWorkspaceApplicationChange(_ notification: Notification) {
+        // The CXL Release route deliberately leaves direct Serato discovery
+        // disabled. Ignore workspace changes there as well, otherwise this
+        // default refresh can silently restore the first camera after Setup
+        // has required an explicit operator choice.
+        guard allowsSeratoDirectCaptureDiscovery else { return }
         guard let application = notification.userInfo?[NSWorkspace.applicationUserInfoKey] as? NSRunningApplication,
               shouldTrackSeratoApplication(application) else {
             return
@@ -5911,27 +6308,38 @@ final class MacCaptureEngine: NSObject, ObservableObject {
         device.localizedName.localizedCaseInsensitiveContains(seratoVirtualAudioDeviceName)
     }
 
-    private func setSelectedAudioDeviceUniqueID(_ uniqueID: String, origin: AudioSelectionOrigin) {
+    private func setSelectedAudioDeviceUniqueID(_ uniqueID: String, origin: DeviceSelectionOrigin) {
         pendingAudioSelectionOrigin = origin
         selectedAudioDeviceUniqueID = uniqueID
         pendingAudioSelectionOrigin = .automatic
     }
 
+    private func setSelectedVideoDeviceUniqueID(_ uniqueID: String, origin: DeviceSelectionOrigin) {
+        pendingVideoSelectionOrigin = origin
+        selectedVideoDeviceUniqueID = uniqueID
+        pendingVideoSelectionOrigin = .automatic
+    }
+
     /// Standalone scratch audio must leave through the real Rane interface so
     /// the controller's hardware signal meters represent the sound ScratchLab
     /// is producing. Never bind playback to a Serato virtual endpoint. The
-    /// system default remains the fail-safe when no physical Rane is present.
+    /// system default is used only before any Rane has been selected in this
+    /// session. A disconnected intended Rane never falls back automatically.
     private func syncScratchPlaybackOutputRoute(using audioDevices: [AVCaptureDevice]? = nil) {
         let devices = audioDevices ?? availableAudioDevices
-        let selectedRane = devices.first(where: {
-            $0.uniqueID == selectedAudioDeviceUniqueID
-                && Self.isRaneHardwareDeviceName($0.localizedName)
-        })
-        let raneDevice = selectedRane
-            ?? devices.first(where: { Self.isRaneHardwareDeviceName($0.localizedName) })
-
-        guard let raneDevice,
-              let deviceID = Self.audioDeviceID(forUID: raneDevice.uniqueID) else {
+        let available = devices.filter { Self.isRaneHardwareDeviceName($0.localizedName) }
+            .map { ScratchHardwareOutputSelection(uid: $0.uniqueID, name: $0.localizedName) }
+        let explicitSelection: Bool
+        switch pendingAudioSelectionOrigin {
+        case .explicitUserChoice: explicitSelection = true
+        case .automatic: explicitSelection = false
+        }
+        let target = ScratchHardwareOutputSelection.resolve(
+            intended: intendedScratchHardwareOutput, selectedInputUID: selectedAudioDeviceUniqueID,
+            availableRaneOutputs: available, explicitSelection: explicitSelection
+        )
+        intendedScratchHardwareOutput = target
+        guard let target else {
             scratchPlaybackController.setPreferredOutputDevice(
                 deviceID: nil,
                 deviceName: "System Default"
@@ -5940,8 +6348,9 @@ final class MacCaptureEngine: NSObject, ObservableObject {
         }
 
         scratchPlaybackController.setPreferredOutputDevice(
-            deviceID: deviceID,
-            deviceName: raneDevice.localizedName
+            deviceID: Self.audioDeviceID(forUID: target.uid) ?? AudioDeviceID(kAudioObjectUnknown),
+            deviceName: target.name,
+            expectedDeviceUID: target.uid
         )
     }
 
@@ -5969,29 +6378,12 @@ final class MacCaptureEngine: NSObject, ObservableObject {
         let explicitSelectionID = (hasExplicitUserAudioSelection && !currentSelection.isEmpty)
             ? currentSelection
             : nil
-        let decision: AudioSelectionDecision
-#if DEBUG
-        // Batch 12: in Debug builds, prefer the system default audio
-        // input over Serato-like virtual devices.  This lets the
-        // prototype timecode live tap capture from Loopback Audio
-        // (or whatever the user has selected as macOS default input)
-        // instead of silently grabbing Serato Virtual Audio.
-        decision = Self.preferredCaptureAudioDevice(
-            from: availableChoices,
-            explicitSelectionUniqueID: explicitSelectionID,
-            previousSelectionUniqueID: currentSelection.isEmpty ? nil : currentSelection,
-            systemDefaultUniqueID: defaultSystemAudioInputUniqueID(),
-            skipSeratoPriority: true,
-            preferRaneHardware: true
-        )
-#else
-        decision = Self.preferredCaptureAudioDevice(
+        let decision = captureAudioSelectionDecision(
             from: availableChoices,
             explicitSelectionUniqueID: explicitSelectionID,
             previousSelectionUniqueID: currentSelection.isEmpty ? nil : currentSelection,
             systemDefaultUniqueID: defaultSystemAudioInputUniqueID()
         )
-#endif
 
         guard forceReselect || currentSelection != decision.device?.uniqueID else {
             if decision.device == nil, !currentSelection.isEmpty {
@@ -6009,6 +6401,25 @@ final class MacCaptureEngine: NSObject, ObservableObject {
 
         guard needsAutomaticSelection else { return }
         setSelectedAudioDeviceUniqueID(decision.device?.uniqueID ?? "", origin: .automatic)
+    }
+
+    /// The same policy is used by discovery, startup and later refreshes.
+    /// Accepting device identities here keeps the Release CXL route testable
+    /// without depending on connected hardware or changing saved selections.
+    func captureAudioSelectionDecision(
+        from devices: [AudioInputDeviceChoice],
+        explicitSelectionUniqueID: String?,
+        previousSelectionUniqueID: String?,
+        systemDefaultUniqueID: String?
+    ) -> AudioSelectionDecision {
+        Self.preferredCaptureAudioDevice(
+            from: devices,
+            explicitSelectionUniqueID: explicitSelectionUniqueID,
+            previousSelectionUniqueID: previousSelectionUniqueID,
+            systemDefaultUniqueID: systemDefaultUniqueID,
+            skipSeratoPriority: prefersPhysicalCaptureAudio,
+            preferRaneHardware: prefersPhysicalCaptureAudio
+        )
     }
 
     private func defaultSystemAudioInputUniqueID() -> String? {
@@ -6918,6 +7329,12 @@ final class MacCaptureEngine: NSObject, ObservableObject {
         let audioDevices = availableAudioDevices
         let videoDevices = availableVideoDevices
 
+#if DEBUG
+        if let captureInputReconfigurationOverride {
+            captureInputReconfigurationOverride(selectedAudioID, selectedVideoID)
+            return
+        }
+#endif
         Task { @MainActor in
             self.isRoutineCaptureReady = false
         }
@@ -6939,9 +7356,6 @@ final class MacCaptureEngine: NSObject, ObservableObject {
                 self.sessionStars = 0
                 self.smoothedHandPoint = nil
                 self.missedHandTrackingFrames = 0
-                let audioName = audioDevices.first(where: { $0.uniqueID == selectedAudioID })?.localizedName ?? "No audio input"
-                let videoName = videoDevices.first(where: { $0.uniqueID == selectedVideoID })?.localizedName ?? "No camera"
-                self.statusMessage = "Connected to \(audioName) and \(videoName)."
             }
         }
     }
@@ -6976,10 +7390,12 @@ final class MacCaptureEngine: NSObject, ObservableObject {
             captureSession.removeOutput(output)
         }
 
+        var attachedVideoUniqueID = ""
         if let videoDevice = videoDevices.first(where: { $0.uniqueID == selectedVideoID }),
            let videoInput = try? AVCaptureDeviceInput(device: videoDevice),
            captureSession.canAddInput(videoInput) {
             captureSession.addInput(videoInput)
+            attachedVideoUniqueID = videoDevice.uniqueID
         }
 
         var attachedAudioUniqueID = ""
@@ -7024,16 +7440,27 @@ final class MacCaptureEngine: NSObject, ObservableObject {
         // must not block those setups (canonical consolidation, Phase 2,
         // 2026-08-22: `isRoutineCaptureReady` must not require a camera that
         // was never requested).
+        let selectedVideoIsAttached = !selectedVideoID.isEmpty
+            && captureSessionHasInput(matching: selectedVideoID, mediaType: .video)
         let sessionIsReady = captureSession.isRunning
-            && (selectedVideoID.isEmpty || captureSessionHasInput(matching: selectedVideoID, mediaType: .video))
+            && (selectedVideoID.isEmpty || selectedVideoIsAttached)
             && captureSessionHasInput(matching: selectedAudioID, mediaType: .audio)
 #if ENABLE_TIMECODE_LIVE_TAP
         refreshLowLatencyTimecodeInput()
 #endif
+        if !sessionIsReady, captureSession.isRunning {
+            captureSession.stopRunning()
+        }
         Task { @MainActor in
-            self.isCameraActive = self.captureSession.isRunning
-            self.isRoutineCaptureReady = sessionIsReady
-            self.activeCaptureAudioDeviceUniqueID = attachedAudioUniqueID
+            self.captureInputConfigurationDidFinish(
+                selectedAudioID: selectedAudioID,
+                selectedVideoID: selectedVideoID,
+                sessionIsReady: sessionIsReady,
+                selectedVideoIsAttached: selectedVideoIsAttached,
+                attachedAudioUniqueID: attachedAudioUniqueID,
+                audioName: audioDevices.first(where: { $0.uniqueID == selectedAudioID })?.localizedName ?? "No audio input",
+                videoName: videoDevices.first(where: { $0.uniqueID == attachedVideoUniqueID })?.localizedName ?? "No camera"
+            )
 
 #if DEBUG && ENABLE_TIMECODE_LIVE_TAP
             let inputs = self.captureSession.inputs.compactMap { input -> String? in
@@ -7047,6 +7474,29 @@ final class MacCaptureEngine: NSObject, ObservableObject {
                 "device=\(self.selectedAudioDeviceName) uid=\(attachedAudioUniqueID.isEmpty ? "(empty)" : attachedAudioUniqueID) inputs=[\(inputsSummary)]"
 #endif
         }
+    }
+
+    @MainActor
+    func captureInputConfigurationDidFinish(
+        selectedAudioID: String,
+        selectedVideoID: String,
+        sessionIsReady: Bool,
+        selectedVideoIsAttached: Bool,
+        attachedAudioUniqueID: String,
+        audioName: String,
+        videoName: String
+    ) {
+        // An older queued route must never advertise readiness for a newer choice.
+        guard selectedAudioID == selectedAudioDeviceUniqueID,
+              selectedVideoID == selectedVideoDeviceUniqueID else { return }
+        isRunning = sessionIsReady
+        isCaptureInputStarting = false
+        isCameraActive = sessionIsReady && selectedVideoIsAttached
+        isRoutineCaptureReady = sessionIsReady
+        activeCaptureAudioDeviceUniqueID = attachedAudioUniqueID
+        statusMessage = sessionIsReady
+            ? "Connected to \(audioName) and \(videoName)."
+            : "Could not activate the selected camera and audio. Check the connections and try again."
     }
 
     private func captureSessionHasInput(matching uniqueID: String, mediaType: AVMediaType) -> Bool {
@@ -7088,7 +7538,7 @@ final class MacCaptureEngine: NSObject, ObservableObject {
 
         let videoDeviceName = videoDevices.first(where: { $0.uniqueID == selectedVideoID })?.localizedName ?? "Unknown video input"
         let audioDeviceName = audioDevices.first(where: { $0.uniqueID == selectedAudioID })?.localizedName ?? "Unknown audio input"
-        let sidecar = CaptureCore.LocalRecordingSidecar.recording(
+        var sidecar = CaptureCore.LocalRecordingSidecar.recording(
             sessionID: sessionID,
             sessionConfig: recordingSessionConfig,
             takeIdentity: takeIdentity,
@@ -7104,6 +7554,14 @@ final class MacCaptureEngine: NSObject, ObservableObject {
             captureTiming: captureTiming,
             startedAt: startedAt
         )
+        if let cameraGuide = try cxlCameraGuideAuditEvent(videoDeviceID: selectedVideoID, at: startedAt) {
+            sidecar.auditTrail.append(cameraGuide)
+        }
+        sidecar.auditTrail.append(try Self.scratchOutputRoutingAuditEvent(
+            snapshot: scratchPlaybackController.outputRoutingSnapshot(),
+            selectedInputUID: selectedAudioID,
+            at: startedAt
+        ))
         let syncedSidecar = pendingWatchReply.map { sidecar.withWatchSync($0) } ?? sidecar
         pendingRoutineTakeIdentity = nil
         pendingWatchReply = nil
@@ -7740,14 +8198,24 @@ final class MacCaptureEngine: NSObject, ObservableObject {
         activeRoutineMovementDebugSession?.framesReceived += 1
         #endif
 
-        let detectedLayout = fixedRigLayout == nil
-            ? rigLayoutDetector.detectLayout(in: pixelBuffer, useLockedCadence: calibrationLocked)
-            : nil
-        let resolvedLayout = resolveFixedRigLayout(from: detectedLayout)
-        let calibratedLayout = applyCalibration(to: resolvedLayout)
-        let perspectiveLayout = applyPerspective(to: calibratedLayout)
-        let layout = applyZoneCalibration(to: perspectiveLayout)
-        let usesManualRigGuide = layout != nil && fixedRigLayoutUsesManualGuide
+        let layout: DJRigLayout?
+        let usesManualRigGuide: Bool
+        if let cxlGuide = cxlCameraGuideLayout {
+            // CXL is an explicit manual estimate in displayed left/right order.
+            // Its exact adjusted boxes are also the tracking zones, with no
+            // normal-app perspective remapping or second calibration applied.
+            layout = cxlGuide
+            usesManualRigGuide = true
+        } else {
+            let detectedLayout = fixedRigLayout == nil
+                ? rigLayoutDetector.detectLayout(in: pixelBuffer, useLockedCadence: calibrationLocked)
+                : nil
+            let resolvedLayout = resolveFixedRigLayout(from: detectedLayout)
+            let calibratedLayout = applyCalibration(to: resolvedLayout)
+            let perspectiveLayout = applyPerspective(to: calibratedLayout)
+            layout = applyZoneCalibration(to: perspectiveLayout)
+            usesManualRigGuide = layout != nil && fixedRigLayoutUsesManualGuide
+        }
         publishRigLayoutIfNeeded(layout, usesManualRigGuide: usesManualRigGuide)
         if shouldPublishPerformerMonitorFrame {
             publishPerformerMonitorFrame(from: pixelBuffer, layout: layout, at: now)
@@ -8616,7 +9084,7 @@ final class MacCaptureEngine: NSObject, ObservableObject {
                     audioConfidence: self.recentAudioScratchConfidence,
                     signalSource: cxlSrc,
                     timingErrorMs: nil,
-                    calibrationLocked: self.calibrationLocked
+                    calibrationLocked: self.cameraGuideCalibrationLocked
                 )
                 self.publishCXLState()
             }
@@ -8681,13 +9149,16 @@ final class MacCaptureEngine: NSObject, ObservableObject {
         return proposed.intersection(normalized)
     }
 
-    private func adjustedBoundingBox(_ rect: CGRect, using adjustment: ZoneAdjustment) -> CGRect {
+    private func adjustedBoundingBox(
+        _ rect: CGRect, using adjustment: ZoneAdjustment,
+        normalizedBounds: CGRect = CaptureGuideEditModel.normalizedBounds
+    ) -> CGRect {
         let widthScale = CGFloat(adjustment.widthScale)
         let heightScale = CGFloat(adjustment.heightScale)
         let offsetX = CGFloat(adjustment.offsetX)
         let offsetY = CGFloat(adjustment.offsetY)
 
-        let normalized = CaptureGuideEditModel.normalizedBounds
+        let normalized = normalizedBounds
         let scaledWidth = min(max(rect.width * widthScale, 0.05), normalized.width)
         let scaledHeight = min(max(rect.height * heightScale, 0.05), normalized.height)
         let centerX = rect.midX + offsetX
@@ -8750,6 +9221,17 @@ final class MacCaptureEngine: NSObject, ObservableObject {
     }
 
     private func setZoneAdjustment(_ adjustment: ZoneAdjustment, for role: DJRigZone.Role) {
+        if cxlCameraGuideEnabled {
+            guard !cameraGuideCalibrationLocked,
+                  [adjustment.offsetX, adjustment.offsetY, adjustment.widthScale, adjustment.heightScale].allSatisfy({ $0.isFinite }),
+                  adjustment.widthScale > 0, adjustment.heightScale > 0 else { return }
+            var updated = cxlCameraZoneAdjustments
+            updated[role] = adjustment.isIdentity ? nil : adjustment
+            cxlCameraZoneAdjustments = updated
+            if !suppressZoneAdjustmentPersistence { persistCurrentZoneAdjustments() }
+            publishCXLCameraGuide()
+            return
+        }
         var updated = zoneAdjustments
         if adjustment.isIdentity {
             updated.removeValue(forKey: role)
@@ -8767,14 +9249,19 @@ final class MacCaptureEngine: NSObject, ObservableObject {
         }
     }
 
-    private static func loadZoneAdjustments() -> [DJRigZone.Role: ZoneAdjustment] {
-        guard let data = UserDefaults.standard.data(forKey: ScratchLabDesktopDefaultsKey.zoneAdjustmentsData),
+    private static func loadZoneAdjustments(
+        defaults: UserDefaults = .standard,
+        key: String = ScratchLabDesktopDefaultsKey.zoneAdjustmentsData
+    ) -> [DJRigZone.Role: ZoneAdjustment] {
+        guard let data = defaults.data(forKey: key),
               let storedAdjustments = try? JSONDecoder().decode([StoredZoneAdjustment].self, from: data) else {
             return [:]
         }
 
         return storedAdjustments.reduce(into: [:]) { partial, stored in
-            guard let role = DJRigZone.Role(rawValue: stored.role) else { return }
+            guard let role = DJRigZone.Role(rawValue: stored.role),
+                  [stored.offsetX, stored.offsetY, stored.widthScale, stored.heightScale].allSatisfy({ $0.isFinite }),
+                  stored.widthScale > 0, stored.heightScale > 0 else { return }
             partial[role] = ZoneAdjustment(
                 offsetX: stored.offsetX,
                 offsetY: stored.offsetY,
@@ -8784,7 +9271,11 @@ final class MacCaptureEngine: NSObject, ObservableObject {
         }
     }
 
-    private static func persistZoneAdjustments(_ zoneAdjustments: [DJRigZone.Role: ZoneAdjustment]) {
+    private static func persistZoneAdjustments(
+        _ zoneAdjustments: [DJRigZone.Role: ZoneAdjustment],
+        defaults: UserDefaults = .standard,
+        key: String = ScratchLabDesktopDefaultsKey.zoneAdjustmentsData
+    ) {
         let storedAdjustments = zoneAdjustments.map { role, adjustment in
             StoredZoneAdjustment(
                 role: role.rawValue,
@@ -8796,7 +9287,7 @@ final class MacCaptureEngine: NSObject, ObservableObject {
         }.sorted { $0.role < $1.role }
 
         if let data = try? JSONEncoder().encode(storedAdjustments) {
-            UserDefaults.standard.set(data, forKey: ScratchLabDesktopDefaultsKey.zoneAdjustmentsData)
+            defaults.set(data, forKey: key)
         }
     }
 
@@ -9006,8 +9497,6 @@ final class MacCaptureEngine: NSObject, ObservableObject {
 
     @MainActor
     func publishAudioSignalLevel(_ measuredLevel: Float?, receivedAt: CFTimeInterval = CACurrentMediaTime()) {
-        lastReceivedAudioSampleTime = receivedAt
-
         guard let measuredLevel, measuredLevel.isFinite else {
             if !hasPublishedAudioLevel {
                 audioLevel = 0
@@ -9015,6 +9504,7 @@ final class MacCaptureEngine: NSObject, ObservableObject {
             return
         }
 
+        lastReceivedAudioSampleTime = receivedAt
         let sanitizedLevel = min(max(measuredLevel, 0), 1)
         let currentLevel = audioLevel.isFinite ? audioLevel : 0
         let candidateLevel = min(max((currentLevel * 0.55) + (sanitizedLevel * 0.45), 0), 1)
@@ -9293,6 +9783,8 @@ final class MacCaptureEngine: NSObject, ObservableObject {
     /// deadlock. Idempotent.
     private func startPlaybackPositionPoll() {
         guard playbackPositionPollTimer == nil else { return }
+        playbackPositionPollGeneration &+= 1
+        let pollGeneration = playbackPositionPollGeneration
         let timer = DispatchSource.makeTimerSource(
             queue: DispatchQueue.global(qos: .userInteractive)
         )
@@ -9304,10 +9796,17 @@ final class MacCaptureEngine: NSObject, ObservableObject {
             guard let self else { return }
             let snapshot = self.scratchPlaybackController.currentPlaybackPositionSnapshot()
             let waveform = self.scratchPlaybackController.currentPlaybackWaveformSnapshot()
+            let meter = self.scratchPlaybackController.currentScratchOutputMeterSnapshot()
+            let routing = self.scratchPlaybackController.outputRoutingSnapshot()
             Task { @MainActor in
+                guard self.isRunning, self.playbackPositionPollGeneration == pollGeneration else { return }
                 self.playbackPositionSnapshot = snapshot
                 if self.playbackWaveformSnapshot != waveform {
                     self.playbackWaveformSnapshot = waveform
+                }
+                self.publishScratchOutputMeterSnapshot(meter)
+                if self.scratchOutputRoutingSnapshot != routing {
+                    self.scratchOutputRoutingSnapshot = routing
                 }
             }
         }
@@ -9710,6 +10209,7 @@ final class MacCaptureEngine: NSObject, ObservableObject {
         midiMappingPersistenceQueue.sync {}
     }
 
+    #if DEBUG
     /// Test-only: counts how many times the coalesced MIDI-monitor publish
     /// block in `recordReceivedMIDICCEvent` has actually executed on main
     /// (not just been enqueued) — used to assert the flood-safety bound.
@@ -9720,6 +10220,7 @@ final class MacCaptureEngine: NSObject, ObservableObject {
     /// main (including stale-generation runs that bailed out without
     /// applying values) — used to assert the flood-safety bound.
     private(set) var testOnly_calibrationObservedPublishCount = 0
+    #endif
 
     // MARK: - New Multi-Action MIDI Learn Methods (Phase 3)
 
@@ -10653,7 +11154,9 @@ final class MacCaptureEngine: NSObject, ObservableObject {
             let observedMax = self.calibrationMaxAccumulator
             self.isCalibrationObservedPublishPending = false
             self.midiCaptureLock.unlock()
+            #if DEBUG
             self.testOnly_calibrationObservedPublishCount += 1
+            #endif
 
             // A stale publication — enqueued before a Cancel, Finish, or a
             // new calibration session started — must never restore or
@@ -11567,23 +12070,30 @@ final class MacCaptureEngine: NSObject, ObservableObject {
     /// as plain closures (not a reference to `self`) so the tracker itself
     /// has no dependency on `MacCaptureEngine` and is independently
     /// testable with synthetic data sources.
-    func makeLivePerformedNotationDataSource() -> LivePerformedNotationDataSource {
-        LivePerformedNotationDataSource(
+    func makeLivePerformedNotationDataSource(
+        includePlaybackLoopContext: Bool = true
+    ) -> LivePerformedNotationDataSource {
+        let playbackLoopContext: () -> PlaybackLoopContext? = includePlaybackLoopContext
+            ? { [weak self] in self?.scratchPlaybackController.currentPlaybackLoopContext() }
+            : { nil }
+        return LivePerformedNotationDataSource(
             selectedMIDISourceName: { [weak self] in self?.selectedMIDIInputSourceName ?? "Not Connected" },
+            selectedMIDISourceIdentifier: { [weak self] in self?.selectedMIDIInputSourceID ?? "" },
             capturedMidiCCEventsSnapshot: { [weak self] in self?.capturedMidiCCEventsSnapshot() ?? [] },
             cameraMovementEventsSnapshot: { [weak self] now in self?.cameraMovementEventsSnapshot(now: now) },
             activeCrossfaderCalibration: { [weak self] in
                 guard let self else { return nil }
                 guard let mapping = self.persistedCrossfaderMappingSnapshot else { return nil }
                 return self.crossfaderCalibration(
-                    forDeviceName: self.selectedMIDIInputSourceName,
+                    forDeviceIdentifier: self.selectedMIDIInputSourceID,
                     channel: mapping.channel,
                     controller: mapping.controller
                 )
             },
-            activePlaybackLoopContext: { [weak self] in
-                self?.scratchPlaybackController.currentPlaybackLoopContext()
-            }
+            activeCrossfaderTakeStartState: { [weak self] in
+                self?.activeCrossfaderTakeStartStateSnapshot()
+            },
+            activePlaybackLoopContext: playbackLoopContext
         )
     }
 
@@ -11603,6 +12113,7 @@ final class MacCaptureEngine: NSObject, ObservableObject {
         // packet.
         let ingressTicket = lockedMIDICaptureWindowTicket()
         let deviceName = midiConnectedSourceName
+        let deviceIdentifier = midiConnectionEndpointIdentityStorage?.sourceID
         let inputConnectionGeneration = midiConnectionGenerationStorage
         midiCaptureLock.unlock()
 
@@ -11655,6 +12166,7 @@ final class MacCaptureEngine: NSObject, ObservableObject {
             MIDIChannelMessageParser.parse(rawBytes) { [self] message in
                 dispatchMIDIChannelVoiceMessage(
                     message,
+                    deviceIdentifier: deviceIdentifier,
                     deviceName: deviceName,
                     ingressTicket: ingressTicket,
                     now: now,
@@ -11708,6 +12220,7 @@ final class MacCaptureEngine: NSObject, ObservableObject {
     /// `MIDIChannelMessageParser`.
     private func dispatchMIDIChannelVoiceMessage(
         _ message: MIDIChannelMessageParser.Message,
+        deviceIdentifier: String?,
         deviceName: String,
         ingressTicket: MIDICaptureWindowTicket,
         now: CFTimeInterval,
@@ -11790,6 +12303,7 @@ final class MacCaptureEngine: NSObject, ObservableObject {
             // Not wired to scratch sample playback until the crossfader
             // feature is designed and approved. No audio-path side effects.
             recordReceivedMIDICCEvent(
+                sourceIdentifier: deviceIdentifier,
                 sourceName: deviceName,
                 channel: channel,
                 controller: controller,
@@ -11952,13 +12466,12 @@ final class MacCaptureEngine: NSObject, ObservableObject {
 
     /// The calibration for one live MIDI address, or `nil`.
     ///
-    /// Matches on device NAME here because that is the only device identity
-    /// the CC read path carries; the calibration was written with the same
-    /// name as its identifier by `ReferenceAuthoringModel`. Channel and CC
-    /// must match exactly - a calibration for the crossfader is never applied
-    /// to the platter's CC.
+    /// Matches the stable selected Core MIDI source identity. Display names
+    /// remain provenance only and may collide or change. Channel and CC must
+    /// also match exactly; a crossfader calibration is never applied to the
+    /// platter's CC.
     func crossfaderCalibration(
-        forDeviceName deviceName: String,
+        forDeviceIdentifier deviceIdentifier: String,
         channel: Int,
         controller: Int
     ) -> CrossfaderCalibration? {
@@ -11967,7 +12480,7 @@ final class MacCaptureEngine: NSObject, ObservableObject {
         midiCaptureLock.unlock()
         return calibrations.first {
             $0.address.matches(
-                deviceIdentifier: deviceName,
+                deviceIdentifier: deviceIdentifier,
                 channel: channel,
                 controller: controller
             )
@@ -12077,6 +12590,7 @@ final class MacCaptureEngine: NSObject, ObservableObject {
     /// earlier in the packet-parsing loop; its result determines
     /// `mappedControl` and `consumedByLearn` before this function ever runs.
     func recordReceivedMIDICCEvent(
+        sourceIdentifier: String? = nil,
         sourceName: String,
         channel: Int,
         controller: Int,
@@ -12095,6 +12609,8 @@ final class MacCaptureEngine: NSObject, ObservableObject {
         midiCaptureLock.lock()
         let effectiveMapping = persistedCrossfaderMapping
         let admissionTicket = ingressTicket ?? lockedMIDICaptureWindowTicket()
+        let effectiveSourceIdentifier = sourceIdentifier
+            ?? midiConnectionEndpointIdentityStorage?.sourceID
         #if DEBUG
         let interleavingHook = testOnly_midiAppendInterleavingHook
         #endif
@@ -12113,7 +12629,7 @@ final class MacCaptureEngine: NSObject, ObservableObject {
         // `normalizedValue`, because assuming the fader spans 0-127 is the
         // defect this replaces.
         let activeCalibration = crossfaderCalibration(
-            forDeviceName: sourceName,
+            forDeviceIdentifier: effectiveSourceIdentifier ?? "",
             channel: channel,
             controller: controller
         )
@@ -12239,7 +12755,9 @@ final class MacCaptureEngine: NSObject, ObservableObject {
                 if self.midiLearnState == .listening, self.midiLearnFeedback != latestSummary {
                     self.midiLearnFeedback = latestSummary
                 }
+                #if DEBUG
                 self.testOnly_midiMonitorPublishCount += 1
+                #endif
             }
         }
 
@@ -12288,6 +12806,7 @@ final class MacCaptureEngine: NSObject, ObservableObject {
         capturedMidiCCEvents.append(CaptureCore.RawMixerMIDIEvent(
             timestamp: timestamp,
             takeRelativeTime: takeRelativeTime,
+            deviceIdentifier: effectiveSourceIdentifier,
             deviceName: sourceName,
             channel: channel,
             controller: controller,

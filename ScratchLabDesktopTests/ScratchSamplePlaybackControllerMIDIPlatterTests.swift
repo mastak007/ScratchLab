@@ -52,6 +52,71 @@ final class ScratchSamplePlaybackControllerMIDIPlatterTests: XCTestCase {
         return (controller, { clock.now = $0 }, { steps.value = $0 })
     }
 
+    private func renderPositionBlock(_ controller: ScratchSamplePlaybackController) {
+        var left = [Float](repeating: 0, count: 64)
+        left.withUnsafeMutableBufferPointer { output in
+            controller.dvsContinuousRenderer.testOnly_render(left: output.baseAddress!, right: nil, frameCount: 64)
+        }
+    }
+
+    func testRenderedCursorRequiresCurrentContinuousOwnerAndPreservesLogicalPosition() throws {
+        let (controller, setNow, setSteps) = try makeController()
+        XCTAssertNil(controller.currentPlaybackPositionSnapshot().renderedFramePosition)
+        setNow(0); setSteps(0)
+        controller.testOnly_midiCoalescingTick()
+        setNow(1.0 / 60); setSteps(40)
+        controller.testOnly_midiCoalescingTick()
+        XCTAssertNil(controller.currentPlaybackPositionSnapshot().renderedFramePosition,
+                     "published movement is not a rendered position")
+        let logical = controller.currentPlaybackPositionSnapshot().unwrappedFramePosition
+        renderPositionBlock(controller)
+        let first = try XCTUnwrap(controller.currentPlaybackPositionSnapshot().renderedFramePosition)
+        XCTAssertEqual(first, controller.dvsContinuousRenderer.testOnly_corePhase - Double(controller.hotCueOnsetFrame), accuracy: 1e-12)
+        renderPositionBlock(controller)
+        XCTAssertNotEqual(first, controller.currentPlaybackPositionSnapshot().renderedFramePosition)
+        XCTAssertEqual(controller.currentPlaybackPositionSnapshot().unwrappedFramePosition, logical,
+                       "read-head telemetry cannot change the logical cue-relative position")
+
+        controller.midiUsesContinuousRenderer = false
+        XCTAssertNil(controller.currentPlaybackPositionSnapshot().renderedFramePosition)
+        controller.midiUsesContinuousRenderer = true
+        renderPositionBlock(controller)
+        XCTAssertNil(controller.currentPlaybackPositionSnapshot().renderedFramePosition,
+                     "re-enabling cannot reuse a previous mode's control receipt")
+        setNow(2.0 / 60); setSteps(80)
+        controller.testOnly_midiCoalescingTick()
+        renderPositionBlock(controller)
+        XCTAssertNotNil(controller.currentPlaybackPositionSnapshot().renderedFramePosition)
+        controller.setDVSOwnership(active: true)
+        controller.waitForAudioQueue()
+        renderPositionBlock(controller)
+        XCTAssertNil(controller.currentPlaybackPositionSnapshot().renderedFramePosition,
+                     "a DVS handoff cannot relabel the previous MIDI cursor")
+    }
+
+    func testRenderedCursorRejectsSameIDReloadAndUnloadWhileDVSOwnsPlayback() throws {
+        let (controller, _, _) = try makeController()
+        controller.setDVSOwnership(active: true)
+        controller.waitForAudioQueue()
+        controller.positionDidChangeContinuous(steps: 0, direction: .forward, segmentWindow: 1.0 / 60)
+        controller.waitForAudioQueue()
+        controller.positionDidChangeContinuous(steps: 40, direction: .forward, segmentWindow: 1.0 / 60)
+        controller.waitForAudioQueue()
+        renderPositionBlock(controller)
+        XCTAssertNotNil(controller.currentPlaybackPositionSnapshot().renderedFramePosition)
+        controller.testOnly_installSyntheticSample(try makeSyntheticLoopBuffer(), sampleID: "synthetic")
+        XCTAssertTrue(controller.testOnly_dvsOwnsPlatterRender)
+        XCTAssertNil(controller.currentPlaybackPositionSnapshot().renderedFramePosition,
+                     "matching the sample name cannot validate an old render table")
+        renderPositionBlock(controller)
+        XCTAssertNotNil(controller.currentPlaybackPositionSnapshot().renderedFramePosition)
+        controller.dvsUsesContinuousRenderer = false
+        XCTAssertNil(controller.currentPlaybackPositionSnapshot().renderedFramePosition)
+        controller.unload()
+        controller.waitForAudioQueue()
+        XCTAssertNil(controller.currentPlaybackPositionSnapshot().renderedFramePosition)
+    }
+
     private final class LoopInput {
         var now = 1.0
         var steps = 0

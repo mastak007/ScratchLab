@@ -11,11 +11,153 @@
 // Nothing here treats any recorded take as valid reference data — these
 // tests only prove the bridge maps and fails correctly.
 
+import AVFoundation
 import CoreMIDI
 import XCTest
 @testable import ScratchLab
 
 final class ReferenceAuthoringCaptureBridgeTests: XCTestCase {
+
+    func testWatchHashUsesExactAssociatedBytesAndRejectsDifferentCaptureIdentity() throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let date = Date(timeIntervalSince1970: 1_788_000_000)
+        let capture = WatchMotionCaptureSession(sessionID: "session-a", takeID: "take-001", commandID: "command",
+            requestedAt: date, acknowledgedAt: date, syncState: .acknowledged, sourceDeviceName: "Fixture",
+            sampleRateHz: 100, startedAt: date, endedAt: date.addingTimeInterval(1),
+            deviceRecordedAtStart: date, deviceRecordedAtEnd: date.addingTimeInterval(1), appVersion: "1",
+            timingMetadata: nil, samples: (0..<10).map { index in
+                WatchMotionSample(elapsedTime: Double(index) / 100, attitudeRoll: 0, attitudePitch: 0,
+                    attitudeYaw: 0, quaternionX: 0, quaternionY: 0, quaternionZ: 0, quaternionW: 1,
+                    gravityX: 0, gravityY: 0, gravityZ: -1, userAccelerationX: 0, userAccelerationY: 0,
+                    userAccelerationZ: 0, rotationRateX: 0, rotationRateY: 0, rotationRateZ: 0)
+            })
+        let bytes = try WatchMotionCaptureCodec.encoder.encode(capture)
+        try bytes.write(to: root.appendingPathComponent("watch.json"))
+        let sidecar = makeSidecar(watchSyncState: .acknowledged, linkedMotionCaptureID: capture.id,
+            linkedMotionFileName: "watch.json")
+        XCTAssertEqual(ReferenceAuthoringCaptureBridge.verifiedWatchData(sidecar: sidecar, takeDirectory: root), bytes)
+        let mismatched = makeSidecar(watchSyncState: .acknowledged, linkedMotionCaptureID: UUID(),
+            linkedMotionFileName: "watch.json")
+        XCTAssertNil(ReferenceAuthoringCaptureBridge.verifiedWatchData(sidecar: mismatched, takeDirectory: root))
+        let wrongTake = makeSidecar(takeID: "take-002", watchSyncState: .acknowledged,
+            linkedMotionCaptureID: capture.id, linkedMotionFileName: "watch.json")
+        XCTAssertNil(ReferenceAuthoringCaptureBridge.verifiedWatchData(sidecar: wrongTake, takeDirectory: root))
+    }
+
+    func testPortableMediaOriginSurvivesForeignHostTimebaseAndLegacyDecode() throws {
+        let timing = CaptureTimingMetadata(clickStartHostTime: 1, recordingStartHostTime: 101,
+            recordingStartOffsetSeconds: 2.5263333333333335)
+        let restored = try JSONDecoder().decode(CaptureTimingMetadata.self, from: JSONEncoder().encode(timing))
+        let origin = try XCTUnwrap(ReferenceAuthoringCaptureBridge.makeMediaTimeOrigin(captureTiming: restored))
+        XCTAssertEqual(origin.recordingStartOffsetSeconds, timing.recordingStartOffsetSeconds)
+        let legacy = try JSONDecoder().decode(CaptureTimingMetadata.self,
+            from: Data(#"{"clickStartHostTime":1,"recordingStartHostTime":101}"#.utf8))
+        XCTAssertNil(legacy.recordingStartOffsetSeconds)
+        for invalid in [-1.0, Double.infinity, Double.nan] {
+            var bad = timing
+            bad.recordingStartOffsetSeconds = invalid
+            XCTAssertThrowsError(try ReferenceAuthoringCaptureBridge.makeMediaTimeOrigin(captureTiming: bad))
+        }
+    }
+
+    func testBoundCapturePlansOnlyRecordedRepetitionsAndTailAndSeparatesNewSetup() throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let beat = try ReferenceBeatAssetStore.prepare(mode: .battleLoop, bpm: 95, rootURL: root)
+        func configuration(id: String) -> ReferenceAuthoringBridgeTakeConfiguration {
+            let intent = ReferenceCaptureIntent(id: id, parentTechniqueID: "tear", variantID: "tear.forward",
+                recipeID: "tear_1bar", startingPlatterDirection: .forward, faderForm: .faderOpenThroughout,
+                bpm: 95, beatsPerCycle: 4,
+                plan: .init(countInBars: 1, repetitionCount: 4, tailBars: 1), beatSpec: beat.binding)
+            return .init(technique: .tear, bpm: 95, beatEngineMode: .battleLoop,
+                captureIntent: intent, preparedBeat: beat)
+        }
+        let first = configuration(id: "setup-one")
+        let firstConfig = first.recordingSessionConfig(existing: nil, now: Date(timeIntervalSince1970: 100))
+        let expectedFrames = Int64((60.0 / 95 * 48_000).rounded()) * 20
+        XCTAssertEqual(try XCTUnwrap(firstConfig.plannedTakeDurationSeconds), Double(expectedFrames) / 48_000,
+            accuracy: 0.00000001)
+        XCTAssertNil(firstConfig.takeDurationSeconds, "A plan is not a measured capture duration.")
+        let retake = first.recordingSessionConfig(existing: firstConfig, now: Date(timeIntervalSince1970: 200))
+        XCTAssertEqual(retake.sessionID, firstConfig.sessionID)
+        XCTAssertEqual(retake.createdAt, firstConfig.createdAt)
+        let second = configuration(id: "setup-two").recordingSessionConfig(existing: firstConfig,
+            now: Date(timeIntervalSince1970: 300))
+        XCTAssertNotEqual(second.sessionID, firstConfig.sessionID)
+        XCTAssertEqual(second.referenceCaptureIntent?.id, "setup-two")
+        XCTAssertEqual(firstConfig.referenceCaptureIntent?.id, "setup-one")
+    }
+
+    func testFinalizedCaptureKeepsVerifiedBeatAfterSourceStoreIsRemoved() throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let store = root.appendingPathComponent("store")
+        let prepared = try ReferenceBeatAssetStore.prepare(mode: .boomBapTrainer, bpm: 95, rootURL: store)
+        let mediaURL = root.appendingPathComponent("capture/take.mov")
+        try ReferenceAuthoringCaptureBridge.preserveBeat(prepared, beside: mediaURL)
+        try FileManager.default.removeItem(at: store)
+        let savedRoot = mediaURL.deletingLastPathComponent().appendingPathComponent("beat_assets")
+        let saved = try ReferenceBeatAssetStore.resolve(binding: prepared.binding, rootURL: savedRoot)
+        XCTAssertEqual(saved.binding, prepared.binding)
+        try ReferenceAuthoringCaptureBridge.preserveBeat(saved, beside: mediaURL)
+        try Data("damaged".utf8).write(to: saved.productionMasterURL)
+        XCTAssertThrowsError(try ReferenceAuthoringCaptureBridge.preserveBeat(saved, beside: mediaURL))
+        XCTAssertEqual(try Data(contentsOf: saved.productionMasterURL), Data("damaged".utf8),
+            "Preservation must report changed evidence, not overwrite it.")
+    }
+
+    func testMediaOriginConvertsCaptureHostTicksAndRejectsMissingOrUnorderedPairs() throws {
+        let clickStart: UInt64 = 1_000
+        let delta = AVAudioTime.hostTime(forSeconds: 4 * 60.0 / 95)
+        let origin = try XCTUnwrap(ReferenceAuthoringCaptureBridge.makeMediaTimeOrigin(
+            captureTiming: .init(clickStartHostTime: clickStart, recordingStartHostTime: clickStart + delta)))
+        XCTAssertEqual(origin.recordingStartOffsetSeconds, AVAudioTime.seconds(forHostTime: delta))
+        XCTAssertEqual(origin.clickStartHostTime, clickStart)
+        XCTAssertEqual(origin.recordingStartHostTime, clickStart + delta)
+        XCTAssertTrue(origin.validationIssues.isEmpty)
+        XCTAssertNil(try ReferenceAuthoringCaptureBridge.makeMediaTimeOrigin(captureTiming: nil))
+        for timing in [
+            CaptureTimingMetadata(clickStartHostTime: nil, recordingStartHostTime: 2),
+            CaptureTimingMetadata(clickStartHostTime: 0, recordingStartHostTime: 2),
+            CaptureTimingMetadata(clickStartHostTime: 2, recordingStartHostTime: 1),
+        ] {
+            XCTAssertThrowsError(try ReferenceAuthoringCaptureBridge.makeMediaTimeOrigin(captureTiming: timing))
+        }
+    }
+
+    func testWitnessedTimingUsesRecordedSampleRateAndPostCountInMediaDuration() throws {
+        let countInFrames = Int64((60.0 / 95 * 48_000).rounded()) * 4
+        let beat = ReferenceBeatSpecBinding(id: "synthetic-95", version: 1, family: "fixture", bpm: 95,
+            feel: .straight, countInFrameCount: countInFrames, loopStartFrame: countInFrames,
+            loopFrameCount: countInFrames * 4, sampleRate: 48_000,
+            productionMasterFileName: "master.wav", productionMasterSHA256: String(repeating: "a", count: 64),
+            sparseAnalysisMixFileName: "analysis.wav", sparseAnalysisMixSHA256: String(repeating: "b", count: 64),
+            availableStemSHA256: [:], rightsState: .procedurallyGeneratedOriginal, provenance: "Synthetic test only")
+        let intent = ReferenceCaptureIntent(id: "fixture", parentTechniqueID: "tear", variantID: "tear_fixture",
+            recipeID: "fixture", startingPlatterDirection: .forward, faderForm: .faderOpenThroughout,
+            bpm: 95, beatsPerCycle: 8, plan: .init(countInBars: 1, repetitionCount: 4, tailBars: 1), beatSpec: beat)
+        let clocks = CaptureTimingMetadata(clickStartHostTime: 1_000,
+            recordingStartHostTime: 1_000 + AVAudioTime.hostTime(forSeconds: Double(countInFrames) / 48_000))
+        let origin = try XCTUnwrap(ReferenceAuthoringCaptureBridge.makeMediaTimeOrigin(captureTiming: clocks))
+        let planned = Double(4 + 4 * 8 + 4) * 60 / 95 - origin.recordingStartOffsetSeconds
+        let frames = Int64((planned * 44_100).rounded())
+        let sidecar = makeSidecar(watchSyncState: .notRequested, linkedMotionCaptureID: nil,
+            captureTiming: clocks, sessionConfig: CaptureSessionConfig(bpm: 95, referenceCaptureIntent: intent))
+        let timing = try XCTUnwrap(ReferenceAuthoringCaptureBridge.makeWitnessedTiming(sidecar: sidecar,
+            audio: .init(fileName: "take.wav", exists: true, byteCount: frames * 8,
+                frameCount: frames, sampleRate: 44_100), videoURL: nil, mediaTimeOrigin: origin))
+        XCTAssertEqual(timing.measuredWAVDurationSeconds, Double(frames) / 44_100)
+        XCTAssertEqual(timing.plannedDurationSeconds, planned, accuracy: 0.0000001)
+        XCTAssertEqual(ReferenceWitnessedTimingValidator.issues(timing, intent: intent, mediaTimeOrigin: origin), [])
+        let mismatch = ReferenceMediaTimeOrigin(clickStartHostTime: origin.clickStartHostTime,
+            recordingStartHostTime: origin.recordingStartHostTime + 1,
+            recordingStartOffsetSeconds: origin.recordingStartOffsetSeconds + 1)
+        let issues = ReferenceWitnessedTimingValidator.issues(timing, intent: intent, mediaTimeOrigin: mismatch)
+        XCTAssertTrue(issues.contains { $0.contains("timestamps do not match") })
+        XCTAssertTrue(issues.contains { $0.contains("planned media duration") })
+    }
 
     private func makeIsolatedEngine() -> MacCaptureEngine {
         let suiteName = "com.machelpnz.scratchlab.tests.reference-bridge.\(UUID().uuidString)"
@@ -25,6 +167,7 @@ final class ReferenceAuthoringCaptureBridgeTests: XCTestCase {
     }
 
     private func makeCrossfaderEvent(
+        deviceIdentifier: String = "midi_rane_one_mk2",
         deviceName: String = "Rane ONE MKII",
         channel: Int = 15,
         controller: Int = 8,
@@ -36,6 +179,7 @@ final class ReferenceAuthoringCaptureBridgeTests: XCTestCase {
         CaptureCore.RawMixerMIDIEvent(
             timestamp: takeRelativeTime,
             takeRelativeTime: takeRelativeTime,
+            deviceIdentifier: deviceIdentifier,
             deviceName: deviceName,
             channel: channel,
             controller: controller,
@@ -136,7 +280,7 @@ final class ReferenceAuthoringCaptureBridgeTests: XCTestCase {
             makeCrossfaderEvent(deviceName: "Rane ONE MKII", channel: 15, controller: 8)
         ]
         let address = ReferenceAuthoringCaptureBridge.observedCrossfaderAddress(from: events)
-        XCTAssertEqual(address?.deviceIdentifier, "Rane ONE MKII")
+        XCTAssertEqual(address?.deviceIdentifier, "midi_rane_one_mk2")
         XCTAssertEqual(address?.channel, 15)
         XCTAssertEqual(address?.controller, 8)
     }
@@ -537,12 +681,8 @@ final class ReferenceAuthoringCaptureBridgeTests: XCTestCase {
 
     // MARK: - Paired Watch start handshake (2026-09-04 hardware-smoke repair)
 
-    /// Reference authoring used to call `engine.startRoutineRecording()`
-    /// directly and never request a Watch capture at all, which is why the
-    /// 2026-09-04 takes carry `watchSyncState: notRequested`. With no relay
-    /// available the start must now be REFUSED, not run without wrist
-    /// evidence.
-    func testStartRecordingIsRefusedWithoutAPairedWatchRelay() {
+    /// Missing optional Watch hardware must not mask a real setup failure.
+    func testStartWithoutWatchStillRequiresPreparedBackingSound() {
         let engine = makeIsolatedEngine()
         let bridge = ReferenceAuthoringCaptureBridge(engine: engine, companionReceiver: nil)
         bridge.setPendingConfiguration(
@@ -566,13 +706,141 @@ final class ReferenceAuthoringCaptureBridgeTests: XCTestCase {
             return XCTFail("Expected a refusal, got \(String(describing: result))")
         }
         XCTAssertTrue(
-            error.errorDescription?.contains("paired Watch relay is not available") ?? false,
+            error.errorDescription?.contains("Prepare the backing sound") ?? false,
             error.errorDescription ?? ""
         )
         XCTAssertNil(
             engine.recordingSessionConfig,
             "The refusal must land before any take configuration is armed on the engine."
         )
+    }
+
+    func testAbsentRelayReturnsUnavailableDiagnosticReplyWithoutStartingHardware() throws {
+        let engine = makeIsolatedEngine()
+        let identity = TakeIdentity(sessionID: "session-a", takeID: "take-001", takeNumber: 1)
+        let outcome = ReferenceAuthoringCaptureBridge.performWatchStartHandshake(
+            engine: engine, receiver: nil, identity: identity, watchWrist: "right",
+            timeout: 1, pollInterval: 0.001, isCancelled: { false }
+        )
+        let reply = try outcome.replyForDiagnosticCapture(identity: identity).get()
+        XCTAssertEqual(reply.syncState, .unavailable)
+        XCTAssertEqual(reply.sessionID, identity.sessionID)
+        XCTAssertEqual(reply.takeID, identity.takeID)
+        XCTAssertNil(reply.acknowledgedAt)
+        XCTAssertNil(engine.watchOwnedTakeIdentity)
+    }
+
+    func testDegradedWatchRepliesKeepExactFailureInPersistedDiagnosticEvidence() throws {
+        let identity = TakeIdentity(sessionID: "session-a", takeID: "take-001", takeNumber: 1)
+        let failed = WatchCaptureControlReply(commandID: "failed-command", sessionID: identity.sessionID,
+            takeID: identity.takeID, syncState: .failed, detail: "Relay could not send start.")
+        let outcomes: [ReferenceAuthoringCaptureBridge.WatchStartHandshakeOutcome] = [
+            .unavailable, .timedOut, .notAcknowledged(failed)
+        ]
+        let expected: [CaptureWatchSyncState] = [.unavailable, .timedOut, .failed]
+        for (outcome, state) in zip(outcomes, expected) {
+            let reply = try outcome.replyForDiagnosticCapture(identity: identity).get()
+            let sidecar = makeSidecar(watchSyncState: .notRequested, linkedMotionCaptureID: nil)
+                .withWatchSync(reply)
+            let restored = try JSONDecoder().decode(CaptureCore.LocalRecordingSidecar.self,
+                from: JSONEncoder().encode(sidecar))
+            XCTAssertEqual(restored.watchSyncState, state)
+            XCTAssertEqual(restored.watchCommandID, reply.commandID)
+            XCTAssertNil(restored.watchAcknowledgedAt)
+            XCTAssertNil(restored.linkedMotionCaptureID)
+            guard case .missing(let syncState) = ReferenceAuthoringCaptureBridge.watchEvidence(
+                in: restored, expectedIdentity: identity
+            ) else { return XCTFail("A degraded start must not claim motion or wait for an acknowledged transfer.") }
+            XCTAssertEqual(syncState, state.rawValue)
+        }
+    }
+
+    func testAcknowledgedWatchReplyAndCommandIdentityArePreserved() throws {
+        let identity = TakeIdentity(sessionID: "session-a", takeID: "take-001", takeNumber: 1)
+        let acknowledged = WatchCaptureControlReply(commandID: "actual-command", sessionID: identity.sessionID,
+            takeID: identity.takeID, syncState: .acknowledged, detail: "Started", acknowledgedAt: Date())
+        XCTAssertEqual(try ReferenceAuthoringCaptureBridge.WatchStartHandshakeOutcome.acknowledged(acknowledged)
+            .replyForDiagnosticCapture(identity: identity).get(), acknowledged)
+    }
+
+    func testMismatchedWatchAcknowledgementCannotApproveAnotherTake() throws {
+        let identity = TakeIdentity(sessionID: "session-a", takeID: "take-001", takeNumber: 1)
+        let stale = WatchCaptureControlReply(commandID: "stale-command", sessionID: "older-session",
+            takeID: "take-002", syncState: .acknowledged, detail: "Started", acknowledgedAt: Date())
+        let reply = try ReferenceAuthoringCaptureBridge.WatchStartHandshakeOutcome.acknowledged(stale)
+            .replyForDiagnosticCapture(identity: identity).get()
+        XCTAssertEqual(reply.syncState, .failed)
+        XCTAssertEqual(reply.sessionID, identity.sessionID)
+        XCTAssertEqual(reply.takeID, identity.takeID)
+        XCTAssertNil(reply.acknowledgedAt)
+    }
+
+    func testExplicitStartCancellationStillRefusesDiagnosticRecording() {
+        let identity = TakeIdentity(sessionID: "session-a", takeID: "take-001", takeNumber: 1)
+        XCTAssertThrowsError(try ReferenceAuthoringCaptureBridge.WatchStartHandshakeOutcome.cancelled
+            .replyForDiagnosticCapture(identity: identity).get())
+    }
+
+    @MainActor
+    func testLateWatchAcknowledgementStopsOnlyOriginalTakeAfterTimeout() {
+        assertLateWatchReplyCleanup(cancelled: false)
+    }
+
+    @MainActor
+    func testLateWatchAcknowledgementStopsOnlyOriginalTakeAfterCancellation() {
+        assertLateWatchReplyCleanup(cancelled: true)
+    }
+
+    @MainActor
+    private func assertLateWatchReplyCleanup(cancelled: Bool) {
+        let engine = makeIsolatedEngine()
+        let original = TakeIdentity(sessionID: "session-a", takeID: "take-001", takeNumber: 1)
+        let newer = TakeIdentity(sessionID: "session-b", takeID: "take-002", takeNumber: 2)
+        let lateReply = WatchCaptureControlReply(commandID: "original-command", sessionID: original.sessionID,
+            takeID: original.takeID, syncState: .acknowledged, detail: "Started", acknowledgedAt: Date())
+        let releaseReply = DispatchSemaphore(value: 0)
+        defer { releaseReply.signal() }
+        let requestStarted = expectation(description: "Watch request entered")
+        let settled = expectation(description: "bounded handshake returned")
+        let stopped = expectation(description: "original Watch take stopped")
+        let requestEntered = DispatchSemaphore(value: 0)
+        engine.watchStopRequestHandler = { identity in
+            XCTAssertEqual(identity.sessionID, original.sessionID)
+            XCTAssertEqual(identity.takeID, original.takeID)
+            stopped.fulfill()
+            return WatchCaptureControlReply(commandID: "stop-original", sessionID: identity.sessionID,
+                takeID: identity.takeID, syncState: .notRequested, detail: "Stopped", stopOutcome: .stopped)
+        }
+        DispatchQueue.global(qos: .userInitiated).async {
+            let outcome = ReferenceAuthoringCaptureBridge.waitForWatchStartReply(
+                engine: engine, identity: original, timeout: 0.1, pollInterval: 0.001,
+                isCancelled: { cancelled && requestEntered.wait(timeout: .now()) == .success }, requestStart: {
+                    requestEntered.signal()
+                    requestStarted.fulfill()
+                    return await withCheckedContinuation { continuation in
+                        DispatchQueue.global().async {
+                            releaseReply.wait()
+                            continuation.resume(returning: lateReply)
+                        }
+                    }
+                }
+            )
+            switch outcome {
+            case .cancelled: XCTAssertTrue(cancelled)
+            case .timedOut: XCTAssertFalse(cancelled)
+            default: XCTFail("Expected abandoned start, got \(outcome)")
+            }
+            settled.fulfill()
+        }
+        wait(for: [requestStarted, settled], timeout: 2)
+        engine.applyPendingWatchReply(WatchCaptureControlReply(commandID: "newer-command",
+            sessionID: newer.sessionID, takeID: newer.takeID, syncState: .acknowledged, detail: "Started"))
+        releaseReply.signal()
+        wait(for: [stopped], timeout: 2)
+        XCTAssertEqual(engine.watchOwnedTakeIdentity?.sessionID, newer.sessionID)
+        XCTAssertEqual(engine.watchOwnedTakeIdentity?.takeID, newer.takeID)
+        XCTAssertNil(engine.requestWatchStop(for: original, reason: .interrupted),
+            "The late handshake must stop its original identity at most once.")
     }
 
     // MARK: - watchLinked is read from the finalized take, never assumed
@@ -583,16 +851,20 @@ final class ReferenceAuthoringCaptureBridgeTests: XCTestCase {
         watchSyncState: CaptureWatchSyncState,
         linkedMotionCaptureID: UUID?,
         linkedMotionFileName: String? = nil,
-        stopDiagnostics: CaptureWatchStopDiagnostics? = nil
+        stopDiagnostics: CaptureWatchStopDiagnostics? = nil,
+        captureTiming: CaptureTimingMetadata? = nil,
+        sessionConfig: CaptureSessionConfig? = nil
     ) -> CaptureCore.LocalRecordingSidecar {
         CaptureCore.LocalRecordingSidecar(
             sessionID: sessionID,
+            sessionConfig: sessionConfig,
             takeID: takeID,
             appLocalTakeNumber: 1,
             recordingRole: "mac_routine_capture",
             platform: "macOS",
             appSurface: "ScratchLab Routine Recorder",
             sourceDeviceName: "DJ",
+            captureTiming: captureTiming,
             startedAt: Date(timeIntervalSince1970: 1_788_000_000),
             recordingStatus: "completed",
             mediaFileName: "\(sessionID)_\(takeID)_routine.mov",
@@ -637,6 +909,21 @@ final class ReferenceAuthoringCaptureBridgeTests: XCTestCase {
         XCTAssertEqual(evidence, .acknowledgedTransferPending)
         XCTAssertFalse(evidence.isLinked)
         XCTAssertFalse(evidence.isTerminal, "a pending transfer must keep the wait alive")
+    }
+
+    func testUnreachableWatchStopExplainsManualRecoveryWithoutLosingMacCapture() {
+        let identity = TakeIdentity(sessionID: "session-a", takeID: "take-001", takeNumber: 1)
+        let evidence = ReferenceAuthoringCaptureBridge.watchEvidence(
+            in: makeSidecar(watchSyncState: .acknowledged, linkedMotionCaptureID: nil,
+                stopDiagnostics: CaptureWatchStopDiagnostics(outcome: .unreachable,
+                    sessionID: identity.sessionID, takeID: identity.takeID,
+                    motionTransferState: .notApplicable)),
+            expectedIdentity: identity)
+        guard case .transferFailed(let detail) = evidence else { return XCTFail("Stop was not confirmed.") }
+        XCTAssertTrue(detail.contains("press Stop"))
+        XCTAssertTrue(detail.contains("Mac recording is retained"))
+        XCTAssertTrue(evidence.isTerminal)
+        XCTAssertFalse(evidence.isLinked)
     }
 
     func testAMatchingTransferThatLandsBecomesLinked() {
@@ -1108,4 +1395,5 @@ final class CrossfaderTakeStartStateTests: XCTestCase {
             .tear
         )
     }
+
 }

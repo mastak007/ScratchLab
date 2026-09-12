@@ -18,6 +18,7 @@ enum ReferencePackageIOError: LocalizedError, Equatable {
     case couldNotCreatePackage(String)
     case manifestUnreadable(String)
     case packageRejected([String])
+    case unsafePackagePath(String)
 
     var errorDescription: String? {
         switch self {
@@ -29,6 +30,8 @@ enum ReferencePackageIOError: LocalizedError, Equatable {
             return "Cannot read the reference package manifest: \(detail)"
         case .packageRejected(let issues):
             return issues.joined(separator: "\n")
+        case .unsafePackagePath(let path):
+            return "Reference package path is unsafe: \(path)"
         }
     }
 }
@@ -108,6 +111,9 @@ enum ReferencePackageIO {
 
         var records: [ReferenceArtifactRecord] = []
         for input in inputs {
+            guard isSafeRelativePath(input.packagePath) else {
+                throw ReferencePackageIOError.unsafePackagePath(input.packagePath)
+            }
             let destination = stagingURL.appendingPathComponent(input.packagePath)
             do {
                 try fileManager.createDirectory(
@@ -237,6 +243,11 @@ enum ReferencePackageIO {
                 ?? "Reference package manifest could not be read."]
         }
         var issues = ReferencePackageValidator.manifestIssues(manifest).map(\.message)
+        if packageURL.lastPathComponent != manifest.packageDirectoryName {
+            issues.append(
+                "Reference package directory identity mismatch: expected \(manifest.packageDirectoryName), found \(packageURL.lastPathComponent)."
+            )
+        }
         let measurements = measureArtifacts(
             manifest: manifest,
             packageURL: packageURL,
@@ -247,6 +258,66 @@ enum ReferencePackageIO {
                 .artifactIssues(manifest, measurements: measurements)
                 .map(\.message)
         )
+        if let beat = manifest.metadata.captureIntent?.beatSpec {
+            do {
+                _ = try ReferenceBeatAssetStore.resolve(
+                    binding: beat,
+                    rootURL: packageURL.appendingPathComponent("beat_assets", isDirectory: true)
+                )
+            } catch {
+                issues.append("Packaged beat evidence is invalid: \(error.localizedDescription)")
+            }
+        }
+        if let artifact = manifest.artifact(role: .watchMotion),
+           case .linked(let identity, let motionFileName, _) = manifest.metadata.sourceState {
+            do {
+                let data = try Data(contentsOf: packageURL.appendingPathComponent(artifact.path))
+                let capture = try WatchMotionCaptureCodec.decoder.decode(WatchMotionCaptureSession.self, from: data)
+                if !WatchAssociationResolver.isLinkedCaptureValid(
+                    sessionID: identity.sessionID, takeID: identity.takeID, captureSession: capture
+                ) {
+                    issues.append("Packaged Watch motion does not belong to the approved take.")
+                }
+                if manifest.requiresExactWatchArtifact {
+                    guard let sidecarRecord = manifest.artifact(role: .takeSidecar) else {
+                        throw ReferencePackageIOError.packageRejected(["The exact captured sidecar is missing."])
+                    }
+                    let sidecarData = try Data(contentsOf: packageURL.appendingPathComponent(sidecarRecord.path))
+                    let sidecar = try decoder.decode(CaptureCore.LocalRecordingSidecar.self, from: sidecarData)
+                    if sidecar.sessionID != identity.sessionID || sidecar.takeID != identity.takeID
+                        || sidecar.linkedMotionCaptureID != capture.id || sidecar.linkedMotionFileName != motionFileName {
+                        issues.append("Packaged Watch motion does not match the captured sidecar identity.")
+                    }
+                }
+            } catch {
+                issues.append("Packaged Watch motion is unreadable: \(error.localizedDescription)")
+            }
+        }
+        let declared = Set(manifest.artifacts.map(\.path) + [ReferencePackageManifest.fileName])
+        if let enumerator = fileManager.enumerator(
+            at: packageURL,
+            includingPropertiesForKeys: [.isRegularFileKey],
+            options: [.skipsHiddenFiles]
+        ) {
+            for case let url as URL in enumerator {
+                guard (try? url.resourceValues(forKeys: [.isRegularFileKey]).isRegularFile) == true else { continue }
+                let prefix = packageURL.standardizedFileURL.path + "/"
+                guard url.standardizedFileURL.path.hasPrefix(prefix) else {
+                    issues.append("Package contains a path outside its root: \(url.path)")
+                    continue
+                }
+                let relative = String(url.standardizedFileURL.path.dropFirst(prefix.count))
+                if !declared.contains(relative) {
+                    issues.append("Reference package contains an unlisted file: \(relative)")
+                }
+            }
+        }
         return issues
+    }
+
+    static func isSafeRelativePath(_ path: String) -> Bool {
+        guard !path.isEmpty, !path.hasPrefix("/"), !path.contains("\\") else { return false }
+        let components = path.split(separator: "/", omittingEmptySubsequences: false)
+        return !components.contains(where: { $0.isEmpty || $0 == "." || $0 == ".." })
     }
 }

@@ -19,6 +19,94 @@ import XCTest
 @MainActor
 final class MacCameraPreviewViewTests: XCTestCase {
 
+    func testMissingIntendedRaneNeverFallsBackToAnotherInputOrOutput() {
+        let intended = ScratchHardwareOutputSelection(uid: "rane-original", name: "Rane ONE MKII")
+        let other = ScratchHardwareOutputSelection(uid: "rane-other", name: "Rane ONE")
+        XCTAssertEqual(ScratchHardwareOutputSelection.resolve(intended: intended,
+            selectedInputUID: "mac-input", availableRaneOutputs: [], explicitSelection: false), intended)
+        XCTAssertEqual(ScratchHardwareOutputSelection.resolve(intended: intended,
+            selectedInputUID: other.uid, availableRaneOutputs: [other], explicitSelection: false), intended)
+        XCTAssertEqual(ScratchHardwareOutputSelection.resolve(intended: intended,
+            selectedInputUID: "mac-input", availableRaneOutputs: [], explicitSelection: true), intended)
+    }
+
+    func testExplicitNewRaneSelectionUpdatesIntentAndFreshSessionCanUseDefault() {
+        let original = ScratchHardwareOutputSelection(uid: "rane-original", name: "Rane ONE MKII")
+        let replacement = ScratchHardwareOutputSelection(uid: "rane-replacement", name: "Rane ONE")
+        XCTAssertEqual(ScratchHardwareOutputSelection.resolve(intended: original,
+            selectedInputUID: replacement.uid, availableRaneOutputs: [replacement], explicitSelection: true), replacement)
+        XCTAssertEqual(ScratchHardwareOutputSelection.resolve(intended: nil,
+            selectedInputUID: replacement.uid, availableRaneOutputs: [replacement], explicitSelection: false), replacement)
+        XCTAssertNil(ScratchHardwareOutputSelection.resolve(intended: nil,
+            selectedInputUID: "mac-input", availableRaneOutputs: [], explicitSelection: false))
+    }
+
+    func testScratchOutputAuditKeepsInputAndActualOutputProvenanceSeparate() throws {
+        let route = ScratchSamplePlaybackController.OutputRoutingSnapshot(
+            primaryDeviceID: 42, primaryDeviceUID: "verified-rane-output",
+            channelMap: [-1, -1, 0, 1, -1, -1, -1, -1, -1, -1],
+            primaryDeviceName: "Rane ONE MKII", outputChannelPair: "USB 3/4",
+            status: "ready", error: nil, pendingChange: false,
+            monitorEnabled: false, monitorStatus: "Off", monitorError: nil
+        )
+        let event = try MacCaptureEngine.scratchOutputRoutingAuditEvent(
+            snapshot: route, selectedInputUID: "selected-rane-input", at: Date(timeIntervalSince1970: 100)
+        )
+        let fields = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(event.detail.utf8)) as? [String: Any])
+        XCTAssertEqual(event.category, "scratch_output_route")
+        XCTAssertEqual(fields["selectedInputUID"] as? String, "selected-rane-input")
+        XCTAssertEqual(fields["primaryDeviceUID"] as? String, "verified-rane-output")
+        XCTAssertEqual(fields["channelMap"] as? [Int], route.channelMap)
+        XCTAssertEqual(fields["physicalMasterReturnVerified"] as? Bool, false)
+        XCTAssertEqual(fields["recordedSignal"] as? String, "scratchlab_internal_post_software_fader_pre_hardware_mixer")
+        XCTAssertEqual(fields["beatAndCountInRouting"] as? String, "separate_engine_system_default_output")
+    }
+
+    func testUnavailableScratchOutputAuditNeverInheritsSelectedInputAsOutput() throws {
+        let route = ScratchSamplePlaybackController.OutputRoutingSnapshot(
+            primaryDeviceID: nil, primaryDeviceUID: nil, channelMap: nil,
+            primaryDeviceName: nil, outputChannelPair: nil,
+            status: "failed", error: "Device disconnected", pendingChange: false,
+            monitorEnabled: true, monitorStatus: "Unavailable", monitorError: "Primary unavailable"
+        )
+        let event = try MacCaptureEngine.scratchOutputRoutingAuditEvent(
+            snapshot: route, selectedInputUID: "selected-rane-input", at: Date()
+        )
+        let fields = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(event.detail.utf8)) as? [String: Any])
+        XCTAssertTrue(fields["primaryDeviceUID"] is NSNull)
+        XCTAssertTrue(fields["channelMap"] is NSNull)
+        XCTAssertEqual(fields["status"] as? String, "failed")
+        XCTAssertEqual(fields["error"] as? String, "Device disconnected")
+        XCTAssertEqual(fields["macMonitorEnabled"] as? Bool, true)
+    }
+
+    func testScratchOutputMeterDistinguishesSilenceFromUnavailable() {
+        XCTAssertEqual(CXLScratchOutputMeter.label(peak: nil), "Unavailable")
+        XCTAssertEqual(CXLScratchOutputMeter.label(peak: .nan), "Unavailable")
+        XCTAssertEqual(CXLScratchOutputMeter.label(peak: 0), "Silent")
+        XCTAssertEqual(CXLScratchOutputMeter.litSegments(peak: nil), 0)
+        XCTAssertEqual(CXLScratchOutputMeter.litSegments(peak: 0), 0)
+    }
+
+    func testScratchOutputMeterUsesUnscaledSamplePeakDecibels() throws {
+        XCTAssertEqual(try XCTUnwrap(CXLScratchOutputMeter.decibels(peak: 0.1)), -20, accuracy: 0.00001)
+        XCTAssertEqual(CXLScratchOutputMeter.litSegments(peak: 0.1), 14)
+        XCTAssertEqual(CXLScratchOutputMeter.litSegments(peak: 1), 20)
+        XCTAssertEqual(CXLScratchOutputMeter.litSegments(peak: 0.0001), 0)
+        XCTAssertEqual(CXLScratchOutputMeter.label(peak: 0.0001), "Below −60 dBFS")
+    }
+
+    func testCXLMainMeterObservesScratchOutputRatherThanRaneInput() throws {
+        let source = try authoringViewSource()
+        let start = try XCTUnwrap(source.range(of: "private var captureAudioMeter: some View"))
+        let end = try XCTUnwrap(source.range(of: "private var videoInputSelectionBinding:"))
+        let meter = String(source[start.lowerBound..<end.lowerBound])
+        XCTAssertTrue(meter.contains("activeScratchOutputSignalLevel"))
+        XCTAssertTrue(meter.contains("scratchOutputSignalSourceLabel"))
+        XCTAssertFalse(meter.contains("activeCaptureAudioSignalLevel"))
+        XCTAssertFalse(meter.contains("Input level"))
+    }
+
     func testDefaultGravityIsResizeAspectFill() {
         let view = PreviewView()
         XCTAssertEqual(view.previewLayer.videoGravity, .resizeAspectFill)
@@ -338,7 +426,7 @@ final class MacCameraPreviewViewTests: XCTestCase {
             // Matched on the binding, not on an indentation the layout can
             // change — the panel moved below the Record controls on
             // 2026-09-05 and a whitespace-sensitive literal broke with it.
-            source.contains("MacCameraPreviewView(")
+            source.contains("CXLCameraCalibrationPreview(")
                 && source.contains("captureEngine: captureEngine"),
             "The authoring preview must render the engine's existing session, not one of its own."
         )
@@ -350,10 +438,11 @@ final class MacCameraPreviewViewTests: XCTestCase {
             source.contains("captureSession.startRunning") || source.contains("captureSession.stopRunning"),
             "The authoring screen must never start or stop the shared capture session."
         )
-        XCTAssertFalse(
-            source.contains("CalibrationCameraOverlay"),
-            "This is a plain framing panel; a camera overlay was explicitly not wanted."
-        )
+        let component = try String(contentsOf: URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent().deletingLastPathComponent()
+            .appendingPathComponent("ScratchLabDesktop/Views/MacCameraPreviewView.swift"), encoding: .utf8)
+        XCTAssertTrue(component.contains("MacCameraPreviewView(") && component.contains("DeckGamificationOverlay("),
+                      "The requested CXL camera guides reuse the shared session and existing zone editor.")
     }
 
     func testReferenceAuthoringStatesTheCameraIsInactiveRatherThanShowingASilentBlackPanel() throws {
@@ -368,11 +457,20 @@ final class MacCameraPreviewViewTests: XCTestCase {
         )
     }
 
-    /// Route activation requests live input; recording, approval and shared
-    /// engine teardown remain owned elsewhere.
+    /// Route appearance discovers inputs without requesting permission.
+    /// Explicit activation, recording, approval and shared engine teardown
+    /// remain owned by their separate actions.
     func testReferenceAuthoringAppearanceAndDisappearancePreserveCaptureOwnership() throws {
         let source = try authoringViewSource()
-        XCTAssertTrue(source.contains(".task {\n            activateCaptureInput()"))
+        let taskStart = try XCTUnwrap(source.range(of: ".task {"))
+        let taskBody = String(source[taskStart.upperBound...].prefix(1500))
+        XCTAssertTrue(taskBody.contains("startDeviceDiscoveryAfterViewMount("))
+        XCTAssertTrue(taskBody.contains("allowSeratoDirectCapture: false"))
+        XCTAssertFalse(
+            taskBody.contains("activateCaptureInput()"),
+            "appearance must not request camera or microphone permission"
+        )
+        XCTAssertTrue(source.contains("cxl.hardware.activateCaptureInput"))
         for forbidden in [
             "captureEngine.stop()",
             "startRoutineRecording",
@@ -407,8 +505,8 @@ final class MacCameraPreviewViewTests: XCTestCase {
         // writes. Everything that owns capture stays owned elsewhere, which
         // the forbidden-call list above continues to enforce.
         XCTAssertEqual(
-            source.components(separatedBy: "captureEngine.start()").count - 1, 1,
-            "Route activation remains exactly one engine start."
+            source.components(separatedBy: "captureEngine.start(").count - 1, 1,
+            "The explicit activation action remains exactly one engine start."
         )
     }
 
@@ -456,7 +554,7 @@ final class MacCameraPreviewViewTests: XCTestCase {
     /// height from the notation's guaranteed minimum.
     func testTheDebugDiagnosticsRowSitsOutsideTheNotationHeight() throws {
         let source = try authoringViewSource()
-        let cardRange = try XCTUnwrap(source.range(of: "LivePerformedNotationCard("))
+        let cardRange = try XCTUnwrap(source.range(of: "ReferenceLiveMotionContent(tracker:"))
         let minimumRange = try XCTUnwrap(source.range(of: "minHeight: Self.liveNotationMinimumHeight"))
         let debugRange = try XCTUnwrap(source.range(of: "LiveNotationDiagnosticsRow(tracker:"))
         XCTAssertLessThan(cardRange.lowerBound, minimumRange.lowerBound)
@@ -475,8 +573,8 @@ final class MacCameraPreviewViewTests: XCTestCase {
             "the 16:9 preview needs a ceiling so both panels fit"
         )
         XCTAssertTrue(
-            source.contains("maxHeight: Self.cameraPreviewMaximumHeight"),
-            "the ceiling must be applied to the preview"
+            source.contains("previewHeight: Self.cameraPreviewMaximumHeight"),
+            "the CXL camera component receives the same bounded preview height"
         )
     }
 
@@ -490,8 +588,8 @@ final class MacCameraPreviewViewTests: XCTestCase {
         )
         XCTAssertFalse(source.contains("CalibrationCameraOverlay"))
         XCTAssertTrue(
-            source.contains("DisclosureGroup(isExpanded: $isShowingFramingPanel)"),
-            "the collapsible framing group is preserved, so collapsing releases its space normally"
+            source.contains("private var framingContent: some View"),
+            "camera and notation remain separate content below the recording controls"
         )
     }
 
@@ -517,7 +615,9 @@ final class MacCameraPreviewViewTests: XCTestCase {
     /// `testThePreExistingTimelineCanvasIsPinnedAndNotWidened`.
     func testTheCanonicalRendererAndSafetyBoundariesAreUnchanged() throws {
         let source = try authoringViewSource()
-        XCTAssertTrue(source.contains("LivePerformedNotationCard("))
+        XCTAssertTrue(source.contains("ReferenceLiveMotionContent(tracker:"))
+        XCTAssertFalse(source.contains("LivePerformedNotationCard("),
+                       "all CXL techniques use continuous canonical geometry")
         XCTAssertTrue(
             source.contains("source: .canonical(projection.records, layer: .performance, frame: frame)"),
             "tear notation must reach the shared chart as canonical gesture records"
@@ -588,10 +688,251 @@ private final class PreviewSessionAssignmentProbe: @unchecked Sendable {
 }
 
 #if DEBUG
-/// Executes the same activation method as the route's SwiftUI task, with a
-/// real engine and its real start guard. Only external startup work is replaced.
+/// Executes the same activation method as the route's explicit Setup button,
+/// with a real engine and its real start guard. Only external startup work is replaced.
 @MainActor
 final class ReferenceAuthoringRouteActivationTests: XCTestCase {
+    func testScratchOutputMeterUsesPostFaderSignalIndependentlyOfSelectedInput() {
+        withAudioSelectionEngine { engine in
+            engine.start()
+            engine.publishAudioSignalLevel(1, receivedAt: 10)
+            XCTAssertNil(engine.activeScratchOutputSignalLevel(at: 10.01),
+                "Hardware input activity cannot masquerade as the internal scratch output.")
+            engine.publishScratchOutputMeterSnapshot(.init(sampleID: "dvs_ahhh", generation: 1,
+                peak: 0.2, receivedAt: 10, sampledAt: 10.01))
+            XCTAssertEqual(engine.activeScratchOutputSignalLevel(at: 10.02), 0.2)
+            XCTAssertEqual(engine.scratchOutputSignalSourceLabel, "ScratchLab AHHH output")
+            engine.selectAudioInput(uniqueID: "disconnected-hardware-input")
+            XCTAssertEqual(engine.activeScratchOutputSignalLevel(at: 10.03), 0.2,
+                "Selecting an external input does not change the internal PCM signal point.")
+            engine.publishScratchOutputMeterSnapshot(.init(sampleID: "dvs_ahhh", generation: 1,
+                peak: 0, receivedAt: 10.04, sampledAt: 10.05))
+            XCTAssertEqual(engine.activeScratchOutputSignalLevel(at: 10.06), 0)
+            XCTAssertNil(engine.activeScratchOutputSignalLevel(at: 10.40))
+        }
+    }
+
+    func testScratchOutputMeterRejectsOldSampleAndDelayedPollAfterUnavailable() {
+        withAudioSelectionEngine { engine in
+            engine.start()
+            engine.publishScratchOutputMeterSnapshot(.init(sampleID: "ahhh", generation: 1,
+                peak: 0.9, receivedAt: 10, sampledAt: 10.01))
+            engine.publishScratchOutputMeterSnapshot(.init(sampleID: "fresh", generation: 2,
+                peak: nil, receivedAt: nil, sampledAt: 10.02))
+            engine.publishScratchOutputMeterSnapshot(.init(sampleID: "ahhh", generation: 1,
+                peak: 0.9, receivedAt: 10.03, sampledAt: 10.04))
+            XCTAssertNil(engine.activeScratchOutputSignalLevel(at: 10.05))
+            XCTAssertEqual(engine.scratchOutputSignalSourceLabel, "ScratchLab FRESH output")
+            engine.publishScratchOutputMeterSnapshot(.init(sampleID: "fresh", generation: 2,
+                peak: 0.3, receivedAt: 10.06, sampledAt: 10.07))
+            XCTAssertEqual(engine.activeScratchOutputSignalLevel(at: 10.08), 0.3)
+            engine.publishScratchOutputMeterSnapshot(.init(sampleID: "fresh", generation: 2,
+                peak: nil, receivedAt: nil, sampledAt: 10.09))
+            engine.publishScratchOutputMeterSnapshot(.init(sampleID: "fresh", generation: 2,
+                peak: 0.3, receivedAt: 10.06, sampledAt: 10.07))
+            XCTAssertNil(engine.activeScratchOutputSignalLevel(at: 10.10))
+        }
+    }
+
+    func testScratchOutputMeterStopClearsSignalAndRejectsQueuedPublication() {
+        withAudioSelectionEngine { engine in
+            engine.start()
+            let snapshot = ScratchSamplePlaybackController.ScratchOutputMeterSnapshot(
+                sampleID: "ahhh", generation: 1, peak: 0.5, receivedAt: 10, sampledAt: 10.01)
+            engine.publishScratchOutputMeterSnapshot(snapshot)
+            XCTAssertEqual(engine.activeScratchOutputSignalLevel(at: 10.02), 0.5)
+            engine.stop()
+            engine.publishScratchOutputMeterSnapshot(snapshot)
+            XCTAssertNil(engine.scratchOutputMeterSnapshot)
+            XCTAssertNil(engine.activeScratchOutputSignalLevel(at: 10.03))
+            engine.start()
+            XCTAssertNil(engine.activeScratchOutputSignalLevel(at: 10.04))
+        }
+    }
+
+    private func withAudioSelectionEngine(_ body: (MacCaptureEngine) -> Void) {
+        let defaults = UserDefaults.standard
+        let keys = [
+            "scratchlab.mac.selectedAudioDeviceUniqueID",
+            "scratchlab.mac.selectedAudioDeviceWasExplicit",
+            "scratchlab.mac.selectedVideoDeviceUniqueID",
+            "scratchlab.mac.selectedVideoDeviceWasExplicit"
+        ]
+        let previous = keys.map { defaults.object(forKey: $0) }
+        defaults.set("virtual-audio", forKey: keys[0])
+        defaults.set("camera", forKey: keys[2])
+        let engine = MacCaptureEngine(autoRefreshDevices: false)
+        engine.liveInputStartupOverride = {}
+        engine.captureInputReconfigurationOverride = { _, _ in }
+        defer {
+            engine.stop()
+            for (key, value) in zip(keys, previous) { defaults.set(value, forKey: key) }
+        }
+        body(engine)
+    }
+
+    private func finishAudioConfiguration(_ engine: MacCaptureEngine, audioID: String, ready: Bool) {
+        engine.captureInputConfigurationDidFinish(
+            selectedAudioID: audioID,
+            selectedVideoID: "camera",
+            sessionIsReady: ready,
+            selectedVideoIsAttached: ready,
+            attachedAudioUniqueID: ready ? audioID : "",
+            audioName: audioID,
+            videoName: "camera"
+        )
+    }
+
+    func testSilentInputSamplesRemainValidUntilTheirDeliveryStops() {
+        withAudioSelectionEngine { engine in
+            engine.publishAudioSignalLevel(0, receivedAt: 10)
+            XCTAssertTrue(engine.hasPublishedAudioLevel)
+            XCTAssertEqual(engine.audioLevel, 0)
+            engine.refreshAudioSignalForCurrentTime(now: 10.5)
+            XCTAssertTrue(engine.hasPublishedAudioLevel)
+            engine.refreshAudioSignalForCurrentTime(now: 11)
+            XCTAssertFalse(engine.hasPublishedAudioLevel)
+        }
+    }
+
+    func testInvalidInputSamplesCannotKeepAnOldSignalAlive() {
+        withAudioSelectionEngine { engine in
+            engine.publishAudioSignalLevel(0.8, receivedAt: 10)
+            XCTAssertTrue(engine.hasPublishedAudioLevel)
+            engine.publishAudioSignalLevel(nil, receivedAt: 10.6)
+            engine.publishAudioSignalLevel(.nan, receivedAt: 10.7)
+            engine.refreshAudioSignalForCurrentTime(now: 11)
+            XCTAssertFalse(engine.hasPublishedAudioLevel)
+            XCTAssertNil(engine.activeCaptureAudioSignalLevel)
+        }
+    }
+
+    func testCaptureAudioActivityRequiresAnAvailableAttachedRoute() {
+        withAudioSelectionEngine { engine in
+            engine.publishAudioSignalLevel(0.8, receivedAt: 10)
+            XCTAssertNil(engine.activeCaptureAudioSignalLevel)
+            engine.start()
+            finishAudioConfiguration(engine, audioID: "virtual-audio", ready: true)
+            engine.publishAudioSignalLevel(0.8, receivedAt: 11)
+            XCTAssertNil(engine.activeCaptureAudioSignalLevel,
+                "A stored UID and fresh value cannot prove the absent device is attached.")
+        }
+    }
+
+    func testAttachedCaptureAudioReportsSilenceAndInvalidatesOnSourceChange() throws {
+        guard let device = AVCaptureDevice.default(for: .audio) else {
+            throw XCTSkip("No discoverable audio input; this test does not start hardware.")
+        }
+        withAudioSelectionEngine { engine in
+            engine.availableAudioDevices = [device]
+            engine.selectAudioInput(uniqueID: device.uniqueID)
+            engine.start()
+            finishAudioConfiguration(engine, audioID: device.uniqueID, ready: true)
+            engine.publishAudioSignalLevel(0, receivedAt: 10)
+            XCTAssertEqual(engine.activeCaptureAudioSignalLevel, 0)
+            engine.selectAudioInput(uniqueID: "different-source")
+            XCTAssertNil(engine.activeCaptureAudioSignalLevel)
+        }
+    }
+
+    func testEnabledAudioCanReconnectWithoutRestartAndInvalidatesPreflightImmediately() {
+        withAudioSelectionEngine { engine in
+            engine.start()
+            finishAudioConfiguration(engine, audioID: "virtual-audio", ready: true)
+            XCTAssertTrue(engine.isRoutineCaptureReady)
+            XCTAssertTrue(engine.isCameraActive)
+            XCTAssertFalse(engine.isAudioInputSelectionLocked)
+            var requests = [String]()
+            engine.captureInputReconfigurationOverride = { audioID, _ in
+                requests.append(audioID)
+                XCTAssertFalse(engine.isRoutineCaptureReady)
+                XCTAssertFalse(engine.isCameraActive)
+                XCTAssertTrue(engine.isCaptureInputStarting)
+            }
+
+            engine.selectAudioInput(uniqueID: "rane")
+            XCTAssertEqual(requests, ["rane"])
+            XCTAssertEqual(engine.selectedAudioDeviceUniqueID, "rane")
+            XCTAssertTrue(engine.isAudioInputSelectionLocked)
+            engine.selectAudioInput(uniqueID: "other")
+            XCTAssertEqual(engine.selectedAudioDeviceUniqueID, "rane", "A pending connection cannot be replaced by another click.")
+            finishAudioConfiguration(engine, audioID: "virtual-audio", ready: true)
+            XCTAssertFalse(engine.isRoutineCaptureReady, "An older route cannot restore stale preflight.")
+            finishAudioConfiguration(engine, audioID: "rane", ready: true)
+            XCTAssertTrue(engine.isRoutineCaptureReady)
+            XCTAssertTrue(engine.isCameraActive)
+            XCTAssertFalse(engine.isAudioInputSelectionLocked)
+            XCTAssertEqual(engine.activeCaptureAudioDeviceUniqueID, "rane")
+            XCTAssertEqual(requests, ["rane"])
+        }
+    }
+
+    func testSelectingAudioWhileStoppedDoesNotStartCameraOrAudio() {
+        withAudioSelectionEngine { engine in
+            var requests = 0
+            engine.liveInputStartupOverride = { requests += 1 }
+            engine.captureInputReconfigurationOverride = { _, _ in requests += 1 }
+            engine.selectAudioInput(uniqueID: "rane")
+            XCTAssertEqual(engine.selectedAudioDeviceUniqueID, "rane")
+            XCTAssertEqual(requests, 0)
+            XCTAssertFalse(engine.isCaptureInputStarting)
+            XCTAssertFalse(engine.isRoutineCaptureReady)
+        }
+    }
+
+    func testSelectingCurrentAudioPreservesReadyPreview() {
+        withAudioSelectionEngine { engine in
+            engine.start()
+            finishAudioConfiguration(engine, audioID: "virtual-audio", ready: true)
+            var requests = 0
+            engine.captureInputReconfigurationOverride = { _, _ in requests += 1 }
+            engine.selectAudioInput(uniqueID: "virtual-audio")
+            XCTAssertEqual(requests, 0)
+            XCTAssertTrue(engine.isCameraActive)
+            XCTAssertTrue(engine.isRoutineCaptureReady)
+            XCTAssertFalse(engine.isCaptureInputStarting)
+        }
+    }
+
+    func testFailedAudioReconnectCanChooseAnotherInputAndEnableAgain() {
+        withAudioSelectionEngine { engine in
+            engine.start()
+            finishAudioConfiguration(engine, audioID: "virtual-audio", ready: true)
+            engine.selectAudioInput(uniqueID: "unavailable")
+            finishAudioConfiguration(engine, audioID: "unavailable", ready: false)
+            XCTAssertFalse(engine.isAudioInputSelectionLocked)
+            XCTAssertFalse(engine.isCameraActive)
+            XCTAssertTrue(engine.statusMessage.contains("Could not activate"))
+            engine.selectAudioInput(uniqueID: "rane")
+            XCTAssertEqual(engine.selectedAudioDeviceUniqueID, "rane")
+            XCTAssertFalse(engine.isRoutineCaptureReady)
+            var starts = 0
+            engine.liveInputStartupOverride = { starts += 1 }
+            engine.start()
+            XCTAssertEqual(starts, 1)
+        }
+    }
+
+    func testAudioSelectionCannotChangeAnArmedOrStoppedUndrainedTake() {
+        withAudioSelectionEngine { engine in
+            let token = engine.testOnly_armTakeMIDIWindow()
+            XCTAssertFalse(engine.isRoutineRecording)
+            XCTAssertFalse(engine.isRoutineFinalizationPending)
+            XCTAssertTrue(engine.isAudioInputSelectionLocked)
+            engine.selectAudioInput(uniqueID: "rane")
+            XCTAssertEqual(engine.selectedAudioDeviceUniqueID, "virtual-audio")
+            engine.testOnly_openTakeMIDIEpoch(at: 10)
+            engine.testOnly_closeTakeMIDIEpoch()
+            XCTAssertTrue(engine.isAudioInputSelectionLocked)
+            engine.selectAudioInput(uniqueID: "rane")
+            XCTAssertEqual(engine.selectedAudioDeviceUniqueID, "virtual-audio")
+            _ = engine.testOnly_drainTakeMIDIWindow(token: token)
+            XCTAssertFalse(engine.isAudioInputSelectionLocked)
+            engine.selectAudioInput(uniqueID: "rane")
+            XCTAssertEqual(engine.selectedAudioDeviceUniqueID, "rane")
+        }
+    }
+
     private final class StartupSpy {
         var requests = 0
     }

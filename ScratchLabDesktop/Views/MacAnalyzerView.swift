@@ -1149,12 +1149,13 @@ struct MacAnalyzerView: View {
     ///
     /// The engine decides *when* a stop is owed — every terminal path for a
     /// take, not only the Stop button — and this supplies the transport.
-    private struct WatchStopDispatchInstaller: ViewModifier {
+    struct WatchStopDispatchInstaller: ViewModifier {
         let captureEngine: MacCaptureEngine
-        let companionReceiver: CompanionCameraReceiver
+        let companionReceiver: CompanionCameraReceiver?
 
         func body(content: Content) -> some View {
             content.onAppear {
+                guard let companionReceiver else { return }
                 captureEngine.watchStopRequestHandler = { identity in
                     await companionReceiver.requestWatchCaptureStop(
                         sessionID: identity.sessionID,
@@ -10956,7 +10957,7 @@ struct MacAnalyzerView: View {
                     .textFieldStyle(.roundedBorder)
 
                 Picker("Click track", selection: routineCaptureModeBinding) {
-                    ForEach(CaptureSessionCaptureMode.allCases) { option in
+                    ForEach(CaptureSessionCaptureMode.standardCaptureModes) { option in
                         Text(option.title).tag(option)
                     }
                 }
@@ -12631,16 +12632,21 @@ struct MacAnalyzerView: View {
     }
 }
 
-private struct MacSamplePositionWaveformView: View {
+struct MacSamplePositionWaveformView: View {
     let waveform: ScratchSamplePlaybackController.PlaybackWaveformSnapshot?
     let position: ScratchSamplePlaybackController.PlaybackPositionSnapshot?
+
+    /// A cue-relative position driven by the platter, distinct from output latency.
+    var positionLabel = "SAMPLE POSITION"
+    var usesRenderedPlayhead = false
 
     private var projection: PlatterSamplePositionProjection? {
         guard let waveform,
               waveform.sampleRate > 0,
               waveform.contentFrameCount > 0,
               position?.loadedSampleID == waveform.sampleID,
-              let framePosition = position?.unwrappedFramePosition else {
+              let framePosition = usesRenderedPlayhead
+                ? position?.renderedFramePosition : position?.unwrappedFramePosition else {
             return nil
         }
         return PlatterSamplePositionProjection.resolve(
@@ -12653,7 +12659,7 @@ private struct MacSamplePositionWaveformView: View {
     var body: some View {
         VStack(alignment: .leading, spacing: ScratchLabDesign.Spacing.xxs) {
             HStack(spacing: ScratchLabDesign.Spacing.sm) {
-                Text("\(waveform?.displayName ?? "AHHH") SAMPLE POSITION")
+                Text("\(waveform?.displayName ?? "AHHH") \(positionLabel)")
                     .font(ScratchLabDesign.Typo.statusPill)
                     .foregroundStyle(ScratchLabDesign.Sem.accent)
                 Spacer(minLength: ScratchLabDesign.Spacing.sm)
@@ -12689,7 +12695,10 @@ private struct MacSamplePositionWaveformView: View {
     }
 
     private var statusText: String {
-        guard let waveform, let projection else { return "LOAD AHHH" }
+        guard let waveform else { return "LOAD AHHH" }
+        guard let projection else {
+            return usesRenderedPlayhead ? "WAITING FOR PLAYBACK" : "LOAD AHHH"
+        }
         switch projection.region {
         case .unloaded:
             return "LOAD AHHH"
@@ -12714,8 +12723,11 @@ private struct MacSamplePositionWaveformView: View {
     }
 
     private var accessibilityLabel: String {
-        guard let waveform, let projection else {
+        guard let waveform else {
             return "AHHH sample position unavailable. Load AHHH to show the playhead."
+        }
+        guard let projection else {
+            return "\(waveform.displayName) waveform loaded. Waiting for a current playback position."
         }
         let location: String
         switch projection.region {
@@ -12779,7 +12791,16 @@ private struct MacSamplePositionWaveformView: View {
             let color = projection.region == .beforeStart || projection.region == .pastEnd
                 ? ScratchLabDesign.Sem.warning
                 : ScratchLabDesign.Notation.performanceTrace
-            context.stroke(playhead, with: .color(color), lineWidth: 2)
+            context.stroke(playhead, with: .color(color), lineWidth: usesRenderedPlayhead ? 4 : 2)
+            if usesRenderedPlayhead {
+                context.stroke(playhead, with: .color(.white), lineWidth: 1)
+                var marker = Path()
+                marker.move(to: CGPoint(x: playheadX - 5, y: 0))
+                marker.addLine(to: CGPoint(x: playheadX + 5, y: 0))
+                marker.addLine(to: CGPoint(x: playheadX, y: 7))
+                marker.closeSubpath()
+                context.fill(marker, with: .color(.white))
+            }
         }
     }
 }

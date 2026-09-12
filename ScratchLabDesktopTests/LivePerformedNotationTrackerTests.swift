@@ -670,7 +670,8 @@ final class LivePerformedNotationTrackerTests: XCTestCase {
         )
         let provisional = CaptureCore.ProvisionalPlatterMovement(
             startTime: 6.5, currentTime: 7.0, startPosition: 0.99, currentPosition: 0.98,
-            direction: "backward", movementKind: .normalPull, displacement: -0.01
+            direction: "backward", movementKind: .normalPull, displacement: -0.01,
+            meetsNoiseGates: true
         )
         let state = LiveNotationTrackingState.tracking(
             committed: [], provisional: nil,
@@ -691,6 +692,30 @@ final class LivePerformedNotationTrackerTests: XCTestCase {
         )
     }
 
+    func testUngatedOpenRunDoesNotPoisonCommittedCanonicalTear() {
+        let committed = CaptureCore.DetectedNotationRecordMovementEvent(
+            startTime: 0, endTime: 0.2, startPosition: 0, endPosition: 1,
+            direction: "forward", movementKind: .normalPush,
+            speed: 5, confidence: 0.9, source: "controller"
+        )
+        let open = CaptureCore.ProvisionalPlatterMovement(
+            startTime: 0.2, currentTime: 0.21,
+            startPosition: 1, currentPosition: 0.99,
+            direction: "backward", movementKind: .normalPull,
+            displacement: -0.01,
+            meetsNoiseGates: false
+        )
+        let rendered = LivePerformedNotationTracker.continuousRenderedEvents(
+            for: .tracking(
+                committed: [], provisional: nil,
+                continuousCommitted: [committed], continuousProvisional: open,
+                platterEvidenceIntervals: [], faderDerivation: nil, wrapPeriod: nil
+            )
+        )
+        XCTAssertEqual(rendered.count, 1)
+        XCTAssertEqual(rendered[0].confidence, 0.9)
+    }
+
     // MARK: - Live evidence parity (stillness + crossfader wiring)
 
     private func crossfaderCC8Event(
@@ -701,6 +726,7 @@ final class LivePerformedNotationTrackerTests: XCTestCase {
         CaptureCore.RawMixerMIDIEvent(
             timestamp: takeRelativeTime,
             takeRelativeTime: takeRelativeTime,
+            deviceIdentifier: "midi_rane",
             deviceName: deviceName,
             channel: 15,
             controller: 8,
@@ -713,12 +739,42 @@ final class LivePerformedNotationTrackerTests: XCTestCase {
     private func usableCrossfaderCalibration() -> CrossfaderCalibration {
         CrossfaderCalibration(
             address: CrossfaderMIDIAddress(
-                deviceIdentifier: "Rane ONE MKII", deviceName: "Rane ONE MKII",
+                deviceIdentifier: "midi_rane", deviceName: "Rane ONE MKII",
                 channel: 15, controller: 8
             ),
-            fullLeftRawValue: 0, centerRawValue: 52, fullRightRawValue: 104,
+            fullLeftRawValue: 0, centerRawValue: 26, fullRightRawValue: 52,
             openEnd: .left, activeDeck: .rightDeck,
             calibratedAt: Date(timeIntervalSince1970: 1_788_000_000)
+        )
+    }
+
+    private func parkedFaderState(
+        sourceID: String = "midi_rane",
+        rawValue: Int = 0,
+        observedTime: Double = -0.02
+    ) -> CaptureCore.CrossfaderTakeStartState {
+        let calibration = usableCrossfaderCalibration()
+        return CaptureCore.CrossfaderTakeStartState(
+            provenance: .preTakeSnapshot,
+            sessionID: "session",
+            takeID: "take",
+            takeGeneration: 7,
+            midiSourceID: sourceID,
+            deviceName: "Rane ONE MKII",
+            midiConnectionGeneration: 3,
+            channel: 15,
+            controller: 8,
+            rawValue: rawValue,
+            calibratedPosition: calibration.normalized(rawValue: rawValue),
+            calibrationID: calibration.id,
+            crossfaderCurveResponse: FaderCurveResponse(
+                zeroAt: 0,
+                oneAt: MIDIFaderCurveConstants.sharpScratchCutInWidth,
+                shape: .linear
+            ),
+            observationSequence: 42,
+            observedTakeRelativeTime: observedTime,
+            unknownReason: nil
         )
     }
 
@@ -754,6 +810,7 @@ final class LivePerformedNotationTrackerTests: XCTestCase {
         ]
         let dataSource = LivePerformedNotationDataSource(
             selectedMIDISourceName: { "Rane ONE MKII" },
+            selectedMIDISourceIdentifier: { "midi_rane" },
             capturedMidiCCEventsSnapshot: { snapshot },
             cameraMovementEventsSnapshot: { _ in nil },
             activeCrossfaderCalibration: { calibration }
@@ -778,6 +835,7 @@ final class LivePerformedNotationTrackerTests: XCTestCase {
         let snapshot = Self.raneRingStream(runs: 2, stepsPerRun: 40) + cc8
         let dataSource = LivePerformedNotationDataSource(
             selectedMIDISourceName: { "Rane ONE MKII" },
+            selectedMIDISourceIdentifier: { "midi_rane" },
             capturedMidiCCEventsSnapshot: { snapshot },
             cameraMovementEventsSnapshot: { _ in nil },
             activeCrossfaderCalibration: { calibration }
@@ -798,6 +856,7 @@ final class LivePerformedNotationTrackerTests: XCTestCase {
             + [crossfaderCC8Event(value: 0, takeRelativeTime: 0.0)]
         let dataSource = LivePerformedNotationDataSource(
             selectedMIDISourceName: { "Rane ONE MKII" },
+            selectedMIDISourceIdentifier: { "midi_rane" },
             capturedMidiCCEventsSnapshot: { snapshot },
             cameraMovementEventsSnapshot: { _ in nil },
             activeCrossfaderCalibration: { nil }
@@ -818,6 +877,7 @@ final class LivePerformedNotationTrackerTests: XCTestCase {
             + [crossfaderCC8Event(value: 0, takeRelativeTime: -1.0)]
         let dataSource = LivePerformedNotationDataSource(
             selectedMIDISourceName: { "Rane ONE MKII" },
+            selectedMIDISourceIdentifier: { "midi_rane" },
             capturedMidiCCEventsSnapshot: { snapshot },
             cameraMovementEventsSnapshot: { _ in nil },
             activeCrossfaderCalibration: { calibration }
@@ -827,6 +887,45 @@ final class LivePerformedNotationTrackerTests: XCTestCase {
             return XCTFail("expected .tracking, got \(state)")
         }
         XCTAssertNil(faderDerivation, "pre-baseline CC8 must not enter the live take's fader derivation")
+    }
+
+    func testLiveTearUsesExactParkedOpenTakeStartSnapshot() {
+        let calibration = usableCrossfaderCalibration()
+        let dataSource = LivePerformedNotationDataSource(
+            selectedMIDISourceName: { "Rane ONE MKII" },
+            selectedMIDISourceIdentifier: { "midi_rane" },
+            capturedMidiCCEventsSnapshot: { Self.raneRingStream(runs: 2, stepsPerRun: 40) },
+            cameraMovementEventsSnapshot: { _ in nil },
+            activeCrossfaderCalibration: { calibration },
+            activeCrossfaderTakeStartState: { self.parkedFaderState() }
+        )
+        let state = LivePerformedNotationTracker.computeState(dataSource: dataSource, baselineTimestamp: 0)
+        guard case .tracking(_, _, _, _, _, let derivation, _) = state else {
+            return XCTFail("expected tracking")
+        }
+        XCTAssertEqual(derivation?.intervals.first?.state, .open)
+    }
+
+    func testLiveTearRejectsMismatchedOrNonPreTakeSnapshot() {
+        let calibration = usableCrossfaderCalibration()
+        for snapshot in [
+            parkedFaderState(sourceID: "midi_other"),
+            parkedFaderState(observedTime: 0)
+        ] {
+            let dataSource = LivePerformedNotationDataSource(
+                selectedMIDISourceName: { "Rane ONE MKII" },
+                selectedMIDISourceIdentifier: { "midi_rane" },
+                capturedMidiCCEventsSnapshot: { Self.raneRingStream(runs: 2, stepsPerRun: 40) },
+                cameraMovementEventsSnapshot: { _ in nil },
+                activeCrossfaderCalibration: { calibration },
+                activeCrossfaderTakeStartState: { snapshot }
+            )
+            guard case .tracking(_, _, _, _, _, let derivation, _) = LivePerformedNotationTracker.computeState(
+                dataSource: dataSource,
+                baselineTimestamp: 0
+            ) else { return XCTFail("expected tracking") }
+            XCTAssertNil(derivation)
+        }
     }
 
     // MARK: - Clock basis (host-time scoping vs take-relative derivation)
@@ -848,6 +947,7 @@ final class LivePerformedNotationTrackerTests: XCTestCase {
             CaptureCore.RawMixerMIDIEvent(
                 timestamp: event.takeRelativeTime + epoch,
                 takeRelativeTime: event.takeRelativeTime,
+                deviceIdentifier: event.deviceIdentifier,
                 deviceName: event.deviceName,
                 channel: event.channel,
                 controller: event.controller,
@@ -886,6 +986,7 @@ final class LivePerformedNotationTrackerTests: XCTestCase {
 
         let dataSource = LivePerformedNotationDataSource(
             selectedMIDISourceName: { "Rane ONE MKII" },
+            selectedMIDISourceIdentifier: { "midi_rane" },
             capturedMidiCCEventsSnapshot: { platter + preBaselineCC8 + inTakeCC8 },
             cameraMovementEventsSnapshot: { _ in nil },
             activeCrossfaderCalibration: { calibration }
@@ -1024,6 +1125,62 @@ final class LivePerformedNotationTrackerTests: XCTestCase {
         let unwrapped = try connectedLoopGeometry(original)
         XCTAssertEqual(rendered.events, unwrapped.events, file: file, line: line)
         XCTAssertEqual(rendered.geometry, unwrapped.geometry, file: file, line: line)
+    }
+
+    /// The CXL preview must draw unequal strokes from a common physical
+    /// origin, including a pull that passes the take's initial position.
+    /// Gesture-local rebasing used to detach these exact reversal endpoints.
+    func testCXLUnwrappedPreviewJoinsAsymmetricStrokesAcrossInitialPosition() throws {
+        let stream = platterEvents(signedRunSteps: [80, -160, 120], interval: 0.005)
+            .map { midiEvent(value: $0.value, takeRelativeTime: $0.takeRelativeTime,
+                             deviceName: "Rane ONE MKII") }
+        let state = loopState(stream, context: nil, baseline: -1)
+        let rendered = try connectedLoopGeometry(state)
+        XCTAssertEqual(rendered.events.map(\.direction), ["forward", "backward", "forward"])
+        let travel = rendered.geometry.motion.segments.filter { !$0.isHold }
+        XCTAssertEqual(travel.count, 3)
+        guard travel.count == 3 else { return }
+        XCTAssertTrue(rendered.geometry.missingMotion.isEmpty,
+                      "crossing the initial sample position cannot invent a motion gap")
+
+        // The physical positions are 0 -> 80 -> -80 -> 40 steps. One shared
+        // frame maps them to 0.5 -> 1 -> 0 -> 0.75, regardless of technique.
+        XCTAssertEqual(travel[0].startPosition, 0.5, accuracy: 1e-8)
+        XCTAssertEqual(travel[0].endPosition, 1, accuracy: 1e-8)
+        XCTAssertEqual(travel[1].endPosition, 0, accuracy: 1e-8)
+        XCTAssertEqual(travel[2].endPosition, 0.75, accuracy: 1e-8)
+        for (previous, next) in zip(travel, travel.dropFirst()) {
+            // Compare the actual shared lane coordinates in a concrete box.
+            XCTAssertEqual(previous.endTime * 600, next.startTime * 600, accuracy: 1e-7)
+            XCTAssertEqual((1 - previous.endPosition) * 140,
+                           (1 - next.startPosition) * 140, accuracy: 1e-7)
+        }
+        XCTAssertTrue(travel.allSatisfy { $0.evidenceStyle == .unknownFader },
+                      "continuity never implies an observed open crossfader")
+    }
+
+    func testCXLUnwrappedPreviewRetainsRealPacketGapBetweenUnequalStrokes() throws {
+        let stream = platterEvents(signedRunSteps: [80, -160, 120], interval: 0.005)
+            .enumerated().map { index, event in
+                let offset = index > 160 ? 0.3 : 0.0
+                return midiEvent(value: event.value,
+                    takeRelativeTime: event.takeRelativeTime + offset,
+                    deviceName: "Rane ONE MKII")
+            }
+        let state = loopState(stream, context: nil, baseline: -1)
+        guard case .tracking(_, _, _, _, let evidence, _, _) = state else {
+            return XCTFail("expected measured controller motion")
+        }
+        let gap = try XCTUnwrap(evidence.first { $0.kind == .packetGap })
+        let rendered = try connectedLoopGeometry(state)
+        let middle = (gap.startTime + gap.endTime) / 2
+        XCTAssertTrue(rendered.geometry.missingMotion.contains { $0.contains(middle) },
+                      "a real missing packet interval stays visibly unknown")
+        XCTAssertFalse(rendered.geometry.motion.segments.contains {
+            $0.startTime < middle && middle < $0.endTime
+        }, "never connect or manufacture a hold across missing telemetry")
+        XCTAssertGreaterThan(rendered.geometry.motion.segments.count, 2,
+                             "healthy motion on both sides remains drawable")
     }
 
     func testSampleLoopHistoryScalePreservesQuarterLoopVisibleTravel() throws {
@@ -1261,6 +1418,70 @@ final class LivePerformedNotationTrackerTests: XCTestCase {
         }
     }
 
+    func testAlignedSampleLoopKeepsQualifyingProvisionalRenderableAndPreservesStillness() throws {
+        let stream = shiftedToHostEpoch(cc6WithStillness(), epoch: 10_000)
+        let decoded = MacCaptureEngine.resolvedControllerMovementEventsWithProvisional(
+            selectedMIDISourceName: "Rane ONE MKII",
+            capturedMidi: stream,
+            referencePacket: try XCTUnwrap(stream.last)
+        )
+        let sourceOpen = try XCTUnwrap(decoded.continuousProvisionalMovement)
+        XCTAssertTrue(sourceOpen.meetsNoiseGates, "fixture must contain measured qualifying travel")
+        XCTAssertTrue(decoded.platterEvidenceIntervals.contains { $0.kind == .observedStillness })
+
+        let state = loopState(
+            stream,
+            context: loopContext(anchor: try XCTUnwrap(stream.last))
+        )
+        guard case .tracking(_, _, let committed, let alignedOpen, let evidence, _, let period) = state else {
+            return XCTFail("expected aligned controller tracking")
+        }
+        XCTAssertNotNil(period, "the fixture must exercise the aligned copy boundary")
+        XCTAssertEqual(evidence, decoded.platterEvidenceIntervals,
+                       "presentation alignment must not rewrite measured holds or gaps")
+        XCTAssertTrue(evidence.contains { $0.kind == .observedStillness })
+        let open = try XCTUnwrap(alignedOpen)
+        XCTAssertTrue(open.meetsNoiseGates,
+                      "alignment must preserve the decoder's qualifying provisional evidence")
+        XCTAssertEqual(open.displacement, sourceOpen.displacement, accuracy: 1e-9)
+
+        let rendered = LivePerformedNotationTracker.continuousRenderedEvents(for: state)
+        XCTAssertEqual(rendered.count, committed.count + 1)
+        XCTAssertEqual(rendered.last?.source, "live_preview",
+                       "a qualifying open Tear run must remain visible before turnaround")
+    }
+
+    func testAlignedSampleLoopKeepsUnderThresholdProvisionalHiddenAndPreservesStillness() throws {
+        let shortOpenStream = Array(cc6WithStillness().prefix(32))
+        let stream = shiftedToHostEpoch(shortOpenStream, epoch: 10_000)
+        let decoded = MacCaptureEngine.resolvedControllerMovementEventsWithProvisional(
+            selectedMIDISourceName: "Rane ONE MKII",
+            capturedMidi: stream,
+            referencePacket: try XCTUnwrap(stream.last)
+        )
+        let sourceOpen = try XCTUnwrap(decoded.continuousProvisionalMovement)
+        XCTAssertFalse(sourceOpen.meetsNoiseGates, "fixture must stay below the shared decoder gates")
+        XCTAssertTrue(decoded.platterEvidenceIntervals.contains { $0.kind == .observedStillness })
+
+        let state = loopState(
+            stream,
+            context: loopContext(anchor: try XCTUnwrap(stream.last))
+        )
+        guard case .tracking(_, _, let committed, let alignedOpen, let evidence, _, let period) = state else {
+            return XCTFail("expected aligned controller tracking")
+        }
+        XCTAssertNotNil(period, "the fixture must exercise the aligned copy boundary")
+        XCTAssertEqual(evidence, decoded.platterEvidenceIntervals,
+                       "presentation alignment must not rewrite measured holds or gaps")
+        XCTAssertTrue(evidence.contains { $0.kind == .observedStillness })
+        XCTAssertFalse(try XCTUnwrap(alignedOpen).meetsNoiseGates)
+
+        let rendered = LivePerformedNotationTracker.continuousRenderedEvents(for: state)
+        XCTAssertEqual(rendered.count, committed.count)
+        XCTAssertFalse(rendered.contains { $0.source == "live_preview" },
+                       "sub-threshold travel must remain hidden from canonical Tear projection")
+    }
+
     func testSampleLoopProjectionLeavesPhysicalGestureAndFinalizedDecodeUnchanged() throws {
         let stream = loopStream([900, -900, 900], closeTrailingRun: false)
         let finalBefore = CaptureCore.derivePlatterMovementEvents(
@@ -1328,6 +1549,28 @@ final class LivePerformedNotationTrackerTests: XCTestCase {
             .deletingLastPathComponent()
             .appendingPathComponent("ScratchLabDesktop/Views/ReferenceAuthoringView.swift")
         return try String(contentsOf: url, encoding: .utf8)
+    }
+
+    private func assertFinalizedTearProjectionContract(
+        in viewSource: String,
+        file: StaticString = #filePath,
+        line: UInt = #line
+    ) throws {
+        XCTAssertTrue(
+            viewSource.contains("canonicalTearChart(\n                title: \"CANONICAL TEAR STRUCTURE — FINALIZED TAKE\",\n                projection: take.tearProjection,"),
+            "the finalized chart must use its take's canonical projection accessor",
+            file: file, line: line
+        )
+        let sessionURL = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .appendingPathComponent("ScratchLab/Models/Reference/ReferenceAuthoringSession.swift")
+        let sessionSource = try String(contentsOf: sessionURL, encoding: .utf8)
+        XCTAssertTrue(
+            sessionSource.contains("var tearProjection: ReferenceTearCanonicalProjection {\n        restoredTearProjection ?? ReferenceTearCanonicalProjectionBuilder.project(tearReview)\n    }"),
+            "the take must retain restored canonical output and otherwise use the shared review builder",
+            file: file, line: line
+        )
     }
 
     /// A data source backed by the engine's REAL evidence closures.
@@ -1541,8 +1784,8 @@ final class LivePerformedNotationTrackerTests: XCTestCase {
 
         // Positive: the shared chart, fed canonical gesture records.
         XCTAssertTrue(
-            source.contains("LivePerformedNotationCard("),
-            "authoring must present the canonical live-notation card"
+            source.contains("movementEvents: liveNotationTracker.continuousRenderedEvents"),
+            "every authoring technique must retain the measured continuous track"
         )
         XCTAssertTrue(
             source.contains("ScratchPhraseChartView("),
@@ -1564,37 +1807,47 @@ final class LivePerformedNotationTrackerTests: XCTestCase {
         )
     }
 
-    /// The ONE `Canvas` on this screen is pre-existing and stays pinned.
-    ///
-    /// `TearReviewTimelineChart` (a3d86e9) draws the tear-review overview
-    /// timeline with a raw `Canvas`. This test does not endorse that: it
-    /// FREEZES it, so the tear repair cannot add a second hand-rolled
-    /// renderer and a future one cannot appear unnoticed. Removing or
-    /// replacing `TearReviewTimelineChart` with the shared chart is a
-    /// separate, still-open piece of work.
-    func testThePreExistingTimelineCanvasIsPinnedAndNotWidened() throws {
+    func testEveryCXLTechniqueUsesContinuousPhysicalProjection() throws {
         let source = try authoringViewSource()
-        let canvasCount = source.components(separatedBy: "Canvas {").count - 1
-        XCTAssertEqual(
-            canvasCount, 1,
-            "exactly one pre-existing Canvas is tolerated on this screen; "
-                + "found \(canvasCount). A new one means a second renderer was added."
-        )
-        let structRange = try XCTUnwrap(
-            source.range(of: "struct TearReviewTimelineChart: View {"),
-            "the pinned Canvas must still belong to TearReviewTimelineChart"
-        )
-        let canvasRange = try XCTUnwrap(source.range(of: "Canvas {"))
-        XCTAssertTrue(
-            canvasRange.lowerBound > structRange.lowerBound,
-            "the tolerated Canvas must sit inside TearReviewTimelineChart, "
-                + "not in the canonical tear chart or the live preview"
-        )
+        let start = try XCTUnwrap(source.range(of: "private var framingContent: some View"))
+        let end = try XCTUnwrap(source.range(of: "private var messagePanel: some View"))
+        let preview = String(source[start.lowerBound..<end.lowerBound])
+        XCTAssertFalse(preview.contains("LivePerformedNotationCard("),
+                       "generic gesture-local rebasing must not re-enter CXL for non-Tear techniques")
+        XCTAssertFalse(preview.contains("selectedTechnique != .tear"))
+        XCTAssertTrue(preview.contains("ReferenceLiveMotionContent(tracker: liveNotationTracker)"),
+                      "the CXL chart must observe live tracker updates directly")
+        XCTAssertTrue(source.contains("@ObservedObject var tracker: LivePerformedNotationTracker"))
+        XCTAssertTrue(preview.contains("movementEvents: liveNotationTracker.continuousRenderedEvents"))
+        XCTAssertTrue(preview.contains("platterEvidenceIntervals: liveNotationTracker.platterEvidenceIntervals"))
+        XCTAssertTrue(preview.contains("derivation: liveNotationTracker.faderDerivation"))
+        XCTAssertTrue(preview.contains("coordinates: liveNotationTracker.continuousPlatterCoordinates"))
+        XCTAssertTrue(preview.contains("$0.displayName.uppercased()"),
+                      "Chirp and other techniques must not be called Tear in the preview")
+        XCTAssertFalse(preview.contains("TEAR STRUCTURE"))
     }
 
-    /// Live preview and finalized review must go through the SAME projection.
-    /// A screen that projected one way while recording and another way
-    /// afterwards is how a tear ends up drawn as a Baby-style reversal.
+    /// Pin the existing overview and the separately requested repetition dim
+    /// overlay. Neither permits another hand-drawn motion renderer in CXL.
+    func testThePreExistingTimelineCanvasIsPinnedAndNotWidened() throws {
+        let source = try authoringViewSource()
+        XCTAssertEqual(source.components(separatedBy: "Canvas {").count - 1, 2)
+        for owner in ["TearReviewTimelineChart", "ReferenceMotionSelectionOverlay"] {
+            let start = try XCTUnwrap(source.range(of: "struct \(owner): View {"))
+            let end = try XCTUnwrap(source.range(of: "\n}\n", range: start.upperBound..<source.endIndex))
+            let body = String(source[start.lowerBound..<end.upperBound])
+            XCTAssertEqual(body.components(separatedBy: "Canvas {").count - 1, 1,
+                           "Each permitted Canvas must remain in its existing owner")
+            if owner == "ReferenceMotionSelectionOverlay" {
+                XCTAssertTrue(body.contains("ReferenceMotionReviewViewport.visibleFractions"))
+                XCTAssertFalse(body.contains("ScratchStrokeGeometry"))
+                XCTAssertFalse(body.contains("movementEvents"))
+            }
+        }
+    }
+
+    /// Live preview and fresh finalized review share the SAME projection
+    /// builder. Restored review retains its historical canonical output.
     func testAuthoringLiveAndReviewShareOneTearProjection() throws {
         let source = try authoringViewSource()
         XCTAssertTrue(
@@ -1602,10 +1855,7 @@ final class LivePerformedNotationTrackerTests: XCTestCase {
                 || source.contains("movementEvents: liveNotationTracker.continuousRenderedEvents"),
             "the live preview must project through ReferenceTearCanonicalProjectionBuilder"
         )
-        XCTAssertTrue(
-            source.contains("ReferenceTearCanonicalProjectionBuilder.project(review)"),
-            "the finalized review must project through the same builder"
-        )
+        try assertFinalizedTearProjectionContract(in: source)
         // The live boundary must also DECLARE which coordinate its positions
         // are in. Without this the projection falls back to the non-claiming
         // take-local basis and the live chart silently stops saying
@@ -1640,9 +1890,12 @@ final class LivePerformedNotationTrackerTests: XCTestCase {
             .deletingLastPathComponent()
             .appendingPathComponent("ScratchLabDesktop/Services/MacCaptureEngine.swift")
         let source = try String(contentsOf: url, encoding: .utf8)
-        XCTAssertTrue(source.contains("func makeLivePerformedNotationDataSource() -> LivePerformedNotationDataSource"))
+        XCTAssertTrue(source.contains("func makeLivePerformedNotationDataSource(\n        includePlaybackLoopContext: Bool = true"))
         XCTAssertTrue(source.contains("capturedMidiCCEventsSnapshot: { [weak self] in self?.capturedMidiCCEventsSnapshot() ?? [] }"))
         XCTAssertTrue(source.contains("cameraMovementEventsSnapshot: { [weak self] now in self?.cameraMovementEventsSnapshot(now: now) }"))
+        XCTAssertTrue(source.contains("let playbackLoopContext: () -> PlaybackLoopContext? = includePlaybackLoopContext"))
+        XCTAssertTrue(source.contains(": { nil }\n        return LivePerformedNotationDataSource("))
+        XCTAssertTrue(source.contains("activePlaybackLoopContext: playbackLoopContext"))
     }
 
     // MARK: - D6 boundary measurement harness
@@ -2616,12 +2869,18 @@ final class LivePerformedNotationTrackerTests: XCTestCase {
         let view = try authoringViewSource()
         XCTAssertTrue(
             view.contains(".onReceive(captureEngine.$midiCaptureWindowReleaseCount)"),
-            "the route must SUBSCRIBE to the engine publisher; captureEngine is a plain let, so onChange of one of its properties establishes no observation and would never fire"
+            "preview re-arming must subscribe to the release event instead of inferring ownership from other recording flags"
         )
-        XCTAssertFalse(
-            view.contains(".onChange(of: captureEngine."),
-            "no engine property may be watched through onChange from a non-observed reference"
-        )
+        if view.contains(".onChange(of: captureEngine.") {
+            XCTAssertTrue(
+                view.contains("@ObservedObject private var captureEngine: MacCaptureEngine"),
+                "engine property changes require an observed engine reference"
+            )
+            XCTAssertTrue(
+                view.contains("_captureEngine = ObservedObject(wrappedValue: engine)"),
+                "the route must initialize observation of the injected engine"
+            )
+        }
         XCTAssertFalse(
             view.contains(".onChange(of: captureEngine.isRoutineFinalizationPending)"),
             "re-arming must not depend on a flag the early-return paths never set"
@@ -3343,10 +3602,11 @@ final class LivePerformedNotationTrackerTests: XCTestCase {
         // window, through the two ownership-guarded accessors.
         XCTAssertTrue(source.contains("captureEngine.endLiveMIDICaptureIfIdle()"))
         XCTAssertTrue(source.contains("captureEngine.beginLiveMIDICapture()"))
-        // And starting the engine remains the route's single existing call.
+        // Engine startup remains one explicit Setup action, outside route
+        // appearance/disappearance lifecycle work.
         XCTAssertEqual(
-            source.components(separatedBy: "captureEngine.start()").count - 1, 1,
-            "the route keeps exactly one engine start, unchanged by this repair"
+            source.components(separatedBy: "captureEngine.start(").count - 1, 1,
+            "the route keeps exactly one explicit engine start"
         )
     }
 
@@ -3405,20 +3665,49 @@ final class LivePerformedNotationTrackerTests: XCTestCase {
             body.contains("syncLiveNotationTracker(mode: resolvedLiveNotationMode)"),
             "entry and restoration must resolve the mode, not wait for a transition"
         )
-        XCTAssertTrue(
+        XCTAssertFalse(
             body.contains("activateCaptureInput()"),
-            "the existing restored-route engine start must be preserved"
+            "restored entry must not request camera or microphone permission"
         )
     }
 
-    /// Finalized review notation is untouched by this repair: it still projects
-    /// through the same builder, and the preview never reaches it.
-    func testFinalizedNotationBehaviourIsUnchanged() throws {
+    /// AHHH playback state is optional presentation context for the generic
+    /// Practice/Capture lanes. CXL's physical reference trace deliberately
+    /// opts out so a loop rotation or transient anchor cannot change its
+    /// coordinate basis, split the line, or restart it from the bottom.
+    func testCXLAuthoringTraceDoesNotUsePlaybackLoopContextOrWrap() throws {
         let source = try authoringViewSource()
         XCTAssertTrue(
-            source.contains("ReferenceTearCanonicalProjectionBuilder.project(review)"),
-            "the finalized review must still project through the shared builder"
+            source.contains("makeLivePerformedNotationDataSource(\n                    includePlaybackLoopContext: false"),
+            "CXL must keep one take-local physical coordinate basis"
         )
+
+        let liveTitle = try XCTUnwrap(
+            source.range(of: "projection: ReferenceTearCanonicalProjectionBuilder.project(")
+        )
+        let liveCall = String(source[liveTitle.lowerBound...].prefix(900))
+        XCTAssertFalse(
+            liveCall.contains("wrapPeriod:"),
+            "the live CXL chart must never insert a pen-up at an AHHH loop boundary"
+        )
+
+        let analyzerURL = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .appendingPathComponent("ScratchLabDesktop/Views/MacAnalyzerView.swift")
+        let analyzer = try String(contentsOf: analyzerURL, encoding: .utf8)
+        XCTAssertTrue(analyzer.contains("makeLivePerformedNotationDataSource()"))
+        XCTAssertFalse(
+            analyzer.contains("includePlaybackLoopContext: false"),
+            "generic Practice/Capture behavior keeps the factory's default"
+        )
+    }
+
+    /// Finalized review uses stored canonical output or the shared builder;
+    /// the preview never reaches that take-owned projection.
+    func testFinalizedNotationBehaviourIsUnchanged() throws {
+        let source = try authoringViewSource()
+        try assertFinalizedTearProjectionContract(in: source)
         XCTAssertTrue(
             source.contains("movementEvents: liveNotationTracker.continuousRenderedEvents"),
             "and the live lane through the same one"

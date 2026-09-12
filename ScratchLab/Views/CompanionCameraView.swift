@@ -3008,7 +3008,7 @@ private struct SessionSetupView: View {
                 }
             case .captureMode:
                 CaptureSelectionSheet(title: "Click track") {
-                    ForEach(CaptureSessionCaptureMode.allCases) { option in
+                    ForEach(CaptureSessionCaptureMode.standardCaptureModes) { option in
                         CaptureSelectionRow(
                             title: option.title,
                             isSelected: captureMode == option,

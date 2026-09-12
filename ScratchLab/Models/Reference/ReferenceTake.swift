@@ -17,9 +17,10 @@
 // with `diagnostic`, `rejected` and `deprecated` as off-ramps that never lead
 // back. A raw capture is never canonical, and no step happens automatically.
 //
-// Foundation only. Pure value types, shared by iOS and macOS.
+// Foundation and CryptoKit. Pure value types, shared by iOS and macOS.
 
 import Foundation
+import CryptoKit
 
 // MARK: - Lifecycle
 
@@ -182,6 +183,476 @@ enum ReferenceFaderVariant: String, Codable, Equatable, Sendable, CaseIterable, 
     var requiresCalibratedFader: Bool { true }
 }
 
+// MARK: - Immutable CXL capture intent
+
+enum ReferenceBeatFeel: String, Codable, Equatable, Sendable, CaseIterable {
+    case straight
+    case swing
+    case lightSwing
+    case halfTime
+}
+
+enum ReferenceBeatMixRole: String, Codable, Equatable, Sendable {
+    case productionMaster
+    case sparseAnalysis
+}
+
+enum ReferenceBeatRightsState: String, Codable, Equatable, Sendable {
+    case procedurallyGeneratedOriginal
+    case rightsPending
+    case unavailable
+}
+
+/// Exact identity of the beat audio bound to a CXL capture. Filenames and
+/// hashes are data, never lookup hints: a consumer either opens this exact
+/// asset set or reports a mismatch.
+struct ReferenceBeatSpecBinding: Codable, Equatable, Sendable, Identifiable {
+    static let currentSchemaVersion = "scratchlab_beat_spec_binding_v1"
+
+    let schemaVersion: String
+    let id: String
+    let version: Int
+    let family: String
+    let bpm: Int
+    let timeSignatureNumerator: Int
+    let timeSignatureDenominator: Int
+    let feel: ReferenceBeatFeel
+    let countInFrameCount: Int64
+    let loopStartFrame: Int64
+    let loopFrameCount: Int64
+    let sampleRate: Int
+    let productionMasterFileName: String
+    let productionMasterSHA256: String
+    let sparseAnalysisMixFileName: String
+    let sparseAnalysisMixSHA256: String
+    let availableStemSHA256: [String: String]
+    let mixRole: ReferenceBeatMixRole
+    let rightsState: ReferenceBeatRightsState
+    let provenance: String
+
+    init(
+        schemaVersion: String = Self.currentSchemaVersion,
+        id: String,
+        version: Int,
+        family: String,
+        bpm: Int,
+        timeSignatureNumerator: Int = 4,
+        timeSignatureDenominator: Int = 4,
+        feel: ReferenceBeatFeel,
+        countInFrameCount: Int64,
+        loopStartFrame: Int64,
+        loopFrameCount: Int64,
+        sampleRate: Int,
+        productionMasterFileName: String,
+        productionMasterSHA256: String,
+        sparseAnalysisMixFileName: String,
+        sparseAnalysisMixSHA256: String,
+        availableStemSHA256: [String: String],
+        mixRole: ReferenceBeatMixRole = .productionMaster,
+        rightsState: ReferenceBeatRightsState,
+        provenance: String
+    ) {
+        self.schemaVersion = schemaVersion
+        self.id = id
+        self.version = version
+        self.family = family
+        self.bpm = bpm
+        self.timeSignatureNumerator = timeSignatureNumerator
+        self.timeSignatureDenominator = timeSignatureDenominator
+        self.feel = feel
+        self.countInFrameCount = countInFrameCount
+        self.loopStartFrame = loopStartFrame
+        self.loopFrameCount = loopFrameCount
+        self.sampleRate = sampleRate
+        self.productionMasterFileName = productionMasterFileName
+        self.productionMasterSHA256 = productionMasterSHA256
+        self.sparseAnalysisMixFileName = sparseAnalysisMixFileName
+        self.sparseAnalysisMixSHA256 = sparseAnalysisMixSHA256
+        self.availableStemSHA256 = availableStemSHA256
+        self.mixRole = mixRole
+        self.rightsState = rightsState
+        self.provenance = provenance
+    }
+}
+
+struct ReferenceCapturePlan: Codable, Equatable, Sendable {
+    let countInBars: Int
+    let repetitionCount: Int
+    let tailBars: Int
+}
+
+enum ReferenceCapturePurpose: String, Codable, CaseIterable, Sendable, Identifiable {
+    case canonicalReference
+    case movementCheck
+
+    var id: String { rawValue }
+    var displayName: String {
+        switch self {
+        case .canonicalReference: "Reference take (four repetitions)"
+        case .movementCheck: "Movement check (no beat)"
+        }
+    }
+}
+
+/// The frozen Setup contract for one CXL authoring sequence. It is created
+/// before recording and copied unchanged into every take and export.
+struct ReferenceCaptureIntent: Codable, Equatable, Sendable, Identifiable {
+    static let currentSchemaVersion = "scratchlab_reference_capture_intent_v1"
+
+    let schemaVersion: String
+    let id: String
+    let parentTechniqueID: String
+    let parentTechniqueVersion: Int
+    let variantID: String
+    let variantVersion: Int
+    let recipeID: String
+    let recipeVersion: Int
+    let startingPlatterDirection: ReferenceStartingPlatterDirection
+    let faderForm: ReferenceFaderVariant
+    let bpm: Int
+    let beatsPerCycle: Int
+    let plan: ReferenceCapturePlan
+    let beatSpec: ReferenceBeatSpecBinding?
+    /// Absent on older captures, which retain the original reference workflow.
+    let purpose: ReferenceCapturePurpose?
+
+    var capturePurpose: ReferenceCapturePurpose { purpose ?? .canonicalReference }
+    var isMovementCheck: Bool { capturePurpose == .movementCheck }
+
+    init(
+        schemaVersion: String = Self.currentSchemaVersion,
+        id: String,
+        parentTechniqueID: String,
+        parentTechniqueVersion: Int = 1,
+        variantID: String,
+        variantVersion: Int = 1,
+        recipeID: String,
+        recipeVersion: Int = 1,
+        startingPlatterDirection: ReferenceStartingPlatterDirection,
+        faderForm: ReferenceFaderVariant,
+        bpm: Int,
+        beatsPerCycle: Int,
+        plan: ReferenceCapturePlan,
+        beatSpec: ReferenceBeatSpecBinding?,
+        purpose: ReferenceCapturePurpose = .canonicalReference
+    ) {
+        self.schemaVersion = schemaVersion
+        self.id = id
+        self.parentTechniqueID = parentTechniqueID
+        self.parentTechniqueVersion = parentTechniqueVersion
+        self.variantID = variantID
+        self.variantVersion = variantVersion
+        self.recipeID = recipeID
+        self.recipeVersion = recipeVersion
+        self.startingPlatterDirection = startingPlatterDirection
+        self.faderForm = faderForm
+        self.bpm = bpm
+        self.beatsPerCycle = beatsPerCycle
+        self.plan = plan
+        self.beatSpec = beatSpec
+        self.purpose = purpose
+    }
+}
+
+enum ReferenceCaptureIntentIssue: Equatable, Sendable {
+    case missingIntent
+    case missingBeatSpec
+    case mismatch(field: String, expected: String, actual: String)
+    case invalid(field: String, detail: String)
+}
+
+enum ReferenceCaptureIntentValidator {
+    private static func isSHA256(_ value: String) -> Bool {
+        value.count == 64 && value.allSatisfy { $0.isHexDigit && !$0.isUppercase }
+    }
+
+    static func issues(
+        intent: ReferenceCaptureIntent?,
+        metadata: ReferenceTakeMetadata? = nil,
+        requireBeatSpec: Bool
+    ) -> [ReferenceCaptureIntentIssue] {
+        guard let intent else { return [.missingIntent] }
+        var issues: [ReferenceCaptureIntentIssue] = []
+        func mismatch(_ field: String, _ expected: CustomStringConvertible, _ actual: CustomStringConvertible) {
+            if expected.description != actual.description {
+                issues.append(.mismatch(field: field, expected: expected.description, actual: actual.description))
+            }
+        }
+        if intent.schemaVersion != ReferenceCaptureIntent.currentSchemaVersion {
+            issues.append(.invalid(field: "intent.schemaVersion", detail: intent.schemaVersion))
+        }
+        if intent.id.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            issues.append(.invalid(field: "intent.id", detail: "empty"))
+        }
+        if intent.parentTechniqueVersion < 1 || intent.variantVersion < 1 || intent.recipeVersion < 1 {
+            issues.append(.invalid(field: "intent.version", detail: "versions must be positive"))
+        }
+        if intent.beatsPerCycle < 1 || (!intent.isMovementCheck && intent.plan.repetitionCount < 1)
+            || intent.plan.countInBars < 0 || intent.plan.tailBars < 0 {
+            issues.append(.invalid(field: "intent.plan", detail: "invalid beat/count plan"))
+        }
+        if intent.isMovementCheck,
+           intent.plan != ReferenceCapturePlan(countInBars: 0, repetitionCount: 0, tailBars: 0)
+            || intent.beatSpec != nil {
+            issues.append(.invalid(field: "intent.plan", detail: "a movement check has no beat, count-in or planned repetitions"))
+        }
+        if let metadata {
+            mismatch("technique", intent.parentTechniqueID, metadata.technique.id)
+            mismatch("recipe", intent.recipeID, metadata.pattern.id)
+            mismatch("bpm", intent.bpm, metadata.bpm)
+            mismatch("beatsPerCycle", intent.beatsPerCycle, metadata.pattern.phraseBeats)
+            mismatch("startingPlatterDirection", intent.startingPlatterDirection.rawValue, metadata.startingPlatterDirection.rawValue)
+            mismatch("faderForm", intent.faderForm.rawValue, metadata.faderVariant.rawValue)
+            mismatch("countInBars", intent.plan.countInBars, metadata.countInBars)
+            mismatch("repetitionCount", intent.plan.repetitionCount, metadata.repetitionCount)
+            mismatch("tailBars", intent.plan.tailBars, metadata.tailBars)
+        }
+        guard let beat = intent.beatSpec else {
+            if requireBeatSpec { issues.append(.missingBeatSpec) }
+            return issues
+        }
+        if beat.schemaVersion != ReferenceBeatSpecBinding.currentSchemaVersion {
+            issues.append(.invalid(field: "beat.schemaVersion", detail: beat.schemaVersion))
+        }
+        mismatch("beat.bpm", intent.bpm, beat.bpm)
+        if beat.id.isEmpty || beat.family.isEmpty || beat.version < 1 {
+            issues.append(.invalid(field: "beat.identity", detail: "missing ID, family, or version"))
+        }
+        if beat.timeSignatureNumerator < 1 || beat.timeSignatureDenominator < 1 {
+            issues.append(.invalid(field: "beat.timeSignature", detail: "invalid numerator or denominator"))
+        }
+        if beat.countInFrameCount < 0 || beat.loopStartFrame != beat.countInFrameCount || beat.loopFrameCount < 1 {
+            issues.append(.invalid(field: "beat.frameContract", detail: "count-in and loop frames do not join exactly"))
+        }
+        if beat.sampleRate != 48_000 {
+            issues.append(.mismatch(field: "beat.sampleRate", expected: "48000", actual: "\(beat.sampleRate)"))
+        }
+        if beat.productionMasterFileName.isEmpty || beat.sparseAnalysisMixFileName.isEmpty
+            || beat.productionMasterFileName == beat.sparseAnalysisMixFileName {
+            issues.append(.invalid(field: "beat.fileName", detail: "master and analysis filenames must be distinct"))
+        }
+        if beat.mixRole != .productionMaster {
+            issues.append(.mismatch(field: "beat.mixRole", expected: ReferenceBeatMixRole.productionMaster.rawValue, actual: beat.mixRole.rawValue))
+        }
+        if !isSHA256(beat.productionMasterSHA256) || !isSHA256(beat.sparseAnalysisMixSHA256)
+            || beat.availableStemSHA256.contains(where: { $0.key.isEmpty || !isSHA256($0.value) }) {
+            issues.append(.invalid(field: "beat.hash", detail: "one or more hashes are not lowercase SHA-256"))
+        }
+        if beat.rightsState != .procedurallyGeneratedOriginal || beat.provenance.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            issues.append(.invalid(field: "beat.rights", detail: "procedural rights provenance is not complete"))
+        }
+        return issues
+    }
+}
+
+// MARK: - Media time origin
+
+/// The authored beat grid starts with the count-in. A timed recorder can
+/// start later, so its WAV/MOV zero needs a separately preserved origin.
+/// Seconds are converted on the capture host; raw host ticks are not portable
+/// seconds and must never be reinterpreted on another machine.
+struct ReferenceMediaTimeOrigin: Codable, Equatable, Sendable {
+    let clickStartHostTime: UInt64
+    let recordingStartHostTime: UInt64
+    let recordingStartOffsetSeconds: Double
+
+    var validationIssues: [String] {
+        var issues: [String] = []
+        if clickStartHostTime == 0 || recordingStartHostTime == 0 {
+            issues.append("media origin is missing a host-clock timestamp")
+        }
+        if recordingStartHostTime < clickStartHostTime {
+            issues.append("media origin host-clock ordering is impossible")
+        }
+        if !recordingStartOffsetSeconds.isFinite || recordingStartOffsetSeconds < 0 {
+            issues.append("media origin offset must be finite and nonnegative")
+        }
+        if (recordingStartHostTime == clickStartHostTime) != (recordingStartOffsetSeconds == 0) {
+            issues.append("media origin offset disagrees with equal host-clock timestamps")
+        }
+        return issues
+    }
+}
+
+enum ReferenceMediaTimeRange {
+    /// Intersect authored time with actual media. A rounded count-in may put
+    /// the first downbeat a fraction of a sample before WAV zero.
+    static func clamped(start: Double, end: Double, duration: Double) -> ClosedRange<Double>? {
+        guard start.isFinite, end.isFinite, duration.isFinite,
+              duration > 0, end > start, start < duration, end > 0 else { return nil }
+        return max(0, start)...min(end, duration)
+    }
+}
+
+// MARK: - Witnessed recording timing
+
+enum ReferenceTimingOriginSource: String, Codable, Equatable, Sendable {
+    case captureSidecarHostClock
+    case syntheticFixture
+}
+
+/// Immutable timing facts observed from the existing beat/click clock and the
+/// finalized media. Host-clock values stay in their native domain; no second
+/// timer or wall-clock conversion is introduced.
+struct ReferenceWitnessedTiming: Codable, Equatable, Sendable {
+    static let currentSchemaVersion = "scratchlab_reference_witnessed_timing_v1"
+
+    let schemaVersion: String
+    let clickStartHostTime: UInt64
+    let intendedMediaOriginHostTime: UInt64
+    let actualRecordingOriginHostTime: UInt64
+    let sampleRate: Int
+    let countInFrameCount: Int64
+    let loopStartFrame: Int64
+    let loopFrameCount: Int64
+    let beatsPerCycle: Int
+    let plannedRepetitions: Int
+    let plannedDurationSeconds: Double
+    let measuredWAVDurationSeconds: Double
+    let measuredMOVDurationSeconds: Double?
+    let uncertaintySeconds: Double
+    let source: ReferenceTimingOriginSource
+
+    init(
+        schemaVersion: String = Self.currentSchemaVersion,
+        clickStartHostTime: UInt64,
+        intendedMediaOriginHostTime: UInt64,
+        actualRecordingOriginHostTime: UInt64,
+        sampleRate: Int,
+        countInFrameCount: Int64,
+        loopStartFrame: Int64,
+        loopFrameCount: Int64,
+        beatsPerCycle: Int,
+        plannedRepetitions: Int,
+        plannedDurationSeconds: Double,
+        measuredWAVDurationSeconds: Double,
+        measuredMOVDurationSeconds: Double?,
+        uncertaintySeconds: Double,
+        source: ReferenceTimingOriginSource
+    ) {
+        self.schemaVersion = schemaVersion
+        self.clickStartHostTime = clickStartHostTime
+        self.intendedMediaOriginHostTime = intendedMediaOriginHostTime
+        self.actualRecordingOriginHostTime = actualRecordingOriginHostTime
+        self.sampleRate = sampleRate
+        self.countInFrameCount = countInFrameCount
+        self.loopStartFrame = loopStartFrame
+        self.loopFrameCount = loopFrameCount
+        self.beatsPerCycle = beatsPerCycle
+        self.plannedRepetitions = plannedRepetitions
+        self.plannedDurationSeconds = plannedDurationSeconds
+        self.measuredWAVDurationSeconds = measuredWAVDurationSeconds
+        self.measuredMOVDurationSeconds = measuredMOVDurationSeconds
+        self.uncertaintySeconds = uncertaintySeconds
+        self.source = source
+    }
+}
+
+enum ReferenceWitnessedTimingValidator {
+    static let durationToleranceSeconds = 0.125
+
+    static func issues(
+        _ timing: ReferenceWitnessedTiming?,
+        intent: ReferenceCaptureIntent?,
+        mediaTimeOrigin: ReferenceMediaTimeOrigin? = nil
+    ) -> [String] {
+        guard let timing else { return ["witnessed timing is missing"] }
+        var issues: [String] = []
+        guard let beat = intent?.beatSpec else { return ["BeatSpec is missing for witnessed timing"] }
+        if timing.schemaVersion != ReferenceWitnessedTiming.currentSchemaVersion {
+            issues.append("witnessed timing schema is unsupported")
+        }
+        if timing.clickStartHostTime == 0 || timing.intendedMediaOriginHostTime == 0
+            || timing.actualRecordingOriginHostTime == 0 {
+            issues.append("a required host-clock origin is missing")
+        }
+        if timing.clickStartHostTime > timing.intendedMediaOriginHostTime
+            || timing.intendedMediaOriginHostTime > timing.actualRecordingOriginHostTime {
+            issues.append("host-clock origin ordering is impossible")
+        }
+        if timing.sampleRate != beat.sampleRate || beat.bpm != intent?.bpm {
+            issues.append("timing and BeatSpec sample rate/BPM do not match")
+        }
+        if timing.beatsPerCycle != intent?.beatsPerCycle || ![1, 2, 4, 8, 16].contains(timing.beatsPerCycle) {
+            issues.append("beats per cycle are unsupported or do not match capture intent")
+        }
+        if timing.countInFrameCount != beat.countInFrameCount
+            || timing.loopStartFrame != beat.loopStartFrame
+            || timing.loopFrameCount != beat.loopFrameCount {
+            issues.append("master/analysis loop boundaries do not match BeatSpec")
+        }
+        if timing.plannedRepetitions != intent?.plan.repetitionCount {
+            issues.append("planned repetitions do not match capture intent")
+        }
+        if let mediaTimeOrigin, let intent {
+            issues.append(contentsOf: mediaTimeOrigin.validationIssues)
+            if mediaTimeOrigin.clickStartHostTime != timing.clickStartHostTime
+                || mediaTimeOrigin.recordingStartHostTime != timing.actualRecordingOriginHostTime {
+                issues.append("media origin and witnessed host-clock timestamps do not match")
+            }
+            let totalBeats = (intent.plan.countInBars + intent.plan.tailBars) * beat.timeSignatureNumerator
+                + intent.plan.repetitionCount * intent.beatsPerCycle
+            let expectedDuration = Double(totalBeats) * 60.0 / Double(intent.bpm)
+                - mediaTimeOrigin.recordingStartOffsetSeconds
+            if !expectedDuration.isFinite || expectedDuration <= 0
+                || abs(timing.plannedDurationSeconds - expectedDuration) > 1.0 / Double(beat.sampleRate) {
+                issues.append("planned media duration does not match the capture plan and media origin")
+            }
+        }
+        if !timing.plannedDurationSeconds.isFinite || timing.plannedDurationSeconds <= 0
+            || !timing.measuredWAVDurationSeconds.isFinite || timing.measuredWAVDurationSeconds <= 0
+            || abs(timing.measuredWAVDurationSeconds - timing.plannedDurationSeconds)
+                > durationToleranceSeconds + max(0, timing.uncertaintySeconds) {
+            issues.append(String(format: "Recorded audio is %.2f seconds; the capture plan requires %.2f seconds. An early stop leaves the timed reference incomplete.", timing.measuredWAVDurationSeconds, timing.plannedDurationSeconds))
+        }
+        if let mov = timing.measuredMOVDurationSeconds,
+           (!mov.isFinite || mov <= 0
+            || abs(mov - timing.measuredWAVDurationSeconds) > durationToleranceSeconds + max(0, timing.uncertaintySeconds)) {
+            issues.append("finalized MOV duration does not match WAV duration")
+        }
+        return issues
+    }
+}
+
+struct ReferenceTakeSourceIdentity: Codable, Equatable, Sendable {
+    let sessionID: String
+    let takeID: String
+    let takeNumber: Int
+    let takeToken: String
+}
+
+/// One persisted source outcome for a take. Only `waitingForLateTransfer` may
+/// transition, and only to a terminal result carrying the same identity/token.
+enum ReferencePerTakeSourceState: Codable, Equatable, Sendable {
+    case linked(identity: ReferenceTakeSourceIdentity, motionFileName: String?, sha256: String?)
+    case notRequested(policy: String)
+    case unavailable(policy: String)
+    case waitingForLateTransfer(identity: ReferenceTakeSourceIdentity, deadline: Date)
+    case identityMismatch(expected: ReferenceTakeSourceIdentity, foundSessionID: String, foundTakeID: String)
+    case timedOut(identity: ReferenceTakeSourceIdentity)
+    case conflict(identity: ReferenceTakeSourceIdentity?, detail: String)
+
+    var isTerminal: Bool {
+        if case .waitingForLateTransfer = self { return false }
+        return true
+    }
+
+    var operatorSummary: String {
+        switch self {
+        case .linked(let identity, let file, _):
+            return "Watch source linked to \(identity.sessionID)/\(identity.takeID)/\(identity.takeToken)\(file.map { " (\($0))" } ?? "")."
+        case .notRequested(let policy): return "Watch source was not requested: \(policy)."
+        case .unavailable(let policy): return "Watch source is explicitly unavailable: \(policy)."
+        case .waitingForLateTransfer(let identity, let deadline):
+            return "Waiting for Watch source for \(identity.sessionID)/\(identity.takeID)/\(identity.takeToken) until \(deadline.formatted())."
+        case .identityMismatch(let expected, let session, let take):
+            return "Watch source mismatch: expected \(expected.sessionID)/\(expected.takeID), found \(session)/\(take)."
+        case .timedOut: return "Watch source transfer reached its bounded timeout."
+        case .conflict(_, let detail): return "Watch source conflict: \(detail)"
+        }
+    }
+}
+
 // MARK: - Take metadata
 
 /// Everything an operator sets before recording, plus what the system records
@@ -221,6 +692,15 @@ struct ReferenceTakeMetadata: Codable, Equatable, Sendable, Identifiable {
     let faderVariant: ReferenceFaderVariant
     let handedness: CaptureSessionHandedness
     let notes: String
+    /// Absent only on legacy/non-CXL metadata. Presence is immutable.
+    let captureIntent: ReferenceCaptureIntent?
+    /// Absent on legacy/non-CXL metadata; required by the strict CXL gate.
+    let witnessedTiming: ReferenceWitnessedTiming?
+    /// Nil preserves legacy beat-to-media conversion; absence is not a
+    /// measured claim that recording included the count-in.
+    let mediaTimeOrigin: ReferenceMediaTimeOrigin?
+    /// Persisted so package reopen reproduces the same terminal source result.
+    var sourceState: ReferencePerTakeSourceState?
     /// Monotonic version of this technique+pattern reference. A re-record of
     /// the same pattern increments it; the registry serves the highest
     /// approved version.
@@ -275,9 +755,14 @@ struct ReferenceTakeMetadata: Codable, Equatable, Sendable, Identifiable {
 
     var secondsPerBeat: Double { bpm > 0 ? 60.0 / Double(bpm) : 0 }
 
+    func mediaSeconds(forBeat beat: Double) -> Double {
+        if let mediaTimeOrigin, !mediaTimeOrigin.validationIssues.isEmpty { return .nan }
+        return beat * secondsPerBeat - (mediaTimeOrigin?.recordingStartOffsetSeconds ?? 0)
+    }
+
     /// Take-relative seconds at which the first repetition starts.
     var firstRepetitionStartSeconds: Double {
-        Double(countInBars * pattern.beatsPerBar) * secondsPerBeat
+        max(0, mediaSeconds(forBeat: Double(countInBars * pattern.beatsPerBar)))
     }
 
     /// Duration of one repetition, in seconds.
@@ -302,6 +787,10 @@ struct ReferenceTakeMetadata: Codable, Equatable, Sendable, Identifiable {
         faderVariant: ReferenceFaderVariant,
         handedness: CaptureSessionHandedness = .right,
         notes: String = "",
+        captureIntent: ReferenceCaptureIntent? = nil,
+        witnessedTiming: ReferenceWitnessedTiming? = nil,
+        mediaTimeOrigin: ReferenceMediaTimeOrigin? = nil,
+        sourceState: ReferencePerTakeSourceState? = nil,
         referenceVersion: Int,
         crossfaderCalibration: CrossfaderCalibration?,
         hysteresis: CrossfaderHysteresis = .default,
@@ -326,6 +815,10 @@ struct ReferenceTakeMetadata: Codable, Equatable, Sendable, Identifiable {
         self.faderVariant = faderVariant
         self.handedness = handedness
         self.notes = notes
+        self.captureIntent = captureIntent
+        self.witnessedTiming = witnessedTiming
+        self.mediaTimeOrigin = mediaTimeOrigin
+        self.sourceState = sourceState
         self.referenceVersion = referenceVersion
         self.crossfaderCalibration = crossfaderCalibration
         self.crossfaderHysteresisClosedAtOrBelow = hysteresis.closedAtOrBelow
@@ -391,6 +884,14 @@ struct ReferenceRepetitionBoundary: Codable, Equatable, Sendable, Identifiable {
 
     func endSeconds(bpm: Int) -> Double {
         bpm > 0 ? endBeat * 60.0 / Double(bpm) : 0
+    }
+
+    func startSeconds(metadata: ReferenceTakeMetadata) -> Double {
+        metadata.mediaSeconds(forBeat: startBeat)
+    }
+
+    func endSeconds(metadata: ReferenceTakeMetadata) -> Double {
+        metadata.mediaSeconds(forBeat: endBeat)
     }
 
     init(index: Int, startBeat: Double, endBeat: Double) {
@@ -676,7 +1177,7 @@ enum ReferenceTearReviewReason: String, CaseIterable, Codable, Equatable, Sendab
 /// string so a correction made here is the same shape of provenance the
 /// canonical layer already demands of a manual label — and can be validated
 /// with the canonical layer's own rule.
-struct ReferenceTearCorrection: Equatable, Sendable {
+struct ReferenceTearCorrection: Codable, Equatable, Sendable {
     let correctedBy: String
     let correctedAt: Date
     let notes: String
@@ -717,7 +1218,7 @@ struct ReferenceTearCorrection: Equatable, Sendable {
 /// events. It never replaces them: `ReferenceTearSegmentationReview` keeps the
 /// raw events verbatim beside these, and nothing in this file mutates,
 /// reorders, repairs or drops one.
-struct ReferenceTearMotionSegment: Equatable, Sendable, Identifiable {
+struct ReferenceTearMotionSegment: Codable, Equatable, Sendable, Identifiable {
     let index: Int
     let span: ReferenceTearTimeSpan
     let state: ScratchNotationMotionState
@@ -740,7 +1241,7 @@ struct ReferenceTearMotionSegment: Equatable, Sendable, Identifiable {
 /// before opposite travel spans the whole stationary interval rather than
 /// inventing an instant inside it — the same rule
 /// `PlatterMotionSegmenter.Reversal` states.
-struct ReferenceTearReversal: Equatable, Sendable, Identifiable {
+struct ReferenceTearReversal: Codable, Equatable, Sendable, Identifiable {
     let index: Int
     let span: ReferenceTearTimeSpan
     let from: ScratchNotationDirection
@@ -757,11 +1258,11 @@ struct ReferenceTearReversal: Equatable, Sendable, Identifiable {
 /// live fields beside it, so the machine's reading and the operator's
 /// disagreement with it both stay inspectable. Removal is a FLAG: no raw
 /// event, and no proposal, is ever deleted.
-struct ReferenceTearBoundary: Equatable, Sendable, Identifiable {
+struct ReferenceTearBoundary: Codable, Equatable, Sendable, Identifiable {
 
     /// What the automatic pass proposed. Absent for a boundary the operator
     /// added, which the machine never proposed at all.
-    struct Proposal: Equatable, Sendable {
+    struct Proposal: Codable, Equatable, Sendable {
         let span: ReferenceTearTimeSpan
         let kind: ReferenceTearBoundaryKind
         let evidenceQuality: ReferenceTearEvidenceQuality
@@ -851,7 +1352,7 @@ struct ReferenceTearBoundary: Equatable, Sendable, Identifiable {
 
 /// One same-direction gesture under review, with the machine's reading and
 /// the operator's.
-struct ReferenceTearCandidate: Equatable, Sendable, Identifiable {
+struct ReferenceTearCandidate: Codable, Equatable, Sendable, Identifiable {
     let id: String
     let gestureIndex: Int
     let direction: ScratchNotationDirection
@@ -1015,7 +1516,7 @@ struct ReferenceTearCandidate: Equatable, Sendable, Identifiable {
 /// fully corrected review leaves the take exactly as un-approved and
 /// un-publishable as an untouched one. Making a take canonical remains the
 /// explicit, separately gated operator action it already was.
-struct ReferenceTearSegmentationReview: Equatable, Sendable {
+struct ReferenceTearSegmentationReview: Codable, Equatable, Sendable {
 
     let referenceTakeID: String
     /// The take's recorded platter movement evidence, VERBATIM. Nothing in
@@ -1257,6 +1758,47 @@ struct ReferenceTearSegmentationReview: Equatable, Sendable {
     ) -> Bool {
         guard let position = candidates.firstIndex(where: { $0.id == candidateID }) else { return false }
         return body(&candidates[position])
+    }
+}
+
+extension ReferenceTearSegmentationReview {
+    /// Intrinsic limitations implied by this review, shared by its owner and
+    /// companion integrity checks. Version 1 uses the current endpoint-joining
+    /// projector, so interpolatedCurve is required even when it yields three
+    /// or more points. This does not infer support for a future measured producer.
+    var requiredIntrinsicComparisonLimitations: [String: [CanonicalTearComparison.UnavailableReason]] {
+        Dictionary(uniqueKeysWithValues: candidates.map { candidate in
+            var reasons: [CanonicalTearComparison.UnavailableReason] = [.interpolatedCurve]
+            if candidate.effectiveClassification == .unknown || hasInterruptedEvidence(in: candidate.span) {
+                reasons.append(.unknownEvidence)
+            }
+            if candidate.hasAmbiguousEvidence || candidate.classificationDisagreesWithBoundaryCount {
+                reasons.append(.ambiguousEvidence)
+            }
+            if candidate.boundaries.contains(where: { boundary in
+                boundary.isRemoved || (boundary.countsAsTearHold && boundary.origin == .operatorAdded)
+                    || (boundary.proposal != nil && (boundary.countsAsTearHold || boundary.proposal?.kind == .hold)
+                        && (boundary.proposal?.span != boundary.span || boundary.proposal?.kind != boundary.kind))
+            }) { reasons.append(.correctedTiming) }
+            return (candidate.id, reasons)
+        })
+    }
+
+    func hasInterruptedEvidence(in span: ReferenceTearTimeSpan) -> Bool {
+        func overlaps(_ start: Double, _ end: Double) -> Bool {
+            start == end ? start >= span.startTime && start <= span.endTime
+                : start < span.endTime && end > span.startTime
+        }
+        return platterEvidenceIntervals.contains {
+            $0.kind != .observedStillness && overlaps($0.startTime, $0.endTime)
+        } || segments.contains { segment in
+            overlaps(segment.span.startTime, segment.span.endTime)
+                && segment.reasons.contains { reason in
+                    [.packetGap, .clockDiscontinuity, .discardedMotion, .insufficientSampling,
+                     .unknownMotionRegion, .malformedMovementEvent, .overlappingMovementEvents,
+                     .gapDerivedStationaryInterval].contains(reason)
+                }
+        }
     }
 }
 
@@ -1986,7 +2528,7 @@ enum ReferenceCrossfaderTakeStart {
         }
         guard calibration.address.channel == channel,
               calibration.address.controller == controller,
-              calibration.address.deviceIdentifier == (state.deviceName ?? "") else {
+              calibration.address.deviceIdentifier == state.midiSourceID else {
             return .rejected(.addressMismatch)
         }
         guard state.calibrationID == calibration.id else {
@@ -2038,7 +2580,7 @@ enum ReferenceCrossfaderTakeStart {
 /// describe the PROJECTION (what could and could not be placed on a canonical
 /// grid), not the segmentation, and the two must not be conflated in a UI or
 /// in a test.
-enum ReferenceTearProjectionReason: String, Equatable, Sendable, CaseIterable {
+enum ReferenceTearProjectionReason: String, Codable, Equatable, Sendable, CaseIterable {
     case measuredPlatterTravel
     case gestureLocalPlatterRevolutions
     case gestureLocalNormalizedDisplacement
@@ -2091,7 +2633,7 @@ enum ReferenceTearProjectionReason: String, Equatable, Sendable, CaseIterable {
 /// It builds no notation model and no renderer of its own: the output is
 /// `ScratchNotation.GestureRecord`, which `ScratchStrokeGeometry` /
 /// `ScratchMotionRenderer` / `ScratchPhraseChartView` already draw.
-struct ReferenceTearCanonicalProjection: Equatable, Sendable {
+struct ReferenceTearCanonicalProjection: Codable, Equatable, Sendable {
     let records: [ScratchNotation.GestureRecord]
     /// Take-relative seconds actually occupied by the projected records.
     let timeRange: ClosedRange<Double>?
@@ -2102,6 +2644,305 @@ struct ReferenceTearCanonicalProjection: Equatable, Sendable {
     let reasons: [ReferenceTearProjectionReason]
 
     var isEmpty: Bool { records.isEmpty }
+}
+
+extension ReferenceTearCanonicalProjection {
+    private struct StoredBounds: Codable {
+        let lowerBound: Double
+        let upperBound: Double
+
+        func range(codingPath: [any CodingKey]) throws -> ClosedRange<Double> {
+            guard lowerBound.isFinite, upperBound.isFinite, lowerBound <= upperBound else {
+                throw DecodingError.dataCorrupted(.init(codingPath: codingPath,
+                    debugDescription: "Projection bounds must be finite and ordered."))
+            }
+            return lowerBound...upperBound
+        }
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case records, timeRange, positionRange, coordinateSpace, reasons
+    }
+
+    init(from decoder: any Decoder) throws {
+        let values = try decoder.container(keyedBy: CodingKeys.self)
+        records = try values.decode([ScratchNotation.GestureRecord].self, forKey: .records)
+        timeRange = try values.decodeIfPresent(StoredBounds.self, forKey: .timeRange)?.range(codingPath: decoder.codingPath)
+        positionRange = try values.decodeIfPresent(StoredBounds.self, forKey: .positionRange)?.range(codingPath: decoder.codingPath)
+        coordinateSpace = try values.decode(ScratchNotation.GestureRecord.CoordinateSpace.self, forKey: .coordinateSpace)
+        reasons = try values.decode([ReferenceTearProjectionReason].self, forKey: .reasons)
+    }
+
+    func encode(to encoder: any Encoder) throws {
+        var values = encoder.container(keyedBy: CodingKeys.self)
+        try values.encode(records, forKey: .records)
+        try values.encodeIfPresent(timeRange.map { StoredBounds(lowerBound: $0.lowerBound, upperBound: $0.upperBound) }, forKey: .timeRange)
+        try values.encodeIfPresent(positionRange.map { StoredBounds(lowerBound: $0.lowerBound, upperBound: $0.upperBound) }, forKey: .positionRange)
+        try values.encode(coordinateSpace, forKey: .coordinateSpace)
+        try values.encode(reasons, forKey: .reasons)
+    }
+}
+
+// MARK: - Optional raw-session evidence companion
+
+/// An immutable binding to the exact finalized source bytes. Captured and
+/// reference-authoring take identities are deliberately separate. A later
+/// sidecar rewrite requires an explicit failure, never silent rebinding.
+struct ReferenceTearEvidenceSourceBinding: Codable, Equatable, Sendable {
+    let capturedSessionID: String
+    let capturedTakeID: String
+    let capturedTakeNumber: Int
+    let rawSidecarFileName: String
+    let rawSidecarData: Data
+    let rawSidecarSHA256: String
+}
+
+/// Version 1 dates are numeric Foundation reference-date seconds since
+/// 2001-01-01 UTC. Raw sidecar bytes remain base64 and retain their original
+/// legacy JSON/date representation. No existing export schema changes.
+struct ReferenceTearEvidenceDocument: Codable, Equatable, Sendable {
+    static let currentSchemaVersion = "scratchlab_reference_tear_evidence_v1"
+    let schemaVersion: String
+    let sourceBinding: ReferenceTearEvidenceSourceBinding
+    let referenceTakeID: String
+    let review: ReferenceTearSegmentationReview
+    /// Historical output is stored, not regenerated during decoding.
+    let projection: ReferenceTearCanonicalProjection
+    /// Only intrinsic record limitations. Selection-dependent gaps are
+    /// recomputed by the owner for the currently selected candidate range.
+    let performedLimitations: [String: [CanonicalTearComparison.UnavailableReason]]
+}
+
+/// Pure serialization and association validation. This does not approve,
+/// publish, install, classify, reproject, or assess evidence quality. In
+/// particular, unknown records intentionally fail motion validation and
+/// finite malformed observations must survive a diagnostic round trip.
+enum ReferenceTearEvidenceCodec {
+    enum ReadResult: Equatable, Sendable {
+        case notAnalysed
+        case restored(ReferenceTearEvidenceDocument)
+    }
+
+    enum Error: Swift.Error, LocalizedError, Equatable, Sendable {
+        case unsupportedSchema(String)
+        case invalidSource(String)
+        case malformedDocument(String)
+        case identityMismatch(String)
+        case invalidSnapshot(String)
+
+        var errorDescription: String? {
+            switch self {
+            case .unsupportedSchema(let value): return "Unsupported reference tear evidence schema: \(value)."
+            case .invalidSource(let detail): return "Invalid reference tear source: \(detail)"
+            case .malformedDocument(let detail): return "Malformed reference tear evidence: \(detail)"
+            case .identityMismatch(let detail): return "Reference tear identity mismatch: \(detail)"
+            case .invalidSnapshot(let detail): return "Inconsistent reference tear snapshot: \(detail)"
+            }
+        }
+    }
+
+    static func makeSourceBinding(
+        rawSidecarData: Data,
+        fileName: String
+    ) throws -> ReferenceTearEvidenceSourceBinding {
+        guard isLeafName(fileName) else { throw Error.invalidSource("sidecar filename must be a plain file name") }
+        let sidecar = try sourceSidecar(rawSidecarData)
+        guard sidecar.schemaVersion == CaptureCore.LocalRecordingSidecar.currentSchemaVersion,
+              !sidecar.sessionID.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+              !sidecar.takeID.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+              sidecar.appLocalTakeNumber > 0,
+              sidecar.sidecarFileName == fileName else {
+            throw Error.invalidSource("schema, captured identities, take number or filename do not agree")
+        }
+        return ReferenceTearEvidenceSourceBinding(
+            capturedSessionID: sidecar.sessionID, capturedTakeID: sidecar.takeID,
+            capturedTakeNumber: sidecar.appLocalTakeNumber, rawSidecarFileName: fileName,
+            rawSidecarData: rawSidecarData, rawSidecarSHA256: sha256(rawSidecarData))
+    }
+
+    static func encode(
+        sourceBinding: ReferenceTearEvidenceSourceBinding,
+        review: ReferenceTearSegmentationReview,
+        projection: ReferenceTearCanonicalProjection,
+        performedLimitations: [String: [CanonicalTearComparison.UnavailableReason]] = [:]
+    ) throws -> Data {
+        let document = ReferenceTearEvidenceDocument(
+            schemaVersion: ReferenceTearEvidenceDocument.currentSchemaVersion,
+            sourceBinding: sourceBinding, referenceTakeID: review.referenceTakeID,
+            review: review, projection: projection, performedLimitations: performedLimitations)
+        try validate(document)
+        do { return try encoder().encode(document) }
+        catch { throw Error.malformedDocument("payload cannot be represented as finite JSON: \(error.localizedDescription)") }
+    }
+
+    /// Nil alone means legacy/not analysed. A present but empty, truncated,
+    /// unsupported or incorrectly bound document always throws.
+    static func decode(
+        _ data: Data?,
+        expectedSource: ReferenceTearEvidenceSourceBinding,
+        expectedReferenceTakeID: String? = nil
+    ) throws -> ReadResult {
+        guard let data else { return .notAnalysed }
+        let document = try decodeDocument(data)
+        let expected = try makeSourceBinding(rawSidecarData: expectedSource.rawSidecarData,
+                                            fileName: expectedSource.rawSidecarFileName)
+        guard expected == expectedSource, document.sourceBinding == expectedSource else {
+            throw Error.identityMismatch("the finalized sidecar bytes, hash, filename or captured take differ")
+        }
+        if let expectedReferenceTakeID, document.referenceTakeID != expectedReferenceTakeID {
+            throw Error.identityMismatch("the reference-authoring take differs")
+        }
+        return .restored(document)
+    }
+
+    /// Self-contained validation for the archive artifact probe. Export and
+    /// restore additionally use `decode(_:expectedSource:)` to bind this to
+    /// the corresponding existing take's external source-byte snapshot.
+    static func decodeDocument(_ data: Data) throws -> ReferenceTearEvidenceDocument {
+        struct Header: Decodable { let schemaVersion: String }
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .deferredToDate
+        let version: String
+        do { version = try decoder.decode(Header.self, from: data).schemaVersion }
+        catch { throw Error.malformedDocument(error.localizedDescription) }
+        guard version == ReferenceTearEvidenceDocument.currentSchemaVersion else {
+            throw Error.unsupportedSchema(version)
+        }
+        let document: ReferenceTearEvidenceDocument
+        do { document = try decoder.decode(ReferenceTearEvidenceDocument.self, from: data) }
+        catch { throw Error.malformedDocument(error.localizedDescription) }
+        try validate(document)
+        return document
+    }
+
+    private static func encoder() -> JSONEncoder {
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.sortedKeys]
+        encoder.dateEncodingStrategy = .deferredToDate
+        // The default nonconforming-float strategy throws. A nonfinite value
+        // is a representation failure, never a value to clamp or discard.
+        return encoder
+    }
+
+    private static func sha256(_ data: Data) -> String {
+        SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined()
+    }
+
+    private static func isLeafName(_ value: String) -> Bool {
+        !value.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            && value != "." && value != ".."
+            && !value.contains("/") && !value.contains("\\") && !value.contains("\0")
+    }
+
+    private static func sourceSidecar(_ data: Data) throws -> CaptureCore.LocalRecordingSidecar {
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .iso8601
+        do { return try decoder.decode(CaptureCore.LocalRecordingSidecar.self, from: data) }
+        catch { throw Error.invalidSource("original sidecar cannot be decoded: \(error.localizedDescription)") }
+    }
+
+    private static func validate(_ document: ReferenceTearEvidenceDocument) throws {
+        guard document.schemaVersion == ReferenceTearEvidenceDocument.currentSchemaVersion else {
+            throw Error.unsupportedSchema(document.schemaVersion)
+        }
+        let binding = document.sourceBinding
+        let derived = try makeSourceBinding(rawSidecarData: binding.rawSidecarData, fileName: binding.rawSidecarFileName)
+        guard binding == derived else { throw Error.identityMismatch("embedded source bytes, hash or captured identities disagree") }
+        let source = try sourceSidecar(binding.rawSidecarData)
+        let review = document.review
+        let projection = document.projection
+        guard !document.referenceTakeID.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+              review.referenceTakeID == document.referenceTakeID else {
+            throw Error.identityMismatch("review and document reference identities disagree")
+        }
+        guard review.rawMovementEvents == (source.detectedNotation?.recordMovementEvents ?? []) else {
+            throw Error.identityMismatch("review raw movement observations differ from the original sidecar")
+        }
+        guard !review.platterCoordinates.reference.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+              projection.coordinateSpace == review.platterCoordinates.coordinateSpace,
+              projection.records.map(\.id) == review.candidates.map(\.id),
+              zip(projection.records, review.candidates).allSatisfy({ pair in
+                  pair.0.direction == pair.1.direction && pair.0.timingDomain == .seconds
+                      && pair.0.coordinateSpace == projection.coordinateSpace
+              }) else {
+            throw Error.invalidSnapshot("stored projection identities, order, timing domain or coordinate declaration disagree")
+        }
+        for range in [projection.timeRange, projection.positionRange].compactMap({ $0 }) {
+            guard range.lowerBound.isFinite, range.upperBound.isFinite else {
+                throw Error.invalidSnapshot("projection range is not finite")
+            }
+        }
+        guard uniqueNames(review.candidates.map(\.id)),
+              review.segments.enumerated().allSatisfy({ $0.offset == $0.element.index }),
+              review.reversals.enumerated().allSatisfy({ $0.offset == $0.element.index }),
+              review.candidates.enumerated().allSatisfy({ $0.offset == $0.element.gestureIndex }) else {
+            throw Error.invalidSnapshot("review identities or ordinal indices are inconsistent")
+        }
+        for segment in review.segments {
+            if let index = segment.movementEventIndex, !review.rawMovementEvents.indices.contains(index) {
+                throw Error.invalidSnapshot("segment cites a missing raw movement event")
+            }
+        }
+        let packetIndices = (source.detectedNotation?.mixerMidiEvents ?? []).indices
+        for interval in review.platterEvidenceIntervals {
+            for index in [interval.firstPacketIndex, interval.lastPacketIndex].compactMap({ $0 }) {
+                guard packetIndices.contains(index) else { throw Error.invalidSnapshot("interval cites a missing raw MIDI packet") }
+            }
+            if let first = interval.firstPacketIndex, let last = interval.lastPacketIndex, first > last {
+                throw Error.invalidSnapshot("interval packet references are reversed")
+            }
+        }
+        for candidate in review.candidates {
+            let indices = candidate.motionSegmentIndices
+            guard indices.allSatisfy(review.segments.indices.contains),
+                  zip(indices, indices.dropFirst()).allSatisfy({ pair in pair.0 < pair.1 }),
+                  uniqueNames(candidate.boundaries.map(\.id)) else {
+                throw Error.invalidSnapshot("candidate has missing, repeated or unordered evidence references")
+            }
+            let added = candidate.boundaries.filter { $0.origin == .operatorAdded }
+            // Removal retains tombstones; duplicate-span coalescing never
+            // increments. The complete generated ID set proves the next ID
+            // cannot reuse an earlier operator-added boundary after restore.
+            guard candidate.addedBoundaryCount == added.count, candidate.addedBoundaryCount < Int(Int32.max),
+                  Set(added.map(\.id)) == Set((0..<added.count).map {
+                      "\(candidate.id)-added-\(String(format: "%03d", $0))"
+                  }),
+                  (candidate.manualClassification != nil) == !candidate.classificationCorrections.isEmpty else {
+                throw Error.invalidSnapshot("candidate correction history or added-boundary counter is inconsistent")
+            }
+            for boundary in candidate.boundaries {
+                // Only this candidate's allocator owns this prefix. An
+                // automatic ID elsewhere may legally contain "-added-".
+                guard boundary.origin != .automatic || !boundary.id.hasPrefix("\(candidate.id)-added-") else {
+                    throw Error.invalidSnapshot("automatic boundary occupies the operator-added identity namespace")
+                }
+                guard (boundary.origin == .automatic) == (boundary.proposal != nil),
+                      !boundary.differsFromProposal || !boundary.corrections.isEmpty else {
+                    throw Error.invalidSnapshot("boundary proposal or correction history is missing")
+                }
+            }
+        }
+        let recordIDs = Set(projection.records.map(\.id))
+        let intrinsicReasons: Set<CanonicalTearComparison.UnavailableReason> = [
+            .unknownEvidence, .ambiguousEvidence, .correctedTiming, .interpolatedCurve
+        ]
+        guard Set(document.performedLimitations.keys).isSubset(of: recordIDs),
+              document.performedLimitations.values.allSatisfy({ Set($0).isSubset(of: intrinsicReasons) }) else {
+            throw Error.invalidSnapshot("stored limitations must belong to records and exclude selected-range gaps")
+        }
+        for (id, required) in review.requiredIntrinsicComparisonLimitations {
+            guard Set(required).isSubset(of: Set(document.performedLimitations[id] ?? [])) else {
+                throw Error.invalidSnapshot("stored limitations omit required review evidence for \(id)")
+            }
+        }
+        // Never call motionValidationIssues(), validate confidence thresholds,
+        // sort evidence, or reconstruct this historical projection here.
+    }
+
+    private static func uniqueNames(_ values: [String]) -> Bool {
+        Set(values).count == values.count
+            && values.allSatisfy { !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
+    }
 }
 
 enum ReferenceTearCanonicalProjectionBuilder {

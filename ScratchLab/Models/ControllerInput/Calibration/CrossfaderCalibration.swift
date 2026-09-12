@@ -246,14 +246,20 @@ struct CrossfaderCalibration: Codable, Equatable, Sendable, Identifiable {
         self.operatorNote = operatorNote
     }
 
-    // MARK: Active half
+    // MARK: Audible throw
 
     /// The raw value at which the calibrated deck is fully CLOSED (silent).
     ///
-    /// The closed end is the centre detent, not the far end stop: past centre
-    /// the deck is still silent, so travel beyond it carries no additional
-    /// information about this deck.
-    var closedRawValue: Int { centerRawValue }
+    /// This is the physical rail opposite `openEnd`. The centre detent is not a
+    /// closed boundary: with a sharp scratch curve the active deck is already
+    /// fully audible shortly after leaving its closed rail and remains audible
+    /// through centre to the open rail.
+    var closedRawValue: Int {
+        switch openEnd {
+        case .left: return fullRightRawValue
+        case .right: return fullLeftRawValue
+        }
+    }
 
     /// The raw value at which the calibrated deck is fully OPEN.
     var openRawValue: Int {
@@ -263,24 +269,13 @@ struct CrossfaderCalibration: Codable, Equatable, Sendable, Identifiable {
         }
     }
 
-    /// The raw value at the far end of the throw, past closed. Positions
-    /// beyond `closedRawValue` in this direction are still fully closed for
-    /// this deck; they are recorded so a take can prove the fader was parked
-    /// rather than disconnected.
-    var beyondClosedRawValue: Int {
-        switch openEnd {
-        case .left: return fullRightRawValue
-        case .right: return fullLeftRawValue
-        }
-    }
-
-    /// Signed span of the calibrated active half, open minus closed.
+    /// Signed span of the calibrated physical throw, open minus closed.
     var activeHalfSignedSpan: Int { openRawValue - closedRawValue }
 
-    /// Magnitude of the calibrated active half, in MIDI steps.
+    /// Magnitude of the calibrated physical throw, in MIDI steps.
     var activeHalfSpan: Int { abs(activeHalfSignedSpan) }
 
-    /// Inclusive raw bounds of the active half, ascending.
+    /// Inclusive raw bounds of the calibrated physical throw, ascending.
     var activeHalfRawBounds: ClosedRange<Int> {
         let lower = min(closedRawValue, openRawValue)
         let upper = max(closedRawValue, openRawValue)
@@ -289,12 +284,13 @@ struct CrossfaderCalibration: Codable, Equatable, Sendable, Identifiable {
 
     // MARK: Normalization
 
-    /// Normalized position of `rawValue` across the CALIBRATED ACTIVE HALF:
+    /// Normalized position of `rawValue` across the CALIBRATED PHYSICAL THROW:
     /// `0.0` fully closed, `1.0` fully open.
     ///
-    /// Travel past the closed end (the other deck's half) clamps to `0.0`,
-    /// which is correct — that region is silent for this deck and carries no
-    /// gradation. Travel past the open end clamps to `1.0`.
+    /// The separate resolved response curve turns this physical position into
+    /// audible gain. Keeping the two values separate preserves the actual
+    /// measured position even when a sharp/custom cut curve reaches unity near
+    /// the closed rail.
     ///
     /// Returns `nil` for a calibration that has not passed `validationIssues()`
     /// or for a raw value outside the MIDI range, so a caller can never
@@ -308,7 +304,7 @@ struct CrossfaderCalibration: Codable, Equatable, Sendable, Identifiable {
         return min(1.0, max(0.0, position))
     }
 
-    /// `true` when `rawValue` lies inside the calibrated active half (with a
+    /// `true` when `rawValue` lies inside the calibrated throw (with a
     /// one-step tolerance at each end for controller jitter at the stops).
     func isWithinActiveHalf(rawValue: Int) -> Bool {
         let bounds = activeHalfRawBounds

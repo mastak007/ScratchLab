@@ -110,18 +110,28 @@ struct CrossfaderHysteresis: Equatable, Sendable {
 struct CrossfaderPositionSample: Equatable, Sendable {
     let takeRelativeTime: Double
     let rawValue: Int
-    /// Position across the calibrated active half, 0…1.
+    /// Physical position across the calibrated throw, 0…1.
     let normalizedPosition: Double
+    /// Audible deck gain after the resolved learned curve. Optional only for
+    /// source compatibility with legacy/synthetic samples; derivation falls
+    /// back to `normalizedPosition` when it is absent.
+    let audibleGain: Double?
 
-    init(takeRelativeTime: Double, rawValue: Int, normalizedPosition: Double) {
+    init(
+        takeRelativeTime: Double,
+        rawValue: Int,
+        normalizedPosition: Double,
+        audibleGain: Double? = nil
+    ) {
         self.takeRelativeTime = takeRelativeTime
         self.rawValue = rawValue
         self.normalizedPosition = normalizedPosition
+        self.audibleGain = audibleGain
     }
 }
 
 /// A committed state, with the span over which it held.
-struct CrossfaderStateInterval: Equatable, Sendable {
+struct CrossfaderStateInterval: Codable, Equatable, Sendable {
     let state: CrossfaderGateState
     let startTime: Double
     let endTime: Double
@@ -159,7 +169,7 @@ enum CrossfaderSemanticEventKind: String, Codable, Equatable, Sendable {
     var isUnknown: Bool { self == .unknown }
 }
 
-struct CrossfaderSemanticEvent: Equatable, Sendable {
+struct CrossfaderSemanticEvent: Codable, Equatable, Sendable {
     let kind: CrossfaderSemanticEventKind
     let startTime: Double
     let endTime: Double
@@ -219,7 +229,12 @@ enum CrossfaderStateDeriver {
     /// position for this deck.
     static func positionSamples(
         rawEvents: [(takeRelativeTime: Double, rawValue: Int)],
-        calibration: CrossfaderCalibration
+        calibration: CrossfaderCalibration,
+        response: FaderCurveResponse = FaderCurveResponse(
+            zeroAt: 0,
+            oneAt: MIDIFaderCurveConstants.sharpScratchCutInWidth,
+            shape: .linear
+        )
     ) -> [CrossfaderPositionSample]? {
         guard calibration.isUsable else { return nil }
         return rawEvents
@@ -231,7 +246,11 @@ enum CrossfaderStateDeriver {
                 return CrossfaderPositionSample(
                     takeRelativeTime: event.takeRelativeTime,
                     rawValue: event.rawValue,
-                    normalizedPosition: position
+                    normalizedPosition: position,
+                    audibleGain: FaderCurveResponse.gain(
+                        forNormalizedPosition: position,
+                        response: response
+                    )
                 )
             }
             .sorted { $0.takeRelativeTime < $1.takeRelativeTime }
@@ -250,11 +269,14 @@ enum CrossfaderStateDeriver {
 
         // Pass 1: raw instantaneous classification, run-length encoded.
         var runs: [CrossfaderStateInterval] = []
-        var runState = hysteresis.instantaneousState(forNormalizedPosition: samples[0].normalizedPosition)
+        func gatePosition(_ sample: CrossfaderPositionSample) -> Double {
+            sample.audibleGain ?? sample.normalizedPosition
+        }
+        var runState = hysteresis.instantaneousState(forNormalizedPosition: gatePosition(samples[0]))
         var runStartIndex = 0
         for index in 1..<samples.count {
             let state = hysteresis.instantaneousState(
-                forNormalizedPosition: samples[index].normalizedPosition
+                forNormalizedPosition: gatePosition(samples[index])
             )
             guard state != runState else { continue }
             runs.append(
@@ -262,8 +284,8 @@ enum CrossfaderStateDeriver {
                     state: runState,
                     startTime: samples[runStartIndex].takeRelativeTime,
                     endTime: samples[index].takeRelativeTime,
-                    startPosition: samples[runStartIndex].normalizedPosition,
-                    endPosition: samples[index - 1].normalizedPosition
+                    startPosition: gatePosition(samples[runStartIndex]),
+                    endPosition: gatePosition(samples[index - 1])
                 )
             )
             runState = state
@@ -274,8 +296,8 @@ enum CrossfaderStateDeriver {
                 state: runState,
                 startTime: samples[runStartIndex].takeRelativeTime,
                 endTime: samples[samples.count - 1].takeRelativeTime,
-                startPosition: samples[runStartIndex].normalizedPosition,
-                endPosition: samples[samples.count - 1].normalizedPosition
+                startPosition: gatePosition(samples[runStartIndex]),
+                endPosition: gatePosition(samples[samples.count - 1])
             )
         )
 
@@ -458,11 +480,20 @@ enum CrossfaderStateDeriver {
     static func derive(
         rawEvents: [(takeRelativeTime: Double, rawValue: Int)],
         calibration: CrossfaderCalibration,
+        response: FaderCurveResponse = FaderCurveResponse(
+            zeroAt: 0,
+            oneAt: MIDIFaderCurveConstants.sharpScratchCutInWidth,
+            shape: .linear
+        ),
         hysteresis: CrossfaderHysteresis = .default,
         maximumCutDuration: Double = defaultMaximumCutDuration,
         maximumPulseGap: Double = defaultMaximumPulseGap
     ) -> CrossfaderDerivation? {
-        guard let samples = positionSamples(rawEvents: rawEvents, calibration: calibration),
+        guard let samples = positionSamples(
+            rawEvents: rawEvents,
+            calibration: calibration,
+            response: response
+        ),
               let intervals = stateIntervals(samples: samples, hysteresis: hysteresis) else {
             return nil
         }

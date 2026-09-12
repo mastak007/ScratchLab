@@ -51,8 +51,21 @@ final class WatchMotionRecorder: NSObject, ObservableObject {
     private var resolvedStopCommandIDs: Set<String> = []
     private var resolvedStopCommandOrder: [String] = []
     private static let maximumRememberedStopCommands = 32
+    private static let stoppedTakeIdentitiesKey = "ScratchLab.watch.stoppedTakeIdentities.v1"
+    private var stoppedTakeIdentities: [String] = []
 
-    private func rememberResolvedStopCommand(_ commandID: String) {
+    private func rememberStoppedTakeIdentity(_ payload: WatchCaptureCommandPayload) {
+        if let identity = WatchMotionStartCommandResolver.identityKey(for: payload),
+           !stoppedTakeIdentities.contains(identity) {
+            stoppedTakeIdentities.append(identity)
+            stoppedTakeIdentities = Array(stoppedTakeIdentities.suffix(Self.maximumRememberedStopCommands))
+            UserDefaults.standard.set(stoppedTakeIdentities, forKey: Self.stoppedTakeIdentitiesKey)
+        }
+    }
+
+    private func rememberResolvedStopCommand(_ payload: WatchCaptureCommandPayload) {
+        rememberStoppedTakeIdentity(payload)
+        let commandID = payload.commandID
         guard resolvedStopCommandIDs.insert(commandID).inserted else { return }
         resolvedStopCommandOrder.append(commandID)
         while resolvedStopCommandOrder.count > Self.maximumRememberedStopCommands {
@@ -73,6 +86,8 @@ final class WatchMotionRecorder: NSObject, ObservableObject {
 
     override init() {
         super.init()
+        stoppedTakeIdentities = Array((UserDefaults.standard.stringArray(forKey: Self.stoppedTakeIdentitiesKey) ?? [])
+            .suffix(Self.maximumRememberedStopCommands))
         activateWatchSession()
     }
 
@@ -207,6 +222,7 @@ final class WatchMotionRecorder: NSObject, ObservableObject {
         isRecording = false
         motionManager.stopDeviceMotionUpdates()
         stopElapsedTimer()
+        if let activeCommandPayload { rememberStoppedTakeIdentity(activeCommandPayload) }
 
         let endedAt = Date()
         let startedAt = captureStartDate ?? endedAt
@@ -682,12 +698,17 @@ extension WatchMotionRecorder: WCSessionDelegate {
 
         switch payload.command {
         case .start:
-            guard !isRecording else {
-                return makeReply(
-                    for: payload,
-                    syncState: .acknowledged,
-                    detail: "Watch motion capture is already recording."
-                )
+            switch WatchMotionStartCommandResolver.decide(
+                payload: payload, isRecording: isRecording, activeCommand: activeCommandPayload,
+                stoppedTakeIdentities: Set(stoppedTakeIdentities)
+            ) {
+            case .alreadyRecording:
+                return makeReply(for: payload, syncState: .acknowledged,
+                    detail: "Watch motion capture is already recording this take.")
+            case .rejectIdentity(let detail):
+                return makeReply(for: payload, syncState: .failed, detail: detail)
+            case .start:
+                break
             }
             guard motionManager.isDeviceMotionAvailable else {
                 return makeReply(
@@ -713,7 +734,7 @@ extension WatchMotionRecorder: WCSessionDelegate {
             switch decision {
             case .stop:
                 // Recorded first so a command delivered twice cannot stop twice.
-                rememberResolvedStopCommand(payload.commandID)
+                rememberResolvedStopCommand(payload)
                 // Core Motion stops here, and the reply goes out immediately
                 // after. Finalization — encoding and writing a multi-megabyte
                 // motion file — runs on the next main-queue turn, because the
@@ -731,7 +752,7 @@ extension WatchMotionRecorder: WCSessionDelegate {
                     stopOutcome: decision.outcome
                 )
             case let .alreadyStopped(detail):
-                rememberResolvedStopCommand(payload.commandID)
+                rememberResolvedStopCommand(payload)
                 return makeReply(
                     for: payload,
                     syncState: decision.syncState,
@@ -739,8 +760,10 @@ extension WatchMotionRecorder: WCSessionDelegate {
                     stopOutcome: decision.outcome
                 )
             case let .rejectIdentity(detail):
-                // Deliberately does NOT remember the command: it was refused,
-                // not handled, and the sender is told exactly why.
+                // Retire the requested take so its delayed Start cannot run
+                // after this recording ends. Preserve the current recording
+                // and keep the reply explicitly identity-rejected.
+                rememberStoppedTakeIdentity(payload)
                 log("stop rejected: \(detail)")
                 return makeReply(
                     for: payload,

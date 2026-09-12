@@ -1,6 +1,7 @@
 import Foundation
 import MultipeerConnectivity
 import AppKit
+import Network
 
 struct RelayedWatchMotionCapture: Identifiable {
     let fileURL: URL
@@ -202,8 +203,10 @@ final class RelayedWatchCaptureStore: ObservableObject {
     }
 
     private let fileManager = FileManager.default
+    private let captureDirectoryOverride: URL?
 
     var captureDirectoryURL: URL {
+        if let captureDirectoryOverride { return captureDirectoryOverride }
         let baseURL = fileManager.urls(for: .applicationSupportDirectory, in: .userDomainMask).first
             ?? fileManager.urls(for: .documentDirectory, in: .userDomainMask).first
             ?? fileManager.homeDirectoryForCurrentUser.appendingPathComponent("Documents", isDirectory: true)
@@ -212,7 +215,8 @@ final class RelayedWatchCaptureStore: ObservableObject {
             .appendingPathComponent("RelayedWatchCaptures", isDirectory: true)
     }
 
-    init() {
+    init(captureDirectoryURL: URL? = nil) {
+        captureDirectoryOverride = captureDirectoryURL
         createCaptureDirectoryIfNeeded()
         reconcileStoredSessions()
         loadStoredSessions()
@@ -227,12 +231,26 @@ final class RelayedWatchCaptureStore: ObservableObject {
     }
 
     @MainActor
-    func noteRequestedStop() {
+    func noteRequestedStop(sessionID: String, takeID: String?) {
+        guard currentControlContext(sessionID: sessionID, takeID: takeID) != nil else { return }
         remoteControlState = .stopping
+    }
+
+    /// A cleanup command for an older take still travels to the Watch, but
+    /// its late status cannot change the take currently shown or recorded.
+    /// Pending wins because a new start may overlap an older stop reply.
+    @MainActor
+    private func currentControlContext(sessionID: String, takeID: String?) -> WatchRelayTakeContext? {
+        guard let context = pendingTakeContext ?? activeTakeContext ?? endingTakeContext,
+              context.sessionID == sessionID, context.takeID == takeID else { return nil }
+        return context
     }
 
     @MainActor
     func noteRemoteControlStatus(_ reply: WatchCaptureControlReply) {
+        guard let context = currentControlContext(sessionID: reply.sessionID, takeID: reply.takeID) else {
+            return
+        }
         switch reply.syncState {
         case .notRequested:
             remoteControlState = .idle
@@ -249,13 +267,13 @@ final class RelayedWatchCaptureStore: ObservableObject {
             }
         case .timedOut:
             remoteControlState = .timedOut(reply.detail ?? "Watch motion start timed out.")
-            markInterrupted(reply.detail ?? "Watch motion start timed out.", context: pendingTakeContext)
+            markInterrupted(reply.detail ?? "Watch motion start timed out.", context: context)
         case .unavailable:
             remoteControlState = .unavailable(reply.detail ?? "Watch motion capture is unavailable.")
-            markInterrupted(reply.detail ?? "Watch motion capture is unavailable.", context: pendingTakeContext)
+            markInterrupted(reply.detail ?? "Watch motion capture is unavailable.", context: context)
         case .failed:
             remoteControlState = .failed(reply.detail ?? "Watch motion capture failed to start.")
-            markInterrupted(reply.detail ?? "Watch motion capture failed to start.", context: activeTakeContext ?? pendingTakeContext)
+            markInterrupted(reply.detail ?? "Watch motion capture failed to start.", context: context)
         }
     }
 
@@ -538,12 +556,14 @@ final class CompanionCameraReceiver: NSObject, ObservableObject {
 
     @Published var discoveredPeers: [PeerSummary] = []
     @Published var connectedPeerNames: [String] = []
-    @Published var connectionStatus = "Searching for companion device"
+    @Published var connectionStatus = "Companion relay is off"
+    @Published private(set) var isBrowsingForPeers = false
 
     let frameStore = FrameStore()
     let relayedWatchCaptureStore: RelayedWatchCaptureStore
 
     private let serviceType = "scrcamfeed"
+    private let directServiceType = "_scrcamfeed._tcp"
     private let peerID = MCPeerID(displayName: Host.current().localizedName ?? "ScratchLab")
     private lazy var session = MCSession(peer: peerID, securityIdentity: nil, encryptionPreference: .required)
     private lazy var browser = MCNearbyServiceBrowser(peer: peerID, serviceType: serviceType)
@@ -556,6 +576,11 @@ final class CompanionCameraReceiver: NSObject, ObservableObject {
     private var lastPublishedWallClockTime: TimeInterval = 0
     private let watchCommandCoordinator = WatchCaptureCommandCoordinator()
     private var watchHealthTimer: DispatchSourceTimer?
+    private let relayQueue = DispatchQueue(label: "scratchlab.cxl.companion.relay")
+    private let directConnectionLock = NSLock()
+    private var directBrowser: NWBrowser?
+    private var directConnection: NWConnection?
+    private var directEndpointLookup: [String: NWEndpoint] = [:]
 
     init(relayedWatchCaptureStore: RelayedWatchCaptureStore, autoStartBrowsing: Bool = true) {
         self.relayedWatchCaptureStore = relayedWatchCaptureStore
@@ -563,13 +588,31 @@ final class CompanionCameraReceiver: NSObject, ObservableObject {
         session.delegate = self
         browser.delegate = self
         if autoStartBrowsing {
-            browser.startBrowsingForPeers()
-            startWatchHealthTimer()
+            Task { @MainActor [weak self] in
+                self?.startBrowsingForCompanionIfNeeded()
+            }
         }
     }
 
     deinit {
+        if isBrowsingForPeers {
+            browser.stopBrowsingForPeers()
+        }
         watchHealthTimer?.cancel()
+        directBrowser?.cancel()
+        replaceDirectConnection(nil)
+    }
+
+    /// Starts nearby companion discovery only after the operator enables the relay.
+    /// Repeated calls are safe and do not create another browser or health timer.
+    @MainActor
+    func startBrowsingForCompanionIfNeeded() {
+        guard !isBrowsingForPeers else { return }
+
+        isBrowsingForPeers = true
+        connectionStatus = "Searching for companion device"
+        startDirectBrowsing()
+        startWatchHealthTimer()
     }
 
     @MainActor
@@ -595,7 +638,7 @@ final class CompanionCameraReceiver: NSObject, ObservableObject {
         )
         relayedWatchCaptureStore.noteRequestedStart(context: context)
 
-        guard !session.connectedPeers.isEmpty else {
+        guard hasConnectedRelay else {
             let reply = WatchCaptureControlReply(
                 commandID: payload.commandID,
                 sessionID: sessionID,
@@ -654,9 +697,9 @@ final class CompanionCameraReceiver: NSObject, ObservableObject {
         timeoutSeconds: TimeInterval = CaptureWatchStopPolicy.acknowledgementTimeoutSeconds,
         maximumAttempts: Int = CaptureWatchStopPolicy.maximumAttempts
     ) async -> WatchCaptureControlReply {
-        relayedWatchCaptureStore.noteRequestedStop()
         let context = relayedWatchCaptureStore.activeTakeContext
         let resolvedTakeID = takeID ?? context?.takeID
+        relayedWatchCaptureStore.noteRequestedStop(sessionID: sessionID, takeID: resolvedTakeID)
         var lastReply: WatchCaptureControlReply?
 
         for attempt in 1...max(1, maximumAttempts) {
@@ -668,7 +711,7 @@ final class CompanionCameraReceiver: NSObject, ObservableObject {
                 watchWrist: context?.watchWrist
             )
 
-            guard !session.connectedPeers.isEmpty else {
+            guard hasConnectedRelay else {
                 let reply = WatchCaptureControlReply(
                     commandID: payload.commandID,
                     sessionID: sessionID,
@@ -769,6 +812,10 @@ final class CompanionCameraReceiver: NSObject, ObservableObject {
     }
 
     func connect(to peer: PeerSummary) {
+        if let endpoint = directEndpointLookup[peer.id] {
+            connectDirectly(to: endpoint, peerName: peer.name)
+            return
+        }
         guard let mcPeer = peerLookup[peer.id] else { return }
         connectionStatus = "Inviting \(peer.name)"
         browser.invitePeer(mcPeer, to: session, withContext: nil, timeout: 10)
@@ -776,6 +823,7 @@ final class CompanionCameraReceiver: NSObject, ObservableObject {
 
     func disconnect() {
         session.disconnect()
+        replaceDirectConnection(nil)
         connectedPeerNames = []
         latestRenderedFrameTimestamp = 0
         lastPublishedWallClockTime = 0
@@ -787,7 +835,168 @@ final class CompanionCameraReceiver: NSObject, ObservableObject {
         }
     }
 
+    private var hasConnectedRelay: Bool {
+        directConnectionLock.lock()
+        let hasDirectConnection = directConnection != nil
+        directConnectionLock.unlock()
+        return hasDirectConnection || !session.connectedPeers.isEmpty
+    }
+
+    private func replaceDirectConnection(_ connection: NWConnection?) {
+        directConnectionLock.lock()
+        let previous = directConnection
+        directConnection = connection
+        directConnectionLock.unlock()
+        if previous !== connection {
+            previous?.cancel()
+        }
+    }
+
+    private func directConnectionSnapshot() -> NWConnection? {
+        directConnectionLock.lock()
+        defer { directConnectionLock.unlock() }
+        return directConnection
+    }
+
+    private func startDirectBrowsing() {
+        directBrowser?.cancel()
+        let parameters = NWParameters.tcp
+        parameters.includePeerToPeer = true
+        let browser = NWBrowser(
+            for: .bonjour(type: directServiceType, domain: nil),
+            using: parameters
+        )
+        directBrowser = browser
+        browser.stateUpdateHandler = { [weak self] state in
+            guard let self else { return }
+            if case .failed(let error) = state {
+                DispatchQueue.main.async {
+                    self.connectionStatus = "Unable to search for companion device: \(error.localizedDescription)"
+                }
+            }
+        }
+        browser.browseResultsChangedHandler = { [weak self] results, _ in
+            guard let self else { return }
+            let endpoints = Dictionary(uniqueKeysWithValues: results.map { result in
+                (result.endpoint.debugDescription, result.endpoint)
+            })
+            let summaries = results.map { result -> PeerSummary in
+                let name: String
+                if case .service(let serviceName, _, _, _) = result.endpoint {
+                    name = serviceName.isEmpty ? "iPhone" : serviceName
+                } else {
+                    name = "iPhone"
+                }
+                return PeerSummary(id: result.endpoint.debugDescription, name: name)
+            }
+            .sorted { $0.name < $1.name }
+
+            DispatchQueue.main.async {
+                self.directEndpointLookup = endpoints
+                self.discoveredPeers = summaries
+                if self.connectedPeerNames.isEmpty {
+                    self.connectionStatus = summaries.isEmpty
+                        ? "Searching for companion device"
+                        : "Found \(summaries[0].name). Connecting..."
+                }
+                self.autoConnectIfNeeded()
+            }
+        }
+        browser.start(queue: relayQueue)
+    }
+
+    private func connectDirectly(to endpoint: NWEndpoint, peerName: String) {
+        if directConnectionSnapshot() != nil { return }
+        connectionStatus = "Connecting to \(peerName)"
+        let parameters = NWParameters.tcp
+        parameters.includePeerToPeer = true
+        let connection = NWConnection(to: endpoint, using: parameters)
+        replaceDirectConnection(connection)
+        connection.stateUpdateHandler = { [weak self, weak connection] state in
+            guard let self, let connection else { return }
+            switch state {
+            case .ready:
+                DispatchQueue.main.async {
+                    self.connectedPeerNames = [peerName]
+                    self.connectionStatus = "Receiving companion feed from \(peerName)"
+                    self.relayedWatchCaptureStore.notePeerConnection(isConnected: true)
+                }
+                self.receiveDirectPacketLength(on: connection, peerName: peerName)
+            case .waiting(let error):
+                DispatchQueue.main.async {
+                    self.connectionStatus = "Companion connection paused: \(error.localizedDescription)"
+                }
+            case .failed, .cancelled:
+                if self.directConnectionSnapshot() === connection {
+                    self.replaceDirectConnection(nil)
+                    DispatchQueue.main.async {
+                        self.connectedPeerNames = []
+                        self.relayedWatchCaptureStore.notePeerConnection(isConnected: false)
+                        self.connectionStatus = "Searching for companion device"
+                        self.attemptedAutoConnectPeerIDs.removeAll()
+                        self.autoConnectIfNeeded()
+                    }
+                }
+            default:
+                break
+            }
+        }
+        connection.start(queue: relayQueue)
+    }
+
+    private func receiveDirectPacketLength(on connection: NWConnection, peerName: String) {
+        connection.receive(minimumIncompleteLength: 4, maximumLength: 4) { [weak self, weak connection] data, _, isComplete, error in
+            guard let self, let connection else { return }
+            guard error == nil, !isComplete, let data, data.count == 4 else {
+                connection.cancel()
+                return
+            }
+            let length = data.withUnsafeBytes { rawBuffer in
+                Int(UInt32(bigEndian: rawBuffer.loadUnaligned(as: UInt32.self)))
+            }
+            guard length > 0, length <= 16_000_000 else {
+                connection.cancel()
+                return
+            }
+            self.receiveDirectPacketBody(length: length, on: connection, peerName: peerName)
+        }
+    }
+
+    private func receiveDirectPacketBody(length: Int, on connection: NWConnection, peerName: String) {
+        connection.receive(minimumIncompleteLength: length, maximumLength: length) { [weak self, weak connection] data, _, isComplete, error in
+            guard let self, let connection else { return }
+            guard error == nil, !isComplete, let data, data.count == length else {
+                connection.cancel()
+                return
+            }
+            self.session(
+                self.session,
+                didReceive: data,
+                fromPeer: MCPeerID(displayName: peerName)
+            )
+            self.receiveDirectPacketLength(on: connection, peerName: peerName)
+        }
+    }
+
+    private func sendDirectPacket(_ data: Data) -> Bool {
+        guard let connection = directConnectionSnapshot(), data.count <= Int(UInt32.max) else {
+            return false
+        }
+        var length = UInt32(data.count).bigEndian
+        var framed = Data(bytes: &length, count: MemoryLayout<UInt32>.size)
+        framed.append(data)
+        connection.send(content: framed, completion: .contentProcessed { [weak self] error in
+            guard error != nil else { return }
+            DispatchQueue.main.async {
+                self?.connectionStatus = "Companion relay connection was interrupted."
+            }
+        })
+        return true
+    }
+
     private func startWatchHealthTimer() {
+        guard watchHealthTimer == nil else { return }
+
         let timer = DispatchSource.makeTimerSource(queue: .main)
         timer.schedule(deadline: .now() + 2, repeating: 2)
         timer.setEventHandler { [weak self] in
@@ -952,9 +1161,14 @@ extension CompanionCameraReceiver: MCSessionDelegate {
     }
 
     private func sendCaptureAck(for captureID: UUID, to peerID: MCPeerID) {
-        guard session.connectedPeers.contains(peerID) else { return }
         let packet = WatchCaptureRelayAckPacket(captureID: captureID)
         guard let encoded = try? PropertyListEncoder().encode(packet) else { return }
+
+        if sendDirectPacket(encoded) {
+            return
+        }
+
+        guard session.connectedPeers.contains(peerID) else { return }
 
         do {
             try session.send(encoded, toPeers: [peerID], with: .reliable)
@@ -966,16 +1180,17 @@ extension CompanionCameraReceiver: MCSessionDelegate {
     }
 
     private func sendWatchControlCommand(_ payload: WatchCaptureCommandPayload) -> Bool {
-        guard !session.connectedPeers.isEmpty else {
-            return false
-        }
-
         let packet = WatchControlCommandPacket(payload: payload)
 
         guard let encoded = try? PropertyListEncoder().encode(packet) else {
             return false
         }
 
+        if sendDirectPacket(encoded) {
+            return true
+        }
+
+        guard !session.connectedPeers.isEmpty else { return false }
         do {
             try session.send(encoded, toPeers: session.connectedPeers, with: .reliable)
             return true

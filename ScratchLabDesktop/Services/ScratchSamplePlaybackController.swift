@@ -48,16 +48,81 @@ final class ScratchSamplePlaybackController {
         label: "com.machelpnz.scratchlab.mac-output-monitor",
         qos: .userInteractive
     )
-    private var macMonitorOutputDeviceID: AudioDeviceID?
     private var macMonitorFormat: AVAudioFormat?
     private var macMonitorEngineStarted = false
+    private var macMonitorAppliedRoute: MacScratchOutputRoute.Applied?
+    private var macMonitorLastVerificationTime: TimeInterval = 0
     private var macMonitorTapInstalled = false
     private var macMonitorPendingBufferCount = 0
     private let macMonitorMaximumPendingBufferCount = 12
+    private let scratchOutputPeakMeter = ScratchOutputPeakMeter()
     private var requestedOutputDeviceID: AudioDeviceID?
+    private var requestedOutputDeviceUID: String?
     private var requestedOutputDeviceName = "System Default"
     private var activeOutputDeviceID: AudioDeviceID?
     private var activeOutputDeviceName = "System Default"
+    private var appliedOutputRoute: MacScratchOutputRoute.Applied?
+    private var outputRouteNeedsApply = true
+    private var outputRoutingError: String?
+    private let monitorRoutingState = Mutex(MacScratchMonitorRouteState())
+
+    struct OutputRoutingSnapshot: Equatable, Sendable {
+        var primaryDeviceID: UInt32?
+        var primaryDeviceUID: String?
+        var channelMap: [Int]?
+        var primaryDeviceName: String?
+        var outputChannelPair: String?
+        var status: String
+        var error: String?
+        var pendingChange: Bool
+        var monitorEnabled: Bool
+        var monitorStatus: String
+        var monitorError: String?
+    }
+
+    func outputRoutingSnapshot() -> OutputRoutingSnapshot {
+        var snapshot: OutputRoutingSnapshot!
+        runSynchronouslyOnAudioQueue {
+            if engineStarted, let route = appliedOutputRoute {
+                do {
+                    guard engine.isRunning else { throw MacScratchOutputRoute.Failure(message: "The AHHH output stopped. Check Playback output before recording.") }
+                    try MacScratchOutputRoute.verify(engine: engine, route: route)
+                }
+                catch { failOutputRoute(error.localizedDescription) }
+            }
+            let monitor = monitorRoutingState.withLock { $0 }
+            snapshot = OutputRoutingSnapshot(
+                primaryDeviceID: appliedOutputRoute?.deviceID,
+                primaryDeviceUID: appliedOutputRoute?.deviceUID,
+                channelMap: appliedOutputRoute?.channelMap,
+                primaryDeviceName: appliedOutputRoute?.deviceName,
+                outputChannelPair: appliedOutputRoute?.channelPair,
+                status: outputRoutingError != nil ? "failed" : (engineStarted ? "ready" : "notReady"),
+                error: outputRoutingError, pendingChange: outputRouteNeedsApply,
+                monitorEnabled: monitor.enabled, monitorStatus: monitor.status,
+                monitorError: monitor.error
+            )
+        }
+        return snapshot
+    }
+
+    func setMacMonitorEnabled(_ enabled: Bool) {
+        audioQueue.async { [weak self] in
+            guard let self else { return }
+            self.monitorRoutingState.withLock { $0.enabled = enabled }
+            self.refreshMacMonitorRoute()
+        }
+    }
+
+    private var outputRouteFrozen: Bool {
+#if DEBUG
+        let diagnosticArmed = outputCaptureArmed
+#else
+        let diagnosticArmed = false
+#endif
+        return !MacScratchOutputRoute.canRebind(routineCaptureArmed: routineOutputCaptureArmed,
+            diagnosticCaptureArmed: diagnosticArmed)
+    }
 
     // MARK: - Production routine output capture
 
@@ -84,6 +149,7 @@ final class ScratchSamplePlaybackController {
         case anotherMixerTapIsActive
         case invalidMixerFormat
         case emptyCapture
+        case outputRouteUnavailable(String)
 
         var errorDescription: String? {
             switch self {
@@ -97,6 +163,8 @@ final class ScratchSamplePlaybackController {
                 return "ScratchLab could not prepare the onboard AHHH recording format."
             case .emptyCapture:
                 return "The onboard AHHH recording contained no audio frames."
+            case .outputRouteUnavailable(let message):
+                return message
             }
         }
     }
@@ -117,8 +185,24 @@ final class ScratchSamplePlaybackController {
     ) throws {
         var capturedError: Error?
         audioQueue.sync {
-            guard engineStarted else {
-                capturedError = RoutineOutputCaptureError.playbackEngineNotRunning
+            if let message = outputRoutingError {
+                capturedError = RoutineOutputCaptureError.outputRouteUnavailable(message)
+                return
+            }
+            guard let route = appliedOutputRoute else {
+                capturedError = RoutineOutputCaptureError.outputRouteUnavailable("The AHHH output route is not ready. Check Playback output before recording.")
+                return
+            }
+            do { try MacScratchOutputRoute.verify(engine: engine, route: route) }
+            catch {
+                failOutputRoute(error.localizedDescription)
+                capturedError = RoutineOutputCaptureError.outputRouteUnavailable(error.localizedDescription)
+                return
+            }
+            guard engineStarted, engine.isRunning else {
+                let message = "The AHHH output stopped. Check Playback output before recording."
+                failOutputRoute(message)
+                capturedError = RoutineOutputCaptureError.outputRouteUnavailable(message)
                 return
             }
             guard !routineOutputCaptureArmed else {
@@ -197,6 +281,7 @@ final class ScratchSamplePlaybackController {
             self.routineOutputCaptureRing = nil
             self.routineOutputCaptureDestinationURL = nil
             self.routineOutputLevelHandler?(0)
+            self.applyDeferredOutputRouteIfNeeded()
         }
     }
 
@@ -214,6 +299,7 @@ final class ScratchSamplePlaybackController {
 
             self.routineOutputCaptureArmed = false
             self.engine.mainMixerNode.removeTap(onBus: 0)
+            defer { self.applyDeferredOutputRouteIfNeeded() }
             let written = self.routineOutputCaptureWriteFrames
             let capacity = self.routineOutputCaptureRingFrames
             self.routineOutputCaptureRing = nil
@@ -317,7 +403,14 @@ final class ScratchSamplePlaybackController {
     /// (still fully compiled — it remains the MIDI path's machinery), kept
     /// as a hardware rollback lever and so grain-mechanism regression
     /// tests keep exercising the code they were written against.
-    var dvsUsesContinuousRenderer = true
+    var dvsUsesContinuousRenderer = true {
+        didSet {
+            guard oldValue != dvsUsesContinuousRenderer else { return }
+            runSynchronouslyOnAudioQueue {
+                minimumRenderPositionEpoch = dvsContinuousRenderer.currentControlEpoch &+ 1
+            }
+        }
+    }
 
     // MARK: - Continuous MIDI platter drive (2026-08-09, right-deck-owned)
     //
@@ -340,6 +433,7 @@ final class ScratchSamplePlaybackController {
             guard oldValue != midiUsesContinuousRenderer else { return }
             runSynchronouslyOnAudioQueue {
                 invalidatePlaybackLoopContext(at: schedulingClock())
+                minimumRenderPositionEpoch = dvsContinuousRenderer.currentControlEpoch &+ 1
             }
         }
     }
@@ -353,7 +447,15 @@ final class ScratchSamplePlaybackController {
         case dvs
         case midi
     }
-    private var platterRenderOwner: PlatterRenderOwner = .none
+    private var platterRenderOwner: PlatterRenderOwner = .none {
+        didSet {
+            guard oldValue != platterRenderOwner else { return }
+            minimumRenderPositionEpoch = dvsContinuousRenderer.currentControlEpoch &+ 1
+        }
+    }
+    /// A new source/mode must publish and render before its cursor appears.
+    private var minimumRenderPositionEpoch: UInt64 = 0
+    private var loadedRenderSampleIdentity: UInt64?
 
     /// Authoritative record of whether DVS/timecode is the active control
     /// source, set exclusively by `applyDVSOwnership(active:)`. Unlike
@@ -1560,6 +1662,8 @@ final class ScratchSamplePlaybackController {
         outputCaptureArmed = false
         outputCaptureOwnership = nil
         engine.mainMixerNode.removeTap(onBus: 0)
+        // Queue rather than re-enter: this method also runs inside stopEngine's lock.
+        audioQueue.async { [weak self] in self?.applyDeferredOutputRouteIfNeeded() }
         dvsCaptureFinalizeCount += 1
         // From here on no writer can touch the ring or the write index.
         let written = outputCaptureWriteFrames
@@ -1793,7 +1897,6 @@ final class ScratchSamplePlaybackController {
         self.schedulingClock = schedulingClock
         self.sampleResourceRoot = sampleResourceRoot
         audioQueue.setSpecific(key: audioQueueKey, value: ())
-        macMonitorOutputDeviceID = Self.defaultOutputDeviceID()
         engine.attach(playerNode)
         engine.attach(varispeedNode)
         engine.attach(scratchOutputMixerNode)
@@ -1818,13 +1921,18 @@ final class ScratchSamplePlaybackController {
     /// selected by `MacCaptureEngine`. Passing nil restores the current macOS
     /// default output. The change is serialized with all other engine work and
     /// deferred while a canonical routine-output capture tap is active.
-    func setPreferredOutputDevice(deviceID: AudioDeviceID?, deviceName: String?) {
+    func setPreferredOutputDevice(deviceID: AudioDeviceID?, deviceName: String?, expectedDeviceUID: String? = nil) {
         audioQueue.async { [weak self] in
             guard let self else { return }
-            self.requestedOutputDeviceID = deviceID
             let trimmedDeviceName = deviceName?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-            self.requestedOutputDeviceName = trimmedDeviceName.isEmpty ? "System Default" : trimmedDeviceName
-            self.applyRequestedOutputDeviceIfNeeded()
+            let name = trimmedDeviceName.isEmpty ? "System Default" : trimmedDeviceName
+            guard self.requestedOutputDeviceID != deviceID || self.requestedOutputDeviceName != name
+                    || self.requestedOutputDeviceUID != expectedDeviceUID || self.outputRoutingError != nil else { return }
+            self.requestedOutputDeviceID = deviceID
+            self.requestedOutputDeviceUID = expectedDeviceUID
+            self.requestedOutputDeviceName = name
+            self.outputRouteNeedsApply = true
+            if self.loadedSampleID != nil && !self.outputRouteFrozen { self.ensureEngineRunning() }
         }
     }
 
@@ -1842,113 +1950,60 @@ final class ScratchSamplePlaybackController {
 
     // MARK: - Engine start/stop (audioQueue or deinit only)
 
-    private func applyRequestedOutputDeviceIfNeeded() {
-        guard let requestedOutputDeviceID,
-              requestedOutputDeviceID != kAudioObjectUnknown,
-              requestedOutputDeviceID != activeOutputDeviceID else {
-            return
+    @discardableResult
+    private func applyRequestedOutputDeviceIfNeeded() -> Bool {
+        guard outputRouteNeedsApply else { return appliedOutputRoute != nil && outputRoutingError == nil }
+        guard !outputRouteFrozen else { return appliedOutputRoute != nil && outputRoutingError == nil }
+        engineLock.lock()
+        playerNode.stop()
+        engine.stop()
+        engineStarted = false
+        engineLock.unlock()
+        removeMacMonitorTapIfNeeded()
+        stopMacMonitor()
+        appliedOutputRoute = nil
+        activeOutputDeviceID = nil
+        outputRoutingError = nil
+        outputRouteNeedsApply = false
+        do {
+            let route = try MacScratchOutputRoute.prepare(
+                engine: engine, preferredDeviceID: requestedOutputDeviceID,
+                preferredDeviceName: requestedOutputDeviceName, expectedDeviceUID: requestedOutputDeviceUID,
+                stereoOutputNode: raneOutputMixerNode
+            )
+            appliedOutputRoute = route
+            activeOutputDeviceID = route.deviceID
+            activeOutputDeviceName = route.deviceName
+            return true
+        } catch {
+            failOutputRoute(error.localizedDescription)
+            return false
         }
-
-        // Keep the primary engine on the Mac default output for direct, low-latency
-        // monitoring. The secondary engine mirrors the signal to the Rane hardware.
-        macMonitorOutputDeviceID = requestedOutputDeviceID
-        activeOutputDeviceID = requestedOutputDeviceID
-        activeOutputDeviceName = requestedOutputDeviceName
-
-        macMonitorQueue.async { [weak self] in
-            guard let self else { return }
-            self.macMonitorPlayerNode.stop()
-            self.macMonitorEngine.stop()
-            self.macMonitorFormat = nil
-            self.macMonitorPendingBufferCount = 0
-        }
-    }/// Maps the stereo scratch mix to Rane USB outputs 3/4. Core Audio uses
-    /// zero-based destination indices, so indices 2/3 feed physical mixer Channel 2.
-    private static func applyRaneChannel2ChannelMap(
-    to audioUnit: AudioUnit?,
-    deviceID: AudioDeviceID,
-    sourceChannelCount: AVAudioChannelCount
-) -> OSStatus {
-    guard let audioUnit else { return -50 }
-
-    let destinationChannelCount = outputChannelCount(for: deviceID)
-    guard destinationChannelCount >= 4 else { return -50 }
-
-    var channelMap = Array(repeating: Int32(-1), count: destinationChannelCount)
-    channelMap[2] = 0
-    channelMap[3] = sourceChannelCount > 1 ? 1 : 0
-
-    return channelMap.withUnsafeMutableBytes { bytes in
-        AudioUnitSetProperty(
-            audioUnit,
-            kAudioOutputUnitProperty_ChannelMap,
-            kAudioUnitScope_Input,
-            0,
-            bytes.baseAddress,
-            UInt32(bytes.count)
-        )
-    }
-}
-
-    private static func outputChannelCount(for deviceID: AudioDeviceID) -> Int {
-    var address = AudioObjectPropertyAddress(
-        mSelector: kAudioDevicePropertyStreamConfiguration,
-        mScope: kAudioDevicePropertyScopeOutput,
-        mElement: kAudioObjectPropertyElementMain
-    )
-    var propertySize: UInt32 = 0
-    guard AudioObjectGetPropertyDataSize(
-        deviceID,
-        &address,
-        0,
-        nil,
-        &propertySize
-    ) == noErr,
-    propertySize >= MemoryLayout<AudioBufferList>.size else {
-        return 0
     }
 
-    let rawBuffer = UnsafeMutableRawPointer.allocate(
-        byteCount: Int(propertySize),
-        alignment: MemoryLayout<AudioBufferList>.alignment
-    )
-    defer { rawBuffer.deallocate() }
-
-    guard AudioObjectGetPropertyData(
-        deviceID,
-        &address,
-        0,
-        nil,
-        &propertySize,
-        rawBuffer
-    ) == noErr else {
-        return 0
+    private func applyDeferredOutputRouteIfNeeded() {
+        guard outputRouteNeedsApply, !outputRouteFrozen else { return }
+        // A stopped/unloaded controller must not be restarted by a late finalizer.
+        if engineStarted { ensureEngineRunning() }
     }
 
-    let bufferList = rawBuffer.assumingMemoryBound(to: AudioBufferList.self)
-    return UnsafeMutableAudioBufferListPointer(bufferList).reduce(0) {
-        $0 + Int($1.mNumberChannels)
+    private func failOutputRoute(_ message: String) {
+        engineLock.lock()
+        playerNode.stop()
+        engine.stop()
+        engineStarted = false
+        engineLock.unlock()
+        // A capture tap remains owned by its finalizer; no route is changed here.
+        if !outputRouteFrozen { removeMacMonitorTapIfNeeded() }
+        stopMacMonitor()
+        appliedOutputRoute = nil
+        activeOutputDeviceID = nil
+        activeOutputDeviceName = "Unavailable"
+        outputRoutingError = message
     }
-}
 
     private static func defaultOutputDeviceID() -> AudioDeviceID? {
-        var address = AudioObjectPropertyAddress(
-            mSelector: kAudioHardwarePropertyDefaultOutputDevice,
-            mScope: kAudioObjectPropertyScopeGlobal,
-            mElement: kAudioObjectPropertyElementMain
-        )
-        var deviceID = AudioDeviceID(kAudioObjectUnknown)
-        var size = UInt32(MemoryLayout<AudioDeviceID>.size)
-        let status = AudioObjectGetPropertyData(
-            AudioObjectID(kAudioObjectSystemObject),
-            &address,
-            0,
-            nil,
-            &size,
-            &deviceID
-        )
-        guard status == noErr, deviceID != AudioDeviceID(kAudioObjectUnknown) else { return nil }
-        return deviceID
+        MacScratchOutputRoute.defaultOutputDeviceID()
     }
 
     private func installMacMonitorTapIfNeeded() {
@@ -1961,66 +2016,97 @@ final class ScratchSamplePlaybackController {
             bufferSize: 128,
             format: format
         ) { [weak self] buffer, _ in
-            self?.enqueueMacMonitorBuffer(buffer)
+            guard let self else { return }
+            let token = self.scratchOutputPeakMeter.currentToken
+            // Tap hostTime may be a future presentation timestamp. Meter
+            // freshness describes callback arrival, not output/playhead time.
+            let receivedAt = CACurrentMediaTime()
+            if let peak = Self.scratchOutputPeak(in: buffer) {
+                self.scratchOutputPeakMeter.publish(peak: peak, receivedAt: receivedAt, token: token)
+            }
+            self.enqueueMacMonitorBuffer(buffer)
         }
         macMonitorTapInstalled = true
     }
 
     private func removeMacMonitorTapIfNeeded() {
+        scratchOutputPeakMeter.reset(now: CACurrentMediaTime())
         guard macMonitorTapInstalled else { return }
         scratchOutputMixerNode.removeTap(onBus: 0)
         macMonitorTapInstalled = false
     }
 
+    private func refreshMacMonitorRoute() {
+        let enabled = monitorRoutingState.withLock { $0.enabled }
+        let deviceID = enabled ? Self.defaultOutputDeviceID() : nil
+        let name = deviceID.flatMap(MacScratchOutputRoute.deviceName)
+        let error: String?
+        if !enabled { error = nil }
+        else if deviceID == nil { error = "No system output is available for Mac monitoring." }
+        else if deviceID == activeOutputDeviceID { error = "The system output is already the primary output; a second copy is disabled." }
+        else if name?.lowercased().contains("rane") == true { error = "Choose Mac speakers or wired Mac headphones as the system output for optional monitoring." }
+        else { error = nil }
+        let eligibleDeviceID = error == nil && enabled && engineStarted ? deviceID : nil
+        let status = !enabled ? "Off" : (error != nil ? "Unavailable" : (engineStarted ? "Waiting for audio" : "Waiting for playback output"))
+        let epoch = monitorRoutingState.withLock { state -> UInt64 in
+            state.epoch &+= 1
+            // Do not accept the next route's buffers until its old player has stopped.
+            state.deviceID = nil
+            state.status = status
+            state.error = error
+            return state.epoch
+        }
+        macMonitorQueue.async { [weak self] in
+            guard let self, self.monitorRoutingState.withLock({ $0.epoch == epoch }) else { return }
+            self.macMonitorPlayerNode.stop()
+            self.macMonitorEngine.stop()
+            self.macMonitorEngineStarted = false
+            self.macMonitorFormat = nil
+            self.macMonitorPendingBufferCount = 0
+            self.monitorRoutingState.withLock {
+                guard $0.epoch == epoch else { return }
+                $0.deviceID = eligibleDeviceID
+            }
+        }
+    }
+
     private func enqueueMacMonitorBuffer(_ sourceBuffer: AVAudioPCMBuffer) {
+        let route = monitorRoutingState.withLock { $0 }
+        guard route.enabled, route.deviceID != nil else { return }
         guard let copiedBuffer = AVAudioPCMBuffer(
-            pcmFormat: sourceBuffer.format,
-            frameCapacity: sourceBuffer.frameLength
+            pcmFormat: sourceBuffer.format, frameCapacity: sourceBuffer.frameLength
         ) else { return }
         copiedBuffer.frameLength = sourceBuffer.frameLength
-
         let sourceBuffers = UnsafeMutableAudioBufferListPointer(sourceBuffer.mutableAudioBufferList)
         let destinationBuffers = UnsafeMutableAudioBufferListPointer(copiedBuffer.mutableAudioBufferList)
         for index in 0..<min(sourceBuffers.count, destinationBuffers.count) {
             guard let sourceData = sourceBuffers[index].mData,
                   let destinationData = destinationBuffers[index].mData else { continue }
-            let byteCount = min(
-                Int(sourceBuffers[index].mDataByteSize),
-                Int(destinationBuffers[index].mDataByteSize)
-            )
+            let byteCount = min(Int(sourceBuffers[index].mDataByteSize), Int(destinationBuffers[index].mDataByteSize))
             memcpy(destinationData, sourceData, byteCount)
             destinationBuffers[index].mDataByteSize = UInt32(byteCount)
         }
-
         macMonitorQueue.async { [weak self] in
             guard let self,
-                  self.macMonitorPendingBufferCount < self.macMonitorMaximumPendingBufferCount,
-                  self.prepareMacMonitorIfNeeded(for: copiedBuffer.format) else { return }
-
+                  self.monitorRoutingState.withLock({ $0.accepts(epoch: route.epoch) }),
+                  self.prepareMacMonitorIfNeeded(for: copiedBuffer.format, route: route),
+                  self.macMonitorPendingBufferCount < self.macMonitorMaximumPendingBufferCount else { return }
             self.macMonitorPendingBufferCount += 1
-            self.macMonitorPlayerNode.scheduleBuffer(
-                copiedBuffer,
-                completionCallbackType: .dataPlayedBack
-            ) { [weak self] _ in
+            self.macMonitorPlayerNode.scheduleBuffer(copiedBuffer, completionCallbackType: .dataPlayedBack) { [weak self] _ in
                 self?.macMonitorQueue.async { [weak self] in
-                    guard let self else { return }
+                    guard let self, self.monitorRoutingState.withLock({ $0.accepts(epoch: route.epoch) }) else { return }
                     self.macMonitorPendingBufferCount = max(0, self.macMonitorPendingBufferCount - 1)
                 }
             }
-            if !self.macMonitorPlayerNode.isPlaying {
-                self.macMonitorPlayerNode.play()
-            }
+            if !self.macMonitorPlayerNode.isPlaying { self.macMonitorPlayerNode.play() }
         }
     }
 
-    private func prepareMacMonitorIfNeeded(for format: AVAudioFormat) -> Bool {
+    private func prepareMacMonitorIfNeeded(for format: AVAudioFormat, route: MacScratchMonitorRouteState) -> Bool {
         let formatChanged = macMonitorFormat.map {
-            $0.sampleRate != format.sampleRate
-                || $0.channelCount != format.channelCount
-                || $0.commonFormat != format.commonFormat
-                || $0.isInterleaved != format.isInterleaved
+            $0.sampleRate != format.sampleRate || $0.channelCount != format.channelCount
+                || $0.commonFormat != format.commonFormat || $0.isInterleaved != format.isInterleaved
         } ?? true
-
         if formatChanged {
             macMonitorPlayerNode.stop()
             macMonitorEngine.stop()
@@ -2030,75 +2116,88 @@ final class ScratchSamplePlaybackController {
             macMonitorEngineStarted = false
             macMonitorPendingBufferCount = 0
         }
-
-        guard !macMonitorEngineStarted else { return true }
-
-        if let outputDeviceID = macMonitorOutputDeviceID,
-           let audioUnit = macMonitorEngine.outputNode.audioUnit {
-            var mutableDeviceID = outputDeviceID
-            let status = AudioUnitSetProperty(
-                audioUnit,
-                kAudioOutputUnitProperty_CurrentDevice,
-                kAudioUnitScope_Global,
-                0,
-                &mutableDeviceID,
-                UInt32(MemoryLayout<AudioDeviceID>.size)
-            )
-            if status != noErr {
-                print("[ScratchSamplePlaybackController] Mac monitor output route failed: \(status)")
-            }
-        }
-
-        guard let raneOutputDeviceID = macMonitorOutputDeviceID else {
-            return false
-        }
-
         do {
-            macMonitorEngine.prepare()
-            let channelMapStatus = Self.applyRaneChannel2ChannelMap(
-                to: macMonitorEngine.outputNode.audioUnit,
-                deviceID: raneOutputDeviceID,
-                sourceChannelCount: macMonitorFormat?.channelCount ?? 2
+            if macMonitorEngineStarted {
+                try MacScratchOutputRoute.validateRunning(macMonitorEngine.isRunning)
+                guard let applied = macMonitorAppliedRoute else {
+                    throw MacScratchOutputRoute.Failure(message: "The Mac monitor route is unavailable.")
+                }
+                let now = CACurrentMediaTime()
+                if now - macMonitorLastVerificationTime >= 0.25 {
+                    try MacScratchOutputRoute.verify(engine: macMonitorEngine, route: applied)
+                    macMonitorLastVerificationTime = now
+                }
+                return true
+            }
+            let applied = try MacScratchOutputRoute.prepare(
+                engine: macMonitorEngine, preferredDeviceID: route.deviceID, preferredDeviceName: nil
             )
-            guard channelMapStatus == noErr else {
-                NSLog("ScratchLab: Rane Channel 2 output map failed with status %d", channelMapStatus)
+            try macMonitorEngine.start()
+            try MacScratchOutputRoute.validateRunning(macMonitorEngine.isRunning)
+            try MacScratchOutputRoute.verify(engine: macMonitorEngine, route: applied)
+            guard monitorRoutingState.withLock({ $0.accepts(epoch: route.epoch) }) else {
+                macMonitorEngine.stop()
                 return false
             }
-            try macMonitorEngine.start()
             macMonitorEngineStarted = true
+            macMonitorAppliedRoute = applied
+            macMonitorLastVerificationTime = CACurrentMediaTime()
+            monitorRoutingState.withLock {
+                guard $0.accepts(epoch: route.epoch) else { return }
+                $0.status = "Active — delayed monitor"
+            }
             return true
         } catch {
-            print("[ScratchSamplePlaybackController] Mac monitor failed to start: \(error)")
+            macMonitorPlayerNode.stop()
+            macMonitorEngine.stop()
+            macMonitorEngineStarted = false
+            macMonitorAppliedRoute = nil
+            macMonitorPendingBufferCount = 0
+            monitorRoutingState.withLock {
+                guard $0.accepts(epoch: route.epoch) else { return }
+                $0.status = "Failed"
+                $0.error = error.localizedDescription
+                $0.deviceID = nil
+            }
             return false
         }
     }
 
     private func stopMacMonitor() {
+        let epoch = monitorRoutingState.withLock { state -> UInt64 in
+            state.epoch &+= 1
+            state.deviceID = nil
+            state.status = state.enabled ? "Waiting for playback output" : "Off"
+            return state.epoch
+        }
         macMonitorQueue.async { [weak self] in
-            guard let self else { return }
+            guard let self, self.monitorRoutingState.withLock({ $0.epoch == epoch }) else { return }
             self.macMonitorPlayerNode.stop()
             self.macMonitorEngine.stop()
             self.macMonitorEngineStarted = false
             self.macMonitorPendingBufferCount = 0
+            self.macMonitorFormat = nil
         }
     }
 
     private func ensureEngineRunning() {
-        applyRequestedOutputDeviceIfNeeded()
-        engineLock.lock()
-        defer { engineLock.unlock() }
+        guard applyRequestedOutputDeviceIfNeeded(), let route = appliedOutputRoute else { return }
         guard !engineStarted else { return }
         do {
             try engine.start()
+            try MacScratchOutputRoute.validateRunning(engine.isRunning)
+            try MacScratchOutputRoute.verify(engine: engine, route: route)
+            engineLock.lock()
             engineStarted = true
+            engineLock.unlock()
             playerNode.play()
             installMacMonitorTapIfNeeded()
+            refreshMacMonitorRoute()
 #if DEBUG
             installOutputCaptureTap(envGated: true)
 #endif
-            print("[ScratchSamplePlaybackController] engine started, output = \(activeOutputDeviceName)")
         } catch {
-            print("[ScratchSamplePlaybackController] engine start failed: \(error)")
+            failOutputRoute(error.localizedDescription)
         }
     }
 
@@ -2256,6 +2355,14 @@ final class ScratchSamplePlaybackController {
         applyLoadedBufferState(buffer, sampleID: sampleID, generation: generation)
 
         ensureEngineRunning()
+        guard engineStarted else {
+            let message = outputRoutingError ?? "The AHHH output could not start. Check Playback output."
+            lastLoadError = message
+            debugPublishOnMainAsync(field: "statusLabel.routeFailed") { [weak self] in
+                self?.statusLabel = message
+            }
+            return
+        }
 
         if !playDiagnosticPreview {
             print("[ScratchSamplePlaybackController] diagnostic preview suppressed by caller · sampleID=\(sampleID)")
@@ -2295,8 +2402,9 @@ final class ScratchSamplePlaybackController {
 
         print("[ScratchSamplePlaybackController] loaded \(sampleID)")
         print("[ScratchSamplePlaybackController] ready for platter · sampleID=\(sampleID) totalFrames=\(totalFrames) framesPerStep=\(String(format: "%.2f", framesPerStep))")
+        let outputName = activeOutputDeviceName
         debugPublishOnMainAsync(field: "statusLabel.loaded") { [weak self] in
-            self?.statusLabel = "loaded: \(sampleID) · system default"
+            self?.statusLabel = "loaded: \(sampleID) · \(outputName)"
         }
     }
 
@@ -2306,6 +2414,7 @@ final class ScratchSamplePlaybackController {
     /// production reset path instead of duplicating it. Must run on
     /// `audioQueue`.
     private func applyLoadedBufferState(_ buffer: AVAudioPCMBuffer, sampleID: String, generation: UInt64) {
+        scratchOutputPeakMeter.reset(now: CACurrentMediaTime())
         invalidatePlaybackLoopContext(at: schedulingClock())
         #if DEBUG
         // Intermittent hot-cue-retrigger investigation (2026-08-14): captured
@@ -2450,12 +2559,13 @@ final class ScratchSamplePlaybackController {
               "initialPhase=\(hotCueOnsetFrame) wasActiveBeforeThisLoad=\(wasActiveBeforeThisLoad) " +
               "renderIngestCountBefore=\(dvsContinuousRenderer.renderIngestCount)")
         #endif
-        dvsContinuousRenderer.installSample(
+        let installed = dvsContinuousRenderer.installSample(
             from: buffer,
             loopFrames: continuousLoopFrames,
             contentFadeFrames: dvsLoopContentFadeFrames,
             initialPhase: Double(hotCueOnsetFrame)
         )
+        loadedRenderSampleIdentity = installed ? dvsContinuousRenderer.currentInstalledSampleIdentity : nil
         #if DEBUG
         print("[HotCueTrace] gen=\(generation) installSample returned · sampleID=\(sampleID) " +
               "installedSampleCount=\(dvsContinuousRenderer.installedSampleCount)")
@@ -3647,9 +3757,11 @@ final class ScratchSamplePlaybackController {
             self.playerNode.stop()
             self.playerNode.volume = 1.0
             self.invalidatePlaybackLoopContext(at: self.schedulingClock())
+            self.scratchOutputPeakMeter.reset(now: CACurrentMediaTime())
             self.forwardBuffer = nil
             self.playbackWaveformSnapshot = nil
             self.loadedSampleID = nil
+            self.loadedRenderSampleIdentity = nil
             self.totalFrames = 0
             self.lastScheduledSteps = 0
             self.lastScheduledDirection = nil
@@ -3941,9 +4053,9 @@ final class ScratchSamplePlaybackController {
         }
     }
 
-    /// Lightweight read-position snapshot for a live UI track. Distinct from
-    /// `DVSPlaybackDiagnostics` (scheduling/rate oriented) — this is the raw
-    /// read-head position, polled by the UI at ~25 Hz for smooth tracking.
+    /// Lightweight waveform and position snapshots for the live UI. Logical
+    /// cue-relative platter position is separate from the renderer read-head;
+    /// the existing UI poll reads both at approximately 25 Hz.
     struct PlaybackWaveformSnapshot: Equatable, Sendable {
         let sampleID: String
         let displayName: String
@@ -3963,6 +4075,10 @@ final class ScratchSamplePlaybackController {
         let totalFrames: Int
         let dvsLoopFrames: Double
         let unwrappedFramePosition: Double
+        /// Last rendered source frame relative to the displayed waveform's
+        /// cue onset. Nil for legacy grains, no owner, or an unrendered reload.
+        /// Unlike the logical platter position, this follows actual audio wraps.
+        let renderedFramePosition: Double?
 
         /// Normalised read position in `[0, 1]` across the effective loop span
         /// (`max(dvsLoopFrames, totalFrames)`, matching `continuousLoopFrames`).
@@ -3993,9 +4109,65 @@ final class ScratchSamplePlaybackController {
                 currentSampleFrame: currentSampleFrame,
                 totalFrames: totalFrames,
                 dvsLoopFrames: dvsLoopFrames,
-                unwrappedFramePosition: unwrappedFramePosition
+                unwrappedFramePosition: unwrappedFramePosition,
+                renderedFramePosition: currentRenderedFramePosition()
             )
         }
+    }
+
+    /// Called only on audioQueue. The renderer supplies a coherent receipt;
+    /// never substitute a logical control position when it is unavailable.
+    private func currentRenderedFramePosition() -> Double? {
+        let ownsContinuousRenderer = (platterRenderOwner == .midi && !dvsOwnershipActive && midiUsesContinuousRenderer)
+            || (platterRenderOwner == .dvs && dvsOwnershipActive && dvsUsesContinuousRenderer)
+        guard loadedSampleID != nil, totalFrames > 0, ownsContinuousRenderer,
+              let rendered = dvsContinuousRenderer.currentRenderPositionSnapshot(),
+              rendered.sampleIdentity == loadedRenderSampleIdentity,
+              rendered.controlEpoch >= minimumRenderPositionEpoch else { return nil }
+        return rendered.sourceFrame - Double(hotCueOnsetFrame)
+    }
+
+    struct ScratchOutputMeterSnapshot: Equatable {
+        let sampleID: String?
+        let generation: UInt32
+        let peak: Float?
+        let receivedAt: TimeInterval?
+        let sampledAt: TimeInterval
+    }
+
+    /// One signal point before, during and after recording: the existing
+    /// scratchOutputMixerNode tap, after the software fader/upfader. It feeds
+    /// the routine-capture main mixer at unity; hardware routing is downstream.
+    /// This is a stereo peak, whereas routine WAV capture later folds to mono.
+    func currentScratchOutputMeterSnapshot(now: TimeInterval? = nil) -> ScratchOutputMeterSnapshot {
+        audioQueue.sync {
+            let sampledAt = now ?? CACurrentMediaTime()
+            let reading = scratchOutputPeakMeter.consume(now: sampledAt)
+            let available = loadedSampleID != nil && totalFrames > 0 && macMonitorTapInstalled
+                && isEngineRunningForPlayback() && engine.isRunning
+                && engine.mainMixerNode.outputVolume == 1
+            return ScratchOutputMeterSnapshot(sampleID: loadedSampleID,
+                generation: scratchOutputPeakMeter.currentToken.generation,
+                peak: available ? reading?.peak : nil,
+                receivedAt: available ? reading?.receivedAt : nil,
+                sampledAt: sampledAt)
+        }
+    }
+
+    /// Allocation-free scan of the actual post-fader PCM. No input RMS scaling,
+    /// averaging across callbacks, or replacement of missing buffers with zero.
+    static func scratchOutputPeak(in buffer: AVAudioPCMBuffer) -> Float? {
+        guard buffer.frameLength > 0, buffer.format.channelCount > 0,
+              !buffer.format.isInterleaved, let channels = buffer.floatChannelData else { return nil }
+        var peak: Float = 0
+        for channel in 0..<Int(buffer.format.channelCount) {
+            for frame in 0..<Int(buffer.frameLength) {
+                let sample = channels[channel][frame]
+                guard sample.isFinite else { return nil }
+                peak = max(peak, abs(sample))
+            }
+        }
+        return peak
     }
 
     /// Immutable PCM overview for UI presentation. The array is rebuilt only
@@ -4580,5 +4752,255 @@ final class ScratchSamplePlaybackController {
             }
         }
         return segment
+    }
+}
+
+/// One producer tap and one control-queue consumer. Positive Float bit patterns
+/// sort by magnitude, so atomic max retains every short peak until the next
+/// poll. The upper word is a lifecycle generation: a delayed old callback can
+/// never replace a reset/new sample. Only reset/consume touch cachedReading.
+final class ScratchOutputPeakMeter {
+    struct Token { let generation: UInt32; let origin: TimeInterval }
+    struct Reading: Equatable { let peak: Float; let receivedAt: TimeInterval }
+    static let freshnessInterval: TimeInterval = 0.25
+    private let generation = Atomic<UInt32>(0)
+    private let originBits = Atomic<UInt64>(Double.zero.bitPattern)
+    private let peakWord = Atomic<UInt64>(0)
+    private let receiptWord = Atomic<UInt64>(0)
+    private var cachedReading: Reading?
+
+    var currentToken: Token {
+        Token(generation: generation.load(ordering: .acquiring),
+              origin: Double(bitPattern: originBits.load(ordering: .acquiring)))
+    }
+
+    /// Control queue only, at load/unload/tap removal. Zero is never active.
+    func reset(now: TimeInterval) {
+        let next = generation.load(ordering: .relaxed) &+ 1
+        let prefix = UInt64(next) << 32
+        peakWord.store(prefix, ordering: .releasing)
+        receiptWord.store(prefix, ordering: .releasing)
+        originBits.store(now.bitPattern, ordering: .releasing)
+        generation.store(next, ordering: .releasing)
+        cachedReading = nil
+    }
+
+    /// Called by the tap after scanning PCM. Fixed atomic operations only;
+    /// receipt first ensures consuming the peak can never lose its timestamp.
+    func publish(peak: Float, receivedAt: TimeInterval, token: Token) {
+        guard token.generation != 0, peak.isFinite, peak >= 0,
+              receivedAt.isFinite, token.origin.isFinite, receivedAt >= token.origin else { return }
+        let elapsedMilliseconds = (receivedAt - token.origin) * 1_000
+        guard elapsedMilliseconds < Double(UInt32.max - 1) else { return }
+        let prefix = UInt64(token.generation) << 32
+        let receipt = UInt64(UInt32(elapsedMilliseconds) + 1)
+        receiptWord.max(prefix | receipt, ordering: .releasing)
+        peakWord.max(prefix | UInt64(peak.bitPattern + 1), ordering: .releasing)
+    }
+
+    /// Control queue only. A real silent callback publishes Float.zero;
+    /// absent/stale callbacks remain nil rather than claiming silent audio.
+    func consume(now: TimeInterval) -> Reading? {
+        let token = currentToken
+        guard token.generation != 0, now.isFinite else { return nil }
+        let prefix = UInt64(token.generation) << 32
+        let peak = peakWord.exchange(prefix, ordering: .acquiringAndReleasing)
+        let receipt = receiptWord.load(ordering: .acquiring)
+        guard peak >> 32 == UInt64(token.generation), receipt >> 32 == UInt64(token.generation),
+              UInt32(truncatingIfNeeded: receipt) > 0 else { return nil }
+        let receivedAt = token.origin + Double(UInt32(truncatingIfNeeded: receipt) - 1) / 1_000
+        guard now >= receivedAt, now - receivedAt <= Self.freshnessInterval else {
+            cachedReading = nil
+            return nil
+        }
+        let bits = UInt32(truncatingIfNeeded: peak)
+        if bits > 0 {
+            cachedReading = Reading(peak: Float(bitPattern: bits - 1), receivedAt: receivedAt)
+        }
+        return cachedReading
+    }
+}
+
+/// Device binding used by the standalone renderer. No graph is started here.
+/// Input-channel selection is deliberately independent of these output maps.
+enum MacScratchOutputRoute {
+    struct Applied: Equatable, Sendable {
+        var deviceID: AudioDeviceID
+        var deviceUID: String
+        var deviceName: String
+        var channelMap: [Int]
+        var channelPair: String
+    }
+
+    struct Failure: LocalizedError {
+        var message: String
+        var errorDescription: String? { message }
+    }
+
+    static func validateIdentity(expectedDeviceUID: String?, actualDeviceUID: String) throws {
+        guard expectedDeviceUID == nil || expectedDeviceUID == actualDeviceUID else {
+            throw Failure(message: "The connected playback device does not match the selected Rane. Reconnect the selected controller or explicitly choose a different output.")
+        }
+    }
+
+    static func validateRunning(_ isRunning: Bool) throws {
+        guard isRunning else {
+            throw Failure(message: "The audio output stopped. Check the output device before recording or monitoring.")
+        }
+    }
+
+    static func canRebind(routineCaptureArmed: Bool, diagnosticCaptureArmed: Bool) -> Bool {
+        !routineCaptureArmed && !diagnosticCaptureArmed
+    }
+
+    static func targetDevice(preferred: AudioDeviceID?, systemDefault: AudioDeviceID?) throws -> AudioDeviceID {
+        guard let result = preferred ?? systemDefault, result != kAudioObjectUnknown else {
+            throw Failure(message: "No playback output is available. Connect the Rane or choose a system output.")
+        }
+        return result
+    }
+
+    static func channelMap(deviceName: String, deviceChannels: Int, nodeChannels: Int) throws -> [Int] {
+        if deviceName.lowercased().contains("rane") {
+            guard RanePlaybackRoutingPolicy.matchesRaneRoute(portName: deviceName) else {
+                throw Failure(message: "The playback output pair for \(deviceName) has not been validated. This build supports Rane ONE playback on USB outputs 3/4.")
+            }
+            switch RanePlaybackRoutingPolicy.decide(portName: deviceName,
+                grantedOutputChannels: deviceChannels, outputNodeChannels: nodeChannels) {
+            case .raneRightDeck(let map): return map
+            case .unroutable(let failure): throw Failure(message: failure.message)
+            case .ordinaryStereo: break
+            }
+        }
+        guard deviceChannels > 0, nodeChannels > 0 else {
+            throw Failure(message: "\(deviceName) has no usable playback output channels.")
+        }
+        var map = Array(repeating: -1, count: nodeChannels)
+        map[0] = 0
+        if map.count > 1 { map[1] = 1 }
+        return map
+    }
+
+    static func validateReadback(route: Applied, deviceID: AudioDeviceID?, channelMap: [Int]?) throws {
+        guard deviceID == route.deviceID else {
+            throw Failure(message: "Playback did not stay on \(route.deviceName). Select the output again before recording.")
+        }
+        guard channelMap == route.channelMap else {
+            throw Failure(message: "\(route.deviceName) did not retain playback output channels \(route.channelPair). Audio is stopped to avoid using the wrong channel.")
+        }
+    }
+
+    static func prepare(engine: AVAudioEngine, preferredDeviceID: AudioDeviceID?, preferredDeviceName: String?, expectedDeviceUID: String? = nil, stereoOutputNode: AVAudioNode? = nil) throws -> Applied {
+        guard !engine.isRunning else {
+            throw Failure(message: "Stop capture before changing the playback output.")
+        }
+        let deviceID = try targetDevice(preferred: preferredDeviceID, systemDefault: defaultOutputDeviceID())
+        guard let name = deviceName(deviceID), let uid = deviceUID(deviceID) else {
+            throw Failure(message: "The selected playback output is no longer connected. Refresh hardware inputs and select it again.")
+        }
+        try validateIdentity(expectedDeviceUID: expectedDeviceUID, actualDeviceUID: uid)
+        // Reject an unsupported selected Rane before touching the output unit.
+        _ = try channelMap(deviceName: name, deviceChannels: outputChannelCount(deviceID), nodeChannels: outputChannelCount(deviceID))
+        guard let unit = engine.outputNode.audioUnit else {
+            throw Failure(message: "The playback output audio unit is unavailable.")
+        }
+        var selected = deviceID
+        let deviceStatus = AudioUnitSetProperty(unit, kAudioOutputUnitProperty_CurrentDevice,
+            kAudioUnitScope_Global, 0, &selected, UInt32(MemoryLayout<AudioDeviceID>.size))
+        guard deviceStatus == noErr else {
+            throw Failure(message: "Could not route AHHH to \(name) (audio error \(deviceStatus)).")
+        }
+        let hardwareFormat = engine.outputNode.outputFormat(forBus: 0)
+        guard hardwareFormat.sampleRate.isFinite, hardwareFormat.sampleRate > 0,
+              hardwareFormat.channelCount > 0,
+              let stereo = AVAudioFormat(standardFormatWithSampleRate: hardwareFormat.sampleRate, channels: 2) else {
+            throw Failure(message: "The playback format on \(name) is unavailable.")
+        }
+        let outputSource = stereoOutputNode ?? engine.mainMixerNode
+        engine.disconnectNodeOutput(outputSource)
+        engine.connect(outputSource, to: engine.outputNode, format: stereo)
+        engine.prepare()
+        let map = try channelMap(deviceName: name, deviceChannels: outputChannelCount(deviceID),
+            nodeChannels: Int(engine.outputNode.outputFormat(forBus: 0).channelCount))
+        var rawMap = map.map(Int32.init)
+        let mapStatus = rawMap.withUnsafeMutableBytes {
+            AudioUnitSetProperty(unit, kAudioOutputUnitProperty_ChannelMap, kAudioUnitScope_Input,
+                0, $0.baseAddress, UInt32($0.count))
+        }
+        guard mapStatus == noErr else {
+            throw Failure(message: "Could not assign the playback channels on \(name) (audio error \(mapStatus)).")
+        }
+        let route = Applied(deviceID: deviceID, deviceUID: uid, deviceName: name,
+            channelMap: map, channelPair: RanePlaybackRoutingPolicy.matchesRaneRoute(portName: name) ? "3/4" : (map.count > 1 ? "1/2" : "1"))
+        try verify(engine: engine, route: route)
+        return route
+    }
+
+    static func verify(engine: AVAudioEngine, route: Applied) throws {
+        guard let unit = engine.outputNode.audioUnit, deviceUID(route.deviceID) == route.deviceUID else {
+            throw Failure(message: "The playback output is no longer available. Reconnect \(route.deviceName) before recording.")
+        }
+        var selected = AudioDeviceID(kAudioObjectUnknown)
+        var size = UInt32(MemoryLayout<AudioDeviceID>.size)
+        let deviceStatus = AudioUnitGetProperty(unit, kAudioOutputUnitProperty_CurrentDevice,
+            kAudioUnitScope_Global, 0, &selected, &size)
+        var map = Array(repeating: Int32(-1), count: route.channelMap.count)
+        var mapSize = UInt32(map.count * MemoryLayout<Int32>.size)
+        let mapStatus = map.withUnsafeMutableBytes { bytes -> OSStatus in
+            guard let baseAddress = bytes.baseAddress else { return kAudio_ParamError }
+            return AudioUnitGetProperty(unit, kAudioOutputUnitProperty_ChannelMap,
+                kAudioUnitScope_Input, 0, baseAddress, &mapSize)
+        }
+        try validateReadback(route: route,
+            deviceID: deviceStatus == noErr ? selected : nil,
+            channelMap: mapStatus == noErr && mapSize == UInt32(map.count * MemoryLayout<Int32>.size) ? map.map(Int.init) : nil)
+    }
+
+    static func defaultOutputDeviceID() -> AudioDeviceID? {
+        var address = AudioObjectPropertyAddress(mSelector: kAudioHardwarePropertyDefaultOutputDevice,
+            mScope: kAudioObjectPropertyScopeGlobal, mElement: kAudioObjectPropertyElementMain)
+        var value = AudioDeviceID(kAudioObjectUnknown)
+        var size = UInt32(MemoryLayout<AudioDeviceID>.size)
+        guard AudioObjectGetPropertyData(AudioObjectID(kAudioObjectSystemObject), &address, 0, nil, &size, &value) == noErr,
+              value != kAudioObjectUnknown else { return nil }
+        return value
+    }
+
+    static func deviceName(_ id: AudioDeviceID) -> String? { stringProperty(id, selector: kAudioObjectPropertyName) }
+    static func deviceUID(_ id: AudioDeviceID) -> String? { stringProperty(id, selector: kAudioDevicePropertyDeviceUID) }
+
+    private static func stringProperty(_ id: AudioDeviceID, selector: AudioObjectPropertySelector) -> String? {
+        var address = AudioObjectPropertyAddress(mSelector: selector, mScope: kAudioObjectPropertyScopeGlobal,
+            mElement: kAudioObjectPropertyElementMain)
+        var value: CFString = "" as CFString
+        var size = UInt32(MemoryLayout<CFString>.size)
+        guard AudioObjectGetPropertyData(id, &address, 0, nil, &size, &value) == noErr else { return nil }
+        let result = value as String
+        return result.isEmpty ? nil : result
+    }
+
+    private static func outputChannelCount(_ deviceID: AudioDeviceID) -> Int {
+        var address = AudioObjectPropertyAddress(mSelector: kAudioDevicePropertyStreamConfiguration,
+            mScope: kAudioDevicePropertyScopeOutput, mElement: kAudioObjectPropertyElementMain)
+        var size: UInt32 = 0
+        guard AudioObjectGetPropertyDataSize(deviceID, &address, 0, nil, &size) == noErr,
+              size >= MemoryLayout<AudioBufferList>.size else { return 0 }
+        let raw = UnsafeMutableRawPointer.allocate(byteCount: Int(size), alignment: MemoryLayout<AudioBufferList>.alignment)
+        defer { raw.deallocate() }
+        guard AudioObjectGetPropertyData(deviceID, &address, 0, nil, &size, raw) == noErr else { return 0 }
+        return UnsafeMutableAudioBufferListPointer(raw.assumingMemoryBound(to: AudioBufferList.self))
+            .reduce(0) { $0 + Int($1.mNumberChannels) }
+    }
+}
+
+struct MacScratchMonitorRouteState: Sendable {
+    var epoch: UInt64 = 0
+    var enabled = false
+    var deviceID: AudioDeviceID?
+    var status = "Off"
+    var error: String?
+
+    func accepts(epoch candidate: UInt64) -> Bool {
+        enabled && deviceID != nil && epoch == candidate
     }
 }

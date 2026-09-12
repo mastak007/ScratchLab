@@ -9,8 +9,197 @@
 // supplied as data, which is what lets the whole rule set be exercised without
 // a controller or a take on disk.
 
+import AVFoundation
 import XCTest
 @testable import ScratchLab
+
+final class ReferenceExactBeatExportTests: XCTestCase {
+    private func temporaryRoot() throws -> URL {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        return root
+    }
+
+    func testBoundStemUsesPlayedLoopFramesAndConvertsToCapturedSampleRate() throws {
+        let root = try temporaryRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let prepared = try ReferenceBeatAssetStore.prepare(mode: .minimalFunk, bpm: 95, loopBeats: 4, rootURL: root)
+        let loop = try ScratchLabBeatEngine.loadPreparedPlayback(preparedBeat: prepared, mode: prepared.mode, bpm: 95).loopBuffer
+        let offset = Double(prepared.binding.countInFrameCount) / 48_000
+        let frames = loop.frameLength + 256
+        let stem = try SessionArchiveBuilder.renderedBoundBeatStem(binding: prepared.binding, beatRootURL: root,
+            recordingStartOffsetSeconds: offset, outputFormat: loop.format, frameCount: frames)
+        XCTAssertEqual(stem.frameLength, frames)
+        for channel in 0..<2 {
+            XCTAssertEqual(Data(bytes: stem.floatChannelData![channel], count: Int(loop.frameLength) * MemoryLayout<Float>.size),
+                Data(bytes: loop.floatChannelData![channel], count: Int(loop.frameLength) * MemoryLayout<Float>.size))
+            XCTAssertEqual(Data(bytes: stem.floatChannelData![channel] + Int(loop.frameLength), count: 256 * MemoryLayout<Float>.size),
+                Data(bytes: loop.floatChannelData![channel], count: 256 * MemoryLayout<Float>.size))
+        }
+        let format441 = try XCTUnwrap(AVAudioFormat(standardFormatWithSampleRate: 44_100, channels: 2))
+        let converted = try SessionArchiveBuilder.renderedBoundBeatStem(binding: prepared.binding, beatRootURL: root,
+            recordingStartOffsetSeconds: offset, outputFormat: format441, frameCount: 44_100)
+        XCTAssertEqual(converted.frameLength, 44_100)
+        XCTAssertTrue((0..<Int(converted.frameLength)).contains { abs(converted.floatChannelData![0][$0]) > 0.01 })
+        XCTAssertLessThanOrEqual(ScratchLabBeatEngine.GeneratedAudioHeadroom.peakAmplitude(of: converted),
+            ScratchLabBeatEngine.GeneratedAudioHeadroom.amplitude(forDBFS: -1.0),
+            "Resampling must preserve the existing exported generated-stem headroom contract.")
+        let invalidOffsets: [Double?] = [nil, .nan, offset + 1]
+        for invalid in invalidOffsets {
+            XCTAssertThrowsError(try SessionArchiveBuilder.renderedBoundBeatStem(binding: prepared.binding, beatRootURL: root,
+                recordingStartOffsetSeconds: invalid, outputFormat: loop.format, frameCount: 100))
+        }
+    }
+
+    func testExactPackageReopensWithoutOriginalLibraryAndRejectsChangedBinding() throws {
+        let root = try temporaryRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let library = root.appendingPathComponent("library")
+        let prepared = try ReferenceBeatAssetStore.prepare(mode: .boomBapTrainer, bpm: 95, loopBeats: 4, rootURL: library)
+        let beat = prepared.binding
+        let watch = watchFixture()
+        let watchData = try WatchMotionCaptureCodec.encoder.encode(watch)
+        let sidecar = CaptureCore.LocalRecordingSidecar(sessionID: "session",
+            sessionConfig: CaptureSessionConfig(referenceCaptureIntent: intent(beat: beat)),
+            takeID: "take-001", appLocalTakeNumber: 1, recordingRole: "reference_authoring", platform: "fixture",
+            appSurface: "reference_authoring", sourceDeviceName: "Fixture", startedAt: watch.startedAt,
+            recordingStatus: "completed", mediaFileName: "take.mov", sidecarFileName: "take.json",
+            watchSyncState: .acknowledged, linkedMotionCaptureID: watch.id, linkedMotionFileName: "watch_motion.json")
+        var inputs = try ReferenceApprovedPackageCoordinator.boundBeatInputs(binding: beat, rootURL: library)
+        inputs += try ReferencePackageManifest.requiredArtifactRoles.enumerated().map { index, role in
+            ReferencePackageInput(role: role, packagePath: "fixture/evidence_\(index).json",
+                data: role == .takeSidecar ? try ReferencePackageIO.encoder.encode(sidecar) : Data("{}".utf8))
+        }
+        inputs.append(.init(role: .watchMotion, packagePath: "evidence/watch_motion.json", data: watchData))
+        let packageURL = try ReferencePackageIO.writePackage(inputs: inputs, parentDirectory: root,
+            packageDirectoryName: "tear.exact_beat_v1") { records in self.manifest(beat: beat, artifacts: records) }
+        try FileManager.default.removeItem(at: library)
+        XCTAssertEqual(ReferencePackageIO.verify(packageURL: packageURL), [])
+        let reopened = try ReferenceApprovedPackageCoordinator.copyAndReopen(packageURL: packageURL,
+            secondRoot: root.appendingPathComponent("second-machine"))
+        XCTAssertEqual(reopened.metadata.captureIntent?.beatSpec, beat)
+        XCTAssertEqual(reopened.metadata.sourceState, .linked(identity: watchIdentity, motionFileName: "watch_motion.json",
+            sha256: ReferencePackageIO.sha256Hex(watchData)))
+        let invalidStates: [ReferencePerTakeSourceState] = [
+            .linked(identity: watchIdentity, motionFileName: "watch_motion.json", sha256: nil),
+            .linked(identity: watchIdentity, motionFileName: nil, sha256: ReferencePackageIO.sha256Hex(watchData)),
+            .unavailable(policy: "fixture")
+        ]
+        for invalidState in invalidStates {
+            XCTAssertTrue(ReferencePackageValidator.manifestIssues(manifest(beat: beat, artifacts: reopened.artifacts,
+                sourceState: invalidState)).contains { if case .sourceStateInvalid = $0 { return true }; return false })
+        }
+        let missingWatch = reopened.artifacts.filter { $0.role != .watchMotion }
+        XCTAssertTrue(ReferencePackageValidator.manifestIssues(manifest(beat: beat, artifacts: missingWatch,
+            sourceState: reopened.metadata.sourceState)).contains {
+            if case .missingRequiredArtifact(let role) = $0 { return role == "watchMotion" }; return false
+        })
+        let changedRecords = reopened.artifacts.map { artifact in
+            ReferenceArtifactRecord(path: artifact.path, byteCount: artifact.byteCount,
+                sha256: artifact.role == .beatProductionMaster ? String(repeating: "0", count: 64) : artifact.sha256,
+                role: artifact.role)
+        }
+        XCTAssertTrue(ReferencePackageValidator.manifestIssues(manifest(beat: beat, artifacts: changedRecords)).contains {
+            if case .captureIntentInvalid = $0 { return true }; return false
+        })
+        let master = packageURL.appendingPathComponent("beat_assets/\(beat.id)/\(beat.productionMasterFileName)")
+        try Data("changed".utf8).write(to: master)
+        XCTAssertFalse(ReferencePackageIO.verify(packageURL: packageURL).isEmpty)
+    }
+
+    func testRawBoundAssetCopyPreservesBindingAndHasNoGlobalLibraryFallback() throws {
+        let root = try temporaryRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let mediaRoot = root.appendingPathComponent("capture")
+        let beatRoot = mediaRoot.appendingPathComponent("beat_assets")
+        let prepared = try ReferenceBeatAssetStore.prepare(mode: .battleLoop, bpm: 95, loopBeats: 4, rootURL: beatRoot)
+        let date = Date(timeIntervalSince1970: 1_788_000_000)
+        let media = mediaRoot.appendingPathComponent("take.mov")
+        let sidecarURL = mediaRoot.appendingPathComponent("take.json")
+        let sidecar = CaptureCore.LocalRecordingSidecar(
+            sessionID: "session",
+            sessionConfig: CaptureSessionConfig(referenceCaptureIntent: intent(beat: prepared.binding)),
+            takeID: "take-001", appLocalTakeNumber: 1, recordingRole: "reference_authoring",
+            platform: "macOS", appSurface: "reference_authoring", sourceDeviceName: "Fixture",
+            captureTiming: CaptureTimingMetadata(clickStartHostTime: 100, recordingStartHostTime: 200,
+                recordingStartOffsetSeconds: Double(prepared.binding.countInFrameCount) / 48_000),
+            startedAt: date, recordingStatus: "completed", mediaFileName: "take.mov", sidecarFileName: "take.json"
+        )
+        let encoder = JSONEncoder(); encoder.dateEncodingStrategy = .iso8601
+        try encoder.encode(sidecar).write(to: sidecarURL)
+        let records = try SessionArchiveBuilder.boundBeatExportArtifacts(sidecar: sidecar, mediaURL: media,
+            sidecarURL: sidecarURL, takeNumber: 1)
+        XCTAssertEqual(Set(records.map(\.source)), ["reference_beat_master", "reference_beat_analysis", "reference_beat_manifest",
+            "reference_beat_rights", "reference_take_sidecar"])
+        let archive = root.appendingPathComponent("archive")
+        for record in records {
+            let destination = archive.appendingPathComponent(record.relativePath)
+            try FileManager.default.createDirectory(at: destination.deletingLastPathComponent(), withIntermediateDirectories: true)
+            try FileManager.default.copyItem(at: record.sourceURL, to: destination)
+        }
+        try FileManager.default.removeItem(at: mediaRoot)
+        XCTAssertNoThrow(try ReferenceBeatAssetStore.resolve(binding: prepared.binding,
+            rootURL: archive.appendingPathComponent("beat_assets/take_001")))
+        XCTAssertThrowsError(try SessionArchiveBuilder.boundBeatExportArtifacts(sidecar: sidecar, mediaURL: media,
+            sidecarURL: sidecarURL, takeNumber: 1))
+    }
+
+    private func intent(beat: ReferenceBeatSpecBinding) -> ReferenceCaptureIntent {
+        .init(id: "intent", parentTechniqueID: ReferenceTechnique.tear.id, variantID: "tear.forward.open",
+            recipeID: "exact_beat", startingPlatterDirection: .forward, faderForm: .faderOpenThroughout,
+            bpm: beat.bpm, beatsPerCycle: 4, plan: .init(countInBars: 1, repetitionCount: 4, tailBars: 1), beatSpec: beat)
+    }
+
+    private var watchIdentity: ReferenceTakeSourceIdentity {
+        .init(sessionID: "session", takeID: "take-001", takeNumber: 1, takeToken: "token-001")
+    }
+
+    private func watchFixture() -> WatchMotionCaptureSession {
+        let start = Date(timeIntervalSince1970: 1_788_000_000)
+        let samples = (0..<1_500).map { index in
+            WatchMotionSample(elapsedTime: Double(index) / 100, coreMotionTimestamp: Double(index) / 100,
+                attitudeRoll: 0, attitudePitch: 0, attitudeYaw: 0,
+                quaternionX: 0, quaternionY: 0, quaternionZ: 0, quaternionW: 1,
+                gravityX: 0, gravityY: -1, gravityZ: 0,
+                userAccelerationX: 0.1, userAccelerationY: 0, userAccelerationZ: 0,
+                rotationRateX: 0.2, rotationRateY: 0, rotationRateZ: 0)
+        }
+        return .init(sessionID: "session", takeID: "take-001", commandID: "command-001",
+            requestedAt: start, acknowledgedAt: start, syncState: .acknowledged,
+            sourceDeviceName: "Synthetic Watch", sampleRateHz: 100, startedAt: start,
+            endedAt: start.addingTimeInterval(15), deviceRecordedAtStart: start,
+            deviceRecordedAtEnd: start.addingTimeInterval(15), appVersion: "fixture", timingMetadata: nil, samples: samples)
+    }
+
+    private func manifest(beat: ReferenceBeatSpecBinding, artifacts: [ReferenceArtifactRecord],
+                          sourceState: ReferencePerTakeSourceState? = nil) -> ReferencePackageManifest {
+        let date = Date(timeIntervalSince1970: 1_788_000_000)
+        let origin = ReferenceMediaTimeOrigin(clickStartHostTime: 100, recordingStartHostTime: 200,
+            recordingStartOffsetSeconds: Double(beat.countInFrameCount) / 48_000)
+        let duration = 24 * 60.0 / Double(beat.bpm) - origin.recordingStartOffsetSeconds
+        let timing = ReferenceWitnessedTiming(clickStartHostTime: 100, intendedMediaOriginHostTime: 200,
+            actualRecordingOriginHostTime: 200, sampleRate: 48_000, countInFrameCount: beat.countInFrameCount,
+            loopStartFrame: beat.loopStartFrame, loopFrameCount: beat.loopFrameCount, beatsPerCycle: 4,
+            plannedRepetitions: 4, plannedDurationSeconds: duration, measuredWAVDurationSeconds: duration,
+            measuredMOVDurationSeconds: nil, uncertaintySeconds: 1 / 48_000.0, source: .syntheticFixture)
+        let decision = ReferenceReviewDecision(outcome: .approved, decidedBy: "Fixture", decidedAt: date,
+            notes: "Synthetic package verification only", selectedRepetitionIndex: 0)
+        let metadata = ReferenceTakeMetadata(referenceTakeID: "reference-take", authoringSessionID: "authoring", takeNumber: 1,
+            operatorName: "Fixture", technique: .tear, pattern: .init(id: "exact_beat", name: "Exact beat", phraseBars: 1),
+            bpm: beat.bpm, startingPlatterDirection: .forward, faderVariant: .faderOpenThroughout,
+            captureIntent: intent(beat: beat), witnessedTiming: timing, mediaTimeOrigin: origin,
+            sourceState: sourceState ?? .linked(identity: watchIdentity, motionFileName: "watch_motion.json",
+                sha256: artifacts.first { $0.role == .watchMotion }?.sha256),
+            referenceVersion: 1, crossfaderCalibration: nil,
+            deviceInfo: .init(platform: "fixture", appVersion: "1", controllerName: "fixture", controllerIdentifier: "fixture",
+                audioDeviceName: nil, videoDeviceName: nil, watchLinked: true),
+            recordedAt: date, lifecycleState: .approvedCanonical, reviewDecision: decision)
+        return ReferencePackageManifest(referenceID: "tear.exact_beat", referenceVersion: 1, packageBuiltAt: date,
+            metadata: metadata, boundaries: .nominal(for: metadata), selectedRepetitionIndex: 0,
+            publishedPhraseStartSeconds: 0, publishedPhraseEndSeconds: 4 * 60.0 / Double(beat.bpm), publishedPhraseBeats: 4,
+            approval: decision, validation: .init(report: .init(findings: [], evaluatedAt: date)), artifacts: artifacts)
+    }
+}
 
 final class ReferenceAuthoringTests: XCTestCase {
 
@@ -49,7 +238,8 @@ final class ReferenceAuthoringTests: XCTestCase {
         bpm: Int = 95,
         phraseBars: Int = 1,
         repetitionCount: Int = 4,
-        lifecycleState: ReferenceLifecycleState = .draft
+        lifecycleState: ReferenceLifecycleState = .draft,
+        mediaTimeOrigin: ReferenceMediaTimeOrigin? = nil
     ) -> ReferenceTakeMetadata {
         ReferenceTakeMetadata(
             referenceTakeID: "ref-take-0001",
@@ -66,12 +256,109 @@ final class ReferenceAuthoringTests: XCTestCase {
             repetitionCount: repetitionCount,
             startingPlatterDirection: .forward,
             faderVariant: technique == .babyScratch ? .faderOpenThroughout : .crossfader,
+            mediaTimeOrigin: mediaTimeOrigin,
             referenceVersion: 1,
             crossfaderCalibration: Self.calibration,
             deviceInfo: Self.deviceInfo,
             recordedAt: Date(timeIntervalSince1970: 1_788_000_100),
             lifecycleState: lifecycleState
         )
+    }
+
+    func testMediaOriginPreservesLegacyTimingAndOffsetsNew95BPMBoundaries() throws {
+        let offset = 4 * 60.0 / 95
+        let origin = ReferenceMediaTimeOrigin(clickStartHostTime: 100, recordingStartHostTime: 200,
+            recordingStartOffsetSeconds: offset)
+        let metadata = makeMetadata(mediaTimeOrigin: origin)
+        let restored = try JSONDecoder().decode(ReferenceTakeMetadata.self, from: JSONEncoder().encode(metadata))
+        XCTAssertEqual(restored.mediaTimeOrigin, origin)
+        let boundaries = ReferencePhraseBoundaries.nominal(for: restored)
+        for (index, boundary) in boundaries.repetitions.enumerated() {
+            XCTAssertEqual(boundary.startBeat, Double((index + 1) * 4))
+            XCTAssertEqual(boundary.startSeconds(metadata: restored), Double(index) * offset, accuracy: 0.0000001)
+            XCTAssertEqual(boundary.endSeconds(metadata: restored), Double(index + 1) * offset, accuracy: 0.0000001)
+        }
+        XCTAssertEqual(restored.firstRepetitionStartSeconds, 0, accuracy: 0.0000001)
+        var legacyJSON = try XCTUnwrap(JSONSerialization.jsonObject(with: JSONEncoder().encode(metadata)) as? [String: Any])
+        legacyJSON.removeValue(forKey: "mediaTimeOrigin")
+        let legacy = try JSONDecoder().decode(ReferenceTakeMetadata.self, from: JSONSerialization.data(withJSONObject: legacyJSON))
+        XCTAssertNil(legacy.mediaTimeOrigin)
+        XCTAssertEqual(boundaries.repetitions[0].startSeconds(metadata: legacy), offset, accuracy: 0.0000001)
+        XCTAssertEqual(legacy.firstRepetitionStartSeconds, offset, accuracy: 0.0000001)
+    }
+
+    func testMalformedMediaOriginsFailValidationInsteadOfFallingBackToLegacyZero() {
+        for origin in [
+            ReferenceMediaTimeOrigin(clickStartHostTime: 0, recordingStartHostTime: 2, recordingStartOffsetSeconds: 1),
+            ReferenceMediaTimeOrigin(clickStartHostTime: 2, recordingStartHostTime: 1, recordingStartOffsetSeconds: 1),
+            ReferenceMediaTimeOrigin(clickStartHostTime: 1, recordingStartHostTime: 2, recordingStartOffsetSeconds: -1),
+            ReferenceMediaTimeOrigin(clickStartHostTime: 1, recordingStartHostTime: 2, recordingStartOffsetSeconds: .nan),
+            ReferenceMediaTimeOrigin(clickStartHostTime: 1, recordingStartHostTime: 1, recordingStartOffsetSeconds: 1),
+        ] {
+            let metadata = makeMetadata(mediaTimeOrigin: origin)
+            XCTAssertTrue(metadata.mediaSeconds(forBeat: 4).isNaN)
+            XCTAssertTrue(ReferenceValidator.validate(makeEvidence(metadata: metadata)).findings.contains {
+                if case .witnessedTimingInvalid = $0 { return true }; return false
+            })
+        }
+    }
+
+    func testFaderRepetitionChecksUseTheSameMediaOriginAsPlayback() {
+        let offset = 4 * 60.0 / 95
+        let origin = ReferenceMediaTimeOrigin(clickStartHostTime: 100, recordingStartHostTime: 200,
+            recordingStartOffsetSeconds: offset)
+        let events = (0..<4).map { (CrossfaderSemanticEventKind.cut, Double($0) * offset + 0.1, Double($0) * offset + 0.15) }
+        let derived = derivation([(.open, 0, 11)], events: events)
+        let expectation = ReferenceTechnique.chirp.defaultFaderExpectation.confirmed(by: "CXL", at: Date())
+        func insufficient(_ metadata: ReferenceTakeMetadata) -> [ReferenceValidationFinding] {
+            ReferenceValidator.validate(makeEvidence(metadata: metadata, derivation: derived), expectation: expectation).findings.filter {
+                if case .insufficientCutEvents = $0 { return true }; return false
+            }
+        }
+        XCTAssertTrue(insufficient(makeMetadata(technique: .chirp, mediaTimeOrigin: origin)).isEmpty)
+        XCTAssertFalse(insufficient(makeMetadata(technique: .chirp)).isEmpty,
+            "Legacy grid begins one bar later; the fixture deliberately has no fifth media bar cut.")
+    }
+
+    func testSelectedAudioCropUsesNewMediaOriginAndSharedOverlap() throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let sourceURL = root.appendingPathComponent("full.wav")
+        let format = try XCTUnwrap(AVAudioFormat(standardFormatWithSampleRate: 48_000, channels: 1))
+        let buffer = try XCTUnwrap(AVAudioPCMBuffer(pcmFormat: format, frameCapacity: 288_000))
+        buffer.frameLength = 288_000
+        let samples = try XCTUnwrap(buffer.floatChannelData?[0])
+        let offset = 4 * 60.0 / 95
+        for frame in 0..<Int(buffer.frameLength) { samples[frame] = Double(frame) < (offset * 48_000).rounded() ? 0.25 : 0.75 }
+        try autoreleasepool {
+            let file = try AVAudioFile(forWriting: sourceURL, settings: format.settings)
+            try file.write(from: buffer)
+            if #available(macOS 15.0, *) { file.close() }
+        }
+        XCTAssertEqual(try AVAudioFile(forReading: sourceURL).length, 288_000,
+            "The fixture must be finalized before testing the crop.")
+        // Sample rounding can put the nominal downbeat just before media zero.
+        let origin = ReferenceMediaTimeOrigin(clickStartHostTime: 100, recordingStartHostTime: 200,
+            recordingStartOffsetSeconds: offset + 0.00001)
+        let metadata = makeMetadata(mediaTimeOrigin: origin)
+        let boundary = ReferencePhraseBoundaries.nominal(for: metadata).repetitions[0]
+        let start = boundary.startSeconds(metadata: metadata)
+        let end = boundary.endSeconds(metadata: metadata)
+        let expected = try XCTUnwrap(ReferenceMediaTimeRange.clamped(start: start, end: end, duration: 6))
+        XCTAssertEqual(expected.lowerBound, 0)
+        let destinationURL = root.appendingPathComponent("selected.wav")
+        let range = try ReferenceApprovedPackageCoordinator.extractSelectedAudio(sourceURL: sourceURL,
+            destinationURL: destinationURL, startSeconds: start, endSeconds: end)
+        XCTAssertEqual(range.lowerBound, expected.lowerBound)
+        XCTAssertEqual(range.upperBound, expected.upperBound, accuracy: 1.0 / 48_000)
+        let selected = try AVAudioFile(forReading: destinationURL)
+        XCTAssertEqual(selected.length, Int64((expected.upperBound * 48_000).rounded()))
+        let actual = try XCTUnwrap(AVAudioPCMBuffer(pcmFormat: selected.processingFormat, frameCapacity: AVAudioFrameCount(selected.length)))
+        try selected.read(into: actual)
+        XCTAssertEqual(actual.floatChannelData![0][0], 0.25, accuracy: 0.00001,
+            "Crop must begin at the recorded first repetition, not the old second bar.")
+        XCTAssertNil(ReferenceMediaTimeRange.clamped(start: -3, end: -1, duration: 6))
     }
 
     private func goodAudio(fileName: String = "reference.wav") -> ReferenceArtifactMeasurement {
@@ -926,14 +1213,14 @@ final class ReferenceAuthoringTests: XCTestCase {
         XCTAssertTrue(result.blockingChecks.contains { $0.id == "controller" })
     }
 
-    func testPreflightBlocksBabyScratchWhenTheFaderIsNotOpen() {
+    func testPreflightAllowsBabyScratchToStartWithAClosedFader() {
         // raw 52 is fully closed on this calibration.
         let result = ReferenceCapturePreflight.evaluate(
             snapshot: makeSnapshot(rawValue: 52),
             technique: .babyScratch
         )
-        XCTAssertTrue(result.blocksRecording)
-        XCTAssertTrue(result.blockingChecks.contains { $0.id == "crossfaderState" })
+        XCTAssertFalse(result.blocksRecording, result.blockingSummary ?? "")
+        XCTAssertEqual(result.checks.first { $0.id == "crossfaderState" }?.status, .advisory)
     }
 
     func testPreflightAllowsAClosedFaderForATransform() {
@@ -944,29 +1231,44 @@ final class ReferenceAuthoringTests: XCTestCase {
         XCTAssertFalse(result.blocksRecording, result.blockingSummary ?? "")
     }
 
-    func testPreflightBlocksOnADeadAudioInput() {
+    func testPreflightBlocksWhenAudioSamplesAreUnavailable() {
         let result = ReferenceCapturePreflight.evaluate(
-            snapshot: makeSnapshot(audioPeak: 0.0),
+            snapshot: makeSnapshot(audioPeak: nil),
             technique: .chirp
         )
         XCTAssertTrue(result.blocksRecording)
         XCTAssertTrue(result.blockingChecks.contains { $0.id == "audioInput" })
     }
 
-    /// The Watch row used to be advisory, from when reference authoring had no
-    /// Watch wiring at all. Authoring now performs the same paired start
-    /// handshake Capture does and refuses to record without an
-    /// acknowledgement, so an unreachable Watch is a condition to fix BEFORE
-    /// recording — not a note added afterwards to a take that can never carry
-    /// wrist evidence.
-    func testPreflightBlocksRecordingWhenTheWatchIsUnreachable() {
+    func testPreflightAllowsDiagnosticRecordingWhenTheWatchIsUnreachable() {
         let result = ReferenceCapturePreflight.evaluate(
             snapshot: makeSnapshot(watchReachable: false),
             technique: .chirp
         )
-        let watch = result.checks.first { $0.id == "watch" }
-        XCTAssertEqual(watch?.status, .blocking)
-        XCTAssertTrue(result.blocksRecording)
+        XCTAssertEqual(result.checks.first { $0.id == "watch" }?.status, .advisory)
+        XCTAssertFalse(result.blocksRecording, result.blockingSummary ?? "")
+    }
+
+    func testPreflightAllowsEveryCalibratedFaderPositionWithQuietAudioAndNoWatch() {
+        for technique: ReferenceTechnique in [.babyScratch, .tear, .transform] {
+            for rawValue in 0...127 {
+                let result = ReferenceCapturePreflight.evaluate(
+                    snapshot: makeSnapshot(rawValue: rawValue, audioPeak: 0, watchReachable: false),
+                    technique: technique
+                )
+                XCTAssertFalse(result.blocksRecording, "\(technique) raw \(rawValue): \(result.blockingSummary ?? "")")
+                XCTAssertEqual(result.checks.first { $0.id == "audioInput" }?.status, .advisory)
+            }
+        }
+    }
+
+    func testPreflightBlocksInvalidAudioLevels() {
+        for peak in [Double.nan, .infinity, -.infinity, -0.1, 1.1] {
+            let result = ReferenceCapturePreflight.evaluate(
+                snapshot: makeSnapshot(audioPeak: peak), technique: .tear
+            )
+            XCTAssertTrue(result.blockingChecks.contains { $0.id == "audioInput" })
+        }
     }
 
     func testPreflightAcceptsAReachableWatch() {
@@ -1221,6 +1523,172 @@ final class ReferenceAuthoringTests: XCTestCase {
             watchEvidence: .linked(motionFileName: "scratch-motion.json")
         )
         XCTAssertTrue(ReferenceValidator.validate(evidence).passes)
+    }
+}
+
+final class ReferenceCaptureIntentTests: XCTestCase {
+    private let hashA = String(repeating: "a", count: 64)
+    private let hashB = String(repeating: "b", count: 64)
+
+    private func beat(
+        version: Int = 1,
+        bpm: Int = 90,
+        masterFile: String = "pilot-master.wav",
+        analysisFile: String = "pilot-analysis.wav",
+        loopStart: Int64 = 192_000,
+        masterHash: String? = nil,
+        role: ReferenceBeatMixRole = .productionMaster
+    ) -> ReferenceBeatSpecBinding {
+        ReferenceBeatSpecBinding(
+            id: "scratchlab.pilot.boom-bap-swing-90",
+            version: version,
+            family: "boom-bap",
+            bpm: bpm,
+            feel: .swing,
+            countInFrameCount: 192_000,
+            loopStartFrame: loopStart,
+            loopFrameCount: 384_000,
+            sampleRate: 48_000,
+            productionMasterFileName: masterFile,
+            productionMasterSHA256: masterHash ?? hashA,
+            sparseAnalysisMixFileName: analysisFile,
+            sparseAnalysisMixSHA256: hashB,
+            availableStemSHA256: ["drums.wav": hashA],
+            mixRole: role,
+            rightsState: .procedurallyGeneratedOriginal,
+            provenance: "Generated by ScratchLabBeatEngine recipe v1."
+        )
+    }
+
+    private func intent(beat: ReferenceBeatSpecBinding? = nil) -> ReferenceCaptureIntent {
+        ReferenceCaptureIntent(
+            id: "authoring.intent.v1",
+            parentTechniqueID: ReferenceTechnique.tear.id,
+            variantID: "tear.tear_1bar.forward.faderOpenThroughout.right",
+            recipeID: "tear_1bar",
+            startingPlatterDirection: .forward,
+            faderForm: .faderOpenThroughout,
+            bpm: 90,
+            beatsPerCycle: 4,
+            plan: .init(countInBars: 1, repetitionCount: 4, tailBars: 1),
+            beatSpec: beat
+        )
+    }
+
+    private func metadata(intent: ReferenceCaptureIntent?) -> ReferenceTakeMetadata {
+        ReferenceTakeMetadata(
+            referenceTakeID: "authoring-take-001",
+            authoringSessionID: "authoring",
+            takeNumber: 1,
+            operatorName: "Karl",
+            technique: .tear,
+            pattern: .init(id: "tear_1bar", name: "Tear", phraseBars: 1),
+            bpm: 90,
+            startingPlatterDirection: .forward,
+            faderVariant: .faderOpenThroughout,
+            captureIntent: intent,
+            referenceVersion: 1,
+            crossfaderCalibration: nil,
+            deviceInfo: .init(
+                platform: "macOS",
+                appVersion: "1",
+                controllerName: "RANE",
+                controllerIdentifier: "midi_rane",
+                audioDeviceName: nil,
+                videoDeviceName: nil,
+                watchLinked: false
+            ),
+            recordedAt: Date(timeIntervalSince1970: 1_788_000_000)
+        )
+    }
+
+    func testExactBeatIntentPersistsThroughConfigSidecarAndMetadataRoundTrip() throws {
+        let captureIntent = intent(beat: beat())
+        XCTAssertTrue(ReferenceCaptureIntentValidator.issues(
+            intent: captureIntent,
+            metadata: metadata(intent: captureIntent),
+            requireBeatSpec: true
+        ).isEmpty)
+
+        let config = CaptureSessionConfig(referenceCaptureIntent: captureIntent)
+        let folder = FileManager.default.temporaryDirectory
+        let files = CaptureCore.LocalRecordingFiles(
+            baseName: "take",
+            mediaURL: folder.appendingPathComponent("take.mov"),
+            sidecarURL: folder.appendingPathComponent("take.json")
+        )
+        let sidecar = CaptureCore.LocalRecordingSidecar.recording(
+            sessionID: "authoring",
+            sessionConfig: config,
+            takeIdentity: .init(sessionID: "authoring", takeID: "take-001", takeNumber: 1),
+            files: files,
+            recordingRole: "reference_authoring",
+            platform: "macOS",
+            appSurface: "reference_authoring",
+            sourceDeviceName: "Synthetic",
+            startedAt: Date(timeIntervalSince1970: 1_788_000_000)
+        )
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .iso8601
+        let decodedSidecar = try decoder.decode(
+            CaptureCore.LocalRecordingSidecar.self,
+            from: sidecar.encodedData()
+        )
+        XCTAssertEqual(decodedSidecar.sessionConfig?.referenceCaptureIntent, captureIntent)
+
+        let decodedMetadata = try JSONDecoder().decode(
+            ReferenceTakeMetadata.self,
+            from: JSONEncoder().encode(metadata(intent: captureIntent))
+        )
+        XCTAssertEqual(decodedMetadata.captureIntent, captureIntent)
+    }
+
+    func testLegacyDocumentsDecodeWithExplicitlyAbsentIntent() throws {
+        let encoded = try JSONEncoder().encode(metadata(intent: nil))
+        let decoded = try JSONDecoder().decode(ReferenceTakeMetadata.self, from: encoded)
+        XCTAssertNil(decoded.captureIntent)
+        XCTAssertEqual(
+            ReferenceCaptureIntentValidator.issues(
+                intent: decoded.captureIntent,
+                metadata: decoded,
+                requireBeatSpec: true
+            ),
+            [.missingIntent]
+        )
+    }
+
+    func testBeatSpecRejectsVersionFilenameRoleFrameAndHashDrift() {
+        let variants: [(String, ReferenceBeatSpecBinding)] = [
+            ("beat.identity", beat(version: 0)),
+            ("beat.fileName", beat(analysisFile: "pilot-master.wav")),
+            ("beat.mixRole", beat(role: .sparseAnalysis)),
+            ("beat.frameContract", beat(loopStart: 192_001)),
+            ("beat.hash", beat(masterHash: "ABC")),
+        ]
+        for (field, changed) in variants {
+            let issues = ReferenceCaptureIntentValidator.issues(
+                intent: intent(beat: changed),
+                requireBeatSpec: true
+            )
+            XCTAssertTrue(issues.contains {
+                if case .invalid(let actual, _) = $0 { return actual == field }
+                if case .mismatch(let actual, _, _) = $0 { return actual == field }
+                return false
+            }, "Expected \(field), got \(issues)")
+        }
+    }
+
+    func testMetadataAndBeatBPMMismatchesFailClosed() {
+        let bound = intent(beat: beat(bpm: 91))
+        let issues = ReferenceCaptureIntentValidator.issues(
+            intent: bound,
+            metadata: metadata(intent: bound),
+            requireBeatSpec: true
+        )
+        XCTAssertTrue(issues.contains {
+            if case .mismatch(let field, _, _) = $0 { return field == "beat.bpm" }
+            return false
+        })
     }
 }
 
@@ -2558,5 +3026,524 @@ final class ReferenceTearCanonicalProjectionTests: XCTestCase {
         )
         XCTAssertEqual(try XCTUnwrap(travel.first).endPosition, 0, accuracy: 1e-9)
         XCTAssertEqual(try XCTUnwrap(travel.last).startPosition, 1, accuracy: 1e-9)
+    }
+}
+
+/// Companion fixtures are synthetic values/JSON only. The separate connected
+/// pipeline suite exercises the actual bridge, worker and archive writer.
+final class ReferenceTearEvidenceCodecTests: XCTestCase {
+    private typealias Codec = ReferenceTearEvidenceCodec
+    private typealias Record = ScratchNotation.GestureRecord
+    private typealias Fixture = (binding: ReferenceTearEvidenceSourceBinding,
+                                review: ReferenceTearSegmentationReview,
+                                projection: ReferenceTearCanonicalProjection)
+
+    private func movement(_ start: Double, _ end: Double, confidence: Double = 1,
+                          source: String = "controller", kind: ScratchMovementKind = .normalPush)
+        -> CaptureCore.DetectedNotationRecordMovementEvent {
+        .init(startTime: start, endTime: end, startPosition: -0.1, endPosition: 0.3,
+              direction: "forward", movementKind: kind, speed: 1, confidence: confidence, source: source)
+    }
+
+    private func fixture(events supplied: [CaptureCore.DetectedNotationRecordMovementEvent]? = nil) throws -> Fixture {
+        let events = supplied ?? [movement(0, 0.2), movement(0.35, 0.65), movement(0.9, 1.4)]
+        let snapshot = CaptureCore.DetectedNotationSnapshot(
+            notationSource: "controller", notationConfidence: 1, detectedLabel: nil,
+            labelSource: "unavailable", labelConfidence: nil, detectionSources: ["controller"],
+            recordMovementEvents: events, audioEvents: [], faderEvents: [], mixerMidiEvents: [],
+            capturedAt: Date(timeIntervalSinceReferenceDate: 0))
+        let sidecar = CaptureCore.LocalRecordingSidecar(
+            sessionID: "captured-session", takeID: "captured-take", appLocalTakeNumber: 1,
+            recordingRole: "reference", platform: "macOS", appSurface: "reference_authoring",
+            sourceDeviceName: "synthetic", startedAt: Date(timeIntervalSinceReferenceDate: 0),
+            endedAt: Date(timeIntervalSinceReferenceDate: 2), recordingStatus: "completed",
+            mediaFileName: "fixture.mov", sidecarFileName: "fixture.json", detectedNotation: snapshot)
+        let binding = try Codec.makeSourceBinding(rawSidecarData: sidecar.encodedData(), fileName: "fixture.json")
+        let review = ReferenceTearSegmentationReviewBuilder.build(
+            referenceTakeID: "reference-take", movementEvents: events,
+            platterEvidenceIntervals: [
+                .init(startTime: 0.2, endTime: 0.35, kind: .observedStillness),
+                .init(startTime: 0.65, endTime: 0.9, kind: .observedStillness)
+            ], derivation: .init(intervals: [
+                .init(state: .open, startTime: 0, endTime: 1.4, startPosition: 1, endPosition: 1)
+            ], events: []))
+        return (binding, review, ReferenceTearCanonicalProjectionBuilder.project(review))
+    }
+
+    private func encoded(_ value: Fixture) throws -> Data {
+        try Codec.encode(sourceBinding: value.binding, review: value.review, projection: value.projection,
+                         performedLimitations: value.review.requiredIntrinsicComparisonLimitations)
+    }
+
+    private func corrected(_ time: Double = 123.1234567890123) -> ReferenceTearCorrection {
+        .init(correctedBy: "Synthetic operator", correctedAt: Date(timeIntervalSinceReferenceDate: time),
+              notes: "retained notes", reason: "synthetic review correction")
+    }
+
+    private func object(_ data: Data) throws -> [String: Any] {
+        try XCTUnwrap(JSONSerialization.jsonObject(with: data) as? [String: Any])
+    }
+
+    private func changed(_ data: Data, _ mutation: (inout [String: Any]) throws -> Void) throws -> Data {
+        var json = try object(data)
+        try mutation(&json)
+        return try JSONSerialization.data(withJSONObject: json, options: [.sortedKeys])
+    }
+
+    private func changedReview(_ data: Data, _ mutation: (inout [String: Any]) throws -> Void) throws -> Data {
+        try changed(data) { json in
+            var review = try XCTUnwrap(json["review"] as? [String: Any])
+            try mutation(&review)
+            json["review"] = review
+        }
+    }
+
+    private func changedCandidate(_ data: Data, _ mutation: (inout [String: Any]) throws -> Void) throws -> Data {
+        try changedReview(data) { review in
+            var candidates = try XCTUnwrap(review["candidates"] as? [[String: Any]])
+            XCTAssertFalse(candidates.isEmpty)
+            var first = try XCTUnwrap(candidates.first)
+            try mutation(&first)
+            candidates[0] = first
+            review["candidates"] = candidates
+        }
+    }
+
+    func testGoldenV1DocumentRetainsOriginalSourceBytesAndKnownHash() throws {
+        let raw = Data(#"{"schemaVersion":"scratchlab_local_recording_sidecar_v1","sessionID":"captured-session","takeID":"captured-take","appLocalTakeNumber":1,"recordingRole":"reference","platform":"macOS","appSurface":"reference_authoring","sourceDeviceName":"synthetic","startedAt":"2001-01-01T00:00:00Z","recordingStatus":"completed","mediaFileName":"fixture.mov","sidecarFileName":"fixture.json","watchSyncState":"notRequested","auditTrail":[]}"#.utf8)
+        let hash = "358f8bc895680db4aec1006dd7ba0218adcb373e46c330f4d0be7c6bc44bf7f3"
+        let golden = Data("""
+        {"schemaVersion":"scratchlab_reference_tear_evidence_v1","referenceTakeID":"reference-take",
+         "sourceBinding":{"capturedSessionID":"captured-session","capturedTakeID":"captured-take","capturedTakeNumber":1,
+          "rawSidecarFileName":"fixture.json","rawSidecarData":"\(raw.base64EncodedString())","rawSidecarSHA256":"\(hash)"},
+         "review":{"referenceTakeID":"reference-take","rawMovementEvents":[],
+          "platterCoordinates":{"basis":"normalizedTakeLocalDisplacement","reference":"golden take-local"},
+          "platterEvidenceIntervals":[],"segments":[],"reversals":[],"faderIntervals":[],"faderClicks":[],
+          "reasons":[],"candidates":[],"notes":"golden","noteCorrections":[]},
+         "projection":{"records":[],"coordinateSpace":"normalizedTakeLocalDisplacement","reasons":[]},
+         "performedLimitations":{}}
+        """.utf8)
+        let document = try Codec.decodeDocument(golden)
+        XCTAssertEqual(document.sourceBinding.rawSidecarData, raw)
+        XCTAssertEqual(document.sourceBinding.rawSidecarSHA256, hash)
+        XCTAssertEqual(document.review.notes, "golden")
+        XCTAssertTrue(document.projection.records.isEmpty)
+        let stable = try Codec.encode(sourceBinding: document.sourceBinding, review: document.review,
+                                      projection: document.projection, performedLimitations: document.performedLimitations)
+        XCTAssertEqual(try Codec.decodeDocument(stable), document)
+        XCTAssertEqual(stable, try Codec.encode(sourceBinding: document.sourceBinding, review: document.review,
+                                               projection: document.projection, performedLimitations: document.performedLimitations))
+        XCTAssertEqual(Set(try object(stable).keys),
+                       Set(["schemaVersion", "sourceBinding", "referenceTakeID", "review", "projection", "performedLimitations"]))
+    }
+
+    func testRoundTripRetainsEveryStoredValueAndIntrinsicLimitation() throws {
+        let f = try fixture(), original = f.review
+        let id = try XCTUnwrap(f.projection.records.first?.id)
+        let limits: [String: [CanonicalTearComparison.UnavailableReason]] = [id: [.interpolatedCurve, .ambiguousEvidence]]
+        let data = try Codec.encode(sourceBinding: f.binding, review: f.review, projection: f.projection,
+                                    performedLimitations: limits)
+        guard case .restored(let restored) = try Codec.decode(data, expectedSource: f.binding,
+                                                              expectedReferenceTakeID: "reference-take") else {
+            return XCTFail("present valid evidence must restore")
+        }
+        XCTAssertEqual(restored.review, original)
+        XCTAssertEqual(restored.projection, f.projection)
+        XCTAssertEqual(restored.performedLimitations, limits)
+        XCTAssertEqual(restored.sourceBinding, f.binding)
+        XCTAssertEqual(restored.projection.records.first?.internalHolds.map(\.evidence.provenance), [.inferred, .inferred])
+        XCTAssertEqual(f.review, original)
+    }
+
+    func testCorrectionDatesKeepReferenceDoublePrecisionAndAppendOrder() throws {
+        let f = try fixture()
+        var review = f.review
+        let first = corrected(), earlierWallClock = corrected(122.0000000000001)
+        review.setNotes("first", correction: first)
+        review.setNotes("second", correction: earlierWallClock)
+        let data = try Codec.encode(sourceBinding: f.binding, review: review, projection: f.projection,
+                                    performedLimitations: review.requiredIntrinsicComparisonLimitations)
+        let restored = try Codec.decodeDocument(data)
+        XCTAssertEqual(restored.review.noteCorrections, [first, earlierWallClock])
+        XCTAssertEqual(restored.review.noteCorrections[0].correctedAt.timeIntervalSinceReferenceDate,
+                       first.correctedAt.timeIntervalSinceReferenceDate)
+        XCTAssertEqual(restored.review.notes, "second")
+        let reviewJSON = try XCTUnwrap(try object(data)["review"] as? [String: Any])
+        let corrections = try XCTUnwrap(reviewJSON["noteCorrections"] as? [[String: Any]])
+        XCTAssertEqual(try XCTUnwrap(corrections.first?["correctedAt"] as? Double),
+                       first.correctedAt.timeIntervalSinceReferenceDate)
+    }
+
+    func testTombstonesProposalsCorrectionsAndCounterSurviveContinuedEditing() throws {
+        let f = try fixture()
+        var review = f.review
+        let candidate = try XCTUnwrap(review.candidates.first), boundary = try XCTUnwrap(candidate.boundaries.first)
+        XCTAssertTrue(review.moveBoundary(inCandidate: candidate.id, boundaryID: boundary.id,
+            to: .init(startTime: 0.21, endTime: 0.34), correction: corrected()))
+        let added = try XCTUnwrap(review.addBoundary(toCandidate: candidate.id,
+            span: .init(startTime: 1.0, endTime: 1.1), kind: .hold, evidenceQuality: .ambiguous, correction: corrected(124)))
+        XCTAssertTrue(review.setBoundaryRemoved(inCandidate: candidate.id, boundaryID: added,
+                                                 removed: true, correction: corrected(125)))
+        XCTAssertTrue(review.classifyCandidate(id: candidate.id, as: .unknown, correction: corrected(126)))
+        let projection = ReferenceTearCanonicalProjectionBuilder.project(review)
+        let restored = try Codec.decodeDocument(Codec.encode(sourceBinding: f.binding, review: review, projection: projection,
+            performedLimitations: review.requiredIntrinsicComparisonLimitations))
+        XCTAssertEqual(restored.review, review)
+        XCTAssertEqual(restored.review.candidates[0].boundaries.first { $0.id == boundary.id }?.proposal, boundary.proposal)
+        XCTAssertTrue(try XCTUnwrap(restored.review.candidates[0].boundaries.first { $0.id == added }).isRemoved)
+        var continued = restored.review
+        let next = try XCTUnwrap(continued.addBoundary(toCandidate: candidate.id,
+            span: .init(startTime: 1.15, endTime: 1.25), kind: .hold, evidenceQuality: .clear, correction: corrected(127)))
+        XCTAssertEqual(next, "\(candidate.id)-added-001")
+        XCTAssertNotEqual(next, added)
+        XCTAssertEqual(continued.candidates[0].addedBoundaryCount, 2)
+        _ = try Codec.encode(sourceBinding: f.binding, review: continued,
+                             projection: ReferenceTearCanonicalProjectionBuilder.project(continued),
+                             performedLimitations: continued.requiredIntrinsicComparisonLimitations)
+    }
+
+    func testCoalescedAddedBoundaryKeepsCounterWithoutLosingCorrection() throws {
+        let f = try fixture()
+        var review = f.review
+        let id = try XCTUnwrap(review.candidates.first?.id)
+        let span = ReferenceTearTimeSpan(startTime: 1.0, endTime: 1.1)
+        let first = review.addBoundary(toCandidate: id, span: span, kind: .hold, evidenceQuality: .clear, correction: corrected())
+        let again = review.addBoundary(toCandidate: id, span: span, kind: .hold, evidenceQuality: .clear, correction: corrected(124))
+        XCTAssertEqual(first, again)
+        XCTAssertNotNil(first)
+        let restored = try Codec.decodeDocument(Codec.encode(sourceBinding: f.binding, review: review,
+            projection: ReferenceTearCanonicalProjectionBuilder.project(review),
+            performedLimitations: review.requiredIntrinsicComparisonLimitations))
+        XCTAssertEqual(restored.review.candidates[0].addedBoundaryCount, 1)
+        XCTAssertEqual(restored.review.candidates[0].boundaries.first { $0.id == first }?.corrections.count, 2)
+    }
+
+    func testUnsupportedProductionProjectionsRoundTripWithoutMotionValidationGate() throws {
+        for event in [movement(0, 0.4, confidence: 0.2), movement(0, 0.4, source: "video"),
+                      movement(0, 0.4, kind: .releaseNormalPlayback)] {
+            let f = try fixture(events: [event])
+            let record = try XCTUnwrap(f.projection.records.first)
+            XCTAssertFalse(record.motionValidationIssues().isEmpty)
+            XCTAssertEqual(record.evidence.provenance, .unknown)
+            let document = try Codec.decodeDocument(encoded(f))
+            XCTAssertEqual(document.projection, f.projection)
+            XCTAssertEqual(document.review, f.review)
+        }
+    }
+
+    func testFiniteMalformedRawMovementAndOriginalChronologyAreRetained() throws {
+        let events = [movement(0.9, 1.4), movement(0, 0.2), movement(0.35, 0.65), movement(2, 2)]
+        let f = try fixture(events: events)
+        XCTAssertTrue(f.review.reasons.contains(.malformedMovementEvent))
+        let document = try Codec.decodeDocument(encoded(f))
+        XCTAssertEqual(document.review.rawMovementEvents, events)
+        XCTAssertEqual(document.review.segments, f.review.segments)
+        XCTAssertEqual(document.projection, f.projection)
+    }
+
+    func testNegativeZeroRawValuesSurviveAlongsideMalformedZeroDuration() throws {
+        let event = CaptureCore.DetectedNotationRecordMovementEvent(
+            startTime: -0.0, endTime: -0.0, startPosition: -0.0, endPosition: -0.0,
+            direction: "forward", movementKind: .normalPush, speed: -0.0, confidence: 1, source: "controller")
+        let f = try fixture(events: [event])
+        XCTAssertTrue(f.review.reasons.contains(.malformedMovementEvent))
+        let restored = try Codec.decodeDocument(encoded(f))
+        let observed = try XCTUnwrap(restored.review.rawMovementEvents.first)
+        XCTAssertEqual(observed.startTime.bitPattern, event.startTime.bitPattern)
+        XCTAssertEqual(observed.endTime.bitPattern, event.endTime.bitPattern)
+        XCTAssertEqual(observed.startPosition.bitPattern, event.startPosition.bitPattern)
+        XCTAssertEqual(observed.endPosition.bitPattern, event.endPosition.bitPattern)
+        XCTAssertEqual(observed.speed.bitPattern, event.speed.bitPattern)
+        XCTAssertEqual(restored.sourceBinding.rawSidecarData, f.binding.rawSidecarData)
+    }
+
+    func testFiniteMalformedStoredCanonicalValuesAreNotReprojectedOrRepaired() throws {
+        let f = try fixture()
+        let data = try changed(encoded(f)) { json in
+            var projection = try XCTUnwrap(json["projection"] as? [String: Any])
+            var records = try XCTUnwrap(projection["records"] as? [[String: Any]])
+            var subdivisions = try XCTUnwrap(records[0]["subdivisions"] as? [[String: Any]])
+            subdivisions[0]["span"] = ["startTime": 0.2, "endTime": -0.1]
+            var evidence = try XCTUnwrap(records[0]["evidence"] as? [String: Any])
+            var observation = try XCTUnwrap(evidence["observation"] as? [String: Any])
+            observation["confidence"] = 1.7
+            evidence["observation"] = observation
+            records[0]["evidence"] = evidence
+            records[0]["subdivisions"] = subdivisions
+            projection["records"] = records
+            json["projection"] = projection
+        }
+        let document = try Codec.decodeDocument(data)
+        let record = try XCTUnwrap(document.projection.records.first)
+        XCTAssertEqual(record.subdivisions.first?.span.endTime, -0.1)
+        XCTAssertEqual(record.evidence.observation.confidence, 1.7)
+        XCTAssertFalse(record.motionValidationIssues().isEmpty)
+        XCTAssertNotEqual(document.projection, ReferenceTearCanonicalProjectionBuilder.project(document.review))
+        let again = try Codec.decodeDocument(Codec.encode(sourceBinding: document.sourceBinding,
+            review: document.review, projection: document.projection, performedLimitations: document.performedLimitations))
+        XCTAssertEqual(again.projection, document.projection)
+    }
+
+    func testOnlyAbsentCompanionMeansNotAnalysed() throws {
+        let f = try fixture()
+        XCTAssertEqual(try Codec.decode(nil, expectedSource: f.binding), .notAnalysed)
+        for invalid in [Data(), Data("{".utf8), Data("{}".utf8), Data("null".utf8)] {
+            XCTAssertThrowsError(try Codec.decode(invalid, expectedSource: f.binding))
+        }
+    }
+
+    func testUnknownVersionAndTruncatedRequiredFieldsFailExplicitly() throws {
+        let f = try fixture(), data = try encoded(f)
+        let future = try changed(data) { $0["schemaVersion"] = "scratchlab_reference_tear_evidence_v2" }
+        XCTAssertThrowsError(try Codec.decodeDocument(future)) {
+            XCTAssertEqual($0 as? Codec.Error, .unsupportedSchema("scratchlab_reference_tear_evidence_v2"))
+        }
+        for key in ["review", "projection", "sourceBinding", "performedLimitations"] {
+            let truncated = try changed(data) { $0.removeValue(forKey: key) }
+            XCTAssertThrowsError(try Codec.decodeDocument(truncated))
+        }
+    }
+
+    func testCapturedAndReferenceIdentityMismatchesFail() throws {
+        let f = try fixture(), data = try encoded(f)
+        XCTAssertThrowsError(try Codec.decode(data, expectedSource: f.binding, expectedReferenceTakeID: "other-reference"))
+        for key in ["capturedSessionID", "capturedTakeID", "rawSidecarSHA256", "rawSidecarFileName"] {
+            let invalid = try changed(data) { json in
+                var source = try XCTUnwrap(json["sourceBinding"] as? [String: Any])
+                source[key] = "mismatched"
+                json["sourceBinding"] = source
+            }
+            XCTAssertThrowsError(try Codec.decodeDocument(invalid))
+        }
+        let wrongNumber = try changed(data) { json in
+            var source = try XCTUnwrap(json["sourceBinding"] as? [String: Any])
+            source["capturedTakeNumber"] = 2
+            json["sourceBinding"] = source
+        }
+        XCTAssertThrowsError(try Codec.decodeDocument(wrongNumber))
+    }
+
+    func testLaterSidecarRewriteFailsEvenWhenDecodedValuesAreEqual() throws {
+        let f = try fixture(), data = try encoded(f)
+        var rewritten = f.binding.rawSidecarData
+        rewritten.append(Data("\n ".utf8))
+        let later = try Codec.makeSourceBinding(rawSidecarData: rewritten, fileName: f.binding.rawSidecarFileName)
+        XCTAssertEqual(later.capturedTakeID, f.binding.capturedTakeID)
+        XCTAssertNotEqual(later.rawSidecarSHA256, f.binding.rawSidecarSHA256)
+        XCTAssertThrowsError(try Codec.decode(data, expectedSource: later))
+        XCTAssertEqual(try Codec.decodeDocument(data).sourceBinding.rawSidecarData, f.binding.rawSidecarData)
+    }
+
+    func testSourceFilenameMustBeItsDeclaredPlainLeafName() throws {
+        let f = try fixture()
+        for name in ["", ".", "..", "../fixture.json", "/fixture.json", "folder\\fixture.json", "different.json"] {
+            XCTAssertThrowsError(try Codec.makeSourceBinding(rawSidecarData: f.binding.rawSidecarData, fileName: name))
+        }
+    }
+
+    func testRawReviewObservationsCannotBeReboundOrDropped() throws {
+        let data = try encoded(fixture())
+        let dropped = try changedReview(data) { $0["rawMovementEvents"] = [] }
+        XCTAssertThrowsError(try Codec.decodeDocument(dropped))
+        let other = try changedReview(data) { $0["referenceTakeID"] = "other-reference" }
+        XCTAssertThrowsError(try Codec.decodeDocument(other))
+    }
+
+    func testBrokenOrdinalAndEvidenceReferencesFail() throws {
+        let data = try encoded(fixture())
+        for indices in [[999], [-1], [0, 0], [2, 0]] {
+            let invalid = try changedCandidate(data) { $0["motionSegmentIndices"] = indices }
+            XCTAssertThrowsError(try Codec.decodeDocument(invalid))
+        }
+        let wrongOrdinal = try changedCandidate(data) { $0["gestureIndex"] = 1 }
+        XCTAssertThrowsError(try Codec.decodeDocument(wrongOrdinal))
+        let missingEvent = try changedReview(data) { review in
+            var segments = try XCTUnwrap(review["segments"] as? [[String: Any]])
+            segments[0]["movementEventIndex"] = 999
+            review["segments"] = segments
+        }
+        XCTAssertThrowsError(try Codec.decodeDocument(missingEvent))
+    }
+
+    func testProjectionIdentityOrderAndCoordinateMismatchFail() throws {
+        let data = try encoded(fixture())
+        for key in ["id", "direction", "timingDomain", "coordinateSpace"] {
+            let invalid = try changed(data) { json in
+                var projection = try XCTUnwrap(json["projection"] as? [String: Any])
+                var records = try XCTUnwrap(projection["records"] as? [[String: Any]])
+                records[0][key] = key == "id" ? "other" : key == "direction" ? "backward"
+                    : key == "timingDomain" ? "beats" : "platterRevolutions"
+                projection["records"] = records
+                json["projection"] = projection
+            }
+            XCTAssertThrowsError(try Codec.decodeDocument(invalid))
+        }
+        let repeated = try changedCandidate(data) { candidate in
+            var boundaries = try XCTUnwrap(candidate["boundaries"] as? [[String: Any]])
+            boundaries[1]["id"] = boundaries[0]["id"]
+            candidate["boundaries"] = boundaries
+        }
+        XCTAssertThrowsError(try Codec.decodeDocument(repeated))
+    }
+
+    func testCounterAndMissingProposalCannotCorruptFutureEdits() throws {
+        let data = try encoded(fixture())
+        for count in [-1, 1, Int.max] {
+            let invalid = try changedCandidate(data) { $0["addedBoundaryCount"] = count }
+            XCTAssertThrowsError(try Codec.decodeDocument(invalid))
+        }
+        let lostProposal = try changedCandidate(data) { candidate in
+            var boundaries = try XCTUnwrap(candidate["boundaries"] as? [[String: Any]])
+            boundaries[0].removeValue(forKey: "proposal")
+            candidate["boundaries"] = boundaries
+        }
+        XCTAssertThrowsError(try Codec.decodeDocument(lostProposal))
+    }
+
+    func testAutomaticBoundaryCannotOccupyItsCandidatesAllocationNamespace() throws {
+        let f = try fixture(), data = try encoded(f)
+        let originalID = try XCTUnwrap(f.review.candidates.first?.id)
+        let forged = try changedCandidate(data) { candidate in
+            var boundaries = try XCTUnwrap(candidate["boundaries"] as? [[String: Any]])
+            boundaries[0]["id"] = "\(originalID)-added-000"
+            candidate["boundaries"] = boundaries
+        }
+        XCTAssertThrowsError(try Codec.decodeDocument(forged))
+
+        // Neither a candidate ID nor an unrelated historical automatic ID
+        // containing "-added-" occupies this candidate's allocation prefix.
+        let historicalID = "historical-added-gesture"
+        let required = try XCTUnwrap(f.review.requiredIntrinsicComparisonLimitations[originalID]).map(\.rawValue)
+        let valid = try changed(data) { json in
+            var review = try XCTUnwrap(json["review"] as? [String: Any])
+            var candidates = try XCTUnwrap(review["candidates"] as? [[String: Any]])
+            candidates[0]["id"] = historicalID
+            var boundaries = try XCTUnwrap(candidates[0]["boundaries"] as? [[String: Any]])
+            boundaries[0]["id"] = "legacy-added-000"
+            candidates[0]["boundaries"] = boundaries
+            review["candidates"] = candidates
+            json["review"] = review
+            var projection = try XCTUnwrap(json["projection"] as? [String: Any])
+            var records = try XCTUnwrap(projection["records"] as? [[String: Any]])
+            records[0]["id"] = historicalID
+            projection["records"] = records
+            json["projection"] = projection
+            json["performedLimitations"] = [historicalID: required]
+        }
+        let restored = try Codec.decodeDocument(valid)
+        XCTAssertEqual(restored.review.candidates[0].boundaries[0].id, "legacy-added-000")
+        var continued = restored.review
+        let next = try XCTUnwrap(continued.addBoundary(toCandidate: historicalID,
+            span: .init(startTime: 1.0, endTime: 1.1), kind: .hold, evidenceQuality: .clear, correction: corrected()))
+        XCTAssertEqual(next, "\(historicalID)-added-000")
+        let boundaries = continued.candidates[0].boundaries
+        XCTAssertEqual(Set(boundaries.map(\.id)).count, boundaries.count)
+        let reencoded = try Codec.encode(sourceBinding: f.binding, review: continued,
+            projection: ReferenceTearCanonicalProjectionBuilder.project(continued),
+            performedLimitations: continued.requiredIntrinsicComparisonLimitations)
+        XCTAssertEqual(try Codec.decodeDocument(reencoded).review, continued)
+    }
+
+    func testChangedAutomaticBoundaryCannotLoseItsCorrectionHistory() throws {
+        let f = try fixture()
+        var review = f.review
+        let id = try XCTUnwrap(review.candidates.first?.id)
+        let boundaryID = try XCTUnwrap(review.candidates.first?.boundaries.first?.id)
+        XCTAssertTrue(review.moveBoundary(inCandidate: id, boundaryID: boundaryID,
+            to: .init(startTime: 0.21, endTime: 0.34), correction: corrected()))
+        let valid = try Codec.encode(sourceBinding: f.binding, review: review,
+            projection: ReferenceTearCanonicalProjectionBuilder.project(review),
+            performedLimitations: review.requiredIntrinsicComparisonLimitations)
+        XCTAssertEqual(try Codec.decodeDocument(valid).review.candidates[0].boundaries[0].corrections.count, 1)
+        let stripped = try changedCandidate(valid) { candidate in
+            var boundaries = try XCTUnwrap(candidate["boundaries"] as? [[String: Any]])
+            boundaries[0]["corrections"] = []
+            candidate["boundaries"] = boundaries
+        }
+        XCTAssertThrowsError(try Codec.decodeDocument(stripped))
+    }
+
+    func testInvalidProjectionBoundsThrowWithoutConstructingAnInvalidRange() throws {
+        let data = try encoded(fixture())
+        let invalid = try changed(data) { json in
+            var projection = try XCTUnwrap(json["projection"] as? [String: Any])
+            projection["timeRange"] = ["lowerBound": 2, "upperBound": 1]
+            json["projection"] = projection
+        }
+        XCTAssertThrowsError(try Codec.decodeDocument(invalid))
+    }
+
+    func testForeignOrSelectionDependentLimitationsAreRejected() throws {
+        let f = try fixture(), id = try XCTUnwrap(f.projection.records.first?.id)
+        XCTAssertThrowsError(try Codec.encode(sourceBinding: f.binding, review: f.review, projection: f.projection,
+                                              performedLimitations: ["other": [.interpolatedCurve]]))
+        XCTAssertThrowsError(try Codec.encode(sourceBinding: f.binding, review: f.review, projection: f.projection,
+                                              performedLimitations: [id: [.unobservedInterGestureInterval]]))
+        XCTAssertThrowsError(try Codec.encode(sourceBinding: f.binding, review: f.review, projection: f.projection,
+                                              performedLimitations: [id: [.missingTarget]]))
+    }
+
+    func testRequiredReviewFlagsCannotBeOmittedFromAStoredCompanion() throws {
+        let f = try fixture()
+        let id = try XCTUnwrap(f.review.candidates.first?.id)
+        let boundaryID = try XCTUnwrap(f.review.candidates.first?.boundaries.first?.id)
+        let required: [CanonicalTearComparison.UnavailableReason] = [
+            .unknownEvidence, .ambiguousEvidence, .correctedTiming, .interpolatedCurve
+        ]
+        for reason in required {
+            var review = f.review
+            switch reason {
+            case .unknownEvidence:
+                XCTAssertTrue(review.classifyCandidate(id: id, as: .unknown, correction: corrected()))
+            case .ambiguousEvidence:
+                XCTAssertTrue(review.setBoundaryEvidenceQuality(inCandidate: id, boundaryID: boundaryID,
+                    to: .ambiguous, correction: corrected()))
+            case .correctedTiming:
+                XCTAssertTrue(review.moveBoundary(inCandidate: id, boundaryID: boundaryID,
+                    to: .init(startTime: 0.21, endTime: 0.34), correction: corrected()))
+            default: break
+            }
+            let limits = review.requiredIntrinsicComparisonLimitations
+            XCTAssertTrue(limits[id]?.contains(reason) == true)
+            let valid = try Codec.encode(sourceBinding: f.binding, review: review,
+                projection: ReferenceTearCanonicalProjectionBuilder.project(review), performedLimitations: limits)
+            XCTAssertEqual(try Codec.decodeDocument(valid).performedLimitations, limits)
+            let omitted = try changed(valid) { json in
+                var changedLimits = limits
+                changedLimits[id] = limits[id]?.filter { $0 != reason }
+                json["performedLimitations"] = changedLimits.mapValues { $0.map(\.rawValue) }
+            }
+            XCTAssertThrowsError(try Codec.decode(omitted, expectedSource: f.binding)) {
+                guard let error = $0 as? Codec.Error, case .invalidSnapshot = error else {
+                    return XCTFail("expected missing evidence qualification to fail snapshot integrity")
+                }
+            }
+        }
+    }
+
+    func testInterruptedReviewRequiresUnknownFlagWithoutChangingStoredProjection() throws {
+        let f = try fixture(), data = try encoded(f)
+        let interrupted = try changedReview(data) { review in
+            var intervals = try XCTUnwrap(review["platterEvidenceIntervals"] as? [[String: Any]])
+            intervals.append(["startTime": 0.1, "endTime": 0.15, "kind": "packetGap", "stage": "decoder"])
+            review["platterEvidenceIntervals"] = intervals
+        }
+        XCTAssertThrowsError(try Codec.decodeDocument(interrupted))
+        let qualified = try changed(interrupted) { json in
+            json["performedLimitations"] = [f.review.candidates[0].id: ["interpolatedCurve", "unknownEvidence"]]
+        }
+        let restored = try Codec.decodeDocument(qualified)
+        XCTAssertEqual(restored.projection, f.projection)
+        XCTAssertTrue(restored.review.hasInterruptedEvidence(in: f.review.candidates[0].span))
+    }
+
+    func testNonfiniteCompanionValueFailsInsteadOfBeingClampedOrDropped() throws {
+        let f = try fixture()
+        var review = f.review
+        review.setNotes("nonfinite date is not serializable", correction: corrected(.nan))
+        XCTAssertThrowsError(try Codec.encode(sourceBinding: f.binding, review: review, projection: f.projection,
+                                    performedLimitations: review.requiredIntrinsicComparisonLimitations))
+        XCTAssertTrue(review.noteCorrections[0].correctedAt.timeIntervalSinceReferenceDate.isNaN)
+        XCTAssertEqual(review.rawMovementEvents, f.review.rawMovementEvents)
     }
 }

@@ -2,6 +2,7 @@ import AVFoundation
 import CoreGraphics
 import CoreMedia
 import CoreVideo
+import CryptoKit
 import Dispatch
 import Vision
 import XCTest
@@ -3422,6 +3423,111 @@ final class CaptureReliabilityPhase1CoreTests: XCTestCase {
         XCTAssertEqual(decision.priority, .explicitUserSelection)
     }
 
+    func testPhysicalCaptureAudioPolicyReplacesAutomaticSeratoWithConnectedRane() {
+        let engine = MacCaptureEngine(
+            autoRefreshDevices: false,
+            allowsSeratoDirectCaptureDiscovery: false,
+            prefersPhysicalCaptureAudio: true
+        )
+        for raneName in ["RANE ONE MKII", "Rane Seventy-Two"] {
+            let decision = engine.captureAudioSelectionDecision(
+                from: [
+                    .init(uniqueID: "serato", name: "Serato Virtual Audio"),
+                    .init(uniqueID: "rane", name: raneName),
+                    .init(uniqueID: "mic", name: "MacBook Pro Microphone")
+                ],
+                explicitSelectionUniqueID: nil,
+                previousSelectionUniqueID: "serato",
+                systemDefaultUniqueID: "mic"
+            )
+
+            XCTAssertEqual(decision.device?.uniqueID, "rane", raneName)
+            XCTAssertEqual(decision.priority, .raneHardware, raneName)
+        }
+    }
+
+    func testPhysicalCaptureAudioPolicyPreservesExplicitChoicesOverConnectedRane() {
+        let engine = MacCaptureEngine(
+            autoRefreshDevices: false,
+            prefersPhysicalCaptureAudio: true
+        )
+        for explicitID in ["serato", "usb"] {
+            let decision = engine.captureAudioSelectionDecision(
+                from: [
+                    .init(uniqueID: "rane", name: "RANE ONE MKII"),
+                    .init(uniqueID: "serato", name: "Serato Virtual Audio"),
+                    .init(uniqueID: "usb", name: "USB Mixer Record")
+                ],
+                explicitSelectionUniqueID: explicitID,
+                previousSelectionUniqueID: explicitID,
+                systemDefaultUniqueID: "rane"
+            )
+
+            XCTAssertEqual(decision.device?.uniqueID, explicitID)
+            XCTAssertEqual(decision.priority, .explicitUserSelection)
+        }
+    }
+
+    func testPhysicalCaptureAudioPolicyUsesDefaultWhenRaneIsAbsent() {
+        let engine = MacCaptureEngine(
+            autoRefreshDevices: false,
+            prefersPhysicalCaptureAudio: true
+        )
+        let decision = engine.captureAudioSelectionDecision(
+            from: [
+                .init(uniqueID: "serato", name: "Serato Virtual Audio"),
+                .init(uniqueID: "usb", name: "USB Mixer Record")
+            ],
+            explicitSelectionUniqueID: nil,
+            previousSelectionUniqueID: "serato",
+            systemDefaultUniqueID: "usb"
+        )
+
+        XCTAssertEqual(decision.device?.uniqueID, "usb")
+        XCTAssertEqual(decision.priority, .systemDefault)
+    }
+
+    func testLegacyCaptureAudioPolicyKeepsSeratoPriorityWithoutProcessTapDiscovery() {
+        let engine = MacCaptureEngine(
+            autoRefreshDevices: false,
+            allowsSeratoDirectCaptureDiscovery: false,
+            prefersPhysicalCaptureAudio: false
+        )
+        let decision = engine.captureAudioSelectionDecision(
+            from: [
+                .init(uniqueID: "rane", name: "RANE ONE MKII"),
+                .init(uniqueID: "serato", name: "Serato Virtual Audio")
+            ],
+            explicitSelectionUniqueID: nil,
+            previousSelectionUniqueID: "rane",
+            systemDefaultUniqueID: "rane"
+        )
+
+        XCTAssertEqual(decision.device?.uniqueID, "serato")
+        XCTAssertEqual(decision.priority, .exactSeratoVirtualAudio)
+    }
+
+    func testDefaultCaptureAudioPolicyPreservesExistingBuildConfigurationBehavior() {
+        let engine = MacCaptureEngine(autoRefreshDevices: false)
+        let decision = engine.captureAudioSelectionDecision(
+            from: [
+                .init(uniqueID: "rane", name: "RANE ONE MKII"),
+                .init(uniqueID: "serato", name: "Serato Virtual Audio")
+            ],
+            explicitSelectionUniqueID: nil,
+            previousSelectionUniqueID: nil,
+            systemDefaultUniqueID: "serato"
+        )
+
+#if DEBUG
+        XCTAssertEqual(decision.device?.uniqueID, "rane")
+        XCTAssertEqual(decision.priority, .raneHardware)
+#else
+        XCTAssertEqual(decision.device?.uniqueID, "serato")
+        XCTAssertEqual(decision.priority, .exactSeratoVirtualAudio)
+#endif
+    }
+
     func testSkipSeratoPriorityFallsBackWhenSystemDefaultIsMissing() {
         let devices = [
             MacCaptureEngine.AudioInputDeviceChoice(uniqueID: "serato", name: "Serato Virtual Audio"),
@@ -3991,6 +4097,144 @@ final class CaptureReliabilityPhase1CoreTests: XCTestCase {
 
         XCTAssertTrue(source.contains("@StateObject private var practiceBeatStore = PracticeBeatStore()"))
         XCTAssertTrue(source.contains(".environmentObject(practiceBeatStore)"))
+    }
+
+    func testCXLReleaseRouteHasDeterministicNormalAndMinimumLayouts() {
+        XCTAssertEqual(CXLReleaseRouteContract.minimumWidth, 900)
+        XCTAssertEqual(CXLReleaseRouteContract.minimumHeight, 700)
+        XCTAssertEqual(CXLReleaseRouteContract.normalWidth, 1180)
+        XCTAssertEqual(CXLReleaseRouteContract.normalHeight, 820)
+        XCTAssertEqual(CXLReleaseRouteContract.stages, ["Setup", "Capture", "Review & Export"])
+    }
+
+    func testCXLReleaseRouteRendersStagesAndExplicitHardwareSelectors() throws {
+        let source = try String(
+            contentsOf: projectRootURL().appendingPathComponent(
+                "ScratchLabDesktop/Views/ReferenceAuthoringView.swift"
+            ),
+            encoding: .utf8
+        )
+        let hardwareSection = try sourceSlice(
+            in: source,
+            from: "private var hardwareSetupSection",
+            through: "private var midiSourceSelectionBinding"
+        )
+
+        XCTAssertTrue(source.contains("stageHeading(\"Setup\")"))
+        XCTAssertTrue(source.contains("stageHeading(\"Capture\")"))
+        XCTAssertTrue(source.contains("stageHeading(\"Review & Export\")"))
+        let task = try sourceSlice(
+            in: source,
+            from: ".task {",
+            through: ".onChange(of: viewModel.selectedTechnique)"
+        )
+        XCTAssertTrue(task.contains("await captureEngine.startDeviceDiscoveryAfterViewMount("))
+        XCTAssertTrue(task.contains("allowSeratoDirectCapture: false"))
+        XCTAssertTrue(task.contains("requiresExplicitVideoSelection: true"))
+        XCTAssertFalse(task.contains("activateCaptureInput()"))
+        XCTAssertTrue(hardwareSection.contains("GroupBox(\"Hardware inputs\")"))
+        XCTAssertTrue(hardwareSection.contains("Picker(\"MIDI source\""))
+        XCTAssertTrue(hardwareSection.contains("Picker(\"Camera input\""))
+        XCTAssertTrue(hardwareSection.contains("Choose a camera…"))
+        XCTAssertTrue(hardwareSection.contains("Picker(\"Audio input\""))
+        XCTAssertTrue(hardwareSection.contains("Button(\"Learn Crossfader\")"))
+        XCTAssertTrue(hardwareSection.contains("Button(\"Clear Crossfader Mapping\")"))
+        XCTAssertTrue(hardwareSection.contains("captureInputActivationButtonTitle"))
+        XCTAssertTrue(hardwareSection.contains("CompanionRelaySetupView"))
+        XCTAssertTrue(source.contains("captureEngine.selectAudioInput(uniqueID: $0)"))
+        XCTAssertTrue(source.contains("captureEngine.selectVideoInput(uniqueID: $0)"))
+        XCTAssertTrue(hardwareSection.contains("cxl.hardware.midiSource"))
+        XCTAssertTrue(hardwareSection.contains("cxl.hardware.videoInput"))
+        XCTAssertTrue(hardwareSection.contains("cxl.hardware.audioInput"))
+        XCTAssertTrue(hardwareSection.contains("cxl.hardware.activateCaptureInput"))
+        XCTAssertTrue(source.contains("cxl.hardware.enableCompanionRelay"))
+        XCTAssertTrue(hardwareSection.contains("hardwareSelectionIsLocked"))
+        XCTAssertTrue(hardwareSection.contains("does not yet prove a specific input pair"))
+        XCTAssertTrue(hardwareSection.contains("permission are requested only after"))
+        XCTAssertTrue(source.contains("captureEngine.start(\n            allowSeratoDirectCapture: false,\n            requiresExplicitVideoSelection: true"))
+        XCTAssertFalse(hardwareSection.localizedCaseInsensitiveContains("Rane ONE"))
+        XCTAssertFalse(hardwareSection.localizedCaseInsensitiveContains("Seventy-Two"))
+    }
+
+    func testCXLReleaseSceneExcludesDebugAndAuxiliaryRoutes() throws {
+        let sourceURL = projectRootURL().appendingPathComponent("ScratchLabDesktop/ScratchLabDesktopApp.swift")
+        let source = try String(contentsOf: sourceURL, encoding: .utf8)
+        let engineSource = try String(
+            contentsOf: projectRootURL().appendingPathComponent(
+                "ScratchLabDesktop/Services/MacCaptureEngine.swift"
+            ),
+            encoding: .utf8
+        )
+        let release = try sourceSlice(
+            in: source,
+            from: "#else\n        Window(\"ScratchLab CXL\"",
+            through: ".windowResizability(.contentMinSize)\n        #endif"
+        )
+        let workspaceHandler = try sourceSlice(
+            in: engineSource,
+            from: "@objc private func handleWorkspaceApplicationChange",
+            through: "private func shouldTrackSeratoApplication"
+        )
+
+        XCTAssertTrue(release.contains("cxlReleaseContent"))
+        XCTAssertFalse(release.contains("MacAnalyzerView()"))
+        XCTAssertFalse(release.contains("WindowGroup(\"Performer Monitor\""))
+        XCTAssertFalse(release.contains("TravelLaneDebugView()"))
+        XCTAssertTrue(source.contains("private var cxlReleaseContent"))
+        XCTAssertTrue(source.contains("ReferenceAuthoringView("))
+        XCTAssertTrue(source.contains("let activateAuxiliaryServices = false"))
+        XCTAssertTrue(source.contains("allowsSeratoDirectCaptureDiscovery: activateAuxiliaryServices"))
+        XCTAssertTrue(source.contains("prefersPhysicalCaptureAudio: true"))
+        XCTAssertTrue(source.contains("autoStartBrowsing: activateAuxiliaryServices"))
+        XCTAssertFalse(source.contains("autoStartBrowsing: !isRunningTests"))
+        XCTAssertTrue(workspaceHandler.contains("guard allowsSeratoDirectCaptureDiscovery else { return }"))
+        XCTAssertTrue(workspaceHandler.contains("self.refreshDevices()"))
+    }
+
+    func testCXLCompanionRelayIsOffUntilOneExplicitIdempotentStart() throws {
+        let source = try String(
+            contentsOf: projectRootURL().appendingPathComponent(
+                "ScratchLabDesktop/Services/CompanionCameraReceiver.swift"
+            ),
+            encoding: .utf8
+        )
+
+        XCTAssertTrue(source.contains("@Published var connectionStatus = \"Companion relay is off\""))
+        XCTAssertTrue(source.contains("@Published private(set) var isBrowsingForPeers = false"))
+        XCTAssertTrue(source.contains("if autoStartBrowsing {"))
+        XCTAssertTrue(source.contains("func startBrowsingForCompanionIfNeeded()"))
+        XCTAssertTrue(source.contains("guard !isBrowsingForPeers else { return }"))
+        XCTAssertTrue(source.contains("guard watchHealthTimer == nil else { return }"))
+        XCTAssertEqual(
+            source.components(separatedBy: "\n        startDirectBrowsing()\n").count - 1,
+            1,
+            "direct Bonjour browsing must have one gated start site"
+        )
+        XCTAssertFalse(
+            source.contains("browser.startBrowsingForPeers()"),
+            "the failed Multipeer invitation path must not restart alongside the direct relay"
+        )
+    }
+
+    func testCXLReleaseIdentityAndPermissionCopyAreExplicit() throws {
+        let project = try String(
+            contentsOf: projectRootURL().appendingPathComponent("ScratchLab.xcodeproj/project.pbxproj"),
+            encoding: .utf8
+        )
+        let releaseConfiguration = try sourceSlice(
+            in: project,
+            from: "91AC8DEE4C1E0E1CB26D90C6 /* Release configuration for PBXNativeTarget \"ScratchLabDesktop\" */",
+            through: "name = Release;"
+        )
+        XCTAssertTrue(releaseConfiguration.contains("com.machelpnz.scratchlab.cxl-authoring"))
+        XCTAssertFalse(releaseConfiguration.contains("ENABLE_TIMECODE_LIVE_TAP"))
+
+        let plist = try String(
+            contentsOf: projectRootURL().appendingPathComponent("ScratchLabDesktop/Info.plist"),
+            encoding: .utf8
+        )
+        XCTAssertTrue(plist.contains("records the audio your DJ app is playing"))
+        XCTAssertTrue(plist.contains("uses the camera to frame the deck view"))
     }
 
     func testMacRoutineSidebarUsesSharedSessionPresentationModel() throws {
@@ -9036,8 +9280,28 @@ final class CaptureReliabilityPhase1CoreTests: XCTestCase {
         // happen to expose a property called `timeRange` (e.g.
         // SoundAnalysis's SNClassificationResult.timeRange, which is
         // unrelated to AVFoundation's deprecated synchronous loaders).
-        let directTrackPropertyPattern = #"\b[A-Za-z_][A-Za-z0-9_]*(Asset|asset|Track|track)\.(formatDescriptions|naturalSize|preferredTransform|nominalFrameRate|timeRange)\b"#
-        let directAssetPropertyPattern = #"\b[A-Za-z_][A-Za-z0-9_]*(Asset|asset|Track|track)\.(duration|commonMetadata|metadata)\b"#
+        // A plain assignment writes a mutable composition track; it does not
+        // synchronously load an asset property. Compound assignments and
+        // equality expressions still read the property and must be rejected.
+        let directTrackPropertyPattern = #"\b[A-Za-z_][A-Za-z0-9_]*(Asset|asset|Track|track)\.(formatDescriptions|naturalSize|preferredTransform|nominalFrameRate|timeRange)\b(?!\s*=(?!=))"#
+        let directAssetPropertyPattern = #"\b[A-Za-z_][A-Za-z0-9_]*(Asset|asset|Track|track)\.(duration|commonMetadata|metadata)\b(?!\s*=(?!=))"#
+        for (expression, shouldReject) in [
+            ("let transform = videoTrack.preferredTransform", true),
+            ("videoTrack.preferredTransform = try await sourceVideo.load(.preferredTransform)", false),
+            ("videoTrack.preferredTransform\n    = transform", false),
+            ("videoTrack.preferredTransform += transform", true),
+            ("videoTrack.preferredTransform *= transform", true),
+            ("videoTrack.preferredTransform == transform", true),
+            ("videoTrack.preferredTransform === transform", true),
+            ("apply(videoTrack.preferredTransform)", true),
+            ("videoTrack.preferredTransform = sourceTrack.preferredTransform", true),
+            ("let duration = videoAsset.duration", true),
+            ("videoAsset.duration == duration", true),
+        ] {
+            let rejected = expression.range(of: directTrackPropertyPattern, options: .regularExpression) != nil
+                || expression.range(of: directAssetPropertyPattern, options: .regularExpression) != nil
+            XCTAssertEqual(rejected, shouldReject, expression)
+        }
         let fileManager = FileManager.default
         var failures: [String] = []
 
@@ -10782,7 +11046,10 @@ final class CaptureRecoveryPhase2CoreTests: XCTestCase {
             seedSessionID: sessionID
         )
 
-        XCTAssertEqual(discoveredURLs, [sidecarURL])
+        XCTAssertEqual(
+            discoveredURLs.map { $0.resolvingSymlinksInPath() },
+            [sidecarURL.resolvingSymlinksInPath()]
+        )
     }
 
     func testLocalRecordingSessionValidationReportsInterruptedTake() throws {
@@ -22365,28 +22632,61 @@ final class MacWatchStopDispatchTests: XCTestCase {
     /// The view must not race the engine with a second, differently-identified
     /// stop.
     func testTheStopButtonNoLongerSendsItsOwnUnidentifiedWatchStop() throws {
-        let source = try String(
+        let macAnalyzerSource = try String(
             contentsOf: URL(fileURLWithPath: #filePath)
                 .deletingLastPathComponent()
                 .deletingLastPathComponent()
                 .appendingPathComponent("ScratchLabDesktop/Views/MacAnalyzerView.swift"),
             encoding: .utf8
         )
+        let referenceAuthoringSource = try String(
+            contentsOf: URL(fileURLWithPath: #filePath)
+                .deletingLastPathComponent()
+                .deletingLastPathComponent()
+                .appendingPathComponent("ScratchLabDesktop/Views/ReferenceAuthoringView.swift"),
+            encoding: .utf8
+        )
+        let referenceBridgeSource = try String(
+            contentsOf: URL(fileURLWithPath: #filePath)
+                .deletingLastPathComponent()
+                .deletingLastPathComponent()
+                .appendingPathComponent("ScratchLabDesktop/Services/ReferenceAuthoringCaptureBridge.swift"),
+            encoding: .utf8
+        )
         XCTAssertEqual(
-            source.components(separatedBy: "requestWatchCaptureStop(").count - 1,
+            macAnalyzerSource.components(separatedBy: "requestWatchCaptureStop(").count - 1,
             1,
             "The view may reference the stop transport exactly once — to install it."
         )
         XCTAssertTrue(
-            source.contains("captureEngine.watchStopRequestHandler = { identity in"),
+            macAnalyzerSource.contains("captureEngine.watchStopRequestHandler = { identity in"),
             "The view must install the engine's stop transport."
         )
         XCTAssertTrue(
-            source.contains("takeID: identity.takeID"),
+            macAnalyzerSource.contains("takeID: identity.takeID"),
             "The installed transport must carry the take's own identity."
         )
+        XCTAssertTrue(
+            referenceAuthoringSource.contains("MacAnalyzerView.WatchStopDispatchInstaller("),
+            "The release-only CXL route must install the same Watch stop transport."
+        )
+        XCTAssertTrue(
+            referenceBridgeSource.contains("let started = try beatEngine.start(")
+                && referenceBridgeSource.contains("mode: configuration.beatEngineMode,")
+                && referenceBridgeSource.contains("preparedBeat: preparedBeat,")
+                && referenceBridgeSource.contains("onRecordingStart:"),
+            "CXL must start the selected backing sound after four count-in clicks through the beat engine's recording boundary."
+        )
+        XCTAssertTrue(
+            referenceBridgeSource.contains("engine.startRoutineRecording(captureTiming: captureTiming)"),
+            "CXL must persist the click and recording host-time boundary used by the audible count-in."
+        )
         XCTAssertFalse(
-            source.contains("sessionID: routineSessionSetup.config.sessionID,\n                takeID: nil"),
+            referenceBridgeSource.contains("engine.applyPendingWatchReply(reply)\n            return engine.startRoutineRecording()"),
+            "CXL must not bypass the audible count-in and start recording immediately after Watch acknowledgement."
+        )
+        XCTAssertFalse(
+            macAnalyzerSource.contains("sessionID: routineSessionSetup.config.sessionID,\n                takeID: nil"),
             "The session-level, take-less stop that could not match the started capture is gone."
         )
     }
@@ -22514,7 +22814,7 @@ final class WatchMotionCaptureStoreStagingTests: XCTestCase {
         let first = try importCapture(store.stageReceivedFile(at: source(session, root: root), metadataName: "original.json"), store: store)
         let bytes = try Data(contentsOf: first.fileURL)
         let duplicate = try importCapture(store.stageReceivedFile(at: source(session, root: root), metadataName: "different-name.json"), store: store)
-        XCTAssertEqual(duplicate.fileURL, first.fileURL)
+        XCTAssertEqual(duplicate.fileURL.resolvingSymlinksInPath(), first.fileURL.resolvingSymlinksInPath())
         XCTAssertEqual(try Data(contentsOf: first.fileURL), bytes)
         XCTAssertEqual(try FileManager.default.contentsOfDirectory(atPath: store.captureDirectoryURL.path), ["original.json"])
     }
@@ -22548,10 +22848,16 @@ final class WatchMotionCaptureStoreStagingTests: XCTestCase {
         let (root, store) = try makeStore()
         for name in ["../../escape.json", "/tmp/escape.json", "..\\..\\escape.json", "..", ".", "", "💥/\u{0}bad.json", String(repeating: "x", count: 500)] {
             let staged = try store.stageReceivedFile(at: source(fixture(), root: root), metadataName: name)
-            XCTAssertEqual(staged.standardizedFileURL.deletingLastPathComponent(), store.incomingDirectoryURL.standardizedFileURL)
+            XCTAssertEqual(
+                staged.standardizedFileURL.deletingLastPathComponent().resolvingSymlinksInPath(),
+                store.incomingDirectoryURL.standardizedFileURL.resolvingSymlinksInPath()
+            )
             XCTAssertLessThan(staged.lastPathComponent.utf8.count, 255)
             let imported = try importCapture(staged, store: store)
-            XCTAssertEqual(imported.fileURL.deletingLastPathComponent(), store.captureDirectoryURL)
+            XCTAssertEqual(
+                imported.fileURL.deletingLastPathComponent().resolvingSymlinksInPath(),
+                store.captureDirectoryURL.resolvingSymlinksInPath()
+            )
         }
         XCTAssertFalse(FileManager.default.fileExists(atPath: root.appendingPathComponent("escape.json").path))
     }
@@ -22634,7 +22940,7 @@ final class WatchMotionCaptureStoreStagingTests: XCTestCase {
         var notifications = 0
         relaunched.recoverPendingTransfers(onImported: { imported in
             notifications += 1
-            XCTAssertEqual(imported.fileURL, existing)
+            XCTAssertEqual(imported.fileURL.resolvingSymlinksInPath(), existing.resolvingSymlinksInPath())
         }, onFailure: { XCTFail($0) })
         XCTAssertEqual(notifications, 1)
         XCTAssertEqual(try Data(contentsOf: existing), originalBytes)
@@ -22788,14 +23094,16 @@ final class WatchMotionStopCommandResolverTests: XCTestCase {
         XCTAssertEqual(decision, .stop)
     }
 
-    func testACaptureStartedLocallyIsStoppable() {
+    func testAnIdentifiedRemoteStopCannotStopANewerLocalCapture() {
         let decision = WatchMotionStopCommandResolver.decide(
             payload: command(.stop),
             isRecording: true,
             activeCommand: nil,
             resolvedStopCommandIDs: []
         )
-        XCTAssertEqual(decision, .stop)
+        guard case .rejectIdentity = decision else {
+            return XCTFail("An old queued remote Stop must not end an unidentified local capture.")
+        }
     }
 }
 
@@ -23742,7 +24050,7 @@ final class ReferencePackageIORoundTripTests: XCTestCase {
     ) -> ReferencePackageManifest {
         let metadata = makeMetadata(lifecycleState: lifecycleState)
         return ReferencePackageManifest(
-            referenceID: "baby_scratch__quarter_notes",
+            referenceID: "baby_scratch.quarter_notes",
             referenceVersion: 1,
             packageBuiltAt: Date(timeIntervalSince1970: 1_788_000_200),
             metadata: metadata,
@@ -23792,6 +24100,11 @@ final class ReferencePackageIORoundTripTests: XCTestCase {
         case .notationEvidence: return "notation/evidence.json"
         case .validationReport: return "validation/report.json"
         case .referenceVideo: return "video/reference.mov"
+        case .beatProductionMaster: return "beat/production_master.wav"
+        case .beatSparseAnalysis: return "beat/sparse_analysis.wav"
+        case .beatManifest: return "beat/manifest.json"
+        case .beatRightsReceipt: return "beat/rights_receipt.json"
+        case .watchMotion: return "motion/watch.json"
         }
     }
 
@@ -23806,7 +24119,7 @@ final class ReferencePackageIORoundTripTests: XCTestCase {
         try ReferencePackageIO.writePackage(
             inputs: try requiredInputs(),
             parentDirectory: root,
-            packageDirectoryName: "baby_scratch__quarter_notes_v1",
+            packageDirectoryName: "baby_scratch.quarter_notes_v1",
             makeManifest: { self.makeManifest(artifacts: $0, lifecycleState: lifecycleState) }
         )
     }
@@ -23819,7 +24132,7 @@ final class ReferencePackageIORoundTripTests: XCTestCase {
         let manifest = try ReferencePackageIO.readManifest(atPackageURL: packageURL)
 
         XCTAssertEqual(manifest.schemaVersion, ReferencePackageManifest.currentSchemaVersion)
-        XCTAssertEqual(manifest.referenceID, "baby_scratch__quarter_notes")
+        XCTAssertEqual(manifest.referenceID, "baby_scratch.quarter_notes")
         XCTAssertEqual(manifest.referenceVersion, 1)
         XCTAssertEqual(manifest.metadata, makeMetadata())
         XCTAssertEqual(manifest.approval.outcome, .approved)
@@ -23864,6 +24177,20 @@ final class ReferencePackageIORoundTripTests: XCTestCase {
         XCTAssertEqual(ReferencePackageIO.verify(packageURL: packageURL), [])
     }
 
+    func testCopiedPackageReopensFromASecondRoot() throws {
+        let packageURL = try writeFixturePackage()
+        let secondRoot = root.appendingPathComponent("second-root", isDirectory: true)
+
+        let reopened = try ReferenceApprovedPackageCoordinator.copyAndReopen(
+            packageURL: packageURL,
+            secondRoot: secondRoot
+        )
+        let copiedURL = secondRoot.appendingPathComponent(packageURL.lastPathComponent, isDirectory: true)
+
+        XCTAssertEqual(reopened, try ReferencePackageIO.readManifest(atPackageURL: packageURL))
+        XCTAssertEqual(ReferencePackageIO.verify(packageURL: copiedURL), [])
+    }
+
     func testVerifyRejectsATamperedArtifact() throws {
         let packageURL = try writeFixturePackage()
         try Data("tampered".utf8).write(to: packageURL.appendingPathComponent("audio/reference.wav"))
@@ -23888,6 +24215,46 @@ final class ReferencePackageIORoundTripTests: XCTestCase {
             issues.contains { $0.contains("take/sidecar.json") },
             "The rejection must name the absent artifact. Got: \(issues)"
         )
+    }
+
+    func testVerifyRejectsAnUnlistedExtraArtifact() throws {
+        let packageURL = try writeFixturePackage()
+        let extra = packageURL.appendingPathComponent("evidence/unlisted.json")
+        try FileManager.default.createDirectory(
+            at: extra.deletingLastPathComponent(), withIntermediateDirectories: true
+        )
+        try Data("extra".utf8).write(to: extra)
+
+        let issues = ReferencePackageIO.verify(packageURL: packageURL)
+
+        XCTAssertTrue(issues.contains { $0.contains("unlisted file") && $0.contains("evidence/unlisted.json") })
+    }
+
+    func testVerifyRejectsIdentitySwappedDirectory() throws {
+        let packageURL = try writeFixturePackage()
+        let swapped = root.appendingPathComponent("another_reference_v9", isDirectory: true)
+        try FileManager.default.moveItem(at: packageURL, to: swapped)
+
+        let issues = ReferencePackageIO.verify(packageURL: swapped)
+
+        XCTAssertTrue(issues.contains { $0.contains("directory identity mismatch") })
+    }
+
+    func testVerifyRejectsStaleManifestIdentity() throws {
+        let packageURL = try writeFixturePackage()
+        let manifestURL = packageURL.appendingPathComponent(ReferencePackageManifest.fileName)
+        var object = try XCTUnwrap(
+            JSONSerialization.jsonObject(with: Data(contentsOf: manifestURL)) as? [String: Any]
+        )
+        var metadata = try XCTUnwrap(object["metadata"] as? [String: Any])
+        metadata["referenceVersion"] = 2
+        object["metadata"] = metadata
+        try JSONSerialization.data(withJSONObject: object, options: [.sortedKeys])
+            .write(to: manifestURL, options: .atomic)
+
+        let issues = ReferencePackageIO.verify(packageURL: packageURL)
+
+        XCTAssertTrue(issues.contains { $0.contains("identity mismatch") })
     }
 
     func testVerifyRejectsADirectoryWithNoManifest() throws {
@@ -23969,13 +24336,36 @@ final class ReferencePackageIORoundTripTests: XCTestCase {
         let packageURL = try writeFixturePackage()
 
         XCTAssertEqual(packageURL.deletingLastPathComponent().standardizedFileURL, root.standardizedFileURL)
-        XCTAssertEqual(packageURL.lastPathComponent, "baby_scratch__quarter_notes_v1")
+        XCTAssertEqual(packageURL.lastPathComponent, "baby_scratch.quarter_notes_v1")
 
         let entries = try FileManager.default.contentsOfDirectory(atPath: root.path).sorted()
         XCTAssertEqual(
-            entries, ["baby_scratch__quarter_notes_v1", "source-sidecar.json"],
+            entries, ["baby_scratch.quarter_notes_v1", "source-sidecar.json"],
             "Writing a package must create nothing outside the parent directory it was given."
         )
+    }
+
+    func testWritingRejectsTraversalArtifactPath() throws {
+        XCTAssertThrowsError(
+            try ReferencePackageIO.writePackage(
+                inputs: [
+                    ReferencePackageInput(
+                        role: .referenceAudio,
+                        packagePath: "../outside.wav",
+                        data: Self.bytes(for: .referenceAudio)
+                    )
+                ],
+                parentDirectory: root,
+                packageDirectoryName: "unsafe_v1",
+                makeManifest: { self.makeManifest(artifacts: $0) }
+            )
+        ) { error in
+            guard case ReferencePackageIOError.unsafePackagePath("../outside.wav") = error else {
+                return XCTFail("Expected unsafePackagePath, got \(error)")
+            }
+        }
+        XCTAssertFalse(FileManager.default.fileExists(atPath: root.deletingLastPathComponent()
+            .appendingPathComponent("outside.wav").path))
     }
 }
 
@@ -24221,5 +24611,700 @@ final class RaneMotionProvenanceTests: XCTestCase {
         XCTAssertEqual(reviewed.stationaryIntervals.count, 0)
         XCTAssertEqual(reviewed.totalCountedTearHoldCount, 0)
         XCTAssertTrue(reviewed.segments.contains { $0.reasons.contains(.unknownMotionRegion) })
+    }
+}
+
+
+/// The real raw-session writer declares, hashes, stages, zips and reads back
+/// optional review evidence. All fixtures and outputs remain in test-owned roots.
+final class SessionArchiveReferenceTearEvidenceTests: XCTestCase {
+    // Reuse fixture methods only; this helper case is never executed or added
+    // to a suite. Its inherited selector initializer is available in XCTest.
+    private static var fixtures: CaptureReliabilityPhase1CoreTests {
+        CaptureReliabilityPhase1CoreTests(selector: NSSelectorFromString(
+            "testCanonicalMultiTakeArchiveContainsEveryUniqueArtifactAndManifestRecord"))
+    }
+
+    private func root() throws -> URL {
+        let url = FileManager.default.temporaryDirectory
+            .appendingPathComponent("ReferenceTearArchive-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)
+        addTeardownBlock { try? FileManager.default.removeItem(at: url) }
+        return url
+    }
+
+    private static func companion(for url: URL, referenceID: String) throws -> Data {
+        var sidecar = try SessionArchiveBuilder().decodeSidecarForAudit(at: url)
+        sidecar = sidecar.withDetectedNotation(Self.fixtures.makeDetectedNotationSnapshot(), recordedAt: sidecar.endedAt ?? sidecar.startedAt)
+        try sidecar.encodedData().write(to: url, options: .atomic)
+        let binding = try ReferenceTearEvidenceCodec.makeSourceBinding(
+            rawSidecarData: Data(contentsOf: url), fileName: url.lastPathComponent)
+        var review = ReferenceTearSegmentationReviewBuilder.build(
+            referenceTakeID: referenceID,
+            movementEvents: try XCTUnwrap(sidecar.detectedNotation).recordMovementEvents,
+            derivation: nil)
+        review.setNotes("Retain the original proposal and operator annotation", correction: .init(
+            correctedBy: "Archive Test", correctedAt: Date(timeIntervalSinceReferenceDate: 810_000_000.1234567),
+            notes: "An annotation is not approval", reason: "Inspect retained evidence"))
+        let projection = ReferenceTearCanonicalProjectionBuilder.project(review)
+        XCTAssertFalse(projection.records.isEmpty)
+        return try ReferenceTearEvidenceCodec.encode(
+            sourceBinding: binding, review: review, projection: projection,
+            performedLimitations: review.requiredIntrinsicComparisonLimitations)
+    }
+
+    private static func archive(_ package: SessionExportPackage, root: URL) throws -> URL {
+        let output = root.appendingPathComponent("archives", isDirectory: true)
+        try FileManager.default.createDirectory(at: output, withIntermediateDirectories: true)
+        let result = try SessionArchiveBuilder().createArchive(
+            from: package, options: SessionExportOptions(mixMode: .scratchOnly), in: output)
+        return try Self.fixtures.unzipArchive(result.archiveURL, to: root.appendingPathComponent("extracted"))
+    }
+
+    private static func manifestTakes(at archive: URL) throws -> [[String: Any]] {
+        let data = try Data(contentsOf: archive.appendingPathComponent("manifests/session_manifest.json"))
+        let manifest = try XCTUnwrap(JSONSerialization.jsonObject(with: data) as? [String: Any])
+        return try XCTUnwrap(manifest["takes"] as? [[String: Any]])
+    }
+
+    private static func rewrite(_ url: URL, _ mutation: (inout [String: Any]) throws -> Void) throws {
+        var object = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(contentsOf: url)) as? [String: Any])
+        try mutation(&object)
+        try JSONSerialization.data(withJSONObject: object, options: [.sortedKeys, .prettyPrinted])
+            .write(to: url, options: .atomic)
+    }
+
+    private static func assertFailure(
+        _ reason: SessionExportValidationReason,
+        file: StaticString = #filePath, line: UInt = #line,
+        _ action: () throws -> Void
+    ) {
+        XCTAssertThrowsError(try action(), file: file, line: line) { error in
+            XCTAssertEqual((error as? SessionExportValidationFailure)?.reason, reason, "\(error)", file: file, line: line)
+        }
+    }
+
+    func testRealMultiTakeArchiveDeclaresAndRetainsExactEvidenceBytesAndHashes() async throws {
+        let directory = try root()
+        try await Task.detached {
+            var package = try Self.fixtures.makeCanonicalPackage(rootURL: directory, useRealMedia: true)
+            for take in package.takes {
+                package.referenceTearEvidenceByTakeID[take.takeID] = try Self.companion(
+                    for: take.sidecarURL, referenceID: "reference-\(take.takeNumber)")
+            }
+            let hydrated = try SessionArchiveBuilder().preparePackage(from: .package(package))
+            XCTAssertEqual(hydrated.referenceTearEvidenceByTakeID, package.referenceTearEvidenceByTakeID)
+            let extracted = try Self.archive(hydrated, root: directory)
+            let takes = try Self.manifestTakes(at: extracted)
+            XCTAssertEqual(takes.count, 3)
+            var paths = Set<String>()
+            for (index, take) in package.takes.enumerated() {
+                let files = try XCTUnwrap(takes[index]["files"] as? [String: String])
+                let artifacts = try XCTUnwrap(takes[index]["artifacts"] as? [String: [String: Any]])
+                let path = try XCTUnwrap(files["reference_tear_evidence"])
+                let artifact = try XCTUnwrap(artifacts["reference_tear_evidence"])
+                XCTAssertTrue(paths.insert(path).inserted)
+                XCTAssertTrue(path.hasPrefix("notation/"))
+                XCTAssertTrue(path.hasSuffix("_reference_tear_evidence.json"))
+                XCTAssertEqual(artifact["path"] as? String, path)
+                let bytes = try Data(contentsOf: extracted.appendingPathComponent(path))
+                XCTAssertEqual(bytes, package.referenceTearEvidenceByTakeID[take.takeID])
+                XCTAssertEqual((artifact["bytes"] as? NSNumber)?.intValue, bytes.count)
+                XCTAssertEqual(artifact["sha256"] as? String, SHA256.hash(data: bytes).map { String(format: "%02x", $0) }.joined())
+                let probe = try XCTUnwrap(artifact["probe"] as? [String: Any])
+                XCTAssertEqual(probe["kind"] as? String, "json")
+                XCTAssertEqual(probe["schema_version"] as? String, ReferenceTearEvidenceDocument.currentSchemaVersion)
+                let document = try ReferenceTearEvidenceCodec.decodeDocument(bytes)
+                XCTAssertEqual(document.sourceBinding.rawSidecarData, try Data(contentsOf: take.sidecarURL))
+                XCTAssertEqual(document.sourceBinding.rawSidecarFileName, take.sidecarURL.lastPathComponent)
+                XCTAssertEqual(document.sourceBinding.capturedTakeID, take.takeID)
+                XCTAssertEqual(document.referenceTakeID, "reference-\(take.takeNumber)")
+                XCTAssertFalse(document.review.noteCorrections.isEmpty)
+                XCTAssertFalse(document.projection.records.isEmpty)
+                XCTAssertEqual(document.review.rawMovementEvents, try SessionArchiveBuilder().decodeSidecarForAudit(at: take.sidecarURL).detectedNotation?.recordMovementEvents)
+            }
+            XCTAssertEqual(try Self.fixtures.decodeSessionMetadataDocument(from: extracted).session.schemaVersion, "scratchlab_session_export_v4")
+        }.value
+    }
+
+    func testLegacyArchiveOmitsBothCompanionDeclarationsAndKeepsVersionedDocuments() async throws {
+        let directory = try root()
+        try await Task.detached {
+            let package = try Self.fixtures.makeCanonicalPackage(rootURL: directory, useRealMedia: true)
+            let extracted = try Self.archive(package, root: directory)
+            for take in try Self.manifestTakes(at: extracted) {
+                XCTAssertNil((take["files"] as? [String: String])?["reference_tear_evidence"])
+                XCTAssertNil((take["artifacts"] as? [String: Any])?["reference_tear_evidence"])
+            }
+            let notationURLs = try FileManager.default.contentsOfDirectory(
+                at: extracted.appendingPathComponent("notation"), includingPropertiesForKeys: nil)
+            XCTAssertEqual(notationURLs.count, package.takes.count)
+            let take = try XCTUnwrap(package.takes.first)
+            let source = try ReferenceTearEvidenceCodec.makeSourceBinding(
+                rawSidecarData: Data(contentsOf: take.sidecarURL), fileName: take.sidecarURL.lastPathComponent)
+            XCTAssertEqual(try ReferenceTearEvidenceCodec.decode(nil, expectedSource: source), .notAnalysed)
+            XCTAssertEqual(try Self.fixtures.decodeSessionMetadataDocument(from: extracted).session.schemaVersion, "scratchlab_session_export_v4")
+            let replayData = try Data(contentsOf: extracted.appendingPathComponent("manifests/session_replay.json"))
+            XCTAssertEqual(try JSONDecoder.captureCoreDecoder.decode(SessionExportReplayDocument.self, from: replayData).schemaVersion, "scratchlab_session_replay_v1")
+        }.value
+    }
+
+    func testLocalRecordingSourceCarriesOnlyRequestedTakeEvidenceThroughRealWriter() async throws {
+        let directory = try root()
+        try await Task.detached {
+            let createdAt = Date(timeIntervalSince1970: 1_710_000_000)
+            let first = try Self.fixtures.makeLocalRecordingTake(in: directory, sessionID: "evidence-local", takeNumber: 1,
+                bpm: 70, createdAt: createdAt, useRealMedia: true)
+            let seed = try Self.fixtures.makeLocalRecordingTake(in: directory, sessionID: "evidence-local", takeNumber: 2,
+                bpm: 90, createdAt: createdAt, useRealMedia: true)
+            let sidecarURL = CaptureCore.LocalRecordingFiles.sidecarURL(forMediaURL: first)
+            let bytes = try Self.companion(for: sidecarURL, referenceID: "independent-authoring-ordinal-9")
+            let binding = try ReferenceTearEvidenceCodec.decodeDocument(bytes).sourceBinding
+            let requested = [binding.capturedTakeID: bytes]
+            let package = try SessionArchiveBuilder().preparePackage(from: .localRecordingSession(
+                lastRecordingURL: seed, sessionName: "Reference raw capture", config: nil,
+                referenceTearEvidenceByTakeID: requested))
+            XCTAssertEqual(package.takes.count, 2)
+            XCTAssertEqual(package.referenceTearEvidenceByTakeID, requested)
+            let extracted = try Self.archive(package, root: directory)
+            let declarations = try Self.manifestTakes(at: extracted).compactMap { ($0["files"] as? [String: String])?["reference_tear_evidence"] }
+            XCTAssertEqual(declarations.count, 1)
+            XCTAssertEqual(try Data(contentsOf: extracted.appendingPathComponent(try XCTUnwrap(declarations.first))), bytes)
+        }.value
+    }
+
+    func testUnusedCapturedTakeKeyIsRejectedInsteadOfOmitted() async throws {
+        let directory = try root()
+        try await Task.detached {
+            var package = try Self.fixtures.makeCanonicalPackage(rootURL: directory)
+            package.referenceTearEvidenceByTakeID["not-in-this-archive"] = Data("{}".utf8)
+            Self.assertFailure(.unmatchedReferenceTearEvidence) { _ = try SessionArchiveBuilder().canonicalPreview(for: package) }
+        }.value
+    }
+
+    func testCompanionBoundToAnotherTakeIsRejected() async throws {
+        let directory = try root()
+        try await Task.detached {
+            var package = try Self.fixtures.makeCanonicalPackage(rootURL: directory)
+            let first = package.takes[0]
+            let bytes = try Self.companion(for: first.sidecarURL, referenceID: "reference-one")
+            package.referenceTearEvidenceByTakeID[package.takes[1].takeID] = bytes
+            Self.assertFailure(.referenceTearEvidenceSourceMismatch) { _ = try SessionArchiveBuilder().canonicalPreview(for: package) }
+        }.value
+    }
+
+    func testMalformedEmptyAndFutureCompanionsRemainExplicitFailures() async throws {
+        let directory = try root()
+        try await Task.detached {
+            var package = try Self.fixtures.makeCanonicalPackage(rootURL: directory)
+            let take = package.takes[0]
+            let valid = try Self.companion(for: take.sidecarURL, referenceID: "reference-one")
+            var future = try XCTUnwrap(JSONSerialization.jsonObject(with: valid) as? [String: Any])
+            future["schemaVersion"] = "scratchlab_reference_tear_evidence_v999"
+            for malformed in [Data(), Data("{".utf8), try JSONSerialization.data(withJSONObject: future)] {
+                package.referenceTearEvidenceByTakeID[take.takeID] = malformed
+                Self.assertFailure(.referenceTearEvidenceInvalid) { _ = try SessionArchiveBuilder().canonicalPreview(for: package) }
+            }
+        }.value
+    }
+
+    func testLateWatchSidecarRewriteRejectsFrozenCompanionAndPreservesSource() async throws {
+        let directory = try root()
+        try await Task.detached {
+            var package = try Self.fixtures.makeCanonicalPackage(rootURL: directory)
+            let take = package.takes[0]
+            package.referenceTearEvidenceByTakeID[take.takeID] = try Self.companion(for: take.sidecarURL, referenceID: "reference-one")
+            var sidecar = try SessionArchiveBuilder().decodeSidecarForAudit(at: take.sidecarURL)
+            sidecar.watchCommandID = "late-watch-metadata"
+            let changed = try sidecar.encodedData()
+            try changed.write(to: take.sidecarURL, options: .atomic)
+            Self.assertFailure(.referenceTearEvidenceSourceMismatch) { _ = try SessionArchiveBuilder().canonicalPreview(for: package) }
+            XCTAssertEqual(try Data(contentsOf: take.sidecarURL), changed)
+        }.value
+    }
+
+    func testSourceRewriteAfterCanonicalSnapshotFailsBeforeArchiveSuccess() async throws {
+        let directory = try root()
+        try await Task.detached {
+            var package = try Self.fixtures.makeCanonicalPackage(rootURL: directory)
+            let take = package.takes[0]
+            package.referenceTearEvidenceByTakeID[take.takeID] = try Self.companion(for: take.sidecarURL, referenceID: "reference-one")
+            let changed = try Data(contentsOf: take.sidecarURL) + Data("\n".utf8)
+            let sourceURL = take.sidecarURL
+            let builder = SessionArchiveBuilder { source, _, _ in
+                if source == "camA" {
+                    try changed.write(to: sourceURL, options: .atomic)
+                    return ["kind": .string("video"), "duration_seconds": .double(1), "width": .int(64), "height": .int(64)]
+                }
+                if source == "serato" {
+                    return ["kind": .string("audio"), "duration_seconds": .double(1), "sample_rate_hz": .int(44_100), "channel_count": .int(2), "frame_count": .int(44_100), "sample_width_bytes": .int(2)]
+                }
+                return ["kind": .string("csv"), "row_count": .int(13), "data_row_count": .int(12), "column_count": .int(CaptureCanonicalRules.watchCSVHeader.count)]
+            }
+            let output = directory.appendingPathComponent("archives", isDirectory: true)
+            try FileManager.default.createDirectory(at: output, withIntermediateDirectories: true)
+            Self.assertFailure(.referenceTearEvidenceSourceMismatch) {
+                _ = try builder.createArchive(from: package, options: SessionExportOptions(mixMode: .scratchOnly), in: output)
+            }
+            XCTAssertEqual(try Data(contentsOf: sourceURL), changed)
+            XCTAssertTrue(try FileManager.default.contentsOfDirectory(at: output, includingPropertiesForKeys: nil).isEmpty)
+        }.value
+    }
+
+    func testExactGroupIncludesDifferentBPMButExcludesOtherMetadataAndSourceFolder() async throws {
+        let directory = try root()
+        try await Task.detached {
+            let date = Date(timeIntervalSince1970: 1_710_000_000)
+            let first = try Self.fixtures.makeLocalRecordingTake(in: directory, sessionID: "group-test", takeNumber: 1, bpm: 70, createdAt: date)
+            let seed = try Self.fixtures.makeLocalRecordingTake(in: directory, sessionID: "group-test", takeNumber: 2, bpm: 90, createdAt: date)
+            let other = try Self.fixtures.makeLocalRecordingTake(in: directory, sessionID: "group-test", takeNumber: 3, bpm: 90, createdAt: date, captureMode: .calibrationNoClick)
+            let builder = SessionArchiveBuilder()
+            let group = try builder.localRecordingExportGroup(lastRecordingURL: seed)
+            XCTAssertEqual(group.sidecarURLsByTakeID.count, 2)
+            for mediaURL in [first, seed, other] {
+                let url = CaptureCore.LocalRecordingFiles.sidecarURL(forMediaURL: mediaURL)
+                let binding = try ReferenceTearEvidenceCodec.makeSourceBinding(rawSidecarData: Data(contentsOf: url), fileName: url.lastPathComponent)
+                XCTAssertEqual(try group.includes(sourceBinding: binding, sourceSidecarURL: url), mediaURL != other)
+                let copiedPath = directory.appendingPathComponent("copied", isDirectory: true).appendingPathComponent(url.lastPathComponent)
+                XCTAssertFalse(try group.includes(sourceBinding: binding, sourceSidecarURL: copiedPath))
+            }
+        }.value
+    }
+
+    func testSeedNotesRewriteCannotBecomeAnExcludedCompanion() async throws {
+        let directory = try root()
+        try await Task.detached {
+            let media = try Self.fixtures.makeLocalRecordingTake(in: directory, sessionID: "notes-rewrite", takeNumber: 1,
+                createdAt: Date(timeIntervalSince1970: 1_710_000_000))
+            let url = CaptureCore.LocalRecordingFiles.sidecarURL(forMediaURL: media)
+            let binding = try ReferenceTearEvidenceCodec.makeSourceBinding(rawSidecarData: Data(contentsOf: url), fileName: url.lastPathComponent)
+            try Self.rewrite(url) { object in
+                var config = try XCTUnwrap(object["sessionConfig"] as? [String: Any])
+                config["notes"] = "changed after finalization"
+                object["sessionConfig"] = config
+            }
+            let group = try SessionArchiveBuilder().localRecordingExportGroup(lastRecordingURL: media)
+            Self.assertFailure(.referenceTearEvidenceSourceMismatch) { _ = try group.includes(sourceBinding: binding, sourceSidecarURL: url) }
+        }.value
+    }
+
+    func testSeedSessionIdentityRewriteCannotBecomeAnExcludedCompanion() async throws {
+        let directory = try root()
+        try await Task.detached {
+            let media = try Self.fixtures.makeLocalRecordingTake(in: directory, sessionID: "identity-rewrite", takeNumber: 1,
+                createdAt: Date(timeIntervalSince1970: 1_710_000_000))
+            let url = CaptureCore.LocalRecordingFiles.sidecarURL(forMediaURL: media)
+            let binding = try ReferenceTearEvidenceCodec.makeSourceBinding(rawSidecarData: Data(contentsOf: url), fileName: url.lastPathComponent)
+            try Self.rewrite(url) { object in
+                object["sessionID"] = "rewritten-session"
+                var config = try XCTUnwrap(object["sessionConfig"] as? [String: Any])
+                config["sessionID"] = "rewritten-session"
+                object["sessionConfig"] = config
+            }
+            let group = try SessionArchiveBuilder().localRecordingExportGroup(lastRecordingURL: media)
+            Self.assertFailure(.referenceTearEvidenceSourceMismatch) { _ = try group.includes(sourceBinding: binding, sourceSidecarURL: url) }
+        }.value
+    }
+
+    func testSnapshotDrivenDocumentsRetainOriginalReviewReplayAndMetadata() async throws {
+        let directory = try root()
+        try await Task.detached {
+            let package = try Self.fixtures.makeCanonicalPackage(rootURL: directory)
+            let take = package.takes[0]
+            _ = try Self.companion(for: take.sidecarURL, referenceID: "reference-one")
+            let builder = SessionArchiveBuilder()
+            let original = try builder.decodeSidecarForAudit(at: take.sidecarURL)
+            let snapshots = [take.takeID: original]
+            let generatedAt = Date(timeIntervalSince1970: 1_710_000_001)
+            let expectedMetadata = try builder.metadataDocument(for: package, sidecarSnapshots: snapshots)
+            let expectedExportMetadata = try builder.exportMetadataDocument(for: package, options: SessionExportOptions(), sidecarSnapshots: snapshots)
+            let expectedReview = builder.reviewDocument(for: package, generatedAt: generatedAt, sidecarSnapshots: snapshots)
+            let expectedReplay = builder.replayDocument(for: package, generatedAt: generatedAt, sidecarSnapshots: snapshots)
+            var changed = original
+            changed.detectedNotation = nil
+            try changed.encodedData().write(to: take.sidecarURL, options: .atomic)
+            XCTAssertEqual(try builder.metadataDocument(for: package, sidecarSnapshots: snapshots), expectedMetadata)
+            XCTAssertEqual(try builder.exportMetadataDocument(for: package, options: SessionExportOptions(), sidecarSnapshots: snapshots), expectedExportMetadata)
+            XCTAssertEqual(builder.reviewDocument(for: package, generatedAt: generatedAt, sidecarSnapshots: snapshots), expectedReview)
+            XCTAssertEqual(builder.replayDocument(for: package, generatedAt: generatedAt, sidecarSnapshots: snapshots), expectedReplay)
+            XCTAssertNotEqual(builder.replayDocument(for: package, generatedAt: generatedAt), expectedReplay)
+        }.value
+    }
+}
+
+/// Exercises the same PCM buffers and sample positions queued by the live
+/// player, without starting an audio device or relying on wall-clock timers.
+final class CXLBeatCountInSchedulingTests: XCTestCase {
+    private let drumModes: [BeatEngineMode] = [.boomBapTrainer, .minimalFunk, .battleLoop]
+
+    private func samples(_ buffer: AVAudioPCMBuffer) throws -> [Float] {
+        let channel = try XCTUnwrap(buffer.floatChannelData?.pointee)
+        return Array(UnsafeBufferPointer(start: channel, count: Int(buffer.frameLength)))
+    }
+
+    func testOptInCountInContainsExactlyFourExistingClicksAndNoDrums() throws {
+        for sampleRate in [44_100.0, 48_000.0] {
+            for mode in drumModes {
+                let schedule = try ScratchLabBeatEngine.makePlaybackSchedule(
+                    mode: mode, bpm: 95, sampleRate: sampleRate, usesClickCountIn: true
+                )
+                let countIn = try XCTUnwrap(schedule.countInBuffer)
+                let pcm = try samples(countIn)
+                let beatFrames = Int((60.0 / 95 * sampleRate).rounded())
+                XCTAssertEqual(pcm.count, 4 * beatFrames)
+                let expected = try ClickTrackEngine.renderedClickTrackBuffer(
+                    bpm: 95, durationSeconds: Double(4 * beatFrames) / sampleRate,
+                    sampleRate: sampleRate, channelCount: 1, startBeatIndex: 0,
+                    exactFrameCount: AVAudioFrameCount(4 * beatFrames)
+                )
+                XCTAssertEqual(pcm, try samples(expected), "The count-in must use click synthesis, regardless of the selected drums.")
+                let clickFrames = Int((0.018 * sampleRate).rounded())
+                var peaks: [Float] = []
+                for beat in 0..<4 {
+                    let start = beat * beatFrames
+                    peaks.append(pcm[start..<(start + clickFrames)].map { abs($0) }.max() ?? 0)
+                    XCTAssertTrue(pcm[(start + clickFrames)..<(start + beatFrames)].allSatisfy { $0 == 0 },
+                                  "Drums or extra clicks must not leak into the space between count-in pulses.")
+                }
+                XCTAssertGreaterThan(peaks[0], peaks[1])
+                XCTAssertGreaterThan(peaks[1], 0)
+                XCTAssertEqual(peaks[1], peaks[2])
+                XCTAssertEqual(peaks[2], peaks[3])
+                XCTAssertEqual(schedule.sampleTime(forStepIndex: 0), AVAudioFramePosition(pcm.count))
+                XCTAssertEqual(schedule.countInDurationSeconds, Double(pcm.count) / sampleRate, accuracy: 1e-12)
+            }
+        }
+    }
+
+    func testSelectedDrumsStartAtCountInBoundaryAndLoopOnTheSameSampleTimeline() throws {
+        for mode in drumModes {
+            let schedule = try ScratchLabBeatEngine.makePlaybackSchedule(
+                mode: mode, bpm: 95, sampleRate: 48_000, usesClickCountIn: true
+            )
+            let preview = try ScratchLabBeatEngine.makePlaybackSchedule(mode: mode, bpm: 95, sampleRate: 48_000)
+            let countInFrames = Int(try XCTUnwrap(schedule.countInBuffer).frameLength)
+            XCTAssertEqual(schedule.stepBuffers.count, 8)
+            XCTAssertEqual(schedule.sampleTime(forStepIndex: 0), AVAudioFramePosition(countInFrames))
+            XCTAssertEqual(schedule.sampleTime(forStepIndex: 2), AVAudioFramePosition(countInFrames + schedule.beatFrameLength),
+                           "The first snare stays one beat after the kick at the recording boundary.")
+            for step in 0..<8 {
+                XCTAssertEqual(try samples(schedule.stepBuffers[step]), try samples(preview.stepBuffers[step]),
+                               "Count-in must not change the selected drum voices.")
+                for bar in [0, 1, 7, 8, 20] {
+                    XCTAssertEqual(
+                        schedule.sampleTime(forStepIndex: step + bar * 8),
+                        preview.sampleTime(forStepIndex: step) + AVAudioFramePosition(countInFrames + bar * schedule.framesPerBar),
+                        "The loop must remain continuous when the scheduling horizon refills."
+                    )
+                }
+            }
+            let kick = try samples(schedule.stepBuffers[0])
+            let snare = try samples(schedule.stepBuffers[2])
+            XCTAssertNotEqual(kick, snare)
+            for voice in [kick, snare] {
+                XCTAssertGreaterThan(voice.count, 2_400)
+                XCTAssertGreaterThan(voice[1_200..<2_400].map { abs($0) }.max() ?? 0, 0.01,
+                                     "The first kick and snare contain sustained percussion after an 18 ms click would have ended.")
+            }
+        }
+    }
+
+    func testDefaultDrumPreviewIsImmediateAndSilentModeDoesNotAcquireAClickCountIn() throws {
+        for mode in drumModes {
+            let preview = try ScratchLabBeatEngine.makePlaybackSchedule(mode: mode, bpm: 95, sampleRate: 48_000)
+            XCTAssertNil(preview.countInBuffer)
+            XCTAssertEqual(preview.sampleTime(forStepIndex: 0), 0)
+            XCTAssertGreaterThan(try samples(preview.stepBuffers[0]).map { abs($0) }.max() ?? 0, 0.1)
+        }
+        let silent = try ScratchLabBeatEngine.makePlaybackSchedule(
+            mode: .silent, bpm: 95, sampleRate: 48_000, usesClickCountIn: true
+        )
+        XCTAssertNil(silent.countInBuffer)
+        XCTAssertEqual(silent.sampleTime(forStepIndex: 0), 0)
+        for step in silent.stepBuffers {
+            XCTAssertTrue(try samples(step).allSatisfy { $0 == 0 })
+        }
+    }
+}
+
+
+final class RelayedWatchCaptureIdentityTests: XCTestCase {
+    private let previous = WatchRelayTakeContext(sessionID: "older-session", takeID: "take-001")
+    private let current = WatchRelayTakeContext(sessionID: "newer-session", takeID: "take-002")
+
+    private func makeStore() -> RelayedWatchCaptureStore {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("relay-identity-\(UUID().uuidString)", isDirectory: true)
+        addTeardownBlock { try? FileManager.default.removeItem(at: root) }
+        return RelayedWatchCaptureStore(captureDirectoryURL:
+            root.appendingPathComponent("RelayedWatchCaptures", isDirectory: true))
+    }
+
+    private func reply(_ context: WatchRelayTakeContext, state: CaptureWatchSyncState) -> WatchCaptureControlReply {
+        WatchCaptureControlReply(commandID: UUID().uuidString,
+            sessionID: context.sessionID, takeID: context.takeID,
+            syncState: state, detail: "Resolved \(context.takeID)")
+    }
+
+    @MainActor
+    func testOldStopAndRepliesCannotInterruptTheNewActiveTake() {
+        let store = makeStore()
+        store.noteRequestedStart(context: previous)
+        store.noteRemoteControlStatus(reply(previous, state: .acknowledged))
+        store.noteRequestedStart(context: current)
+        store.noteRemoteControlStatus(reply(current, state: .acknowledged))
+
+        store.noteRequestedStop(sessionID: previous.sessionID, takeID: previous.takeID)
+        for state in [CaptureWatchSyncState.requested, .acknowledged, .notRequested, .timedOut, .unavailable, .failed] {
+            store.noteRemoteControlStatus(reply(previous, state: state))
+            XCTAssertEqual(store.activeTakeContext, current)
+            XCTAssertEqual(store.remoteControlState, .acknowledged)
+            XCTAssertEqual(store.relayState, .active)
+            XCTAssertNil(store.lastInterruption)
+        }
+    }
+
+    @MainActor
+    func testOldReplyCannotReplaceANewerPendingStart() {
+        let store = makeStore()
+        store.noteRequestedStart(context: previous)
+        store.noteRemoteControlStatus(reply(previous, state: .acknowledged))
+        store.noteRequestedStart(context: current)
+
+        store.noteRequestedStop(sessionID: previous.sessionID, takeID: previous.takeID)
+        store.noteRemoteControlStatus(reply(previous, state: .failed))
+        XCTAssertEqual(store.remoteControlState, .starting)
+        XCTAssertNil(store.lastInterruption)
+
+        store.noteRemoteControlStatus(reply(current, state: .acknowledged))
+        XCTAssertEqual(store.activeTakeContext, current)
+        XCTAssertEqual(store.remoteControlState, .acknowledged)
+    }
+
+    @MainActor
+    func testMatchingPendingFailureNamesThePendingTakeRatherThanThePreviousActiveTake() {
+        let store = makeStore()
+        store.noteRequestedStart(context: previous)
+        store.noteRemoteControlStatus(reply(previous, state: .acknowledged))
+        store.noteRequestedStart(context: current)
+        store.noteRemoteControlStatus(reply(current, state: .failed))
+
+        XCTAssertEqual(store.lastInterruption?.context, current)
+        XCTAssertEqual(store.relayState, .interrupted)
+        guard case .failed = store.remoteControlState else {
+            return XCTFail("The current take's real failure must remain visible.")
+        }
+    }
+
+    @MainActor
+    func testMatchingStopAndTimeoutStillUpdateTheirOwnTake() {
+        let store = makeStore()
+        store.noteRequestedStart(context: current)
+        store.noteRemoteControlStatus(reply(current, state: .acknowledged))
+        store.noteRequestedStop(sessionID: current.sessionID, takeID: current.takeID)
+        XCTAssertEqual(store.remoteControlState, .stopping)
+
+        store.noteRemoteControlStatus(reply(current, state: .timedOut))
+        XCTAssertEqual(store.lastInterruption?.context, current)
+        XCTAssertEqual(store.relayState, .interrupted)
+        guard case .timedOut = store.remoteControlState else {
+            return XCTFail("The current take's stop timeout must remain visible.")
+        }
+    }
+}
+
+final class WatchPendingStopRecoveryTests: XCTestCase {
+    private func command(_ kind: WatchCaptureCommandPayload.Command = .stop,
+                         id: String = "stop-a", session: String = "session-a",
+                         take: String? = "take-001") -> WatchCaptureCommandPayload {
+        WatchCaptureCommandPayload(commandID: id, command: kind, sessionID: session,
+            takeID: take, requestedAt: Date(timeIntervalSince1970: 1_700_000_000))
+    }
+
+    private func reply(_ payload: WatchCaptureCommandPayload,
+                       outcome: CaptureWatchStopOutcome) -> WatchCaptureControlReply {
+        WatchCaptureControlReply(commandID: payload.commandID, sessionID: payload.sessionID,
+            takeID: payload.takeID, syncState: outcome.isStopConfirmed ? .notRequested : .failed,
+            detail: nil, stopOutcome: outcome)
+    }
+
+    func testPendingStopSurvivesPhoneRelaunchWithOriginalCorrelation() throws {
+        let payload = command()
+        var ledger = WatchPendingStopLedger()
+        XCTAssertTrue(ledger.retain(payload))
+        XCTAssertFalse(ledger.settle(reply(payload, outcome: .unreachable), for: payload))
+        let restored = try JSONDecoder().decode(WatchPendingStopLedger.self,
+            from: JSONEncoder().encode(ledger))
+        XCTAssertEqual(restored.commands, [payload])
+        XCTAssertTrue(restored.hasValidIdentities)
+    }
+
+    func testDegradedRepliesRetainStopUntilConfirmed() {
+        let payload = command()
+        for outcome: CaptureWatchStopOutcome in [.notRequested, .sent, .unreachable, .timedOut, .failed] {
+            var ledger = WatchPendingStopLedger()
+            ledger.retain(payload)
+            XCTAssertFalse(ledger.settle(reply(payload, outcome: outcome), for: payload))
+            XCTAssertEqual(ledger.commands, [payload])
+        }
+    }
+
+    func testConfirmedStopRemovesOnlyItsExactTake() {
+        let old = command()
+        let other = command(id: "stop-b", session: "session-b")
+        var ledger = WatchPendingStopLedger()
+        ledger.retain(old)
+        ledger.retain(other)
+        XCTAssertTrue(ledger.settle(reply(old, outcome: .stopped), for: old))
+        XCTAssertEqual(ledger.commands, [other])
+    }
+
+    func testMismatchedReplyCannotRetirePendingStop() {
+        let old = command()
+        let mismatches = [command(id: "other"), command(session: "other"), command(take: "other")]
+        for mismatch in mismatches {
+            var ledger = WatchPendingStopLedger()
+            ledger.retain(old)
+            XCTAssertFalse(ledger.settle(reply(mismatch, outcome: .stopped), for: old))
+            XCTAssertEqual(ledger.commands, [old])
+        }
+    }
+
+    func testRepeatedStopPreservesOriginalCommandForSameTake() {
+        let old = command()
+        var ledger = WatchPendingStopLedger()
+        ledger.retain(old)
+        ledger.retain(command(id: "retry-from-mac"))
+        XCTAssertEqual(ledger.commands, [old])
+        XCTAssertTrue(ledger.settle(reply(command(id: "retry-from-mac"), outcome: .stopped),
+                                    for: command(id: "retry-from-mac")))
+        XCTAssertTrue(ledger.commands.isEmpty)
+    }
+
+    func testQueueRejectsUnidentifiedOrNonStopCommands() {
+        for invalid in [command(.start), command(id: " "), command(session: " "),
+                        command(take: nil), command(take: " ")] {
+            var ledger = WatchPendingStopLedger()
+            XCTAssertFalse(ledger.retain(invalid))
+            XCTAssertTrue(ledger.commands.isEmpty)
+        }
+    }
+
+    func testWakingWatchStopsOriginalTakeThenAllowsNextStart() throws {
+        let old = command()
+        var ledger = WatchPendingStopLedger()
+        ledger.retain(old)
+        ledger = try JSONDecoder().decode(WatchPendingStopLedger.self,
+            from: JSONEncoder().encode(ledger))
+        let retried = try XCTUnwrap(ledger.commands.first)
+        let decision = WatchMotionStopCommandResolver.decide(payload: retried,
+            isRecording: true, activeCommand: command(.start, id: "start-a"),
+            resolvedStopCommandIDs: [])
+        XCTAssertEqual(decision, .stop)
+        XCTAssertTrue(ledger.settle(reply(retried, outcome: decision.outcome), for: retried))
+        XCTAssertTrue(ledger.commands.isEmpty)
+        XCTAssertEqual(WatchMotionStartCommandResolver.decide(
+            payload: command(.start, take: "take-002"), isRecording: false, activeCommand: nil), .start)
+    }
+
+    func testQueuedOldStopRejectsNewTakeAndRetiresWithoutStoppingIt() {
+        let old = command()
+        let newer = command(.start, id: "start-new", take: "take-002")
+        var ledger = WatchPendingStopLedger()
+        ledger.retain(old)
+        let decision = WatchMotionStopCommandResolver.decide(payload: old,
+            isRecording: true, activeCommand: newer, resolvedStopCommandIDs: [])
+        guard case .rejectIdentity = decision else { return XCTFail("Must preserve the new take.") }
+        XCTAssertTrue(ledger.settle(reply(old, outcome: decision.outcome), for: old))
+        XCTAssertTrue(ledger.commands.isEmpty)
+        XCTAssertEqual(WatchMotionStartCommandResolver.decide(
+            payload: newer, isRecording: true, activeCommand: newer), .alreadyRecording)
+    }
+
+    func testQueuedStopRejectsLocalAndIncompleteActiveIdentities() {
+        let incomplete: [WatchCaptureCommandPayload?] = [nil,
+            command(.start, session: ""), command(.start, take: nil)]
+        for active in incomplete {
+            let decision = WatchMotionStopCommandResolver.decide(payload: command(),
+                isRecording: true, activeCommand: active, resolvedStopCommandIDs: [])
+            guard case .rejectIdentity = decision else {
+                return XCTFail("A queued Stop may only stop its exactly identified capture.")
+            }
+        }
+    }
+
+    func testDuplicateStopWhileNewTakeRunsRemainsHarmless() {
+        let old = command()
+        let decision = WatchMotionStopCommandResolver.decide(payload: old,
+            isRecording: true, activeCommand: command(.start, take: "take-002"),
+            resolvedStopCommandIDs: [old.commandID])
+        guard case .alreadyStopped = decision else { return XCTFail("Do not stop the new take twice.") }
+    }
+
+    func testWatchOnlyAcknowledgesAnAlreadyRecordingExactTake() {
+        let active = command(.start, id: "start-a")
+        XCTAssertEqual(WatchMotionStartCommandResolver.decide(
+            payload: command(.start, id: "start-retry"), isRecording: true,
+            activeCommand: active), .alreadyRecording)
+        for incoming in [command(.start, session: "other"), command(.start, take: "other"),
+                         command(.start, take: nil)] {
+            guard case .rejectIdentity = WatchMotionStartCommandResolver.decide(
+                payload: incoming, isRecording: true, activeCommand: active) else {
+                return XCTFail("Do not falsely acknowledge another take's motion.")
+            }
+        }
+    }
+
+    func testNewLinkedStartPreservesExistingLocalRecording() {
+        guard case .rejectIdentity = WatchMotionStartCommandResolver.decide(
+            payload: command(.start), isRecording: true, activeCommand: nil) else {
+            return XCTFail("A remote Start must not overwrite a local recording.")
+        }
+    }
+
+    func testStopBeforeDelayedStartCannotCreateAnOrphanCapture() throws {
+        let stop = command()
+        let stoppedIdentity = try XCTUnwrap(WatchMotionStartCommandResolver.identityKey(for: stop))
+        let decision = WatchMotionStopCommandResolver.decide(payload: stop,
+            isRecording: false, activeCommand: nil, resolvedStopCommandIDs: [])
+        guard case .alreadyStopped = decision else { return XCTFail("An idle Stop must resolve.") }
+        // The Watch persists this exact identity before returning the Stop ACK.
+        let restored = try JSONDecoder().decode([String].self,
+            from: JSONEncoder().encode([stoppedIdentity]))
+        guard case .rejectIdentity = WatchMotionStartCommandResolver.decide(
+            payload: command(.start, id: "delayed-start"), isRecording: false,
+            activeCommand: nil, stoppedTakeIdentities: Set(restored)) else {
+            return XCTFail("An acknowledged Stop must prevent a delayed Start for that same take.")
+        }
+        XCTAssertEqual(WatchMotionStartCommandResolver.decide(
+            payload: command(.start, take: "take-002"), isRecording: false,
+            activeCommand: nil, stoppedTakeIdentities: Set(restored)), .start)
+    }
+
+    func testStoppedIdentityCannotConflateDifferentSessionTakeBoundaries() {
+        XCTAssertNotEqual(WatchMotionStartCommandResolver.identityKey(for: command(session: "a:b", take: "c")),
+                          WatchMotionStartCommandResolver.identityKey(for: command(session: "a", take: "b:c")))
+        XCTAssertNil(WatchMotionStartCommandResolver.identityKey(for: command(take: nil)))
+    }
+
+    func testIdentityRejectedStopPreventsDelayedStartAfterNewerTakeEnds() throws {
+        let oldStop = command()
+        let newer = command(.start, id: "start-new", take: "take-002")
+        let decision = WatchMotionStopCommandResolver.decide(payload: oldStop,
+            isRecording: true, activeCommand: newer, resolvedStopCommandIDs: [])
+        guard case .rejectIdentity = decision else { return XCTFail("Preserve the newer recording.") }
+        XCTAssertEqual(decision.outcome, .identityRejected)
+        let retired = try XCTUnwrap(WatchMotionStartCommandResolver.identityKey(for: oldStop))
+        let terminalIdentities: Set<String> = [retired]
+        XCTAssertEqual(WatchMotionStartCommandResolver.decide(payload: newer,
+            isRecording: true, activeCommand: newer, stoppedTakeIdentities: terminalIdentities),
+            .alreadyRecording)
+        // Once the newer recording ends, the refused old Stop must still
+        // prevent its own delayed Start from creating an orphan.
+        guard case .rejectIdentity = WatchMotionStartCommandResolver.decide(
+            payload: command(.start, id: "late-start-old"), isRecording: false,
+            activeCommand: nil, stoppedTakeIdentities: terminalIdentities) else {
+            return XCTFail("A retired Stop identity cannot be started after another take ends.")
+        }
     }
 }

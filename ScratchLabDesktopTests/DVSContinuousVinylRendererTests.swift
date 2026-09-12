@@ -632,6 +632,48 @@ final class DVSContinuousVinylRendererTests: XCTestCase {
         XCTAssertGreaterThanOrEqual(renderer.testOnly_corePhase, 0)
     }
 
+    private func renderPositionBlock(_ renderer: DVSContinuousVinylRenderer, frames: Int) {
+        var left = [Float](repeating: 0, count: max(1, frames))
+        left.withUnsafeMutableBufferPointer { output in
+            renderer.testOnly_render(left: output.baseAddress!, right: nil, frameCount: frames)
+        }
+    }
+
+    func testRenderedPositionReportsActualFractionalPhaseThroughLoopWrap() throws {
+        let renderer = DVSContinuousVinylRenderer()
+        XCTAssertNil(renderer.currentRenderPositionSnapshot())
+        XCTAssertTrue(renderer.installSample(from: try makeSyntheticLoopBuffer(frames: 512),
+            loopFrames: 512, contentFadeFrames: 4))
+        XCTAssertNil(renderer.currentRenderPositionSnapshot(), "installing is not rendering")
+        renderer.publish(velocity: Self.rate, authoritativePhase: 0, active: true)
+        renderPositionBlock(renderer, frames: 512)
+        renderer.publish(velocity: Self.rate, authoritativePhase: 511.5, active: true, snapPhase: true)
+        renderPositionBlock(renderer, frames: 8)
+        let position = try XCTUnwrap(renderer.currentRenderPositionSnapshot())
+        XCTAssertEqual(position.sourceFrame, renderer.testOnly_corePhase, accuracy: 1e-12)
+        XCTAssertGreaterThanOrEqual(position.sourceFrame, 0)
+        XCTAssertLessThan(position.sourceFrame, 20, "the actual cursor has crossed the loop boundary")
+        XCTAssertNotEqual(position.sourceFrame, 511.5, "never substitute the last control anchor")
+        XCTAssertEqual(position.controlEpoch, renderer.currentControlEpoch)
+    }
+
+    func testRenderedPositionRejectsPriorSampleUntilReloadActuallyRenders() throws {
+        let renderer = DVSContinuousVinylRenderer()
+        let buffer = try makeSyntheticLoopBuffer(frames: 512)
+        renderer.installSample(from: buffer, loopFrames: 512, contentFadeFrames: 4, initialPhase: 32)
+        renderPositionBlock(renderer, frames: 1)
+        let first = try XCTUnwrap(renderer.currentRenderPositionSnapshot())
+        XCTAssertEqual(first.sourceFrame, 32)
+        renderer.installSample(from: buffer, loopFrames: 512, contentFadeFrames: 4, initialPhase: 128)
+        XCTAssertNil(renderer.currentRenderPositionSnapshot(), "same PCM still has a new install identity")
+        renderPositionBlock(renderer, frames: 0)
+        XCTAssertNil(renderer.currentRenderPositionSnapshot(), "ingest-only callbacks contain no rendered frames")
+        renderPositionBlock(renderer, frames: 1)
+        let reloaded = try XCTUnwrap(renderer.currentRenderPositionSnapshot())
+        XCTAssertNotEqual(first.sampleIdentity, reloaded.sampleIdentity)
+        XCTAssertEqual(reloaded.sourceFrame, 128)
+    }
+
     // MARK: - 13 & routing: controller integration via the synthetic seam
 
     private func makeSyntheticLoopBuffer(frames: Int = 8_000) throws -> AVAudioPCMBuffer {

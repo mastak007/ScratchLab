@@ -58,17 +58,17 @@ final class ReferenceAuthoringSessionTests: XCTestCase {
     }
 
     /// Everything ready EXCEPT the paired Watch.
-    private func watchUnreachableSnapshot() -> ReferencePreflightSnapshot {
+    private func watchUnreachableSnapshot(rawValue: Int = 1, audioPeak: Double = 0.5) -> ReferencePreflightSnapshot {
         ReferencePreflightSnapshot(
             controllerName: "Rane ONE MKII",
             controllerIdentifier: "Rane ONE MKII",
             observedCrossfaderAddress: calibration.address,
-            latestCrossfaderRawValue: 1,
+            latestCrossfaderRawValue: rawValue,
             calibration: calibration,
             crossfaderEventCount: 40,
             platterEventCount: 100,
             platterIsMoving: true,
-            audioInputPeakLevel: 0.5,
+            audioInputPeakLevel: audioPeak,
             audioDeviceName: "Rane ONE MKII",
             watchIsReachable: false,
             watchMotionIsStreaming: false,
@@ -99,12 +99,15 @@ final class ReferenceAuthoringSessionTests: XCTestCase {
         autoDetected: ReferenceTechnique? = nil,
         crossfaderStaysOpen: Bool = true,
         watchLinked: Bool = true,
-        watchEvidence: ReferenceWatchEvidence? = nil
+        watchEvidence: ReferenceWatchEvidence? = nil,
+        mediaTimeOrigin: ReferenceMediaTimeOrigin? = nil,
+        sourceState: ReferencePerTakeSourceState? = nil,
+        sourceBinding: ReferenceTearEvidenceSourceBinding? = nil
     ) -> ReferenceRecordedTakeArtifacts {
         let samples: [CrossfaderPositionSample] = (0..<800).map { index in
             CrossfaderPositionSample(
                 takeRelativeTime: Double(index) * 0.001,
-                rawValue: crossfaderStaysOpen ? 1 : (index % 100 < 50 ? 1 : 52),
+                rawValue: crossfaderStaysOpen ? 1 : (index % 100 < 50 ? 1 : 104),
                 normalizedPosition: crossfaderStaysOpen ? 1 : (index % 100 < 50 ? 1 : 0)
             )
         }
@@ -130,7 +133,10 @@ final class ReferenceAuthoringSessionTests: XCTestCase {
                 watchLinked
                     ? .linked(motionFileName: "watch-motion.json")
                     : .acknowledgedTransferPending
-            )
+            ),
+            tearEvidenceSourceBinding: sourceBinding,
+            mediaTimeOrigin: mediaTimeOrigin,
+            sourceState: sourceState
         )
     }
 
@@ -172,6 +178,57 @@ final class ReferenceAuthoringSessionTests: XCTestCase {
         XCTAssertNotNil(session.selectedFaderVariant)
         session.selectTechnique(.chirp)
         XCTAssertNil(session.selectedFaderVariant, "A stale variant from a different technique must not carry over silently.")
+    }
+
+    func testCaptureIntentIsMintedOnceAndSurvivesReviewApprovalAndNextTake() throws {
+        var session = makeConfiguredSession()
+        try calibrateSession(&session)
+        let hooks = ReferenceAuthoringRecordingHooks(
+            startRecording: { .success(()) },
+            stopRecording: { .success(self.goodArtifacts()) },
+            currentPreflightSnapshot: { self.passingSnapshot() },
+            latestCalibrationObservation: { nil }
+        )
+
+        let prepared = try session.prepareCaptureIntentForRecording()
+        XCTAssertEqual(try session.prepareCaptureIntentForRecording(), prepared)
+        guard case .success = session.beginRecording(using: hooks) else {
+            return XCTFail("Expected recording to begin after capture intent was prepared")
+        }
+        _ = try session.finishRecording(using: hooks).get()
+        XCTAssertEqual(session.takeInReview?.evidence.metadata.captureIntent, prepared)
+
+        session.selectRepetitionForApproval(0)
+        try session.approveTakeInReview(notes: "Intent remains immutable")
+        let approvedID = try XCTUnwrap(session.latestRecordedTake?.id)
+        try session.prepareNextTake(afterApprovedTakeID: approvedID)
+
+        XCTAssertEqual(session.captureIntent, prepared)
+        XCTAssertEqual(session.latestRecordedTake?.evidence.metadata.captureIntent, prepared)
+        session.selectPattern(.init(id: "different", name: "Different", phraseBars: 2), bpm: 120)
+        XCTAssertEqual(session.captureIntent, prepared)
+        XCTAssertEqual(session.selectedPattern?.id, prepared.recipeID)
+        XCTAssertEqual(session.selectedBPM, prepared.bpm)
+    }
+
+    func testMeasuredMediaOriginSurvivesFinalizationWatchRefreshApprovalAndNextTake() throws {
+        let origin = ReferenceMediaTimeOrigin(clickStartHostTime: 100, recordingStartHostTime: 200,
+            recordingStartOffsetSeconds: 4 * 60.0 / 95)
+        var session = makeConfiguredSession()
+        try calibrateSession(&session)
+        let hooks = ReferenceAuthoringRecordingHooks(startRecording: { .success(()) },
+            stopRecording: { .success(self.goodArtifacts(mediaTimeOrigin: origin)) },
+            currentPreflightSnapshot: { self.passingSnapshot() }, latestCalibrationObservation: { nil })
+        _ = try session.beginRecording(using: hooks).get()
+        _ = try session.finishRecording(using: hooks).get()
+        session.updateWatchEvidenceForTakeInReview(.linked(motionFileName: "watch-motion.json"))
+        session.selectRepetitionForApproval(0)
+        XCTAssertEqual(session.takeInReview?.evidence.metadata.mediaTimeOrigin, origin)
+        try session.approveTakeInReview(notes: "Synthetic origin preservation")
+        let takeID = try XCTUnwrap(session.latestRecordedTake?.id)
+        try session.prepareNextTake(afterApprovedTakeID: takeID)
+        XCTAssertEqual(session.latestRecordedTake?.evidence.metadata.mediaTimeOrigin, origin)
+        XCTAssertEqual(session.latestRecordedTake?.evidence.metadata.lifecycleState, .approvedCanonical)
     }
 
     // MARK: - Preflight (step 4) and calibration (step 5)
@@ -487,6 +544,89 @@ final class ReferenceAuthoringSessionTests: XCTestCase {
         XCTAssertNotNil(session.takeReadyForPublication(takeIndex: 0))
     }
 
+    func testPreparingNextTakePreservesTheCompleteApprovedRecord() throws {
+        var session = makeConfiguredSession()
+        try calibrateSession(&session)
+        let hooks = ReferenceAuthoringRecordingHooks(
+            startRecording: { .success(()) },
+            stopRecording: { .success(self.goodArtifacts()) },
+            currentPreflightSnapshot: { self.passingSnapshot() },
+            latestCalibrationObservation: { nil }
+        )
+        _ = session.beginRecording(using: hooks)
+        _ = try session.finishRecording(using: hooks).get()
+        session.selectRepetitionForApproval(2)
+        session.revalidateTakeInReview()
+        try session.approveTakeInReview(
+            notes: "Approved take remains immutable.",
+            now: Date(timeIntervalSince1970: 1_788_010_000)
+        )
+
+        let approvedID = try XCTUnwrap(session.latestRecordedTake?.id)
+        var expected = session
+        expected.phase = .readyToRecord
+
+        XCTAssertTrue(session.canPrepareNextTake)
+        try session.prepareNextTake(afterApprovedTakeID: approvedID)
+
+        XCTAssertEqual(session, expected)
+        XCTAssertFalse(session.canPrepareNextTake)
+        XCTAssertEqual(session.takes.count, 1, "preparing must not allocate or record another take")
+    }
+
+    func testPreparingNextTakeRejectsInvalidPhaseOrApprovedIdentityWithoutMutation() throws {
+        var session = makeConfiguredSession()
+        try calibrateSession(&session)
+        let hooks = ReferenceAuthoringRecordingHooks(
+            startRecording: { .success(()) },
+            stopRecording: { .success(self.goodArtifacts()) },
+            currentPreflightSnapshot: { self.passingSnapshot() },
+            latestCalibrationObservation: { nil }
+        )
+        _ = session.beginRecording(using: hooks)
+        _ = try session.finishRecording(using: hooks).get()
+        session.selectRepetitionForApproval(0)
+        session.revalidateTakeInReview()
+        try session.approveTakeInReview(notes: "Approved")
+        let approvedID = try XCTUnwrap(session.latestRecordedTake?.id)
+        let complete = session
+
+        let invalidPhases: [ReferenceAuthoringPhase] = [
+            .configuring,
+            .calibrating,
+            .readyToRecord,
+            .recording,
+            .reviewing(takeIndex: 0),
+        ]
+        for phase in invalidPhases {
+            var invalid = complete
+            invalid.phase = phase
+            let before = invalid
+            XCTAssertThrowsError(try invalid.prepareNextTake(afterApprovedTakeID: approvedID))
+            XCTAssertEqual(invalid, before, "Refusal from \(phase) must be mutation-free")
+        }
+
+        var emptyComplete = makeConfiguredSession()
+        emptyComplete.phase = .complete
+        let emptyBefore = emptyComplete
+        XCTAssertThrowsError(try emptyComplete.prepareNextTake(afterApprovedTakeID: approvedID))
+        XCTAssertEqual(emptyComplete, emptyBefore)
+
+        var published = complete
+        try published.markTakePublished(takeIndex: 0)
+        let publishedBefore = published
+        XCTAssertThrowsError(try published.prepareNextTake(afterApprovedTakeID: approvedID))
+        XCTAssertEqual(published, publishedBefore)
+
+        XCTAssertThrowsError(try session.prepareNextTake(afterApprovedTakeID: "stale-take"))
+        XCTAssertEqual(session, complete)
+
+        try session.prepareNextTake(afterApprovedTakeID: approvedID)
+        let ready = session
+        XCTAssertThrowsError(try session.prepareNextTake(afterApprovedTakeID: approvedID))
+        XCTAssertEqual(session, ready)
+    }
+
     func testPublishingMovesAnApprovedTakeToTheOnlyPlayableState() throws {
         var session = makeConfiguredSession()
         try calibrateSession(&session)
@@ -523,8 +663,39 @@ final class ReferenceAuthoringSessionTests: XCTestCase {
 
     // MARK: - Retake
 
+    private func makeBeatSpec() -> ReferenceBeatSpecBinding {
+        ReferenceBeatSpecBinding(
+            id: "fixture-beat", version: 1, family: "fixture", bpm: 95, feel: .straight,
+            countInFrameCount: 121_263, loopStartFrame: 121_263, loopFrameCount: 121_263,
+            sampleRate: 48_000, productionMasterFileName: "master.wav",
+            productionMasterSHA256: String(repeating: "a", count: 64),
+            sparseAnalysisMixFileName: "analysis.wav",
+            sparseAnalysisMixSHA256: String(repeating: "b", count: 64),
+            availableStemSHA256: [:], rightsState: .procedurallyGeneratedOriginal, provenance: "Synthetic test fixture"
+        )
+    }
+
+    private func makeFinalizedSession(
+        watchEvidence: ReferenceWatchEvidence? = nil,
+        sourceState: ReferencePerTakeSourceState? = nil,
+        sourceBinding: ReferenceTearEvidenceSourceBinding? = nil
+    ) throws -> ReferenceAuthoringSession {
+        var session = makeConfiguredSession()
+        try calibrateSession(&session)
+        let hooks = ReferenceAuthoringRecordingHooks(
+            startRecording: { .success(()) },
+            stopRecording: { .success(self.goodArtifacts(watchEvidence: watchEvidence, sourceState: sourceState, sourceBinding: sourceBinding)) },
+            currentPreflightSnapshot: { self.passingSnapshot() },
+            latestCalibrationObservation: { nil }
+        )
+        try session.beginRecording(using: hooks).get()
+        _ = try session.finishRecording(using: hooks).get()
+        return session
+    }
+
     func testRetakeReturnsToReadyToRecordWithoutRemovingThePriorTake() throws {
         var session = makeConfiguredSession()
+        session.bindBeatSpec(makeBeatSpec())
         try calibrateSession(&session)
         let hooks = ReferenceAuthoringRecordingHooks(
             startRecording: { .success(()) },
@@ -534,13 +705,288 @@ final class ReferenceAuthoringSessionTests: XCTestCase {
         )
         _ = session.beginRecording(using: hooks)
         _ = try session.finishRecording(using: hooks).get()
+        let firstTake = try XCTUnwrap(session.latestRecordedTake)
+        var expected = session
+        expected.phase = .readyToRecord
         session.retake()
+        XCTAssertEqual(session, expected, "Retake must retain the entire setup and finalized record.")
         XCTAssertEqual(session.phase, .readyToRecord)
         XCTAssertEqual(session.takes.count, 1, "Retake starts a new take; it must not delete the evidence of the old one.")
 
         _ = session.beginRecording(using: hooks)
         _ = try session.finishRecording(using: hooks).get()
         XCTAssertEqual(session.takes.count, 2)
+        XCTAssertEqual(session.takes[0], firstTake)
+        XCTAssertNotEqual(session.takes[1].id, firstTake.id)
+        XCTAssertEqual(session.takes[1].evidence.metadata.captureIntent, firstTake.evidence.metadata.captureIntent)
+        XCTAssertEqual(session.takes[1].evidence.metadata.captureIntent?.beatSpec, makeBeatSpec())
+        XCTAssertNil(session.takes[1].evidence.metadata.reviewDecision)
+    }
+
+    func testRetakingUnboundCapturePreparesOnlyFutureIntentForExactBeatBinding() throws {
+        var session = makeConfiguredSession()
+        session.notes = "Repeat this setup"
+        session.selectBeatEngineMode(.clickTrack)
+        try calibrateSession(&session)
+        let hooks = ReferenceAuthoringRecordingHooks(
+            startRecording: { .success(()) },
+            stopRecording: { .success(self.goodArtifacts()) },
+            currentPreflightSnapshot: { self.passingSnapshot() },
+            latestCalibrationObservation: { nil }
+        )
+        try session.beginRecording(using: hooks).get()
+        _ = try session.finishRecording(using: hooks).get()
+        let before = session
+        let retained = try XCTUnwrap(session.latestRecordedTake)
+        let originalIntent = try XCTUnwrap(session.captureIntent)
+        XCTAssertNil(originalIntent.beatSpec)
+
+        try session.retake(afterTakeID: retained.id)
+
+        XCTAssertEqual(session.phase, .readyToRecord)
+        XCTAssertNil(session.captureIntent)
+        XCTAssertNil(session.selectedBeatSpec)
+        XCTAssertEqual(session.takes, before.takes)
+        XCTAssertEqual(session.selectedTechnique, before.selectedTechnique)
+        XCTAssertEqual(session.selectedPattern, before.selectedPattern)
+        XCTAssertEqual(session.selectedBPM, before.selectedBPM)
+        XCTAssertEqual(session.selectedStartingDirection, before.selectedStartingDirection)
+        XCTAssertEqual(session.selectedFaderVariant, before.selectedFaderVariant)
+        XCTAssertEqual(session.selectedHandedness, before.selectedHandedness)
+        XCTAssertEqual(session.selectedBeatEngineMode, before.selectedBeatEngineMode)
+        XCTAssertEqual(session.notes, before.notes)
+        XCTAssertEqual(session.confirmedCalibration, before.confirmedCalibration)
+        XCTAssertEqual(session.latestPreflightSnapshot, before.latestPreflightSnapshot)
+        let ready = session
+        try session.retake(afterTakeID: retained.id)
+        XCTAssertEqual(session, ready, "A duplicate retake must not advance the future intent identity again.")
+
+        session.bindBeatSpec(makeBeatSpec())
+        let boundIntent = try session.prepareCaptureIntentForRecording()
+        XCTAssertNotEqual(boundIntent.id, originalIntent.id)
+        XCTAssertEqual(boundIntent.variantID, originalIntent.variantID)
+        XCTAssertEqual(boundIntent.beatSpec, makeBeatSpec())
+        try session.beginRecording(using: hooks).get()
+        _ = try session.finishRecording(using: hooks).get()
+        XCTAssertEqual(session.takes[0], retained)
+        XCTAssertEqual(session.takes[0].evidence.metadata.captureIntent, originalIntent)
+        XCTAssertEqual(session.takes[1].evidence.metadata.captureIntent, boundIntent)
+        XCTAssertNotEqual(session.takes[1].id, retained.id)
+    }
+
+    func testNewScratchSetupClearsFutureSelectionsAndPreservesFinalizedEvidenceAndHardware() throws {
+        var session = makeConfiguredSession()
+        session.declareVariant(startingDirection: .forward, faderVariant: .faderOpenThroughout, handedness: .left)
+        session.notes = "Notes for the first scratch only"
+        session.selectBeatEngineMode(.clickTrack)
+        session.bindBeatSpec(makeBeatSpec())
+        try calibrateSession(&session)
+        let hooks = ReferenceAuthoringRecordingHooks(
+            startRecording: { .success(()) },
+            stopRecording: { .success(self.goodArtifacts()) },
+            currentPreflightSnapshot: { self.passingSnapshot() },
+            latestCalibrationObservation: { nil }
+        )
+        try session.beginRecording(using: hooks).get()
+        _ = try session.finishRecording(using: hooks).get()
+        _ = session.setTearReviewNotes("Retain this operator review history")
+        let before = session
+        let firstTake = try XCTUnwrap(session.latestRecordedTake)
+        let firstIntent = try XCTUnwrap(firstTake.evidence.metadata.captureIntent)
+
+        XCTAssertNil(session.newScratchSetupBlockReason())
+        try session.prepareNewScratchSetup(afterTakeID: firstTake.id)
+
+        XCTAssertEqual(session.phase, .configuring)
+        XCTAssertEqual(session.takes, before.takes)
+        XCTAssertEqual(session.latestRecordedTake, firstTake)
+        XCTAssertEqual(session.authoringSessionID, before.authoringSessionID)
+        XCTAssertEqual(session.operatorName, before.operatorName)
+        XCTAssertEqual(session.confirmedCalibration, before.confirmedCalibration)
+        XCTAssertEqual(session.confirmedCalibrationSource, before.confirmedCalibrationSource)
+        XCTAssertEqual(session.calibrationSweep, before.calibrationSweep)
+        XCTAssertEqual(session.lastIngestedCalibrationSequence, before.lastIngestedCalibrationSequence)
+        XCTAssertEqual(session.latestPreflightSnapshot, before.latestPreflightSnapshot)
+        XCTAssertEqual(session.selectedHandedness, .left)
+        XCTAssertTrue(session.canExportRawCapture)
+        XCTAssertNil(session.latestPreflight)
+        XCTAssertNil(session.captureIntent)
+        XCTAssertNil(session.selectedBeatSpec)
+        XCTAssertNil(session.selectedTechnique)
+        XCTAssertNil(session.selectedPattern)
+        XCTAssertNil(session.selectedBPM)
+        XCTAssertNil(session.selectedStartingDirection)
+        XCTAssertNil(session.selectedFaderVariant)
+        XCTAssertEqual(session.selectedBeatEngineMode, .boomBapTrainer)
+        XCTAssertEqual(session.notes, "")
+        XCTAssertFalse(session.configurationIsComplete)
+        XCTAssertThrowsError(try session.prepareCaptureIntentForRecording())
+
+        session.selectTechnique(.chirp)
+        session.selectPattern(ReferencePatternIdentity(id: "eighths", name: "Eighths", phraseBars: 1), bpm: 110)
+        session.declareVariant(startingDirection: .backward, faderVariant: .crossfader, handedness: .left)
+        let secondIntent = try session.prepareCaptureIntentForRecording()
+        XCTAssertNotEqual(secondIntent.id, firstIntent.id)
+        XCTAssertEqual(secondIntent.parentTechniqueID, ReferenceTechnique.chirp.id)
+        XCTAssertNil(secondIntent.beatSpec)
+        XCTAssertEqual(try session.prepareCaptureIntentForRecording(), secondIntent)
+        try session.beginRecording(using: hooks).get()
+        _ = try session.finishRecording(using: hooks).get()
+        XCTAssertEqual(session.takes.count, 2)
+        XCTAssertEqual(session.takes[0], firstTake)
+        XCTAssertEqual(session.takes[1].evidence.metadata.takeNumber, 2)
+        XCTAssertNotEqual(session.takes[1].id, firstTake.id)
+        XCTAssertEqual(session.takes[1].evidence.metadata.captureIntent, secondIntent)
+        XCTAssertEqual(session.takes[1].evidence.metadata.lifecycleState, .draft)
+        XCTAssertNil(session.takes[1].evidence.metadata.reviewDecision)
+    }
+
+    func testNewScratchSetupAcceptsFinalizedReviewLifecyclesWithoutChangingTheirDecisions() throws {
+        let draft = try makeFinalizedSession()
+        for state in [ReferenceLifecycleState.draft, .reviewed, .rejected, .approvedCanonical, .published] {
+            var session = draft
+            switch state {
+            case .draft: break
+            case .reviewed: try session.markTakeReviewed()
+            case .rejected: try session.rejectTakeInReview(notes: "Rejected by operator")
+            case .approvedCanonical, .published:
+                session.selectRepetitionForApproval(0)
+                try session.approveTakeInReview(notes: "Approved by operator")
+                if state == .published { try session.markTakePublished(takeIndex: 0) }
+            case .diagnostic, .deprecated:
+                return XCTFail("This fixture does not create diagnostic or deprecated takes.")
+            }
+            let retained = try XCTUnwrap(session.latestRecordedTake)
+            XCTAssertEqual(retained.evidence.metadata.lifecycleState, state)
+            try session.prepareNewScratchSetup(afterTakeID: retained.id)
+            XCTAssertEqual(session.takes, [retained], "Starting another scratch must preserve \(state).")
+            XCTAssertEqual(session.phase, .configuring)
+        }
+    }
+
+    func testNewScratchSetupAndRetakeRefuseInvalidPhaseOrStaleIdentityWithoutMutation() throws {
+        let finalized = try makeFinalizedSession()
+        let takeID = try XCTUnwrap(finalized.latestRecordedTake?.id)
+        for phase in [ReferenceAuthoringPhase.configuring, .calibrating, .recording, .reviewing(takeIndex: -1)] {
+            var session = finalized
+            session.phase = phase
+            let before = session
+            XCTAssertNotNil(session.newScratchSetupBlockReason())
+            XCTAssertNotNil(session.retakeBlockReason())
+            XCTAssertThrowsError(try session.prepareNewScratchSetup(afterTakeID: takeID))
+            XCTAssertThrowsError(try session.retake(afterTakeID: takeID))
+            session.retake()
+            XCTAssertEqual(session, before, "A refused action from \(phase) must preserve in-progress state.")
+        }
+        var session = finalized
+        XCTAssertThrowsError(try session.prepareNewScratchSetup(afterTakeID: "stale-take"))
+        XCTAssertThrowsError(try session.retake(afterTakeID: "stale-take"))
+        XCTAssertEqual(session, finalized)
+        try session.prepareNewScratchSetup(afterTakeID: takeID)
+        let configuring = session
+        XCTAssertThrowsError(try session.prepareNewScratchSetup(afterTakeID: takeID))
+        XCTAssertThrowsError(try session.retake(afterTakeID: takeID))
+        XCTAssertEqual(session, configuring, "A duplicate action cannot reset a new setup.")
+
+        var empty = makeConfiguredSession()
+        empty.phase = .readyToRecord
+        let emptyBefore = empty
+        XCTAssertThrowsError(try empty.prepareNewScratchSetup(afterTakeID: takeID))
+        XCTAssertThrowsError(try empty.retake(afterTakeID: takeID))
+        empty.retake()
+        XCTAssertEqual(empty, emptyBefore)
+    }
+
+    func testNewScratchSetupAndRetakeWaitForPendingEvidenceButAllowTerminalMissingEvidence() throws {
+        let identity = ReferenceTakeSourceIdentity(sessionID: "capture", takeID: "take-001", takeNumber: 1, takeToken: "token")
+        let pendingStates: [(ReferenceWatchEvidence, ReferencePerTakeSourceState?)] = [
+            (.acknowledgedTransferPending, nil),
+            (.linked(motionFileName: "watch.json"), .waitingForLateTransfer(identity: identity, deadline: .distantFuture)),
+        ]
+        for (watch, source) in pendingStates {
+            var session = try makeFinalizedSession(watchEvidence: watch, sourceState: source)
+            let before = session
+            let takeID = try XCTUnwrap(session.latestRecordedTake?.id)
+            XCTAssertNotNil(session.newScratchSetupBlockReason())
+            XCTAssertNotNil(session.retakeBlockReason())
+            XCTAssertThrowsError(try session.prepareNewScratchSetup(afterTakeID: takeID))
+            XCTAssertThrowsError(try session.retake(afterTakeID: takeID))
+            XCTAssertThrowsError(try session.rejectTakeInReview(notes: "Wait for the pending evidence"))
+            session.retake()
+            XCTAssertEqual(session, before)
+        }
+        for watch in [ReferenceWatchEvidence.missing(syncState: "unavailable"), .transferFailed(detail: "Transfer timed out")] {
+            let finalized = try makeFinalizedSession(watchEvidence: watch, sourceState: .timedOut(identity: identity))
+            let retained = try XCTUnwrap(finalized.latestRecordedTake)
+            var retake = finalized
+            try retake.retake(afterTakeID: retained.id)
+            XCTAssertEqual(retake.phase, .readyToRecord)
+            XCTAssertEqual(retake.takes, finalized.takes)
+            var newScratch = finalized
+            try newScratch.prepareNewScratchSetup(afterTakeID: retained.id)
+            XCTAssertEqual(newScratch.phase, .configuring)
+            XCTAssertEqual(newScratch.takes, finalized.takes)
+        }
+    }
+
+    func testRejectRemainsInReviewUntilPendingWatchEvidenceHasATerminalOutcome() throws {
+        let identity = ReferenceTakeSourceIdentity(sessionID: "capture", takeID: "take-001", takeNumber: 1, takeToken: "token")
+        var session = try makeFinalizedSession(
+            watchEvidence: .acknowledgedTransferPending,
+            sourceState: .waitingForLateTransfer(identity: identity, deadline: .distantFuture)
+        )
+        let pending = session
+        XCTAssertThrowsError(try session.rejectTakeInReview(notes: "Rejected by operator"))
+        XCTAssertEqual(session, pending)
+        XCTAssertNotNil(session.takeInReview, "The existing refresh must still be able to address this take.")
+
+        session.updateWatchEvidenceForTakeInReview(.transferFailed(detail: "Watch transfer timeout"))
+        let resolved = try XCTUnwrap(session.takeInReview)
+        XCTAssertEqual(resolved.evidence.metadata.sourceState, .timedOut(identity: identity))
+        try session.rejectTakeInReview(notes: "Rejected by operator")
+
+        let rejected = try XCTUnwrap(session.latestRecordedTake)
+        XCTAssertEqual(session.phase, .readyToRecord)
+        XCTAssertEqual(rejected.evidence.watchEvidence, resolved.evidence.watchEvidence)
+        XCTAssertEqual(rejected.evidence.metadata.sourceState, resolved.evidence.metadata.sourceState)
+        XCTAssertEqual(rejected.evidence.metadata.captureIntent, resolved.evidence.metadata.captureIntent)
+        XCTAssertEqual(rejected.evidence.metadata.lifecycleState, .rejected)
+        XCTAssertEqual(rejected.evidence.metadata.reviewDecision?.outcome, .rejected)
+        XCTAssertEqual(rejected.evidence.metadata.reviewDecision?.notes, "Rejected by operator")
+    }
+
+    func testRepeatedSetupWithIdenticalSelectionsStillGetsANewIntentIdentity() throws {
+        var session = try makeFinalizedSession()
+        let firstTake = try XCTUnwrap(session.latestRecordedTake)
+        let firstIntent = try XCTUnwrap(session.captureIntent)
+        try session.prepareNewScratchSetup(afterTakeID: firstTake.id)
+        session.selectTechnique(.babyScratch)
+        session.selectPattern(firstTake.evidence.metadata.pattern, bpm: firstTake.evidence.metadata.bpm)
+        session.declareVariant(startingDirection: .forward, faderVariant: .faderOpenThroughout, handedness: .right)
+        let nextIntent = try session.prepareCaptureIntentForRecording()
+        XCTAssertNotEqual(nextIntent.id, firstIntent.id)
+        XCTAssertEqual(nextIntent.variantID, firstIntent.variantID)
+        XCTAssertEqual(session.takes, [firstTake])
+    }
+
+    func testFailedFinalizationCannotBeAbandonedThroughRetakeOrNewScratchSetup() throws {
+        var session = try makeFinalizedSession()
+        let retainedID = try XCTUnwrap(session.latestRecordedTake?.id)
+        try session.retake(afterTakeID: retainedID)
+        let hooks = ReferenceAuthoringRecordingHooks(
+            startRecording: { .success(()) },
+            stopRecording: { .failure(.recordingFailed("Media is still finalizing.")) },
+            currentPreflightSnapshot: { self.passingSnapshot() },
+            latestCalibrationObservation: { nil }
+        )
+        try session.beginRecording(using: hooks).get()
+        XCTAssertThrowsError(try session.finishRecording(using: hooks).get())
+        let finalizing = session
+        XCTAssertEqual(session.phase, .recording)
+        XCTAssertThrowsError(try session.retake(afterTakeID: retainedID))
+        XCTAssertThrowsError(try session.prepareNewScratchSetup(afterTakeID: retainedID))
+        session.retake()
+        XCTAssertEqual(session, finalizing)
     }
 
     // MARK: - Recording failure surfaces, does not crash
@@ -675,25 +1121,26 @@ final class ReferenceAuthoringSessionTests: XCTestCase {
         XCTAssertTrue(session.takes.last?.evidence.metadata.deviceInfo.watchLinked == true)
     }
 
-    /// Recording is refused while the Watch is unreachable, so no take exists
-    /// to review or approve from a blocked attempt.
-    func testRecordingIsBlockedWhileTheWatchIsUnreachable() throws {
+    func testDiagnosticTakeRecordsWithAClosedFaderQuietAudioAndNoWatch() throws {
         var session = makeConfiguredSession()
         try calibrateSession(&session)
+        var startCount = 0
         let hooks = ReferenceAuthoringRecordingHooks(
-            startRecording: { XCTFail("Recording must not start with the Watch unreachable."); return .success(()) },
-            stopRecording: { .success(self.goodArtifacts()) },
-            currentPreflightSnapshot: { self.watchUnreachableSnapshot() },
+            startRecording: { startCount += 1; return .success(()) },
+            stopRecording: { .success(self.goodArtifacts(watchEvidence: .missing(syncState: "unavailable"))) },
+            currentPreflightSnapshot: { self.watchUnreachableSnapshot(rawValue: 52, audioPeak: 0) },
             latestCalibrationObservation: { nil }
         )
-        guard case .failure(let error) = session.beginRecording(using: hooks) else {
-            return XCTFail("Expected the preflight to block recording.")
-        }
-        guard case .preflightBlocked = error else {
-            return XCTFail("Expected preflightBlocked, got \(error)")
-        }
-        XCTAssertEqual(session.phase, .readyToRecord)
-        XCTAssertTrue(session.takes.isEmpty)
+        try session.beginRecording(using: hooks).get()
+        XCTAssertEqual(startCount, 1)
+        XCTAssertEqual(session.phase, .recording)
+        _ = try session.finishRecording(using: hooks).get()
+        let take = try XCTUnwrap(session.takeInReview)
+        XCTAssertFalse(take.evidence.metadata.deviceInfo.watchLinked)
+        XCTAssertEqual(take.evidence.watchEvidence, .missing(syncState: "unavailable"))
+        session.selectRepetitionForApproval(1)
+        XCTAssertFalse(session.canApproveTakeInReview(), "Diagnostic capture must not imply canonical eligibility.")
+        XCTAssertNotNil(session.approvalBlockReason())
     }
 
     // MARK: - Watch transfer completes after macOS finalization (D1)
@@ -740,6 +1187,140 @@ final class ReferenceAuthoringSessionTests: XCTestCase {
             session.approvalBlockReason() ?? ""
         )
     }
+
+    func testPendingWatchTransferBlocksRawSaveWithSpecificReason() throws {
+        let session = try reviewedSessionWithPendingWatch()
+
+        XCTAssertEqual(
+            session.rawCaptureExportBlockReason(),
+            "Apple Watch motion is still transferring. Save Capture will become available when it is linked."
+        )
+        XCTAssertFalse(session.canExportRawCapture)
+    }
+
+    func testLateVerifiedWatchHashSurvivesRefreshAndApproval() throws {
+        let identity = ReferenceTakeSourceIdentity(sessionID: "capture-session", takeID: "take-001", takeNumber: 1, takeToken: "token")
+        let beforeBinding = ReferenceTearEvidenceSourceBinding(
+            capturedSessionID: identity.sessionID, capturedTakeID: identity.takeID, capturedTakeNumber: identity.takeNumber,
+            rawSidecarFileName: "take-001.json", rawSidecarData: Data("before-watch".utf8), rawSidecarSHA256: "before")
+        let afterBinding = ReferenceTearEvidenceSourceBinding(
+            capturedSessionID: identity.sessionID, capturedTakeID: identity.takeID, capturedTakeNumber: identity.takeNumber,
+            rawSidecarFileName: "take-001.json", rawSidecarData: Data("after-watch".utf8), rawSidecarSHA256: "after")
+        let verifiedState = ReferencePerTakeSourceState.linked(
+            identity: identity, motionFileName: "watch.json", sha256: String(repeating: "a", count: 64))
+        var session = try makeFinalizedSession(watchEvidence: .acknowledgedTransferPending,
+            sourceState: .waitingForLateTransfer(identity: identity, deadline: .distantFuture), sourceBinding: beforeBinding)
+        let refresh = ReferenceWatchEvidenceRefresh(evidence: .linked(motionFileName: "watch.json"),
+            sourceBinding: afterBinding, sourceState: verifiedState)
+        session.updateWatchEvidenceForTakeInReview(refresh.evidence,
+            refreshedSourceBinding: refresh.sourceBinding, sourceState: refresh.sourceState)
+        XCTAssertEqual(session.takeInReview?.evidence.metadata.sourceState, verifiedState)
+        XCTAssertEqual(session.takeInReview?.tearEvidenceSourceBinding, afterBinding)
+        XCTAssertTrue(session.takeInReview?.evidence.metadata.deviceInfo.watchLinked == true)
+
+        // Legacy refreshes and same-file results without a hash cannot erase
+        // the verified digest needed by approved-package export.
+        session.updateWatchEvidenceForTakeInReview(.linked(motionFileName: "watch.json"))
+        session.updateWatchEvidenceForTakeInReview(.linked(motionFileName: "watch.json"),
+            sourceState: .linked(identity: identity, motionFileName: "watch.json", sha256: nil))
+        XCTAssertEqual(session.takeInReview?.evidence.metadata.sourceState, verifiedState)
+        session.selectRepetitionForApproval(0)
+        try session.approveTakeInReview(notes: "Verified Watch file retained")
+        XCTAssertEqual(session.latestRecordedTake?.evidence.metadata.lifecycleState, .approvedCanonical)
+        XCTAssertEqual(session.latestRecordedTake?.evidence.metadata.sourceState, verifiedState)
+        XCTAssertEqual(session.latestRecordedTake?.tearEvidenceSourceBinding, afterBinding)
+    }
+
+    func testMismatchedVerifiedWatchSourceCannotAttachOrReplaceItsHash() throws {
+        let identity = ReferenceTakeSourceIdentity(sessionID: "capture-session", takeID: "take-001", takeNumber: 1, takeToken: "token")
+        let binding = ReferenceTearEvidenceSourceBinding(
+            capturedSessionID: identity.sessionID, capturedTakeID: identity.takeID, capturedTakeNumber: identity.takeNumber,
+            rawSidecarFileName: "take-001.json", rawSidecarData: Data("pending".utf8), rawSidecarSHA256: "pending")
+        let pending = try makeFinalizedSession(watchEvidence: .acknowledgedTransferPending,
+            sourceState: .waitingForLateTransfer(identity: identity, deadline: .distantFuture), sourceBinding: binding)
+        let wrongIdentities = [
+            ReferenceTakeSourceIdentity(sessionID: "other", takeID: identity.takeID, takeNumber: 1, takeToken: "token"),
+            ReferenceTakeSourceIdentity(sessionID: identity.sessionID, takeID: "other", takeNumber: 1, takeToken: "token"),
+            ReferenceTakeSourceIdentity(sessionID: identity.sessionID, takeID: identity.takeID, takeNumber: 2, takeToken: "token"),
+            ReferenceTakeSourceIdentity(sessionID: identity.sessionID, takeID: identity.takeID, takeNumber: 1, takeToken: "other"),
+        ]
+        for wrongIdentity in wrongIdentities {
+            var session = pending
+            session.updateWatchEvidenceForTakeInReview(.linked(motionFileName: "watch.json"),
+                refreshedSourceBinding: binding,
+                sourceState: .linked(identity: wrongIdentity, motionFileName: "watch.json", sha256: String(repeating: "a", count: 64)))
+            XCTAssertEqual(session, pending, "A source identity mismatch must refuse the entire refresh.")
+        }
+        var session = pending
+        let wrongBinding = ReferenceTearEvidenceSourceBinding(
+            capturedSessionID: identity.sessionID, capturedTakeID: "other", capturedTakeNumber: identity.takeNumber,
+            rawSidecarFileName: "take-001.json", rawSidecarData: Data("other".utf8), rawSidecarSHA256: "other")
+        session.updateWatchEvidenceForTakeInReview(.linked(motionFileName: "watch.json"), refreshedSourceBinding: wrongBinding,
+            sourceState: .linked(identity: identity, motionFileName: "watch.json", sha256: String(repeating: "a", count: 64)))
+        XCTAssertEqual(session, pending, "The refreshed sidecar and verified Watch source must name the same capture.")
+        session.updateWatchEvidenceForTakeInReview(.linked(motionFileName: "watch.json"),
+            sourceState: .linked(identity: identity, motionFileName: "other.json", sha256: String(repeating: "a", count: 64)))
+        XCTAssertEqual(session, pending)
+        session.updateWatchEvidenceForTakeInReview(.linked(motionFileName: "watch.json"),
+            sourceState: .linked(identity: identity, motionFileName: "watch.json", sha256: String(repeating: "a", count: 64)))
+        let linked = session
+        session.updateWatchEvidenceForTakeInReview(.linked(motionFileName: "watch.json"),
+            sourceState: .linked(identity: identity, motionFileName: "watch.json", sha256: String(repeating: "b", count: 64)))
+        XCTAssertEqual(session, linked, "A different digest cannot silently replace an already verified file.")
+    }
+
+    func testMatchingLinkedWatchRefreshRebindsTheFinalSidecarSnapshotForExport() throws {
+        let initial = ReferenceTearEvidenceSourceBinding(
+            capturedSessionID: "capture-session",
+            capturedTakeID: "take-001",
+            capturedTakeNumber: 1,
+            rawSidecarFileName: "take-001.json",
+            rawSidecarData: Data("before-watch".utf8),
+            rawSidecarSHA256: "before"
+        )
+        let refreshed = ReferenceTearEvidenceSourceBinding(
+            capturedSessionID: "capture-session",
+            capturedTakeID: "take-001",
+            capturedTakeNumber: 1,
+            rawSidecarFileName: "take-001.json",
+            rawSidecarData: Data("after-watch".utf8),
+            rawSidecarSHA256: "after"
+        )
+        var session = makeConfiguredSession()
+        try calibrateSession(&session)
+        let hooks = ReferenceAuthoringRecordingHooks(
+            startRecording: { .success(()) },
+            stopRecording: {
+                .success(ReferenceRecordedTakeArtifacts(
+                    audio: ReferenceArtifactMeasurement(fileName: "reference.wav", exists: true, byteCount: 500_000),
+                    video: nil,
+                    sidecar: ReferenceArtifactMeasurement(fileName: "take-001.json", exists: true, byteCount: 2_048),
+                    actualMediaFileName: nil,
+                    crossfaderRawSamples: [],
+                    observedCrossfaderAddress: self.calibration.address,
+                    platterMovementEventCount: 60,
+                    recordedAt: Date(timeIntervalSince1970: 1_788_000_500),
+                    autoDetectedTechnique: nil,
+                    watchEvidence: .acknowledgedTransferPending,
+                    tearEvidenceSourceBinding: initial,
+                    rawSidecarURL: URL(fileURLWithPath: "/tmp/take-001.json")
+                ))
+            },
+            currentPreflightSnapshot: { self.passingSnapshot() },
+            latestCalibrationObservation: { nil }
+        )
+        _ = session.beginRecording(using: hooks)
+        _ = try session.finishRecording(using: hooks).get()
+
+        session.updateWatchEvidenceForTakeInReview(
+            .linked(motionFileName: "scratch-motion.json"),
+            refreshedSourceBinding: refreshed
+        )
+
+        XCTAssertEqual(session.takeInReview?.tearEvidenceSourceBinding, refreshed)
+        XCTAssertNil(session.rawCaptureExportBlockReason())
+    }
+
 
     func testATransferThatFailsLeavesTheTakeUnapprovable() throws {
         var session = try reviewedSessionWithPendingWatch()
@@ -1912,7 +2493,7 @@ final class ReferenceTearAuthoringSliceTests: XCTestCase {
     /// emits nothing for the whole take.
     private let calibration = CrossfaderCalibration(
         address: CrossfaderMIDIAddress(
-            deviceIdentifier: "Rane ONE MKII",
+            deviceIdentifier: "midi_rane_one_mkii",
             deviceName: "Rane ONE MKII",
             channel: 15,
             controller: 8
@@ -1928,7 +2509,7 @@ final class ReferenceTearAuthoringSliceTests: XCTestCase {
     private var otherDeviceCalibration: CrossfaderCalibration {
         CrossfaderCalibration(
             address: CrossfaderMIDIAddress(
-                deviceIdentifier: "Pioneer DDJ-GRV6",
+                deviceIdentifier: "midi_pioneer_ddj_grv6",
                 deviceName: "Pioneer DDJ-GRV6",
                 channel: 6,
                 controller: 31
@@ -1952,7 +2533,7 @@ final class ReferenceTearAuthoringSliceTests: XCTestCase {
     private func passingSnapshot() -> ReferencePreflightSnapshot {
         ReferencePreflightSnapshot(
             controllerName: "Rane ONE MKII",
-            controllerIdentifier: "Rane ONE MKII",
+            controllerIdentifier: calibration.address.deviceIdentifier,
             observedCrossfaderAddress: calibration.address,
             latestCrossfaderRawValue: 127,
             calibration: calibration,
@@ -2015,7 +2596,7 @@ final class ReferenceTearAuthoringSliceTests: XCTestCase {
         controller: Int? = 8,
         deviceName: String? = "Rane ONE MKII",
         rawValue: Int? = 127,
-        calibrationID: String? = "Rane ONE MKII#15#8",
+        calibrationID: String? = "midi_rane_one_mkii#15#8",
         observedTakeRelativeTime: Double? = -0.4,
         provenance: CaptureCore.CrossfaderTakeStartState.Provenance = .preTakeSnapshot
     ) -> CaptureCore.CrossfaderTakeStartState {
@@ -2468,12 +3049,12 @@ final class ReferenceTearAuthoringSliceTests: XCTestCase {
         XCTAssertEqual(reason(parkedTakeStartState(), calibration: nil), .calibrationMissing)
         XCTAssertEqual(reason(parkedTakeStartState(controller: 9), calibration: calibration), .addressMismatch)
         XCTAssertEqual(reason(parkedTakeStartState(channel: 0), calibration: calibration), .addressMismatch)
-        XCTAssertEqual(
-            reason(parkedTakeStartState(deviceName: "Pioneer DDJ-GRV6"), calibration: calibration),
-            .addressMismatch
+        XCTAssertNil(
+            reason(parkedTakeStartState(deviceName: "Renamed RANE source"), calibration: calibration),
+            "A cosmetic Core MIDI display-name change must not break stable source identity."
         )
         XCTAssertEqual(
-            reason(parkedTakeStartState(calibrationID: "Rane ONE MKII#15#9"), calibration: calibration),
+            reason(parkedTakeStartState(calibrationID: "midi_rane_one_mkii#15#9"), calibration: calibration),
             .calibrationMismatch
         )
         XCTAssertEqual(reason(nil, calibration: calibration), .notRecorded)
@@ -2662,4 +3243,137 @@ final class ReferenceTearAuthoringSliceTests: XCTestCase {
         let take = try XCTUnwrap(session.takeInReview)
         XCTAssertEqual(take.evidence.metadata.lifecycleState, .draft)
     }
+
+    // MARK: The calibration at Record owns the entire take
+
+    private func snapshotForCalibrationHandoff(
+        calibration candidate: CrossfaderCalibration?,
+        sourceID: String = "midi_rane_one_mkii"
+    ) -> ReferencePreflightSnapshot {
+        ReferencePreflightSnapshot(controllerName: "Rane ONE MKII", controllerIdentifier: sourceID,
+            observedCrossfaderAddress: calibration.address, latestCrossfaderRawValue: 127,
+            calibration: candidate, crossfaderEventCount: 40, platterEventCount: 100,
+            platterIsMoving: true, audioInputPeakLevel: 0.5, audioDeviceName: "Rane ONE MKII",
+            watchIsReachable: true, watchMotionIsStreaming: true,
+            cameraDeviceName: "Studio Camera", cameraIsActive: true)
+    }
+
+    private func requestCalibrationBeforeFirstCC8(
+        session: inout ReferenceAuthoringSession,
+        openEnd: CrossfaderOpenEnd = .right,
+        activeDeck: CrossfaderActiveDeck = .rightDeck
+    ) throws {
+        let store = try makeStore()
+        try store.save(calibration)
+        XCTAssertEqual(session.adoptPersistedCalibrationIfExact(store: store,
+            openEnd: openEnd, activeDeck: activeDeck, address: nil), .noObservedAddress)
+        XCTAssertNil(session.confirmedCalibration)
+    }
+
+    private func handoffHooks(
+        snapshot: ReferencePreflightSnapshot,
+        artifacts: ReferenceRecordedTakeArtifacts
+    ) -> ReferenceAuthoringRecordingHooks {
+        ReferenceAuthoringRecordingHooks(startRecording: { .success(()) },
+            stopRecording: { .success(artifacts) }, currentPreflightSnapshot: { snapshot },
+            latestCalibrationObservation: { nil })
+    }
+
+    func testCalibrationArrivingAfterApplyIsFrozenBeforeParkedFaderRecording() throws {
+        var session = makeConfiguredTearSession()
+        try requestCalibrationBeforeFirstCC8(session: &session)
+        let artifacts = parkedArtifacts(takeStartState: parkedTakeStartState(), takeStartCorrelation: correlation())
+        let recordingHooks = handoffHooks(snapshot: snapshotForCalibrationHandoff(calibration: calibration),
+            artifacts: artifacts)
+        try session.beginRecording(using: recordingHooks).get()
+        XCTAssertEqual(session.confirmedCalibration, calibration)
+        XCTAssertTrue(session.confirmedCalibrationSource?.isReused == true)
+        _ = try session.finishRecording(using: recordingHooks).get()
+        let take = try XCTUnwrap(session.takeInReview)
+        XCTAssertEqual(take.evidence.metadata.crossfaderCalibration, calibration)
+        XCTAssertEqual(take.evidence.metadata.deviceInfo.controllerIdentifier, calibration.address.deviceIdentifier)
+        XCTAssertEqual(take.evidence.metadata.deviceInfo.controllerName, calibration.address.deviceName)
+        XCTAssertTrue(take.evidence.crossfaderRawSamples.isEmpty, "A parked baseline must not fabricate CC8 packets.")
+        XCTAssertEqual(take.evidence.crossfaderTakeStartOutcome?.adoptedRawValue, 127)
+        XCTAssertEqual(ReferenceValidator.faderOpenEvidence(for: take.evidence), .provenContinuouslyOpen)
+    }
+
+    func testLaterCalibrationMutationCannotReinterpretTheRecordingTake() throws {
+        var session = makeConfiguredTearSession()
+        try requestCalibrationBeforeFirstCC8(session: &session)
+        let artifacts = parkedArtifacts(takeStartState: parkedTakeStartState(), takeStartCorrelation: correlation())
+        let recordingHooks = handoffHooks(snapshot: snapshotForCalibrationHandoff(calibration: calibration),
+            artifacts: artifacts)
+        try session.beginRecording(using: recordingHooks).get()
+        session.confirmedCalibration = otherDeviceCalibration
+        session.latestPreflightSnapshot = snapshotForCalibrationHandoff(calibration: otherDeviceCalibration)
+        _ = try session.finishRecording(using: recordingHooks).get()
+        let take = try XCTUnwrap(session.takeInReview)
+        XCTAssertEqual(take.evidence.metadata.crossfaderCalibration, calibration)
+        XCTAssertEqual(ReferenceValidator.faderOpenEvidence(for: take.evidence), .provenContinuouslyOpen)
+    }
+
+    func testMissingCalibrationStillBlocksTheRecordBoundary() throws {
+        var session = makeConfiguredTearSession()
+        try requestCalibrationBeforeFirstCC8(session: &session)
+        let recordingHooks = handoffHooks(snapshot: snapshotForCalibrationHandoff(calibration: nil),
+            artifacts: parkedArtifacts())
+        guard case .failure(.preflightBlocked) = session.beginRecording(using: recordingHooks) else {
+            return XCTFail("Missing calibration remains a separate blocking input condition.")
+        }
+        session.confirmedCalibration = calibration
+        guard case .failure(.noActiveRecording) = session.finishRecording(using: recordingHooks) else {
+            return XCTFail("A later calibration must not manufacture an earlier recorded take.")
+        }
+        XCTAssertTrue(session.takes.isEmpty)
+    }
+
+    func testStartCalibrationAdoptionRejectsWrongSourceDeckOpenEndAndAddress() throws {
+        let wrongAddress = CrossfaderCalibration(address: .init(deviceIdentifier: calibration.address.deviceIdentifier,
+            deviceName: calibration.address.deviceName, channel: 15, controller: 9),
+            fullLeftRawValue: 0, centerRawValue: 63, fullRightRawValue: 127,
+            openEnd: .right, activeDeck: .rightDeck, calibratedAt: calibration.calibratedAt)
+        let cases: [(CrossfaderCalibration, String, CrossfaderOpenEnd, CrossfaderActiveDeck)] = [
+            (calibration, "different-controller", .right, .rightDeck),
+            (calibration, calibration.address.deviceIdentifier, .left, .rightDeck),
+            (calibration, calibration.address.deviceIdentifier, .right, .leftDeck),
+            (wrongAddress, calibration.address.deviceIdentifier, .right, .rightDeck)
+        ]
+        for (candidate, sourceID, openEnd, deck) in cases {
+            var session = makeConfiguredTearSession()
+            try requestCalibrationBeforeFirstCC8(session: &session, openEnd: openEnd, activeDeck: deck)
+            let recordingHooks = handoffHooks(
+                snapshot: snapshotForCalibrationHandoff(calibration: candidate, sourceID: sourceID),
+                artifacts: parkedArtifacts())
+            let result = session.beginRecording(using: recordingHooks)
+            XCTAssertNil(session.confirmedCalibration)
+            if candidate.address.controller != calibration.address.controller {
+                guard case .failure(.preflightBlocked) = result else {
+                    return XCTFail("A calibration for another MIDI address must fail preflight.")
+                }
+                XCTAssertTrue(session.takes.isEmpty)
+            } else {
+                guard case .success = result else { return XCTFail("Expected diagnostic capture.") }
+                _ = try session.finishRecording(using: recordingHooks).get()
+                XCTAssertNil(session.takeInReview?.evidence.metadata.crossfaderCalibration)
+            }
+        }
+    }
+
+    func testControllerChangeDuringCaptureRejectsTheFrozenCalibration() throws {
+        var session = makeConfiguredTearSession()
+        try requestCalibrationBeforeFirstCC8(session: &session)
+        let artifacts = parkedArtifacts(takeStartState: parkedTakeStartState(),
+            takeStartCorrelation: correlation(midiSourceID: "different-controller"))
+        let recordingHooks = handoffHooks(snapshot: snapshotForCalibrationHandoff(calibration: calibration),
+            artifacts: artifacts)
+        try session.beginRecording(using: recordingHooks).get()
+        _ = try session.finishRecording(using: recordingHooks).get()
+        let take = try XCTUnwrap(session.takeInReview)
+        XCTAssertNil(take.evidence.metadata.crossfaderCalibration)
+        XCTAssertNil(take.evidence.derivation)
+        XCTAssertEqual(take.evidence.metadata.deviceInfo.controllerIdentifier, "different-controller")
+        XCTAssertNotNil(session.approvalBlockReason())
+    }
+
 }

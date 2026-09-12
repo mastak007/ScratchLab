@@ -44,6 +44,16 @@ struct DJRigZoneTuning: Equatable {
         verticalInset: 0.010
     )
 
+    /// CXL framing starts with a manual full-image estimate. The mixer is
+    /// twice the ordinary app's effective 0.17 default; no detector confidence
+    /// is implied by these deliberately simple 33 / 34 / 33 proportions.
+    static let cxlFullFrame = DJRigZoneTuning(
+        mixerShare: 0.34,
+        deckHorizontalInset: 0,
+        mixerHorizontalInset: 0,
+        verticalInset: 0
+    )
+
     static let deskView = DJRigZoneTuning(
         mixerShare: 0.17,
         deckHorizontalInset: 0.006,
@@ -64,6 +74,11 @@ struct DJRigZoneTuning: Equatable {
 struct DJRigLayout: Equatable {
     let zones: [DJRigZone]
     let confidence: Float
+
+    static let cxlFullFrameGuide = DJRigLayout(
+        zones: zones(in: CGRect(x: 0, y: 0, width: 1, height: 1), tuning: .cxlFullFrame),
+        confidence: 0.32
+    )
 
     var unionBox: CGRect {
         zones.reduce(.null) { partial, zone in

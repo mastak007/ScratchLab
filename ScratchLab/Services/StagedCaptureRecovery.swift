@@ -72,12 +72,13 @@ final class WatchTransferStagingStore {
         onImported: (ImportedCapture) -> Void,
         onFailure: (String) -> Void
     ) {
-        guard !completedTransfers.contains(stagedURL) else { return }
+        let transferKey = canonicalURL(stagedURL)
+        guard !completedTransfers.contains(transferKey) else { return }
         do {
             let imported = try importStagedFile(at: stagedURL)
             // The durable file has been decoded and checked before removing our receipt.
             try fileManager.removeItem(at: stagedURL)
-            completedTransfers.insert(stagedURL)
+            completedTransfers.insert(transferKey)
             onImported(imported)
         } catch {
             let message = "Watch transfer import failed for \(stagedURL.lastPathComponent): \(error.localizedDescription)"
@@ -155,7 +156,15 @@ final class WatchTransferStagingStore {
     }
 
     private func isStagedURL(_ url: URL) -> Bool {
-        url.standardizedFileURL.deletingLastPathComponent() == incomingDirectoryURL.standardizedFileURL
+        canonicalURL(url).deletingLastPathComponent() == canonicalURL(incomingDirectoryURL)
+    }
+
+    /// `/var` and `/private/var` can name the same receipt on macOS. Recovery
+    /// directory enumeration may return either spelling, while an already
+    /// queued callback retains the other. Canonicalize before enforcing the
+    /// exactly-once set so the alias cannot trigger a second import attempt.
+    private func canonicalURL(_ url: URL) -> URL {
+        url.standardizedFileURL.resolvingSymlinksInPath()
     }
 
     private func requireRegularFile(_ url: URL) throws {

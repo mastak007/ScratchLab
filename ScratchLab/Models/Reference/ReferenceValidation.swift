@@ -88,6 +88,8 @@ enum ReferenceValidationFinding: Equatable, Sendable {
     case operatorNameMissing
     case patternIdentityMissing
     case referenceVersionInvalid(version: Int)
+    case captureIntentInvalid(detail: String)
+    case witnessedTimingInvalid(detail: String)
     case lifecycleTransitionNotPermitted(from: String, to: String)
 
     var severity: ReferenceValidationSeverity {
@@ -191,6 +193,10 @@ enum ReferenceValidationFinding: Equatable, Sendable {
             return "Pattern ID is required. Each rhythmic pattern is a separate reference take and needs its own stable ID."
         case .referenceVersionInvalid(let version):
             return "Reference version \(version) is invalid; versions start at 1 and increase."
+        case .captureIntentInvalid(let detail):
+            return "The immutable capture intent does not match this take: \(detail)"
+        case .witnessedTimingInvalid(let detail):
+            return "The finalized take timing is not CXL-ready: \(detail)"
         case .lifecycleTransitionNotPermitted(let from, let to):
             return "A reference cannot move from \(from) to \(to). The order is draft → reviewed → approved canonical → published, and diagnostic, rejected and deprecated takes never re-enter it."
         }
@@ -236,6 +242,7 @@ struct ReferenceArtifactMeasurement: Equatable, Sendable {
     let peakLevel: Double?
     /// Frame count for audio artifacts. `nil` for video.
     let frameCount: Int64?
+    let sampleRate: Double?
     /// SHA-256 recorded at capture time, if any.
     let recordedSHA256: String?
     /// SHA-256 measured now.
@@ -248,6 +255,7 @@ struct ReferenceArtifactMeasurement: Equatable, Sendable {
         readError: String? = nil,
         peakLevel: Double? = nil,
         frameCount: Int64? = nil,
+        sampleRate: Double? = nil,
         recordedSHA256: String? = nil,
         currentSHA256: String? = nil
     ) {
@@ -257,6 +265,7 @@ struct ReferenceArtifactMeasurement: Equatable, Sendable {
         self.readError = readError
         self.peakLevel = peakLevel
         self.frameCount = frameCount
+        self.sampleRate = sampleRate
         self.recordedSHA256 = recordedSHA256
         self.currentSHA256 = currentSHA256
     }
@@ -336,6 +345,8 @@ struct ReferenceTakeEvidence: Equatable, Sendable {
     let actualMediaFileName: String?
     /// Raw crossfader samples, as `(takeRelativeTime, rawValue)`.
     let crossfaderRawSamples: [CrossfaderPositionSample]
+    /// Finalized sidecar mixer packets, retained verbatim for package export.
+    let rawMixerMIDIEvents: [CaptureCore.RawMixerMIDIEvent]
     /// The MIDI address the take actually observed fader traffic on.
     let observedCrossfaderAddress: CrossfaderMIDIAddress?
     /// Count of recorded platter movement events.
@@ -377,6 +388,7 @@ struct ReferenceTakeEvidence: Equatable, Sendable {
         sidecar: ReferenceArtifactMeasurement,
         actualMediaFileName: String?,
         crossfaderRawSamples: [CrossfaderPositionSample],
+        rawMixerMIDIEvents: [CaptureCore.RawMixerMIDIEvent] = [],
         observedCrossfaderAddress: CrossfaderMIDIAddress?,
         platterMovementEventCount: Int,
         derivation: CrossfaderDerivation?,
@@ -394,6 +406,7 @@ struct ReferenceTakeEvidence: Equatable, Sendable {
         self.sidecar = sidecar
         self.actualMediaFileName = actualMediaFileName
         self.crossfaderRawSamples = crossfaderRawSamples
+        self.rawMixerMIDIEvents = rawMixerMIDIEvents
         self.observedCrossfaderAddress = observedCrossfaderAddress
         self.platterMovementEventCount = platterMovementEventCount
         self.platterMovementEvents = platterMovementEvents
@@ -475,6 +488,23 @@ enum ReferenceValidator {
         }
         if metadata.referenceVersion < 1 {
             findings.append(.referenceVersionInvalid(version: metadata.referenceVersion))
+        }
+        if let origin = metadata.mediaTimeOrigin {
+            findings.append(contentsOf: origin.validationIssues.map { .witnessedTimingInvalid(detail: $0) })
+        }
+        if metadata.captureIntent != nil {
+            findings.append(contentsOf: ReferenceCaptureIntentValidator.issues(
+                intent: metadata.captureIntent,
+                metadata: metadata,
+                requireBeatSpec: false
+            ).map { .captureIntentInvalid(detail: String(describing: $0)) })
+            if metadata.captureIntent?.beatSpec != nil {
+                findings.append(contentsOf: ReferenceWitnessedTimingValidator.issues(
+                    metadata.witnessedTiming,
+                    intent: metadata.captureIntent,
+                    mediaTimeOrigin: metadata.mediaTimeOrigin
+                ).map { .witnessedTimingInvalid(detail: $0) })
+            }
         }
         // A flare that reached this point without a click count is not
         // representable in `ReferenceTechnique`, but a sidecar decoded from
@@ -819,8 +849,8 @@ enum ReferenceValidator {
         guard expectation.minimumCutEventsPerRepetition > 0,
               expectation.source.isOperatorConfirmed else { return findings }
         for repetition in evidence.boundaries.repetitions {
-            let start = repetition.startSeconds(bpm: metadata.bpm)
-            let end = repetition.endSeconds(bpm: metadata.bpm)
+            let start = repetition.startSeconds(metadata: metadata)
+            let end = repetition.endSeconds(metadata: metadata)
             let cuts = derivation.events.filter { event in
                 let isCutFamily = event.kind == .cut
                     || event.kind == .pulse

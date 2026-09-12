@@ -487,6 +487,80 @@ struct WatchCaptureControlReply: Codable, Equatable, Sendable {
     }
 }
 
+/// Pending Stop intent survives phone relaunch. A request names an exact
+/// session/take; only a matching confirmed stop or identity rejection retires it.
+struct WatchPendingStopLedger: Codable, Equatable, Sendable {
+    private(set) var commands: [WatchCaptureCommandPayload] = []
+
+    @discardableResult
+    mutating func retain(_ payload: WatchCaptureCommandPayload) -> Bool {
+        guard payload.command == .stop,
+              !payload.commandID.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+              !payload.sessionID.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+              let takeID = payload.takeID,
+              !takeID.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return false }
+        if !commands.contains(where: { Self.sameTake($0, payload) }) { commands.append(payload) }
+        return true
+    }
+
+    @discardableResult
+    mutating func settle(_ reply: WatchCaptureControlReply, for payload: WatchCaptureCommandPayload) -> Bool {
+        guard reply.commandID == payload.commandID,
+              reply.sessionID == payload.sessionID, reply.takeID == payload.takeID else { return false }
+        let outcome = CaptureWatchStopPolicy.outcome(for: reply)
+        guard outcome.isStopConfirmed || outcome == .identityRejected else { return false }
+        commands.removeAll { Self.sameTake($0, payload) }
+        return true
+    }
+
+    var hasValidIdentities: Bool {
+        commands.allSatisfy { payload in
+            payload.command == .stop
+                && !payload.commandID.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                && !payload.sessionID.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                && payload.takeID?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false
+        }
+    }
+
+    private static func sameTake(_ lhs: WatchCaptureCommandPayload, _ rhs: WatchCaptureCommandPayload) -> Bool {
+        lhs.sessionID == rhs.sessionID && lhs.takeID == rhs.takeID
+    }
+}
+
+/// A second Start must never claim that an older running take belongs to the
+/// new command. Only an exact active session/take may be acknowledged again.
+enum WatchMotionStartCommandResolver {
+    enum Decision: Equatable {
+        case start
+        case alreadyRecording
+        case rejectIdentity(String)
+    }
+
+    static func decide(payload: WatchCaptureCommandPayload, isRecording: Bool,
+                       activeCommand: WatchCaptureCommandPayload?,
+                       stoppedTakeIdentities: Set<String> = []) -> Decision {
+        if let identity = identityKey(for: payload), stoppedTakeIdentities.contains(identity) {
+            return .rejectIdentity("This Watch take was already stopped. Start a new take to record linked motion.")
+        }
+        guard isRecording else { return .start }
+        guard let activeCommand,
+              !payload.sessionID.isEmpty, let takeID = payload.takeID, !takeID.isEmpty,
+              activeCommand.sessionID == payload.sessionID, activeCommand.takeID == takeID else {
+            return .rejectIdentity("The Watch is still recording another take. Stop that take on the Watch before requesting linked motion for a new take.")
+        }
+        return .alreadyRecording
+    }
+
+    /// Length prefixes preserve the exact session/take boundary without
+    /// assuming either identifier excludes a separator character.
+    static func identityKey(for payload: WatchCaptureCommandPayload) -> String? {
+        guard !payload.sessionID.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+              let takeID = payload.takeID,
+              !takeID.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return nil }
+        return "\(payload.sessionID.count):\(payload.sessionID)\(takeID.count):\(takeID)"
+    }
+}
+
 /// The Watch's decision table for an incoming `stop` command.
 ///
 /// Pure so the Watch's behaviour is testable off-device: `WatchMotionRecorder`
@@ -556,27 +630,28 @@ enum WatchMotionStopCommandResolver {
         return .stop
     }
 
-    /// Non-nil when both sides name an identity and those identities differ.
+    /// Identified remote stops require an exact active identity.
     ///
     /// A command with no identity (a local Watch-UI stop, or a legacy peer) is
-    /// allowed through: refusing it would strand a running capture. A capture
-    /// started locally with no command payload likewise cannot be identity-
-    /// checked, and is stoppable.
+    /// allowed through. A delayed identified command must not stop a newer
+    /// local capture, whose identity cannot be matched to the command.
     private static func identityMismatchDetail(
         payload: WatchCaptureCommandPayload,
         activeCommand: WatchCaptureCommandPayload?
     ) -> String? {
-        guard let activeCommand else { return nil }
-
         let requestedSession = payload.sessionID.trimmed
-        let activeSession = activeCommand.sessionID.trimmed
-        if let requestedSession, let activeSession, requestedSession != activeSession {
+        let requestedTake = payload.takeID?.trimmed
+        guard requestedSession != nil || requestedTake != nil else { return nil }
+        guard let activeCommand,
+              let requestedSession, let requestedTake,
+              let activeSession = activeCommand.sessionID.trimmed,
+              let activeTake = activeCommand.takeID?.trimmed else {
+            return "Stop cannot match this Watch recording to the requested session and take. Stop this recording on the Watch."
+        }
+        if requestedSession != activeSession {
             return "Stop names session \(requestedSession) but this watch is recording \(activeSession)."
         }
-
-        let requestedTake = payload.takeID?.trimmed
-        let activeTake = activeCommand.takeID?.trimmed
-        if let requestedTake, let activeTake, requestedTake != activeTake {
+        if requestedTake != activeTake {
             return "Stop names take \(requestedTake) but this watch is recording \(activeTake)."
         }
         return nil

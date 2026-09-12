@@ -46,19 +46,63 @@ import AVFoundation
 struct ReferenceAuthoringBridgeTakeConfiguration: Equatable {
     let technique: ReferenceTechnique
     let bpm: Int
+    let beatEngineMode: BeatEngineMode
     let handedness: CaptureSessionHandedness
     let notes: String
+    let captureIntent: ReferenceCaptureIntent?
+    let preparedBeat: ReferencePreparedBeat?
+
+    var isMovementCheck: Bool { captureIntent?.isMovementCheck == true }
 
     init(
         technique: ReferenceTechnique,
         bpm: Int,
+        beatEngineMode: BeatEngineMode = .boomBapTrainer,
         handedness: CaptureSessionHandedness = .right,
-        notes: String = ""
+        notes: String = "",
+        captureIntent: ReferenceCaptureIntent? = nil,
+        preparedBeat: ReferencePreparedBeat? = nil
     ) {
         self.technique = technique
         self.bpm = bpm
+        self.beatEngineMode = beatEngineMode
         self.handedness = handedness
         self.notes = notes
+        self.captureIntent = captureIntent
+        self.preparedBeat = preparedBeat
+    }
+
+    func recordingSessionConfig(existing: CaptureSessionConfig?, now: Date) -> CaptureSessionConfig {
+        // A different scratch setup starts a different recording group. Its
+        // old sidecars/configuration remain attached to the previous group.
+        let sameSetup = existing?.referenceCaptureIntent?.id == captureIntent?.id
+        return CaptureSessionConfig(
+            performerName: ReferenceTakeMetadata.defaultPerformerName,
+            bpm: bpm,
+            scratchType: technique.scratchType,
+            drillMode: .fullCapture,
+            captureMode: isMovementCheck ? .movementCheck : .timedClick,
+            beatEngineMode: isMovementCheck ? .silent : beatEngineMode,
+            swingAmount: isMovementCheck ? 0 : beatEngineMode.defaultSwingAmount,
+            plannedTakeDurationSeconds: plannedRecordingDurationSeconds,
+            handedness: handedness,
+            notes: notes,
+            referenceCaptureIntent: captureIntent,
+            sessionID: sameSetup ? (existing?.sessionID ?? CaptureCore.LocalRecordingNaming.sessionID())
+                : CaptureCore.LocalRecordingNaming.sessionID(),
+            createdAt: sameSetup ? (existing?.createdAt ?? now) : now,
+            updatedAt: now
+        )
+    }
+
+    var plannedRecordingDurationSeconds: Double? {
+        guard !isMovementCheck else { return nil }
+        guard let intent = captureIntent, let beat = intent.beatSpec,
+              beat.sampleRate > 0, intent.bpm > 0 else { return nil }
+        let beatFrames = (60.0 / Double(intent.bpm) * Double(beat.sampleRate)).rounded()
+        let performanceBeats = intent.beatsPerCycle * intent.plan.repetitionCount
+            + intent.plan.tailBars * CaptureClickTrackDefaults.beatsPerBar
+        return Double(performanceBeats) * beatFrames / Double(beat.sampleRate)
     }
 }
 
@@ -97,6 +141,11 @@ final class ReferenceAuthoringCaptureBridge {
     static let platterController = 6
 
     private let engine: MacCaptureEngine
+    /// The same click/beat engine used by the normal desktop Capture route.
+    /// CXL declares every reference take as `timed_click`, so starting the
+    /// camera immediately without this engine made the sidecar claim an
+    /// audible count-in that the operator never heard.
+    private let beatEngine: ScratchLabBeatEngine
     /// The SAME transport Capture uses for the paired Watch. Not a second
     /// protocol: this bridge calls `requestWatchCaptureStart` exactly as
     /// `MacAnalyzerView`'s record action does, and never sends a stop —
@@ -104,8 +153,8 @@ final class ReferenceAuthoringCaptureBridge {
     /// authority for every terminal path of a take (commit d3ecf2a6).
     ///
     /// Optional so the bridge stays constructible in tests with no
-    /// Multipeer stack. `nil` means the paired workflow is unavailable, and
-    /// a start is REFUSED rather than run without wrist evidence.
+    /// Multipeer stack. `nil` records explicit unavailable Watch evidence;
+    /// raw diagnostic media may still be recorded and saved.
     private let companionReceiver: CompanionCameraReceiver?
     /// Session/take identity reserved for the in-flight start, shared by the
     /// Watch command, the macOS media, the sidecar and the ReferenceTake.
@@ -127,9 +176,14 @@ final class ReferenceAuthoringCaptureBridge {
     /// for cancelling the other; the view-disappearance path bumps both.
     private var startHandshakeCancellationGeneration: UInt64 = 0
 
-    init(engine: MacCaptureEngine, companionReceiver: CompanionCameraReceiver? = nil) {
+    init(
+        engine: MacCaptureEngine,
+        companionReceiver: CompanionCameraReceiver? = nil,
+        beatEngine: ScratchLabBeatEngine = ScratchLabBeatEngine()
+    ) {
         self.engine = engine
         self.companionReceiver = companionReceiver
+        self.beatEngine = beatEngine
     }
 
     /// Set immediately before calling
@@ -175,11 +229,11 @@ final class ReferenceAuthoringCaptureBridge {
             ))
         }
 
-        guard let companionReceiver else {
-            return .failure(.recordingFailed(
-                "The paired Watch relay is not available on this screen, so a reference take cannot be recorded. "
-                    + "A canonical reference requires linked watch motion."
-            ))
+        let preparedBeat = configuration.preparedBeat
+        guard configuration.isMovementCheck
+                ? (preparedBeat == nil && configuration.captureIntent?.beatSpec == nil)
+                : (preparedBeat != nil && preparedBeat?.binding == configuration.captureIntent?.beatSpec) else {
+            return .failure(.recordingFailed("Prepare the backing sound before recording this reference take."))
         }
 
         let now = Date()
@@ -188,25 +242,8 @@ final class ReferenceAuthoringCaptureBridge {
         //    macOS media file, the sidecar and the ReferenceTake all carry —
         //    the same reservation Capture makes, not a parallel one.
         let identityResult: Result<TakeIdentity, ReferenceAuthoringError> = DispatchQueue.main.sync {
-            let existingConfig = engine.recordingSessionConfig
-            engine.recordingSessionConfig = CaptureSessionConfig(
-                // Bookkeeping only — `ReferenceAuthoringSession.finishRecording`
-                // builds the authoritative `ReferenceTakeMetadata` itself, this
-                // config only drives the underlying routine-capture pipeline's
-                // own journal/session naming.
-                performerName: ReferenceTakeMetadata.defaultPerformerName,
-                bpm: configuration.bpm,
-                scratchType: configuration.technique.scratchType,
-                drillMode: .fullCapture,
-                captureMode: .timedClick,
-                handedness: configuration.handedness,
-                notes: configuration.notes,
-                // Reused across every take in one authoring session so
-                // retakes land in the same session folder; a fresh session ID
-                // only the first time.
-                sessionID: existingConfig?.sessionID ?? CaptureCore.LocalRecordingNaming.sessionID(),
-                createdAt: existingConfig?.createdAt ?? now,
-                updatedAt: now
+            engine.recordingSessionConfig = configuration.recordingSessionConfig(
+                existing: engine.recordingSessionConfig, now: now
             )
             do {
                 return .success(try engine.reserveNextRoutineTakeIdentity())
@@ -226,9 +263,9 @@ final class ReferenceAuthoringCaptureBridge {
         }
         reservedTakeIdentity = takeIdentity
 
-        // 2. Paired Watch start, on that exact identity, bounded and
-        //    cancellable. macOS recording does NOT begin until this is
-        //    acknowledged.
+        // 2. Attempt paired Watch start on this exact identity. A degraded
+        //    reply is retained as diagnostic evidence and cannot prevent raw
+        //    media capture; an explicit cancellation still stops this attempt.
         let handshakeGeneration = currentStartHandshakeCancellationGeneration()
         let handshakeOutcome = Self.performWatchStartHandshake(
             engine: engine,
@@ -242,25 +279,95 @@ final class ReferenceAuthoringCaptureBridge {
             }
         )
 
-        guard case .acknowledged(let reply) = handshakeOutcome else {
-            // Not acknowledged, timed out, or cancelled. Drop the reservation
-            // — which also issues the Watch stop for any capture the
-            // handshake may have left running — and leave the session
-            // recordable only through an explicit retry. No take exists, so
-            // nothing can be reviewed or approved from this attempt.
+        let reply: WatchCaptureControlReply
+        switch handshakeOutcome.replyForDiagnosticCapture(identity: takeIdentity) {
+        case .success(let value):
+            reply = value
+        case .failure(let error):
             reservedTakeIdentity = nil
             DispatchQueue.main.sync {
                 _ = engine.cancelPendingRoutineReservation()
             }
-            return .failure(.recordingFailed(handshakeOutcome.failureDetail))
+            return .failure(error)
         }
 
-        // 3. Only now start the macOS take. From here the engine's existing
-        //    `watchStopRequestHandler` is the single stop authority for this
-        //    Watch capture (commit d3ecf2a6); this bridge never sends a stop.
-        let recordingToken = DispatchQueue.main.sync {
+        // 3. Only now start the audible click count-in. The real macOS take
+        //    starts on the click engine's recording boundary, carrying those
+        //    exact host times into the persisted sidecar. From there the
+        //    engine's `watchStopRequestHandler` remains the single stop owner.
+        let timedStart = TimedRecordingStartRelay()
+        let beatStartError: Error? = DispatchQueue.main.sync {
             engine.applyPendingWatchReply(reply)
-            return engine.startRoutineRecording()
+            guard !startHandshakeWasCancelled(since: handshakeGeneration) else {
+                return ReferenceAuthoringError.recordingFailed("The capture start was cancelled.")
+            }
+            if configuration.isMovementCheck {
+                // No invented beat origin: start the same token-owned capture
+                // immediately and leave its end to Stop and Finalize.
+                let token = engine.startRoutineRecording(captureTiming: nil)
+                if timedStart.complete(with: token) {
+                    _ = engine.requestRoutineRecordingStop(for: token, reason: .interrupted)
+                }
+                return nil
+            }
+            guard let preparedBeat else {
+                return ReferenceAuthoringError.recordingFailed("The backing sound is missing.")
+            }
+            var beatStartMetadata: BeatEngineStartMetadata?
+            do {
+                let started = try beatEngine.start(
+                    preparedBeat: preparedBeat,
+                    mode: configuration.beatEngineMode,
+                    bpm: configuration.bpm,
+                    onRecordingStart: { [engine, beatEngine] in
+                        let captureTiming = CaptureTimingMetadata(
+                            clickStartHostTime: beatStartMetadata?.clickStartHostTime,
+                            recordingStartHostTime: beatStartMetadata?.recordingStartHostTime
+                                ?? ScratchLabBeatEngine.currentHostTime(),
+                            recordingStartOffsetSeconds: beatStartMetadata.map {
+                                AVAudioTime.seconds(forHostTime: $0.recordingStartHostTime - $0.clickStartHostTime)
+                            }
+                        )
+                        let token = engine.startRoutineRecording(captureTiming: captureTiming)
+                        if timedStart.complete(with: token) {
+                            beatEngine.stop()
+                            _ = engine.requestRoutineRecordingStop(for: token, reason: .interrupted)
+                        }
+                    }
+                )
+                beatStartMetadata = started
+                return nil
+            } catch {
+                return error
+            }
+        }
+
+        if let beatStartError {
+            DispatchQueue.main.sync {
+                beatEngine.stop()
+                _ = engine.cancelPendingRoutineReservation()
+            }
+            reservedTakeIdentity = nil
+            return .failure(.recordingFailed(
+                "Could not start capture: \(SessionExportFailureText.describe(beatStartError))"
+            ))
+        }
+
+        let countInDuration = Double(configuration.isMovementCheck ? 0 : CaptureClickTrackDefaults.countInBeats)
+            * 60.0 / Double(CaptureClickTrackDefaults.clampedBPM(configuration.bpm))
+        let recordingToken: RoutineRecordingRequestToken
+        if let token = timedStart.wait(timeout: countInDuration + 3)
+            ?? timedStart.abandon() {
+            recordingToken = token
+        } else {
+            DispatchQueue.main.sync {
+                beatEngine.stop()
+                _ = engine.cancelPendingRoutineReservation()
+            }
+            reservedTakeIdentity = nil
+            return .failure(.recordingFailed(
+                "The audible count-in finished, but recording did not start."
+            ))
         }
 
         switch Self.waitForRoutineRecordingStart(
@@ -272,6 +379,13 @@ final class ReferenceAuthoringCaptureBridge {
             activeRecordingToken = recordingToken
             return .success(())
         case .failure(let error):
+            DispatchQueue.main.sync {
+                beatEngine.stop()
+                _ = engine.requestRoutineRecordingStop(
+                    for: recordingToken,
+                    reason: .interrupted
+                )
+            }
             return .failure(error)
         }
     }
@@ -286,22 +400,41 @@ final class ReferenceAuthoringCaptureBridge {
         case cancelled
         case unavailable
 
-        var failureDetail: String {
+        /// Only cancellation refuses recording. Missing/degraded Watch data
+        /// is persisted exactly as such and remains ineligible for approval.
+        func replyForDiagnosticCapture(
+            identity: TakeIdentity
+        ) -> Result<WatchCaptureControlReply, ReferenceAuthoringError> {
             switch self {
-            case .acknowledged:
-                return ""
-            case .notAcknowledged(let reply):
-                return "Apple Watch did not acknowledge the start for this take (\(reply.syncState.rawValue)). "
-                    + (reply.detail ?? "Reconnect the companion device and the Watch, then record again.")
-            case .timedOut:
-                return "Apple Watch did not acknowledge the start within "
-                    + "\(ReferenceAuthoringCaptureBridge.formattedSeconds(ReferenceAuthoringCaptureBridge.watchHandshakeTimeout))s. "
-                    + "Recording was not started."
+            case .acknowledged(let reply), .notAcknowledged(let reply):
+                guard reply.sessionID == identity.sessionID, reply.takeID == identity.takeID else {
+                    return .success(WatchCaptureControlReply(
+                        commandID: UUID().uuidString.lowercased(),
+                        sessionID: identity.sessionID, takeID: identity.takeID,
+                        syncState: .failed,
+                        detail: "Watch start replied for another take; no synchronized Watch evidence is claimed."
+                    ))
+                }
+                return .success(reply)
+            case .timedOut, .unavailable:
+                return .success(WatchCaptureControlReply(
+                    commandID: UUID().uuidString.lowercased(),
+                    sessionID: identity.sessionID, takeID: identity.takeID,
+                    syncState: isTimedOut ? .timedOut : .unavailable,
+                    detail: isTimedOut
+                        ? "Watch start did not reply within the bounded wait. Raw media capture continued without synchronized Watch evidence."
+                        : "The Watch relay was unavailable. Raw media capture continued without Watch evidence."
+                ))
             case .cancelled:
-                return "The Watch start handshake was cancelled before it completed. Recording was not started."
-            case .unavailable:
-                return "The paired Watch relay is not available, so recording was not started."
+                return .failure(.recordingFailed(
+                    "The capture start was cancelled. Recording was not started."
+                ))
             }
+        }
+
+        private var isTimedOut: Bool {
+            if case .timedOut = self { return true }
+            return false
         }
     }
 
@@ -316,6 +449,14 @@ final class ReferenceAuthoringCaptureBridge {
         private var reply: WatchCaptureControlReply?
         private var waiterAbandoned = false
         private var completed = false
+
+        /// A task delayed on the main actor must not send a new start after
+        /// the worker has already cancelled or continued without the Watch.
+        func canBeginRequest() -> Bool {
+            lock.lock()
+            defer { lock.unlock() }
+            return !waiterAbandoned
+        }
 
         /// Called by the handshake task. `true` when the waiter has already
         /// given up, so the TASK owns the cleanup.
@@ -345,40 +486,93 @@ final class ReferenceAuthoringCaptureBridge {
         }
     }
 
+    /// Carries the exact engine token created by the click engine's scheduled
+    /// recording boundary back to the bridge's serial worker. If the bounded
+    /// waiter has already left, the callback owns immediate cleanup so neither
+    /// the Mac recorder nor the Watch can be orphaned.
+    private final class TimedRecordingStartRelay: @unchecked Sendable {
+        private let lock = NSLock()
+        private let semaphore = DispatchSemaphore(value: 0)
+        private var token: RoutineRecordingRequestToken?
+        private var waiterAbandoned = false
+
+        func complete(with token: RoutineRecordingRequestToken) -> Bool {
+            lock.lock()
+            self.token = token
+            let shouldCleanUp = waiterAbandoned
+            lock.unlock()
+            semaphore.signal()
+            return shouldCleanUp
+        }
+
+        func wait(timeout: TimeInterval) -> RoutineRecordingRequestToken? {
+            guard semaphore.wait(timeout: .now() + timeout) == .success else {
+                return nil
+            }
+            lock.lock()
+            defer { lock.unlock() }
+            return token
+        }
+
+        @discardableResult
+        func abandon() -> RoutineRecordingRequestToken? {
+            lock.lock()
+            defer { lock.unlock() }
+            if let token { return token }
+            waiterAbandoned = true
+            return nil
+        }
+    }
+
     /// Runs the SAME `requestWatchCaptureStart` call Capture makes, on the
     /// reserved identity, and blocks the CALLING (never main) thread on a
     /// bounded, cancellable wait for its answer.
     ///
-    /// `applyPendingWatchReply` is always performed by the task, on the main
-    /// actor, before this returns or abandons — so ownership of a Watch that
-    /// may have started is armed even when the wait gives up, and
-    /// `cancelPendingRoutineReservation` can then stop it.
+    /// The caller applies only the settled reply. An abandoned wait's late
+    /// reply can clean up only its original Watch identity, never a newer
+    /// reservation or capture, and cannot promote degraded evidence.
     static func performWatchStartHandshake(
         engine: MacCaptureEngine,
-        receiver: CompanionCameraReceiver,
+        receiver: CompanionCameraReceiver?,
         identity: TakeIdentity,
         watchWrist: String?,
         timeout: TimeInterval,
         pollInterval: TimeInterval,
         isCancelled: @escaping () -> Bool
     ) -> WatchStartHandshakeOutcome {
+        guard !isCancelled() else { return .cancelled }
+        guard let receiver else { return .unavailable }
+        return waitForWatchStartReply(
+            engine: engine, identity: identity, timeout: timeout,
+            pollInterval: pollInterval, isCancelled: isCancelled,
+            requestStart: {
+                await receiver.requestWatchCaptureStart(
+                    sessionID: identity.sessionID, takeID: identity.takeID,
+                    takeNumber: identity.takeNumber, watchWrist: watchWrist
+                )
+            }
+        )
+    }
+
+    /// The same bounded handoff is injectable without starting hardware, so
+    /// late replies and cancellation can be tested against real stop ownership.
+    static func waitForWatchStartReply(
+        engine: MacCaptureEngine,
+        identity: TakeIdentity,
+        timeout: TimeInterval,
+        pollInterval: TimeInterval,
+        isCancelled: @escaping () -> Bool,
+        requestStart: @escaping @MainActor () async -> WatchCaptureControlReply
+    ) -> WatchStartHandshakeOutcome {
         let relay = WatchStartHandshakeRelay()
         let semaphore = DispatchSemaphore(value: 0)
 
         Task { @MainActor in
-            let reply = await receiver.requestWatchCaptureStart(
-                sessionID: identity.sessionID,
-                takeID: identity.takeID,
-                takeNumber: identity.takeNumber,
-                watchWrist: watchWrist
-            )
-            // Fail-closed ownership first: a reply of any kind may mean the
-            // wrist is already recording.
-            engine.applyPendingWatchReply(reply)
-            if relay.complete(with: reply) {
-                // The waiter already gave up. Nothing will start, so release
-                // whatever this handshake may have left running.
-                _ = engine.cancelPendingRoutineReservation()
+            guard relay.canBeginRequest() else { return }
+            let reply = await requestStart()
+            if relay.complete(with: reply),
+               CaptureWatchStopPolicy.startMayHaveLeftWatchRecording(reply.syncState) {
+                _ = engine.requestWatchStop(for: identity, reason: .interrupted)
             }
             semaphore.signal()
         }
@@ -401,7 +595,13 @@ final class ReferenceAuthoringCaptureBridge {
         if settled == nil {
             settled = relay.abandon()
         }
-        if cancelled {
+        if cancelled || isCancelled() {
+            if let settled,
+               CaptureWatchStopPolicy.startMayHaveLeftWatchRecording(settled.syncState) {
+                DispatchQueue.main.sync {
+                    _ = engine.requestWatchStop(for: identity, reason: .interrupted)
+                }
+            }
             return .cancelled
         }
         guard let reply = settled else {
@@ -448,6 +648,10 @@ final class ReferenceAuthoringCaptureBridge {
         }
         guard let recordingToken = activeRecordingToken else {
             return .failure(.noActiveRecording)
+        }
+
+        DispatchQueue.main.sync {
+            beatEngine.stop()
         }
 
         let cancellationGeneration = currentFinalizationWaitCancellationGeneration()
@@ -499,6 +703,14 @@ final class ReferenceAuthoringCaptureBridge {
             )
         }
 
+        do {
+            if let preparedBeat = pendingConfiguration?.preparedBeat {
+                try Self.preserveBeat(preparedBeat, beside: completion.mediaURL)
+            }
+        } catch {
+            return .failure(.recordingFailed("Could not preserve this take's backing sound: \(error.localizedDescription)"))
+        }
+
         let artifacts = Self.buildArtifacts(
             mediaURL: completion.mediaURL,
             expectedIdentity: reservedTakeIdentity,
@@ -514,6 +726,20 @@ final class ReferenceAuthoringCaptureBridge {
             reservedTakeIdentity = nil
         }
         return artifacts
+    }
+
+    static func preserveBeat(_ beat: ReferencePreparedBeat, beside mediaURL: URL) throws {
+        let root = mediaURL.deletingLastPathComponent().appendingPathComponent("beat_assets", isDirectory: true)
+        let destination = root.appendingPathComponent(beat.binding.id, isDirectory: true)
+        let manager = FileManager.default
+        if !manager.fileExists(atPath: destination.path) {
+            try manager.createDirectory(at: root, withIntermediateDirectories: true)
+            let staging = root.appendingPathComponent(".preparing-\(UUID().uuidString)", isDirectory: true)
+            defer { try? manager.removeItem(at: staging) }
+            try manager.copyItem(at: beat.directoryURL, to: staging)
+            try manager.moveItem(at: staging, to: destination)
+        }
+        _ = try ReferenceBeatAssetStore.resolve(binding: beat.binding, rootURL: root)
     }
 
     /// Wait for a durable terminal record for one exact engine generation.
@@ -605,11 +831,15 @@ final class ReferenceAuthoringCaptureBridge {
             ))
         }
         let sidecar: CaptureCore.LocalRecordingSidecar
+        let sourceBinding: ReferenceTearEvidenceSourceBinding
         do {
             let data = try Data(contentsOf: sidecarURL)
             let decoder = JSONDecoder()
             decoder.dateDecodingStrategy = .iso8601
             sidecar = try decoder.decode(CaptureCore.LocalRecordingSidecar.self, from: data)
+            sourceBinding = try ReferenceTearEvidenceCodec.makeSourceBinding(
+                rawSidecarData: data, fileName: sidecarURL.lastPathComponent
+            )
         } catch {
             return .failure(.recordingFailed(
                 "Finalized sidecar \(sidecarURL.lastPathComponent) could not be read: \(SessionExportFailureText.describe(error))"
@@ -621,10 +851,13 @@ final class ReferenceAuthoringCaptureBridge {
             ))
         }
 
-        let sidecarMeasurement = measureArtifact(
-            url: sidecarURL,
-            fileManager: fileManager,
-            readError: nil
+        // Identity, bytes and the measured hash describe one finalized snapshot.
+        // Later sidecar rewrites must fail companion export, never silently rebind it.
+        let sidecarMeasurement = ReferenceArtifactMeasurement(
+            fileName: sidecarURL.lastPathComponent, exists: true,
+            byteCount: Int64(sourceBinding.rawSidecarData.count),
+            recordedSHA256: sourceBinding.rawSidecarSHA256,
+            currentSHA256: sourceBinding.rawSidecarSHA256
         )
 
         let audioCheck = ArtifactPreflight.checkFileReady(url: audioURL, fileManager: fileManager)
@@ -656,6 +889,23 @@ final class ReferenceAuthoringCaptureBridge {
         // Keep saved events/counts verbatim. Reuse the shared raw decoder only
         // for a companion provenance view, including runs lost by old filters.
         let platterMovementEvents = detectedNotation?.recordMovementEvents ?? []
+        let mediaTimeOrigin: ReferenceMediaTimeOrigin?
+        do {
+            mediaTimeOrigin = try makeMediaTimeOrigin(captureTiming: sidecar.captureTiming)
+        } catch {
+            return .failure(.recordingFailed(error.localizedDescription))
+        }
+        let witnessedTiming = makeWitnessedTiming(
+            sidecar: sidecar,
+            audio: audioMeasurement,
+            videoURL: videoMeasurement.exists ? mediaURL : nil,
+            mediaTimeOrigin: mediaTimeOrigin
+        )
+        let perTakeSourceState = makePerTakeSourceState(
+            sidecar: sidecar,
+            expectedIdentity: expectedIdentity,
+            takeDirectory: mediaURL.deletingLastPathComponent()
+        )
 
         return .success(
             ReferenceRecordedTakeArtifacts(
@@ -664,6 +914,7 @@ final class ReferenceAuthoringCaptureBridge {
                 sidecar: sidecarMeasurement,
                 actualMediaFileName: mediaURL.lastPathComponent,
                 crossfaderRawSamples: crossfaderPositionSamples(from: crossfaderEvents),
+                rawMixerMIDIEvents: mixerMidiEvents,
                 observedCrossfaderAddress: observedCrossfaderAddress(from: crossfaderEvents),
                 platterMovementEventCount: platterMovementEvents.count,
                 recordedAt: sidecar.endedAt ?? sidecar.startedAt,
@@ -681,8 +932,167 @@ final class ReferenceAuthoringCaptureBridge {
                 // this bridge only supplies the record and the identities it
                 // must be correlated against.
                 crossfaderTakeStartState: sidecar.crossfaderTakeStartState,
-                crossfaderTakeStartCorrelation: takeStartCorrelation
+                crossfaderTakeStartCorrelation: takeStartCorrelation,
+                tearEvidenceSourceBinding: sourceBinding,
+                rawSidecarURL: sidecarURL,
+                witnessedTiming: witnessedTiming,
+                mediaTimeOrigin: mediaTimeOrigin,
+                sourceState: perTakeSourceState
             )
+        )
+    }
+
+    private static func makePerTakeSourceState(
+        sidecar: CaptureCore.LocalRecordingSidecar,
+        expectedIdentity: TakeIdentity?,
+        takeDirectory: URL
+    ) -> ReferencePerTakeSourceState {
+        guard let expectedIdentity else {
+            return .conflict(identity: nil, detail: "the capture bridge has no reserved take identity")
+        }
+        guard sidecar.sessionID == expectedIdentity.sessionID,
+              sidecar.takeID == expectedIdentity.takeID else {
+            let expected = ReferenceTakeSourceIdentity(
+                sessionID: expectedIdentity.sessionID, takeID: expectedIdentity.takeID,
+                takeNumber: expectedIdentity.takeNumber, takeToken: sidecar.watchCommandID ?? "missing-token"
+            )
+            return .identityMismatch(
+                expected: expected,
+                foundSessionID: sidecar.sessionID,
+                foundTakeID: sidecar.takeID
+            )
+        }
+        guard let token = sidecar.watchCommandID, !token.isEmpty else {
+            return sidecar.watchSyncState == .notRequested
+                ? .notRequested(policy: "supported capture policy did not request Watch evidence")
+                : .conflict(identity: nil, detail: "Watch evidence has no take token")
+        }
+        let identity = ReferenceTakeSourceIdentity(
+            sessionID: expectedIdentity.sessionID,
+            takeID: expectedIdentity.takeID,
+            takeNumber: expectedIdentity.takeNumber,
+            takeToken: token
+        )
+        let evidence = watchEvidence(in: sidecar, expectedIdentity: expectedIdentity)
+        switch evidence {
+        case .linked(let fileName):
+            guard let data = verifiedWatchData(sidecar: sidecar, takeDirectory: takeDirectory) else {
+                return .conflict(identity: identity, detail: "The linked Watch file could not be verified for this take.")
+            }
+            return .linked(identity: identity, motionFileName: fileName, sha256: ReferencePackageIO.sha256Hex(data))
+        case .acknowledgedTransferPending:
+            return .waitingForLateTransfer(
+                identity: identity,
+                deadline: (sidecar.endedAt ?? sidecar.startedAt).addingTimeInterval(90)
+            )
+        case .transferFailed(let detail):
+            return sidecar.watchSyncState == .timedOut
+                ? .timedOut(identity: identity)
+                : .conflict(identity: identity, detail: detail)
+        case .identityMismatch(_, let found):
+            let pieces = found.split(separator: "/", maxSplits: 1).map(String.init)
+            return .identityMismatch(
+                expected: identity,
+                foundSessionID: pieces.first ?? found,
+                foundTakeID: pieces.count > 1 ? pieces[1] : "unknown"
+            )
+        case .missing(let syncState):
+            if sidecar.watchSyncState == .unavailable {
+                return .unavailable(policy: "Watch was unavailable under the supported CXL policy")
+            }
+            if sidecar.watchSyncState == .timedOut {
+                return .timedOut(identity: identity)
+            }
+            return .conflict(identity: identity, detail: "Watch source ended as \(syncState)")
+        }
+    }
+
+    static func verifiedWatchData(sidecar: CaptureCore.LocalRecordingSidecar, takeDirectory: URL) -> Data? {
+        guard let fileName = sidecar.linkedMotionFileName,
+              URL(fileURLWithPath: fileName).lastPathComponent == fileName,
+              let expectedCaptureID = sidecar.linkedMotionCaptureID else { return nil }
+        let localURL = takeDirectory.appendingPathComponent(fileName)
+        let resolvedURL = FileManager.default.fileExists(atPath: localURL.path)
+            ? localURL : SessionArchiveBuilder().resolveLinkedWatchCaptureArtifact(for: sidecar)?.fileURL
+        guard let resolvedURL, let data = try? Data(contentsOf: resolvedURL),
+              let capture = try? WatchMotionCaptureCodec.decoder.decode(WatchMotionCaptureSession.self, from: data),
+              capture.id == expectedCaptureID,
+              WatchAssociationResolver.isLinkedCaptureValid(sessionID: sidecar.sessionID,
+                takeID: sidecar.takeID, captureSession: capture) else { return nil }
+        return data
+    }
+
+    static func makeMediaTimeOrigin(captureTiming: CaptureTimingMetadata?) throws -> ReferenceMediaTimeOrigin? {
+        guard let captureTiming else { return nil }
+        guard let clickStart = captureTiming.clickStartHostTime,
+              let recordingStart = captureTiming.recordingStartHostTime,
+              clickStart > 0, recordingStart >= clickStart else {
+            throw ReferenceAuthoringError.recordingFailed("The take's media origin has missing or unordered capture timestamps.")
+        }
+        let origin = ReferenceMediaTimeOrigin(
+            clickStartHostTime: clickStart,
+            recordingStartHostTime: recordingStart,
+            recordingStartOffsetSeconds: captureTiming.recordingStartOffsetSeconds
+                ?? AVAudioTime.seconds(forHostTime: recordingStart - clickStart)
+        )
+        guard origin.validationIssues.isEmpty else {
+            throw ReferenceAuthoringError.recordingFailed(origin.validationIssues.joined(separator: " "))
+        }
+        return origin
+    }
+
+    static func makeWitnessedTiming(
+        sidecar: CaptureCore.LocalRecordingSidecar,
+        audio: ReferenceArtifactMeasurement,
+        videoURL: URL?,
+        mediaTimeOrigin: ReferenceMediaTimeOrigin?
+    ) -> ReferenceWitnessedTiming? {
+        guard let captureTiming = sidecar.captureTiming,
+              let clickStart = captureTiming.clickStartHostTime,
+              let actualStart = captureTiming.recordingStartHostTime,
+              let config = sidecar.sessionConfig,
+              let intent = config.referenceCaptureIntent,
+              let beat = intent.beatSpec,
+              let audioFrames = audio.frameCount,
+              let audioSampleRate = audio.sampleRate,
+              audioSampleRate.isFinite, audioSampleRate > 0,
+              beat.sampleRate > 0 else { return nil }
+        let sampleRate = Double(beat.sampleRate)
+        let intendedStart = clickStart + AVAudioTime.hostTime(
+            forSeconds: Double(beat.countInFrameCount) / sampleRate
+        )
+        let wavDuration = Double(audioFrames) / audioSampleRate
+        let plannedDuration: Double
+        if let mediaTimeOrigin {
+            let plannedBeats = (intent.plan.countInBars + intent.plan.tailBars) * beat.timeSignatureNumerator
+                + intent.plan.repetitionCount * intent.beatsPerCycle
+            plannedDuration = Double(plannedBeats) * 60.0 / Double(intent.bpm)
+                - mediaTimeOrigin.recordingStartOffsetSeconds
+        } else {
+            plannedDuration = Double(beat.countInFrameCount + beat.loopFrameCount) / sampleRate
+        }
+        let movDuration: Double?
+        if let videoURL {
+            let measured = CMTimeGetSeconds(AVURLAsset(url: videoURL).duration)
+            movDuration = measured.isFinite && measured > 0 ? measured : nil
+        } else {
+            movDuration = nil
+        }
+        return ReferenceWitnessedTiming(
+            clickStartHostTime: clickStart,
+            intendedMediaOriginHostTime: intendedStart,
+            actualRecordingOriginHostTime: actualStart,
+            sampleRate: beat.sampleRate,
+            countInFrameCount: beat.countInFrameCount,
+            loopStartFrame: beat.loopStartFrame,
+            loopFrameCount: beat.loopFrameCount,
+            beatsPerCycle: intent.beatsPerCycle,
+            plannedRepetitions: intent.plan.repetitionCount,
+            plannedDurationSeconds: plannedDuration,
+            measuredWAVDurationSeconds: wavDuration,
+            measuredMOVDurationSeconds: movDuration,
+            uncertaintySeconds: max(1.0 / sampleRate, 1.0 / audioSampleRate),
+            source: .captureSidecarHostClock
         )
     }
 
@@ -726,6 +1136,11 @@ final class ReferenceAuthoringCaptureBridge {
         guard sidecar.watchSyncState == .acknowledged else {
             return .missing(syncState: sidecar.watchSyncState.rawValue)
         }
+        if let stop = sidecar.watchStopDiagnostics, stop.outcome.isDegraded {
+            return .transferFailed(
+                detail: "The Watch did not confirm Stop (\(stop.outcome.rawValue)). If it is still recording, open ScratchLab on the Watch and press Stop. The Mac recording is retained."
+            )
+        }
         switch sidecar.watchStopDiagnostics?.motionTransferState {
         case .completed:
             // Transfer says completed but nothing is linked — that is a
@@ -752,9 +1167,16 @@ final class ReferenceAuthoringCaptureBridge {
     /// state.
     var lastFinalizedRecordingURL: URL? { lastFinalizedMediaURL }
 
+    var activeRecordingHasStopped: Bool {
+        guard let token = activeRecordingToken,
+              let boundary = engine.routineRecordingBoundary(for: token),
+              boundary.token == token, boundary.didStartRecording else { return false }
+        return boundary.stopWasRequested || boundary.didEnterFinalization || boundary.completion != nil
+    }
+
     /// Re-read the last finalized take's sidecar and re-classify its Watch
     /// evidence. Pure file read; attaches nothing itself.
-    private func refreshWatchEvidence() -> ReferenceWatchEvidence? {
+    private func refreshWatchEvidence() -> ReferenceWatchEvidenceRefresh? {
         guard let mediaURL = lastFinalizedMediaURL else { return nil }
         let sidecarURL = CaptureCore.LocalRecordingFiles.sidecarURL(forMediaURL: mediaURL)
         guard let data = try? Data(contentsOf: sidecarURL) else { return nil }
@@ -764,7 +1186,20 @@ final class ReferenceAuthoringCaptureBridge {
             CaptureCore.LocalRecordingSidecar.self,
             from: data
         ) else { return nil }
-        return Self.watchEvidence(in: sidecar, expectedIdentity: lastFinalizedIdentity)
+        let sourceBinding = try? ReferenceTearEvidenceCodec.makeSourceBinding(
+            rawSidecarData: data,
+            fileName: sidecarURL.lastPathComponent
+        )
+        let sourceState = Self.makePerTakeSourceState(sidecar: sidecar,
+            expectedIdentity: lastFinalizedIdentity, takeDirectory: mediaURL.deletingLastPathComponent())
+        let evidence = Self.watchEvidence(in: sidecar, expectedIdentity: lastFinalizedIdentity)
+        if case .linked = sourceState {
+            return .init(evidence: evidence, sourceBinding: sourceBinding, sourceState: sourceState)
+        }
+        if evidence.isLinked, case .conflict(_, let detail) = sourceState {
+            return .init(evidence: .transferFailed(detail: detail), sourceBinding: sourceBinding)
+        }
+        return .init(evidence: evidence, sourceBinding: sourceBinding)
     }
 
     private static func measureArtifact(
@@ -827,6 +1262,7 @@ final class ReferenceAuthoringCaptureBridge {
                     byteCount: byteCount,
                     peakLevel: Double(peak),
                     frameCount: Int64(frameCount),
+                    sampleRate: format.sampleRate,
                     recordedSHA256: hash,
                     currentSHA256: hash
                 )
@@ -866,7 +1302,7 @@ final class ReferenceAuthoringCaptureBridge {
     ) -> CrossfaderMIDIAddress? {
         guard let first = crossfaderEvents.first else { return nil }
         return CrossfaderMIDIAddress(
-            deviceIdentifier: first.deviceName,
+            deviceIdentifier: first.deviceIdentifier ?? "",
             deviceName: first.deviceName,
             channel: first.channel,
             controller: first.controller
@@ -957,7 +1393,7 @@ final class ReferenceAuthoringCaptureBridge {
             } ?? nil
             let observedAddress = crossfaderObservation.map {
                 CrossfaderMIDIAddress(
-                    deviceIdentifier: $0.deviceName,
+                    deviceIdentifier: engine.selectedMIDIInputSourceID,
                     deviceName: $0.deviceName,
                     channel: $0.channel,
                     controller: $0.controller
@@ -965,7 +1401,7 @@ final class ReferenceAuthoringCaptureBridge {
             }
             let calibration = crossfaderMapping.flatMap {
                 engine.crossfaderCalibration(
-                    forDeviceName: crossfaderObservation?.deviceName ?? controllerName,
+                    forDeviceIdentifier: engine.selectedMIDIInputSourceID,
                     channel: $0.channel,
                     controller: $0.controller
                 )
@@ -1024,9 +1460,7 @@ final class ReferenceAuthoringCaptureBridge {
                 crossfaderEventCount: crossfaderObservation?.eventCount ?? 0,
                 platterEventCount: platterObservation?.eventCount ?? 0,
                 platterIsMoving: platterIsMoving,
-                audioInputPeakLevel: engine.selectedAudioDeviceUniqueID.isEmpty
-                    ? nil
-                    : Double(engine.audioLevel),
+                audioInputPeakLevel: engine.activeCaptureAudioSignalLevel.map(Double.init),
                 audioDeviceName: engine.availableAudioDevices
                     .first(where: { $0.uniqueID == engine.selectedAudioDeviceUniqueID })?
                     .localizedName,
@@ -1096,13 +1530,16 @@ final class ReferenceAuthoringCaptureBridge {
     }
 
     /// Cancels an in-flight Watch start handshake. Safe at any time: the
-    /// handshake task still applies its reply on the main actor and then
-    /// releases any Watch capture it may have started, so leaving the screen
+    /// handshake task releases only the original Watch identity when its reply
+    /// arrives after cancellation, so leaving the screen
     /// mid-handshake cannot orphan a recording wrist.
     func cancelPendingStartHandshake() {
         cancellationLock.lock()
         startHandshakeCancellationGeneration &+= 1
         cancellationLock.unlock()
+        DispatchQueue.main.async { [beatEngine] in
+            beatEngine.stop()
+        }
     }
 
     private func currentStartHandshakeCancellationGeneration() -> UInt64 {

@@ -1713,3 +1713,591 @@ struct ScratchAlignmentBoundaryTests {
         #expect(controller.scoredPerformedRange == camera.scoredPerformedRange)
     }
 }
+
+#if DEBUG
+struct CanonicalTearComparisonTests {
+    typealias R = ScratchNotation.GestureRecord
+    typealias C = CanonicalTearComparison
+
+    private func target(_ holds: Int = 2, form: ScratchNotation.TearTemplate.Form = .forward,
+                        weights: [Double]? = nil) -> [R] {
+        ScratchNotation.TearTemplate(
+            id: "comparison-target-\(holds)-\(form.rawValue)", form: form, holdCount: holds,
+            subdivisionRatio: weights ?? Array(repeating: 1, count: holds + 1),
+            gestureDurationBeats: 1, holdDurationBeats: 1.0 / 16
+        ).expanded()!
+    }
+
+    private func evidence(_ provenance: ScratchNotationProvenance = .measured,
+                          source: ScratchNotationEvidenceSource = .platterTimeline,
+                          confidence: Double = 1) -> R.Evidence {
+        R.Evidence(provenance: provenance, observation: ScratchNotationEvidence(
+            source: source, confidence: confidence, reason: "canonical_comparison_fixture", rawSampleCount: 3))
+    }
+
+    private func replacing(_ r: R, id: String? = nil, evidence: R.Evidence? = nil,
+                           coordinate: R.CoordinateSpace? = nil, subdivisions: [R.Subdivision]? = nil,
+                           holds: [R.TearHold]? = nil, edges: [R.FaderTransition]? = nil,
+                           intervals: [R.FaderSpan]? = nil) -> R {
+        R(id: id ?? r.id, direction: r.direction, timingDomain: r.timingDomain,
+          coordinateSpace: coordinate ?? r.coordinateSpace, evidence: evidence ?? r.evidence,
+          subdivisions: subdivisions ?? r.subdivisions, internalHolds: holds ?? r.internalHolds,
+          faderTransitions: edges ?? r.faderTransitions, faderIntervals: intervals ?? r.faderIntervals)
+    }
+
+    /// Dense curves are explicitly synthetic measured fixtures, never a
+    /// production adapter. Real authoring projection supplies interpolatedCurve.
+    private func performance(_ targets: [R], bpm: Double = 60, origin: Double = 0,
+                             dense: Bool = true, holdOffset: Double = 0,
+                             shapeBend: Double = 0) -> [R] {
+        let motionEvidence = evidence()
+        let faderEvidence = evidence(source: .crossfaderRaw)
+        return targets.map { t in
+            func time(_ beat: Double) -> Double {
+                let atHold = t.internalHolds.contains {
+                    $0.span.startTime == beat || $0.span.endTime == beat
+                }
+                return origin + beat * 60 / bpm + (atHold ? holdOffset : 0)
+            }
+            return R(id: "performed/\(t.id)", direction: t.direction, timingDomain: .seconds,
+                coordinateSpace: t.coordinateSpace, evidence: motionEvidence,
+                subdivisions: t.subdivisions.map { s in
+                    let a = s.targetCurve!.points.first!, b = s.targetCurve!.points.last!
+                    var points: [R.CurvePoint] = [.init(time: time(a.time), position: a.position)]
+                    if dense {
+                        points.append(.init(time: (time(a.time) + time(b.time)) / 2,
+                                            position: (a.position + b.position) / 2 + shapeBend))
+                    }
+                    points.append(.init(time: time(b.time), position: b.position))
+                    return R.Subdivision(id: "performed/\(s.id)",
+                        span: .init(startTime: time(s.span.startTime), endTime: time(s.span.endTime)),
+                        evidence: motionEvidence,
+                        measuredCurve: .init(points: points, evidence: motionEvidence))
+                },
+                internalHolds: t.internalHolds.map { h in
+                    R.TearHold(id: "performed/\(h.id)",
+                        span: .init(startTime: time(h.span.startTime), endTime: time(h.span.endTime)),
+                        label: h.label, evidence: motionEvidence, position: h.position)
+                },
+                faderTransitions: t.faderTransitions.map {
+                    R.FaderTransition(id: "performed/\($0.id)", time: time($0.time),
+                                      state: $0.state, evidence: faderEvidence)
+                },
+                faderIntervals: t.faderIntervals.map {
+                    R.FaderSpan(id: "performed/\($0.id)",
+                        span: .init(startTime: time($0.span.startTime), endTime: time($0.span.endTime)),
+                        state: $0.state, evidence: faderEvidence)
+                })
+        }
+    }
+
+    private func dimension(_ result: C.Result, _ axis: C.Axis) -> C.Dimension {
+        result.dimensions.first { $0.axis == axis }!
+    }
+
+    private func compared(_ t: [R], _ p: [R], bpm: Double = 60, origin: Double = 0,
+                          limitations: [String: [C.UnavailableReason]] = [:]) -> C.Result {
+        C.compare(target: t, performed: p, bpm: bpm, performedOriginSeconds: origin,
+                  performedLimitations: limitations)
+    }
+
+    private func withFaderTarget(_ r: R) -> R {
+        let e = evidence(.authored, source: .authored)
+        return replacing(r, edges: [
+            .init(id: "target-close", time: 0.2, state: .closed, evidence: e),
+            .init(id: "target-open", time: 0.3, state: .open, evidence: e)
+        ])
+    }
+
+    @Test("All authored directions, hold counts and unequal ratios compare independently",
+          arguments: ScratchNotation.internalCanonicalTearTemplates)
+    func allAuthoredTemplates(_ template: ScratchNotation.TearTemplate) {
+        let t = template.expanded()!
+        let p = performance(t, bpm: 95, origin: 2)
+        let result = compared(t, p, bpm: 95, origin: 2)
+        #expect(result.dimensions.map(\.axis) == C.Axis.allCases)
+        for axis in [C.Axis.directionOrder, .holdCount, .holdTiming, .subdivisionRatios, .motionShape, .evidenceQuality] {
+            #expect(dimension(result, axis).assessment == .withinTolerance)
+            #expect(dimension(result, axis).scorePercentage == 100)
+        }
+        #expect(dimension(result, .faderTiming).assessment == .notRequested)
+        #expect(result.semanticErrors.isEmpty)
+    }
+
+    @Test("Early and late holds retain timing matches and exact signed deviations", arguments: [-0.09, 0.09])
+    func earlyAndLateHolds(_ offset: Double) {
+        let t = target(1)
+        let result = compared(t, performance(t, holdOffset: offset))
+        #expect(dimension(result, .holdCount).assessment == .withinTolerance)
+        let timing = dimension(result, .holdTiming)
+        #expect(timing.assessment == .outsideTolerance)
+        #expect(timing.measurements.count == 2)
+        #expect(timing.measurements.allSatisfy { abs(($0.signedError ?? 0) - offset * 1000) < 0.000001 })
+        #expect(!timing.unavailableReasons.contains(.unmatchedHold))
+        #expect(result.semanticErrors.contains { $0.kind == (offset < 0 ? .tearHoldEarly : .tearHoldLate) })
+    }
+
+    @Test("Missing and extra holds stay count errors with order-aligned timing", arguments: [1, 3])
+    func missingAndExtraHold(_ actualCount: Int) {
+        let result = compared(target(2), performance(target(actualCount)))
+        let count = dimension(result, .holdCount)
+        #expect(count.assessment == .outsideTolerance)
+        #expect(count.measurements.first?.signedError == Double(actualCount - 2))
+        let timing = dimension(result, .holdTiming)
+        #expect(timing.assessment == .partiallyAssessed)
+        #expect(timing.unavailableReasons.contains(.unmatchedHold))
+        #expect(timing.measurements.filter { $0.kind == .holdOnset }.count == min(2, actualCount))
+        #expect(result.semanticErrors.contains { $0.kind == (actualCount < 2 ? .missingTearHold : .extraTearHold) })
+    }
+
+    @Test("Wrong direction is assessed without selecting a different target")
+    func wrongDirection() {
+        let result = compared(target(2), performance(target(2, form: .backward)))
+        #expect(dimension(result, .directionOrder).assessment == .outsideTolerance)
+        #expect(dimension(result, .holdCount).assessment == .withinTolerance)
+        #expect(result.semanticErrors.contains { $0.kind == .wrongDirection })
+    }
+
+    @Test("Explicit orbit order preserves wrong directions and extra gestures")
+    func directionOrder() {
+        let t = target(1, form: .forwardBackward)
+        let forward = performance(target(1))[0]
+        let backward = performance(target(1, form: .backward), origin: 1)[0]
+        let extra = replacing(performance(target(1), origin: 2)[0], id: "extra")
+        let result = compared(t, [forward, backward, extra])
+        #expect(dimension(result, .directionOrder).measurements.filter { $0.kind == .direction }.count == 2)
+        #expect(dimension(result, .directionOrder).measurements.last?.kind == .extraGesture)
+        #expect(dimension(result, .directionOrder).assessment == .outsideTolerance)
+    }
+
+    @Test("Unequal authored weights permit nearby unequal performance and preserve exact share error")
+    func unevenButAllowed() {
+        let t = target(2, weights: [1, 2, 1])
+        let p = performance(target(2, weights: [1, 2.15, 0.95]))
+        let ratio = dimension(compared(t, p), .subdivisionRatios)
+        #expect(ratio.assessment == .withinTolerance)
+        #expect(ratio.measurements.count == 3)
+        #expect(abs(ratio.measurements[1].expected! - 0.5) < 0.000001)
+        #expect(abs(ratio.measurements[1].observed! - 2.15 / 4.1) < 0.000001)
+        #expect(abs(ratio.measurements[1].signedError!) > 0.01)
+    }
+
+    @Test("Ratio deviations beyond the explicit share tolerance generate specific feedback")
+    func unequalOutsideTolerance() {
+        let result = compared(target(2, weights: [1, 2, 1]),
+                              performance(target(2, weights: [3, 0.5, 0.5])))
+        #expect(dimension(result, .subdivisionRatios).assessment == .outsideTolerance)
+        #expect(result.semanticErrors.contains { $0.kind == .subdivisionRatioMismatch })
+    }
+
+    @Test("Captured clicks on a plain tear never become cut penalties")
+    func clickOnPlainTear() {
+        let t = target(1)
+        let p = performance(t)[0]
+        let fader = evidence(source: .crossfaderRaw)
+        let clicked = replacing(p, edges: [
+            .init(id: "close", time: 0.2, state: .closed, evidence: fader),
+            .init(id: "open", time: 0.3, state: .open, evidence: fader)
+        ])
+        let result = compared(t, [clicked])
+        #expect(dimension(result, .faderTiming).assessment == .notRequested)
+        #expect(dimension(result, .faderTiming).scorePercentage == nil)
+        #expect(result.semanticErrors.allSatisfy { $0.family != .fader })
+        #expect(dimension(result, .holdCount).assessment == .withinTolerance)
+    }
+
+    @Test("Authored fader transitions assess their own timing")
+    func authoredFaderTiming() {
+        let t = [withFaderTarget(target(1)[0])]
+        let p = performance(t)[0]
+        let shifted = replacing(p, edges: p.faderTransitions.map {
+            .init(id: $0.id, time: $0.time + 0.08, state: $0.state, evidence: $0.evidence)
+        })
+        let result = compared(t, [shifted])
+        let fader = dimension(result, .faderTiming)
+        #expect(fader.assessment == .outsideTolerance)
+        #expect(fader.measurements.filter { $0.kind == .faderOffset }.allSatisfy {
+            abs(($0.signedError ?? 0) - 80) < 0.000001
+        })
+        #expect(result.semanticErrors.contains { $0.kind == .lateCut })
+        #expect(dimension(result, .holdTiming).assessment == .withinTolerance)
+    }
+
+    @Test("Uncaptured requested fader is unavailable, not missing-cut failure")
+    func missingFaderEvidence() {
+        let t = [withFaderTarget(target(1)[0])]
+        let p = replacing(performance(t)[0], edges: [], intervals: [])
+        let result = compared(t, [p])
+        #expect(dimension(result, .faderTiming).assessment == .unavailable)
+        #expect(dimension(result, .faderTiming).unavailableReasons == [.missingFaderEvidence])
+        #expect(dimension(result, .evidenceQuality).unavailableReasons.contains(.missingFaderEvidence))
+        #expect(!result.semanticErrors.contains { $0.family == .fader })
+    }
+
+    @Test("Observed open fader with no requested transition is a real missing-cut result")
+    func observedMissingCuts() {
+        let t = [withFaderTarget(target(1)[0])]
+        let p = replacing(performance(t)[0], edges: [])
+        let result = compared(t, [p])
+        #expect(dimension(result, .faderTiming).assessment == .outsideTolerance)
+        #expect(dimension(result, .faderTiming).measurements.filter { $0.kind == .missingFader }.count == 2)
+    }
+
+    @Test("No selected target or no performance produces seven unavailable dimensions", arguments: [true, false])
+    func missingInputs(_ missingTarget: Bool) {
+        let t = target()
+        let result = compared(missingTarget ? [] : t, missingTarget ? performance(t) : [])
+        #expect(result.dimensions.count == 7)
+        #expect(result.dimensions.allSatisfy { $0.assessment == .unavailable && $0.scorePercentage == nil })
+        #expect(result.dimensions[0].unavailableReasons.contains(missingTarget ? .missingTarget : .missingPerformance))
+        #expect(result.semanticErrors.isEmpty)
+    }
+
+    @Test("Invalid tempo or origin cannot generate a numeric score", arguments: [0.0, -1, Double.nan, .infinity])
+    func invalidTempo(_ bpm: Double) {
+        let t = target()
+        let result = compared(t, performance(t), bpm: bpm)
+        #expect(result.dimensions.allSatisfy { $0.unavailableReasons == [.invalidTempoOrOrigin] })
+        let invalidOrigin = compared(t, performance(t), origin: .nan)
+        #expect(invalidOrigin.dimensions.allSatisfy { $0.scorePercentage == nil })
+    }
+
+    @Test("Invalid tolerance configuration is explicit")
+    func invalidConfiguration() {
+        let t = target()
+        var configuration = C.Configuration.internalReview
+        configuration.ratioShareTolerance = -.infinity
+        let result = C.compare(target: t, performed: performance(t), bpm: 60,
+                               performedOriginSeconds: 0, configuration: configuration)
+        #expect(result.dimensions.allSatisfy { $0.unavailableReasons == [.invalidConfiguration] })
+    }
+
+    @Test("Unknown and ambiguous reviewed classifications suppress structural judgments",
+          arguments: [C.UnavailableReason.unknownEvidence, .ambiguousEvidence])
+    func reviewedUnknown(_ reason: C.UnavailableReason) {
+        let t = target(), p = performance(t)
+        let result = compared(t, p, limitations: [p[0].id: [reason]])
+        for axis in [C.Axis.directionOrder, .holdCount, .holdTiming, .subdivisionRatios, .motionShape] {
+            #expect(dimension(result, axis).assessment == .unavailable)
+            #expect(dimension(result, axis).unavailableReasons.contains(reason))
+        }
+        #expect(result.semanticErrors.isEmpty)
+        #expect(dimension(result, .evidenceQuality).scorePercentage == nil)
+        #expect(dimension(result, .evidenceQuality).measurements.first?.observed == 0)
+    }
+
+    @Test("Corrected timing retains reviewed count but never claims measured timing or ratios")
+    func correctedTiming() {
+        let t = target(), p = performance(t)
+        let result = compared(t, p, limitations: [p[0].id: [.correctedTiming]])
+        #expect(dimension(result, .holdCount).assessment == .withinTolerance)
+        for axis in [C.Axis.holdTiming, .subdivisionRatios, .motionShape] {
+            #expect(dimension(result, axis).assessment == .unavailable)
+            #expect(dimension(result, axis).unavailableReasons.contains(.correctedTiming))
+        }
+    }
+
+    @Test("Manual correction provenance alone prevents measured timing and shape claims", arguments: [0, 1, 2])
+    func correctedProvenance(_ level: Int) {
+        let t = target(), p = performance(t)[0]
+        let holds = p.internalHolds.map {
+            R.TearHold(id: $0.id, span: $0.span, label: $0.label,
+                       evidence: evidence(.manuallyCorrected), position: $0.position)
+        }
+        let subdivisions = p.subdivisions.map {
+            R.Subdivision(id: $0.id, span: $0.span, evidence: evidence(.manuallyCorrected),
+                          measuredCurve: $0.measuredCurve)
+        }
+        let corrected = level == 0 ? replacing(p, holds: holds)
+            : level == 1 ? replacing(p, subdivisions: subdivisions)
+            : replacing(p, evidence: evidence(.manuallyCorrected))
+        let before = corrected
+        let result = compared(t, [corrected])
+        #expect(dimension(result, .holdCount).assessment == .withinTolerance)
+        #expect(dimension(result, .holdTiming).unavailableReasons.contains(.correctedTiming))
+        #expect(dimension(result, .motionShape).assessment == .unavailable)
+        #expect(dimension(result, .motionShape).unavailableReasons.contains(.correctedTiming))
+        #expect(corrected == before)
+    }
+
+    @Test("Sparse endpoints and interpolated curves never earn a speed-shape pass", arguments: [true, false])
+    func sparseOrInterpolated(_ sparse: Bool) {
+        let t = target(), p = performance(t, dense: !sparse)
+        let reason: C.UnavailableReason = sparse ? .insufficientCurveSamples : .interpolatedCurve
+        let result = compared(t, p, limitations: sparse ? [:] : [p[0].id: [reason]])
+        #expect(dimension(result, .motionShape).assessment == .unavailable)
+        #expect(dimension(result, .motionShape).scorePercentage == nil)
+        #expect(dimension(result, .motionShape).unavailableReasons.contains(reason))
+        #expect(dimension(result, .holdCount).assessment == .withinTolerance)
+    }
+
+    @Test("Take-local coordinates cannot be relabelled as comparable sample position")
+    func coordinateMismatch() {
+        let t = target()
+        let p = replacing(performance(t)[0], coordinate: .normalizedTakeLocalDisplacement)
+        let result = compared(t, [p])
+        #expect(dimension(result, .motionShape).assessment == .unavailable)
+        #expect(dimension(result, .motionShape).unavailableReasons.contains(.coordinateMismatch))
+        #expect(dimension(result, .subdivisionRatios).assessment == .withinTolerance)
+    }
+
+    @Test("Reversed record order and duplicate identities fail without sorting or repair", arguments: [true, false])
+    func malformedRecordSequence(_ reversed: Bool) {
+        let t = target(1, form: .forwardBackward), p = performance(t)
+        let malformed = reversed ? Array(p.reversed()) : [p[0], replacing(p[1], id: p[0].id)]
+        let result = compared(t, malformed)
+        #expect(result.dimensions.allSatisfy { $0.unavailableReasons == [.invalidPerformance] })
+        #expect(result.semanticErrors.isEmpty)
+    }
+
+    @Test("Unknown, inferred and low-confidence motion never becomes a measured success", arguments: [0, 1, 2])
+    func unsupportedEvidence(_ variant: Int) {
+        let t = target(), p = performance(t)[0]
+        let e = variant == 0 ? evidence(.unknown)
+            : variant == 1 ? evidence(.inferred) : evidence(confidence: 0.2)
+        let result = compared(t, [replacing(p, evidence: e)])
+        #expect(dimension(result, .holdCount).assessment == .unavailable)
+        #expect(dimension(result, .holdCount).scorePercentage == nil)
+    }
+
+    @Test("Non-finite measured points fail motion assessment")
+    func nonFiniteCurve() {
+        let t = target(), p = performance(t)[0], s = p.subdivisions[0]
+        var subdivisions = p.subdivisions
+        subdivisions[0] = .init(id: s.id, span: s.span, evidence: s.evidence,
+            measuredCurve: .init(points: [
+                .init(time: s.span.startTime, position: .nan),
+                .init(time: s.span.endTime, position: 1)
+            ], evidence: s.evidence))
+        let result = compared(t, [replacing(p, subdivisions: subdivisions)])
+        #expect(dimension(result, .directionOrder).assessment == .unavailable)
+        #expect(dimension(result, .motionShape).unavailableReasons.contains(.invalidPerformance))
+    }
+
+    @Test("Dense measured shape differences produce a shape-only observation")
+    func measuredShapeMismatch() {
+        let t = target(1)
+        let result = compared(t, performance(t, shapeBend: 0.2))
+        #expect(dimension(result, .motionShape).assessment == .outsideTolerance)
+        #expect(dimension(result, .motionShape).measurements.contains {
+            $0.kind == .sampledShape && ($0.observed ?? 0) > 0.1
+        })
+        #expect(dimension(result, .holdTiming).assessment == .withinTolerance)
+        #expect(result.semanticErrors.contains { $0.kind == .motionShapeMismatch })
+    }
+
+    @Test("Measured discontinuity at a hold is not hidden by matching timing")
+    func discontinuityAtHold() {
+        let t = target(1), p = performance(t)[0], h = p.internalHolds[0]
+        let changed = R.TearHold(id: h.id, span: h.span, label: h.label,
+                                evidence: h.evidence, position: h.position! + 0.1)
+        let result = compared(t, [replacing(p, holds: [changed])])
+        #expect(dimension(result, .motionShape).assessment == .outsideTolerance)
+        #expect(dimension(result, .motionShape).measurements.contains {
+            $0.kind == .continuity && abs(($0.observed ?? 0) - 0.1) < 0.000001
+        })
+        #expect(dimension(result, .holdTiming).assessment == .withinTolerance)
+    }
+
+    @Test("Finite inputs that overflow milliseconds are unavailable, never infinite measurements")
+    func finiteArithmeticOverflow() {
+        let t = target(), p = performance(t)
+        let result = compared(t, p, origin: -Double.greatestFiniteMagnitude)
+        #expect(dimension(result, .holdTiming).unavailableReasons.contains(.nonFiniteMeasurement))
+        #expect(result.dimensions.flatMap(\.measurements).allSatisfy {
+            [$0.expected, $0.observed, $0.signedError, $0.tolerance].compactMap { $0 }.allSatisfy(\.isFinite)
+        })
+    }
+
+    @Test("Comparison is deterministic and leaves both canonical inputs unchanged")
+    func immutableAndDeterministic() {
+        let t = target(3, form: .forwardBackward), p = performance(t, bpm: 95, origin: 2)
+        let originalTarget = t, originalPerformance = p
+        let a = compared(t, p, bpm: 95, origin: 2)
+        let b = compared(t, p, bpm: 95, origin: 2)
+        #expect(a == b)
+        #expect(t == originalTarget)
+        #expect(p == originalPerformance)
+        #expect(a.dimensions.count == 7)
+    }
+
+    @Test("Plain tears disclose unknown, malformed and partial fader evidence without cut penalties", arguments: [0, 1, 2])
+    func plainFaderQuality(_ variant: Int) {
+        let t = target(1), p = performance(t)[0]
+        let interval = R.FaderSpan(id: "limited-fader",
+            span: variant == 1 ? .init(startTime: 0.5, endTime: 0.2)
+                : variant == 2 ? .init(startTime: 0.4, endTime: 0.6)
+                : .init(startTime: 0, endTime: 1), state: .open,
+            evidence: evidence(variant == 0 ? .unknown : .measured, source: .crossfaderRaw))
+        let result = compared(t, [replacing(p, intervals: [interval])])
+        #expect(dimension(result, .faderTiming).assessment == .notRequested)
+        #expect(dimension(result, .evidenceQuality).unavailableReasons.contains(.missingFaderEvidence))
+        #expect(dimension(result, .evidenceQuality).scorePercentage == nil)
+        #expect(result.semanticErrors.allSatisfy { $0.family != .fader })
+    }
+
+    @Test("Gaps in requested fader coverage cannot prove missing cuts")
+    func requestedPartialFaderCoverage() {
+        let t = [withFaderTarget(target(1)[0])], p = performance(t)[0]
+        let interval = R.FaderSpan(id: "later-open", span: .init(startTime: 0.5, endTime: 1),
+                                  state: .open, evidence: evidence(source: .crossfaderRaw))
+        let result = compared(t, [replacing(p, edges: [], intervals: [interval])])
+        #expect(dimension(result, .faderTiming).assessment == .unavailable)
+        #expect(dimension(result, .faderTiming).unavailableReasons.contains(.missingFaderEvidence))
+        #expect(!result.semanticErrors.contains { $0.kind == .missedCut })
+    }
+
+    @Test("Unrepresented inter-gesture intervals remain explicit")
+    func interGestureGap() {
+        let t = target(1, form: .forwardBackward)
+        let p = [performance([t[0]])[0], performance([t[1]], origin: 0.1)[0]]
+        let result = compared(t, p)
+        #expect(dimension(result, .directionOrder).assessment == .partiallyAssessed)
+        #expect(dimension(result, .evidenceQuality).unavailableReasons.contains(.unobservedInterGestureInterval))
+        #expect(dimension(result, .evidenceQuality).scorePercentage == nil)
+        #expect(dimension(result, .evidenceQuality).measurements.contains {
+            $0.kind == .interGestureGap && abs(($0.observed ?? 0) - 100) < 0.000001
+        })
+    }
+
+    @Test("Aggregate dense curves and excessive subdivisions are bounded", arguments: [true, false])
+    func boundedWork(_ dense: Bool) {
+        let t = target(1)
+        let performed: [R]
+        if dense {
+            performed = (0..<9).map { index in
+                let p = performance(t, origin: Double(index))[0]
+                let subdivisions = p.subdivisions.map { s in
+                    let first = s.measuredCurve!.points.first!, last = s.measuredCurve!.points.last!
+                    let points = (0..<4096).map { sample in
+                        let share = Double(sample) / 4095
+                        return R.CurvePoint(time: first.time + (last.time - first.time) * share,
+                                            position: first.position + (last.position - first.position) * share)
+                    }
+                    return R.Subdivision(id: s.id, span: s.span, evidence: s.evidence,
+                        measuredCurve: .init(points: points, evidence: s.evidence))
+                }
+                return replacing(p, id: "dense-\(index)", subdivisions: subdivisions)
+            }
+        } else {
+            let p = performance(t)[0]
+            performed = [replacing(p, subdivisions: Array(repeating: p.subdivisions[0], count: 130))]
+        }
+        let result = compared(t, performed)
+        #expect(result.dimensions.allSatisfy { $0.unavailableReasons == [.comparisonLimitExceeded] })
+    }
+
+    @Test("Nonpositive and nonmonotonic subdivision spans remain invalid", arguments: [0, 1, 2])
+    func invalidSubdivisionSpans(_ variant: Int) {
+        let t = target(2), p = performance(t)[0], s = p.subdivisions[1]
+        var subdivisions = p.subdivisions
+        let span: R.TimeSpan = variant == 0
+            ? .init(startTime: s.span.startTime, endTime: s.span.startTime)
+            : variant == 1 ? .init(startTime: s.span.endTime, endTime: s.span.startTime)
+            : .init(startTime: p.subdivisions[0].span.startTime, endTime: s.span.endTime)
+        subdivisions[1] = .init(id: s.id, span: span, evidence: s.evidence, measuredCurve: s.measuredCurve)
+        let malformed = replacing(p, subdivisions: subdivisions)
+        let result = compared(t, [malformed])
+        #expect(dimension(result, .holdCount).assessment == .unavailable)
+        #expect(dimension(result, .holdCount).unavailableReasons.contains(.invalidPerformance))
+        #expect(malformed.subdivisions[1].span == span)
+    }
+
+    @Test("Inferred holds retain descriptive counts without suppressing measured direction", arguments: [1, 2, 3])
+    func inferredHoldIndependence(_ actualCount: Int) {
+        let t = target(2), p = performance(target(actualCount))[0]
+        let inferredHolds = p.internalHolds.map {
+            R.TearHold(id: $0.id, span: $0.span, label: $0.label,
+                       evidence: evidence(.inferred), position: $0.position)
+        }
+        let inferred = replacing(p, holds: inferredHolds)
+        let before = inferred
+        let result = compared(t, [inferred], limitations: [inferred.id: [.interpolatedCurve]])
+        #expect(dimension(result, .directionOrder).assessment == .withinTolerance)
+        let count = dimension(result, .holdCount)
+        #expect(count.assessment == .unavailable)
+        #expect(count.scorePercentage == nil)
+        #expect(count.measurements.first?.expected == 2)
+        #expect(count.measurements.first?.observed == Double(actualCount))
+        #expect(count.measurements.first?.signedError == Double(actualCount - 2))
+        #expect(count.measurements.first?.isWithinTolerance == nil)
+        for axis in [C.Axis.holdCount, .holdTiming, .subdivisionRatios] {
+            #expect(dimension(result, axis).assessment == .unavailable)
+            #expect(dimension(result, axis).unavailableReasons.contains(.inferredHoldEvidence))
+        }
+        #expect(dimension(result, .motionShape).unavailableReasons.contains(.interpolatedCurve))
+        #expect(result.semanticErrors.isEmpty)
+        #expect(inferred == before)
+        #expect(inferred.internalHolds.allSatisfy { $0.evidence.provenance == .inferred })
+    }
+
+    @Test("Unknown hold evidence cannot suppress independent direction and fader observations")
+    func unknownHoldIndependence() {
+        let t = [withFaderTarget(target(1)[0])], p = performance(t)[0]
+        let holds = p.internalHolds.map {
+            R.TearHold(id: $0.id, span: $0.span, label: $0.label,
+                       evidence: evidence(.unknown), position: $0.position)
+        }
+        let result = compared(t, [replacing(p, holds: holds)])
+        #expect(dimension(result, .directionOrder).assessment == .withinTolerance)
+        #expect(dimension(result, .faderTiming).assessment == .withinTolerance)
+        #expect(dimension(result, .holdCount).assessment == .unavailable)
+        #expect(dimension(result, .holdTiming).unavailableReasons.contains(.unknownEvidence))
+        #expect(dimension(result, .motionShape).assessment == .unavailable)
+        #expect(result.semanticErrors.isEmpty)
+    }
+
+    @Test("Independent supplied limitations survive an earlier unknown-evidence gate")
+    func independentLimitationsSurvive() {
+        let t = target(), p = performance(t)
+        let result = compared(t, p, limitations: [p[0].id: [.unknownEvidence, .correctedTiming, .interpolatedCurve]])
+        #expect(dimension(result, .directionOrder).assessment == .unavailable)
+        #expect(dimension(result, .holdTiming).unavailableReasons.contains(.correctedTiming))
+        #expect(dimension(result, .subdivisionRatios).unavailableReasons.contains(.correctedTiming))
+        #expect(dimension(result, .motionShape).unavailableReasons.contains(.interpolatedCurve))
+        #expect(result.semanticErrors.isEmpty)
+    }
+
+    @Test("Local hold qualifications survive unknown directional evidence", arguments: [false, true])
+    func localHoldLimitationsSurvive(_ corrected: Bool) {
+        let t = target(1), p = performance(t)[0]
+        let holds = p.internalHolds.map {
+            R.TearHold(id: $0.id, span: $0.span, label: $0.label,
+                       evidence: evidence(corrected ? .manuallyCorrected : .inferred), position: $0.position)
+        }
+        let mixed = replacing(p, evidence: evidence(.unknown), holds: holds)
+        let before = mixed
+        let result = compared(t, [mixed])
+        let reason: C.UnavailableReason = corrected ? .correctedTiming : .inferredHoldEvidence
+        #expect(dimension(result, .directionOrder).assessment == .unavailable)
+        for axis in [C.Axis.holdTiming, .subdivisionRatios, .motionShape, .evidenceQuality] {
+            #expect(dimension(result, axis).unavailableReasons.contains(reason))
+            #expect(dimension(result, axis).scorePercentage == nil)
+        }
+        if !corrected {
+            #expect(dimension(result, .holdCount).unavailableReasons.contains(.inferredHoldEvidence))
+        }
+        #expect(result.semanticErrors.isEmpty)
+        #expect(mixed == before)
+    }
+
+    @Test("A mixed measured and inferred orbit reports partial hold assessment")
+    func mixedHoldProvenance() {
+        let t = target(1, form: .forwardBackward), p = performance(t)
+        let holds = p[1].internalHolds.map {
+            R.TearHold(id: $0.id, span: $0.span, label: $0.label,
+                       evidence: evidence(.inferred), position: $0.position)
+        }
+        let result = compared(t, [p[0], replacing(p[1], holds: holds)])
+        #expect(dimension(result, .directionOrder).assessment == .withinTolerance)
+        let count = dimension(result, .holdCount)
+        #expect(count.assessment == .partiallyAssessed)
+        #expect(count.measurements.count == 2)
+        #expect(count.measurements[0].isWithinTolerance == true)
+        #expect(count.measurements[1].isWithinTolerance == nil)
+        #expect(dimension(result, .holdTiming).assessment == .partiallyAssessed)
+        #expect(dimension(result, .subdivisionRatios).assessment == .partiallyAssessed)
+        #expect(dimension(result, .evidenceQuality).scorePercentage == nil)
+    }
+}
+#endif

@@ -1,6 +1,12 @@
 
 # ScratchLab – AI Context
 
+## Current CXL validation boundary — 2026-09-12
+
+The active candidate is in `/Users/karlwatson/Developer/ScratchLab-CXL-Recovery-20260912/source`; the separately dirty Downloads checkout is preserved. The current repair replaces unrelated hardware-input activity in the main meter with actual generated scratch PCM peak and binds Rane ONE primary playback directly to verified USB3/4. Mac monitoring is optional and delayed. Input and output provenance remain distinct; the saved WAV is internal post-software-fader audio, not a verified physical mixer master return. Beats/count-in still use a separate system-default output and their Rane bus is not verified.
+
+This is a diagnostic candidate, not ready for CXL production reference capture. Current targeted tests/Release verification are recorded in `../evidence/cxl-output-meter-20260912/RESULT.md` when complete. Full all-platform gate remains deferred; prior dates below do not establish this candidate's physical acceptance. Rane ONE MKII needs one no-beat movement capture, playback and export check; Seventy-Two plus Twelve needs its own output/input mapping and capture acceptance. On September12 the user explicitly authorized commits and pushes as needed; checkpoint verified source on a new codex branch without changing the dirty primary or committing captured media.
+
 ## Overview
 ScratchLab is an Apple-platform application for DJ scratch training and high-quality data capture.
 
@@ -34,7 +40,7 @@ Every product decision is filtered through the first list. If a capability prima
 
 **Scope of the virtual platter.** ScratchLab can render and drive a virtual platter for *teaching mechanics* (forward push, pull-back, hand position, timing windows, beat alignment). That platter alone is sufficient for **baby-scratch-class techniques** — single-deck push/pull with the fader implicitly open.
 
-**What the virtual platter is not.** A platter without a crossfader is musically incomplete for almost every other named technique (chirp, transformer, flare, crab, orbit, tear, scribble — every one of these is *defined by* coordinated fader cuts). Building a deeper virtual platter without an honest crossfader does not unlock more techniques; it produces a misleading practice surface where students "succeed" without learning the half of the skill that actually matters.
+**What the virtual platter is not.** A platter without a crossfader is musically incomplete for techniques whose identity includes coordinated cuts, including chirps, transformers, flares, crabs and fader-cut orbits. Plain Tears are interrupted same-direction platter motion and may be performed with the fader open; their motion holds and any fader evidence remain independent. Scribbles are also platter-motion techniques unless a specific authored variant adds a fader pattern. Building deeper virtual-platter teaching for a cut-defined target without an honest crossfader produces a misleading surface where students can appear to succeed without learning the coordinated skill.
 
 **Rule.** Any new virtual-platter capability must answer the question: *"does this give the student a true representation of the skill, or is it baby-scratch dressed up?"* If the answer is the second, build the crossfader pairing first.
 
@@ -347,3 +353,12 @@ A session is considered valid only if:
 - Do NOT weaken requirements to “make things pass”
 - If unsure, STOP and ask for clarification
 - Always prefer tightening correctness over adding features
+# Current CXL prompts 13–21 state (2026-09-08)
+
+The isolated final-gate candidate is `/private/tmp/scratchlab-cxl-auto-20260908/p21-final-gates` on `codex/cxl-auto-p21-final-gates`. Prompts 13–21 are software-complete. The current hardware-feedback candidate is `/private/tmp/scratchlab-cxl-auto-20260908/products-p22c-cxl-hardware-fix/Release/ScratchLab.app`, bundle `com.machelpnz.scratchlab.cxl-authoring`, executable SHA-256 `7c1d4edaba6646b15dcd6cbd9234685661924f9aa0a77667f0710be943989cc9`. It is a universal `x86_64 arm64` Release bundle with a complete local ad-hoc signature; `codesign --verify --deep --strict` passes and its Info.plist, resources, identifier, and capture entitlements are sealed.
+
+Focused and broad software gates pass after narrow Prompt-21 repairs. Direct full Debug and Release-optimized test harnesses each execute 3,973 tests with 56 skips and 0 failures per configured run; the final required `scripts/build.sh all` rerun executes 3,973 with 55 skips and 0 failures, then passes all three builds. Release tests require the repository's existing test-only `DEBUG ENABLE_TIMECODE_LIVE_TAP` conditions; the physical candidate was built separately with neither condition and has no checked Debug route/tool/test symbols. The original P21 candidate was not launched or connected to hardware. Continue only with `RANE_PHYSICAL_HANDOFF.md`; record physical evidence as PASS/FAIL/BLOCKED/NOT RUN and stop at the first failure.
+
+Hardware feedback on the earlier candidate exposed three Release-only presentation/setup defects. CXL live Tear could alternate between AHHH-loop calibrated revolutions and fallback normalized coordinates, which split or rescaled one physical trace; the aligned provisional reconstruction also dropped the decoder's `meetsNoiseGates` result. Release entered capture without a visible explicit hardware setup, started camera/microphone work on route appearance, allowed Continuity companion browsing, and could react to Serato lifecycle changes by silently restoring the first camera. The repair fixes CXL to one take-local physical coordinate basis, retains the shared decoder's provisional gate, keeps genuine packet gaps explicit as `MOTION UNKNOWN`, adds visible Setup/Capture/Review & Export stages and exact MIDI/camera/audio selectors, and gates camera/audio, companion relay, and Serato process-tap work behind explicit operator actions. Generic Practice/Capture remain loop-aware.
+
+The final frozen repair gate passed 17 unique tests in two configurations: 34/34 executions, zero failures, skips, or runtime warnings. Its 453 Swift/project/test-plan input manifest remained byte-identical, SHA-256 `5a0f72aba42016ac540b3476aae84e5c1d253324fbab0119d323a03a78c30b72`. The universal Release build passed after the focused gate. PID `80042` was agent-verified running from the exact candidate executable; UI inspection is blocked only because the Mac is locked. Every Rane, permission-dialog, live-notation, recording, calibration, media, Watch, export, and operator result remains NOT RUN. The immediate diagnostic rig is the Rane ONE MKII; the intended CXL Rane Seventy-Two plus Rane Twelve path remains separately NOT RUN, and the current Setup does not yet prove its pair-specific DVS/master routing. The established 3.2-second rolling normalization can still refit as old motion ages out; that is independent of AHHH playback and remains an explicit residual risk.
