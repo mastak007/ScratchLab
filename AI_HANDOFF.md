@@ -1,5 +1,11 @@
 # Current handoff — reference library complete, 13 September 2026
 
+## Latest product decision and Claude progress
+
+Karl asked to save live-battle/private-avatar/automatic-judge ideas for later and assess keeping the learner app free before continuing. Decisions and sourced funding arithmetic are in docs/free_learner_pilot.md; deferred ideas are in docs/future_product_ideas.md. The immediate sequence is CXL reliability and a small teaching set, then a three-skill learner loop and roughly ten learners for four weeks. Replace mandatory learner payment with payer validation from sponsors/institutions. Sponsorship is a hypothesis, not a secured business model. Watch is optional CXL research only with a useful question; learners must not need it. No runtime Watch removal, scoring or advertising integration occurred in this documentation slice.
+
+Claude's pasted progress and worktree were inspected: branch codex/cxl-claude-followup-20260913 at3558128, with dirty task-2 preference/export changes, no final HANDOFF_TO_CODEX.md and an active isolated xcodebuild gate. The meter fault was not reproduced and no production repair was made. Do not promote the passing controller tests to an operator pass. Do not interrupt the gate, merge a moving working tree or duplicate its work. After final handoff, review source/tests/known baseline failures, integrate with the completed library, then stage and arrange the exact physical capture check. Current planning changes were checked as documentation only; no concurrent Xcode gate was started.
+
 Worktree: `/Users/karlwatson/.codex/worktrees/a4aa/ScratchLab`.
 Branch: `codex/finish-reference-library-20260913`, based on673b3ee.
 Status: software verified; signed CXL candidate staged; installed apps/captures unchanged.

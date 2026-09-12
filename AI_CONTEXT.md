@@ -1,6 +1,12 @@
 
 # ScratchLab – AI Context
 
+## Current user direction — 13 September 2026
+
+The learner app should be free. Assess direct sponsorship and institutional funding first, with ads as a possible supplement; do not require pilot learners to pay to continue. Finish current CXL fixes and a small teaching set, then one complete three-skill learner experience on a verified setup and a four-week trial with roughly ten target learners. Evaluate independent setup, repeat practice, expert-reviewed improvement and actual payer demand from sponsors/institutions. See docs/free_learner_pilot.md.
+
+Watch capture is optional CXL research only where it can answer a useful current/future wrist-motion question; it is not a learner dependency. Live battles, private avatars and automatic live judging are deferred in docs/future_product_ideas.md. These decisions do not implement monetisation, remove existing runtime Watch routes, establish automated scoring, or supersede evidence-integrity checks. Claude's capture work remains in its separate worktree until the final handoff and gates can be reviewed.
+
 ## Current CXL validation boundary — 2026-09-12
 
 The active candidate is in `/Users/karlwatson/Developer/ScratchLab-CXL-Recovery-20260912/source`; the separately dirty Downloads checkout is preserved. The current repair replaces unrelated hardware-input activity in the main meter with actual generated scratch PCM peak and binds Rane ONE primary playback directly to verified USB3/4. Mac monitoring is optional and delayed. Input and output provenance remain distinct; the saved WAV is internal post-software-fader audio, not a verified physical mixer master return. Beats/count-in still use a separate system-default output and their Rane bus is not verified.
