@@ -17,6 +17,8 @@ The immediate sequence is reliable CXL capture, a small set of excellent teachin
 
 Serato's existing DJ-school partnerships show that relationships between equipment/software businesses and DJ education exist. They do not show that Serato or any listed school will fund ScratchLab: [Serato Certified DJ Schools](https://serato.com/certified-dj-schools).
 
+Karl identified a concrete institutional route on 13 September: his contacts at the NZ turntablist DJ academy in Wellington. Explore a paid academy subscription for teacher tools, student learning and future in-class battles, with the core learner app remaining free. This is an additional funding hypothesis; pricing, teacher needs and willingness to renew are unverified. The [deferred academy opportunity](future_product_ideas.md#dj-academy-teaching-and-classroom-battles) records the proposed scope and pilot questions.
+
 ### Advertising arithmetic, not a revenue forecast
 
 AdMob defines publisher eCPM as estimated earnings per thousand ad impressions. Revenue is therefore `delivered impressions / 1000 * realised eCPM`: [AdMob explanation](https://support.google.com/admob/answer/15337570?hl=en).

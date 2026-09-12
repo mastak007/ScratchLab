@@ -2,6 +2,18 @@
 
 Recorded 13 September 2026 at Karl's request. These are future requirements and research questions, not implemented features or current delivery blockers. Resume only after evaluating the focused [free learner pilot](free_learner_pilot.md) and selecting one bounded next task.
 
+## DJ academy teaching and classroom battles
+
+Added 13 September 2026 at Karl's request. Karl has contacts at the NZ turntablist DJ academy in Wellington and wants to explore ScratchLab as a tool for its teachers and students. This is a potential customer route, not an agreed partnership or sale.
+
+- Candidate teacher value: assign scratch exercises, review student recordings, give feedback and follow progress. Candidate student value: clear examples, structured practice and feedback between classes.
+- Include a future in-class battle option: teachers organise timed rounds and students perform on the classroom setup. Begin with teacher judging and recorded review; automatic judging and internet battles have separate evidence and technical requirements.
+- Test an academy-paid subscription or recurring school licence for teaching and class-management features while keeping the core learner app free. Price, billing unit (academy, cohort or active student), support and renewal terms remain to be established with the academy.
+- After the focused learner experience works, prepare a small teacher-and-class pilot. Assess lesson preparation/review time, student practice and improvement, classroom setup reliability, and whether the academy will pay and renew. Do not build an extensive school dashboard before establishing which workflow teachers need.
+- Preserve this as a future opportunity alongside sponsorship. Karl's contacts make a conversation possible; they do not establish demand. No contact, pilot, subscription or classroom battle implementation has been initiated.
+
+See the [funding options and learner pilot](free_learner_pilot.md). Current CXL fixes and teaching examples remain the immediate priority.
+
 ## Live online DJ battles
 
 - Connect remote DJs for live, timed, turn-taking battles with a host, opponents and spectators. Explore DMC or other competition organisers as possible customers or licensees; no interest, relationship or sale is established.
