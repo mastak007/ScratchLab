@@ -1,3 +1,41 @@
+# Current — automated review complete, exceptions only
+
+Read /Users/karlwatson/Developer/ScratchLab-CXL-Ready-20260913/evidence/operator-media-review-20260913/AUTOMATION_RESULT.md and AUTOMATED_QA.json.
+
+The user asked to stop repetitive operator checks and automate the remaining work. All 23 techniques are now prepared: 92 review points and 276 media files. Automated derivative QA passed for 23/23 selected overhead full sequences: all 276 file hashes/metadata checked, 23 full videos decoded, 207 audio windows compared against their own source tracks near start/middle/end, all passed. Timing criterion is under 2 ms and normalized correlation above .95; measurements remain in AUTOMATED_QA.json. Three synthetic verifier tests passed (correct alignment, injected shift rejected, silence inconclusive). These checks establish sampled derivative/source correspondence, not physical A/V sync or all-camera acceptance.
+
+All 13 prior operator observations are preserved: three full-sequence tracks each for Baby, Chirps, Cutting and Drags, plus Baby start/Scratch-only. Baby's four-beat scratch/four-beat rest note, Chirps' missing break after fourth cut note, and unresolved Tear verdict remain. Automated QA never writes operator approvals. Nine techniques keep unconfirmed audio-role labels: 1clickflare, clovertears, dicing, long_short_tips, needledropping, orbits, originalflare, waves, zigzags. Cutting angle 2 is missing; Tear's local picture/audio divergence remains unresolved with both passes retained. Physical sync and speech-free boundaries on unreviewed techniques are not established. No original source, packaged dataset, app assets or training data changed.
+
+The review page now has Automatic checks and an expandable Source issues and limits summary, with all 23 techniques selectable. API and browser verified 23 passes, zero conversion exceptions and 13 preserved observations. http://127.0.0.1:54793/ remains served by one operator server (PID in server.json). Builder and verifier have exited; no batch waiters or QA server are running. Changes: new verify_library.py/test_library_qa.py; existing server.py, app.js and index.html expose the truthful summary; generated derivative media/manifests/reports remain external. See AUTOMATION_SUMMARY.json and AUTOMATED_QA.json. No app build or prior expensive repeat-audit rerun: external media/tooling only.
+
+Next: work through the specific source exceptions with existing evidence and automation first. Do not resume a routine manual checklist for every clip; request a targeted human judgment only if required to settle an unresolved issue. Do not silently infer labels, clean speech, absolute sync, canonical approval, or training eligibility from a conversion pass. No new commit/push in this slice; bbbc947 remains the pushed Claude archive checkpoint. Current workflow changes in CXL-MediaAudit/source and earlier app WIP remain uncommitted and separate.
+
+--- Historical handoff ---
+
+# Current — media review batch 2 ready
+
+Read /Users/karlwatson/Developer/ScratchLab-CXL-Ready-20260913/evidence/operator-media-review-20260913/HANDOFF.md and BATCH_2_VERIFICATION.json.
+
+Batch 2 is ready: Chirps 98 BPM (19.6196 s), Cutting 79 BPM (24.2242 s), Drags 98 BPM (39.205833 s). Each has a continuous full sequence plus three short boundary views and three audio choices. Existing completed Baby full-sequence observations for all three tracks, clean-start observation, rhythm note (four beats scratching/four beats rest), and Tear unresolved state remain unchanged. New techniques are unreviewed; no approval is copied from Baby.
+
+Changed external build_review.py to add batches without replacing existing manifest items; published manifest remains available while separate build-progress.json checkpoints progress. Existing source identities cannot silently change. verify_preview_audio.py now selects technique; test_review_batches.py checks preservation, idempotency and rejection of changed source ranges. Three tests pass; 48 media hashes and metadata checked, including 36 new media files; nine source/derivative audio sample comparisons pass. Chirps/Cutting samples show zero lag, Drags 0.5 ms, all correlations above .997; this is derivative alignment, not physical A/V sync. Existing four Baby item records and four operator observations preserved. See BATCH_2_VERIFICATION.json. No full audit rerun or app build for external-only changes. No original media, dataset, app or Claude archive changed.
+
+Open http://127.0.0.1:54793/ (one operator server, PID in server.json). Start with Chirps, Full sequence, Scratch only; review the full performances/breaks and each audio choice, then the cut points as needed. Continue Cutting and Drags in this small batch before adding more. Other 19 techniques remain unprepared here. The Cutting missing camera angle is still unresolved; this review uses mapped angle 3. Absolute sync, nine audio-role cases elsewhere and Tear discrepancy remain unresolved. No new commit/push; Claude checkpoint bbbc947 remains pushed.
+
+--- Prior handoff ---
+
+# Current — full Baby sequence reviewed
+
+External tool: /Users/karlwatson/Developer/ScratchLab-CXL-Ready-20260913/evidence/operator-media-review-20260913. Read its HANDOFF.md and FULL_SEQUENCE_VERIFICATION.json.
+
+The full Baby sequence review is implemented and the user confirmed all four performances and breaks are complete on Scratch only / track 2. This is saved as baby_79bpm__full_sequence/track1 with original-video range 35.035–59.2592 s (24.2242 s). The earlier start/Scratch-only approval and Tear unresolved reading are unchanged. Do not infer other tracks, absolute A/V sync or training approval from this review.
+
+Short boundary clips could not show the complete sequence. Changed external build_review.py, app.js, index.html, server.py and verify_preview_audio.py, generated plan/manifest and three new derivatives: full continuous candidate, preserved breaks, three audio choices, clip/original-video clocks, separate review with source metadata. Snapshot: snapshots/before-full-sequence. Nine old media hashes preserved. Three new hash/metadata checks, Python/JS syntax, browser playback/audio switching/QA save/reload and sampled source-audio comparisons pass (zero measured sample lag, correlation above .999). See FULL_SEQUENCE_VERIFICATION.json. No app build or full audit rerun for external-only changes. Source movies, dataset, app and Claude archive unchanged.
+
+Review page http://127.0.0.1:54793/ remains running; exact PID in server.json. QA server stopped. Next: retain the complete Baby sequence and four performances as one source group, then continue small review batches. Do not invent individual variation boundaries or apply this confirmation to other techniques/tracks. Nine audio-role tests and Tear discrepancy remain unresolved. Claude checkpoint bbbc947 remains pushed; no new commit/push in this slice.
+
+--- Earlier handoff ---
+
 # Current checkpoint — Claude CXL MKV audit, 13 September 2026
 
 User requested committing and pushing the completed Claude audit. Active checkpoint worktree: /Users/karlwatson/Developer/ScratchLab-CXL-MediaAudit-20260913/source, branch codex/cxl-mkv-audit-20260913. Read audits/cxl-mkv-20260913/README.md first: it reconciles the frozen reports with23 completed repeat classifications,9 unconfirmed audio-role tests and the flawed83.4s tail-preview cap. Original snapshots remain byte-identical; raw media and decode caches remain outside Git. Operator could not distinguish Tear passes; both preserved and flagged take02/take06 withheld in proposed paired-training policy only.
