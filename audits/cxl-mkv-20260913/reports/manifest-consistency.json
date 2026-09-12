@@ -1,0 +1,539 @@
+{
+  "manifest_rows": 700,
+  "techniques_in_manifest": 23,
+  "note": "Read-only check. No dataset file was modified.",
+  "per_technique": {
+    "1clickflare": {
+      "rows": 32,
+      "angles": [
+        "angle_1",
+        "angle_2",
+        "angle_3",
+        "angle_4"
+      ],
+      "takes": 8,
+      "paths_checked": 128,
+      "paths_missing": 72,
+      "missing_by_column": {
+        "audio_withBeat": 24,
+        "audio_noBeat": 24,
+        "audio_beatOnly": 24
+      },
+      "audited_duplicate_take_pairs": [
+        "take01_vs_take05",
+        "take02_vs_take06",
+        "take03_vs_take07",
+        "take04_vs_take08"
+      ]
+    },
+    "baby": {
+      "rows": 32,
+      "angles": [
+        "angle_1",
+        "angle_2",
+        "angle_3",
+        "angle_4"
+      ],
+      "takes": 8,
+      "paths_checked": 128,
+      "paths_missing": 72,
+      "missing_by_column": {
+        "audio_withBeat": 24,
+        "audio_noBeat": 24,
+        "audio_beatOnly": 24
+      },
+      "audited_duplicate_take_pairs": [
+        "take01_vs_take05",
+        "take02_vs_take06",
+        "take03_vs_take07",
+        "take04_vs_take08"
+      ]
+    },
+    "chirpflare": {
+      "rows": 32,
+      "angles": [
+        "angle_1",
+        "angle_2",
+        "angle_3",
+        "angle_4"
+      ],
+      "takes": 8,
+      "paths_checked": 128,
+      "paths_missing": 72,
+      "missing_by_column": {
+        "audio_withBeat": 24,
+        "audio_noBeat": 24,
+        "audio_beatOnly": 24
+      },
+      "audited_duplicate_take_pairs": [
+        "take01_vs_take05",
+        "take02_vs_take06",
+        "take03_vs_take07",
+        "take04_vs_take08"
+      ]
+    },
+    "chirps": {
+      "rows": 28,
+      "angles": [
+        "angle_1",
+        "angle_2",
+        "angle_3",
+        "angle_4"
+      ],
+      "takes": 7,
+      "paths_checked": 112,
+      "paths_missing": 63,
+      "missing_by_column": {
+        "audio_withBeat": 21,
+        "audio_noBeat": 21,
+        "audio_beatOnly": 21
+      },
+      "audited_duplicate_take_pairs": [
+        "take02_vs_take05",
+        "take03_vs_take06",
+        "take04_vs_take07"
+      ]
+    },
+    "clovertears": {
+      "rows": 32,
+      "angles": [
+        "angle_1",
+        "angle_2",
+        "angle_3",
+        "angle_4"
+      ],
+      "takes": 8,
+      "paths_checked": 128,
+      "paths_missing": 72,
+      "missing_by_column": {
+        "audio_withBeat": 24,
+        "audio_noBeat": 24,
+        "audio_beatOnly": 24
+      },
+      "audited_duplicate_take_pairs": [
+        "take01_vs_take05",
+        "take02_vs_take06",
+        "take03_vs_take07",
+        "take04_vs_take08"
+      ]
+    },
+    "crabs": {
+      "rows": 32,
+      "angles": [
+        "angle_1",
+        "angle_2",
+        "angle_3",
+        "angle_4"
+      ],
+      "takes": 8,
+      "paths_checked": 128,
+      "paths_missing": 72,
+      "missing_by_column": {
+        "audio_withBeat": 24,
+        "audio_noBeat": 24,
+        "audio_beatOnly": 24
+      },
+      "audited_duplicate_take_pairs": [
+        "take01_vs_take05",
+        "take02_vs_take06",
+        "take03_vs_take07",
+        "take04_vs_take08"
+      ]
+    },
+    "cresentflare": {
+      "rows": 32,
+      "angles": [
+        "angle_1",
+        "angle_2",
+        "angle_3",
+        "angle_4"
+      ],
+      "takes": 8,
+      "paths_checked": 128,
+      "paths_missing": 72,
+      "missing_by_column": {
+        "audio_withBeat": 24,
+        "audio_noBeat": 24,
+        "audio_beatOnly": 24
+      },
+      "audited_duplicate_take_pairs": [
+        "take02_vs_take06",
+        "take03_vs_take07",
+        "take04_vs_take08"
+      ]
+    },
+    "cutting": {
+      "rows": 32,
+      "angles": [
+        "angle_1",
+        "angle_2",
+        "angle_3",
+        "angle_4"
+      ],
+      "takes": 8,
+      "paths_checked": 128,
+      "paths_missing": 80,
+      "missing_by_column": {
+        "audio_withBeat": 24,
+        "audio_noBeat": 24,
+        "audio_beatOnly": 24,
+        "video": 8
+      },
+      "audited_duplicate_take_pairs": [
+        "take01_vs_take05",
+        "take02_vs_take06",
+        "take03_vs_take07",
+        "take04_vs_take08"
+      ]
+    },
+    "dicing": {
+      "rows": 32,
+      "angles": [
+        "angle_1",
+        "angle_2",
+        "angle_3",
+        "angle_4"
+      ],
+      "takes": 8,
+      "paths_checked": 128,
+      "paths_missing": 72,
+      "missing_by_column": {
+        "audio_withBeat": 24,
+        "audio_noBeat": 24,
+        "audio_beatOnly": 24
+      },
+      "audited_duplicate_take_pairs": [
+        "take01_vs_take05",
+        "take02_vs_take06",
+        "take03_vs_take07",
+        "take04_vs_take08"
+      ]
+    },
+    "drags": {
+      "rows": 32,
+      "angles": [
+        "angle_1",
+        "angle_2",
+        "angle_3",
+        "angle_4"
+      ],
+      "takes": 8,
+      "paths_checked": 128,
+      "paths_missing": 72,
+      "missing_by_column": {
+        "audio_withBeat": 24,
+        "audio_noBeat": 24,
+        "audio_beatOnly": 24
+      },
+      "audited_duplicate_take_pairs": [
+        "take01_vs_take05",
+        "take02_vs_take06",
+        "take03_vs_take07",
+        "take04_vs_take08"
+      ]
+    },
+    "lazers": {
+      "rows": 24,
+      "angles": [
+        "angle_1",
+        "angle_2",
+        "angle_3",
+        "angle_4"
+      ],
+      "takes": 6,
+      "paths_checked": 96,
+      "paths_missing": 54,
+      "missing_by_column": {
+        "audio_withBeat": 18,
+        "audio_noBeat": 18,
+        "audio_beatOnly": 18
+      },
+      "audited_duplicate_take_pairs": [
+        "take01_vs_take04",
+        "take02_vs_take05",
+        "take03_vs_take06"
+      ]
+    },
+    "long_short_tips": {
+      "rows": 32,
+      "angles": [
+        "angle_1",
+        "angle_2",
+        "angle_3",
+        "angle_4"
+      ],
+      "takes": 8,
+      "paths_checked": 128,
+      "paths_missing": 72,
+      "missing_by_column": {
+        "audio_withBeat": 24,
+        "audio_noBeat": 24,
+        "audio_beatOnly": 24
+      },
+      "audited_duplicate_take_pairs": [
+        "take01_vs_take05",
+        "take02_vs_take06",
+        "take03_vs_take07",
+        "take04_vs_take08"
+      ]
+    },
+    "marches": {
+      "rows": 32,
+      "angles": [
+        "angle_1",
+        "angle_2",
+        "angle_3",
+        "angle_4"
+      ],
+      "takes": 8,
+      "paths_checked": 128,
+      "paths_missing": 72,
+      "missing_by_column": {
+        "audio_withBeat": 24,
+        "audio_noBeat": 24,
+        "audio_beatOnly": 24
+      },
+      "audited_duplicate_take_pairs": [
+        "take01_vs_take05",
+        "take02_vs_take06",
+        "take03_vs_take07",
+        "take04_vs_take08"
+      ]
+    },
+    "needledropping": {
+      "rows": 24,
+      "angles": [
+        "angle_1",
+        "angle_2",
+        "angle_3",
+        "angle_4"
+      ],
+      "takes": 6,
+      "paths_checked": 96,
+      "paths_missing": 54,
+      "missing_by_column": {
+        "audio_withBeat": 18,
+        "audio_noBeat": 18,
+        "audio_beatOnly": 18
+      },
+      "audited_duplicate_take_pairs": [
+        "take01_vs_take04",
+        "take02_vs_take05",
+        "take03_vs_take06"
+      ]
+    },
+    "orbits": {
+      "rows": 24,
+      "angles": [
+        "angle_1",
+        "angle_2",
+        "angle_3",
+        "angle_4"
+      ],
+      "takes": 6,
+      "paths_checked": 96,
+      "paths_missing": 54,
+      "missing_by_column": {
+        "audio_withBeat": 18,
+        "audio_noBeat": 18,
+        "audio_beatOnly": 18
+      },
+      "audited_duplicate_take_pairs": [
+        "take02_vs_take05",
+        "take03_vs_take06"
+      ]
+    },
+    "originalflare": {
+      "rows": 24,
+      "angles": [
+        "angle_1",
+        "angle_2",
+        "angle_3",
+        "angle_4"
+      ],
+      "takes": 6,
+      "paths_checked": 96,
+      "paths_missing": 54,
+      "missing_by_column": {
+        "audio_withBeat": 18,
+        "audio_noBeat": 18,
+        "audio_beatOnly": 18
+      },
+      "audited_duplicate_take_pairs": [
+        "take02_vs_take05",
+        "take03_vs_take06"
+      ]
+    },
+    "reversecutting": {
+      "rows": 32,
+      "angles": [
+        "angle_1",
+        "angle_2",
+        "angle_3",
+        "angle_4"
+      ],
+      "takes": 8,
+      "paths_checked": 128,
+      "paths_missing": 72,
+      "missing_by_column": {
+        "audio_withBeat": 24,
+        "audio_noBeat": 24,
+        "audio_beatOnly": 24
+      },
+      "audited_duplicate_take_pairs": [
+        "take01_vs_take05",
+        "take02_vs_take06",
+        "take03_vs_take07",
+        "take04_vs_take08"
+      ]
+    },
+    "swipes": {
+      "rows": 24,
+      "angles": [
+        "angle_1",
+        "angle_2",
+        "angle_3",
+        "angle_4"
+      ],
+      "takes": 6,
+      "paths_checked": 96,
+      "paths_missing": 54,
+      "missing_by_column": {
+        "audio_withBeat": 18,
+        "audio_noBeat": 18,
+        "audio_beatOnly": 18
+      },
+      "audited_duplicate_take_pairs": [
+        "take01_vs_take04",
+        "take02_vs_take05",
+        "take03_vs_take06"
+      ]
+    },
+    "tears": {
+      "rows": 32,
+      "angles": [
+        "angle_1",
+        "angle_2",
+        "angle_3",
+        "angle_4"
+      ],
+      "takes": 8,
+      "paths_checked": 128,
+      "paths_missing": 72,
+      "missing_by_column": {
+        "audio_withBeat": 24,
+        "audio_noBeat": 24,
+        "audio_beatOnly": 24
+      },
+      "audited_duplicate_take_pairs": [
+        "take01_vs_take05",
+        "take02_vs_take06",
+        "take03_vs_take07",
+        "take04_vs_take08"
+      ]
+    },
+    "tips": {
+      "rows": 32,
+      "angles": [
+        "angle_1",
+        "angle_2",
+        "angle_3",
+        "angle_4"
+      ],
+      "takes": 8,
+      "paths_checked": 128,
+      "paths_missing": 72,
+      "missing_by_column": {
+        "audio_withBeat": 24,
+        "audio_noBeat": 24,
+        "audio_beatOnly": 24
+      },
+      "audited_duplicate_take_pairs": [
+        "take01_vs_take05",
+        "take02_vs_take06",
+        "take03_vs_take07",
+        "take04_vs_take08"
+      ]
+    },
+    "transformer": {
+      "rows": 32,
+      "angles": [
+        "angle_1",
+        "angle_2",
+        "angle_3",
+        "angle_4"
+      ],
+      "takes": 8,
+      "paths_checked": 128,
+      "paths_missing": 72,
+      "missing_by_column": {
+        "audio_withBeat": 24,
+        "audio_noBeat": 24,
+        "audio_beatOnly": 24
+      },
+      "audited_duplicate_take_pairs": [
+        "take01_vs_take05",
+        "take02_vs_take06",
+        "take03_vs_take07",
+        "take04_vs_take08"
+      ]
+    },
+    "waves": {
+      "rows": 40,
+      "angles": [
+        "angle_1",
+        "angle_2",
+        "angle_3",
+        "angle_4"
+      ],
+      "takes": 10,
+      "paths_checked": 160,
+      "paths_missing": 90,
+      "missing_by_column": {
+        "audio_withBeat": 30,
+        "audio_noBeat": 30,
+        "audio_beatOnly": 30
+      },
+      "audited_duplicate_take_pairs": [
+        "take01_vs_take06",
+        "take03_vs_take08",
+        "take04_vs_take09",
+        "take05_vs_take10"
+      ]
+    },
+    "zigzags": {
+      "rows": 32,
+      "angles": [
+        "angle_1",
+        "angle_2",
+        "angle_3",
+        "angle_4"
+      ],
+      "takes": 8,
+      "paths_checked": 128,
+      "paths_missing": 72,
+      "missing_by_column": {
+        "audio_withBeat": 24,
+        "audio_noBeat": 24,
+        "audio_beatOnly": 24
+      },
+      "audited_duplicate_take_pairs": [
+        "take01_vs_take05",
+        "take02_vs_take06",
+        "take03_vs_take07",
+        "take04_vs_take08"
+      ]
+    }
+  },
+  "totals": {
+    "paths_checked": 2800,
+    "paths_missing": 1583,
+    "techniques_with_missing_paths": 23
+  },
+  "summary": {
+    "techniques_with_all_four_angles": 23,
+    "techniques_with_fewer_angles": {},
+    "audio_path_pattern_problem": "Manifest names per-angle WAVs, but only one angle's WAVs exist on disk for several techniques. Audio is byte-identical across angles in every group audited so far, so the fix is a naming/reference decision, not missing content - but it is NOT verified for unaudited groups.",
+    "duplicate_takes_not_marked": "manifest.csv has no column recording that take05-08 duplicate take01-04. Every technique audited so far shows that duplication. Adding a duplicate_of column is a dataset change and was NOT made here."
+  }
+}

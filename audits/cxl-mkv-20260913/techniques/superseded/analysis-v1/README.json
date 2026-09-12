@@ -1,0 +1,20 @@
+{
+  "what": "Superseded per-technique artifacts, retained verbatim.",
+  "analysis_version": "pre-versioning (fractional_lag_repeat v1, no repeat_profile divergence detector)",
+  "why_superseded": "The fractional lag search was widened from +-2 to +-32 samples, and repeat_profile gained fractional-lag audio plus divergence detection. Numbers in these files are correct for the narrower search but under-report where the best lag exceeded 2 samples.",
+  "findings_still_valid": "The FINDINGS drawn from these files were each checked by hand at the time and stand. Only the artifact numbers are superseded.",
+  "files": [
+    "cutting_79bpm.drift-crosscheck.json",
+    "cutting_79bpm.fractional-lag.json",
+    "cutting_79bpm.json",
+    "transformer_85bpm.drift-crosscheck.json",
+    "transformer_85bpm.json",
+    "reversecutting_79bpm.drift-crosscheck.json",
+    "reversecutting_79bpm.fractional-lag.json",
+    "reversecutting_79bpm.json",
+    "reversecutting_79bpm.repeat-profile.json",
+    "tears_98bpm.fractional-lag.json",
+    "tears_98bpm.json"
+  ],
+  "replaced_by": "../<key>*.json under the current analysis version"
+}

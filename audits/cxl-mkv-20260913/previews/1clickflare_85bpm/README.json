@@ -1,0 +1,14 @@
+{
+  "technique": "1clickflare_85bpm",
+  "source_title": "Scratch_t46",
+  "chapter2": [
+    66.066,
+    156.48
+  ],
+  "previews": [
+    "previews/1clickflare_85bpm/1clickflare_85bpm_boundary_head_54to71s_Scratch_t46.mov",
+    "previews/1clickflare_85bpm/1clickflare_85bpm_boundary_tail_73to83s_Scratch_t46.mov"
+  ],
+  "time_mapping": "preview t=0 corresponds to the source time in the filename",
+  "operator_audition": "PENDING - no automatic test can prove absence of speech"
+}

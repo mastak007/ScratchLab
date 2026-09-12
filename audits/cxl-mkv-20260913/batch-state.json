@@ -1,0 +1,2921 @@
+{
+  "analysis_version": "run_batch/1",
+  "techniques": {
+    "marches_79bpm": {
+      "key": "marches_79bpm",
+      "titles": [
+        "Scratch_t12",
+        "Scratch_t13",
+        "Scratch_t14",
+        "Scratch_t15"
+      ],
+      "chapter2": [
+        47.047,
+        95.52
+      ],
+      "fingerprint": {
+        "sources": {
+          "Scratch_t12": {
+            "exists": true,
+            "bytes": 57915565,
+            "mtime_ns": 1777689849000000000
+          },
+          "Scratch_t13": {
+            "exists": true,
+            "bytes": 57894257,
+            "mtime_ns": 1777689877000000000
+          },
+          "Scratch_t14": {
+            "exists": true,
+            "bytes": 57489222,
+            "mtime_ns": 1777689905000000000
+          },
+          "Scratch_t15": {
+            "exists": true,
+            "bytes": 57754880,
+            "mtime_ns": 1777689933000000000
+          }
+        },
+        "script_sha256_16": {
+          "audit_technique.py": "e1e1df407392468a",
+          "drift_crosscheck.py": "575dbb87b83e35d1",
+          "fractional_lag_repeat.py": "ad960abeb06e7a79",
+          "make_boundary_previews.py": "5ee35d440fba6344",
+          "repeat_profile.py": "5484938d7511e993",
+          "run_batch.py": "fb7b50e0468466a5"
+        },
+        "runner_version": "run_batch/1",
+        "params": {
+          "frac_max_lag": 32.0,
+          "frac_probe_s": 6.0,
+          "profile_window_s": 1.0,
+          "video_match": 0.995,
+          "audio_match": 0.9
+        }
+      },
+      "started": "2026-09-13T04:14:28",
+      "steps": {
+        "audit": "ok",
+        "fractional_lag": "ok",
+        "repeat_profile": "ok",
+        "drift_crosscheck": "ok",
+        "previews": "ok"
+      },
+      "log": [
+        {
+          "cmd": "/Users/karlwatson/Developer/ScratchLab-CXL-Ready-20260913/evidence/mkv-source-inspection-20260913/claude-mkv-batch-audit/scripts/audit_technique.py marches_79bpm",
+          "rc": 0,
+          "seconds": 51.3,
+          "stdout_tail": "{\n  \"technique\": \"marches\",\n  \"angle_to_title\": {\n    \"1\": \"Scratch_t12\",\n    \"2\": \"Scratch_t13\",\n    \"3\": \"Scratch_t14\",\n    \"4\": \"Scratch_t15\"\n  },\n  \"missing_delivered_angles\": []\n}\nsections: ['video_integrity', 'audio_streams', 'title_duplicates', 'repeat_within_title', 'segment_duplication', 'talking_boundaries', 'noise', 'av_sync']\nwritten: /Users/karlwatson/Developer/ScratchLab-CXL-Ready-20260913/evidence/mkv-source-inspection-20260913/claude-mkv-batch-audit/techniques/marches_79bpm.json",
+          "stderr_tail": ""
+        },
+        {
+          "cmd": "/Users/karlwatson/Developer/ScratchLab-CXL-Ready-20260913/evidence/mkv-source-inspection-20260913/claude-mkv-batch-audit/scripts/fractional_lag_repeat.py marches_79bpm Scratch_t12 47.047 95.52 726 --discover",
+          "rc": 0,
+          "seconds": 15.5,
+          "stdout_tail": "marches_79bpm Scratch_t12: offset 726 fr = 1162761.6 samples (whole: False, == half chapter: True)\n  audio-discovered offset 24.2242s (ncc 0.9852), delta vs supplied -0.01 ms\n  windows 12  int-lag ncc 0.735/0.985/0.990  frac ncc 1.000/1.000/1.000  lag -2.04..-0.96  below0.90: 0",
+          "stderr_tail": ""
+        },
+        {
+          "cmd": "/Users/karlwatson/Developer/ScratchLab-CXL-Ready-20260913/evidence/mkv-source-inspection-20260913/claude-mkv-batch-audit/scripts/repeat_profile.py marches_79bpm",
+          "rc": 0,
+          "seconds": 15.8,
+          "stdout_tail": "marches_79bpm: offset 726 fr (24.2242s), 24 x 1.0s windows\n  controls: adjacent 0.98585, random 0.85084\n  video matching 24/24   audio matching 12/12 evaluated\n  DIVERGENCE spans (video ok, audio not): none",
+          "stderr_tail": ""
+        },
+        {
+          "cmd": "/Users/karlwatson/Developer/ScratchLab-CXL-Ready-20260913/evidence/mkv-source-inspection-20260913/claude-mkv-batch-audit/scripts/drift_crosscheck.py marches_79bpm",
+          "rc": 0,
+          "seconds": 2.6,
+          "stdout_tail": "{\n  \"technique\": \"marches_79bpm\",\n  \"reference_title\": \"Scratch_t12\",\n  \"video_repeat_offset_frames\": 726,\n  \"video_repeat_offset_s\": 24.2242,\n  \"video_repeat_mean_similarity\": 0.99878,\n  \"audio_repeat_extra_lag_samples\": 0,\n  \"audio_repeat_extra_lag_ms\": 0.0,\n  \"audio_repeat_ncc_at_best\": 0.960317,\n  \"audio_repeat_ncc_at_video_offset\": 0.960317,\n  \"window_s\": 24.249,\n  \"verdict\": \"No A/V drift: over 24.2 s the audio repeats at the video's own repeat offset to within 0.00 ms (0 samples). A drift of even one frame (33.4 ms) would have shown here.\",\n  \"caveat\": \"This compares the audio timeline with the video timeline across the title's own repeat. It constrains RELATIVE timing over the repeated span and can rule out progressive drift. It does NOT measure absolute audio/video synchronisation, and a constant absolute offset would be invisible to it. Where the repeat offset is not a whole number of audio samples, use scripts/fractional_lag_repeat.py instead - integer lag alone under-reports the match.\"\n}",
+          "stderr_tail": ""
+        },
+        {
+          "cmd": "/Users/karlwatson/Developer/ScratchLab-CXL-Ready-20260913/evidence/mkv-source-inspection-20260913/claude-mkv-batch-audit/scripts/make_boundary_previews.py marches_79bpm",
+          "rc": 0,
+          "seconds": 2.4,
+          "stdout_tail": "{\n  \"technique\": \"marches_79bpm\",\n  \"source_title\": \"Scratch_t14\",\n  \"chapter2\": [\n    47.047,\n    95.52\n  ],\n  \"previews\": [\n    \"previews/marches_79bpm/marches_79bpm_boundary_head_35to52s_Scratch_t14.mov\",\n    \"previews/marches_79bpm/marches_79bpm_boundary_tail_73to83s_Scratch_t14.mov\"\n  ],\n  \"time_mapping\": \"preview t=0 corresponds to the source time in the filename\",\n  \"operator_audition\": \"PENDING - no automatic test can prove absence of speech\"\n}",
+          "stderr_tail": ""
+        }
+      ],
+      "state": "verified_duplicate_half",
+      "reason": "video and audio both repeat at 726 frames",
+      "offset_frames_searched": 726,
+      "offset_frames_half_chapter": 726,
+      "offset_equals_half_chapter": true,
+      "facts": {
+        "offset_frames": 726,
+        "video_repeat_detected": true,
+        "video_mean_similarity": 0.99878,
+        "adjacent_frame_similarity": 0.98543,
+        "audio_roles": "CONFIRMED for this technique",
+        "missing_delivered_angles": [],
+        "identical_video_titles": [],
+        "audio_ncc_median_fractional": 0.9999,
+        "audio_ncc_min_fractional": 0.9998,
+        "audio_windows_below_0.90": 0,
+        "lag_spread_samples": 1.08,
+        "lag_hit_search_bound": false,
+        "offset_equals_half_chapter": true,
+        "audio_discovered_offset_delta_ms": -0.013,
+        "divergence_spans_first_pass_s": [],
+        "divergence_spans_second_pass_s": []
+      },
+      "finished": "2026-09-13T04:15:55",
+      "operator_checks_required": [
+        "Talking boundaries are NOT established. Component subtraction cannot prove a region is speech-free, and the voice-band indicator has no sensitivity against a music bed. Audition previews/marches_79bpm/.",
+        "Absolute audio/video synchronisation is NOT established. Every timing result here is relative, measured across the title's own repeat."
+      ]
+    },
+    "cutting_79bpm": {
+      "key": "cutting_79bpm",
+      "titles": [
+        "Scratch_t04",
+        "Scratch_t05",
+        "Scratch_t07"
+      ],
+      "chapter2": [
+        35.035,
+        83.450033
+      ],
+      "fingerprint": {
+        "sources": {
+          "Scratch_t04": {
+            "exists": true,
+            "bytes": 50548525,
+            "mtime_ns": 1777689648000000000
+          },
+          "Scratch_t05": {
+            "exists": true,
+            "bytes": 50224366,
+            "mtime_ns": 1777689676000000000
+          },
+          "Scratch_t07": {
+            "exists": true,
+            "bytes": 50428467,
+            "mtime_ns": 1777689731000000000
+          }
+        },
+        "script_sha256_16": {
+          "audit_technique.py": "e1e1df407392468a",
+          "drift_crosscheck.py": "575dbb87b83e35d1",
+          "fractional_lag_repeat.py": "ad960abeb06e7a79",
+          "make_boundary_previews.py": "5ee35d440fba6344",
+          "repeat_profile.py": "5484938d7511e993",
+          "run_batch.py": "fb7b50e0468466a5"
+        },
+        "runner_version": "run_batch/1",
+        "params": {
+          "frac_max_lag": 32.0,
+          "frac_probe_s": 6.0,
+          "profile_window_s": 1.0,
+          "video_match": 0.995,
+          "audio_match": 0.9
+        }
+      },
+      "started": "2026-09-13T04:16:28",
+      "steps": {
+        "audit": "ok",
+        "fractional_lag": "ok",
+        "repeat_profile": "ok",
+        "drift_crosscheck": "ok",
+        "previews": "ok"
+      },
+      "log": [
+        {
+          "cmd": "/Users/karlwatson/Developer/ScratchLab-CXL-Ready-20260913/evidence/mkv-source-inspection-20260913/claude-mkv-batch-audit/scripts/audit_technique.py cutting_79bpm",
+          "rc": 0,
+          "seconds": 0.1,
+          "stdout_tail": "cutting_79bpm.json already complete; nothing to do (delete it to force a rerun).",
+          "stderr_tail": ""
+        },
+        {
+          "cmd": "/Users/karlwatson/Developer/ScratchLab-CXL-Ready-20260913/evidence/mkv-source-inspection-20260913/claude-mkv-batch-audit/scripts/fractional_lag_repeat.py cutting_79bpm Scratch_t04 35.035 83.450033 726 --discover",
+          "rc": 0,
+          "seconds": 15.6,
+          "stdout_tail": "cutting_79bpm Scratch_t04: offset 726 fr = 1162761.6 samples (whole: False, == half chapter: False)\n  audio-discovered offset 24.2242s (ncc 0.9999), delta vs supplied +0.03 ms\n  windows 12  int-lag ncc 0.930/0.952/0.957  frac ncc 1.000/1.000/1.000  lag -2.60..-2.60  below0.90: 0",
+          "stderr_tail": ""
+        },
+        {
+          "cmd": "/Users/karlwatson/Developer/ScratchLab-CXL-Ready-20260913/evidence/mkv-source-inspection-20260913/claude-mkv-batch-audit/scripts/repeat_profile.py cutting_79bpm",
+          "rc": 0,
+          "seconds": 15.4,
+          "stdout_tail": "cutting_79bpm: offset 726 fr (24.2242s), 24 x 1.0s windows\n  controls: adjacent 0.98542, random 0.84796\n  video matching 24/24   audio matching 12/12 evaluated\n  DIVERGENCE spans (video ok, audio not): none",
+          "stderr_tail": ""
+        },
+        {
+          "cmd": "/Users/karlwatson/Developer/ScratchLab-CXL-Ready-20260913/evidence/mkv-source-inspection-20260913/claude-mkv-batch-audit/scripts/drift_crosscheck.py cutting_79bpm",
+          "rc": 0,
+          "seconds": 2.6,
+          "stdout_tail": "{\n  \"technique\": \"cutting_79bpm\",\n  \"reference_title\": \"Scratch_t04\",\n  \"video_repeat_offset_frames\": 726,\n  \"video_repeat_offset_s\": 24.2242,\n  \"video_repeat_mean_similarity\": 0.99885,\n  \"audio_repeat_extra_lag_samples\": 1,\n  \"audio_repeat_extra_lag_ms\": 0.0208,\n  \"audio_repeat_ncc_at_best\": 0.999926,\n  \"audio_repeat_ncc_at_video_offset\": 0.984635,\n  \"window_s\": 24.191,\n  \"verdict\": \"No A/V drift: over 24.2 s the audio repeats at the video's own repeat offset to within 0.02 ms (1 samples). A drift of even one frame (33.4 ms) would have shown here.\",\n  \"caveat\": \"This compares the audio timeline with the video timeline across the title's own repeat. It constrains RELATIVE timing over the repeated span and can rule out progressive drift. It does NOT measure absolute audio/video synchronisation, and a constant absolute offset would be invisible to it. Where the repeat offset is not a whole number of audio samples, use scripts/fractional_lag_repeat.py instead - integer lag alone under-reports the match.\"\n}",
+          "stderr_tail": ""
+        },
+        {
+          "cmd": "/Users/karlwatson/Developer/ScratchLab-CXL-Ready-20260913/evidence/mkv-source-inspection-20260913/claude-mkv-batch-audit/scripts/make_boundary_previews.py cutting_79bpm",
+          "rc": 0,
+          "seconds": 3.0,
+          "stdout_tail": "{\n  \"technique\": \"cutting_79bpm\",\n  \"source_title\": \"Scratch_t05\",\n  \"chapter2\": [\n    35.035,\n    83.450033\n  ],\n  \"previews\": [\n    \"previews/cutting_79bpm/cutting_79bpm_boundary_head_23to40s_Scratch_t05.mov\",\n    \"previews/cutting_79bpm/cutting_79bpm_boundary_tail_73to83s_Scratch_t05.mov\"\n  ],\n  \"time_mapping\": \"preview t=0 corresponds to the source time in the filename\",\n  \"operator_audition\": \"PENDING - no automatic test can prove absence of speech\"\n}",
+          "stderr_tail": ""
+        }
+      ],
+      "state": "verified_duplicate_half",
+      "reason": "video and audio both repeat at 726 frames",
+      "offset_frames_searched": 726,
+      "offset_frames_half_chapter": 725,
+      "offset_equals_half_chapter": false,
+      "facts": {
+        "offset_frames": 726,
+        "video_repeat_detected": true,
+        "video_mean_similarity": 0.99885,
+        "adjacent_frame_similarity": 0.98612,
+        "audio_roles": "CONFIRMED for this technique",
+        "missing_delivered_angles": [
+          "2"
+        ],
+        "identical_video_titles": [
+          [
+            "Scratch_t05",
+            "Scratch_t06"
+          ]
+        ],
+        "audio_ncc_median_fractional": 1.0,
+        "audio_ncc_min_fractional": 0.9999,
+        "audio_windows_below_0.90": 0,
+        "lag_spread_samples": 0.0,
+        "lag_hit_search_bound": false,
+        "offset_equals_half_chapter": false,
+        "audio_discovered_offset_delta_ms": 0.029,
+        "divergence_spans_first_pass_s": [],
+        "divergence_spans_second_pass_s": []
+      },
+      "finished": "2026-09-13T04:17:05",
+      "operator_checks_required": [
+        "Talking boundaries are NOT established. Component subtraction cannot prove a region is speech-free, and the voice-band indicator has no sensitivity against a music bed. Audition previews/cutting_79bpm/.",
+        "Absolute audio/video synchronisation is NOT established. Every timing result here is relative, measured across the title's own repeat."
+      ]
+    },
+    "transformer_85bpm": {
+      "key": "transformer_85bpm",
+      "titles": [
+        "Scratch_t36",
+        "Scratch_t37",
+        "Scratch_t38",
+        "Scratch_t39"
+      ],
+      "chapter2": [
+        51.051,
+        141.472
+      ],
+      "fingerprint": {
+        "sources": {
+          "Scratch_t36": {
+            "exists": true,
+            "bytes": 86254201,
+            "mtime_ns": 1777690496000000000
+          },
+          "Scratch_t37": {
+            "exists": true,
+            "bytes": 86280391,
+            "mtime_ns": 1777690530000000000
+          },
+          "Scratch_t38": {
+            "exists": true,
+            "bytes": 85750300,
+            "mtime_ns": 1777690562000000000
+          },
+          "Scratch_t39": {
+            "exists": true,
+            "bytes": 86051898,
+            "mtime_ns": 1777690595000000000
+          }
+        },
+        "script_sha256_16": {
+          "audit_technique.py": "e1e1df407392468a",
+          "drift_crosscheck.py": "575dbb87b83e35d1",
+          "fractional_lag_repeat.py": "ad960abeb06e7a79",
+          "make_boundary_previews.py": "5ee35d440fba6344",
+          "repeat_profile.py": "5484938d7511e993",
+          "run_batch.py": "fb7b50e0468466a5"
+        },
+        "runner_version": "run_batch/1",
+        "params": {
+          "frac_max_lag": 32.0,
+          "frac_probe_s": 6.0,
+          "profile_window_s": 1.0,
+          "video_match": 0.995,
+          "audio_match": 0.9
+        }
+      },
+      "started": "2026-09-13T04:17:05",
+      "steps": {
+        "audit": "ok",
+        "fractional_lag": "ok",
+        "repeat_profile": "ok",
+        "drift_crosscheck": "ok",
+        "previews": "ok"
+      },
+      "log": [
+        {
+          "cmd": "/Users/karlwatson/Developer/ScratchLab-CXL-Ready-20260913/evidence/mkv-source-inspection-20260913/claude-mkv-batch-audit/scripts/audit_technique.py transformer_85bpm",
+          "rc": 0,
+          "seconds": 0.1,
+          "stdout_tail": "transformer_85bpm.json already complete; nothing to do (delete it to force a rerun).",
+          "stderr_tail": ""
+        },
+        {
+          "cmd": "/Users/karlwatson/Developer/ScratchLab-CXL-Ready-20260913/evidence/mkv-source-inspection-20260913/claude-mkv-batch-audit/scripts/fractional_lag_repeat.py transformer_85bpm Scratch_t36 51.051 141.472 1355 --discover",
+          "rc": 0,
+          "seconds": 32.4,
+          "stdout_tail": "transformer_85bpm Scratch_t36: offset 1355 fr = 2170168.0 samples (whole: True, == half chapter: True)\n  audio-discovered offset 45.2119s (ncc 0.9977), delta vs supplied +0.04 ms\n  windows 25  int-lag ncc 0.586/0.900/0.955  frac ncc 1.000/1.000/1.000  lag -2.35..-2.33  below0.90: 0",
+          "stderr_tail": ""
+        },
+        {
+          "cmd": "/Users/karlwatson/Developer/ScratchLab-CXL-Ready-20260913/evidence/mkv-source-inspection-20260913/claude-mkv-batch-audit/scripts/repeat_profile.py transformer_85bpm",
+          "rc": 0,
+          "seconds": 31.6,
+          "stdout_tail": "transformer_85bpm: offset 1355 fr (45.2118s), 45 x 1.0s windows\n  controls: adjacent 0.98248, random 0.85784\n  video matching 45/45   audio matching 25/25 evaluated\n  DIVERGENCE spans (video ok, audio not): none",
+          "stderr_tail": ""
+        },
+        {
+          "cmd": "/Users/karlwatson/Developer/ScratchLab-CXL-Ready-20260913/evidence/mkv-source-inspection-20260913/claude-mkv-batch-audit/scripts/drift_crosscheck.py transformer_85bpm",
+          "rc": 0,
+          "seconds": 5.5,
+          "stdout_tail": "{\n  \"technique\": \"transformer_85bpm\",\n  \"reference_title\": \"Scratch_t36\",\n  \"video_repeat_offset_frames\": 1355,\n  \"video_repeat_offset_s\": 45.211833,\n  \"video_repeat_mean_similarity\": 0.99878,\n  \"audio_repeat_extra_lag_samples\": 2,\n  \"audio_repeat_extra_lag_ms\": 0.0417,\n  \"audio_repeat_ncc_at_best\": 0.995603,\n  \"audio_repeat_ncc_at_video_offset\": 0.83894,\n  \"window_s\": 45.209,\n  \"verdict\": \"No A/V drift: over 45.2 s the audio repeats at the video's own repeat offset to within 0.04 ms (2 samples). A drift of even one frame (33.4 ms) would have shown here.\",\n  \"caveat\": \"This compares the audio timeline with the video timeline across the title's own repeat. It constrains RELATIVE timing over the repeated span and can rule out progressive drift. It does NOT measure absolute audio/video synchronisation, and a constant absolute offset would be invisible to it. Where the repeat offset is not a whole number of audio samples, use scripts/fractional_lag_repeat.py instead - integer lag alone under-reports the match.\"\n}",
+          "stderr_tail": ""
+        },
+        {
+          "cmd": "/Users/karlwatson/Developer/ScratchLab-CXL-Ready-20260913/evidence/mkv-source-inspection-20260913/claude-mkv-batch-audit/scripts/make_boundary_previews.py transformer_85bpm",
+          "rc": 0,
+          "seconds": 3.2,
+          "stdout_tail": "{\n  \"technique\": \"transformer_85bpm\",\n  \"source_title\": \"Scratch_t38\",\n  \"chapter2\": [\n    51.051,\n    141.472\n  ],\n  \"previews\": [\n    \"previews/transformer_85bpm/transformer_85bpm_boundary_head_39to56s_Scratch_t38.mov\",\n    \"previews/transformer_85bpm/transformer_85bpm_boundary_tail_73to83s_Scratch_t38.mov\"\n  ],\n  \"time_mapping\": \"preview t=0 corresponds to the source time in the filename\",\n  \"operator_audition\": \"PENDING - no automatic test can prove absence of speech\"\n}",
+          "stderr_tail": ""
+        }
+      ],
+      "state": "verified_duplicate_half",
+      "reason": "video and audio both repeat at 1355 frames",
+      "offset_frames_searched": 1355,
+      "offset_frames_half_chapter": 1355,
+      "offset_equals_half_chapter": true,
+      "facts": {
+        "offset_frames": 1355,
+        "video_repeat_detected": true,
+        "video_mean_similarity": 0.99878,
+        "adjacent_frame_similarity": 0.98487,
+        "audio_roles": "CONFIRMED for this technique",
+        "missing_delivered_angles": [],
+        "identical_video_titles": [],
+        "audio_ncc_median_fractional": 1.0,
+        "audio_ncc_min_fractional": 0.9998,
+        "audio_windows_below_0.90": 0,
+        "lag_spread_samples": 0.02,
+        "lag_hit_search_bound": false,
+        "offset_equals_half_chapter": true,
+        "audio_discovered_offset_delta_ms": 0.042,
+        "divergence_spans_first_pass_s": [],
+        "divergence_spans_second_pass_s": []
+      },
+      "finished": "2026-09-13T04:18:18",
+      "operator_checks_required": [
+        "Talking boundaries are NOT established. Component subtraction cannot prove a region is speech-free, and the voice-band indicator has no sensitivity against a music bed. Audition previews/transformer_85bpm/.",
+        "Absolute audio/video synchronisation is NOT established. Every timing result here is relative, measured across the title's own repeat."
+      ]
+    },
+    "reversecutting_79bpm": {
+      "key": "reversecutting_79bpm",
+      "titles": [
+        "Scratch_t08",
+        "Scratch_t09",
+        "Scratch_t10",
+        "Scratch_t11"
+      ],
+      "chapter2": [
+        23.5235,
+        72.0
+      ],
+      "fingerprint": {
+        "sources": {
+          "Scratch_t08": {
+            "exists": true,
+            "bytes": 43461478,
+            "mtime_ns": 1777689753000000000
+          },
+          "Scratch_t09": {
+            "exists": true,
+            "bytes": 43443562,
+            "mtime_ns": 1777689776000000000
+          },
+          "Scratch_t10": {
+            "exists": true,
+            "bytes": 43143827,
+            "mtime_ns": 1777689798000000000
+          },
+          "Scratch_t11": {
+            "exists": true,
+            "bytes": 43368015,
+            "mtime_ns": 1777689821000000000
+          }
+        },
+        "script_sha256_16": {
+          "audit_technique.py": "e1e1df407392468a",
+          "drift_crosscheck.py": "575dbb87b83e35d1",
+          "fractional_lag_repeat.py": "ad960abeb06e7a79",
+          "make_boundary_previews.py": "5ee35d440fba6344",
+          "repeat_profile.py": "5484938d7511e993",
+          "run_batch.py": "fb7b50e0468466a5"
+        },
+        "runner_version": "run_batch/1",
+        "params": {
+          "frac_max_lag": 32.0,
+          "frac_probe_s": 6.0,
+          "profile_window_s": 1.0,
+          "video_match": 0.995,
+          "audio_match": 0.9
+        }
+      },
+      "started": "2026-09-13T04:18:18",
+      "steps": {
+        "audit": "ok",
+        "fractional_lag": "ok",
+        "repeat_profile": "ok",
+        "drift_crosscheck": "ok",
+        "previews": "ok"
+      },
+      "log": [
+        {
+          "cmd": "/Users/karlwatson/Developer/ScratchLab-CXL-Ready-20260913/evidence/mkv-source-inspection-20260913/claude-mkv-batch-audit/scripts/audit_technique.py reversecutting_79bpm",
+          "rc": 0,
+          "seconds": 0.1,
+          "stdout_tail": "reversecutting_79bpm.json already complete; nothing to do (delete it to force a rerun).",
+          "stderr_tail": ""
+        },
+        {
+          "cmd": "/Users/karlwatson/Developer/ScratchLab-CXL-Ready-20260913/evidence/mkv-source-inspection-20260913/claude-mkv-batch-audit/scripts/fractional_lag_repeat.py reversecutting_79bpm Scratch_t08 23.5235 72.0 726 --discover",
+          "rc": 0,
+          "seconds": 15.9,
+          "stdout_tail": "reversecutting_79bpm Scratch_t08: offset 726 fr = 1162761.6 samples (whole: False, == half chapter: True)\n  audio-discovered offset 24.2242s (ncc 0.9323), delta vs supplied +0.01 ms\n  windows 12  int-lag ncc -0.540/0.320/0.978  frac ncc 0.953/1.000/1.000  lag -3.13..-0.96  below0.90: 0",
+          "stderr_tail": ""
+        },
+        {
+          "cmd": "/Users/karlwatson/Developer/ScratchLab-CXL-Ready-20260913/evidence/mkv-source-inspection-20260913/claude-mkv-batch-audit/scripts/repeat_profile.py reversecutting_79bpm",
+          "rc": 0,
+          "seconds": 15.5,
+          "stdout_tail": "reversecutting_79bpm: offset 726 fr (24.2242s), 24 x 1.0s windows\n  controls: adjacent 0.98653, random 0.80902\n  video matching 24/24   audio matching 12/12 evaluated\n  DIVERGENCE spans (video ok, audio not): none",
+          "stderr_tail": ""
+        },
+        {
+          "cmd": "/Users/karlwatson/Developer/ScratchLab-CXL-Ready-20260913/evidence/mkv-source-inspection-20260913/claude-mkv-batch-audit/scripts/drift_crosscheck.py reversecutting_79bpm",
+          "rc": 0,
+          "seconds": 2.6,
+          "stdout_tail": "{\n  \"technique\": \"reversecutting_79bpm\",\n  \"reference_title\": \"Scratch_t08\",\n  \"video_repeat_offset_frames\": 726,\n  \"video_repeat_offset_s\": 24.2242,\n  \"video_repeat_mean_similarity\": 0.99854,\n  \"audio_repeat_extra_lag_samples\": 1,\n  \"audio_repeat_extra_lag_ms\": 0.0208,\n  \"audio_repeat_ncc_at_best\": 0.805352,\n  \"audio_repeat_ncc_at_video_offset\": 0.670903,\n  \"window_s\": 24.252,\n  \"verdict\": \"No A/V drift: over 24.3 s the audio repeats at the video's own repeat offset to within 0.02 ms (1 samples). A drift of even one frame (33.4 ms) would have shown here.\",\n  \"caveat\": \"This compares the audio timeline with the video timeline across the title's own repeat. It constrains RELATIVE timing over the repeated span and can rule out progressive drift. It does NOT measure absolute audio/video synchronisation, and a constant absolute offset would be invisible to it. Where the repeat offset is not a whole number of audio samples, use scripts/fractional_lag_repeat.py instead - integer lag alone under-reports the match.\"\n}",
+          "stderr_tail": ""
+        },
+        {
+          "cmd": "/Users/karlwatson/Developer/ScratchLab-CXL-Ready-20260913/evidence/mkv-source-inspection-20260913/claude-mkv-batch-audit/scripts/make_boundary_previews.py reversecutting_79bpm",
+          "rc": 0,
+          "seconds": 3.0,
+          "stdout_tail": "{\n  \"technique\": \"reversecutting_79bpm\",\n  \"source_title\": \"Scratch_t10\",\n  \"chapter2\": [\n    23.5235,\n    72.0\n  ],\n  \"previews\": [\n    \"previews/reversecutting_79bpm/reversecutting_79bpm_boundary_head_12to29s_Scratch_t10.mov\",\n    \"previews/reversecutting_79bpm/reversecutting_79bpm_boundary_tail_62to72s_Scratch_t10.mov\"\n  ],\n  \"time_mapping\": \"preview t=0 corresponds to the source time in the filename\",\n  \"operator_audition\": \"PENDING - no automatic test can prove absence of speech\"\n}",
+          "stderr_tail": ""
+        }
+      ],
+      "state": "verified_duplicate_half",
+      "reason": "video and audio both repeat at 726 frames",
+      "offset_frames_searched": 726,
+      "offset_frames_half_chapter": 726,
+      "offset_equals_half_chapter": true,
+      "facts": {
+        "offset_frames": 726,
+        "video_repeat_detected": true,
+        "video_mean_similarity": 0.99854,
+        "adjacent_frame_similarity": 0.98617,
+        "audio_roles": "CONFIRMED for this technique",
+        "missing_delivered_angles": [],
+        "identical_video_titles": [],
+        "audio_ncc_median_fractional": 0.99965,
+        "audio_ncc_min_fractional": 0.9531,
+        "audio_windows_below_0.90": 0,
+        "lag_spread_samples": 2.17,
+        "lag_hit_search_bound": false,
+        "offset_equals_half_chapter": true,
+        "audio_discovered_offset_delta_ms": 0.008,
+        "divergence_spans_first_pass_s": [],
+        "divergence_spans_second_pass_s": []
+      },
+      "finished": "2026-09-13T04:18:55",
+      "operator_checks_required": [
+        "Talking boundaries are NOT established. Component subtraction cannot prove a region is speech-free, and the voice-band indicator has no sensitivity against a music bed. Audition previews/reversecutting_79bpm/.",
+        "Absolute audio/video synchronisation is NOT established. Every timing result here is relative, measured across the title's own repeat."
+      ]
+    },
+    "tears_98bpm": {
+      "key": "tears_98bpm",
+      "titles": [
+        "Scratch_t24",
+        "Scratch_t25",
+        "Scratch_t26",
+        "Scratch_t27"
+      ],
+      "chapter2": [
+        43.043,
+        121.376
+      ],
+      "fingerprint": {
+        "sources": {
+          "Scratch_t24": {
+            "exists": true,
+            "bytes": 73861956,
+            "mtime_ns": 1777690183000000000
+          },
+          "Scratch_t25": {
+            "exists": true,
+            "bytes": 73815229,
+            "mtime_ns": 1777690213000000000
+          },
+          "Scratch_t26": {
+            "exists": true,
+            "bytes": 73282102,
+            "mtime_ns": 1777690244000000000
+          },
+          "Scratch_t27": {
+            "exists": true,
+            "bytes": 73725819,
+            "mtime_ns": 1777690276000000000
+          }
+        },
+        "script_sha256_16": {
+          "audit_technique.py": "e1e1df407392468a",
+          "drift_crosscheck.py": "575dbb87b83e35d1",
+          "fractional_lag_repeat.py": "ad960abeb06e7a79",
+          "make_boundary_previews.py": "5ee35d440fba6344",
+          "repeat_profile.py": "5484938d7511e993",
+          "run_batch.py": "fb7b50e0468466a5"
+        },
+        "runner_version": "run_batch/1",
+        "params": {
+          "frac_max_lag": 32.0,
+          "frac_probe_s": 6.0,
+          "profile_window_s": 1.0,
+          "video_match": 0.995,
+          "audio_match": 0.9
+        }
+      },
+      "started": "2026-09-13T04:18:55",
+      "steps": {
+        "audit": "ok",
+        "fractional_lag": "ok",
+        "repeat_profile": "ok",
+        "drift_crosscheck": "ok",
+        "previews": "ok"
+      },
+      "log": [
+        {
+          "cmd": "/Users/karlwatson/Developer/ScratchLab-CXL-Ready-20260913/evidence/mkv-source-inspection-20260913/claude-mkv-batch-audit/scripts/audit_technique.py tears_98bpm",
+          "rc": 0,
+          "seconds": 0.1,
+          "stdout_tail": "tears_98bpm.json already complete; nothing to do (delete it to force a rerun).",
+          "stderr_tail": ""
+        },
+        {
+          "cmd": "/Users/karlwatson/Developer/ScratchLab-CXL-Ready-20260913/evidence/mkv-source-inspection-20260913/claude-mkv-batch-audit/scripts/fractional_lag_repeat.py tears_98bpm Scratch_t24 43.043 121.376 1175 --discover",
+          "rc": 0,
+          "seconds": 28.1,
+          "stdout_tail": "tears_98bpm Scratch_t24: offset 1175 fr = 1881880.0 samples (whole: True, == half chapter: False)\n  audio-discovered offset 39.2059s (ncc 0.9994), delta vs supplied +0.02 ms\n  windows 21  int-lag ncc 0.010/0.716/0.984  frac ncc 0.067/1.000/1.000  lag -31.35..-0.83  below0.90: 2",
+          "stderr_tail": ""
+        },
+        {
+          "cmd": "/Users/karlwatson/Developer/ScratchLab-CXL-Ready-20260913/evidence/mkv-source-inspection-20260913/claude-mkv-batch-audit/scripts/repeat_profile.py tears_98bpm",
+          "rc": 0,
+          "seconds": 27.3,
+          "stdout_tail": "tears_98bpm: offset 1175 fr (39.2058s), 39 x 1.0s windows\n  controls: adjacent 0.98437, random 0.84062\n  video matching 38/39   audio matching 19/21 evaluated\n  DIVERGENCE spans (video ok, audio not): [[56.043, 58.043]]\n  second-pass counterparts: [[95.249, 97.249]]",
+          "stderr_tail": ""
+        },
+        {
+          "cmd": "/Users/karlwatson/Developer/ScratchLab-CXL-Ready-20260913/evidence/mkv-source-inspection-20260913/claude-mkv-batch-audit/scripts/drift_crosscheck.py tears_98bpm",
+          "rc": 0,
+          "seconds": 4.8,
+          "stdout_tail": "{\n  \"technique\": \"tears_98bpm\",\n  \"reference_title\": \"Scratch_t24\",\n  \"video_repeat_offset_frames\": 1175,\n  \"video_repeat_offset_s\": 39.205833,\n  \"video_repeat_mean_similarity\": 0.9986,\n  \"audio_repeat_extra_lag_samples\": 2,\n  \"audio_repeat_extra_lag_ms\": 0.0417,\n  \"audio_repeat_ncc_at_best\": 0.897319,\n  \"audio_repeat_ncc_at_video_offset\": 0.736865,\n  \"window_s\": 39.127,\n  \"verdict\": \"No A/V drift: over 39.1 s the audio repeats at the video's own repeat offset to within 0.04 ms (2 samples). A drift of even one frame (33.4 ms) would have shown here.\",\n  \"caveat\": \"This compares the audio timeline with the video timeline across the title's own repeat. It constrains RELATIVE timing over the repeated span and can rule out progressive drift. It does NOT measure absolute audio/video synchronisation, and a constant absolute offset would be invisible to it. Where the repeat offset is not a whole number of audio samples, use scripts/fractional_lag_repeat.py instead - integer lag alone under-reports the match.\"\n}",
+          "stderr_tail": ""
+        },
+        {
+          "cmd": "/Users/karlwatson/Developer/ScratchLab-CXL-Ready-20260913/evidence/mkv-source-inspection-20260913/claude-mkv-batch-audit/scripts/make_boundary_previews.py tears_98bpm",
+          "rc": 0,
+          "seconds": 3.2,
+          "stdout_tail": "{\n  \"technique\": \"tears_98bpm\",\n  \"source_title\": \"Scratch_t26\",\n  \"chapter2\": [\n    43.043,\n    121.376\n  ],\n  \"previews\": [\n    \"previews/tears_98bpm/tears_98bpm_boundary_head_31to48s_Scratch_t26.mov\",\n    \"previews/tears_98bpm/tears_98bpm_boundary_tail_73to83s_Scratch_t26.mov\"\n  ],\n  \"time_mapping\": \"preview t=0 corresponds to the source time in the filename\",\n  \"operator_audition\": \"PENDING - no automatic test can prove absence of speech\"\n}",
+          "stderr_tail": ""
+        }
+      ],
+      "state": "verified_partial_repeat",
+      "reason": "repeat confirmed, but 1 span(s) where the picture duplicates and the audio does not - flag for A/V review",
+      "offset_frames_searched": 1175,
+      "offset_frames_half_chapter": 1174,
+      "offset_equals_half_chapter": false,
+      "facts": {
+        "offset_frames": 1175,
+        "video_repeat_detected": true,
+        "video_mean_similarity": 0.9986,
+        "adjacent_frame_similarity": 0.98697,
+        "audio_roles": "CONFIRMED for this technique",
+        "missing_delivered_angles": [],
+        "identical_video_titles": [],
+        "audio_ncc_median_fractional": 0.9999,
+        "audio_ncc_min_fractional": 0.0672,
+        "audio_windows_below_0.90": 2,
+        "lag_spread_samples": 30.52,
+        "lag_hit_search_bound": false,
+        "offset_equals_half_chapter": false,
+        "audio_discovered_offset_delta_ms": 0.021,
+        "divergence_spans_first_pass_s": [
+          [
+            56.043,
+            58.043
+          ]
+        ],
+        "divergence_spans_second_pass_s": [
+          [
+            95.249,
+            97.249
+          ]
+        ]
+      },
+      "finished": "2026-09-13T04:19:58",
+      "operator_checks_required": [
+        "Talking boundaries are NOT established. Component subtraction cannot prove a region is speech-free, and the voice-band indicator has no sensitivity against a music bed. Audition previews/tears_98bpm/.",
+        "Absolute audio/video synchronisation is NOT established. Every timing result here is relative, measured across the title's own repeat."
+      ]
+    },
+    "1clickflare_85bpm": {
+      "key": "1clickflare_85bpm",
+      "titles": [
+        "Scratch_t44",
+        "Scratch_t45",
+        "Scratch_t46",
+        "Scratch_t47"
+      ],
+      "chapter2": [
+        66.066,
+        156.48
+      ],
+      "fingerprint": {
+        "sources": {
+          "Scratch_t44": {
+            "exists": true,
+            "bytes": 85919365,
+            "mtime_ns": 1777690744000000000
+          },
+          "Scratch_t45": {
+            "exists": true,
+            "bytes": 85882495,
+            "mtime_ns": 1777690776000000000
+          },
+          "Scratch_t46": {
+            "exists": true,
+            "bytes": 85301333,
+            "mtime_ns": 1777690808000000000
+          },
+          "Scratch_t47": {
+            "exists": true,
+            "bytes": 85678577,
+            "mtime_ns": 1777690842000000000
+          }
+        },
+        "script_sha256_16": {
+          "audit_technique.py": "e1e1df407392468a",
+          "drift_crosscheck.py": "575dbb87b83e35d1",
+          "fractional_lag_repeat.py": "ad960abeb06e7a79",
+          "make_boundary_previews.py": "5ee35d440fba6344",
+          "repeat_profile.py": "5484938d7511e993",
+          "run_batch.py": "fb7b50e0468466a5"
+        },
+        "runner_version": "run_batch/1",
+        "params": {
+          "frac_max_lag": 32.0,
+          "frac_probe_s": 6.0,
+          "profile_window_s": 1.0,
+          "video_match": 0.995,
+          "audio_match": 0.9
+        }
+      },
+      "started": "2026-09-13T04:20:27",
+      "steps": {
+        "audit": "ok",
+        "fractional_lag": "ok",
+        "repeat_profile": "ok",
+        "drift_crosscheck": "ok",
+        "previews": "ok"
+      },
+      "log": [
+        {
+          "cmd": "/Users/karlwatson/Developer/ScratchLab-CXL-Ready-20260913/evidence/mkv-source-inspection-20260913/claude-mkv-batch-audit/scripts/audit_technique.py 1clickflare_85bpm",
+          "rc": 0,
+          "seconds": 86.4,
+          "stdout_tail": "{\n  \"technique\": \"1clickflare\",\n  \"angle_to_title\": {\n    \"1\": \"Scratch_t44\",\n    \"2\": \"Scratch_t45\",\n    \"3\": \"Scratch_t46\",\n    \"4\": \"Scratch_t47\"\n  },\n  \"missing_delivered_angles\": []\n}\nsections: ['video_integrity', 'audio_streams', 'title_duplicates', 'repeat_within_title', 'segment_duplication', 'talking_boundaries', 'noise', 'av_sync']\nwritten: /Users/karlwatson/Developer/ScratchLab-CXL-Ready-20260913/evidence/mkv-source-inspection-20260913/claude-mkv-batch-audit/techniques/1clickflare_85bpm.json",
+          "stderr_tail": ""
+        },
+        {
+          "cmd": "/Users/karlwatson/Developer/ScratchLab-CXL-Ready-20260913/evidence/mkv-source-inspection-20260913/claude-mkv-batch-audit/scripts/fractional_lag_repeat.py 1clickflare_85bpm Scratch_t44 66.066 156.48 1355 --discover",
+          "rc": 0,
+          "seconds": 32.1,
+          "stdout_tail": "1clickflare_85bpm Scratch_t44: offset 1355 fr = 2170168.0 samples (whole: True, == half chapter: True)\n  audio-discovered offset 45.2119s (ncc 0.9999), delta vs supplied +0.04 ms\n  windows 24  int-lag ncc 0.672/0.875/0.928  frac ncc 1.000/1.000/1.000  lag -2.00..-2.00  below0.90: 0",
+          "stderr_tail": ""
+        },
+        {
+          "cmd": "/Users/karlwatson/Developer/ScratchLab-CXL-Ready-20260913/evidence/mkv-source-inspection-20260913/claude-mkv-batch-audit/scripts/repeat_profile.py 1clickflare_85bpm",
+          "rc": 0,
+          "seconds": 31.5,
+          "stdout_tail": "1clickflare_85bpm: offset 1355 fr (45.2118s), 45 x 1.0s windows\n  controls: adjacent 0.98651, random 0.84828\n  video matching 45/45   audio matching 24/24 evaluated\n  DIVERGENCE spans (video ok, audio not): none",
+          "stderr_tail": ""
+        },
+        {
+          "cmd": "/Users/karlwatson/Developer/ScratchLab-CXL-Ready-20260913/evidence/mkv-source-inspection-20260913/claude-mkv-batch-audit/scripts/drift_crosscheck.py 1clickflare_85bpm",
+          "rc": 0,
+          "seconds": 5.4,
+          "stdout_tail": "{\n  \"technique\": \"1clickflare_85bpm\",\n  \"reference_title\": \"Scratch_t44\",\n  \"video_repeat_offset_frames\": 1355,\n  \"video_repeat_offset_s\": 45.211833,\n  \"video_repeat_mean_similarity\": 0.99874,\n  \"audio_repeat_extra_lag_samples\": 2,\n  \"audio_repeat_extra_lag_ms\": 0.0417,\n  \"audio_repeat_ncc_at_best\": 0.999907,\n  \"audio_repeat_ncc_at_video_offset\": 0.868571,\n  \"window_s\": 45.202,\n  \"verdict\": \"No A/V drift: over 45.2 s the audio repeats at the video's own repeat offset to within 0.04 ms (2 samples). A drift of even one frame (33.4 ms) would have shown here.\",\n  \"caveat\": \"This compares the audio timeline with the video timeline across the title's own repeat. It constrains RELATIVE timing over the repeated span and can rule out progressive drift. It does NOT measure absolute audio/video synchronisation, and a constant absolute offset would be invisible to it. Where the repeat offset is not a whole number of audio samples, use scripts/fractional_lag_repeat.py instead - integer lag alone under-reports the match.\"\n}",
+          "stderr_tail": ""
+        },
+        {
+          "cmd": "/Users/karlwatson/Developer/ScratchLab-CXL-Ready-20260913/evidence/mkv-source-inspection-20260913/claude-mkv-batch-audit/scripts/make_boundary_previews.py 1clickflare_85bpm",
+          "rc": 0,
+          "seconds": 2.5,
+          "stdout_tail": "{\n  \"technique\": \"1clickflare_85bpm\",\n  \"source_title\": \"Scratch_t46\",\n  \"chapter2\": [\n    66.066,\n    156.48\n  ],\n  \"previews\": [\n    \"previews/1clickflare_85bpm/1clickflare_85bpm_boundary_head_54to71s_Scratch_t46.mov\",\n    \"previews/1clickflare_85bpm/1clickflare_85bpm_boundary_tail_73to83s_Scratch_t46.mov\"\n  ],\n  \"time_mapping\": \"preview t=0 corresponds to the source time in the filename\",\n  \"operator_audition\": \"PENDING - no automatic test can prove absence of speech\"\n}",
+          "stderr_tail": ""
+        }
+      ],
+      "state": "verified_duplicate_half",
+      "reason": "video and audio both repeat at 1355 frames",
+      "offset_frames_searched": 1355,
+      "offset_frames_half_chapter": 1355,
+      "offset_equals_half_chapter": true,
+      "facts": {
+        "offset_frames": 1355,
+        "video_repeat_detected": true,
+        "video_mean_similarity": 0.99874,
+        "adjacent_frame_similarity": 0.98608,
+        "audio_roles": "NOT CONFIRMED - do not reuse Baby's stream order here",
+        "missing_delivered_angles": [],
+        "identical_video_titles": [],
+        "audio_ncc_median_fractional": 0.9999,
+        "audio_ncc_min_fractional": 0.9996,
+        "audio_windows_below_0.90": 0,
+        "lag_spread_samples": 0.0,
+        "lag_hit_search_bound": false,
+        "offset_equals_half_chapter": true,
+        "audio_discovered_offset_delta_ms": 0.042,
+        "divergence_spans_first_pass_s": [],
+        "divergence_spans_second_pass_s": []
+      },
+      "finished": "2026-09-13T04:23:05",
+      "operator_checks_required": [
+        "Talking boundaries are NOT established. Component subtraction cannot prove a region is speech-free, and the voice-band indicator has no sensitivity against a music bed. Audition previews/1clickflare_85bpm/.",
+        "Absolute audio/video synchronisation is NOT established. Every timing result here is relative, measured across the title's own repeat."
+      ]
+    },
+    "baby_79bpm": {
+      "key": "baby_79bpm",
+      "titles": [
+        "Scratch_t00",
+        "Scratch_t01",
+        "Scratch_t02",
+        "Scratch_t03"
+      ],
+      "chapter2": [
+        35.035,
+        83.450033
+      ],
+      "fingerprint": {
+        "sources": {
+          "Scratch_t00": {
+            "exists": true,
+            "bytes": 50559490,
+            "mtime_ns": 1777689529000000000
+          },
+          "Scratch_t01": {
+            "exists": true,
+            "bytes": 50554996,
+            "mtime_ns": 1777689559000000000
+          },
+          "Scratch_t02": {
+            "exists": true,
+            "bytes": 50256268,
+            "mtime_ns": 1777689590000000000
+          },
+          "Scratch_t03": {
+            "exists": true,
+            "bytes": 50439103,
+            "mtime_ns": 1777689620000000000
+          }
+        },
+        "script_sha256_16": {
+          "audit_technique.py": "e1e1df407392468a",
+          "drift_crosscheck.py": "575dbb87b83e35d1",
+          "fractional_lag_repeat.py": "ad960abeb06e7a79",
+          "make_boundary_previews.py": "5ee35d440fba6344",
+          "repeat_profile.py": "5484938d7511e993",
+          "run_batch.py": "fb7b50e0468466a5"
+        },
+        "runner_version": "run_batch/1",
+        "params": {
+          "frac_max_lag": 32.0,
+          "frac_probe_s": 6.0,
+          "profile_window_s": 1.0,
+          "video_match": 0.995,
+          "audio_match": 0.9
+        }
+      },
+      "started": "2026-09-13T04:23:05",
+      "steps": {
+        "audit": "ok",
+        "fractional_lag": "ok",
+        "repeat_profile": "ok",
+        "drift_crosscheck": "ok",
+        "previews": "ok"
+      },
+      "log": [
+        {
+          "cmd": "/Users/karlwatson/Developer/ScratchLab-CXL-Ready-20260913/evidence/mkv-source-inspection-20260913/claude-mkv-batch-audit/scripts/audit_technique.py baby_79bpm",
+          "rc": 0,
+          "seconds": 54.8,
+          "stdout_tail": "{\n  \"technique\": \"baby\",\n  \"angle_to_title\": {\n    \"1\": \"Scratch_t00\",\n    \"2\": \"Scratch_t01\",\n    \"3\": \"Scratch_t02\",\n    \"4\": \"Scratch_t03\"\n  },\n  \"missing_delivered_angles\": []\n}\nsections: ['video_integrity', 'audio_streams', 'title_duplicates', 'repeat_within_title', 'segment_duplication', 'talking_boundaries', 'noise', 'av_sync']\nwritten: /Users/karlwatson/Developer/ScratchLab-CXL-Ready-20260913/evidence/mkv-source-inspection-20260913/claude-mkv-batch-audit/techniques/baby_79bpm.json",
+          "stderr_tail": ""
+        },
+        {
+          "cmd": "/Users/karlwatson/Developer/ScratchLab-CXL-Ready-20260913/evidence/mkv-source-inspection-20260913/claude-mkv-batch-audit/scripts/fractional_lag_repeat.py baby_79bpm Scratch_t00 35.035 83.450033 726 --discover",
+          "rc": 0,
+          "seconds": 15.5,
+          "stdout_tail": "baby_79bpm Scratch_t00: offset 726 fr = 1162761.6 samples (whole: False, == half chapter: False)\n  audio-discovered offset 24.2242s (ncc 0.9889), delta vs supplied -0.01 ms\n  windows 12  int-lag ncc 0.985/0.989/0.990  frac ncc 1.000/1.000/1.000  lag -0.96..-0.96  below0.90: 0",
+          "stderr_tail": ""
+        },
+        {
+          "cmd": "/Users/karlwatson/Developer/ScratchLab-CXL-Ready-20260913/evidence/mkv-source-inspection-20260913/claude-mkv-batch-audit/scripts/repeat_profile.py baby_79bpm",
+          "rc": 0,
+          "seconds": 15.1,
+          "stdout_tail": "baby_79bpm: offset 726 fr (24.2242s), 24 x 1.0s windows\n  controls: adjacent 0.98890, random 0.86017\n  video matching 24/24   audio matching 12/12 evaluated\n  DIVERGENCE spans (video ok, audio not): none",
+          "stderr_tail": ""
+        },
+        {
+          "cmd": "/Users/karlwatson/Developer/ScratchLab-CXL-Ready-20260913/evidence/mkv-source-inspection-20260913/claude-mkv-batch-audit/scripts/drift_crosscheck.py baby_79bpm",
+          "rc": 0,
+          "seconds": 2.0,
+          "stdout_tail": "{\n  \"technique\": \"baby_79bpm\",\n  \"reference_title\": \"Scratch_t00\",\n  \"video_repeat_offset_frames\": 726,\n  \"video_repeat_offset_s\": 24.2242,\n  \"video_repeat_mean_similarity\": 0.99883,\n  \"audio_repeat_extra_lag_samples\": -1,\n  \"audio_repeat_extra_lag_ms\": -0.0208,\n  \"audio_repeat_ncc_at_best\": 0.988511,\n  \"audio_repeat_ncc_at_video_offset\": 0.964861,\n  \"window_s\": 24.191,\n  \"verdict\": \"No A/V drift: over 24.2 s the audio repeats at the video's own repeat offset to within 0.02 ms (-1 samples). A drift of even one frame (33.4 ms) would have shown here.\",\n  \"caveat\": \"This compares the audio timeline with the video timeline across the title's own repeat. It constrains RELATIVE timing over the repeated span and can rule out progressive drift. It does NOT measure absolute audio/video synchronisation, and a constant absolute offset would be invisible to it. Where the repeat offset is not a whole number of audio samples, use scripts/fractional_lag_repeat.py instead - integer lag alone under-reports the match.\"\n}",
+          "stderr_tail": ""
+        },
+        {
+          "cmd": "/Users/karlwatson/Developer/ScratchLab-CXL-Ready-20260913/evidence/mkv-source-inspection-20260913/claude-mkv-batch-audit/scripts/make_boundary_previews.py baby_79bpm",
+          "rc": 0,
+          "seconds": 2.0,
+          "stdout_tail": "{\n  \"technique\": \"baby_79bpm\",\n  \"source_title\": \"Scratch_t02\",\n  \"chapter2\": [\n    35.035,\n    83.450033\n  ],\n  \"previews\": [\n    \"previews/baby_79bpm/baby_79bpm_boundary_head_23to40s_Scratch_t02.mov\",\n    \"previews/baby_79bpm/baby_79bpm_boundary_tail_73to83s_Scratch_t02.mov\"\n  ],\n  \"time_mapping\": \"preview t=0 corresponds to the source time in the filename\",\n  \"operator_audition\": \"PENDING - no automatic test can prove absence of speech\"\n}",
+          "stderr_tail": ""
+        }
+      ],
+      "state": "verified_duplicate_half",
+      "reason": "video and audio both repeat at 726 frames",
+      "offset_frames_searched": 726,
+      "offset_frames_half_chapter": 725,
+      "offset_equals_half_chapter": false,
+      "facts": {
+        "offset_frames": 726,
+        "video_repeat_detected": true,
+        "video_mean_similarity": 0.99883,
+        "adjacent_frame_similarity": 0.98722,
+        "audio_roles": "CONFIRMED for this technique",
+        "missing_delivered_angles": [],
+        "identical_video_titles": [
+          [
+            "Scratch_t05",
+            "Scratch_t06"
+          ]
+        ],
+        "audio_ncc_median_fractional": 0.9999,
+        "audio_ncc_min_fractional": 0.9998,
+        "audio_windows_below_0.90": 0,
+        "lag_spread_samples": 0.0,
+        "lag_hit_search_bound": false,
+        "offset_equals_half_chapter": false,
+        "audio_discovered_offset_delta_ms": -0.013,
+        "divergence_spans_first_pass_s": [],
+        "divergence_spans_second_pass_s": []
+      },
+      "finished": "2026-09-13T04:24:34",
+      "operator_checks_required": [
+        "Talking boundaries are NOT established. Component subtraction cannot prove a region is speech-free, and the voice-band indicator has no sensitivity against a music bed. Audition previews/baby_79bpm/.",
+        "Absolute audio/video synchronisation is NOT established. Every timing result here is relative, measured across the title's own repeat."
+      ]
+    },
+    "chirpflare_92bpm": {
+      "key": "chirpflare_92bpm",
+      "titles": [
+        "Scratch_t52",
+        "Scratch_t53",
+        "Scratch_t54",
+        "Scratch_t55"
+      ],
+      "chapter2": [
+        31.5315,
+        114.848067
+      ],
+      "fingerprint": {
+        "sources": {
+          "Scratch_t52": {
+            "exists": true,
+            "bytes": 69896654,
+            "mtime_ns": 1777690979000000000
+          },
+          "Scratch_t53": {
+            "exists": true,
+            "bytes": 69852397,
+            "mtime_ns": 1777691005000000000
+          },
+          "Scratch_t54": {
+            "exists": true,
+            "bytes": 69351874,
+            "mtime_ns": 1777691031000000000
+          },
+          "Scratch_t55": {
+            "exists": true,
+            "bytes": 69656589,
+            "mtime_ns": 1777691059000000000
+          }
+        },
+        "script_sha256_16": {
+          "audit_technique.py": "e1e1df407392468a",
+          "drift_crosscheck.py": "575dbb87b83e35d1",
+          "fractional_lag_repeat.py": "ad960abeb06e7a79",
+          "make_boundary_previews.py": "5ee35d440fba6344",
+          "repeat_profile.py": "5484938d7511e993",
+          "run_batch.py": "fb7b50e0468466a5"
+        },
+        "runner_version": "run_batch/1",
+        "params": {
+          "frac_max_lag": 32.0,
+          "frac_probe_s": 6.0,
+          "profile_window_s": 1.0,
+          "video_match": 0.995,
+          "audio_match": 0.9
+        }
+      },
+      "started": "2026-09-13T04:24:34",
+      "steps": {
+        "audit": "ok",
+        "fractional_lag": "ok",
+        "repeat_profile": "ok",
+        "drift_crosscheck": "ok",
+        "previews": "ok"
+      },
+      "log": [
+        {
+          "cmd": "/Users/karlwatson/Developer/ScratchLab-CXL-Ready-20260913/evidence/mkv-source-inspection-20260913/claude-mkv-batch-audit/scripts/audit_technique.py chirpflare_92bpm",
+          "rc": 0,
+          "seconds": 65.8,
+          "stdout_tail": "{\n  \"technique\": \"chirpflare\",\n  \"angle_to_title\": {\n    \"1\": \"Scratch_t52\",\n    \"2\": \"Scratch_t53\",\n    \"3\": \"Scratch_t54\",\n    \"4\": \"Scratch_t55\"\n  },\n  \"missing_delivered_angles\": []\n}\nsections: ['video_integrity', 'audio_streams', 'title_duplicates', 'repeat_within_title', 'segment_duplication', 'talking_boundaries', 'noise', 'av_sync']\nwritten: /Users/karlwatson/Developer/ScratchLab-CXL-Ready-20260913/evidence/mkv-source-inspection-20260913/claude-mkv-batch-audit/techniques/chirpflare_92bpm.json",
+          "stderr_tail": ""
+        },
+        {
+          "cmd": "/Users/karlwatson/Developer/ScratchLab-CXL-Ready-20260913/evidence/mkv-source-inspection-20260913/claude-mkv-batch-audit/scripts/fractional_lag_repeat.py chirpflare_92bpm Scratch_t52 31.5315 114.848067 1249 --discover",
+          "rc": 0,
+          "seconds": 29.5,
+          "stdout_tail": "chirpflare_92bpm Scratch_t52: offset 1249 fr = 2000398.4 samples (whole: False, == half chapter: True)\n  audio-discovered offset 41.6750s (ncc 0.9993), delta vs supplied +0.01 ms\n  windows 23  int-lag ncc 0.900/0.959/0.986  frac ncc 1.000/1.000/1.000  lag -1.31..-1.31  below0.90: 0",
+          "stderr_tail": ""
+        },
+        {
+          "cmd": "/Users/karlwatson/Developer/ScratchLab-CXL-Ready-20260913/evidence/mkv-source-inspection-20260913/claude-mkv-batch-audit/scripts/repeat_profile.py chirpflare_92bpm",
+          "rc": 0,
+          "seconds": 28.6,
+          "stdout_tail": "chirpflare_92bpm: offset 1249 fr (41.6750s), 41 x 1.0s windows\n  controls: adjacent 0.98618, random 0.85842\n  video matching 41/41   audio matching 23/23 evaluated\n  DIVERGENCE spans (video ok, audio not): none",
+          "stderr_tail": ""
+        },
+        {
+          "cmd": "/Users/karlwatson/Developer/ScratchLab-CXL-Ready-20260913/evidence/mkv-source-inspection-20260913/claude-mkv-batch-audit/scripts/drift_crosscheck.py chirpflare_92bpm",
+          "rc": 0,
+          "seconds": 4.9,
+          "stdout_tail": "{\n  \"technique\": \"chirpflare_92bpm\",\n  \"reference_title\": \"Scratch_t52\",\n  \"video_repeat_offset_frames\": 1249,\n  \"video_repeat_offset_s\": 41.674967,\n  \"video_repeat_mean_similarity\": 0.99902,\n  \"audio_repeat_extra_lag_samples\": 1,\n  \"audio_repeat_extra_lag_ms\": 0.0208,\n  \"audio_repeat_ncc_at_best\": 0.999434,\n  \"audio_repeat_ncc_at_video_offset\": 0.954769,\n  \"window_s\": 41.642,\n  \"verdict\": \"No A/V drift: over 41.6 s the audio repeats at the video's own repeat offset to within 0.02 ms (1 samples). A drift of even one frame (33.4 ms) would have shown here.\",\n  \"caveat\": \"This compares the audio timeline with the video timeline across the title's own repeat. It constrains RELATIVE timing over the repeated span and can rule out progressive drift. It does NOT measure absolute audio/video synchronisation, and a constant absolute offset would be invisible to it. Where the repeat offset is not a whole number of audio samples, use scripts/fractional_lag_repeat.py instead - integer lag alone under-reports the match.\"\n}",
+          "stderr_tail": ""
+        },
+        {
+          "cmd": "/Users/karlwatson/Developer/ScratchLab-CXL-Ready-20260913/evidence/mkv-source-inspection-20260913/claude-mkv-batch-audit/scripts/make_boundary_previews.py chirpflare_92bpm",
+          "rc": 0,
+          "seconds": 2.4,
+          "stdout_tail": "{\n  \"technique\": \"chirpflare_92bpm\",\n  \"source_title\": \"Scratch_t54\",\n  \"chapter2\": [\n    31.5315,\n    114.848067\n  ],\n  \"previews\": [\n    \"previews/chirpflare_92bpm/chirpflare_92bpm_boundary_head_20to37s_Scratch_t54.mov\",\n    \"previews/chirpflare_92bpm/chirpflare_92bpm_boundary_tail_73to83s_Scratch_t54.mov\"\n  ],\n  \"time_mapping\": \"preview t=0 corresponds to the source time in the filename\",\n  \"operator_audition\": \"PENDING - no automatic test can prove absence of speech\"\n}",
+          "stderr_tail": ""
+        }
+      ],
+      "state": "verified_duplicate_half",
+      "reason": "video and audio both repeat at 1249 frames",
+      "offset_frames_searched": 1249,
+      "offset_frames_half_chapter": 1249,
+      "offset_equals_half_chapter": true,
+      "facts": {
+        "offset_frames": 1249,
+        "video_repeat_detected": true,
+        "video_mean_similarity": 0.99902,
+        "adjacent_frame_similarity": 0.98609,
+        "audio_roles": "CONFIRMED for this technique",
+        "missing_delivered_angles": [],
+        "identical_video_titles": [],
+        "audio_ncc_median_fractional": 0.9999,
+        "audio_ncc_min_fractional": 0.9999,
+        "audio_windows_below_0.90": 0,
+        "lag_spread_samples": 0.0,
+        "lag_hit_search_bound": false,
+        "offset_equals_half_chapter": true,
+        "audio_discovered_offset_delta_ms": 0.012,
+        "divergence_spans_first_pass_s": [],
+        "divergence_spans_second_pass_s": []
+      },
+      "finished": "2026-09-13T04:26:45",
+      "operator_checks_required": [
+        "Talking boundaries are NOT established. Component subtraction cannot prove a region is speech-free, and the voice-band indicator has no sensitivity against a music bed. Audition previews/chirpflare_92bpm/.",
+        "Absolute audio/video synchronisation is NOT established. Every timing result here is relative, measured across the title's own repeat."
+      ]
+    },
+    "chirps_98bpm": {
+      "key": "chirps_98bpm",
+      "titles": [
+        "Scratch_t20",
+        "Scratch_t21",
+        "Scratch_t22",
+        "Scratch_t23"
+      ],
+      "chapter2": [
+        64.064,
+        103.328
+      ],
+      "fingerprint": {
+        "sources": {
+          "Scratch_t20": {
+            "exists": true,
+            "bytes": 62753440,
+            "mtime_ns": 1777690068000000000
+          },
+          "Scratch_t21": {
+            "exists": true,
+            "bytes": 62720538,
+            "mtime_ns": 1777690096000000000
+          },
+          "Scratch_t22": {
+            "exists": true,
+            "bytes": 62344416,
+            "mtime_ns": 1777690123000000000
+          },
+          "Scratch_t23": {
+            "exists": true,
+            "bytes": 62615225,
+            "mtime_ns": 1777690151000000000
+          }
+        },
+        "script_sha256_16": {
+          "audit_technique.py": "e1e1df407392468a",
+          "drift_crosscheck.py": "575dbb87b83e35d1",
+          "fractional_lag_repeat.py": "ad960abeb06e7a79",
+          "make_boundary_previews.py": "5ee35d440fba6344",
+          "repeat_profile.py": "5484938d7511e993",
+          "run_batch.py": "fb7b50e0468466a5"
+        },
+        "runner_version": "run_batch/1",
+        "params": {
+          "frac_max_lag": 32.0,
+          "frac_probe_s": 6.0,
+          "profile_window_s": 1.0,
+          "video_match": 0.995,
+          "audio_match": 0.9
+        }
+      },
+      "started": "2026-09-13T04:26:45",
+      "steps": {
+        "audit": "ok",
+        "fractional_lag": "ok",
+        "repeat_profile": "ok",
+        "drift_crosscheck": "ok",
+        "previews": "ok"
+      },
+      "log": [
+        {
+          "cmd": "/Users/karlwatson/Developer/ScratchLab-CXL-Ready-20260913/evidence/mkv-source-inspection-20260913/claude-mkv-batch-audit/scripts/audit_technique.py chirps_98bpm",
+          "rc": 0,
+          "seconds": 48.9,
+          "stdout_tail": "{\n  \"technique\": \"chirps\",\n  \"angle_to_title\": {\n    \"1\": \"Scratch_t20\",\n    \"2\": \"Scratch_t21\",\n    \"3\": \"Scratch_t22\",\n    \"4\": \"Scratch_t23\"\n  },\n  \"missing_delivered_angles\": []\n}\nsections: ['video_integrity', 'audio_streams', 'title_duplicates', 'repeat_within_title', 'segment_duplication', 'talking_boundaries', 'noise', 'av_sync']\nwritten: /Users/karlwatson/Developer/ScratchLab-CXL-Ready-20260913/evidence/mkv-source-inspection-20260913/claude-mkv-batch-audit/techniques/chirps_98bpm.json",
+          "stderr_tail": ""
+        },
+        {
+          "cmd": "/Users/karlwatson/Developer/ScratchLab-CXL-Ready-20260913/evidence/mkv-source-inspection-20260913/claude-mkv-batch-audit/scripts/fractional_lag_repeat.py chirps_98bpm Scratch_t20 64.064 103.328 588 --discover",
+          "rc": 0,
+          "seconds": 18.0,
+          "stdout_tail": "chirps_98bpm Scratch_t20: offset 588 fr = 941740.8 samples (whole: False, == half chapter: True)\n  audio-discovered offset 19.6196s (ncc 0.9997), delta vs supplied +0.03 ms\n  windows 14  int-lag ncc 0.590/0.738/0.913  frac ncc 0.999/1.000/1.000  lag -2.81..-2.75  below0.90: 0",
+          "stderr_tail": ""
+        },
+        {
+          "cmd": "/Users/karlwatson/Developer/ScratchLab-CXL-Ready-20260913/evidence/mkv-source-inspection-20260913/claude-mkv-batch-audit/scripts/repeat_profile.py chirps_98bpm",
+          "rc": 0,
+          "seconds": 18.1,
+          "stdout_tail": "chirps_98bpm: offset 588 fr (19.6196s), 19 x 1.0s windows\n  controls: adjacent 0.98528, random 0.88366\n  video matching 19/19   audio matching 14/14 evaluated\n  DIVERGENCE spans (video ok, audio not): none",
+          "stderr_tail": ""
+        },
+        {
+          "cmd": "/Users/karlwatson/Developer/ScratchLab-CXL-Ready-20260913/evidence/mkv-source-inspection-20260913/claude-mkv-batch-audit/scripts/drift_crosscheck.py chirps_98bpm",
+          "rc": 0,
+          "seconds": 1.9,
+          "stdout_tail": "{\n  \"technique\": \"chirps_98bpm\",\n  \"reference_title\": \"Scratch_t20\",\n  \"video_repeat_offset_frames\": 588,\n  \"video_repeat_offset_s\": 19.6196,\n  \"video_repeat_mean_similarity\": 0.99858,\n  \"audio_repeat_extra_lag_samples\": 1,\n  \"audio_repeat_extra_lag_ms\": 0.0208,\n  \"audio_repeat_ncc_at_best\": 0.999823,\n  \"audio_repeat_ncc_at_video_offset\": 0.931202,\n  \"window_s\": 19.644,\n  \"verdict\": \"No A/V drift: over 19.6 s the audio repeats at the video's own repeat offset to within 0.02 ms (1 samples). A drift of even one frame (33.4 ms) would have shown here.\",\n  \"caveat\": \"This compares the audio timeline with the video timeline across the title's own repeat. It constrains RELATIVE timing over the repeated span and can rule out progressive drift. It does NOT measure absolute audio/video synchronisation, and a constant absolute offset would be invisible to it. Where the repeat offset is not a whole number of audio samples, use scripts/fractional_lag_repeat.py instead - integer lag alone under-reports the match.\"\n}",
+          "stderr_tail": ""
+        },
+        {
+          "cmd": "/Users/karlwatson/Developer/ScratchLab-CXL-Ready-20260913/evidence/mkv-source-inspection-20260913/claude-mkv-batch-audit/scripts/make_boundary_previews.py chirps_98bpm",
+          "rc": 0,
+          "seconds": 2.8,
+          "stdout_tail": "{\n  \"technique\": \"chirps_98bpm\",\n  \"source_title\": \"Scratch_t22\",\n  \"chapter2\": [\n    64.064,\n    103.328\n  ],\n  \"previews\": [\n    \"previews/chirps_98bpm/chirps_98bpm_boundary_head_52to69s_Scratch_t22.mov\",\n    \"previews/chirps_98bpm/chirps_98bpm_boundary_tail_73to83s_Scratch_t22.mov\"\n  ],\n  \"time_mapping\": \"preview t=0 corresponds to the source time in the filename\",\n  \"operator_audition\": \"PENDING - no automatic test can prove absence of speech\"\n}",
+          "stderr_tail": ""
+        }
+      ],
+      "state": "verified_duplicate_half",
+      "reason": "video and audio both repeat at 588 frames",
+      "offset_frames_searched": 588,
+      "offset_frames_half_chapter": 588,
+      "offset_equals_half_chapter": true,
+      "facts": {
+        "offset_frames": 588,
+        "video_repeat_detected": true,
+        "video_mean_similarity": 0.99858,
+        "adjacent_frame_similarity": 0.98394,
+        "audio_roles": "CONFIRMED for this technique",
+        "missing_delivered_angles": [],
+        "identical_video_titles": [],
+        "audio_ncc_median_fractional": 0.9999,
+        "audio_ncc_min_fractional": 0.9992,
+        "audio_windows_below_0.90": 0,
+        "lag_spread_samples": 0.06,
+        "lag_hit_search_bound": false,
+        "offset_equals_half_chapter": true,
+        "audio_discovered_offset_delta_ms": 0.025,
+        "divergence_spans_first_pass_s": [],
+        "divergence_spans_second_pass_s": []
+      },
+      "finished": "2026-09-13T04:28:15",
+      "operator_checks_required": [
+        "Talking boundaries are NOT established. Component subtraction cannot prove a region is speech-free, and the voice-band indicator has no sensitivity against a music bed. Audition previews/chirps_98bpm/.",
+        "Absolute audio/video synchronisation is NOT established. Every timing result here is relative, measured across the title's own repeat."
+      ]
+    },
+    "clovertears_105bpm": {
+      "key": "clovertears_105bpm",
+      "titles": [
+        "Scratch_t74",
+        "Scratch_t75",
+        "Scratch_t76",
+        "Scratch_t77"
+      ],
+      "chapter2": [
+        45.045,
+        81.648233
+      ],
+      "fingerprint": {
+        "sources": {
+          "Scratch_t74": {
+            "exists": true,
+            "bytes": 49484650,
+            "mtime_ns": 1777691372000000000
+          },
+          "Scratch_t75": {
+            "exists": true,
+            "bytes": 49376737,
+            "mtime_ns": 1777691398000000000
+          },
+          "Scratch_t76": {
+            "exists": true,
+            "bytes": 49054996,
+            "mtime_ns": 1777691420000000000
+          },
+          "Scratch_t77": {
+            "exists": true,
+            "bytes": 49224945,
+            "mtime_ns": 1777691444000000000
+          }
+        },
+        "script_sha256_16": {
+          "audit_technique.py": "e1e1df407392468a",
+          "drift_crosscheck.py": "575dbb87b83e35d1",
+          "fractional_lag_repeat.py": "ad960abeb06e7a79",
+          "make_boundary_previews.py": "5ee35d440fba6344",
+          "repeat_profile.py": "5484938d7511e993",
+          "run_batch.py": "fb7b50e0468466a5"
+        },
+        "runner_version": "run_batch/1",
+        "params": {
+          "frac_max_lag": 32.0,
+          "frac_probe_s": 6.0,
+          "profile_window_s": 1.0,
+          "video_match": 0.995,
+          "audio_match": 0.9
+        }
+      },
+      "started": "2026-09-13T04:28:15",
+      "steps": {
+        "audit": "ok",
+        "fractional_lag": "ok",
+        "repeat_profile": "ok",
+        "drift_crosscheck": "ok",
+        "previews": "ok"
+      },
+      "log": [
+        {
+          "cmd": "/Users/karlwatson/Developer/ScratchLab-CXL-Ready-20260913/evidence/mkv-source-inspection-20260913/claude-mkv-batch-audit/scripts/audit_technique.py clovertears_105bpm",
+          "rc": 0,
+          "seconds": 43.0,
+          "stdout_tail": "{\n  \"technique\": \"clovertears\",\n  \"angle_to_title\": {\n    \"1\": \"Scratch_t74\",\n    \"2\": \"Scratch_t75\",\n    \"3\": \"Scratch_t76\",\n    \"4\": \"Scratch_t77\"\n  },\n  \"missing_delivered_angles\": []\n}\nsections: ['video_integrity', 'audio_streams', 'title_duplicates', 'repeat_within_title', 'segment_duplication', 'talking_boundaries', 'noise', 'av_sync']\nwritten: /Users/karlwatson/Developer/ScratchLab-CXL-Ready-20260913/evidence/mkv-source-inspection-20260913/claude-mkv-batch-audit/techniques/clovertears_105bpm.json",
+          "stderr_tail": ""
+        },
+        {
+          "cmd": "/Users/karlwatson/Developer/ScratchLab-CXL-Ready-20260913/evidence/mkv-source-inspection-20260913/claude-mkv-batch-audit/scripts/fractional_lag_repeat.py clovertears_105bpm Scratch_t74 45.045 81.648233 549 --discover",
+          "rc": 0,
+          "seconds": 13.2,
+          "stdout_tail": "clovertears_105bpm Scratch_t74: offset 549 fr = 879278.4 samples (whole: False, == half chapter: False)\n  audio-discovered offset 18.3183s (ncc 0.9952), delta vs supplied +0.01 ms\n  windows 10  int-lag ncc 0.864/0.915/0.962  frac ncc 1.000/1.000/1.000  lag -1.85..-1.85  below0.90: 0",
+          "stderr_tail": ""
+        },
+        {
+          "cmd": "/Users/karlwatson/Developer/ScratchLab-CXL-Ready-20260913/evidence/mkv-source-inspection-20260913/claude-mkv-batch-audit/scripts/repeat_profile.py clovertears_105bpm",
+          "rc": 0,
+          "seconds": 13.0,
+          "stdout_tail": "clovertears_105bpm: offset 549 fr (18.3183s), 18 x 1.0s windows\n  controls: adjacent 0.98619, random 0.84549\n  video matching 18/18   audio matching 10/10 evaluated\n  DIVERGENCE spans (video ok, audio not): none",
+          "stderr_tail": ""
+        },
+        {
+          "cmd": "/Users/karlwatson/Developer/ScratchLab-CXL-Ready-20260913/evidence/mkv-source-inspection-20260913/claude-mkv-batch-audit/scripts/drift_crosscheck.py clovertears_105bpm",
+          "rc": 0,
+          "seconds": 1.7,
+          "stdout_tail": "{\n  \"technique\": \"clovertears_105bpm\",\n  \"reference_title\": \"Scratch_t74\",\n  \"video_repeat_offset_frames\": 549,\n  \"video_repeat_offset_s\": 18.3183,\n  \"video_repeat_mean_similarity\": 0.99845,\n  \"audio_repeat_extra_lag_samples\": 1,\n  \"audio_repeat_extra_lag_ms\": 0.0208,\n  \"audio_repeat_ncc_at_best\": 0.991547,\n  \"audio_repeat_ncc_at_video_offset\": 0.921569,\n  \"window_s\": 18.285,\n  \"verdict\": \"No A/V drift: over 18.3 s the audio repeats at the video's own repeat offset to within 0.02 ms (1 samples). A drift of even one frame (33.4 ms) would have shown here.\",\n  \"caveat\": \"This compares the audio timeline with the video timeline across the title's own repeat. It constrains RELATIVE timing over the repeated span and can rule out progressive drift. It does NOT measure absolute audio/video synchronisation, and a constant absolute offset would be invisible to it. Where the repeat offset is not a whole number of audio samples, use scripts/fractional_lag_repeat.py instead - integer lag alone under-reports the match.\"\n}",
+          "stderr_tail": ""
+        },
+        {
+          "cmd": "/Users/karlwatson/Developer/ScratchLab-CXL-Ready-20260913/evidence/mkv-source-inspection-20260913/claude-mkv-batch-audit/scripts/make_boundary_previews.py clovertears_105bpm",
+          "rc": 0,
+          "seconds": 2.6,
+          "stdout_tail": "{\n  \"technique\": \"clovertears_105bpm\",\n  \"source_title\": \"Scratch_t76\",\n  \"chapter2\": [\n    45.045,\n    81.648233\n  ],\n  \"previews\": [\n    \"previews/clovertears_105bpm/clovertears_105bpm_boundary_head_33to50s_Scratch_t76.mov\",\n    \"previews/clovertears_105bpm/clovertears_105bpm_boundary_tail_72to82s_Scratch_t76.mov\"\n  ],\n  \"time_mapping\": \"preview t=0 corresponds to the source time in the filename\",\n  \"operator_audition\": \"PENDING - no automatic test can prove absence of speech\"\n}",
+          "stderr_tail": ""
+        }
+      ],
+      "state": "verified_duplicate_half",
+      "reason": "video and audio both repeat at 549 frames",
+      "offset_frames_searched": 549,
+      "offset_frames_half_chapter": 548,
+      "offset_equals_half_chapter": false,
+      "facts": {
+        "offset_frames": 549,
+        "video_repeat_detected": true,
+        "video_mean_similarity": 0.99845,
+        "adjacent_frame_similarity": 0.98683,
+        "audio_roles": "NOT CONFIRMED - do not reuse Baby's stream order here",
+        "missing_delivered_angles": [],
+        "identical_video_titles": [],
+        "audio_ncc_median_fractional": 0.99995,
+        "audio_ncc_min_fractional": 0.9998,
+        "audio_windows_below_0.90": 0,
+        "lag_spread_samples": 0.0,
+        "lag_hit_search_bound": false,
+        "offset_equals_half_chapter": false,
+        "audio_discovered_offset_delta_ms": 0.013,
+        "divergence_spans_first_pass_s": [],
+        "divergence_spans_second_pass_s": []
+      },
+      "finished": "2026-09-13T04:29:29",
+      "operator_checks_required": [
+        "Talking boundaries are NOT established. Component subtraction cannot prove a region is speech-free, and the voice-band indicator has no sensitivity against a music bed. Audition previews/clovertears_105bpm/.",
+        "Absolute audio/video synchronisation is NOT established. Every timing result here is relative, measured across the title's own repeat."
+      ]
+    },
+    "crabs_92bpm": {
+      "key": "crabs_92bpm",
+      "titles": [
+        "Scratch_t102",
+        "Scratch_t103",
+        "Scratch_t104",
+        "Scratch_t105"
+      ],
+      "chapter2": [
+        58.5585,
+        141.888
+      ],
+      "fingerprint": {
+        "sources": {
+          "Scratch_t102": {
+            "exists": true,
+            "bytes": 77803070,
+            "mtime_ns": 1777692263000000000
+          },
+          "Scratch_t103": {
+            "exists": true,
+            "bytes": 77768046,
+            "mtime_ns": 1777692310000000000
+          },
+          "Scratch_t104": {
+            "exists": true,
+            "bytes": 77235082,
+            "mtime_ns": 1777692355000000000
+          },
+          "Scratch_t105": {
+            "exists": true,
+            "bytes": 77505849,
+            "mtime_ns": 1777692397000000000
+          }
+        },
+        "script_sha256_16": {
+          "audit_technique.py": "e1e1df407392468a",
+          "drift_crosscheck.py": "575dbb87b83e35d1",
+          "fractional_lag_repeat.py": "ad960abeb06e7a79",
+          "make_boundary_previews.py": "5ee35d440fba6344",
+          "repeat_profile.py": "5484938d7511e993",
+          "run_batch.py": "fb7b50e0468466a5"
+        },
+        "runner_version": "run_batch/1",
+        "params": {
+          "frac_max_lag": 32.0,
+          "frac_probe_s": 6.0,
+          "profile_window_s": 1.0,
+          "video_match": 0.995,
+          "audio_match": 0.9
+        }
+      },
+      "started": "2026-09-13T04:29:29",
+      "steps": {
+        "audit": "ok",
+        "fractional_lag": "ok",
+        "repeat_profile": "ok",
+        "drift_crosscheck": "ok",
+        "previews": "ok"
+      },
+      "log": [
+        {
+          "cmd": "/Users/karlwatson/Developer/ScratchLab-CXL-Ready-20260913/evidence/mkv-source-inspection-20260913/claude-mkv-batch-audit/scripts/audit_technique.py crabs_92bpm",
+          "rc": 0,
+          "seconds": 74.9,
+          "stdout_tail": "{\n  \"technique\": \"crabs\",\n  \"angle_to_title\": {\n    \"1\": \"Scratch_t102\",\n    \"2\": \"Scratch_t103\",\n    \"3\": \"Scratch_t104\",\n    \"4\": \"Scratch_t105\"\n  },\n  \"missing_delivered_angles\": []\n}\nsections: ['video_integrity', 'audio_streams', 'title_duplicates', 'repeat_within_title', 'segment_duplication', 'talking_boundaries', 'noise', 'av_sync']\nwritten: /Users/karlwatson/Developer/ScratchLab-CXL-Ready-20260913/evidence/mkv-source-inspection-20260913/claude-mkv-batch-audit/techniques/crabs_92bpm.json",
+          "stderr_tail": ""
+        },
+        {
+          "cmd": "/Users/karlwatson/Developer/ScratchLab-CXL-Ready-20260913/evidence/mkv-source-inspection-20260913/claude-mkv-batch-audit/scripts/fractional_lag_repeat.py crabs_92bpm Scratch_t102 58.5585 141.888 1249 --discover",
+          "rc": 0,
+          "seconds": 30.2,
+          "stdout_tail": "crabs_92bpm Scratch_t102: offset 1249 fr = 2000398.4 samples (whole: False, == half chapter: True)\n  audio-discovered offset 41.6750s (ncc 0.9948), delta vs supplied +0.05 ms\n  windows 23  int-lag ncc 0.825/0.894/0.937  frac ncc 0.998/1.000/1.000  lag -2.94..-2.94  below0.90: 0",
+          "stderr_tail": ""
+        },
+        {
+          "cmd": "/Users/karlwatson/Developer/ScratchLab-CXL-Ready-20260913/evidence/mkv-source-inspection-20260913/claude-mkv-batch-audit/scripts/repeat_profile.py crabs_92bpm",
+          "rc": 0,
+          "seconds": 29.0,
+          "stdout_tail": "crabs_92bpm: offset 1249 fr (41.6750s), 41 x 1.0s windows\n  controls: adjacent 0.98602, random 0.84277\n  video matching 41/41   audio matching 23/23 evaluated\n  DIVERGENCE spans (video ok, audio not): none",
+          "stderr_tail": ""
+        },
+        {
+          "cmd": "/Users/karlwatson/Developer/ScratchLab-CXL-Ready-20260913/evidence/mkv-source-inspection-20260913/claude-mkv-batch-audit/scripts/drift_crosscheck.py crabs_92bpm",
+          "rc": 0,
+          "seconds": 5.1,
+          "stdout_tail": "{\n  \"technique\": \"crabs_92bpm\",\n  \"reference_title\": \"Scratch_t102\",\n  \"video_repeat_offset_frames\": 1249,\n  \"video_repeat_offset_s\": 41.674967,\n  \"video_repeat_mean_similarity\": 0.99886,\n  \"audio_repeat_extra_lag_samples\": 3,\n  \"audio_repeat_extra_lag_ms\": 0.0625,\n  \"audio_repeat_ncc_at_best\": 0.995629,\n  \"audio_repeat_ncc_at_video_offset\": 0.890552,\n  \"window_s\": 41.655,\n  \"verdict\": \"No A/V drift: over 41.7 s the audio repeats at the video's own repeat offset to within 0.06 ms (3 samples). A drift of even one frame (33.4 ms) would have shown here.\",\n  \"caveat\": \"This compares the audio timeline with the video timeline across the title's own repeat. It constrains RELATIVE timing over the repeated span and can rule out progressive drift. It does NOT measure absolute audio/video synchronisation, and a constant absolute offset would be invisible to it. Where the repeat offset is not a whole number of audio samples, use scripts/fractional_lag_repeat.py instead - integer lag alone under-reports the match.\"\n}",
+          "stderr_tail": ""
+        },
+        {
+          "cmd": "/Users/karlwatson/Developer/ScratchLab-CXL-Ready-20260913/evidence/mkv-source-inspection-20260913/claude-mkv-batch-audit/scripts/make_boundary_previews.py crabs_92bpm",
+          "rc": 0,
+          "seconds": 2.5,
+          "stdout_tail": "{\n  \"technique\": \"crabs_92bpm\",\n  \"source_title\": \"Scratch_t104\",\n  \"chapter2\": [\n    58.5585,\n    141.888\n  ],\n  \"previews\": [\n    \"previews/crabs_92bpm/crabs_92bpm_boundary_head_47to64s_Scratch_t104.mov\",\n    \"previews/crabs_92bpm/crabs_92bpm_boundary_tail_73to83s_Scratch_t104.mov\"\n  ],\n  \"time_mapping\": \"preview t=0 corresponds to the source time in the filename\",\n  \"operator_audition\": \"PENDING - no automatic test can prove absence of speech\"\n}",
+          "stderr_tail": ""
+        }
+      ],
+      "state": "verified_duplicate_half",
+      "reason": "video and audio both repeat at 1249 frames",
+      "offset_frames_searched": 1249,
+      "offset_frames_half_chapter": 1249,
+      "offset_equals_half_chapter": true,
+      "facts": {
+        "offset_frames": 1249,
+        "video_repeat_detected": true,
+        "video_mean_similarity": 0.99886,
+        "adjacent_frame_similarity": 0.98424,
+        "audio_roles": "CONFIRMED for this technique",
+        "missing_delivered_angles": [],
+        "identical_video_titles": [],
+        "audio_ncc_median_fractional": 1.0,
+        "audio_ncc_min_fractional": 0.9975,
+        "audio_windows_below_0.90": 0,
+        "lag_spread_samples": 0.0,
+        "lag_hit_search_bound": false,
+        "offset_equals_half_chapter": true,
+        "audio_discovered_offset_delta_ms": 0.054,
+        "divergence_spans_first_pass_s": [],
+        "divergence_spans_second_pass_s": []
+      },
+      "finished": "2026-09-13T04:31:50",
+      "operator_checks_required": [
+        "Talking boundaries are NOT established. Component subtraction cannot prove a region is speech-free, and the voice-band indicator has no sensitivity against a music bed. Audition previews/crabs_92bpm/.",
+        "Absolute audio/video synchronisation is NOT established. Every timing result here is relative, measured across the title's own repeat."
+      ]
+    },
+    "cresentflare_92bpm": {
+      "key": "cresentflare_92bpm",
+      "titles": [
+        "Scratch_t48",
+        "Scratch_t49",
+        "Scratch_t50",
+        "Scratch_t51"
+      ],
+      "chapter2": [
+        37.037,
+        120.353567
+      ],
+      "fingerprint": {
+        "sources": {
+          "Scratch_t48": {
+            "exists": true,
+            "bytes": 73279592,
+            "mtime_ns": 1777690868000000000
+          },
+          "Scratch_t49": {
+            "exists": true,
+            "bytes": 73257814,
+            "mtime_ns": 1777690895000000000
+          },
+          "Scratch_t50": {
+            "exists": true,
+            "bytes": 72879776,
+            "mtime_ns": 1777690923000000000
+          },
+          "Scratch_t51": {
+            "exists": true,
+            "bytes": 73055402,
+            "mtime_ns": 1777690951000000000
+          }
+        },
+        "script_sha256_16": {
+          "audit_technique.py": "e1e1df407392468a",
+          "drift_crosscheck.py": "575dbb87b83e35d1",
+          "fractional_lag_repeat.py": "ad960abeb06e7a79",
+          "make_boundary_previews.py": "5ee35d440fba6344",
+          "repeat_profile.py": "5484938d7511e993",
+          "run_batch.py": "fb7b50e0468466a5"
+        },
+        "runner_version": "run_batch/1",
+        "params": {
+          "frac_max_lag": 32.0,
+          "frac_probe_s": 6.0,
+          "profile_window_s": 1.0,
+          "video_match": 0.995,
+          "audio_match": 0.9
+        }
+      },
+      "started": "2026-09-13T04:31:50",
+      "steps": {
+        "audit": "ok",
+        "fractional_lag": "ok",
+        "repeat_profile": "ok",
+        "drift_crosscheck": "ok",
+        "previews": "ok"
+      },
+      "log": [
+        {
+          "cmd": "/Users/karlwatson/Developer/ScratchLab-CXL-Ready-20260913/evidence/mkv-source-inspection-20260913/claude-mkv-batch-audit/scripts/audit_technique.py cresentflare_92bpm",
+          "rc": 0,
+          "seconds": 69.6,
+          "stdout_tail": "{\n  \"technique\": \"cresentflare\",\n  \"angle_to_title\": {\n    \"1\": \"Scratch_t48\",\n    \"2\": \"Scratch_t49\",\n    \"3\": \"Scratch_t50\",\n    \"4\": \"Scratch_t51\"\n  },\n  \"missing_delivered_angles\": []\n}\nsections: ['video_integrity', 'audio_streams', 'title_duplicates', 'repeat_within_title', 'segment_duplication', 'talking_boundaries', 'noise', 'av_sync']\nwritten: /Users/karlwatson/Developer/ScratchLab-CXL-Ready-20260913/evidence/mkv-source-inspection-20260913/claude-mkv-batch-audit/techniques/cresentflare_92bpm.json",
+          "stderr_tail": ""
+        },
+        {
+          "cmd": "/Users/karlwatson/Developer/ScratchLab-CXL-Ready-20260913/evidence/mkv-source-inspection-20260913/claude-mkv-batch-audit/scripts/fractional_lag_repeat.py cresentflare_92bpm Scratch_t48 37.037 120.353567 1249 --discover",
+          "rc": 0,
+          "seconds": 30.6,
+          "stdout_tail": "cresentflare_92bpm Scratch_t48: offset 1249 fr = 2000398.4 samples (whole: False, == half chapter: True)\n  audio-discovered offset 41.6750s (ncc 0.9988), delta vs supplied +0.03 ms\n  windows 24  int-lag ncc 0.678/0.833/0.943  frac ncc 0.996/1.000/1.000  lag -2.40..-2.21  below0.90: 0",
+          "stderr_tail": ""
+        },
+        {
+          "cmd": "/Users/karlwatson/Developer/ScratchLab-CXL-Ready-20260913/evidence/mkv-source-inspection-20260913/claude-mkv-batch-audit/scripts/repeat_profile.py cresentflare_92bpm",
+          "rc": 0,
+          "seconds": 29.4,
+          "stdout_tail": "cresentflare_92bpm: offset 1249 fr (41.6750s), 41 x 1.0s windows\n  controls: adjacent 0.98457, random 0.84371\n  video matching 41/41   audio matching 24/24 evaluated\n  DIVERGENCE spans (video ok, audio not): none",
+          "stderr_tail": ""
+        },
+        {
+          "cmd": "/Users/karlwatson/Developer/ScratchLab-CXL-Ready-20260913/evidence/mkv-source-inspection-20260913/claude-mkv-batch-audit/scripts/drift_crosscheck.py cresentflare_92bpm",
+          "rc": 0,
+          "seconds": 3.9,
+          "stdout_tail": "{\n  \"technique\": \"cresentflare_92bpm\",\n  \"reference_title\": \"Scratch_t48\",\n  \"video_repeat_offset_frames\": 1249,\n  \"video_repeat_offset_s\": 41.674967,\n  \"video_repeat_mean_similarity\": 0.99894,\n  \"audio_repeat_extra_lag_samples\": 2,\n  \"audio_repeat_extra_lag_ms\": 0.0417,\n  \"audio_repeat_ncc_at_best\": 0.999678,\n  \"audio_repeat_ncc_at_video_offset\": 0.833115,\n  \"window_s\": 41.642,\n  \"verdict\": \"No A/V drift: over 41.6 s the audio repeats at the video's own repeat offset to within 0.04 ms (2 samples). A drift of even one frame (33.4 ms) would have shown here.\",\n  \"caveat\": \"This compares the audio timeline with the video timeline across the title's own repeat. It constrains RELATIVE timing over the repeated span and can rule out progressive drift. It does NOT measure absolute audio/video synchronisation, and a constant absolute offset would be invisible to it. Where the repeat offset is not a whole number of audio samples, use scripts/fractional_lag_repeat.py instead - integer lag alone under-reports the match.\"\n}",
+          "stderr_tail": ""
+        },
+        {
+          "cmd": "/Users/karlwatson/Developer/ScratchLab-CXL-Ready-20260913/evidence/mkv-source-inspection-20260913/claude-mkv-batch-audit/scripts/make_boundary_previews.py cresentflare_92bpm",
+          "rc": 0,
+          "seconds": 2.1,
+          "stdout_tail": "{\n  \"technique\": \"cresentflare_92bpm\",\n  \"source_title\": \"Scratch_t50\",\n  \"chapter2\": [\n    37.037,\n    120.353567\n  ],\n  \"previews\": [\n    \"previews/cresentflare_92bpm/cresentflare_92bpm_boundary_head_25to42s_Scratch_t50.mov\",\n    \"previews/cresentflare_92bpm/cresentflare_92bpm_boundary_tail_73to83s_Scratch_t50.mov\"\n  ],\n  \"time_mapping\": \"preview t=0 corresponds to the source time in the filename\",\n  \"operator_audition\": \"PENDING - no automatic test can prove absence of speech\"\n}",
+          "stderr_tail": ""
+        }
+      ],
+      "state": "verified_duplicate_half",
+      "reason": "video and audio both repeat at 1249 frames",
+      "offset_frames_searched": 1249,
+      "offset_frames_half_chapter": 1249,
+      "offset_equals_half_chapter": true,
+      "facts": {
+        "offset_frames": 1249,
+        "video_repeat_detected": true,
+        "video_mean_similarity": 0.99894,
+        "adjacent_frame_similarity": 0.98534,
+        "audio_roles": "CONFIRMED for this technique",
+        "missing_delivered_angles": [],
+        "identical_video_titles": [],
+        "audio_ncc_median_fractional": 0.9999,
+        "audio_ncc_min_fractional": 0.996,
+        "audio_windows_below_0.90": 0,
+        "lag_spread_samples": 0.19,
+        "lag_hit_search_bound": false,
+        "offset_equals_half_chapter": true,
+        "audio_discovered_offset_delta_ms": 0.033,
+        "divergence_spans_first_pass_s": [],
+        "divergence_spans_second_pass_s": []
+      },
+      "finished": "2026-09-13T04:34:06",
+      "operator_checks_required": [
+        "Talking boundaries are NOT established. Component subtraction cannot prove a region is speech-free, and the voice-band indicator has no sensitivity against a music bed. Audition previews/cresentflare_92bpm/.",
+        "Absolute audio/video synchronisation is NOT established. Every timing result here is relative, measured across the title's own repeat."
+      ]
+    },
+    "dicing_85bpm": {
+      "key": "dicing_85bpm",
+      "titles": [
+        "Scratch_t40",
+        "Scratch_t41",
+        "Scratch_t42",
+        "Scratch_t43"
+      ],
+      "chapter2": [
+        33.5335,
+        123.968
+      ],
+      "fingerprint": {
+        "sources": {
+          "Scratch_t40": {
+            "exists": true,
+            "bytes": 75451742,
+            "mtime_ns": 1777690625000000000
+          },
+          "Scratch_t41": {
+            "exists": true,
+            "bytes": 75413281,
+            "mtime_ns": 1777690655000000000
+          },
+          "Scratch_t42": {
+            "exists": true,
+            "bytes": 74937451,
+            "mtime_ns": 1777690683000000000
+          },
+          "Scratch_t43": {
+            "exists": true,
+            "bytes": 75225350,
+            "mtime_ns": 1777690713000000000
+          }
+        },
+        "script_sha256_16": {
+          "audit_technique.py": "e1e1df407392468a",
+          "drift_crosscheck.py": "575dbb87b83e35d1",
+          "fractional_lag_repeat.py": "ad960abeb06e7a79",
+          "make_boundary_previews.py": "5ee35d440fba6344",
+          "repeat_profile.py": "5484938d7511e993",
+          "run_batch.py": "fb7b50e0468466a5"
+        },
+        "runner_version": "run_batch/1",
+        "params": {
+          "frac_max_lag": 32.0,
+          "frac_probe_s": 6.0,
+          "profile_window_s": 1.0,
+          "video_match": 0.995,
+          "audio_match": 0.9
+        }
+      },
+      "started": "2026-09-13T04:34:06",
+      "steps": {
+        "audit": "ok",
+        "fractional_lag": "ok",
+        "repeat_profile": "ok",
+        "drift_crosscheck": "ok",
+        "previews": "ok"
+      },
+      "log": [
+        {
+          "cmd": "/Users/karlwatson/Developer/ScratchLab-CXL-Ready-20260913/evidence/mkv-source-inspection-20260913/claude-mkv-batch-audit/scripts/audit_technique.py dicing_85bpm",
+          "rc": 0,
+          "seconds": 71.8,
+          "stdout_tail": "{\n  \"technique\": \"dicing\",\n  \"angle_to_title\": {\n    \"1\": \"Scratch_t40\",\n    \"2\": \"Scratch_t41\",\n    \"3\": \"Scratch_t42\",\n    \"4\": \"Scratch_t43\"\n  },\n  \"missing_delivered_angles\": []\n}\nsections: ['video_integrity', 'audio_streams', 'title_duplicates', 'repeat_within_title', 'segment_duplication', 'talking_boundaries', 'noise', 'av_sync']\nwritten: /Users/karlwatson/Developer/ScratchLab-CXL-Ready-20260913/evidence/mkv-source-inspection-20260913/claude-mkv-batch-audit/techniques/dicing_85bpm.json",
+          "stderr_tail": ""
+        },
+        {
+          "cmd": "/Users/karlwatson/Developer/ScratchLab-CXL-Ready-20260913/evidence/mkv-source-inspection-20260913/claude-mkv-batch-audit/scripts/fractional_lag_repeat.py dicing_85bpm Scratch_t40 33.5335 123.968 1355 --discover",
+          "rc": 0,
+          "seconds": 31.7,
+          "stdout_tail": "dicing_85bpm Scratch_t40: offset 1355 fr = 2170168.0 samples (whole: True, == half chapter: True)\n  audio-discovered offset 45.2119s (ncc 0.9886), delta vs supplied +0.04 ms\n  windows 24  int-lag ncc 0.564/0.659/0.935  frac ncc 0.976/1.000/1.000  lag -2.35..-1.92  below0.90: 0",
+          "stderr_tail": ""
+        },
+        {
+          "cmd": "/Users/karlwatson/Developer/ScratchLab-CXL-Ready-20260913/evidence/mkv-source-inspection-20260913/claude-mkv-batch-audit/scripts/repeat_profile.py dicing_85bpm",
+          "rc": 0,
+          "seconds": 30.1,
+          "stdout_tail": "dicing_85bpm: offset 1355 fr (45.2118s), 45 x 1.0s windows\n  controls: adjacent 0.98005, random 0.85376\n  video matching 45/45   audio matching 24/24 evaluated\n  DIVERGENCE spans (video ok, audio not): none",
+          "stderr_tail": ""
+        },
+        {
+          "cmd": "/Users/karlwatson/Developer/ScratchLab-CXL-Ready-20260913/evidence/mkv-source-inspection-20260913/claude-mkv-batch-audit/scripts/drift_crosscheck.py dicing_85bpm",
+          "rc": 0,
+          "seconds": 5.4,
+          "stdout_tail": "{\n  \"technique\": \"dicing_85bpm\",\n  \"reference_title\": \"Scratch_t40\",\n  \"video_repeat_offset_frames\": 1355,\n  \"video_repeat_offset_s\": 45.211833,\n  \"video_repeat_mean_similarity\": 0.9988,\n  \"audio_repeat_extra_lag_samples\": 2,\n  \"audio_repeat_extra_lag_ms\": 0.0417,\n  \"audio_repeat_ncc_at_best\": 0.991119,\n  \"audio_repeat_ncc_at_video_offset\": 0.702644,\n  \"window_s\": 45.223,\n  \"verdict\": \"No A/V drift: over 45.2 s the audio repeats at the video's own repeat offset to within 0.04 ms (2 samples). A drift of even one frame (33.4 ms) would have shown here.\",\n  \"caveat\": \"This compares the audio timeline with the video timeline across the title's own repeat. It constrains RELATIVE timing over the repeated span and can rule out progressive drift. It does NOT measure absolute audio/video synchronisation, and a constant absolute offset would be invisible to it. Where the repeat offset is not a whole number of audio samples, use scripts/fractional_lag_repeat.py instead - integer lag alone under-reports the match.\"\n}",
+          "stderr_tail": ""
+        },
+        {
+          "cmd": "/Users/karlwatson/Developer/ScratchLab-CXL-Ready-20260913/evidence/mkv-source-inspection-20260913/claude-mkv-batch-audit/scripts/make_boundary_previews.py dicing_85bpm",
+          "rc": 0,
+          "seconds": 2.4,
+          "stdout_tail": "{\n  \"technique\": \"dicing_85bpm\",\n  \"source_title\": \"Scratch_t42\",\n  \"chapter2\": [\n    33.5335,\n    123.968\n  ],\n  \"previews\": [\n    \"previews/dicing_85bpm/dicing_85bpm_boundary_head_22to39s_Scratch_t42.mov\",\n    \"previews/dicing_85bpm/dicing_85bpm_boundary_tail_73to83s_Scratch_t42.mov\"\n  ],\n  \"time_mapping\": \"preview t=0 corresponds to the source time in the filename\",\n  \"operator_audition\": \"PENDING - no automatic test can prove absence of speech\"\n}",
+          "stderr_tail": ""
+        }
+      ],
+      "state": "verified_duplicate_half",
+      "reason": "video and audio both repeat at 1355 frames",
+      "offset_frames_searched": 1355,
+      "offset_frames_half_chapter": 1355,
+      "offset_equals_half_chapter": true,
+      "facts": {
+        "offset_frames": 1355,
+        "video_repeat_detected": true,
+        "video_mean_similarity": 0.9988,
+        "adjacent_frame_similarity": 0.98321,
+        "audio_roles": "NOT CONFIRMED - do not reuse Baby's stream order here",
+        "missing_delivered_angles": [],
+        "identical_video_titles": [],
+        "audio_ncc_median_fractional": 0.9999,
+        "audio_ncc_min_fractional": 0.9763,
+        "audio_windows_below_0.90": 0,
+        "lag_spread_samples": 0.43,
+        "lag_hit_search_bound": false,
+        "offset_equals_half_chapter": true,
+        "audio_discovered_offset_delta_ms": 0.042,
+        "divergence_spans_first_pass_s": [],
+        "divergence_spans_second_pass_s": []
+      },
+      "finished": "2026-09-13T04:36:27",
+      "operator_checks_required": [
+        "Talking boundaries are NOT established. Component subtraction cannot prove a region is speech-free, and the voice-band indicator has no sensitivity against a music bed. Audition previews/dicing_85bpm/.",
+        "Absolute audio/video synchronisation is NOT established. Every timing result here is relative, measured across the title's own repeat."
+      ]
+    },
+    "drags_98bpm": {
+      "key": "drags_98bpm",
+      "titles": [
+        "Scratch_t16",
+        "Scratch_t17",
+        "Scratch_t18",
+        "Scratch_t19"
+      ],
+      "chapter2": [
+        15.5155,
+        93.92
+      ],
+      "fingerprint": {
+        "sources": {
+          "Scratch_t16": {
+            "exists": true,
+            "bytes": 56940110,
+            "mtime_ns": 1777689959000000000
+          },
+          "Scratch_t17": {
+            "exists": true,
+            "bytes": 56948848,
+            "mtime_ns": 1777689986000000000
+          },
+          "Scratch_t18": {
+            "exists": true,
+            "bytes": 56527385,
+            "mtime_ns": 1777690013000000000
+          },
+          "Scratch_t19": {
+            "exists": true,
+            "bytes": 56794912,
+            "mtime_ns": 1777690040000000000
+          }
+        },
+        "script_sha256_16": {
+          "audit_technique.py": "e1e1df407392468a",
+          "drift_crosscheck.py": "575dbb87b83e35d1",
+          "fractional_lag_repeat.py": "ad960abeb06e7a79",
+          "make_boundary_previews.py": "5ee35d440fba6344",
+          "repeat_profile.py": "5484938d7511e993",
+          "run_batch.py": "fb7b50e0468466a5"
+        },
+        "runner_version": "run_batch/1",
+        "params": {
+          "frac_max_lag": 32.0,
+          "frac_probe_s": 6.0,
+          "profile_window_s": 1.0,
+          "video_match": 0.995,
+          "audio_match": 0.9
+        }
+      },
+      "started": "2026-09-13T04:36:27",
+      "steps": {
+        "audit": "ok",
+        "fractional_lag": "ok",
+        "repeat_profile": "ok",
+        "drift_crosscheck": "ok",
+        "previews": "ok"
+      },
+      "log": [
+        {
+          "cmd": "/Users/karlwatson/Developer/ScratchLab-CXL-Ready-20260913/evidence/mkv-source-inspection-20260913/claude-mkv-batch-audit/scripts/audit_technique.py drags_98bpm",
+          "rc": 0,
+          "seconds": 58.8,
+          "stdout_tail": "{\n  \"technique\": \"drags\",\n  \"angle_to_title\": {\n    \"1\": \"Scratch_t16\",\n    \"2\": \"Scratch_t17\",\n    \"3\": \"Scratch_t18\",\n    \"4\": \"Scratch_t19\"\n  },\n  \"missing_delivered_angles\": []\n}\nsections: ['video_integrity', 'audio_streams', 'title_duplicates', 'repeat_within_title', 'segment_duplication', 'talking_boundaries', 'noise', 'av_sync']\nwritten: /Users/karlwatson/Developer/ScratchLab-CXL-Ready-20260913/evidence/mkv-source-inspection-20260913/claude-mkv-batch-audit/techniques/drags_98bpm.json",
+          "stderr_tail": ""
+        },
+        {
+          "cmd": "/Users/karlwatson/Developer/ScratchLab-CXL-Ready-20260913/evidence/mkv-source-inspection-20260913/claude-mkv-batch-audit/scripts/fractional_lag_repeat.py drags_98bpm Scratch_t16 15.5155 93.92 1175 --discover",
+          "rc": 0,
+          "seconds": 24.2,
+          "stdout_tail": "drags_98bpm Scratch_t16: offset 1175 fr = 1881880.0 samples (whole: True, == half chapter: True)\n  audio-discovered offset 39.2059s (ncc 0.9938), delta vs supplied +0.06 ms\n  windows 19  int-lag ncc 0.441/0.720/0.911  frac ncc 0.981/1.000/1.000  lag -3.00..-1.90  below0.90: 0",
+          "stderr_tail": ""
+        },
+        {
+          "cmd": "/Users/karlwatson/Developer/ScratchLab-CXL-Ready-20260913/evidence/mkv-source-inspection-20260913/claude-mkv-batch-audit/scripts/repeat_profile.py drags_98bpm",
+          "rc": 0,
+          "seconds": 23.3,
+          "stdout_tail": "drags_98bpm: offset 1175 fr (39.2058s), 39 x 1.0s windows\n  controls: adjacent 0.98717, random 0.82961\n  video matching 39/39   audio matching 19/19 evaluated\n  DIVERGENCE spans (video ok, audio not): none",
+          "stderr_tail": ""
+        },
+        {
+          "cmd": "/Users/karlwatson/Developer/ScratchLab-CXL-Ready-20260913/evidence/mkv-source-inspection-20260913/claude-mkv-batch-audit/scripts/drift_crosscheck.py drags_98bpm",
+          "rc": 0,
+          "seconds": 3.7,
+          "stdout_tail": "{\n  \"technique\": \"drags_98bpm\",\n  \"reference_title\": \"Scratch_t16\",\n  \"video_repeat_offset_frames\": 1175,\n  \"video_repeat_offset_s\": 39.205833,\n  \"video_repeat_mean_similarity\": 0.99832,\n  \"audio_repeat_extra_lag_samples\": 2,\n  \"audio_repeat_extra_lag_ms\": 0.0417,\n  \"audio_repeat_ncc_at_best\": 0.961124,\n  \"audio_repeat_ncc_at_video_offset\": 0.68287,\n  \"window_s\": 39.199,\n  \"verdict\": \"No A/V drift: over 39.2 s the audio repeats at the video's own repeat offset to within 0.04 ms (2 samples). A drift of even one frame (33.4 ms) would have shown here.\",\n  \"caveat\": \"This compares the audio timeline with the video timeline across the title's own repeat. It constrains RELATIVE timing over the repeated span and can rule out progressive drift. It does NOT measure absolute audio/video synchronisation, and a constant absolute offset would be invisible to it. Where the repeat offset is not a whole number of audio samples, use scripts/fractional_lag_repeat.py instead - integer lag alone under-reports the match.\"\n}",
+          "stderr_tail": ""
+        },
+        {
+          "cmd": "/Users/karlwatson/Developer/ScratchLab-CXL-Ready-20260913/evidence/mkv-source-inspection-20260913/claude-mkv-batch-audit/scripts/make_boundary_previews.py drags_98bpm",
+          "rc": 0,
+          "seconds": 2.2,
+          "stdout_tail": "{\n  \"technique\": \"drags_98bpm\",\n  \"source_title\": \"Scratch_t18\",\n  \"chapter2\": [\n    15.5155,\n    93.92\n  ],\n  \"previews\": [\n    \"previews/drags_98bpm/drags_98bpm_boundary_head_4to21s_Scratch_t18.mov\",\n    \"previews/drags_98bpm/drags_98bpm_boundary_tail_73to83s_Scratch_t18.mov\"\n  ],\n  \"time_mapping\": \"preview t=0 corresponds to the source time in the filename\",\n  \"operator_audition\": \"PENDING - no automatic test can prove absence of speech\"\n}",
+          "stderr_tail": ""
+        }
+      ],
+      "state": "verified_duplicate_half",
+      "reason": "video and audio both repeat at 1175 frames",
+      "offset_frames_searched": 1175,
+      "offset_frames_half_chapter": 1175,
+      "offset_equals_half_chapter": true,
+      "facts": {
+        "offset_frames": 1175,
+        "video_repeat_detected": true,
+        "video_mean_similarity": 0.99832,
+        "adjacent_frame_similarity": 0.98794,
+        "audio_roles": "CONFIRMED for this technique",
+        "missing_delivered_angles": [],
+        "identical_video_titles": [],
+        "audio_ncc_median_fractional": 0.9999,
+        "audio_ncc_min_fractional": 0.9807,
+        "audio_windows_below_0.90": 0,
+        "lag_spread_samples": 1.1,
+        "lag_hit_search_bound": false,
+        "offset_equals_half_chapter": true,
+        "audio_discovered_offset_delta_ms": 0.063,
+        "divergence_spans_first_pass_s": [],
+        "divergence_spans_second_pass_s": []
+      },
+      "finished": "2026-09-13T04:38:19",
+      "operator_checks_required": [
+        "Talking boundaries are NOT established. Component subtraction cannot prove a region is speech-free, and the voice-band indicator has no sensitivity against a music bed. Audition previews/drags_98bpm/.",
+        "Absolute audio/video synchronisation is NOT established. Every timing result here is relative, measured across the title's own repeat."
+      ]
+    },
+    "lazers_92bpm": {
+      "key": "lazers_92bpm",
+      "titles": [
+        "Scratch_t56",
+        "Scratch_t57",
+        "Scratch_t58",
+        "Scratch_t59"
+      ],
+      "chapter2": [
+        44.044,
+        85.652233
+      ],
+      "fingerprint": {
+        "sources": {
+          "Scratch_t56": {
+            "exists": true,
+            "bytes": 51855691,
+            "mtime_ns": 1777691082000000000
+          },
+          "Scratch_t57": {
+            "exists": true,
+            "bytes": 51792275,
+            "mtime_ns": 1777691103000000000
+          },
+          "Scratch_t58": {
+            "exists": true,
+            "bytes": 51550130,
+            "mtime_ns": 1777691125000000000
+          },
+          "Scratch_t59": {
+            "exists": true,
+            "bytes": 51693805,
+            "mtime_ns": 1777691145000000000
+          }
+        },
+        "script_sha256_16": {
+          "audit_technique.py": "e1e1df407392468a",
+          "drift_crosscheck.py": "575dbb87b83e35d1",
+          "fractional_lag_repeat.py": "ad960abeb06e7a79",
+          "make_boundary_previews.py": "5ee35d440fba6344",
+          "repeat_profile.py": "5484938d7511e993",
+          "run_batch.py": "fb7b50e0468466a5"
+        },
+        "runner_version": "run_batch/1",
+        "params": {
+          "frac_max_lag": 32.0,
+          "frac_probe_s": 6.0,
+          "profile_window_s": 1.0,
+          "video_match": 0.995,
+          "audio_match": 0.9
+        }
+      },
+      "started": "2026-09-13T04:38:19",
+      "steps": {
+        "audit": "ok",
+        "fractional_lag": "ok",
+        "repeat_profile": "ok",
+        "drift_crosscheck": "ok",
+        "previews": "ok"
+      },
+      "log": [
+        {
+          "cmd": "/Users/karlwatson/Developer/ScratchLab-CXL-Ready-20260913/evidence/mkv-source-inspection-20260913/claude-mkv-batch-audit/scripts/audit_technique.py lazers_92bpm",
+          "rc": 0,
+          "seconds": 40.9,
+          "stdout_tail": "{\n  \"technique\": \"lazers\",\n  \"angle_to_title\": {\n    \"1\": \"Scratch_t56\",\n    \"2\": \"Scratch_t57\",\n    \"3\": \"Scratch_t58\",\n    \"4\": \"Scratch_t59\"\n  },\n  \"missing_delivered_angles\": []\n}\nsections: ['video_integrity', 'audio_streams', 'title_duplicates', 'repeat_within_title', 'segment_duplication', 'talking_boundaries', 'noise', 'av_sync']\nwritten: /Users/karlwatson/Developer/ScratchLab-CXL-Ready-20260913/evidence/mkv-source-inspection-20260913/claude-mkv-batch-audit/techniques/lazers_92bpm.json",
+          "stderr_tail": ""
+        },
+        {
+          "cmd": "/Users/karlwatson/Developer/ScratchLab-CXL-Ready-20260913/evidence/mkv-source-inspection-20260913/claude-mkv-batch-audit/scripts/fractional_lag_repeat.py lazers_92bpm Scratch_t56 44.044 85.652233 624 --discover",
+          "rc": 0,
+          "seconds": 15.6,
+          "stdout_tail": "lazers_92bpm Scratch_t56: offset 624 fr = 999398.4 samples (whole: False, == half chapter: False)\n  audio-discovered offset 20.8208s (ncc 0.9963), delta vs supplied +0.01 ms\n  windows 12  int-lag ncc 0.902/0.944/0.974  frac ncc 0.990/1.000/1.000  lag -1.50..-1.40  below0.90: 0",
+          "stderr_tail": ""
+        },
+        {
+          "cmd": "/Users/karlwatson/Developer/ScratchLab-CXL-Ready-20260913/evidence/mkv-source-inspection-20260913/claude-mkv-batch-audit/scripts/repeat_profile.py lazers_92bpm",
+          "rc": 0,
+          "seconds": 14.9,
+          "stdout_tail": "lazers_92bpm: offset 624 fr (20.8208s), 20 x 1.0s windows\n  controls: adjacent 0.98118, random 0.86067\n  video matching 20/20   audio matching 12/12 evaluated\n  DIVERGENCE spans (video ok, audio not): none",
+          "stderr_tail": ""
+        },
+        {
+          "cmd": "/Users/karlwatson/Developer/ScratchLab-CXL-Ready-20260913/evidence/mkv-source-inspection-20260913/claude-mkv-batch-audit/scripts/drift_crosscheck.py lazers_92bpm",
+          "rc": 0,
+          "seconds": 2.2,
+          "stdout_tail": "{\n  \"technique\": \"lazers_92bpm\",\n  \"reference_title\": \"Scratch_t56\",\n  \"video_repeat_offset_frames\": 624,\n  \"video_repeat_offset_s\": 20.8208,\n  \"video_repeat_mean_similarity\": 0.99865,\n  \"audio_repeat_extra_lag_samples\": 1,\n  \"audio_repeat_extra_lag_ms\": 0.0208,\n  \"audio_repeat_ncc_at_best\": 0.998866,\n  \"audio_repeat_ncc_at_video_offset\": 0.937378,\n  \"window_s\": 20.787,\n  \"verdict\": \"No A/V drift: over 20.8 s the audio repeats at the video's own repeat offset to within 0.02 ms (1 samples). A drift of even one frame (33.4 ms) would have shown here.\",\n  \"caveat\": \"This compares the audio timeline with the video timeline across the title's own repeat. It constrains RELATIVE timing over the repeated span and can rule out progressive drift. It does NOT measure absolute audio/video synchronisation, and a constant absolute offset would be invisible to it. Where the repeat offset is not a whole number of audio samples, use scripts/fractional_lag_repeat.py instead - integer lag alone under-reports the match.\"\n}",
+          "stderr_tail": ""
+        },
+        {
+          "cmd": "/Users/karlwatson/Developer/ScratchLab-CXL-Ready-20260913/evidence/mkv-source-inspection-20260913/claude-mkv-batch-audit/scripts/make_boundary_previews.py lazers_92bpm",
+          "rc": 0,
+          "seconds": 2.5,
+          "stdout_tail": "{\n  \"technique\": \"lazers_92bpm\",\n  \"source_title\": \"Scratch_t58\",\n  \"chapter2\": [\n    44.044,\n    85.652233\n  ],\n  \"previews\": [\n    \"previews/lazers_92bpm/lazers_92bpm_boundary_head_32to49s_Scratch_t58.mov\",\n    \"previews/lazers_92bpm/lazers_92bpm_boundary_tail_73to83s_Scratch_t58.mov\"\n  ],\n  \"time_mapping\": \"preview t=0 corresponds to the source time in the filename\",\n  \"operator_audition\": \"PENDING - no automatic test can prove absence of speech\"\n}",
+          "stderr_tail": ""
+        }
+      ],
+      "state": "verified_duplicate_half",
+      "reason": "video and audio both repeat at 624 frames",
+      "offset_frames_searched": 624,
+      "offset_frames_half_chapter": 623,
+      "offset_equals_half_chapter": false,
+      "facts": {
+        "offset_frames": 624,
+        "video_repeat_detected": true,
+        "video_mean_similarity": 0.99865,
+        "adjacent_frame_similarity": 0.98177,
+        "audio_roles": "CONFIRMED for this technique",
+        "missing_delivered_angles": [],
+        "identical_video_titles": [],
+        "audio_ncc_median_fractional": 0.9999,
+        "audio_ncc_min_fractional": 0.9902,
+        "audio_windows_below_0.90": 0,
+        "lag_spread_samples": 0.1,
+        "lag_hit_search_bound": false,
+        "offset_equals_half_chapter": false,
+        "audio_discovered_offset_delta_ms": 0.012,
+        "divergence_spans_first_pass_s": [],
+        "divergence_spans_second_pass_s": []
+      },
+      "finished": "2026-09-13T04:39:36",
+      "operator_checks_required": [
+        "Talking boundaries are NOT established. Component subtraction cannot prove a region is speech-free, and the voice-band indicator has no sensitivity against a music bed. Audition previews/lazers_92bpm/.",
+        "Absolute audio/video synchronisation is NOT established. Every timing result here is relative, measured across the title's own repeat."
+      ]
+    },
+    "long_short_tips_105bpm": {
+      "key": "long_short_tips_105bpm",
+      "titles": [
+        "Scratch_t32",
+        "Scratch_t33",
+        "Scratch_t34",
+        "Scratch_t35"
+      ],
+      "chapter2": [
+        49.5495,
+        122.752
+      ],
+      "fingerprint": {
+        "sources": {
+          "Scratch_t32": {
+            "exists": true,
+            "bytes": 74894620,
+            "mtime_ns": 1777690375000000000
+          },
+          "Scratch_t33": {
+            "exists": true,
+            "bytes": 74728676,
+            "mtime_ns": 1777690404000000000
+          },
+          "Scratch_t34": {
+            "exists": true,
+            "bytes": 74365436,
+            "mtime_ns": 1777690434000000000
+          },
+          "Scratch_t35": {
+            "exists": true,
+            "bytes": 74568034,
+            "mtime_ns": 1777690463000000000
+          }
+        },
+        "script_sha256_16": {
+          "audit_technique.py": "e1e1df407392468a",
+          "drift_crosscheck.py": "575dbb87b83e35d1",
+          "fractional_lag_repeat.py": "ad960abeb06e7a79",
+          "make_boundary_previews.py": "5ee35d440fba6344",
+          "repeat_profile.py": "5484938d7511e993",
+          "run_batch.py": "fb7b50e0468466a5"
+        },
+        "runner_version": "run_batch/1",
+        "params": {
+          "frac_max_lag": 32.0,
+          "frac_probe_s": 6.0,
+          "profile_window_s": 1.0,
+          "video_match": 0.995,
+          "audio_match": 0.9
+        }
+      },
+      "started": "2026-09-13T04:39:36",
+      "steps": {
+        "audit": "ok",
+        "fractional_lag": "ok",
+        "repeat_profile": "ok",
+        "drift_crosscheck": "ok",
+        "previews": "ok"
+      },
+      "log": [
+        {
+          "cmd": "/Users/karlwatson/Developer/ScratchLab-CXL-Ready-20260913/evidence/mkv-source-inspection-20260913/claude-mkv-batch-audit/scripts/audit_technique.py long_short_tips_105bpm",
+          "rc": 0,
+          "seconds": 66.1,
+          "stdout_tail": "{\n  \"technique\": \"long_short_tips\",\n  \"angle_to_title\": {\n    \"1\": \"Scratch_t32\",\n    \"2\": \"Scratch_t33\",\n    \"3\": \"Scratch_t34\",\n    \"4\": \"Scratch_t35\"\n  },\n  \"missing_delivered_angles\": []\n}\nsections: ['video_integrity', 'audio_streams', 'title_duplicates', 'repeat_within_title', 'segment_duplication', 'talking_boundaries', 'noise', 'av_sync']\nwritten: /Users/karlwatson/Developer/ScratchLab-CXL-Ready-20260913/evidence/mkv-source-inspection-20260913/claude-mkv-batch-audit/techniques/long_short_tips_105bpm.json",
+          "stderr_tail": ""
+        },
+        {
+          "cmd": "/Users/karlwatson/Developer/ScratchLab-CXL-Ready-20260913/evidence/mkv-source-inspection-20260913/claude-mkv-batch-audit/scripts/fractional_lag_repeat.py long_short_tips_105bpm Scratch_t32 49.5495 122.752 1097 --discover",
+          "rc": 0,
+          "seconds": 25.5,
+          "stdout_tail": "long_short_tips_105bpm Scratch_t32: offset 1097 fr = 1756955.2 samples (whole: False, == half chapter: True)\n  audio-discovered offset 36.6033s (ncc 0.9989), delta vs supplied +0.06 ms\n  windows 20  int-lag ncc 0.346/0.472/0.858  frac ncc 1.000/1.000/1.000  lag -3.29..-3.29  below0.90: 0",
+          "stderr_tail": ""
+        },
+        {
+          "cmd": "/Users/karlwatson/Developer/ScratchLab-CXL-Ready-20260913/evidence/mkv-source-inspection-20260913/claude-mkv-batch-audit/scripts/repeat_profile.py long_short_tips_105bpm",
+          "rc": 0,
+          "seconds": 24.9,
+          "stdout_tail": "long_short_tips_105bpm: offset 1097 fr (36.6032s), 36 x 1.0s windows\n  controls: adjacent 0.98330, random 0.87785\n  video matching 36/36   audio matching 20/20 evaluated\n  DIVERGENCE spans (video ok, audio not): none",
+          "stderr_tail": ""
+        },
+        {
+          "cmd": "/Users/karlwatson/Developer/ScratchLab-CXL-Ready-20260913/evidence/mkv-source-inspection-20260913/claude-mkv-batch-audit/scripts/drift_crosscheck.py long_short_tips_105bpm",
+          "rc": 0,
+          "seconds": 3.4,
+          "stdout_tail": "{\n  \"technique\": \"long_short_tips_105bpm\",\n  \"reference_title\": \"Scratch_t32\",\n  \"video_repeat_offset_frames\": 1097,\n  \"video_repeat_offset_s\": 36.603233,\n  \"video_repeat_mean_similarity\": 0.99881,\n  \"audio_repeat_extra_lag_samples\": 3,\n  \"audio_repeat_extra_lag_ms\": 0.0625,\n  \"audio_repeat_ncc_at_best\": 0.998867,\n  \"audio_repeat_ncc_at_video_offset\": 0.487056,\n  \"window_s\": 36.599,\n  \"verdict\": \"No A/V drift: over 36.6 s the audio repeats at the video's own repeat offset to within 0.06 ms (3 samples). A drift of even one frame (33.4 ms) would have shown here.\",\n  \"caveat\": \"This compares the audio timeline with the video timeline across the title's own repeat. It constrains RELATIVE timing over the repeated span and can rule out progressive drift. It does NOT measure absolute audio/video synchronisation, and a constant absolute offset would be invisible to it. Where the repeat offset is not a whole number of audio samples, use scripts/fractional_lag_repeat.py instead - integer lag alone under-reports the match.\"\n}",
+          "stderr_tail": ""
+        },
+        {
+          "cmd": "/Users/karlwatson/Developer/ScratchLab-CXL-Ready-20260913/evidence/mkv-source-inspection-20260913/claude-mkv-batch-audit/scripts/make_boundary_previews.py long_short_tips_105bpm",
+          "rc": 0,
+          "seconds": 2.1,
+          "stdout_tail": "{\n  \"technique\": \"long_short_tips_105bpm\",\n  \"source_title\": \"Scratch_t34\",\n  \"chapter2\": [\n    49.5495,\n    122.752\n  ],\n  \"previews\": [\n    \"previews/long_short_tips_105bpm/long_short_tips_105bpm_boundary_head_38to55s_Scratch_t34.mov\",\n    \"previews/long_short_tips_105bpm/long_short_tips_105bpm_boundary_tail_73to83s_Scratch_t34.mov\"\n  ],\n  \"time_mapping\": \"preview t=0 corresponds to the source time in the filename\",\n  \"operator_audition\": \"PENDING - no automatic test can prove absence of speech\"\n}",
+          "stderr_tail": ""
+        }
+      ],
+      "state": "verified_duplicate_half",
+      "reason": "video and audio both repeat at 1097 frames",
+      "offset_frames_searched": 1097,
+      "offset_frames_half_chapter": 1097,
+      "offset_equals_half_chapter": true,
+      "facts": {
+        "offset_frames": 1097,
+        "video_repeat_detected": true,
+        "video_mean_similarity": 0.99881,
+        "adjacent_frame_similarity": 0.9866,
+        "audio_roles": "NOT CONFIRMED - do not reuse Baby's stream order here",
+        "missing_delivered_angles": [],
+        "identical_video_titles": [],
+        "audio_ncc_median_fractional": 0.9998,
+        "audio_ncc_min_fractional": 0.9997,
+        "audio_windows_below_0.90": 0,
+        "lag_spread_samples": 0.0,
+        "lag_hit_search_bound": false,
+        "offset_equals_half_chapter": true,
+        "audio_discovered_offset_delta_ms": 0.059,
+        "divergence_spans_first_pass_s": [],
+        "divergence_spans_second_pass_s": []
+      },
+      "finished": "2026-09-13T04:41:37",
+      "operator_checks_required": [
+        "Talking boundaries are NOT established. Component subtraction cannot prove a region is speech-free, and the voice-band indicator has no sensitivity against a music bed. Audition previews/long_short_tips_105bpm/.",
+        "Absolute audio/video synchronisation is NOT established. Every timing result here is relative, measured across the title's own repeat."
+      ]
+    },
+    "needledropping_105bpm": {
+      "key": "needledropping_105bpm",
+      "titles": [
+        "Scratch_t78",
+        "Scratch_t79",
+        "Scratch_t80",
+        "Scratch_t81"
+      ],
+      "chapter2": [
+        54.5545,
+        109.442667
+      ],
+      "fingerprint": {
+        "sources": {
+          "Scratch_t78": {
+            "exists": true,
+            "bytes": 66689321,
+            "mtime_ns": 1777691475000000000
+          },
+          "Scratch_t79": {
+            "exists": true,
+            "bytes": 66657810,
+            "mtime_ns": 1777691505000000000
+          },
+          "Scratch_t80": {
+            "exists": true,
+            "bytes": 66401954,
+            "mtime_ns": 1777691537000000000
+          },
+          "Scratch_t81": {
+            "exists": true,
+            "bytes": 66613622,
+            "mtime_ns": 1777691569000000000
+          }
+        },
+        "script_sha256_16": {
+          "audit_technique.py": "e1e1df407392468a",
+          "drift_crosscheck.py": "575dbb87b83e35d1",
+          "fractional_lag_repeat.py": "ad960abeb06e7a79",
+          "make_boundary_previews.py": "5ee35d440fba6344",
+          "repeat_profile.py": "5484938d7511e993",
+          "run_batch.py": "fb7b50e0468466a5"
+        },
+        "runner_version": "run_batch/1",
+        "params": {
+          "frac_max_lag": 32.0,
+          "frac_probe_s": 6.0,
+          "profile_window_s": 1.0,
+          "video_match": 0.995,
+          "audio_match": 0.9
+        }
+      },
+      "started": "2026-09-13T04:41:37",
+      "steps": {
+        "audit": "ok",
+        "fractional_lag": "ok",
+        "repeat_profile": "ok",
+        "drift_crosscheck": "ok",
+        "previews": "ok"
+      },
+      "log": [
+        {
+          "cmd": "/Users/karlwatson/Developer/ScratchLab-CXL-Ready-20260913/evidence/mkv-source-inspection-20260913/claude-mkv-batch-audit/scripts/audit_technique.py needledropping_105bpm",
+          "rc": 0,
+          "seconds": 53.6,
+          "stdout_tail": "{\n  \"technique\": \"needledropping\",\n  \"angle_to_title\": {\n    \"1\": \"Scratch_t78\",\n    \"2\": \"Scratch_t79\",\n    \"3\": \"Scratch_t80\",\n    \"4\": \"Scratch_t81\"\n  },\n  \"missing_delivered_angles\": []\n}\nsections: ['video_integrity', 'audio_streams', 'title_duplicates', 'repeat_within_title', 'segment_duplication', 'talking_boundaries', 'noise', 'av_sync']\nwritten: /Users/karlwatson/Developer/ScratchLab-CXL-Ready-20260913/evidence/mkv-source-inspection-20260913/claude-mkv-batch-audit/techniques/needledropping_105bpm.json",
+          "stderr_tail": ""
+        },
+        {
+          "cmd": "/Users/karlwatson/Developer/ScratchLab-CXL-Ready-20260913/evidence/mkv-source-inspection-20260913/claude-mkv-batch-audit/scripts/fractional_lag_repeat.py needledropping_105bpm Scratch_t78 54.5545 109.442667 823 --discover",
+          "rc": 0,
+          "seconds": 19.1,
+          "stdout_tail": "needledropping_105bpm Scratch_t78: offset 823 fr = 1318116.8 samples (whole: False, == half chapter: True)\n  audio-discovered offset 27.4608s (ncc 0.9983), delta vs supplied +0.04 ms\n  windows 15  int-lag ncc 0.597/0.725/0.936  frac ncc 1.000/1.000/1.000  lag -3.98..-3.98  below0.90: 0",
+          "stderr_tail": ""
+        },
+        {
+          "cmd": "/Users/karlwatson/Developer/ScratchLab-CXL-Ready-20260913/evidence/mkv-source-inspection-20260913/claude-mkv-batch-audit/scripts/repeat_profile.py needledropping_105bpm",
+          "rc": 0,
+          "seconds": 19.2,
+          "stdout_tail": "needledropping_105bpm: offset 823 fr (27.4608s), 27 x 1.0s windows\n  controls: adjacent 0.99209, random 0.91987\n  video matching 27/27   audio matching 15/15 evaluated\n  DIVERGENCE spans (video ok, audio not): none",
+          "stderr_tail": ""
+        },
+        {
+          "cmd": "/Users/karlwatson/Developer/ScratchLab-CXL-Ready-20260913/evidence/mkv-source-inspection-20260913/claude-mkv-batch-audit/scripts/drift_crosscheck.py needledropping_105bpm",
+          "rc": 0,
+          "seconds": 2.4,
+          "stdout_tail": "{\n  \"technique\": \"needledropping_105bpm\",\n  \"reference_title\": \"Scratch_t78\",\n  \"video_repeat_offset_frames\": 823,\n  \"video_repeat_offset_s\": 27.460767,\n  \"video_repeat_mean_similarity\": 0.99934,\n  \"audio_repeat_extra_lag_samples\": 2,\n  \"audio_repeat_extra_lag_ms\": 0.0417,\n  \"audio_repeat_ncc_at_best\": 0.998637,\n  \"audio_repeat_ncc_at_video_offset\": 0.859216,\n  \"window_s\": 27.427,\n  \"verdict\": \"No A/V drift: over 27.4 s the audio repeats at the video's own repeat offset to within 0.04 ms (2 samples). A drift of even one frame (33.4 ms) would have shown here.\",\n  \"caveat\": \"This compares the audio timeline with the video timeline across the title's own repeat. It constrains RELATIVE timing over the repeated span and can rule out progressive drift. It does NOT measure absolute audio/video synchronisation, and a constant absolute offset would be invisible to it. Where the repeat offset is not a whole number of audio samples, use scripts/fractional_lag_repeat.py instead - integer lag alone under-reports the match.\"\n}",
+          "stderr_tail": ""
+        },
+        {
+          "cmd": "/Users/karlwatson/Developer/ScratchLab-CXL-Ready-20260913/evidence/mkv-source-inspection-20260913/claude-mkv-batch-audit/scripts/make_boundary_previews.py needledropping_105bpm",
+          "rc": 0,
+          "seconds": 2.1,
+          "stdout_tail": "{\n  \"technique\": \"needledropping_105bpm\",\n  \"source_title\": \"Scratch_t80\",\n  \"chapter2\": [\n    54.5545,\n    109.442667\n  ],\n  \"previews\": [\n    \"previews/needledropping_105bpm/needledropping_105bpm_boundary_head_43to60s_Scratch_t80.mov\",\n    \"previews/needledropping_105bpm/needledropping_105bpm_boundary_tail_73to83s_Scratch_t80.mov\"\n  ],\n  \"time_mapping\": \"preview t=0 corresponds to the source time in the filename\",\n  \"operator_audition\": \"PENDING - no automatic test can prove absence of speech\"\n}",
+          "stderr_tail": ""
+        }
+      ],
+      "state": "verified_duplicate_half",
+      "reason": "video and audio both repeat at 823 frames",
+      "offset_frames_searched": 823,
+      "offset_frames_half_chapter": 823,
+      "offset_equals_half_chapter": true,
+      "facts": {
+        "offset_frames": 823,
+        "video_repeat_detected": true,
+        "video_mean_similarity": 0.99934,
+        "adjacent_frame_similarity": 0.99326,
+        "audio_roles": "NOT CONFIRMED - do not reuse Baby's stream order here",
+        "missing_delivered_angles": [],
+        "identical_video_titles": [],
+        "audio_ncc_median_fractional": 0.9999,
+        "audio_ncc_min_fractional": 0.9998,
+        "audio_windows_below_0.90": 0,
+        "lag_spread_samples": 0.0,
+        "lag_hit_search_bound": false,
+        "offset_equals_half_chapter": true,
+        "audio_discovered_offset_delta_ms": 0.045,
+        "divergence_spans_first_pass_s": [],
+        "divergence_spans_second_pass_s": []
+      },
+      "finished": "2026-09-13T04:43:14",
+      "operator_checks_required": [
+        "Talking boundaries are NOT established. Component subtraction cannot prove a region is speech-free, and the voice-band indicator has no sensitivity against a music bed. Audition previews/needledropping_105bpm/.",
+        "Absolute audio/video synchronisation is NOT established. Every timing result here is relative, measured across the title's own repeat."
+      ]
+    },
+    "orbits_85bpm": {
+      "key": "orbits_85bpm",
+      "titles": [
+        "Scratch_t100",
+        "Scratch_t101",
+        "Scratch_t98",
+        "Scratch_t99"
+      ],
+      "chapter2": [
+        44.5445,
+        112.352
+      ],
+      "fingerprint": {
+        "sources": {
+          "Scratch_t100": {
+            "exists": true,
+            "bytes": 67878908,
+            "mtime_ns": 1777692184000000000
+          },
+          "Scratch_t101": {
+            "exists": true,
+            "bytes": 68190802,
+            "mtime_ns": 1777692221000000000
+          },
+          "Scratch_t98": {
+            "exists": true,
+            "bytes": 68342519,
+            "mtime_ns": 1777692110000000000
+          },
+          "Scratch_t99": {
+            "exists": true,
+            "bytes": 68312888,
+            "mtime_ns": 1777692148000000000
+          }
+        },
+        "script_sha256_16": {
+          "audit_technique.py": "e1e1df407392468a",
+          "drift_crosscheck.py": "575dbb87b83e35d1",
+          "fractional_lag_repeat.py": "ad960abeb06e7a79",
+          "make_boundary_previews.py": "5ee35d440fba6344",
+          "repeat_profile.py": "5484938d7511e993",
+          "run_batch.py": "fb7b50e0468466a5"
+        },
+        "runner_version": "run_batch/1",
+        "params": {
+          "frac_max_lag": 32.0,
+          "frac_probe_s": 6.0,
+          "profile_window_s": 1.0,
+          "video_match": 0.995,
+          "audio_match": 0.9
+        }
+      },
+      "started": "2026-09-13T04:43:14",
+      "steps": {
+        "audit": "ok",
+        "fractional_lag": "ok",
+        "repeat_profile": "ok",
+        "drift_crosscheck": "ok",
+        "previews": "ok"
+      },
+      "log": [
+        {
+          "cmd": "/Users/karlwatson/Developer/ScratchLab-CXL-Ready-20260913/evidence/mkv-source-inspection-20260913/claude-mkv-batch-audit/scripts/audit_technique.py orbits_85bpm",
+          "rc": 0,
+          "seconds": 57.1,
+          "stdout_tail": "{\n  \"technique\": \"orbits\",\n  \"angle_to_title\": {\n    \"1\": \"Scratch_t100\",\n    \"2\": \"Scratch_t101\",\n    \"3\": \"Scratch_t98\",\n    \"4\": \"Scratch_t99\"\n  },\n  \"missing_delivered_angles\": []\n}\nsections: ['video_integrity', 'audio_streams', 'title_duplicates', 'repeat_within_title', 'segment_duplication', 'talking_boundaries', 'noise', 'av_sync']\nwritten: /Users/karlwatson/Developer/ScratchLab-CXL-Ready-20260913/evidence/mkv-source-inspection-20260913/claude-mkv-batch-audit/techniques/orbits_85bpm.json",
+          "stderr_tail": ""
+        },
+        {
+          "cmd": "/Users/karlwatson/Developer/ScratchLab-CXL-Ready-20260913/evidence/mkv-source-inspection-20260913/claude-mkv-batch-audit/scripts/fractional_lag_repeat.py orbits_85bpm Scratch_t100 44.5445 112.352 1016 --discover",
+          "rc": 0,
+          "seconds": 23.1,
+          "stdout_tail": "orbits_85bpm Scratch_t100: offset 1016 fr = 1627225.6 samples (whole: False, == half chapter: True)\n  audio-discovered offset 33.9006s (ncc 0.9966), delta vs supplied +0.05 ms\n  windows 18  int-lag ncc 0.688/0.753/0.854  frac ncc 1.000/1.000/1.000  lag -3.90..-3.90  below0.90: 0",
+          "stderr_tail": ""
+        },
+        {
+          "cmd": "/Users/karlwatson/Developer/ScratchLab-CXL-Ready-20260913/evidence/mkv-source-inspection-20260913/claude-mkv-batch-audit/scripts/repeat_profile.py orbits_85bpm",
+          "rc": 0,
+          "seconds": 23.0,
+          "stdout_tail": "orbits_85bpm: offset 1016 fr (33.9005s), 33 x 1.0s windows\n  controls: adjacent 0.97809, random 0.84888\n  video matching 33/33   audio matching 18/18 evaluated\n  DIVERGENCE spans (video ok, audio not): none",
+          "stderr_tail": ""
+        },
+        {
+          "cmd": "/Users/karlwatson/Developer/ScratchLab-CXL-Ready-20260913/evidence/mkv-source-inspection-20260913/claude-mkv-batch-audit/scripts/drift_crosscheck.py orbits_85bpm",
+          "rc": 0,
+          "seconds": 3.2,
+          "stdout_tail": "{\n  \"technique\": \"orbits_85bpm\",\n  \"reference_title\": \"Scratch_t100\",\n  \"video_repeat_offset_frames\": 1016,\n  \"video_repeat_offset_s\": 33.900533,\n  \"video_repeat_mean_similarity\": 0.99819,\n  \"audio_repeat_extra_lag_samples\": 2,\n  \"audio_repeat_extra_lag_ms\": 0.0417,\n  \"audio_repeat_ncc_at_best\": 0.997127,\n  \"audio_repeat_ncc_at_video_offset\": 0.86807,\n  \"window_s\": 33.907,\n  \"verdict\": \"No A/V drift: over 33.9 s the audio repeats at the video's own repeat offset to within 0.04 ms (2 samples). A drift of even one frame (33.4 ms) would have shown here.\",\n  \"caveat\": \"This compares the audio timeline with the video timeline across the title's own repeat. It constrains RELATIVE timing over the repeated span and can rule out progressive drift. It does NOT measure absolute audio/video synchronisation, and a constant absolute offset would be invisible to it. Where the repeat offset is not a whole number of audio samples, use scripts/fractional_lag_repeat.py instead - integer lag alone under-reports the match.\"\n}",
+          "stderr_tail": ""
+        },
+        {
+          "cmd": "/Users/karlwatson/Developer/ScratchLab-CXL-Ready-20260913/evidence/mkv-source-inspection-20260913/claude-mkv-batch-audit/scripts/make_boundary_previews.py orbits_85bpm",
+          "rc": 0,
+          "seconds": 2.0,
+          "stdout_tail": "{\n  \"technique\": \"orbits_85bpm\",\n  \"source_title\": \"Scratch_t98\",\n  \"chapter2\": [\n    44.5445,\n    112.352\n  ],\n  \"previews\": [\n    \"previews/orbits_85bpm/orbits_85bpm_boundary_head_33to50s_Scratch_t98.mov\",\n    \"previews/orbits_85bpm/orbits_85bpm_boundary_tail_73to83s_Scratch_t98.mov\"\n  ],\n  \"time_mapping\": \"preview t=0 corresponds to the source time in the filename\",\n  \"operator_audition\": \"PENDING - no automatic test can prove absence of speech\"\n}",
+          "stderr_tail": ""
+        }
+      ],
+      "state": "verified_duplicate_half",
+      "reason": "video and audio both repeat at 1016 frames",
+      "offset_frames_searched": 1016,
+      "offset_frames_half_chapter": 1016,
+      "offset_equals_half_chapter": true,
+      "facts": {
+        "offset_frames": 1016,
+        "video_repeat_detected": true,
+        "video_mean_similarity": 0.99819,
+        "adjacent_frame_similarity": 0.97952,
+        "audio_roles": "NOT CONFIRMED - do not reuse Baby's stream order here",
+        "missing_delivered_angles": [],
+        "identical_video_titles": [],
+        "audio_ncc_median_fractional": 1.0,
+        "audio_ncc_min_fractional": 0.9999,
+        "audio_windows_below_0.90": 0,
+        "lag_spread_samples": 0.0,
+        "lag_hit_search_bound": false,
+        "offset_equals_half_chapter": true,
+        "audio_discovered_offset_delta_ms": 0.05,
+        "divergence_spans_first_pass_s": [],
+        "divergence_spans_second_pass_s": []
+      },
+      "finished": "2026-09-13T04:45:02",
+      "operator_checks_required": [
+        "Talking boundaries are NOT established. Component subtraction cannot prove a region is speech-free, and the voice-band indicator has no sensitivity against a music bed. Audition previews/orbits_85bpm/.",
+        "Absolute audio/video synchronisation is NOT established. Every timing result here is relative, measured across the title's own repeat."
+      ]
+    },
+    "originalflare_85bpm": {
+      "key": "originalflare_85bpm",
+      "titles": [
+        "Scratch_t94",
+        "Scratch_t95",
+        "Scratch_t96",
+        "Scratch_t97"
+      ],
+      "chapter2": [
+        99.099,
+        166.912
+      ],
+      "fingerprint": {
+        "sources": {
+          "Scratch_t94": {
+            "exists": true,
+            "bytes": 91682805,
+            "mtime_ns": 1777691939000000000
+          },
+          "Scratch_t95": {
+            "exists": true,
+            "bytes": 91612845,
+            "mtime_ns": 1777691982000000000
+          },
+          "Scratch_t96": {
+            "exists": true,
+            "bytes": 91007478,
+            "mtime_ns": 1777692024000000000
+          },
+          "Scratch_t97": {
+            "exists": true,
+            "bytes": 91336724,
+            "mtime_ns": 1777692071000000000
+          }
+        },
+        "script_sha256_16": {
+          "audit_technique.py": "e1e1df407392468a",
+          "drift_crosscheck.py": "575dbb87b83e35d1",
+          "fractional_lag_repeat.py": "ad960abeb06e7a79",
+          "make_boundary_previews.py": "5ee35d440fba6344",
+          "repeat_profile.py": "5484938d7511e993",
+          "run_batch.py": "fb7b50e0468466a5"
+        },
+        "runner_version": "run_batch/1",
+        "params": {
+          "frac_max_lag": 32.0,
+          "frac_probe_s": 6.0,
+          "profile_window_s": 1.0,
+          "video_match": 0.995,
+          "audio_match": 0.9
+        }
+      },
+      "started": "2026-09-13T04:45:02",
+      "steps": {
+        "audit": "ok",
+        "fractional_lag": "ok",
+        "repeat_profile": "ok",
+        "drift_crosscheck": "ok",
+        "previews": "ok"
+      },
+      "log": [
+        {
+          "cmd": "/Users/karlwatson/Developer/ScratchLab-CXL-Ready-20260913/evidence/mkv-source-inspection-20260913/claude-mkv-batch-audit/scripts/audit_technique.py originalflare_85bpm",
+          "rc": 0,
+          "seconds": 71.5,
+          "stdout_tail": "{\n  \"technique\": \"originalflare\",\n  \"angle_to_title\": {\n    \"1\": \"Scratch_t94\",\n    \"2\": \"Scratch_t95\",\n    \"3\": \"Scratch_t96\",\n    \"4\": \"Scratch_t97\"\n  },\n  \"missing_delivered_angles\": []\n}\nsections: ['video_integrity', 'audio_streams', 'title_duplicates', 'repeat_within_title', 'segment_duplication', 'talking_boundaries', 'noise', 'av_sync']\nwritten: /Users/karlwatson/Developer/ScratchLab-CXL-Ready-20260913/evidence/mkv-source-inspection-20260913/claude-mkv-batch-audit/techniques/originalflare_85bpm.json",
+          "stderr_tail": ""
+        },
+        {
+          "cmd": "/Users/karlwatson/Developer/ScratchLab-CXL-Ready-20260913/evidence/mkv-source-inspection-20260913/claude-mkv-batch-audit/scripts/fractional_lag_repeat.py originalflare_85bpm Scratch_t94 99.099 166.912 1016 --discover",
+          "rc": 0,
+          "seconds": 21.6,
+          "stdout_tail": "originalflare_85bpm Scratch_t94: offset 1016 fr = 1627225.6 samples (whole: False, == half chapter: True)\n  audio-discovered offset 33.9006s (ncc 0.9940), delta vs supplied +0.05 ms\n  windows 17  int-lag ncc 0.086/0.421/0.805  frac ncc 1.000/1.000/1.000  lag -3.90..-3.90  below0.90: 0",
+          "stderr_tail": ""
+        },
+        {
+          "cmd": "/Users/karlwatson/Developer/ScratchLab-CXL-Ready-20260913/evidence/mkv-source-inspection-20260913/claude-mkv-batch-audit/scripts/repeat_profile.py originalflare_85bpm",
+          "rc": 0,
+          "seconds": 22.2,
+          "stdout_tail": "originalflare_85bpm: offset 1016 fr (33.9005s), 33 x 1.0s windows\n  controls: adjacent 0.98389, random 0.85944\n  video matching 33/33   audio matching 17/17 evaluated\n  DIVERGENCE spans (video ok, audio not): none",
+          "stderr_tail": ""
+        },
+        {
+          "cmd": "/Users/karlwatson/Developer/ScratchLab-CXL-Ready-20260913/evidence/mkv-source-inspection-20260913/claude-mkv-batch-audit/scripts/drift_crosscheck.py originalflare_85bpm",
+          "rc": 0,
+          "seconds": 3.1,
+          "stdout_tail": "{\n  \"technique\": \"originalflare_85bpm\",\n  \"reference_title\": \"Scratch_t94\",\n  \"video_repeat_offset_frames\": 1016,\n  \"video_repeat_offset_s\": 33.900533,\n  \"video_repeat_mean_similarity\": 0.99868,\n  \"audio_repeat_extra_lag_samples\": 2,\n  \"audio_repeat_extra_lag_ms\": 0.0417,\n  \"audio_repeat_ncc_at_best\": 0.992347,\n  \"audio_repeat_ncc_at_video_offset\": 0.667863,\n  \"window_s\": 33.912,\n  \"verdict\": \"No A/V drift: over 33.9 s the audio repeats at the video's own repeat offset to within 0.04 ms (2 samples). A drift of even one frame (33.4 ms) would have shown here.\",\n  \"caveat\": \"This compares the audio timeline with the video timeline across the title's own repeat. It constrains RELATIVE timing over the repeated span and can rule out progressive drift. It does NOT measure absolute audio/video synchronisation, and a constant absolute offset would be invisible to it. Where the repeat offset is not a whole number of audio samples, use scripts/fractional_lag_repeat.py instead - integer lag alone under-reports the match.\"\n}",
+          "stderr_tail": ""
+        },
+        {
+          "cmd": "/Users/karlwatson/Developer/ScratchLab-CXL-Ready-20260913/evidence/mkv-source-inspection-20260913/claude-mkv-batch-audit/scripts/make_boundary_previews.py originalflare_85bpm",
+          "rc": 0,
+          "seconds": 2.4,
+          "stdout_tail": "{\n  \"technique\": \"originalflare_85bpm\",\n  \"source_title\": \"Scratch_t96\",\n  \"chapter2\": [\n    99.099,\n    166.912\n  ],\n  \"previews\": [\n    \"previews/originalflare_85bpm/originalflare_85bpm_boundary_head_87to104s_Scratch_t96.mov\",\n    \"previews/originalflare_85bpm/originalflare_85bpm_boundary_tail_73to83s_Scratch_t96.mov\"\n  ],\n  \"time_mapping\": \"preview t=0 corresponds to the source time in the filename\",\n  \"operator_audition\": \"PENDING - no automatic test can prove absence of speech\"\n}",
+          "stderr_tail": ""
+        }
+      ],
+      "state": "verified_duplicate_half",
+      "reason": "video and audio both repeat at 1016 frames",
+      "offset_frames_searched": 1016,
+      "offset_frames_half_chapter": 1016,
+      "offset_equals_half_chapter": true,
+      "facts": {
+        "offset_frames": 1016,
+        "video_repeat_detected": true,
+        "video_mean_similarity": 0.99868,
+        "adjacent_frame_similarity": 0.9839,
+        "audio_roles": "NOT CONFIRMED - do not reuse Baby's stream order here",
+        "missing_delivered_angles": [],
+        "identical_video_titles": [],
+        "audio_ncc_median_fractional": 1.0,
+        "audio_ncc_min_fractional": 0.9999,
+        "audio_windows_below_0.90": 0,
+        "lag_spread_samples": 0.0,
+        "lag_hit_search_bound": false,
+        "offset_equals_half_chapter": true,
+        "audio_discovered_offset_delta_ms": 0.05,
+        "divergence_spans_first_pass_s": [],
+        "divergence_spans_second_pass_s": []
+      },
+      "finished": "2026-09-13T04:47:03",
+      "operator_checks_required": [
+        "Talking boundaries are NOT established. Component subtraction cannot prove a region is speech-free, and the voice-band indicator has no sensitivity against a music bed. Audition previews/originalflare_85bpm/.",
+        "Absolute audio/video synchronisation is NOT established. Every timing result here is relative, measured across the title's own repeat."
+      ]
+    },
+    "swipes_105bpm": {
+      "key": "swipes_105bpm",
+      "titles": [
+        "Scratch_t90",
+        "Scratch_t91",
+        "Scratch_t92",
+        "Scratch_t93"
+      ],
+      "chapter2": [
+        43.5435,
+        80.096
+      ],
+      "fingerprint": {
+        "sources": {
+          "Scratch_t90": {
+            "exists": true,
+            "bytes": 48511440,
+            "mtime_ns": 1777691813000000000
+          },
+          "Scratch_t91": {
+            "exists": true,
+            "bytes": 48422505,
+            "mtime_ns": 1777691840000000000
+          },
+          "Scratch_t92": {
+            "exists": true,
+            "bytes": 48155055,
+            "mtime_ns": 1777691868000000000
+          },
+          "Scratch_t93": {
+            "exists": true,
+            "bytes": 48283865,
+            "mtime_ns": 1777691896000000000
+          }
+        },
+        "script_sha256_16": {
+          "audit_technique.py": "e1e1df407392468a",
+          "drift_crosscheck.py": "575dbb87b83e35d1",
+          "fractional_lag_repeat.py": "ad960abeb06e7a79",
+          "make_boundary_previews.py": "5ee35d440fba6344",
+          "repeat_profile.py": "5484938d7511e993",
+          "run_batch.py": "fb7b50e0468466a5"
+        },
+        "runner_version": "run_batch/1",
+        "params": {
+          "frac_max_lag": 32.0,
+          "frac_probe_s": 6.0,
+          "profile_window_s": 1.0,
+          "video_match": 0.995,
+          "audio_match": 0.9
+        }
+      },
+      "started": "2026-09-13T04:47:03",
+      "steps": {
+        "audit": "ok",
+        "fractional_lag": "ok",
+        "repeat_profile": "ok",
+        "drift_crosscheck": "ok",
+        "previews": "ok"
+      },
+      "log": [
+        {
+          "cmd": "/Users/karlwatson/Developer/ScratchLab-CXL-Ready-20260913/evidence/mkv-source-inspection-20260913/claude-mkv-batch-audit/scripts/audit_technique.py swipes_105bpm",
+          "rc": 0,
+          "seconds": 38.4,
+          "stdout_tail": "{\n  \"technique\": \"swipes\",\n  \"angle_to_title\": {\n    \"1\": \"Scratch_t90\",\n    \"2\": \"Scratch_t91\",\n    \"3\": \"Scratch_t92\",\n    \"4\": \"Scratch_t93\"\n  },\n  \"missing_delivered_angles\": []\n}\nsections: ['video_integrity', 'audio_streams', 'title_duplicates', 'repeat_within_title', 'segment_duplication', 'talking_boundaries', 'noise', 'av_sync']\nwritten: /Users/karlwatson/Developer/ScratchLab-CXL-Ready-20260913/evidence/mkv-source-inspection-20260913/claude-mkv-batch-audit/techniques/swipes_105bpm.json",
+          "stderr_tail": ""
+        },
+        {
+          "cmd": "/Users/karlwatson/Developer/ScratchLab-CXL-Ready-20260913/evidence/mkv-source-inspection-20260913/claude-mkv-batch-audit/scripts/fractional_lag_repeat.py swipes_105bpm Scratch_t90 43.5435 80.096 548 --discover",
+          "rc": 0,
+          "seconds": 13.9,
+          "stdout_tail": "swipes_105bpm Scratch_t90: offset 548 fr = 877676.8 samples (whole: False, == half chapter: True)\n  audio-discovered offset 18.2850s (ncc 0.9994), delta vs supplied +0.03 ms\n  windows 11  int-lag ncc 0.832/0.899/0.943  frac ncc 0.998/1.000/1.000  lag -2.96..-2.79  below0.90: 0",
+          "stderr_tail": ""
+        },
+        {
+          "cmd": "/Users/karlwatson/Developer/ScratchLab-CXL-Ready-20260913/evidence/mkv-source-inspection-20260913/claude-mkv-batch-audit/scripts/repeat_profile.py swipes_105bpm",
+          "rc": 0,
+          "seconds": 13.2,
+          "stdout_tail": "swipes_105bpm: offset 548 fr (18.2849s), 18 x 1.0s windows\n  controls: adjacent 0.98661, random 0.83434\n  video matching 18/18   audio matching 11/11 evaluated\n  DIVERGENCE spans (video ok, audio not): none",
+          "stderr_tail": ""
+        },
+        {
+          "cmd": "/Users/karlwatson/Developer/ScratchLab-CXL-Ready-20260913/evidence/mkv-source-inspection-20260913/claude-mkv-batch-audit/scripts/drift_crosscheck.py swipes_105bpm",
+          "rc": 0,
+          "seconds": 1.4,
+          "stdout_tail": "{\n  \"technique\": \"swipes_105bpm\",\n  \"reference_title\": \"Scratch_t90\",\n  \"video_repeat_offset_frames\": 548,\n  \"video_repeat_offset_s\": 18.284933,\n  \"video_repeat_mean_similarity\": 0.99838,\n  \"audio_repeat_extra_lag_samples\": 1,\n  \"audio_repeat_extra_lag_ms\": 0.0208,\n  \"audio_repeat_ncc_at_best\": 0.999741,\n  \"audio_repeat_ncc_at_video_offset\": 0.969194,\n  \"window_s\": 18.268,\n  \"verdict\": \"No A/V drift: over 18.3 s the audio repeats at the video's own repeat offset to within 0.02 ms (1 samples). A drift of even one frame (33.4 ms) would have shown here.\",\n  \"caveat\": \"This compares the audio timeline with the video timeline across the title's own repeat. It constrains RELATIVE timing over the repeated span and can rule out progressive drift. It does NOT measure absolute audio/video synchronisation, and a constant absolute offset would be invisible to it. Where the repeat offset is not a whole number of audio samples, use scripts/fractional_lag_repeat.py instead - integer lag alone under-reports the match.\"\n}",
+          "stderr_tail": ""
+        },
+        {
+          "cmd": "/Users/karlwatson/Developer/ScratchLab-CXL-Ready-20260913/evidence/mkv-source-inspection-20260913/claude-mkv-batch-audit/scripts/make_boundary_previews.py swipes_105bpm",
+          "rc": 0,
+          "seconds": 2.3,
+          "stdout_tail": "{\n  \"technique\": \"swipes_105bpm\",\n  \"source_title\": \"Scratch_t92\",\n  \"chapter2\": [\n    43.5435,\n    80.096\n  ],\n  \"previews\": [\n    \"previews/swipes_105bpm/swipes_105bpm_boundary_head_32to49s_Scratch_t92.mov\",\n    \"previews/swipes_105bpm/swipes_105bpm_boundary_tail_70to80s_Scratch_t92.mov\"\n  ],\n  \"time_mapping\": \"preview t=0 corresponds to the source time in the filename\",\n  \"operator_audition\": \"PENDING - no automatic test can prove absence of speech\"\n}",
+          "stderr_tail": ""
+        }
+      ],
+      "state": "verified_duplicate_half",
+      "reason": "video and audio both repeat at 548 frames",
+      "offset_frames_searched": 548,
+      "offset_frames_half_chapter": 548,
+      "offset_equals_half_chapter": true,
+      "facts": {
+        "offset_frames": 548,
+        "video_repeat_detected": true,
+        "video_mean_similarity": 0.99838,
+        "adjacent_frame_similarity": 0.98614,
+        "audio_roles": "CONFIRMED for this technique",
+        "missing_delivered_angles": [],
+        "identical_video_titles": [],
+        "audio_ncc_median_fractional": 0.9999,
+        "audio_ncc_min_fractional": 0.998,
+        "audio_windows_below_0.90": 0,
+        "lag_spread_samples": 0.17,
+        "lag_hit_search_bound": false,
+        "offset_equals_half_chapter": true,
+        "audio_discovered_offset_delta_ms": 0.025,
+        "divergence_spans_first_pass_s": [],
+        "divergence_spans_second_pass_s": []
+      },
+      "finished": "2026-09-13T04:48:12",
+      "operator_checks_required": [
+        "Talking boundaries are NOT established. Component subtraction cannot prove a region is speech-free, and the voice-band indicator has no sensitivity against a music bed. Audition previews/swipes_105bpm/.",
+        "Absolute audio/video synchronisation is NOT established. Every timing result here is relative, measured across the title's own repeat."
+      ]
+    },
+    "tips_105bpm": {
+      "key": "tips_105bpm",
+      "titles": [
+        "Scratch_t28",
+        "Scratch_t29",
+        "Scratch_t30",
+        "Scratch_t31"
+      ],
+      "chapter2": [
+        27.5275,
+        64.096
+      ],
+      "fingerprint": {
+        "sources": {
+          "Scratch_t28": {
+            "exists": true,
+            "bytes": 38608053,
+            "mtime_ns": 1777690292000000000
+          },
+          "Scratch_t29": {
+            "exists": true,
+            "bytes": 38547109,
+            "mtime_ns": 1777690309000000000
+          },
+          "Scratch_t30": {
+            "exists": true,
+            "bytes": 38360723,
+            "mtime_ns": 1777690326000000000
+          },
+          "Scratch_t31": {
+            "exists": true,
+            "bytes": 38450435,
+            "mtime_ns": 1777690344000000000
+          }
+        },
+        "script_sha256_16": {
+          "audit_technique.py": "e1e1df407392468a",
+          "drift_crosscheck.py": "575dbb87b83e35d1",
+          "fractional_lag_repeat.py": "ad960abeb06e7a79",
+          "make_boundary_previews.py": "5ee35d440fba6344",
+          "repeat_profile.py": "5484938d7511e993",
+          "run_batch.py": "fb7b50e0468466a5"
+        },
+        "runner_version": "run_batch/1",
+        "params": {
+          "frac_max_lag": 32.0,
+          "frac_probe_s": 6.0,
+          "profile_window_s": 1.0,
+          "video_match": 0.995,
+          "audio_match": 0.9
+        }
+      },
+      "started": "2026-09-13T04:48:12",
+      "steps": {
+        "audit": "ok",
+        "fractional_lag": "ok",
+        "repeat_profile": "ok",
+        "drift_crosscheck": "ok",
+        "previews": "ok"
+      },
+      "log": [
+        {
+          "cmd": "/Users/karlwatson/Developer/ScratchLab-CXL-Ready-20260913/evidence/mkv-source-inspection-20260913/claude-mkv-batch-audit/scripts/audit_technique.py tips_105bpm",
+          "rc": 0,
+          "seconds": 35.0,
+          "stdout_tail": "{\n  \"technique\": \"tips\",\n  \"angle_to_title\": {\n    \"1\": \"Scratch_t28\",\n    \"2\": \"Scratch_t29\",\n    \"3\": \"Scratch_t30\",\n    \"4\": \"Scratch_t31\"\n  },\n  \"missing_delivered_angles\": []\n}\nsections: ['video_integrity', 'audio_streams', 'title_duplicates', 'repeat_within_title', 'segment_duplication', 'talking_boundaries', 'noise', 'av_sync']\nwritten: /Users/karlwatson/Developer/ScratchLab-CXL-Ready-20260913/evidence/mkv-source-inspection-20260913/claude-mkv-batch-audit/techniques/tips_105bpm.json",
+          "stderr_tail": ""
+        },
+        {
+          "cmd": "/Users/karlwatson/Developer/ScratchLab-CXL-Ready-20260913/evidence/mkv-source-inspection-20260913/claude-mkv-batch-audit/scripts/fractional_lag_repeat.py tips_105bpm Scratch_t28 27.5275 64.096 548 --discover",
+          "rc": 0,
+          "seconds": 15.3,
+          "stdout_tail": "tips_105bpm Scratch_t28: offset 548 fr = 877676.8 samples (whole: False, == half chapter: True)\n  audio-discovered offset 18.2849s (ncc 0.9890), delta vs supplied +0.01 ms\n  windows 12  int-lag ncc 0.832/0.913/0.984  frac ncc 0.963/1.000/1.000  lag -1.81..-1.42  below0.90: 0",
+          "stderr_tail": ""
+        },
+        {
+          "cmd": "/Users/karlwatson/Developer/ScratchLab-CXL-Ready-20260913/evidence/mkv-source-inspection-20260913/claude-mkv-batch-audit/scripts/repeat_profile.py tips_105bpm",
+          "rc": 0,
+          "seconds": 14.8,
+          "stdout_tail": "tips_105bpm: offset 548 fr (18.2849s), 18 x 1.0s windows\n  controls: adjacent 0.98882, random 0.86551\n  video matching 18/18   audio matching 12/12 evaluated\n  DIVERGENCE spans (video ok, audio not): none",
+          "stderr_tail": ""
+        },
+        {
+          "cmd": "/Users/karlwatson/Developer/ScratchLab-CXL-Ready-20260913/evidence/mkv-source-inspection-20260913/claude-mkv-batch-audit/scripts/drift_crosscheck.py tips_105bpm",
+          "rc": 0,
+          "seconds": 1.7,
+          "stdout_tail": "{\n  \"technique\": \"tips_105bpm\",\n  \"reference_title\": \"Scratch_t28\",\n  \"video_repeat_offset_frames\": 548,\n  \"video_repeat_offset_s\": 18.284933,\n  \"video_repeat_mean_similarity\": 0.99838,\n  \"audio_repeat_extra_lag_samples\": 0,\n  \"audio_repeat_extra_lag_ms\": 0.0,\n  \"audio_repeat_ncc_at_best\": 0.99581,\n  \"audio_repeat_ncc_at_video_offset\": 0.99581,\n  \"window_s\": 18.284,\n  \"verdict\": \"No A/V drift: over 18.3 s the audio repeats at the video's own repeat offset to within 0.00 ms (0 samples). A drift of even one frame (33.4 ms) would have shown here.\",\n  \"caveat\": \"This compares the audio timeline with the video timeline across the title's own repeat. It constrains RELATIVE timing over the repeated span and can rule out progressive drift. It does NOT measure absolute audio/video synchronisation, and a constant absolute offset would be invisible to it. Where the repeat offset is not a whole number of audio samples, use scripts/fractional_lag_repeat.py instead - integer lag alone under-reports the match.\"\n}",
+          "stderr_tail": ""
+        },
+        {
+          "cmd": "/Users/karlwatson/Developer/ScratchLab-CXL-Ready-20260913/evidence/mkv-source-inspection-20260913/claude-mkv-batch-audit/scripts/make_boundary_previews.py tips_105bpm",
+          "rc": 0,
+          "seconds": 2.0,
+          "stdout_tail": "{\n  \"technique\": \"tips_105bpm\",\n  \"source_title\": \"Scratch_t30\",\n  \"chapter2\": [\n    27.5275,\n    64.096\n  ],\n  \"previews\": [\n    \"previews/tips_105bpm/tips_105bpm_boundary_head_16to33s_Scratch_t30.mov\",\n    \"previews/tips_105bpm/tips_105bpm_boundary_tail_54to64s_Scratch_t30.mov\"\n  ],\n  \"time_mapping\": \"preview t=0 corresponds to the source time in the filename\",\n  \"operator_audition\": \"PENDING - no automatic test can prove absence of speech\"\n}",
+          "stderr_tail": ""
+        }
+      ],
+      "state": "verified_duplicate_half",
+      "reason": "video and audio both repeat at 548 frames",
+      "offset_frames_searched": 548,
+      "offset_frames_half_chapter": 548,
+      "offset_equals_half_chapter": true,
+      "facts": {
+        "offset_frames": 548,
+        "video_repeat_detected": true,
+        "video_mean_similarity": 0.99838,
+        "adjacent_frame_similarity": 0.98743,
+        "audio_roles": "CONFIRMED for this technique",
+        "missing_delivered_angles": [],
+        "identical_video_titles": [],
+        "audio_ncc_median_fractional": 0.99975,
+        "audio_ncc_min_fractional": 0.9629,
+        "audio_windows_below_0.90": 0,
+        "lag_spread_samples": 0.39,
+        "lag_hit_search_bound": false,
+        "offset_equals_half_chapter": true,
+        "audio_discovered_offset_delta_ms": 0.005,
+        "divergence_spans_first_pass_s": [],
+        "divergence_spans_second_pass_s": []
+      },
+      "finished": "2026-09-13T04:49:21",
+      "operator_checks_required": [
+        "Talking boundaries are NOT established. Component subtraction cannot prove a region is speech-free, and the voice-band indicator has no sensitivity against a music bed. Audition previews/tips_105bpm/.",
+        "Absolute audio/video synchronisation is NOT established. Every timing result here is relative, measured across the title's own repeat."
+      ]
+    },
+    "waves_105bpm": {
+      "key": "waves_105bpm",
+      "titles": [
+        "Scratch_t86",
+        "Scratch_t87",
+        "Scratch_t88",
+        "Scratch_t89"
+      ],
+      "chapter2": [
+        22.5225,
+        95.744
+      ],
+      "fingerprint": {
+        "sources": {
+          "Scratch_t86": {
+            "exists": true,
+            "bytes": 58140157,
+            "mtime_ns": 1777691692000000000
+          },
+          "Scratch_t87": {
+            "exists": true,
+            "bytes": 58067067,
+            "mtime_ns": 1777691722000000000
+          },
+          "Scratch_t88": {
+            "exists": true,
+            "bytes": 57740503,
+            "mtime_ns": 1777691753000000000
+          },
+          "Scratch_t89": {
+            "exists": true,
+            "bytes": 57890323,
+            "mtime_ns": 1777691785000000000
+          }
+        },
+        "script_sha256_16": {
+          "audit_technique.py": "e1e1df407392468a",
+          "drift_crosscheck.py": "575dbb87b83e35d1",
+          "fractional_lag_repeat.py": "ad960abeb06e7a79",
+          "make_boundary_previews.py": "5ee35d440fba6344",
+          "repeat_profile.py": "5484938d7511e993",
+          "run_batch.py": "fb7b50e0468466a5"
+        },
+        "runner_version": "run_batch/1",
+        "params": {
+          "frac_max_lag": 32.0,
+          "frac_probe_s": 6.0,
+          "profile_window_s": 1.0,
+          "video_match": 0.995,
+          "audio_match": 0.9
+        }
+      },
+      "started": "2026-09-13T04:49:21",
+      "steps": {
+        "audit": "ok",
+        "fractional_lag": "ok",
+        "repeat_profile": "ok",
+        "drift_crosscheck": "ok",
+        "previews": "ok"
+      },
+      "log": [
+        {
+          "cmd": "/Users/karlwatson/Developer/ScratchLab-CXL-Ready-20260913/evidence/mkv-source-inspection-20260913/claude-mkv-batch-audit/scripts/audit_technique.py waves_105bpm",
+          "rc": 0,
+          "seconds": 57.9,
+          "stdout_tail": "{\n  \"technique\": \"waves\",\n  \"angle_to_title\": {\n    \"1\": \"Scratch_t86\",\n    \"2\": \"Scratch_t87\",\n    \"3\": \"Scratch_t88\",\n    \"4\": \"Scratch_t89\"\n  },\n  \"missing_delivered_angles\": []\n}\nsections: ['video_integrity', 'audio_streams', 'title_duplicates', 'repeat_within_title', 'segment_duplication', 'talking_boundaries', 'noise', 'av_sync']\nwritten: /Users/karlwatson/Developer/ScratchLab-CXL-Ready-20260913/evidence/mkv-source-inspection-20260913/claude-mkv-batch-audit/techniques/waves_105bpm.json",
+          "stderr_tail": ""
+        },
+        {
+          "cmd": "/Users/karlwatson/Developer/ScratchLab-CXL-Ready-20260913/evidence/mkv-source-inspection-20260913/claude-mkv-batch-audit/scripts/fractional_lag_repeat.py waves_105bpm Scratch_t86 22.5225 95.744 1097 --discover",
+          "rc": 0,
+          "seconds": 23.6,
+          "stdout_tail": "waves_105bpm Scratch_t86: offset 1097 fr = 1756955.2 samples (whole: False, == half chapter: True)\n  audio-discovered offset 36.6033s (ncc 0.9997), delta vs supplied +0.02 ms\n  windows 18  int-lag ncc 0.968/0.983/0.990  frac ncc 1.000/1.000/1.000  lag -1.12..-1.12  below0.90: 0",
+          "stderr_tail": ""
+        },
+        {
+          "cmd": "/Users/karlwatson/Developer/ScratchLab-CXL-Ready-20260913/evidence/mkv-source-inspection-20260913/claude-mkv-batch-audit/scripts/repeat_profile.py waves_105bpm",
+          "rc": 0,
+          "seconds": 22.5,
+          "stdout_tail": "waves_105bpm: offset 1097 fr (36.6032s), 36 x 1.0s windows\n  controls: adjacent 0.98611, random 0.86363\n  video matching 36/36   audio matching 18/18 evaluated\n  DIVERGENCE spans (video ok, audio not): none",
+          "stderr_tail": ""
+        },
+        {
+          "cmd": "/Users/karlwatson/Developer/ScratchLab-CXL-Ready-20260913/evidence/mkv-source-inspection-20260913/claude-mkv-batch-audit/scripts/drift_crosscheck.py waves_105bpm",
+          "rc": 0,
+          "seconds": 4.5,
+          "stdout_tail": "{\n  \"technique\": \"waves_105bpm\",\n  \"reference_title\": \"Scratch_t86\",\n  \"video_repeat_offset_frames\": 1097,\n  \"video_repeat_offset_s\": 36.603233,\n  \"video_repeat_mean_similarity\": 0.999,\n  \"audio_repeat_extra_lag_samples\": 1,\n  \"audio_repeat_extra_lag_ms\": 0.0208,\n  \"audio_repeat_ncc_at_best\": 0.999696,\n  \"audio_repeat_ncc_at_video_offset\": 0.980258,\n  \"window_s\": 36.618,\n  \"verdict\": \"No A/V drift: over 36.6 s the audio repeats at the video's own repeat offset to within 0.02 ms (1 samples). A drift of even one frame (33.4 ms) would have shown here.\",\n  \"caveat\": \"This compares the audio timeline with the video timeline across the title's own repeat. It constrains RELATIVE timing over the repeated span and can rule out progressive drift. It does NOT measure absolute audio/video synchronisation, and a constant absolute offset would be invisible to it. Where the repeat offset is not a whole number of audio samples, use scripts/fractional_lag_repeat.py instead - integer lag alone under-reports the match.\"\n}",
+          "stderr_tail": ""
+        },
+        {
+          "cmd": "/Users/karlwatson/Developer/ScratchLab-CXL-Ready-20260913/evidence/mkv-source-inspection-20260913/claude-mkv-batch-audit/scripts/make_boundary_previews.py waves_105bpm",
+          "rc": 0,
+          "seconds": 2.4,
+          "stdout_tail": "{\n  \"technique\": \"waves_105bpm\",\n  \"source_title\": \"Scratch_t88\",\n  \"chapter2\": [\n    22.5225,\n    95.744\n  ],\n  \"previews\": [\n    \"previews/waves_105bpm/waves_105bpm_boundary_head_11to28s_Scratch_t88.mov\",\n    \"previews/waves_105bpm/waves_105bpm_boundary_tail_73to83s_Scratch_t88.mov\"\n  ],\n  \"time_mapping\": \"preview t=0 corresponds to the source time in the filename\",\n  \"operator_audition\": \"PENDING - no automatic test can prove absence of speech\"\n}",
+          "stderr_tail": ""
+        }
+      ],
+      "state": "verified_duplicate_half",
+      "reason": "video and audio both repeat at 1097 frames",
+      "offset_frames_searched": 1097,
+      "offset_frames_half_chapter": 1097,
+      "offset_equals_half_chapter": true,
+      "facts": {
+        "offset_frames": 1097,
+        "video_repeat_detected": true,
+        "video_mean_similarity": 0.999,
+        "adjacent_frame_similarity": 0.98802,
+        "audio_roles": "NOT CONFIRMED - do not reuse Baby's stream order here",
+        "missing_delivered_angles": [],
+        "identical_video_titles": [],
+        "audio_ncc_median_fractional": 0.9999,
+        "audio_ncc_min_fractional": 0.9998,
+        "audio_windows_below_0.90": 0,
+        "lag_spread_samples": 0.0,
+        "lag_hit_search_bound": false,
+        "offset_equals_half_chapter": true,
+        "audio_discovered_offset_delta_ms": 0.017,
+        "divergence_spans_first_pass_s": [],
+        "divergence_spans_second_pass_s": []
+      },
+      "finished": "2026-09-13T04:51:12",
+      "operator_checks_required": [
+        "Talking boundaries are NOT established. Component subtraction cannot prove a region is speech-free, and the voice-band indicator has no sensitivity against a music bed. Audition previews/waves_105bpm/.",
+        "Absolute audio/video synchronisation is NOT established. Every timing result here is relative, measured across the title's own repeat."
+      ]
+    },
+    "zigzags_105bpm": {
+      "key": "zigzags_105bpm",
+      "titles": [
+        "Scratch_t82",
+        "Scratch_t83",
+        "Scratch_t84",
+        "Scratch_t85"
+      ],
+      "chapter2": [
+        32.5325,
+        69.088
+      ],
+      "fingerprint": {
+        "sources": {
+          "Scratch_t82": {
+            "exists": true,
+            "bytes": 41668796,
+            "mtime_ns": 1777691590000000000
+          },
+          "Scratch_t83": {
+            "exists": true,
+            "bytes": 41515331,
+            "mtime_ns": 1777691614000000000
+          },
+          "Scratch_t84": {
+            "exists": true,
+            "bytes": 41371215,
+            "mtime_ns": 1777691637000000000
+          },
+          "Scratch_t85": {
+            "exists": true,
+            "bytes": 41440215,
+            "mtime_ns": 1777691662000000000
+          }
+        },
+        "script_sha256_16": {
+          "audit_technique.py": "e1e1df407392468a",
+          "drift_crosscheck.py": "575dbb87b83e35d1",
+          "fractional_lag_repeat.py": "ad960abeb06e7a79",
+          "make_boundary_previews.py": "5ee35d440fba6344",
+          "repeat_profile.py": "5484938d7511e993",
+          "run_batch.py": "fb7b50e0468466a5"
+        },
+        "runner_version": "run_batch/1",
+        "params": {
+          "frac_max_lag": 32.0,
+          "frac_probe_s": 6.0,
+          "profile_window_s": 1.0,
+          "video_match": 0.995,
+          "audio_match": 0.9
+        }
+      },
+      "started": "2026-09-13T04:51:12",
+      "steps": {
+        "audit": "ok",
+        "fractional_lag": "ok",
+        "repeat_profile": "ok",
+        "drift_crosscheck": "ok",
+        "previews": "ok"
+      },
+      "log": [
+        {
+          "cmd": "/Users/karlwatson/Developer/ScratchLab-CXL-Ready-20260913/evidence/mkv-source-inspection-20260913/claude-mkv-batch-audit/scripts/audit_technique.py zigzags_105bpm",
+          "rc": 0,
+          "seconds": 38.9,
+          "stdout_tail": "{\n  \"technique\": \"zigzags\",\n  \"angle_to_title\": {\n    \"1\": \"Scratch_t82\",\n    \"2\": \"Scratch_t83\",\n    \"3\": \"Scratch_t84\",\n    \"4\": \"Scratch_t85\"\n  },\n  \"missing_delivered_angles\": []\n}\nsections: ['video_integrity', 'audio_streams', 'title_duplicates', 'repeat_within_title', 'segment_duplication', 'talking_boundaries', 'noise', 'av_sync']\nwritten: /Users/karlwatson/Developer/ScratchLab-CXL-Ready-20260913/evidence/mkv-source-inspection-20260913/claude-mkv-batch-audit/techniques/zigzags_105bpm.json",
+          "stderr_tail": ""
+        },
+        {
+          "cmd": "/Users/karlwatson/Developer/ScratchLab-CXL-Ready-20260913/evidence/mkv-source-inspection-20260913/claude-mkv-batch-audit/scripts/fractional_lag_repeat.py zigzags_105bpm Scratch_t82 32.5325 69.088 548 --discover",
+          "rc": 0,
+          "seconds": 15.2,
+          "stdout_tail": "zigzags_105bpm Scratch_t82: offset 548 fr = 877676.8 samples (whole: False, == half chapter: True)\n  audio-discovered offset 18.2850s (ncc 0.9985), delta vs supplied +0.05 ms\n  windows 12  int-lag ncc 0.419/0.667/0.881  frac ncc 0.994/1.000/1.000  lag -3.92..-3.79  below0.90: 0",
+          "stderr_tail": ""
+        },
+        {
+          "cmd": "/Users/karlwatson/Developer/ScratchLab-CXL-Ready-20260913/evidence/mkv-source-inspection-20260913/claude-mkv-batch-audit/scripts/repeat_profile.py zigzags_105bpm",
+          "rc": 0,
+          "seconds": 14.6,
+          "stdout_tail": "zigzags_105bpm: offset 548 fr (18.2849s), 18 x 1.0s windows\n  controls: adjacent 0.97926, random 0.85718\n  video matching 18/18   audio matching 12/12 evaluated\n  DIVERGENCE spans (video ok, audio not): none",
+          "stderr_tail": ""
+        },
+        {
+          "cmd": "/Users/karlwatson/Developer/ScratchLab-CXL-Ready-20260913/evidence/mkv-source-inspection-20260913/claude-mkv-batch-audit/scripts/drift_crosscheck.py zigzags_105bpm",
+          "rc": 0,
+          "seconds": 1.7,
+          "stdout_tail": "{\n  \"technique\": \"zigzags_105bpm\",\n  \"reference_title\": \"Scratch_t82\",\n  \"video_repeat_offset_frames\": 548,\n  \"video_repeat_offset_s\": 18.284933,\n  \"video_repeat_mean_similarity\": 0.99821,\n  \"audio_repeat_extra_lag_samples\": 2,\n  \"audio_repeat_extra_lag_ms\": 0.0417,\n  \"audio_repeat_ncc_at_best\": 0.99838,\n  \"audio_repeat_ncc_at_video_offset\": 0.75835,\n  \"window_s\": 18.271,\n  \"verdict\": \"No A/V drift: over 18.3 s the audio repeats at the video's own repeat offset to within 0.04 ms (2 samples). A drift of even one frame (33.4 ms) would have shown here.\",\n  \"caveat\": \"This compares the audio timeline with the video timeline across the title's own repeat. It constrains RELATIVE timing over the repeated span and can rule out progressive drift. It does NOT measure absolute audio/video synchronisation, and a constant absolute offset would be invisible to it. Where the repeat offset is not a whole number of audio samples, use scripts/fractional_lag_repeat.py instead - integer lag alone under-reports the match.\"\n}",
+          "stderr_tail": ""
+        },
+        {
+          "cmd": "/Users/karlwatson/Developer/ScratchLab-CXL-Ready-20260913/evidence/mkv-source-inspection-20260913/claude-mkv-batch-audit/scripts/make_boundary_previews.py zigzags_105bpm",
+          "rc": 0,
+          "seconds": 2.4,
+          "stdout_tail": "{\n  \"technique\": \"zigzags_105bpm\",\n  \"source_title\": \"Scratch_t84\",\n  \"chapter2\": [\n    32.5325,\n    69.088\n  ],\n  \"previews\": [\n    \"previews/zigzags_105bpm/zigzags_105bpm_boundary_head_21to38s_Scratch_t84.mov\",\n    \"previews/zigzags_105bpm/zigzags_105bpm_boundary_tail_59to69s_Scratch_t84.mov\"\n  ],\n  \"time_mapping\": \"preview t=0 corresponds to the source time in the filename\",\n  \"operator_audition\": \"PENDING - no automatic test can prove absence of speech\"\n}",
+          "stderr_tail": ""
+        }
+      ],
+      "state": "verified_duplicate_half",
+      "reason": "video and audio both repeat at 548 frames",
+      "offset_frames_searched": 548,
+      "offset_frames_half_chapter": 548,
+      "offset_equals_half_chapter": true,
+      "facts": {
+        "offset_frames": 548,
+        "video_repeat_detected": true,
+        "video_mean_similarity": 0.99821,
+        "adjacent_frame_similarity": 0.98106,
+        "audio_roles": "NOT CONFIRMED - do not reuse Baby's stream order here",
+        "missing_delivered_angles": [],
+        "identical_video_titles": [],
+        "audio_ncc_median_fractional": 0.9998,
+        "audio_ncc_min_fractional": 0.9938,
+        "audio_windows_below_0.90": 0,
+        "lag_spread_samples": 0.13,
+        "lag_hit_search_bound": false,
+        "offset_equals_half_chapter": true,
+        "audio_discovered_offset_delta_ms": 0.046,
+        "divergence_spans_first_pass_s": [],
+        "divergence_spans_second_pass_s": []
+      },
+      "finished": "2026-09-13T04:52:25",
+      "operator_checks_required": [
+        "Talking boundaries are NOT established. Component subtraction cannot prove a region is speech-free, and the voice-band indicator has no sensitivity against a music bed. Audition previews/zigzags_105bpm/.",
+        "Absolute audio/video synchronisation is NOT established. Every timing result here is relative, measured across the title's own repeat."
+      ]
+    }
+  },
+  "runs": [],
+  "last_update": "2026-09-13T04:52:25"
+}

@@ -1,3 +1,11 @@
+# Current checkpoint — Claude CXL MKV audit, 13 September 2026
+
+User requested committing and pushing the completed Claude audit. Active checkpoint worktree: /Users/karlwatson/Developer/ScratchLab-CXL-MediaAudit-20260913/source, branch codex/cxl-mkv-audit-20260913. Read audits/cxl-mkv-20260913/README.md first: it reconciles the frozen reports with23 completed repeat classifications,9 unconfirmed audio-role tests and the flawed83.4s tail-preview cap. Original snapshots remain byte-identical; raw media and decode caches remain outside Git. Operator could not distinguish Tear passes; both preserved and flagged take02/take06 withheld in proposed paired-training policy only.
+
+The in-progress media-review page lives outside Git at /Users/karlwatson/Developer/ScratchLab-CXL-Ready-20260913/evidence/operator-media-review-20260913. Baby derivatives and test-mode playback/save checks are in progress. Continue that small slice without rerunning the full audit. Preserve the separate seven-file app/audio changes in /Users/karlwatson/Developer/ScratchLab-CXL-Ready-20260913/source; they are not part of this audit commit. No absolute sync, speech-free trim, approval, training or app-asset replacement has been established.
+
+Historical handoffs follow; do not treat their old pending counts or installed identities as current.
+
 ## Current direction — checkpoint integration, then CXL capture readiness
 
 On 13 September Karl explicitly authorized committing/pushing the completed work and creating a new worktree before the next slice. Checkpoint the 34 named integration/workflow files on codex/cxl-dataset-integration-20260913; keep generated assets, raw captures and model binaries outside Git. Pre-checkpoint audit matched all 422 final build inputs to the successful gate snapshot. Checkpoint receipts are under /Users/karlwatson/Developer/ScratchLab-Dataset-Integration-20260913/app-evidence/checkpoint-20260913; resolve the resulting commit/push from Git and that receipt.

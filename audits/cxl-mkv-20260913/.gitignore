@@ -1,0 +1,10 @@
+__pycache__/
+*.pyc
+.DS_Store
+*.mov
+*.mp4
+*.mkv
+*.wav
+*.s16le
+*.gray
+.partial-*

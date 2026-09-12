@@ -1,0 +1,1420 @@
+{
+  "drags_98bpm": {
+    "technique": "drags",
+    "bpm": 98,
+    "export_start_s": 15.5155,
+    "candidate_titles": [
+      "Scratch_t16",
+      "Scratch_t17",
+      "Scratch_t18",
+      "Scratch_t19"
+    ],
+    "angles": {
+      "1": {
+        "title": "Scratch_t16",
+        "zncc": 0.99991,
+        "margin_over_runner_up": 0.93715,
+        "all_scores": {
+          "Scratch_t16": 0.99991,
+          "Scratch_t17": 0.03374,
+          "Scratch_t18": -0.15248,
+          "Scratch_t19": 0.06276
+        }
+      },
+      "2": {
+        "title": "Scratch_t17",
+        "zncc": 0.99992,
+        "margin_over_runner_up": 0.93581,
+        "all_scores": {
+          "Scratch_t16": 0.03281,
+          "Scratch_t17": 0.99992,
+          "Scratch_t18": 0.06411,
+          "Scratch_t19": 0.04353
+        }
+      },
+      "3": {
+        "title": "Scratch_t18",
+        "zncc": 0.99993,
+        "margin_over_runner_up": 0.93321,
+        "all_scores": {
+          "Scratch_t16": -0.15299,
+          "Scratch_t17": 0.06672,
+          "Scratch_t18": 0.99993,
+          "Scratch_t19": -0.05251
+        }
+      },
+      "4": {
+        "title": "Scratch_t19",
+        "zncc": 0.99988,
+        "margin_over_runner_up": 0.93944,
+        "all_scores": {
+          "Scratch_t16": 0.06044,
+          "Scratch_t17": 0.04294,
+          "Scratch_t18": -0.04772,
+          "Scratch_t19": 0.99988
+        }
+      }
+    },
+    "audio_equality_classes": null,
+    "one_to_one": true,
+    "ascending_convention": true
+  },
+  "waves_105bpm": {
+    "technique": "waves",
+    "bpm": 105,
+    "export_start_s": 22.5225,
+    "candidate_titles": [
+      "Scratch_t86",
+      "Scratch_t87",
+      "Scratch_t88",
+      "Scratch_t89"
+    ],
+    "angles": {
+      "1": {
+        "title": "Scratch_t86",
+        "zncc": 0.99992,
+        "margin_over_runner_up": 0.90221,
+        "all_scores": {
+          "Scratch_t86": 0.99992,
+          "Scratch_t87": 0.05391,
+          "Scratch_t88": -0.14889,
+          "Scratch_t89": 0.09771
+        }
+      },
+      "2": {
+        "title": "Scratch_t87",
+        "zncc": 0.99991,
+        "margin_over_runner_up": 0.86672,
+        "all_scores": {
+          "Scratch_t86": 0.05479,
+          "Scratch_t87": 0.99991,
+          "Scratch_t88": 0.13319,
+          "Scratch_t89": -0.00874
+        }
+      },
+      "3": {
+        "title": "Scratch_t88",
+        "zncc": 0.99993,
+        "margin_over_runner_up": 0.86647,
+        "all_scores": {
+          "Scratch_t86": -0.14908,
+          "Scratch_t87": 0.13346,
+          "Scratch_t88": 0.99993,
+          "Scratch_t89": -0.13655
+        }
+      },
+      "4": {
+        "title": "Scratch_t89",
+        "zncc": 0.99989,
+        "margin_over_runner_up": 0.90742,
+        "all_scores": {
+          "Scratch_t86": 0.09247,
+          "Scratch_t87": -0.0107,
+          "Scratch_t88": -0.13809,
+          "Scratch_t89": 0.99989
+        }
+      }
+    },
+    "audio_equality_classes": null,
+    "one_to_one": true,
+    "ascending_convention": true
+  },
+  "reversecutting_79bpm": {
+    "technique": "reversecutting",
+    "bpm": 79,
+    "export_start_s": 23.5235,
+    "candidate_titles": [
+      "Scratch_t08",
+      "Scratch_t09",
+      "Scratch_t10",
+      "Scratch_t11"
+    ],
+    "angles": {
+      "1": {
+        "title": "Scratch_t08",
+        "zncc": 0.99992,
+        "margin_over_runner_up": 0.90744,
+        "all_scores": {
+          "Scratch_t08": 0.99992,
+          "Scratch_t09": 0.03309,
+          "Scratch_t10": -0.15449,
+          "Scratch_t11": 0.09248
+        }
+      },
+      "2": {
+        "title": "Scratch_t09",
+        "zncc": 0.99992,
+        "margin_over_runner_up": 0.91818,
+        "all_scores": {
+          "Scratch_t08": 0.0358,
+          "Scratch_t09": 0.99992,
+          "Scratch_t10": 0.03655,
+          "Scratch_t11": 0.08174
+        }
+      },
+      "3": {
+        "title": "Scratch_t10",
+        "zncc": 0.99993,
+        "margin_over_runner_up": 0.96443,
+        "all_scores": {
+          "Scratch_t08": -0.15496,
+          "Scratch_t09": 0.0355,
+          "Scratch_t10": 0.99993,
+          "Scratch_t11": -0.08932
+        }
+      },
+      "4": {
+        "title": "Scratch_t11",
+        "zncc": 0.99989,
+        "margin_over_runner_up": 0.90755,
+        "all_scores": {
+          "Scratch_t08": 0.09234,
+          "Scratch_t09": 0.08188,
+          "Scratch_t10": -0.08894,
+          "Scratch_t11": 0.99989
+        }
+      }
+    },
+    "audio_equality_classes": null,
+    "one_to_one": true,
+    "ascending_convention": true
+  },
+  "chirpflare_92bpm": {
+    "technique": "chirpflare",
+    "bpm": 92,
+    "export_start_s": 31.5315,
+    "candidate_titles": [
+      "Scratch_t52",
+      "Scratch_t53",
+      "Scratch_t54",
+      "Scratch_t55"
+    ],
+    "angles": {
+      "1": {
+        "title": "Scratch_t52",
+        "zncc": 0.99992,
+        "margin_over_runner_up": 0.9208,
+        "all_scores": {
+          "Scratch_t52": 0.99992,
+          "Scratch_t53": 0.04383,
+          "Scratch_t54": -0.18367,
+          "Scratch_t55": 0.07912
+        }
+      },
+      "2": {
+        "title": "Scratch_t53",
+        "zncc": 0.99991,
+        "margin_over_runner_up": 0.92888,
+        "all_scores": {
+          "Scratch_t52": 0.042,
+          "Scratch_t53": 0.99991,
+          "Scratch_t54": 0.07103,
+          "Scratch_t55": 0.06295
+        }
+      },
+      "3": {
+        "title": "Scratch_t54",
+        "zncc": 0.99993,
+        "margin_over_runner_up": 0.92612,
+        "all_scores": {
+          "Scratch_t52": -0.18434,
+          "Scratch_t53": 0.07381,
+          "Scratch_t54": 0.99993,
+          "Scratch_t55": -0.04887
+        }
+      },
+      "4": {
+        "title": "Scratch_t55",
+        "zncc": 0.99989,
+        "margin_over_runner_up": 0.92082,
+        "all_scores": {
+          "Scratch_t52": 0.07907,
+          "Scratch_t53": 0.05631,
+          "Scratch_t54": -0.04993,
+          "Scratch_t55": 0.99989
+        }
+      }
+    },
+    "audio_equality_classes": null,
+    "one_to_one": true,
+    "ascending_convention": true
+  },
+  "dicing_85bpm": {
+    "technique": "dicing",
+    "bpm": 85,
+    "export_start_s": 33.5335,
+    "candidate_titles": [
+      "Scratch_t40",
+      "Scratch_t41",
+      "Scratch_t42",
+      "Scratch_t43"
+    ],
+    "angles": {
+      "1": {
+        "title": "Scratch_t40",
+        "zncc": 0.99992,
+        "margin_over_runner_up": 0.91824,
+        "all_scores": {
+          "Scratch_t40": 0.99992,
+          "Scratch_t41": 0.08168,
+          "Scratch_t42": -0.1652,
+          "Scratch_t43": 0.07028
+        }
+      },
+      "2": {
+        "title": "Scratch_t41",
+        "zncc": 0.99991,
+        "margin_over_runner_up": 0.91896,
+        "all_scores": {
+          "Scratch_t40": 0.08095,
+          "Scratch_t41": 0.99991,
+          "Scratch_t42": 0.02782,
+          "Scratch_t43": 0.04429
+        }
+      },
+      "3": {
+        "title": "Scratch_t42",
+        "zncc": 0.99993,
+        "margin_over_runner_up": 0.97139,
+        "all_scores": {
+          "Scratch_t40": -0.16745,
+          "Scratch_t41": 0.02854,
+          "Scratch_t42": 0.99993,
+          "Scratch_t43": -0.04529
+        }
+      },
+      "4": {
+        "title": "Scratch_t43",
+        "zncc": 0.99989,
+        "margin_over_runner_up": 0.92989,
+        "all_scores": {
+          "Scratch_t40": 0.07,
+          "Scratch_t41": 0.04166,
+          "Scratch_t42": -0.049,
+          "Scratch_t43": 0.99989
+        }
+      }
+    },
+    "audio_equality_classes": null,
+    "one_to_one": true,
+    "ascending_convention": true
+  },
+  "baby_79bpm": {
+    "technique": "baby",
+    "bpm": 79,
+    "export_start_s": 35.035,
+    "candidate_titles": [
+      "Scratch_t00",
+      "Scratch_t01",
+      "Scratch_t02",
+      "Scratch_t03",
+      "Scratch_t04",
+      "Scratch_t05",
+      "Scratch_t06",
+      "Scratch_t07"
+    ],
+    "angles": {
+      "1": {
+        "title": "Scratch_t00",
+        "zncc": 0.99992,
+        "margin_over_runner_up": 0.14009,
+        "all_scores": {
+          "Scratch_t00": 0.99992,
+          "Scratch_t01": 0.08022,
+          "Scratch_t02": -0.14719,
+          "Scratch_t03": 0.06131,
+          "Scratch_t04": 0.85983,
+          "Scratch_t05": -0.17145,
+          "Scratch_t06": -0.17145,
+          "Scratch_t07": 0.07496
+        }
+      },
+      "2": {
+        "title": "Scratch_t01",
+        "zncc": 0.99993,
+        "margin_over_runner_up": 0.89931,
+        "all_scores": {
+          "Scratch_t00": 0.08039,
+          "Scratch_t01": 0.99993,
+          "Scratch_t02": 0.10062,
+          "Scratch_t03": 0.026,
+          "Scratch_t04": 0.07393,
+          "Scratch_t05": 0.05939,
+          "Scratch_t06": 0.05939,
+          "Scratch_t07": 0.02278
+        }
+      },
+      "3": {
+        "title": "Scratch_t02",
+        "zncc": 0.99994,
+        "margin_over_runner_up": 0.13095,
+        "all_scores": {
+          "Scratch_t00": -0.14737,
+          "Scratch_t01": 0.10167,
+          "Scratch_t02": 0.99994,
+          "Scratch_t03": -0.11504,
+          "Scratch_t04": -0.15157,
+          "Scratch_t05": 0.86899,
+          "Scratch_t06": 0.86899,
+          "Scratch_t07": -0.13404
+        }
+      },
+      "4": {
+        "title": "Scratch_t03",
+        "zncc": 0.9999,
+        "margin_over_runner_up": 0.20429,
+        "all_scores": {
+          "Scratch_t00": 0.0614,
+          "Scratch_t01": 0.02607,
+          "Scratch_t02": -0.11507,
+          "Scratch_t03": 0.9999,
+          "Scratch_t04": 0.06718,
+          "Scratch_t05": -0.08825,
+          "Scratch_t06": -0.08825,
+          "Scratch_t07": 0.79561
+        }
+      }
+    },
+    "audio_equality_classes": null,
+    "one_to_one": true,
+    "ascending_convention": true
+  },
+  "cresentflare_92bpm": {
+    "technique": "cresentflare",
+    "bpm": 92,
+    "export_start_s": 37.037,
+    "candidate_titles": [
+      "Scratch_t48",
+      "Scratch_t49",
+      "Scratch_t50",
+      "Scratch_t51"
+    ],
+    "angles": {
+      "1": {
+        "title": "Scratch_t48",
+        "zncc": 0.99992,
+        "margin_over_runner_up": 0.89515,
+        "all_scores": {
+          "Scratch_t48": 0.99992,
+          "Scratch_t49": 0.044,
+          "Scratch_t50": -0.18172,
+          "Scratch_t51": 0.10477
+        }
+      },
+      "2": {
+        "title": "Scratch_t49",
+        "zncc": 0.99991,
+        "margin_over_runner_up": 0.91879,
+        "all_scores": {
+          "Scratch_t48": 0.04383,
+          "Scratch_t49": 0.99991,
+          "Scratch_t50": 0.08112,
+          "Scratch_t51": 0.04777
+        }
+      },
+      "3": {
+        "title": "Scratch_t50",
+        "zncc": 0.99993,
+        "margin_over_runner_up": 0.91799,
+        "all_scores": {
+          "Scratch_t48": -0.18298,
+          "Scratch_t49": 0.08194,
+          "Scratch_t50": 0.99993,
+          "Scratch_t51": -0.05184
+        }
+      },
+      "4": {
+        "title": "Scratch_t51",
+        "zncc": 0.99989,
+        "margin_over_runner_up": 0.89518,
+        "all_scores": {
+          "Scratch_t48": 0.10471,
+          "Scratch_t49": 0.04733,
+          "Scratch_t50": -0.05352,
+          "Scratch_t51": 0.99989
+        }
+      }
+    },
+    "audio_equality_classes": null,
+    "one_to_one": true,
+    "ascending_convention": true
+  },
+  "tears_98bpm": {
+    "technique": "tears",
+    "bpm": 98,
+    "export_start_s": 43.043,
+    "candidate_titles": [
+      "Scratch_t24",
+      "Scratch_t25",
+      "Scratch_t26",
+      "Scratch_t27"
+    ],
+    "angles": {
+      "1": {
+        "title": "Scratch_t24",
+        "zncc": 0.99992,
+        "margin_over_runner_up": 0.91981,
+        "all_scores": {
+          "Scratch_t24": 0.99992,
+          "Scratch_t25": 0.08011,
+          "Scratch_t26": -0.13995,
+          "Scratch_t27": 0.05395
+        }
+      },
+      "2": {
+        "title": "Scratch_t25",
+        "zncc": 0.99992,
+        "margin_over_runner_up": 0.92031,
+        "all_scores": {
+          "Scratch_t24": 0.07961,
+          "Scratch_t25": 0.99992,
+          "Scratch_t26": 0.05599,
+          "Scratch_t27": -0.01759
+        }
+      },
+      "3": {
+        "title": "Scratch_t26",
+        "zncc": 0.99992,
+        "margin_over_runner_up": 0.94075,
+        "all_scores": {
+          "Scratch_t24": -0.14062,
+          "Scratch_t25": 0.05917,
+          "Scratch_t26": 0.99992,
+          "Scratch_t27": -0.08674
+        }
+      },
+      "4": {
+        "title": "Scratch_t27",
+        "zncc": 0.99989,
+        "margin_over_runner_up": 0.94731,
+        "all_scores": {
+          "Scratch_t24": 0.05258,
+          "Scratch_t25": -0.01712,
+          "Scratch_t26": -0.08273,
+          "Scratch_t27": 0.99989
+        }
+      }
+    },
+    "audio_equality_classes": null,
+    "one_to_one": true,
+    "ascending_convention": true
+  },
+  "lazers_92bpm": {
+    "technique": "lazers",
+    "bpm": 92,
+    "export_start_s": 44.044,
+    "candidate_titles": [
+      "Scratch_t56",
+      "Scratch_t57",
+      "Scratch_t58",
+      "Scratch_t59"
+    ],
+    "angles": {
+      "1": {
+        "title": "Scratch_t56",
+        "zncc": 0.99992,
+        "margin_over_runner_up": 0.88341,
+        "all_scores": {
+          "Scratch_t56": 0.99992,
+          "Scratch_t57": 0.0797,
+          "Scratch_t58": -0.16036,
+          "Scratch_t59": 0.11651
+        }
+      },
+      "2": {
+        "title": "Scratch_t57",
+        "zncc": 0.9999,
+        "margin_over_runner_up": 0.86774,
+        "all_scores": {
+          "Scratch_t56": 0.07993,
+          "Scratch_t57": 0.9999,
+          "Scratch_t58": 0.13216,
+          "Scratch_t59": 0.0236
+        }
+      },
+      "3": {
+        "title": "Scratch_t58",
+        "zncc": 0.99993,
+        "margin_over_runner_up": 0.86596,
+        "all_scores": {
+          "Scratch_t56": -0.16052,
+          "Scratch_t57": 0.13397,
+          "Scratch_t58": 0.99993,
+          "Scratch_t59": -0.10703
+        }
+      },
+      "4": {
+        "title": "Scratch_t59",
+        "zncc": 0.99989,
+        "margin_over_runner_up": 0.88423,
+        "all_scores": {
+          "Scratch_t56": 0.11566,
+          "Scratch_t57": 0.02353,
+          "Scratch_t58": -0.10457,
+          "Scratch_t59": 0.99989
+        }
+      }
+    },
+    "audio_equality_classes": null,
+    "one_to_one": true,
+    "ascending_convention": true
+  },
+  "orbits_85bpm": {
+    "technique": "orbits",
+    "bpm": 85,
+    "export_start_s": 44.5445,
+    "candidate_titles": [
+      "Scratch_t100",
+      "Scratch_t101",
+      "Scratch_t98",
+      "Scratch_t99"
+    ],
+    "angles": {
+      "1": {
+        "title": "Scratch_t100",
+        "zncc": 0.99993,
+        "margin_over_runner_up": 0.90461,
+        "all_scores": {
+          "Scratch_t100": 0.99993,
+          "Scratch_t101": -0.06088,
+          "Scratch_t98": -0.19146,
+          "Scratch_t99": 0.09532
+        }
+      },
+      "2": {
+        "title": "Scratch_t101",
+        "zncc": 0.99989,
+        "margin_over_runner_up": 0.9238,
+        "all_scores": {
+          "Scratch_t100": -0.06087,
+          "Scratch_t101": 0.99989,
+          "Scratch_t98": 0.07609,
+          "Scratch_t99": 0.03414
+        }
+      },
+      "3": {
+        "title": "Scratch_t98",
+        "zncc": 0.99992,
+        "margin_over_runner_up": 0.92471,
+        "all_scores": {
+          "Scratch_t100": -0.19154,
+          "Scratch_t101": 0.07521,
+          "Scratch_t98": 0.99992,
+          "Scratch_t99": 0.03952
+        }
+      },
+      "4": {
+        "title": "Scratch_t99",
+        "zncc": 0.99991,
+        "margin_over_runner_up": 0.90466,
+        "all_scores": {
+          "Scratch_t100": 0.09525,
+          "Scratch_t101": 0.03624,
+          "Scratch_t98": 0.03982,
+          "Scratch_t99": 0.99991
+        }
+      }
+    },
+    "audio_equality_classes": null,
+    "one_to_one": true,
+    "ascending_convention": true
+  },
+  "marches_79bpm": {
+    "technique": "marches",
+    "bpm": 79,
+    "export_start_s": 47.047,
+    "candidate_titles": [
+      "Scratch_t12",
+      "Scratch_t13",
+      "Scratch_t14",
+      "Scratch_t15"
+    ],
+    "angles": {
+      "1": {
+        "title": "Scratch_t12",
+        "zncc": 0.99992,
+        "margin_over_runner_up": 0.92329,
+        "all_scores": {
+          "Scratch_t12": 0.99992,
+          "Scratch_t13": 0.05681,
+          "Scratch_t14": -0.1441,
+          "Scratch_t15": 0.07663
+        }
+      },
+      "2": {
+        "title": "Scratch_t13",
+        "zncc": 0.99992,
+        "margin_over_runner_up": 0.92674,
+        "all_scores": {
+          "Scratch_t12": 0.05772,
+          "Scratch_t13": 0.99992,
+          "Scratch_t14": 0.07318,
+          "Scratch_t15": 0.03597
+        }
+      },
+      "3": {
+        "title": "Scratch_t14",
+        "zncc": 0.99993,
+        "margin_over_runner_up": 0.92595,
+        "all_scores": {
+          "Scratch_t12": -0.14381,
+          "Scratch_t13": 0.07398,
+          "Scratch_t14": 0.99993,
+          "Scratch_t15": -0.08552
+        }
+      },
+      "4": {
+        "title": "Scratch_t15",
+        "zncc": 0.99989,
+        "margin_over_runner_up": 0.92454,
+        "all_scores": {
+          "Scratch_t12": 0.07535,
+          "Scratch_t13": 0.03499,
+          "Scratch_t14": -0.08284,
+          "Scratch_t15": 0.99989
+        }
+      }
+    },
+    "audio_equality_classes": null,
+    "one_to_one": true,
+    "ascending_convention": true
+  },
+  "long_short_tips_105bpm": {
+    "technique": "long_short_tips",
+    "bpm": 105,
+    "export_start_s": 49.5495,
+    "candidate_titles": [
+      "Scratch_t32",
+      "Scratch_t33",
+      "Scratch_t34",
+      "Scratch_t35"
+    ],
+    "angles": {
+      "1": {
+        "title": "Scratch_t32",
+        "zncc": 0.99992,
+        "margin_over_runner_up": 0.92783,
+        "all_scores": {
+          "Scratch_t32": 0.99992,
+          "Scratch_t33": 0.07209,
+          "Scratch_t34": -0.15577,
+          "Scratch_t35": 0.06508
+        }
+      },
+      "2": {
+        "title": "Scratch_t33",
+        "zncc": 0.99991,
+        "margin_over_runner_up": 0.89485,
+        "all_scores": {
+          "Scratch_t32": 0.07252,
+          "Scratch_t33": 0.99991,
+          "Scratch_t34": 0.10506,
+          "Scratch_t35": -0.02778
+        }
+      },
+      "3": {
+        "title": "Scratch_t34",
+        "zncc": 0.99993,
+        "margin_over_runner_up": 0.89435,
+        "all_scores": {
+          "Scratch_t32": -0.15627,
+          "Scratch_t33": 0.10558,
+          "Scratch_t34": 0.99993,
+          "Scratch_t35": -0.13016
+        }
+      },
+      "4": {
+        "title": "Scratch_t35",
+        "zncc": 0.99989,
+        "margin_over_runner_up": 0.93995,
+        "all_scores": {
+          "Scratch_t32": 0.05994,
+          "Scratch_t33": -0.02799,
+          "Scratch_t34": -0.12945,
+          "Scratch_t35": 0.99989
+        }
+      }
+    },
+    "audio_equality_classes": null,
+    "one_to_one": true,
+    "ascending_convention": true
+  },
+  "transformer_85bpm": {
+    "technique": "transformer",
+    "bpm": 85,
+    "export_start_s": 51.051,
+    "candidate_titles": [
+      "Scratch_t36",
+      "Scratch_t37",
+      "Scratch_t38",
+      "Scratch_t39"
+    ],
+    "angles": {
+      "1": {
+        "title": "Scratch_t36",
+        "zncc": 0.99993,
+        "margin_over_runner_up": 0.8973,
+        "all_scores": {
+          "Scratch_t36": 0.99993,
+          "Scratch_t37": 0.07305,
+          "Scratch_t38": -0.1454,
+          "Scratch_t39": 0.10263
+        }
+      },
+      "2": {
+        "title": "Scratch_t37",
+        "zncc": 0.99992,
+        "margin_over_runner_up": 0.92776,
+        "all_scores": {
+          "Scratch_t36": 0.07216,
+          "Scratch_t37": 0.99992,
+          "Scratch_t38": 0.02866,
+          "Scratch_t39": 0.02671
+        }
+      },
+      "3": {
+        "title": "Scratch_t38",
+        "zncc": 0.99993,
+        "margin_over_runner_up": 0.97095,
+        "all_scores": {
+          "Scratch_t36": -0.14892,
+          "Scratch_t37": 0.02898,
+          "Scratch_t38": 0.99993,
+          "Scratch_t39": -0.04606
+        }
+      },
+      "4": {
+        "title": "Scratch_t39",
+        "zncc": 0.99989,
+        "margin_over_runner_up": 0.89728,
+        "all_scores": {
+          "Scratch_t36": 0.10261,
+          "Scratch_t37": 0.02359,
+          "Scratch_t38": -0.04653,
+          "Scratch_t39": 0.99989
+        }
+      }
+    },
+    "audio_equality_classes": null,
+    "one_to_one": true,
+    "ascending_convention": true
+  },
+  "needledropping_105bpm": {
+    "technique": "needledropping",
+    "bpm": 105,
+    "export_start_s": 54.5545,
+    "candidate_titles": [
+      "Scratch_t78",
+      "Scratch_t79",
+      "Scratch_t80",
+      "Scratch_t81"
+    ],
+    "angles": {
+      "1": {
+        "title": "Scratch_t78",
+        "zncc": 0.99994,
+        "margin_over_runner_up": 0.84987,
+        "all_scores": {
+          "Scratch_t78": 0.99994,
+          "Scratch_t79": 0.02331,
+          "Scratch_t80": 0.15007,
+          "Scratch_t81": -0.02679
+        }
+      },
+      "2": {
+        "title": "Scratch_t79",
+        "zncc": 0.99991,
+        "margin_over_runner_up": 0.94294,
+        "all_scores": {
+          "Scratch_t78": 0.02215,
+          "Scratch_t79": 0.99991,
+          "Scratch_t80": -0.02025,
+          "Scratch_t81": 0.05697
+        }
+      },
+      "3": {
+        "title": "Scratch_t80",
+        "zncc": 0.99992,
+        "margin_over_runner_up": 0.85568,
+        "all_scores": {
+          "Scratch_t78": 0.14424,
+          "Scratch_t79": -0.02058,
+          "Scratch_t80": 0.99992,
+          "Scratch_t81": 0.04525
+        }
+      },
+      "4": {
+        "title": "Scratch_t81",
+        "zncc": 0.9999,
+        "margin_over_runner_up": 0.94383,
+        "all_scores": {
+          "Scratch_t78": -0.02798,
+          "Scratch_t79": 0.05607,
+          "Scratch_t80": 0.04473,
+          "Scratch_t81": 0.9999
+        }
+      }
+    },
+    "audio_equality_classes": null,
+    "one_to_one": true,
+    "ascending_convention": true
+  },
+  "crabs_92bpm": {
+    "technique": "crabs",
+    "bpm": 92,
+    "export_start_s": 58.5585,
+    "candidate_titles": [
+      "Scratch_t102",
+      "Scratch_t103",
+      "Scratch_t104",
+      "Scratch_t105"
+    ],
+    "angles": {
+      "1": {
+        "title": "Scratch_t102",
+        "zncc": 0.99993,
+        "margin_over_runner_up": 0.91721,
+        "all_scores": {
+          "Scratch_t102": 0.99993,
+          "Scratch_t103": 0.08272,
+          "Scratch_t104": -0.19139,
+          "Scratch_t105": 0.06185
+        }
+      },
+      "2": {
+        "title": "Scratch_t103",
+        "zncc": 0.99992,
+        "margin_over_runner_up": 0.91799,
+        "all_scores": {
+          "Scratch_t102": 0.08193,
+          "Scratch_t103": 0.99992,
+          "Scratch_t104": 0.05106,
+          "Scratch_t105": 0.03455
+        }
+      },
+      "3": {
+        "title": "Scratch_t104",
+        "zncc": 0.99993,
+        "margin_over_runner_up": 0.94782,
+        "all_scores": {
+          "Scratch_t102": -0.19163,
+          "Scratch_t103": 0.05211,
+          "Scratch_t104": 0.99993,
+          "Scratch_t105": -0.04027
+        }
+      },
+      "4": {
+        "title": "Scratch_t105",
+        "zncc": 0.99989,
+        "margin_over_runner_up": 0.93932,
+        "all_scores": {
+          "Scratch_t102": 0.06057,
+          "Scratch_t103": 0.03291,
+          "Scratch_t104": -0.04162,
+          "Scratch_t105": 0.99989
+        }
+      }
+    },
+    "audio_equality_classes": null,
+    "one_to_one": true,
+    "ascending_convention": true
+  },
+  "chirps_98bpm": {
+    "technique": "chirps",
+    "bpm": 98,
+    "export_start_s": 64.064,
+    "candidate_titles": [
+      "Scratch_t20",
+      "Scratch_t21",
+      "Scratch_t22",
+      "Scratch_t23"
+    ],
+    "angles": {
+      "1": {
+        "title": "Scratch_t20",
+        "zncc": 0.99992,
+        "margin_over_runner_up": 0.91025,
+        "all_scores": {
+          "Scratch_t20": 0.99992,
+          "Scratch_t21": 0.04574,
+          "Scratch_t22": -0.1431,
+          "Scratch_t23": 0.08967
+        }
+      },
+      "2": {
+        "title": "Scratch_t21",
+        "zncc": 0.99992,
+        "margin_over_runner_up": 0.92714,
+        "all_scores": {
+          "Scratch_t20": 0.04665,
+          "Scratch_t21": 0.99992,
+          "Scratch_t22": 0.07278,
+          "Scratch_t23": 0.03166
+        }
+      },
+      "3": {
+        "title": "Scratch_t22",
+        "zncc": 0.99993,
+        "margin_over_runner_up": 0.92902,
+        "all_scores": {
+          "Scratch_t20": -0.144,
+          "Scratch_t21": 0.07091,
+          "Scratch_t22": 0.99993,
+          "Scratch_t23": -0.07679
+        }
+      },
+      "4": {
+        "title": "Scratch_t23",
+        "zncc": 0.99989,
+        "margin_over_runner_up": 0.91151,
+        "all_scores": {
+          "Scratch_t20": 0.08838,
+          "Scratch_t21": 0.03202,
+          "Scratch_t22": -0.07592,
+          "Scratch_t23": 0.99989
+        }
+      }
+    },
+    "audio_equality_classes": null,
+    "one_to_one": true,
+    "ascending_convention": true
+  },
+  "1clickflare_85bpm": {
+    "technique": "1clickflare",
+    "bpm": 85,
+    "export_start_s": 66.066,
+    "candidate_titles": [
+      "Scratch_t44",
+      "Scratch_t45",
+      "Scratch_t46",
+      "Scratch_t47"
+    ],
+    "angles": {
+      "1": {
+        "title": "Scratch_t44",
+        "zncc": 0.99993,
+        "margin_over_runner_up": 0.92664,
+        "all_scores": {
+          "Scratch_t44": 0.99993,
+          "Scratch_t45": 0.04604,
+          "Scratch_t46": -0.15118,
+          "Scratch_t47": 0.07329
+        }
+      },
+      "2": {
+        "title": "Scratch_t45",
+        "zncc": 0.99992,
+        "margin_over_runner_up": 0.94947,
+        "all_scores": {
+          "Scratch_t44": 0.04484,
+          "Scratch_t45": 0.99992,
+          "Scratch_t46": 0.05045,
+          "Scratch_t47": 0.04246
+        }
+      },
+      "3": {
+        "title": "Scratch_t46",
+        "zncc": 0.99993,
+        "margin_over_runner_up": 0.94939,
+        "all_scores": {
+          "Scratch_t44": -0.151,
+          "Scratch_t45": 0.05054,
+          "Scratch_t46": 0.99993,
+          "Scratch_t47": -0.04685
+        }
+      },
+      "4": {
+        "title": "Scratch_t47",
+        "zncc": 0.9999,
+        "margin_over_runner_up": 0.92707,
+        "all_scores": {
+          "Scratch_t44": 0.07283,
+          "Scratch_t45": 0.04218,
+          "Scratch_t46": -0.04584,
+          "Scratch_t47": 0.9999
+        }
+      }
+    },
+    "audio_equality_classes": null,
+    "one_to_one": true,
+    "ascending_convention": true
+  },
+  "originalflare_85bpm": {
+    "technique": "originalflare",
+    "bpm": 85,
+    "export_start_s": 99.099,
+    "candidate_titles": [
+      "Scratch_t94",
+      "Scratch_t95",
+      "Scratch_t96",
+      "Scratch_t97"
+    ],
+    "angles": {
+      "1": {
+        "title": "Scratch_t94",
+        "zncc": 0.99993,
+        "margin_over_runner_up": 0.9084,
+        "all_scores": {
+          "Scratch_t94": 0.99993,
+          "Scratch_t95": 0.05121,
+          "Scratch_t96": -0.14659,
+          "Scratch_t97": 0.09153
+        }
+      },
+      "2": {
+        "title": "Scratch_t95",
+        "zncc": 0.99992,
+        "margin_over_runner_up": 0.94598,
+        "all_scores": {
+          "Scratch_t94": 0.05066,
+          "Scratch_t95": 0.99992,
+          "Scratch_t96": 0.05394,
+          "Scratch_t97": 0.05324
+        }
+      },
+      "3": {
+        "title": "Scratch_t96",
+        "zncc": 0.99993,
+        "margin_over_runner_up": 0.94487,
+        "all_scores": {
+          "Scratch_t94": -0.14722,
+          "Scratch_t95": 0.05506,
+          "Scratch_t96": 0.99993,
+          "Scratch_t97": -0.06192
+        }
+      },
+      "4": {
+        "title": "Scratch_t97",
+        "zncc": 0.99989,
+        "margin_over_runner_up": 0.90773,
+        "all_scores": {
+          "Scratch_t94": 0.09216,
+          "Scratch_t95": 0.05311,
+          "Scratch_t96": -0.06111,
+          "Scratch_t97": 0.99989
+        }
+      }
+    },
+    "audio_equality_classes": null,
+    "one_to_one": true,
+    "ascending_convention": true
+  },
+  "tips_105bpm": {
+    "technique": "tips",
+    "bpm": 105,
+    "export_start_s": 27.5275,
+    "candidate_titles": [
+      "Scratch_t28",
+      "Scratch_t29",
+      "Scratch_t30",
+      "Scratch_t31"
+    ],
+    "angles": {
+      "1": {
+        "title": "Scratch_t28",
+        "zncc": 0.99992,
+        "margin_over_runner_up": 0.89453,
+        "all_scores": {
+          "Scratch_t28": 0.99992,
+          "Scratch_t29": 0.07701,
+          "Scratch_t30": -0.1491,
+          "Scratch_t31": 0.10539
+        }
+      },
+      "2": {
+        "title": "Scratch_t29",
+        "zncc": 0.99991,
+        "margin_over_runner_up": 0.86491,
+        "all_scores": {
+          "Scratch_t28": 0.07829,
+          "Scratch_t29": 0.99991,
+          "Scratch_t30": 0.135,
+          "Scratch_t31": -0.01321
+        }
+      },
+      "3": {
+        "title": "Scratch_t30",
+        "zncc": 0.99992,
+        "margin_over_runner_up": 0.86197,
+        "all_scores": {
+          "Scratch_t28": -0.15012,
+          "Scratch_t29": 0.13795,
+          "Scratch_t30": 0.99992,
+          "Scratch_t31": -0.13118
+        }
+      },
+      "4": {
+        "title": "Scratch_t31",
+        "zncc": 0.99989,
+        "margin_over_runner_up": 0.89499,
+        "all_scores": {
+          "Scratch_t28": 0.1049,
+          "Scratch_t29": -0.01924,
+          "Scratch_t30": -0.13794,
+          "Scratch_t31": 0.99989
+        }
+      }
+    },
+    "audio_equality_classes": null,
+    "frames_compared": 135,
+    "angles_resolved": 4,
+    "one_to_one": true,
+    "ascending_convention": true
+  },
+  "zigzags_105bpm": {
+    "technique": "zigzags",
+    "bpm": 105,
+    "export_start_s": 32.5325,
+    "candidate_titles": [
+      "Scratch_t82",
+      "Scratch_t83",
+      "Scratch_t84",
+      "Scratch_t85"
+    ],
+    "angles": {
+      "1": {
+        "title": "Scratch_t82",
+        "zncc": 0.99992,
+        "margin_over_runner_up": 0.87927,
+        "all_scores": {
+          "Scratch_t82": 0.99992,
+          "Scratch_t83": 0.08633,
+          "Scratch_t84": -0.13633,
+          "Scratch_t85": 0.12065
+        }
+      },
+      "2": {
+        "title": "Scratch_t83",
+        "zncc": 0.99991,
+        "margin_over_runner_up": 0.89368,
+        "all_scores": {
+          "Scratch_t82": 0.08658,
+          "Scratch_t83": 0.99991,
+          "Scratch_t84": 0.10623,
+          "Scratch_t85": -0.01385
+        }
+      },
+      "3": {
+        "title": "Scratch_t84",
+        "zncc": 0.99992,
+        "margin_over_runner_up": 0.89464,
+        "all_scores": {
+          "Scratch_t82": -0.13608,
+          "Scratch_t83": 0.10528,
+          "Scratch_t84": 0.99992,
+          "Scratch_t85": -0.10276
+        }
+      },
+      "4": {
+        "title": "Scratch_t85",
+        "zncc": 0.99989,
+        "margin_over_runner_up": 0.87831,
+        "all_scores": {
+          "Scratch_t82": 0.12158,
+          "Scratch_t83": -0.01547,
+          "Scratch_t84": -0.10458,
+          "Scratch_t85": 0.99989
+        }
+      }
+    },
+    "audio_equality_classes": null,
+    "frames_compared": 135,
+    "angles_resolved": 4,
+    "one_to_one": true,
+    "ascending_convention": true
+  },
+  "cutting_79bpm": {
+    "technique": "cutting",
+    "bpm": 79,
+    "export_start_s": 35.035,
+    "candidate_titles": [
+      "Scratch_t00",
+      "Scratch_t01",
+      "Scratch_t02",
+      "Scratch_t03",
+      "Scratch_t04",
+      "Scratch_t05",
+      "Scratch_t06",
+      "Scratch_t07"
+    ],
+    "angles": {
+      "1": {
+        "title": "Scratch_t04",
+        "zncc": 0.99992,
+        "margin_over_runner_up": 0.14035,
+        "all_scores": {
+          "Scratch_t00": 0.85957,
+          "Scratch_t01": 0.07393,
+          "Scratch_t02": -0.15139,
+          "Scratch_t03": 0.06718,
+          "Scratch_t04": 0.99992,
+          "Scratch_t05": -0.16919,
+          "Scratch_t06": -0.16919,
+          "Scratch_t07": 0.08448
+        }
+      },
+      "2": {
+        "error": "missing delivered file cutting_79bpm_angle_2_take01.mp4"
+      },
+      "3": {
+        "title": "Scratch_t05",
+        "zncc": 0.99993,
+        "margin_over_runner_up": 0.0,
+        "all_scores": {
+          "Scratch_t00": -0.17224,
+          "Scratch_t01": 0.05967,
+          "Scratch_t02": 0.86772,
+          "Scratch_t03": -0.09088,
+          "Scratch_t04": -0.1698,
+          "Scratch_t05": 0.99993,
+          "Scratch_t06": 0.99993,
+          "Scratch_t07": -0.10811
+        }
+      },
+      "4": {
+        "title": "Scratch_t07",
+        "zncc": 0.99989,
+        "margin_over_runner_up": 0.20668,
+        "all_scores": {
+          "Scratch_t00": 0.07376,
+          "Scratch_t01": 0.02423,
+          "Scratch_t02": -0.13505,
+          "Scratch_t03": 0.79321,
+          "Scratch_t04": 0.08477,
+          "Scratch_t05": -0.10552,
+          "Scratch_t06": -0.10552,
+          "Scratch_t07": 0.99989
+        }
+      }
+    },
+    "audio_equality_classes": null,
+    "frames_compared": 150,
+    "angles_resolved": 3,
+    "one_to_one": true,
+    "ascending_convention": true
+  },
+  "swipes_105bpm": {
+    "technique": "swipes",
+    "bpm": 105,
+    "export_start_s": 43.5435,
+    "candidate_titles": [
+      "Scratch_t90",
+      "Scratch_t91",
+      "Scratch_t92",
+      "Scratch_t93"
+    ],
+    "angles": {
+      "1": {
+        "title": "Scratch_t90",
+        "zncc": 0.99993,
+        "margin_over_runner_up": 0.90844,
+        "all_scores": {
+          "Scratch_t90": 0.99993,
+          "Scratch_t91": 0.08592,
+          "Scratch_t92": -0.15517,
+          "Scratch_t93": 0.09149
+        }
+      },
+      "2": {
+        "title": "Scratch_t91",
+        "zncc": 0.99991,
+        "margin_over_runner_up": 0.91333,
+        "all_scores": {
+          "Scratch_t90": 0.08658,
+          "Scratch_t91": 0.99991,
+          "Scratch_t92": 0.07416,
+          "Scratch_t93": -0.00341
+        }
+      },
+      "3": {
+        "title": "Scratch_t92",
+        "zncc": 0.99992,
+        "margin_over_runner_up": 0.92645,
+        "all_scores": {
+          "Scratch_t90": -0.1557,
+          "Scratch_t91": 0.07347,
+          "Scratch_t92": 0.99992,
+          "Scratch_t93": -0.11344
+        }
+      },
+      "4": {
+        "title": "Scratch_t93",
+        "zncc": 0.99989,
+        "margin_over_runner_up": 0.90808,
+        "all_scores": {
+          "Scratch_t90": 0.09181,
+          "Scratch_t91": 0.00011,
+          "Scratch_t92": -0.11409,
+          "Scratch_t93": 0.99989
+        }
+      }
+    },
+    "audio_equality_classes": null,
+    "frames_compared": 134,
+    "angles_resolved": 4,
+    "one_to_one": true,
+    "ascending_convention": true
+  },
+  "clovertears_105bpm": {
+    "technique": "clovertears",
+    "bpm": 105,
+    "export_start_s": 45.045,
+    "candidate_titles": [
+      "Scratch_t74",
+      "Scratch_t75",
+      "Scratch_t76",
+      "Scratch_t77"
+    ],
+    "angles": {
+      "1": {
+        "title": "Scratch_t74",
+        "zncc": 0.99992,
+        "margin_over_runner_up": 0.91685,
+        "all_scores": {
+          "Scratch_t74": 0.99992,
+          "Scratch_t75": 0.06814,
+          "Scratch_t76": -0.16917,
+          "Scratch_t77": 0.08307
+        }
+      },
+      "2": {
+        "title": "Scratch_t75",
+        "zncc": 0.9999,
+        "margin_over_runner_up": 0.90174,
+        "all_scores": {
+          "Scratch_t74": 0.06778,
+          "Scratch_t75": 0.9999,
+          "Scratch_t76": 0.09816,
+          "Scratch_t77": 0.00678
+        }
+      },
+      "3": {
+        "title": "Scratch_t76",
+        "zncc": 0.99993,
+        "margin_over_runner_up": 0.90159,
+        "all_scores": {
+          "Scratch_t74": -0.16955,
+          "Scratch_t75": 0.09834,
+          "Scratch_t76": 0.99993,
+          "Scratch_t77": -0.11646
+        }
+      },
+      "4": {
+        "title": "Scratch_t77",
+        "zncc": 0.99989,
+        "margin_over_runner_up": 0.91692,
+        "all_scores": {
+          "Scratch_t74": 0.08297,
+          "Scratch_t75": 0.00481,
+          "Scratch_t76": -0.11512,
+          "Scratch_t77": 0.99989
+        }
+      }
+    },
+    "audio_equality_classes": null,
+    "frames_compared": 130,
+    "angles_resolved": 4,
+    "one_to_one": true,
+    "ascending_convention": true
+  }
+}

@@ -1,0 +1,14 @@
+{
+  "technique": "clovertears_105bpm",
+  "source_title": "Scratch_t76",
+  "chapter2": [
+    45.045,
+    81.648233
+  ],
+  "previews": [
+    "previews/clovertears_105bpm/clovertears_105bpm_boundary_head_33to50s_Scratch_t76.mov",
+    "previews/clovertears_105bpm/clovertears_105bpm_boundary_tail_72to82s_Scratch_t76.mov"
+  ],
+  "time_mapping": "preview t=0 corresponds to the source time in the filename",
+  "operator_audition": "PENDING - no automatic test can prove absence of speech"
+}

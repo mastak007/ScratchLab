@@ -1,0 +1,28 @@
+processing 18: 1clickflare_85bpm, baby_79bpm, chirpflare_92bpm, chirps_98bpm, clovertears_105bpm, crabs_92bpm, cresentflare_92bpm, dicing_85bpm, drags_98bpm, lazers_92bpm, long_short_tips_105bpm, needledropping_105bpm, orbits_85bpm, originalflare_85bpm, swipes_105bpm, tips_105bpm, waves_105bpm, zigzags_105bpm
+[verified_duplicate_half] 1clickflare_85bpm: video and audio both repeat at 1355 frames
+  note: searched offset 726 != half-chapter 725 frames (+33.4 ms) - using the SEARCHED value
+[verified_duplicate_half] baby_79bpm: video and audio both repeat at 726 frames
+[verified_duplicate_half] chirpflare_92bpm: video and audio both repeat at 1249 frames
+[verified_duplicate_half] chirps_98bpm: video and audio both repeat at 588 frames
+  note: searched offset 549 != half-chapter 548 frames (+33.4 ms) - using the SEARCHED value
+[verified_duplicate_half] clovertears_105bpm: video and audio both repeat at 549 frames
+[verified_duplicate_half] crabs_92bpm: video and audio both repeat at 1249 frames
+[verified_duplicate_half] cresentflare_92bpm: video and audio both repeat at 1249 frames
+[verified_duplicate_half] dicing_85bpm: video and audio both repeat at 1355 frames
+[verified_duplicate_half] drags_98bpm: video and audio both repeat at 1175 frames
+  note: searched offset 624 != half-chapter 623 frames (+33.4 ms) - using the SEARCHED value
+[verified_duplicate_half] lazers_92bpm: video and audio both repeat at 624 frames
+[verified_duplicate_half] long_short_tips_105bpm: video and audio both repeat at 1097 frames
+[verified_duplicate_half] needledropping_105bpm: video and audio both repeat at 823 frames
+[verified_duplicate_half] orbits_85bpm: video and audio both repeat at 1016 frames
+[verified_duplicate_half] originalflare_85bpm: video and audio both repeat at 1016 frames
+[verified_duplicate_half] swipes_105bpm: video and audio both repeat at 548 frames
+[verified_duplicate_half] tips_105bpm: video and audio both repeat at 548 frames
+[verified_duplicate_half] waves_105bpm: video and audio both repeat at 1097 frames
+[verified_duplicate_half] zigzags_105bpm: video and audio both repeat at 548 frames
+
+counts: {
+ "verified_duplicate_half": 18,
+ "audited-earlier": 5
+}
+state file: /Users/karlwatson/Developer/ScratchLab-CXL-Ready-20260913/evidence/mkv-source-inspection-20260913/claude-mkv-batch-audit/batch-state.json

@@ -1,0 +1,17 @@
+{
+  "method": "separatefields on both sides, no interpolation; 184 frames = 368 fields of Baby angle 3 take01 (source Scratch_t02 frames 1050-1233)",
+  "source_fields": 368,
+  "delivered_fields": 368,
+  "psnr_per_field_parity_db": {
+    "field_index_parity_0": 36.917,
+    "field_index_parity_1": 36.919
+  },
+  "psnr_if_fields_were_swapped_db": 19.287,
+  "psnr_if_second_field_had_been_dropped_and_duplicated_db": 22.279,
+  "field_difference_within_a_frame": {
+    "delivered_mean_abs_diff_between_the_two_fields": 12.7898,
+    "source_mean_abs_diff_between_the_two_fields": 12.9969,
+    "note": "if a field had been dropped and the other duplicated, these would be ~0"
+  },
+  "field_rate_frames_obtainable_from_delivered_mp4": "368"
+}

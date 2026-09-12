@@ -1,0 +1,129 @@
+{
+  "analysis_version": "run_batch/1",
+  "validated_technique": "tears_98bpm",
+  "reference_title": "Scratch_t24",
+  "chapter2": [
+    43.043,
+    121.376
+  ],
+  "offset_frames_from_stored_audit": 1175,
+  "offset_frames_half_chapter": 1174,
+  "offset_equals_half_chapter": false,
+  "cache_used": "/private/tmp/claude-501/-Users-karlwatson-Developer-ScratchLab-CXL-Ready-20260913-evidence-mkv-source-inspection-20260913/63286248-ced4-4649-8945-717a8c57e505/scratchpad/batch",
+  "wrote_only_into": "/Users/karlwatson/Developer/ScratchLab-CXL-Ready-20260913/evidence/mkv-source-inspection-20260913/claude-mkv-batch-audit/reports/runner-validation",
+  "checks": {
+    "cache_present": "PASS",
+    "fractional_lag_ran": "PASS",
+    "repeat_profile_ran": "PASS",
+    "reproduces_stored_numbers": "SKIPPED - stored file was produced by (none - predates versioning), the current analysis is fractional_lag_repeat/2. Differing numbers here are an expected consequence of the widened lag search, not a reproducibility failure. Re-run this technique to refresh its artifacts.",
+    "detects_superseded_artifacts": "PASS",
+    "classifier_produced_a_distinct_state": "PASS"
+  },
+  "cache_inputs": {
+    "/private/tmp/claude-501/-Users-karlwatson-Developer-ScratchLab-CXL-Ready-20260913-evidence-mkv-source-inspection-20260913/63286248-ced4-4649-8945-717a8c57e505/scratchpad/batch/pcm/Scratch_t24-a1.s16le": 23304192,
+    "/private/tmp/claude-501/-Users-karlwatson-Developer-ScratchLab-CXL-Ready-20260913-evidence-mkv-source-inspection-20260913/63286248-ced4-4649-8945-717a8c57e505/scratchpad/batch/grayfull/Scratch_t24.gray": 314150400
+  },
+  "stored_analysis_version": "(none - predates versioning)",
+  "recomputed_analysis_version": "fractional_lag_repeat/2",
+  "stored_and_recomputed_same_version": false,
+  "comparison_vs_stored": {
+    "active_windows": {
+      "stored": 21,
+      "recomputed": 21,
+      "match": true
+    },
+    "ncc_best_fractional": {
+      "stored": {
+        "min": 0.0608,
+        "median": 0.9999,
+        "max": 0.9999
+      },
+      "recomputed": {
+        "min": 0.0672,
+        "median": 0.9999,
+        "max": 0.9999
+      },
+      "match": false
+    },
+    "extra_lag_samples": {
+      "stored": {
+        "min": -5.08,
+        "median": -2.92,
+        "max": 30.94,
+        "spread": 36.02
+      },
+      "recomputed": {
+        "min": -31.35,
+        "median": -3.08,
+        "max": -0.83,
+        "spread": 30.52
+      },
+      "match": false
+    }
+  },
+  "divergence_detector": {
+    "divergence_detected": true,
+    "spans_first_pass_s": [
+      [
+        56.043,
+        58.043
+      ]
+    ],
+    "video_windows_matching": 38,
+    "audio_windows_matching": 19,
+    "audio_windows_evaluated": 21,
+    "controls": {
+      "adjacent_frame_similarity": 0.98437,
+      "random_pair_similarity": 0.84062
+    }
+  },
+  "classifier_output": {
+    "state": "verified_partial_repeat",
+    "reason": "repeat confirmed, but 1 span(s) where the picture duplicates and the audio does not - flag for A/V review",
+    "facts": {
+      "offset_frames": 1175,
+      "video_repeat_detected": true,
+      "video_mean_similarity": 0.9986,
+      "adjacent_frame_similarity": 0.98697,
+      "audio_roles": "CONFIRMED for this technique",
+      "missing_delivered_angles": [],
+      "identical_video_titles": [],
+      "audio_ncc_median_fractional": 0.9999,
+      "audio_ncc_min_fractional": 0.0672,
+      "audio_windows_below_0.90": 2,
+      "lag_spread_samples": 30.52,
+      "lag_hit_search_bound": false,
+      "offset_equals_half_chapter": false,
+      "audio_discovered_offset_delta_ms": 0.021,
+      "divergence_spans_first_pass_s": [
+        [
+          56.043,
+          58.043
+        ]
+      ],
+      "divergence_spans_second_pass_s": [
+        [
+          95.249,
+          97.249
+        ]
+      ]
+    }
+  },
+  "log": [
+    {
+      "cmd": "/Users/karlwatson/Developer/ScratchLab-CXL-Ready-20260913/evidence/mkv-source-inspection-20260913/claude-mkv-batch-audit/scripts/fractional_lag_repeat.py tears_98bpm Scratch_t24 43.043 121.376 1175 --discover --out /Users/karlwatson/Developer/ScratchLab-CXL-Ready-20260913/evidence/mkv-source-inspection-20260913/claude-mkv-batch-audit/reports/runner-validation/tears_98bpm.fractional-lag.json",
+      "rc": 0,
+      "seconds": 26.9,
+      "stdout_tail": "tears_98bpm Scratch_t24: offset 1175 fr = 1881880.0 samples (whole: True, == half chapter: False)\n  audio-discovered offset 39.2059s (ncc 0.9994), delta vs supplied +0.02 ms\n  windows 21  int-lag ncc 0.010/0.716/0.984  frac ncc 0.067/1.000/1.000  lag -31.35..-0.83  below0.90: 2",
+      "stderr_tail": ""
+    },
+    {
+      "cmd": "/Users/karlwatson/Developer/ScratchLab-CXL-Ready-20260913/evidence/mkv-source-inspection-20260913/claude-mkv-batch-audit/scripts/repeat_profile.py tears_98bpm --out /Users/karlwatson/Developer/ScratchLab-CXL-Ready-20260913/evidence/mkv-source-inspection-20260913/claude-mkv-batch-audit/reports/runner-validation/tears_98bpm.repeat-profile.json",
+      "rc": 0,
+      "seconds": 26.6,
+      "stdout_tail": "tears_98bpm: offset 1175 fr (39.2058s), 39 x 1.0s windows\n  controls: adjacent 0.98437, random 0.84062\n  video matching 38/39   audio matching 19/21 evaluated\n  DIVERGENCE spans (video ok, audio not): [[56.043, 58.043]]\n  second-pass counterparts: [[95.249, 97.249]]",
+      "stderr_tail": ""
+    }
+  ],
+  "note": "Validation writes only into reports/runner-validation/. The stored evidence for this technique was not modified, and no source or dataset file was touched."
+}

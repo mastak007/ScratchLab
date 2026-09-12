@@ -1,0 +1,14 @@
+{
+  "technique": "chirpflare_92bpm",
+  "source_title": "Scratch_t54",
+  "chapter2": [
+    31.5315,
+    114.848067
+  ],
+  "previews": [
+    "previews/chirpflare_92bpm/chirpflare_92bpm_boundary_head_20to37s_Scratch_t54.mov",
+    "previews/chirpflare_92bpm/chirpflare_92bpm_boundary_tail_73to83s_Scratch_t54.mov"
+  ],
+  "time_mapping": "preview t=0 corresponds to the source time in the filename",
+  "operator_audition": "PENDING - no automatic test can prove absence of speech"
+}

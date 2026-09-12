@@ -1,0 +1,7032 @@
+{
+  "generated_by": "scripts/stage_a_inventory.py",
+  "n_titles": 119,
+  "n_groups": 49,
+  "grouping_evidence": "chapter-2 range (primary) + byte-identical audio excerpt (binds angles) + edit-list chapter-2 match (technique name). Filenames and duration alone were NOT used to decide membership.",
+  "audio_fingerprint": "SHA-256 of 0:a:0 decoded to s16le 48 kHz stereo over source 10.000-14.000 s",
+  "cross_group_audio_collisions": {},
+  "groups": {
+    "ch2_10.010_237.304": {
+      "chapter2": [
+        10.01,
+        237.304
+      ],
+      "titles": [
+        "Scratch_t106"
+      ],
+      "n_titles": 1,
+      "edit_list_candidates": [],
+      "technique_binding": "no edit-list match",
+      "audio_equality_classes": [
+        [
+          "Scratch_t106"
+        ]
+      ],
+      "audio_binds_all_titles": true,
+      "n_audio_streams": [
+        1
+      ],
+      "video_specs": [
+        "{\"codec_name\": \"mpeg2video\", \"display_aspect_ratio\": \"4:3\", \"field_order\": \"bb\", \"height\": 480, \"r_frame_rate\": \"30000/1001\", \"sample_aspect_ratio\": \"8:9\", \"width\": 720}"
+      ],
+      "durations": [
+        237.303
+      ]
+    },
+    "ch2_11.511_412.445": {
+      "chapter2": [
+        11.511,
+        412.445
+      ],
+      "titles": [
+        "Scratch_t107"
+      ],
+      "n_titles": 1,
+      "edit_list_candidates": [],
+      "technique_binding": "no edit-list match",
+      "audio_equality_classes": [
+        [
+          "Scratch_t107"
+        ]
+      ],
+      "audio_binds_all_titles": true,
+      "n_audio_streams": [
+        1
+      ],
+      "video_specs": [
+        "{\"codec_name\": \"mpeg2video\", \"display_aspect_ratio\": \"4:3\", \"field_order\": \"bb\", \"height\": 480, \"r_frame_rate\": \"30000/1001\", \"sample_aspect_ratio\": \"8:9\", \"width\": 720}"
+      ],
+      "durations": [
+        412.445
+      ]
+    },
+    "ch2_121.621_125.058": {
+      "chapter2": [
+        121.621,
+        125.058
+      ],
+      "titles": [
+        "Scratch_t110"
+      ],
+      "n_titles": 1,
+      "edit_list_candidates": [],
+      "technique_binding": "no edit-list match",
+      "audio_equality_classes": [
+        [
+          "Scratch_t110"
+        ]
+      ],
+      "audio_binds_all_titles": true,
+      "n_audio_streams": [
+        1
+      ],
+      "video_specs": [
+        "{\"codec_name\": \"mpeg2video\", \"display_aspect_ratio\": \"4:3\", \"field_order\": \"bb\", \"height\": 480, \"r_frame_rate\": \"30000/1001\", \"sample_aspect_ratio\": \"8:9\", \"width\": 720}"
+      ],
+      "durations": [
+        125.058
+      ]
+    },
+    "ch2_123.123_124.624": {
+      "chapter2": [
+        123.123,
+        124.624
+      ],
+      "titles": [
+        "Scratch_t60"
+      ],
+      "n_titles": 1,
+      "edit_list_candidates": [],
+      "technique_binding": "no edit-list match",
+      "audio_equality_classes": [
+        [
+          "Scratch_t60"
+        ]
+      ],
+      "audio_binds_all_titles": true,
+      "n_audio_streams": [
+        1
+      ],
+      "video_specs": [
+        "{\"codec_name\": \"mpeg2video\", \"display_aspect_ratio\": \"4:3\", \"field_order\": \"bb\", \"height\": 480, \"r_frame_rate\": \"30000/1001\", \"sample_aspect_ratio\": \"8:9\", \"width\": 720}"
+      ],
+      "durations": [
+        124.624
+      ]
+    },
+    "ch2_136.136_138.205": {
+      "chapter2": [
+        136.136,
+        138.205
+      ],
+      "titles": [
+        "Scratch_t111"
+      ],
+      "n_titles": 1,
+      "edit_list_candidates": [],
+      "technique_binding": "no edit-list match",
+      "audio_equality_classes": [
+        [
+          "Scratch_t111"
+        ]
+      ],
+      "audio_binds_all_titles": true,
+      "n_audio_streams": [
+        1
+      ],
+      "video_specs": [
+        "{\"codec_name\": \"mpeg2video\", \"display_aspect_ratio\": \"4:3\", \"field_order\": \"bb\", \"height\": 480, \"r_frame_rate\": \"30000/1001\", \"sample_aspect_ratio\": \"8:9\", \"width\": 720}"
+      ],
+      "durations": [
+        138.204
+      ]
+    },
+    "ch2_139.139_141.108": {
+      "chapter2": [
+        139.139,
+        141.108
+      ],
+      "titles": [
+        "Scratch_t66"
+      ],
+      "n_titles": 1,
+      "edit_list_candidates": [],
+      "technique_binding": "no edit-list match",
+      "audio_equality_classes": [
+        [
+          "Scratch_t66"
+        ]
+      ],
+      "audio_binds_all_titles": true,
+      "n_audio_streams": [
+        1
+      ],
+      "video_specs": [
+        "{\"codec_name\": \"mpeg2video\", \"display_aspect_ratio\": \"4:3\", \"field_order\": \"bb\", \"height\": 480, \"r_frame_rate\": \"30000/1001\", \"sample_aspect_ratio\": \"8:9\", \"width\": 720}"
+      ],
+      "durations": [
+        141.107
+      ]
+    },
+    "ch2_15.515_93.920": {
+      "chapter2": [
+        15.515,
+        93.92
+      ],
+      "titles": [
+        "Scratch_t16",
+        "Scratch_t17",
+        "Scratch_t18",
+        "Scratch_t19"
+      ],
+      "n_titles": 4,
+      "edit_list_candidates": [
+        "drags_98bpm"
+      ],
+      "technique_binding": "unique edit-list match",
+      "audio_equality_classes": [
+        [
+          "Scratch_t16",
+          "Scratch_t17",
+          "Scratch_t18",
+          "Scratch_t19"
+        ]
+      ],
+      "audio_binds_all_titles": true,
+      "n_audio_streams": [
+        3
+      ],
+      "video_specs": [
+        "{\"codec_name\": \"mpeg2video\", \"display_aspect_ratio\": \"4:3\", \"field_order\": \"bb\", \"height\": 480, \"r_frame_rate\": \"30000/1001\", \"sample_aspect_ratio\": \"8:9\", \"width\": 720}"
+      ],
+      "durations": [
+        93.92
+      ]
+    },
+    "ch2_164.164_166.033": {
+      "chapter2": [
+        164.164,
+        166.033
+      ],
+      "titles": [
+        "Scratch_t62"
+      ],
+      "n_titles": 1,
+      "edit_list_candidates": [],
+      "technique_binding": "no edit-list match",
+      "audio_equality_classes": [
+        [
+          "Scratch_t62"
+        ]
+      ],
+      "audio_binds_all_titles": true,
+      "n_audio_streams": [
+        1
+      ],
+      "video_specs": [
+        "{\"codec_name\": \"mpeg2video\", \"display_aspect_ratio\": \"4:3\", \"field_order\": \"bb\", \"height\": 480, \"r_frame_rate\": \"30000/1001\", \"sample_aspect_ratio\": \"8:9\", \"width\": 720}"
+      ],
+      "durations": [
+        166.032
+      ]
+    },
+    "ch2_17.017_190.016": {
+      "chapter2": [
+        17.017,
+        190.016
+      ],
+      "titles": [
+        "Scratch_t114"
+      ],
+      "n_titles": 1,
+      "edit_list_candidates": [],
+      "technique_binding": "no edit-list match",
+      "audio_equality_classes": [
+        [
+          "Scratch_t114"
+        ]
+      ],
+      "audio_binds_all_titles": true,
+      "n_audio_streams": [
+        1
+      ],
+      "video_specs": [
+        "{\"codec_name\": \"mpeg2video\", \"display_aspect_ratio\": \"4:3\", \"field_order\": \"bb\", \"height\": 480, \"r_frame_rate\": \"30000/1001\", \"sample_aspect_ratio\": \"8:9\", \"width\": 720}"
+      ],
+      "durations": [
+        190.016
+      ]
+    },
+    "ch2_22.523_95.744": {
+      "chapter2": [
+        22.523,
+        95.744
+      ],
+      "titles": [
+        "Scratch_t86",
+        "Scratch_t87",
+        "Scratch_t88",
+        "Scratch_t89"
+      ],
+      "n_titles": 4,
+      "edit_list_candidates": [
+        "waves_105bpm"
+      ],
+      "technique_binding": "unique edit-list match",
+      "audio_equality_classes": [
+        [
+          "Scratch_t86",
+          "Scratch_t87",
+          "Scratch_t88",
+          "Scratch_t89"
+        ]
+      ],
+      "audio_binds_all_titles": true,
+      "n_audio_streams": [
+        3
+      ],
+      "video_specs": [
+        "{\"codec_name\": \"mpeg2video\", \"display_aspect_ratio\": \"4:3\", \"field_order\": \"bb\", \"height\": 480, \"r_frame_rate\": \"30000/1001\", \"sample_aspect_ratio\": \"8:9\", \"width\": 720}"
+      ],
+      "durations": [
+        95.744
+      ]
+    },
+    "ch2_23.523_261.361": {
+      "chapter2": [
+        23.523,
+        261.361
+      ],
+      "titles": [
+        "Scratch_t115"
+      ],
+      "n_titles": 1,
+      "edit_list_candidates": [],
+      "technique_binding": "no edit-list match",
+      "audio_equality_classes": [
+        [
+          "Scratch_t115"
+        ]
+      ],
+      "audio_binds_all_titles": true,
+      "n_audio_streams": [
+        1
+      ],
+      "video_specs": [
+        "{\"codec_name\": \"mpeg2video\", \"display_aspect_ratio\": \"4:3\", \"field_order\": \"bb\", \"height\": 480, \"r_frame_rate\": \"30000/1001\", \"sample_aspect_ratio\": \"8:9\", \"width\": 720}"
+      ],
+      "durations": [
+        261.361
+      ]
+    },
+    "ch2_23.523_72.000": {
+      "chapter2": [
+        23.523,
+        72.0
+      ],
+      "titles": [
+        "Scratch_t08",
+        "Scratch_t09",
+        "Scratch_t10",
+        "Scratch_t11"
+      ],
+      "n_titles": 4,
+      "edit_list_candidates": [
+        "reversecutting_79bpm"
+      ],
+      "technique_binding": "unique edit-list match",
+      "audio_equality_classes": [
+        [
+          "Scratch_t08",
+          "Scratch_t09",
+          "Scratch_t10",
+          "Scratch_t11"
+        ]
+      ],
+      "audio_binds_all_titles": true,
+      "n_audio_streams": [
+        3
+      ],
+      "video_specs": [
+        "{\"codec_name\": \"mpeg2video\", \"display_aspect_ratio\": \"4:3\", \"field_order\": \"bb\", \"height\": 480, \"r_frame_rate\": \"30000/1001\", \"sample_aspect_ratio\": \"8:9\", \"width\": 720}"
+      ],
+      "durations": [
+        72.0
+      ]
+    },
+    "ch2_24.024_25.425": {
+      "chapter2": [
+        24.024,
+        25.425
+      ],
+      "titles": [
+        "Scratch_t72"
+      ],
+      "n_titles": 1,
+      "edit_list_candidates": [],
+      "technique_binding": "no edit-list match",
+      "audio_equality_classes": [
+        [
+          "Scratch_t72"
+        ]
+      ],
+      "audio_binds_all_titles": true,
+      "n_audio_streams": [
+        1
+      ],
+      "video_specs": [
+        "{\"codec_name\": \"mpeg2video\", \"display_aspect_ratio\": \"4:3\", \"field_order\": \"bb\", \"height\": 480, \"r_frame_rate\": \"30000/1001\", \"sample_aspect_ratio\": \"8:9\", \"width\": 720}"
+      ],
+      "durations": [
+        25.425
+      ]
+    },
+    "ch2_27.527_64.096": {
+      "chapter2": [
+        27.527,
+        64.096
+      ],
+      "titles": [
+        "Scratch_t28",
+        "Scratch_t29",
+        "Scratch_t30",
+        "Scratch_t31"
+      ],
+      "n_titles": 4,
+      "edit_list_candidates": [
+        "tips_105bpm"
+      ],
+      "technique_binding": "unique edit-list match",
+      "audio_equality_classes": [
+        [
+          "Scratch_t28",
+          "Scratch_t29",
+          "Scratch_t30",
+          "Scratch_t31"
+        ]
+      ],
+      "audio_binds_all_titles": true,
+      "n_audio_streams": [
+        3
+      ],
+      "video_specs": [
+        "{\"codec_name\": \"mpeg2video\", \"display_aspect_ratio\": \"4:3\", \"field_order\": \"bb\", \"height\": 480, \"r_frame_rate\": \"30000/1001\", \"sample_aspect_ratio\": \"8:9\", \"width\": 720}"
+      ],
+      "durations": [
+        64.096
+      ]
+    },
+    "ch2_31.532_114.848": {
+      "chapter2": [
+        31.532,
+        114.848
+      ],
+      "titles": [
+        "Scratch_t52",
+        "Scratch_t53",
+        "Scratch_t54",
+        "Scratch_t55"
+      ],
+      "n_titles": 4,
+      "edit_list_candidates": [
+        "chirpflare_92bpm"
+      ],
+      "technique_binding": "unique edit-list match",
+      "audio_equality_classes": [
+        [
+          "Scratch_t52",
+          "Scratch_t53",
+          "Scratch_t54",
+          "Scratch_t55"
+        ]
+      ],
+      "audio_binds_all_titles": true,
+      "n_audio_streams": [
+        3
+      ],
+      "video_specs": [
+        "{\"codec_name\": \"mpeg2video\", \"display_aspect_ratio\": \"4:3\", \"field_order\": \"bb\", \"height\": 480, \"r_frame_rate\": \"30000/1001\", \"sample_aspect_ratio\": \"8:9\", \"width\": 720}"
+      ],
+      "durations": [
+        114.848
+      ]
+    },
+    "ch2_32.532_69.088": {
+      "chapter2": [
+        32.532,
+        69.088
+      ],
+      "titles": [
+        "Scratch_t82",
+        "Scratch_t83",
+        "Scratch_t84",
+        "Scratch_t85"
+      ],
+      "n_titles": 4,
+      "edit_list_candidates": [
+        "zigzags_105bpm"
+      ],
+      "technique_binding": "unique edit-list match",
+      "audio_equality_classes": [
+        [
+          "Scratch_t82",
+          "Scratch_t83",
+          "Scratch_t84",
+          "Scratch_t85"
+        ]
+      ],
+      "audio_binds_all_titles": true,
+      "n_audio_streams": [
+        3
+      ],
+      "video_specs": [
+        "{\"codec_name\": \"mpeg2video\", \"display_aspect_ratio\": \"4:3\", \"field_order\": \"bb\", \"height\": 480, \"r_frame_rate\": \"30000/1001\", \"sample_aspect_ratio\": \"8:9\", \"width\": 720}"
+      ],
+      "durations": [
+        69.088
+      ]
+    },
+    "ch2_33.533_123.968": {
+      "chapter2": [
+        33.533,
+        123.968
+      ],
+      "titles": [
+        "Scratch_t40",
+        "Scratch_t41",
+        "Scratch_t42",
+        "Scratch_t43"
+      ],
+      "n_titles": 4,
+      "edit_list_candidates": [
+        "dicing_85bpm"
+      ],
+      "technique_binding": "unique edit-list match",
+      "audio_equality_classes": [
+        [
+          "Scratch_t40",
+          "Scratch_t41",
+          "Scratch_t42",
+          "Scratch_t43"
+        ]
+      ],
+      "audio_binds_all_titles": true,
+      "n_audio_streams": [
+        3
+      ],
+      "video_specs": [
+        "{\"codec_name\": \"mpeg2video\", \"display_aspect_ratio\": \"4:3\", \"field_order\": \"bb\", \"height\": 480, \"r_frame_rate\": \"30000/1001\", \"sample_aspect_ratio\": \"8:9\", \"width\": 720}"
+      ],
+      "durations": [
+        123.968
+      ]
+    },
+    "ch2_35.035_83.450": {
+      "chapter2": [
+        35.035,
+        83.45
+      ],
+      "titles": [
+        "Scratch_t00",
+        "Scratch_t01",
+        "Scratch_t02",
+        "Scratch_t03",
+        "Scratch_t04",
+        "Scratch_t05",
+        "Scratch_t06",
+        "Scratch_t07"
+      ],
+      "n_titles": 8,
+      "edit_list_candidates": [
+        "baby_79bpm",
+        "cutting_79bpm"
+      ],
+      "technique_binding": "ambiguous - multiple edit lists share this chapter-2 range",
+      "audio_equality_classes": [
+        [
+          "Scratch_t00",
+          "Scratch_t01",
+          "Scratch_t02",
+          "Scratch_t03"
+        ],
+        [
+          "Scratch_t04",
+          "Scratch_t05",
+          "Scratch_t06",
+          "Scratch_t07"
+        ]
+      ],
+      "audio_binds_all_titles": false,
+      "n_audio_streams": [
+        3
+      ],
+      "video_specs": [
+        "{\"codec_name\": \"mpeg2video\", \"display_aspect_ratio\": \"4:3\", \"field_order\": \"bb\", \"height\": 480, \"r_frame_rate\": \"30000/1001\", \"sample_aspect_ratio\": \"8:9\", \"width\": 720}"
+      ],
+      "durations": [
+        83.45
+      ]
+    },
+    "ch2_35.535_36.864": {
+      "chapter2": [
+        35.535,
+        36.864
+      ],
+      "titles": [
+        "Scratch_t69"
+      ],
+      "n_titles": 1,
+      "edit_list_candidates": [],
+      "technique_binding": "no edit-list match",
+      "audio_equality_classes": [
+        [
+          "Scratch_t69"
+        ]
+      ],
+      "audio_binds_all_titles": true,
+      "n_audio_streams": [
+        1
+      ],
+      "video_specs": [
+        "{\"codec_name\": \"mpeg2video\", \"display_aspect_ratio\": \"4:3\", \"field_order\": \"bb\", \"height\": 480, \"r_frame_rate\": \"30000/1001\", \"sample_aspect_ratio\": \"8:9\", \"width\": 720}"
+      ],
+      "durations": [
+        36.864
+      ]
+    },
+    "ch2_37.037_120.354": {
+      "chapter2": [
+        37.037,
+        120.354
+      ],
+      "titles": [
+        "Scratch_t48",
+        "Scratch_t49",
+        "Scratch_t50",
+        "Scratch_t51"
+      ],
+      "n_titles": 4,
+      "edit_list_candidates": [
+        "cresentflare_92bpm"
+      ],
+      "technique_binding": "unique edit-list match",
+      "audio_equality_classes": [
+        [
+          "Scratch_t48",
+          "Scratch_t49",
+          "Scratch_t50",
+          "Scratch_t51"
+        ]
+      ],
+      "audio_binds_all_titles": true,
+      "n_audio_streams": [
+        3
+      ],
+      "video_specs": [
+        "{\"codec_name\": \"mpeg2video\", \"display_aspect_ratio\": \"4:3\", \"field_order\": \"bb\", \"height\": 480, \"r_frame_rate\": \"30000/1001\", \"sample_aspect_ratio\": \"8:9\", \"width\": 720}"
+      ],
+      "durations": [
+        120.353
+      ]
+    },
+    "ch2_41.041_42.509": {
+      "chapter2": [
+        41.041,
+        42.509
+      ],
+      "titles": [
+        "Scratch_t70"
+      ],
+      "n_titles": 1,
+      "edit_list_candidates": [],
+      "technique_binding": "no edit-list match",
+      "audio_equality_classes": [
+        [
+          "Scratch_t70"
+        ]
+      ],
+      "audio_binds_all_titles": true,
+      "n_audio_streams": [
+        1
+      ],
+      "video_specs": [
+        "{\"codec_name\": \"mpeg2video\", \"display_aspect_ratio\": \"4:3\", \"field_order\": \"bb\", \"height\": 480, \"r_frame_rate\": \"30000/1001\", \"sample_aspect_ratio\": \"8:9\", \"width\": 720}"
+      ],
+      "durations": [
+        42.509
+      ]
+    },
+    "ch2_42.542_43.844": {
+      "chapter2": [
+        42.542,
+        43.844
+      ],
+      "titles": [
+        "Scratch_t71"
+      ],
+      "n_titles": 1,
+      "edit_list_candidates": [],
+      "technique_binding": "no edit-list match",
+      "audio_equality_classes": [
+        [
+          "Scratch_t71"
+        ]
+      ],
+      "audio_binds_all_titles": true,
+      "n_audio_streams": [
+        1
+      ],
+      "video_specs": [
+        "{\"codec_name\": \"mpeg2video\", \"display_aspect_ratio\": \"4:3\", \"field_order\": \"bb\", \"height\": 480, \"r_frame_rate\": \"30000/1001\", \"sample_aspect_ratio\": \"8:9\", \"width\": 720}"
+      ],
+      "durations": [
+        43.843
+      ]
+    },
+    "ch2_43.043_121.376": {
+      "chapter2": [
+        43.043,
+        121.376
+      ],
+      "titles": [
+        "Scratch_t24",
+        "Scratch_t25",
+        "Scratch_t26",
+        "Scratch_t27"
+      ],
+      "n_titles": 4,
+      "edit_list_candidates": [
+        "tears_98bpm"
+      ],
+      "technique_binding": "unique edit-list match",
+      "audio_equality_classes": [
+        [
+          "Scratch_t24",
+          "Scratch_t25",
+          "Scratch_t26",
+          "Scratch_t27"
+        ]
+      ],
+      "audio_binds_all_titles": true,
+      "n_audio_streams": [
+        3
+      ],
+      "video_specs": [
+        "{\"codec_name\": \"mpeg2video\", \"display_aspect_ratio\": \"4:3\", \"field_order\": \"bb\", \"height\": 480, \"r_frame_rate\": \"30000/1001\", \"sample_aspect_ratio\": \"8:9\", \"width\": 720}"
+      ],
+      "durations": [
+        121.376
+      ]
+    },
+    "ch2_43.544_80.096": {
+      "chapter2": [
+        43.544,
+        80.096
+      ],
+      "titles": [
+        "Scratch_t90",
+        "Scratch_t91",
+        "Scratch_t92",
+        "Scratch_t93"
+      ],
+      "n_titles": 4,
+      "edit_list_candidates": [
+        "swipes_105bpm"
+      ],
+      "technique_binding": "unique edit-list match",
+      "audio_equality_classes": [
+        [
+          "Scratch_t90",
+          "Scratch_t91",
+          "Scratch_t92",
+          "Scratch_t93"
+        ]
+      ],
+      "audio_binds_all_titles": true,
+      "n_audio_streams": [
+        3
+      ],
+      "video_specs": [
+        "{\"codec_name\": \"mpeg2video\", \"display_aspect_ratio\": \"4:3\", \"field_order\": \"bb\", \"height\": 480, \"r_frame_rate\": \"30000/1001\", \"sample_aspect_ratio\": \"8:9\", \"width\": 720}"
+      ],
+      "durations": [
+        80.096
+      ]
+    },
+    "ch2_44.044_85.652": {
+      "chapter2": [
+        44.044,
+        85.652
+      ],
+      "titles": [
+        "Scratch_t56",
+        "Scratch_t57",
+        "Scratch_t58",
+        "Scratch_t59"
+      ],
+      "n_titles": 4,
+      "edit_list_candidates": [
+        "lazers_92bpm"
+      ],
+      "technique_binding": "unique edit-list match",
+      "audio_equality_classes": [
+        [
+          "Scratch_t56",
+          "Scratch_t57",
+          "Scratch_t58",
+          "Scratch_t59"
+        ]
+      ],
+      "audio_binds_all_titles": true,
+      "n_audio_streams": [
+        3
+      ],
+      "video_specs": [
+        "{\"codec_name\": \"mpeg2video\", \"display_aspect_ratio\": \"4:3\", \"field_order\": \"bb\", \"height\": 480, \"r_frame_rate\": \"30000/1001\", \"sample_aspect_ratio\": \"8:9\", \"width\": 720}"
+      ],
+      "durations": [
+        85.652
+      ]
+    },
+    "ch2_44.544_112.352": {
+      "chapter2": [
+        44.544,
+        112.352
+      ],
+      "titles": [
+        "Scratch_t100",
+        "Scratch_t101",
+        "Scratch_t98",
+        "Scratch_t99"
+      ],
+      "n_titles": 4,
+      "edit_list_candidates": [
+        "orbits_85bpm"
+      ],
+      "technique_binding": "unique edit-list match",
+      "audio_equality_classes": [
+        [
+          "Scratch_t100",
+          "Scratch_t101",
+          "Scratch_t98",
+          "Scratch_t99"
+        ]
+      ],
+      "audio_binds_all_titles": true,
+      "n_audio_streams": [
+        3
+      ],
+      "video_specs": [
+        "{\"codec_name\": \"mpeg2video\", \"display_aspect_ratio\": \"4:3\", \"field_order\": \"bb\", \"height\": 480, \"r_frame_rate\": \"30000/1001\", \"sample_aspect_ratio\": \"8:9\", \"width\": 720}"
+      ],
+      "durations": [
+        112.352
+      ]
+    },
+    "ch2_45.045_81.648": {
+      "chapter2": [
+        45.045,
+        81.648
+      ],
+      "titles": [
+        "Scratch_t74",
+        "Scratch_t75",
+        "Scratch_t76",
+        "Scratch_t77"
+      ],
+      "n_titles": 4,
+      "edit_list_candidates": [
+        "clovertears_105bpm"
+      ],
+      "technique_binding": "unique edit-list match",
+      "audio_equality_classes": [
+        [
+          "Scratch_t74",
+          "Scratch_t75",
+          "Scratch_t76",
+          "Scratch_t77"
+        ]
+      ],
+      "audio_binds_all_titles": true,
+      "n_audio_streams": [
+        3
+      ],
+      "video_specs": [
+        "{\"codec_name\": \"mpeg2video\", \"display_aspect_ratio\": \"4:3\", \"field_order\": \"bb\", \"height\": 480, \"r_frame_rate\": \"30000/1001\", \"sample_aspect_ratio\": \"8:9\", \"width\": 720}"
+      ],
+      "durations": [
+        81.648
+      ]
+    },
+    "ch2_47.047_95.520": {
+      "chapter2": [
+        47.047,
+        95.52
+      ],
+      "titles": [
+        "Scratch_t12",
+        "Scratch_t13",
+        "Scratch_t14",
+        "Scratch_t15"
+      ],
+      "n_titles": 4,
+      "edit_list_candidates": [
+        "marches_79bpm"
+      ],
+      "technique_binding": "unique edit-list match",
+      "audio_equality_classes": [
+        [
+          "Scratch_t12",
+          "Scratch_t13",
+          "Scratch_t14",
+          "Scratch_t15"
+        ]
+      ],
+      "audio_binds_all_titles": true,
+      "n_audio_streams": [
+        3
+      ],
+      "video_specs": [
+        "{\"codec_name\": \"mpeg2video\", \"display_aspect_ratio\": \"4:3\", \"field_order\": \"bb\", \"height\": 480, \"r_frame_rate\": \"30000/1001\", \"sample_aspect_ratio\": \"8:9\", \"width\": 720}"
+      ],
+      "durations": [
+        95.52
+      ]
+    },
+    "ch2_489.489_493.693": {
+      "chapter2": [
+        489.489,
+        493.693
+      ],
+      "titles": [
+        "Scratch_t118"
+      ],
+      "n_titles": 1,
+      "edit_list_candidates": [],
+      "technique_binding": "no edit-list match",
+      "audio_equality_classes": [
+        [
+          "Scratch_t118"
+        ]
+      ],
+      "audio_binds_all_titles": true,
+      "n_audio_streams": [
+        1
+      ],
+      "video_specs": [
+        "{\"codec_name\": \"mpeg2video\", \"display_aspect_ratio\": \"4:3\", \"field_order\": \"bb\", \"height\": 480, \"r_frame_rate\": \"30000/1001\", \"sample_aspect_ratio\": \"8:9\", \"width\": 720}"
+      ],
+      "durations": [
+        493.693
+      ]
+    },
+    "ch2_49.550_122.752": {
+      "chapter2": [
+        49.55,
+        122.752
+      ],
+      "titles": [
+        "Scratch_t32",
+        "Scratch_t33",
+        "Scratch_t34",
+        "Scratch_t35"
+      ],
+      "n_titles": 4,
+      "edit_list_candidates": [
+        "long_short_tips_105bpm"
+      ],
+      "technique_binding": "unique edit-list match",
+      "audio_equality_classes": [
+        [
+          "Scratch_t32",
+          "Scratch_t33",
+          "Scratch_t34",
+          "Scratch_t35"
+        ]
+      ],
+      "audio_binds_all_titles": true,
+      "n_audio_streams": [
+        3
+      ],
+      "video_specs": [
+        "{\"codec_name\": \"mpeg2video\", \"display_aspect_ratio\": \"4:3\", \"field_order\": \"bb\", \"height\": 480, \"r_frame_rate\": \"30000/1001\", \"sample_aspect_ratio\": \"8:9\", \"width\": 720}"
+      ],
+      "durations": [
+        122.752
+      ]
+    },
+    "ch2_51.051_141.472": {
+      "chapter2": [
+        51.051,
+        141.472
+      ],
+      "titles": [
+        "Scratch_t36",
+        "Scratch_t37",
+        "Scratch_t38",
+        "Scratch_t39"
+      ],
+      "n_titles": 4,
+      "edit_list_candidates": [
+        "transformer_85bpm"
+      ],
+      "technique_binding": "unique edit-list match",
+      "audio_equality_classes": [
+        [
+          "Scratch_t36",
+          "Scratch_t37",
+          "Scratch_t38",
+          "Scratch_t39"
+        ]
+      ],
+      "audio_binds_all_titles": true,
+      "n_audio_streams": [
+        3
+      ],
+      "video_specs": [
+        "{\"codec_name\": \"mpeg2video\", \"display_aspect_ratio\": \"4:3\", \"field_order\": \"bb\", \"height\": 480, \"r_frame_rate\": \"30000/1001\", \"sample_aspect_ratio\": \"8:9\", \"width\": 720}"
+      ],
+      "durations": [
+        141.472
+      ]
+    },
+    "ch2_51.551_53.568": {
+      "chapter2": [
+        51.551,
+        53.568
+      ],
+      "titles": [
+        "Scratch_t117"
+      ],
+      "n_titles": 1,
+      "edit_list_candidates": [],
+      "technique_binding": "no edit-list match",
+      "audio_equality_classes": [
+        [
+          "Scratch_t117"
+        ]
+      ],
+      "audio_binds_all_titles": true,
+      "n_audio_streams": [
+        1
+      ],
+      "video_specs": [
+        "{\"codec_name\": \"mpeg2video\", \"display_aspect_ratio\": \"4:3\", \"field_order\": \"tt\", \"height\": 480, \"r_frame_rate\": \"30000/1001\", \"sample_aspect_ratio\": \"8:9\", \"width\": 720}"
+      ],
+      "durations": [
+        53.568
+      ]
+    },
+    "ch2_54.554_109.443": {
+      "chapter2": [
+        54.554,
+        109.443
+      ],
+      "titles": [
+        "Scratch_t78",
+        "Scratch_t79",
+        "Scratch_t80",
+        "Scratch_t81"
+      ],
+      "n_titles": 4,
+      "edit_list_candidates": [
+        "needledropping_105bpm"
+      ],
+      "technique_binding": "unique edit-list match",
+      "audio_equality_classes": [
+        [
+          "Scratch_t78",
+          "Scratch_t79",
+          "Scratch_t80",
+          "Scratch_t81"
+        ]
+      ],
+      "audio_binds_all_titles": true,
+      "n_audio_streams": [
+        3
+      ],
+      "video_specs": [
+        "{\"codec_name\": \"mpeg2video\", \"display_aspect_ratio\": \"4:3\", \"field_order\": \"bb\", \"height\": 480, \"r_frame_rate\": \"30000/1001\", \"sample_aspect_ratio\": \"8:9\", \"width\": 720}"
+      ],
+      "durations": [
+        109.442
+      ]
+    },
+    "ch2_55.055_56.290": {
+      "chapter2": [
+        55.055,
+        56.29
+      ],
+      "titles": [
+        "Scratch_t68"
+      ],
+      "n_titles": 1,
+      "edit_list_candidates": [],
+      "technique_binding": "no edit-list match",
+      "audio_equality_classes": [
+        [
+          "Scratch_t68"
+        ]
+      ],
+      "audio_binds_all_titles": true,
+      "n_audio_streams": [
+        1
+      ],
+      "video_specs": [
+        "{\"codec_name\": \"mpeg2video\", \"display_aspect_ratio\": \"4:3\", \"field_order\": \"bb\", \"height\": 480, \"r_frame_rate\": \"30000/1001\", \"sample_aspect_ratio\": \"8:9\", \"width\": 720}"
+      ],
+      "durations": [
+        56.289
+      ]
+    },
+    "ch2_58.559_141.888": {
+      "chapter2": [
+        58.559,
+        141.888
+      ],
+      "titles": [
+        "Scratch_t102",
+        "Scratch_t103",
+        "Scratch_t104",
+        "Scratch_t105"
+      ],
+      "n_titles": 4,
+      "edit_list_candidates": [
+        "crabs_92bpm"
+      ],
+      "technique_binding": "unique edit-list match",
+      "audio_equality_classes": [
+        [
+          "Scratch_t102",
+          "Scratch_t103",
+          "Scratch_t104",
+          "Scratch_t105"
+        ]
+      ],
+      "audio_binds_all_titles": true,
+      "n_audio_streams": [
+        3
+      ],
+      "video_specs": [
+        "{\"codec_name\": \"mpeg2video\", \"display_aspect_ratio\": \"4:3\", \"field_order\": \"bb\", \"height\": 480, \"r_frame_rate\": \"30000/1001\", \"sample_aspect_ratio\": \"8:9\", \"width\": 720}"
+      ],
+      "durations": [
+        141.888
+      ]
+    },
+    "ch2_64.064_103.328": {
+      "chapter2": [
+        64.064,
+        103.328
+      ],
+      "titles": [
+        "Scratch_t20",
+        "Scratch_t21",
+        "Scratch_t22",
+        "Scratch_t23"
+      ],
+      "n_titles": 4,
+      "edit_list_candidates": [
+        "chirps_98bpm"
+      ],
+      "technique_binding": "unique edit-list match",
+      "audio_equality_classes": [
+        [
+          "Scratch_t20",
+          "Scratch_t21",
+          "Scratch_t22",
+          "Scratch_t23"
+        ]
+      ],
+      "audio_binds_all_titles": true,
+      "n_audio_streams": [
+        3
+      ],
+      "video_specs": [
+        "{\"codec_name\": \"mpeg2video\", \"display_aspect_ratio\": \"4:3\", \"field_order\": \"bb\", \"height\": 480, \"r_frame_rate\": \"30000/1001\", \"sample_aspect_ratio\": \"8:9\", \"width\": 720}"
+      ],
+      "durations": [
+        103.328
+      ]
+    },
+    "ch2_66.066_156.480": {
+      "chapter2": [
+        66.066,
+        156.48
+      ],
+      "titles": [
+        "Scratch_t44",
+        "Scratch_t45",
+        "Scratch_t46",
+        "Scratch_t47"
+      ],
+      "n_titles": 4,
+      "edit_list_candidates": [
+        "1clickflare_85bpm"
+      ],
+      "technique_binding": "unique edit-list match",
+      "audio_equality_classes": [
+        [
+          "Scratch_t44",
+          "Scratch_t45",
+          "Scratch_t46",
+          "Scratch_t47"
+        ]
+      ],
+      "audio_binds_all_titles": true,
+      "n_audio_streams": [
+        3
+      ],
+      "video_specs": [
+        "{\"codec_name\": \"mpeg2video\", \"display_aspect_ratio\": \"4:3\", \"field_order\": \"bb\", \"height\": 480, \"r_frame_rate\": \"30000/1001\", \"sample_aspect_ratio\": \"8:9\", \"width\": 720}"
+      ],
+      "durations": [
+        156.48
+      ]
+    },
+    "ch2_66.066_68.368": {
+      "chapter2": [
+        66.066,
+        68.368
+      ],
+      "titles": [
+        "Scratch_t73"
+      ],
+      "n_titles": 1,
+      "edit_list_candidates": [],
+      "technique_binding": "no edit-list match",
+      "audio_equality_classes": [
+        [
+          "Scratch_t73"
+        ]
+      ],
+      "audio_binds_all_titles": true,
+      "n_audio_streams": [
+        1
+      ],
+      "video_specs": [
+        "{\"codec_name\": \"mpeg2video\", \"display_aspect_ratio\": \"4:3\", \"field_order\": \"bb\", \"height\": 480, \"r_frame_rate\": \"30000/1001\", \"sample_aspect_ratio\": \"8:9\", \"width\": 720}"
+      ],
+      "durations": [
+        68.368
+      ]
+    },
+    "ch2_69.069_70.737": {
+      "chapter2": [
+        69.069,
+        70.737
+      ],
+      "titles": [
+        "Scratch_t116"
+      ],
+      "n_titles": 1,
+      "edit_list_candidates": [],
+      "technique_binding": "no edit-list match",
+      "audio_equality_classes": [
+        [
+          "Scratch_t116"
+        ]
+      ],
+      "audio_binds_all_titles": true,
+      "n_audio_streams": [
+        1
+      ],
+      "video_specs": [
+        "{\"codec_name\": \"mpeg2video\", \"display_aspect_ratio\": \"4:3\", \"field_order\": \"bb\", \"height\": 480, \"r_frame_rate\": \"30000/1001\", \"sample_aspect_ratio\": \"8:9\", \"width\": 720}"
+      ],
+      "durations": [
+        70.737
+      ]
+    },
+    "ch2_8.008_361.161": {
+      "chapter2": [
+        8.008,
+        361.161
+      ],
+      "titles": [
+        "Scratch_t109"
+      ],
+      "n_titles": 1,
+      "edit_list_candidates": [],
+      "technique_binding": "no edit-list match",
+      "audio_equality_classes": [
+        [
+          "Scratch_t109"
+        ]
+      ],
+      "audio_binds_all_titles": true,
+      "n_audio_streams": [
+        1
+      ],
+      "video_specs": [
+        "{\"codec_name\": \"mpeg2video\", \"display_aspect_ratio\": \"4:3\", \"field_order\": \"bb\", \"height\": 480, \"r_frame_rate\": \"30000/1001\", \"sample_aspect_ratio\": \"8:9\", \"width\": 720}"
+      ],
+      "durations": [
+        361.16
+      ]
+    },
+    "ch2_8.508_220.620": {
+      "chapter2": [
+        8.508,
+        220.62
+      ],
+      "titles": [
+        "Scratch_t108"
+      ],
+      "n_titles": 1,
+      "edit_list_candidates": [],
+      "technique_binding": "no edit-list match",
+      "audio_equality_classes": [
+        [
+          "Scratch_t108"
+        ]
+      ],
+      "audio_binds_all_titles": true,
+      "n_audio_streams": [
+        1
+      ],
+      "video_specs": [
+        "{\"codec_name\": \"mpeg2video\", \"display_aspect_ratio\": \"4:3\", \"field_order\": \"bb\", \"height\": 480, \"r_frame_rate\": \"30000/1001\", \"sample_aspect_ratio\": \"8:9\", \"width\": 720}"
+      ],
+      "durations": [
+        220.62
+      ]
+    },
+    "ch2_83.083_84.418": {
+      "chapter2": [
+        83.083,
+        84.418
+      ],
+      "titles": [
+        "Scratch_t63"
+      ],
+      "n_titles": 1,
+      "edit_list_candidates": [],
+      "technique_binding": "no edit-list match",
+      "audio_equality_classes": [
+        [
+          "Scratch_t63"
+        ]
+      ],
+      "audio_binds_all_titles": true,
+      "n_audio_streams": [
+        1
+      ],
+      "video_specs": [
+        "{\"codec_name\": \"mpeg2video\", \"display_aspect_ratio\": \"4:3\", \"field_order\": \"bb\", \"height\": 480, \"r_frame_rate\": \"30000/1001\", \"sample_aspect_ratio\": \"8:9\", \"width\": 720}"
+      ],
+      "durations": [
+        84.417
+      ]
+    },
+    "ch2_88.588_90.457": {
+      "chapter2": [
+        88.588,
+        90.457
+      ],
+      "titles": [
+        "Scratch_t65"
+      ],
+      "n_titles": 1,
+      "edit_list_candidates": [],
+      "technique_binding": "no edit-list match",
+      "audio_equality_classes": [
+        [
+          "Scratch_t65"
+        ]
+      ],
+      "audio_binds_all_titles": true,
+      "n_audio_streams": [
+        1
+      ],
+      "video_specs": [
+        "{\"codec_name\": \"mpeg2video\", \"display_aspect_ratio\": \"4:3\", \"field_order\": \"bb\", \"height\": 480, \"r_frame_rate\": \"30000/1001\", \"sample_aspect_ratio\": \"8:9\", \"width\": 720}"
+      ],
+      "durations": [
+        90.457
+      ]
+    },
+    "ch2_94.594_95.829": {
+      "chapter2": [
+        94.594,
+        95.829
+      ],
+      "titles": [
+        "Scratch_t64"
+      ],
+      "n_titles": 1,
+      "edit_list_candidates": [],
+      "technique_binding": "no edit-list match",
+      "audio_equality_classes": [
+        [
+          "Scratch_t64"
+        ]
+      ],
+      "audio_binds_all_titles": true,
+      "n_audio_streams": [
+        1
+      ],
+      "video_specs": [
+        "{\"codec_name\": \"mpeg2video\", \"display_aspect_ratio\": \"4:3\", \"field_order\": \"bb\", \"height\": 480, \"r_frame_rate\": \"30000/1001\", \"sample_aspect_ratio\": \"8:9\", \"width\": 720}"
+      ],
+      "durations": [
+        95.829
+      ]
+    },
+    "ch2_99.099_100.500": {
+      "chapter2": [
+        99.099,
+        100.5
+      ],
+      "titles": [
+        "Scratch_t61"
+      ],
+      "n_titles": 1,
+      "edit_list_candidates": [],
+      "technique_binding": "no edit-list match",
+      "audio_equality_classes": [
+        [
+          "Scratch_t61"
+        ]
+      ],
+      "audio_binds_all_titles": true,
+      "n_audio_streams": [
+        1
+      ],
+      "video_specs": [
+        "{\"codec_name\": \"mpeg2video\", \"display_aspect_ratio\": \"4:3\", \"field_order\": \"bb\", \"height\": 480, \"r_frame_rate\": \"30000/1001\", \"sample_aspect_ratio\": \"8:9\", \"width\": 720}"
+      ],
+      "durations": [
+        100.5
+      ]
+    },
+    "ch2_99.099_166.912": {
+      "chapter2": [
+        99.099,
+        166.912
+      ],
+      "titles": [
+        "Scratch_t94",
+        "Scratch_t95",
+        "Scratch_t96",
+        "Scratch_t97"
+      ],
+      "n_titles": 4,
+      "edit_list_candidates": [
+        "originalflare_85bpm"
+      ],
+      "technique_binding": "unique edit-list match",
+      "audio_equality_classes": [
+        [
+          "Scratch_t94",
+          "Scratch_t95",
+          "Scratch_t96",
+          "Scratch_t97"
+        ]
+      ],
+      "audio_binds_all_titles": true,
+      "n_audio_streams": [
+        3
+      ],
+      "video_specs": [
+        "{\"codec_name\": \"mpeg2video\", \"display_aspect_ratio\": \"4:3\", \"field_order\": \"bb\", \"height\": 480, \"r_frame_rate\": \"30000/1001\", \"sample_aspect_ratio\": \"8:9\", \"width\": 720}"
+      ],
+      "durations": [
+        166.912
+      ]
+    },
+    "nochapters_Scratch_t112": {
+      "chapter2": null,
+      "titles": [
+        "Scratch_t112"
+      ],
+      "n_titles": 1,
+      "edit_list_candidates": [],
+      "technique_binding": "no edit-list match",
+      "audio_equality_classes": [
+        [
+          "Scratch_t112"
+        ]
+      ],
+      "audio_binds_all_titles": true,
+      "n_audio_streams": [
+        1
+      ],
+      "video_specs": [
+        "{\"codec_name\": \"mpeg2video\", \"display_aspect_ratio\": \"4:3\", \"field_order\": \"bb\", \"height\": 480, \"r_frame_rate\": \"30000/1001\", \"sample_aspect_ratio\": \"8:9\", \"width\": 720}"
+      ],
+      "durations": [
+        68.568
+      ]
+    },
+    "nochapters_Scratch_t113": {
+      "chapter2": null,
+      "titles": [
+        "Scratch_t113"
+      ],
+      "n_titles": 1,
+      "edit_list_candidates": [],
+      "technique_binding": "no edit-list match",
+      "audio_equality_classes": [
+        [
+          "Scratch_t113"
+        ]
+      ],
+      "audio_binds_all_titles": true,
+      "n_audio_streams": [
+        1
+      ],
+      "video_specs": [
+        "{\"codec_name\": \"mpeg2video\", \"display_aspect_ratio\": \"4:3\", \"field_order\": \"tt\", \"height\": 480, \"r_frame_rate\": \"30000/1001\", \"sample_aspect_ratio\": \"8:9\", \"width\": 720}"
+      ],
+      "durations": [
+        6.528
+      ]
+    },
+    "nochapters_Scratch_t67": {
+      "chapter2": null,
+      "titles": [
+        "Scratch_t67"
+      ],
+      "n_titles": 1,
+      "edit_list_candidates": [],
+      "technique_binding": "no edit-list match",
+      "audio_equality_classes": [
+        [
+          "Scratch_t67"
+        ]
+      ],
+      "audio_binds_all_titles": true,
+      "n_audio_streams": [
+        1
+      ],
+      "video_specs": [
+        "{\"codec_name\": \"mpeg2video\", \"display_aspect_ratio\": \"4:3\", \"field_order\": \"bb\", \"height\": 480, \"r_frame_rate\": \"30000/1001\", \"sample_aspect_ratio\": \"8:9\", \"width\": 720}"
+      ],
+      "durations": [
+        45.045
+      ]
+    }
+  },
+  "titles": {
+    "Scratch_t00": {
+      "file": "Scratch_t00.mkv",
+      "duration": 83.45,
+      "n_audio": 3,
+      "audio_source_ids": [
+        null,
+        null,
+        null
+      ],
+      "video": {
+        "codec_name": "mpeg2video",
+        "width": 720,
+        "height": 480,
+        "sample_aspect_ratio": "8:9",
+        "display_aspect_ratio": "4:3",
+        "field_order": "bb",
+        "r_frame_rate": "30000/1001"
+      },
+      "chapters": [
+        [
+          0.0,
+          35.035
+        ],
+        [
+          35.035,
+          83.450033
+        ]
+      ],
+      "chapter2": [
+        35.035,
+        83.450033
+      ]
+    },
+    "Scratch_t01": {
+      "file": "Scratch_t01.mkv",
+      "duration": 83.45,
+      "n_audio": 3,
+      "audio_source_ids": [
+        null,
+        null,
+        null
+      ],
+      "video": {
+        "codec_name": "mpeg2video",
+        "width": 720,
+        "height": 480,
+        "sample_aspect_ratio": "8:9",
+        "display_aspect_ratio": "4:3",
+        "field_order": "bb",
+        "r_frame_rate": "30000/1001"
+      },
+      "chapters": [
+        [
+          0.0,
+          35.035
+        ],
+        [
+          35.035,
+          83.450033
+        ]
+      ],
+      "chapter2": [
+        35.035,
+        83.450033
+      ]
+    },
+    "Scratch_t02": {
+      "file": "Scratch_t02.mkv",
+      "duration": 83.45,
+      "n_audio": 3,
+      "audio_source_ids": [
+        null,
+        null,
+        null
+      ],
+      "video": {
+        "codec_name": "mpeg2video",
+        "width": 720,
+        "height": 480,
+        "sample_aspect_ratio": "8:9",
+        "display_aspect_ratio": "4:3",
+        "field_order": "bb",
+        "r_frame_rate": "30000/1001"
+      },
+      "chapters": [
+        [
+          0.0,
+          35.035
+        ],
+        [
+          35.035,
+          83.450033
+        ]
+      ],
+      "chapter2": [
+        35.035,
+        83.450033
+      ]
+    },
+    "Scratch_t03": {
+      "file": "Scratch_t03.mkv",
+      "duration": 83.45,
+      "n_audio": 3,
+      "audio_source_ids": [
+        null,
+        null,
+        null
+      ],
+      "video": {
+        "codec_name": "mpeg2video",
+        "width": 720,
+        "height": 480,
+        "sample_aspect_ratio": "8:9",
+        "display_aspect_ratio": "4:3",
+        "field_order": "bb",
+        "r_frame_rate": "30000/1001"
+      },
+      "chapters": [
+        [
+          0.0,
+          35.035
+        ],
+        [
+          35.035,
+          83.450033
+        ]
+      ],
+      "chapter2": [
+        35.035,
+        83.450033
+      ]
+    },
+    "Scratch_t04": {
+      "file": "Scratch_t04.mkv",
+      "duration": 83.45,
+      "n_audio": 3,
+      "audio_source_ids": [
+        null,
+        null,
+        null
+      ],
+      "video": {
+        "codec_name": "mpeg2video",
+        "width": 720,
+        "height": 480,
+        "sample_aspect_ratio": "8:9",
+        "display_aspect_ratio": "4:3",
+        "field_order": "bb",
+        "r_frame_rate": "30000/1001"
+      },
+      "chapters": [
+        [
+          0.0,
+          35.035
+        ],
+        [
+          35.035,
+          83.450033
+        ]
+      ],
+      "chapter2": [
+        35.035,
+        83.450033
+      ]
+    },
+    "Scratch_t05": {
+      "file": "Scratch_t05.mkv",
+      "duration": 83.45,
+      "n_audio": 3,
+      "audio_source_ids": [
+        null,
+        null,
+        null
+      ],
+      "video": {
+        "codec_name": "mpeg2video",
+        "width": 720,
+        "height": 480,
+        "sample_aspect_ratio": "8:9",
+        "display_aspect_ratio": "4:3",
+        "field_order": "bb",
+        "r_frame_rate": "30000/1001"
+      },
+      "chapters": [
+        [
+          0.0,
+          35.035
+        ],
+        [
+          35.035,
+          83.450033
+        ]
+      ],
+      "chapter2": [
+        35.035,
+        83.450033
+      ]
+    },
+    "Scratch_t06": {
+      "file": "Scratch_t06.mkv",
+      "duration": 83.45,
+      "n_audio": 3,
+      "audio_source_ids": [
+        null,
+        null,
+        null
+      ],
+      "video": {
+        "codec_name": "mpeg2video",
+        "width": 720,
+        "height": 480,
+        "sample_aspect_ratio": "8:9",
+        "display_aspect_ratio": "4:3",
+        "field_order": "bb",
+        "r_frame_rate": "30000/1001"
+      },
+      "chapters": [
+        [
+          0.0,
+          35.035
+        ],
+        [
+          35.035,
+          83.450033
+        ]
+      ],
+      "chapter2": [
+        35.035,
+        83.450033
+      ]
+    },
+    "Scratch_t07": {
+      "file": "Scratch_t07.mkv",
+      "duration": 83.45,
+      "n_audio": 3,
+      "audio_source_ids": [
+        null,
+        null,
+        null
+      ],
+      "video": {
+        "codec_name": "mpeg2video",
+        "width": 720,
+        "height": 480,
+        "sample_aspect_ratio": "8:9",
+        "display_aspect_ratio": "4:3",
+        "field_order": "bb",
+        "r_frame_rate": "30000/1001"
+      },
+      "chapters": [
+        [
+          0.0,
+          35.035
+        ],
+        [
+          35.035,
+          83.450033
+        ]
+      ],
+      "chapter2": [
+        35.035,
+        83.450033
+      ]
+    },
+    "Scratch_t08": {
+      "file": "Scratch_t08.mkv",
+      "duration": 72.0,
+      "n_audio": 3,
+      "audio_source_ids": [
+        null,
+        null,
+        null
+      ],
+      "video": {
+        "codec_name": "mpeg2video",
+        "width": 720,
+        "height": 480,
+        "sample_aspect_ratio": "8:9",
+        "display_aspect_ratio": "4:3",
+        "field_order": "bb",
+        "r_frame_rate": "30000/1001"
+      },
+      "chapters": [
+        [
+          0.0,
+          23.5235
+        ],
+        [
+          23.5235,
+          72.0
+        ]
+      ],
+      "chapter2": [
+        23.5235,
+        72.0
+      ]
+    },
+    "Scratch_t09": {
+      "file": "Scratch_t09.mkv",
+      "duration": 72.0,
+      "n_audio": 3,
+      "audio_source_ids": [
+        null,
+        null,
+        null
+      ],
+      "video": {
+        "codec_name": "mpeg2video",
+        "width": 720,
+        "height": 480,
+        "sample_aspect_ratio": "8:9",
+        "display_aspect_ratio": "4:3",
+        "field_order": "bb",
+        "r_frame_rate": "30000/1001"
+      },
+      "chapters": [
+        [
+          0.0,
+          23.5235
+        ],
+        [
+          23.5235,
+          72.0
+        ]
+      ],
+      "chapter2": [
+        23.5235,
+        72.0
+      ]
+    },
+    "Scratch_t10": {
+      "file": "Scratch_t10.mkv",
+      "duration": 72.0,
+      "n_audio": 3,
+      "audio_source_ids": [
+        null,
+        null,
+        null
+      ],
+      "video": {
+        "codec_name": "mpeg2video",
+        "width": 720,
+        "height": 480,
+        "sample_aspect_ratio": "8:9",
+        "display_aspect_ratio": "4:3",
+        "field_order": "bb",
+        "r_frame_rate": "30000/1001"
+      },
+      "chapters": [
+        [
+          0.0,
+          23.5235
+        ],
+        [
+          23.5235,
+          72.0
+        ]
+      ],
+      "chapter2": [
+        23.5235,
+        72.0
+      ]
+    },
+    "Scratch_t100": {
+      "file": "Scratch_t100.mkv",
+      "duration": 112.352,
+      "n_audio": 3,
+      "audio_source_ids": [
+        null,
+        null,
+        null
+      ],
+      "video": {
+        "codec_name": "mpeg2video",
+        "width": 720,
+        "height": 480,
+        "sample_aspect_ratio": "8:9",
+        "display_aspect_ratio": "4:3",
+        "field_order": "bb",
+        "r_frame_rate": "30000/1001"
+      },
+      "chapters": [
+        [
+          0.0,
+          44.5445
+        ],
+        [
+          44.5445,
+          112.352
+        ]
+      ],
+      "chapter2": [
+        44.5445,
+        112.352
+      ]
+    },
+    "Scratch_t101": {
+      "file": "Scratch_t101.mkv",
+      "duration": 112.352,
+      "n_audio": 3,
+      "audio_source_ids": [
+        null,
+        null,
+        null
+      ],
+      "video": {
+        "codec_name": "mpeg2video",
+        "width": 720,
+        "height": 480,
+        "sample_aspect_ratio": "8:9",
+        "display_aspect_ratio": "4:3",
+        "field_order": "bb",
+        "r_frame_rate": "30000/1001"
+      },
+      "chapters": [
+        [
+          0.0,
+          44.5445
+        ],
+        [
+          44.5445,
+          112.352
+        ]
+      ],
+      "chapter2": [
+        44.5445,
+        112.352
+      ]
+    },
+    "Scratch_t102": {
+      "file": "Scratch_t102.mkv",
+      "duration": 141.888,
+      "n_audio": 3,
+      "audio_source_ids": [
+        null,
+        null,
+        null
+      ],
+      "video": {
+        "codec_name": "mpeg2video",
+        "width": 720,
+        "height": 480,
+        "sample_aspect_ratio": "8:9",
+        "display_aspect_ratio": "4:3",
+        "field_order": "bb",
+        "r_frame_rate": "30000/1001"
+      },
+      "chapters": [
+        [
+          0.0,
+          58.5585
+        ],
+        [
+          58.5585,
+          141.888
+        ]
+      ],
+      "chapter2": [
+        58.5585,
+        141.888
+      ]
+    },
+    "Scratch_t103": {
+      "file": "Scratch_t103.mkv",
+      "duration": 141.888,
+      "n_audio": 3,
+      "audio_source_ids": [
+        null,
+        null,
+        null
+      ],
+      "video": {
+        "codec_name": "mpeg2video",
+        "width": 720,
+        "height": 480,
+        "sample_aspect_ratio": "8:9",
+        "display_aspect_ratio": "4:3",
+        "field_order": "bb",
+        "r_frame_rate": "30000/1001"
+      },
+      "chapters": [
+        [
+          0.0,
+          58.5585
+        ],
+        [
+          58.5585,
+          141.888
+        ]
+      ],
+      "chapter2": [
+        58.5585,
+        141.888
+      ]
+    },
+    "Scratch_t104": {
+      "file": "Scratch_t104.mkv",
+      "duration": 141.888,
+      "n_audio": 3,
+      "audio_source_ids": [
+        null,
+        null,
+        null
+      ],
+      "video": {
+        "codec_name": "mpeg2video",
+        "width": 720,
+        "height": 480,
+        "sample_aspect_ratio": "8:9",
+        "display_aspect_ratio": "4:3",
+        "field_order": "bb",
+        "r_frame_rate": "30000/1001"
+      },
+      "chapters": [
+        [
+          0.0,
+          58.5585
+        ],
+        [
+          58.5585,
+          141.888
+        ]
+      ],
+      "chapter2": [
+        58.5585,
+        141.888
+      ]
+    },
+    "Scratch_t105": {
+      "file": "Scratch_t105.mkv",
+      "duration": 141.888,
+      "n_audio": 3,
+      "audio_source_ids": [
+        null,
+        null,
+        null
+      ],
+      "video": {
+        "codec_name": "mpeg2video",
+        "width": 720,
+        "height": 480,
+        "sample_aspect_ratio": "8:9",
+        "display_aspect_ratio": "4:3",
+        "field_order": "bb",
+        "r_frame_rate": "30000/1001"
+      },
+      "chapters": [
+        [
+          0.0,
+          58.5585
+        ],
+        [
+          58.5585,
+          141.888
+        ]
+      ],
+      "chapter2": [
+        58.5585,
+        141.888
+      ]
+    },
+    "Scratch_t106": {
+      "file": "Scratch_t106.mkv",
+      "duration": 237.303,
+      "n_audio": 1,
+      "audio_source_ids": [
+        null
+      ],
+      "video": {
+        "codec_name": "mpeg2video",
+        "width": 720,
+        "height": 480,
+        "sample_aspect_ratio": "8:9",
+        "display_aspect_ratio": "4:3",
+        "field_order": "bb",
+        "r_frame_rate": "30000/1001"
+      },
+      "chapters": [
+        [
+          0.0,
+          10.01
+        ],
+        [
+          10.01,
+          237.303733
+        ]
+      ],
+      "chapter2": [
+        10.01,
+        237.303733
+      ]
+    },
+    "Scratch_t107": {
+      "file": "Scratch_t107.mkv",
+      "duration": 412.445,
+      "n_audio": 1,
+      "audio_source_ids": [
+        null
+      ],
+      "video": {
+        "codec_name": "mpeg2video",
+        "width": 720,
+        "height": 480,
+        "sample_aspect_ratio": "8:9",
+        "display_aspect_ratio": "4:3",
+        "field_order": "bb",
+        "r_frame_rate": "30000/1001"
+      },
+      "chapters": [
+        [
+          0.0,
+          11.5115
+        ],
+        [
+          11.5115,
+          412.445367
+        ]
+      ],
+      "chapter2": [
+        11.5115,
+        412.445367
+      ]
+    },
+    "Scratch_t108": {
+      "file": "Scratch_t108.mkv",
+      "duration": 220.62,
+      "n_audio": 1,
+      "audio_source_ids": [
+        null
+      ],
+      "video": {
+        "codec_name": "mpeg2video",
+        "width": 720,
+        "height": 480,
+        "sample_aspect_ratio": "8:9",
+        "display_aspect_ratio": "4:3",
+        "field_order": "bb",
+        "r_frame_rate": "30000/1001"
+      },
+      "chapters": [
+        [
+          0.0,
+          8.5085
+        ],
+        [
+          8.5085,
+          220.6204
+        ]
+      ],
+      "chapter2": [
+        8.5085,
+        220.6204
+      ]
+    },
+    "Scratch_t109": {
+      "file": "Scratch_t109.mkv",
+      "duration": 361.16,
+      "n_audio": 1,
+      "audio_source_ids": [
+        null
+      ],
+      "video": {
+        "codec_name": "mpeg2video",
+        "width": 720,
+        "height": 480,
+        "sample_aspect_ratio": "8:9",
+        "display_aspect_ratio": "4:3",
+        "field_order": "bb",
+        "r_frame_rate": "30000/1001"
+      },
+      "chapters": [
+        [
+          0.0,
+          8.008
+        ],
+        [
+          8.008,
+          361.1608
+        ]
+      ],
+      "chapter2": [
+        8.008,
+        361.1608
+      ]
+    },
+    "Scratch_t11": {
+      "file": "Scratch_t11.mkv",
+      "duration": 72.0,
+      "n_audio": 3,
+      "audio_source_ids": [
+        null,
+        null,
+        null
+      ],
+      "video": {
+        "codec_name": "mpeg2video",
+        "width": 720,
+        "height": 480,
+        "sample_aspect_ratio": "8:9",
+        "display_aspect_ratio": "4:3",
+        "field_order": "bb",
+        "r_frame_rate": "30000/1001"
+      },
+      "chapters": [
+        [
+          0.0,
+          23.5235
+        ],
+        [
+          23.5235,
+          72.0
+        ]
+      ],
+      "chapter2": [
+        23.5235,
+        72.0
+      ]
+    },
+    "Scratch_t110": {
+      "file": "Scratch_t110.mkv",
+      "duration": 125.058,
+      "n_audio": 1,
+      "audio_source_ids": [
+        null
+      ],
+      "video": {
+        "codec_name": "mpeg2video",
+        "width": 720,
+        "height": 480,
+        "sample_aspect_ratio": "8:9",
+        "display_aspect_ratio": "4:3",
+        "field_order": "bb",
+        "r_frame_rate": "30000/1001"
+      },
+      "chapters": [
+        [
+          0.0,
+          121.6215
+        ],
+        [
+          121.6215,
+          125.058267
+        ]
+      ],
+      "chapter2": [
+        121.6215,
+        125.058267
+      ]
+    },
+    "Scratch_t111": {
+      "file": "Scratch_t111.mkv",
+      "duration": 138.204,
+      "n_audio": 1,
+      "audio_source_ids": [
+        null
+      ],
+      "video": {
+        "codec_name": "mpeg2video",
+        "width": 720,
+        "height": 480,
+        "sample_aspect_ratio": "8:9",
+        "display_aspect_ratio": "4:3",
+        "field_order": "bb",
+        "r_frame_rate": "30000/1001"
+      },
+      "chapters": [
+        [
+          0.0,
+          136.136
+        ],
+        [
+          136.136,
+          138.204733
+        ]
+      ],
+      "chapter2": [
+        136.136,
+        138.204733
+      ]
+    },
+    "Scratch_t112": {
+      "file": "Scratch_t112.mkv",
+      "duration": 68.568,
+      "n_audio": 1,
+      "audio_source_ids": [
+        null
+      ],
+      "video": {
+        "codec_name": "mpeg2video",
+        "width": 720,
+        "height": 480,
+        "sample_aspect_ratio": "8:9",
+        "display_aspect_ratio": "4:3",
+        "field_order": "bb",
+        "r_frame_rate": "30000/1001"
+      },
+      "chapters": [],
+      "chapter2": null
+    },
+    "Scratch_t113": {
+      "file": "Scratch_t113.mkv",
+      "duration": 6.528,
+      "n_audio": 1,
+      "audio_source_ids": [
+        null
+      ],
+      "video": {
+        "codec_name": "mpeg2video",
+        "width": 720,
+        "height": 480,
+        "sample_aspect_ratio": "8:9",
+        "display_aspect_ratio": "4:3",
+        "field_order": "tt",
+        "r_frame_rate": "30000/1001"
+      },
+      "chapters": [],
+      "chapter2": null
+    },
+    "Scratch_t114": {
+      "file": "Scratch_t114.mkv",
+      "duration": 190.016,
+      "n_audio": 1,
+      "audio_source_ids": [
+        null
+      ],
+      "video": {
+        "codec_name": "mpeg2video",
+        "width": 720,
+        "height": 480,
+        "sample_aspect_ratio": "8:9",
+        "display_aspect_ratio": "4:3",
+        "field_order": "bb",
+        "r_frame_rate": "30000/1001"
+      },
+      "chapters": [
+        [
+          0.0,
+          17.017
+        ],
+        [
+          17.017,
+          190.016
+        ]
+      ],
+      "chapter2": [
+        17.017,
+        190.016
+      ]
+    },
+    "Scratch_t115": {
+      "file": "Scratch_t115.mkv",
+      "duration": 261.361,
+      "n_audio": 1,
+      "audio_source_ids": [
+        null
+      ],
+      "video": {
+        "codec_name": "mpeg2video",
+        "width": 720,
+        "height": 480,
+        "sample_aspect_ratio": "8:9",
+        "display_aspect_ratio": "4:3",
+        "field_order": "bb",
+        "r_frame_rate": "30000/1001"
+      },
+      "chapters": [
+        [
+          0.0,
+          23.5235
+        ],
+        [
+          23.5235,
+          261.3611
+        ]
+      ],
+      "chapter2": [
+        23.5235,
+        261.3611
+      ]
+    },
+    "Scratch_t116": {
+      "file": "Scratch_t116.mkv",
+      "duration": 70.737,
+      "n_audio": 1,
+      "audio_source_ids": [
+        null
+      ],
+      "video": {
+        "codec_name": "mpeg2video",
+        "width": 720,
+        "height": 480,
+        "sample_aspect_ratio": "8:9",
+        "display_aspect_ratio": "4:3",
+        "field_order": "bb",
+        "r_frame_rate": "30000/1001"
+      },
+      "chapters": [
+        [
+          0.0,
+          69.069
+        ],
+        [
+          69.069,
+          70.737333
+        ]
+      ],
+      "chapter2": [
+        69.069,
+        70.737333
+      ]
+    },
+    "Scratch_t117": {
+      "file": "Scratch_t117.mkv",
+      "duration": 53.568,
+      "n_audio": 1,
+      "audio_source_ids": [
+        null
+      ],
+      "video": {
+        "codec_name": "mpeg2video",
+        "width": 720,
+        "height": 480,
+        "sample_aspect_ratio": "8:9",
+        "display_aspect_ratio": "4:3",
+        "field_order": "tt",
+        "r_frame_rate": "30000/1001"
+      },
+      "chapters": [
+        [
+          0.0,
+          51.5515
+        ],
+        [
+          51.5515,
+          53.568
+        ]
+      ],
+      "chapter2": [
+        51.5515,
+        53.568
+      ]
+    },
+    "Scratch_t118": {
+      "file": "Scratch_t118.mkv",
+      "duration": 493.693,
+      "n_audio": 1,
+      "audio_source_ids": [
+        null
+      ],
+      "video": {
+        "codec_name": "mpeg2video",
+        "width": 720,
+        "height": 480,
+        "sample_aspect_ratio": "8:9",
+        "display_aspect_ratio": "4:3",
+        "field_order": "bb",
+        "r_frame_rate": "30000/1001"
+      },
+      "chapters": [
+        [
+          0.0,
+          489.489
+        ],
+        [
+          489.489,
+          493.6932
+        ]
+      ],
+      "chapter2": [
+        489.489,
+        493.6932
+      ]
+    },
+    "Scratch_t12": {
+      "file": "Scratch_t12.mkv",
+      "duration": 95.52,
+      "n_audio": 3,
+      "audio_source_ids": [
+        null,
+        null,
+        null
+      ],
+      "video": {
+        "codec_name": "mpeg2video",
+        "width": 720,
+        "height": 480,
+        "sample_aspect_ratio": "8:9",
+        "display_aspect_ratio": "4:3",
+        "field_order": "bb",
+        "r_frame_rate": "30000/1001"
+      },
+      "chapters": [
+        [
+          0.0,
+          47.047
+        ],
+        [
+          47.047,
+          95.52
+        ]
+      ],
+      "chapter2": [
+        47.047,
+        95.52
+      ]
+    },
+    "Scratch_t13": {
+      "file": "Scratch_t13.mkv",
+      "duration": 95.52,
+      "n_audio": 3,
+      "audio_source_ids": [
+        null,
+        null,
+        null
+      ],
+      "video": {
+        "codec_name": "mpeg2video",
+        "width": 720,
+        "height": 480,
+        "sample_aspect_ratio": "8:9",
+        "display_aspect_ratio": "4:3",
+        "field_order": "bb",
+        "r_frame_rate": "30000/1001"
+      },
+      "chapters": [
+        [
+          0.0,
+          47.047
+        ],
+        [
+          47.047,
+          95.52
+        ]
+      ],
+      "chapter2": [
+        47.047,
+        95.52
+      ]
+    },
+    "Scratch_t14": {
+      "file": "Scratch_t14.mkv",
+      "duration": 95.52,
+      "n_audio": 3,
+      "audio_source_ids": [
+        null,
+        null,
+        null
+      ],
+      "video": {
+        "codec_name": "mpeg2video",
+        "width": 720,
+        "height": 480,
+        "sample_aspect_ratio": "8:9",
+        "display_aspect_ratio": "4:3",
+        "field_order": "bb",
+        "r_frame_rate": "30000/1001"
+      },
+      "chapters": [
+        [
+          0.0,
+          47.047
+        ],
+        [
+          47.047,
+          95.52
+        ]
+      ],
+      "chapter2": [
+        47.047,
+        95.52
+      ]
+    },
+    "Scratch_t15": {
+      "file": "Scratch_t15.mkv",
+      "duration": 95.52,
+      "n_audio": 3,
+      "audio_source_ids": [
+        null,
+        null,
+        null
+      ],
+      "video": {
+        "codec_name": "mpeg2video",
+        "width": 720,
+        "height": 480,
+        "sample_aspect_ratio": "8:9",
+        "display_aspect_ratio": "4:3",
+        "field_order": "bb",
+        "r_frame_rate": "30000/1001"
+      },
+      "chapters": [
+        [
+          0.0,
+          47.047
+        ],
+        [
+          47.047,
+          95.52
+        ]
+      ],
+      "chapter2": [
+        47.047,
+        95.52
+      ]
+    },
+    "Scratch_t16": {
+      "file": "Scratch_t16.mkv",
+      "duration": 93.92,
+      "n_audio": 3,
+      "audio_source_ids": [
+        null,
+        null,
+        null
+      ],
+      "video": {
+        "codec_name": "mpeg2video",
+        "width": 720,
+        "height": 480,
+        "sample_aspect_ratio": "8:9",
+        "display_aspect_ratio": "4:3",
+        "field_order": "bb",
+        "r_frame_rate": "30000/1001"
+      },
+      "chapters": [
+        [
+          0.0,
+          15.5155
+        ],
+        [
+          15.5155,
+          93.92
+        ]
+      ],
+      "chapter2": [
+        15.5155,
+        93.92
+      ]
+    },
+    "Scratch_t17": {
+      "file": "Scratch_t17.mkv",
+      "duration": 93.92,
+      "n_audio": 3,
+      "audio_source_ids": [
+        null,
+        null,
+        null
+      ],
+      "video": {
+        "codec_name": "mpeg2video",
+        "width": 720,
+        "height": 480,
+        "sample_aspect_ratio": "8:9",
+        "display_aspect_ratio": "4:3",
+        "field_order": "bb",
+        "r_frame_rate": "30000/1001"
+      },
+      "chapters": [
+        [
+          0.0,
+          15.5155
+        ],
+        [
+          15.5155,
+          93.92
+        ]
+      ],
+      "chapter2": [
+        15.5155,
+        93.92
+      ]
+    },
+    "Scratch_t18": {
+      "file": "Scratch_t18.mkv",
+      "duration": 93.92,
+      "n_audio": 3,
+      "audio_source_ids": [
+        null,
+        null,
+        null
+      ],
+      "video": {
+        "codec_name": "mpeg2video",
+        "width": 720,
+        "height": 480,
+        "sample_aspect_ratio": "8:9",
+        "display_aspect_ratio": "4:3",
+        "field_order": "bb",
+        "r_frame_rate": "30000/1001"
+      },
+      "chapters": [
+        [
+          0.0,
+          15.5155
+        ],
+        [
+          15.5155,
+          93.92
+        ]
+      ],
+      "chapter2": [
+        15.5155,
+        93.92
+      ]
+    },
+    "Scratch_t19": {
+      "file": "Scratch_t19.mkv",
+      "duration": 93.92,
+      "n_audio": 3,
+      "audio_source_ids": [
+        null,
+        null,
+        null
+      ],
+      "video": {
+        "codec_name": "mpeg2video",
+        "width": 720,
+        "height": 480,
+        "sample_aspect_ratio": "8:9",
+        "display_aspect_ratio": "4:3",
+        "field_order": "bb",
+        "r_frame_rate": "30000/1001"
+      },
+      "chapters": [
+        [
+          0.0,
+          15.5155
+        ],
+        [
+          15.5155,
+          93.92
+        ]
+      ],
+      "chapter2": [
+        15.5155,
+        93.92
+      ]
+    },
+    "Scratch_t20": {
+      "file": "Scratch_t20.mkv",
+      "duration": 103.328,
+      "n_audio": 3,
+      "audio_source_ids": [
+        null,
+        null,
+        null
+      ],
+      "video": {
+        "codec_name": "mpeg2video",
+        "width": 720,
+        "height": 480,
+        "sample_aspect_ratio": "8:9",
+        "display_aspect_ratio": "4:3",
+        "field_order": "bb",
+        "r_frame_rate": "30000/1001"
+      },
+      "chapters": [
+        [
+          0.0,
+          64.064
+        ],
+        [
+          64.064,
+          103.328
+        ]
+      ],
+      "chapter2": [
+        64.064,
+        103.328
+      ]
+    },
+    "Scratch_t21": {
+      "file": "Scratch_t21.mkv",
+      "duration": 103.328,
+      "n_audio": 3,
+      "audio_source_ids": [
+        null,
+        null,
+        null
+      ],
+      "video": {
+        "codec_name": "mpeg2video",
+        "width": 720,
+        "height": 480,
+        "sample_aspect_ratio": "8:9",
+        "display_aspect_ratio": "4:3",
+        "field_order": "bb",
+        "r_frame_rate": "30000/1001"
+      },
+      "chapters": [
+        [
+          0.0,
+          64.064
+        ],
+        [
+          64.064,
+          103.328
+        ]
+      ],
+      "chapter2": [
+        64.064,
+        103.328
+      ]
+    },
+    "Scratch_t22": {
+      "file": "Scratch_t22.mkv",
+      "duration": 103.328,
+      "n_audio": 3,
+      "audio_source_ids": [
+        null,
+        null,
+        null
+      ],
+      "video": {
+        "codec_name": "mpeg2video",
+        "width": 720,
+        "height": 480,
+        "sample_aspect_ratio": "8:9",
+        "display_aspect_ratio": "4:3",
+        "field_order": "bb",
+        "r_frame_rate": "30000/1001"
+      },
+      "chapters": [
+        [
+          0.0,
+          64.064
+        ],
+        [
+          64.064,
+          103.328
+        ]
+      ],
+      "chapter2": [
+        64.064,
+        103.328
+      ]
+    },
+    "Scratch_t23": {
+      "file": "Scratch_t23.mkv",
+      "duration": 103.328,
+      "n_audio": 3,
+      "audio_source_ids": [
+        null,
+        null,
+        null
+      ],
+      "video": {
+        "codec_name": "mpeg2video",
+        "width": 720,
+        "height": 480,
+        "sample_aspect_ratio": "8:9",
+        "display_aspect_ratio": "4:3",
+        "field_order": "bb",
+        "r_frame_rate": "30000/1001"
+      },
+      "chapters": [
+        [
+          0.0,
+          64.064
+        ],
+        [
+          64.064,
+          103.328
+        ]
+      ],
+      "chapter2": [
+        64.064,
+        103.328
+      ]
+    },
+    "Scratch_t24": {
+      "file": "Scratch_t24.mkv",
+      "duration": 121.376,
+      "n_audio": 3,
+      "audio_source_ids": [
+        null,
+        null,
+        null
+      ],
+      "video": {
+        "codec_name": "mpeg2video",
+        "width": 720,
+        "height": 480,
+        "sample_aspect_ratio": "8:9",
+        "display_aspect_ratio": "4:3",
+        "field_order": "bb",
+        "r_frame_rate": "30000/1001"
+      },
+      "chapters": [
+        [
+          0.0,
+          43.043
+        ],
+        [
+          43.043,
+          121.376
+        ]
+      ],
+      "chapter2": [
+        43.043,
+        121.376
+      ]
+    },
+    "Scratch_t25": {
+      "file": "Scratch_t25.mkv",
+      "duration": 121.376,
+      "n_audio": 3,
+      "audio_source_ids": [
+        null,
+        null,
+        null
+      ],
+      "video": {
+        "codec_name": "mpeg2video",
+        "width": 720,
+        "height": 480,
+        "sample_aspect_ratio": "8:9",
+        "display_aspect_ratio": "4:3",
+        "field_order": "bb",
+        "r_frame_rate": "30000/1001"
+      },
+      "chapters": [
+        [
+          0.0,
+          43.043
+        ],
+        [
+          43.043,
+          121.376
+        ]
+      ],
+      "chapter2": [
+        43.043,
+        121.376
+      ]
+    },
+    "Scratch_t26": {
+      "file": "Scratch_t26.mkv",
+      "duration": 121.376,
+      "n_audio": 3,
+      "audio_source_ids": [
+        null,
+        null,
+        null
+      ],
+      "video": {
+        "codec_name": "mpeg2video",
+        "width": 720,
+        "height": 480,
+        "sample_aspect_ratio": "8:9",
+        "display_aspect_ratio": "4:3",
+        "field_order": "bb",
+        "r_frame_rate": "30000/1001"
+      },
+      "chapters": [
+        [
+          0.0,
+          43.043
+        ],
+        [
+          43.043,
+          121.376
+        ]
+      ],
+      "chapter2": [
+        43.043,
+        121.376
+      ]
+    },
+    "Scratch_t27": {
+      "file": "Scratch_t27.mkv",
+      "duration": 121.376,
+      "n_audio": 3,
+      "audio_source_ids": [
+        null,
+        null,
+        null
+      ],
+      "video": {
+        "codec_name": "mpeg2video",
+        "width": 720,
+        "height": 480,
+        "sample_aspect_ratio": "8:9",
+        "display_aspect_ratio": "4:3",
+        "field_order": "bb",
+        "r_frame_rate": "30000/1001"
+      },
+      "chapters": [
+        [
+          0.0,
+          43.043
+        ],
+        [
+          43.043,
+          121.376
+        ]
+      ],
+      "chapter2": [
+        43.043,
+        121.376
+      ]
+    },
+    "Scratch_t28": {
+      "file": "Scratch_t28.mkv",
+      "duration": 64.096,
+      "n_audio": 3,
+      "audio_source_ids": [
+        null,
+        null,
+        null
+      ],
+      "video": {
+        "codec_name": "mpeg2video",
+        "width": 720,
+        "height": 480,
+        "sample_aspect_ratio": "8:9",
+        "display_aspect_ratio": "4:3",
+        "field_order": "bb",
+        "r_frame_rate": "30000/1001"
+      },
+      "chapters": [
+        [
+          0.0,
+          27.5275
+        ],
+        [
+          27.5275,
+          64.096
+        ]
+      ],
+      "chapter2": [
+        27.5275,
+        64.096
+      ]
+    },
+    "Scratch_t29": {
+      "file": "Scratch_t29.mkv",
+      "duration": 64.096,
+      "n_audio": 3,
+      "audio_source_ids": [
+        null,
+        null,
+        null
+      ],
+      "video": {
+        "codec_name": "mpeg2video",
+        "width": 720,
+        "height": 480,
+        "sample_aspect_ratio": "8:9",
+        "display_aspect_ratio": "4:3",
+        "field_order": "bb",
+        "r_frame_rate": "30000/1001"
+      },
+      "chapters": [
+        [
+          0.0,
+          27.5275
+        ],
+        [
+          27.5275,
+          64.096
+        ]
+      ],
+      "chapter2": [
+        27.5275,
+        64.096
+      ]
+    },
+    "Scratch_t30": {
+      "file": "Scratch_t30.mkv",
+      "duration": 64.096,
+      "n_audio": 3,
+      "audio_source_ids": [
+        null,
+        null,
+        null
+      ],
+      "video": {
+        "codec_name": "mpeg2video",
+        "width": 720,
+        "height": 480,
+        "sample_aspect_ratio": "8:9",
+        "display_aspect_ratio": "4:3",
+        "field_order": "bb",
+        "r_frame_rate": "30000/1001"
+      },
+      "chapters": [
+        [
+          0.0,
+          27.5275
+        ],
+        [
+          27.5275,
+          64.096
+        ]
+      ],
+      "chapter2": [
+        27.5275,
+        64.096
+      ]
+    },
+    "Scratch_t31": {
+      "file": "Scratch_t31.mkv",
+      "duration": 64.096,
+      "n_audio": 3,
+      "audio_source_ids": [
+        null,
+        null,
+        null
+      ],
+      "video": {
+        "codec_name": "mpeg2video",
+        "width": 720,
+        "height": 480,
+        "sample_aspect_ratio": "8:9",
+        "display_aspect_ratio": "4:3",
+        "field_order": "bb",
+        "r_frame_rate": "30000/1001"
+      },
+      "chapters": [
+        [
+          0.0,
+          27.5275
+        ],
+        [
+          27.5275,
+          64.096
+        ]
+      ],
+      "chapter2": [
+        27.5275,
+        64.096
+      ]
+    },
+    "Scratch_t32": {
+      "file": "Scratch_t32.mkv",
+      "duration": 122.752,
+      "n_audio": 3,
+      "audio_source_ids": [
+        null,
+        null,
+        null
+      ],
+      "video": {
+        "codec_name": "mpeg2video",
+        "width": 720,
+        "height": 480,
+        "sample_aspect_ratio": "8:9",
+        "display_aspect_ratio": "4:3",
+        "field_order": "bb",
+        "r_frame_rate": "30000/1001"
+      },
+      "chapters": [
+        [
+          0.0,
+          49.5495
+        ],
+        [
+          49.5495,
+          122.752
+        ]
+      ],
+      "chapter2": [
+        49.5495,
+        122.752
+      ]
+    },
+    "Scratch_t33": {
+      "file": "Scratch_t33.mkv",
+      "duration": 122.752,
+      "n_audio": 3,
+      "audio_source_ids": [
+        null,
+        null,
+        null
+      ],
+      "video": {
+        "codec_name": "mpeg2video",
+        "width": 720,
+        "height": 480,
+        "sample_aspect_ratio": "8:9",
+        "display_aspect_ratio": "4:3",
+        "field_order": "bb",
+        "r_frame_rate": "30000/1001"
+      },
+      "chapters": [
+        [
+          0.0,
+          49.5495
+        ],
+        [
+          49.5495,
+          122.752
+        ]
+      ],
+      "chapter2": [
+        49.5495,
+        122.752
+      ]
+    },
+    "Scratch_t34": {
+      "file": "Scratch_t34.mkv",
+      "duration": 122.752,
+      "n_audio": 3,
+      "audio_source_ids": [
+        null,
+        null,
+        null
+      ],
+      "video": {
+        "codec_name": "mpeg2video",
+        "width": 720,
+        "height": 480,
+        "sample_aspect_ratio": "8:9",
+        "display_aspect_ratio": "4:3",
+        "field_order": "bb",
+        "r_frame_rate": "30000/1001"
+      },
+      "chapters": [
+        [
+          0.0,
+          49.5495
+        ],
+        [
+          49.5495,
+          122.752
+        ]
+      ],
+      "chapter2": [
+        49.5495,
+        122.752
+      ]
+    },
+    "Scratch_t35": {
+      "file": "Scratch_t35.mkv",
+      "duration": 122.752,
+      "n_audio": 3,
+      "audio_source_ids": [
+        null,
+        null,
+        null
+      ],
+      "video": {
+        "codec_name": "mpeg2video",
+        "width": 720,
+        "height": 480,
+        "sample_aspect_ratio": "8:9",
+        "display_aspect_ratio": "4:3",
+        "field_order": "bb",
+        "r_frame_rate": "30000/1001"
+      },
+      "chapters": [
+        [
+          0.0,
+          49.5495
+        ],
+        [
+          49.5495,
+          122.752
+        ]
+      ],
+      "chapter2": [
+        49.5495,
+        122.752
+      ]
+    },
+    "Scratch_t36": {
+      "file": "Scratch_t36.mkv",
+      "duration": 141.472,
+      "n_audio": 3,
+      "audio_source_ids": [
+        null,
+        null,
+        null
+      ],
+      "video": {
+        "codec_name": "mpeg2video",
+        "width": 720,
+        "height": 480,
+        "sample_aspect_ratio": "8:9",
+        "display_aspect_ratio": "4:3",
+        "field_order": "bb",
+        "r_frame_rate": "30000/1001"
+      },
+      "chapters": [
+        [
+          0.0,
+          51.051
+        ],
+        [
+          51.051,
+          141.472
+        ]
+      ],
+      "chapter2": [
+        51.051,
+        141.472
+      ]
+    },
+    "Scratch_t37": {
+      "file": "Scratch_t37.mkv",
+      "duration": 141.472,
+      "n_audio": 3,
+      "audio_source_ids": [
+        null,
+        null,
+        null
+      ],
+      "video": {
+        "codec_name": "mpeg2video",
+        "width": 720,
+        "height": 480,
+        "sample_aspect_ratio": "8:9",
+        "display_aspect_ratio": "4:3",
+        "field_order": "bb",
+        "r_frame_rate": "30000/1001"
+      },
+      "chapters": [
+        [
+          0.0,
+          51.051
+        ],
+        [
+          51.051,
+          141.472
+        ]
+      ],
+      "chapter2": [
+        51.051,
+        141.472
+      ]
+    },
+    "Scratch_t38": {
+      "file": "Scratch_t38.mkv",
+      "duration": 141.472,
+      "n_audio": 3,
+      "audio_source_ids": [
+        null,
+        null,
+        null
+      ],
+      "video": {
+        "codec_name": "mpeg2video",
+        "width": 720,
+        "height": 480,
+        "sample_aspect_ratio": "8:9",
+        "display_aspect_ratio": "4:3",
+        "field_order": "bb",
+        "r_frame_rate": "30000/1001"
+      },
+      "chapters": [
+        [
+          0.0,
+          51.051
+        ],
+        [
+          51.051,
+          141.472
+        ]
+      ],
+      "chapter2": [
+        51.051,
+        141.472
+      ]
+    },
+    "Scratch_t39": {
+      "file": "Scratch_t39.mkv",
+      "duration": 141.472,
+      "n_audio": 3,
+      "audio_source_ids": [
+        null,
+        null,
+        null
+      ],
+      "video": {
+        "codec_name": "mpeg2video",
+        "width": 720,
+        "height": 480,
+        "sample_aspect_ratio": "8:9",
+        "display_aspect_ratio": "4:3",
+        "field_order": "bb",
+        "r_frame_rate": "30000/1001"
+      },
+      "chapters": [
+        [
+          0.0,
+          51.051
+        ],
+        [
+          51.051,
+          141.472
+        ]
+      ],
+      "chapter2": [
+        51.051,
+        141.472
+      ]
+    },
+    "Scratch_t40": {
+      "file": "Scratch_t40.mkv",
+      "duration": 123.968,
+      "n_audio": 3,
+      "audio_source_ids": [
+        null,
+        null,
+        null
+      ],
+      "video": {
+        "codec_name": "mpeg2video",
+        "width": 720,
+        "height": 480,
+        "sample_aspect_ratio": "8:9",
+        "display_aspect_ratio": "4:3",
+        "field_order": "bb",
+        "r_frame_rate": "30000/1001"
+      },
+      "chapters": [
+        [
+          0.0,
+          33.5335
+        ],
+        [
+          33.5335,
+          123.968
+        ]
+      ],
+      "chapter2": [
+        33.5335,
+        123.968
+      ]
+    },
+    "Scratch_t41": {
+      "file": "Scratch_t41.mkv",
+      "duration": 123.968,
+      "n_audio": 3,
+      "audio_source_ids": [
+        null,
+        null,
+        null
+      ],
+      "video": {
+        "codec_name": "mpeg2video",
+        "width": 720,
+        "height": 480,
+        "sample_aspect_ratio": "8:9",
+        "display_aspect_ratio": "4:3",
+        "field_order": "bb",
+        "r_frame_rate": "30000/1001"
+      },
+      "chapters": [
+        [
+          0.0,
+          33.5335
+        ],
+        [
+          33.5335,
+          123.968
+        ]
+      ],
+      "chapter2": [
+        33.5335,
+        123.968
+      ]
+    },
+    "Scratch_t42": {
+      "file": "Scratch_t42.mkv",
+      "duration": 123.968,
+      "n_audio": 3,
+      "audio_source_ids": [
+        null,
+        null,
+        null
+      ],
+      "video": {
+        "codec_name": "mpeg2video",
+        "width": 720,
+        "height": 480,
+        "sample_aspect_ratio": "8:9",
+        "display_aspect_ratio": "4:3",
+        "field_order": "bb",
+        "r_frame_rate": "30000/1001"
+      },
+      "chapters": [
+        [
+          0.0,
+          33.5335
+        ],
+        [
+          33.5335,
+          123.968
+        ]
+      ],
+      "chapter2": [
+        33.5335,
+        123.968
+      ]
+    },
+    "Scratch_t43": {
+      "file": "Scratch_t43.mkv",
+      "duration": 123.968,
+      "n_audio": 3,
+      "audio_source_ids": [
+        null,
+        null,
+        null
+      ],
+      "video": {
+        "codec_name": "mpeg2video",
+        "width": 720,
+        "height": 480,
+        "sample_aspect_ratio": "8:9",
+        "display_aspect_ratio": "4:3",
+        "field_order": "bb",
+        "r_frame_rate": "30000/1001"
+      },
+      "chapters": [
+        [
+          0.0,
+          33.5335
+        ],
+        [
+          33.5335,
+          123.968
+        ]
+      ],
+      "chapter2": [
+        33.5335,
+        123.968
+      ]
+    },
+    "Scratch_t44": {
+      "file": "Scratch_t44.mkv",
+      "duration": 156.48,
+      "n_audio": 3,
+      "audio_source_ids": [
+        null,
+        null,
+        null
+      ],
+      "video": {
+        "codec_name": "mpeg2video",
+        "width": 720,
+        "height": 480,
+        "sample_aspect_ratio": "8:9",
+        "display_aspect_ratio": "4:3",
+        "field_order": "bb",
+        "r_frame_rate": "30000/1001"
+      },
+      "chapters": [
+        [
+          0.0,
+          66.066
+        ],
+        [
+          66.066,
+          156.48
+        ]
+      ],
+      "chapter2": [
+        66.066,
+        156.48
+      ]
+    },
+    "Scratch_t45": {
+      "file": "Scratch_t45.mkv",
+      "duration": 156.48,
+      "n_audio": 3,
+      "audio_source_ids": [
+        null,
+        null,
+        null
+      ],
+      "video": {
+        "codec_name": "mpeg2video",
+        "width": 720,
+        "height": 480,
+        "sample_aspect_ratio": "8:9",
+        "display_aspect_ratio": "4:3",
+        "field_order": "bb",
+        "r_frame_rate": "30000/1001"
+      },
+      "chapters": [
+        [
+          0.0,
+          66.066
+        ],
+        [
+          66.066,
+          156.48
+        ]
+      ],
+      "chapter2": [
+        66.066,
+        156.48
+      ]
+    },
+    "Scratch_t46": {
+      "file": "Scratch_t46.mkv",
+      "duration": 156.48,
+      "n_audio": 3,
+      "audio_source_ids": [
+        null,
+        null,
+        null
+      ],
+      "video": {
+        "codec_name": "mpeg2video",
+        "width": 720,
+        "height": 480,
+        "sample_aspect_ratio": "8:9",
+        "display_aspect_ratio": "4:3",
+        "field_order": "bb",
+        "r_frame_rate": "30000/1001"
+      },
+      "chapters": [
+        [
+          0.0,
+          66.066
+        ],
+        [
+          66.066,
+          156.48
+        ]
+      ],
+      "chapter2": [
+        66.066,
+        156.48
+      ]
+    },
+    "Scratch_t47": {
+      "file": "Scratch_t47.mkv",
+      "duration": 156.48,
+      "n_audio": 3,
+      "audio_source_ids": [
+        null,
+        null,
+        null
+      ],
+      "video": {
+        "codec_name": "mpeg2video",
+        "width": 720,
+        "height": 480,
+        "sample_aspect_ratio": "8:9",
+        "display_aspect_ratio": "4:3",
+        "field_order": "bb",
+        "r_frame_rate": "30000/1001"
+      },
+      "chapters": [
+        [
+          0.0,
+          66.066
+        ],
+        [
+          66.066,
+          156.48
+        ]
+      ],
+      "chapter2": [
+        66.066,
+        156.48
+      ]
+    },
+    "Scratch_t48": {
+      "file": "Scratch_t48.mkv",
+      "duration": 120.353,
+      "n_audio": 3,
+      "audio_source_ids": [
+        null,
+        null,
+        null
+      ],
+      "video": {
+        "codec_name": "mpeg2video",
+        "width": 720,
+        "height": 480,
+        "sample_aspect_ratio": "8:9",
+        "display_aspect_ratio": "4:3",
+        "field_order": "bb",
+        "r_frame_rate": "30000/1001"
+      },
+      "chapters": [
+        [
+          0.0,
+          37.037
+        ],
+        [
+          37.037,
+          120.353567
+        ]
+      ],
+      "chapter2": [
+        37.037,
+        120.353567
+      ]
+    },
+    "Scratch_t49": {
+      "file": "Scratch_t49.mkv",
+      "duration": 120.353,
+      "n_audio": 3,
+      "audio_source_ids": [
+        null,
+        null,
+        null
+      ],
+      "video": {
+        "codec_name": "mpeg2video",
+        "width": 720,
+        "height": 480,
+        "sample_aspect_ratio": "8:9",
+        "display_aspect_ratio": "4:3",
+        "field_order": "bb",
+        "r_frame_rate": "30000/1001"
+      },
+      "chapters": [
+        [
+          0.0,
+          37.037
+        ],
+        [
+          37.037,
+          120.353567
+        ]
+      ],
+      "chapter2": [
+        37.037,
+        120.353567
+      ]
+    },
+    "Scratch_t50": {
+      "file": "Scratch_t50.mkv",
+      "duration": 120.353,
+      "n_audio": 3,
+      "audio_source_ids": [
+        null,
+        null,
+        null
+      ],
+      "video": {
+        "codec_name": "mpeg2video",
+        "width": 720,
+        "height": 480,
+        "sample_aspect_ratio": "8:9",
+        "display_aspect_ratio": "4:3",
+        "field_order": "bb",
+        "r_frame_rate": "30000/1001"
+      },
+      "chapters": [
+        [
+          0.0,
+          37.037
+        ],
+        [
+          37.037,
+          120.353567
+        ]
+      ],
+      "chapter2": [
+        37.037,
+        120.353567
+      ]
+    },
+    "Scratch_t51": {
+      "file": "Scratch_t51.mkv",
+      "duration": 120.353,
+      "n_audio": 3,
+      "audio_source_ids": [
+        null,
+        null,
+        null
+      ],
+      "video": {
+        "codec_name": "mpeg2video",
+        "width": 720,
+        "height": 480,
+        "sample_aspect_ratio": "8:9",
+        "display_aspect_ratio": "4:3",
+        "field_order": "bb",
+        "r_frame_rate": "30000/1001"
+      },
+      "chapters": [
+        [
+          0.0,
+          37.037
+        ],
+        [
+          37.037,
+          120.353567
+        ]
+      ],
+      "chapter2": [
+        37.037,
+        120.353567
+      ]
+    },
+    "Scratch_t52": {
+      "file": "Scratch_t52.mkv",
+      "duration": 114.848,
+      "n_audio": 3,
+      "audio_source_ids": [
+        null,
+        null,
+        null
+      ],
+      "video": {
+        "codec_name": "mpeg2video",
+        "width": 720,
+        "height": 480,
+        "sample_aspect_ratio": "8:9",
+        "display_aspect_ratio": "4:3",
+        "field_order": "bb",
+        "r_frame_rate": "30000/1001"
+      },
+      "chapters": [
+        [
+          0.0,
+          31.5315
+        ],
+        [
+          31.5315,
+          114.848067
+        ]
+      ],
+      "chapter2": [
+        31.5315,
+        114.848067
+      ]
+    },
+    "Scratch_t53": {
+      "file": "Scratch_t53.mkv",
+      "duration": 114.848,
+      "n_audio": 3,
+      "audio_source_ids": [
+        null,
+        null,
+        null
+      ],
+      "video": {
+        "codec_name": "mpeg2video",
+        "width": 720,
+        "height": 480,
+        "sample_aspect_ratio": "8:9",
+        "display_aspect_ratio": "4:3",
+        "field_order": "bb",
+        "r_frame_rate": "30000/1001"
+      },
+      "chapters": [
+        [
+          0.0,
+          31.5315
+        ],
+        [
+          31.5315,
+          114.848067
+        ]
+      ],
+      "chapter2": [
+        31.5315,
+        114.848067
+      ]
+    },
+    "Scratch_t54": {
+      "file": "Scratch_t54.mkv",
+      "duration": 114.848,
+      "n_audio": 3,
+      "audio_source_ids": [
+        null,
+        null,
+        null
+      ],
+      "video": {
+        "codec_name": "mpeg2video",
+        "width": 720,
+        "height": 480,
+        "sample_aspect_ratio": "8:9",
+        "display_aspect_ratio": "4:3",
+        "field_order": "bb",
+        "r_frame_rate": "30000/1001"
+      },
+      "chapters": [
+        [
+          0.0,
+          31.5315
+        ],
+        [
+          31.5315,
+          114.848067
+        ]
+      ],
+      "chapter2": [
+        31.5315,
+        114.848067
+      ]
+    },
+    "Scratch_t55": {
+      "file": "Scratch_t55.mkv",
+      "duration": 114.848,
+      "n_audio": 3,
+      "audio_source_ids": [
+        null,
+        null,
+        null
+      ],
+      "video": {
+        "codec_name": "mpeg2video",
+        "width": 720,
+        "height": 480,
+        "sample_aspect_ratio": "8:9",
+        "display_aspect_ratio": "4:3",
+        "field_order": "bb",
+        "r_frame_rate": "30000/1001"
+      },
+      "chapters": [
+        [
+          0.0,
+          31.5315
+        ],
+        [
+          31.5315,
+          114.848067
+        ]
+      ],
+      "chapter2": [
+        31.5315,
+        114.848067
+      ]
+    },
+    "Scratch_t56": {
+      "file": "Scratch_t56.mkv",
+      "duration": 85.652,
+      "n_audio": 3,
+      "audio_source_ids": [
+        null,
+        null,
+        null
+      ],
+      "video": {
+        "codec_name": "mpeg2video",
+        "width": 720,
+        "height": 480,
+        "sample_aspect_ratio": "8:9",
+        "display_aspect_ratio": "4:3",
+        "field_order": "bb",
+        "r_frame_rate": "30000/1001"
+      },
+      "chapters": [
+        [
+          0.0,
+          44.044
+        ],
+        [
+          44.044,
+          85.652233
+        ]
+      ],
+      "chapter2": [
+        44.044,
+        85.652233
+      ]
+    },
+    "Scratch_t57": {
+      "file": "Scratch_t57.mkv",
+      "duration": 85.652,
+      "n_audio": 3,
+      "audio_source_ids": [
+        null,
+        null,
+        null
+      ],
+      "video": {
+        "codec_name": "mpeg2video",
+        "width": 720,
+        "height": 480,
+        "sample_aspect_ratio": "8:9",
+        "display_aspect_ratio": "4:3",
+        "field_order": "bb",
+        "r_frame_rate": "30000/1001"
+      },
+      "chapters": [
+        [
+          0.0,
+          44.044
+        ],
+        [
+          44.044,
+          85.652233
+        ]
+      ],
+      "chapter2": [
+        44.044,
+        85.652233
+      ]
+    },
+    "Scratch_t58": {
+      "file": "Scratch_t58.mkv",
+      "duration": 85.652,
+      "n_audio": 3,
+      "audio_source_ids": [
+        null,
+        null,
+        null
+      ],
+      "video": {
+        "codec_name": "mpeg2video",
+        "width": 720,
+        "height": 480,
+        "sample_aspect_ratio": "8:9",
+        "display_aspect_ratio": "4:3",
+        "field_order": "bb",
+        "r_frame_rate": "30000/1001"
+      },
+      "chapters": [
+        [
+          0.0,
+          44.044
+        ],
+        [
+          44.044,
+          85.652233
+        ]
+      ],
+      "chapter2": [
+        44.044,
+        85.652233
+      ]
+    },
+    "Scratch_t59": {
+      "file": "Scratch_t59.mkv",
+      "duration": 85.652,
+      "n_audio": 3,
+      "audio_source_ids": [
+        null,
+        null,
+        null
+      ],
+      "video": {
+        "codec_name": "mpeg2video",
+        "width": 720,
+        "height": 480,
+        "sample_aspect_ratio": "8:9",
+        "display_aspect_ratio": "4:3",
+        "field_order": "bb",
+        "r_frame_rate": "30000/1001"
+      },
+      "chapters": [
+        [
+          0.0,
+          44.044
+        ],
+        [
+          44.044,
+          85.652233
+        ]
+      ],
+      "chapter2": [
+        44.044,
+        85.652233
+      ]
+    },
+    "Scratch_t60": {
+      "file": "Scratch_t60.mkv",
+      "duration": 124.624,
+      "n_audio": 1,
+      "audio_source_ids": [
+        null
+      ],
+      "video": {
+        "codec_name": "mpeg2video",
+        "width": 720,
+        "height": 480,
+        "sample_aspect_ratio": "8:9",
+        "display_aspect_ratio": "4:3",
+        "field_order": "bb",
+        "r_frame_rate": "30000/1001"
+      },
+      "chapters": [
+        [
+          0.0,
+          123.123
+        ],
+        [
+          123.123,
+          124.6245
+        ]
+      ],
+      "chapter2": [
+        123.123,
+        124.6245
+      ]
+    },
+    "Scratch_t61": {
+      "file": "Scratch_t61.mkv",
+      "duration": 100.5,
+      "n_audio": 1,
+      "audio_source_ids": [
+        null
+      ],
+      "video": {
+        "codec_name": "mpeg2video",
+        "width": 720,
+        "height": 480,
+        "sample_aspect_ratio": "8:9",
+        "display_aspect_ratio": "4:3",
+        "field_order": "bb",
+        "r_frame_rate": "30000/1001"
+      },
+      "chapters": [
+        [
+          0.0,
+          99.099
+        ],
+        [
+          99.099,
+          100.5004
+        ]
+      ],
+      "chapter2": [
+        99.099,
+        100.5004
+      ]
+    },
+    "Scratch_t62": {
+      "file": "Scratch_t62.mkv",
+      "duration": 166.032,
+      "n_audio": 1,
+      "audio_source_ids": [
+        null
+      ],
+      "video": {
+        "codec_name": "mpeg2video",
+        "width": 720,
+        "height": 480,
+        "sample_aspect_ratio": "8:9",
+        "display_aspect_ratio": "4:3",
+        "field_order": "bb",
+        "r_frame_rate": "30000/1001"
+      },
+      "chapters": [
+        [
+          0.0,
+          164.164
+        ],
+        [
+          164.164,
+          166.032533
+        ]
+      ],
+      "chapter2": [
+        164.164,
+        166.032533
+      ]
+    },
+    "Scratch_t63": {
+      "file": "Scratch_t63.mkv",
+      "duration": 84.417,
+      "n_audio": 1,
+      "audio_source_ids": [
+        null
+      ],
+      "video": {
+        "codec_name": "mpeg2video",
+        "width": 720,
+        "height": 480,
+        "sample_aspect_ratio": "8:9",
+        "display_aspect_ratio": "4:3",
+        "field_order": "bb",
+        "r_frame_rate": "30000/1001"
+      },
+      "chapters": [
+        [
+          0.0,
+          83.083
+        ],
+        [
+          83.083,
+          84.417667
+        ]
+      ],
+      "chapter2": [
+        83.083,
+        84.417667
+      ]
+    },
+    "Scratch_t64": {
+      "file": "Scratch_t64.mkv",
+      "duration": 95.829,
+      "n_audio": 1,
+      "audio_source_ids": [
+        null
+      ],
+      "video": {
+        "codec_name": "mpeg2video",
+        "width": 720,
+        "height": 480,
+        "sample_aspect_ratio": "8:9",
+        "display_aspect_ratio": "4:3",
+        "field_order": "bb",
+        "r_frame_rate": "30000/1001"
+      },
+      "chapters": [
+        [
+          0.0,
+          94.5945
+        ],
+        [
+          94.5945,
+          95.829067
+        ]
+      ],
+      "chapter2": [
+        94.5945,
+        95.829067
+      ]
+    },
+    "Scratch_t65": {
+      "file": "Scratch_t65.mkv",
+      "duration": 90.457,
+      "n_audio": 1,
+      "audio_source_ids": [
+        null
+      ],
+      "video": {
+        "codec_name": "mpeg2video",
+        "width": 720,
+        "height": 480,
+        "sample_aspect_ratio": "8:9",
+        "display_aspect_ratio": "4:3",
+        "field_order": "bb",
+        "r_frame_rate": "30000/1001"
+      },
+      "chapters": [
+        [
+          0.0,
+          88.5885
+        ],
+        [
+          88.5885,
+          90.457033
+        ]
+      ],
+      "chapter2": [
+        88.5885,
+        90.457033
+      ]
+    },
+    "Scratch_t66": {
+      "file": "Scratch_t66.mkv",
+      "duration": 141.107,
+      "n_audio": 1,
+      "audio_source_ids": [
+        null
+      ],
+      "video": {
+        "codec_name": "mpeg2video",
+        "width": 720,
+        "height": 480,
+        "sample_aspect_ratio": "8:9",
+        "display_aspect_ratio": "4:3",
+        "field_order": "bb",
+        "r_frame_rate": "30000/1001"
+      },
+      "chapters": [
+        [
+          0.0,
+          139.139
+        ],
+        [
+          139.139,
+          141.107633
+        ]
+      ],
+      "chapter2": [
+        139.139,
+        141.107633
+      ]
+    },
+    "Scratch_t67": {
+      "file": "Scratch_t67.mkv",
+      "duration": 45.045,
+      "n_audio": 1,
+      "audio_source_ids": [
+        null
+      ],
+      "video": {
+        "codec_name": "mpeg2video",
+        "width": 720,
+        "height": 480,
+        "sample_aspect_ratio": "8:9",
+        "display_aspect_ratio": "4:3",
+        "field_order": "bb",
+        "r_frame_rate": "30000/1001"
+      },
+      "chapters": [],
+      "chapter2": null
+    },
+    "Scratch_t68": {
+      "file": "Scratch_t68.mkv",
+      "duration": 56.289,
+      "n_audio": 1,
+      "audio_source_ids": [
+        null
+      ],
+      "video": {
+        "codec_name": "mpeg2video",
+        "width": 720,
+        "height": 480,
+        "sample_aspect_ratio": "8:9",
+        "display_aspect_ratio": "4:3",
+        "field_order": "bb",
+        "r_frame_rate": "30000/1001"
+      },
+      "chapters": [
+        [
+          0.0,
+          55.055
+        ],
+        [
+          55.055,
+          56.289567
+        ]
+      ],
+      "chapter2": [
+        55.055,
+        56.289567
+      ]
+    },
+    "Scratch_t69": {
+      "file": "Scratch_t69.mkv",
+      "duration": 36.864,
+      "n_audio": 1,
+      "audio_source_ids": [
+        null
+      ],
+      "video": {
+        "codec_name": "mpeg2video",
+        "width": 720,
+        "height": 480,
+        "sample_aspect_ratio": "8:9",
+        "display_aspect_ratio": "4:3",
+        "field_order": "bb",
+        "r_frame_rate": "30000/1001"
+      },
+      "chapters": [
+        [
+          0.0,
+          35.5355
+        ],
+        [
+          35.5355,
+          36.864
+        ]
+      ],
+      "chapter2": [
+        35.5355,
+        36.864
+      ]
+    },
+    "Scratch_t70": {
+      "file": "Scratch_t70.mkv",
+      "duration": 42.509,
+      "n_audio": 1,
+      "audio_source_ids": [
+        null
+      ],
+      "video": {
+        "codec_name": "mpeg2video",
+        "width": 720,
+        "height": 480,
+        "sample_aspect_ratio": "8:9",
+        "display_aspect_ratio": "4:3",
+        "field_order": "bb",
+        "r_frame_rate": "30000/1001"
+      },
+      "chapters": [
+        [
+          0.0,
+          41.041
+        ],
+        [
+          41.041,
+          42.509133
+        ]
+      ],
+      "chapter2": [
+        41.041,
+        42.509133
+      ]
+    },
+    "Scratch_t71": {
+      "file": "Scratch_t71.mkv",
+      "duration": 43.843,
+      "n_audio": 1,
+      "audio_source_ids": [
+        null
+      ],
+      "video": {
+        "codec_name": "mpeg2video",
+        "width": 720,
+        "height": 480,
+        "sample_aspect_ratio": "8:9",
+        "display_aspect_ratio": "4:3",
+        "field_order": "bb",
+        "r_frame_rate": "30000/1001"
+      },
+      "chapters": [
+        [
+          0.0,
+          42.5425
+        ],
+        [
+          42.5425,
+          43.8438
+        ]
+      ],
+      "chapter2": [
+        42.5425,
+        43.8438
+      ]
+    },
+    "Scratch_t72": {
+      "file": "Scratch_t72.mkv",
+      "duration": 25.425,
+      "n_audio": 1,
+      "audio_source_ids": [
+        null
+      ],
+      "video": {
+        "codec_name": "mpeg2video",
+        "width": 720,
+        "height": 480,
+        "sample_aspect_ratio": "8:9",
+        "display_aspect_ratio": "4:3",
+        "field_order": "bb",
+        "r_frame_rate": "30000/1001"
+      },
+      "chapters": [
+        [
+          0.0,
+          24.024
+        ],
+        [
+          24.024,
+          25.4254
+        ]
+      ],
+      "chapter2": [
+        24.024,
+        25.4254
+      ]
+    },
+    "Scratch_t73": {
+      "file": "Scratch_t73.mkv",
+      "duration": 68.368,
+      "n_audio": 1,
+      "audio_source_ids": [
+        null
+      ],
+      "video": {
+        "codec_name": "mpeg2video",
+        "width": 720,
+        "height": 480,
+        "sample_aspect_ratio": "8:9",
+        "display_aspect_ratio": "4:3",
+        "field_order": "bb",
+        "r_frame_rate": "30000/1001"
+      },
+      "chapters": [
+        [
+          0.0,
+          66.066
+        ],
+        [
+          66.066,
+          68.3683
+        ]
+      ],
+      "chapter2": [
+        66.066,
+        68.3683
+      ]
+    },
+    "Scratch_t74": {
+      "file": "Scratch_t74.mkv",
+      "duration": 81.648,
+      "n_audio": 3,
+      "audio_source_ids": [
+        null,
+        null,
+        null
+      ],
+      "video": {
+        "codec_name": "mpeg2video",
+        "width": 720,
+        "height": 480,
+        "sample_aspect_ratio": "8:9",
+        "display_aspect_ratio": "4:3",
+        "field_order": "bb",
+        "r_frame_rate": "30000/1001"
+      },
+      "chapters": [
+        [
+          0.0,
+          45.045
+        ],
+        [
+          45.045,
+          81.648233
+        ]
+      ],
+      "chapter2": [
+        45.045,
+        81.648233
+      ]
+    },
+    "Scratch_t75": {
+      "file": "Scratch_t75.mkv",
+      "duration": 81.648,
+      "n_audio": 3,
+      "audio_source_ids": [
+        null,
+        null,
+        null
+      ],
+      "video": {
+        "codec_name": "mpeg2video",
+        "width": 720,
+        "height": 480,
+        "sample_aspect_ratio": "8:9",
+        "display_aspect_ratio": "4:3",
+        "field_order": "bb",
+        "r_frame_rate": "30000/1001"
+      },
+      "chapters": [
+        [
+          0.0,
+          45.045
+        ],
+        [
+          45.045,
+          81.648233
+        ]
+      ],
+      "chapter2": [
+        45.045,
+        81.648233
+      ]
+    },
+    "Scratch_t76": {
+      "file": "Scratch_t76.mkv",
+      "duration": 81.648,
+      "n_audio": 3,
+      "audio_source_ids": [
+        null,
+        null,
+        null
+      ],
+      "video": {
+        "codec_name": "mpeg2video",
+        "width": 720,
+        "height": 480,
+        "sample_aspect_ratio": "8:9",
+        "display_aspect_ratio": "4:3",
+        "field_order": "bb",
+        "r_frame_rate": "30000/1001"
+      },
+      "chapters": [
+        [
+          0.0,
+          45.045
+        ],
+        [
+          45.045,
+          81.648233
+        ]
+      ],
+      "chapter2": [
+        45.045,
+        81.648233
+      ]
+    },
+    "Scratch_t77": {
+      "file": "Scratch_t77.mkv",
+      "duration": 81.648,
+      "n_audio": 3,
+      "audio_source_ids": [
+        null,
+        null,
+        null
+      ],
+      "video": {
+        "codec_name": "mpeg2video",
+        "width": 720,
+        "height": 480,
+        "sample_aspect_ratio": "8:9",
+        "display_aspect_ratio": "4:3",
+        "field_order": "bb",
+        "r_frame_rate": "30000/1001"
+      },
+      "chapters": [
+        [
+          0.0,
+          45.045
+        ],
+        [
+          45.045,
+          81.648233
+        ]
+      ],
+      "chapter2": [
+        45.045,
+        81.648233
+      ]
+    },
+    "Scratch_t78": {
+      "file": "Scratch_t78.mkv",
+      "duration": 109.442,
+      "n_audio": 3,
+      "audio_source_ids": [
+        null,
+        null,
+        null
+      ],
+      "video": {
+        "codec_name": "mpeg2video",
+        "width": 720,
+        "height": 480,
+        "sample_aspect_ratio": "8:9",
+        "display_aspect_ratio": "4:3",
+        "field_order": "bb",
+        "r_frame_rate": "30000/1001"
+      },
+      "chapters": [
+        [
+          0.0,
+          54.5545
+        ],
+        [
+          54.5545,
+          109.442667
+        ]
+      ],
+      "chapter2": [
+        54.5545,
+        109.442667
+      ]
+    },
+    "Scratch_t79": {
+      "file": "Scratch_t79.mkv",
+      "duration": 109.442,
+      "n_audio": 3,
+      "audio_source_ids": [
+        null,
+        null,
+        null
+      ],
+      "video": {
+        "codec_name": "mpeg2video",
+        "width": 720,
+        "height": 480,
+        "sample_aspect_ratio": "8:9",
+        "display_aspect_ratio": "4:3",
+        "field_order": "bb",
+        "r_frame_rate": "30000/1001"
+      },
+      "chapters": [
+        [
+          0.0,
+          54.5545
+        ],
+        [
+          54.5545,
+          109.442667
+        ]
+      ],
+      "chapter2": [
+        54.5545,
+        109.442667
+      ]
+    },
+    "Scratch_t80": {
+      "file": "Scratch_t80.mkv",
+      "duration": 109.442,
+      "n_audio": 3,
+      "audio_source_ids": [
+        null,
+        null,
+        null
+      ],
+      "video": {
+        "codec_name": "mpeg2video",
+        "width": 720,
+        "height": 480,
+        "sample_aspect_ratio": "8:9",
+        "display_aspect_ratio": "4:3",
+        "field_order": "bb",
+        "r_frame_rate": "30000/1001"
+      },
+      "chapters": [
+        [
+          0.0,
+          54.5545
+        ],
+        [
+          54.5545,
+          109.442667
+        ]
+      ],
+      "chapter2": [
+        54.5545,
+        109.442667
+      ]
+    },
+    "Scratch_t81": {
+      "file": "Scratch_t81.mkv",
+      "duration": 109.442,
+      "n_audio": 3,
+      "audio_source_ids": [
+        null,
+        null,
+        null
+      ],
+      "video": {
+        "codec_name": "mpeg2video",
+        "width": 720,
+        "height": 480,
+        "sample_aspect_ratio": "8:9",
+        "display_aspect_ratio": "4:3",
+        "field_order": "bb",
+        "r_frame_rate": "30000/1001"
+      },
+      "chapters": [
+        [
+          0.0,
+          54.5545
+        ],
+        [
+          54.5545,
+          109.442667
+        ]
+      ],
+      "chapter2": [
+        54.5545,
+        109.442667
+      ]
+    },
+    "Scratch_t82": {
+      "file": "Scratch_t82.mkv",
+      "duration": 69.088,
+      "n_audio": 3,
+      "audio_source_ids": [
+        null,
+        null,
+        null
+      ],
+      "video": {
+        "codec_name": "mpeg2video",
+        "width": 720,
+        "height": 480,
+        "sample_aspect_ratio": "8:9",
+        "display_aspect_ratio": "4:3",
+        "field_order": "bb",
+        "r_frame_rate": "30000/1001"
+      },
+      "chapters": [
+        [
+          0.0,
+          32.5325
+        ],
+        [
+          32.5325,
+          69.088
+        ]
+      ],
+      "chapter2": [
+        32.5325,
+        69.088
+      ]
+    },
+    "Scratch_t83": {
+      "file": "Scratch_t83.mkv",
+      "duration": 69.088,
+      "n_audio": 3,
+      "audio_source_ids": [
+        null,
+        null,
+        null
+      ],
+      "video": {
+        "codec_name": "mpeg2video",
+        "width": 720,
+        "height": 480,
+        "sample_aspect_ratio": "8:9",
+        "display_aspect_ratio": "4:3",
+        "field_order": "bb",
+        "r_frame_rate": "30000/1001"
+      },
+      "chapters": [
+        [
+          0.0,
+          32.5325
+        ],
+        [
+          32.5325,
+          69.088
+        ]
+      ],
+      "chapter2": [
+        32.5325,
+        69.088
+      ]
+    },
+    "Scratch_t84": {
+      "file": "Scratch_t84.mkv",
+      "duration": 69.088,
+      "n_audio": 3,
+      "audio_source_ids": [
+        null,
+        null,
+        null
+      ],
+      "video": {
+        "codec_name": "mpeg2video",
+        "width": 720,
+        "height": 480,
+        "sample_aspect_ratio": "8:9",
+        "display_aspect_ratio": "4:3",
+        "field_order": "bb",
+        "r_frame_rate": "30000/1001"
+      },
+      "chapters": [
+        [
+          0.0,
+          32.5325
+        ],
+        [
+          32.5325,
+          69.088
+        ]
+      ],
+      "chapter2": [
+        32.5325,
+        69.088
+      ]
+    },
+    "Scratch_t85": {
+      "file": "Scratch_t85.mkv",
+      "duration": 69.088,
+      "n_audio": 3,
+      "audio_source_ids": [
+        null,
+        null,
+        null
+      ],
+      "video": {
+        "codec_name": "mpeg2video",
+        "width": 720,
+        "height": 480,
+        "sample_aspect_ratio": "8:9",
+        "display_aspect_ratio": "4:3",
+        "field_order": "bb",
+        "r_frame_rate": "30000/1001"
+      },
+      "chapters": [
+        [
+          0.0,
+          32.5325
+        ],
+        [
+          32.5325,
+          69.088
+        ]
+      ],
+      "chapter2": [
+        32.5325,
+        69.088
+      ]
+    },
+    "Scratch_t86": {
+      "file": "Scratch_t86.mkv",
+      "duration": 95.744,
+      "n_audio": 3,
+      "audio_source_ids": [
+        null,
+        null,
+        null
+      ],
+      "video": {
+        "codec_name": "mpeg2video",
+        "width": 720,
+        "height": 480,
+        "sample_aspect_ratio": "8:9",
+        "display_aspect_ratio": "4:3",
+        "field_order": "bb",
+        "r_frame_rate": "30000/1001"
+      },
+      "chapters": [
+        [
+          0.0,
+          22.5225
+        ],
+        [
+          22.5225,
+          95.744
+        ]
+      ],
+      "chapter2": [
+        22.5225,
+        95.744
+      ]
+    },
+    "Scratch_t87": {
+      "file": "Scratch_t87.mkv",
+      "duration": 95.744,
+      "n_audio": 3,
+      "audio_source_ids": [
+        null,
+        null,
+        null
+      ],
+      "video": {
+        "codec_name": "mpeg2video",
+        "width": 720,
+        "height": 480,
+        "sample_aspect_ratio": "8:9",
+        "display_aspect_ratio": "4:3",
+        "field_order": "bb",
+        "r_frame_rate": "30000/1001"
+      },
+      "chapters": [
+        [
+          0.0,
+          22.5225
+        ],
+        [
+          22.5225,
+          95.744
+        ]
+      ],
+      "chapter2": [
+        22.5225,
+        95.744
+      ]
+    },
+    "Scratch_t88": {
+      "file": "Scratch_t88.mkv",
+      "duration": 95.744,
+      "n_audio": 3,
+      "audio_source_ids": [
+        null,
+        null,
+        null
+      ],
+      "video": {
+        "codec_name": "mpeg2video",
+        "width": 720,
+        "height": 480,
+        "sample_aspect_ratio": "8:9",
+        "display_aspect_ratio": "4:3",
+        "field_order": "bb",
+        "r_frame_rate": "30000/1001"
+      },
+      "chapters": [
+        [
+          0.0,
+          22.5225
+        ],
+        [
+          22.5225,
+          95.744
+        ]
+      ],
+      "chapter2": [
+        22.5225,
+        95.744
+      ]
+    },
+    "Scratch_t89": {
+      "file": "Scratch_t89.mkv",
+      "duration": 95.744,
+      "n_audio": 3,
+      "audio_source_ids": [
+        null,
+        null,
+        null
+      ],
+      "video": {
+        "codec_name": "mpeg2video",
+        "width": 720,
+        "height": 480,
+        "sample_aspect_ratio": "8:9",
+        "display_aspect_ratio": "4:3",
+        "field_order": "bb",
+        "r_frame_rate": "30000/1001"
+      },
+      "chapters": [
+        [
+          0.0,
+          22.5225
+        ],
+        [
+          22.5225,
+          95.744
+        ]
+      ],
+      "chapter2": [
+        22.5225,
+        95.744
+      ]
+    },
+    "Scratch_t90": {
+      "file": "Scratch_t90.mkv",
+      "duration": 80.096,
+      "n_audio": 3,
+      "audio_source_ids": [
+        null,
+        null,
+        null
+      ],
+      "video": {
+        "codec_name": "mpeg2video",
+        "width": 720,
+        "height": 480,
+        "sample_aspect_ratio": "8:9",
+        "display_aspect_ratio": "4:3",
+        "field_order": "bb",
+        "r_frame_rate": "30000/1001"
+      },
+      "chapters": [
+        [
+          0.0,
+          43.5435
+        ],
+        [
+          43.5435,
+          80.096
+        ]
+      ],
+      "chapter2": [
+        43.5435,
+        80.096
+      ]
+    },
+    "Scratch_t91": {
+      "file": "Scratch_t91.mkv",
+      "duration": 80.096,
+      "n_audio": 3,
+      "audio_source_ids": [
+        null,
+        null,
+        null
+      ],
+      "video": {
+        "codec_name": "mpeg2video",
+        "width": 720,
+        "height": 480,
+        "sample_aspect_ratio": "8:9",
+        "display_aspect_ratio": "4:3",
+        "field_order": "bb",
+        "r_frame_rate": "30000/1001"
+      },
+      "chapters": [
+        [
+          0.0,
+          43.5435
+        ],
+        [
+          43.5435,
+          80.096
+        ]
+      ],
+      "chapter2": [
+        43.5435,
+        80.096
+      ]
+    },
+    "Scratch_t92": {
+      "file": "Scratch_t92.mkv",
+      "duration": 80.096,
+      "n_audio": 3,
+      "audio_source_ids": [
+        null,
+        null,
+        null
+      ],
+      "video": {
+        "codec_name": "mpeg2video",
+        "width": 720,
+        "height": 480,
+        "sample_aspect_ratio": "8:9",
+        "display_aspect_ratio": "4:3",
+        "field_order": "bb",
+        "r_frame_rate": "30000/1001"
+      },
+      "chapters": [
+        [
+          0.0,
+          43.5435
+        ],
+        [
+          43.5435,
+          80.096
+        ]
+      ],
+      "chapter2": [
+        43.5435,
+        80.096
+      ]
+    },
+    "Scratch_t93": {
+      "file": "Scratch_t93.mkv",
+      "duration": 80.096,
+      "n_audio": 3,
+      "audio_source_ids": [
+        null,
+        null,
+        null
+      ],
+      "video": {
+        "codec_name": "mpeg2video",
+        "width": 720,
+        "height": 480,
+        "sample_aspect_ratio": "8:9",
+        "display_aspect_ratio": "4:3",
+        "field_order": "bb",
+        "r_frame_rate": "30000/1001"
+      },
+      "chapters": [
+        [
+          0.0,
+          43.5435
+        ],
+        [
+          43.5435,
+          80.096
+        ]
+      ],
+      "chapter2": [
+        43.5435,
+        80.096
+      ]
+    },
+    "Scratch_t94": {
+      "file": "Scratch_t94.mkv",
+      "duration": 166.912,
+      "n_audio": 3,
+      "audio_source_ids": [
+        null,
+        null,
+        null
+      ],
+      "video": {
+        "codec_name": "mpeg2video",
+        "width": 720,
+        "height": 480,
+        "sample_aspect_ratio": "8:9",
+        "display_aspect_ratio": "4:3",
+        "field_order": "bb",
+        "r_frame_rate": "30000/1001"
+      },
+      "chapters": [
+        [
+          0.0,
+          99.099
+        ],
+        [
+          99.099,
+          166.912
+        ]
+      ],
+      "chapter2": [
+        99.099,
+        166.912
+      ]
+    },
+    "Scratch_t95": {
+      "file": "Scratch_t95.mkv",
+      "duration": 166.912,
+      "n_audio": 3,
+      "audio_source_ids": [
+        null,
+        null,
+        null
+      ],
+      "video": {
+        "codec_name": "mpeg2video",
+        "width": 720,
+        "height": 480,
+        "sample_aspect_ratio": "8:9",
+        "display_aspect_ratio": "4:3",
+        "field_order": "bb",
+        "r_frame_rate": "30000/1001"
+      },
+      "chapters": [
+        [
+          0.0,
+          99.099
+        ],
+        [
+          99.099,
+          166.912
+        ]
+      ],
+      "chapter2": [
+        99.099,
+        166.912
+      ]
+    },
+    "Scratch_t96": {
+      "file": "Scratch_t96.mkv",
+      "duration": 166.912,
+      "n_audio": 3,
+      "audio_source_ids": [
+        null,
+        null,
+        null
+      ],
+      "video": {
+        "codec_name": "mpeg2video",
+        "width": 720,
+        "height": 480,
+        "sample_aspect_ratio": "8:9",
+        "display_aspect_ratio": "4:3",
+        "field_order": "bb",
+        "r_frame_rate": "30000/1001"
+      },
+      "chapters": [
+        [
+          0.0,
+          99.099
+        ],
+        [
+          99.099,
+          166.912
+        ]
+      ],
+      "chapter2": [
+        99.099,
+        166.912
+      ]
+    },
+    "Scratch_t97": {
+      "file": "Scratch_t97.mkv",
+      "duration": 166.912,
+      "n_audio": 3,
+      "audio_source_ids": [
+        null,
+        null,
+        null
+      ],
+      "video": {
+        "codec_name": "mpeg2video",
+        "width": 720,
+        "height": 480,
+        "sample_aspect_ratio": "8:9",
+        "display_aspect_ratio": "4:3",
+        "field_order": "bb",
+        "r_frame_rate": "30000/1001"
+      },
+      "chapters": [
+        [
+          0.0,
+          99.099
+        ],
+        [
+          99.099,
+          166.912
+        ]
+      ],
+      "chapter2": [
+        99.099,
+        166.912
+      ]
+    },
+    "Scratch_t98": {
+      "file": "Scratch_t98.mkv",
+      "duration": 112.352,
+      "n_audio": 3,
+      "audio_source_ids": [
+        null,
+        null,
+        null
+      ],
+      "video": {
+        "codec_name": "mpeg2video",
+        "width": 720,
+        "height": 480,
+        "sample_aspect_ratio": "8:9",
+        "display_aspect_ratio": "4:3",
+        "field_order": "bb",
+        "r_frame_rate": "30000/1001"
+      },
+      "chapters": [
+        [
+          0.0,
+          44.5445
+        ],
+        [
+          44.5445,
+          112.352
+        ]
+      ],
+      "chapter2": [
+        44.5445,
+        112.352
+      ]
+    },
+    "Scratch_t99": {
+      "file": "Scratch_t99.mkv",
+      "duration": 112.352,
+      "n_audio": 3,
+      "audio_source_ids": [
+        null,
+        null,
+        null
+      ],
+      "video": {
+        "codec_name": "mpeg2video",
+        "width": 720,
+        "height": 480,
+        "sample_aspect_ratio": "8:9",
+        "display_aspect_ratio": "4:3",
+        "field_order": "bb",
+        "r_frame_rate": "30000/1001"
+      },
+      "chapters": [
+        [
+          0.0,
+          44.5445
+        ],
+        [
+          44.5445,
+          112.352
+        ]
+      ],
+      "chapter2": [
+        44.5445,
+        112.352
+      ]
+    }
+  },
+  "edit_lists": {
+    "1clickflare_85bpm": {
+      "scratch": "1clickflare",
+      "bpm": 85,
+      "chapter2": [
+        66.066,
+        156.48
+      ],
+      "keeps": [
+        [
+          66.066,
+          75.59539600000001
+        ],
+        [
+          75.59539600000001,
+          86.46866700000001
+        ],
+        [
+          86.46866700000001,
+          96.495104
+        ],
+        [
+          96.495104,
+          111.31868800000001
+        ],
+        [
+          111.31868800000001,
+          120.807271
+        ],
+        [
+          120.807271,
+          131.680542
+        ],
+        [
+          131.680542,
+          141.706979
+        ],
+        [
+          141.706979,
+          156.48
+        ]
+      ],
+      "silences": [
+        [
+          71.360271,
+          75.59539600000001
+        ],
+        [
+          82.896354,
+          86.46866700000001
+        ],
+        [
+          93.979625,
+          96.495104
+        ],
+        [
+          105.077396,
+          111.31868800000001
+        ],
+        [
+          116.58933300000001,
+          120.807271
+        ],
+        [
+          128.108229,
+          131.680542
+        ],
+        [
+          139.19150000000002,
+          141.706979
+        ],
+        [
+          150.28927099999999,
+          156.5035
+        ]
+      ]
+    },
+    "baby_79bpm": {
+      "scratch": "baby",
+      "bpm": 79,
+      "chapter2": [
+        35.035,
+        83.450033
+      ],
+      "keeps": [
+        [
+          35.035,
+          41.151354
+        ],
+        [
+          41.151354,
+          47.199833
+        ],
+        [
+          47.199833,
+          53.232979
+        ],
+        [
+          53.232979,
+          59.323187
+        ],
+        [
+          59.323187,
+          65.375542
+        ],
+        [
+          65.375542,
+          71.424021
+        ],
+        [
+          71.424021,
+          77.457167
+        ],
+        [
+          77.457167,
+          83.450033
+        ]
+      ],
+      "silences": [
+        [
+          37.420520999999994,
+          41.151354
+        ],
+        [
+          43.637229,
+          47.199833
+        ],
+        [
+          49.708667,
+          53.232979
+        ],
+        [
+          55.573042,
+          59.323187
+        ],
+        [
+          61.644687,
+          65.375542
+        ],
+        [
+          67.874854,
+          71.424021
+        ],
+        [
+          73.93285399999999,
+          77.457167
+        ],
+        [
+          79.79722899999999,
+          83.4725
+        ]
+      ]
+    },
+    "chirpflare_92bpm": {
+      "scratch": "chirpflare",
+      "bpm": 92,
+      "chapter2": [
+        31.5315,
+        114.848067
+      ],
+      "keeps": [
+        [
+          31.5315,
+          41.233708
+        ],
+        [
+          41.233708,
+          52.616125
+        ],
+        [
+          52.616125,
+          62.790896000000004
+        ],
+        [
+          62.790896000000004,
+          73.415583
+        ],
+        [
+          73.415583,
+          82.90866700000001
+        ],
+        [
+          82.90866700000001,
+          94.291104
+        ],
+        [
+          94.291104,
+          104.46587500000001
+        ],
+        [
+          104.46587500000001,
+          114.848067
+        ]
+      ],
+      "silences": [
+        [
+          36.989667000000004,
+          41.233708
+        ],
+        [
+          47.443854,
+          52.616125
+        ],
+        [
+          57.255250000000004,
+          62.790896000000004
+        ],
+        [
+          68.336167,
+          73.415583
+        ],
+        [
+          78.684917,
+          82.90866700000001
+        ],
+        [
+          89.118833,
+          94.291104
+        ],
+        [
+          98.936125,
+          104.46587500000001
+        ],
+        [
+          110.011146,
+          114.869
+        ]
+      ]
+    },
+    "chirps_98bpm": {
+      "scratch": "chirps",
+      "bpm": 98,
+      "chapter2": [
+        64.064,
+        103.328
+      ],
+      "keeps": [
+        [
+          64.064,
+          69.18116699999999
+        ],
+        [
+          69.18116699999999,
+          74.060583
+        ],
+        [
+          74.060583,
+          78.82452099999999
+        ],
+        [
+          78.82452099999999,
+          88.800792
+        ],
+        [
+          88.800792,
+          93.680208
+        ],
+        [
+          93.680208,
+          98.44414599999999
+        ],
+        [
+          98.44414599999999,
+          103.328
+        ]
+      ],
+      "silences": [
+        [
+          66.61852099999999,
+          69.18116699999999
+        ],
+        [
+          71.568292,
+          74.060583
+        ],
+        [
+          76.493,
+          78.82452099999999
+        ],
+        [
+          86.238146,
+          88.800792
+        ],
+        [
+          91.187917,
+          93.680208
+        ],
+        [
+          96.112625,
+          98.44414599999999
+        ],
+        [
+          101.18299999999999,
+          103.328
+        ]
+      ]
+    },
+    "clovertears_105bpm": {
+      "scratch": "clovertears",
+      "bpm": 105,
+      "chapter2": [
+        45.045,
+        81.648233
+      ],
+      "keeps": [
+        [
+          45.045,
+          49.493521
+        ],
+        [
+          49.493521,
+          54.102313
+        ],
+        [
+          54.102313,
+          58.635771000000005
+        ],
+        [
+          58.635771000000005,
+          63.39352100000001
+        ],
+        [
+          63.39352100000001,
+          67.811896
+        ],
+        [
+          67.811896,
+          72.420625
+        ],
+        [
+          72.420625,
+          76.954167
+        ],
+        [
+          76.954167,
+          81.648233
+        ]
+      ],
+      "silences": [
+        [
+          47.000167000000005,
+          49.493521
+        ],
+        [
+          51.501417000000004,
+          54.102313
+        ],
+        [
+          56.001917000000006,
+          58.635771000000005
+        ],
+        [
+          60.830167,
+          63.39352100000001
+        ],
+        [
+          65.3185,
+          67.811896
+        ],
+        [
+          69.81975,
+          72.420625
+        ],
+        [
+          74.32025,
+          76.954167
+        ],
+        [
+          79.14847900000001,
+          81.67
+        ]
+      ]
+    },
+    "crabs_92bpm": {
+      "scratch": "crabs",
+      "bpm": 92,
+      "chapter2": [
+        58.5585,
+        141.888
+      ],
+      "keeps": [
+        [
+          58.5585,
+          67.194333
+        ],
+        [
+          67.194333,
+          79.5185
+        ],
+        [
+          79.5185,
+          87.39960400000001
+        ],
+        [
+          87.39960400000001,
+          100.26595800000001
+        ],
+        [
+          100.26595800000001,
+          108.869354
+        ],
+        [
+          108.869354,
+          121.193521
+        ],
+        [
+          121.193521,
+          129.074625
+        ],
+        [
+          129.074625,
+          141.888
+        ]
+      ],
+      "silences": [
+        [
+          64.742958,
+          67.194333
+        ],
+        [
+          74.41556200000001,
+          79.5185
+        ],
+        [
+          84.898604,
+          87.39960400000001
+        ],
+        [
+          95.40239600000001,
+          100.26595800000001
+        ],
+        [
+          106.41454200000001,
+          108.869354
+        ],
+        [
+          116.09058300000001,
+          121.193521
+        ],
+        [
+          126.57362499999999,
+          129.074625
+        ],
+        [
+          137.074375,
+          141.9085
+        ]
+      ]
+    },
+    "cresentflare_92bpm": {
+      "scratch": "cresentflare",
+      "bpm": 92,
+      "chapter2": [
+        37.037,
+        120.353567
+      ],
+      "keeps": [
+        [
+          37.037,
+          46.413833
+        ],
+        [
+          46.413833,
+          57.791792
+        ],
+        [
+          57.791792,
+          67.922312
+        ],
+        [
+          67.922312,
+          78.913
+        ],
+        [
+          78.913,
+          88.09002100000001
+        ],
+        [
+          88.09002100000001,
+          99.466792
+        ],
+        [
+          99.466792,
+          109.59731199999999
+        ],
+        [
+          109.59731199999999,
+          120.353567
+        ]
+      ],
+      "silences": [
+        [
+          42.392396,
+          46.413833
+        ],
+        [
+          53.180291999999994,
+          57.791792
+        ],
+        [
+          64.061,
+          67.922312
+        ],
+        [
+          73.700583,
+          78.913
+        ],
+        [
+          84.067396,
+          88.09002100000001
+        ],
+        [
+          94.85529199999999,
+          99.466792
+        ],
+        [
+          105.73599999999999,
+          109.59731199999999
+        ],
+        [
+          115.375583,
+          120.37450000000001
+        ]
+      ]
+    },
+    "cutting_79bpm": {
+      "scratch": "cutting",
+      "bpm": 79,
+      "chapter2": [
+        35.035,
+        83.450033
+      ],
+      "keeps": [
+        [
+          35.035,
+          41.040417
+        ],
+        [
+          41.040417,
+          47.155666999999994
+        ],
+        [
+          47.155666999999994,
+          53.23349999999999
+        ],
+        [
+          53.23349999999999,
+          59.304271
+        ],
+        [
+          59.304271,
+          65.264708
+        ],
+        [
+          65.264708,
+          71.379896
+        ],
+        [
+          71.379896,
+          77.457729
+        ],
+        [
+          77.457729,
+          83.450033
+        ]
+      ],
+      "silences": [
+        [
+          37.547895999999994,
+          41.040417
+        ],
+        [
+          43.562811999999994,
+          47.155666999999994
+        ],
+        [
+          49.81979199999999,
+          53.23349999999999
+        ],
+        [
+          56.131271,
+          59.304271
+        ],
+        [
+          61.772124999999996,
+          65.264708
+        ],
+        [
+          67.787042,
+          71.379896
+        ],
+        [
+          74.04402099999999,
+          77.457729
+        ],
+        [
+          80.3555,
+          83.4725
+        ]
+      ]
+    },
+    "dicing_85bpm": {
+      "scratch": "dicing",
+      "bpm": 85,
+      "chapter2": [
+        33.5335,
+        123.968
+      ],
+      "keeps": [
+        [
+          33.5335,
+          43.376458
+        ],
+        [
+          43.376458,
+          56.406875
+        ],
+        [
+          56.406875,
+          66.044187
+        ],
+        [
+          66.044187,
+          78.777896
+        ],
+        [
+          78.777896,
+          88.510625
+        ],
+        [
+          88.510625,
+          101.61875
+        ],
+        [
+          101.61875,
+          111.25791699999999
+        ],
+        [
+          111.25791699999999,
+          123.968
+        ]
+      ],
+      "silences": [
+        [
+          38.952228999999996,
+          43.376458
+        ],
+        [
+          50.42854199999999,
+          56.406875
+        ],
+        [
+          61.920874999999995,
+          66.044187
+        ],
+        [
+          73.41302099999999,
+          78.777896
+        ],
+        [
+          84.164104,
+          88.510625
+        ],
+        [
+          95.64433299999999,
+          101.61875
+        ],
+        [
+          107.13277099999999,
+          111.25791699999999
+        ],
+        [
+          118.624896,
+          123.96799999999999
+        ]
+      ]
+    },
+    "drags_98bpm": {
+      "scratch": "drags",
+      "bpm": 98,
+      "chapter2": [
+        15.5155,
+        93.92
+      ],
+      "keeps": [
+        [
+          15.5155,
+          25.387
+        ],
+        [
+          25.387,
+          35.222646
+        ],
+        [
+          35.222646,
+          45.010436999999996
+        ],
+        [
+          45.010436999999996,
+          54.80081199999999
+        ],
+        [
+          54.80081199999999,
+          64.592896
+        ],
+        [
+          64.592896,
+          74.428542
+        ],
+        [
+          74.428542,
+          84.216312
+        ],
+        [
+          84.216312,
+          93.92
+        ]
+      ],
+      "silences": [
+        [
+          19.296416999999998,
+          25.387
+        ],
+        [
+          29.264104,
+          35.222646
+        ],
+        [
+          39.319917000000004,
+          45.010436999999996
+        ],
+        [
+          49.137833,
+          54.80081199999999
+        ],
+        [
+          58.502312,
+          64.592896
+        ],
+        [
+          68.47,
+          74.428542
+        ],
+        [
+          78.525771,
+          84.216312
+        ],
+        [
+          88.343708,
+          93.9405
+        ]
+      ]
+    },
+    "lazers_92bpm": {
+      "scratch": "lazers",
+      "bpm": 92,
+      "chapter2": [
+        44.044,
+        85.652233
+      ],
+      "keeps": [
+        [
+          44.044,
+          49.302312
+        ],
+        [
+          49.302312,
+          54.560207999999996
+        ],
+        [
+          54.560207999999996,
+          64.94818699999999
+        ],
+        [
+          64.94818699999999,
+          70.123125
+        ],
+        [
+          70.123125,
+          75.381021
+        ],
+        [
+          75.381021,
+          85.652233
+        ]
+      ],
+      "silences": [
+        [
+          46.822854,
+          49.302312
+        ],
+        [
+          52.122833,
+          54.560207999999996
+        ],
+        [
+          62.324166999999996,
+          64.94818699999999
+        ],
+        [
+          67.643667,
+          70.123125
+        ],
+        [
+          72.943646,
+          75.381021
+        ],
+        [
+          83.144979,
+          85.669
+        ]
+      ]
+    },
+    "long_short_tips_105bpm": {
+      "scratch": "long_short_tips",
+      "bpm": 105,
+      "chapter2": [
+        49.5495,
+        122.752
+      ],
+      "keeps": [
+        [
+          49.5495,
+          58.557875
+        ],
+        [
+          58.557875,
+          67.784104
+        ],
+        [
+          67.784104,
+          77.307812
+        ],
+        [
+          77.307812,
+          86.184229
+        ],
+        [
+          86.184229,
+          93.22743700000001
+        ],
+        [
+          95.16039599999999,
+          104.387667
+        ],
+        [
+          104.387667,
+          113.911104
+        ],
+        [
+          113.911104,
+          122.752
+        ]
+      ],
+      "silences": [
+        [
+          53.827458,
+          58.557875
+        ],
+        [
+          63.401917000000005,
+          67.784104
+        ],
+        [
+          72.584042,
+          77.307812
+        ],
+        [
+          81.493896,
+          86.184229
+        ],
+        [
+          90.43075,
+          93.22743700000001
+        ],
+        [
+          93.227458,
+          95.16039599999999
+        ],
+        [
+          100.00520800000001,
+          104.387667
+        ],
+        [
+          109.187333,
+          113.911104
+        ],
+        [
+          118.09718699999999,
+          122.77449999999999
+        ]
+      ]
+    },
+    "marches_79bpm": {
+      "scratch": "marches",
+      "bpm": 79,
+      "chapter2": [
+        47.047,
+        95.52
+      ],
+      "keeps": [
+        [
+          47.047,
+          53.091812
+        ],
+        [
+          53.091812,
+          59.173125
+        ],
+        [
+          59.173125,
+          65.23075
+        ],
+        [
+          65.23075,
+          71.318646
+        ],
+        [
+          71.318646,
+          77.316
+        ],
+        [
+          77.316,
+          83.397313
+        ],
+        [
+          83.397313,
+          89.45487499999999
+        ],
+        [
+          89.45487499999999,
+          95.52
+        ]
+      ],
+      "silences": [
+        [
+          49.912312,
+          53.091812
+        ],
+        [
+          55.711208,
+          59.173125
+        ],
+        [
+          61.975770999999995,
+          65.23075
+        ],
+        [
+          68.097125,
+          71.318646
+        ],
+        [
+          74.1365,
+          77.316
+        ],
+        [
+          79.935396,
+          83.397313
+        ],
+        [
+          86.199979,
+          89.45487499999999
+        ],
+        [
+          92.32124999999999,
+          95.52
+        ]
+      ]
+    },
+    "needledropping_105bpm": {
+      "scratch": "needledropping",
+      "bpm": 105,
+      "chapter2": [
+        54.5545,
+        109.442667
+      ],
+      "keeps": [
+        [
+          54.5545,
+          63.731021
+        ],
+        [
+          63.731021,
+          73.168604
+        ],
+        [
+          73.168604,
+          82.075187
+        ],
+        [
+          82.075187,
+          91.191854
+        ],
+        [
+          91.191854,
+          100.62941699999999
+        ],
+        [
+          100.62941699999999,
+          109.442667
+        ]
+      ],
+      "silences": [
+        [
+          59.094313,
+          63.731021
+        ],
+        [
+          68.30072899999999,
+          73.168604
+        ],
+        [
+          77.44720799999999,
+          82.075187
+        ],
+        [
+          86.555125,
+          91.191854
+        ],
+        [
+          95.758562,
+          100.62941699999999
+        ],
+        [
+          104.908917,
+          109.467
+        ]
+      ]
+    },
+    "orbits_85bpm": {
+      "scratch": "orbits",
+      "bpm": 85,
+      "chapter2": [
+        44.5445,
+        112.352
+      ],
+      "keeps": [
+        [
+          44.5445,
+          54.512167
+        ],
+        [
+          54.512167,
+          65.124437
+        ],
+        [
+          65.124437,
+          76.405771
+        ],
+        [
+          76.405771,
+          88.41277099999999
+        ],
+        [
+          88.41277099999999,
+          99.02502100000001
+        ],
+        [
+          99.02502100000001,
+          110.305271
+        ]
+      ],
+      "silences": [
+        [
+          50.221375,
+          54.512167
+        ],
+        [
+          61.056312,
+          65.124437
+        ],
+        [
+          72.780187,
+          76.405771
+        ],
+        [
+          84.121979,
+          88.41277099999999
+        ],
+        [
+          94.95712499999999,
+          99.02502100000001
+        ],
+        [
+          106.680604,
+          110.305271
+        ]
+      ]
+    },
+    "originalflare_85bpm": {
+      "scratch": "originalflare",
+      "bpm": 85,
+      "chapter2": [
+        99.099,
+        166.912
+      ],
+      "keeps": [
+        [
+          99.099,
+          108.28520800000001
+        ],
+        [
+          108.28520800000001,
+          118.793646
+        ],
+        [
+          118.793646,
+          131.26960400000002
+        ],
+        [
+          131.26960400000002,
+          142.187771
+        ],
+        [
+          142.187771,
+          152.69402100000002
+        ],
+        [
+          152.69402100000002,
+          165.170187
+        ]
+      ],
+      "silences": [
+        [
+          104.590458,
+          108.28520800000001
+        ],
+        [
+          116.236271,
+          118.793646
+        ],
+        [
+          125.795208,
+          131.26960400000002
+        ],
+        [
+          138.457708,
+          142.187771
+        ],
+        [
+          150.136875,
+          152.69402100000002
+        ],
+        [
+          159.695792,
+          165.170187
+        ]
+      ]
+    },
+    "reversecutting_79bpm": {
+      "scratch": "reversecutting",
+      "bpm": 79,
+      "chapter2": [
+        23.5235,
+        72.0
+      ],
+      "keeps": [
+        [
+          23.5235,
+          29.602375
+        ],
+        [
+          29.602375,
+          35.549792
+        ],
+        [
+          35.549792,
+          41.614896
+        ],
+        [
+          41.614896,
+          47.734832999999995
+        ],
+        [
+          47.734832999999995,
+          53.826646
+        ],
+        [
+          53.826646,
+          59.774021
+        ],
+        [
+          59.774021,
+          65.839125
+        ],
+        [
+          65.839125,
+          72.0
+        ]
+      ],
+      "silences": [
+        [
+          26.235646,
+          29.602375
+        ],
+        [
+          32.275667,
+          35.549792
+        ],
+        [
+          38.219457999999996,
+          41.614896
+        ],
+        [
+          44.414728999999994,
+          47.734832999999995
+        ],
+        [
+          50.459833,
+          53.826646
+        ],
+        [
+          56.499916999999996,
+          59.774021
+        ],
+        [
+          62.443687,
+          65.839125
+        ],
+        [
+          68.638979,
+          72.0
+        ]
+      ]
+    },
+    "swipes_105bpm": {
+      "scratch": "swipes",
+      "bpm": 105,
+      "chapter2": [
+        43.5435,
+        80.096
+      ],
+      "keeps": [
+        [
+          43.5435,
+          48.147792
+        ],
+        [
+          48.147792,
+          52.749604000000005
+        ],
+        [
+          52.749604000000005,
+          61.87195800000001
+        ],
+        [
+          61.87195800000001,
+          66.43275
+        ],
+        [
+          66.43275,
+          71.034562
+        ],
+        [
+          71.034562,
+          80.096
+        ]
+      ],
+      "silences": [
+        [
+          45.456250000000004,
+          48.147792
+        ],
+        [
+          50.470854,
+          52.749604000000005
+        ],
+        [
+          59.434812,
+          61.87195800000001
+        ],
+        [
+          63.741208,
+          66.43275
+        ],
+        [
+          68.755812,
+          71.034562
+        ],
+        [
+          77.71977100000001,
+          80.11850000000001
+        ]
+      ]
+    },
+    "tears_98bpm": {
+      "scratch": "tears",
+      "bpm": 98,
+      "chapter2": [
+        43.043,
+        121.376
+      ],
+      "keeps": [
+        [
+          43.043,
+          52.869646
+        ],
+        [
+          52.869646,
+          62.700458
+        ],
+        [
+          62.700458,
+          72.463604
+        ],
+        [
+          72.463604,
+          82.32160400000001
+        ],
+        [
+          82.32160400000001,
+          92.076875
+        ],
+        [
+          92.076875,
+          101.900729
+        ],
+        [
+          101.900729,
+          111.6695
+        ],
+        [
+          111.6695,
+          121.376
+        ]
+      ],
+      "silences": [
+        [
+          47.466479,
+          52.869646
+        ],
+        [
+          57.430604,
+          62.700458
+        ],
+        [
+          67.272667,
+          72.463604
+        ],
+        [
+          77.094042,
+          82.32160400000001
+        ],
+        [
+          86.67233300000001,
+          92.076875
+        ],
+        [
+          96.63193799999999,
+          101.900729
+        ],
+        [
+          106.478562,
+          111.6695
+        ],
+        [
+          116.299937,
+          121.376
+        ]
+      ]
+    },
+    "tips_105bpm": {
+      "scratch": "tips",
+      "bpm": 105,
+      "chapter2": [
+        27.5275,
+        64.096
+      ],
+      "keeps": [
+        [
+          27.5275,
+          32.164792
+        ],
+        [
+          32.164792,
+          36.729042
+        ],
+        [
+          36.729042,
+          41.303729000000004
+        ],
+        [
+          41.303729000000004,
+          45.865437
+        ],
+        [
+          45.865437,
+          50.449729000000005
+        ],
+        [
+          50.449729000000005,
+          55.013979
+        ],
+        [
+          55.013979,
+          59.588667
+        ],
+        [
+          59.588667,
+          64.096
+        ]
+      ],
+      "silences": [
+        [
+          29.834833,
+          32.164792
+        ],
+        [
+          34.377792,
+          36.729042
+        ],
+        [
+          38.942271,
+          41.303729000000004
+        ],
+        [
+          43.59325,
+          45.865437
+        ],
+        [
+          48.119771,
+          50.449729000000005
+        ],
+        [
+          52.662729,
+          55.013979
+        ],
+        [
+          57.227208000000005,
+          59.588667
+        ],
+        [
+          61.878187,
+          64.115
+        ]
+      ]
+    },
+    "transformer_85bpm": {
+      "scratch": "transformer",
+      "bpm": 85,
+      "chapter2": [
+        51.051,
+        141.472
+      ],
+      "keeps": [
+        [
+          51.051,
+          62.394479000000004
+        ],
+        [
+          62.394479000000004,
+          73.647
+        ],
+        [
+          73.647,
+          84.9645
+        ],
+        [
+          84.9645,
+          96.327208
+        ],
+        [
+          96.327208,
+          107.606375
+        ],
+        [
+          107.606375,
+          118.858875
+        ],
+        [
+          118.858875,
+          130.17810400000002
+        ],
+        [
+          130.17810400000002,
+          141.472
+        ]
+      ],
+      "silences": [
+        [
+          56.4455,
+          62.394479000000004
+        ],
+        [
+          67.931312,
+          73.647
+        ],
+        [
+          78.978917,
+          84.9645
+        ],
+        [
+          90.40658300000001,
+          96.327208
+        ],
+        [
+          101.657396,
+          107.606375
+        ],
+        [
+          113.143792,
+          118.858875
+        ],
+        [
+          124.19081200000001,
+          130.17810400000002
+        ],
+        [
+          135.618458,
+          141.4885
+        ]
+      ]
+    },
+    "waves_105bpm": {
+      "scratch": "waves",
+      "bpm": 105,
+      "chapter2": [
+        22.5225,
+        95.744
+      ],
+      "keeps": [
+        [
+          22.5225,
+          28.867604
+        ],
+        [
+          28.867604,
+          31.68325
+        ],
+        [
+          31.68325,
+          38.884187
+        ],
+        [
+          38.884187,
+          47.894228999999996
+        ],
+        [
+          47.894228999999996,
+          59.157729
+        ],
+        [
+          59.157729,
+          65.05152100000001
+        ],
+        [
+          65.05152100000001,
+          68.2865
+        ],
+        [
+          68.2865,
+          75.487292
+        ],
+        [
+          75.487292,
+          84.497479
+        ],
+        [
+          84.497479,
+          95.744
+        ]
+      ],
+      "silences": [
+        [
+          26.599167,
+          28.867604
+        ],
+        [
+          29.786104,
+          31.68325
+        ],
+        [
+          35.712583,
+          38.884187
+        ],
+        [
+          45.335937,
+          47.894228999999996
+        ],
+        [
+          54.766854,
+          59.157729
+        ],
+        [
+          63.202417000000004,
+          65.05152100000001
+        ],
+        [
+          66.389354,
+          68.2865
+        ],
+        [
+          72.315833,
+          75.487292
+        ],
+        [
+          81.93920800000001,
+          84.497479
+        ],
+        [
+          91.370104,
+          95.744
+        ]
+      ]
+    },
+    "zigzags_105bpm": {
+      "scratch": "zigzags",
+      "bpm": 105,
+      "chapter2": [
+        32.5325,
+        69.088
+      ],
+      "keeps": [
+        [
+          32.5325,
+          37.146625
+        ],
+        [
+          37.146625,
+          41.722812
+        ],
+        [
+          41.722812,
+          46.251146
+        ],
+        [
+          46.251146,
+          50.866249999999994
+        ],
+        [
+          50.866249999999994,
+          55.431604
+        ],
+        [
+          55.431604,
+          60.007791999999995
+        ],
+        [
+          60.007791999999995,
+          64.536125
+        ],
+        [
+          64.536125,
+          69.088
+        ]
+      ],
+      "silences": [
+        [
+          34.713125,
+          37.146625
+        ],
+        [
+          39.270354,
+          41.722812
+        ],
+        [
+          43.838187,
+          46.251146
+        ],
+        [
+          48.510354,
+          50.866249999999994
+        ],
+        [
+          52.998104,
+          55.431604
+        ],
+        [
+          57.556062999999995,
+          60.007791999999995
+        ],
+        [
+          62.123166999999995,
+          64.536125
+        ],
+        [
+          66.795312,
+          69.1075
+        ]
+      ]
+    }
+  }
+}

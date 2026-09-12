@@ -1,0 +1,14 @@
+{
+  "technique": "crabs_92bpm",
+  "source_title": "Scratch_t104",
+  "chapter2": [
+    58.5585,
+    141.888
+  ],
+  "previews": [
+    "previews/crabs_92bpm/crabs_92bpm_boundary_head_47to64s_Scratch_t104.mov",
+    "previews/crabs_92bpm/crabs_92bpm_boundary_tail_73to83s_Scratch_t104.mov"
+  ],
+  "time_mapping": "preview t=0 corresponds to the source time in the filename",
+  "operator_audition": "PENDING - no automatic test can prove absence of speech"
+}

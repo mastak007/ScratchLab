@@ -1,0 +1,14 @@
+{
+  "technique": "waves_105bpm",
+  "source_title": "Scratch_t88",
+  "chapter2": [
+    22.5225,
+    95.744
+  ],
+  "previews": [
+    "previews/waves_105bpm/waves_105bpm_boundary_head_11to28s_Scratch_t88.mov",
+    "previews/waves_105bpm/waves_105bpm_boundary_tail_73to83s_Scratch_t88.mov"
+  ],
+  "time_mapping": "preview t=0 corresponds to the source time in the filename",
+  "operator_audition": "PENDING - no automatic test can prove absence of speech"
+}

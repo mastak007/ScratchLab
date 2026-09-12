@@ -1,0 +1,14 @@
+{
+  "technique": "cutting_79bpm",
+  "source_title": "Scratch_t05",
+  "chapter2": [
+    35.035,
+    83.450033
+  ],
+  "previews": [
+    "previews/cutting_79bpm/cutting_79bpm_boundary_head_23to40s_Scratch_t05.mov",
+    "previews/cutting_79bpm/cutting_79bpm_boundary_tail_73to83s_Scratch_t05.mov"
+  ],
+  "time_mapping": "preview t=0 corresponds to the source time in the filename",
+  "operator_audition": "PENDING - no automatic test can prove absence of speech"
+}

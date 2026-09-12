@@ -1,0 +1,14 @@
+processing 4: cutting_79bpm, transformer_85bpm, reversecutting_79bpm, tears_98bpm
+  note: searched offset 726 != half-chapter 725 frames (+33.4 ms) - using the SEARCHED value
+[verified_duplicate_half] cutting_79bpm: video and audio both repeat at 726 frames
+[verified_duplicate_half] transformer_85bpm: video and audio both repeat at 1355 frames
+[verified_duplicate_half] reversecutting_79bpm: video and audio both repeat at 726 frames
+  note: searched offset 1175 != half-chapter 1174 frames (+33.4 ms) - using the SEARCHED value
+[verified_partial_repeat] tears_98bpm: repeat confirmed, but 1 span(s) where the picture duplicates and the audio does not - flag for A/V review
+
+counts: {
+ "screened_only": 18,
+ "audited-earlier": 4,
+ "verified_duplicate_half": 1
+}
+state file: /Users/karlwatson/Developer/ScratchLab-CXL-Ready-20260913/evidence/mkv-source-inspection-20260913/claude-mkv-batch-audit/batch-state.json

@@ -1,0 +1,14 @@
+{
+  "technique": "tips_105bpm",
+  "source_title": "Scratch_t30",
+  "chapter2": [
+    27.5275,
+    64.096
+  ],
+  "previews": [
+    "previews/tips_105bpm/tips_105bpm_boundary_head_16to33s_Scratch_t30.mov",
+    "previews/tips_105bpm/tips_105bpm_boundary_tail_54to64s_Scratch_t30.mov"
+  ],
+  "time_mapping": "preview t=0 corresponds to the source time in the filename",
+  "operator_audition": "PENDING - no automatic test can prove absence of speech"
+}

@@ -1,0 +1,14 @@
+{
+  "technique": "lazers_92bpm",
+  "source_title": "Scratch_t58",
+  "chapter2": [
+    44.044,
+    85.652233
+  ],
+  "previews": [
+    "previews/lazers_92bpm/lazers_92bpm_boundary_head_32to49s_Scratch_t58.mov",
+    "previews/lazers_92bpm/lazers_92bpm_boundary_tail_73to83s_Scratch_t58.mov"
+  ],
+  "time_mapping": "preview t=0 corresponds to the source time in the filename",
+  "operator_audition": "PENDING - no automatic test can prove absence of speech"
+}

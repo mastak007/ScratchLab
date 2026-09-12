@@ -1,0 +1,13 @@
+
+=== runner validation: tears_98bpm ===
+  cache_present: PASS
+  fractional_lag_ran: PASS
+  repeat_profile_ran: PASS
+  reproduces_stored_numbers: SKIPPED - stored file was produced by (none - predates versioning), the current analysis is fractional_lag_repeat/2. Differing numbers here are an expected consequence of the widened lag search, not a reproducibility failure. Re-run this technique to refresh its artifacts.
+  detects_superseded_artifacts: PASS
+  classifier_produced_a_distinct_state: PASS
+  compare active_windows: match=True
+  compare ncc_best_fractional: match=False
+  compare extra_lag_samples: match=False
+  classifier: verified_partial_repeat - repeat confirmed, but 1 span(s) where the picture duplicates and the audio does not - flag for A/V review
+  written: /Users/karlwatson/Developer/ScratchLab-CXL-Ready-20260913/evidence/mkv-source-inspection-20260913/claude-mkv-batch-audit/reports/runner-validation/tears_98bpm-validation.json

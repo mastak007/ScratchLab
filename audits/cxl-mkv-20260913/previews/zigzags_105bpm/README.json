@@ -1,0 +1,14 @@
+{
+  "technique": "zigzags_105bpm",
+  "source_title": "Scratch_t84",
+  "chapter2": [
+    32.5325,
+    69.088
+  ],
+  "previews": [
+    "previews/zigzags_105bpm/zigzags_105bpm_boundary_head_21to38s_Scratch_t84.mov",
+    "previews/zigzags_105bpm/zigzags_105bpm_boundary_tail_59to69s_Scratch_t84.mov"
+  ],
+  "time_mapping": "preview t=0 corresponds to the source time in the filename",
+  "operator_audition": "PENDING - no automatic test can prove absence of speech"
+}

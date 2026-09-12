@@ -1,0 +1,111 @@
+{
+  "technique": "cutting_79bpm",
+  "title": "Scratch_t04",
+  "offset_frames": 726,
+  "offset_exact_samples": 1162761.6,
+  "offset_is_whole_samples": false,
+  "active_windows": 12,
+  "ncc_integer_lag": {
+    "min": 0.9299,
+    "median": 0.95155,
+    "max": 0.9566
+  },
+  "ncc_best_fractional": {
+    "min": 0.9931,
+    "median": 0.99495,
+    "max": 0.9954
+  },
+  "extra_lag_samples": {
+    "min": -2.0,
+    "median": -2.0,
+    "max": -2.0,
+    "spread": 0.0
+  },
+  "caveat": "This measures the audio timeline against itself across the repeat. It constrains RELATIVE timing only; it is not a measurement of absolute audio/video sync.",
+  "windows": [
+    {
+      "t_s": 35.035,
+      "ncc_integer_lag": 0.951,
+      "ncc_best_fractional": 0.995,
+      "extra_lag_samples": -2.0,
+      "rms": 1070.0
+    },
+    {
+      "t_s": 36.035,
+      "ncc_integer_lag": 0.9521,
+      "ncc_best_fractional": 0.9949,
+      "extra_lag_samples": -2.0,
+      "rms": 836.0
+    },
+    {
+      "t_s": 37.035,
+      "ncc_integer_lag": 0.9512,
+      "ncc_best_fractional": 0.9948,
+      "extra_lag_samples": -2.0,
+      "rms": 800.0
+    },
+    {
+      "t_s": 41.035,
+      "ncc_integer_lag": 0.9534,
+      "ncc_best_fractional": 0.9953,
+      "extra_lag_samples": -2.0,
+      "rms": 1131.0
+    },
+    {
+      "t_s": 42.035,
+      "ncc_integer_lag": 0.9519,
+      "ncc_best_fractional": 0.9951,
+      "extra_lag_samples": -2.0,
+      "rms": 1129.0
+    },
+    {
+      "t_s": 43.035,
+      "ncc_integer_lag": 0.9507,
+      "ncc_best_fractional": 0.9949,
+      "extra_lag_samples": -2.0,
+      "rms": 869.0
+    },
+    {
+      "t_s": 47.035,
+      "ncc_integer_lag": 0.9531,
+      "ncc_best_fractional": 0.9952,
+      "extra_lag_samples": -2.0,
+      "rms": 1047.0
+    },
+    {
+      "t_s": 48.035,
+      "ncc_integer_lag": 0.9475,
+      "ncc_best_fractional": 0.9944,
+      "extra_lag_samples": -2.0,
+      "rms": 820.0
+    },
+    {
+      "t_s": 49.035,
+      "ncc_integer_lag": 0.9299,
+      "ncc_best_fractional": 0.9931,
+      "extra_lag_samples": -2.0,
+      "rms": 1241.0
+    },
+    {
+      "t_s": 53.035,
+      "ncc_integer_lag": 0.9566,
+      "ncc_best_fractional": 0.9954,
+      "extra_lag_samples": -2.0,
+      "rms": 924.0
+    },
+    {
+      "t_s": 54.035,
+      "ncc_integer_lag": 0.9538,
+      "ncc_best_fractional": 0.9952,
+      "extra_lag_samples": -2.0,
+      "rms": 954.0
+    },
+    {
+      "t_s": 55.035,
+      "ncc_integer_lag": 0.9309,
+      "ncc_best_fractional": 0.9933,
+      "extra_lag_samples": -2.0,
+      "rms": 1242.0
+    }
+  ]
+}

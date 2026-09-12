@@ -1,0 +1,14 @@
+{
+  "technique": "chirpflare_92bpm",
+  "reference_title": "Scratch_t52",
+  "video_repeat_offset_frames": 1249,
+  "video_repeat_offset_s": 41.674967,
+  "video_repeat_mean_similarity": 0.99902,
+  "audio_repeat_extra_lag_samples": 1,
+  "audio_repeat_extra_lag_ms": 0.0208,
+  "audio_repeat_ncc_at_best": 0.999434,
+  "audio_repeat_ncc_at_video_offset": 0.954769,
+  "window_s": 41.642,
+  "verdict": "No A/V drift: over 41.6 s the audio repeats at the video's own repeat offset to within 0.02 ms (1 samples). A drift of even one frame (33.4 ms) would have shown here.",
+  "caveat": "This compares the audio timeline with the video timeline across the title's own repeat. It constrains RELATIVE timing over the repeated span and can rule out progressive drift. It does NOT measure absolute audio/video synchronisation, and a constant absolute offset would be invisible to it. Where the repeat offset is not a whole number of audio samples, use scripts/fractional_lag_repeat.py instead - integer lag alone under-reports the match."
+}

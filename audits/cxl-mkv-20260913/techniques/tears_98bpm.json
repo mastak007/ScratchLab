@@ -1,0 +1,699 @@
+{
+  "technique": "tears",
+  "bpm": 98,
+  "key": "tears_98bpm",
+  "chapter2": [
+    43.043,
+    121.376
+  ],
+  "angle_to_title": {
+    "1": "Scratch_t24",
+    "2": "Scratch_t25",
+    "3": "Scratch_t26",
+    "4": "Scratch_t27"
+  },
+  "distinct_titles": [
+    "Scratch_t24",
+    "Scratch_t25",
+    "Scratch_t26",
+    "Scratch_t27"
+  ],
+  "missing_delivered_angles": [],
+  "sections_completed": [
+    "video_integrity",
+    "audio_streams",
+    "title_duplicates",
+    "repeat_within_title",
+    "segment_duplication",
+    "talking_boundaries",
+    "noise",
+    "av_sync"
+  ],
+  "video": {
+    "Scratch_t24": {
+      "frames": 3636,
+      "first_pts": 0.0,
+      "last_pts": 121.288,
+      "pts_monotonic": true,
+      "pts_step_mean": 0.033366713,
+      "pts_step_range": [
+        0.033,
+        0.034
+      ],
+      "interlaced_frames": 3636,
+      "top_field_first_count": 0,
+      "repeat_pict_nonzero": 0,
+      "sar": [
+        "8:9"
+      ],
+      "size": [
+        "720x480"
+      ],
+      "decode_stderr": "",
+      "decode_clean": true,
+      "idet_multi_frame": "Multi frame detection: TFF:     0 BFF:  1527 Progressive:     5 Undetermined:    59"
+    },
+    "Scratch_t25": {
+      "frames": 3636,
+      "first_pts": 0.0,
+      "last_pts": 121.288,
+      "pts_monotonic": true,
+      "pts_step_mean": 0.033366713,
+      "pts_step_range": [
+        0.033,
+        0.034
+      ],
+      "interlaced_frames": 3636,
+      "top_field_first_count": 0,
+      "repeat_pict_nonzero": 0,
+      "sar": [
+        "8:9"
+      ],
+      "size": [
+        "720x480"
+      ],
+      "decode_stderr": "",
+      "decode_clean": true,
+      "idet_multi_frame": "Multi frame detection: TFF:     0 BFF:  1528 Progressive:     4 Undetermined:    59"
+    },
+    "Scratch_t26": {
+      "frames": 3636,
+      "first_pts": 0.0,
+      "last_pts": 121.288,
+      "pts_monotonic": true,
+      "pts_step_mean": 0.033366713,
+      "pts_step_range": [
+        0.033,
+        0.034
+      ],
+      "interlaced_frames": 3636,
+      "top_field_first_count": 0,
+      "repeat_pict_nonzero": 0,
+      "sar": [
+        "8:9"
+      ],
+      "size": [
+        "720x480"
+      ],
+      "decode_stderr": "",
+      "decode_clean": true,
+      "idet_multi_frame": "Multi frame detection: TFF:     0 BFF:  1527 Progressive:     5 Undetermined:    59"
+    },
+    "Scratch_t27": {
+      "frames": 3636,
+      "first_pts": 0.0,
+      "last_pts": 121.288,
+      "pts_monotonic": true,
+      "pts_step_mean": 0.033366713,
+      "pts_step_range": [
+        0.033,
+        0.034
+      ],
+      "interlaced_frames": 3636,
+      "top_field_first_count": 0,
+      "repeat_pict_nonzero": 0,
+      "sar": [
+        "8:9"
+      ],
+      "size": [
+        "720x480"
+      ],
+      "decode_stderr": "",
+      "decode_clean": true,
+      "idet_multi_frame": "Multi frame detection: TFF:     0 BFF:  1527 Progressive:     5 Undetermined:    59"
+    }
+  },
+  "complete": true,
+  "audio": {
+    "n_streams": 3,
+    "streams": {
+      "Scratch_t24": {
+        "a0": {
+          "sha256": "4ecfcd4298b1ee88097bf0f8def60795f84dba95dad7f903de47110351efe1ae",
+          "samples": 5826048,
+          "duration_s": 121.376,
+          "rms_dbfs": -17.95,
+          "peak_dbfs": -1.307,
+          "samples_at_full_scale": 0
+        },
+        "a1": {
+          "sha256": "c14b65f751834b75b7105bfa5fa1b1c5ff73644f7ecf64d28030fbdd68e49526",
+          "samples": 5826048,
+          "duration_s": 121.376,
+          "rms_dbfs": -28.09,
+          "peak_dbfs": -3.829,
+          "samples_at_full_scale": 0
+        },
+        "a2": {
+          "sha256": "ae10aea4e3d56e5319196cdd17c5e666ae402d7b1d4dfeee33463cb86e9f797e",
+          "samples": 5826048,
+          "duration_s": 121.376,
+          "rms_dbfs": -17.06,
+          "peak_dbfs": -1.582,
+          "samples_at_full_scale": 0
+        }
+      },
+      "Scratch_t25": {
+        "a0": {
+          "sha256": "4ecfcd4298b1ee88097bf0f8def60795f84dba95dad7f903de47110351efe1ae",
+          "samples": 5826048,
+          "duration_s": 121.376,
+          "rms_dbfs": -17.95,
+          "peak_dbfs": -1.307,
+          "samples_at_full_scale": 0
+        },
+        "a1": {
+          "sha256": "c14b65f751834b75b7105bfa5fa1b1c5ff73644f7ecf64d28030fbdd68e49526",
+          "samples": 5826048,
+          "duration_s": 121.376,
+          "rms_dbfs": -28.09,
+          "peak_dbfs": -3.829,
+          "samples_at_full_scale": 0
+        },
+        "a2": {
+          "sha256": "ae10aea4e3d56e5319196cdd17c5e666ae402d7b1d4dfeee33463cb86e9f797e",
+          "samples": 5826048,
+          "duration_s": 121.376,
+          "rms_dbfs": -17.06,
+          "peak_dbfs": -1.582,
+          "samples_at_full_scale": 0
+        }
+      },
+      "Scratch_t26": {
+        "a0": {
+          "sha256": "4ecfcd4298b1ee88097bf0f8def60795f84dba95dad7f903de47110351efe1ae",
+          "samples": 5826048,
+          "duration_s": 121.376,
+          "rms_dbfs": -17.95,
+          "peak_dbfs": -1.307,
+          "samples_at_full_scale": 0
+        },
+        "a1": {
+          "sha256": "c14b65f751834b75b7105bfa5fa1b1c5ff73644f7ecf64d28030fbdd68e49526",
+          "samples": 5826048,
+          "duration_s": 121.376,
+          "rms_dbfs": -28.09,
+          "peak_dbfs": -3.829,
+          "samples_at_full_scale": 0
+        },
+        "a2": {
+          "sha256": "ae10aea4e3d56e5319196cdd17c5e666ae402d7b1d4dfeee33463cb86e9f797e",
+          "samples": 5826048,
+          "duration_s": 121.376,
+          "rms_dbfs": -17.06,
+          "peak_dbfs": -1.582,
+          "samples_at_full_scale": 0
+        }
+      },
+      "Scratch_t27": {
+        "a0": {
+          "sha256": "4ecfcd4298b1ee88097bf0f8def60795f84dba95dad7f903de47110351efe1ae",
+          "samples": 5826048,
+          "duration_s": 121.376,
+          "rms_dbfs": -17.95,
+          "peak_dbfs": -1.307,
+          "samples_at_full_scale": 0
+        },
+        "a1": {
+          "sha256": "c14b65f751834b75b7105bfa5fa1b1c5ff73644f7ecf64d28030fbdd68e49526",
+          "samples": 5826048,
+          "duration_s": 121.376,
+          "rms_dbfs": -28.09,
+          "peak_dbfs": -3.829,
+          "samples_at_full_scale": 0
+        },
+        "a2": {
+          "sha256": "ae10aea4e3d56e5319196cdd17c5e666ae402d7b1d4dfeee33463cb86e9f797e",
+          "samples": 5826048,
+          "duration_s": 121.376,
+          "rms_dbfs": -17.06,
+          "peak_dbfs": -1.582,
+          "samples_at_full_scale": 0
+        }
+      }
+    },
+    "cross_title_identity": {
+      "a0": {
+        "equality_classes": [
+          [
+            "Scratch_t24",
+            "Scratch_t25",
+            "Scratch_t26",
+            "Scratch_t27"
+          ]
+        ]
+      },
+      "a1": {
+        "equality_classes": [
+          [
+            "Scratch_t24",
+            "Scratch_t25",
+            "Scratch_t26",
+            "Scratch_t27"
+          ]
+        ]
+      },
+      "a2": {
+        "equality_classes": [
+          [
+            "Scratch_t24",
+            "Scratch_t25",
+            "Scratch_t26",
+            "Scratch_t27"
+          ]
+        ]
+      }
+    },
+    "roles": {
+      "hypothesis": {
+        "0:a:0": "withBeat",
+        "0:a:1": "noBeat",
+        "0:a:2": "beatOnly"
+      },
+      "test": "a0 - a1 - a2 should collapse, measured over chapter 2 only",
+      "window_s": [
+        43.043,
+        121.376
+      ],
+      "residual_dbfs": -63.44,
+      "programme_dbfs": -16.85,
+      "residual_below_programme_db": -46.59,
+      "corr_a0_minus_a2_vs_a1": 0.99977,
+      "rms_dbfs": {
+        "a0": -16.85,
+        "a1": -30.08,
+        "a2": -17.07
+      },
+      "full_title_residual_below_programme_db": -8.94,
+      "full_title_note": "expected to be much worse than the chapter-2 figure whenever the title has narration, because speech is on the mixed track alone",
+      "verdict": "CONFIRMED for this technique"
+    }
+  },
+  "title_duplicates": {
+    "method": "ffmpeg framemd5 of the decoded video stream; identical hash sequence means identical decoded frames for the whole title",
+    "per_title": {
+      "Scratch_t24": {
+        "frames": 3636,
+        "frame_hash_sequence_sha256": "36a8aece0e81402c07ebde7c0d89066ca511c82773b32818fafb4d14a495d6db"
+      },
+      "Scratch_t25": {
+        "frames": 3636,
+        "frame_hash_sequence_sha256": "1366680918a272e6c920c6c4aa8bd7fa3920e7ae62a679c1433eed61ae75147b"
+      },
+      "Scratch_t26": {
+        "frames": 3636,
+        "frame_hash_sequence_sha256": "c5c3564f4e451ba5c5496b809934beb8c526646e3678b7bc603aa0bd95aecdb7"
+      },
+      "Scratch_t27": {
+        "frames": 3636,
+        "frame_hash_sequence_sha256": "ae10e63fe5233795fec43351b87303c91a3b0df23945fb0c5b20115ed99beac3"
+      }
+    },
+    "identical_video_groups": [],
+    "distinct_camera_views_in_group": 4,
+    "titles_in_group": 4
+  },
+  "repeat_within_title": {
+    "reference_title": "Scratch_t24",
+    "chapter2_frames": 2346,
+    "adjacent_frame_similarity": 0.98697,
+    "random_pair_similarity": 0.85479,
+    "best_nonlocal_offset": {
+      "offset_frames": 1175,
+      "mean_similarity": 0.9986,
+      "offset_s": 39.205833
+    },
+    "video_repeat_detected": true,
+    "criterion": "a real repeat makes frames OFF apart at least as similar as neighbouring frames",
+    "isolated_scratch_confirmation": {
+      "ncc_at_video_offset": 0.736865,
+      "note": "confirmation uses the isolated-scratch track, not the beat"
+    }
+  },
+  "delivered_segment_duplication": {
+    "angle_1": {
+      "takes": 8,
+      "duplicate_pairs_zncc_gt_0.99": {
+        "take01_vs_take05": {
+          "zncc": 0.99973,
+          "frame_offset": -3,
+          "frames": 280
+        },
+        "take02_vs_take06": {
+          "zncc": 0.9997,
+          "frame_offset": 0,
+          "frames": 283
+        },
+        "take03_vs_take07": {
+          "zncc": 0.99974,
+          "frame_offset": 1,
+          "frames": 280
+        },
+        "take04_vs_take08": {
+          "zncc": 0.99961,
+          "frame_offset": 0,
+          "frames": 277
+        }
+      }
+    },
+    "angle_2": {
+      "takes": 8,
+      "duplicate_pairs_zncc_gt_0.99": {
+        "take01_vs_take05": {
+          "zncc": 0.99976,
+          "frame_offset": -3,
+          "frames": 280
+        },
+        "take02_vs_take06": {
+          "zncc": 0.99976,
+          "frame_offset": 0,
+          "frames": 283
+        },
+        "take03_vs_take07": {
+          "zncc": 0.99977,
+          "frame_offset": 1,
+          "frames": 280
+        },
+        "take04_vs_take08": {
+          "zncc": 0.99961,
+          "frame_offset": 0,
+          "frames": 277
+        }
+      }
+    },
+    "angle_3": {
+      "takes": 8,
+      "duplicate_pairs_zncc_gt_0.99": {
+        "take01_vs_take05": {
+          "zncc": 0.99949,
+          "frame_offset": -3,
+          "frames": 280
+        },
+        "take02_vs_take06": {
+          "zncc": 0.99955,
+          "frame_offset": 0,
+          "frames": 283
+        },
+        "take03_vs_take07": {
+          "zncc": 0.99955,
+          "frame_offset": 1,
+          "frames": 280
+        },
+        "take04_vs_take08": {
+          "zncc": 0.99945,
+          "frame_offset": 0,
+          "frames": 277
+        }
+      }
+    },
+    "angle_4": {
+      "takes": 8,
+      "duplicate_pairs_zncc_gt_0.99": {
+        "take01_vs_take05": {
+          "zncc": 0.99958,
+          "frame_offset": -3,
+          "frames": 280
+        },
+        "take02_vs_take06": {
+          "zncc": 0.9996,
+          "frame_offset": 0,
+          "frames": 283
+        },
+        "take03_vs_take07": {
+          "zncc": 0.99956,
+          "frame_offset": 1,
+          "frames": 280
+        },
+        "take04_vs_take08": {
+          "zncc": 0.9994,
+          "frame_offset": 0,
+          "frames": 277
+        }
+      }
+    }
+  },
+  "talking_boundaries": {
+    "method_note": "Two independent tests. (a) Component subtraction isolates content unique to the mixed track, but CANNOT prove absence of speech: voice shared by two components cancels. (b) A per-stream voice-band indicator is run on every stream separately. Neither replaces listening; boundary previews are produced and operator audition is REQUIRED.",
+    "operator_audition": "PENDING",
+    "residual_speech_runs_s": [
+      [
+        0.02,
+        2.23
+      ],
+      [
+        2.79,
+        7.13
+      ],
+      [
+        7.69,
+        12.03
+      ],
+      [
+        12.6,
+        16.93
+      ],
+      [
+        17.5,
+        21.84
+      ],
+      [
+        22.41,
+        26.75
+      ],
+      [
+        27.31,
+        31.66
+      ],
+      [
+        32.22,
+        36.57
+      ],
+      [
+        37.11,
+        40.21
+      ]
+    ],
+    "residual_floor": 13.459,
+    "residual_threshold": 80.752,
+    "residual_max_after_chapter2_start": 110.86,
+    "residual_max_before_chapter2_start": 9525.53,
+    "per_stream_voice_band": {
+      "a0": {
+        "candidate_runs_total": 4,
+        "candidate_runs_inside_chapter2": [
+          [
+            56.47,
+            56.73
+          ],
+          [
+            95.67,
+            95.93
+          ]
+        ],
+        "n_inside_chapter2": 2,
+        "caveat": "scratch transients also carry voice-band energy; these are candidates, not detections"
+      },
+      "a1": {
+        "candidate_runs_total": 28,
+        "candidate_runs_inside_chapter2": [
+          [
+            43.99,
+            44.23
+          ],
+          [
+            45.55,
+            45.91
+          ],
+          [
+            46.76,
+            47.43
+          ],
+          [
+            52.88,
+            53.13
+          ],
+          [
+            53.8,
+            54.06
+          ],
+          [
+            56.47,
+            57.34
+          ],
+          [
+            62.73,
+            62.98
+          ],
+          [
+            63.86,
+            65.45
+          ],
+          [
+            65.85,
+            66.09
+          ],
+          [
+            66.41,
+            67.17
+          ],
+          [
+            76.13,
+            77.01
+          ],
+          [
+            84.74,
+            85.45
+          ],
+          [
+            85.97,
+            86.63
+          ],
+          [
+            93.01,
+            93.27
+          ],
+          [
+            95.67,
+            96.55
+          ],
+          [
+            102.43,
+            103.41
+          ],
+          [
+            104.28,
+            104.65
+          ],
+          [
+            105.6,
+            106.38
+          ],
+          [
+            115.34,
+            116.21
+          ]
+        ],
+        "n_inside_chapter2": 19,
+        "caveat": "scratch transients also carry voice-band energy; these are candidates, not detections"
+      },
+      "a2": {
+        "candidate_runs_total": 0,
+        "candidate_runs_inside_chapter2": [],
+        "n_inside_chapter2": 0,
+        "caveat": "scratch transients also carry voice-band energy; these are candidates, not detections"
+      }
+    }
+  },
+  "hum_hiss_clipping": {
+    "policy": "measured observations only; no filter applied, no Baby setting reused",
+    "pause_windows_used_s": [
+      [
+        47.466479,
+        52.869646
+      ],
+      [
+        57.430604,
+        62.700458
+      ],
+      [
+        67.272667,
+        72.463604
+      ],
+      [
+        77.094042,
+        82.32160400000001
+      ],
+      [
+        86.67233300000001,
+        92.076875
+      ],
+      [
+        96.63193799999999,
+        101.900729
+      ],
+      [
+        106.478562,
+        111.6695
+      ],
+      [
+        116.299937,
+        121.376
+      ]
+    ],
+    "a0": {
+      "quiet_material_s": 42.032,
+      "quiet_rms_dbfs": -17.12,
+      "fitted_mains_fundamental_hz": 52.2,
+      "harmonic_levels_dbfs": {
+        "52.2": -36.99,
+        "104.4": -37.44,
+        "156.6": -32.39,
+        "208.8": -41.63,
+        "261.0": -47.21,
+        "365.4": -49.98
+      },
+      "broadband_median_2k_16k_dbfs_per_bin": 2.83,
+      "peak_dbfs": -1.307,
+      "samples_at_full_scale": 0,
+      "interpretation_warning": "these windows may still contain music; a peak at the mains frequency is only hum if the stream is otherwise quiet there"
+    },
+    "a1": {
+      "quiet_material_s": 42.032,
+      "quiet_rms_dbfs": -50.71,
+      "fitted_mains_fundamental_hz": 59.99,
+      "harmonic_levels_dbfs": {
+        "59.99": -70.71,
+        "119.98": -62.14,
+        "179.97": -67.87,
+        "239.96": -66.52,
+        "299.95": -76.46,
+        "419.93": -71.82
+      },
+      "broadband_median_2k_16k_dbfs_per_bin": -12.3,
+      "peak_dbfs": -3.829,
+      "samples_at_full_scale": 0,
+      "interpretation_warning": "these windows may still contain music; a peak at the mains frequency is only hum if the stream is otherwise quiet there"
+    },
+    "a2": {
+      "quiet_material_s": 42.032,
+      "quiet_rms_dbfs": -17.12,
+      "fitted_mains_fundamental_hz": 52.2,
+      "harmonic_levels_dbfs": {
+        "52.2": -37.0,
+        "104.4": -37.44,
+        "156.6": -32.39,
+        "208.8": -41.63,
+        "261.0": -47.21,
+        "365.4": -49.98
+      },
+      "broadband_median_2k_16k_dbfs_per_bin": 2.64,
+      "peak_dbfs": -1.582,
+      "samples_at_full_scale": 0,
+      "interpretation_warning": "these windows may still contain music; a peak at the mains frequency is only hum if the stream is otherwise quiet there"
+    }
+  },
+  "av_sync": {
+    "reference_title": "Scratch_t26",
+    "method": "isolated-scratch loudness envelope vs per-frame video motion energy; resolution ~1 frame (33.4 ms), not better",
+    "segments": {
+      "start": {
+        "best_lag_frames": 10,
+        "best_lag_ms": 333.67,
+        "peak_corr": 0.5705,
+        "corr_at_zero": 0.2566
+      },
+      "middle": {
+        "best_lag_frames": -3,
+        "best_lag_ms": -100.1,
+        "peak_corr": 0.6922,
+        "corr_at_zero": 0.3812
+      },
+      "end": {
+        "best_lag_frames": 10,
+        "best_lag_ms": 333.67,
+        "peak_corr": 0.6218,
+        "corr_at_zero": 0.3804
+      }
+    }
+  }
+}

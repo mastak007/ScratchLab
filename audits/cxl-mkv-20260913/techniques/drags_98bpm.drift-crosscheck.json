@@ -1,0 +1,14 @@
+{
+  "technique": "drags_98bpm",
+  "reference_title": "Scratch_t16",
+  "video_repeat_offset_frames": 1175,
+  "video_repeat_offset_s": 39.205833,
+  "video_repeat_mean_similarity": 0.99832,
+  "audio_repeat_extra_lag_samples": 2,
+  "audio_repeat_extra_lag_ms": 0.0417,
+  "audio_repeat_ncc_at_best": 0.961124,
+  "audio_repeat_ncc_at_video_offset": 0.68287,
+  "window_s": 39.199,
+  "verdict": "No A/V drift: over 39.2 s the audio repeats at the video's own repeat offset to within 0.04 ms (2 samples). A drift of even one frame (33.4 ms) would have shown here.",
+  "caveat": "This compares the audio timeline with the video timeline across the title's own repeat. It constrains RELATIVE timing over the repeated span and can rule out progressive drift. It does NOT measure absolute audio/video synchronisation, and a constant absolute offset would be invisible to it. Where the repeat offset is not a whole number of audio samples, use scripts/fractional_lag_repeat.py instead - integer lag alone under-reports the match."
+}

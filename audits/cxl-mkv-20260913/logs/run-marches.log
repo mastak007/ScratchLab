@@ -1,0 +1,9 @@
+processing 1: marches_79bpm
+[verified_duplicate_half] marches_79bpm: video and audio both repeat at 726 frames
+
+counts: {
+ "screened_only": 18,
+ "audited-earlier": 4,
+ "verified_duplicate_half": 1
+}
+state file: /Users/karlwatson/Developer/ScratchLab-CXL-Ready-20260913/evidence/mkv-source-inspection-20260913/claude-mkv-batch-audit/batch-state.json

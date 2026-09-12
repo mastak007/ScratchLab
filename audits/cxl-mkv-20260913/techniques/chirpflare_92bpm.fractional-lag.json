@@ -1,0 +1,248 @@
+{
+  "analysis_version": "fractional_lag_repeat/2",
+  "technique": "chirpflare_92bpm",
+  "title": "Scratch_t52",
+  "chapter2": [
+    31.5315,
+    114.848067
+  ],
+  "offset_frames": 1249,
+  "offset_exact_samples": 2000398.4,
+  "offset_is_whole_samples": false,
+  "half_chapter_offset_frames": 1249,
+  "params": {
+    "probe_s": 6.0,
+    "max_lag_samples": 32.0,
+    "window_s": 1.0,
+    "active_rms_threshold": 200
+  },
+  "offset_equals_half_chapter": true,
+  "audio_discovered_offset": {
+    "best_offset_s": 41.674979,
+    "best_offset_frames_nearest": 1249,
+    "ncc": 0.99933,
+    "probe_s": 6.0,
+    "top_distinct_peaks": [
+      {
+        "offset_s": 41.674979,
+        "ncc": 0.99933
+      },
+      {
+        "offset_s": 4.605188,
+        "ncc": 0.0362
+      },
+      {
+        "offset_s": 46.280146,
+        "ncc": 0.0362
+      }
+    ]
+  },
+  "audio_vs_supplied_offset_delta_ms": 0.012,
+  "active_windows": 23,
+  "ncc_integer_lag": {
+    "min": 0.9005,
+    "median": 0.9592,
+    "max": 0.9863
+  },
+  "ncc_best_fractional": {
+    "min": 0.9999,
+    "median": 0.9999,
+    "max": 0.9999
+  },
+  "extra_lag_samples": {
+    "min": -1.31,
+    "median": -1.31,
+    "max": -1.31,
+    "spread": 0.0
+  },
+  "any_lag_hit_search_bound": false,
+  "windows_below_0.90": [],
+  "n_windows_below_0.90": 0,
+  "caveat": "Relative timing within one audio timeline. Not absolute audio/video sync, and no statement about speech.",
+  "windows": [
+    {
+      "t_s": 31.532,
+      "ncc_integer_lag": 0.9288,
+      "ncc_best_fractional": 0.9999,
+      "extra_lag_samples": -1.31,
+      "lag_hit_search_bound": false,
+      "rms": 1397.0
+    },
+    {
+      "t_s": 32.532,
+      "ncc_integer_lag": 0.961,
+      "ncc_best_fractional": 0.9999,
+      "extra_lag_samples": -1.31,
+      "lag_hit_search_bound": false,
+      "rms": 1121.0
+    },
+    {
+      "t_s": 33.532,
+      "ncc_integer_lag": 0.9005,
+      "ncc_best_fractional": 0.9999,
+      "extra_lag_samples": -1.31,
+      "lag_hit_search_bound": false,
+      "rms": 1371.0
+    },
+    {
+      "t_s": 34.532,
+      "ncc_integer_lag": 0.9648,
+      "ncc_best_fractional": 0.9999,
+      "extra_lag_samples": -1.31,
+      "lag_hit_search_bound": false,
+      "rms": 1464.0
+    },
+    {
+      "t_s": 35.532,
+      "ncc_integer_lag": 0.9501,
+      "ncc_best_fractional": 0.9999,
+      "extra_lag_samples": -1.31,
+      "lag_hit_search_bound": false,
+      "rms": 1668.0
+    },
+    {
+      "t_s": 36.532,
+      "ncc_integer_lag": 0.9859,
+      "ncc_best_fractional": 0.9999,
+      "extra_lag_samples": -1.31,
+      "lag_hit_search_bound": false,
+      "rms": 941.0
+    },
+    {
+      "t_s": 41.532,
+      "ncc_integer_lag": 0.9725,
+      "ncc_best_fractional": 0.9999,
+      "extra_lag_samples": -1.31,
+      "lag_hit_search_bound": false,
+      "rms": 1150.0
+    },
+    {
+      "t_s": 42.532,
+      "ncc_integer_lag": 0.9201,
+      "ncc_best_fractional": 0.9999,
+      "extra_lag_samples": -1.31,
+      "lag_hit_search_bound": false,
+      "rms": 1338.0
+    },
+    {
+      "t_s": 43.532,
+      "ncc_integer_lag": 0.9509,
+      "ncc_best_fractional": 0.9999,
+      "extra_lag_samples": -1.31,
+      "lag_hit_search_bound": false,
+      "rms": 1405.0
+    },
+    {
+      "t_s": 44.532,
+      "ncc_integer_lag": 0.9592,
+      "ncc_best_fractional": 0.9999,
+      "extra_lag_samples": -1.31,
+      "lag_hit_search_bound": false,
+      "rms": 1385.0
+    },
+    {
+      "t_s": 45.532,
+      "ncc_integer_lag": 0.9694,
+      "ncc_best_fractional": 0.9999,
+      "extra_lag_samples": -1.31,
+      "lag_hit_search_bound": false,
+      "rms": 1649.0
+    },
+    {
+      "t_s": 46.532,
+      "ncc_integer_lag": 0.9784,
+      "ncc_best_fractional": 0.9999,
+      "extra_lag_samples": -1.31,
+      "lag_hit_search_bound": false,
+      "rms": 1530.0
+    },
+    {
+      "t_s": 52.532,
+      "ncc_integer_lag": 0.9543,
+      "ncc_best_fractional": 0.9999,
+      "extra_lag_samples": -1.31,
+      "lag_hit_search_bound": false,
+      "rms": 1709.0
+    },
+    {
+      "t_s": 53.532,
+      "ncc_integer_lag": 0.9399,
+      "ncc_best_fractional": 0.9999,
+      "extra_lag_samples": -1.31,
+      "lag_hit_search_bound": false,
+      "rms": 1356.0
+    },
+    {
+      "t_s": 54.532,
+      "ncc_integer_lag": 0.9611,
+      "ncc_best_fractional": 0.9999,
+      "extra_lag_samples": -1.31,
+      "lag_hit_search_bound": false,
+      "rms": 1586.0
+    },
+    {
+      "t_s": 55.532,
+      "ncc_integer_lag": 0.9623,
+      "ncc_best_fractional": 0.9999,
+      "extra_lag_samples": -1.31,
+      "lag_hit_search_bound": false,
+      "rms": 1749.0
+    },
+    {
+      "t_s": 56.532,
+      "ncc_integer_lag": 0.9863,
+      "ncc_best_fractional": 0.9999,
+      "extra_lag_samples": -1.31,
+      "lag_hit_search_bound": false,
+      "rms": 1313.0
+    },
+    {
+      "t_s": 62.532,
+      "ncc_integer_lag": 0.9767,
+      "ncc_best_fractional": 0.9999,
+      "extra_lag_samples": -1.31,
+      "lag_hit_search_bound": false,
+      "rms": 1202.0
+    },
+    {
+      "t_s": 63.532,
+      "ncc_integer_lag": 0.9465,
+      "ncc_best_fractional": 0.9999,
+      "extra_lag_samples": -1.31,
+      "lag_hit_search_bound": false,
+      "rms": 1500.0
+    },
+    {
+      "t_s": 64.531,
+      "ncc_integer_lag": 0.9328,
+      "ncc_best_fractional": 0.9999,
+      "extra_lag_samples": -1.31,
+      "lag_hit_search_bound": false,
+      "rms": 1320.0
+    },
+    {
+      "t_s": 65.531,
+      "ncc_integer_lag": 0.954,
+      "ncc_best_fractional": 0.9999,
+      "extra_lag_samples": -1.31,
+      "lag_hit_search_bound": false,
+      "rms": 1475.0
+    },
+    {
+      "t_s": 66.531,
+      "ncc_integer_lag": 0.9504,
+      "ncc_best_fractional": 0.9999,
+      "extra_lag_samples": -1.31,
+      "lag_hit_search_bound": false,
+      "rms": 2013.0
+    },
+    {
+      "t_s": 67.531,
+      "ncc_integer_lag": 0.9858,
+      "ncc_best_fractional": 0.9999,
+      "extra_lag_samples": -1.31,
+      "lag_hit_search_bound": false,
+      "rms": 1358.0
+    }
+  ]
+}

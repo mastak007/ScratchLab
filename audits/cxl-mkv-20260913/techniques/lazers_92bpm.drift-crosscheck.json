@@ -1,0 +1,14 @@
+{
+  "technique": "lazers_92bpm",
+  "reference_title": "Scratch_t56",
+  "video_repeat_offset_frames": 624,
+  "video_repeat_offset_s": 20.8208,
+  "video_repeat_mean_similarity": 0.99865,
+  "audio_repeat_extra_lag_samples": 1,
+  "audio_repeat_extra_lag_ms": 0.0208,
+  "audio_repeat_ncc_at_best": 0.998866,
+  "audio_repeat_ncc_at_video_offset": 0.937378,
+  "window_s": 20.787,
+  "verdict": "No A/V drift: over 20.8 s the audio repeats at the video's own repeat offset to within 0.02 ms (1 samples). A drift of even one frame (33.4 ms) would have shown here.",
+  "caveat": "This compares the audio timeline with the video timeline across the title's own repeat. It constrains RELATIVE timing over the repeated span and can rule out progressive drift. It does NOT measure absolute audio/video synchronisation, and a constant absolute offset would be invisible to it. Where the repeat offset is not a whole number of audio samples, use scripts/fractional_lag_repeat.py instead - integer lag alone under-reports the match."
+}

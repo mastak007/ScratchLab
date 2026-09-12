@@ -1,0 +1,14 @@
+{
+  "technique": "marches_79bpm",
+  "source_title": "Scratch_t14",
+  "chapter2": [
+    47.047,
+    95.52
+  ],
+  "previews": [
+    "previews/marches_79bpm/marches_79bpm_boundary_head_35to52s_Scratch_t14.mov",
+    "previews/marches_79bpm/marches_79bpm_boundary_tail_73to83s_Scratch_t14.mov"
+  ],
+  "time_mapping": "preview t=0 corresponds to the source time in the filename",
+  "operator_audition": "PENDING - no automatic test can prove absence of speech"
+}

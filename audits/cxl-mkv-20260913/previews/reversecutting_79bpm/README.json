@@ -1,0 +1,14 @@
+{
+  "technique": "reversecutting_79bpm",
+  "source_title": "Scratch_t10",
+  "chapter2": [
+    23.5235,
+    72.0
+  ],
+  "previews": [
+    "previews/reversecutting_79bpm/reversecutting_79bpm_boundary_head_12to29s_Scratch_t10.mov",
+    "previews/reversecutting_79bpm/reversecutting_79bpm_boundary_tail_62to72s_Scratch_t10.mov"
+  ],
+  "time_mapping": "preview t=0 corresponds to the source time in the filename",
+  "operator_audition": "PENDING - no automatic test can prove absence of speech"
+}

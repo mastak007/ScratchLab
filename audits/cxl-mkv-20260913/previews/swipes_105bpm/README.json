@@ -1,0 +1,14 @@
+{
+  "technique": "swipes_105bpm",
+  "source_title": "Scratch_t92",
+  "chapter2": [
+    43.5435,
+    80.096
+  ],
+  "previews": [
+    "previews/swipes_105bpm/swipes_105bpm_boundary_head_32to49s_Scratch_t92.mov",
+    "previews/swipes_105bpm/swipes_105bpm_boundary_tail_70to80s_Scratch_t92.mov"
+  ],
+  "time_mapping": "preview t=0 corresponds to the source time in the filename",
+  "operator_audition": "PENDING - no automatic test can prove absence of speech"
+}

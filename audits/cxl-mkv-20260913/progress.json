@@ -1,0 +1,498 @@
+{
+  "task": "CXL MKV batch audit - resumable",
+  "created": "2026-09-13T03:16:00",
+  "last_update": "2026-09-13T04:53:24",
+  "state": "COMPLETE - all 23 techniques audited. 22 verified_duplicate_half, 1 verified_partial_repeat (tears). 0 inconclusive, 0 failed.",
+  "output_root": "/Users/karlwatson/Developer/ScratchLab-CXL-Ready-20260913/evidence/mkv-source-inspection-20260913/claude-mkv-batch-audit",
+  "protected_read_only": [
+    "/Volumes/Untitled/CXLrip",
+    "/Users/karlwatson/Movies/PRO DJ DATASET/dataset",
+    "/Users/karlwatson/Developer/ScratchLab-CXL-Ready-20260913/evidence/mkv-source-inspection-20260913/claude-baby-pilot",
+    "/Users/karlwatson/Developer/ScratchLab-CXL-Ready-20260913/evidence/mkv-source-inspection-20260913/audio-comparison",
+    "/Users/karlwatson/Developer/ScratchLab-CXL-Ready-20260913/evidence/mkv-source-inspection-20260913/probe",
+    "/Users/karlwatson/Developer/ScratchLab-CXL-Ready-20260913/source"
+  ],
+  "usage_monitoring": {
+    "plan_usage_data_available": false,
+    "note": "No reliable plan-usage window data is exposed to this session. Only an informational session dollar figure is visible, which is not a plan-usage percentage. Per the task instructions, this turn is capped at TWO techniques after the inventory stage."
+  },
+  "stages": {
+    "A_inventory_grouping": {
+      "status": "complete",
+      "note": "119 titles -> 49 chapter groups: 22 multi-title groups covering all 92 three-audio-stream titles and all 23 edit-list techniques, plus 27 single-title groups that are exactly the 27 one-audio-stream titles and match no edit list. Zero cross-group audio collisions. Evidence: inventory/stage-a-groups.json, inventory/angle-binding.json"
+    },
+    "B_pipeline_claim_checks": {
+      "status": "complete",
+      "note": "Baby's 'second field discarded' claim tested and REFUTED. reports/stage-b-field-retention.json"
+    },
+    "C_per_technique_audit": {
+      "status": "complete",
+      "note": "23 of 23 audited under the current analysis version."
+    },
+    "D_duplication_screen": {
+      "status": "complete",
+      "note": "Audio-only SCREEN, one title per technique. 21/23 screen as duplicated-half likely (ncc 0.96-0.99993); reversecutting_79bpm (0.812) and tears_98bpm (0.897) inconclusive. NOT a substitute for the per-technique audit. reports/stage-d-duplication-screen.json"
+    },
+    "E_runner": {
+      "status": "complete",
+      "note": "scripts/run_batch.py orchestrates the existing per-technique scripts; fractional_lag_repeat.py and repeat_profile.py were EXTENDED (independent offset discovery, fractional-lag windowed comparison, divergence detection, atomic --out) rather than duplicated. Validated on cutting_79bpm from cache: exit 0."
+    },
+    "F_consolidation": {
+      "status": "complete",
+      "note": "reports/REVIEW_QUEUE.json consolidated (1 open item), reports/manifest-consistency.json refreshed, reports/RESULTS_TABLE.md and reports/BATCH_AUDIT_REPORT.md regenerated."
+    }
+  },
+  "groups": {},
+  "techniques_completed": [
+    "1clickflare_85bpm",
+    "baby_79bpm",
+    "chirpflare_92bpm",
+    "chirps_98bpm",
+    "clovertears_105bpm",
+    "crabs_92bpm",
+    "cresentflare_92bpm",
+    "cutting_79bpm",
+    "dicing_85bpm",
+    "drags_98bpm",
+    "lazers_92bpm",
+    "long_short_tips_105bpm",
+    "marches_79bpm",
+    "needledropping_105bpm",
+    "orbits_85bpm",
+    "originalflare_85bpm",
+    "reversecutting_79bpm",
+    "swipes_105bpm",
+    "tears_98bpm",
+    "tips_105bpm",
+    "transformer_85bpm",
+    "waves_105bpm",
+    "zigzags_105bpm"
+  ],
+  "techniques_partial": [],
+  "techniques_pending": [],
+  "techniques_blocked": [],
+  "next_exact_operation": "Nothing pending in the audit. Operator actions are in 'Pending operator checks'. To re-verify any technique: python3 scripts/run_batch.py --only <key>  (it re-runs only if the fingerprint changed).",
+  "n_techniques_total": 23,
+  "corrections_to_prior_evidence": [
+    {
+      "claim": "Baby pilot REPORT.md: 'The originals carry a second field the exports threw away.'",
+      "verdict": "REFUTED. Both fields are present in the delivered MP4s, in the correct order.",
+      "evidence": "separatefields on both sides, 368 fields of baby angle_3 take01: PSNR 36.92 dB (parity 0) and 36.92 dB (parity 1) against the source fields. A dropped-and-duplicated field would score 22.28 dB; a field-order swap 19.29 dB. Within-frame field difference 12.79 (delivered) vs 13.00 (source), so the two fields still genuinely differ. bwdif send_field yields 368 = 2x184 field-rate frames directly FROM the delivered MP4. reports/stage-b-field-retention.json",
+      "consequence": "Field-rate 59.94p output does NOT require returning to the MKVs; it can be produced from the delivered exports. The only loss in the exports is H.264 coding fidelity (~36.9 dB per field). The case for rebuilding Baby from source now rests on the duplicated second pass and the missing/mislinked audio, not on lost fields."
+    }
+  ],
+  "techniques": {
+    "1clickflare_85bpm": {
+      "state": "complete",
+      "titles": "t44,t45,t46,t47",
+      "headline": "verified_duplicate_half; offset 1355 fr; audio ncc median 0.9999",
+      "evidence": "techniques/1clickflare_85bpm*.json, previews/1clickflare_85bpm/"
+    },
+    "baby_79bpm": {
+      "state": "complete",
+      "titles": "t00,t01,t02,t03",
+      "headline": "verified_duplicate_half; offset 726 fr (NOT half-chapter); audio ncc median 0.9999; identical titles [['Scratch_t05', 'Scratch_t06']]",
+      "evidence": "techniques/baby_79bpm*.json, previews/baby_79bpm/"
+    },
+    "chirpflare_92bpm": {
+      "state": "complete",
+      "titles": "t52,t53,t54,t55",
+      "headline": "verified_duplicate_half; offset 1249 fr; audio ncc median 0.9999",
+      "evidence": "techniques/chirpflare_92bpm*.json, previews/chirpflare_92bpm/"
+    },
+    "chirps_98bpm": {
+      "state": "complete",
+      "titles": "t20,t21,t22,t23",
+      "headline": "verified_duplicate_half; offset 588 fr; audio ncc median 0.9999",
+      "evidence": "techniques/chirps_98bpm*.json, previews/chirps_98bpm/"
+    },
+    "clovertears_105bpm": {
+      "state": "complete",
+      "titles": "t74,t75,t76,t77",
+      "headline": "verified_duplicate_half; offset 549 fr (NOT half-chapter); audio ncc median 0.99995",
+      "evidence": "techniques/clovertears_105bpm*.json, previews/clovertears_105bpm/"
+    },
+    "crabs_92bpm": {
+      "state": "complete",
+      "titles": "t102,t103,t104,t105",
+      "headline": "verified_duplicate_half; offset 1249 fr; audio ncc median 1.0",
+      "evidence": "techniques/crabs_92bpm*.json, previews/crabs_92bpm/"
+    },
+    "cresentflare_92bpm": {
+      "state": "complete",
+      "titles": "t48,t49,t50,t51",
+      "headline": "verified_duplicate_half; offset 1249 fr; audio ncc median 0.9999",
+      "evidence": "techniques/cresentflare_92bpm*.json, previews/cresentflare_92bpm/"
+    },
+    "cutting_79bpm": {
+      "state": "complete",
+      "titles": "t04,t05,t07",
+      "headline": "verified_duplicate_half; offset 726 fr (NOT half-chapter); audio ncc median 1.0; missing angles ['2']; identical titles [['Scratch_t05', 'Scratch_t06']]",
+      "evidence": "techniques/cutting_79bpm*.json, previews/cutting_79bpm/"
+    },
+    "dicing_85bpm": {
+      "state": "complete",
+      "titles": "t40,t41,t42,t43",
+      "headline": "verified_duplicate_half; offset 1355 fr; audio ncc median 0.9999",
+      "evidence": "techniques/dicing_85bpm*.json, previews/dicing_85bpm/"
+    },
+    "drags_98bpm": {
+      "state": "complete",
+      "titles": "t16,t17,t18,t19",
+      "headline": "verified_duplicate_half; offset 1175 fr; audio ncc median 0.9999",
+      "evidence": "techniques/drags_98bpm*.json, previews/drags_98bpm/"
+    },
+    "lazers_92bpm": {
+      "state": "complete",
+      "titles": "t56,t57,t58,t59",
+      "headline": "verified_duplicate_half; offset 624 fr (NOT half-chapter); audio ncc median 0.9999",
+      "evidence": "techniques/lazers_92bpm*.json, previews/lazers_92bpm/"
+    },
+    "long_short_tips_105bpm": {
+      "state": "complete",
+      "titles": "t32,t33,t34,t35",
+      "headline": "verified_duplicate_half; offset 1097 fr; audio ncc median 0.9998",
+      "evidence": "techniques/long_short_tips_105bpm*.json, previews/long_short_tips_105bpm/"
+    },
+    "marches_79bpm": {
+      "state": "complete",
+      "titles": "t12,t13,t14,t15",
+      "headline": "verified_duplicate_half; offset 726 fr; audio ncc median 0.9999",
+      "evidence": "techniques/marches_79bpm*.json, previews/marches_79bpm/"
+    },
+    "needledropping_105bpm": {
+      "state": "complete",
+      "titles": "t78,t79,t80,t81",
+      "headline": "verified_duplicate_half; offset 823 fr; audio ncc median 0.9999",
+      "evidence": "techniques/needledropping_105bpm*.json, previews/needledropping_105bpm/"
+    },
+    "orbits_85bpm": {
+      "state": "complete",
+      "titles": "t100,t101,t98,t99",
+      "headline": "verified_duplicate_half; offset 1016 fr; audio ncc median 1.0",
+      "evidence": "techniques/orbits_85bpm*.json, previews/orbits_85bpm/"
+    },
+    "originalflare_85bpm": {
+      "state": "complete",
+      "titles": "t94,t95,t96,t97",
+      "headline": "verified_duplicate_half; offset 1016 fr; audio ncc median 1.0",
+      "evidence": "techniques/originalflare_85bpm*.json, previews/originalflare_85bpm/"
+    },
+    "reversecutting_79bpm": {
+      "state": "complete",
+      "titles": "t08,t09,t10,t11",
+      "headline": "verified_duplicate_half; offset 726 fr; audio ncc median 0.99965",
+      "evidence": "techniques/reversecutting_79bpm*.json, previews/reversecutting_79bpm/"
+    },
+    "swipes_105bpm": {
+      "state": "complete",
+      "titles": "t90,t91,t92,t93",
+      "headline": "verified_duplicate_half; offset 548 fr; audio ncc median 0.9999",
+      "evidence": "techniques/swipes_105bpm*.json, previews/swipes_105bpm/"
+    },
+    "tears_98bpm": {
+      "state": "complete",
+      "titles": "t24,t25,t26,t27",
+      "headline": "verified_partial_repeat; offset 1175 fr (NOT half-chapter); audio ncc median 0.9999; DIVERGENCE [[56.043, 58.043]]",
+      "evidence": "techniques/tears_98bpm*.json, previews/tears_98bpm/"
+    },
+    "tips_105bpm": {
+      "state": "complete",
+      "titles": "t28,t29,t30,t31",
+      "headline": "verified_duplicate_half; offset 548 fr; audio ncc median 0.99975",
+      "evidence": "techniques/tips_105bpm*.json, previews/tips_105bpm/"
+    },
+    "transformer_85bpm": {
+      "state": "complete",
+      "titles": "t36,t37,t38,t39",
+      "headline": "verified_duplicate_half; offset 1355 fr; audio ncc median 1.0",
+      "evidence": "techniques/transformer_85bpm*.json, previews/transformer_85bpm/"
+    },
+    "waves_105bpm": {
+      "state": "complete",
+      "titles": "t86,t87,t88,t89",
+      "headline": "verified_duplicate_half; offset 1097 fr; audio ncc median 0.9999",
+      "evidence": "techniques/waves_105bpm*.json, previews/waves_105bpm/"
+    },
+    "zigzags_105bpm": {
+      "state": "complete",
+      "titles": "t82,t83,t84,t85",
+      "headline": "verified_duplicate_half; offset 548 fr; audio ncc median 0.9998",
+      "evidence": "techniques/zigzags_105bpm*.json, previews/zigzags_105bpm/"
+    }
+  },
+  "pending_operator_checks": [
+    "PRIORITY - tears_98bpm audiovisual review: reports/REVIEW_QUEUE.json. Compare previews/tears_98bpm/tears_98bpm_INSIDE_chapter2_53.4to60.4s_Scratch_t26.mov (first pass) against tears_98bpm_SECONDPASS_92.6to99.6s_Scratch_t26.mov (second pass). Same picture, different sound, ~2.25 s. Affects delivered take02 and take06 on all four angles, 8 clips. PRESERVE BOTH VERSIONS - the evidence does not say which pass is faithful.",
+    "Talking boundaries for every technique remain unaudited by ear. Margins are tight: reversecutting 2.68 s, tears 2.83 s, transformer 3.95 s, cutting 12.0 s. Baby's is still pending from the pilot.",
+    "Absolute audio/video synchronisation is not established for any technique and needs a separate method (a clap, a slate, or a known transient with a visible cause).",
+    "cutting_79bpm: accept that the angle-2 view is absent from the inspected files, and decide whether the dataset should record that absence explicitly.",
+    "Policy for duplicated take05-08 across the library: tag as duplicate_of take01-04 rather than delete."
+  ],
+  "unresolved_claims": [
+    "19 of 23 techniques remain SCREENED ONLY. The screen is now known to under-report: it produced two false 'inconclusive' verdicts out of two, both from lag-resolution artifacts, and it cannot see a localised divergence like the one found in tears. Screened-positive is not audited.",
+    "The tears video/audio mismatch at 56.25-58.50 s has no determined cause, and it is unknown whether any other technique has a similar localised divergence. Only a per-technique fractional-lag profile would reveal one.",
+    "Absolute audio/video synchronisation is NOT established for any technique. Every sync result so far is a RELATIVE measurement across a title's own repeat, which cannot see a constant offset. The motion-envelope method is too weak to settle it (peak correlation 0.31-0.66 outside Baby).",
+    "cutting_79bpm angle_2: t05 and t06 are frame-identical in THESE files, so the angle-2 view is absent from the inspected source. That does not prove the camera view never existed - it may exist on other media, another disc, or an earlier master. It is absent here, nothing stronger.",
+    "The 27 one-audio-stream titles (t60-t73, t106-t118) match no edit list and remain unidentified.",
+    "The per-stream voice-band speech indicator has essentially no sensitivity against a music bed: it missed known narration entirely in cutting, transformer and reversecutting. Boundary conclusions rest on component subtraction plus audition, and component subtraction cannot prove absence of speech."
+  ],
+  "findings_cutting_79bpm": {
+    "angle_map": {
+      "1": "Scratch_t04",
+      "3": "Scratch_t05 (== Scratch_t06)",
+      "4": "Scratch_t07",
+      "2": "ABSENT from source"
+    },
+    "title_duplicate": "Scratch_t05 and Scratch_t06 produce an identical decoded frame-hash sequence for all 2501 frames (SHA-256 264abbd6...). The DVD carries the same camera view twice, so the angle-2 view is missing from the SOURCE, not merely from the export. Nothing can recover it.",
+    "repeat": "Chapter 2 repeats at 726 frames / 24.2242 s: video mean similarity 0.99885 (adjacent 0.98612, random 0.87343), isolated-scratch ncc 0.984635 at that offset, 0.999926 after a 1-sample refine. Delivered take05-08 duplicate take01-04 on all three angles (zncc 0.9994-0.9998).",
+    "audio_roles": "CONFIRMED, same order as Baby: residual 49.72 dB below programme over chapter 2, corr 0.999662. NOTE the same test over the full title gives only -9.93 dB because narration sits on the mixed track alone - the window matters.",
+    "av_sync": "No drift. The motion-envelope method suggested 0/+6/+14 frames across start/middle/end, but its peak correlation is only 0.45-0.52 here (Baby: 0.77-0.84) because a crossfader technique decouples hand motion from audio transients. The repeat cross-check settles it: audio repeats at the video's own 726-frame offset to within 1 sample (0.02 ms).",
+    "noise": "No clipping on any stream (peaks -0.43/-4.45/-0.45 dBFS). Isolated scratch: mains fundamental fitted at 59.98 Hz, harmonics -60.8 to -76.2 dBFS, quiet RMS -48.4 dBFS. The mixed and beat-only streams fit 55.43 Hz at -27.8 dBFS, which is a BASS NOTE, not hum - Baby's 60 Hz notch must not be applied to them. No filtering was applied to anything.",
+    "talking": "Residual component subtraction puts narration at 0.0-23.02 s only; max residual after chapter-2 start is 63.0 against 9843 during speech. CAVEAT: the independent per-stream voice-band indicator found 0 candidates on the mixed track ANYWHERE, including the 0-23 s stretch where speech certainly exists, so that indicator has no sensitivity here and its silence inside chapter 2 is NOT evidence. Operator audition of previews/cutting_79bpm/ is required."
+  },
+  "repeat_rule": "Chapter 2 appears to be its own first half played twice, at an offset of half the chapter-2 span snapped to a whole video frame. Confirmed in video+audio for baby (726 frames / 24.2242 s), cutting (726 / 24.2242 s) and transformer (1355 / 45.2118 s).",
+  "findings_reversecutting_79bpm": {
+    "angle_map": {
+      "1": "Scratch_t08",
+      "2": "Scratch_t09",
+      "3": "Scratch_t10",
+      "4": "Scratch_t11"
+    },
+    "title_duplicates": "none - 4 distinct camera views for 4 titles",
+    "video_integrity": "2156 frames each, monotonic PTS, every frame interlaced, top_field_first 0 on every frame, no pulldown, SAR 8:9, clean full decode, idet 942 BFF / 0 TFF",
+    "audio_roles": "CONFIRMED, same order as Baby: -48.48 dB below programme over chapter 2, corr 0.999425 (full-title -10.3 dB, as expected with narration present)",
+    "repeat": "Chapter 2 (48.4765 s) repeats at 726 frames / 24.2242 s. Video: mean similarity 0.99854 vs adjacent 0.98617 and random 0.84511; full-resolution PSNR frame(i) vs frame(i+726) = 35.59 dB against 24.73 dB for CONSECUTIVE frames and 15.45 dB at 1.2 s. Audio: best match at 24.2242 s with no competing peak (next 0.045), ncc 0.953-1.000 at the correct fractional lag.",
+    "why_the_screen_said_inconclusive": "726 frames = 1,162,761.6 audio samples - NOT a whole number. Fixed integer-lag correlation therefore under-reports, and the best integer lag wanders about 2.2 samples (~45 microseconds) across the span, stepping from -0.96 to -3.13 samples. At fixed integer lag the per-window ncc ranges -0.540 to 0.978; at the correct fractional lag it is 0.953 to 1.000. The screen's 0.812 was a measurement artifact, not weak duplication.",
+    "delivered_duplication": "take05-08 duplicate take01-04 on all four angles, zncc 0.9993-0.9998 at frame offset 0",
+    "av_sync": "The motion-envelope method is unusable here (peak correlation 0.31-0.55). The repeat cross-check constrains RELATIVE audio/video timing only. Absolute A/V sync for this technique is NOT established.",
+    "noise": "No clipping on any stream. Isolated scratch: mains fitted at 59.96 Hz, harmonics -61.8 to -76.2 dBFS, quiet RMS -48.7 dBFS. Mixed and beat-only fit 55.41 Hz at -27.4 dBFS - a bass note, not hum. Nothing was filtered.",
+    "talking": "Residual puts narration at 0.0-20.84 s; chapter 2 starts at 23.5235 s, a margin of only 2.68 s. Max residual after the boundary 96.06 against 8595 during speech. The per-stream voice-band indicator again found nothing anywhere on the mixed track, including the known speech, so it contributes no evidence. AUDITION PENDING."
+  },
+  "findings_tears_98bpm": {
+    "angle_map": {
+      "1": "Scratch_t24",
+      "2": "Scratch_t25",
+      "3": "Scratch_t26",
+      "4": "Scratch_t27"
+    },
+    "title_duplicates": "none - 4 distinct camera views for 4 titles",
+    "video_integrity": "3636 frames each, monotonic PTS, all frames interlaced, top_field_first 0 on every frame, no pulldown, SAR 8:9, clean decode, idet 1527-1528 BFF / 0 TFF",
+    "audio_roles": "CONFIRMED, same order as Baby: -46.59 dB below programme over chapter 2, corr 0.99977",
+    "repeat": "Chapter 2 (78.333 s) repeats at 1175 frames / 39.2058 s. Video mean similarity 0.9986 (adjacent 0.98697, random 0.85479). Isolated-scratch ncc is 1.000 in 19 of 21 active windows once the small lag is allowed (two discrete plateaus, -2.92 samples before the gap and -5.08 after).",
+    "why_the_screen_said_inconclusive": "The screen assumed a half-offset of 1174 frames; the true offset is 1175. One frame of error plus the divergent window dropped it to 0.897. Corrected, it is 0.9994.",
+    "ANOMALY_video_audio_mismatch": {
+      "window_first_pass_s": [
+        56.25,
+        58.5
+      ],
+      "window_second_pass_s": [
+        95.456,
+        97.706
+      ],
+      "observation": "Across this ~2.25 s the video stays duplicated at 0.9989-0.9993 (adjacent-frame control 0.98801, random-pair 0.87932) while the isolated-scratch audio correlation collapses from 0.999 to 0.08-0.25, with the best lag wandering to the search bounds. Recovery is partial at 58.5-62.0 s (0.59-0.98) and complete from 62.25 s (0.999-1.000).",
+      "meaning": "In this window the two passes carry the SAME picture and DIFFERENT scratch audio. At least one of the two passes therefore has picture and sound that do not correspond.",
+      "cause": "NOT determined. Could be an authoring splice, a different performance of that bar, or a defect. The audit cannot say which pass is the faithful one.",
+      "delivered_segments_affected": "take02 (52.870-62.700 s) and take06 (92.077-101.901 s), on all four angles - 8 delivered clips. These are the clips to inspect before any hand-motion/audio training use.",
+      "corroboration": "Independently, the mixed-track voice-band indicator fired inside chapter 2 only twice for this technique, at 56.47-56.73 s and 95.67-95.93 s - both inside the divergent window and its counterpart. Residual there is 87.4 and 44.5 against a codec floor of 13.55, i.e. 6.5x and 3.3x, versus 9525 during known speech. Weak, but it points at the same place.",
+      "audition_clip": "previews/tears_98bpm/tears_98bpm_INSIDE_chapter2_53.4to60.4s_Scratch_t26.mov"
+    },
+    "av_sync": "Not established in absolute terms. The repeat cross-check constrains relative timing only.",
+    "noise": "No clipping (peaks -1.31/-3.83/-1.58 dBFS). Isolated scratch: mains fitted 59.99 Hz, harmonics -62.1 to -76.5 dBFS, quiet RMS -50.7 dBFS. Mixed and beat-only fit 52.2 Hz at -37.0/-32.4 dBFS (strongest at 156.6 Hz) - musical bass, not hum. Nothing filtered.",
+    "talking": "Residual puts narration in 9 fragmented runs from 0.02 to 40.21 s; chapter 2 starts 43.043 s, margin 2.83 s. AUDITION PENDING."
+  },
+  "runner": {
+    "entry_point": "scripts/run_batch.py",
+    "orchestrates": [
+      "audit_technique.py",
+      "fractional_lag_repeat.py",
+      "repeat_profile.py",
+      "drift_crosscheck.py",
+      "make_boundary_previews.py"
+    ],
+    "state_file": "batch-state.json",
+    "result_vocabulary": {
+      "verified_duplicate_half": "repeat found and confirmed in BOTH video and audio",
+      "verified_partial_repeat": "repeat confirmed but with divergent spans inside it (the tears signature)",
+      "verified_no_repeat": "searched, none found",
+      "inconclusive": "evidence conflicts or falls below thresholds - never treated as a negative result",
+      "failed": "a step errored; partial results preserved and NOT marked complete",
+      "screened_only": "not audited; the cheap screen is a hypothesis, not a finding"
+    },
+    "skip_rule": "A technique is skipped only when state starts with 'verified' AND its fingerprint matches: source file sizes and mtimes, SHA-256 of all six scripts, runner version, and the analysis parameters. Any change re-runs it.",
+    "offset_policy": "The repeat offset is SEARCHED by audit_technique.py over all offsets, then cross-checked against an independently discovered audio offset (fractional_lag_repeat --discover). Half the chapter duration is recorded for comparison only and is never assumed. cutting_79bpm proves the point: searched 726 frames, half-chapter 725.",
+    "failure_handling": "The record is written before work starts with state=failed, and only upgraded after classification. A crash or interruption therefore leaves 'failed' plus a step log, never a false 'complete'."
+  },
+  "cache": {
+    "env_var": "BATCH_SCRATCH",
+    "path_used_so_far": "/private/tmp/claude-501/-Users-karlwatson-Developer-ScratchLab-CXL-Ready-20260913-evidence-mkv-source-inspection-20260913/63286248-ced4-4649-8945-717a8c57e505/scratchpad/batch",
+    "warning": "That path is session-scoped and may be cleared. If it is gone the scripts re-decode from the original MKVs automatically - slower, same results. Set BATCH_SCRATCH to any durable directory.",
+    "subdirs": {
+      "pcm": "full-length decoded audio, s16le 48 kHz stereo, <title>-a<N>.s16le",
+      "grayfull": "full-length 360x240 grayscale video, <title>.gray",
+      "gray": "short grayscale windows used by angle binding",
+      "clip": "grayscale of delivered dataset MP4s",
+      "framemd5": "per-frame MD5 of decoded video, for exact title-duplicate tests",
+      "fields": "separatefields output for the field-retention check",
+      "fullres": "720x480 grayscale windows for full-resolution PSNR"
+    },
+    "approx_size_per_technique": "roughly 200-400 MB of cache per technique (4 titles)",
+    "disk_pressure": "The decode cache reached 7.9 GB after 6 techniques (grayfull dominates at ~350 MB per full-length title). Projected peak for all 23 is roughly 28 GB. The data volume had 38 GiB free when the batch started. If space runs short, the safe things to delete are $BATCH_SCRATCH/grayfull, /fields and /fullres - all recomputable from the originals, at the cost of re-decoding. Do NOT delete anything outside $BATCH_SCRATCH."
+  },
+  "dependencies": {
+    "python": "3.14.2",
+    "numpy": "2.3.5",
+    "ffmpeg": "ffmpeg version 8.1.1 Copyright (c) 2000-2026 the FFmpeg developers",
+    "ffprobe": "same build as ffmpeg",
+    "notes": "This ffmpeg build has NO drawtext filter, so previews carry no burnt-in timecode; source time is encoded in each preview filename instead."
+  },
+  "runner_validation": {
+    "technique": "cutting_79bpm",
+    "mode": "--validate, cached evidence only, exit 0",
+    "wrote_only_into": "reports/runner-validation/ (stored evidence untouched)",
+    "checks": {
+      "cache_present": "PASS",
+      "fractional_lag_ran": "PASS",
+      "repeat_profile_ran": "PASS",
+      "reproduces_stored_numbers": "SKIPPED - stored file was produced by (none - predates versioning), the current analysis is fractional_lag_repeat/2. Differing numbers here are an expected consequence of the widened lag search, not a reproducibility failure. Re-run this technique to refresh its artifacts.",
+      "detects_superseded_artifacts": "PASS",
+      "classifier_produced_a_distinct_state": "PASS"
+    },
+    "offset_check": {
+      "searched": 726,
+      "half_chapter": 725,
+      "equal": false,
+      "meaning": "cutting does NOT repeat at exactly half its chapter duration; the runner uses the searched offset and flags the difference"
+    },
+    "independent_offset_agreement_ms": 0.029,
+    "divergence_detector_negative_control": {
+      "divergence_detected": false,
+      "video_windows_matching": 24,
+      "audio_windows_matching": "12 of 12 evaluated",
+      "controls": {
+        "adjacent_frame_similarity": 0.98542,
+        "random_pair_similarity": 0.84796
+      }
+    },
+    "classifier_output": "verified_duplicate_half - video and audio both repeat at 726 frames",
+    "issues_found_and_fixed_by_the_validation": [
+      "The classifier was reading stored artifacts instead of the validation's own recomputed ones; it now takes a derived_dir.",
+      "Comparison against stored numbers is now analysis-version aware. cutting's stored fractional-lag file predates the widened lag search, so its numbers legitimately differ; this is reported as SUPERSEDED, not as a reproducibility failure."
+    ],
+    "not_exercised": "The divergence detector's POSITIVE case was not re-run here; it is evidenced by tears_98bpm (see reports/REVIEW_QUEUE.json). A full end-to-end run including audit_technique.py on a fresh technique has not been executed.",
+    "positive_control": {
+      "technique": "tears_98bpm",
+      "mode": "--validate, cached evidence only",
+      "divergence_detected": true,
+      "spans_first_pass_s": [
+        [
+          56.043,
+          58.043
+        ]
+      ],
+      "spans_second_pass_s": [
+        [
+          95.249,
+          97.249
+        ]
+      ],
+      "matches_hand_measured_span": "yes - hand measurement was 56.25-58.50 s / 95.456-97.706 s; the detector reports 56.043-58.043 / 95.249-97.249 on its 1 s window grid",
+      "video_windows_matching": 38,
+      "audio_windows_matching": "19 of 21 evaluated",
+      "controls": {
+        "adjacent_frame_similarity": 0.98437,
+        "random_pair_similarity": 0.84062
+      },
+      "offset_used_frames": 1175,
+      "half_chapter_frames": 1174,
+      "offset_equals_half_chapter": false,
+      "audio_discovered_offset_delta_ms": 0.021,
+      "classifier": "verified_partial_repeat - repeat confirmed, but 1 span(s) where the picture duplicates and the audio does not - flag for A/V review",
+      "does_not_declare_a_faithful_pass": "confirmed - the profile's interpretation field states explicitly that it does not say which pass is faithful, and the classifier routes to review rather than a verdict"
+    },
+    "negative_control": {
+      "technique": "cutting_79bpm",
+      "divergence_detected": false,
+      "spans": [],
+      "classifier": "verified_duplicate_half"
+    }
+  },
+  "artifact_versions": {
+    "note": "The four techniques audited earlier were produced under an earlier analysis version. Their FINDINGS stand - they were each checked by hand - but their .fractional-lag.json artifacts predate the widened lag search, and only reversecutting has a .repeat-profile.json. Re-running them under the runner is cheap with warm caches and would make the evidence set consistent.",
+    "audited_earlier": [
+      "cutting_79bpm",
+      "transformer_85bpm",
+      "reversecutting_79bpm",
+      "tears_98bpm"
+    ],
+    "command": "python3 scripts/run_batch.py --only cutting_79bpm transformer_85bpm reversecutting_79bpm tears_98bpm"
+  },
+  "counts": {
+    "total_techniques": 23,
+    "verified_audited": 23,
+    "pending": 0,
+    "inconclusive": 0,
+    "failed": 0,
+    "screened_only_not_audited": 0,
+    "note": "Counts come straight from batch-state.json. 'pending' means not yet run by the runner; the cheap screen is a hypothesis, not a finding."
+  },
+  "limitations": [
+    "**Correlation cannot establish absolute audio/video synchronisation.** Every timing result in this audit is RELATIVE - a title's audio repeat period against its own video repeat period. That rules out progressive drift across the repeated span and nothing more. A constant offset between picture and sound is invisible to it. Establishing absolute sync needs a different instrument.",
+    "**Correlation cannot prove a region is speech-free.** Component subtraction (withBeat - noBeat - beatOnly) isolates content unique to the mixed track, but voice present in two components cancels. The per-stream voice-band indicator has essentially no sensitivity against a music bed - it missed known narration entirely in cutting, transformer and reversecutting. Boundary claims are evidence plus audition, never measurement alone.",
+    "**A whole-span correlation score hides localised divergence.** tears_98bpm scores 1.000 in 19 of 21 windows and still conceals 2.25 s where the picture duplicates and the audio does not. Only the windowed profile finds it.",
+    "**A repeat offset is not necessarily half the chapter.** cutting_79bpm repeats at 726 frames while half its chapter is 725. The offset is searched, then cross-checked against an independently discovered audio offset; the half-chapter value is recorded for comparison only.",
+    "**Frame-identical titles show an angle is absent from THESE files.** cutting's t05 and t06 are frame-identical, so the angle-2 view is not in the inspected source. That is not evidence it never existed - it may survive on other media, another pressing, or an earlier master.",
+    "**The cheap screen under-reports.** Of the two techniques it flagged inconclusive, both were false alarms from lag-resolution artifacts. A screened-positive verdict is a hypothesis, not a finding.",
+    "**The motion-envelope A/V sync method is unreliable** outside Baby: it produced spurious multi-frame drift on three of four techniques at peak correlations of 0.31-0.66. Its numbers are retained in the per-technique JSON but should not be quoted as sync measurements."
+  ],
+  "review_queue": {
+    "path": "reports/REVIEW_QUEUE.json",
+    "open_items": 1,
+    "summary": "tears_98bpm take02 and take06, all four angles (8 delivered clips). Source ranges 56.25-58.50 s (first pass) and 95.456-97.706 s (second pass). Both versions preserved; the evidence does not say which pass is faithful."
+  },
+  "current_operation": "none - batch finished; review queue consolidated and manifest checked",
+  "superseded_evidence": {
+    "path": "techniques/superseded/analysis-v1/",
+    "note": "Pre-versioning artifacts for the four earlier techniques, retained verbatim with a README recording why they were superseded. Findings from them stand; only the numbers are superseded."
+  },
+  "manifest_consistency": {
+    "report": "reports/manifest-consistency.json",
+    "checked": "read-only; nothing in the dataset was modified",
+    "headline": "1583 of 2800 manifest paths do not exist on disk (56%), across all 23 techniques.",
+    "pattern": "manifest.csv names per-angle WAVs, but only one angle's WAVs exist per technique - so 24 of 32 audio paths per variant are dead for most techniques (30 of 40 for waves). Audio is byte-identical across angles in every group audited, so this is a naming/reference decision rather than missing content - but that is NOT verified for unaudited groups.",
+    "cutting_extra": "cutting also has 8 dead VIDEO paths: the manifest lists angle_2 rows whose files do not exist, because that camera view is absent from the inspected source.",
+    "duplicate_takes_not_recorded": "manifest.csv has no column marking that take05-08 duplicate take01-04. Adding one is a dataset change and was NOT made here."
+  },
+  "reading_notes": {
+    "baby_identical_titles_is_not_a_baby_problem": "baby_79bpm's record lists identical_video_titles [[Scratch_t05, Scratch_t06]]. Those are CUTTING's titles. baby and cutting share the chapter-2 range 35.035-83.450, so they share one candidate group, and audit_technique.py scans every title in the group. baby's own four titles (t00-t03) are all distinct. Do not read this as a missing baby angle.",
+    "offset_not_half_is_common": "Techniques whose searched repeat offset differs from half the chapter duration so far: cutting, tears, baby, clovertears. The searched value is always the one used; the half-chapter figure is recorded for comparison only.",
+    "in_flight_records_read_as_failed": "run_batch.py writes a technique's record with state=failed BEFORE work starts and upgrades it only after classification. A record showing 'failed' with few or no steps is a technique currently running or interrupted, not a genuine failure. Genuine failures carry a reason and a step log."
+  },
+  "results_table": {
+    "path": "reports/RESULTS_TABLE.md",
+    "regenerate": "python3 scripts/render_results_table.py",
+    "note": "Per-technique measurements behind each classification. Repeat offsets found so far span 549 to 1355 frames and three of the first thirteen are NOT half the chapter duration, so the searched value must always be used."
+  },
+  "auxiliary_scripts": {
+    "sync_handoff.py": "rolls batch-state.json into progress.json and HANDOFF_TO_CODEX.md; safe to run while the runner works",
+    "render_results_table.py": "regenerates reports/RESULTS_TABLE.md",
+    "consolidate_review_queue.py": "merges auto-detected divergences into reports/REVIEW_QUEUE.json, keeping hand-authored items",
+    "make_divergence_clip.py": "renders both passes of a detected divergence span for audition",
+    "manifest_consistency.py": "read-only check of dataset/manifest.csv against disk",
+    "note": "None of these are in the runner's fingerprint, so adding or editing them does not invalidate completed work."
+  },
+  "library_result": {
+    "every_technique_has_a_duplicated_half": true,
+    "repeat_offsets_frames": {
+      "min": 548,
+      "max": 1355,
+      "note": "offsets vary widely; 5 of 23 are NOT half the chapter duration (baby, clovertears, cutting, lazers, tears). The searched value was always used."
+    },
+    "techniques_with_picture_audio_divergence": [
+      "tears_98bpm"
+    ],
+    "techniques_missing_a_delivered_angle": [
+      "cutting_79bpm (angle 2, absent from the inspected files)"
+    ],
+    "consequence": "Roughly half of every technique's exported segments duplicate the other half. take05-08 duplicate take01-04 across the library."
+  }
+}

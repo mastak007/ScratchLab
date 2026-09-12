@@ -1,0 +1,134 @@
+{
+  "queue": "audiovisual review required - not a defect list, and nothing has been changed",
+  "principle": "Both versions are preserved. The evidence shows the two passes differ; it does NOT show which one is faithful. Do not delete, prefer or overwrite either until a person has watched and listened to both.",
+  "items": [
+    {
+      "technique": "tears_98bpm",
+      "bpm": 98,
+      "source_titles": {
+        "angle_1": "Scratch_t24",
+        "angle_2": "Scratch_t25",
+        "angle_3": "Scratch_t26",
+        "angle_4": "Scratch_t27"
+      },
+      "chapter2_s": [
+        43.043,
+        121.376
+      ],
+      "repeat_offset_frames": 1175,
+      "repeat_offset_s": 39.205833,
+      "finding": "Across roughly 2.25 s the picture still duplicates at the repeat offset (video similarity 0.9989-0.9993, against an adjacent-frame control of 0.98801 and a random-pair control of 0.87932) while the isolated-scratch audio correlation collapses from 0.999 to 0.08-0.25 even at the best fractional lag. The two passes therefore carry the same image and different sound there.",
+      "cause": "NOT DETERMINED. An authoring splice, a genuinely different performance of that bar, or a defect in one pass are all consistent with what was measured.",
+      "source_ranges_to_review": [
+        {
+          "pass": "first",
+          "start_s": 56.25,
+          "end_s": 58.5,
+          "video_frames": [
+            1686,
+            1753
+          ],
+          "audio_samples": [
+            2700000,
+            2808000
+          ]
+        },
+        {
+          "pass": "second",
+          "start_s": 95.456,
+          "end_s": 97.706,
+          "video_frames": [
+            2861,
+            2928
+          ],
+          "audio_samples": [
+            4581880,
+            4689880
+          ]
+        }
+      ],
+      "partial_recovery_zone_s": [
+        58.5,
+        62.0
+      ],
+      "partial_recovery_note": "audio ncc recovers to 0.59-0.98 here before returning to 0.999-1.000 from 62.25 s",
+      "delivered_segments_affected": {
+        "take02": {
+          "source_range_s": [
+            52.869646,
+            62.700458
+          ],
+          "files": [
+            "dataset/video/tears/tears_98bpm_angle_1_take02.mp4",
+            "dataset/video/tears/tears_98bpm_angle_2_take02.mp4",
+            "dataset/video/tears/tears_98bpm_angle_3_take02.mp4",
+            "dataset/video/tears/tears_98bpm_angle_4_take02.mp4"
+          ]
+        },
+        "take06": {
+          "source_range_s": [
+            92.076875,
+            101.900729
+          ],
+          "files": [
+            "dataset/video/tears/tears_98bpm_angle_1_take06.mp4",
+            "dataset/video/tears/tears_98bpm_angle_2_take06.mp4",
+            "dataset/video/tears/tears_98bpm_angle_3_take06.mp4",
+            "dataset/video/tears/tears_98bpm_angle_4_take06.mp4"
+          ]
+        },
+        "count": 8,
+        "audio_files": "dataset/audio/{noBeat,withBeat,beatOnly}/tears/ - per-angle names in manifest.csv may not all exist on disk; check before assuming"
+      },
+      "corroborating_signal": "The mixed-track voice-band indicator fired inside chapter 2 exactly twice for this technique, at 56.47-56.73 s and 95.67-95.93 s - inside the divergent window and its counterpart. Residual there is 87.4 and 44.5 against a codec floor of 13.55 (6.5x and 3.3x); known speech reaches 9525. Weak on its own.",
+      "audition_material": [
+        "previews/tears_98bpm/tears_98bpm_INSIDE_chapter2_53.4to60.4s_Scratch_t26.mov",
+        "previews/tears_98bpm/tears_98bpm_SECONDPASS_92.6to99.6s_Scratch_t26.mov",
+        "previews/tears_98bpm/tears_98bpm_boundary_head_31to48s_Scratch_t26.mov",
+        "previews/tears_98bpm/tears_98bpm_boundary_tail_73to83s_Scratch_t26.mov"
+      ],
+      "review_questions": [
+        "Does the hand motion match the scratch sound in the FIRST pass at 56.25-58.50 s?",
+        "Does it match in the SECOND pass at 95.46-97.71 s?",
+        "If one pass is mismatched, is the other usable as-is, or is the whole take suspect?",
+        "Should take02 and take06 be excluded from hand-motion/audio training until resolved?"
+      ],
+      "status": "OPEN - awaiting operator audiovisual review",
+      "audition_pairing": "Compare tears_98bpm_INSIDE_chapter2_53.4to60.4s (first pass, divergence at ~2.9-5.1 s into the clip) against tears_98bpm_SECONDPASS_92.6to99.6s (second pass, same picture, different sound). Both are angle 3 / Scratch_t26."
+    }
+  ],
+  "other_techniques": "The divergence detector has only been run on tears_98bpm, reversecutting_79bpm and cutting_79bpm (the last as a validation negative control, clean). Any of the 19 unaudited techniques could hide the same pattern; it is invisible to a whole-span correlation score.",
+  "consolidated": {
+    "techniques_with_a_repeat_profile": [
+      "1clickflare_85bpm",
+      "baby_79bpm",
+      "chirpflare_92bpm",
+      "chirps_98bpm",
+      "clovertears_105bpm",
+      "crabs_92bpm",
+      "cresentflare_92bpm",
+      "cutting_79bpm",
+      "dicing_85bpm",
+      "drags_98bpm",
+      "lazers_92bpm",
+      "long_short_tips_105bpm",
+      "marches_79bpm",
+      "needledropping_105bpm",
+      "orbits_85bpm",
+      "originalflare_85bpm",
+      "reversecutting_79bpm",
+      "swipes_105bpm",
+      "tears_98bpm",
+      "tips_105bpm",
+      "transformer_85bpm",
+      "waves_105bpm",
+      "zigzags_105bpm"
+    ],
+    "n_scanned": 23,
+    "auto_added_this_run": [],
+    "hand_authored_kept": [
+      "tears_98bpm"
+    ],
+    "open_items": 1
+  }
+}

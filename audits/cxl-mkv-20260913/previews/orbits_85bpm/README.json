@@ -1,0 +1,14 @@
+{
+  "technique": "orbits_85bpm",
+  "source_title": "Scratch_t98",
+  "chapter2": [
+    44.5445,
+    112.352
+  ],
+  "previews": [
+    "previews/orbits_85bpm/orbits_85bpm_boundary_head_33to50s_Scratch_t98.mov",
+    "previews/orbits_85bpm/orbits_85bpm_boundary_tail_73to83s_Scratch_t98.mov"
+  ],
+  "time_mapping": "preview t=0 corresponds to the source time in the filename",
+  "operator_audition": "PENDING - no automatic test can prove absence of speech"
+}

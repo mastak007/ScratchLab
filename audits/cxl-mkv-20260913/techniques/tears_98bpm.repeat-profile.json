@@ -1,0 +1,322 @@
+{
+  "analysis_version": "repeat_profile/2",
+  "technique": "tears_98bpm",
+  "reference_title": "Scratch_t24",
+  "chapter2": [
+    43.043,
+    121.376
+  ],
+  "offset_frames": 1175,
+  "offset_s": 39.205833,
+  "params": {
+    "window_s": 1.0,
+    "max_lag_samples": 32.0,
+    "video_match_threshold": 0.995,
+    "audio_match_threshold": 0.9,
+    "activity_rms_threshold": 200
+  },
+  "controls": {
+    "adjacent_frame_similarity": 0.98437,
+    "random_pair_similarity": 0.84062
+  },
+  "windows": 39,
+  "video_windows_matching": 38,
+  "audio_windows_evaluated": 21,
+  "audio_windows_matching": 19,
+  "divergence_windows_video_ok_audio_not": [
+    56.043,
+    57.043
+  ],
+  "divergence_spans_first_pass_s": [
+    [
+      56.043,
+      58.043
+    ]
+  ],
+  "divergence_spans_second_pass_s": [
+    [
+      95.249,
+      97.249
+    ]
+  ],
+  "divergence_detected": true,
+  "interpretation": "Windows where the picture still duplicates but the isolated scratch does not. In those the two passes carry the same image and different sound, so at least one pass has picture and audio that do not correspond. This does NOT say which pass is faithful, and it is not a statement about absolute A/V sync.",
+  "profile": [
+    {
+      "t_s": 43.043,
+      "video_sim": 0.99918,
+      "iso_rms": 1497.0,
+      "iso_ncc_integer_lag": 0.9447,
+      "iso_ncc_best_fractional": 0.9993,
+      "iso_best_lag_samples": -1.0
+    },
+    {
+      "t_s": 44.043,
+      "video_sim": 0.99921,
+      "iso_rms": 1400.0,
+      "iso_ncc_integer_lag": 0.9326,
+      "iso_ncc_best_fractional": 0.9992,
+      "iso_best_lag_samples": -1.0
+    },
+    {
+      "t_s": 45.043,
+      "video_sim": 0.99921,
+      "iso_rms": 1467.0,
+      "iso_ncc_integer_lag": 0.9468,
+      "iso_ncc_best_fractional": 0.9994,
+      "iso_best_lag_samples": -1.0
+    },
+    {
+      "t_s": 46.043,
+      "video_sim": 0.99922,
+      "iso_rms": 1519.0,
+      "iso_ncc_integer_lag": 0.9548,
+      "iso_ncc_best_fractional": 0.9995,
+      "iso_best_lag_samples": -1.0
+    },
+    {
+      "t_s": 47.043,
+      "video_sim": 0.99915,
+      "iso_rms": 710.0,
+      "iso_ncc_integer_lag": 0.9841,
+      "iso_ncc_best_fractional": 0.9998,
+      "iso_best_lag_samples": -1.0
+    },
+    {
+      "t_s": 48.043,
+      "video_sim": 0.99931,
+      "iso_rms": 51.0,
+      "iso_skipped": "pause: below the 200 RMS activity threshold"
+    },
+    {
+      "t_s": 49.043,
+      "video_sim": 0.99929,
+      "iso_rms": 49.0,
+      "iso_skipped": "pause: below the 200 RMS activity threshold"
+    },
+    {
+      "t_s": 50.043,
+      "video_sim": 0.99922,
+      "iso_rms": 52.0,
+      "iso_skipped": "pause: below the 200 RMS activity threshold"
+    },
+    {
+      "t_s": 51.043,
+      "video_sim": 0.99925,
+      "iso_rms": 53.0,
+      "iso_skipped": "pause: below the 200 RMS activity threshold"
+    },
+    {
+      "t_s": 52.043,
+      "video_sim": 0.99907,
+      "iso_rms": 947.0,
+      "iso_ncc_integer_lag": 0.9284,
+      "iso_ncc_best_fractional": 0.9991,
+      "iso_best_lag_samples": -1.0
+    },
+    {
+      "t_s": 53.043,
+      "video_sim": 0.99863,
+      "iso_rms": 1453.0,
+      "iso_ncc_integer_lag": 0.9268,
+      "iso_ncc_best_fractional": 0.9991,
+      "iso_best_lag_samples": -1.0
+    },
+    {
+      "t_s": 54.043,
+      "video_sim": 0.99914,
+      "iso_rms": 1516.0,
+      "iso_ncc_integer_lag": 0.9244,
+      "iso_ncc_best_fractional": 0.9991,
+      "iso_best_lag_samples": -1.0
+    },
+    {
+      "t_s": 55.043,
+      "video_sim": 0.99914,
+      "iso_rms": 1593.0,
+      "iso_ncc_integer_lag": 0.9228,
+      "iso_ncc_best_fractional": 0.999,
+      "iso_best_lag_samples": -1.0
+    },
+    {
+      "t_s": 56.043,
+      "video_sim": 0.99927,
+      "iso_rms": 1290.0,
+      "iso_ncc_integer_lag": 0.3586,
+      "iso_ncc_best_fractional": 0.3819,
+      "iso_best_lag_samples": -0.75
+    },
+    {
+      "t_s": 57.043,
+      "video_sim": 0.99906,
+      "iso_rms": 319.0,
+      "iso_ncc_integer_lag": 0.0101,
+      "iso_ncc_best_fractional": 0.067,
+      "iso_best_lag_samples": -31.25
+    },
+    {
+      "t_s": 58.043,
+      "video_sim": 0.99923,
+      "iso_rms": 55.0,
+      "iso_skipped": "pause: below the 200 RMS activity threshold"
+    },
+    {
+      "t_s": 59.043,
+      "video_sim": 0.99928,
+      "iso_rms": 56.0,
+      "iso_skipped": "pause: below the 200 RMS activity threshold"
+    },
+    {
+      "t_s": 60.043,
+      "video_sim": 0.99926,
+      "iso_rms": 55.0,
+      "iso_skipped": "pause: below the 200 RMS activity threshold"
+    },
+    {
+      "t_s": 61.043,
+      "video_sim": 0.99925,
+      "iso_rms": 51.0,
+      "iso_skipped": "pause: below the 200 RMS activity threshold"
+    },
+    {
+      "t_s": 62.043,
+      "video_sim": 0.99918,
+      "iso_rms": 1139.0,
+      "iso_ncc_integer_lag": 0.5638,
+      "iso_ncc_best_fractional": 0.9993,
+      "iso_best_lag_samples": -3.0
+    },
+    {
+      "t_s": 63.043,
+      "video_sim": 0.99916,
+      "iso_rms": 1901.0,
+      "iso_ncc_integer_lag": 0.575,
+      "iso_ncc_best_fractional": 0.9994,
+      "iso_best_lag_samples": -3.0
+    },
+    {
+      "t_s": 64.043,
+      "video_sim": 0.99922,
+      "iso_rms": 1801.0,
+      "iso_ncc_integer_lag": 0.6308,
+      "iso_ncc_best_fractional": 0.9995,
+      "iso_best_lag_samples": -3.0
+    },
+    {
+      "t_s": 65.043,
+      "video_sim": 0.99921,
+      "iso_rms": 1905.0,
+      "iso_ncc_integer_lag": 0.572,
+      "iso_ncc_best_fractional": 0.9994,
+      "iso_best_lag_samples": -3.0
+    },
+    {
+      "t_s": 66.043,
+      "video_sim": 0.99926,
+      "iso_rms": 1380.0,
+      "iso_ncc_integer_lag": 0.7163,
+      "iso_ncc_best_fractional": 0.9995,
+      "iso_best_lag_samples": -3.0
+    },
+    {
+      "t_s": 67.043,
+      "video_sim": 0.99914,
+      "iso_rms": 158.0,
+      "iso_skipped": "pause: below the 200 RMS activity threshold"
+    },
+    {
+      "t_s": 68.043,
+      "video_sim": 0.99928,
+      "iso_rms": 55.0,
+      "iso_skipped": "pause: below the 200 RMS activity threshold"
+    },
+    {
+      "t_s": 69.043,
+      "video_sim": 0.99923,
+      "iso_rms": 56.0,
+      "iso_skipped": "pause: below the 200 RMS activity threshold"
+    },
+    {
+      "t_s": 70.043,
+      "video_sim": 0.99919,
+      "iso_rms": 59.0,
+      "iso_skipped": "pause: below the 200 RMS activity threshold"
+    },
+    {
+      "t_s": 71.043,
+      "video_sim": 0.99928,
+      "iso_rms": 55.0,
+      "iso_skipped": "pause: below the 200 RMS activity threshold"
+    },
+    {
+      "t_s": 72.043,
+      "video_sim": 0.99923,
+      "iso_rms": 1291.0,
+      "iso_ncc_integer_lag": 0.5856,
+      "iso_ncc_best_fractional": 0.9993,
+      "iso_best_lag_samples": -3.0
+    },
+    {
+      "t_s": 73.043,
+      "video_sim": 0.99922,
+      "iso_rms": 1298.0,
+      "iso_ncc_integer_lag": 0.5951,
+      "iso_ncc_best_fractional": 0.9994,
+      "iso_best_lag_samples": -3.0
+    },
+    {
+      "t_s": 74.043,
+      "video_sim": 0.99923,
+      "iso_rms": 1256.0,
+      "iso_ncc_integer_lag": 0.5784,
+      "iso_ncc_best_fractional": 0.9993,
+      "iso_best_lag_samples": -3.0
+    },
+    {
+      "t_s": 75.043,
+      "video_sim": 0.99921,
+      "iso_rms": 1612.0,
+      "iso_ncc_integer_lag": 0.6195,
+      "iso_ncc_best_fractional": 0.9994,
+      "iso_best_lag_samples": -3.0
+    },
+    {
+      "t_s": 76.043,
+      "video_sim": 0.99931,
+      "iso_rms": 1098.0,
+      "iso_ncc_integer_lag": 0.8467,
+      "iso_ncc_best_fractional": 0.9997,
+      "iso_best_lag_samples": -3.0
+    },
+    {
+      "t_s": 77.043,
+      "video_sim": 0.99917,
+      "iso_rms": 70.0,
+      "iso_skipped": "pause: below the 200 RMS activity threshold"
+    },
+    {
+      "t_s": 78.043,
+      "video_sim": 0.99927,
+      "iso_rms": 51.0,
+      "iso_skipped": "pause: below the 200 RMS activity threshold"
+    },
+    {
+      "t_s": 79.043,
+      "video_sim": 0.99929,
+      "iso_rms": 50.0,
+      "iso_skipped": "pause: below the 200 RMS activity threshold"
+    },
+    {
+      "t_s": 80.043,
+      "video_sim": 0.99935,
+      "iso_rms": 53.0,
+      "iso_skipped": "pause: below the 200 RMS activity threshold"
+    },
+    {
+      "t_s": 81.043,
+      "video_sim": 0.99212,
+      "iso_rms": 56.0,
+      "iso_skipped": "pause: below the 200 RMS activity threshold"
+    }
+  ]
+}

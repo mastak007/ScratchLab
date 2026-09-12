@@ -1,0 +1,1132 @@
+{
+  "created_at": "2026-09-12T17:10:52.053886+00:00",
+  "source_directory": "/Users/karlwatson/Developer/ScratchLab-CXL-Ready-20260913/evidence/mkv-source-inspection-20260913/claude-mkv-batch-audit",
+  "purpose": "Exact Claude audit snapshot; no media payloads included. README.md contains current caveats.",
+  "copied_files": [
+    {
+      "path": "HANDOFF_TO_CODEX.md",
+      "bytes": 23054,
+      "sha256": "bd76f5ecca86ce835bf2ca4996d2ec83db6b8329baf15fda2c343365a2e6a78e"
+    },
+    {
+      "path": "batch-state.json",
+      "bytes": 166021,
+      "sha256": "5e838fcade8c07dbba6c5d5448dfc90d37ae592315b090a0094866b3e12168d7"
+    },
+    {
+      "path": "inventory/angle-binding.json",
+      "bytes": 35655,
+      "sha256": "42420feca332936c71eb73c7ae81ac8dbf29fd325aeba34facefa1891dac0294"
+    },
+    {
+      "path": "inventory/audio-fingerprints.json",
+      "bytes": 16200,
+      "sha256": "4a9ecd9a8953c4db088419d81c72cfe2aa6e28053c766e1f2357e3d6a3fd69b8"
+    },
+    {
+      "path": "inventory/stage-a-groups.json",
+      "bytes": 141055,
+      "sha256": "22db585dbe28d041f7c68a239a2d02f8c0f18f811d8e42c68b99d4eef137c544"
+    },
+    {
+      "path": "logs/disk-watch.log",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "logs/refresh-four.log",
+      "bytes": 914,
+      "sha256": "13a9b99a5dffa0fab16a7670b03defe0f5acc6f1c255dccd19720b64873ba143"
+    },
+    {
+      "path": "logs/run-all.log",
+      "bytes": 2338,
+      "sha256": "3b8f07e57bd036e2693abe1f83dc203ab4f56a15d80303f094a73f46ae609e85"
+    },
+    {
+      "path": "logs/run-marches.log",
+      "bytes": 349,
+      "sha256": "f08877a23e2bfc8b18b3c80bbbec788b19e3e359ca1621f3974883c09ec0573a"
+    },
+    {
+      "path": "logs/validate-tears.log",
+      "bytes": 954,
+      "sha256": "7c442c3c54974ce8dceabbe9e848ea6051ac0e30388f0d54e510c53bd43de724"
+    },
+    {
+      "path": "previews/1clickflare_85bpm/README.json",
+      "bytes": 477,
+      "sha256": "4d1d8f98bef272a4076ccfcefda3c49751eeb2ae23413bf490b71d11b6f77162"
+    },
+    {
+      "path": "previews/baby_79bpm/README.json",
+      "bytes": 445,
+      "sha256": "6b3439895df3fbe70bd035617cfd69504fd8158c4d34e95f52a5544e8c96e07c"
+    },
+    {
+      "path": "previews/chirpflare_92bpm/README.json",
+      "bytes": 477,
+      "sha256": "430855af7c6aa8c766cd4cbe6c583fbe5a00d70dfd64714d36cbaf257a754980"
+    },
+    {
+      "path": "previews/chirps_98bpm/README.json",
+      "bytes": 453,
+      "sha256": "0c118f40ede64a71fbd0a7b4460d923f3b32fbc7f652c1c08d12936953d800da"
+    },
+    {
+      "path": "previews/clovertears_105bpm/README.json",
+      "bytes": 485,
+      "sha256": "82662641ce7e6ef7cbd748f47501730acd86c697441072ebcdc380d1a97cd1b8"
+    },
+    {
+      "path": "previews/crabs_92bpm/README.json",
+      "bytes": 452,
+      "sha256": "b9397c934c3f962f8912026be44a7ffd6e8f391b53baceb522864ea50eaac5ab"
+    },
+    {
+      "path": "previews/cresentflare_92bpm/README.json",
+      "bytes": 486,
+      "sha256": "5cf6ea0c57a4417975322a840d92e681adc2b5bb91171da332771705305d99ab"
+    },
+    {
+      "path": "previews/cutting_79bpm/README.json",
+      "bytes": 460,
+      "sha256": "8eaa66f652bbea7ab68aa9e72979301e7a7b4dc57f045f71cc7c6530f7d0c99f"
+    },
+    {
+      "path": "previews/dicing_85bpm/README.json",
+      "bytes": 454,
+      "sha256": "6631852fe646b3d5a57e85cea595999f88b8a72bbe1c14ca015bf4d17c6f7fd5"
+    },
+    {
+      "path": "previews/drags_98bpm/README.json",
+      "bytes": 446,
+      "sha256": "0f859eb1b9978371ec6fc51f5b266309802ad7d50bcc9240242648bf42adbe05"
+    },
+    {
+      "path": "previews/lazers_92bpm/README.json",
+      "bytes": 455,
+      "sha256": "3f8c9c77cf121c39215251f6b98758f4b8cbcd9137af45184d32ad3cbdc6926b"
+    },
+    {
+      "path": "previews/long_short_tips_105bpm/README.json",
+      "bytes": 504,
+      "sha256": "166fc9a06a3fd607863034c9f3b7439d954e135a8694ea67c0b9487acec168b3"
+    },
+    {
+      "path": "previews/marches_79bpm/README.json",
+      "bytes": 456,
+      "sha256": "6f43c040a14f3b7abe38e3d4b9c25447e8133ec4413ab68557172984b35c3139"
+    },
+    {
+      "path": "previews/needledropping_105bpm/README.json",
+      "bytes": 502,
+      "sha256": "bada1ccb7c66b6bb0ee3828c270b2965755ed59df67a8cde1a0d0693bae265b5"
+    },
+    {
+      "path": "previews/orbits_85bpm/README.json",
+      "bytes": 454,
+      "sha256": "d7692416e44fce4e10e1418b532b51de3763d2700d51b0a0a6a25c38554fc0cf"
+    },
+    {
+      "path": "previews/originalflare_85bpm/README.json",
+      "bytes": 489,
+      "sha256": "901b15fe4459ba2cb94b511424567bb7ad0c8dc344e82381078e457cfd8ff91c"
+    },
+    {
+      "path": "previews/reversecutting_79bpm/README.json",
+      "bytes": 491,
+      "sha256": "a51824d5eca0067bc109f90017fdd9e8e8b5e5aeaacf31c2ae8cf18d5a6e0981"
+    },
+    {
+      "path": "previews/swipes_105bpm/README.json",
+      "bytes": 458,
+      "sha256": "3059e3b40419212e7842157b78fbec968ad04192897de242ace1b3a616841647"
+    },
+    {
+      "path": "previews/tears_98bpm/README.json",
+      "bytes": 448,
+      "sha256": "e2603958443e4c5c72406de83b3c65eb95b3dbdeb42878bd935d2c4bb687b44e"
+    },
+    {
+      "path": "previews/tips_105bpm/README.json",
+      "bytes": 448,
+      "sha256": "d15c980b3dee4698cf23f8682e0631534237d5ef5e9d453a348bab29676fa82a"
+    },
+    {
+      "path": "previews/transformer_85bpm/README.json",
+      "bytes": 478,
+      "sha256": "770a55ee89e90d5924c9a8fb6e31dc39eae158baacb97703160c40147a8c7865"
+    },
+    {
+      "path": "previews/waves_105bpm/README.json",
+      "bytes": 453,
+      "sha256": "3e090e324bf22e26adaf0ce096cc12168b46a97aefc6801ce5d52e8ba7f59292"
+    },
+    {
+      "path": "previews/zigzags_105bpm/README.json",
+      "bytes": 463,
+      "sha256": "93e0341d272349e9b75d3bf3169a91ef99e509297aa28712ba011b00f315521a"
+    },
+    {
+      "path": "progress.json",
+      "bytes": 36256,
+      "sha256": "7d9b3c7657431a5c18a035bf85419f0ff0cc7e3562a675ccabbd504d06e0425d"
+    },
+    {
+      "path": "reports/BATCH_AUDIT_REPORT.md",
+      "bytes": 20936,
+      "sha256": "06f617281f0acf52613a5b5ae883c4aebcb60521317baf6738cbb28f0bd50a36"
+    },
+    {
+      "path": "reports/RESULTS_TABLE.md",
+      "bytes": 3950,
+      "sha256": "9bc4e8a3d14cabd3dbd5a864c115418a641dcba2db68aaded9846580dadf5f78"
+    },
+    {
+      "path": "reports/REVIEW_QUEUE.json",
+      "bytes": 5525,
+      "sha256": "c8c599adf4b785a89aa0eee28b22955816185c8e7790f9ed9cec8c535784c059"
+    },
+    {
+      "path": "reports/manifest-consistency.json",
+      "bytes": 12222,
+      "sha256": "9a384f5c1fec356fac4f4c18cfa3fb1c98d8f0356ce91a406fa6c2cdfa5ecebc"
+    },
+    {
+      "path": "reports/runner-validation/cutting_79bpm-validation.json",
+      "bytes": 5317,
+      "sha256": "b27d1d9c1363eec33282e5514492df1f442d871aba0e3f195671a2c28ffb5a3d"
+    },
+    {
+      "path": "reports/runner-validation/cutting_79bpm.fractional-lag.json",
+      "bytes": 3718,
+      "sha256": "555e0f310fd05f0a0cb0c49c8c9ec3357abd8cad90fc11b11b4b88078e5039ba"
+    },
+    {
+      "path": "reports/runner-validation/cutting_79bpm.repeat-profile.json",
+      "bytes": 5312,
+      "sha256": "4452fc50112730b38ee13e87ab0bc9cf1772eb5cdad43cdfe325b174d737f197"
+    },
+    {
+      "path": "reports/runner-validation/tears_98bpm-validation.json",
+      "bytes": 5531,
+      "sha256": "c418102ad999e551e3594b084d0bff4cb06bbf4ef331a610ccc7a9663d07e8fb"
+    },
+    {
+      "path": "reports/runner-validation/tears_98bpm.fractional-lag.json",
+      "bytes": 5545,
+      "sha256": "4d8b715f485eb330d18f2594a75d725d14c80812534819496bba9771d001b442"
+    },
+    {
+      "path": "reports/runner-validation/tears_98bpm.repeat-profile.json",
+      "bytes": 8139,
+      "sha256": "ce9133b4f1ad2f309225a64586fffb3a22f55def875013a526745bc10b329877"
+    },
+    {
+      "path": "reports/stage-b-field-retention.json",
+      "bytes": 735,
+      "sha256": "7e1d462cb0c2400ec97ed26c40abc80802947f89d4640630c3dfa75438713ad0"
+    },
+    {
+      "path": "reports/stage-d-duplication-screen.json",
+      "bytes": 9506,
+      "sha256": "fb7ef68d72a7b1b472434e490ef160ac80ec7db42131f0ccd5304039aa195a6d"
+    },
+    {
+      "path": "scripts/audit_technique.py",
+      "bytes": 22474,
+      "sha256": "e1e1df407392468a281a6c1256e6eea74bfd5d1ee17147cd53dfb642780ed1b2"
+    },
+    {
+      "path": "scripts/checkpoint.py",
+      "bytes": 10328,
+      "sha256": "9bb1ce04d801fc321eefc0985a8f53cb2353d52088509716693dd309a685ba2d"
+    },
+    {
+      "path": "scripts/consolidate_review_queue.py",
+      "bytes": 3798,
+      "sha256": "3e7c97b01915d67a86d302c59b9406615a4730a54da3181713e7f15ba270d305"
+    },
+    {
+      "path": "scripts/drift_crosscheck.py",
+      "bytes": 3052,
+      "sha256": "575dbb87b83e35d16d49897f4445d855b1087c71cc0e9f517c4e8ad3be0fe1e8"
+    },
+    {
+      "path": "scripts/finalise_report.py",
+      "bytes": 4635,
+      "sha256": "5bf34043d9e1dad7f5367747ff92fcdda9fdf2bf693a1916d4dcff0be93dd7c9"
+    },
+    {
+      "path": "scripts/fractional_lag_repeat.py",
+      "bytes": 7721,
+      "sha256": "ad960abeb06e7a798c3f3337a8df6c2872a6a1815ea10de75c1657a7f9c49693"
+    },
+    {
+      "path": "scripts/make_boundary_previews.py",
+      "bytes": 2805,
+      "sha256": "5ee35d440fba634452a2f6c044de30d4a4420a7713c04c07a4901385a705769b"
+    },
+    {
+      "path": "scripts/make_divergence_clip.py",
+      "bytes": 2937,
+      "sha256": "43051964e71c134698cc26a719373e82055883c4d56b5ea2257ff0975041e92e"
+    },
+    {
+      "path": "scripts/manifest_consistency.py",
+      "bytes": 3756,
+      "sha256": "96c6d32d542f1e24e20680a1b6b9203e15ccd7b5f9b298089e2891978187c090"
+    },
+    {
+      "path": "scripts/render_results_table.py",
+      "bytes": 3543,
+      "sha256": "9fc8058e4660e86178ca654af10bb751bbea70504f7fb3911e32332c23abcd46"
+    },
+    {
+      "path": "scripts/repeat_profile.py",
+      "bytes": 7707,
+      "sha256": "5484938d7511e9939368a4b99ea6a13acbd928c228fd8895978ad7f62f37de56"
+    },
+    {
+      "path": "scripts/run_batch.py",
+      "bytes": 19074,
+      "sha256": "fb7b50e0468466a54f3c54af0f0072d9bf0074c9cbeaba0b40b5ce90be093be1"
+    },
+    {
+      "path": "scripts/stage_a2_angle_binding.py",
+      "bytes": 5070,
+      "sha256": "88701a8ca7130497876c2c26be2701823eb9720005852ea186df69544566543c"
+    },
+    {
+      "path": "scripts/stage_a_inventory.py",
+      "bytes": 6714,
+      "sha256": "113dc6165615e3d20bc333d7bff956f41f53f15811f50f5e6529801371d27fc8"
+    },
+    {
+      "path": "scripts/stage_b_field_retention.py",
+      "bytes": 4055,
+      "sha256": "daa799eb1bbd16b2172efda73c5fe7c4991496a2811036a87afb677582ce8468"
+    },
+    {
+      "path": "scripts/stage_d_duplication_screen.py",
+      "bytes": 4060,
+      "sha256": "f83dbfe3fec83f876d149f271ce1e136d65143652f11c336f9f788d177b5d771"
+    },
+    {
+      "path": "scripts/sync_handoff.py",
+      "bytes": 4020,
+      "sha256": "4c9543ec8481a7dea2c43aa482f963b8fafebba0e4470779ec8d8e94d5a6257f"
+    },
+    {
+      "path": "techniques/1clickflare_85bpm.drift-crosscheck.json",
+      "bytes": 1025,
+      "sha256": "8c09919a9e84ffb942ca3bda4c0117fd7e12f1e13ea2575eab31806fd9738476"
+    },
+    {
+      "path": "techniques/1clickflare_85bpm.fractional-lag.json",
+      "bytes": 6083,
+      "sha256": "a360985139f58e5fac2d5b18d7a74ce201d96ba8afbb9e07d94e5235250bd2b4"
+    },
+    {
+      "path": "techniques/1clickflare_85bpm.json",
+      "bytes": 17493,
+      "sha256": "0832d552bc92ddd94615d922f53349b95cf71b0794c4fc975c6265eeed7b5f75"
+    },
+    {
+      "path": "techniques/1clickflare_85bpm.repeat-profile.json",
+      "bytes": 9094,
+      "sha256": "9d7e82cf8799893a136c3ca166197dd1fd46425b994d24da3c4a29348e5c8f16"
+    },
+    {
+      "path": "techniques/baby_79bpm.drift-crosscheck.json",
+      "bytes": 1018,
+      "sha256": "e01b7d2fad1d078e268bf1cc8cc83d1c99bd558e1514d470b13687378f199da5"
+    },
+    {
+      "path": "techniques/baby_79bpm.fractional-lag.json",
+      "bytes": 3756,
+      "sha256": "af297152d1ce89277e499fa35d3a0768d3cc6c368b6f37cc06dbc3d7c8e42f68"
+    },
+    {
+      "path": "techniques/baby_79bpm.json",
+      "bytes": 23300,
+      "sha256": "8938cb53a8b7dcfe3b3358f216e7a791028ff7938e694ebbb19af6ddedce745b"
+    },
+    {
+      "path": "techniques/baby_79bpm.repeat-profile.json",
+      "bytes": 5303,
+      "sha256": "91f3b390a1522f6d8656049fdca6c73ee19d8f4570545a6e47c9eb9de8b162d9"
+    },
+    {
+      "path": "techniques/chirpflare_92bpm.drift-crosscheck.json",
+      "bytes": 1024,
+      "sha256": "572714dd192cfdbc849c880680e779a108aa6d9a41b5fa10a6d0ed2be156206a"
+    },
+    {
+      "path": "techniques/chirpflare_92bpm.fractional-lag.json",
+      "bytes": 5915,
+      "sha256": "d11bad498fa638d104c266d3d1eeb2ff8cafa1dd0f526413023c55892bcdc496"
+    },
+    {
+      "path": "techniques/chirpflare_92bpm.json",
+      "bytes": 16420,
+      "sha256": "fe7580c851790d87f8c93a960cac6631d55b9560bab20527906887b3b0f5bd7e"
+    },
+    {
+      "path": "techniques/chirpflare_92bpm.repeat-profile.json",
+      "bytes": 8460,
+      "sha256": "07b8b6cc016d9ac7d073f0e2502e9f8f9f2c426012cc1e59bbe5f2e4b2851adb"
+    },
+    {
+      "path": "techniques/chirps_98bpm.drift-crosscheck.json",
+      "bytes": 1017,
+      "sha256": "2851972884f17acf896bfa57e24deb2c53dbc9c29c7d8a1703a34fa2d397f37f"
+    },
+    {
+      "path": "techniques/chirps_98bpm.fractional-lag.json",
+      "bytes": 4141,
+      "sha256": "0162b33ac673932fa5ac705c30254ddd4397f10a71bf047f7b3c977c4d2d2684"
+    },
+    {
+      "path": "techniques/chirps_98bpm.json",
+      "bytes": 17153,
+      "sha256": "2d0c7585a7d8af744e4ef1ceef35eb5c19de9f454cc963ac767f506ff3f35a0f"
+    },
+    {
+      "path": "techniques/chirps_98bpm.repeat-profile.json",
+      "bytes": 4653,
+      "sha256": "340497ae2c6a2397d0aa9d0569ce9f0a4c1122ff958fb0a08122392369d2e79a"
+    },
+    {
+      "path": "techniques/clovertears_105bpm.drift-crosscheck.json",
+      "bytes": 1023,
+      "sha256": "359394277f0c06669433e75030c45df3045db2cf07e31b52ab42da5e68774318"
+    },
+    {
+      "path": "techniques/clovertears_105bpm.fractional-lag.json",
+      "bytes": 3362,
+      "sha256": "4b13d9585634f8b021a227bee6ba5b2e41fe0551da4db762a2d3d83f305b8df1"
+    },
+    {
+      "path": "techniques/clovertears_105bpm.json",
+      "bytes": 17966,
+      "sha256": "86700d4463cf0f26931ed3658d51c20f5329f175e5dbfde7bad75760a9c508b3"
+    },
+    {
+      "path": "techniques/clovertears_105bpm.repeat-profile.json",
+      "bytes": 4326,
+      "sha256": "5e71af1266bda196e47da2e7092eacd8ff946c46a88dfdc3089ebd6d9ca23019"
+    },
+    {
+      "path": "techniques/crabs_92bpm.drift-crosscheck.json",
+      "bytes": 1020,
+      "sha256": "ac448577f919b3ff9d9e1712355665752face7356bd2d0cf682cdd5f04d3356e"
+    },
+    {
+      "path": "techniques/crabs_92bpm.fractional-lag.json",
+      "bytes": 5842,
+      "sha256": "a19277bda51e054eeb49726fab37237009c0c9bdfd11e8f9504fa42727560328"
+    },
+    {
+      "path": "techniques/crabs_92bpm.json",
+      "bytes": 16888,
+      "sha256": "350b2ebfa6fbf0ff324c3a7dabf0d3e8bc3d8790865eb50eec300f18954edf21"
+    },
+    {
+      "path": "techniques/crabs_92bpm.repeat-profile.json",
+      "bytes": 8427,
+      "sha256": "1f65ebcb20ea76335853b40718aeca7c32601b7c179543e89aced9a6585eede6"
+    },
+    {
+      "path": "techniques/cresentflare_92bpm.drift-crosscheck.json",
+      "bytes": 1026,
+      "sha256": "786d19d1af7fa8cb39034a7c5131ab11bf1583893c36a46286b15ed3f96d4ced"
+    },
+    {
+      "path": "techniques/cresentflare_92bpm.fractional-lag.json",
+      "bytes": 6078,
+      "sha256": "09c2bb132a3fe57ed791f3aded1f080526a41a220df30dff0d8e2ec77f917b40"
+    },
+    {
+      "path": "techniques/cresentflare_92bpm.json",
+      "bytes": 16169,
+      "sha256": "d129975c04e37709d6139e8eee2116533849a9fa9f0a364bfd1dc114fec1a978"
+    },
+    {
+      "path": "techniques/cresentflare_92bpm.repeat-profile.json",
+      "bytes": 8482,
+      "sha256": "327b4c42b4a60756fdbd3bea3619728f624838d792037ad36ad6c52b383791fe"
+    },
+    {
+      "path": "techniques/cutting_79bpm.drift-crosscheck.json",
+      "bytes": 1018,
+      "sha256": "84e158be916759f5232e8534e1a89a2d4a06338cc5479ff1d468e25c59725c13"
+    },
+    {
+      "path": "techniques/cutting_79bpm.fractional-lag.json",
+      "bytes": 3718,
+      "sha256": "555e0f310fd05f0a0cb0c49c8c9ec3357abd8cad90fc11b11b4b88078e5039ba"
+    },
+    {
+      "path": "techniques/cutting_79bpm.json",
+      "bytes": 22936,
+      "sha256": "029a59c3ae91c03cc20ce2ab43f15d60a5708d323d6045c7b9061c9a02c9718b"
+    },
+    {
+      "path": "techniques/cutting_79bpm.repeat-profile.json",
+      "bytes": 5312,
+      "sha256": "4452fc50112730b38ee13e87ab0bc9cf1772eb5cdad43cdfe325b174d737f197"
+    },
+    {
+      "path": "techniques/dicing_85bpm.drift-crosscheck.json",
+      "bytes": 1019,
+      "sha256": "5da38624b039eaf72a2da4338e41b1a19e9d1b42bdc1e80d11c55e091845ae2d"
+    },
+    {
+      "path": "techniques/dicing_85bpm.fractional-lag.json",
+      "bytes": 6090,
+      "sha256": "f11e4687f17f8781aacd610fc4923e84d5dd9bbe3659757f141e210d464b5ba1"
+    },
+    {
+      "path": "techniques/dicing_85bpm.json",
+      "bytes": 16568,
+      "sha256": "0f9ce87c6e1a308c73e6471a7d7e79d7f31a981dcdcdb8b2ed28ccf1c68e5276"
+    },
+    {
+      "path": "techniques/dicing_85bpm.repeat-profile.json",
+      "bytes": 9111,
+      "sha256": "5dbe90d8babcc1958ccdbb47fad38f8f11b328b1cd3dffb23fa37f320e7d7fc7"
+    },
+    {
+      "path": "techniques/drags_98bpm.drift-crosscheck.json",
+      "bytes": 1018,
+      "sha256": "528a67bf4161fa37956eda10193a060a1763723c32afaaa6f3f7c1de60591d79"
+    },
+    {
+      "path": "techniques/drags_98bpm.fractional-lag.json",
+      "bytes": 5079,
+      "sha256": "f62611e97362aecab074bc5e287b91fb67d1237efaac20f952a5297b43502fb6"
+    },
+    {
+      "path": "techniques/drags_98bpm.json",
+      "bytes": 17743,
+      "sha256": "d6c1d8135b189d182f38490bbfbba87b06c57fce0da809cea407e10340546aff"
+    },
+    {
+      "path": "techniques/drags_98bpm.repeat-profile.json",
+      "bytes": 7909,
+      "sha256": "d3b12e9e6d22c05fdb00ef0ab7a29cd899e20f1eb362a321aec51cef67db7e25"
+    },
+    {
+      "path": "techniques/lazers_92bpm.drift-crosscheck.json",
+      "bytes": 1017,
+      "sha256": "b28df2744c11ec63a01d57fcf9d4f86a1f68cf432cad65990a991cd79cc9a48f"
+    },
+    {
+      "path": "techniques/lazers_92bpm.fractional-lag.json",
+      "bytes": 3744,
+      "sha256": "e7f07eb5839bfe9e81dd76c7368512adcc005d7f26dc087001f490ca9068bf6f"
+    },
+    {
+      "path": "techniques/lazers_92bpm.json",
+      "bytes": 16269,
+      "sha256": "84197b41bb2cf5674d0d28f50e7b552edd8f79184142fbe5e586930d8e5758eb"
+    },
+    {
+      "path": "techniques/lazers_92bpm.repeat-profile.json",
+      "bytes": 4710,
+      "sha256": "a8a28a2ce66cc2311ced8ac261462a671b591c9264102adaf6688888b636871b"
+    },
+    {
+      "path": "techniques/long_short_tips_105bpm.drift-crosscheck.json",
+      "bytes": 1030,
+      "sha256": "f1527e43d4cd8a6ac97858e65dd892dd15eb45961cb03e16c744ece570fdd5c0"
+    },
+    {
+      "path": "techniques/long_short_tips_105bpm.fractional-lag.json",
+      "bytes": 5324,
+      "sha256": "8dfbd27531a66b32aeda5d37fbbed0c3946a874ce3f4807b0395196c210e1628"
+    },
+    {
+      "path": "techniques/long_short_tips_105bpm.json",
+      "bytes": 18558,
+      "sha256": "d5941eb2f2b5f8ad711613ca0c59cc6c77b61b0d70753b6803a30bfda7278240"
+    },
+    {
+      "path": "techniques/long_short_tips_105bpm.repeat-profile.json",
+      "bytes": 7538,
+      "sha256": "b6329603f63101cb18b4c5dcc0bac50113b8d31166bc652a94a36b57ffb3d01e"
+    },
+    {
+      "path": "techniques/marches_79bpm.drift-crosscheck.json",
+      "bytes": 1015,
+      "sha256": "1aec8220e52742045f652603ec3cfae17610120f346b127014dc8c474597c7b3"
+    },
+    {
+      "path": "techniques/marches_79bpm.fractional-lag.json",
+      "bytes": 3758,
+      "sha256": "ff5c2632924db69444630ecb8d8139e2dde04fdd7e171065ca8e26ac63c23ce3"
+    },
+    {
+      "path": "techniques/marches_79bpm.json",
+      "bytes": 16481,
+      "sha256": "784003c07cca60cc2ad1b9e9f7cbe23bf9ef195689d8545fda17376aa91ad888"
+    },
+    {
+      "path": "techniques/marches_79bpm.repeat-profile.json",
+      "bytes": 5310,
+      "sha256": "90f3786dc7c730d14602e3ce0ba9ef00727770cae052c4b89994ec7bbc1bfee9"
+    },
+    {
+      "path": "techniques/needledropping_105bpm.drift-crosscheck.json",
+      "bytes": 1028,
+      "sha256": "1bacd39a3a810ee0acac2420cac8cd570349cff2d1112f2887b90e0043a139b1"
+    },
+    {
+      "path": "techniques/needledropping_105bpm.fractional-lag.json",
+      "bytes": 4330,
+      "sha256": "d88c48fe90444b383f5a1d14d762713375f6d5ab9f2a99cf42daee141c5a447b"
+    },
+    {
+      "path": "techniques/needledropping_105bpm.json",
+      "bytes": 16571,
+      "sha256": "326c01c8f7cc860785c5998664c073c38c28d984b76b1a60fe19124cda9c2cc6"
+    },
+    {
+      "path": "techniques/needledropping_105bpm.repeat-profile.json",
+      "bytes": 5918,
+      "sha256": "782523a71b1a4768ddcce3cad03c2e25a5ef98cdbdc02b6e4808fe753283e7b3"
+    },
+    {
+      "path": "techniques/orbits_85bpm.drift-crosscheck.json",
+      "bytes": 1020,
+      "sha256": "97f3a482545d759d0e2e409446572d9e0462ff92a82f7b1208c489893f4d3ad7"
+    },
+    {
+      "path": "techniques/orbits_85bpm.fractional-lag.json",
+      "bytes": 4870,
+      "sha256": "53a6142bdfc38964a222b77084d30b7f91d39515b037a45ede9336f97b333144"
+    },
+    {
+      "path": "techniques/orbits_85bpm.json",
+      "bytes": 16310,
+      "sha256": "30a0c2fe8d9d0ccad90b6573afd0c75a2cf749321e127bffbb849d2599b7fa6c"
+    },
+    {
+      "path": "techniques/orbits_85bpm.repeat-profile.json",
+      "bytes": 6980,
+      "sha256": "c769e86a3d07ae7b3cb7d88827c1b0aa2580b005772f5585e6595a35a250150b"
+    },
+    {
+      "path": "techniques/originalflare_85bpm.drift-crosscheck.json",
+      "bytes": 1027,
+      "sha256": "27193cdd1cda5397b8cbcdc673e5a8e120bc6c35961351c56dbb6f995663cae8"
+    },
+    {
+      "path": "techniques/originalflare_85bpm.fractional-lag.json",
+      "bytes": 4707,
+      "sha256": "203db5eff5ee4dc4530b6ab4006b5beff5096a9ba7c581cfa7bb36fe3710929c"
+    },
+    {
+      "path": "techniques/originalflare_85bpm.json",
+      "bytes": 16027,
+      "sha256": "bec6cd3c1aceb40d00c46b66662b7980d388d3264e23478e7576499e58aaf83d"
+    },
+    {
+      "path": "techniques/originalflare_85bpm.repeat-profile.json",
+      "bytes": 6965,
+      "sha256": "ecf3ba947e5ee1747834e08906c9d5c4b770b7b5b6d78b7481de46df355f787e"
+    },
+    {
+      "path": "techniques/reversecutting_79bpm.drift-crosscheck.json",
+      "bytes": 1025,
+      "sha256": "81399da626d09146f780fc6e278c7a052a6d8a3912c68dfac69a160556d745da"
+    },
+    {
+      "path": "techniques/reversecutting_79bpm.fractional-lag.json",
+      "bytes": 3767,
+      "sha256": "3daafacc3214cc959bc79bfd9f87697dd9b764ed817f0c96893fb331b95f48a2"
+    },
+    {
+      "path": "techniques/reversecutting_79bpm.json",
+      "bytes": 16249,
+      "sha256": "a58ec03c063452ff0a39f6c3789cacf0c59f973723a62499f757c9b67b7fa70f"
+    },
+    {
+      "path": "techniques/reversecutting_79bpm.repeat-profile.json",
+      "bytes": 5320,
+      "sha256": "2accea8ff192505db32fd63f18dd4b64cb50ca4431f5ae4e922725e43764ca6e"
+    },
+    {
+      "path": "techniques/superseded/analysis-v1/README.json",
+      "bytes": 1124,
+      "sha256": "956415d07d9833152482c0006f8ea37d6c3aaa2591f29019931daa61f2269eb4"
+    },
+    {
+      "path": "techniques/superseded/analysis-v1/cutting_79bpm.drift-crosscheck.json",
+      "bytes": 557,
+      "sha256": "51c09da218d00357897093518df788658084723b4951b39400497f1d06d6bd14"
+    },
+    {
+      "path": "techniques/superseded/analysis-v1/cutting_79bpm.fractional-lag.json",
+      "bytes": 2530,
+      "sha256": "1c08c0b42ec8f3b26dcef289a4adbf10f545fcd9e579c84a6d29805aefaf3a54"
+    },
+    {
+      "path": "techniques/superseded/analysis-v1/cutting_79bpm.json",
+      "bytes": 22936,
+      "sha256": "029a59c3ae91c03cc20ce2ab43f15d60a5708d323d6045c7b9061c9a02c9718b"
+    },
+    {
+      "path": "techniques/superseded/analysis-v1/reversecutting_79bpm.drift-crosscheck.json",
+      "bytes": 1025,
+      "sha256": "81399da626d09146f780fc6e278c7a052a6d8a3912c68dfac69a160556d745da"
+    },
+    {
+      "path": "techniques/superseded/analysis-v1/reversecutting_79bpm.fractional-lag.json",
+      "bytes": 2554,
+      "sha256": "976a8cee55c057236828af7866eb0e8672ac858b4d4d9f129e838e9e9de2f433"
+    },
+    {
+      "path": "techniques/superseded/analysis-v1/reversecutting_79bpm.json",
+      "bytes": 16249,
+      "sha256": "a58ec03c063452ff0a39f6c3789cacf0c59f973723a62499f757c9b67b7fa70f"
+    },
+    {
+      "path": "techniques/superseded/analysis-v1/reversecutting_79bpm.repeat-profile.json",
+      "bytes": 6966,
+      "sha256": "2e7b82d07f44e0f2d30e7516247db4b4577c801dba7f53cc0bccf9d8d8f82045"
+    },
+    {
+      "path": "techniques/superseded/analysis-v1/tears_98bpm.fractional-lag.json",
+      "bytes": 3968,
+      "sha256": "990a5ac0d2f17fafa9e3d4ad8460813d20f33b8f732ca953ab4e254f9a0aeb72"
+    },
+    {
+      "path": "techniques/superseded/analysis-v1/tears_98bpm.json",
+      "bytes": 17820,
+      "sha256": "aeede303e89cf389c8ab2dc9995c16dff92a9783ad93bfa4bd39023b2f0d5d4e"
+    },
+    {
+      "path": "techniques/superseded/analysis-v1/transformer_85bpm.drift-crosscheck.json",
+      "bytes": 563,
+      "sha256": "7b0924b260592a8ff6fd128f44c386ee169c05368701e53b54a34dce00c3c542"
+    },
+    {
+      "path": "techniques/superseded/analysis-v1/transformer_85bpm.json",
+      "bytes": 17427,
+      "sha256": "9ae32623f99fc34855109d88fea34e334c16ce0ab82d7fe9965e1759b9a0331c"
+    },
+    {
+      "path": "techniques/swipes_105bpm.drift-crosscheck.json",
+      "bytes": 1020,
+      "sha256": "b7b04ae9d4d10f213372bfbee55b784b4e5deb7e3ea98f82976aba548ff9f81b"
+    },
+    {
+      "path": "techniques/swipes_105bpm.fractional-lag.json",
+      "bytes": 3549,
+      "sha256": "75607630aed08cda09a5414a6160c9c0215207e1b8f875cf0b488ceea9117399"
+    },
+    {
+      "path": "techniques/swipes_105bpm.json",
+      "bytes": 16879,
+      "sha256": "11ae4cd9e88876b41812c9bba125a7265bdd033d7d5a37e8e5922e681e724de0"
+    },
+    {
+      "path": "techniques/swipes_105bpm.repeat-profile.json",
+      "bytes": 4368,
+      "sha256": "c646dfc132877825df7e4f612ada05d50305c8489ff1f5d07c74df53de4787dc"
+    },
+    {
+      "path": "techniques/tears_98bpm.drift-crosscheck.json",
+      "bytes": 1018,
+      "sha256": "5dc11ac00239a26453b05ac124c435a99a4e1ab6402be1d3553f6827392b5ca6"
+    },
+    {
+      "path": "techniques/tears_98bpm.fractional-lag.json",
+      "bytes": 5545,
+      "sha256": "4d8b715f485eb330d18f2594a75d725d14c80812534819496bba9771d001b442"
+    },
+    {
+      "path": "techniques/tears_98bpm.json",
+      "bytes": 17820,
+      "sha256": "aeede303e89cf389c8ab2dc9995c16dff92a9783ad93bfa4bd39023b2f0d5d4e"
+    },
+    {
+      "path": "techniques/tears_98bpm.repeat-profile.json",
+      "bytes": 8139,
+      "sha256": "ce9133b4f1ad2f309225a64586fffb3a22f55def875013a526745bc10b329877"
+    },
+    {
+      "path": "techniques/tips_105bpm.drift-crosscheck.json",
+      "bytes": 1013,
+      "sha256": "0c1a5dd6333a20686457b15ac7c0a06d029fb85ea2d8bd7ac6fb67b1efd3f716"
+    },
+    {
+      "path": "techniques/tips_105bpm.fractional-lag.json",
+      "bytes": 3758,
+      "sha256": "c794ba02677c2ce6472d7c805a52c5889f67f469ac2ea0b2a8674bcd5ff788a7"
+    },
+    {
+      "path": "techniques/tips_105bpm.json",
+      "bytes": 17420,
+      "sha256": "9c51b4944ba30748f811e853a8288162d04d40f70ba74a7cfe9d72e25164021d"
+    },
+    {
+      "path": "techniques/tips_105bpm.repeat-profile.json",
+      "bytes": 4408,
+      "sha256": "6c2f96a2699afcad3eec34140024ad447d5fe82014240412e2aa90157ad7c1dd"
+    },
+    {
+      "path": "techniques/transformer_85bpm.drift-crosscheck.json",
+      "bytes": 1024,
+      "sha256": "5fc37cd5292f662734824427212d6b0bf184b2d0a599a3d7b525f491953137b3"
+    },
+    {
+      "path": "techniques/transformer_85bpm.fractional-lag.json",
+      "bytes": 6250,
+      "sha256": "175528e9c3007d4c073be7656950756b92caacb9a762827fc19cb9c1363b20a9"
+    },
+    {
+      "path": "techniques/transformer_85bpm.json",
+      "bytes": 17427,
+      "sha256": "9ae32623f99fc34855109d88fea34e334c16ce0ab82d7fe9965e1759b9a0331c"
+    },
+    {
+      "path": "techniques/transformer_85bpm.repeat-profile.json",
+      "bytes": 9161,
+      "sha256": "30ee3e4d9b07c29e902dccbdeb0dfafbee6296688486064c1a8572e097d57dc4"
+    },
+    {
+      "path": "techniques/waves_105bpm.drift-crosscheck.json",
+      "bytes": 1018,
+      "sha256": "1b669f3bbb5ac6a65d1677c0969ab307c9b6428f64678addfbe7e5aad06de533"
+    },
+    {
+      "path": "techniques/waves_105bpm.fractional-lag.json",
+      "bytes": 4917,
+      "sha256": "2218925b4e52107e81672329a81a5cea06eba61e3673f34aae184ac8187a5d41"
+    },
+    {
+      "path": "techniques/waves_105bpm.json",
+      "bytes": 17385,
+      "sha256": "09a606580406fa36cbb8ac4b11144fc03e6cbabd89245e5865ef48e6cef2fc4f"
+    },
+    {
+      "path": "techniques/waves_105bpm.repeat-profile.json",
+      "bytes": 7428,
+      "sha256": "0ac11520e665b02684072d5a50a4b941814ad9b85f92a0dc6f6617a9c7625ca6"
+    },
+    {
+      "path": "techniques/zigzags_105bpm.drift-crosscheck.json",
+      "bytes": 1019,
+      "sha256": "7ad75554532a339dceccebe2d39630db9f73406212d08dd8e00fffa68233c732"
+    },
+    {
+      "path": "techniques/zigzags_105bpm.fractional-lag.json",
+      "bytes": 3763,
+      "sha256": "e59c0ef5ef18abe88fc1b92eee39d26c11d9e1903e9e52fb8effc4c3093fc80d"
+    },
+    {
+      "path": "techniques/zigzags_105bpm.json",
+      "bytes": 17283,
+      "sha256": "dd721a9576478d059ddb9e7affc77c251f839c4127f01b3bd66964c519ea19e0"
+    },
+    {
+      "path": "techniques/zigzags_105bpm.repeat-profile.json",
+      "bytes": 4398,
+      "sha256": "08652d5e5af0d4ba156fdeca49d1f9fe8deb865e5e71d5acbe160807655241e0"
+    }
+  ],
+  "excluded_media": [
+    {
+      "path": "previews/1clickflare_85bpm/1clickflare_85bpm_boundary_head_54to71s_Scratch_t46.mov",
+      "bytes": 14308162,
+      "sha256": "d86ae82bdc9c86d4e3262473487a2633648e708e494c4dfadf46bb66eab116b3",
+      "retained_at": "/Users/karlwatson/Developer/ScratchLab-CXL-Ready-20260913/evidence/mkv-source-inspection-20260913/claude-mkv-batch-audit/previews/1clickflare_85bpm/1clickflare_85bpm_boundary_head_54to71s_Scratch_t46.mov"
+    },
+    {
+      "path": "previews/1clickflare_85bpm/1clickflare_85bpm_boundary_tail_73to83s_Scratch_t46.mov",
+      "bytes": 8469894,
+      "sha256": "eb413471dca23277c3741bb3212c8295d486e27c7a1fef0c8b1bea718a93ff4e",
+      "retained_at": "/Users/karlwatson/Developer/ScratchLab-CXL-Ready-20260913/evidence/mkv-source-inspection-20260913/claude-mkv-batch-audit/previews/1clickflare_85bpm/1clickflare_85bpm_boundary_tail_73to83s_Scratch_t46.mov"
+    },
+    {
+      "path": "previews/baby_79bpm/baby_79bpm_boundary_head_23to40s_Scratch_t02.mov",
+      "bytes": 13994403,
+      "sha256": "6efb3cb232babf92be8c4ac06a295402ba6e9d59d3f52a58e9bf8b550a1e033d",
+      "retained_at": "/Users/karlwatson/Developer/ScratchLab-CXL-Ready-20260913/evidence/mkv-source-inspection-20260913/claude-mkv-batch-audit/previews/baby_79bpm/baby_79bpm_boundary_head_23to40s_Scratch_t02.mov"
+    },
+    {
+      "path": "previews/baby_79bpm/baby_79bpm_boundary_tail_73to83s_Scratch_t02.mov",
+      "bytes": 8057481,
+      "sha256": "ec58f5ac2c02d0963e32d2a83bf50ea64cd23f534f84bd4fafcc63e4ae6a45d5",
+      "retained_at": "/Users/karlwatson/Developer/ScratchLab-CXL-Ready-20260913/evidence/mkv-source-inspection-20260913/claude-mkv-batch-audit/previews/baby_79bpm/baby_79bpm_boundary_tail_73to83s_Scratch_t02.mov"
+    },
+    {
+      "path": "previews/chirpflare_92bpm/chirpflare_92bpm_boundary_head_20to37s_Scratch_t54.mov",
+      "bytes": 15151971,
+      "sha256": "15a3767e9f850b3037d3df3cecc2cba0bfa601e421688b7f850c41b93ccc7bc5",
+      "retained_at": "/Users/karlwatson/Developer/ScratchLab-CXL-Ready-20260913/evidence/mkv-source-inspection-20260913/claude-mkv-batch-audit/previews/chirpflare_92bpm/chirpflare_92bpm_boundary_head_20to37s_Scratch_t54.mov"
+    },
+    {
+      "path": "previews/chirpflare_92bpm/chirpflare_92bpm_boundary_tail_73to83s_Scratch_t54.mov",
+      "bytes": 8570644,
+      "sha256": "da2b6350048893cd33aacb254db7ce43beb273407cd413f9071ffcc9a751f0be",
+      "retained_at": "/Users/karlwatson/Developer/ScratchLab-CXL-Ready-20260913/evidence/mkv-source-inspection-20260913/claude-mkv-batch-audit/previews/chirpflare_92bpm/chirpflare_92bpm_boundary_tail_73to83s_Scratch_t54.mov"
+    },
+    {
+      "path": "previews/chirps_98bpm/chirps_98bpm_boundary_head_52to69s_Scratch_t22.mov",
+      "bytes": 14978413,
+      "sha256": "b82dee25efb01d53346c9f23dad84fedb342e8273ef3273bf5fa57655b8c4c95",
+      "retained_at": "/Users/karlwatson/Developer/ScratchLab-CXL-Ready-20260913/evidence/mkv-source-inspection-20260913/claude-mkv-batch-audit/previews/chirps_98bpm/chirps_98bpm_boundary_head_52to69s_Scratch_t22.mov"
+    },
+    {
+      "path": "previews/chirps_98bpm/chirps_98bpm_boundary_tail_73to83s_Scratch_t22.mov",
+      "bytes": 8576199,
+      "sha256": "dedf622d16500dcf7bd738b6d4561f70c4fa08e4bb78ad5567f3b4c4a70d6ef6",
+      "retained_at": "/Users/karlwatson/Developer/ScratchLab-CXL-Ready-20260913/evidence/mkv-source-inspection-20260913/claude-mkv-batch-audit/previews/chirps_98bpm/chirps_98bpm_boundary_tail_73to83s_Scratch_t22.mov"
+    },
+    {
+      "path": "previews/clovertears_105bpm/clovertears_105bpm_boundary_head_33to50s_Scratch_t76.mov",
+      "bytes": 14570054,
+      "sha256": "25b6cf66505a59fcb9d3c8b50b4fb121050ae09d3dce7307d05812131561fe96",
+      "retained_at": "/Users/karlwatson/Developer/ScratchLab-CXL-Ready-20260913/evidence/mkv-source-inspection-20260913/claude-mkv-batch-audit/previews/clovertears_105bpm/clovertears_105bpm_boundary_head_33to50s_Scratch_t76.mov"
+    },
+    {
+      "path": "previews/clovertears_105bpm/clovertears_105bpm_boundary_tail_72to82s_Scratch_t76.mov",
+      "bytes": 8462528,
+      "sha256": "18fa5903424158b15e76ed1b2d622748d667203fdc50db3b827f10feae16bfb3",
+      "retained_at": "/Users/karlwatson/Developer/ScratchLab-CXL-Ready-20260913/evidence/mkv-source-inspection-20260913/claude-mkv-batch-audit/previews/clovertears_105bpm/clovertears_105bpm_boundary_tail_72to82s_Scratch_t76.mov"
+    },
+    {
+      "path": "previews/crabs_92bpm/crabs_92bpm_boundary_head_47to64s_Scratch_t104.mov",
+      "bytes": 14531879,
+      "sha256": "69ceae2159e1a8f8a9efd4c0e46c4d28deb1043862d09f2a47d6030459424b7b",
+      "retained_at": "/Users/karlwatson/Developer/ScratchLab-CXL-Ready-20260913/evidence/mkv-source-inspection-20260913/claude-mkv-batch-audit/previews/crabs_92bpm/crabs_92bpm_boundary_head_47to64s_Scratch_t104.mov"
+    },
+    {
+      "path": "previews/crabs_92bpm/crabs_92bpm_boundary_tail_73to83s_Scratch_t104.mov",
+      "bytes": 8178309,
+      "sha256": "cd7f5bde904e6e9543ffe21e3e7e184ad7448a3424e82c75938a7a06c0e44ce0",
+      "retained_at": "/Users/karlwatson/Developer/ScratchLab-CXL-Ready-20260913/evidence/mkv-source-inspection-20260913/claude-mkv-batch-audit/previews/crabs_92bpm/crabs_92bpm_boundary_tail_73to83s_Scratch_t104.mov"
+    },
+    {
+      "path": "previews/cresentflare_92bpm/cresentflare_92bpm_boundary_head_25to42s_Scratch_t50.mov",
+      "bytes": 14626261,
+      "sha256": "4a925cfc6bfa940f90f5ad11ecbe4631a334a010cc9f9785f3db8f4a53e4bae0",
+      "retained_at": "/Users/karlwatson/Developer/ScratchLab-CXL-Ready-20260913/evidence/mkv-source-inspection-20260913/claude-mkv-batch-audit/previews/cresentflare_92bpm/cresentflare_92bpm_boundary_head_25to42s_Scratch_t50.mov"
+    },
+    {
+      "path": "previews/cresentflare_92bpm/cresentflare_92bpm_boundary_tail_73to83s_Scratch_t50.mov",
+      "bytes": 8350511,
+      "sha256": "5f7d6ed591c93e874cf3f900d70ec6602ebe1b83f82d149102a5d0ad44754260",
+      "retained_at": "/Users/karlwatson/Developer/ScratchLab-CXL-Ready-20260913/evidence/mkv-source-inspection-20260913/claude-mkv-batch-audit/previews/cresentflare_92bpm/cresentflare_92bpm_boundary_tail_73to83s_Scratch_t50.mov"
+    },
+    {
+      "path": "previews/cutting_79bpm/cutting_79bpm_boundary_head_23to40s_Scratch_t05.mov",
+      "bytes": 14572584,
+      "sha256": "9a43eef86df001ece081b130571ffab29e602c7791028c8461ca6570568c9629",
+      "retained_at": "/Users/karlwatson/Developer/ScratchLab-CXL-Ready-20260913/evidence/mkv-source-inspection-20260913/claude-mkv-batch-audit/previews/cutting_79bpm/cutting_79bpm_boundary_head_23to40s_Scratch_t05.mov"
+    },
+    {
+      "path": "previews/cutting_79bpm/cutting_79bpm_boundary_tail_73to83s_Scratch_t05.mov",
+      "bytes": 8271837,
+      "sha256": "8765fb97e79da0dcb207f6a38734356ab7d384a723f0c1e957bbba743a33b5b6",
+      "retained_at": "/Users/karlwatson/Developer/ScratchLab-CXL-Ready-20260913/evidence/mkv-source-inspection-20260913/claude-mkv-batch-audit/previews/cutting_79bpm/cutting_79bpm_boundary_tail_73to83s_Scratch_t05.mov"
+    },
+    {
+      "path": "previews/dicing_85bpm/dicing_85bpm_boundary_head_22to39s_Scratch_t42.mov",
+      "bytes": 14899028,
+      "sha256": "69a0f88c4b467ab72a7e9da6cf5fe68068c008e3eb733a729e2be2b8113948b8",
+      "retained_at": "/Users/karlwatson/Developer/ScratchLab-CXL-Ready-20260913/evidence/mkv-source-inspection-20260913/claude-mkv-batch-audit/previews/dicing_85bpm/dicing_85bpm_boundary_head_22to39s_Scratch_t42.mov"
+    },
+    {
+      "path": "previews/dicing_85bpm/dicing_85bpm_boundary_tail_73to83s_Scratch_t42.mov",
+      "bytes": 8571873,
+      "sha256": "8f3a6460d370bd3c04110f11224d9373a0c183b2f8f259b66ac492704b1c6e35",
+      "retained_at": "/Users/karlwatson/Developer/ScratchLab-CXL-Ready-20260913/evidence/mkv-source-inspection-20260913/claude-mkv-batch-audit/previews/dicing_85bpm/dicing_85bpm_boundary_tail_73to83s_Scratch_t42.mov"
+    },
+    {
+      "path": "previews/drags_98bpm/drags_98bpm_boundary_head_4to21s_Scratch_t18.mov",
+      "bytes": 15351430,
+      "sha256": "8fb035a3b5d804e02cd567117ea53fd919ff40a98779df62e4ad9c7942893d33",
+      "retained_at": "/Users/karlwatson/Developer/ScratchLab-CXL-Ready-20260913/evidence/mkv-source-inspection-20260913/claude-mkv-batch-audit/previews/drags_98bpm/drags_98bpm_boundary_head_4to21s_Scratch_t18.mov"
+    },
+    {
+      "path": "previews/drags_98bpm/drags_98bpm_boundary_tail_73to83s_Scratch_t18.mov",
+      "bytes": 8594057,
+      "sha256": "9b5fd5ef7bc093d8241739c98b41be5c31d6d5c8dbaf8718a19efffcec165947",
+      "retained_at": "/Users/karlwatson/Developer/ScratchLab-CXL-Ready-20260913/evidence/mkv-source-inspection-20260913/claude-mkv-batch-audit/previews/drags_98bpm/drags_98bpm_boundary_tail_73to83s_Scratch_t18.mov"
+    },
+    {
+      "path": "previews/lazers_92bpm/lazers_92bpm_boundary_head_32to49s_Scratch_t58.mov",
+      "bytes": 14193555,
+      "sha256": "43f431daafa02357b54d259b93f96a859bf9f197c9f6639e5de1f8b1a96203ca",
+      "retained_at": "/Users/karlwatson/Developer/ScratchLab-CXL-Ready-20260913/evidence/mkv-source-inspection-20260913/claude-mkv-batch-audit/previews/lazers_92bpm/lazers_92bpm_boundary_head_32to49s_Scratch_t58.mov"
+    },
+    {
+      "path": "previews/lazers_92bpm/lazers_92bpm_boundary_tail_73to83s_Scratch_t58.mov",
+      "bytes": 8277714,
+      "sha256": "2a4fd703172081d9b88a9df7b8102b94ec3440edd10249c8867a75209fcba03e",
+      "retained_at": "/Users/karlwatson/Developer/ScratchLab-CXL-Ready-20260913/evidence/mkv-source-inspection-20260913/claude-mkv-batch-audit/previews/lazers_92bpm/lazers_92bpm_boundary_tail_73to83s_Scratch_t58.mov"
+    },
+    {
+      "path": "previews/long_short_tips_105bpm/long_short_tips_105bpm_boundary_head_38to55s_Scratch_t34.mov",
+      "bytes": 14310430,
+      "sha256": "e64193f99a1c6222fa906d6a3bc6c42009e526ff91fb42c2e88ba3c0a92421cc",
+      "retained_at": "/Users/karlwatson/Developer/ScratchLab-CXL-Ready-20260913/evidence/mkv-source-inspection-20260913/claude-mkv-batch-audit/previews/long_short_tips_105bpm/long_short_tips_105bpm_boundary_head_38to55s_Scratch_t34.mov"
+    },
+    {
+      "path": "previews/long_short_tips_105bpm/long_short_tips_105bpm_boundary_tail_73to83s_Scratch_t34.mov",
+      "bytes": 8171578,
+      "sha256": "cf72c0131f08d6ac23416ce8c8f6b07daec8ffeb2aa686bf84b34c51aee56a0a",
+      "retained_at": "/Users/karlwatson/Developer/ScratchLab-CXL-Ready-20260913/evidence/mkv-source-inspection-20260913/claude-mkv-batch-audit/previews/long_short_tips_105bpm/long_short_tips_105bpm_boundary_tail_73to83s_Scratch_t34.mov"
+    },
+    {
+      "path": "previews/marches_79bpm/marches_79bpm_boundary_head_35to52s_Scratch_t14.mov",
+      "bytes": 14695929,
+      "sha256": "a7c77b3fa7d29c26e4183dc4c805fba2ce8362acd327f9d51222764d8bacf532",
+      "retained_at": "/Users/karlwatson/Developer/ScratchLab-CXL-Ready-20260913/evidence/mkv-source-inspection-20260913/claude-mkv-batch-audit/previews/marches_79bpm/marches_79bpm_boundary_head_35to52s_Scratch_t14.mov"
+    },
+    {
+      "path": "previews/marches_79bpm/marches_79bpm_boundary_tail_73to83s_Scratch_t14.mov",
+      "bytes": 8390551,
+      "sha256": "621fb7dc995765a8f2aa14c69e5a1d7627424cadfed19adc24fabc8246dcb994",
+      "retained_at": "/Users/karlwatson/Developer/ScratchLab-CXL-Ready-20260913/evidence/mkv-source-inspection-20260913/claude-mkv-batch-audit/previews/marches_79bpm/marches_79bpm_boundary_tail_73to83s_Scratch_t14.mov"
+    },
+    {
+      "path": "previews/needledropping_105bpm/needledropping_105bpm_boundary_head_43to60s_Scratch_t80.mov",
+      "bytes": 12763463,
+      "sha256": "2eca7f85a97261a9eeeb26bdd30c2831353afde2e7c8efcdf776f2086d083dbd",
+      "retained_at": "/Users/karlwatson/Developer/ScratchLab-CXL-Ready-20260913/evidence/mkv-source-inspection-20260913/claude-mkv-batch-audit/previews/needledropping_105bpm/needledropping_105bpm_boundary_head_43to60s_Scratch_t80.mov"
+    },
+    {
+      "path": "previews/needledropping_105bpm/needledropping_105bpm_boundary_tail_73to83s_Scratch_t80.mov",
+      "bytes": 7519855,
+      "sha256": "409ff98663c30c004e88d483117c915c9e83cbe8fa0e2eba7bec361ce486ecad",
+      "retained_at": "/Users/karlwatson/Developer/ScratchLab-CXL-Ready-20260913/evidence/mkv-source-inspection-20260913/claude-mkv-batch-audit/previews/needledropping_105bpm/needledropping_105bpm_boundary_tail_73to83s_Scratch_t80.mov"
+    },
+    {
+      "path": "previews/orbits_85bpm/orbits_85bpm_boundary_head_33to50s_Scratch_t98.mov",
+      "bytes": 11126572,
+      "sha256": "bca1ee74b20ce555a4045a9ad03a43dfda6a77bfce12f906d2dfe045a9d571be",
+      "retained_at": "/Users/karlwatson/Developer/ScratchLab-CXL-Ready-20260913/evidence/mkv-source-inspection-20260913/claude-mkv-batch-audit/previews/orbits_85bpm/orbits_85bpm_boundary_head_33to50s_Scratch_t98.mov"
+    },
+    {
+      "path": "previews/orbits_85bpm/orbits_85bpm_boundary_tail_73to83s_Scratch_t98.mov",
+      "bytes": 6536762,
+      "sha256": "bea424a31f61e8a84d15b368291de8b1e6876ae3f456748c8d2558aff43c486b",
+      "retained_at": "/Users/karlwatson/Developer/ScratchLab-CXL-Ready-20260913/evidence/mkv-source-inspection-20260913/claude-mkv-batch-audit/previews/orbits_85bpm/orbits_85bpm_boundary_tail_73to83s_Scratch_t98.mov"
+    },
+    {
+      "path": "previews/originalflare_85bpm/originalflare_85bpm_boundary_head_87to104s_Scratch_t96.mov",
+      "bytes": 14725195,
+      "sha256": "03dcaabad234cf43da8589e9ea063b74b18d57b9088cd18f85c91b3933652ce5",
+      "retained_at": "/Users/karlwatson/Developer/ScratchLab-CXL-Ready-20260913/evidence/mkv-source-inspection-20260913/claude-mkv-batch-audit/previews/originalflare_85bpm/originalflare_85bpm_boundary_head_87to104s_Scratch_t96.mov"
+    },
+    {
+      "path": "previews/originalflare_85bpm/originalflare_85bpm_boundary_tail_73to83s_Scratch_t96.mov",
+      "bytes": 8919004,
+      "sha256": "a59a8b8976148d8411e5d1c5a3ca2034a55e5cb8abc0105731055e61bbe058b9",
+      "retained_at": "/Users/karlwatson/Developer/ScratchLab-CXL-Ready-20260913/evidence/mkv-source-inspection-20260913/claude-mkv-batch-audit/previews/originalflare_85bpm/originalflare_85bpm_boundary_tail_73to83s_Scratch_t96.mov"
+    },
+    {
+      "path": "previews/reversecutting_79bpm/reversecutting_79bpm_boundary_head_12to29s_Scratch_t10.mov",
+      "bytes": 14912269,
+      "sha256": "ab5751b017ed30f91b21233bf2d29705cfd9cc30546a5742e3ede1b38075ba74",
+      "retained_at": "/Users/karlwatson/Developer/ScratchLab-CXL-Ready-20260913/evidence/mkv-source-inspection-20260913/claude-mkv-batch-audit/previews/reversecutting_79bpm/reversecutting_79bpm_boundary_head_12to29s_Scratch_t10.mov"
+    },
+    {
+      "path": "previews/reversecutting_79bpm/reversecutting_79bpm_boundary_tail_62to72s_Scratch_t10.mov",
+      "bytes": 8252013,
+      "sha256": "67c72a9d2f7d7fa0ab5c1bc8f72737615262ce91391f25581e46aeda4b69301a",
+      "retained_at": "/Users/karlwatson/Developer/ScratchLab-CXL-Ready-20260913/evidence/mkv-source-inspection-20260913/claude-mkv-batch-audit/previews/reversecutting_79bpm/reversecutting_79bpm_boundary_tail_62to72s_Scratch_t10.mov"
+    },
+    {
+      "path": "previews/swipes_105bpm/swipes_105bpm_boundary_head_32to49s_Scratch_t92.mov",
+      "bytes": 14465519,
+      "sha256": "b5d0540f2c02477d7604249040857397a6e9093c828b0193f2b1a2b62ef2ca61",
+      "retained_at": "/Users/karlwatson/Developer/ScratchLab-CXL-Ready-20260913/evidence/mkv-source-inspection-20260913/claude-mkv-batch-audit/previews/swipes_105bpm/swipes_105bpm_boundary_head_32to49s_Scratch_t92.mov"
+    },
+    {
+      "path": "previews/swipes_105bpm/swipes_105bpm_boundary_tail_70to80s_Scratch_t92.mov",
+      "bytes": 8413896,
+      "sha256": "0c69ccb57660531cb6d6554e0d072bc2c0da8f5b3e5e07691fe9930d9888f001",
+      "retained_at": "/Users/karlwatson/Developer/ScratchLab-CXL-Ready-20260913/evidence/mkv-source-inspection-20260913/claude-mkv-batch-audit/previews/swipes_105bpm/swipes_105bpm_boundary_tail_70to80s_Scratch_t92.mov"
+    },
+    {
+      "path": "previews/tears_98bpm/tears_98bpm_INSIDE_chapter2_53.4to60.4s_Scratch_t26.mov",
+      "bytes": 6017028,
+      "sha256": "ac67f77a9baaabac7c8554dbe028c547a2ff6a0e6fb41dc57a9dbcb68c087fa9",
+      "retained_at": "/Users/karlwatson/Developer/ScratchLab-CXL-Ready-20260913/evidence/mkv-source-inspection-20260913/claude-mkv-batch-audit/previews/tears_98bpm/tears_98bpm_INSIDE_chapter2_53.4to60.4s_Scratch_t26.mov"
+    },
+    {
+      "path": "previews/tears_98bpm/tears_98bpm_SECONDPASS_92.6to99.6s_Scratch_t26.mov",
+      "bytes": 5985670,
+      "sha256": "2ed3fff38ff5d6122f8b1650919306af4f88cf9ac62a635dbbf0b0d58a2f532d",
+      "retained_at": "/Users/karlwatson/Developer/ScratchLab-CXL-Ready-20260913/evidence/mkv-source-inspection-20260913/claude-mkv-batch-audit/previews/tears_98bpm/tears_98bpm_SECONDPASS_92.6to99.6s_Scratch_t26.mov"
+    },
+    {
+      "path": "previews/tears_98bpm/tears_98bpm_boundary_head_31to48s_Scratch_t26.mov",
+      "bytes": 15212425,
+      "sha256": "d576fe237025b3c7cf277030620a6221a2c147e7d75a6b6d8b377dbb17a49ec5",
+      "retained_at": "/Users/karlwatson/Developer/ScratchLab-CXL-Ready-20260913/evidence/mkv-source-inspection-20260913/claude-mkv-batch-audit/previews/tears_98bpm/tears_98bpm_boundary_head_31to48s_Scratch_t26.mov"
+    },
+    {
+      "path": "previews/tears_98bpm/tears_98bpm_boundary_tail_73to83s_Scratch_t26.mov",
+      "bytes": 8513246,
+      "sha256": "fc7f6d0d83b848e2b481e6bd29739e7137c8bae7c69edbe6b0c7a66291061eeb",
+      "retained_at": "/Users/karlwatson/Developer/ScratchLab-CXL-Ready-20260913/evidence/mkv-source-inspection-20260913/claude-mkv-batch-audit/previews/tears_98bpm/tears_98bpm_boundary_tail_73to83s_Scratch_t26.mov"
+    },
+    {
+      "path": "previews/tips_105bpm/tips_105bpm_boundary_head_16to33s_Scratch_t30.mov",
+      "bytes": 13978786,
+      "sha256": "c145dff60a7bbce56cf319f1bd75b5e9e3b665b2d9e748feacbf99638447238f",
+      "retained_at": "/Users/karlwatson/Developer/ScratchLab-CXL-Ready-20260913/evidence/mkv-source-inspection-20260913/claude-mkv-batch-audit/previews/tips_105bpm/tips_105bpm_boundary_head_16to33s_Scratch_t30.mov"
+    },
+    {
+      "path": "previews/tips_105bpm/tips_105bpm_boundary_tail_54to64s_Scratch_t30.mov",
+      "bytes": 8185237,
+      "sha256": "57edc4beb47a74d12a18f4f8a821b4c6d8a8e88bb60c2118f6a86aa6c40c361b",
+      "retained_at": "/Users/karlwatson/Developer/ScratchLab-CXL-Ready-20260913/evidence/mkv-source-inspection-20260913/claude-mkv-batch-audit/previews/tips_105bpm/tips_105bpm_boundary_tail_54to64s_Scratch_t30.mov"
+    },
+    {
+      "path": "previews/transformer_85bpm/transformer_85bpm_boundary_head_39to56s_Scratch_t38.mov",
+      "bytes": 14862332,
+      "sha256": "718685528197bd94655027764eacc354a18e15fc00e1f370b923099bfae3bead",
+      "retained_at": "/Users/karlwatson/Developer/ScratchLab-CXL-Ready-20260913/evidence/mkv-source-inspection-20260913/claude-mkv-batch-audit/previews/transformer_85bpm/transformer_85bpm_boundary_head_39to56s_Scratch_t38.mov"
+    },
+    {
+      "path": "previews/transformer_85bpm/transformer_85bpm_boundary_tail_73to83s_Scratch_t38.mov",
+      "bytes": 8371429,
+      "sha256": "2fc91d8f48fe672f519b99437e70fafb0c8f6c6432c951f797bcf464cca12d65",
+      "retained_at": "/Users/karlwatson/Developer/ScratchLab-CXL-Ready-20260913/evidence/mkv-source-inspection-20260913/claude-mkv-batch-audit/previews/transformer_85bpm/transformer_85bpm_boundary_tail_73to83s_Scratch_t38.mov"
+    },
+    {
+      "path": "previews/waves_105bpm/waves_105bpm_boundary_head_11to28s_Scratch_t88.mov",
+      "bytes": 14331989,
+      "sha256": "f1a83817fda8a04e73d9317638e240b97f5504114fa488c42f16728f691272be",
+      "retained_at": "/Users/karlwatson/Developer/ScratchLab-CXL-Ready-20260913/evidence/mkv-source-inspection-20260913/claude-mkv-batch-audit/previews/waves_105bpm/waves_105bpm_boundary_head_11to28s_Scratch_t88.mov"
+    },
+    {
+      "path": "previews/waves_105bpm/waves_105bpm_boundary_tail_73to83s_Scratch_t88.mov",
+      "bytes": 8314082,
+      "sha256": "a3bfd43e95f5bec41d9d2ca9696a62f0862ddc344dcd83b4681e614c0d8abfbd",
+      "retained_at": "/Users/karlwatson/Developer/ScratchLab-CXL-Ready-20260913/evidence/mkv-source-inspection-20260913/claude-mkv-batch-audit/previews/waves_105bpm/waves_105bpm_boundary_tail_73to83s_Scratch_t88.mov"
+    },
+    {
+      "path": "previews/zigzags_105bpm/zigzags_105bpm_boundary_head_21to38s_Scratch_t84.mov",
+      "bytes": 14406767,
+      "sha256": "effcecc7f8d4de43c5902164598a66f20817770a117d40fecacd42bb6de6df69",
+      "retained_at": "/Users/karlwatson/Developer/ScratchLab-CXL-Ready-20260913/evidence/mkv-source-inspection-20260913/claude-mkv-batch-audit/previews/zigzags_105bpm/zigzags_105bpm_boundary_head_21to38s_Scratch_t84.mov"
+    },
+    {
+      "path": "previews/zigzags_105bpm/zigzags_105bpm_boundary_tail_59to69s_Scratch_t84.mov",
+      "bytes": 8400780,
+      "sha256": "b377a08fd4d4f197a3948960d54c7f9f6b386f0bdca901366a3dd0a3f7f0dbc5",
+      "retained_at": "/Users/karlwatson/Developer/ScratchLab-CXL-Ready-20260913/evidence/mkv-source-inspection-20260913/claude-mkv-batch-audit/previews/zigzags_105bpm/zigzags_105bpm_boundary_tail_59to69s_Scratch_t84.mov"
+    }
+  ]
+}

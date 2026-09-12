@@ -1,0 +1,14 @@
+{
+  "technique": "needledropping_105bpm",
+  "reference_title": "Scratch_t78",
+  "video_repeat_offset_frames": 823,
+  "video_repeat_offset_s": 27.460767,
+  "video_repeat_mean_similarity": 0.99934,
+  "audio_repeat_extra_lag_samples": 2,
+  "audio_repeat_extra_lag_ms": 0.0417,
+  "audio_repeat_ncc_at_best": 0.998637,
+  "audio_repeat_ncc_at_video_offset": 0.859216,
+  "window_s": 27.427,
+  "verdict": "No A/V drift: over 27.4 s the audio repeats at the video's own repeat offset to within 0.04 ms (2 samples). A drift of even one frame (33.4 ms) would have shown here.",
+  "caveat": "This compares the audio timeline with the video timeline across the title's own repeat. It constrains RELATIVE timing over the repeated span and can rule out progressive drift. It does NOT measure absolute audio/video synchronisation, and a constant absolute offset would be invisible to it. Where the repeat offset is not a whole number of audio samples, use scripts/fractional_lag_repeat.py instead - integer lag alone under-reports the match."
+}

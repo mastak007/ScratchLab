@@ -1,0 +1,23 @@
+{
+  "technique": "tears_98bpm",
+  "operator_statement": "i cant tell they look same",
+  "source": "User conversation after comparing the two review clips",
+  "outcome": "unresolved",
+  "both_versions_preserved": true,
+  "proposed_dataset_policy": {
+    "hold_from_paired_training_and_evaluation": [
+      "take02",
+      "take06"
+    ],
+    "angles": [
+      "1",
+      "2",
+      "3",
+      "4"
+    ],
+    "reason": "Unresolved picture/audio divergence; no faithful pass identified"
+  },
+  "existing_dataset_changed": false,
+  "boundary_observations": {},
+  "absolute_sync": "not_established"
+}

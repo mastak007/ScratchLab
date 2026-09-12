@@ -1,0 +1,208 @@
+{
+  "analysis_version": "fractional_lag_repeat/2",
+  "technique": "waves_105bpm",
+  "title": "Scratch_t86",
+  "chapter2": [
+    22.5225,
+    95.744
+  ],
+  "offset_frames": 1097,
+  "offset_exact_samples": 1756955.2,
+  "offset_is_whole_samples": false,
+  "half_chapter_offset_frames": 1097,
+  "params": {
+    "probe_s": 6.0,
+    "max_lag_samples": 32.0,
+    "window_s": 1.0,
+    "active_rms_threshold": 200
+  },
+  "offset_equals_half_chapter": true,
+  "audio_discovered_offset": {
+    "best_offset_s": 36.60325,
+    "best_offset_frames_nearest": 1097,
+    "ncc": 0.99973,
+    "probe_s": 6.0,
+    "top_distinct_peaks": [
+      {
+        "offset_s": 36.60325,
+        "ncc": 0.99973
+      },
+      {
+        "offset_s": 38.810563,
+        "ncc": 0.05786
+      },
+      {
+        "offset_s": 2.207313,
+        "ncc": 0.05784
+      }
+    ]
+  },
+  "audio_vs_supplied_offset_delta_ms": 0.017,
+  "active_windows": 18,
+  "ncc_integer_lag": {
+    "min": 0.9678,
+    "median": 0.98325,
+    "max": 0.9895
+  },
+  "ncc_best_fractional": {
+    "min": 0.9998,
+    "median": 0.9999,
+    "max": 1.0
+  },
+  "extra_lag_samples": {
+    "min": -1.12,
+    "median": -1.12,
+    "max": -1.12,
+    "spread": 0.0
+  },
+  "any_lag_hit_search_bound": false,
+  "windows_below_0.90": [],
+  "n_windows_below_0.90": 0,
+  "caveat": "Relative timing within one audio timeline. Not absolute audio/video sync, and no statement about speech.",
+  "windows": [
+    {
+      "t_s": 22.523,
+      "ncc_integer_lag": 0.9849,
+      "ncc_best_fractional": 1.0,
+      "extra_lag_samples": -1.12,
+      "lag_hit_search_bound": false,
+      "rms": 1571.0
+    },
+    {
+      "t_s": 23.523,
+      "ncc_integer_lag": 0.9831,
+      "ncc_best_fractional": 0.9999,
+      "extra_lag_samples": -1.12,
+      "lag_hit_search_bound": false,
+      "rms": 1275.0
+    },
+    {
+      "t_s": 24.523,
+      "ncc_integer_lag": 0.9742,
+      "ncc_best_fractional": 0.9999,
+      "extra_lag_samples": -1.12,
+      "lag_hit_search_bound": false,
+      "rms": 1447.0
+    },
+    {
+      "t_s": 25.523,
+      "ncc_integer_lag": 0.9826,
+      "ncc_best_fractional": 0.9998,
+      "extra_lag_samples": -1.12,
+      "lag_hit_search_bound": false,
+      "rms": 792.0
+    },
+    {
+      "t_s": 31.523,
+      "ncc_integer_lag": 0.9895,
+      "ncc_best_fractional": 0.9999,
+      "extra_lag_samples": -1.12,
+      "lag_hit_search_bound": false,
+      "rms": 1291.0
+    },
+    {
+      "t_s": 32.523,
+      "ncc_integer_lag": 0.9864,
+      "ncc_best_fractional": 0.9999,
+      "extra_lag_samples": -1.12,
+      "lag_hit_search_bound": false,
+      "rms": 1132.0
+    },
+    {
+      "t_s": 33.523,
+      "ncc_integer_lag": 0.9868,
+      "ncc_best_fractional": 1.0,
+      "extra_lag_samples": -1.12,
+      "lag_hit_search_bound": false,
+      "rms": 1604.0
+    },
+    {
+      "t_s": 34.523,
+      "ncc_integer_lag": 0.9834,
+      "ncc_best_fractional": 0.9999,
+      "extra_lag_samples": -1.12,
+      "lag_hit_search_bound": false,
+      "rms": 977.0
+    },
+    {
+      "t_s": 40.523,
+      "ncc_integer_lag": 0.9865,
+      "ncc_best_fractional": 0.9999,
+      "extra_lag_samples": -1.12,
+      "lag_hit_search_bound": false,
+      "rms": 1351.0
+    },
+    {
+      "t_s": 41.523,
+      "ncc_integer_lag": 0.9841,
+      "ncc_best_fractional": 0.9999,
+      "extra_lag_samples": -1.12,
+      "lag_hit_search_bound": false,
+      "rms": 945.0
+    },
+    {
+      "t_s": 42.523,
+      "ncc_integer_lag": 0.9803,
+      "ncc_best_fractional": 1.0,
+      "extra_lag_samples": -1.12,
+      "lag_hit_search_bound": false,
+      "rms": 1587.0
+    },
+    {
+      "t_s": 43.523,
+      "ncc_integer_lag": 0.9877,
+      "ncc_best_fractional": 0.9999,
+      "extra_lag_samples": -1.12,
+      "lag_hit_search_bound": false,
+      "rms": 1333.0
+    },
+    {
+      "t_s": 44.523,
+      "ncc_integer_lag": 0.9678,
+      "ncc_best_fractional": 0.9999,
+      "extra_lag_samples": -1.12,
+      "lag_hit_search_bound": false,
+      "rms": 1600.0
+    },
+    {
+      "t_s": 49.523,
+      "ncc_integer_lag": 0.9861,
+      "ncc_best_fractional": 0.9999,
+      "extra_lag_samples": -1.12,
+      "lag_hit_search_bound": false,
+      "rms": 771.0
+    },
+    {
+      "t_s": 50.523,
+      "ncc_integer_lag": 0.9808,
+      "ncc_best_fractional": 1.0,
+      "extra_lag_samples": -1.12,
+      "lag_hit_search_bound": false,
+      "rms": 1655.0
+    },
+    {
+      "t_s": 51.523,
+      "ncc_integer_lag": 0.9746,
+      "ncc_best_fractional": 0.9999,
+      "extra_lag_samples": -1.12,
+      "lag_hit_search_bound": false,
+      "rms": 1344.0
+    },
+    {
+      "t_s": 52.523,
+      "ncc_integer_lag": 0.9793,
+      "ncc_best_fractional": 0.9999,
+      "extra_lag_samples": -1.12,
+      "lag_hit_search_bound": false,
+      "rms": 1627.0
+    },
+    {
+      "t_s": 53.523,
+      "ncc_integer_lag": 0.9797,
+      "ncc_best_fractional": 0.9999,
+      "extra_lag_samples": -1.12,
+      "lag_hit_search_bound": false,
+      "rms": 1453.0
+    }
+  ]
+}

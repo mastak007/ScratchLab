@@ -1,0 +1,225 @@
+{
+  "analysis_version": "repeat_profile/2",
+  "technique": "needledropping_105bpm",
+  "reference_title": "Scratch_t78",
+  "chapter2": [
+    54.5545,
+    109.442667
+  ],
+  "offset_frames": 823,
+  "offset_s": 27.460767,
+  "params": {
+    "window_s": 1.0,
+    "max_lag_samples": 32.0,
+    "video_match_threshold": 0.995,
+    "audio_match_threshold": 0.9,
+    "activity_rms_threshold": 200
+  },
+  "controls": {
+    "adjacent_frame_similarity": 0.99209,
+    "random_pair_similarity": 0.91987
+  },
+  "windows": 27,
+  "video_windows_matching": 27,
+  "audio_windows_evaluated": 15,
+  "audio_windows_matching": 15,
+  "divergence_windows_video_ok_audio_not": [],
+  "divergence_spans_first_pass_s": [],
+  "divergence_spans_second_pass_s": [],
+  "divergence_detected": false,
+  "interpretation": "Windows where the picture still duplicates but the isolated scratch does not. In those the two passes carry the same image and different sound, so at least one pass has picture and audio that do not correspond. This does NOT say which pass is faithful, and it is not a statement about absolute A/V sync.",
+  "profile": [
+    {
+      "t_s": 54.554,
+      "video_sim": 0.9995,
+      "iso_rms": 860.0,
+      "iso_ncc_integer_lag": 0.6308,
+      "iso_ncc_best_fractional": 0.9998,
+      "iso_best_lag_samples": -4.0
+    },
+    {
+      "t_s": 55.554,
+      "video_sim": 0.99949,
+      "iso_rms": 1252.0,
+      "iso_ncc_integer_lag": 0.6447,
+      "iso_ncc_best_fractional": 0.9999,
+      "iso_best_lag_samples": -4.0
+    },
+    {
+      "t_s": 56.554,
+      "video_sim": 0.99948,
+      "iso_rms": 1049.0,
+      "iso_ncc_integer_lag": 0.6627,
+      "iso_ncc_best_fractional": 0.9999,
+      "iso_best_lag_samples": -4.0
+    },
+    {
+      "t_s": 57.554,
+      "video_sim": 0.99948,
+      "iso_rms": 1054.0,
+      "iso_ncc_integer_lag": 0.6473,
+      "iso_ncc_best_fractional": 0.9999,
+      "iso_best_lag_samples": -4.0
+    },
+    {
+      "t_s": 58.554,
+      "video_sim": 0.99947,
+      "iso_rms": 1548.0,
+      "iso_ncc_integer_lag": 0.8115,
+      "iso_ncc_best_fractional": 0.9999,
+      "iso_best_lag_samples": -4.0
+    },
+    {
+      "t_s": 59.554,
+      "video_sim": 0.99943,
+      "iso_rms": 69.0,
+      "iso_skipped": "pause: below the 200 RMS activity threshold"
+    },
+    {
+      "t_s": 60.554,
+      "video_sim": 0.99944,
+      "iso_rms": 73.0,
+      "iso_skipped": "pause: below the 200 RMS activity threshold"
+    },
+    {
+      "t_s": 61.554,
+      "video_sim": 0.99949,
+      "iso_rms": 73.0,
+      "iso_skipped": "pause: below the 200 RMS activity threshold"
+    },
+    {
+      "t_s": 62.554,
+      "video_sim": 0.99953,
+      "iso_rms": 69.0,
+      "iso_skipped": "pause: below the 200 RMS activity threshold"
+    },
+    {
+      "t_s": 63.554,
+      "video_sim": 0.99952,
+      "iso_rms": 1422.0,
+      "iso_ncc_integer_lag": 0.8077,
+      "iso_ncc_best_fractional": 0.9999,
+      "iso_best_lag_samples": -4.0
+    },
+    {
+      "t_s": 64.554,
+      "video_sim": 0.99954,
+      "iso_rms": 1516.0,
+      "iso_ncc_integer_lag": 0.8255,
+      "iso_ncc_best_fractional": 1.0,
+      "iso_best_lag_samples": -4.0
+    },
+    {
+      "t_s": 65.554,
+      "video_sim": 0.99954,
+      "iso_rms": 857.0,
+      "iso_ncc_integer_lag": 0.8385,
+      "iso_ncc_best_fractional": 0.9999,
+      "iso_best_lag_samples": -4.0
+    },
+    {
+      "t_s": 66.554,
+      "video_sim": 0.99956,
+      "iso_rms": 718.0,
+      "iso_ncc_integer_lag": 0.9362,
+      "iso_ncc_best_fractional": 0.9999,
+      "iso_best_lag_samples": -4.0
+    },
+    {
+      "t_s": 67.554,
+      "video_sim": 0.99953,
+      "iso_rms": 1571.0,
+      "iso_ncc_integer_lag": 0.8297,
+      "iso_ncc_best_fractional": 1.0,
+      "iso_best_lag_samples": -4.0
+    },
+    {
+      "t_s": 68.554,
+      "video_sim": 0.99942,
+      "iso_rms": 65.0,
+      "iso_skipped": "pause: below the 200 RMS activity threshold"
+    },
+    {
+      "t_s": 69.554,
+      "video_sim": 0.99943,
+      "iso_rms": 65.0,
+      "iso_skipped": "pause: below the 200 RMS activity threshold"
+    },
+    {
+      "t_s": 70.554,
+      "video_sim": 0.99947,
+      "iso_rms": 68.0,
+      "iso_skipped": "pause: below the 200 RMS activity threshold"
+    },
+    {
+      "t_s": 71.554,
+      "video_sim": 0.99951,
+      "iso_rms": 73.0,
+      "iso_skipped": "pause: below the 200 RMS activity threshold"
+    },
+    {
+      "t_s": 72.554,
+      "video_sim": 0.99954,
+      "iso_rms": 641.0,
+      "iso_ncc_integer_lag": 0.5969,
+      "iso_ncc_best_fractional": 0.9998,
+      "iso_best_lag_samples": -4.0
+    },
+    {
+      "t_s": 73.554,
+      "video_sim": 0.99949,
+      "iso_rms": 1839.0,
+      "iso_ncc_integer_lag": 0.6621,
+      "iso_ncc_best_fractional": 0.9999,
+      "iso_best_lag_samples": -4.0
+    },
+    {
+      "t_s": 74.554,
+      "video_sim": 0.99949,
+      "iso_rms": 1761.0,
+      "iso_ncc_integer_lag": 0.7202,
+      "iso_ncc_best_fractional": 0.9999,
+      "iso_best_lag_samples": -4.0
+    },
+    {
+      "t_s": 75.554,
+      "video_sim": 0.99946,
+      "iso_rms": 1682.0,
+      "iso_ncc_integer_lag": 0.725,
+      "iso_ncc_best_fractional": 0.9999,
+      "iso_best_lag_samples": -4.0
+    },
+    {
+      "t_s": 76.554,
+      "video_sim": 0.99949,
+      "iso_rms": 1914.0,
+      "iso_ncc_integer_lag": 0.7692,
+      "iso_ncc_best_fractional": 1.0,
+      "iso_best_lag_samples": -4.0
+    },
+    {
+      "t_s": 77.554,
+      "video_sim": 0.99942,
+      "iso_rms": 73.0,
+      "iso_skipped": "pause: below the 200 RMS activity threshold"
+    },
+    {
+      "t_s": 78.554,
+      "video_sim": 0.99943,
+      "iso_rms": 71.0,
+      "iso_skipped": "pause: below the 200 RMS activity threshold"
+    },
+    {
+      "t_s": 79.554,
+      "video_sim": 0.99946,
+      "iso_rms": 67.0,
+      "iso_skipped": "pause: below the 200 RMS activity threshold"
+    },
+    {
+      "t_s": 80.554,
+      "video_sim": 0.9995,
+      "iso_rms": 66.0,
+      "iso_skipped": "pause: below the 200 RMS activity threshold"
+    }
+  ]
+}

@@ -1,0 +1,26 @@
+{
+  "copied_source_hashes_verified": 167,
+  "copy_mismatches": [],
+  "json_files_parsed": 144,
+  "python_files_syntax_checked": 17,
+  "repeat_states": {
+    "verified_duplicate_half": 22,
+    "verified_partial_repeat": 1
+  },
+  "core_evidence_files_present": 69,
+  "script_fingerprints_match": true,
+  "media_payloads_in_snapshot": 0,
+  "excluded_media_files": 48,
+  "audit_rerun": false,
+  "app_build": "NOT RUN - archival evidence and documentation only",
+  "classification_not_media_approval": true,
+  "archival_whitespace_findings": {
+    "count": 2,
+    "file": "scripts/stage_a2_angle_binding.py",
+    "lines": [
+      58,
+      87
+    ],
+    "disposition": "Preserved original trailing spaces to retain source hashes; no production code affected."
+  }
+}
