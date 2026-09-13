@@ -1,4 +1,18 @@
-# Current — CXL delivery preparation, Apple setup pending (13 September 2026)
+# Current — continue TestFlight upload after Karl signs in (13 September 2026)
+
+1. Read `docs/cxl_delivery.md`.
+2. Read `/Users/karlwatson/Developer/ScratchLab-CXL-Handoff-20260913/NEXT_STEPS_AFTER_SIGN_IN.md`.
+3. First confirm Karl has signed in to Xcode 26.6 and App Store Connect on Apple's screens. Never request credentials, codes, private keys or tokens in chat.
+4. Inspect the existing ScratchLab record's builds before uploading iPhone build 22.
+5. Create the separate ScratchLab CXL macOS record only if none exists.
+6. Export and upload `archives/ScratchLab-CXL-Mac.xcarchive` with `mac-testflight/evidence/ExportOptions-mac-upload.plist`, using automatic signing and `DEVELOPER_DIR` set to stable Xcode.
+7. Verify processing, including that the Watch app is present in the iPhone build.
+8. Enter the text from `TESTFLIGHT_BETA_INFO_APPROVED.md` and submit external Beta App Review.
+9. Do not invite testers or publish.
+
+--- Previous state (historical) ---
+
+# CXL delivery preparation, Apple setup pending (13 September 2026)
 
 User wants the CXL Mac app plus iPhone/Watch distribution and a one-page guide. Prepared root /Users/karlwatson/Developer/ScratchLab-CXL-Handoff-20260913. Read docs/cxl_delivery.md and that root's RESULT.md first. One-page PDF is package/ScratchLab CXL Quick Start.pdf. Mac internal pilot ZIP is Development signed only; no Developer ID certificate exists in the current keychain, no notarization. Installed blank Mac app untouched.
 

@@ -1,4 +1,26 @@
-# Current — CXL delivery preparation, Apple setup pending (13 September 2026)
+# Current — TestFlight route prepared, blocked on Apple sign-in (13 September 2026)
+
+Karl switched the Mac to TestFlight; the Developer ID plan is superseded. He is away (Remote Control on iPhone) and has not signed in to Apple. Nothing has been uploaded, no app record created, no beta review submitted and no testers invited.
+
+Authentication checked without exposing secrets:
+- Xcode has no account.
+- Transporter has no account.
+- The automation Chrome window shows ASC login `authResult=FAILED`.
+- API key `AuthKey_M6C29AZTW5.p8` exists but has no recorded issuer ID.
+
+The local ASC export of the Mac archive failed with `No Accounts` / `No profiles for com.machelpnz.scratchlab.cxl-authoring`.
+
+New this turn:
+- Mac archive at `/Users/karlwatson/Developer/ScratchLab-CXL-Handoff-20260913/archives/ScratchLab-CXL-Mac.xcarchive`: CXLRelease 1.0.1(21), stable Xcode 26.6/macOS 26.5 SDK, universal, App Sandbox with existing entitlements unchanged. Apple Development signed, strict verify OK, 169/169 assets match.
+- Guide Install paragraph now covers TestFlight on Mac and iPhone. The one-page A4 PDF is in `package/`; the old PDF is kept as "(superseded download route)".
+- Karl approved the beta text; saved in `TESTFLIGHT_BETA_INFO_APPROVED.md`.
+- For beta review contact, feedback email and privacy URL, reuse existing ASC values. Ask if any are empty.
+
+Keychain has Apple Distribution and 3rd Party Mac Developer Installer identities. The installed pilot was built with Xcode 27 beta, which ASC rejects, so use the new stable archive. Read `NEXT_STEPS_AFTER_SIGN_IN.md` in that root for the exact continuation. The iPhone IPA (build 22) is unchanged and still needs the ASC build-number check. Mac cache directory was removed; archive, logs and evidence retained.
+
+--- Previous state (historical) ---
+
+# CXL delivery preparation, Apple setup pending (13 September 2026)
 
 User wants the CXL Mac app plus iPhone/Watch distribution and a one-page guide. Prepared root /Users/karlwatson/Developer/ScratchLab-CXL-Handoff-20260913. Read docs/cxl_delivery.md and that root's RESULT.md first. One-page PDF is package/ScratchLab CXL Quick Start.pdf. Mac internal pilot ZIP is Development signed only; no Developer ID certificate exists in the current keychain, no notarization. Installed blank Mac app untouched.
 

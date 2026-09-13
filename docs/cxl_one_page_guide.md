@@ -10,7 +10,7 @@ Devices Mac with macOS 15 or later; the ScratchLab phone app needs iOS 26.5 or l
 
 Accounts and connections For an iPhone camera, sign the Mac and iPhone into your own same Apple Account with two-factor authentication. Keep Wi-Fi and Bluetooth on, devices nearby and on the same local network. You do not need Karl’s account. Use power and secure camera mounts; allow Camera, Microphone and Local Network when requested.
 
-Install Install the supplied Mac app as ScratchLab CXL in Applications. On iPhone, accept Karl’s TestFlight invitation and install ScratchLab. In that app’s TestFlight details, install the compatible Watch app, then open ScratchLab on the Watch. Keep the beta updated; TestFlight builds expire after 90 days.
+Install Both apps come through Apple’s TestFlight app. On the Mac, install TestFlight from the Mac App Store, accept Karl’s ScratchLab CXL invitation and install it. On iPhone, accept the ScratchLab invitation and install it; in its TestFlight details install the Watch app, then open ScratchLab on the Watch. Keep both betas updated; builds expire after 90 days.
 
 Set up the picture and sound
 

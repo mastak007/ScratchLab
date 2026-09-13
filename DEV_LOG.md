@@ -5303,3 +5303,30 @@ User-selected task: prepare sending the CXL Mac app with matching iPhone/Watch a
 Local root ~/Developer/ScratchLab-CXL-Handoff-20260913. Universal Mac pilot staged via mandated helper, same team/bundle/permissions/entitlements and matching code-directory hashes on both architectures; Apple Development signature only, no Developer ID identity available. Mac ZIP CRC and exact included PDF pass. Archive for iPhone plus embedded Watch succeeds with stable Xcode26.6 and command-local IDEBuildLocationStyle=Unique. First attempt compiled but archive assembly failed because global Custom build paths and SYMROOT/OBJROOT overrides disagreed; global preferences unchanged. First local export rejected manually selected Xcode-managed profiles; automatic export signing correctly uses existing Apple Distribution C9B754... for both apps. Export succeeds, code signatures verify, get-task-allow=false, no registered-device restriction, matching version1.0.1/build22, iOS26.5/watchOS10 minimums. All169 library hashes verified in Mac/archive/exportedIPA. Full app build/tests not repeated for packaging/docs; successful device Release archive is this turn's build check. Previous hardware acceptance limitations remain.
 
 No Apple-authenticated browser session: upload, existing-build-number check, external beta review/invitation and Mac Developer ID signing/notarization remain pending. Candidate22 has not been checked against ASC. Requested CXL device/OS details and tester email are still needed. No credentials requested in chat, no invitation/upload/publication/install/capture or privacy reset. Installed Mac and blank library unchanged. Kept final archive, IPA, Mac candidate/ZIP, PDF/DOCX and logs/verification receipts; removed only this turn's temporary failed archive, extraction and build caches after successful verification. See RESULT.md and evidence under the local root. No Claude audit/rebuild repeated.
+
+## CXL TestFlight route prepared; blocked on Apple sign-in — 13 September 2026
+
+User-selected task: upload the CXL Mac app and iPhone/Watch app to App Store Connect/TestFlight and submit external beta review, switching the Mac from Developer ID to TestFlight.
+
+Authentication check (no secrets exposed):
+- Xcode 26.6 has no account.
+- Transporter has no account.
+- The automation Chrome window has no ASC session.
+- The local API key has no recorded issuer ID.
+
+Karl is away and has not signed in. No upload, app record, beta review submission or invitation occurred.
+
+Mac CXLRelease archived with stable Xcode 26.6: universal, 1.0.1(21), App Sandbox and existing entitlements unchanged, strict verify passes, 169/169 assets hash-verified. The installed pilot was built with Xcode 27 beta and is not uploadable. The local app-store-connect export failed with "No Accounts / No profiles for com.machelpnz.scratchlab.cxl-authoring", confirming sign-in is required.
+
+Files changed:
+- docs/cxl_one_page_guide.md: Install now uses TestFlight on Mac and iPhone; the rendered PDF is still one A4 page and was visually checked.
+- docs/cxl_delivery.md
+- DEV_LOG.md, AI_HANDOFF.md, AI_HANDOFF/next_prompt.md
+
+External files:
+- TESTFLIGHT_BETA_INFO_APPROVED.md (Karl-approved text)
+- NEXT_STEPS_AFTER_SIGN_IN.md
+- the Mac upload ExportOptions plist
+- the updated package PDF (old PDF kept)
+
+No app source changed; no XCTest gate needed for docs/packaging. Temporary Mac build caches were removed; archive and logs retained. Installed app and blank capture library unchanged.
