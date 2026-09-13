@@ -44,6 +44,9 @@
          <TestPlanReference
             reference = "container:ScratchLab 2.xctestplan">
          </TestPlanReference>
+         <TestPlanReference
+            reference = "container:ScratchLabCloudCapture.xctestplan">
+         </TestPlanReference>
       </TestPlans>
    </TestAction>
    <LaunchAction

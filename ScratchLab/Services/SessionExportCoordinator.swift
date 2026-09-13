@@ -4361,8 +4361,8 @@ struct SessionArchiveBuilder: Sendable {
         frameCount: AVAudioFrameCount
     ) throws -> AVAudioPCMBuffer {
         let expectedOffset = Double(binding.countInFrameCount) / Double(binding.sampleRate)
-        guard let offset = recordingStartOffsetSeconds, offset.isFinite, offset >= 0,
-              abs(offset - expectedOffset) <= 1.0 / Double(binding.sampleRate),
+        guard let offset = recordingStartOffsetSeconds,
+              ReferenceRecordingOriginPolicy.accepts(offset: offset, countIn: expectedOffset, sampleRate: binding.sampleRate),
               frameCount > 0, outputFormat.sampleRate.isFinite, outputFormat.sampleRate > 0 else {
             throw ReferencePackageIOError.packageRejected(["The bound beat has no valid portable recording origin."])
         }
@@ -4387,6 +4387,9 @@ struct SessionArchiveBuilder: Sendable {
         }
         source.frameLength = source.frameCapacity
         let startFrame = Int(((offset - expectedOffset) * loop.format.sampleRate).rounded())
+        guard startFrame >= -Int(playback.countInBuffer.frameLength) else {
+            throw ReferencePackageIOError.packageRejected(["The measured media origin precedes the available count-in audio."])
+        }
         let loopFrames = Int(loop.frameLength)
         for channel in 0..<Int(loop.format.channelCount) {
             for frame in 0..<Int(source.frameLength) {

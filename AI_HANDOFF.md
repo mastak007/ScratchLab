@@ -1,3 +1,47 @@
+# Current Cloud setup — corrected source integrated, upload pending
+
+Integrated the seven verified source/test files from timing correction235abb8 (475 source/settings files match that worktree). Original audit regressions failed on d86a369 and pass on235abb8. Local verification: Python87;440unique/880executions=876pass4existing skips0fail; iOS, fullMac universal, CXL universal, Watch builds pass. The CXL disk-full packaging retry is documented in the timing worktree; no source changed. Unsafe staged d86a369 app was removed there; installed app/captures unchanged. F5–F7 and approval/export dependency audit remain open before delivery.
+
+Three manual verification workflows are configured under ScratchLab Cloud product4ABF7852-6C7E-45C8-B7AD-FAD2040DBEF4: Capture regressions, CXL Mac build, iPhone and Watch build. Stable Xcode26.6/macOS26.6.2. All remain inactive until the private upload completes. Source and private reference repository access are granted (confirmed in ASC). CXL remains its own bundle and separate ASC app6811514515; no TestFlight distribution configured.
+
+Private upload: ../evidence/upload_reference_assets.py writes resumable asset-upload-checkpoints.json, 30 checkpoints then final pin10f8357ae79fa6d83ee350f4d60e819d5b9c814d. Do not repeat the completed media audit or alter media. The source repository is public; the media repository is private. Existing generated caches/outputs are separate from captures.
+
+One-time completion runner prepared at ../evidence/complete_cloud_setup.py. After this branch is clean and committed/pushed, run it with --source-commit FULL_SHA (first use --check-only). It waits for the exact uploaded private pin, checks repository privacy and the source SHA, enables only the three manual workflows, starts one run at a time, saves run/action/test-result JSON and refuses zero-test or missing audit-test success. It never uploads TestFlight archives or installs/records. State is cloud-verification-state.json, result CLOUD_VERIFICATION_RESULT.md. A failed/uncertain POST is never blindly retried. At this checkpoint the runner has not been launched and no remote build has run.
+
+--- Historical setup notes below ---
+
+# Resumed Cloud setup and audit correction — 13 September 2026
+
+ScratchLab Cloud product now exists: 4ABF7852-6C7E-45C8-B7AD-FAD2040DBEF4. Three manual workflows are configured under that source product and remain inactive: iPhone and Watch build 8AB7AEE3-668E-47A7-8DFB-3C2A973CE90D; CXL Mac build 429b3ceb-089d-4e31-873c-b10cb1e896b0; Capture regressions f30de045-bce3-4623-baeb-333218c64cc7. Xcode26.6/macOS26.6.2; no automatic starts, postactions, invites or remote builds. CXL remains a separate application bundle and ASC record6811514515; sharing a verification-only Cloud product does not merge the apps. A separate CXL archive/TestFlight Cloud product remains future delivery setup.
+
+The initial large media push failed after pause/resume. Resumable upload now runs ../evidence/upload_reference_assets.py with state asset-upload-checkpoints.json and log asset-upload.log, 30 private checkpoints then original pin10f8357. Final pin is not yet remotely verified. Keep source/media private boundaries: source repo public, assets repo private; no tokens committed.
+
+IMPORTANT: the d86a369 timing candidate failed Claude's independent audit. Do not install or upload it. Correction in ~/Developer/ScratchLab-CXL-Timing-Fix-20260913/source addresses measured timing, fixed planned duration, bounded preroll/export and Watch sidecar synchronization. Expanded local gate currently running. After it passes, commit the correction, integrate its source/tests here while preserving these CI edits, then run the Cloud plan. The Cloud plan now includes15classes, including six new audit/origin/merge tests and four exact beat-export tests; these require the forthcoming corrected source commit. No cloud or hardware success claimed.
+
+--- Older setup notes below are historical ---
+
+# RESUMED at user request — 13 September 2026
+
+Upload process group58651 resumed after identity verification. Cloud setup remains in progress.
+
+# Active Xcode Cloud setup — 13 September 2026
+
+User requested Xcode Cloud setup. Dedicated source: ~/Developer/ScratchLab-Xcode-Cloud-20260913/source, branch codex/xcode-cloud-setup-20260913, base d86a369 (timing/Watch repair committed and pushed). Original delivery worktree unchanged. No remote Cloud build has passed yet; do not claim activation.
+
+Prepared ci_scripts/ci_post_clone.sh, pinned private-library lock, scripts/prepare_cloud_reference_library.py, ScratchLabCloudCapture.xctestplan and its nondefault ScratchLabDesktop scheme reference, docs/xcode_cloud.md. Post-clone local check verifies all169 assets and Python87 fixtures pass. Valid fixture passes; changed bytes and escaping paths fail. Python compilation, sh syntax and Xcode test-plan discovery pass. No new full-platform gate for CI-only files: parent d86a369 already passed the all-platform gate, first remote Cloud gate remains pending.
+
+Created PRIVATE GitHub repo mastak007/ScratchLab-ReferenceAssets; source repo mastak007/ScratchLab is PUBLIC. Only the checked reference library was copied; original media, MKVs and captures untouched. Private repo final pin10f8357ae79fa6d83ee350f4d60e819d5b9c814d is local. Four commits are being pushed sequentially by exec session31399; first roughly730MB batch still uploading slowly as of17:26NZST. Do not assume the final pin exists remotely. Local private-assets directory and evidence are siblings of source. GitHub CLI signed in; no credentials in source. Grant Apple access only to source and private-assets repos.
+
+Registered CXL bundle com.machelpnz.scratchlab.cxl-authoring via signed-in Apple Developer portal and created separate ASC Mac app6811514515 (ScratchLab CXL). API key could read admin users but POST bundleIds returned403; browser owner route succeeded. Existing full ScratchLab app6761674709 preserved. No TestFlight upload, review submission or tester invitation made here.
+
+Native stable Xcode initial CXL workflow is at Grant Access to Your Source Code. Draft name CXL Mac build, DEACTIVATED, no postactions. The wizard temporarily contains two default macOS archive actions from a UI duplicate action; remove/replace them with one Build action through the supported API after initial product creation, before enabling or running. Desired final workflows are manual CXL Mac build, iPhone+embedded Watch build, and focused Mac capture regression tests. Browser tab4 is Apple Cloud setup and starts GitHub connection. No ciProducts existed at last API check. External helper evidence/asc_client.py uses existing key without printing secrets. No key copied to Git.
+
+Git common origin was normalized from git@github-mastak007:mastak007/ScratchLab.git to https://github.com/mastak007/ScratchLab.git so Cloud recognizes GitHub. Same remote repository. gh credential helper configured. Added xcode-cloud remote with same HTTPS URL; extensions.worktreeConfig enabled. No branch reset or rewrite. GitHub source branch pushed at base, current CI edits await checkpoint.
+
+Timing-fix task remains active separately: staged same-team CXL app in ../ScratchLab-CXL-Timing-Fix-20260913/staged, not installed. User has a pending question to quit CXL safely. Preserve captures and previous app before installation. See historical repair handoff below for hashes/gate. Independent Claude audit snapshot/prompt remains separate and must not be overwritten.
+
+--- Previous handoff follows ---
+
 # Active repair — timed capture and late Watch evidence (13 September 2026)
 
 User-selected task: fix the reported Baby take stopping short and falsely reporting Watch Stop failure. Worktree: `/Users/karlwatson/Developer/ScratchLab-CXL-Timing-Fix-20260913/source`, branch `codex/cxl-timing-watch-fix-20260913`, base7b056cd. Original a4aa delivery worktree remains untouched; Claude may be handling ASC independently.

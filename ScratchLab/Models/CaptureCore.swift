@@ -12743,6 +12743,20 @@ enum CaptureCore {
             return updated
         }
 
+        /// Finalization must retain a Stop reply that arrived after its
+        /// snapshot, independently of whether the motion file arrived too.
+        func mergingLatestWatchStopDiagnostics(from onDisk: LocalRecordingSidecar) -> LocalRecordingSidecar {
+            guard onDisk.sessionID == sessionID, onDisk.takeID == takeID,
+                  let incoming = onDisk.watchStopDiagnostics,
+                  incoming.sessionID == sessionID, incoming.takeID == takeID else { return self }
+            if let current = watchStopDiagnostics {
+                guard incoming != current, let incomingDate = incoming.resolvedAt ?? incoming.requestedAt,
+                      incomingDate >= (current.resolvedAt ?? current.requestedAt ?? .distantPast),
+                      !(current.outcome != .sent && incoming.outcome == .sent) else { return self }
+            }
+            return withWatchStopDiagnostics(incoming)
+        }
+
         func withPendingWatchRequest(_ request: WatchCaptureCommandPayload) -> LocalRecordingSidecar {
             var updated = self
             updated.watchSyncState = .requested

@@ -4072,6 +4072,8 @@ final class MacCaptureEngine: NSObject, ObservableObject {
         _ diagnostics: CaptureWatchStopDiagnostics,
         for identity: TakeIdentity
     ) {
+        routineSidecarLock.lock()
+        defer { routineSidecarLock.unlock() }
         guard let sidecarURL = routineSidecarURL(for: identity),
               let data = try? Data(contentsOf: sidecarURL),
               let onDisk = try? Self.routineSidecarDecoder.decode(
@@ -4083,7 +4085,17 @@ final class MacCaptureEngine: NSObject, ObservableObject {
             return
         }
 
-        var updated = onDisk.withWatchStopDiagnostics(diagnostics)
+        // The active copy owns measured camera timing. Disk may still hold
+        // the prepared, planned origin; adopt only its late Watch association.
+        let base: CaptureCore.LocalRecordingSidecar
+        if activeRoutineRecordingSidecarURL == sidecarURL,
+           let active = activeRoutineRecordingSidecar,
+           active.sessionID == identity.sessionID, active.takeID == identity.takeID {
+            base = active.mergingLatestWatchAssociation(from: onDisk)
+        } else {
+            base = onDisk
+        }
+        var updated = base.withWatchStopDiagnostics(diagnostics)
         // A link already present means the motion artifact arrived; say so
         // rather than leaving the transfer state stuck at `pending`.
         if onDisk.linkedMotionFileName != nil, var refined = updated.watchStopDiagnostics {
@@ -4111,6 +4123,8 @@ final class MacCaptureEngine: NSObject, ObservableObject {
 
     /// Locates the on-disk sidecar for a take, preferring the active one.
     private func routineSidecarURL(for identity: TakeIdentity) -> URL? {
+        routineSidecarLock.lock()
+        defer { routineSidecarLock.unlock() }
         if let activeURL = activeRoutineRecordingSidecarURL,
            activeRoutineRecordingSidecar?.sessionID == identity.sessionID,
            activeRoutineRecordingSidecar?.takeID == identity.takeID {
@@ -4138,6 +4152,8 @@ final class MacCaptureEngine: NSObject, ObservableObject {
 
     @MainActor
     func recordWatchRelayInterruption(_ interruption: WatchRelayInterruption) {
+        routineSidecarLock.lock()
+        defer { routineSidecarLock.unlock() }
         guard let context = interruption.context else { return }
         if var sidecar = activeRoutineRecordingSidecar,
            sidecar.sessionID == context.sessionID,
@@ -5140,8 +5156,34 @@ final class MacCaptureEngine: NSObject, ObservableObject {
     private var seratoDirectCaptureProcessIdentifiers: [pid_t] = []
     private var directCaptureRoute: DirectCaptureRoute?
     var recordingSessionConfig: CaptureSessionConfig?
-    private var activeRoutineRecordingSidecar: CaptureCore.LocalRecordingSidecar?
-    private var activeRoutineRecordingSidecarURL: URL?
+    // File-output, session, Watch and finalization queues share one owner
+    // lock. Compound changes also hold it across read/merge/write; protected
+    // accessors alone would not prevent a stale read-modify-write overwrite.
+    private let routineSidecarLock = NSRecursiveLock()
+    private var activeRoutineRecordingSidecarStorage: CaptureCore.LocalRecordingSidecar?
+    private var activeRoutineRecordingSidecarURLStorage: URL?
+    private var activeRoutineRecordingSidecar: CaptureCore.LocalRecordingSidecar? {
+        get { routineSidecarLock.withLock { activeRoutineRecordingSidecarStorage } }
+        set { routineSidecarLock.withLock { activeRoutineRecordingSidecarStorage = newValue } }
+    }
+    private var activeRoutineRecordingSidecarURL: URL? {
+        get { routineSidecarLock.withLock { activeRoutineRecordingSidecarURLStorage } }
+        set { routineSidecarLock.withLock { activeRoutineRecordingSidecarURLStorage = newValue } }
+    }
+
+    private func recordRoutineMeasuredOrigin(_ hostTime: Double, mediaURL: URL) {
+        routineSidecarLock.withLock {
+            guard var sidecar = activeRoutineRecordingSidecar,
+                  sidecar.mediaFileName == mediaURL.lastPathComponent,
+                  activeRoutineRecordingSidecarURL == CaptureCore.LocalRecordingFiles.sidecarURL(forMediaURL: mediaURL),
+                  var timing = sidecar.captureTiming, let click = timing.clickStartHostTime,
+                  hostTime.isFinite, hostTime >= AVAudioTime.seconds(forHostTime: click) else { return }
+            timing.recordingStartHostTime = AVAudioTime.hostTime(forSeconds: hostTime)
+            timing.recordingStartOffsetSeconds = hostTime - AVAudioTime.seconds(forHostTime: click)
+            sidecar.captureTiming = timing
+            activeRoutineRecordingSidecar = sidecar
+        }
+    }
     private var pendingRoutineOutputAudioURL: URL?
     private var activeRoutineAudioCaptureWriter: RoutineAudioCaptureWriter?
     private var activeRoutineAudioNotationDetector: ScratchAudioNotationDetector?
@@ -6212,9 +6254,11 @@ final class MacCaptureEngine: NSObject, ObservableObject {
                     sidecarFileName: preparedRecording.sidecar.sidecarFileName,
                     mediaFileName: preparedRecording.sidecar.mediaFileName
                 )
-                try self.writeRoutineRecordingSidecar(preparedRecording.sidecar, to: preparedRecording.sidecarURL)
-                self.activeRoutineRecordingSidecar = preparedRecording.sidecar
-                self.activeRoutineRecordingSidecarURL = preparedRecording.sidecarURL
+                try self.routineSidecarLock.withLock {
+                    try self.writeRoutineRecordingSidecar(preparedRecording.sidecar, to: preparedRecording.sidecarURL)
+                    self.activeRoutineRecordingSidecar = preparedRecording.sidecar
+                    self.activeRoutineRecordingSidecarURL = preparedRecording.sidecarURL
+                }
                 // Per-take builder admission gate. Shared (non-DEBUG) so Debug
                 // and Release admit builder observations identically; only the
                 // diagnostic trace/instrumentation below is DEBUG-scoped.
@@ -8128,12 +8172,15 @@ final class MacCaptureEngine: NSObject, ObservableObject {
         // in-memory snapshot was captured but before the write below. Adopt
         // that link instead of overwriting it with the stale unlinked/timedOut
         // state this snapshot carries.
+        routineSidecarLock.lock()
+        defer { routineSidecarLock.unlock() }
         if let onDiskData = try? Data(contentsOf: sidecarURL),
            let onDiskSidecar = try? Self.routineSidecarDecoder.decode(
                CaptureCore.LocalRecordingSidecar.self,
                from: onDiskData
            ) {
             sidecar = sidecar.mergingLatestWatchAssociation(from: onDiskSidecar)
+                .mergingLatestWatchStopDiagnostics(from: onDiskSidecar)
         }
 
         sidecar = sidecar.finalized(
@@ -12326,6 +12373,21 @@ final class MacCaptureEngine: NSObject, ObservableObject {
     }
 
     #if DEBUG
+    func testOnly_prepareSidecar(_ sidecar: CaptureCore.LocalRecordingSidecar, url: URL) throws {
+        try routineSidecarLock.withLock {
+            try writeRoutineRecordingSidecar(sidecar, to: url)
+            activeRoutineRecordingSidecar = sidecar
+            activeRoutineRecordingSidecarURL = url
+        }
+    }
+    func testOnly_recordMeasuredOrigin(_ hostTime: Double, mediaURL: URL) {
+        recordRoutineMeasuredOrigin(hostTime, mediaURL: mediaURL)
+    }
+    func testOnly_persistWatchStop(_ diagnostics: CaptureWatchStopDiagnostics, identity: TakeIdentity) {
+        persistWatchStopDiagnostics(diagnostics, for: identity)
+    }
+    var testOnly_activeSidecar: CaptureCore.LocalRecordingSidecar? { activeRoutineRecordingSidecar }
+
     /// Test-only drivers for the exact private window transitions the capture
     /// lifecycle performs, so ownership interleavings can be exercised without
     /// a camera, a movie writer or a MIDI device. Each forwards to the
@@ -14237,18 +14299,14 @@ extension MacCaptureEngine {
         guard let pending = pendingRoutineMediaStart else { return }
         // A short, real camera preroll keeps beat 4 inside the media, including
         // at low frame rates. Its measured offset is persisted and exported.
-        if let planned = pending.plannedStartHostTime, hostTime < planned - 0.15 { return }
+        if let planned = pending.plannedStartHostTime,
+           hostTime < planned - ReferenceRecordingOriginPolicy.maximumPrerollSeconds { return }
         pendingRoutineMediaStart = nil
         routineMediaStartHostTimeStorage = hostTime
         let duration = Self.routineMediaDuration(maximum: routineMaximumTakeDurationSecondsStorage,
             plannedStart: pending.plannedStartHostTime, actualStart: hostTime)
         routineMaximumTakeDurationSecondsStorage = duration
-        if var timing = activeRoutineRecordingSidecar?.captureTiming,
-           let click = timing.clickStartHostTime {
-            timing.recordingStartHostTime = AVAudioTime.hostTime(forSeconds: hostTime)
-            timing.recordingStartOffsetSeconds = hostTime - AVAudioTime.seconds(forHostTime: click)
-            activeRoutineRecordingSidecar?.captureTiming = timing
-        }
+        recordRoutineMeasuredOrigin(hostTime, mediaURL: pending.mediaURL)
         beginRoutineTakeTimelines(at: hostTime, token: pending.recordingToken,
             midiTakeToken: pending.midiTakeToken)
         secondaryCamera.begin(primaryURL: pending.mediaURL, epoch: hostTime)

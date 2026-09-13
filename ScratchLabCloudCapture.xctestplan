@@ -1,0 +1,45 @@
+{
+  "configurations": [
+    {
+      "id": "D4995C97-D892-4BF8-AFBD-20B6F700CB19",
+      "name": "Cloud capture regressions",
+      "options": {}
+    }
+  ],
+  "defaultOptions": {
+    "codeCoverage": false,
+    "performanceAntipatternCheckerEnabled": true,
+    "targetForVariableExpansion": {
+      "containerPath": "container:ScratchLab.xcodeproj",
+      "identifier": "14AA15152CB136619CDCFA95",
+      "name": "ScratchLabDesktop"
+    }
+  },
+  "testTargets": [
+    {
+      "target": {
+        "containerPath": "container:ScratchLab.xcodeproj",
+        "identifier": "2010EE0010EE0010EE0010EE",
+        "name": "ScratchLabDesktopTests"
+      },
+      "selectedTests": [
+        "ScratchSamplePlaybackControllerTests",
+        "ReferenceAuthoringCaptureBridgeTests",
+        "ReferenceAuthoringSessionTests",
+        "ReferenceAuthoringViewModelTests",
+        "ReferenceAuthoringTests",
+        "ReferenceCaptureIntentTests",
+        "ReferenceTearEvidenceCodecTests",
+        "ReferenceWitnessedTimingTests",
+        "ReferencePerTakeSourceStateTests",
+        "CXLBeatOutputRoutingTests",
+        "RoutineReviewMovieMuxerTests",
+        "ReferenceAuthoringCalibrationReuseAndExportTests",
+        "SecondaryCameraTests",
+        "CXLIndependentAuditTimingTests",
+        "ReferenceExactBeatExportTests"
+      ]
+    }
+  ],
+  "version": 1
+}
