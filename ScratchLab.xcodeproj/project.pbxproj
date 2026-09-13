@@ -2087,7 +2087,6 @@
 		09C738A56A342FC5A7BBBEA3 /* Resources */ = {
 			isa = PBXResourcesBuildPhase;
 			files = (
-				1FAA36479025DA730287DCDF /* ReferenceExamples in Resources */,
 				A11CE0000000000000000002 /* ScratchLabLogo.svg in Resources */,
 				B9AF9ED5370241CF8BEFDB7C /* Resources/CoachInstructions in Resources */,
 				51C2E59D2FA1B00000E87B79 /* Resources/Coach/Coach.usdz in Resources */,
@@ -3192,7 +3191,7 @@
 				CODE_SIGN_IDENTITY = "Apple Distribution";
 				CODE_SIGN_STYLE = Manual;
 				COMBINE_HIDPI_IMAGES = YES;
-				CURRENT_PROJECT_VERSION = 22;
+				CURRENT_PROJECT_VERSION = 23;
 				DEAD_CODE_STRIPPING = YES;
 				DEVELOPMENT_TEAM = 2DDKGL33BU;
 				ENABLE_HARDENED_RUNTIME = YES;

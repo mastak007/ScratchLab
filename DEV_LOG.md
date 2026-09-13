@@ -5403,3 +5403,9 @@ ASC preparation: current CXL app has no builds; iOS has valid23. Created only th
 - Verification: CXLRelease build succeeded; `codesign --verify --deep --strict` passed; signed application identifier and certificate/profile match confirmed. New package is `/tmp/ScratchLab-CXL-profile23.pkg`; ASC re-upload is pending.
 - ASC then rejected the component package as 90229/90232/90237: it was not a signed product archive containing an application component. Rebuilt the same fixed app with `productbuild --component`; archive contains `Distribution` and `com.machelpnz.scratchlab.cxl-authoring.pkg/Payload/ScratchLab CXL.app`, including `embedded.provisionprofile`, and is signed with the `3rd Party Mac Developer Installer` certificate. New package: `../CXL-ASC/ScratchLab-CXL-productarchive.pkg`.
 - The direct two-step hand-built archive was also rejected by Transporter, so the final package was exported from the successful CXLRelease archive with Xcode's `-exportArchive` and a manual export plist naming the exact profile. Xcode export succeeded and produced `../CXL-ASC/ScratchLab-CXL-xcode-export.pkg`, with signed product archive metadata and a signed application component.
+
+## 2026-09-14 — CXL build 23 ASC delivery
+- Removed the optional `ReferenceExamples` resource from the CXL macOS target and advanced `CXLRelease` to build 23.
+- Archived and exported with Xcode using the supplied Mac App Store profile and matching Apple Distribution certificate; exported installer is `../CXL-ASC/ScratchLab-CXL-build23.pkg` (about 38 MB).
+- Verification: Xcode DistributionSummary confirms version 1.0.1/build 23, bundle ID `com.machelpnz.scratchlab.cxl-authoring`, profile `ScratchLab CXL Mac App Store`, team `2DDKGL33BU`; `pkgutil --check-signature` passes with the matching 3rd Party Mac Developer Installer certificate.
+- Transporter accepted build 23 and is uploading/analyzing it for App Store Connect.
