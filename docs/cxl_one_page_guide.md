@@ -14,9 +14,9 @@ Install Both apps come through Apple’s TestFlight app. On the Mac, install Tes
 
 Set up the picture and sound
 
-1  Select the hardware Open ScratchLab CXL → Setup. Choose the actual MIDI controller, audio input and main camera; press Enable Selected Camera & Audio. Frame both hands, platter and crossfader from about 45° in landscape. Learn and calibrate the fader for your active deck and open end; check the live fader state.
+1  Select the hardware Open ScratchLab CXL → Setup. Choose the actual MIDI controller, audio input and main camera; press Enable Selected Camera & Audio. With Seventy-Two + Twelve, select Seventy-Two as the main MIDI source and Twelve under Separate Twelve platter, physically set to Deck 2. Frame both hands, platter and crossfader from about 45° in landscape. Learn and calibrate the fader for your active deck and open end; check the live fader state.
 
-2  Check what you hear Load AHHH, select the intended AHHH output, then Preview backing sound. Confirm BOTH scratch and beat in the actual headphones. Rane ONE/MKII uses right USB 3/4 for scratch and left USB 1/2 for beat; cue both decks. The Seventy-Two/Twelve route needs its own check—do not assume the ONE mapping applies.
+2  Check what you hear Use Scratch sample → Load / Re-cue (AHHH, Fresh, Ah yeah or Check it out), select the intended output, then Preview backing sound. Confirm BOTH scratch and beat in the actual headphones. Rane ONE/MKII uses right USB 3/4 for scratch and left USB 1/2 for beat; cue both decks. For Seventy-Two, choose Scratch USB outputs and Beat USB outputs in Mixer & Hot-Cue Mapping, set the mixer decks to the Mac’s USB A/B connection, then test each pair. Use Learn for its faders and hot cues; assign samples and choose a fader curve there. These choices are saved for that device.
 
 3  Optional second view or Watch For an iPhone view, enable Continuity Camera in iPhone Settings → General → AirPlay & Continuity. Select it under Second camera, mount it in portrait showing your upper body and decks, and choose Portrait 90° or 270° until upright. Check both previews. Camera choices can be changed between takes.
 

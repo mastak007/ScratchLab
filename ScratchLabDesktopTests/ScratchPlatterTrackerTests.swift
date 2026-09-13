@@ -313,3 +313,127 @@ final class ScratchPlatterTrackerTests: XCTestCase {
         XCTAssertTrue(true, "Concurrent ingest must not crash")
     }
 }
+
+final class RaneTwelvePlatterDecoderTests: XCTestCase {
+    func testForwardAndBackwardWrapWithoutDoubleCountingVelocity() throws {
+        let decoder = RaneTwelvePlatterDecoder()
+        let values: [UInt8] = [126, 127, 0, 1, 0, 127, 126]
+        var deltas: [Int] = []
+        for (index, value) in values.enumerated() {
+            let time = Double(index) * 0.001
+            let position = try XCTUnwrap(decoder.ingest(status: 0xB1, controller: 1, value: value, timestamp: time))
+            if let delta = position.deltaTicks { deltas.append(delta) }
+            let velocity = try XCTUnwrap(decoder.ingest(status: 0xB1, controller: 2, value: 20, timestamp: time))
+            XCTAssertEqual(velocity.accumulatedTicks, position.accumulatedTicks)
+            XCTAssertNil(velocity.deltaTicks)
+        }
+        XCTAssertEqual(deltas, [1, 1, 1, -1, -1, -1])
+        XCTAssertEqual(decoder.snapshot()?.accumulatedTicks, 0)
+    }
+
+    func testFiltersOtherChannelsCCsAndInvalidValues() {
+        let decoder = RaneTwelvePlatterDecoder()
+        for status: UInt8 in [0xB0, 0xB2, 0x91] {
+            XCTAssertNil(decoder.ingest(status: status, controller: 1, value: 0, timestamp: 1))
+        }
+        XCTAssertNil(decoder.ingest(status: 0xB1, controller: 6, value: 0, timestamp: 1))
+        XCTAssertNil(decoder.ingest(status: 0xB1, controller: 1, value: 128, timestamp: 1))
+        XCTAssertNil(decoder.ingest(status: 0xB1, controller: 1, value: 1, timestamp: .nan))
+        XCTAssertNil(decoder.snapshot())
+    }
+
+    func testVelocityCodesHaveNoInventedPhysicalUnits() {
+        let decoder = RaneTwelvePlatterDecoder()
+        for (value, signed): (UInt8, Int?) in [(0,nil), (1,1), (63,63), (64,0), (65,-1), (127,-63)] {
+            XCTAssertEqual(decoder.ingest(status: 0xB1, controller: 2, value: value, timestamp: 1)?.signedVelocityCode, signed)
+        }
+    }
+
+    func testAmbiguousHalfWrapGapAndClockRegressionReanchor() {
+        let decoder = RaneTwelvePlatterDecoder()
+        _ = decoder.ingest(status: 0xB1, controller: 1, value: 0, timestamp: 1)
+        for (value,time): (UInt8,Double) in [(64,1.001), (65,2), (66,1.9)] {
+            let result = decoder.ingest(status: 0xB1, controller: 1, value: value, timestamp: time)
+            XCTAssertNil(result?.deltaTicks)
+            XCTAssertEqual(result?.discontinuity, true)
+        }
+        XCTAssertEqual(decoder.ingest(status: 0xB1, controller: 1, value: 67, timestamp: 1.901)?.deltaTicks, 1)
+    }
+
+    func testDuplicatePositionAndSeparateDecoderConnections() {
+        let decoder = RaneTwelvePlatterDecoder()
+        _ = decoder.ingest(status: 0xB1, controller: 1, value: 44, timestamp: 1)
+        XCTAssertEqual(decoder.ingest(status: 0xB1, controller: 1, value: 44, timestamp: 1)?.deltaTicks, 0)
+        let replacement = RaneTwelvePlatterDecoder()
+        XCTAssertNil(replacement.ingest(status: 0xB1, controller: 1, value: 100, timestamp: 2)?.deltaTicks)
+    }
+
+    func testRecordedTwelveEvidenceUsesCC1AndPreservesBothCCStreams() throws {
+        var events: [CaptureCore.RawMixerMIDIEvent] = []
+        for index in 0...16 {
+            for cc in [1,2] {
+                events.append(CaptureCore.RawMixerMIDIEvent(timestamp: 10 + Double(index) * 0.01,
+                    takeRelativeTime: Double(index) * 0.01, deviceIdentifier: "twelve-right",
+                    deviceName: "Twelve", channel: 1, controller: cc, value: cc == 1 ? (120 + index) % 128 : 63,
+                    normalizedValue: 0, mappedControl: cc == 1 ? RaneTwelvePlatterDecoder.positionMapping : RaneTwelvePlatterDecoder.velocityMapping))
+            }
+        }
+        XCTAssertEqual(CaptureCore.capturedPlatterController(from: events), 1)
+        let motion = MacCaptureEngine.resolvedControllerMovementEvents(selectedMIDISourceName: "Twelve", capturedMidi: events)
+        XCTAssertEqual(motion.count, 1)
+        XCTAssertEqual(motion.first?.direction, "forward")
+        XCTAssertFalse(CaptureCore.derivePlatterMotionEvidence(from: events).events.isEmpty)
+        let encoded = try JSONEncoder().encode(events)
+        XCTAssertEqual(try JSONDecoder().decode([CaptureCore.RawMixerMIDIEvent].self, from: encoded), events)
+        XCTAssertEqual(events.count, 34)
+        let unrelated = CaptureCore.RawMixerMIDIEvent(timestamp: 10.01, takeRelativeTime: 0.01,
+            deviceIdentifier: "mixer", deviceName: "Seventy-Two", channel: 1, controller: 1,
+            value: 80, normalizedValue: 0, mappedControl: nil)
+        XCTAssertEqual(CaptureCore.derivePlatterMotionEvidence(from: events + [unrelated]).events,
+                       CaptureCore.derivePlatterMotionEvidence(from: events).events,
+                       "A mixer using the same CC cannot contaminate the explicitly captured Twelve route.")
+        XCTAssertTrue(MacCaptureEngine.resolvedControllerMovementEvents(selectedMIDISourceName: "Unselected", capturedMidi: events).isEmpty)
+    }
+}
+
+import CoreMIDI
+import AVFoundation
+
+final class RaneTwelveCoreMIDIIngressTests: XCTestCase {
+    func testUMPVisitorFiltersGroupChannelAndCCAndRetainsRealSource() throws {
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: "TwelveIngress.\(UUID())"))
+        let engine = MacCaptureEngine(autoRefreshDevices: false, midiDefaults: defaults)
+        let token = engine.testOnly_armTakeMIDIWindow()
+        defer { engine.testOnly_releaseAbandonedTakeMIDIWindow(token: token) }
+        engine.testOnly_openTakeMIDIEpoch(at: 10)
+        engine.testOnly_setTwelveSource(sourceID: "test-twelve", name: "Twelve", generation: 4)
+        let allocation = UnsafeMutableRawPointer.allocate(byteCount: 2048, alignment: 8)
+        defer { allocation.deallocate() }
+        let list = allocation.bindMemory(to: MIDIEventList.self, capacity: 1)
+        let first = MIDIEventListInit(list, ._1_0)
+        let words: [UInt32] = [0x20B17E01, 0x20B00105, 0x21B10106, 0x20B1017F, 0x20B10240, 0x20B10100]
+        try words.withUnsafeBufferPointer { buffer in
+            XCTAssertNotNil(MIDIEventListAdd(list, 2048, first, AVAudioTime.hostTime(forSeconds: 10.01), buffer.count, buffer.baseAddress!))
+            engine.testOnly_receiveTwelveEventList(UnsafePointer(list))
+        }
+        let raw = engine.capturedMidiCCEventsSnapshot()
+        XCTAssertEqual(raw.map(\.controller), [1,2,1])
+        XCTAssertEqual(raw.map(\.value), [127,64,0])
+        XCTAssertEqual(Set(raw.compactMap(\.deviceIdentifier)), ["test-twelve"])
+        XCTAssertTrue(raw.allSatisfy { $0.calibrationID == nil && $0.calibratedPosition == nil })
+        XCTAssertEqual(engine.connectedTwelvePlatterObservation()?.eventCount, 2)
+        XCTAssertNil(engine.currentMIDIDeviceMapping)
+    }
+
+    func testRetiredTwelveConnectionCannotAppendIntoCurrentTake() throws {
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: "TwelveRetired.\(UUID())"))
+        let engine = MacCaptureEngine(autoRefreshDevices: false, midiDefaults: defaults)
+        let token = engine.testOnly_armTakeMIDIWindow()
+        defer { engine.testOnly_releaseAbandonedTakeMIDIWindow(token: token) }
+        engine.testOnly_openTakeMIDIEpoch(at: 10)
+        engine.testOnly_setTwelveSource(sourceID: "test-twelve", name: "Twelve", generation: 5)
+        engine.recordReceivedMIDICCEvent(sourceIdentifier: "test-twelve", sourceName: "Twelve", channel: 1,
+            controller: 1, value: 99, timestamp: 10.02, inputConnectionGeneration: 4, twelveConnectionGeneration: 4)
+        XCTAssertTrue(engine.capturedMidiCCEventsSnapshot().isEmpty)
+    }
+}

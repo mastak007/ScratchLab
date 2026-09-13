@@ -1266,15 +1266,15 @@ final class ReferenceAuthoringSessionTests: XCTestCase {
     func testLegacySentStopDraftAcceptsOnlyVerifiedMatchingLateMotion() throws {
         let identity = ReferenceTakeSourceIdentity(sessionID: "capture-session", takeID: "take-001",
             takeNumber: 1, takeToken: "token")
-        for outcome in [CaptureWatchStopOutcome.sent, .unreachable] {
+        for outcome in [CaptureWatchStopOutcome?](arrayLiteral: .sent, .unreachable, nil) {
             let sidecar = CaptureCore.LocalRecordingSidecar(sessionID: identity.sessionID,
                 takeID: identity.takeID, appLocalTakeNumber: identity.takeNumber,
                 recordingRole: "routine", platform: "macOS", appSurface: "CXL",
                 sourceDeviceName: "Mac", startedAt: Date(timeIntervalSince1970: 100),
                 recordingStatus: "completed", mediaFileName: "take-001.mov", sidecarFileName: "take-001.json",
                 watchSyncState: .acknowledged, watchCommandID: identity.takeToken,
-                watchStopDiagnostics: CaptureWatchStopDiagnostics(outcome: outcome,
-                    sessionID: identity.sessionID, takeID: identity.takeID, motionTransferState: .pending))
+                watchStopDiagnostics: outcome.map { CaptureWatchStopDiagnostics(outcome: $0,
+                    sessionID: identity.sessionID, takeID: identity.takeID, motionTransferState: .pending) })
             let encoder = JSONEncoder(); encoder.dateEncodingStrategy = .iso8601
             let data = try encoder.encode(sidecar)
             let binding = ReferenceTearEvidenceSourceBinding(capturedSessionID: identity.sessionID,
@@ -1299,6 +1299,14 @@ final class ReferenceAuthoringSessionTests: XCTestCase {
     }
 
     func testExpiredOptionalWatchUnblocksRawSaveAndContinuationAndOnlyVerifiedLateFileRecovers() throws {
+        try assertExpiredWatchRecovery(hasStopDiagnostics: true)
+    }
+
+    func testExpiredLegacyAcknowledgementWithoutStopDiagnosticsAcceptsOnlyVerifiedLateFile() throws {
+        try assertExpiredWatchRecovery(hasStopDiagnostics: false)
+    }
+
+    private func assertExpiredWatchRecovery(hasStopDiagnostics: Bool) throws {
         let identity = ReferenceTakeSourceIdentity(sessionID: "capture-session", takeID: "take-001",
             takeNumber: 1, takeToken: "token")
         let sidecar = CaptureCore.LocalRecordingSidecar(sessionID: identity.sessionID,
@@ -1307,8 +1315,8 @@ final class ReferenceAuthoringSessionTests: XCTestCase {
             sourceDeviceName: "Mac", startedAt: Date(timeIntervalSince1970: 100),
             recordingStatus: "completed", mediaFileName: "take-001.mov", sidecarFileName: "take-001.json",
             watchSyncState: .acknowledged, watchCommandID: identity.takeToken,
-            watchStopDiagnostics: CaptureWatchStopDiagnostics(outcome: .sent,
-                sessionID: identity.sessionID, takeID: identity.takeID, motionTransferState: .pending))
+            watchStopDiagnostics: hasStopDiagnostics ? CaptureWatchStopDiagnostics(outcome: .sent,
+                sessionID: identity.sessionID, takeID: identity.takeID, motionTransferState: .pending) : nil)
         let encoder = JSONEncoder(); encoder.dateEncodingStrategy = .iso8601
         let data = try encoder.encode(sidecar)
         let binding = ReferenceTearEvidenceSourceBinding(capturedSessionID: identity.sessionID,

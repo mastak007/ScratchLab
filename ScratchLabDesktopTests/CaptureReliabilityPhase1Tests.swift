@@ -4152,8 +4152,7 @@ final class CaptureReliabilityPhase1CoreTests: XCTestCase {
         XCTAssertTrue(hardwareSection.contains("does not yet prove a specific input pair"))
         XCTAssertTrue(hardwareSection.contains("permission are requested only after"))
         XCTAssertTrue(source.contains("captureEngine.start(\n            allowSeratoDirectCapture: false,\n            requiresExplicitVideoSelection: true"))
-        XCTAssertFalse(hardwareSection.localizedCaseInsensitiveContains("Rane ONE"))
-        XCTAssertFalse(hardwareSection.localizedCaseInsensitiveContains("Seventy-Two"))
+        XCTAssertTrue(hardwareSection.localizedCaseInsensitiveContains("Seventy-Two"))
     }
 
     func testCXLReleaseSceneExcludesDebugAndAuxiliaryRoutes() throws {
@@ -17309,8 +17308,21 @@ final class ControllerPlatterDecoderTests: XCTestCase {
         XCTAssertEqual(events.first?.source, "controller")
     }
 
-    func testTwelveNameVariantUsesChannelZero() {
-        let selected = deviceRun(0, 12, from: 0.0, device: "TWELVE MKII", channel: 0)
+    func testTwelveNameVariantUsesExplicitCC1Route() {
+        var selected: [CaptureCore.RawMixerMIDIEvent] = []
+        for index in 0...16 {
+            let time = Double(index) * 0.01
+            selected.append(CaptureCore.RawMixerMIDIEvent(
+                timestamp: 10 + time, takeRelativeTime: time,
+                deviceIdentifier: "twelve-right", deviceName: "TWELVE MKII",
+                channel: 1, controller: 1, value: (120 + index) % 128,
+                normalizedValue: 0, mappedControl: RaneTwelvePlatterDecoder.positionMapping))
+            selected.append(CaptureCore.RawMixerMIDIEvent(
+                timestamp: 10 + time, takeRelativeTime: time,
+                deviceIdentifier: "twelve-right", deviceName: "TWELVE MKII",
+                channel: 1, controller: 2, value: 63,
+                normalizedValue: 0, mappedControl: RaneTwelvePlatterDecoder.velocityMapping))
+        }
 
         let events = MacCaptureEngine.resolvedControllerMovementEvents(
             selectedMIDISourceName: "TWELVE MKII", capturedMidi: selected)

@@ -487,14 +487,15 @@ final class ReferenceTearEvidencePipelineTests: XCTestCase {
         return result
     }
     private nonisolated static func withFader(_ platter: [Raw], closed: [ClosedRange<Double>] = [],
-        alwaysClosed: Bool = false) throws -> [Raw] {
+        alwaysClosed: Bool = false, includeSourceIdentity: Bool = true) throws -> [Raw] {
         let end = (platter.map(\.takeRelativeTime).max() ?? 0) + 0.1
         let fader = try (0...Int(ceil(end * 1_000))).map { index -> Raw in
             let time = Double(index) / 1_000
             let value = alwaysClosed || closed.contains { $0.contains(time) } ? 104 : 0
             let position = try XCTUnwrap(calibration.normalized(rawValue: value))
-            return Raw(timestamp: time, takeRelativeTime: time, deviceName: "Rane ONE MKII",
-                channel: 15, controller: 8, value: value, normalizedValue: Double(value) / 127,
+            return Raw(timestamp: time, takeRelativeTime: time,
+                deviceIdentifier: includeSourceIdentity ? calibration.address.deviceIdentifier : nil,
+                deviceName: "Rane ONE MKII", channel: 15, controller: 8, value: value, normalizedValue: Double(value) / 127,
                 mappedControl: "crossfader", calibratedPosition: position, calibrationID: calibration.id)
         }
         // Only chronological fixtures use this merge. Clock-regression fixtures
@@ -935,6 +936,8 @@ final class ReferenceTearEvidencePipelineTests: XCTestCase {
     }
 
     func testEveryCaptureTechniqueSurvivesFinalizationDraftReopenAndRawArchive() async throws {
+        // This single integration case writes, reopens and exports all 23 techniques.
+        executionTimeAllowance = 600
         for technique in ReferenceTechnique.authorableSet {
             let files = try await fixture(Self.withFader(Self.tear(holds: 1)), scratchType: technique.scratchType)
             let root = files.directory.appendingPathComponent("drafts")
@@ -1583,6 +1586,14 @@ final class ReferenceTearEvidencePipelineTests: XCTestCase {
         XCTAssertTrue(geometry.faderEdges.contains { abs($0.time - 0.9) < 1e-9 })
         XCTAssertEqual(geometry.faderEdges.map(\.time), geometry.faderEdges.map(\.time).sorted())
     }
+    func testFaderWithoutSourceIdentityCannotBorrowSavedCalibration() async throws {
+        let raw = try Self.withFader(Self.tear(holds: 1), includeSourceIdentity: false)
+        let take = try await roundTrip(fixture(raw))
+        XCTAssertTrue(take.tearReview.faderIntervals.isEmpty)
+        XCTAssertTrue(take.tearReview.faderClicks.isEmpty)
+        XCTAssertTrue(try geometry(take).motion.segments.allSatisfy { $0.evidenceStyle == .unknownFader })
+    }
+
     func testMissingFaderRemainsUnavailableThroughTheWholeRoute() async throws {
         let take = try await roundTrip(fixture(Self.tear(holds: 1)))
         XCTAssertTrue(take.tearReview.faderIntervals.isEmpty)

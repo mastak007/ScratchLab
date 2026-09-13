@@ -94,4 +94,84 @@ final class PlatterTestSampleLoadTests: XCTestCase {
 
         XCTAssertEqual(engine.platterTestLoadStatus, "audible test: dvs_ahhh")
     }
+    func testManualSelectorLoadsAllFourBundledSamples() throws {
+        let engine = try makeEngine()
+        for sample in ["dvs_ahhh", "fresh", "ah_yeah", "check_it_out"] {
+            engine.loadScratchSample(sample)
+            let snapshot = engine.testOnly_scratchPlaybackDiagnosticsSnapshot()
+            XCTAssertEqual(snapshot.loadedSampleID, sample)
+            XCTAssertNil(snapshot.lastLoadError)
+        }
+    }
+
+    func testUnavailableSampleKeepsCurrentSampleAndExplainsFailure() throws {
+        let engine = try makeEngine()
+        engine.loadScratchSample("fresh")
+        flushMainQueue()
+        engine.loadScratchSample("missing")
+        XCTAssertEqual(engine.testOnly_scratchPlaybackDiagnosticsSnapshot().loadedSampleID, "fresh")
+        XCTAssertTrue(engine.platterTestLoadStatus.contains("unavailable"))
+    }
+
+    func testTakeOwnershipLocksSampleAndMappingMutations() throws {
+        let engine = try makeEngine()
+        engine.loadScratchSample("fresh")
+        let token = engine.testOnly_armTakeMIDIWindow()
+        defer { engine.testOnly_releaseAbandonedTakeMIDIWindow(token: token) }
+        engine.loadScratchSample("dvs_ahhh")
+        engine.startMIDILearn(for: .crossfader)
+        engine.startCalibration(for: .crossfader)
+        engine.startCurveCalibration(for: .crossfader)
+        engine.previewPlatterTestSample()
+        flushMainQueue()
+        XCTAssertEqual(engine.testOnly_scratchPlaybackDiagnosticsSnapshot().loadedSampleID, "fresh")
+        XCTAssertNil(engine.activeMIDILearnAction)
+        XCTAssertNil(engine.activeCalibrationAction)
+        XCTAssertNil(engine.activeCurveCaptureAction)
+    }
+
+    func testSavedUSBOutputPairsStayBoundToEachDeviceAndCannotChangeDuringTake() throws {
+        let defaults = try makeDefaults()
+        let saved = ["seventy-two-A": MacCaptureEngine.ScratchUSBOutputPairs(scratch: 2, beat: 0),
+                     "one-B": MacCaptureEngine.ScratchUSBOutputPairs(scratch: 4, beat: 2)]
+        let data = try JSONEncoder().encode(saved)
+        defaults.set(data, forKey: "scratchlab.mac.usbOutputPairsByUID")
+        let engine = try makeEngine(defaults: defaults)
+        XCTAssertEqual(engine.scratchUSBOutputPairsByUID, saved)
+        XCTAssertEqual(engine.selectedScratchUSBOutputPairs, .init())
+        let previousUID = engine.selectedAudioDeviceUniqueID
+        engine.selectedAudioDeviceUniqueID = "seventy-two-A"
+        defer { engine.selectedAudioDeviceUniqueID = previousUID }
+        XCTAssertEqual(engine.selectedScratchUSBOutputPairs, saved["seventy-two-A"])
+        let token = engine.testOnly_armTakeMIDIWindow()
+        defer { engine.testOnly_releaseAbandonedTakeMIDIWindow(token: token) }
+        engine.setScratchUSBOutputPair(nil, forBeat: false)
+        XCTAssertEqual(defaults.data(forKey: "scratchlab.mac.usbOutputPairsByUID"), data)
+        XCTAssertEqual(engine.scratchUSBOutputPairsByUID, saved)
+    }
+
+    func testControllerSetupAuditRetainsInitialSampleSourcesAndLearnedCurves() throws {
+        let date = Date(timeIntervalSince1970: 1_788_000_000)
+        let mapping = MIDIDeviceMapping(deviceIdentifier: "mixer-72", deviceName: "Seventy-Two",
+            controls: [
+                MIDILearnedControl(action: .crossfader, messageType: .controlChange, channel: 15,
+                    controlNumber: 8, learnedAt: date,
+                    curveConfig: MIDIFaderCurveConfig(preset: .sharpScratch, customCapture: nil)),
+                MIDILearnedControl(action: .hotCue1, messageType: .note, channel: 1,
+                    controlNumber: 40, assignedSampleID: "fresh", learnedAt: date)
+            ], createdAt: date, lastModifiedAt: date)
+        let event = try MacCaptureEngine.scratchControllerSetupAuditEvent(sampleID: "fresh",
+            mixerSourceID: "mixer-72", platterSourceID: "platter-12", mapping: mapping, at: date)
+        let restored = try JSONDecoder().decode(CaptureAuditEvent.self, from: JSONEncoder().encode(event))
+        XCTAssertEqual(restored, event)
+        XCTAssertEqual(event.category, "scratch_controller_setup")
+        let fields = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(restored.detail.utf8)) as? [String: Any])
+        XCTAssertEqual(fields["initialSampleID"] as? String, "fresh")
+        XCTAssertEqual(fields["mixerSourceID"] as? String, "mixer-72")
+        XCTAssertEqual(fields["platterSourceID"] as? String, "platter-12")
+        XCTAssertEqual(fields["physicalTicksPerRevolutionVerified"] as? Bool, false)
+        let mappingData = try JSONSerialization.data(withJSONObject: XCTUnwrap(fields["learnedMixerMapping"]))
+        XCTAssertEqual(try JSONDecoder().decode(MIDIDeviceMapping.self, from: mappingData), mapping)
+    }
+
 }

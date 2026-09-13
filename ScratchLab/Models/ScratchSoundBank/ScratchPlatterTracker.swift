@@ -10,6 +10,7 @@
 
 import Foundation
 import os
+import Synchronization
 
 /// Explicit coordinate semantics for platter motion.
 ///
@@ -407,4 +408,99 @@ final class ScratchPlatterTracker {
 enum ScratchPlatterDirection: Equatable {
     case forward
     case backward
+}
+
+/// Deck-2 CC1/CC2 protocol supplied by the operator; not a certified Rane map.
+/// CC1 is a modulo-128 phase counter, NOT an absolute revolution position.
+/// No RPM/ticks-per-revolution calibration is inferred from these messages.
+/// Use one decoder per endpoint connection. All state is lock-owned; ingress
+/// uses a try-lock and drops contention rather than waiting on a MIDI thread.
+final class RaneTwelvePlatterDecoder: @unchecked Sendable {
+    static let positionMapping = "raneTwelveDeck2PositionV1"
+    static let velocityMapping = "raneTwelveDeck2VelocityV1"
+
+    struct Observation: Equatable, Sendable {
+        let timestamp: Double
+        let controller: UInt8
+        let rawValue: UInt8
+        let accumulatedTicks: Int
+        /// Nil means the first position or an ambiguous/gapped observation.
+        let deltaTicks: Int?
+        /// CC2 code, signed under the supplied convention; not ticks/second.
+        let signedVelocityCode: Int?
+        let discontinuity: Bool
+    }
+
+    private struct State {
+        var previous: UInt8?
+        var previousTime: Double?
+        var ticks = 0
+        var latest: Observation?
+        var lossGeneration: UInt64 = 0
+    }
+    private let state = OSAllocatedUnfairLock(initialState: State())
+    private let losses = Synchronization.Atomic<UInt64>(0)
+    var droppedMessageCount: UInt64 { losses.load(ordering: .relaxed) }
+
+    /// Complete MIDI 1 channel messages only. A modern CoreMIDI port carries
+    /// these as UMP words; it does not deliver a three-byte packet list.
+    @discardableResult
+    func ingest(status: UInt8, controller: UInt8, value: UInt8, timestamp: Double) -> Observation? {
+        guard status == 0xB1, controller == 1 || controller == 2, value < 128,
+              timestamp.isFinite, timestamp >= 0 else { return nil }
+        let generation = losses.load(ordering: .acquiring)
+        let result = state.withLockIfAvailable { state -> Observation in
+            let lost = state.lossGeneration != generation
+            if lost {
+                state.previous = nil
+                state.previousTime = nil
+                state.lossGeneration = generation
+            }
+            var delta: Int?
+            var discontinuity = lost
+            var velocity: Int?
+            if controller == 1 {
+                if let previous = state.previous, let time = state.previousTime {
+                    let elapsed = timestamp - time
+                    var change = Int(value) - Int(previous)
+                    // 127 -> 0 becomes +1; 0 -> 127 becomes -1.
+                    // This shortest-path inference requires less than half a
+                    // counter cycle between observations. Lost full cycles
+                    // cannot be recovered from a seven-bit phase counter.
+                    if change > 64 { change -= 128 }
+                    if change < -64 { change += 128 }
+                    if elapsed < 0 || elapsed > 0.1 || abs(change) == 64 {
+                        discontinuity = true
+                    } else {
+                        delta = change
+                        state.ticks &+= change
+                    }
+                }
+                state.previous = value
+                state.previousTime = timestamp
+            } else {
+                // CC2 never increments displacement: that would count every
+                // physical update twice. 0 is unspecified, so remains nil.
+                switch value {
+                case 1...63: velocity = Int(value)
+                case 64: velocity = 0
+                case 65...127: velocity = -(Int(value) - 64)
+                default: velocity = nil
+                }
+            }
+            let observation = Observation(timestamp: timestamp, controller: controller,
+                rawValue: value, accumulatedTicks: state.ticks, deltaTicks: delta,
+                signedVelocityCode: velocity, discontinuity: discontinuity)
+            state.latest = observation
+            return observation
+        }
+        guard let result else {
+            losses.wrappingAdd(1, ordering: .releasing)
+            return nil
+        }
+        return result
+    }
+
+    /// Read from the control/UI queue, not the audio render callback.
+    func snapshot() -> Observation? { state.withLock { $0.latest } }
 }

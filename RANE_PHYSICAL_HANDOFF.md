@@ -1,3 +1,22 @@
+# Active Seventy-Two/Twelve candidate — 13 September 2026
+
+Codex source: `~/Developer/ScratchLab-CXL-Rane-SeventyTwo-20260913/source`, branch `codex/cxl-rane-seventy-two-twelve-20260913`. This header supersedes all installation/PID/route instructions below. The candidate is being verified; use only its eventual staging receipt. Current installed app and captured files are unchanged.
+
+Software additions: CXL now exposes the shared fader/hot-cue/curve controls and always-visible Load/Re-cue for AHHH, Fresh, Ah yeah and Check it out. Select the Seventy-Two as primary MIDI source (mixer controls), then the independent Twelve source in Separate Twelve platter. User specifies Twelve connected through the Seventy-Two hub, physically Deck2. The new modern CoreMIDI input requests MIDI1 channel messages via UMP and only accepts group0/status0xB1 CC1/CC2. User-supplied convention: CC1 modulo128 phase; CC2 forward1–63, stopped64, reverse65–127, zero unspecified. This convention and ~3584–3600 ticks/revolution are not independently hardware-verified here; no calibrated physical travel claim. The decoder keeps velocity code separate from displacement and reanchors uncertain/gapped counters.
+
+Audio: Seventy-Two has no automatic validated output map in this build. Instead, choose the actual Scratch USB outputs and Beat USB outputs under Mixer & Hot-Cue Mapping. Choices persist against the exact Core Audio device UID; unavailable pairs and mismatched readback fail visibly. Both may use the same pair if desired. Scratch and beat remain separate in the capture/export pipeline. This is explicit operator configuration, not a software claim that pair3/4 reaches a particular physical fader on this rig.
+
+Bounded physical acceptance still NOT RUN:
+1. On the actual Seventy-Two/Twelve, confirm both independent MIDI identities and Deck2. Load each bundled sample; forward/back must sound correct and rising/falling notation must match the movement. Hardware hot-cue presses must load only their assigned sample; mixer CC1/CC2 must never drive the Twelve platter.
+2. Learn/calibrate the Seventy-Two crossfader, verify both ends and the chosen software curve. Configure scratch and beat USB pairs, select the appropriate USB A/B deck inputs, and listen to each in the actual headphones. A software meter/readback is not this listening check.
+3. Record one normal four-repetition reference and let it finish, then one early-stop diagnostic. Check real WAV/MOV timing, preferred repetition, review boundaries, approval and ZIP. With an enabled second camera, verify its actual exported video. Watch is optional; verify Stop/relaunch/pending-expiry and any late motion file separately.
+
+Keep original media and all four repetitions. Nothing may fabricate missing early audio, fader observations, pauses or Watch motion. The per-take audit retains the initial sample/source/mapping setup and actual output route. Manual UI setup changes are locked during a take; raw hot-cue/MIDI evidence remains distinct from the initial snapshot.
+
+Manufacturer connection reference: [Seventy-Two user guide](https://cdn.inmusicbrands.com/rane/seventy-two/Seventy-Two-UserGuide-v1.3.pdf), rear-panel Twelve/Controller USB ports. It establishes the supported connection arrangement, not our supplied CC protocol or absolute output pair verification.
+
+--- Historical evidence follows ---
+
 # Current physical boundary — 2026-09-12
 
 Use the installed `~/Applications/ScratchLab CXL.app` only after its new candidate receipt is verified. Source and current receipts are under `/Users/karlwatson/Developer/ScratchLab-CXL-Recovery-20260912/`; all prior temporary paths/PIDs below are historical. The new diagnostic build is installed, SHA256 `19f0fea027a5503c31e93c290497c6ea649264690967806bfbaea4a1ff2b4380`, observed running PID47873. The prior build is retained for rollback.

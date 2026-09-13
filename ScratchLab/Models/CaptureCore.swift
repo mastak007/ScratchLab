@@ -11780,14 +11780,27 @@ enum CaptureCore {
         }
     }
 
+    /// Only the explicit Twelve capture route writes this marker. A CC1 from
+    /// an arbitrary mixer is never silently promoted to platter evidence.
+    static func capturedPlatterController(from events: [RawMixerMIDIEvent], deviceName: String? = nil) -> Int {
+        events.contains { $0.controller == 1 && $0.channel == 1
+            && $0.mappedControl == RaneTwelvePlatterDecoder.positionMapping
+            && (deviceName == nil || $0.deviceName == deviceName) } ? 1 : 6
+    }
+
     static func derivePlatterMotionEvidence(
         from mixerMidiEvents: [RawMixerMIDIEvent],
-        controller: Int = 6, channel: Int? = 1, deviceName: String? = nil,
+        controller: Int? = nil, channel: Int? = 1, deviceName: String? = nil,
         ringModulus: Int = 128, minRunDuration: Double = 0.08,
         minRunSteps: Int = 8, maxEventGap: Double = 0.10
     ) -> PlatterMotionEvidence {
+        let usesTwelveRoute = controller == nil && capturedPlatterController(from: mixerMidiEvents, deviceName: deviceName) == 1
+        let controller = controller ?? capturedPlatterController(from: mixerMidiEvents, deviceName: deviceName)
+        let platterEvents = usesTwelveRoute
+            ? mixerMidiEvents.filter { $0.mappedControl == RaneTwelvePlatterDecoder.positionMapping }
+            : mixerMidiEvents
         let core = decodePlatterCore(
-            from: mixerMidiEvents, controller: controller, channel: channel,
+            from: platterEvents, controller: controller, channel: channel,
             deviceName: deviceName, ringModulus: ringModulus,
             minRunDuration: minRunDuration, minRunSteps: minRunSteps,
             maxEventGap: maxEventGap)
@@ -11957,7 +11970,7 @@ enum CaptureCore {
 
         // An unspecified source must still resolve uniquely. Mixed sources
         // cannot establish stillness or a shared ring-counter baseline.
-        if Set(events.map { "\($0.deviceName)/\($0.channel)" }).count != 1 {
+        if Set(events.map { "\($0.deviceIdentifier ?? $0.deviceName)/\($0.channel)" }).count != 1 {
             let times = events.map(\.takeRelativeTime).filter(\.isFinite)
             intervals.append(PlatterEvidenceInterval(startTime: times.min() ?? 0,
                 endTime: times.max() ?? 0, kind: .unknown))
@@ -12299,9 +12312,11 @@ enum CaptureCore {
     /// excursion and never guesses raw motor travel.
     static func gestureRelativeRecordMovementEventsForPresentation(
         from snapshot: DetectedNotationSnapshot,
-        controller: Int = 6,
+        controller: Int? = nil,
         channel: Int = 1
     ) -> [DetectedNotationRecordMovementEvent] {
+        let usesTwelveRoute = controller == nil && capturedPlatterController(from: snapshot.mixerMidiEvents) == 1
+        let controller = controller ?? capturedPlatterController(from: snapshot.mixerMidiEvents)
         let canonical = snapshot.recordMovementEvents
         let hasControllerEvidence = canonical.contains(
             where: usesGestureRelativeControllerNotation
@@ -12312,6 +12327,7 @@ enum CaptureCore {
 
         let eligibleMIDI = snapshot.mixerMidiEvents.filter {
             $0.controller == controller && $0.channel == channel
+                && (!usesTwelveRoute || $0.mappedControl == RaneTwelvePlatterDecoder.positionMapping)
         }
         let deviceNames = Set(eligibleMIDI.map(\.deviceName))
         guard deviceNames.count == 1, let deviceName = deviceNames.first else {

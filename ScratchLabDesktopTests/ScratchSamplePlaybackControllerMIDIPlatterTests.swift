@@ -396,6 +396,27 @@ final class ScratchSamplePlaybackControllerMIDIPlatterTests: XCTestCase {
         XCTAssertNil(controller.currentPlaybackLoopContext(), "sanitized velocity did not publish the advanced phase")
     }
 
+    func testSeparatePlatterLosingOrChangingConnectionNeverPlaysCounterJump() throws {
+        let (controller, input) = try makeLoopContextController()
+        controller.configureMIDIPlatterProvider(rightDeckAccumulatedSteps: { input.steps },
+            observation: { input.observation() }, requiresCorrelatedObservation: { true })
+        controller.waitForAudioQueue()
+        controller.testOnly_cancelMIDICoalescingTimer()
+        advanceLoopContext(controller, input, steps: 0, time: 1)
+        advanceLoopContext(controller, input, steps: 40, time: 1.02)
+        let phase = controller.currentSampleFrame
+        input.metadataAvailable = false
+        advanceLoopContext(controller, input, steps: 9000, time: 1.04)
+        XCTAssertEqual(controller.currentSampleFrame, phase)
+        XCTAssertNil(controller.currentPlaybackLoopContext())
+        input.metadataAvailable = true
+        input.connectionGeneration += 1
+        advanceLoopContext(controller, input, steps: 0, time: 1.06)
+        XCTAssertEqual(controller.currentSampleFrame, phase)
+        advanceLoopContext(controller, input, steps: 40, time: 1.08)
+        XCTAssertNotNil(controller.currentPlaybackLoopContext())
+    }
+
     // MARK: - Forward / backward phase advancement
 
     func testMIDIContinuousForwardMotionAdvancesPhaseAndPublishesPositiveVelocity() throws {

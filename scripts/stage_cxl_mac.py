@@ -34,6 +34,8 @@ def main():
     parser.add_argument("--output", required=True, type=pathlib.Path)
     parser.add_argument("--identity", required=True, help="Apple-issued certificate SHA-1")
     parser.add_argument("--expected-team", default="2DDKGL33BU")
+    parser.add_argument("--exclude-reference-examples", action="store_true",
+                        help="Omit the optional full-app reference library from the CXL bundle.")
     args = parser.parse_args()
     if len(args.identity) != 40 or any(c not in "0123456789abcdefABCDEF" for c in args.identity):
         parser.error("Use an Apple-issued certificate SHA-1; ad hoc signing is forbidden.")
@@ -62,6 +64,11 @@ def main():
     installed_entitlements = plistlib.loads(entitlements)
     args.output.parent.mkdir(parents=True, exist_ok=True)
     run("/usr/bin/ditto", str(args.built_app), str(args.output))
+    if args.exclude_reference_examples:
+        examples = args.output / "Contents/Resources/ReferenceExamples"
+        if examples.exists():
+            import shutil
+            shutil.rmtree(examples)
     entitlement_path = args.output.with_suffix(".entitlements.plist")
     entitlement_path.write_bytes(plistlib.dumps(installed_entitlements))
     # Apple's default Development requirement can pin the certificate CN.

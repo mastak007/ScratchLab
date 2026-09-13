@@ -444,12 +444,12 @@ struct NotationSheetTests {
             .deletingLastPathComponent()
             .appendingPathComponent("ScratchLabDesktop/Services/MacCaptureEngine.swift")
         let source = try String(contentsOf: sourceURL, encoding: .utf8)
-        // showRigGuides must reference calibrationLocked, not practiceViewEnabled
+        // showRigGuides must reference the effective calibration lock, not practice mode.
         let rigGuidesRange = source.range(of: "var showRigGuides: Bool")!
         let afterDecl = source[rigGuidesRange.upperBound...]
         let nextFuncRange = afterDecl.range(of: "func ") ?? afterDecl.endIndex..<afterDecl.endIndex
         let body = String(afterDecl[..<nextFuncRange.lowerBound])
-        #expect(body.contains("calibrationLocked"))
+        #expect(body.contains("cameraGuideCalibrationLocked"))
         #expect(!body.contains("practiceViewEnabled"))
     }
 
