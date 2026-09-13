@@ -630,3 +630,112 @@ final class CXLIndependentAuditTimingTests: XCTestCase {
         XCTAssertEqual(finalSnapshot.mergingLatestWatchStopDiagnostics(from: stored).watchStopDiagnostics, stopped)
     }
 }
+
+/// F5: a Stop landing between the first movie-sample claim and
+/// `didStartRecordingTo` must survive into that exact take. These drive the
+/// production arming, claim, stop request and start delegate without a camera
+/// or movie writer; the observer sits on the single writer-stop call.
+final class RoutineStopDuringStartTests: XCTestCase {
+    private final class StopCounter: @unchecked Sendable {
+        private let lock = NSLock()
+        private var value = 0
+        func increment() { lock.lock(); value += 1; lock.unlock() }
+        var count: Int { lock.lock(); defer { lock.unlock() }; return value }
+    }
+
+    private func makeEngine(counter: StopCounter) -> MacCaptureEngine {
+        let suite = "com.machelpnz.scratchlab.tests.stop-during-start.\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: suite)!
+        addTeardownBlock { defaults.removePersistentDomain(forName: suite) }
+        let engine = MacCaptureEngine(autoRefreshDevices: false, midiDefaults: defaults)
+        engine.testOnly_routineMovieWriterStopOverride = { counter.increment() }
+        return engine
+    }
+
+    private func media(_ name: String) -> URL {
+        URL(fileURLWithPath: NSTemporaryDirectory())
+            .appendingPathComponent("\(UUID().uuidString)_\(name)_routine.mov")
+    }
+
+    /// Bounded: a regression that blocks the session queue fails in seconds.
+    private func drainSessionQueue(_ engine: MacCaptureEngine, file: StaticString = #filePath, line: UInt = #line) {
+        let drained = expectation(description: "session queue drained")
+        engine.testOnly_afterSessionQueueDrains { drained.fulfill() }
+        wait(for: [drained], timeout: 5)
+    }
+
+    private func startCallback(_ engine: MacCaptureEngine, _ url: URL) {
+        engine.fileOutput(AVCaptureMovieFileOutput(), didStartRecordingTo: url, from: [])
+        drainSessionQueue(engine)
+    }
+
+    func testStopBetweenFrameClaimAndStartCallbackStopsThatTakeAsManual() throws {
+        let counter = StopCounter()
+        let engine = makeEngine(counter: counter)
+        let take = media("take001")
+        let token = try engine.testOnly_prepareRoutineMediaStart(mediaURL: take, plannedStartHostTime: 100)
+        XCTAssertEqual(engine.testOnly_claimRoutineMediaStart(at: 99.87), take)
+        XCTAssertEqual(engine.requestRoutineRecordingStop(for: token, reason: .manual), .accepted)
+        drainSessionQueue(engine)
+        XCTAssertEqual(counter.count, 0, "The writer has not confirmed its start yet.")
+        startCallback(engine, take)
+        XCTAssertEqual(counter.count, 1, "A Stop requested before didStartRecordingTo was lost.")
+        let boundary = try XCTUnwrap(engine.routineRecordingBoundary(for: token))
+        XCTAssertTrue(boundary.didStartRecording)
+        XCTAssertTrue(boundary.stopWasRequested)
+        XCTAssertEqual(engine.testOnly_resolvedRoutineStopReason(captureError: nil), .manual)
+        startCallback(engine, take)
+        XCTAssertEqual(counter.count, 1, "A duplicate start callback must not stop the writer again.")
+    }
+
+    func testStartCallbackForAnotherFileCannotConsumeTheDeferredStop() throws {
+        let counter = StopCounter()
+        let engine = makeEngine(counter: counter)
+        let take = media("take001")
+        let token = try engine.testOnly_prepareRoutineMediaStart(mediaURL: take, plannedStartHostTime: 100)
+        XCTAssertEqual(engine.testOnly_claimRoutineMediaStart(at: 100), take)
+        XCTAssertEqual(engine.requestRoutineRecordingStop(for: token, reason: .manual), .accepted)
+        startCallback(engine, media("stale"))
+        XCTAssertEqual(counter.count, 0)
+        startCallback(engine, take)
+        XCTAssertEqual(counter.count, 1)
+    }
+
+    func testStopBeforeFirstFrameCancelsWithoutClaimingOrStoppingAWriter() throws {
+        let counter = StopCounter()
+        let engine = makeEngine(counter: counter)
+        let take = media("take001")
+        let token = try engine.testOnly_prepareRoutineMediaStart(mediaURL: take, plannedStartHostTime: 100)
+        guard case .rejected = engine.requestRoutineRecordingStop(for: token, reason: .manual) else {
+            return XCTFail("A Stop before the first sample must cancel the start.")
+        }
+        XCTAssertNil(engine.testOnly_claimRoutineMediaStart(at: 100))
+        drainSessionQueue(engine)
+        XCTAssertEqual(counter.count, 0)
+        let boundary = try XCTUnwrap(engine.routineRecordingBoundary(for: token))
+        XCTAssertFalse(boundary.didStartRecording)
+        XCTAssertNotNil(boundary.startFailureDescription)
+    }
+
+    func testStaleStopForEarlierGenerationCannotStopTheNextTake() throws {
+        let counter = StopCounter()
+        let engine = makeEngine(counter: counter)
+        let first = media("take001"), second = media("take002")
+        let firstToken = try engine.testOnly_prepareRoutineMediaStart(mediaURL: first, plannedStartHostTime: 100)
+        guard case .rejected = engine.requestRoutineRecordingStop(for: firstToken, reason: .manual) else {
+            return XCTFail("Expected cancellation of the first request.")
+        }
+        let secondToken = try engine.testOnly_prepareRoutineMediaStart(mediaURL: second, plannedStartHostTime: 200)
+        XCTAssertEqual(engine.testOnly_claimRoutineMediaStart(at: 200), second)
+        startCallback(engine, second)
+        guard case .rejected = engine.requestRoutineRecordingStop(for: firstToken, reason: .manual) else {
+            return XCTFail("A stale generation must be rejected.")
+        }
+        drainSessionQueue(engine)
+        XCTAssertEqual(counter.count, 0)
+        XCTAssertEqual(engine.routineRecordingBoundary(for: secondToken)?.stopWasRequested, false)
+        XCTAssertEqual(engine.requestRoutineRecordingStop(for: secondToken, reason: .manual), .accepted)
+        drainSessionQueue(engine)
+        XCTAssertEqual(counter.count, 1, "The confirmed current take must stop.")
+    }
+}

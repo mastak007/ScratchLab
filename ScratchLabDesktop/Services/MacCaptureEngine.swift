@@ -774,6 +774,17 @@ final class RoutineRecordingBoundaryLedger: @unchecked Sendable {
         }
     }
 
+    /// Records a Stop for the active prepared take whose first movie sample is
+    /// claimed but whose start callback has not arrived yet.
+    func requestStopBeforeConfirmedStart(token: RoutineRecordingRequestToken) {
+        lock.lock()
+        defer { lock.unlock() }
+        guard activeToken == token, var record = records[token], record.mediaURL != nil,
+              record.completion == nil, record.startFailureDescription == nil else { return }
+        record.stopWasRequested = true
+        records[token] = record
+    }
+
     func requestStop(
         token: RoutineRecordingRequestToken
     ) -> RoutineRecordingStopRequestDisposition {
@@ -4719,6 +4730,19 @@ final class MacCaptureEngine: NSObject, ObservableObject {
         let plannedStartHostTime: Double?
     }
     private var pendingRoutineMediaStart: PendingRoutineMediaStart?
+    /// Movie claimed by its first sample, the same movie once
+    /// `didStartRecordingTo` confirms it, and a Stop requested in between.
+    /// All three are guarded by `routineMediaEpochLock`, so a Stop can never
+    /// fall into the gap before `movieOutput.isRecording` becomes true.
+    private var routineClaimedMediaURLStorage: URL?
+    private var routineStartedMediaURLStorage: URL?
+    private var routineDeferredStopMediaURLStorage: URL?
+    #if DEBUG
+    /// Replaces ONLY the AVFoundation writer-stop call for tests that drive
+    /// simulated start callbacks without a started movie writer. Arming,
+    /// claim, deferred-stop, ledger and delegate logic still run unchanged.
+    var testOnly_routineMovieWriterStopOverride: (() -> Void)?
+    #endif
     private let routineMediaEpochLock = NSLock()
     private var routineMediaStartHostTimeStorage: CFTimeInterval = 0
     /// Longest the active take may run. A safety cap unless the operator chose
@@ -4760,6 +4784,23 @@ final class MacCaptureEngine: NSObject, ObservableObject {
         return routinePlannedTakeDurationSecondsStorage
     }
 
+    /// Arms the first-sample claim unless this request already failed or was
+    /// cancelled while its camera, sidecar and PCM were being prepared.
+    private func armPendingRoutineMediaStart(
+        mediaURL: URL,
+        recordingToken: RoutineRecordingRequestToken,
+        midiTakeToken: MIDICaptureTakeToken,
+        plannedStartHostTime: Double?
+    ) throws {
+        routineMediaEpochLock.lock()
+        defer { routineMediaEpochLock.unlock() }
+        if routineRecordingBoundaryLedger.snapshot(for: recordingToken)?.startFailureDescription != nil {
+            throw RoutineRecordingError.sessionNotReady
+        }
+        pendingRoutineMediaStart = PendingRoutineMediaStart(mediaURL: mediaURL, recordingToken: recordingToken,
+            midiTakeToken: midiTakeToken, plannedStartHostTime: plannedStartHostTime)
+    }
+
     private func armRoutineTakeDuration(
         maximumSeconds: Double,
         plannedSeconds: Double?
@@ -4769,6 +4810,9 @@ final class MacCaptureEngine: NSObject, ObservableObject {
         routinePlannedTakeDurationSecondsStorage = plannedSeconds
         routineStopReasonStorage = nil
         routineMediaStartHostTimeStorage = 0
+        routineClaimedMediaURLStorage = nil
+        routineStartedMediaURLStorage = nil
+        routineDeferredStopMediaURLStorage = nil
         routineMediaEpochLock.unlock()
     }
 
@@ -4809,6 +4853,9 @@ final class MacCaptureEngine: NSObject, ObservableObject {
     private func endRoutineMediaEpoch() {
         routineMediaEpochLock.lock()
         routineMediaStartHostTimeStorage = 0
+        routineClaimedMediaURLStorage = nil
+        routineStartedMediaURLStorage = nil
+        routineDeferredStopMediaURLStorage = nil
         let pendingStop = routineTimedStopWorkItem
         routineTimedStopWorkItem = nil
         routineMediaEpochLock.unlock()
@@ -6047,9 +6094,10 @@ final class MacCaptureEngine: NSObject, ObservableObject {
         if let state = routineRecordingBoundaryLedger.snapshot(for: token),
            !state.didStartRecording, state.completion == nil {
             routineMediaEpochLock.lock()
-            if routineMediaStartHostTimeStorage > 0,
-               let mediaURL = state.mediaURL, midiTakeToken(for: mediaURL) != nil {
+            if let mediaURL = state.mediaURL, routineClaimedMediaURLStorage == mediaURL,
+               midiTakeToken(for: mediaURL) != nil {
                 routineMediaEpochLock.unlock()
+                routineRecordingBoundaryLedger.requestStopBeforeConfirmedStart(token: token)
                 stopRoutineRecording(reason: reason)
                 return .accepted
             }
@@ -6347,12 +6395,7 @@ final class MacCaptureEngine: NSObject, ObservableObject {
                     destinationURL: preparedRecording.audioURL,
                     maximumDurationSeconds: maximumTakeDurationSeconds + 15
                 )
-                self.routineMediaEpochLock.lock()
-                if self.routineRecordingBoundaryLedger.snapshot(for: recordingToken)?.startFailureDescription != nil {
-                    self.routineMediaEpochLock.unlock()
-                    throw RoutineRecordingError.sessionNotReady
-                }
-                self.pendingRoutineMediaStart = PendingRoutineMediaStart(
+                try self.armPendingRoutineMediaStart(
                     mediaURL: preparedRecording.mediaURL,
                     recordingToken: recordingToken,
                     midiTakeToken: preparedMIDIToken,
@@ -6360,7 +6403,6 @@ final class MacCaptureEngine: NSObject, ObservableObject {
                         AVAudioTime.seconds(forHostTime: $0)
                     }
                 )
-                self.routineMediaEpochLock.unlock()
             } catch {
                 self.scratchPlaybackController.cancelRoutineOutputCapture()
                 // Arming may already have seized the MIDI window; this take
@@ -6407,24 +6449,61 @@ final class MacCaptureEngine: NSObject, ObservableObject {
                 description: "Recording stopped before the camera and audio were ready.")
         }
         sessionQueue.async {
-            guard self.movieOutput.isRecording else {
+            switch self.routineMovieStopAction() {
+            case .deferUntilStart:
+                // The first sample is claimed and `startRecording` issued, but
+                // the writer has not confirmed. `didStartRecordingTo` stops it.
                 Task { @MainActor in
                     self.isRoutineRecording = false
+                    self.routineRecordingStatus = "Stopping as soon as the camera recording starts"
                 }
                 return
-            }
-            Task { @MainActor in
-                self.isRoutineRecording = false
-                self.routineRecordingStatus = "Finishing routine recording"
-                if let sidecar = self.activeRoutineRecordingSidecar {
-                    self.upsertRoutineTakeArtifactStatus(
-                        self.provisionalRoutineTakeArtifactStatus(for: sidecar, readiness: .finalizing)
-                    )
+            case .stopConfirmedMovie:
+                break
+            case .noClaimedMovie:
+                guard self.movieOutput.isRecording else {
+                    Task { @MainActor in
+                        self.isRoutineRecording = false
+                    }
+                    return
                 }
             }
-            self.closeMIDIRecordingWindow(token: midiTakeToken)
-            self.movieOutput.stopRecording()
+            self.performRoutineMovieStop(midiTakeToken: midiTakeToken)
         }
+    }
+
+    private enum RoutineMovieStopAction { case stopConfirmedMovie, deferUntilStart, noClaimedMovie }
+
+    /// Decides, under the same lock as the claim and start callback, whether a
+    /// Stop can reach the writer now or must wait for its confirmed start.
+    private func routineMovieStopAction() -> RoutineMovieStopAction {
+        routineMediaEpochLock.lock()
+        defer { routineMediaEpochLock.unlock() }
+        guard let claimed = routineClaimedMediaURLStorage else { return .noClaimedMovie }
+        if routineStartedMediaURLStorage == claimed { return .stopConfirmedMovie }
+        routineDeferredStopMediaURLStorage = claimed
+        return .deferUntilStart
+    }
+
+    /// The one routine writer stop. Runs on `sessionQueue`.
+    private func performRoutineMovieStop(midiTakeToken: MIDICaptureTakeToken?) {
+        Task { @MainActor in
+            self.isRoutineRecording = false
+            self.routineRecordingStatus = "Finishing routine recording"
+            if let sidecar = self.activeRoutineRecordingSidecar {
+                self.upsertRoutineTakeArtifactStatus(
+                    self.provisionalRoutineTakeArtifactStatus(for: sidecar, readiness: .finalizing)
+                )
+            }
+        }
+        closeMIDIRecordingWindow(token: midiTakeToken)
+        #if DEBUG
+        if let override = testOnly_routineMovieWriterStopOverride {
+            override()
+            return
+        }
+        #endif
+        movieOutput.stopRecording()
     }
 
     func refreshDevices(
@@ -12387,6 +12466,33 @@ final class MacCaptureEngine: NSObject, ObservableObject {
         persistWatchStopDiagnostics(diagnostics, for: identity)
     }
     var testOnly_activeSidecar: CaptureCore.LocalRecordingSidecar? { activeRoutineRecordingSidecar }
+    /// Prepares one routine request through the production ledger, MIDI window
+    /// and first-sample arming; no camera, writer or sidecar is involved.
+    func testOnly_prepareRoutineMediaStart(mediaURL: URL, plannedStartHostTime: Double?) throws -> RoutineRecordingRequestToken {
+        armRoutineTakeDuration(maximumSeconds: 40.0 / 3, plannedSeconds: 40.0 / 3)
+        let token = routineRecordingBoundaryLedger.beginRequest()
+        routineRecordingBoundaryLedger.prepare(token: token,
+            takeID: mediaURL.deletingPathExtension().lastPathComponent, mediaURL: mediaURL)
+        guard let midiToken = openMIDIInputForRecording(mediaURL: mediaURL) else {
+            throw RoutineRecordingError.sessionNotReady
+        }
+        try armPendingRoutineMediaStart(mediaURL: mediaURL, recordingToken: token, midiTakeToken: midiToken,
+            plannedStartHostTime: plannedStartHostTime)
+        return token
+    }
+    /// The same claim the first movie sample performs.
+    func testOnly_claimRoutineMediaStart(at hostTime: Double) -> URL? {
+        routineMediaEpochLock.lock()
+        defer { routineMediaEpochLock.unlock() }
+        return claimPendingRoutineMediaStartLocked(hostTime: hostTime)?.start.mediaURL
+    }
+    /// Runs `body` after work already queued on `sessionQueue`; never blocks.
+    func testOnly_afterSessionQueueDrains(_ body: @escaping @Sendable () -> Void) {
+        sessionQueue.async(execute: body)
+    }
+    func testOnly_resolvedRoutineStopReason(captureError: Error?) -> CaptureStopReason {
+        resolvedRoutineStopReason(captureError: captureError, captureErrorDescription: nil)
+    }
 
     /// Test-only drivers for the exact private window transitions the capture
     /// lifecycle performs, so ownership interleavings can be exercised without
@@ -14296,22 +14402,35 @@ extension MacCaptureEngine {
         guard hostTime.isFinite, hostTime >= firstAudio else { return }
         routineMediaEpochLock.lock()
         defer { routineMediaEpochLock.unlock() }
-        guard let pending = pendingRoutineMediaStart else { return }
-        // A short, real camera preroll keeps beat 4 inside the media, including
-        // at low frame rates. Its measured offset is persisted and exported.
-        if let planned = pending.plannedStartHostTime,
-           hostTime < planned - ReferenceRecordingOriginPolicy.maximumPrerollSeconds { return }
-        pendingRoutineMediaStart = nil
-        routineMediaStartHostTimeStorage = hostTime
-        let duration = Self.routineMediaDuration(maximum: routineMaximumTakeDurationSecondsStorage,
-            plannedStart: pending.plannedStartHostTime, actualStart: hostTime)
-        routineMaximumTakeDurationSecondsStorage = duration
+        guard let claim = claimPendingRoutineMediaStartLocked(hostTime: hostTime) else { return }
+        let pending = claim.start, duration = claim.duration
         recordRoutineMeasuredOrigin(hostTime, mediaURL: pending.mediaURL)
         beginRoutineTakeTimelines(at: hostTime, token: pending.recordingToken,
             midiTakeToken: pending.midiTakeToken)
         secondaryCamera.begin(primaryURL: pending.mediaURL, epoch: hostTime)
         output.maxRecordedDuration = CMTime(seconds: duration, preferredTimescale: 60000)
         output.startRecording(to: pending.mediaURL, recordingDelegate: self)
+    }
+
+    /// Claims the prepared take for the first eligible movie sample. Call with
+    /// `routineMediaEpochLock` held.
+    private func claimPendingRoutineMediaStartLocked(
+        hostTime: Double
+    ) -> (start: PendingRoutineMediaStart, duration: Double)? {
+        guard let pending = pendingRoutineMediaStart else { return nil }
+        // A short, real camera preroll keeps beat 4 inside the media, including
+        // at low frame rates. Its measured offset is persisted and exported.
+        if let planned = pending.plannedStartHostTime,
+           hostTime < planned - ReferenceRecordingOriginPolicy.maximumPrerollSeconds { return nil }
+        pendingRoutineMediaStart = nil
+        routineMediaStartHostTimeStorage = hostTime
+        routineClaimedMediaURLStorage = pending.mediaURL
+        routineStartedMediaURLStorage = nil
+        routineDeferredStopMediaURLStorage = nil
+        let duration = Self.routineMediaDuration(maximum: routineMaximumTakeDurationSecondsStorage,
+            plannedStart: pending.plannedStartHostTime, actualStart: hostTime)
+        routineMaximumTakeDurationSecondsStorage = duration
+        return (pending, duration)
     }
 
     static func routineMediaDuration(maximum: Double, plannedStart: Double?, actualStart: Double) -> Double {
@@ -14323,8 +14442,20 @@ extension MacCaptureEngine {
 
 extension MacCaptureEngine: AVCaptureFileOutputRecordingDelegate {
     nonisolated func fileOutput(_ output: AVCaptureFileOutput, didStartRecordingTo fileURL: URL, from connections: [AVCaptureConnection]) {
-        guard midiTakeToken(for: fileURL) != nil else { return }
+        guard let takeToken = midiTakeToken(for: fileURL) else { return }
         _ = routineRecordingBoundaryLedger.didStartRecording(mediaURL: fileURL)
+        routineMediaEpochLock.lock()
+        let isClaimedMovie = routineClaimedMediaURLStorage == fileURL
+        let wasAlreadyStarted = isClaimedMovie && routineStartedMediaURLStorage == fileURL
+        if isClaimedMovie { routineStartedMediaURLStorage = fileURL }
+        let stopRequested = isClaimedMovie && routineDeferredStopMediaURLStorage == fileURL
+        if stopRequested { routineDeferredStopMediaURLStorage = nil }
+        routineMediaEpochLock.unlock()
+        if stopRequested {
+            sessionQueue.async { self.performRoutineMovieStop(midiTakeToken: takeToken) }
+            return
+        }
+        guard !wasAlreadyStarted else { return }
         scheduleRoutineTimedStop(mediaStartHostTime: routineMediaStartHostTime,
             maximumDurationSeconds: routineMaximumTakeDurationSeconds)
         Task { @MainActor in
