@@ -15,7 +15,7 @@ enum WatchMotionCaptureCodec {
     }()
 }
 
-struct WatchMotionCaptureSession: Codable, Identifiable {
+struct WatchMotionCaptureSession: Codable, Identifiable, Equatable, Sendable {
     let id: UUID
     let sessionID: String
     let takeID: String?
@@ -123,7 +123,7 @@ struct WatchMotionCaptureSession: Codable, Identifiable {
     }
 }
 
-struct WatchMotionTimingMetadata: Codable {
+struct WatchMotionTimingMetadata: Codable, Equatable, Sendable {
     let clockSource: String
     let firstCoreMotionTimestamp: TimeInterval
     let lastCoreMotionTimestamp: TimeInterval
@@ -204,7 +204,7 @@ struct WatchMotionTimingMetadata: Codable {
     }
 }
 
-struct WatchMotionSample: Codable {
+struct WatchMotionSample: Codable, Equatable, Sendable {
     let elapsedTime: TimeInterval
     let coreMotionTimestamp: TimeInterval?
     let attitudeRoll: Double
@@ -262,5 +262,166 @@ struct WatchMotionSample: Codable {
         self.rotationRateX = rotationRateX
         self.rotationRateY = rotationRateY
         self.rotationRateZ = rotationRateZ
+    }
+}
+
+struct WatchMotionRelayBatch: Codable, Equatable, Sendable {
+    static let packetKind = "watch_motion_batch_v1"
+
+    let kind: String
+    let captureID: UUID
+    let context: WatchRelayTakeContext
+    let commandID: String
+    let requestedAt: Date
+    let acknowledgedAt: Date?
+    let sourceDeviceName: String
+    let appVersion: String
+    let sampleRateHz: Double
+    let startedAt: Date
+    let capturedAt: Date
+    let endedAt: Date?
+    let sequence: Int
+    let isFinal: Bool
+    let samples: [WatchMotionSample]
+
+    init(
+        captureID: UUID,
+        context: WatchRelayTakeContext,
+        commandID: String,
+        requestedAt: Date,
+        acknowledgedAt: Date?,
+        sourceDeviceName: String,
+        appVersion: String,
+        sampleRateHz: Double,
+        startedAt: Date,
+        capturedAt: Date = Date(),
+        endedAt: Date? = nil,
+        sequence: Int,
+        isFinal: Bool,
+        samples: [WatchMotionSample]
+    ) {
+        self.kind = Self.packetKind
+        self.captureID = captureID
+        self.context = context
+        self.commandID = commandID
+        self.requestedAt = requestedAt
+        self.acknowledgedAt = acknowledgedAt
+        self.sourceDeviceName = sourceDeviceName
+        self.appVersion = appVersion
+        self.sampleRateHz = sampleRateHz
+        self.startedAt = startedAt
+        self.capturedAt = capturedAt
+        self.endedAt = endedAt
+        self.sequence = sequence
+        self.isFinal = isFinal
+        self.samples = samples
+    }
+}
+
+struct WatchMotionRelayAcknowledgement: Codable, Equatable, Sendable {
+    static let packetKind = "watch_motion_batch_ack_v1"
+
+    let kind: String
+    let captureID: UUID
+    let sequence: Int
+    let accepted: Bool
+
+    init(batch: WatchMotionRelayBatch, accepted: Bool) {
+        self.kind = Self.packetKind
+        self.captureID = batch.captureID
+        self.sequence = batch.sequence
+        self.accepted = accepted
+    }
+
+    func accepts(_ batch: WatchMotionRelayBatch) -> Bool {
+        kind == Self.packetKind
+            && accepted
+            && captureID == batch.captureID
+            && sequence == batch.sequence
+    }
+}
+
+struct WatchMotionRelayAssembler {
+    enum Rejection: Equatable {
+        case invalidPacket
+        case unauthorizedContext
+        case captureIdentityChanged
+        case duplicateSequence
+    }
+
+    enum IngestResult: Equatable {
+        case accepted
+        case rejected(Rejection)
+        case completed(WatchMotionCaptureSession)
+    }
+
+    private var captureID: UUID?
+    private var batches: [Int: WatchMotionRelayBatch] = [:]
+    private var finalSequence: Int?
+
+    mutating func reset() {
+        captureID = nil
+        batches.removeAll(keepingCapacity: true)
+        finalSequence = nil
+    }
+
+    mutating func ingest(
+        _ batch: WatchMotionRelayBatch,
+        accepting authorizedContext: WatchRelayTakeContext
+    ) -> IngestResult {
+        guard batch.kind == WatchMotionRelayBatch.packetKind, batch.sequence >= 0 else {
+            return .rejected(.invalidPacket)
+        }
+        guard batch.context == authorizedContext else {
+            return .rejected(.unauthorizedContext)
+        }
+        if let captureID, captureID != batch.captureID {
+            return .rejected(.captureIdentityChanged)
+        }
+        guard batches[batch.sequence] == nil else {
+            return .rejected(.duplicateSequence)
+        }
+
+        captureID = batch.captureID
+        batches[batch.sequence] = batch
+        if batch.isFinal {
+            finalSequence = batch.sequence
+        }
+
+        guard let finalSequence,
+              let firstBatch = batches[0],
+              let finalBatch = batches[finalSequence],
+              (0...finalSequence).allSatisfy({ batches[$0] != nil }) else {
+            return .accepted
+        }
+
+        let samples = (0...finalSequence).flatMap { batches[$0]?.samples ?? [] }
+        let endedAt = finalBatch.endedAt ?? finalBatch.capturedAt
+        let wallClockDuration = max(endedAt.timeIntervalSince(firstBatch.startedAt), 0)
+        let requestedSampleInterval = firstBatch.sampleRateHz > 0 ? 1.0 / firstBatch.sampleRateHz : 0
+        let timingMetadata = WatchMotionTimingMetadata.make(
+            from: samples,
+            requestedSampleInterval: requestedSampleInterval,
+            wallClockDuration: wallClockDuration
+        )
+        let session = WatchMotionCaptureSession(
+            id: batch.captureID,
+            sessionID: authorizedContext.sessionID,
+            takeID: authorizedContext.takeID,
+            commandID: firstBatch.commandID,
+            requestedAt: firstBatch.requestedAt,
+            acknowledgedAt: firstBatch.acknowledgedAt,
+            syncState: .acknowledged,
+            sourceDeviceName: firstBatch.sourceDeviceName,
+            sampleRateHz: firstBatch.sampleRateHz,
+            startedAt: firstBatch.startedAt,
+            endedAt: endedAt,
+            deviceRecordedAtStart: firstBatch.startedAt,
+            deviceRecordedAtEnd: endedAt,
+            appVersion: firstBatch.appVersion,
+            timingMetadata: timingMetadata,
+            samples: samples
+        )
+        return .completed(session)
     }
 }

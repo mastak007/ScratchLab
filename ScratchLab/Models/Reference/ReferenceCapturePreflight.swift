@@ -1,0 +1,512 @@
+// ReferenceCapturePreflight — the live readiness check shown before a
+// reference take, and the gate that blocks recording when it fails.
+//
+// This is a pure projection of live inputs into named checks. The macOS panel
+// renders it; the record button reads `blocksRecording`. Keeping the decision
+// here rather than in the view is what lets "can CXL record right now?" be
+// tested without a controller, and what will let iOS present the same panel.
+//
+// A check is either satisfied, unsatisfied-and-blocking, or unsatisfied-and-
+// advisory. Nothing is silently ignored: an input that is not required for the
+// selected technique is still SHOWN, marked advisory, so the operator can see
+// that ScratchLab knows it is absent.
+//
+// Foundation only. Pure value types.
+
+import Foundation
+
+// MARK: - Live input snapshot
+
+/// One MIDI address the app has received traffic on since launch.
+///
+/// Purely diagnostic. Exists because the 2026-09-04 hardware smoke could not
+/// distinguish "the crossfader is transmitting" from "the crossfader
+/// transmitted at some point before the take and has been silent since", and
+/// could not see that a control had been learned onto an address nothing was
+/// actually sending on.
+struct ReferenceLiveMIDIAddressObservation: Equatable, Sendable, Identifiable {
+    let deviceName: String
+    /// Channel as received in the byte stream, 0–15.
+    let channel: Int
+    let controller: Int
+    let latestRawValue: Int
+    /// Messages received on this address since app launch.
+    let eventCount: Int
+    /// Age of the most recent message, in seconds.
+    let secondsSinceLastMessage: Double
+
+    init(
+        deviceName: String,
+        channel: Int,
+        controller: Int,
+        latestRawValue: Int,
+        eventCount: Int,
+        secondsSinceLastMessage: Double
+    ) {
+        self.deviceName = deviceName
+        self.channel = channel
+        self.controller = controller
+        self.latestRawValue = latestRawValue
+        self.eventCount = eventCount
+        self.secondsSinceLastMessage = secondsSinceLastMessage
+    }
+
+    var id: String { "\(deviceName)#\(channel)#\(controller)" }
+    /// Channel as printed on hardware and in vendor documentation (1-based).
+    var userFacingChannel: Int { channel + 1 }
+    var displayName: String { "\(deviceName) · Ch\(userFacingChannel) CC\(controller)" }
+}
+
+/// Everything the preflight panel observes, sampled at one instant.
+struct ReferencePreflightSnapshot: Equatable, Sendable {
+    /// Connected controller name, or `nil` when no MIDI source is selected.
+    let controllerName: String?
+    let controllerIdentifier: String?
+    /// The address crossfader traffic is arriving on, if any has arrived.
+    let observedCrossfaderAddress: CrossfaderMIDIAddress?
+    /// Latest raw crossfader value seen, `nil` if none yet.
+    let latestCrossfaderRawValue: Int?
+    /// The calibration on file for the observed address, if any.
+    let calibration: CrossfaderCalibration?
+    /// Running crossfader message count carried by an observation from the
+    /// CURRENT connected MIDI source/generation. Callers must exclude cached
+    /// observations from an earlier connection. The counter may include earlier
+    /// traffic, so it does not prove movement now or samples in this take.
+    let crossfaderEventCount: Int
+    /// Age of the most recent crossfader message, in seconds. `nil` when none
+    /// has ever arrived.
+    ///
+    /// The 2026-09-04 hardware smoke read a stale lifetime count of 1,089 as
+    /// "the crossfader is working" and then recorded a take containing zero
+    /// crossfader samples. This is the field that tells those two states
+    /// apart.
+    let crossfaderSecondsSinceLastMessage: Double?
+    /// Crossfader messages captured INSIDE the currently recording take.
+    /// Zero when no take is recording.
+    let takeScopedCrossfaderEventCount: Int
+    /// Whether a take is recording right now, so the panel can say whether
+    /// `takeScopedCrossfaderEventCount` is meaningful yet.
+    let isRecordingTake: Bool
+    /// Every MIDI address that has carried traffic since launch, most recently
+    /// active first. Diagnostic only — never a mapping or a decision.
+    let observedMIDIAddresses: [ReferenceLiveMIDIAddressObservation]
+    /// Running platter message count from a current-connection observation.
+    /// Zero until this connected source/generation has actually sent traffic.
+    let platterEventCount: Int
+    /// Whether the platter has moved recently enough to count as live.
+    let platterIsMoving: Bool
+    /// Program audio input peak, 0…1, from the attached input receiving samples.
+    /// Zero is valid silence; `nil` means the selected input is unavailable or
+    /// is not delivering audio samples.
+    let audioInputPeakLevel: Double?
+    let audioDeviceName: String?
+    let watchIsReachable: Bool
+    let watchMotionIsStreaming: Bool
+    /// Selected camera device name, or `nil` when no video device is
+    /// selected. Defaulted so existing callers (and every test written
+    /// before this field existed) keep compiling unmodified.
+    let cameraDeviceName: String?
+    /// Whether the capture session's camera preview is actually running —
+    /// distinct from a device merely being *selected*, the same distinction
+    /// `MacCaptureEngine.isCameraActive` already draws.
+    let cameraIsActive: Bool
+
+    init(
+        controllerName: String?,
+        controllerIdentifier: String?,
+        observedCrossfaderAddress: CrossfaderMIDIAddress?,
+        latestCrossfaderRawValue: Int?,
+        calibration: CrossfaderCalibration?,
+        crossfaderEventCount: Int,
+        platterEventCount: Int,
+        platterIsMoving: Bool,
+        audioInputPeakLevel: Double?,
+        audioDeviceName: String?,
+        watchIsReachable: Bool,
+        watchMotionIsStreaming: Bool,
+        cameraDeviceName: String? = nil,
+        cameraIsActive: Bool = false,
+        crossfaderSecondsSinceLastMessage: Double? = nil,
+        takeScopedCrossfaderEventCount: Int = 0,
+        isRecordingTake: Bool = false,
+        observedMIDIAddresses: [ReferenceLiveMIDIAddressObservation] = []
+    ) {
+        self.crossfaderSecondsSinceLastMessage = crossfaderSecondsSinceLastMessage
+        self.takeScopedCrossfaderEventCount = takeScopedCrossfaderEventCount
+        self.isRecordingTake = isRecordingTake
+        self.observedMIDIAddresses = observedMIDIAddresses
+        self.controllerName = controllerName
+        self.controllerIdentifier = controllerIdentifier
+        self.observedCrossfaderAddress = observedCrossfaderAddress
+        self.latestCrossfaderRawValue = latestCrossfaderRawValue
+        self.calibration = calibration
+        self.crossfaderEventCount = crossfaderEventCount
+        self.platterEventCount = platterEventCount
+        self.platterIsMoving = platterIsMoving
+        self.audioInputPeakLevel = audioInputPeakLevel
+        self.audioDeviceName = audioDeviceName
+        self.watchIsReachable = watchIsReachable
+        self.watchMotionIsStreaming = watchMotionIsStreaming
+        self.cameraDeviceName = cameraDeviceName
+        self.cameraIsActive = cameraIsActive
+    }
+
+    /// Calibrated position of the latest raw value, or `nil` when either the
+    /// value or the calibration is missing. Never falls back to `raw / 127`.
+    var calibratedCrossfaderPosition: Double? {
+        guard let raw = latestCrossfaderRawValue,
+              let calibration,
+              calibration.isUsable else { return nil }
+        return calibration.normalized(rawValue: raw)
+    }
+
+    /// Open / closed / moving for the latest value, under `hysteresis`.
+    func crossfaderGateState(
+        hysteresis: CrossfaderHysteresis = .default
+    ) -> CrossfaderGateState? {
+        guard let position = calibratedCrossfaderPosition, hysteresis.isUsable else { return nil }
+        return hysteresis.instantaneousState(forNormalizedPosition: position)
+    }
+}
+
+// MARK: - Checks
+
+/// One preflight row.
+struct ReferencePreflightCheck: Equatable, Sendable, Identifiable {
+    enum Status: Equatable, Sendable {
+        case satisfied
+        /// Not satisfied, and recording is blocked.
+        case blocking
+        /// Not satisfied, recording is allowed, the operator is told.
+        case advisory
+    }
+
+    let id: String
+    let title: String
+    /// Live value, e.g. "Rane ONE MKII · Ch16 CC8" or "raw 41 · 0.78 open".
+    let detail: String
+    let status: Status
+
+    init(id: String, title: String, detail: String, status: Status) {
+        self.id = id
+        self.title = title
+        self.detail = detail
+        self.status = status
+    }
+}
+
+/// The full preflight result.
+struct ReferencePreflightResult: Equatable, Sendable {
+    let checks: [ReferencePreflightCheck]
+
+    var blockingChecks: [ReferencePreflightCheck] {
+        checks.filter { $0.status == .blocking }
+    }
+
+    var blocksRecording: Bool { !blockingChecks.isEmpty }
+
+    /// One line for the record button's disabled explanation.
+    var blockingSummary: String? {
+        guard !blockingChecks.isEmpty else { return nil }
+        return blockingChecks.map { "\($0.title): \($0.detail)" }.joined(separator: " · ")
+    }
+}
+
+// MARK: - Evaluator
+
+enum ReferenceCapturePreflight {
+
+    /// Audio input peak below which we treat the program feed as dead.
+    static let minimumAudioInputPeak: Double = 0.0005
+
+    /// How recently a control must have sent a message to count as live.
+    /// Matches the window the platter row already uses.
+    static let recentActivityWindow: Double = 1.5
+
+    /// `true` only when a crossfader message arrived inside
+    /// `recentActivityWindow`. A lifetime count with no recent message is
+    /// explicitly NOT liveness.
+    static func crossfaderIsRecentlyActive(snapshot: ReferencePreflightSnapshot) -> Bool {
+        guard snapshot.crossfaderEventCount > 0,
+              let age = snapshot.crossfaderSecondsSinceLastMessage else { return false }
+        return age.isFinite && age >= 0 && age < recentActivityWindow
+    }
+
+    /// Readiness belongs to a valid observation on the selected connection,
+    /// not to whether the operator is moving their hand at this instant.
+    static func controllerIsConnected(snapshot: ReferencePreflightSnapshot) -> Bool {
+        guard let name = snapshot.controllerName,
+              !name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+              let identifier = snapshot.controllerIdentifier,
+              !identifier.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return false }
+        return true
+    }
+
+    static func crossfaderIsReady(snapshot: ReferencePreflightSnapshot) -> Bool {
+        guard controllerIsConnected(snapshot: snapshot),
+              snapshot.crossfaderEventCount > 0,
+              let address = snapshot.observedCrossfaderAddress,
+              address.deviceIdentifier == snapshot.controllerIdentifier,
+              let raw = snapshot.latestCrossfaderRawValue, (0...127).contains(raw) else { return false }
+        return true
+    }
+
+    /// Activity and take-scoped counts remain explicit even when readiness
+    /// stays green for a parked control. Readiness never proves take evidence.
+    static func crossfaderDetail(snapshot: ReferencePreflightSnapshot) -> String {
+        var parts: [String] = []
+        if crossfaderIsReady(snapshot: snapshot) {
+            parts.append(crossfaderIsRecentlyActive(snapshot: snapshot) ? "Ready — moving now" : "Ready — idle")
+            parts.append("\(snapshot.crossfaderEventCount) since launch")
+            if let age = snapshot.crossfaderSecondsSinceLastMessage, age.isFinite, age >= 0 {
+                if !crossfaderIsRecentlyActive(snapshot: snapshot) {
+                    parts.append(String(format: "last message %.1fs ago", age))
+                }
+            } else {
+                parts.append("last message age unavailable")
+            }
+        } else {
+            parts.append("No valid crossfader traffic for the selected connection. Move the crossfader after connecting.")
+        }
+        if snapshot.isRecordingTake {
+            parts.append("\(snapshot.takeScopedCrossfaderEventCount) in this take")
+        }
+        return parts.joined(separator: " · ")
+    }
+
+    /// Evaluate readiness to record `technique` right now.
+    ///
+    /// Blocking conditions, in the order an operator would fix them:
+    /// no controller, no crossfader traffic, no calibration for the observed
+    /// address, a calibration measured on a different address, no platter
+    /// traffic, a dead audio input, and no active camera. The Watch is
+    /// advisory for diagnostic recording; canonical approval still requires it.
+    static func evaluate(
+        snapshot: ReferencePreflightSnapshot,
+        technique: ReferenceTechnique,
+        hysteresis: CrossfaderHysteresis = .default
+    ) -> ReferencePreflightResult {
+        var checks: [ReferencePreflightCheck] = []
+        let expectation = technique.defaultFaderExpectation
+
+        // Controller
+        if let controllerName = snapshot.controllerName,
+           !controllerName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+           let identifier = snapshot.controllerIdentifier,
+           !identifier.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            checks.append(
+                ReferencePreflightCheck(
+                    id: "controller",
+                    title: "Controller",
+                    detail: controllerName,
+                    status: .satisfied
+                )
+            )
+        } else {
+            checks.append(
+                ReferencePreflightCheck(
+                    id: "controller",
+                    title: "Controller",
+                    detail: "No MIDI source selected.",
+                    status: .blocking
+                )
+            )
+        }
+
+        // Crossfader address
+        if let address = snapshot.observedCrossfaderAddress {
+            checks.append(
+                ReferencePreflightCheck(
+                    id: "crossfaderAddress",
+                    title: "Crossfader MIDI",
+                    detail: address.displayName,
+                    status: .satisfied
+                )
+            )
+        } else {
+            checks.append(
+                ReferencePreflightCheck(
+                    id: "crossfaderAddress",
+                    title: "Crossfader MIDI",
+                    detail: "No crossfader traffic detected. Move the crossfader.",
+                    status: .blocking
+                )
+            )
+        }
+
+        // Raw value
+        checks.append(
+            ReferencePreflightCheck(
+                id: "crossfaderRaw",
+                title: "Raw crossfader",
+                detail: snapshot.latestCrossfaderRawValue.map(String.init) ?? "—",
+                status: snapshot.latestCrossfaderRawValue == nil ? .blocking : .satisfied
+            )
+        )
+
+        // Calibration + calibrated value + gate state
+        if let calibration = snapshot.calibration, calibration.isUsable {
+            let addressMatches = snapshot.observedCrossfaderAddress.map { observed in
+                calibration.address.matches(
+                    deviceIdentifier: observed.deviceIdentifier,
+                    channel: observed.channel,
+                    controller: observed.controller
+                )
+            } ?? true
+            checks.append(
+                ReferencePreflightCheck(
+                    id: "calibration",
+                    title: "Calibration",
+                    detail: addressMatches
+                        ? "Active half \(calibration.activeHalfRawBounds.lowerBound)–\(calibration.activeHalfRawBounds.upperBound), \(calibration.activeDeck.displayName), \(calibration.openEnd.displayName)."
+                        : "Calibrated on \(calibration.address.displayName), but traffic is arriving on a different address.",
+                    status: addressMatches ? .satisfied : .blocking
+                )
+            )
+            checks.append(
+                ReferencePreflightCheck(
+                    id: "crossfaderCalibrated",
+                    title: "Calibrated value",
+                    detail: snapshot.calibratedCrossfaderPosition
+                        .map { String(format: "%.3f", $0) } ?? "—",
+                    status: snapshot.calibratedCrossfaderPosition == nil ? .blocking : .satisfied
+                )
+            )
+            let gate = snapshot.crossfaderGateState(hysteresis: hysteresis)
+            // Starting position does not describe the upcoming performance.
+            // The finalized take still has to satisfy its fader expectation.
+            let needsOpenFaderReminder = expectation.requiresContinuouslyOpenFader && gate != .open
+            checks.append(
+                ReferencePreflightCheck(
+                    id: "crossfaderState",
+                    title: "Fader state",
+                    detail: gate.map(\.displayName)
+                        ?? "Unknown — calibrate the crossfader.",
+                    status: gate == nil
+                        ? .blocking
+                        : (needsOpenFaderReminder ? .advisory : .satisfied)
+                )
+            )
+        } else {
+            checks.append(
+                ReferencePreflightCheck(
+                    id: "calibration",
+                    title: "Calibration",
+                    detail: snapshot.calibration == nil
+                        ? "No calibration on file for this crossfader. Run calibration first."
+                        : "The stored calibration is unusable. Recalibrate.",
+                    status: .blocking
+                )
+            )
+            checks.append(
+                ReferencePreflightCheck(
+                    id: "crossfaderCalibrated",
+                    title: "Calibrated value",
+                    detail: "—",
+                    status: .blocking
+                )
+            )
+            checks.append(
+                ReferencePreflightCheck(
+                    id: "crossfaderState",
+                    title: "Fader state",
+                    detail: "Unknown — calibrate the crossfader.",
+                    status: .blocking
+                )
+            )
+        }
+
+        // A parked control stays ready after a valid current-connection
+        // observation; movement and take evidence remain separate diagnostics.
+        checks.append(
+            ReferencePreflightCheck(
+                id: "crossfaderEvents",
+                title: "Crossfader events",
+                detail: Self.crossfaderDetail(snapshot: snapshot),
+                status: Self.crossfaderIsReady(snapshot: snapshot) ? .satisfied : .advisory
+            )
+        )
+
+        // Platter readiness survives ordinary stillness, but not a source or
+        // connection change. The bridge only supplies current-generation traffic.
+        let platterReady = controllerIsConnected(snapshot: snapshot) && snapshot.platterEventCount > 0
+        checks.append(
+            ReferencePreflightCheck(
+                id: "platter",
+                title: "Platter",
+                detail: platterReady
+                    ? (snapshot.platterIsMoving
+                        ? "Ready — moving · \(snapshot.platterEventCount) messages seen."
+                        : "Ready — idle · \(snapshot.platterEventCount) messages seen.")
+                    : "No platter traffic for the selected connection. Touch the platter after connecting.",
+                status: platterReady
+                    ? .satisfied
+                    : (expectation.requiresPlatterMotion && snapshot.platterEventCount == 0
+                        ? .blocking
+                        : .advisory)
+            )
+        )
+
+        // Audio input
+        if let peak = snapshot.audioInputPeakLevel, peak.isFinite, (0...1).contains(peak) {
+            let deviceLabel = snapshot.audioDeviceName ?? "Audio input"
+            checks.append(
+                ReferencePreflightCheck(
+                    id: "audioInput",
+                    title: "Audio input",
+                    detail: peak > minimumAudioInputPeak
+                        ? String(format: "%@ · input level %.0f%%", deviceLabel, peak * 100)
+                        : "\(deviceLabel) · receiving quiet audio. Recording can start; check the sound in review.",
+                    status: peak > minimumAudioInputPeak ? .satisfied : .advisory
+                )
+            )
+        } else {
+            checks.append(
+                ReferencePreflightCheck(
+                    id: "audioInput",
+                    title: "Audio input",
+                    detail: "Audio input is unavailable or not delivering valid samples. Check the selected input.",
+                    status: .blocking
+                )
+            )
+        }
+
+        // Camera
+        if let cameraDeviceName = snapshot.cameraDeviceName,
+           !cameraDeviceName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            checks.append(
+                ReferencePreflightCheck(
+                    id: "camera",
+                    title: "Camera",
+                    detail: snapshot.cameraIsActive
+                        ? cameraDeviceName
+                        : "\(cameraDeviceName) — preview is not running.",
+                    status: snapshot.cameraIsActive ? .satisfied : .blocking
+                )
+            )
+        } else {
+            checks.append(
+                ReferencePreflightCheck(
+                    id: "camera",
+                    title: "Camera",
+                    detail: "No camera selected.",
+                    status: .blocking
+                )
+            )
+        }
+
+        // Watch motion is optional; source identity remains strict if attached.
+        checks.append(
+            ReferencePreflightCheck(
+                id: "watch",
+                title: "Apple Watch",
+                detail: snapshot.watchIsReachable
+                    ? (snapshot.watchMotionIsStreaming ? "Connected, motion streaming." : "Connected, motion idle.")
+                    : "Not connected. Watch motion is optional for recording and scratch reference approval.",
+                status: snapshot.watchIsReachable ? .satisfied : .advisory
+            )
+        )
+
+        return ReferencePreflightResult(checks: checks)
+    }
+}

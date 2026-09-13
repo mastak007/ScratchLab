@@ -15,11 +15,14 @@ private enum PracticeBeatUIContract {
 }
 
 // Practice assist modes. Default is `.open` so the existing coaching loop is
-// unchanged for users on first launch. Demo is a non-scored reference mode
-// that plays the bundled demo audio; the rest run the scored practice loop.
+// unchanged for users on first launch. `.demo` is a non-scored reference mode
+// that plays the bundled demo audio; `.demoWithMotion` is the same reference
+// playback with the learner's live platter motion drawn over the target (still
+// non-scored, still camera-free); the rest run the scored practice loop.
 fileprivate enum PracticeAssistMode: String, CaseIterable, Identifiable {
     case autoCut
     case demo
+    case demoWithMotion
     case guided
     case coached
     case open
@@ -28,21 +31,23 @@ fileprivate enum PracticeAssistMode: String, CaseIterable, Identifiable {
 
     var title: String {
         switch self {
-        case .autoCut: return "Auto-cut"
-        case .demo:    return "Demo"
-        case .guided:  return "Guided"
-        case .coached: return "Coached"
-        case .open:    return "Open"
+        case .autoCut:        return "Auto-cut"
+        case .demo:           return "Demo"
+        case .demoWithMotion: return "Demo + My Motion"
+        case .guided:         return "Guided"
+        case .coached:        return "Coached"
+        case .open:           return "Open"
         }
     }
 
     var explainer: String {
         switch self {
-        case .autoCut: return "Visual target preview. App playback is off for this mode."
-        case .demo:    return "ScratchLab plays the demo audio and moves the notation in time — watch and listen; this run isn't scored."
-        case .guided:  return "ScratchLab shows upcoming cut cues while you move the fader."
-        case .coached: return "Target pattern loops in time. Mic listens for your scratches and gives a practice estimate."
-        case .open:    return "Static target reference. Mic listens; freestyle freely. No beat unless you turn one on."
+        case .autoCut:        return "Visual target preview. App playback is off for this mode."
+        case .demo:           return "ScratchLab plays the demo audio and moves the notation in time — watch and listen; this run isn't scored."
+        case .demoWithMotion: return "ScratchLab plays the demo audio and shows the target; your connected platter's motion is drawn over the target as you move. No camera, no mic — this run isn't scored."
+        case .guided:         return "ScratchLab shows upcoming cut cues while you move the fader."
+        case .coached:        return "Target pattern loops in time. Mic listens for your scratches and gives a practice estimate."
+        case .open:           return "Static target reference. Mic listens; freestyle freely. No beat unless you turn one on."
         }
     }
 }
@@ -62,7 +67,6 @@ struct PracticeModeView: View {
     let usesSimplifiedReady: Bool
 
     @Environment(\.dismiss) var dismiss
-    @Environment(\.verticalSizeClass) private var verticalSizeClass
     @EnvironmentObject var audioEngine: AudioEngine
     @EnvironmentObject var progressManager: ProgressManager
     @EnvironmentObject private var practiceBeatStore: PracticeBeatStore
@@ -72,10 +76,14 @@ struct PracticeModeView: View {
     /// always resolving `.targetOnly`. See `practiceResultNotation` below.
     @EnvironmentObject private var midiControllerDispatcher: IOSMIDIControllerDispatcher
 
-    // Compact vertical size class is iPhone landscape (and small split-view).
-    // Used only for surgical landscape adjustments — every branch keeps the
-    // portrait layout byte-identical.
-    private var isCompactVertical: Bool { verticalSizeClass == .compact }
+    @State private var viewportSize: CGSize = .zero
+
+    // Geometry, rather than size class, is authoritative here: iPad can report
+    // regular/regular while visibly landscape. Only short landscape canvases
+    // receive the compressed HUD treatment.
+    private var isCompactVertical: Bool {
+        viewportSize.width > viewportSize.height && viewportSize.height < 560
+    }
 
     // Bundled demo-audio player for the non-scored Demo assist mode. Reused
     // from the coach card; owned here so the live session can drive the demo
@@ -155,8 +163,8 @@ struct PracticeModeView: View {
     // Notation feedback overlay state — driven by live scratch detection results.
     @State private var notationFeedbackState: NotationFeedbackState = .neutral
     // Active-attempt performance evidence for the live notation lane. This is
-    // presentation state only; Result continues to resolve its finalized
-    // evidence directly from `midiControllerDispatcher.platterMovementEvents`.
+    // presentation state only; Result independently resolves its finalized
+    // gesture-relative view from the same raw attempt evidence.
     @State private var livePerformedMovementEvents: [CaptureCore.DetectedNotationRecordMovementEvent] = []
 
     let durationOptions: [(String, TimeInterval)] = [
@@ -195,6 +203,30 @@ struct PracticeModeView: View {
     private var practiceAssistMode: PracticeAssistMode {
         PracticeAssistMode(rawValue: practiceAssistModeRaw) ?? .open
     }
+
+    // MARK: - Assist-mode semantics
+    //
+    // Three narrow predicates so the demo-audio / scored split reads the same
+    // everywhere instead of scattering `== .demo` / `!= .demo` checks. Adding
+    // `.demoWithMotion` only needed these to be taught the new case once.
+
+    /// Reference-only Demo: the bundled demo audio plays and the notation
+    /// follows it — nothing else runs. No live performed capture, no camera,
+    /// no mic analysis, no scoring, no results, no persisted attempt.
+    private var isReferenceOnlyDemo: Bool { practiceAssistMode == .demo }
+
+    /// A mode that plays the bundled demo audio instead of the scored mic
+    /// loop: `.demo` (reference only) and `.demoWithMotion` (same playback,
+    /// plus the learner's live platter motion drawn over the target). Neither
+    /// starts the camera or mic, and neither is scored or persisted.
+    private var isDemoAudioMode: Bool {
+        practiceAssistMode == .demo || practiceAssistMode == .demoWithMotion
+    }
+
+    /// The scored practice loop — camera preview + mic analysis + running
+    /// score + post-take results + progression. Every mode that is not a
+    /// demo-audio mode.
+    private var isScoredPracticeMode: Bool { !isDemoAudioMode }
 
     private var normalizedDrillEvents: [ScratchRenderEvent] {
         guard let drillTimeline else { return [] }
@@ -443,7 +475,7 @@ struct PracticeModeView: View {
     /// `demoPlayer.isPlaying` owner and the visible state never reads COPY
     /// while the learner is only listening.
     private var practicePresentationState: PracticePresentationState {
-        if practiceAssistMode == .demo {
+        if isDemoAudioMode {
             return isPaused ? .paused : .listening
         }
         return PracticePresentationState.derive(
@@ -457,7 +489,16 @@ struct PracticeModeView: View {
     
     var body: some View {
         GeometryReader { geometry in
+            let usesLandscapeCameraSurface = isSessionActive
+                && isCameraPreviewVisible
+                && geometry.size.width > geometry.size.height
+
             ZStack {
+                if usesLandscapeCameraSurface {
+                    Color.black
+                        .ignoresSafeArea()
+                }
+
                 // Camera feed background — only when a live session is active
                 if isCameraPreviewVisible {
                     CameraPreviewView()
@@ -465,22 +506,29 @@ struct PracticeModeView: View {
                 }
                 
                 // Dark overlay for readability
-                Color.black.opacity(0.3)
+                Color.black.opacity(usesLandscapeCameraSurface ? 0.08 : 0.3)
                     .ignoresSafeArea()
                 
                 // Main UI overlay
-                VStack(spacing: 0) {
-                    // Top bar
-                    topBar(topSafeAreaInset: geometry.safeAreaInsets.top)
+                if usesLandscapeCameraSurface {
+                    landscapeCameraPracticeSurface(
+                        size: geometry.size,
+                        safeAreaInsets: geometry.safeAreaInsets
+                    )
+                } else {
+                    VStack(spacing: 0) {
+                        // Top bar
+                        topBar(topSafeAreaInset: geometry.safeAreaInsets.top)
 
-                    // Notation-first practice surface — the timing lane fills
-                    // all the space below the top bar; status sits in thin HUD
-                    // chip rows inside it. Empty until a session starts.
-                    if isSessionActive {
-                        centerFeedbackArea
-                            .frame(maxWidth: .infinity, maxHeight: .infinity)
-                    } else {
-                        Spacer()
+                        // Notation-first practice surface — the timing lane fills
+                        // all the space below the top bar; status sits in thin HUD
+                        // chip rows inside it. Empty until a session starts.
+                        if isSessionActive {
+                            centerFeedbackArea
+                                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                        } else {
+                            Spacer()
+                        }
                     }
                 }
                 
@@ -488,7 +536,7 @@ struct PracticeModeView: View {
                 // Diagnostic-only: floats top-right so it does not disturb
                 // the active Practice layout in either orientation. Visible
                 // only while a session is live, when the engine is running.
-                if isSessionActive {
+                if isSessionActive && !usesLandscapeCameraSurface {
                     debugInputRecordOverlay
                         .padding(.top, geometry.safeAreaInsets.top + 12)
                         .padding(.trailing, 16)
@@ -547,6 +595,7 @@ struct PracticeModeView: View {
                             bpm: Double(practiceBeatStore.bpmValue),
                             topSafeAreaInset: geometry.safeAreaInsets.top,
                             bottomSafeAreaInset: geometry.safeAreaInsets.bottom,
+                            onSetBPM: { practiceBeatStore.setBPM($0) },
                             onStart: { startOpenPractice() },
                             onWatch: { startWatchPractice() },
                             onBack: { dismiss() }
@@ -579,6 +628,10 @@ struct PracticeModeView: View {
                 }
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .onAppear { viewportSize = geometry.size }
+            .onChange(of: geometry.size) { _, newSize in
+                viewportSize = newSize
+            }
         }
         .onAppear {
             setupAudioEngine()
@@ -609,6 +662,147 @@ struct PracticeModeView: View {
             QuickStartView(onFinish: completeQuickStartReview)
                 .interactiveDismissDisabled()
         }
+    }
+
+    /// Notation-first active Practice composition for every landscape device.
+    /// The camera remains a clean background source, while the target and live
+    /// performance lanes fill the safe workspace beneath overlaid transport
+    /// controls. Portrait keeps the existing stacked composition.
+    private func landscapeCameraPracticeSurface(
+        size: CGSize,
+        safeAreaInsets: EdgeInsets
+    ) -> some View {
+        ZStack {
+            VStack(spacing: 0) {
+                HStack(spacing: 10) {
+                    Button(action: pauseSession) {
+                        Image(systemName: "pause.fill")
+                            .font(.system(size: 15, weight: .bold))
+                            .foregroundStyle(ScratchLabDesign.Sem.textPrimary)
+                            .frame(width: 44, height: 44)
+                            .background(.ultraThinMaterial, in: Circle())
+                            .overlay {
+                                Circle()
+                                    .stroke(Color.white.opacity(0.18), lineWidth: 1)
+                            }
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityLabel("Pause practice")
+                    .accessibilityHint("Pause to resume, restart, or exit")
+
+                    Spacer(minLength: 12)
+
+                    HStack(spacing: 8) {
+                        Circle()
+                            .fill(timeRemaining < 60
+                                  ? ScratchLabDesign.Sem.danger
+                                  : ScratchLabDesign.Sem.success)
+                            .frame(width: 8, height: 8)
+
+                        Text(formatTime(timeRemaining))
+                            .font(.system(size: 14, weight: .bold, design: .monospaced))
+                            .foregroundStyle(ScratchLabDesign.Sem.textPrimary)
+                            .monospacedDigit()
+                    }
+                    .padding(.horizontal, 13)
+                    .frame(height: 40)
+                    .background(.ultraThinMaterial, in: Capsule())
+                    .overlay {
+                        Capsule()
+                            .stroke(Color.white.opacity(0.18), lineWidth: 1)
+                    }
+                    .accessibilityElement(children: .combine)
+                    .accessibilityLabel("Practice time remaining \(formatTime(timeRemaining))")
+                }
+                .padding(.leading, max(safeAreaInsets.leading, 12))
+                .padding(.trailing, max(safeAreaInsets.trailing, 12))
+                .padding(.top, max(safeAreaInsets.top, 8))
+
+                Spacer(minLength: 0)
+            }
+
+            landscapeLiveNotationOverlay
+                .padding(.horizontal, max(max(safeAreaInsets.leading, safeAreaInsets.trailing), 16))
+                .padding(.top, max(safeAreaInsets.top, 8) + 56)
+                .padding(.bottom, max(safeAreaInsets.bottom, 8) + 116)
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+
+            SamplePositionWaveformView()
+                .frame(height: 108)
+                .padding(.horizontal, max(max(safeAreaInsets.leading, safeAreaInsets.trailing), 16))
+                .padding(.bottom, max(safeAreaInsets.bottom, 8))
+                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottom)
+
+            feedbackBanner
+                .padding(.horizontal, 16)
+                .padding(.bottom, max(safeAreaInsets.bottom, 10) + 112)
+                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottom)
+        }
+        .ignoresSafeArea()
+    }
+
+    /// Read-only landscape notation presentation. It consumes the same live
+    /// movement events and target lane already used by the portrait panel,
+    /// but removes all card/background chrome so the camera remains visible.
+    private var landscapeLiveNotationOverlay: some View {
+        VStack(alignment: .leading, spacing: 5) {
+            HStack(spacing: 8) {
+                Text("LIVE NOTATION")
+                    .font(ScratchLabDesign.Typo.metricLabel)
+                    .foregroundStyle(ScratchLabDesign.Sem.accent)
+
+                Spacer(minLength: 8)
+
+                Text("CAMERA CLEAN · NOTATION SEPARATE")
+                    .font(ScratchLabDesign.Typo.statusPill)
+                    .foregroundStyle(ScratchLabDesign.Sem.textSecondary)
+            }
+
+            Text("TARGET")
+                .font(ScratchLabDesign.Typo.statusPill)
+                .foregroundStyle(ScratchLabDesign.Notation.targetTrace)
+
+            if let lane = activeLane {
+                PracticeLandscapeTargetTrace(content: lane.content, clock: lane.clock)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    .layoutPriority(1)
+            } else {
+                Text("Target notation is unavailable for this technique.")
+                    .font(ScratchLabDesign.Typo.caption)
+                    .foregroundStyle(ScratchLabDesign.Sem.textSecondary)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .leading)
+                    .layoutPriority(1)
+            }
+
+            Text("MY PERFORMANCE · LIVE")
+                .font(ScratchLabDesign.Typo.statusPill)
+                .foregroundStyle(ScratchLabDesign.Notation.performanceTrace)
+
+            if !livePerformedMovementEvents.isEmpty {
+                PracticeLandscapePerformedTrace(events: livePerformedMovementEvents)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    .layoutPriority(1)
+            } else {
+                Text("Waiting for movement input")
+                    .font(ScratchLabDesign.Typo.caption)
+                    .foregroundStyle(ScratchLabDesign.Sem.textSecondary)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .leading)
+                    .layoutPriority(1)
+            }
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+        .padding(ScratchLabDesign.Spacing.md)
+        .background(Color.clear)
+        .overlay {
+            RoundedRectangle(cornerRadius: ScratchLabDesign.Radius.control, style: .continuous)
+                .stroke(Color.white.opacity(0.24), lineWidth: 1)
+        }
+        .shadow(color: .black.opacity(0.9), radius: 2, x: 0, y: 1)
+        .allowsHitTesting(false)
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel(livePerformedMovementEvents.isEmpty
+                            ? "Target reference notation, waiting for movement input"
+                            : "Target reference and live performed notation")
     }
     
     // MARK: - Top Bar
@@ -681,66 +875,196 @@ struct PracticeModeView: View {
     }
 
     private var practiceStatusStrip: some View {
-        ScrollView(.horizontal, showsIndicators: false) {
-            HStack(spacing: 8) {
+        ViewThatFits(in: .horizontal) {
+            expandedPracticeStatusBadges
+            compactPracticeStatusBadges
+            collapsedPracticeStatusSummary
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    /// Full status fidelity when the viewport has room. `fixedSize` makes
+    /// `ViewThatFits` measure the real chip widths instead of squeezing or
+    /// wrapping them into a deceptively narrow row.
+    private var expandedPracticeStatusBadges: some View {
+        HStack(spacing: 8) {
+            StatusBadge(
+                title: "Practice",
+                value: practicePresentationState.label,
+                variant: practicePresentationState.variant,
+                systemImage: "waveform"
+            )
+            StatusBadge(
+                title: "Audio",
+                value: micStatusTitle,
+                variant: micStatusVariant,
+                systemImage: micStatusIcon
+            )
+            if let audioError = audioEngine.lastAudioError {
                 StatusBadge(
-                    title: "Practice",
-                    value: practicePresentationState.label,
-                    variant: practicePresentationState.variant,
-                    systemImage: "waveform"
-                )
-                StatusBadge(
-                    title: "Audio",
-                    value: micStatusTitle,
-                    variant: micStatusVariant,
-                    systemImage: micStatusIcon
-                )
-                if let audioError = audioEngine.lastAudioError {
-                    StatusBadge(
-                        title: "Issue",
-                        value: audioError,
-                        variant: .danger,
-                        systemImage: "exclamationmark.triangle.fill"
-                    )
-                }
-                if isGuidedDrillMode {
-                    StatusBadge(
-                        title: "BPM",
-                        value: "\(practiceBeatStore.bpmValue)",
-                        variant: .accent,
-                        systemImage: "metronome"
-                    )
-                    if let activeDrillEventIndex {
-                        StatusBadge(
-                            title: "Step",
-                            value: "\(activeDrillEventIndex + 1)/\(normalizedDrillEvents.count)",
-                            variant: .warning,
-                            systemImage: "number"
-                        )
-                    }
-                } else if !isCompactVertical {
-                    // Hidden in iPhone landscape — redundant with the session
-                    // title in `practiceTopHUD` and saves chip-strip width that
-                    // otherwise pushes everything off-screen on narrow heights.
-                    StatusBadge(
-                        title: "Scratch",
-                        value: activeScratch.name,
-                        variant: .accent,
-                        systemImage: "waveform"
-                    )
-                }
-                StatusBadge(
-                    title: "Beat",
-                    value: practiceBeatStore.isBeatEnabled
-                        ? (practiceBeatStore.isPlaying
-                            ? "\(practiceBeatStore.beatEngineMode.title) On"
-                            : "\(practiceBeatStore.beatEngineMode.title) Ready")
-                        : "Off",
-                    variant: practiceBeatStore.isBeatEnabled ? .success : .neutral,
-                    systemImage: practiceBeatStore.isBeatEnabled ? "metronome.fill" : "speaker.slash.fill"
+                    title: "Issue",
+                    value: audioError,
+                    variant: .danger,
+                    systemImage: "exclamationmark.triangle.fill"
                 )
             }
+            if isGuidedDrillMode {
+                StatusBadge(
+                    title: "BPM",
+                    value: "\(practiceBeatStore.bpmValue)",
+                    variant: .accent,
+                    systemImage: "metronome"
+                )
+                if let activeDrillEventIndex {
+                    StatusBadge(
+                        title: "Step",
+                        value: "\(activeDrillEventIndex + 1)/\(normalizedDrillEvents.count)",
+                        variant: .warning,
+                        systemImage: "number"
+                    )
+                }
+            } else if !isCompactVertical {
+                StatusBadge(
+                    title: "Scratch",
+                    value: activeScratch.name,
+                    variant: .accent,
+                    systemImage: "waveform"
+                )
+            }
+            StatusBadge(
+                title: "Beat",
+                value: practiceBeatStatusValue,
+                variant: practiceBeatStore.isBeatEnabled ? .success : .neutral,
+                systemImage: practiceBeatStore.isBeatEnabled ? "metronome.fill" : "speaker.slash.fill"
+            )
         }
+        .fixedSize(horizontal: true, vertical: false)
+    }
+
+    /// Compact single-line chips retain every live status while dropping the
+    /// repeated title row. Long, variable error copy becomes an honest
+    /// "Audio issue" chip with the full message preserved for VoiceOver.
+    private var compactPracticeStatusBadges: some View {
+        HStack(spacing: 6) {
+            StatusBadge(
+                title: "",
+                value: practicePresentationState.label,
+                variant: practicePresentationState.variant,
+                systemImage: "waveform"
+            )
+            StatusBadge(
+                title: "",
+                value: micStatusTitle,
+                variant: micStatusVariant,
+                systemImage: micStatusIcon
+            )
+            if let audioError = audioEngine.lastAudioError {
+                StatusBadge(
+                    title: "",
+                    value: "Audio issue",
+                    variant: .danger,
+                    systemImage: "exclamationmark.triangle.fill"
+                )
+                .accessibilityLabel("Audio issue: \(audioError)")
+            }
+            if isGuidedDrillMode {
+                StatusBadge(
+                    title: "",
+                    value: "\(practiceBeatStore.bpmValue) BPM",
+                    variant: .accent,
+                    systemImage: "metronome"
+                )
+                if let activeDrillEventIndex {
+                    StatusBadge(
+                        title: "",
+                        value: "\(activeDrillEventIndex + 1)/\(normalizedDrillEvents.count)",
+                        variant: .warning,
+                        systemImage: "number"
+                    )
+                }
+            }
+            StatusBadge(
+                title: "",
+                value: practiceBeatStatusValue,
+                variant: practiceBeatStore.isBeatEnabled ? .success : .neutral,
+                systemImage: practiceBeatStore.isBeatEnabled ? "metronome.fill" : "speaker.slash.fill"
+            )
+        }
+        .fixedSize(horizontal: true, vertical: false)
+    }
+
+    /// Narrowest fallback is one bounded summary chip, never another scroll
+    /// region. It remains readable at accessibility sizes and exposes the
+    /// complete underlying status/error text to VoiceOver.
+    private var collapsedPracticeStatusSummary: some View {
+        HStack(spacing: 8) {
+            Image(systemName: audioEngine.lastAudioError == nil
+                  ? "waveform"
+                  : "exclamationmark.triangle.fill")
+                .font(ScratchLabDesign.Typo.statusPill)
+                .foregroundStyle(audioEngine.lastAudioError == nil
+                                 ? practicePresentationState.variant.color
+                                 : ScratchLabDesign.Sem.danger)
+                .accessibilityHidden(true)
+
+            Text(collapsedPracticeStatusText)
+                .font(ScratchLabDesign.Typo.statusPill)
+                .foregroundStyle(ScratchLabDesign.Sem.textPrimary)
+                .lineLimit(1)
+                .minimumScaleFactor(0.68)
+        }
+        .padding(.horizontal, ScratchLabDesign.Badge.horizontalPadding)
+        .padding(.vertical, ScratchLabDesign.Badge.verticalPadding)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(
+            ScratchLabDesign.Badge.background,
+            in: RoundedRectangle(cornerRadius: ScratchLabDesign.Badge.cornerRadius, style: .continuous)
+        )
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(practiceStatusAccessibilitySummary)
+    }
+
+    private var practiceBeatStatusValue: String {
+        guard practiceBeatStore.isBeatEnabled else { return "Off" }
+        return practiceBeatStore.isPlaying
+            ? "\(practiceBeatStore.beatEngineMode.title) On"
+            : "\(practiceBeatStore.beatEngineMode.title) Ready"
+    }
+
+    private var collapsedPracticeStatusText: String {
+        var values = [
+            practicePresentationState.label,
+            StatusBadge.dedupedStatusValue(title: "Audio", value: micStatusTitle)
+        ]
+        if audioEngine.lastAudioError != nil {
+            values.append("Audio issue")
+        }
+        if isGuidedDrillMode {
+            values.append("\(practiceBeatStore.bpmValue) BPM")
+            if let activeDrillEventIndex {
+                values.append("Step \(activeDrillEventIndex + 1)/\(normalizedDrillEvents.count)")
+            }
+        }
+        values.append("Beat \(practiceBeatStatusValue)")
+        return values.joined(separator: " · ")
+    }
+
+    private var practiceStatusAccessibilitySummary: String {
+        var values = [
+            "Practice \(practicePresentationState.label)",
+            "Audio \(micStatusTitle)"
+        ]
+        if let audioError = audioEngine.lastAudioError {
+            values.append("Audio issue: \(audioError)")
+        }
+        if isGuidedDrillMode {
+            values.append("Tempo \(practiceBeatStore.bpmValue) BPM")
+            if let activeDrillEventIndex {
+                values.append("Step \(activeDrillEventIndex + 1) of \(normalizedDrillEvents.count)")
+            }
+        }
+        values.append("Beat \(practiceBeatStatusValue)")
+        return values.joined(separator: ", ")
     }
 
     private func completeQuickStartReview() {
@@ -806,7 +1130,8 @@ struct PracticeModeView: View {
 
             // The notation status pill lives in the lane panel's own
             // "TARGET PATTERN" header (notationLanePanel) — not duplicated here.
-            if practiceAssistMode != .demo {
+            // Demo-audio modes carry no running score, so no metrics chip.
+            if isScoredPracticeMode {
                 practiceMetricsChip
             }
         }
@@ -842,7 +1167,8 @@ struct PracticeModeView: View {
         HStack(spacing: 8) {
             bottomHUDContext
             Spacer(minLength: 8)
-            if practiceAssistMode != .demo {
+            // Demo-audio modes never open the mic, so no mic status chip.
+            if isScoredPracticeMode {
                 micChip
             }
             beatToggleChip
@@ -954,6 +1280,13 @@ struct PracticeModeView: View {
             }
             .buttonStyle(.plain)
             .disabled(audioEngine.isDebugRecording || !audioEngine.isRunning)
+            .accessibilityHint(
+                audioEngine.isDebugRecording
+                    ? "A debug input recording is already in progress"
+                    : audioEngine.isRunning
+                        ? "Records twenty seconds of raw input for diagnostics"
+                        : "Start the audio engine before recording diagnostic input"
+            )
 
             if let url = audioEngine.lastDebugRecordingURL {
                 Text("Saved: \(url.lastPathComponent)")
@@ -1001,7 +1334,7 @@ struct PracticeModeView: View {
     // tappable-looking "Play Beat" — same `.disabled` semantics, just no
     // longer disguising the disabled state.
     private var beatToggleChip: some View {
-        Button(action: { practiceBeatStore.togglePlayback() }) {
+        Button(action: handleBeatButton) {
             HStack(spacing: 6) {
                 Image(systemName: beatChipIconName)
                     .font(.system(size: 10, weight: .bold))
@@ -1017,12 +1350,14 @@ struct PracticeModeView: View {
                     : ScratchLabDesign.Surface.disabledFill,
                 in: Capsule())
         }
-        .disabled(!practiceBeatStore.isBeatEnabled)
         .accessibilityLabel(practiceBeatStore.isBeatEnabled
                             ? (practiceBeatStore.isPlaying
                                ? PracticeBeatUIContract.stopLabel
                                : PracticeBeatUIContract.playLabel)
                             : "Beat Off")
+        .accessibilityHint(practiceBeatStore.isBeatEnabled
+            ? "Stops or resumes the selected practice beat"
+            : "Enables and starts the selected practice beat")
     }
 
     private var beatChipIconName: String {
@@ -1035,6 +1370,15 @@ struct PracticeModeView: View {
         return practiceBeatStore.isPlaying
             ? PracticeBeatUIContract.stopLabel
             : PracticeBeatUIContract.playLabel
+    }
+
+    private func handleBeatButton() {
+        if practiceBeatStore.isBeatEnabled {
+            practiceBeatStore.togglePlayback()
+        } else {
+            practiceBeatStore.setBeatEnabled(true)
+            practiceBeatStore.startPlayback()
+        }
     }
 
     @ViewBuilder
@@ -1055,25 +1399,51 @@ struct PracticeModeView: View {
         }
     }
 
+    /// The target rendered during the active session. Baby Scratch demo-audio
+    /// modes use the exact 32-stroke BBB timeline paired with
+    /// `baby_noBeat.wav`; scored modes keep the BPM-materialized canonical
+    /// teaching pattern. This distinction is session-only, so the Ready card
+    /// continues to show the concise canonical target.
+    private var activeLaneTargetNotation: ScratchNotation? {
+        guard isDemoAudioMode,
+              activeScratch.id == CaptureSessionScratchType.babyScratch.rawValue else {
+            return targetNotation
+        }
+        return ScratchNotation.babyScratchDemo ?? targetNotation
+    }
+
+    /// Beat-grid tempo for the active lane. The bundled BBB recording is a
+    /// fixed 79 BPM reference and must not inherit an unrelated user-selected
+    /// practice tempo.
+    private var activeLaneBPM: Double {
+        if isDemoAudioMode,
+           activeScratch.id == CaptureSessionScratchType.babyScratch.rawValue {
+            return Double(ScratchLabDemoSessionBuilder.demoBPM)
+        }
+        return Double(practiceBeatStore.bpmValue)
+    }
+
     // The notation lane this mode + orientation should render, paired with its
-    // clock. Demo follows the demo-audio reel; Auto-cut / Guided loop the
-    // target pattern; Coached / Open hold it parked. `nil` when the active
+    // clock. Demo follows the exact bundled demo audio; Auto-cut / Guided loop
+    // the target pattern; Coached / Open hold it parked. `nil` when the active
     // scratch ships no notation.
     private var activeLane: (content: LaneContent, clock: LaneClock)? {
         if practiceAssistMode == .demo, let reel = demoReel {
             return (LaneContent(reel: reel),
                     .audioTime { demoPlayer.sampledPlaybackTime() })
         }
-        guard let notation = targetNotation else { return nil }
+        guard let notation = activeLaneTargetNotation else { return nil }
         // Pass the session's selected BPM through so `ScratchMotionLane`'s
         // existing beat-grid renderer (gated on `content.beatsPerMinute`)
         // lights up. The grid is a visual timing reference — shown even
         // when the audible click track is off.
         let content = LaneContent(notation: notation,
-                                  beatsPerMinute: Double(practiceBeatStore.bpmValue))
+                                  beatsPerMinute: activeLaneBPM)
         switch practiceAssistMode {
-        case .demo:
-            // Reel manifest missing/invalid — follow the demo audio anyway.
+        case .demo, .demoWithMotion:
+            // Follow the demo audio position. `.demo` with a valid reel took
+            // the branch above; `.demoWithMotion` always lands here (canonical
+            // target notation + a live performance lane, never the reel).
             return (content, .audioTime { demoPlayer.sampledPlaybackTime() })
         case .autoCut, .guided, .coached:
             // Coached promotes from `.fixed(0)` to a wall-clock loop so the
@@ -1091,18 +1461,19 @@ struct PracticeModeView: View {
     }
 
     // The unified notation-first timing lane — the primary learning surface in
-    // every mode and orientation. Auto-cut / Guided / Coached / Open render
-    // through the canonical `ScratchNotationPanel` (`ScratchPhraseChartView`)
-    // — the same renderer as the pre-session "TARGET — COPY THIS" card and
-    // macOS Review — so target geometry, colour tokens, turnaround markers,
-    // and direction cues read identically everywhere. Demo keeps
-    // `ScratchMotionLane`: its call-and-response reel carries demo/copy
-    // segments and derived ghost strokes that `ScratchNotation` has no
-    // vocabulary for, and Demo never shows a live-performance overlay (see
-    // `updateLivePerformedNotation`'s `practiceAssistMode != .demo` guard) —
-    // so this isn't a duplicate of the target/performance surface, it's a
-    // genuinely different, narrower feature. A status chip names the runtime
-    // state.
+    // every mode and orientation. Auto-cut / Guided / Coached / Open /
+    // Demo + My Motion render through the canonical `ScratchNotationPanel`
+    // (`ScratchPhraseChartView`) — the same renderer as the pre-session
+    // "TARGET — COPY THIS" card and macOS Review — so target geometry, colour
+    // tokens, turnaround markers, and direction cues read identically
+    // everywhere. Reference-only Demo keeps `ScratchMotionLane`: its
+    // call-and-response reel carries demo/copy segments and derived ghost
+    // strokes that `ScratchNotation` has no vocabulary for, and it never
+    // shows a live-performance overlay (see `updateLivePerformedNotation`'s
+    // `isReferenceOnlyDemo` guard). Demo + My Motion is *not* reference-only:
+    // it reuses the canonical target/performance surface below, adding a live
+    // performed lane driven by the demo-audio clock. A status chip names the
+    // runtime state.
     @ViewBuilder
     private func notationLanePanel(axis: LaneAxis) -> some View {
         if let lane = activeLane {
@@ -1121,15 +1492,25 @@ struct PracticeModeView: View {
                     ScratchMotionLane(content: lane.content, clock: lane.clock, axis: axis,
                                       feedbackState: notationFeedbackState)
                         .frame(maxWidth: .infinity, maxHeight: .infinity)
-                } else if let targetNotation {
+                } else if let activeLaneTargetNotation {
                     // Fixed-height cards (see `canonicalLiveNotationPanel`) need
                     // `.top` here, not the default `.center` — on the taller
                     // iPad frame, centering left a large dead gap between the
                     // instructional line above and the chart.
-                    canonicalLiveNotationPanel(targetNotation: targetNotation,
-                                               duration: lane.content.duration,
-                                               clock: lane.clock)
-                        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+                    //
+                    // Demo + My Motion: the performed lane's visible window and
+                    // the target playhead are both driven by the demo-audio
+                    // clock (`lane.clock` is `.audioTime` here), and the lane
+                    // shows a truthful "connect a controller" state instead of
+                    // an empty trace when there is no live platter signal.
+                    canonicalLiveNotationPanel(
+                        targetNotation: activeLaneTargetNotation,
+                        duration: lane.content.duration,
+                        clock: lane.clock,
+                        performedWindowFollowsClock: practiceAssistMode == .demoWithMotion,
+                        showNoMotionPlaceholder: practiceAssistMode == .demoWithMotion
+                    )
+                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
                 }
             }
         } else {
@@ -1202,21 +1583,37 @@ struct PracticeModeView: View {
         return (target, performance)
     }
 
-    // Canonical target/performance surface for Auto-cut, Guided, Coached, and
-    // Open — the same `ScratchNotationPanel` → `ScratchPhraseChartView` pair
-    // the pre-session "TARGET — COPY THIS" card and the existing live
-    // performance overlay already use (previously only the performance half
-    // of this pair rendered during a live session; the target half rendered
-    // through the separate `ScratchMotionLane`). `ScratchPhraseChartView`
-    // renders one static full phrase (no scrolling/tiling), so the moving
-    // element is the playhead, not the content — `clock.now(at:)` is always
-    // within `[0, duration]` here (`.looping` wraps via modulo, `.fixed`
-    // returns a constant in range; `.audioTime` is Demo-only and never
-    // reaches this branch), so it maps directly onto the static chart with
-    // no extra remapping. The performance lane keeps its own pre-existing
-    // rolling `livePerformanceDomain` window unchanged — it was already
-    // correct; only its neighbour (the target lane) was rendering through
-    // the wrong component.
+    /// One demo-audio-clock trailing window, in seconds. Matches the width of
+    /// `livePerformanceDomain` so Demo + My Motion and the scored preview modes
+    /// show the same amount of recent motion.
+    private static let liveNotationClockWindowSeconds: TimeInterval = 3.2
+
+    /// A rolling `[end - seconds, end]` range, clamped so the lower bound is
+    /// never negative and the bounds are always ordered. Demo + My Motion uses
+    /// this to place the performed lane on the same clock as the target
+    /// playhead (the demo-audio position) instead of the performed events'
+    /// own timestamps.
+    private static func rollingClockWindow(
+        endingAt end: TimeInterval, seconds: TimeInterval
+    ) -> ClosedRange<TimeInterval> {
+        max(0, end - seconds)...max(seconds, end)
+    }
+
+    // Canonical target/performance surface for Auto-cut, Guided, Coached,
+    // Open, and Demo + My Motion — the same `ScratchNotationPanel` →
+    // `ScratchPhraseChartView` pair the pre-session "TARGET — COPY THIS" card
+    // and the existing live performance overlay already use (previously only
+    // the performance half of this pair rendered during a live session; the
+    // target half rendered through the separate `ScratchMotionLane`).
+    // `ScratchPhraseChartView` renders one static full phrase (no
+    // scrolling/tiling), so the moving element is the playhead, not the
+    // content. The playhead time is folded onto `[0, duration)` below:
+    // `.looping` already wraps via modulo and `.fixed` returns a constant in
+    // range (no-ops under the fold); only the `.audioTime` clock (Demo /
+    // Demo + My Motion) can run past one target cycle and needs it. The
+    // performance lane keeps its own rolling `livePerformanceDomain` window
+    // for the scored modes; Demo + My Motion instead follows the demo-audio
+    // clock via `performedWindowFollowsClock`.
     //
     // Canvas heights target macOS's own dominant Practice teaching surface
     // proportions (`MacAnalyzerView.swift` / `LivePerformedNotationTracker
@@ -1235,19 +1632,39 @@ struct PracticeModeView: View {
     @ViewBuilder
     private func canonicalLiveNotationPanel(targetNotation: ScratchNotation,
                                             duration: TimeInterval,
-                                            clock: LaneClock) -> some View {
+                                            clock: LaneClock,
+                                            performedWindowFollowsClock: Bool = false,
+                                            showNoMotionPlaceholder: Bool = false) -> some View {
         let hasPerformance = !livePerformedMovementEvents.isEmpty
+        // The placeholder occupies the same slot as a real performance lane,
+        // so the height split must treat it like one. For every existing
+        // caller `showNoMotionPlaceholder` is false and this is unchanged.
+        let showsPerformanceSlot = hasPerformance || showNoMotionPlaceholder
         let spacing = ScratchLabDesign.Spacing.itemTight
 
         GeometryReader { proxy in
             let heights = Self.liveNotationCanvasHeights(
-                availableHeight: proxy.size.height, hasPerformance: hasPerformance, spacing: spacing
+                availableHeight: proxy.size.height, hasPerformance: showsPerformanceSlot, spacing: spacing
             )
             TimelineView(.periodic(from: .now, by: 1.0 / 30.0)) { timeline in
-                let now = clock.now(at: timeline.date)
+                let rawNow = clock.now(at: timeline.date)
+                // Fold onto `[0, duration)` for the playhead. `.looping`
+                // already returns a value in that range and `.fixed` a
+                // constant in it (both no-ops); only `.audioTime`
+                // (Demo / Demo + My Motion) can exceed one target cycle.
+                let now = duration > 0
+                    ? rawNow.truncatingRemainder(dividingBy: duration)
+                    : rawNow
                 let actionLineFraction = duration > 0
                     ? min(max(CGFloat(now / duration), 0), 1)
                     : 0
+                // Demo + My Motion drives the performed window off the same
+                // demo-audio clock as the target playhead; every other mode
+                // keeps the pre-existing event-timestamp window.
+                let performedDomain: ClosedRange<TimeInterval>? = performedWindowFollowsClock
+                    ? Self.rollingClockWindow(endingAt: rawNow,
+                                              seconds: Self.liveNotationClockWindowSeconds)
+                    : livePerformanceDomain
 
                 VStack(alignment: .leading, spacing: spacing) {
                     ZStack {
@@ -1274,7 +1691,20 @@ struct PracticeModeView: View {
                             presentation: .standard,
                             source: .performedPlatter(livePerformedMovementEvents),
                             bpm: Double(practiceBeatStore.bpmValue),
-                            domain: livePerformanceDomain,
+                            domain: performedDomain,
+                            mode: .liveComparison,
+                            canvasHeightOverride: heights.performance
+                        )
+                    } else if showNoMotionPlaceholder {
+                        // Truthful "no live platter signal" state — reuses the
+                        // canonical panel's own `.empty` presentation rather
+                        // than drawing a fake zero-motion trace. The target /
+                        // demo playback above continues normally.
+                        ScratchNotationPanel(
+                            lane: .performance,
+                            presentation: .standard,
+                            source: .empty("Connect a controller to see your motion"),
+                            bpm: Double(practiceBeatStore.bpmValue),
                             mode: .liveComparison,
                             canvasHeightOverride: heights.performance
                         )
@@ -1356,9 +1786,10 @@ struct PracticeModeView: View {
     // learner's own scratches. Honest copy — no mode plays audio.
     private var notationStatus: (text: String, isLive: Bool) {
         switch practiceAssistMode {
-        case .autoCut: return ("Preview playing", true)
-        case .demo:    return ("Demo playing", true)
-        case .guided:  return ("Guide active", true)
+        case .autoCut:        return ("Preview playing", true)
+        case .demo:           return ("Demo playing", true)
+        case .demoWithMotion: return ("Demo + your motion", true)
+        case .guided:         return ("Guide active", true)
         case .coached, .open: return ("Waiting for input", false)
         }
     }
@@ -1487,10 +1918,12 @@ struct PracticeModeView: View {
         // t = 0 together with this session.
         notationClockStartDate = Date()
 
-        // Demo mode is a non-scored reference playback: play the bundled demo
-        // audio and skip live scratch analysis. Every other mode runs scored
-        // mic analysis. Camera is not needed for demo/coach playback.
-        if practiceAssistMode == .demo {
+        // Demo-audio modes are non-scored reference playback: play the bundled
+        // demo audio and skip live scratch analysis. `.demoWithMotion` also
+        // stays camera-free and mic-free — it only adds the live platter
+        // overlay, which rides the always-on MIDI feed. Every other mode runs
+        // scored mic analysis with the camera preview.
+        if isDemoAudioMode {
             configureDemoPlayback()
             demoPlayer.play()
         } else {
@@ -1507,13 +1940,20 @@ struct PracticeModeView: View {
 
     /// Configures the Demo-mode audio and the matching notation surface.
     ///
-    /// Prefers the bundled call-and-response reel manifest: its `audioFile`
-    /// field — never a hardcoded filename — selects the audio, and a valid,
-    /// audio-backed manifest is stored in `demoReel` so the portrait vertical
-    /// reel can render it. Falls back to the legacy coach demo audio with a
-    /// nil `demoReel` (the horizontal chart) when no usable manifest is
-    /// bundled, or when a manifest loads but its paired audio file is missing.
+    /// Baby Scratch now uses the exact BBB reference pair:
+    /// `CoachDemoAudio/baby_noBeat.wav` plus
+    /// `CoachDemoMotion/baby_scratch_strokes.json`. The older 42-second
+    /// call-and-response reel remains only as a fallback for a future scratch
+    /// that has no extracted full-demo notation; it must never override the
+    /// current Baby Scratch asset merely because both resources are bundled.
     private func configureDemoPlayback() {
+        if activeScratch.id == CaptureSessionScratchType.babyScratch.rawValue,
+           ScratchNotation.babyScratchDemo != nil {
+            demoReel = nil
+            demoPlayer.configure(with: coachInstruction)
+            return
+        }
+
         if let reel = loadDemoReelTimeline(), reel.isValid {
             demoPlayer.configure(withAudioFileNamed: reel.audioFile)
             // The manifest only drives the reel if its paired audio resolved.
@@ -1543,7 +1983,7 @@ struct PracticeModeView: View {
     
     private func resumeSession() {
         isPaused = false
-        if practiceAssistMode == .demo {
+        if isDemoAudioMode {
             demoPlayer.play()
         } else {
             audioEngine.startAnalyzing(for: activeScratch)
@@ -1563,9 +2003,10 @@ struct PracticeModeView: View {
         isCameraPreviewVisible = false
         isSessionActive = false
 
-        // Demo mode is a non-scored reference playback — no results screen and
-        // no recorded practice attempt.
-        guard practiceAssistMode != .demo else { return }
+        // Demo-audio modes (`.demo`, `.demoWithMotion`) are non-scored
+        // reference playback — no results screen, no recorded practice
+        // attempt, no progression update.
+        guard isScoredPracticeMode else { return }
 
         showingResults = true
         persistSessionProgressIfNeeded()
@@ -1844,7 +2285,7 @@ struct PracticeModeView: View {
     // labels/confidence out of this surface — only timing aggregates flow
     // through.
     private var practiceTimingPreviewSummary: TakeEvidenceSummary? {
-        guard practiceAssistMode != .demo else { return nil }
+        guard isScoredPracticeMode else { return nil }
         guard attemptCount > 0 else { return nil }
         let elapsed = sessionStartedAt.map { Date().timeIntervalSince($0) } ?? 0
         let avgOffset = cumulativeAbsoluteBeatOffsetMs / Double(attemptCount)
@@ -1860,7 +2301,7 @@ struct PracticeModeView: View {
     // from the live timing aggregates — no platter direction/position claim,
     // never saved, scored, or exported.
     private var practiceReviewSummary: PracticeReviewSummary? {
-        guard practiceAssistMode != .demo else { return nil }
+        guard isScoredPracticeMode else { return nil }
         return PracticeReviewSummary(
             attempts: attemptCount,
             averageAccuracy: currentAccuracy,
@@ -1875,14 +2316,15 @@ struct PracticeModeView: View {
     // movement evidence and `resolve` returns `.targetOnly`. When a RANE
     // platter was used this attempt, `midiControllerDispatcher` already
     // accumulated its CC6 telemetry (see `resetCapturedPlatterEvents` in
-    // `startSession`/`resetSession`); `platterMovementEvents` decodes it via
-    // the same shared `CaptureCore.derivePlatterMovementEvents` macOS's
-    // Practice/Review notation uses. The decision itself lives in
+    // `startSession`/`resetSession`);
+    // `gestureRelativePlatterNotationEvents` decodes the same shared run and
+    // reversal boundaries macOS presentation uses, then locally rebases each
+    // accepted gesture. The decision itself lives in
     // `PracticeResultNotation.resolve` (pure, evidence-driven) — this is the
     // "future DVS/MIDI/camera input path" the type's own doc comment
     // anticipated; no change to the result view itself.
     private var practiceResultNotation: PracticeResultNotation {
-        let events = midiControllerDispatcher.platterMovementEvents
+        let events = midiControllerDispatcher.gestureRelativePlatterNotationEvents
         #if DEBUG
         if !events.isEmpty {
             print("[SCRATCH-DEBUG] practice received update · movementEvents=\(events.count)")
@@ -1902,7 +2344,10 @@ struct PracticeModeView: View {
     /// `ScratchNotationPanel`; no renderer geometry or notation grammar is
     /// reimplemented here.
     private func updateLivePerformedNotation() {
-        guard isSessionActive, !isPaused, practiceAssistMode != .demo else { return }
+        // Reference-only Demo collects nothing; every other mode — including
+        // Demo + My Motion — feeds the live performed lane from the always-on
+        // MIDI platter stream. Camera/mic are irrelevant to this path.
+        guard isSessionActive, !isPaused, !isReferenceOnlyDemo else { return }
         let events = midiControllerDispatcher.livePlatterMovementEvents
         guard events != livePerformedMovementEvents else { return }
         livePerformedMovementEvents = events
@@ -2003,6 +2448,109 @@ struct PracticeModeView: View {
 
 }
 
+/// Transparent target trace for the active Practice camera surface. The clock,
+/// lane content, geometry, and renderer are the existing Practice sources; this
+/// wrapper changes presentation only by omitting the chart card and substrate.
+private struct PracticeLandscapeTargetTrace: View {
+    let content: LaneContent
+    let clock: LaneClock
+    private let motionPath: MotionPath
+
+    init(content: LaneContent, clock: LaneClock) {
+        self.content = content
+        self.clock = clock
+        self.motionPath = ScratchStrokeGeometry.motionPath(for: content)
+    }
+
+    var body: some View {
+        TimelineView(.periodic(from: .now, by: 1.0 / 30.0)) { timeline in
+            Canvas { context, size in
+                let viewport = LaneViewport(
+                    size: size,
+                    now: clock.now(at: timeline.date),
+                    axis: .horizontal,
+                    actionLineFraction: 0.18,
+                    secondsAhead: 3.0
+                )
+                ScratchMotionRenderer.draw(
+                    motionPath,
+                    in: context,
+                    viewport: viewport,
+                    style: .target
+                )
+
+                let actionX = size.width * 0.18
+                var actionLine = Path()
+                actionLine.move(to: CGPoint(x: actionX, y: 0))
+                actionLine.addLine(to: CGPoint(x: actionX, y: size.height))
+                context.stroke(
+                    actionLine,
+                    with: .color(ScratchLabDesign.Sem.accent.opacity(0.72)),
+                    lineWidth: 1
+                )
+            }
+        }
+        .allowsHitTesting(false)
+    }
+}
+
+/// Transparent measured-performance trace for landscape camera Practice. It
+/// adapts the already-published movement events with the canonical adapter and
+/// renderer and never writes back to capture, MIDI, or notation state.
+private struct PracticeLandscapePerformedTrace: View {
+    let events: [CaptureCore.DetectedNotationRecordMovementEvent]
+    private let motionPath: MotionPath
+    private let visibleWindow: ClosedRange<TimeInterval>?
+
+    init(events: [CaptureCore.DetectedNotationRecordMovementEvent]) {
+        self.events = events
+        let strokes = events.compactMap(PerformedStrokeAdapter.laneStroke)
+        let end = max(events.map(\.endTime).max() ?? 0.1, 0.1)
+        let content = LaneContent(
+            strokes: strokes,
+            segments: [],
+            beatsPerMinute: nil,
+            duration: end,
+            loops: false
+        )
+        if let frame = PerformedStrokeAdapter.gestureRelativeNormalizationFrame(for: events) {
+            self.motionPath = ScratchStrokeGeometry.motionPath(
+                for: content,
+                normalizingTo: frame
+            )
+        } else {
+            self.motionPath = ScratchStrokeGeometry.motionPath(for: content)
+        }
+
+        if let first = events.first, let last = events.last {
+            self.visibleWindow = first.startTime...max(first.startTime + 0.1, last.endTime)
+        } else {
+            self.visibleWindow = nil
+        }
+    }
+
+    var body: some View {
+        Canvas { context, size in
+            guard let visibleWindow else { return }
+            let duration = max(visibleWindow.upperBound - visibleWindow.lowerBound, 0.1)
+            let viewport = LaneViewport(
+                size: size,
+                now: visibleWindow.lowerBound,
+                axis: .horizontal,
+                actionLineFraction: 0,
+                secondsAhead: duration
+            )
+            ScratchMotionRenderer.draw(
+                motionPath,
+                in: context,
+                viewport: viewport,
+                style: .performance
+            )
+        }
+        .allowsHitTesting(false)
+    }
+}
+
 // MARK: - Camera Preview
 
 struct CameraPreviewView: View {
@@ -2095,6 +2643,479 @@ struct CameraPreviewView: View {
     }
 }
 
+private extension SessionSetupOverlay {
+    private var usesAccessibilitySetupSizing: Bool {
+        dynamicTypeSize.isAccessibilitySize
+    }
+
+    /// Advanced Practice setup in landscape is a fixed three-pane workspace:
+    /// beat, session, and input. Each pane uses `ViewThatFits` so normal text
+    /// sizes require no scrolling; a local pane scroll is used only when
+    /// accessibility text, an error, or optional descriptive copy needs it.
+    private func landscapeSetupLayout(
+        size: CGSize,
+        safeAreaInsets: EdgeInsets
+    ) -> some View {
+        let leadingInset = max(safeAreaInsets.leading, 10)
+        let trailingInset = max(safeAreaInsets.trailing, 10)
+        let topInset = max(safeAreaInsets.top, 6)
+        let bottomInset = max(safeAreaInsets.bottom, 6)
+        let availableWidth = max(0, size.width - leadingInset - trailingInset)
+        let toolbarHeight: CGFloat = 40
+        let workspaceHeight = max(190, size.height - topInset - bottomInset - toolbarHeight - 6)
+        let paneSpacing: CGFloat = 8
+        let paneWidth = max(0, availableWidth - (paneSpacing * 2))
+        let beatWidth = paneWidth * 0.36
+        let sessionWidth = paneWidth * 0.31
+        let inputWidth = max(0, paneWidth - beatWidth - sessionWidth)
+
+        return VStack(spacing: 6) {
+            HStack(spacing: 12) {
+                Button(action: onBack) {
+                    Image(systemName: "chevron.left")
+                        .font(.system(size: 16, weight: .bold))
+                        .foregroundStyle(ScratchLabDesign.Sem.textPrimary)
+                        .frame(width: 40, height: 40)
+                        .background(ScratchLabDesign.Surface.scrim, in: Circle())
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel("Back to Practice")
+
+                VStack(alignment: .leading, spacing: 1) {
+                    Text("\(sessionTitle) · \(scratch.name)")
+                        .font(ScratchLabDesign.Typo.cardHeading)
+                        .foregroundStyle(ScratchLabDesign.Sem.textPrimary)
+                        .lineLimit(1)
+                    Text(sessionDescription ?? scratch.description)
+                        .font(ScratchLabDesign.Typo.caption)
+                        .foregroundStyle(ScratchLabDesign.Sem.textSecondary)
+                        .lineLimit(1)
+                }
+
+                Spacer(minLength: 8)
+
+                Text(selectedAssistMode.title.uppercased())
+                    .font(ScratchLabDesign.Typo.statusPill)
+                    .foregroundStyle(ScratchLabDesign.Sem.accent)
+                    .padding(.horizontal, 10)
+                    .frame(height: 30)
+                    .background(ScratchLabDesign.Surface.subtleFill, in: Capsule())
+            }
+            .frame(height: toolbarHeight)
+
+            HStack(alignment: .top, spacing: paneSpacing) {
+                ViewThatFits(in: .vertical) {
+                    landscapeBeatPane
+                        .fixedSize(horizontal: false, vertical: true)
+                    ScrollView(showsIndicators: true) {
+                        landscapeBeatPane
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                }
+                .frame(width: beatWidth, height: workspaceHeight, alignment: .top)
+
+                ViewThatFits(in: .vertical) {
+                    landscapeSessionPane
+                        .fixedSize(horizontal: false, vertical: true)
+                    ScrollView(showsIndicators: true) {
+                        landscapeSessionPane
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                }
+                .frame(width: sessionWidth, height: workspaceHeight, alignment: .top)
+
+                ViewThatFits(in: .vertical) {
+                    landscapeInputPane
+                        .fixedSize(horizontal: false, vertical: true)
+                    ScrollView(showsIndicators: true) {
+                        landscapeInputPane
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                }
+                .frame(width: inputWidth, height: workspaceHeight, alignment: .top)
+            }
+        }
+        .padding(.leading, leadingInset)
+        .padding(.trailing, trailingInset)
+        .padding(.top, topInset)
+        .padding(.bottom, bottomInset)
+    }
+
+    private var landscapeBeatPane: some View {
+        landscapeSetupCard {
+            VStack(alignment: .leading, spacing: 6) {
+            HStack {
+                Text("PRACTICE BEAT")
+                    .font(ScratchLabDesign.Typo.technical)
+                    .foregroundStyle(ScratchLabDesign.Sem.textTertiary)
+                Spacer(minLength: 8)
+                Text(practiceBeatStore.isBeatEnabled
+                     ? PracticeBeatUIContract.beatOnLabel
+                     : PracticeBeatUIContract.noBeatLabel)
+                    .font(ScratchLabDesign.Typo.statusPill)
+                    .foregroundStyle(practiceBeatStore.isBeatEnabled
+                                     ? ScratchLabDesign.Sem.success
+                                     : ScratchLabDesign.Sem.textSecondary)
+            }
+
+            HStack(spacing: 6) {
+                compactSelectionButton(
+                    title: PracticeBeatUIContract.noBeatLabel,
+                    isSelected: !practiceBeatStore.isBeatEnabled,
+                    selectedColor: ScratchLabDesign.Sem.accent,
+                    accessibilityID: "practice-beat-no-beat-button",
+                    action: { practiceBeatStore.setBeatEnabled(false) }
+                )
+                compactSelectionButton(
+                    title: PracticeBeatUIContract.beatOnLabel,
+                    isSelected: practiceBeatStore.isBeatEnabled,
+                    selectedColor: ScratchLabDesign.Sem.success,
+                    accessibilityID: "practice-beat-on-button",
+                    action: { practiceBeatStore.setBeatEnabled(true) }
+                )
+            }
+
+            if practiceBeatStore.isBeatEnabled {
+                Menu {
+                    ForEach(practiceBeatStore.availableBeatModes) { mode in
+                        Button {
+                            practiceBeatStore.selectBeatMode(mode)
+                        } label: {
+                            if practiceBeatStore.selectedBeatMode == mode {
+                                Label(mode.title, systemImage: "checkmark")
+                            } else {
+                                Text(mode.title)
+                            }
+                        }
+                    }
+                } label: {
+                    HStack {
+                        Text("Beat style")
+                            .font(ScratchLabDesign.Typo.caption)
+                            .foregroundStyle(ScratchLabDesign.Sem.textSecondary)
+                        Spacer(minLength: 8)
+                        Text(practiceBeatStore.selectedBeatMode.title)
+                            .font(ScratchLabDesign.Typo.sectionLabel)
+                            .foregroundStyle(ScratchLabDesign.Sem.textPrimary)
+                            .lineLimit(usesAccessibilitySetupSizing ? nil : 1)
+                        Image(systemName: "chevron.up.chevron.down")
+                            .font(.system(size: 10, weight: .bold))
+                            .foregroundStyle(ScratchLabDesign.Sem.textTertiary)
+                    }
+                    .padding(.horizontal, 10)
+                    .frame(minHeight: 44)
+                    .background(
+                        ScratchLabDesign.Surface.controlFill,
+                        in: RoundedRectangle(cornerRadius: ScratchLabDesign.Radius.compactPanel, style: .continuous)
+                    )
+                }
+            }
+
+            HStack(spacing: 6) {
+                compactBPMButton(systemImage: "minus") {
+                    practiceBeatStore.stepBPM(by: -1)
+                }
+
+                PracticeBPMInput(
+                    value: practiceBeatStore.bpmValue,
+                    onCommit: { practiceBeatStore.setBPM($0) }
+                )
+
+                compactBPMButton(systemImage: "plus") {
+                    practiceBeatStore.stepBPM(by: 1)
+                }
+            }
+
+            HStack(spacing: 5) {
+                ForEach(practiceBeatStore.allowedBPMList, id: \.self) { bpm in
+                    Button(action: { practiceBeatStore.setBPM(bpm) }) {
+                        Text("\(bpm)")
+                            .font(.system(size: 12, weight: .bold, design: .monospaced))
+                            .foregroundStyle(practiceBeatStore.bpmValue == bpm
+                                             ? ScratchLabDesign.Sem.textOnAccent
+                                             : ScratchLabDesign.Sem.textPrimary)
+                            .frame(maxWidth: .infinity)
+                            .frame(height: 44)
+                            .background(
+                                practiceBeatStore.bpmValue == bpm
+                                    ? ScratchLabDesign.Sem.accent
+                                    : ScratchLabDesign.Surface.controlFill,
+                                in: RoundedRectangle(cornerRadius: ScratchLabDesign.Radius.compactPanel, style: .continuous)
+                            )
+                    }
+                    .buttonStyle(.plain)
+                }
+            }
+
+            Button(action: { practiceBeatStore.togglePlayback() }) {
+                Text(practiceBeatStore.isPlaying
+                     ? PracticeBeatUIContract.stopLabel
+                     : PracticeBeatUIContract.playLabel)
+                    .font(ScratchLabDesign.Typo.sectionLabel)
+                    .foregroundStyle(ScratchLabDesign.Sem.textOnAccent)
+                    .frame(maxWidth: .infinity)
+                    .frame(height: 44)
+                    .background(
+                        practiceBeatStore.isBeatEnabled
+                            ? (practiceBeatStore.isPlaying
+                               ? ScratchLabDesign.Sem.warning
+                               : ScratchLabDesign.Sem.success)
+                            : ScratchLabDesign.Surface.disabledFill,
+                        in: RoundedRectangle(cornerRadius: ScratchLabDesign.Radius.control, style: .continuous)
+                    )
+            }
+            .buttonStyle(.plain)
+            .disabled(!practiceBeatStore.isBeatEnabled)
+            .accessibilityIdentifier("practice-beat-playback-button")
+
+            if let playbackErrorMessage = practiceBeatStore.playbackErrorMessage {
+                Text(playbackErrorMessage)
+                    .font(ScratchLabDesign.Typo.caption)
+                    .foregroundStyle(ScratchLabDesign.Sem.warning)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            }
+        }
+        .accessibilityIdentifier(PracticeBeatUIContract.sectionAccessibilityID)
+    }
+
+    private var landscapeSessionPane: some View {
+        landscapeSetupCard {
+            VStack(alignment: .leading, spacing: 6) {
+            Text("SESSION")
+                .font(ScratchLabDesign.Typo.technical)
+                .foregroundStyle(ScratchLabDesign.Sem.textTertiary)
+
+            if let fixedDurationLabel {
+                HStack {
+                    Text("Length")
+                        .font(ScratchLabDesign.Typo.caption)
+                        .foregroundStyle(ScratchLabDesign.Sem.textSecondary)
+                    Spacer(minLength: 8)
+                    Text(fixedDurationLabel)
+                        .font(ScratchLabDesign.Typo.sectionLabel)
+                        .foregroundStyle(ScratchLabDesign.Sem.textPrimary)
+                }
+                .padding(.horizontal, 10)
+                .frame(height: 34)
+                .background(
+                    ScratchLabDesign.Surface.controlFill,
+                    in: RoundedRectangle(cornerRadius: ScratchLabDesign.Radius.compactPanel, style: .continuous)
+                )
+            } else {
+                VStack(alignment: .leading, spacing: 5) {
+                    Text("Length")
+                        .font(ScratchLabDesign.Typo.caption)
+                        .foregroundStyle(ScratchLabDesign.Sem.textSecondary)
+                    HStack(spacing: 5) {
+                        ForEach(durationOptions, id: \.1) { option in
+                            compactSelectionButton(
+                                title: option.0,
+                                isSelected: selectedDuration == option.1,
+                                selectedColor: ScratchLabDesign.Sem.accent,
+                                accessibilityID: nil,
+                                action: { selectedDuration = option.1 }
+                            )
+                        }
+                    }
+                }
+            }
+
+            VStack(alignment: .leading, spacing: 5) {
+                Text("Assist mode")
+                    .font(ScratchLabDesign.Typo.caption)
+                    .foregroundStyle(ScratchLabDesign.Sem.textSecondary)
+
+                Menu {
+                    ForEach(PracticeAssistMode.allCases) { mode in
+                        Button {
+                            selectedAssistMode = mode
+                        } label: {
+                            if selectedAssistMode == mode {
+                                Label(mode.title, systemImage: "checkmark")
+                            } else {
+                                Text(mode.title)
+                            }
+                        }
+                    }
+                } label: {
+                    HStack {
+                        Text(selectedAssistMode.title)
+                            .font(ScratchLabDesign.Typo.sectionLabel)
+                            .foregroundStyle(ScratchLabDesign.Sem.textPrimary)
+                        Spacer(minLength: 8)
+                        Image(systemName: "chevron.up.chevron.down")
+                            .font(.system(size: 10, weight: .bold))
+                            .foregroundStyle(ScratchLabDesign.Sem.textTertiary)
+                    }
+                    .padding(.horizontal, 10)
+                    .frame(height: 44)
+                    .background(
+                        ScratchLabDesign.Surface.controlFill,
+                        in: RoundedRectangle(cornerRadius: ScratchLabDesign.Radius.compactPanel, style: .continuous)
+                    )
+                }
+
+                Text(selectedAssistMode.explainer)
+                    .font(ScratchLabDesign.Typo.caption)
+                    .foregroundStyle(ScratchLabDesign.Sem.textSecondary)
+                    .lineLimit(usesAccessibilitySetupSizing ? nil : 1)
+                    .minimumScaleFactor(0.72)
+            }
+
+            if let landscapeSetupSummaryText {
+                Text(landscapeSetupSummaryText)
+                    .font(ScratchLabDesign.Typo.caption)
+                    .foregroundStyle(ScratchLabDesign.Sem.textSecondary)
+                    .lineLimit(usesAccessibilitySetupSizing ? nil : 1)
+                    .minimumScaleFactor(0.76)
+                    .padding(7)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .background(
+                        ScratchLabDesign.Surface.subtleFill,
+                        in: RoundedRectangle(cornerRadius: ScratchLabDesign.Radius.compactPanel, style: .continuous)
+                    )
+            }
+            }
+        }
+    }
+
+    private var landscapeInputPane: some View {
+        landscapeSetupCard {
+            VStack(alignment: .leading, spacing: 6) {
+            Text("AUDIO INPUT")
+                .font(ScratchLabDesign.Typo.technical)
+                .foregroundStyle(ScratchLabDesign.Sem.textTertiary)
+
+            ForEach(inputSourceOptions, id: \.self) { source in
+                Button(action: { onSelectInputSource(source) }) {
+                    HStack(spacing: 8) {
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text(source.practiceLabel)
+                                .font(ScratchLabDesign.Typo.sectionLabel)
+                            Text(inputTileSubtitle(for: source))
+                                .font(ScratchLabDesign.Typo.caption)
+                                .lineLimit(usesAccessibilitySetupSizing ? nil : 1)
+                        }
+                        Spacer(minLength: 6)
+                        if selectedInputSource == source {
+                            Image(systemName: "checkmark.circle.fill")
+                                .font(.system(size: 13, weight: .bold))
+                        }
+                    }
+                    .foregroundStyle(selectedInputSource == source
+                                     ? ScratchLabDesign.Sem.textOnAccent
+                                     : ScratchLabDesign.Sem.textPrimary)
+                    .padding(.horizontal, 10)
+                    .frame(maxWidth: .infinity, minHeight: 44, alignment: .leading)
+                    .background(
+                        selectedInputSource == source
+                            ? ScratchLabDesign.Sem.accent
+                            : ScratchLabDesign.Surface.controlFill,
+                        in: RoundedRectangle(cornerRadius: ScratchLabDesign.Radius.control, style: .continuous)
+                    )
+                }
+                .buttonStyle(.plain)
+            }
+
+            VStack(alignment: .leading, spacing: 3) {
+                Text("Current route: \(activeInputName)")
+                    .font(ScratchLabDesign.Typo.sectionLabel)
+                    .foregroundStyle(ScratchLabDesign.Sem.textPrimary)
+                    .lineLimit(usesAccessibilitySetupSizing ? nil : 1)
+                Text(inputRouteHint)
+                    .font(ScratchLabDesign.Typo.caption)
+                    .foregroundStyle(ScratchLabDesign.Sem.textSecondary)
+                    .lineLimit(usesAccessibilitySetupSizing ? nil : 1)
+                    .minimumScaleFactor(0.72)
+            }
+
+            Spacer(minLength: 0)
+
+            Button(action: onStart) {
+                Text(startButtonTitle)
+            }
+            .scratchLabPrimaryButton(fillsWidth: true)
+            }
+        }
+    }
+
+    private func compactSelectionButton(
+        title: String,
+        isSelected: Bool,
+        selectedColor: Color,
+        accessibilityID: String?,
+        action: @escaping () -> Void
+    ) -> some View {
+        Button(action: action) {
+            Text(title)
+                .font(.system(size: 12, weight: .bold))
+                .foregroundStyle(isSelected
+                                 ? ScratchLabDesign.Sem.textOnAccent
+                                 : ScratchLabDesign.Sem.textPrimary)
+                .lineLimit(usesAccessibilitySetupSizing ? 2 : 1)
+                .minimumScaleFactor(0.75)
+                .frame(maxWidth: .infinity)
+                .frame(minHeight: 44)
+                .background(
+                    isSelected ? selectedColor : ScratchLabDesign.Surface.controlFill,
+                    in: RoundedRectangle(cornerRadius: ScratchLabDesign.Radius.compactPanel, style: .continuous)
+                )
+        }
+        .buttonStyle(.plain)
+        .accessibilityIdentifier(accessibilityID ?? "session-option-\(title)")
+    }
+
+    private func compactBPMButton(
+        systemImage: String,
+        action: @escaping () -> Void
+    ) -> some View {
+        Button(action: action) {
+            Image(systemName: systemImage)
+                .font(.system(size: 13, weight: .bold))
+                .foregroundStyle(ScratchLabDesign.Sem.textPrimary)
+                .frame(width: 34, height: 44)
+                .background(
+                    ScratchLabDesign.Surface.controlFill,
+                    in: RoundedRectangle(cornerRadius: ScratchLabDesign.Radius.compactPanel, style: .continuous)
+                )
+        }
+        .buttonStyle(.plain)
+    }
+
+    private var landscapeSetupSummaryText: String? {
+        let details = [
+            objectiveText.map { "Objective: \($0)" },
+            modeNote.map { "Mode: \($0)" }
+        ].compactMap { $0 }
+        return details.isEmpty ? nil : details.joined(separator: " · ")
+    }
+
+    /// Landscape setup uses the design system's compact card metrics rather
+    /// than the 20-point standard card padding used by portrait.
+    private func landscapeSetupCard<Content: View>(
+        @ViewBuilder content: () -> Content
+    ) -> some View {
+        content()
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(ScratchLabDesign.Card.compactPadding)
+            .background(
+                ScratchLabDesign.Surface.card,
+                in: RoundedRectangle(
+                    cornerRadius: ScratchLabDesign.Card.compactCornerRadius,
+                    style: .continuous
+                )
+            )
+            .overlay {
+                RoundedRectangle(
+                    cornerRadius: ScratchLabDesign.Card.compactCornerRadius,
+                    style: .continuous
+                )
+                .stroke(Color.primary.opacity(0.06), lineWidth: 1)
+            }
+        }
+}
+
 // MARK: - Camera Preview Layer (UIViewRepresentable)
 
 private struct CameraPreviewLayer: UIViewRepresentable {
@@ -2149,7 +3170,7 @@ private struct CameraPreviewLayer: UIViewRepresentable {
 
 struct AudioLevelIndicator: View {
     let level: Float
-    
+
     var body: some View {
         HStack(spacing: 3) {
             ForEach(0..<20, id: \.self) { i in
@@ -2188,7 +3209,7 @@ struct AudioLevelIndicator: View {
 
 struct AccuracyBurstView: View {
     let accuracy: Double
-    
+
     var body: some View {
         ZStack {
             // Expanding rings
@@ -2197,13 +3218,13 @@ struct AccuracyBurstView: View {
                     .stroke(burstColor.opacity(0.5 - Double(i) * 0.15), lineWidth: 3)
                     .frame(width: 100 + CGFloat(i * 40), height: 100 + CGFloat(i * 40))
             }
-            
+
             // Center text
             Text(accuracy >= 90 ? "🔥" : accuracy >= 70 ? "👍" : "💪")
                 .font(.system(size: 60))
         }
     }
-    
+
     private var burstColor: Color {
         if accuracy >= 90 {
             return ScratchLabDesign.Sem.success
@@ -2232,14 +3253,17 @@ private struct PracticeReadyOverlay: View {
     let bpm: Double
     let topSafeAreaInset: CGFloat
     let bottomSafeAreaInset: CGFloat
+    let onSetBPM: (Int) -> Void
     let onStart: () -> Void
     let onWatch: () -> Void
     let onBack: () -> Void
     @Environment(\.horizontalSizeClass) private var horizontalSizeClass
-    @Environment(\.verticalSizeClass) private var verticalSizeClass
     @EnvironmentObject private var midiManager: IOSMIDIManager
     @EnvironmentObject private var midiLearnCoordinator: IOSMIDILearnCoordinator
-    @ObservedObject private var sampleManager = SampleManager.shared
+    @EnvironmentObject private var midiControllerDispatcher: IOSMIDIControllerDispatcher
+    @EnvironmentObject private var scratchPlaybackEngine: IOScratchPlaybackEngine
+    @State private var isControllerSetupExpanded = false
+    @State private var isDetailedMappingExpanded = false
 
     private let faderActions: [MIDISemanticAction] = [
         .crossfader, .leftUpfader, .rightUpfader
@@ -2253,109 +3277,357 @@ private struct PracticeReadyOverlay: View {
         ScratchLabAdaptiveLayout.notationPresentation(isRegularWidth: horizontalSizeClass == .regular)
     }
 
-    private var layoutMode: ScratchLabAdaptiveLayout.LayoutMode {
-        ScratchLabAdaptiveLayout.layoutMode(
-            horizontalSizeClass: horizontalSizeClass ?? .compact,
-            verticalSizeClass: verticalSizeClass ?? .regular
-        )
+    /// The notation canvas is only the inner chart. Reserve the panel's two
+    /// card insets, lane-label row, and label-to-canvas spacing so the outer
+    /// card stays inside the landscape workspace instead of clipping its edge.
+    private var landscapeNotationChromeAllowance: CGFloat {
+        let cardPadding = presentation == .compact
+            ? ScratchLabDesign.Card.compactPadding
+            : ScratchLabDesign.Card.padding
+        let laneLabelHeight: CGFloat = 16
+        return (cardPadding * 2) + ScratchLabDesign.Spacing.itemTight + laneLabelHeight
     }
 
     var body: some View {
-        ZStack {
-            ScratchLabDesign.Surface.overlay
-                .ignoresSafeArea()
+        GeometryReader { geometry in
+            let isLandscape = geometry.size.width > geometry.size.height
 
-            ScrollView(showsIndicators: false) {
-                VStack(alignment: .leading, spacing: 16) {
-                    HStack {
-                        Button(action: onBack) {
-                            Image(systemName: "chevron.left")
-                                .font(.title2)
-                                .foregroundColor(ScratchLabDesign.Sem.textPrimary)
-                                .padding(12)
-                                .background(ScratchLabDesign.Surface.scrim)
-                                .clipShape(Circle())
-                        }
-                        .accessibilityLabel("Back")
-                        Spacer()
-                    }
+            ZStack {
+                ScratchLabDesign.Surface.overlay
+                    .ignoresSafeArea()
 
-                    AdaptiveWorkspaceHeader(
-                        title: "Practice",
-                        status: .ready,
-                        detail: "\(scratch.name) · Copy the target"
+                if isLandscape {
+                    landscapeReadyLayout(
+                        size: geometry.size,
+                        safeAreaInsets: geometry.safeAreaInsets
                     )
-
-                    LessonProgressIndicator(
-                        stages: [.watch, .listen, .copy, .result, .review],
-                        current: .watch
-                    )
-
-                    if layoutMode == .regularLandscape {
-                        // iPad landscape: dominant notation left, controls right.
-                        HStack(alignment: .top, spacing: 16) {
-                            if let targetNotation {
-                                ScratchNotationPanel(
-                                    lane: .target,
-                                    presentation: presentation,
-                                    source: .target(targetNotation),
-                                    bpm: bpm,
-                                    mode: .targetReference
-                                )
-                                .frame(maxWidth: .infinity, alignment: .top)
-                            }
-
-                            VStack(alignment: .leading, spacing: 16) {
-                                HStack(spacing: 8) {
-                                    statusPill(label: micStatusTitle, color: micStatusColor)
-                                    statusPill(label: "\(Int(bpm)) BPM", color: ScratchLabDesign.Sem.accent)
-                                }
-
-                                midiMappingCard
-
-                                openPracticeCard
-
-                                readyActions
-                            }
-                            .frame(width: 320, alignment: .top)
-                        }
-                    } else {
-                        // Portrait / compact: single column (unchanged).
-                        if let targetNotation {
-                            ScratchNotationPanel(
-                                lane: .target,
-                                presentation: presentation,
-                                source: .target(targetNotation),
-                                bpm: bpm,
-                                mode: .targetReference
-                            )
-                        }
-
-                        HStack(spacing: 8) {
-                            statusPill(label: micStatusTitle, color: micStatusColor)
-                            statusPill(label: "\(Int(bpm)) BPM", color: ScratchLabDesign.Sem.accent)
-                        }
-
-                        midiMappingCard
-
-                        openPracticeCard
-
-                        readyActions
+                } else {
+                    ScrollView(showsIndicators: false) {
+                        portraitReadyContent
+                            .padding(.horizontal, 24)
+                            .padding(.top, topSafeAreaInset + 12)
+                            .padding(.bottom, max(bottomSafeAreaInset, 16) + 20)
                     }
                 }
-                .padding(.horizontal, 24)
-                .padding(.top, topSafeAreaInset + 12)
-                .padding(.bottom, max(bottomSafeAreaInset, 16) + 20)
             }
         }
     }
 
-    private var midiMappingCard: some View {
-        VStack(alignment: .leading, spacing: 12) {
+    private var portraitReadyContent: some View {
+        VStack(alignment: .leading, spacing: 16) {
             HStack {
-                VStack(alignment: .leading, spacing: 3) {
-                    Text("MIDI mapping")
+                portraitBackButton
+                Spacer()
+            }
+
+            AdaptiveWorkspaceHeader(
+                title: "Practice",
+                status: .ready,
+                detail: "\(scratch.name) · Copy the target"
+            )
+
+            LessonProgressIndicator(
+                stages: [.watch, .listen, .copy, .result, .review],
+                current: .watch
+            )
+
+            targetNotationPanel
+            readyControlSurface
+        }
+    }
+
+    /// One-screen landscape Ready workspace. The columns are proportional to
+    /// the available viewport (not a fixed side rail), with notation owning
+    /// the majority of the width. The controls pane scrolls only after the
+    /// genuinely variable controller-mapping disclosure is expanded.
+    private func landscapeReadyLayout(
+        size: CGSize,
+        safeAreaInsets: EdgeInsets
+    ) -> some View {
+        let horizontalInset = max(max(safeAreaInsets.leading, safeAreaInsets.trailing), 14)
+        let topInset = max(safeAreaInsets.top, 8)
+        let bottomInset = max(safeAreaInsets.bottom, 8)
+        let availableWidth = max(0, size.width - (horizontalInset * 2))
+        let availableHeight = max(0, size.height - topInset - bottomInset)
+        let toolbarHeight: CGFloat = 46
+        let workspaceHeight = max(180, availableHeight - toolbarHeight - 10)
+        let controlsFraction: CGFloat = size.width >= 1_000 ? 0.34 : 0.39
+        let controlsWidth = min(
+            max(230, (availableWidth - 14) * controlsFraction),
+            max(230, availableWidth - 14 - 260)
+        )
+        let notationWidth = max(0, availableWidth - controlsWidth - 14)
+
+        return VStack(spacing: 10) {
+            HStack(spacing: 12) {
+                backButton
+
+                VStack(alignment: .leading, spacing: 1) {
+                    Text("Practice · \(scratch.name)")
                         .font(ScratchLabDesign.Typo.cardHeading)
+                        .foregroundStyle(ScratchLabDesign.Sem.textPrimary)
+                        .lineLimit(1)
+                    Text("Copy the target")
+                        .font(ScratchLabDesign.Typo.caption)
+                        .foregroundStyle(ScratchLabDesign.Sem.textSecondary)
+                }
+
+                Spacer(minLength: 8)
+
+                HStack(spacing: 6) {
+                    Circle()
+                        .fill(ScratchLabDesign.Sem.accent)
+                        .frame(width: 6, height: 6)
+                    Text("WATCH · 1 OF 5")
+                        .font(ScratchLabDesign.Typo.statusPill)
+                        .foregroundStyle(ScratchLabDesign.Sem.textPrimary)
+                }
+                .padding(.horizontal, 10)
+                .frame(height: 30)
+                .background(ScratchLabDesign.Surface.subtleFill, in: Capsule())
+                .accessibilityLabel("Practice stage Watch, one of five")
+            }
+            .frame(height: toolbarHeight)
+
+            HStack(alignment: .top, spacing: 14) {
+                landscapeTargetNotationPanel(
+                    canvasHeight: max(112, workspaceHeight - landscapeNotationChromeAllowance)
+                )
+                .frame(width: notationWidth, height: workspaceHeight, alignment: .top)
+
+                landscapeReadyControlPane
+                    .frame(width: controlsWidth, height: workspaceHeight, alignment: .top)
+            }
+        }
+        .padding(.horizontal, horizontalInset)
+        .padding(.top, topInset)
+        .padding(.bottom, bottomInset)
+    }
+
+    private var backButton: some View {
+        Button(action: onBack) {
+            Image(systemName: "chevron.left")
+                .font(.system(size: 16, weight: .bold))
+                .foregroundColor(ScratchLabDesign.Sem.textPrimary)
+                .frame(width: 40, height: 40)
+                .background(ScratchLabDesign.Surface.scrim)
+                .clipShape(Circle())
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel("Back")
+    }
+
+    /// Keeps the established portrait navigation affordance byte-for-byte in
+    /// appearance while landscape uses the denser 40-point toolbar control.
+    private var portraitBackButton: some View {
+        Button(action: onBack) {
+            Image(systemName: "chevron.left")
+                .font(.title2)
+                .foregroundColor(ScratchLabDesign.Sem.textPrimary)
+                .padding(12)
+                .background(ScratchLabDesign.Surface.scrim)
+                .clipShape(Circle())
+        }
+        .accessibilityLabel("Back")
+    }
+
+    @ViewBuilder
+    private func landscapeTargetNotationPanel(canvasHeight: CGFloat) -> some View {
+        if let targetNotation {
+            ScratchNotationPanel(
+                lane: .target,
+                presentation: presentation,
+                source: .target(targetNotation),
+                bpm: bpm,
+                mode: .targetReference,
+                canvasHeightOverride: canvasHeight
+            )
+            .frame(maxWidth: .infinity, alignment: .top)
+        } else {
+            VStack(spacing: 8) {
+                Image(systemName: "waveform.path")
+                    .font(.title2)
+                    .foregroundStyle(ScratchLabDesign.Sem.textTertiary)
+                Text("Target notation isn't available for \(scratch.name) yet.")
+                    .font(ScratchLabDesign.Typo.bodySecondary)
+                    .foregroundStyle(ScratchLabDesign.Sem.textSecondary)
+                    .multilineTextAlignment(.center)
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .scratchLabCard(.standard)
+        }
+    }
+
+    @ViewBuilder
+    private var landscapeReadyControlPane: some View {
+        if isControllerSetupExpanded {
+            ScrollView(showsIndicators: true) {
+                landscapeReadyControls
+            }
+        } else {
+            landscapeReadyControls
+        }
+    }
+
+    private var landscapeReadyControls: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack(spacing: 8) {
+                statusPill(label: micStatusTitle, color: micStatusColor)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+
+                PracticeBPMInput(value: Int(bpm.rounded()), onCommit: onSetBPM)
+                    .frame(width: 126)
+            }
+
+            HStack(alignment: .top, spacing: 8) {
+                Image(systemName: "waveform")
+                    .font(.system(size: 12, weight: .semibold))
+                    .foregroundStyle(ScratchLabDesign.Sem.accent)
+                    .padding(.top, 2)
+                Text("Open practice · Static target reference. Mic listens; freestyle freely.")
+                    .font(ScratchLabDesign.Typo.caption)
+                    .foregroundStyle(ScratchLabDesign.Sem.textSecondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            .padding(10)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(
+                ScratchLabDesign.Surface.subtleFill,
+                in: RoundedRectangle(cornerRadius: ScratchLabDesign.Radius.control, style: .continuous)
+            )
+
+            HStack(spacing: 8) {
+                Button(action: onStart) {
+                    Text("Start session")
+                }
+                .scratchLabPrimaryButton(fillsWidth: true)
+
+                Button(action: onWatch) {
+                    Text("Watch")
+                }
+                .scratchLabSecondaryButton(fillsWidth: true)
+            }
+
+            midiMappingCard
+        }
+        .frame(maxWidth: .infinity, alignment: .top)
+    }
+
+    @ViewBuilder
+    private var targetNotationPanel: some View {
+        if let targetNotation {
+            ScratchNotationPanel(
+                lane: .target,
+                presentation: presentation,
+                source: .target(targetNotation),
+                bpm: bpm,
+                mode: .targetReference
+            )
+            .frame(maxWidth: .infinity, alignment: .top)
+        }
+    }
+
+    private var readyControlSurface: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            statusPill(label: micStatusTitle, color: micStatusColor)
+
+            VStack(alignment: .leading, spacing: 6) {
+                Text("TEMPO")
+                    .font(ScratchLabDesign.Typo.technical)
+                    .foregroundStyle(ScratchLabDesign.Sem.textTertiary)
+                PracticeBPMInput(value: Int(bpm.rounded()), onCommit: onSetBPM)
+                Text("\(CaptureClickTrackDefaults.supportedBPMRange.lowerBound)–\(CaptureClickTrackDefaults.supportedBPMRange.upperBound) BPM")
+                    .font(ScratchLabDesign.Typo.caption)
+                    .foregroundStyle(ScratchLabDesign.Sem.textSecondary)
+            }
+
+            openPracticeCard
+            readyActions
+            midiMappingCard
+        }
+    }
+
+    private var midiMappingCard: some View {
+        DisclosureGroup(isExpanded: $isControllerSetupExpanded) {
+            VStack(alignment: .leading, spacing: 7) {
+                Button("Apply Verified RANE Mapping") {
+                    midiLearnCoordinator.applyVerifiedRaneOneMKIIMapping()
+                }
+                .buttonStyle(.borderedProminent)
+                .controlSize(.small)
+                .tint(ScratchLabDesign.Sem.accent)
+                .disabled(!canLearnMIDI || midiLearnCoordinator.activeAction != nil)
+                .accessibilityIdentifier("apply-rane-one-mkii-mapping")
+
+                Button("Load AHHH") {
+                    scratchPlaybackEngine.loadPlatterAHHH()
+                }
+                .buttonStyle(.bordered)
+                .controlSize(.small)
+                .tint(ScratchLabDesign.Sem.accent)
+                .disabled(!canLearnMIDI)
+                .accessibilityIdentifier("load-platter-ahhh")
+
+                Text(RaneOneMKIIVerifiedLearnedMapping.isComplete(midiLearnCoordinator.currentMapping)
+                    ? "Mapped: crossfader, both upfaders, and Hot Cues 1–8. Hot Cue 1 loads AHHH."
+                    : "Mapping incomplete. Apply the verified RANE mapping.")
+                    .font(ScratchLabDesign.Typo.caption)
+                    .foregroundStyle(RaneOneMKIIVerifiedLearnedMapping.isComplete(midiLearnCoordinator.currentMapping)
+                        ? ScratchLabDesign.Sem.success
+                        : ScratchLabDesign.Sem.warning)
+                    .fixedSize(horizontal: false, vertical: true)
+
+                Text(scratchPlaybackEngine.platterSampleStatus)
+                    .font(ScratchLabDesign.Typo.caption)
+                    .foregroundStyle(ScratchLabDesign.Sem.textSecondary)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .accessibilityIdentifier("platter-sample-status")
+
+                Text(midiActivitySummary)
+                    .font(.system(size: 10, weight: .semibold, design: .monospaced))
+                    .foregroundStyle(ScratchLabDesign.Sem.textPrimary)
+                    .fixedSize(horizontal: false, vertical: true)
+
+                if let message = midiManager.latestMessage {
+                    Text("Last MIDI · raw ch \(message.channel) · \(String(describing: message.messageType)) · CC \(message.controlNumber) · Note \(message.noteNumber) · value \(message.value)")
+                        .font(.system(size: 10, weight: .medium, design: .monospaced))
+                        .foregroundStyle(ScratchLabDesign.Sem.textSecondary)
+                        .lineLimit(2)
+                }
+
+                DisclosureGroup("Fine-tune mappings", isExpanded: $isDetailedMappingExpanded) {
+                    ScrollView(showsIndicators: true) {
+                        VStack(spacing: 7) {
+                            ForEach(faderActions, id: \.rawValue) { action in
+                                midiLearnRow(action)
+                            }
+
+                        ForEach(hotCueActions, id: \.rawValue) { action in
+                            midiLearnRow(action)
+                        }
+                    }
+                        .padding(.top, 6)
+                    }
+                    .frame(maxHeight: 150)
+                }
+                .tint(ScratchLabDesign.Sem.textPrimary)
+                .font(ScratchLabDesign.Typo.caption)
+                .foregroundStyle(ScratchLabDesign.Sem.textPrimary)
+
+                if !midiLearnCoordinator.feedback.isEmpty {
+                    Text(midiLearnCoordinator.feedback)
+                        .font(ScratchLabDesign.Typo.caption)
+                        .foregroundStyle(ScratchLabDesign.Sem.accent)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .accessibilityIdentifier("midi-learn-feedback")
+                }
+            }
+            .padding(.top, 6)
+        } label: {
+            HStack(spacing: 8) {
+                VStack(alignment: .leading, spacing: 3) {
+                    Text("Controller setup")
+                        .font(ScratchLabDesign.Typo.sectionLabel)
                         .foregroundStyle(ScratchLabDesign.Sem.textPrimary)
                     Text(midiDeviceDetail)
                         .font(ScratchLabDesign.Typo.caption)
@@ -2367,33 +3639,28 @@ private struct PracticeReadyOverlay: View {
                     .frame(width: 8, height: 8)
                     .accessibilityHidden(true)
             }
-
-            ForEach(faderActions, id: \.rawValue) { action in
-                midiLearnRow(action)
-            }
-
-            DisclosureGroup("Hot cues") {
-                VStack(spacing: 8) {
-                    ForEach(hotCueActions, id: \.rawValue) { action in
-                        midiLearnRow(action)
-                    }
-                }
-                .padding(.top, 8)
-            }
-            .tint(ScratchLabDesign.Sem.textPrimary)
-            .font(ScratchLabDesign.Typo.sectionLabel)
-            .foregroundStyle(ScratchLabDesign.Sem.textPrimary)
-
-            if !midiLearnCoordinator.feedback.isEmpty {
-                Text(midiLearnCoordinator.feedback)
-                    .font(ScratchLabDesign.Typo.caption)
-                    .foregroundStyle(ScratchLabDesign.Sem.accent)
-                    .fixedSize(horizontal: false, vertical: true)
-                    .accessibilityIdentifier("midi-learn-feedback")
-            }
         }
-        .scratchLabCard(.standard)
+        .tint(ScratchLabDesign.Sem.textPrimary)
+        .padding(10)
+        .background(
+            ScratchLabDesign.Surface.subtleFill,
+            in: RoundedRectangle(cornerRadius: ScratchLabDesign.Radius.control, style: .continuous)
+        )
+        .overlay {
+            RoundedRectangle(cornerRadius: ScratchLabDesign.Radius.control, style: .continuous)
+                .stroke(ScratchLabDesign.Border.default, lineWidth: 1)
+        }
         .accessibilityIdentifier("midi-mapping-card")
+    }
+
+    private var midiActivitySummary: String {
+        let crossfader = midiControllerDispatcher.crossfaderMIDIValue.map(String.init) ?? "--"
+        let left = midiControllerDispatcher.leftUpfaderMIDIValue.map(String.init) ?? "--"
+        let right = midiControllerDispatcher.rightUpfaderMIDIValue.map(String.init) ?? "--"
+        let hotCue = midiControllerDispatcher.lastHotCueIndex.map { "HC\($0)" }
+            ?? midiControllerDispatcher.lastHotCueSampleID.map { "HC \($0)" }
+            ?? "HC--"
+        return "LIVE · XF \(crossfader) · L \(left) · R \(right) · \(hotCue)"
     }
 
     private func midiLearnRow(_ action: MIDISemanticAction) -> some View {
@@ -2429,29 +3696,10 @@ private struct PracticeReadyOverlay: View {
                 .accessibilityIdentifier("midi-learn-\(action.rawValue)")
             }
 
-            if let learned, action.hotCueIndex != nil {
-                Picker("Scratch sample", selection: Binding(
-                    get: { learned.assignedSampleID ?? "" },
-                    set: { sampleID in
-                        midiLearnCoordinator.assignSample(
-                            sampleID.isEmpty ? nil : sampleID,
-                            to: action
-                        )
-                    }
-                )) {
-                    Text("No sample").tag("")
-                    ForEach(sampleManager.availableSamples) { sample in
-                        Text(sample.displayName).tag(sample.id)
-                    }
-                }
-                .pickerStyle(.menu)
-                .tint(ScratchLabDesign.Sem.accent)
-                .accessibilityIdentifier("midi-sample-\(action.rawValue)")
-            }
         }
     }
 
-    private var canLearnMIDI: Bool { midiManager.sources.count == 1 }
+    private var canLearnMIDI: Bool { midiLearnCoordinator.selectedDeviceName != nil }
 
     private var midiDeviceDetail: String {
         switch midiManager.sources.count {
@@ -2475,13 +3723,7 @@ private struct PracticeReadyOverlay: View {
 
     private func mappingDetail(_ control: MIDILearnedControl) -> String {
         let type = control.messageType == .controlChange ? "CC" : "Note"
-        let sample = control.assignedSampleID.flatMap(sampleDisplayName)
-            .map { " · \($0)" } ?? ""
-        return "\(type) \(control.controlNumber) · Ch \(control.channel + 1)\(sample)"
-    }
-
-    private func sampleDisplayName(for sampleID: String) -> String? {
-        sampleManager.availableSamples.first(where: { $0.id == sampleID })?.displayName
+        return "\(type) \(control.controlNumber) · Ch \(control.channel + 1)"
     }
 
     private var readyActions: some View {
@@ -2528,9 +3770,86 @@ private struct PracticeReadyOverlay: View {
     }
 }
 
+/// Numeric tempo entry shared by the production Ready screen and Advanced
+/// beat setup. Draft digits stay local while the user types (so entering 120
+/// is not prematurely clamped after the first digit); valid values flow
+/// through the existing `PracticeBeatStore.setBPM` action.
+private struct PracticeBPMInput: View {
+    let value: Int
+    let onCommit: (Int) -> Void
+
+    @State private var draft = ""
+    @FocusState private var isFocused: Bool
+
+    var body: some View {
+        HStack(spacing: 6) {
+            TextField("90", text: $draft)
+                .keyboardType(.numberPad)
+                .submitLabel(.done)
+                .multilineTextAlignment(.trailing)
+                .font(.system(size: 18, weight: .bold, design: .monospaced))
+                .foregroundStyle(ScratchLabDesign.Sem.textPrimary)
+                .focused($isFocused)
+                .onSubmit(commitDraft)
+
+            Text("BPM")
+                .font(ScratchLabDesign.Typo.sectionLabel)
+                .foregroundStyle(ScratchLabDesign.Sem.textSecondary)
+        }
+        .padding(.horizontal, 10)
+        .frame(minHeight: 44)
+        .background(ScratchLabDesign.Surface.controlFill, in: RoundedRectangle(cornerRadius: ScratchLabDesign.Radius.control, style: .continuous))
+        .overlay {
+            RoundedRectangle(cornerRadius: ScratchLabDesign.Radius.control, style: .continuous)
+                .stroke(isFocused ? ScratchLabDesign.Sem.accent : ScratchLabDesign.Border.default, lineWidth: 1)
+        }
+        .onAppear { draft = String(value) }
+        .onChange(of: value) { _, newValue in
+            guard !isFocused else { return }
+            draft = String(newValue)
+        }
+        .onChange(of: draft) { _, newValue in
+            let digits = String(newValue.filter(\.isNumber).prefix(3))
+            if digits != newValue {
+                draft = digits
+                return
+            }
+            guard let bpm = Int(digits),
+                  CaptureClickTrackDefaults.supportedBPMRange.contains(bpm) else { return }
+            onCommit(bpm)
+        }
+        .onChange(of: isFocused) { wasFocused, nowFocused in
+            guard wasFocused, !nowFocused else { return }
+            commitDraft()
+        }
+        .toolbar {
+            ToolbarItemGroup(placement: .keyboard) {
+                Spacer()
+                Button("Done") {
+                    isFocused = false
+                }
+            }
+        }
+        .accessibilityLabel("Tempo in beats per minute")
+        .accessibilityValue("\(value)")
+    }
+
+    private func commitDraft() {
+        guard let bpm = Int(draft), !draft.isEmpty else {
+            draft = String(value)
+            return
+        }
+        let clamped = CaptureClickTrackDefaults.clampedBPM(bpm)
+        onCommit(clamped)
+        draft = String(clamped)
+    }
+}
+
 // MARK: - Session Setup Overlay
 
 struct SessionSetupOverlay: View {
+    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
+
     let scratch: Scratch
     @ObservedObject var practiceBeatStore: PracticeBeatStore
     @Binding var selectedDuration: TimeInterval
@@ -2565,11 +3884,21 @@ struct SessionSetupOverlay: View {
     }
 
     var body: some View {
-        ZStack {
-            ScratchLabDesign.Surface.overlay
-                .ignoresSafeArea()
-            ScrollView(showsIndicators: true) {
-                VStack(spacing: 22) {
+        GeometryReader { geometry in
+            let isLandscape = geometry.size.width > geometry.size.height
+
+            ZStack {
+                ScratchLabDesign.Surface.overlay
+                    .ignoresSafeArea()
+
+                if isLandscape {
+                    landscapeSetupLayout(
+                        size: geometry.size,
+                        safeAreaInsets: geometry.safeAreaInsets
+                    )
+                } else {
+                    ScrollView(showsIndicators: true) {
+                        VStack(spacing: 22) {
                     // Header
                     VStack(spacing: 6) {
                         Text(sessionTitle)
@@ -2730,8 +4059,10 @@ struct SessionSetupOverlay: View {
                             .foregroundColor(ScratchLabDesign.Sem.textTertiary)
                     }
                 }
-                .padding(.top, topSafeAreaInset + 12)
-                .padding(.bottom, max(bottomSafeAreaInset, 16) + 20)
+                        .padding(.top, topSafeAreaInset + 12)
+                        .padding(.bottom, max(bottomSafeAreaInset, 16) + 20)
+                    }
+                }
             }
         }
     }
@@ -3120,15 +4451,11 @@ private struct PracticeBeatControlsCard: View {
 
                     Spacer()
 
-                    VStack(spacing: 2) {
-                        Text("\(practiceBeatStore.bpmValue) BPM")
-                            .font(.system(size: 22, weight: .bold, design: .monospaced))
-                            .foregroundColor(ScratchLabDesign.Sem.textPrimary)
-
-                        Text("Range \(CaptureClickTrackDefaults.supportedBPMRange.lowerBound)-\(CaptureClickTrackDefaults.supportedBPMRange.upperBound)")
-                            .font(ScratchLabDesign.Typo.caption)
-                            .foregroundColor(ScratchLabDesign.Sem.textSecondary)
-                    }
+                    PracticeBPMInput(
+                        value: practiceBeatStore.bpmValue,
+                        onCommit: { practiceBeatStore.setBPM($0) }
+                    )
+                    .frame(maxWidth: 150)
 
                     Spacer()
 
@@ -3141,6 +4468,10 @@ private struct PracticeBeatControlsCard: View {
                             .clipShape(RoundedRectangle(cornerRadius: ScratchLabDesign.Radius.compactPanel, style: .continuous))
                     }
                 }
+
+                Text("Enter \(CaptureClickTrackDefaults.supportedBPMRange.lowerBound)–\(CaptureClickTrackDefaults.supportedBPMRange.upperBound) BPM, or use a preset.")
+                    .font(ScratchLabDesign.Typo.caption)
+                    .foregroundStyle(ScratchLabDesign.Sem.textSecondary)
 
                 HStack(spacing: 10) {
                     ForEach(practiceBeatStore.allowedBPMList, id: \.self) { bpm in
@@ -3250,7 +4581,7 @@ struct ResultsOverlayView: View {
     let attempts: Int
     let bestStreak: Int
     let detailNote: String?
-    fileprivate var takeEvidence: TakeEvidenceSummary? = nil
+    fileprivate let takeEvidence: TakeEvidenceSummary?
     let targetNotation: ScratchNotation?
     let bpm: Double
     let evidence: PracticeResultNotation
@@ -3259,49 +4590,134 @@ struct ResultsOverlayView: View {
     let onContinue: () -> Void
     let onExit: () -> Void
 
-    @Environment(\.horizontalSizeClass) private var horizontalSizeClass
-    @Environment(\.verticalSizeClass) private var verticalSizeClass
+    @State private var viewportSize: CGSize = .zero
 
-    private var isRegularLandscape: Bool {
-        ScratchLabAdaptiveLayout.layoutMode(
-            horizontalSizeClass: horizontalSizeClass ?? .compact,
-            verticalSizeClass: verticalSizeClass ?? .regular
-        ) == .regularLandscape
+    private var isLandscapeViewport: Bool {
+        viewportSize.width > viewportSize.height
     }
 
     var body: some View {
-        ZStack {
-            ScratchLabDesign.Surface.overlay
-                .ignoresSafeArea()
+        GeometryReader { geometry in
+            let isLandscape = geometry.size.width > geometry.size.height
 
-            ScrollView {
-                if isRegularLandscape {
-                    // iPad landscape (Figma 281:1280): the canonical TARGET /
-                    // MY PERFORMANCE notation dominates the left, and the scored
-                    // summary sits in a fixed side column — a true two-column
-                    // composition rather than a stretched single column.
-                    HStack(alignment: .top, spacing: 24) {
-                        resultNotation
-                            .frame(maxWidth: .infinity, alignment: .top)
+            ZStack {
+                ScratchLabDesign.Surface.overlay
+                    .ignoresSafeArea()
 
-                        VStack(alignment: .leading, spacing: 16) {
+                if isLandscape {
+                    landscapeResultLayout(
+                        size: geometry.size,
+                        safeAreaInsets: geometry.safeAreaInsets
+                    )
+                } else {
+                    ScrollView {
+                        VStack(spacing: 16) {
                             resultHeader
+                            resultNotation
                             resultSummaryBody
                         }
-                        .frame(width: 360, alignment: .top)
+                        .padding(.vertical, 24)
                     }
-                    .padding(.horizontal, 32)
-                    .padding(.vertical, 24)
-                } else {
-                    VStack(spacing: 16) {
-                        resultHeader
-                        resultNotation
-                        resultSummaryBody
-                    }
-                    .padding(.vertical, 24)
                 }
             }
+            .onAppear { viewportSize = geometry.size }
+            .onChange(of: geometry.size) { _, newSize in
+                viewportSize = newSize
+            }
         }
+    }
+
+    /// Landscape Result is a stable one-viewport workspace: notation never
+    /// scrolls away, while only the genuinely variable review/detail summary
+    /// can scroll within its proportional pane.
+    private func landscapeResultLayout(
+        size: CGSize,
+        safeAreaInsets: EdgeInsets
+    ) -> some View {
+        let horizontalInset = max(max(safeAreaInsets.leading, safeAreaInsets.trailing), 16)
+        let verticalInset = max(max(safeAreaInsets.top, safeAreaInsets.bottom), 12)
+        let availableWidth = max(0, size.width - (horizontalInset * 2))
+        let availableHeight = max(0, size.height - (verticalInset * 2))
+        let summaryFraction: CGFloat = size.width >= 1_000 ? 0.35 : 0.40
+        let summaryWidth = min(
+            max(250, (availableWidth - 16) * summaryFraction),
+            max(250, availableWidth - 16 - 260)
+        )
+        let notationWidth = max(0, availableWidth - summaryWidth - 16)
+
+        return HStack(alignment: .top, spacing: 16) {
+            resultNotation
+                .frame(width: notationWidth, height: availableHeight, alignment: .top)
+
+            ScrollView(showsIndicators: true) {
+                landscapeResultSummary
+            }
+            .frame(width: summaryWidth, height: availableHeight, alignment: .top)
+        }
+        .padding(.horizontal, horizontalInset)
+        .padding(.vertical, verticalInset)
+    }
+
+    private var landscapeResultSummary: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            HStack(alignment: .center, spacing: 12) {
+                VStack(alignment: .leading, spacing: 3) {
+                    Text("RESULT · LOCAL")
+                        .font(ScratchLabDesign.Typo.technical)
+                        .foregroundStyle(ScratchLabDesign.Sem.success)
+                    Text(resultHeadline)
+                        .font(ScratchLabDesign.Typo.cardHeading)
+                        .foregroundStyle(ScratchLabDesign.Sem.textPrimary)
+                        .lineLimit(2)
+                    Text(sessionTitle ?? scratch.name)
+                        .font(ScratchLabDesign.Typo.caption)
+                        .foregroundStyle(ScratchLabDesign.Sem.textSecondary)
+                        .lineLimit(1)
+                }
+
+                Spacer(minLength: 8)
+
+                Text("\(Int(accuracy))%")
+                    .font(.system(size: 38, weight: .bold, design: .rounded))
+                    .foregroundStyle(ScratchLabDesign.Sem.accent)
+                    .minimumScaleFactor(0.75)
+                    .lineLimit(1)
+            }
+
+            HStack(alignment: .top, spacing: 8) {
+                resultCard(title: "Timing", body: timingBody, selected: true)
+                resultCard(title: "Best streak", body: "\(bestStreak)", selected: false)
+            }
+
+            Text("Timing is an on-device audio-onset estimate — it isn't saved, exported, or scored.")
+                .font(ScratchLabDesign.Typo.caption)
+                .foregroundStyle(ScratchLabDesign.Sem.textTertiary)
+                .fixedSize(horizontal: false, vertical: true)
+
+            if let reviewSummary {
+                PracticeReviewCard(summary: reviewSummary)
+            }
+
+            if let detailNote {
+                Text(detailNote)
+                    .font(ScratchLabDesign.Typo.bodySmall)
+                    .foregroundStyle(ScratchLabDesign.Sem.textSecondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+
+            HStack(spacing: 8) {
+                Button(action: onContinue) {
+                    Text(continueButtonTitle)
+                }
+                .scratchLabPrimaryButton(fillsWidth: true)
+
+                Button(action: onExit) {
+                    Text("Done")
+                }
+                .scratchLabSecondaryButton(fillsWidth: true)
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .topLeading)
     }
 
     // Result eyebrow — "LOCAL" names the real progression outcome: the attempt
@@ -3336,7 +4752,7 @@ struct ResultsOverlayView: View {
     private var resultNotation: some View {
         if !isCombo {
             PracticeResultNotationSection(target: targetNotation, bpm: bpm, evidence: evidence)
-                .padding(.horizontal, isRegularLandscape ? 0 : 32)
+                .padding(.horizontal, isLandscapeViewport ? 0 : 32)
         }
     }
 
@@ -3345,7 +4761,7 @@ struct ResultsOverlayView: View {
             resultCard(title: "Timing", body: timingBody, selected: true)
             resultCard(title: "Best streak", body: "\(bestStreak)", selected: false)
         }
-        .padding(.horizontal, isRegularLandscape ? 0 : 32)
+        .padding(.horizontal, isLandscapeViewport ? 0 : 32)
     }
 
     private var resultDisclaimers: some View {
@@ -3354,7 +4770,7 @@ struct ResultsOverlayView: View {
                 .font(ScratchLabDesign.Typo.caption)
                 .foregroundStyle(ScratchLabDesign.Sem.textTertiary)
                 .multilineTextAlignment(.center)
-                .padding(.horizontal, isRegularLandscape ? 0 : 32)
+                .padding(.horizontal, isLandscapeViewport ? 0 : 32)
 
             Text("Practice estimate \(score) · \(attempts) attempts")
                 .font(.system(size: 12, weight: .medium))
@@ -3366,14 +4782,14 @@ struct ResultsOverlayView: View {
     private var resultReview: some View {
         if let reviewSummary {
             PracticeReviewCard(summary: reviewSummary)
-                .padding(.horizontal, isRegularLandscape ? 0 : 32)
+                .padding(.horizontal, isLandscapeViewport ? 0 : 32)
         }
         if let detailNote {
             Text(detailNote)
                 .font(ScratchLabDesign.Typo.bodySmall)
                 .foregroundStyle(ScratchLabDesign.Sem.textSecondary)
                 .multilineTextAlignment(.center)
-                .padding(.horizontal, isRegularLandscape ? 0 : 32)
+                .padding(.horizontal, isLandscapeViewport ? 0 : 32)
         }
     }
 
@@ -3389,7 +4805,7 @@ struct ResultsOverlayView: View {
             }
             .scratchLabSecondaryButton(fillsWidth: true)
         }
-        .padding(.horizontal, isRegularLandscape ? 0 : 32)
+        .padding(.horizontal, isLandscapeViewport ? 0 : 32)
     }
 
     /// The scored-summary column that trails the notation in the iPad landscape
@@ -3589,51 +5005,122 @@ struct CaptureHelpView: View {
     ]
 
     var body: some View {
-        ZStack {
-            LinearGradient(
-                colors: [
-                    Color(hex: "05070B"),
-                    Color(hex: "0B1018"),
-                    Color(hex: "101826")
-                ],
-                startPoint: .topLeading,
-                endPoint: .bottomTrailing
-            )
-            .ignoresSafeArea()
+        GeometryReader { geometry in
+            ZStack {
+                backgroundGradient
 
-            VStack(alignment: .leading, spacing: 20) {
-                HStack {
-                    Text("Capture Help")
-                        .font(.system(size: 24, weight: .bold))
-                        .foregroundColor(.white)
-
-                    Spacer()
-
-                    Button("Done") {
-                        dismiss()
-                    }
-                    .font(.headline)
-                    .foregroundColor(Color(hex: "00D4FF"))
+                if geometry.size.width > geometry.size.height {
+                    landscapeHelpLayout(
+                        size: geometry.size,
+                        safeAreaInsets: geometry.safeAreaInsets
+                    )
+                } else {
+                    portraitHelpLayout
                 }
-
-                helpSection(title: "Quick Start", items: quickStartSteps)
-                helpSection(title: "Capture Checklist", items: checklistItems)
-
-                Button(action: showQuickStartAgain) {
-                    Text("Show Quick Start Again")
-                        .font(.headline)
-                        .foregroundColor(.black)
-                        .frame(maxWidth: .infinity)
-                        .frame(height: 52)
-                        .background(Color(hex: "00D4FF"))
-                        .cornerRadius(8)
-                }
-                .accessibilityLabel("Show Quick Start Again")
-
-                Spacer(minLength: 0)
             }
-            .padding(24)
         }
+    }
+
+    private var backgroundGradient: some View {
+        LinearGradient(
+            colors: [
+                Color(hex: "05070B"),
+                Color(hex: "0B1018"),
+                Color(hex: "101826")
+            ],
+            startPoint: .topLeading,
+            endPoint: .bottomTrailing
+        )
+        .ignoresSafeArea()
+    }
+
+    /// Keeps the established portrait stack unchanged while landscape uses
+    /// the wider viewport for two parallel, immediately scannable sections.
+    private var portraitHelpLayout: some View {
+        VStack(alignment: .leading, spacing: 20) {
+            HStack {
+                helpTitle
+                Spacer()
+                doneButton
+            }
+
+            helpSection(title: "Quick Start", items: quickStartSteps)
+            helpSection(title: "Capture Checklist", items: checklistItems)
+            quickStartButton(fillsWidth: true)
+            Spacer(minLength: 0)
+        }
+        .padding(24)
+    }
+
+    /// Fixed capture guidance fits one landscape viewport at normal text
+    /// sizes. A scroll fallback is selected only when accessibility sizing
+    /// makes the fixed composition taller than the safe-area workspace.
+    private func landscapeHelpLayout(
+        size: CGSize,
+        safeAreaInsets: EdgeInsets
+    ) -> some View {
+        let horizontalInset = max(max(safeAreaInsets.leading, safeAreaInsets.trailing), 18)
+        let verticalInset = max(max(safeAreaInsets.top, safeAreaInsets.bottom), 10)
+        let availableHeight = max(0, size.height - (verticalInset * 2))
+
+        return ViewThatFits(in: .vertical) {
+            landscapeHelpContent
+
+            ScrollView(showsIndicators: true) {
+                landscapeHelpContent
+            }
+        }
+        .frame(maxWidth: .infinity, minHeight: availableHeight, maxHeight: availableHeight, alignment: .top)
+        .padding(.horizontal, horizontalInset)
+        .padding(.vertical, verticalInset)
+    }
+
+    private var landscapeHelpContent: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            HStack(spacing: 12) {
+                helpTitle
+                Spacer(minLength: 12)
+                quickStartButton(fillsWidth: false)
+                doneButton
+            }
+
+            HStack(alignment: .top, spacing: 14) {
+                helpSection(title: "Quick Start", items: quickStartSteps)
+                    .frame(maxWidth: .infinity, alignment: .top)
+
+                helpSection(title: "Capture Checklist", items: checklistItems)
+                    .frame(maxWidth: .infinity, alignment: .top)
+            }
+        }
+    }
+
+    private var helpTitle: some View {
+        Text("Capture Help")
+            .font(.system(size: 24, weight: .bold))
+            .foregroundColor(.white)
+            .lineLimit(1)
+    }
+
+    private var doneButton: some View {
+        Button("Done") {
+            dismiss()
+        }
+        .font(.headline)
+        .foregroundColor(Color(hex: "00D4FF"))
+    }
+
+    private func quickStartButton(fillsWidth: Bool) -> some View {
+        Button(action: showQuickStartAgain) {
+            Text("Show Quick Start Again")
+                .font(.headline)
+                .foregroundColor(.black)
+                .frame(maxWidth: fillsWidth ? .infinity : nil)
+                .padding(.horizontal, fillsWidth ? 0 : 16)
+                .frame(height: fillsWidth ? 52 : 40)
+                .background(Color(hex: "00D4FF"))
+                .cornerRadius(8)
+        }
+        .accessibilityLabel("Show Quick Start Again")
     }
 
     private func helpSection(title: String, items: [String]) -> some View {

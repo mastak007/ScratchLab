@@ -12,6 +12,7 @@
 - [ ] If using a second phone, label it as `camB`
 - [ ] If using an Apple Watch, wear it on the scratching hand and open the capture app
 - [ ] Clear enough local storage on every recording device
+- [ ] If mapping a Rane ONE MKII with MIDI Learn, set the channel-assign switch above the fader fully left (otherwise the upfaders and normal hot-cue pads may not transmit MIDI)
 
 ## Before Each Take
 

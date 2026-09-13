@@ -8,40 +8,12 @@
 	<string>ScratchLab</string>
 	<key>CFBundleExecutable</key>
 	<string>$(EXECUTABLE_NAME)</string>
-	<key>CFBundleIconFiles</key>
-	<array>
-		<string>AppIcon24x24@2x</string>
-		<string>AppIcon27.5x27.5@2x</string>
-		<string>AppIcon29x29@2x</string>
-		<string>AppIcon29x29@3x</string>
-		<string>AppIcon40x40@2x</string>
-		<string>AppIcon44x44@2x</string>
-		<string>AppIcon50x50@2x</string>
-		<string>AppIcon86x86@2x</string>
-		<string>AppIcon98x98@2x</string>
-		<string>AppIcon108x108@2x</string>
-		<string>AppIcon1024x1024</string>
-	</array>
 	<key>CFBundleIdentifier</key>
 	<string>$(PRODUCT_BUNDLE_IDENTIFIER)</string>
 	<key>CFBundleIcons</key>
 	<dict>
 		<key>CFBundlePrimaryIcon</key>
 		<dict>
-			<key>CFBundleIconFiles</key>
-			<array>
-				<string>AppIcon24x24@2x</string>
-				<string>AppIcon27.5x27.5@2x</string>
-				<string>AppIcon29x29@2x</string>
-				<string>AppIcon29x29@3x</string>
-				<string>AppIcon40x40@2x</string>
-				<string>AppIcon44x44@2x</string>
-				<string>AppIcon50x50@2x</string>
-				<string>AppIcon86x86@2x</string>
-				<string>AppIcon98x98@2x</string>
-				<string>AppIcon108x108@2x</string>
-				<string>AppIcon1024x1024</string>
-			</array>
 			<key>CFBundleIconName</key>
 			<string>AppIcon</string>
 		</dict>
@@ -58,6 +30,8 @@
 	<string>$(CURRENT_PROJECT_VERSION)</string>
 	<key>MinimumOSVersion</key>
 	<string>$(WATCHOS_DEPLOYMENT_TARGET)</string>
+	<key>NSMotionUsageDescription</key>
+	<string>ScratchLab uses Apple Watch motion data to capture wrist movement during scratch training takes.</string>
 	<key>WKApplication</key>
 	<true/>
 	<key>WKCompanionAppBundleIdentifier</key>

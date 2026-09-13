@@ -91,9 +91,11 @@ private struct ActivitySharePresenter: UIViewControllerRepresentable {
             popover.permittedArrowDirections = [.up, .down]
         }
 
-        context.coordinator.lastPresentedID = request.id
-        context.coordinator.onPresented()
-        uiViewController.present(activityViewController, animated: true)
+        let coordinator = context.coordinator
+        coordinator.lastPresentedID = request.id
+        uiViewController.present(activityViewController, animated: true) {
+            coordinator.onPresented()
+        }
     }
 
     final class Coordinator: NSObject {
@@ -171,10 +173,14 @@ private struct MacSharePickerPresenter: NSViewRepresentable {
         context.coordinator.lastPresentedID = request.id
         context.coordinator.didChooseService = false
 
+        let coordinator = context.coordinator
         let picker = NSSharingServicePicker(items: [request.archiveURL])
-        picker.delegate = context.coordinator
-        context.coordinator.onPresented()
+        picker.delegate = coordinator
         picker.show(relativeTo: nsView.bounds, of: nsView, preferredEdge: .maxY)
+        Task { @MainActor in
+            await Task.yield()
+            coordinator.onPresented()
+        }
     }
 
     final class Coordinator: NSObject, NSSharingServicePickerDelegate, NSSharingServiceDelegate {

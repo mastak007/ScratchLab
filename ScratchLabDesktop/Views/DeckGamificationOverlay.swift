@@ -126,7 +126,8 @@ struct CaptureGuideEditModel {
         translation: CGSize,
         canvasSize: CGSize,
         offsetRange: ClosedRange<Double>,
-        scaleRange: ClosedRange<Double>
+        scaleRange: ClosedRange<Double>,
+        normalizedBounds: CGRect = CaptureGuideEditModel.normalizedBounds
     ) -> MacCaptureEngine.ZoneAdjustment {
         let deltaWidth = Double(translation.width / max(canvasSize.width, 1))
         let deltaHeight = Double(translation.height / max(canvasSize.height, 1))
@@ -145,7 +146,45 @@ struct CaptureGuideEditModel {
             proposed,
             boundingBox: snapshot.boundingBox,
             offsetRange: offsetRange,
-            scaleRange: scaleRange
+            scaleRange: scaleRange,
+            normalizedBounds: normalizedBounds
+        )
+    }
+
+    /// CXL snapshots already contain the previous adjustment. Resize that
+    /// displayed rectangle once, then encode against its original full-frame
+    /// zone; never apply an absolute persisted scale to the snapshot again.
+    static func cxlResizedGeometry(
+        from snapshot: ZoneResizeSnapshot,
+        baseBoundingBox: CGRect,
+        translation: CGSize,
+        canvasSize: CGSize,
+        scaleRange: ClosedRange<Double>
+    ) -> (adjustment: MacCaptureEngine.ZoneAdjustment, boundingBox: CGRect) {
+        let bounds = CGRect(x: 0, y: 0, width: 1, height: 1)
+        let width = min(max(snapshot.boundingBox.width + translation.width / max(canvasSize.width, 1),
+                            baseBoundingBox.width * CGFloat(scaleRange.lowerBound)),
+                        min(baseBoundingBox.width * CGFloat(scaleRange.upperBound), bounds.width))
+        let height = min(max(snapshot.boundingBox.height + translation.height / max(canvasSize.height, 1),
+                             baseBoundingBox.height * CGFloat(scaleRange.lowerBound)),
+                         min(baseBoundingBox.height * CGFloat(scaleRange.upperBound), bounds.height))
+        // The green corner is bottom-right in the displayed image. Hold its
+        // opposite top-left corner until image/adjustment bounds are reached.
+        // CXL dragging can use the whole image; resizing must retain that
+        // placement instead of reapplying the ordinary app's ±0.28 limits.
+        let centerX = min(max(snapshot.boundingBox.minX + width / 2,
+                              bounds.minX + width / 2), bounds.maxX - width / 2)
+        let centerY = min(max(snapshot.boundingBox.maxY - height / 2,
+                              bounds.minY + height / 2), bounds.maxY - height / 2)
+        let rect = CGRect(x: centerX - width / 2, y: centerY - height / 2, width: width, height: height)
+        return (
+            MacCaptureEngine.ZoneAdjustment(
+                offsetX: Double(centerX - baseBoundingBox.midX),
+                offsetY: Double(centerY - baseBoundingBox.midY),
+                widthScale: Double(width / baseBoundingBox.width),
+                heightScale: Double(height / baseBoundingBox.height)
+            ),
+            rect
         )
     }
 
@@ -153,7 +192,8 @@ struct CaptureGuideEditModel {
         _ adjustment: MacCaptureEngine.ZoneAdjustment,
         boundingBox: CGRect,
         offsetRange: ClosedRange<Double>,
-        scaleRange: ClosedRange<Double>
+        scaleRange: ClosedRange<Double>,
+        normalizedBounds: CGRect = CaptureGuideEditModel.normalizedBounds
     ) -> MacCaptureEngine.ZoneAdjustment {
         let widthScale = clamp(adjustment.widthScale, within: scaleRange)
         let heightScale = clamp(adjustment.heightScale, within: scaleRange)
@@ -193,6 +233,9 @@ struct DeckGamificationOverlay: View {
     /// `CalibrationCameraOverlay` passes ~0.15–0.20 for a subtle,
     /// non-obstructive persistent guide instead.
     var lockedOpacity: Double = 0
+    /// A capture caller can suppress pointer editing without changing saved
+    /// calibration. CXL also guards the engine mutation at the take boundary.
+    var allowsEditing: Bool = true
     // Slice X.1.1: this used to be a hardcoded `false`, which collapsed
     // every overlay box to opacity 0 and disabled hit-testing — meaning
     // the deck/mixer calibration boxes were INVISIBLE everywhere even
@@ -201,15 +244,17 @@ struct DeckGamificationOverlay: View {
     // from the same `CaptureGuideEditModel.isEditable` helper that gates
     // the interactive layer.
     private var isCalibrationEditMode: Bool {
-        CaptureGuideEditModel.isEditable(
+        allowsEditing && CaptureGuideEditModel.isEditable(
             showRigGuides: detector.showRigGuides,
-            calibrationLocked: detector.calibrationLocked,
+            calibrationLocked: detector.cameraGuideCalibrationLocked,
             isUsingManualRigGuide: detector.isUsingManualRigGuide
         )
     }
     @State private var zoneMoveSnapshots: [DJRigZone.Role: MacCaptureEngine.ZoneAdjustment] = [:]
     @State private var zoneMovePixelSnapshots: [DJRigZone.Role: CGRect] = [:]
     @State private var zoneResizeSnapshots: [DJRigZone.Role: ZoneResizeSnapshot] = [:]
+    @State private var zoneDraftRects: [DJRigZone.Role: CGRect] = [:]
+    @State private var zoneDraftAdjustments: [DJRigZone.Role: MacCaptureEngine.ZoneAdjustment] = [:]
     @State private var activeZoneInteraction: ZoneInteraction?
 
     var body: some View {
@@ -237,9 +282,9 @@ struct DeckGamificationOverlay: View {
     }
 
     private var isInteractiveCalibrationVisible: Bool {
-        CaptureGuideEditModel.isEditable(
+        allowsEditing && CaptureGuideEditModel.isEditable(
             showRigGuides: detector.showRigGuides,
-            calibrationLocked: detector.calibrationLocked,
+            calibrationLocked: detector.cameraGuideCalibrationLocked,
             isUsingManualRigGuide: detector.isUsingManualRigGuide
         )
     }
@@ -248,7 +293,7 @@ struct DeckGamificationOverlay: View {
         ZStack(alignment: .topLeading) {
             Group {
                 ForEach(layout.zones) { zone in
-                    let rect = convert(zone.boundingBox, in: size)
+                    let rect = zoneDraftRects[zone.role] ?? convert(zone.boundingBox, in: size)
                     let isHighlighted = detector.highlightedZoneRole == zone.role
                     // Guides render whenever a rig layout exists, not only
                     // while `showRigGuides` (unlocked) — this is what keeps
@@ -301,7 +346,7 @@ struct DeckGamificationOverlay: View {
     private func interactiveZoneCalibrationLayer(layout: DJRigLayout, size: CGSize) -> some View {
         ZStack(alignment: .topLeading) {
             ForEach(layout.zones) { zone in
-                let rect = convert(zone.boundingBox, in: size)
+                let rect = zoneDraftRects[zone.role] ?? convert(zone.boundingBox, in: size)
                 interactiveZoneControls(for: zone, rect: rect, size: size)
                     .allowsHitTesting(false)
             }
@@ -378,22 +423,23 @@ struct DeckGamificationOverlay: View {
             calibrationBadge(title: zone.role.title, systemImage: "move.3d")
                 .position(x: rect.midX, y: max(rect.minY - 18, 28))
 
-            // Move handle — visible grab affordance at the top of each overlay.
-            // Only this area + the resize handle are interactive.
+            // Move hint. Like the iOS calibration editor, the entire box is
+            // draggable; the dedicated green corner handle resizes it.
             moveHandlePill(for: zone, rect: rect)
                 .position(x: rect.midX, y: rect.minY + 22)
 
-            // Resize handle (bottom-right corner)
+            // iOS-matching resize handle (bottom-right corner).
             Circle()
-                .fill(Color.white)
-                .frame(width: 22, height: 22)
+                .fill(Color(nsColor: .systemGreen))
+                .frame(width: 28, height: 28)
                 .overlay(
                     Image(systemName: "arrow.up.left.and.arrow.down.right")
                         .font(.system(size: 10, weight: .bold))
-                        .foregroundStyle(.black)
+                        .foregroundStyle(.white)
                 )
+                .overlay(Circle().stroke(Color.white.opacity(0.92), lineWidth: 2))
                 .shadow(color: Color.black.opacity(0.28), radius: 6, x: 0, y: 3)
-                .position(x: rect.maxX - 10, y: rect.maxY - 10)
+                .position(x: rect.maxX - 14, y: rect.maxY - 14)
         }
     }
 
@@ -424,6 +470,7 @@ struct DeckGamificationOverlay: View {
     private func interactiveCalibrationGesture(layout: DJRigLayout, size: CGSize) -> some Gesture {
         DragGesture(minimumDistance: 0)
             .onChanged { value in
+                guard isCalibrationEditMode else { return }
                 if activeZoneInteraction == nil {
                     activeZoneInteraction = zoneInteraction(at: value.startLocation, layout: layout, size: size)
                 }
@@ -440,13 +487,24 @@ struct DeckGamificationOverlay: View {
             }
             .onEnded { _ in
                 if let activeZoneInteraction {
+                    let role = activeZoneInteraction.role
+                    if isCalibrationEditMode, let finalAdjustment = zoneDraftAdjustments[role] {
+                        // Preserve the existing engine contract: publish the
+                        // final adjustment once, then persist once. Keeping
+                        // intermediate pointer movement view-local prevents
+                        // the analyzer tree from invalidating on every event.
+                        detector.updateZoneAdjustmentTransient(for: role) { adjustment in
+                            adjustment = finalAdjustment
+                        }
+                        detector.persistCurrentZoneAdjustments()
+                    }
                     zoneMoveSnapshots[activeZoneInteraction.role] = nil
                     zoneMovePixelSnapshots[activeZoneInteraction.role] = nil
                     zoneResizeSnapshots[activeZoneInteraction.role] = nil
+                    zoneDraftRects[activeZoneInteraction.role] = nil
+                    zoneDraftAdjustments[activeZoneInteraction.role] = nil
                 }
                 activeZoneInteraction = nil
-                // Persist the final position once, after the drag ends.
-                detector.persistCurrentZoneAdjustments()
             }
     }
 
@@ -454,38 +512,31 @@ struct DeckGamificationOverlay: View {
     /// canvas's local pixel coordinate space) maps to.
     ///
     /// Priority order:
-    /// 1. Resize handle (bottom-right 36×36 area of each zone)
-    /// 2. Move handle (top-center pill, ~144×36 pt area)
-    ///
-    /// The body of the overlay is intentionally NOT a move target — only the
-    /// dedicated handle areas trigger interactions.
+    /// 1. Resize handle (bottom-right 52×52 area of each zone)
+    /// 2. Any point inside the box moves it, matching the iOS calibration
+    /// editor. Every resize target is checked before any move target so an
+    /// overlapping zone can never steal a corner resize.
     private func zoneInteraction(at point: CGPoint, layout: DJRigLayout, size: CGSize) -> ZoneInteraction? {
         let zoneRects = layout.zones.map { zone in
             (zone: zone, rect: convert(zone.boundingBox, in: size))
         }
 
         for zoneRect in zoneRects.reversed() {
-            // Resize handle: bottom-right corner
+            // The visible green control is centred 14 points inside the
+            // bottom-right corner. Give that exact centre a 52-point target.
             let resizeHandleRect = CGRect(
-                x: zoneRect.rect.maxX - 28,
-                y: zoneRect.rect.maxY - 28,
-                width: 36,
-                height: 36
+                x: zoneRect.rect.maxX - 40,
+                y: zoneRect.rect.maxY - 40,
+                width: 52,
+                height: 52
             )
             if resizeHandleRect.contains(point) {
                 return ZoneInteraction(role: zoneRect.zone.role, kind: .resize)
             }
+        }
 
-            // Move handle: top-center pill area
-            let moveHandleWidth: CGFloat = min(zoneRect.rect.width * 0.65, 160)
-            let moveHandleHeight: CGFloat = 36
-            let moveHandleRect = CGRect(
-                x: zoneRect.rect.midX - moveHandleWidth / 2,
-                y: zoneRect.rect.minY,
-                width: moveHandleWidth,
-                height: moveHandleHeight
-            )
-            if moveHandleRect.contains(point) {
+        for zoneRect in zoneRects.reversed() {
+            if zoneRect.rect.contains(point) {
                 return ZoneInteraction(role: zoneRect.zone.role, kind: .move)
             }
         }
@@ -516,15 +567,20 @@ struct DeckGamificationOverlay: View {
             pixelSnapshot: pixelSnapshot,
             translation: value.translation,
             canvasSize: size,
-            inset: CaptureGuideEditModel.canvasInset
+            inset: detector.cameraGuideCanvasInset
         )
 
-        detector.updateZoneAdjustmentTransient(for: role) { adjustment in
-            adjustment.offsetX = adjustmentSnapshot.offsetX + deltaX
-            adjustment.offsetY = adjustmentSnapshot.offsetY + deltaY
-            adjustment.widthScale = adjustmentSnapshot.widthScale
-            adjustment.heightScale = adjustmentSnapshot.heightScale
-        }
+        zoneDraftRects[role] = CaptureGuideEditModel.clampRect(
+            pixelSnapshot.offsetBy(dx: value.translation.width, dy: value.translation.height),
+            to: size,
+            inset: detector.cameraGuideCanvasInset
+        )
+        zoneDraftAdjustments[role] = MacCaptureEngine.ZoneAdjustment(
+            offsetX: adjustmentSnapshot.offsetX + deltaX,
+            offsetY: adjustmentSnapshot.offsetY + deltaY,
+            widthScale: adjustmentSnapshot.widthScale,
+            heightScale: adjustmentSnapshot.heightScale
+        )
     }
 
     /// Resize drag — unchanged from the original implementation.  The resize
@@ -536,15 +592,59 @@ struct DeckGamificationOverlay: View {
         )
         zoneResizeSnapshots[zone.role] = snapshot
 
-        detector.updateZoneAdjustmentTransient(for: zone.role) { adjustment in
-            adjustment = CaptureGuideEditModel.resizedAdjustment(
+        if detector.cxlCameraGuideEnabled,
+           let baseZone = DJRigLayout.cxlFullFrameGuide.zone(for: zone.role) {
+            let geometry = CaptureGuideEditModel.cxlResizedGeometry(
                 from: snapshot,
+                baseBoundingBox: baseZone.boundingBox,
                 translation: value.translation,
                 canvasSize: size,
-                offsetRange: detector.calibrationOffsetRange,
                 scaleRange: detector.calibrationScaleRange
             )
+            zoneDraftAdjustments[zone.role] = geometry.adjustment
+            zoneDraftRects[zone.role] = convert(geometry.boundingBox, in: size)
+            return
         }
+
+        let adjustment = CaptureGuideEditModel.resizedAdjustment(
+            from: snapshot,
+            translation: value.translation,
+            canvasSize: size,
+            offsetRange: detector.calibrationOffsetRange,
+            scaleRange: detector.calibrationScaleRange,
+            normalizedBounds: detector.cameraGuideNormalizedBounds
+        )
+        zoneDraftAdjustments[zone.role] = adjustment
+        zoneDraftRects[zone.role] = resizePreviewRect(
+            from: snapshot,
+            adjustment: adjustment,
+            size: size
+        )
+    }
+
+    /// Mirrors the final adjustment as view-local geometry while dragging.
+    /// This is presentation-only; the adjustment itself is still produced by
+    /// the established `CaptureGuideEditModel.resizedAdjustment` calculation.
+    private func resizePreviewRect(
+        from snapshot: ZoneResizeSnapshot,
+        adjustment: MacCaptureEngine.ZoneAdjustment,
+        size: CGSize
+    ) -> CGRect {
+        let widthScaleRatio = adjustment.widthScale / max(snapshot.adjustment.widthScale, 0.0001)
+        let heightScaleRatio = adjustment.heightScale / max(snapshot.adjustment.heightScale, 0.0001)
+        let normalizedWidth = snapshot.boundingBox.width * CGFloat(widthScaleRatio)
+        let normalizedHeight = snapshot.boundingBox.height * CGFloat(heightScaleRatio)
+        let centerX = snapshot.boundingBox.midX
+            + CGFloat(adjustment.offsetX - snapshot.adjustment.offsetX)
+        let centerY = snapshot.boundingBox.midY
+            + CGFloat(adjustment.offsetY - snapshot.adjustment.offsetY)
+        let normalizedRect = CGRect(
+            x: centerX - normalizedWidth / 2,
+            y: centerY - normalizedHeight / 2,
+            width: normalizedWidth,
+            height: normalizedHeight
+        )
+        return convert(normalizedRect, in: size)
     }
 }
 

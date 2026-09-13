@@ -30,6 +30,7 @@ final class ClickTrackEngine: ObservableObject {
     private static let internalSampleRate = 48_000.0
 
     private let audioEngine = AVAudioEngine()
+    private let outputRouting: (any BeatPlaybackOutputRouting)?
     private let playerNode = AVAudioPlayerNode()
     private let schedulingQueue = DispatchQueue(label: "scratchlab.clicktrack.engine")
 
@@ -47,7 +48,8 @@ final class ClickTrackEngine: ObservableObject {
     private var beatDurationSeconds = 0.5
     private var pendingUIWorkItems: [DispatchWorkItem] = []
 
-    init() {
+    init(outputRouting: (any BeatPlaybackOutputRouting)? = nil) {
+        self.outputRouting = outputRouting
         audioEngine.attach(playerNode)
         if let playerFormat {
             audioEngine.connect(playerNode, to: audioEngine.mainMixerNode, format: playerFormat)
@@ -73,18 +75,18 @@ final class ClickTrackEngine: ObservableObject {
         let bpm = CaptureClickTrackDefaults.clampedBPM(requestedBPM)
         let beatDurationSeconds = 60.0 / Double(bpm)
         let startDelay = Self.preRollLeadInSeconds
-        let clickStartHostTime = Self.currentHostTime() + AVAudioTime.hostTime(forSeconds: startDelay)
-        let recordingStartHostTime = clickStartHostTime
-            + AVAudioTime.hostTime(forSeconds: Double(CaptureClickTrackDefaults.countInBeats) * beatDurationSeconds)
         let sampleRate = resolvedSampleRate()
 
         do {
             try configurePlayerFormat(sampleRate: sampleRate)
+            try outputRouting?.prepare(audioEngine)
             if !audioEngine.isRunning {
                 try audioEngine.start()
             }
+            try outputRouting?.verify(audioEngine)
         } catch {
-            throw ClickTrackEngineError.unableToStartAudio
+            stop()
+            throw error
         }
 
         accentBeatBuffer = makeBeatBuffer(sampleRate: sampleRate, bpm: bpm, accent: true)
@@ -99,6 +101,10 @@ final class ClickTrackEngine: ObservableObject {
             throw ClickTrackEngineError.unableToStartAudio
         }
 
+        // Device startup must finish before the four audible count-in beats.
+        let clickStartHostTime = Self.currentHostTime() + AVAudioTime.hostTime(forSeconds: startDelay)
+        let recordingStartHostTime = clickStartHostTime
+            + AVAudioTime.hostTime(forSeconds: Double(CaptureClickTrackDefaults.countInBeats) * beatDurationSeconds)
         let generation = UUID()
         let metadata = ClickTrackStartMetadata(
             bpm: bpm,
@@ -145,6 +151,11 @@ final class ClickTrackEngine: ObservableObject {
         if audioEngine.isRunning {
             audioEngine.stop()
         }
+    }
+
+    func setOutputGain(_ normalizedGain: Double) {
+        let finiteGain = normalizedGain.isFinite ? normalizedGain : 0
+        playerNode.volume = Float(min(max(finiteGain, 0), 1))
     }
 
     private func resolvedSampleRate() -> Double {
@@ -199,10 +210,15 @@ final class ClickTrackEngine: ObservableObject {
         durationSeconds: Double,
         sampleRate: Double,
         channelCount: AVAudioChannelCount,
-        startBeatIndex: Int
+        startBeatIndex: Int,
+        exactFrameCount: AVAudioFrameCount? = nil
     ) throws -> AVAudioPCMBuffer {
         let bpm = CaptureClickTrackDefaults.clampedBPM(requestedBPM)
-        let totalFrameCount = max(1, Int(ceil(max(0, durationSeconds) * sampleRate)))
+        let totalFrameCount = max(
+            1,
+            exactFrameCount.map(Int.init)
+                ?? Int(ceil(max(0, durationSeconds) * sampleRate))
+        )
         guard let format = AVAudioFormat(
             standardFormatWithSampleRate: sampleRate,
             channels: channelCount

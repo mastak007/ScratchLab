@@ -1,11 +1,268 @@
 import XCTest
 import AVFoundation
+import CoreAudio
 @testable import ScratchLab
 
 /// ScratchSamplePlaybackController tests.
 /// Focuses on sample-frame mapping, WAV resolution, and lifecycle.
 /// Full audio engine tests require hardware; these are logic-level tests.
 final class ScratchSamplePlaybackControllerTests: XCTestCase {
+
+    func testRoutineAudioUsesMediaClockInsteadOfLateStartCallback() throws {
+        for rate in [44_100.0, 48_000.0] {
+            // PCM was armed during count-in. A 1.03s-late delegate must
+            // not shorten the 13 1/3 second movie or shift its audio.
+            let range = try XCTUnwrap(ScratchSamplePlaybackController.routineCaptureFrameRange(
+                firstAudioHostTime: 100, mediaStartHostTime: 102,
+                mediaDurationSeconds: 40.0 / 3, sampleRate: rate,
+                availableFrames: Int(rate * 16)))
+            XCTAssertEqual(range.lowerBound, Int(rate * 2))
+            XCTAssertEqual(range.count, Int((rate * 40 / 3).rounded()))
+        }
+    }
+
+    func testRoutineAudioRejectsMissingPrefixOrTailRatherThanPadding() {
+        XCTAssertNil(ScratchSamplePlaybackController.routineCaptureFrameRange(
+            firstAudioHostTime: 103.03, mediaStartHostTime: 102,
+            mediaDurationSeconds: 40.0 / 3, sampleRate: 44_100, availableFrames: 700_000))
+        XCTAssertNil(ScratchSamplePlaybackController.routineCaptureFrameRange(
+            firstAudioHostTime: 102, mediaStartHostTime: 102,
+            mediaDurationSeconds: 40.0 / 3, sampleRate: 44_100, availableFrames: 542_430))
+        for duration in [0, -1, Double.nan, Double.infinity] {
+            XCTAssertNil(ScratchSamplePlaybackController.routineCaptureFrameRange(
+                firstAudioHostTime: 100, mediaStartHostTime: 100,
+                mediaDurationSeconds: duration, sampleRate: 48_000, availableFrames: 480_000))
+        }
+    }
+
+    func testMoviePrerollPreservesMusicalEndAtEitherFrameBoundary() {
+        for start in [99.85, 100, 100.025] {
+            XCTAssertEqual(start + MacCaptureEngine.routineMediaDuration(
+                maximum: 40.0 / 3, plannedStart: 100, actualStart: start),
+                100 + 40.0 / 3, accuracy: 0.000_001)
+        }
+        XCTAssertEqual(MacCaptureEngine.routineMediaDuration(
+            maximum: 30, plannedStart: nil, actualStart: 100), 30)
+    }
+
+    // MARK: - Actual post-fader output metering (no audio hardware)
+
+    func testOutputTapCannotBecomeTheControllersFinalOwner() throws {
+        var controller: ScratchSamplePlaybackController? = ScratchSamplePlaybackController()
+        weak var observedController = controller
+        var reachedPublication = false
+        let handler = try XCTUnwrap(controller).testOnly_scratchOutputTapHandler {
+            reachedPublication = true
+            // Release the external owner while the exact production tap
+            // handler is executing. A temporary strong `self` in that handler
+            // would defer destruction until AVFoundation's callback returns.
+            controller = nil
+            XCTAssertNil(observedController,
+                "The tap must not retain the controller and run its engine teardown on AVFoundation's service queue.")
+        }
+        let format = try XCTUnwrap(AVAudioFormat(standardFormatWithSampleRate: 44_100, channels: 2))
+        let buffer = try XCTUnwrap(AVAudioPCMBuffer(pcmFormat: format, frameCapacity: 16))
+        buffer.frameLength = 16
+        for channel in 0..<2 {
+            for frame in 0..<16 { buffer.floatChannelData![channel][frame] = 0.25 }
+        }
+        handler(buffer, AVAudioTime(sampleTime: 0, atRate: 44_100))
+        XCTAssertTrue(reachedPublication)
+        XCTAssertNil(observedController)
+    }
+
+    func testOutputMeterDistinguishesSilenceFromMissingCallbacks() throws {
+        let meter = ScratchOutputPeakMeter()
+        XCTAssertNil(meter.consume(now: 10))
+        meter.reset(now: 10)
+        XCTAssertNil(meter.consume(now: 10.01))
+        meter.publish(peak: 0, receivedAt: 10.01, token: meter.currentToken)
+        XCTAssertEqual(try XCTUnwrap(meter.consume(now: 10.02)).peak, 0)
+        XCTAssertEqual(try XCTUnwrap(meter.consume(now: 10.10)).peak, 0)
+        XCTAssertNil(meter.consume(now: 10.30), "Lost callbacks must become unavailable, not silent.")
+        meter.publish(peak: 0.6, receivedAt: 10.31, token: meter.currentToken)
+        XCTAssertEqual(try XCTUnwrap(meter.consume(now: 10.32)).peak, 0.6)
+    }
+
+    func testOutputMeterRetainsBriefCutAttackUntilPollThenAcceptsRealSilence() throws {
+        let meter = ScratchOutputPeakMeter()
+        meter.reset(now: 10)
+        let token = meter.currentToken
+        meter.publish(peak: 0, receivedAt: 10.005, token: token)
+        meter.publish(peak: 0.875, receivedAt: 10.010, token: token)
+        meter.publish(peak: 0, receivedAt: 10.015, token: token)
+        XCTAssertEqual(try XCTUnwrap(meter.consume(now: 10.040)).peak, 0.875,
+            "Every tap buffer between the 25 Hz polls contributes its actual peak.")
+        XCTAssertEqual(try XCTUnwrap(meter.consume(now: 10.041)).peak, 0.875,
+            "A poll without another callback must not fabricate silence.")
+        meter.publish(peak: 0, receivedAt: 10.045, token: token)
+        XCTAssertEqual(try XCTUnwrap(meter.consume(now: 10.080)).peak, 0,
+            "The first poll containing an actual silent buffer clears the cached peak.")
+        XCTAssertNil(meter.consume(now: 10.300), "A cached silent value expires when callback delivery stops.")
+    }
+
+    func testOutputMeterReloadRejectsDelayedCallbacksAndOldPCM() throws {
+        let meter = ScratchOutputPeakMeter()
+        meter.reset(now: 10)
+        let oldToken = meter.currentToken
+        meter.publish(peak: 0.9, receivedAt: 10.01, token: oldToken)
+        meter.reset(now: 11)
+        let newToken = meter.currentToken
+        XCTAssertGreaterThan(newToken.generation, oldToken.generation)
+        meter.publish(peak: 0.99, receivedAt: 10.99, token: oldToken)
+        meter.publish(peak: 0.99, receivedAt: 10.99, token: newToken)
+        XCTAssertNil(meter.consume(now: 11.01), "A reload cannot reuse the previous sample's signal.")
+        meter.publish(peak: 0.2, receivedAt: 11.02, token: newToken)
+        meter.publish(peak: 0.99, receivedAt: 11.03, token: oldToken)
+        XCTAssertEqual(try XCTUnwrap(meter.consume(now: 11.04)).peak, 0.2)
+        meter.reset(now: 12)
+        meter.publish(peak: 0.8, receivedAt: 12.01, token: newToken)
+        XCTAssertNil(meter.consume(now: 12.02), "Stop/unload invalidation also rejects a pending tap.")
+    }
+
+    func testOutputMeterInvalidSamplesDoNotRefreshAndPeakIsUnscaled() throws {
+        let meter = ScratchOutputPeakMeter()
+        meter.reset(now: 10)
+        let token = meter.currentToken
+        meter.publish(peak: 1.25, receivedAt: 10.01, token: token)
+        XCTAssertEqual(try XCTUnwrap(meter.consume(now: 10.02)).peak, 1.25,
+            "Do not apply input RMS x10 scaling or clamp an over-full-scale PCM peak.")
+        meter.publish(peak: .nan, receivedAt: 10.20, token: token)
+        meter.publish(peak: .infinity, receivedAt: 10.20, token: token)
+        meter.publish(peak: -0.2, receivedAt: 10.20, token: token)
+        meter.publish(peak: 0.8, receivedAt: .infinity, token: token)
+        XCTAssertNil(meter.consume(now: 10.30))
+    }
+
+    func testPostFaderPCMScanFindsSingleFrameAttackOnEitherChannel() throws {
+        let buffer = try makeOutputMeterBuffer()
+        let channels = try XCTUnwrap(buffer.floatChannelData)
+        XCTAssertEqual(ScratchSamplePlaybackController.scratchOutputPeak(in: buffer), 0)
+        channels[1][127] = -0.75
+        XCTAssertEqual(ScratchSamplePlaybackController.scratchOutputPeak(in: buffer), 0.75)
+        channels[0][0] = 1.125
+        XCTAssertEqual(ScratchSamplePlaybackController.scratchOutputPeak(in: buffer), 1.125)
+        channels[1][64] = .nan
+        XCTAssertNil(ScratchSamplePlaybackController.scratchOutputPeak(in: buffer))
+        buffer.frameLength = 0
+        XCTAssertNil(ScratchSamplePlaybackController.scratchOutputPeak(in: buffer))
+    }
+
+    func testLoadedSampleWithoutOutputCallbacksNeverClaimsSilentOutputAndReloadInvalidates() throws {
+        let controller = ScratchSamplePlaybackController()
+        XCTAssertNil(controller.currentScratchOutputMeterSnapshot().peak)
+        controller.testOnly_installSyntheticSample(try makeOutputMeterBuffer(), sampleID: "meter-a")
+        let first = controller.currentScratchOutputMeterSnapshot()
+        XCTAssertEqual(first.sampleID, "meter-a")
+        XCTAssertNil(first.peak)
+        controller.testOnly_installSyntheticSample(try makeOutputMeterBuffer(), sampleID: "meter-a")
+        let reloaded = controller.currentScratchOutputMeterSnapshot()
+        XCTAssertGreaterThan(reloaded.generation, first.generation)
+        XCTAssertNil(reloaded.peak)
+        controller.unload()
+        controller.waitForAudioQueue()
+        let unloaded = controller.currentScratchOutputMeterSnapshot()
+        XCTAssertGreaterThan(unloaded.generation, reloaded.generation)
+        XCTAssertNil(unloaded.sampleID)
+        XCTAssertNil(unloaded.peak)
+    }
+
+    // MARK: - Real engine output routes (uses this Mac's audio devices; skips when absent)
+
+    /// The direct Mac route is System Default. Without scheduled PCM, real
+    /// silent callbacks must read as fresh zero, never as unavailable, and
+    /// unloading must return to unavailable under a newer generation.
+    func testSystemDefaultRouteMetersFreshSilentCallbacksAndClearsOnUnload() throws {
+        guard MacScratchOutputRoute.defaultOutputDeviceID() != nil else { throw XCTSkip("No system output device.") }
+        let controller = ScratchSamplePlaybackController()
+        controller.setPreferredOutputDevice(deviceID: nil, deviceName: "System Default")
+        XCTAssertTrue(controller.load(sampleID: "dvs_ahhh", playDiagnosticPreview: false))
+        controller.waitForAudioQueue()
+        XCTAssertEqual(controller.outputRoutingSnapshot().status, "ready")
+        let observed = Self.sampleOutputMeter(controller, seconds: 1.5)
+        XCTAssertEqual(observed.peaks.last ?? nil, 0, "Silent System Default callbacks must read as silence.")
+        XCTAssertTrue(observed.peaks.allSatisfy { $0 == nil || $0 == 0 }, "No PCM was scheduled.")
+        XCTAssertGreaterThan(observed.receipts.count, 5, "The post-fader tap must deliver on the Mac route.")
+        let gaps = zip(observed.receipts.dropFirst(), observed.receipts).map { $0 - $1 }
+        XCTAssertLessThanOrEqual(gaps.max() ?? 0, ScratchOutputPeakMeter.freshnessInterval,
+            "Tap cadence on the Mac route must stay inside the meter freshness window.")
+        let loaded = controller.currentScratchOutputMeterSnapshot()
+        controller.unload()
+        controller.waitForAudioQueue()
+        let unloaded = controller.currentScratchOutputMeterSnapshot()
+        XCTAssertNil(unloaded.peak)
+        XCTAssertNil(unloaded.sampleID)
+        XCTAssertGreaterThan(unloaded.generation, loaded.generation)
+    }
+
+    /// Rebinding from an explicit device (the Rane path) to System Default (the
+    /// Mac path) keeps the actual post-fader meter available and never carries
+    /// an earlier generated peak across the route change. Uses the inaudible
+    /// Serato Virtual Audio output for the explicit device when present.
+    func testExplicitDeviceToSystemDefaultRebindKeepsMeterAvailableWithoutStalePeak() throws {
+        guard MacScratchOutputRoute.defaultOutputDeviceID() != nil,
+              let virtualID = Self.outputDevice(named: "Serato Virtual Audio"),
+              MacScratchOutputRoute.defaultOutputDeviceID() != virtualID,
+              let virtualUID = MacScratchOutputRoute.deviceUID(virtualID) else {
+            throw XCTSkip("Requires a system output plus the Serato Virtual Audio output.")
+        }
+        let controller = ScratchSamplePlaybackController()
+        controller.setPreferredOutputDevice(deviceID: virtualID, deviceName: "Serato Virtual Audio", expectedDeviceUID: virtualUID)
+        XCTAssertTrue(controller.load(sampleID: "dvs_ahhh", playDiagnosticPreview: true))
+        controller.waitForAudioQueue()
+        let explicit = Self.sampleOutputMeter(controller, seconds: 1.0)
+        XCTAssertEqual(controller.outputRoutingSnapshot().primaryDeviceName, "Serato Virtual Audio")
+        XCTAssertTrue(explicit.peaks.contains { ($0 ?? 0) > 0 }, "Generated preview PCM must reach the meter.")
+        for _ in 0..<2 {
+            controller.setPreferredOutputDevice(deviceID: nil, deviceName: "System Default")
+            controller.waitForAudioQueue()
+            let direct = Self.sampleOutputMeter(controller, seconds: 1.0)
+            XCTAssertEqual(controller.outputRoutingSnapshot().status, "ready")
+            XCTAssertNotEqual(controller.outputRoutingSnapshot().primaryDeviceName, "Serato Virtual Audio")
+            XCTAssertEqual(direct.peaks.last ?? nil, 0, "The direct Mac route must meter after rebinding.")
+            XCTAssertFalse(direct.peaks.contains { ($0 ?? 0) > 0 }, "No earlier generated peak survives the rebind.")
+            controller.setPreferredOutputDevice(deviceID: virtualID, deviceName: "Serato Virtual Audio", expectedDeviceUID: virtualUID)
+            controller.waitForAudioQueue()
+            XCTAssertEqual(Self.sampleOutputMeter(controller, seconds: 0.6).peaks.last ?? nil, 0)
+        }
+        controller.unload()
+        controller.waitForAudioQueue()
+    }
+
+    private static func sampleOutputMeter(_ controller: ScratchSamplePlaybackController,
+        seconds: TimeInterval) -> (peaks: [Float?], receipts: [TimeInterval]) {
+        var peaks: [Float?] = []
+        var receipts: [TimeInterval] = []
+        let start = CACurrentMediaTime()
+        while CACurrentMediaTime() - start < seconds {
+            let snapshot = controller.currentScratchOutputMeterSnapshot()
+            peaks.append(snapshot.peak)
+            if let receivedAt = snapshot.receivedAt, receipts.last != receivedAt { receipts.append(receivedAt) }
+            Thread.sleep(forTimeInterval: 0.01)
+        }
+        return (peaks, receipts)
+    }
+
+    private static func outputDevice(named name: String) -> AudioDeviceID? {
+        var address = AudioObjectPropertyAddress(mSelector: kAudioHardwarePropertyDevices,
+            mScope: kAudioObjectPropertyScopeGlobal, mElement: kAudioObjectPropertyElementMain)
+        var size: UInt32 = 0
+        guard AudioObjectGetPropertyDataSize(AudioObjectID(kAudioObjectSystemObject), &address, 0, nil, &size) == noErr else { return nil }
+        var ids = [AudioDeviceID](repeating: 0, count: Int(size) / MemoryLayout<AudioDeviceID>.size)
+        guard AudioObjectGetPropertyData(AudioObjectID(kAudioObjectSystemObject), &address, 0, nil, &size, &ids) == noErr else { return nil }
+        return ids.first { MacScratchOutputRoute.deviceName($0) == name }
+    }
+
+    private func makeOutputMeterBuffer() throws -> AVAudioPCMBuffer {
+        let format = try XCTUnwrap(AVAudioFormat(standardFormatWithSampleRate: 48_000, channels: 2))
+        let buffer = try XCTUnwrap(AVAudioPCMBuffer(pcmFormat: format, frameCapacity: 128))
+        buffer.frameLength = 128
+        let channels = try XCTUnwrap(buffer.floatChannelData)
+        for channel in 0..<2 {
+            for frame in 0..<128 { channels[channel][frame] = 0 }
+        }
+        return buffer
+    }
 
     // MARK: - sampleFrame mapping
 
@@ -358,15 +615,10 @@ final class ScratchSamplePlaybackControllerTests: XCTestCase {
         controller.positionDidChange(steps: 0, direction: .forward)
         controller.waitForAudioQueue()
 
-        // Move to just past the halfway point (uncapped, proportional movement) —
-        // comfortably under the per-tick frame-delta cap, so this is a normal
-        // forward push, not a saturating one. 6_000 steps (not 9_000 —
-        // direct-MIDI geometry fix, 2026-08-10: at the new 3600-step/rev
-        // scale, 9_000 steps' frame delta approached "ahhh"'s 196_980-frame
-        // length closely enough on the SECOND push below to risk landing
-        // exactly on a whole-loop multiple; 6_000/4_000 keep both pushes
-        // clear of that boundary while preserving the same test intent).
-        controller.positionDidChange(steps: 6_000, direction: .forward)
+        // Absolute MIDI positions must advance monotonically for forward
+        // motion. Keep each delta below the full-loop cap so the first push
+        // lands beyond halfway and the second push crosses the loop end.
+        controller.positionDidChange(steps: 1_500, direction: .forward)
         controller.waitForAudioQueue()
         let nearEndFrame = controller.currentSampleFrame
         XCTAssertGreaterThan(nearEndFrame, controller.totalFrames / 2,
@@ -377,7 +629,7 @@ final class ScratchSamplePlaybackControllerTests: XCTestCase {
         // Push far enough forward to cross the loop end. The old
         // clamp-without-wrapping behavior stuck at totalFrames - 1; looping
         // instead wraps the excess motion back around to near the loop origin.
-        controller.positionDidChange(steps: 4_000, direction: .forward)
+        controller.positionDidChange(steps: 2_500, direction: .forward)
         controller.waitForAudioQueue()
 
         XCTAssertLessThan(controller.currentSampleFrame, nearEndFrame,
@@ -732,18 +984,17 @@ final class ScratchSamplePlaybackControllerTests: XCTestCase {
         guard controller.load(sampleID: "ahhh") else { return }
         controller.waitForAudioQueue()
 
-        // Move near the loop end, then cross it. 6_000/4_000 (not
-        // 9_000/10_000 — direct-MIDI geometry fix, 2026-08-10): see the
-        // comment in testForwardMovementPastEndWrapsToStart above.
+        // Move beyond halfway, then cross the loop end with monotonically
+        // increasing absolute MIDI positions.
         controller.positionDidChange(steps: 0, direction: .forward)
         controller.waitForAudioQueue()
-        controller.positionDidChange(steps: 6_000, direction: .forward)
+        controller.positionDidChange(steps: 1_500, direction: .forward)
         controller.waitForAudioQueue()
         let nearEndFrame = controller.currentSampleFrame
 
         Thread.sleep(forTimeInterval: 0.02)
 
-        controller.positionDidChange(steps: 4_000, direction: .forward)
+        controller.positionDidChange(steps: 2_500, direction: .forward)
         controller.waitForAudioQueue()
         let wrappedFrame = controller.currentSampleFrame
         XCTAssertLessThan(wrappedFrame, nearEndFrame, "Needle must have wrapped past the loop end")
@@ -753,7 +1004,7 @@ final class ScratchSamplePlaybackControllerTests: XCTestCase {
         // Continued forward motion after the wrap must keep scheduling
         // normally from the new (wrapped) position — not skip as though
         // still pinned at a permanent boundary.
-        controller.positionDidChange(steps: 4_030, direction: .forward)
+        controller.positionDidChange(steps: 2_530, direction: .forward)
         controller.waitForAudioQueue()
 
         XCTAssertNil(controller.lastScheduleSkippedReason,
@@ -1105,7 +1356,12 @@ final class ScratchSamplePlaybackControllerTests: XCTestCase {
             accuracy: 0.01,
             "DVS must report the captured sub-0.25x motion rate, not the varispeed floor"
         )
-        XCTAssertEqual(controller.currentSampleFrame, controller.hotCueOnsetFrame + 101)
+        let expectedPhaseFrame = Int((controller.dvsLoopFrames / 3_932) * 5)
+        XCTAssertEqual(
+            controller.currentSampleFrame,
+            controller.hotCueOnsetFrame + expectedPhaseFrame,
+            "The permanent phase anchor truncates the exact physical phase while the rendered grain rounds its frame count"
+        )
     }
 
     func testDVSEarlySixtyHertzTickSchedulesWithoutInflatedCatchUpRate() {
@@ -1607,12 +1863,11 @@ final class ScratchSamplePlaybackControllerTests: XCTestCase {
         guard controller.load(sampleID: "ahhh") else { return }
         controller.waitForAudioQueue()
 
-        // Force needle near the loop end (uncapped, proportional movement).
-        // 6_000 (not 9_000 — direct-MIDI geometry fix, 2026-08-10): see
-        // the comment in testForwardMovementPastEndWrapsToStart above.
+        // Force the needle near the loop end without saturating the
+        // per-tick full-loop cap.
         controller.positionDidChange(steps: 0, direction: .forward)
         controller.waitForAudioQueue()
-        controller.positionDidChange(steps: 6_000, direction: .forward)
+        controller.positionDidChange(steps: 1_900, direction: .forward)
         controller.waitForAudioQueue()
         let nearEnd = controller.currentSampleFrame
         XCTAssertGreaterThan(nearEnd, controller.totalFrames / 2, "Needle must be near the loop end")
@@ -1622,7 +1877,7 @@ final class ScratchSamplePlaybackControllerTests: XCTestCase {
         // Reverse with a compensated grain near the loop end — must retreat
         // (or wrap) safely, never crash or produce an invalid segment,
         // regardless of whether the compensated grain crosses the origin.
-        controller.positionDidChange(steps: 5_980, direction: .backward)
+        controller.positionDidChange(steps: 1_880, direction: .backward)
         controller.waitForAudioQueue()
 
         XCTAssertNotEqual(controller.lastScheduleSkippedReason, "invalidSegment")

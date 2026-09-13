@@ -77,13 +77,14 @@ final class DVSContinuousVinylRendererTests: XCTestCase {
             ))
         }
 
-        func publishIdle() {
+        func publishIdle(midiAnchor: MIDIIdlePhaseAnchor? = nil) {
             epoch += 1
             core.ingest(snapshot: DVSVinylControlSnapshot(
                 epoch: epoch,
                 velocity: 0,
                 authoritativePhase: core.controlAuthoritativePhase,
-                active: false
+                active: false,
+                midiIdleAnchor: midiAnchor
             ))
         }
 
@@ -355,6 +356,70 @@ final class DVSContinuousVinylRendererTests: XCTestCase {
     }
 
     // MARK: - 9 & 10: stop settles to silence without phase reset; restart is immediate
+
+    func testMIDIIdleReconcilesOnlyAfterSilenceWithoutChangingAudibleRamp() {
+        let measured = CoreHarness()
+        let ordinary = CoreHarness()
+        for harness in [measured, ordinary] {
+            harness.install(content: sineContent(frames: 8_000), loopFrames: Self.revolutionFrames)
+            harness.publish(velocity: Self.rate * 0.12, authoritativePhase: 0)
+            harness.render(2_940)
+        }
+        let endpoint = 3_000.25
+        measured.publishIdle(midiAnchor: MIDIIdlePhaseAnchor(
+            sampleIdentity: measured.core.sampleIdentity, sourceFrame: endpoint))
+        ordinary.publishIdle()
+        XCTAssertEqual(measured.render(735), ordinary.render(735),
+            "An endpoint request cannot alter the audible idle ramp.")
+        XCTAssertGreaterThan(measured.core.gain, 0.000_001)
+        XCTAssertEqual(measured.core.phase, ordinary.core.phase)
+        XCTAssertEqual(measured.render(3_675), ordinary.render(3_675),
+            "Repositioning must happen only in the branch that already emits zero PCM.")
+        XCTAssertEqual(measured.core.phase, endpoint, accuracy: 1e-12)
+        XCTAssertEqual(measured.core.velocity, 0)
+        XCTAssertEqual(measured.core.pendingPhaseCorrection, 0)
+        measured.render(735)
+        XCTAssertEqual(measured.core.phase, endpoint, accuracy: 1e-12)
+        measured.publish(velocity: -Self.rate * 0.12, authoritativePhase: endpoint)
+        XCTAssertNotEqual(measured.render(64), [Float](repeating: 0, count: 64))
+        XCTAssertLessThan(measured.core.phase, endpoint, "Restart leaves the measured endpoint immediately.")
+    }
+
+    func testNewMotionCancelsPendingMIDIIdleReconciliation() {
+        let measured = CoreHarness()
+        let ordinary = CoreHarness()
+        for harness in [measured, ordinary] {
+            harness.install(content: sineContent(frames: 8_000), loopFrames: Self.revolutionFrames)
+            harness.publish(velocity: Self.rate * 0.12, authoritativePhase: 0)
+            harness.render(2_940)
+        }
+        measured.publishIdle(midiAnchor: MIDIIdlePhaseAnchor(
+            sampleIdentity: measured.core.sampleIdentity, sourceFrame: 3_000.25))
+        ordinary.publishIdle()
+        measured.render(64)
+        ordinary.render(64)
+        for harness in [measured, ordinary] {
+            harness.publish(velocity: -Self.rate * 0.12, authoritativePhase: 300)
+            harness.render(735)
+            harness.publishIdle()
+        }
+        XCTAssertEqual(measured.render(4_410), ordinary.render(4_410))
+        XCTAssertEqual(measured.core.phase, ordinary.core.phase, accuracy: 1e-12,
+            "A later active control followed by ordinary/DVS idle must retire the MIDI endpoint.")
+    }
+
+    func testSampleSwapDiscardsPendingMIDIIdleReconciliation() {
+        let harness = CoreHarness()
+        harness.install(content: sineContent(frames: 8_000), loopFrames: Self.revolutionFrames)
+        harness.publish(velocity: Self.rate * 0.12, authoritativePhase: 0)
+        harness.render(2_940)
+        harness.publishIdle(midiAnchor: MIDIIdlePhaseAnchor(
+            sampleIdentity: harness.core.sampleIdentity, sourceFrame: 3_000.25))
+        harness.render(64)
+        harness.install(content: sineContent(frames: 8_000), loopFrames: Self.revolutionFrames)
+        harness.render(4_410)
+        XCTAssertEqual(harness.core.phase, 0, "Loading a sample owns its initial cue.")
+    }
 
     func testIdleSettlesToSilenceWithoutResettingPhaseAndRestartsImmediately() {
         let harness = CoreHarness()
@@ -630,6 +695,69 @@ final class DVSContinuousVinylRendererTests: XCTestCase {
         XCTAssertFalse(sawUnbounded, "Concurrent publish/render must never yield unbounded output")
         XCTAssertTrue(renderer.testOnly_corePhase.isFinite)
         XCTAssertGreaterThanOrEqual(renderer.testOnly_corePhase, 0)
+    }
+
+    private func renderPositionBlock(_ renderer: DVSContinuousVinylRenderer, frames: Int) {
+        var left = [Float](repeating: 0, count: max(1, frames))
+        left.withUnsafeMutableBufferPointer { output in
+            renderer.testOnly_render(left: output.baseAddress!, right: nil, frameCount: frames)
+        }
+    }
+
+    func testRenderedPositionReportsActualFractionalPhaseThroughLoopWrap() throws {
+        let renderer = DVSContinuousVinylRenderer()
+        XCTAssertNil(renderer.currentRenderPositionSnapshot())
+        XCTAssertTrue(renderer.installSample(from: try makeSyntheticLoopBuffer(frames: 512),
+            loopFrames: 512, contentFadeFrames: 4))
+        XCTAssertNil(renderer.currentRenderPositionSnapshot(), "installing is not rendering")
+        renderer.publish(velocity: Self.rate, authoritativePhase: 0, active: true)
+        renderPositionBlock(renderer, frames: 512)
+        renderer.publish(velocity: Self.rate, authoritativePhase: 511.5, active: true, snapPhase: true)
+        renderPositionBlock(renderer, frames: 8)
+        let position = try XCTUnwrap(renderer.currentRenderPositionSnapshot())
+        XCTAssertEqual(position.sourceFrame, renderer.testOnly_corePhase, accuracy: 1e-12)
+        XCTAssertGreaterThanOrEqual(position.sourceFrame, 0)
+        XCTAssertLessThan(position.sourceFrame, 20, "the actual cursor has crossed the loop boundary")
+        XCTAssertNotEqual(position.sourceFrame, 511.5, "never substitute the last control anchor")
+        XCTAssertEqual(position.controlEpoch, renderer.currentControlEpoch)
+    }
+
+    func testRenderedPositionRejectsPriorSampleUntilReloadActuallyRenders() throws {
+        let renderer = DVSContinuousVinylRenderer()
+        let buffer = try makeSyntheticLoopBuffer(frames: 512)
+        renderer.installSample(from: buffer, loopFrames: 512, contentFadeFrames: 4, initialPhase: 32)
+        renderPositionBlock(renderer, frames: 1)
+        let first = try XCTUnwrap(renderer.currentRenderPositionSnapshot())
+        XCTAssertEqual(first.sourceFrame, 32)
+        renderer.installSample(from: buffer, loopFrames: 512, contentFadeFrames: 4, initialPhase: 128)
+        XCTAssertNil(renderer.currentRenderPositionSnapshot(), "same PCM still has a new install identity")
+        renderPositionBlock(renderer, frames: 0)
+        XCTAssertNil(renderer.currentRenderPositionSnapshot(), "ingest-only callbacks contain no rendered frames")
+        renderPositionBlock(renderer, frames: 1)
+        let reloaded = try XCTUnwrap(renderer.currentRenderPositionSnapshot())
+        XCTAssertNotEqual(first.sampleIdentity, reloaded.sampleIdentity)
+        XCTAssertEqual(reloaded.sourceFrame, 128)
+    }
+
+    func testMIDIIdleMailboxRejectsOldSampleAndControlAndWrapsValidEndpoint() throws {
+        let renderer = DVSContinuousVinylRenderer()
+        let buffer = try makeSyntheticLoopBuffer(frames: 512)
+        renderer.installSample(from: buffer, loopFrames: 512, contentFadeFrames: 4, initialPhase: 32)
+        let oldIdentity = try XCTUnwrap(renderer.currentInstalledSampleIdentity)
+        renderer.installSample(from: buffer, loopFrames: 512, contentFadeFrames: 4, initialPhase: 128)
+        renderer.publishIdle(midiAnchor: MIDIIdlePhaseAnchor(sampleIdentity: oldIdentity, sourceFrame: 400))
+        renderPositionBlock(renderer, frames: 4_410)
+        XCTAssertEqual(renderer.testOnly_corePhase, 128, "A prior sample cannot move a freshly loaded cue.")
+
+        let currentIdentity = try XCTUnwrap(renderer.currentInstalledSampleIdentity)
+        renderer.publishIdle(midiAnchor: MIDIIdlePhaseAnchor(sampleIdentity: currentIdentity, sourceFrame: 400))
+        renderer.publish(velocity: 0, authoritativePhase: 128, active: false)
+        renderPositionBlock(renderer, frames: 4_410)
+        XCTAssertEqual(renderer.testOnly_corePhase, 128, "A new ordinary control retires an unread MIDI anchor.")
+
+        renderer.publishIdle(midiAnchor: MIDIIdlePhaseAnchor(sampleIdentity: currentIdentity, sourceFrame: -1.25))
+        renderPositionBlock(renderer, frames: 64)
+        XCTAssertEqual(renderer.testOnly_corePhase, 510.75, accuracy: 1e-12)
     }
 
     // MARK: - 13 & routing: controller integration via the synthetic seam

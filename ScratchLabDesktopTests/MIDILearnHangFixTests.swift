@@ -335,7 +335,9 @@ final class MIDILearnHangFixTests: XCTestCase {
     }
 
     func testHotCueSampleLoadDoesNotBlockTheCallingThread() {
-        let engine = MacCaptureEngine(autoRefreshDevices: false)
+        let defaults = UserDefaults(suiteName: "MIDILearnHangFixTests.hotcue.\(UUID().uuidString)")!
+        ScratchAudioOwnershipMode.scratchLabStandalone.persist(to: defaults)
+        let engine = MacCaptureEngine(autoRefreshDevices: false, midiDefaults: defaults)
         let deviceID = "midi_test_hang_no_sync_sample_load"
         engine.selectedMIDIInputSourceID = deviceID
         defer { cleanUpMIDIMapping(deviceIdentifier: deviceID) }

@@ -87,15 +87,15 @@ final class SessionReplayDocumentTests: XCTestCase {
         XCTAssertEqual(document.takes.count, 1)
 
         let timeline = try XCTUnwrap(document.takes.first?.timeline)
-        let expectedDuration = try XCTUnwrap(snapshot.capturedEvidenceEndTime)
+        let expectedDuration = stagedDuration
         let expectedTimeline = SessionReplayTimeline.build(
             from: snapshot,
             takeDuration: expectedDuration
         )
         XCTAssertEqual(timeline, expectedTimeline)
         XCTAssertEqual(timeline.takeDurationSeconds, expectedDuration)
-        XCTAssertNotEqual(timeline.takeDurationSeconds, stagedDuration,
-                          "capturedEvidenceEndTime must win over the staged take.duration when available.")
+        XCTAssertNotEqual(timeline.takeDurationSeconds, snapshot.capturedEvidenceEndTime,
+                          "Control evidence must not redefine the playable take duration.")
     }
 
     func testReplayDocumentFallsBackToTakeDurationWhenNoEvidenceEndTime() throws {

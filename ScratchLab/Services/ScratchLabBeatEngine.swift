@@ -1,6 +1,23 @@
 import AVFoundation
+import CryptoKit
 import Darwin
 import Foundation
+
+/// A verified playback destination, independent of the recorded scratch stem.
+struct BeatPlaybackOutputRoute: Codable, Equatable, Sendable {
+    var deviceID: UInt32
+    var deviceUID: String
+    var deviceName: String
+    var channelPair: String
+    var channelMap: [Int]
+}
+
+/// Hardware routing is supplied by the host; scheduling and PCM stay shared.
+protocol BeatPlaybackOutputRouting: AnyObject {
+    var route: BeatPlaybackOutputRoute? { get }
+    func prepare(_ engine: AVAudioEngine) throws
+    func verify(_ engine: AVAudioEngine) throws
+}
 
 protocol ClickTrackTimingEngine: AnyObject {
     func start(
@@ -9,6 +26,11 @@ protocol ClickTrackTimingEngine: AnyObject {
         onRecordingStart: (() -> Void)?
     ) throws -> ClickTrackStartMetadata
     func stop()
+    func setOutputGain(_ normalizedGain: Double)
+}
+
+extension ClickTrackTimingEngine {
+    func setOutputGain(_ normalizedGain: Double) {}
 }
 
 extension ClickTrackEngine: ClickTrackTimingEngine {}
@@ -27,6 +49,7 @@ struct BeatEngineStartMetadata: Equatable, Sendable {
     let beatPatternVersion: String
     let swingAmount: Double
     let engineVersion: String
+    var outputRoute: BeatPlaybackOutputRoute? = nil
 }
 
 enum ScratchLabBeatEngineError: LocalizedError {
@@ -52,7 +75,37 @@ final class ScratchLabBeatEngine: ObservableObject {
     private static let preRollLeadInSeconds = 0.12
     private static let scheduledStepHorizon = 64
 
+    /// One player timeline: an optional click-only bar followed by the
+    /// existing repeating drum pattern. The frame boundary also owns the
+    /// recording-start host time; no completion callback starts another engine.
+    struct PlaybackSchedule {
+        let countInBuffer: AVAudioPCMBuffer?
+        let stepBuffers: [AVAudioPCMBuffer]
+        let beatFrameLength: Int
+        let framesPerBar: Int
+        let swingFrameOffset: Int
+        let sampleRate: Double
+
+        var patternStartFrame: Int { Int(countInBuffer?.frameLength ?? 0) }
+        var countInDurationSeconds: Double { Double(patternStartFrame) / sampleRate }
+
+        func sampleTime(forStepIndex stepIndex: Int) -> AVAudioFramePosition {
+            AVAudioFramePosition(patternStartFrame + ScratchLabBeatEngine.sampleTimeForStepIndex(
+                stepIndex,
+                beatFrames: beatFrameLength,
+                framesPerBar: framesPerBar,
+                swingFrames: swingFrameOffset
+            ))
+        }
+    }
+
+    struct PreparedPlayback {
+        let countInBuffer: AVAudioPCMBuffer
+        let loopBuffer: AVAudioPCMBuffer
+    }
+
     private let clickTrackEngine: ClickTrackTimingEngine
+    private let outputRouting: (any BeatPlaybackOutputRouting)?
     private let audioEngine = AVAudioEngine()
     private let playerNode = AVAudioPlayerNode()
     private let schedulingQueue = DispatchQueue(label: "scratchlab.beatengine.scheduler")
@@ -64,18 +117,18 @@ final class ScratchLabBeatEngine: ObservableObject {
     private var currentMode: BeatEngineMode = .silent
     private var currentBPM = CaptureClickTrackDefaults.defaultTimedBPM
     private var currentSwingAmount = 0.0
-    private var stepBuffers: [AVAudioPCMBuffer] = []
-    private var beatFrameLength: AVAudioFramePosition = 0
-    private var framesPerBar: AVAudioFramePosition = 0
-    private var swingFrameOffset: AVAudioFramePosition = 0
+    private var playbackSchedule: PlaybackSchedule?
+    private var preparedPlayback: PreparedPlayback?
     private var scheduledStepCount = 0
     private var consumedStepCount = 0
     private var activeGeneration = UUID()
     private var isRunning = false
     private var pendingUIWorkItems: [DispatchWorkItem] = []
 
-    init(clickTrackEngine: ClickTrackTimingEngine = ClickTrackEngine()) {
-        self.clickTrackEngine = clickTrackEngine
+    init(clickTrackEngine: ClickTrackTimingEngine? = nil,
+         outputRouting: (any BeatPlaybackOutputRouting)? = nil) {
+        self.outputRouting = outputRouting
+        self.clickTrackEngine = clickTrackEngine ?? ClickTrackEngine(outputRouting: outputRouting)
         audioEngine.attach(playerNode)
         if let playerFormat {
             audioEngine.connect(playerNode, to: audioEngine.mainMixerNode, format: playerFormat)
@@ -100,10 +153,8 @@ final class ScratchLabBeatEngine: ObservableObject {
             self.isRunning = false
             self.scheduledStepCount = 0
             self.consumedStepCount = 0
-            self.stepBuffers = []
-            self.beatFrameLength = 0
-            self.framesPerBar = 0
-            self.swingFrameOffset = 0
+            self.playbackSchedule = nil
+            self.preparedPlayback = nil
         }
 
         playerNode.stop()
@@ -126,6 +177,7 @@ final class ScratchLabBeatEngine: ObservableObject {
     func start(
         mode: BeatEngineMode,
         bpm requestedBPM: Int,
+        usesClickCountIn: Bool = false,
         onCountInBeat: ((Int) -> Void)? = nil,
         onRecordingStart: (() -> Void)? = nil
     ) throws -> BeatEngineStartMetadata {
@@ -151,47 +203,67 @@ final class ScratchLabBeatEngine: ObservableObject {
                 beatPatternName: nil,
                 beatPatternVersion: CaptureBeatEngineDefaults.beatPatternVersion,
                 swingAmount: 0,
-                engineVersion: CaptureBeatEngineDefaults.engineVersion
+                engineVersion: CaptureBeatEngineDefaults.engineVersion,
+                outputRoute: outputRouting?.route
             )
         }
 
         let beatDurationSeconds = 60.0 / Double(bpm)
         let startDelay = Self.preRollLeadInSeconds
-        let clickStartHostTime = Self.currentHostTime() + AVAudioTime.hostTime(forSeconds: startDelay)
-        let recordingStartHostTime = clickStartHostTime
-            + AVAudioTime.hostTime(forSeconds: Double(CaptureClickTrackDefaults.countInBeats) * beatDurationSeconds)
+        let legacyClickStartHostTime = Self.currentHostTime() + AVAudioTime.hostTime(forSeconds: startDelay)
         let sampleRate = resolvedSampleRate()
 
         do {
             try configurePlayerFormat(sampleRate: sampleRate)
+            try outputRouting?.prepare(audioEngine)
             if !audioEngine.isRunning {
                 try audioEngine.start()
             }
+            try outputRouting?.verify(audioEngine)
         } catch {
-            throw ScratchLabBeatEngineError.unableToStartAudio
+            stop()
+            throw error
         }
 
         currentMode = mode
         currentBPM = bpm
         currentSwingAmount = mode.defaultSwingAmount
-        stepBuffers = makeStepBuffers(mode: mode, sampleRate: sampleRate)
-        guard !stepBuffers.isEmpty else {
+        let schedule: PlaybackSchedule
+        do {
+            schedule = try Self.makePlaybackSchedule(
+                mode: mode,
+                bpm: bpm,
+                sampleRate: sampleRate,
+                usesClickCountIn: usesClickCountIn
+            )
+        } catch {
             stop()
-            throw ScratchLabBeatEngineError.unableToStartAudio
+            throw error
         }
-
-        beatFrameLength = max(1, AVAudioFramePosition((60.0 / Double(bpm) * sampleRate).rounded()))
-        framesPerBar = beatFrameLength * AVAudioFramePosition(CaptureClickTrackDefaults.beatsPerBar)
-        swingFrameOffset = mode == .minimalFunk
-            ? AVAudioFramePosition((Double(beatFrameLength) * currentSwingAmount).rounded())
-            : 0
+        let recordingDelay = schedule.countInBuffer != nil
+            ? schedule.countInDurationSeconds
+            : Double(CaptureClickTrackDefaults.countInBeats) * beatDurationSeconds
+        // Prepare the opted-in count-in before choosing its future start:
+        // audio-device startup must not consume any of the four audible beats.
+        let clickStartHostTime = schedule.countInBuffer != nil
+            ? Self.currentHostTime() + AVAudioTime.hostTime(forSeconds: startDelay)
+            : legacyClickStartHostTime
+        let recordingStartHostTime = clickStartHostTime + AVAudioTime.hostTime(forSeconds: recordingDelay)
 
         let generation = UUID()
         schedulingQueue.sync {
             self.activeGeneration = generation
             self.isRunning = true
+            self.playbackSchedule = schedule
             self.scheduledStepCount = 0
             self.consumedStepCount = 0
+            if let countInBuffer = schedule.countInBuffer {
+                self.playerNode.scheduleBuffer(
+                    countInBuffer,
+                    at: AVAudioTime(sampleTime: 0, atRate: sampleRate),
+                    options: []
+                )
+            }
             self.scheduleStepsIfNeeded()
         }
 
@@ -209,15 +281,138 @@ final class ScratchLabBeatEngine: ObservableObject {
             beatPatternName: mode.beatPatternName,
             beatPatternVersion: CaptureBeatEngineDefaults.beatPatternVersion,
             swingAmount: mode.defaultSwingAmount,
-            engineVersion: CaptureBeatEngineDefaults.engineVersion
+            engineVersion: CaptureBeatEngineDefaults.engineVersion,
+            outputRoute: outputRouting?.route
         )
         scheduleUICallbacks(
             generation: generation,
             bpm: bpm,
+            countInStartHostTime: schedule.countInBuffer != nil ? clickStartHostTime : nil,
+            countInBeatDurationSeconds: Double(schedule.beatFrameLength) / sampleRate,
+            recordingStartHostTime: schedule.countInBuffer != nil ? recordingStartHostTime : nil,
             onCountInBeat: onCountInBeat,
             onRecordingStart: onRecordingStart
         )
         return metadata
+    }
+
+    /// CXL playback consumes the exact verified production WAV that is bound
+    /// to the take. The four-click prefix runs once; the remaining frames loop
+    /// on this same player node without a timer or renderer transition.
+    func start(
+        preparedBeat: ReferencePreparedBeat,
+        mode: BeatEngineMode,
+        bpm: Int,
+        onCountInBeat: ((Int) -> Void)? = nil,
+        onRecordingStart: (() -> Void)? = nil
+    ) throws -> BeatEngineStartMetadata {
+        hardResetBeatPlayback()
+        do {
+            let playback = try Self.loadPreparedPlayback(preparedBeat: preparedBeat, mode: mode, bpm: bpm)
+            let sampleRate = playback.loopBuffer.format.sampleRate
+            try configurePlayerFormat(sampleRate: sampleRate, channelCount: playback.loopBuffer.format.channelCount)
+            try outputRouting?.prepare(audioEngine)
+            try audioEngine.start()
+            try outputRouting?.verify(audioEngine)
+            currentMode = mode
+            currentBPM = bpm
+            currentSwingAmount = mode.defaultSwingAmount
+            let countInFrames = playback.countInBuffer.frameLength
+            let clickStart = Self.currentHostTime() + AVAudioTime.hostTime(forSeconds: Self.preRollLeadInSeconds)
+            let recordingStart = clickStart + AVAudioTime.hostTime(forSeconds: Double(countInFrames) / sampleRate)
+            let generation = UUID()
+            schedulingQueue.sync {
+                self.activeGeneration = generation
+                self.isRunning = true
+                self.preparedPlayback = playback
+                self.playerNode.scheduleBuffer(
+                    playback.countInBuffer,
+                    at: AVAudioTime(sampleTime: 0, atRate: sampleRate), options: []
+                )
+                self.playerNode.scheduleBuffer(
+                    playback.loopBuffer,
+                    at: AVAudioTime(sampleTime: AVAudioFramePosition(countInFrames), atRate: sampleRate),
+                    options: [.loops]
+                )
+            }
+            playerNode.play(at: AVAudioTime(hostTime: clickStart))
+            scheduleUICallbacks(
+                generation: generation, bpm: bpm, countInStartHostTime: clickStart,
+                countInBeatDurationSeconds: Double(countInFrames) / 4.0 / sampleRate,
+                recordingStartHostTime: recordingStart,
+                onCountInBeat: onCountInBeat, onRecordingStart: onRecordingStart
+            )
+            return BeatEngineStartMetadata(
+                bpm: bpm, countInBeats: 4, beatsPerBar: 4,
+                clickStartHostTime: clickStart, recordingStartHostTime: recordingStart,
+                clickAccentPattern: CaptureClickTrackDefaults.clickAccentPattern,
+                clickVersion: CaptureClickTrackDefaults.clickVersion,
+                beatEngineMode: mode, beatEnabled: mode.beatEnabled,
+                beatPatternName: mode.beatPatternName,
+                beatPatternVersion: CaptureBeatEngineDefaults.beatPatternVersion,
+                swingAmount: mode.defaultSwingAmount,
+                engineVersion: CaptureBeatEngineDefaults.engineVersion,
+                outputRoute: outputRouting?.route
+            )
+        } catch {
+            stop()
+            throw error
+        }
+    }
+
+    /// A hardware-free loading seam shared by playback and its PCM regressions.
+    /// Revalidate the bound set each time; a stale prepared URL is not evidence.
+    static func loadPreparedPlayback(
+        preparedBeat: ReferencePreparedBeat,
+        mode: BeatEngineMode,
+        bpm: Int
+    ) throws -> PreparedPlayback {
+        let verified = try ReferenceBeatAssetStore.resolve(
+            binding: preparedBeat.binding,
+            rootURL: preparedBeat.directoryURL.deletingLastPathComponent()
+        )
+        guard verified == preparedBeat, verified.mode == mode, verified.binding.bpm == bpm else {
+            throw ReferenceBeatAssetError.invalid("playback mode or BPM differs from the prepared binding")
+        }
+        let file = try AVAudioFile(forReading: verified.productionMasterURL, commonFormat: .pcmFormatFloat32, interleaved: false)
+        func readFrames(_ frameCount: Int64) throws -> AVAudioPCMBuffer {
+            guard frameCount > 0, frameCount <= Int64(UInt32.max),
+                  let result = AVAudioPCMBuffer(pcmFormat: file.processingFormat, frameCapacity: AVAudioFrameCount(frameCount)),
+                  let destination = result.floatChannelData,
+                  let chunk = AVAudioPCMBuffer(pcmFormat: file.processingFormat, frameCapacity: 16_384),
+                  let source = chunk.floatChannelData else {
+                throw ReferenceBeatAssetError.invalid("the production WAV could not be decoded")
+            }
+            var copied: Int64 = 0
+            while copied < frameCount {
+                chunk.frameLength = 0
+                try file.read(into: chunk, frameCount: AVAudioFrameCount(min(frameCount - copied, Int64(chunk.frameCapacity))))
+                guard chunk.frameLength > 0 else {
+                    throw ReferenceBeatAssetError.invalid("the production WAV ended before its bound frame count")
+                }
+                let length = min(Int(chunk.frameLength), Int(frameCount - copied))
+                for channel in 0..<Int(file.processingFormat.channelCount) {
+                    destination[channel].advanced(by: Int(copied)).update(from: source[channel], count: length)
+                }
+                copied += Int64(length)
+            }
+            result.frameLength = AVAudioFrameCount(frameCount)
+            return result
+        }
+        let countIn = try readFrames(verified.binding.countInFrameCount)
+        let loop = try readFrames(verified.binding.loopFrameCount)
+        let hashAfterRead = SHA256.hash(data: try Data(contentsOf: verified.productionMasterURL))
+            .map { String(format: "%02x", $0) }.joined()
+        guard file.framePosition == file.length, hashAfterRead == verified.binding.productionMasterSHA256 else {
+            throw ReferenceBeatAssetError.invalid("the production WAV changed while playback was loading")
+        }
+        return PreparedPlayback(countInBuffer: countIn, loopBuffer: loop)
+    }
+
+    /// Recheck after the count-in, immediately before the capture is armed.
+    func verifiedPreparedOutputRoute() throws -> BeatPlaybackOutputRoute? {
+        try outputRouting?.verify(audioEngine)
+        return outputRouting?.route
     }
 
     func stop() {
@@ -229,16 +424,84 @@ final class ScratchLabBeatEngine: ObservableObject {
             self.isRunning = false
             self.scheduledStepCount = 0
             self.consumedStepCount = 0
-            self.stepBuffers = []
-            self.beatFrameLength = 0
-            self.framesPerBar = 0
-            self.swingFrameOffset = 0
+            self.playbackSchedule = nil
+            self.preparedPlayback = nil
         }
 
         playerNode.stop()
         playerNode.reset()
         if audioEngine.isRunning {
             audioEngine.stop()
+        }
+    }
+
+    func setOutputGain(_ normalizedGain: Double) {
+        let finiteGain = normalizedGain.isFinite ? normalizedGain : 0
+        let clampedGain = min(max(finiteGain, 0), 1)
+        playerNode.volume = Float(clampedGain)
+        clickTrackEngine.setOutputGain(clampedGain)
+    }
+
+    /// Peak-level policy for audio ScratchLab *generates* (timing/beat stems and
+    /// the scratch+timing mix).
+    ///
+    /// Summed percussion voices routinely overshoot full scale, and the old
+    /// export clamped the overshoot sample-by-sample, which is hard clipping:
+    /// it is audible, it is irreversible, and it makes a stem that no longer
+    /// matches what the pattern actually is. Instead every generated buffer is
+    /// attenuated by one constant linear gain until its peak sits at the
+    /// ceiling. Attenuation only — a quiet pattern is never boosted — so the
+    /// operation is a pure gain and cannot change frame counts, timing, or the
+    /// relative shape of the waveform.
+    enum GeneratedAudioHeadroom {
+        /// Ceiling for stems ScratchLab renders on its own (beat_only).
+        static let generatedStemCeilingDBFS: Double = -1.0
+        /// Ceiling for the scratch + timing mix.
+        ///
+        /// Deliberately close to full scale rather than matching the generated
+        /// stem ceiling. The mix contains *captured* audio, and the captured
+        /// scratch in the regression fixture already peaks at -0.234 dBFS; a
+        /// -1 dBFS mix ceiling would force an attenuation of the recording
+        /// itself just to make room for a stem ScratchLab generated. The mix
+        /// instead holds the scratch at unity and reduces only the timing
+        /// contribution — see `SessionArchiveBuilder.mixScratchWithTiming`.
+        static let mixCeilingDBFS: Double = -0.1
+
+        static func amplitude(forDBFS dbfs: Double) -> Float {
+            Float(pow(10.0, dbfs / 20.0))
+        }
+
+        static func peakAmplitude(of buffer: AVAudioPCMBuffer) -> Float {
+            guard let channels = buffer.floatChannelData else { return 0 }
+            let frameCount = Int(buffer.frameLength)
+            var peak: Float = 0
+            for channel in 0..<Int(buffer.format.channelCount) {
+                let samples = channels[channel]
+                for frame in 0..<frameCount {
+                    peak = max(peak, abs(samples[frame]))
+                }
+            }
+            return peak
+        }
+
+        /// Attenuates `buffer` in place so its peak is at most `ceilingDBFS`.
+        /// Returns the gain that was applied (1.0 when nothing was needed).
+        @discardableResult
+        static func applyCeiling(_ ceilingDBFS: Double, to buffer: AVAudioPCMBuffer) -> Float {
+            let ceiling = amplitude(forDBFS: ceilingDBFS)
+            let peak = peakAmplitude(of: buffer)
+            guard peak > ceiling, peak.isFinite, peak > 0,
+                  let channels = buffer.floatChannelData else { return 1 }
+
+            let gain = ceiling / peak
+            let frameCount = Int(buffer.frameLength)
+            for channel in 0..<Int(buffer.format.channelCount) {
+                let samples = channels[channel]
+                for frame in 0..<frameCount {
+                    samples[frame] *= gain
+                }
+            }
+            return gain
         }
     }
 
@@ -251,7 +514,8 @@ final class ScratchLabBeatEngine: ObservableObject {
         clickStartHostTime: UInt64?,
         recordingStartHostTime: UInt64?,
         sampleRate: Double,
-        channelCount: AVAudioChannelCount
+        channelCount: AVAudioChannelCount,
+        exactFrameCount: AVAudioFrameCount? = nil
     ) throws -> AVAudioPCMBuffer {
         let bpm = CaptureClickTrackDefaults.clampedBPM(requestedBPM)
         let startBeatIndex = resolvedStartBeatIndex(
@@ -262,16 +526,26 @@ final class ScratchLabBeatEngine: ObservableObject {
         )
 
         if mode == .clickTrack {
-            return try ClickTrackEngine.renderedClickTrackBuffer(
+            let clickBuffer = try ClickTrackEngine.renderedClickTrackBuffer(
                 bpm: bpm,
                 durationSeconds: durationSeconds,
                 sampleRate: sampleRate,
                 channelCount: channelCount,
-                startBeatIndex: startBeatIndex
+                startBeatIndex: startBeatIndex,
+                exactFrameCount: exactFrameCount
             )
+            GeneratedAudioHeadroom.applyCeiling(
+                GeneratedAudioHeadroom.generatedStemCeilingDBFS,
+                to: clickBuffer
+            )
+            return clickBuffer
         }
 
-        let totalFrameCount = max(1, Int(ceil(max(0, durationSeconds) * sampleRate)))
+        let totalFrameCount = max(
+            1,
+            exactFrameCount.map(Int.init)
+                ?? Int(ceil(max(0, durationSeconds) * sampleRate))
+        )
         guard let format = AVAudioFormat(
             standardFormatWithSampleRate: sampleRate,
             channels: channelCount
@@ -298,7 +572,8 @@ final class ScratchLabBeatEngine: ObservableObject {
             ? Int((Double(beatFrames) * mode.defaultSwingAmount).rounded())
             : 0
         let startStepIndex = max(0, startBeatIndex * 2)
-        let totalStepCount = Int(ceil(max(0, durationSeconds) / max(0.0001, 60.0 / Double(bpm) / 2.0))) + 8
+        let renderedDurationSeconds = Double(totalFrameCount) / sampleRate
+        let totalStepCount = Int(ceil(renderedDurationSeconds / max(0.0001, 60.0 / Double(bpm) / 2.0))) + 8
 
         for stepIndex in startStepIndex..<(startStepIndex + totalStepCount) {
             let stepInBar = stepIndex % renderedSteps.count
@@ -322,6 +597,14 @@ final class ScratchLabBeatEngine: ObservableObject {
             }
         }
 
+        // Overlapping kick/snare/hat voices sum past full scale on the
+        // downbeat. Pull the whole stem back to the headroom ceiling with one
+        // gain instead of clipping individual samples.
+        GeneratedAudioHeadroom.applyCeiling(
+            GeneratedAudioHeadroom.generatedStemCeilingDBFS,
+            to: buffer
+        )
+
         return buffer
     }
 
@@ -330,15 +613,16 @@ final class ScratchLabBeatEngine: ObservableObject {
         return sampleRate > 0 ? sampleRate : 48_000
     }
 
-    private func configurePlayerFormat(sampleRate: Double) throws {
+    private func configurePlayerFormat(sampleRate: Double, channelCount: AVAudioChannelCount = 1) throws {
         guard let requestedFormat = AVAudioFormat(
             standardFormatWithSampleRate: sampleRate,
-            channels: 1
+            channels: channelCount
         ) else {
             throw ScratchLabBeatEngineError.unableToStartAudio
         }
 
-        guard playerFormat?.sampleRate != requestedFormat.sampleRate else { return }
+        guard playerFormat?.sampleRate != requestedFormat.sampleRate
+                || playerFormat?.channelCount != requestedFormat.channelCount else { return }
 
         playerNode.stop()
         audioEngine.disconnectNodeOutput(playerNode)
@@ -346,7 +630,42 @@ final class ScratchLabBeatEngine: ObservableObject {
         playerFormat = requestedFormat
     }
 
-    private func makeStepBuffers(mode: BeatEngineMode, sampleRate: Double) -> [AVAudioPCMBuffer] {
+    static func makePlaybackSchedule(
+        mode: BeatEngineMode,
+        bpm requestedBPM: Int,
+        sampleRate: Double,
+        usesClickCountIn: Bool = false
+    ) throws -> PlaybackSchedule {
+        let bpm = CaptureClickTrackDefaults.clampedBPM(requestedBPM)
+        let beatFrames = max(1, Int((60.0 / Double(bpm) * sampleRate).rounded()))
+        let countInFrames = beatFrames * CaptureClickTrackDefaults.countInBeats
+        let countInBuffer: AVAudioPCMBuffer?
+        if usesClickCountIn && mode.beatEnabled {
+            countInBuffer = try ClickTrackEngine.renderedClickTrackBuffer(
+                bpm: bpm,
+                durationSeconds: Double(countInFrames) / sampleRate,
+                sampleRate: sampleRate,
+                channelCount: 1,
+                startBeatIndex: 0,
+                exactFrameCount: AVAudioFrameCount(countInFrames)
+            )
+        } else {
+            countInBuffer = nil
+        }
+        let stepBuffers = makeStepBuffers(mode: mode, sampleRate: sampleRate)
+        guard !stepBuffers.isEmpty else { throw ScratchLabBeatEngineError.unableToStartAudio }
+        return PlaybackSchedule(
+            countInBuffer: countInBuffer,
+            stepBuffers: stepBuffers,
+            beatFrameLength: beatFrames,
+            framesPerBar: beatFrames * CaptureClickTrackDefaults.beatsPerBar,
+            swingFrameOffset: mode == .minimalFunk
+                ? Int((Double(beatFrames) * mode.defaultSwingAmount).rounded()) : 0,
+            sampleRate: sampleRate
+        )
+    }
+
+    private static func makeStepBuffers(mode: BeatEngineMode, sampleRate: Double) -> [AVAudioPCMBuffer] {
         let renderedSteps = Self.makeRenderedStepSamples(mode: mode, sampleRate: sampleRate)
         guard let format = AVAudioFormat(standardFormatWithSampleRate: sampleRate, channels: 1) else {
             return []
@@ -398,15 +717,10 @@ final class ScratchLabBeatEngine: ObservableObject {
     }
 
     private func scheduleStep(at stepIndex: Int, generation: UUID) {
-        guard !stepBuffers.isEmpty else { return }
+        guard let playbackSchedule, !playbackSchedule.stepBuffers.isEmpty else { return }
         guard let playerFormat else { return }
-        let stepBuffer = stepBuffers[stepIndex % stepBuffers.count]
-        let sampleTime = Self.sampleTimeForStepIndex(
-            stepIndex,
-            beatFrames: Int(beatFrameLength),
-            framesPerBar: Int(framesPerBar),
-            swingFrames: Int(swingFrameOffset)
-        )
+        let stepBuffer = playbackSchedule.stepBuffers[stepIndex % playbackSchedule.stepBuffers.count]
+        let sampleTime = playbackSchedule.sampleTime(forStepIndex: stepIndex)
 
         playerNode.scheduleBuffer(
             stepBuffer,
@@ -444,12 +758,19 @@ final class ScratchLabBeatEngine: ObservableObject {
     private func scheduleUICallbacks(
         generation: UUID,
         bpm: Int,
+        countInStartHostTime: UInt64?,
+        countInBeatDurationSeconds: Double,
+        recordingStartHostTime: UInt64?,
         onCountInBeat: ((Int) -> Void)?,
         onRecordingStart: (() -> Void)?
     ) {
         cancelPendingUICallbacks()
 
         let beatDurationSeconds = 60.0 / Double(bpm)
+        func delay(until hostTime: UInt64) -> Double {
+            let now = Self.currentHostTime()
+            return hostTime > now ? AVAudioTime.seconds(forHostTime: hostTime - now) : 0
+        }
         for beatIndex in 0..<CaptureClickTrackDefaults.countInBeats {
             let beatNumber = (beatIndex % CaptureClickTrackDefaults.beatsPerBar) + 1
             let workItem = DispatchWorkItem { [weak self] in
@@ -457,8 +778,11 @@ final class ScratchLabBeatEngine: ObservableObject {
                 onCountInBeat?(beatNumber)
             }
             pendingUIWorkItems.append(workItem)
+            let beatDelay = countInStartHostTime.map {
+                delay(until: $0 + AVAudioTime.hostTime(forSeconds: Double(beatIndex) * countInBeatDurationSeconds))
+            } ?? (Self.preRollLeadInSeconds + Double(beatIndex) * beatDurationSeconds)
             DispatchQueue.main.asyncAfter(
-                deadline: .now() + Self.preRollLeadInSeconds + (Double(beatIndex) * beatDurationSeconds),
+                deadline: .now() + beatDelay,
                 execute: workItem
             )
         }
@@ -468,8 +792,10 @@ final class ScratchLabBeatEngine: ObservableObject {
             onRecordingStart?()
         }
         pendingUIWorkItems.append(recordingStartItem)
+        let recordingDelay = recordingStartHostTime.map { delay(until: $0) }
+            ?? (Self.preRollLeadInSeconds + Double(CaptureClickTrackDefaults.countInBeats) * beatDurationSeconds)
         DispatchQueue.main.asyncAfter(
-            deadline: .now() + Self.preRollLeadInSeconds + (Double(CaptureClickTrackDefaults.countInBeats) * beatDurationSeconds),
+            deadline: .now() + recordingDelay,
             execute: recordingStartItem
         )
     }

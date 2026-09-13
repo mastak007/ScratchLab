@@ -59,7 +59,9 @@ final class TimecodeBridgeContinuityFixTests: XCTestCase {
     /// pass) if the bundled fixture is missing, matching
     /// `ScratchSamplePlaybackControllerTests.loadDVSAhhhOrFail`.
     private func makeReadyEngine(file: StaticString = #filePath, line: UInt = #line) -> MacCaptureEngine {
-        let engine = MacCaptureEngine(autoRefreshDevices: false)
+        let defaults = UserDefaults(suiteName: "TimecodeBridgeContinuityFixTests.\(UUID().uuidString)")!
+        ScratchAudioOwnershipMode.scratchLabStandalone.persist(to: defaults)
+        let engine = MacCaptureEngine(autoRefreshDevices: false, midiDefaults: defaults)
         engine.setDVSPlaybackDriveActive(true)
         engine.forwardTimecodeDrive(nil, decision: .notEvaluated, elapsed: 0)
         engine.testOnly_waitForPlaybackQueue()

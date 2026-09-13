@@ -112,6 +112,112 @@ enum LearnedMIDIMessageType: String, Codable, CaseIterable, Equatable {
     }
 }
 
+// MARK: - Verified Rane ONE MKII learned mapping
+
+/// Shared bridge from the verified Rane ONE MKII hardware profile to the
+/// per-device learned-mapping store used by both iOS and macOS. Keeping these
+/// values here prevents the two platform coordinators from drifting apart.
+enum RaneOneMKIIVerifiedLearnedMapping {
+    private static let scratchLabSampleIDs = [
+        "dvs_ahhh",
+        "fresh",
+        "ah_yeah",
+        "check_it_out",
+    ]
+
+    static let requiredActions: [MIDISemanticAction] = [
+        .crossfader,
+        .leftUpfader,
+        .rightUpfader,
+        .hotCue1,
+        .hotCue2,
+        .hotCue3,
+        .hotCue4,
+        .hotCue5,
+        .hotCue6,
+        .hotCue7,
+        .hotCue8,
+    ]
+
+    static func matches(deviceName: String) -> Bool {
+        let normalized = deviceName.lowercased()
+        return normalized.contains("rane") && normalized.contains("one")
+    }
+
+    static func controls(
+        learnedAt: Date = Date(),
+        assignsScratchLabSamples: Bool = true
+    ) -> [MIDILearnedControl] {
+        var controls = [
+            MIDILearnedControl(
+                action: .crossfader,
+                messageType: .controlChange,
+                channel: 15,
+                controlNumber: 8,
+                learnedAt: learnedAt,
+                isVerified: true
+            ),
+            MIDILearnedControl(
+                action: .leftUpfader,
+                messageType: .controlChange,
+                channel: 0,
+                controlNumber: 28,
+                deck: 0,
+                learnedAt: learnedAt,
+                isVerified: true
+            ),
+            MIDILearnedControl(
+                action: .rightUpfader,
+                messageType: .controlChange,
+                channel: 1,
+                controlNumber: 28,
+                deck: 1,
+                learnedAt: learnedAt,
+                isVerified: true
+            ),
+        ]
+
+        for action in requiredActions where action.hotCueIndex != nil {
+            guard let index = action.hotCueIndex else { continue }
+            controls.append(MIDILearnedControl(
+                action: action,
+                messageType: .note,
+                channel: 5,
+                controlNumber: 19 + index,
+                deck: 1,
+                assignedSampleID: assignsScratchLabSamples
+                    ? defaultSampleID(for: action)
+                    : nil,
+                learnedAt: learnedAt,
+                isVerified: true
+            ))
+        }
+        return controls
+    }
+
+    static func defaultSampleID(for action: MIDISemanticAction) -> String? {
+        guard let index = action.hotCueIndex else { return nil }
+        return scratchLabSampleIDs[(index - 1) % scratchLabSampleIDs.count]
+    }
+
+    static func apply(
+        to mapping: inout MIDIDeviceMapping,
+        overwriteExisting: Bool,
+        assignsScratchLabSamples: Bool = true
+    ) {
+        for control in controls(assignsScratchLabSamples: assignsScratchLabSamples) {
+            if overwriteExisting || mapping.control(for: control.action) == nil {
+                mapping.upsert(control)
+            }
+        }
+    }
+
+    static func isComplete(_ mapping: MIDIDeviceMapping?) -> Bool {
+        guard let mapping else { return false }
+        return requiredActions.allSatisfy { mapping.control(for: $0) != nil }
+    }
+}
+
 // MARK: - Learned Control
 
 /// One user-learned MIDI mapping for a single physical control.
@@ -341,6 +447,38 @@ struct MIDIDeviceMapping: Codable, Equatable {
     mutating func clearAll() {
         controls.removeAll()
         lastModifiedAt = Date()
+    }
+
+    /// Restores ScratchLab's default local sample routing to sampleless hot-cue
+    /// mappings while preserving the learned MIDI address, calibration,
+    /// verification, and curve data. This repairs mappings saved by builds that
+    /// temporarily treated the RANE pads as listen-only controls.
+    @discardableResult
+    mutating func restoreMissingAssignedHotCueSamples() -> Bool {
+        var didChange = false
+        controls = controls.map { control in
+            guard control.assignedSampleID == nil,
+                  let sampleID = RaneOneMKIIVerifiedLearnedMapping.defaultSampleID(for: control.action) else {
+                return control
+            }
+            didChange = true
+            return MIDILearnedControl(
+                action: control.action,
+                messageType: control.messageType,
+                channel: control.channel,
+                controlNumber: control.controlNumber,
+                deck: control.deck,
+                minValue: control.minValue,
+                maxValue: control.maxValue,
+                inverted: control.inverted,
+                assignedSampleID: sampleID,
+                learnedAt: control.learnedAt,
+                isVerified: control.isVerified,
+                curveConfig: control.curveConfig
+            )
+        }
+        if didChange { lastModifiedAt = Date() }
+        return didChange
     }
 
     /// Whether the mapping is empty (no learned controls).

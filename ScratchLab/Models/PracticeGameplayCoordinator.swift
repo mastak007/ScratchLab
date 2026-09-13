@@ -31,6 +31,9 @@ enum PracticeGameplayState: Equatable {
     case copying(PracticeAttemptSession)
     /// The just-finished attempt's immutable result.
     case result(PracticeAttemptResult)
+    /// Capture completed, but contained no evidence the scorer can assess.
+    /// This is terminal and reviewable without inventing a score.
+    case unavailable(PracticeAttemptSession)
 }
 
 /// The parameters and anchor of one in-flight (or most recently started)
@@ -78,6 +81,15 @@ final class PracticeGameplayCoordinator: ObservableObject {
     var currentResult: PracticeAttemptResult? {
         if case .result(let result) = state { return result }
         return nil
+    }
+
+    var hasFinishedAttempt: Bool {
+        switch state {
+        case .result, .unavailable:
+            return true
+        case .idle, .watching, .ready, .copying:
+            return false
+        }
     }
 
     /// idle/ready/result → watching. A no-op while an attempt is open —
@@ -130,6 +142,13 @@ final class PracticeGameplayCoordinator: ObservableObject {
         return result
     }
 
+    /// copying -> unavailable. Used only after capture finalized with no
+    /// evidence the scorer can assess, preserving an honest terminal state.
+    func completeUnavailableAttempt() {
+        guard case .copying(let session) = state else { return }
+        state = .unavailable(session)
+    }
+
     /// result → copying, reusing the just-finished attempt's technique/
     /// tempo/count-in with a fresh window anchored at `now()`. A no-op from
     /// any state other than `.result` — there is nothing to retry before an
@@ -140,7 +159,13 @@ final class PracticeGameplayCoordinator: ObservableObject {
     /// there is no progression yet to advance to, so both host-view buttons
     /// should call this one method.
     func retry() {
-        guard case .result = state, let session = lastSession else { return }
+        switch state {
+        case .result, .unavailable:
+            break
+        case .idle, .watching, .ready, .copying:
+            return
+        }
+        guard let session = lastSession else { return }
         guard let window = GameplayAttemptWindow(
             cycleIndex: 0, cycleDurationBeats: session.pattern.durationBeats
         ) else { return }
@@ -250,7 +275,7 @@ enum PracticePresentationState: Equatable, Sendable {
         switch gameplay {
         case .copying:
             return isPaused ? .paused : .copyActive
-        case .result:
+        case .result, .unavailable:
             return .result
         case .watching, .ready, .idle:
             return isListening ? .listening : .ready

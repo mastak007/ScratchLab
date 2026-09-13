@@ -22,11 +22,13 @@
 //   two fields have no cross-field consistency requirement of their own —
 //   the render-side follower already smooths over the rare case where one
 //   is read a callback apart from the other.
-// - `currentFramePosition` (the render thread's own smoothed playhead) is
-//   never shared: it lives purely on the audio thread. A fresh `load(buffer:)`
-//   is detected by the render thread noticing the published table's
-//   `identity` changed, at which point it snaps the playhead to 0 itself
-//   rather than requiring a separate cross-thread reset signal.
+// - `currentFramePosition` (the render thread's own smoothed playhead) remains
+//   render-thread-owned. One separate atomic snapshot publishes its unwrapped
+//   position once per callback for read-only UI presentation; the UI never
+//   writes playback state. A fresh `load(buffer:)` is detected by the render
+//   thread noticing the published table's `identity` changed, at which point
+//   it snaps the playhead to 0 itself rather than requiring a separate
+//   cross-thread reset signal.
 
 import AVFoundation
 import Foundation
@@ -38,6 +40,16 @@ struct ScratchPlaybackState: Sendable {
     var framePosition: Double = 0
     var direction: PlatterDirection = .idle
     var velocity: Double = 0
+}
+
+/// Immutable sample geometry returned by `load(buffer:)`. The playback engine
+/// uses the exact same cue origin/content range as the renderer when it builds
+/// the read-only waveform overview, preventing UI/audio drift.
+struct ScratchSampleLoadMetadata: Sendable, Equatable {
+    let cueStartFrame: Int
+    let contentFrameCount: Int
+    let loopFrameCount: Int
+    let sampleRate: Double
 }
 
 /// One immutable, fully initialized description of the installed hot-cue
@@ -65,11 +77,14 @@ final class IOScratchRenderer {
 
     private let sampleTablePointer = Atomic<UnsafeMutableRawPointer?>(nil)
     private let targetFrameBits = Atomic<UInt64>(0)
+    private let unwrappedTargetFrameBits = Atomic<UInt64>(0)
     private let velocityFramesPerSecondBits = Atomic<UInt64>(0)
     private let snapPhaseWord = Atomic<UInt64>(0)
     private let controlEpoch = Atomic<UInt64>(0)
     private let isActiveWord = Atomic<UInt64>(0)
+    private let userMixerGainBits = Atomic<UInt64>(Double(1).bitPattern)
     private let nextIdentity = Atomic<UInt64>(0)
+    private let currentUnwrappedFrameSnapshotBits = Atomic<UInt64>(0)
 
     // MARK: - Capture tap (lock-free)
     //
@@ -113,6 +128,7 @@ final class IOScratchRenderer {
     /// handling: the position follower below is already continuous, so a
     /// reversed target is chased smoothly, not jumped to.
     private var renderGain: Double = 1
+    private var renderedUserMixerGain: Double = 1
     /// Render-thread-owned running count of frames written into the capture
     /// ring since the renderer was created; published to `captureWriteIndex`
     /// once per callback (not once per frame) so the consumer always sees a
@@ -224,8 +240,9 @@ final class IOScratchRenderer {
     /// the render thread's pointer reads never depend on `AVAudioPCMBuffer`'s
     /// own lifetime/thread-safety. Preserves stereo — both channels are
     /// copied, no downmix.
-    func load(buffer: AVAudioPCMBuffer) {
-        guard let source = buffer.floatChannelData, buffer.frameLength > 0 else { return }
+    @discardableResult
+    func load(buffer: AVAudioPCMBuffer) -> ScratchSampleLoadMetadata? {
+        guard let source = buffer.floatChannelData, buffer.frameLength > 0 else { return nil }
         let totalFrames = Int(buffer.frameLength)
         let channelCount = Int(buffer.format.channelCount)
 
@@ -268,9 +285,17 @@ final class IOScratchRenderer {
         retainedTableAllocations.append(table)
 
         targetFrameBits.store(Double.zero.bitPattern, ordering: .relaxed)
+        unwrappedTargetFrameBits.store(Double.zero.bitPattern, ordering: .relaxed)
         velocityFramesPerSecondBits.store(Double.zero.bitPattern, ordering: .relaxed)
+        currentUnwrappedFrameSnapshotBits.store(Double.zero.bitPattern, ordering: .relaxed)
         // Releasing store publishes the fully initialized table.
         sampleTablePointer.store(UnsafeMutableRawPointer(table), ordering: .releasing)
+        return ScratchSampleLoadMetadata(
+            cueStartFrame: cueStartFrame,
+            contentFrameCount: max(0, totalFrames - cueStartFrame),
+            loopFrameCount: loopFrameCount,
+            sampleRate: buffer.format.sampleRate
+        )
     }
 
     /// Update the playback target from platter travel measured relative to the
@@ -280,7 +305,10 @@ final class IOScratchRenderer {
         guard let raw = sampleTablePointer.load(ordering: .acquiring) else { return }
         let table = raw.assumingMemoryBound(to: ScratchSampleTable.self).pointee
         let loopLength = Double(table.loopFrameCount)
-        var localTarget = (relativePlatterSteps * table.framesPerPlatterStep)
+        let unwrappedTarget = relativePlatterSteps.isFinite
+            ? relativePlatterSteps * table.framesPerPlatterStep
+            : 0
+        var localTarget = unwrappedTarget
             .truncatingRemainder(dividingBy: loopLength)
         if localTarget < 0 { localTarget += loopLength }
         let rawVelocity = signedVelocityStepsPerSecond.isFinite
@@ -292,6 +320,7 @@ final class IOScratchRenderer {
         let crossedRevolutionBoundary = lastPublishedRevolution.map { $0 != revolution } ?? false
         lastPublishedRevolution = revolution
         targetFrameBits.store(localTarget.bitPattern, ordering: .relaxed)
+        unwrappedTargetFrameBits.store(unwrappedTarget.bitPattern, ordering: .relaxed)
         velocityFramesPerSecondBits.store(velocity.bitPattern, ordering: .relaxed)
         snapPhaseWord.store(crossedRevolutionBoundary ? 1 : 0, ordering: .relaxed)
         controlEpoch.wrappingAdd(1, ordering: .releasing)
@@ -303,17 +332,33 @@ final class IOScratchRenderer {
         isActiveWord.store(1, ordering: .relaxed)
     }
 
+    /// Publishes the learned crossfader × right-upfader gain to the render
+    /// thread. The render callback smooths changes with its existing 3 ms
+    /// click-suppression ramp.
+    func setUserMixerGain(_ gain: Double) {
+        let clamped = gain.isFinite ? min(max(gain, 0), 1) : 0
+        userMixerGainBits.store(clamped.bitPattern, ordering: .relaxed)
+    }
+
     /// Deactivate output and re-target the top. The render thread's own
     /// playhead snaps to 0 the next time it notices a fresh `load(buffer:)`
     /// (every hotcue re-trigger bumps the install identity), so no separate
     /// cross-thread position reset is needed here.
     func reset() {
         targetFrameBits.store(Double(0).bitPattern, ordering: .relaxed)
+        unwrappedTargetFrameBits.store(Double.zero.bitPattern, ordering: .relaxed)
         velocityFramesPerSecondBits.store(Double.zero.bitPattern, ordering: .relaxed)
+        currentUnwrappedFrameSnapshotBits.store(Double.zero.bitPattern, ordering: .relaxed)
         snapPhaseWord.store(0, ordering: .relaxed)
         lastPublishedRevolution = nil
         isActiveWord.store(0, ordering: .relaxed)
         controlEpoch.wrappingAdd(1, ordering: .releasing)
+    }
+
+    /// Lock-free read-only UI snapshot of the actual smoothed render position,
+    /// expressed relative to the hot-cue origin without modulo wrapping.
+    func currentUnwrappedFramePositionSnapshot() -> Double {
+        Double(bitPattern: currentUnwrappedFrameSnapshotBits.load(ordering: .relaxed))
     }
 
     // MARK: - Render callback
@@ -346,14 +391,18 @@ final class IOScratchRenderer {
             pendingPhaseCorrection = 0
             framesSinceControlUpdate = Int.max / 2
             renderGain = 0
+            currentUnwrappedFrameSnapshotBits.store(Double.zero.bitPattern, ordering: .relaxed)
         }
 
         let rawTarget = Double(bitPattern: targetFrameBits.load(ordering: .relaxed))
+        let rawUnwrappedTarget = Double(bitPattern: unwrappedTargetFrameBits.load(ordering: .relaxed))
         let rawVelocity = Double(bitPattern: velocityFramesPerSecondBits.load(ordering: .relaxed))
+        let userMixerGainTarget = Double(bitPattern: userMixerGainBits.load(ordering: .relaxed))
         let epoch = controlEpoch.load(ordering: .acquiring)
         var current = currentFramePosition
         var velocity = currentVelocity
         var gain = renderGain
+        var userMixerGain = renderedUserMixerGain
 
         isSilence.pointee = false
         let abl = UnsafeMutableAudioBufferListPointer(audioBufferList)
@@ -414,6 +463,7 @@ final class IOScratchRenderer {
                 if current < 0 { current += loopLength }
             }
             gain += ((engaged ? 1.0 : 0.0) - gain) * Self.gainAlpha
+            userMixerGain += (userMixerGainTarget - userMixerGain) * Self.gainAlpha
 
             let base = current.rounded(.down)
             let fraction = Float(current - base)
@@ -421,7 +471,7 @@ final class IOScratchRenderer {
             let index0 = index1 - 1 < 0 ? table.loopFrameCount - 1 : index1 - 1
             let index2 = index1 + 1 >= table.loopFrameCount ? 0 : index1 + 1
             let index3 = index2 + 1 >= table.loopFrameCount ? 0 : index2 + 1
-            let sampleGain = Float(gain)
+            let sampleGain = Float(gain * userMixerGain)
             let left = Self.catmullRom(
                 Self.loopSample(srcL, index: index0, contentFrames: contentFrames, cueStart: table.cueStartFrame),
                 Self.loopSample(srcL, index: index1, contentFrames: contentFrames, cueStart: table.cueStartFrame),
@@ -452,8 +502,15 @@ final class IOScratchRenderer {
         }
 
         currentFramePosition = current
+        let currentUnwrapped = Self.unwrappedFramePosition(
+            current,
+            nearest: rawUnwrappedTarget,
+            loop: loopLength
+        )
+        currentUnwrappedFrameSnapshotBits.store(currentUnwrapped.bitPattern, ordering: .relaxed)
         currentVelocity = velocity
         renderGain = gain
+        renderedUserMixerGain = userMixerGain
         isSilence.pointee = ObjCBool(!renderedAudibleSample)
         if captureTapEnabled {
             captureWriteIndex.store(localCaptureWriteIndex, ordering: .releasing)
@@ -500,6 +557,20 @@ final class IOScratchRenderer {
         if wrapped > loop / 2 { wrapped -= loop }
         if wrapped < -loop / 2 { wrapped += loop }
         return wrapped
+    }
+
+    @inline(__always)
+    private static func unwrappedFramePosition(
+        _ wrappedPosition: Double,
+        nearest unwrappedTarget: Double,
+        loop: Double
+    ) -> Double {
+        guard wrappedPosition.isFinite,
+              unwrappedTarget.isFinite,
+              loop.isFinite,
+              loop > 0 else { return 0 }
+        let revolution = ((unwrappedTarget - wrappedPosition) / loop).rounded()
+        return wrappedPosition + revolution * loop
     }
 
     /// First 5 ms RMS block containing sustained audible content. This is the

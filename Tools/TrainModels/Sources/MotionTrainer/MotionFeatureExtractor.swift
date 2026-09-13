@@ -197,76 +197,12 @@ public struct MotionFeatureExtractor: Sendable {
     // MARK: - Vision
 
     private func makeMotionFrame(from image: CGImage, timestamp: Double) -> ScratchMotionFrame {
-        let request = VNDetectHumanHandPoseRequest()
-        request.maximumHandCount = configuration.maximumHandCount
-
-        let handler = VNImageRequestHandler(cgImage: image, orientation: .up, options: [:])
-        do {
-            try handler.perform([request])
-        } catch {
-            return ScratchMotionFrame(timestamp: timestamp)
-        }
-
-        let observations = (request.results ?? [])
-            .sorted { $0.confidence > $1.confidence }
-
-        guard let dominant = observations.first else {
-            return ScratchMotionFrame(timestamp: timestamp)
-        }
-
-        let dominantPoints = recognizedPoints(for: dominant)
-        let secondaryWrist: CGPoint? = observations.dropFirst().first.flatMap { secondary in
-            recognizedPoints(for: secondary).wrist
-        }
-
-        let primaryHandPoint = dominantPoints.indexTip ?? dominantPoints.wrist
-
-        return ScratchMotionFrame(
+        // Preserve the CLI's existing nil-observation fallback on Vision errors.
+        (try? ScratchHandPoseFrameExtractor.frame(
+            from: image,
             timestamp: timestamp,
-            dominantHand: primaryHandPoint,
-            recordEdgeAngle: nil,
-            crossfaderPosition: nil,
-            dominantHandWrist: dominantPoints.wrist,
-            dominantHandIndexTip: dominantPoints.indexTip,
-            dominantHandThumbTip: dominantPoints.thumbTip,
-            dominantHandMiddleTip: dominantPoints.middleTip,
-            dominantHandConfidence: dominant.confidence,
-            secondaryHandWrist: secondaryWrist,
-            recordCenter: nil
-        )
-    }
-
-    private struct DominantPoints {
-        var wrist: CGPoint?
-        var indexTip: CGPoint?
-        var thumbTip: CGPoint?
-        var middleTip: CGPoint?
-    }
-
-    private func recognizedPoints(for observation: VNHumanHandPoseObservation) -> DominantPoints {
-        var points = DominantPoints()
-        if let wrist = try? observation.recognizedPoint(.wrist) {
-            points.wrist = topLeftPoint(from: wrist)
-        }
-        if let index = try? observation.recognizedPoint(.indexTip) {
-            points.indexTip = topLeftPoint(from: index)
-        }
-        if let thumb = try? observation.recognizedPoint(.thumbTip) {
-            points.thumbTip = topLeftPoint(from: thumb)
-        }
-        if let middle = try? observation.recognizedPoint(.middleTip) {
-            points.middleTip = topLeftPoint(from: middle)
-        }
-        return points
-    }
-
-    /// Vision returns normalized points with a bottom-left origin and a
-    /// confidence in `[0, 1]`. Drop low-confidence detections (they're
-    /// usually off-image extrapolations) and flip y so callers see
-    /// top-left-origin coordinates that match CGImage / SwiftUI.
-    private func topLeftPoint(from point: VNRecognizedPoint) -> CGPoint? {
-        guard point.confidence > 0 else { return nil }
-        return CGPoint(x: point.location.x, y: 1.0 - point.location.y)
+            maximumHandCount: configuration.maximumHandCount
+        )) ?? ScratchMotionFrame(timestamp: timestamp)
     }
 
     // MARK: - Asset duration (sync)

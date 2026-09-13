@@ -562,18 +562,79 @@ struct LaneWiringTests {
         #expect(startBody.contains("configureDemoPlayback()"))
         #expect(startBody.contains("audioEngine.startAnalyzing(for: activeScratch)"))
         let demoBranch = try sliceBetween(startBody,
-            from: "if practiceAssistMode == .demo {", to: "} else {")
+            from: "if isDemoAudioMode {", to: "} else {")
         #expect(demoBranch.contains("demoPlayer.play()"))
         #expect(!demoBranch.contains("startAnalyzing"))
     }
 
-    @Test("A missing or invalid reel manifest falls back gracefully")
+    @Test("iOS Baby Demo selects the exact BBB audio and motion before the legacy reel")
+    func babyDemoUsesExactBBBReference() throws {
+        let source = try practiceSource()
+        let configuration = try sliceBetween(source,
+            from: "private func configureDemoPlayback()",
+            to: "private func loadDemoReelTimeline()")
+
+        #expect(configuration.contains("ScratchNotation.babyScratchDemo != nil"))
+        #expect(configuration.contains("demoPlayer.configure(with: coachInstruction)"))
+        #expect(configuration.contains("return"))
+        #expect(configuration.range(of: "demoPlayer.configure(with: coachInstruction)")!.lowerBound
+            < configuration.range(of: "loadDemoReelTimeline()")!.lowerBound)
+
+        let lane = try sliceBetween(source,
+            from: "private var activeLaneTargetNotation",
+            to: "private func notationLanePanel")
+        #expect(lane.contains("ScratchNotation.babyScratchDemo ?? targetNotation"))
+        #expect(lane.contains("ScratchLabDemoSessionBuilder.demoBPM"))
+    }
+
+    @Test("A future non-Baby reel can still fall back gracefully")
     func fallbackPathExists() throws {
         let source = try practiceSource()
         #expect(source.contains("demoReel = demoPlayer.isAudioAvailable ? reel : nil"))
         #expect(source.contains("demoPlayer.configure(with: coachInstruction)"))
-        // The demo fallback still drives a lane — from the demo audio.
-        #expect(source.contains("// Reel manifest missing/invalid"))
+        #expect(source.contains("PracticeReelTimeline.loadBundled"))
+    }
+
+    @Test("The static iOS launch screen uses the compact launch-only logo")
+    func launchScreenUsesCompactLogo() throws {
+        let plistURL = reelTestsRepoRoot().appendingPathComponent("ScratchLab/Info.plist")
+        let data = try Data(contentsOf: plistURL)
+        let root = try #require(
+            PropertyListSerialization.propertyList(from: data, format: nil) as? [String: Any]
+        )
+        let launch = try #require(root["UILaunchScreen"] as? [String: Any])
+
+        #expect(launch["UIColorName"] as? String == "LaunchBackground")
+        #expect(launch["UIImageName"] as? String == "ScratchLabLaunchLogo")
+
+        let logoURL = reelTestsRepoRoot().appendingPathComponent(
+            "ScratchLab/Assets.xcassets/ScratchLabLaunchLogo.imageset/ScratchLabLaunchLogo.svg"
+        )
+        let logo = try String(contentsOf: logoURL, encoding: .utf8)
+        #expect(logo.contains("width=\"240\" height=\"240\""))
+        #expect(logo.contains("viewBox=\"0 0 240 240\""))
+    }
+
+    @Test("The SwiftUI splash renders before heavyweight iOS services are constructed")
+    func swiftUISplashWrapsTheRootServiceContainer() throws {
+        let appURL = reelTestsRepoRoot().appendingPathComponent("ScratchLab/ScratchLabApp.swift")
+        let source = try String(contentsOf: appURL, encoding: .utf8)
+        let launchContainer = try sliceBetween(
+            source,
+            from: "private struct AppLaunchContainerView: View",
+            to: "private struct RootContainerView: View"
+        )
+        let contentView = try sliceBetween(
+            source,
+            from: "struct ContentView: View",
+            to: "// MARK: - Splash Screen"
+        )
+
+        #expect(source.contains("WindowGroup {\n            AppLaunchContainerView()"))
+        #expect(launchContainer.contains("if showSplash"))
+        #expect(launchContainer.contains("SplashView(showSplash: $showSplash)"))
+        #expect(launchContainer.contains("} else {\n                RootContainerView()"))
+        #expect(!contentView.contains("@State private var showSplash"))
     }
 
     @Test("Guided keeps its crossfader cue layer")
@@ -1080,7 +1141,7 @@ struct ScratchMotionRendererTests {
                 != ScratchMotionRenderer.Style.target.backwardColor)
     }
 
-    @Test("Holds draw no line — no visible centre spine across the lane")
+    @Test("Legacy padding holds stay hidden; canonical observed holds draw a line")
     func holdsRenderNoCentreSpine() throws {
         let source = try rendererSource()
         // The geometry still produces hold segments (lead-in, inter-stroke
@@ -1090,12 +1151,22 @@ struct ScratchMotionRendererTests {
         // visually splitting the chart into two notation half-lanes
         // flanking a centre spine.
         //
-        // The notation-line loop now filters out holds before drawing.
+        // The renderer consumes the evidence-aware policy, preserving the
+        // legacy padding rule while allowing real canonical platter holds.
         let lineLoop = try sliceBetween(source,
             from: "// 2. The notation line",
             to: "// 3.")
-        #expect(lineLoop.contains("where !item.segment.isHold"))
-        // No alternate hold-drawing branch remains.
+        #expect(lineLoop.contains("where item.segment.drawsLine"))
+        let padding = MotionSegment(kind: .hold, startTime: 0, endTime: 1,
+            startPosition: 0.5, endPosition: 0.5, speed: .medium, isGhost: false)
+        #expect(!padding.drawsLine)
+        for evidenceStyle in [MotionSegment.EvidenceStyle.open, .closed, .unknownFader] {
+            var observed = padding
+            observed.evidenceStyle = evidenceStyle
+            #expect(observed.drawsLine)
+            #expect(observed.startPosition == observed.endPosition)
+        }
+        // No separate hold renderer or legacy hold-only tuning was added.
         #expect(!lineLoop.contains("if item.segment.isHold"))
         // The renderer no longer needs the hold-only opacity / width-scale
         // tuning constants that drove the old centre baseline.
@@ -1118,6 +1189,9 @@ struct ScratchMotionRendererTests {
         // The dedupe machinery from the new every-junction logic is in place.
         #expect(block.contains("junctionTimeEpsilon"))
         #expect(block.contains("junctionPositionEpsilon"))
+        // Canonical platter holds/curve points must not acquire the legacy
+        // junction discs; fader glyphs live in the independent fader lane.
+        #expect(block.contains("$0.segment.evidenceStyle == .legacy"))
         // Each segment contributes both endpoints — start times AND end
         // times are visited, so apexes, centre entries / exits and hold
         // endpoints all get a mark.

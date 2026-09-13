@@ -28,14 +28,58 @@ final class WatchMotionCaptureStore: NSObject, ObservableObject {
     @Published private(set) var isWatchReachable = false
     @Published private(set) var remoteCaptureState: RemoteCaptureState = .idle
     @Published private(set) var macAcknowledgedCaptureIDs: Set<UUID> = []
+    @Published private(set) var isMacConnected = false
+    @Published private(set) var activeRelayContext: WatchRelayTakeContext?
+    private var pendingRelayContext: WatchRelayTakeContext?
+    /// The Watch sends its final motion batch asynchronously, so its stop reply can arrive
+    /// first. Keep only that exact take authorized for a short drain window rather than
+    /// dropping the final batch after `activeRelayContext` is cleared.
+    private var recentlyEndedRelayContext: WatchRelayTakeContext?
+    private var finalLiveRelayContext: WatchRelayTakeContext?
+    @Published private(set) var relayInterruptionReason: String?
+    @Published private(set) var hadRequiredRelayConnections = false
+    @Published private(set) var latestLiveMotionBatchAt: Date?
 
-    var onImportedCapture: ((ImportedWatchMotionCapture) -> Void)?
+    var onImportedCapture: ((ImportedWatchMotionCapture) -> Void)? {
+        didSet {
+            guard let onImportedCapture else { return }
+            let pending = pendingImportNotifications
+            pendingImportNotifications.removeAll()
+            pending.forEach(onImportedCapture)
+        }
+    }
+    // Startup recovery can finish before the app installs its relay callback.
+    private var pendingImportNotifications: [ImportedWatchMotionCapture] = []
+    /// Handles Start/Stop Take requests initiated on Apple Watch. The iPhone
+    /// capture view installs this only while its real guided-capture state
+    /// machine is on screen.
+    var onPhoneCaptureCommand: ((PhoneCaptureCommandPayload, @escaping (WatchCaptureControlReply) -> Void) -> Void)?
     /// (isPaired, isInstalled, isReachable) — fired whenever the local WCSession's view of the
     /// watch changes, so the Mac bridge can relay a fresh snapshot over MultipeerConnectivity.
     var onAvailabilityChange: ((Bool, Bool, Bool) -> Void)?
+    var onLiveMotionBatch: ((WatchMotionRelayBatch) -> Void)?
+    var onRelayLifecycle: ((WatchRelayLifecycleEvent, WatchRelayTakeContext?, String?) -> Void)?
+
+    var relayState: WatchRelayFlowState {
+        WatchRelayStateResolver.resolve(
+            isWatchReachable: isWatchReachable,
+            isMacConnected: isMacConnected,
+            activeContext: activeRelayContext,
+            hadRequiredConnections: hadRequiredRelayConnections,
+            interruptionReason: relayInterruptionReason
+        )
+    }
 
     private let fileManager = FileManager.default
     private let processingQueue = DispatchQueue(label: "com.scratchlab.watch-motion-import")
+    private let transferStagingStore: WatchTransferStagingStore
+    private let pendingWatchStopsURL: URL
+    private var pendingWatchStops = WatchPendingStopLedger()
+    private var pendingWatchStopsLoadFailed = false
+    private var pendingWatchStopPersistenceFailed = false
+    private var stopCommandsInFlight: [String: UUID] = [:]
+    private var pendingStopRetry: DispatchWorkItem?
+    private var stopRetryAttemptsRemaining = 3
     private var hasActivatedWatchSession = false
     private let macAcknowledgedCaptureIDsDefaultsKey = "com.scratchlab.watch.macAcknowledgedCaptureIDs"
 
@@ -51,13 +95,20 @@ final class WatchMotionCaptureStore: NSObject, ObservableObject {
     }
 
     override init() {
+        let applicationSupportURL = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first
+            ?? FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first!
+        transferStagingStore = WatchTransferStagingStore(applicationSupportURL: applicationSupportURL)
+        pendingWatchStopsURL = applicationSupportURL
+            .appendingPathComponent("ScratchLab/WatchControl/pending-stops.json")
         super.init()
+        restorePendingWatchStops()
         createCaptureDirectoryIfNeeded()
         reconcileStoredCaptures()
         loadStoredSessions()
         if let stored = UserDefaults.standard.stringArray(forKey: macAcknowledgedCaptureIDsDefaultsKey) {
             macAcknowledgedCaptureIDs = Set(stored.compactMap(UUID.init(uuidString:)))
         }
+        checkForPendingImports()
         activateIfNeeded()
     }
 
@@ -113,36 +164,19 @@ final class WatchMotionCaptureStore: NSObject, ObservableObject {
 
     func checkForPendingImports() {
         processingQueue.async {
-            let pendingFiles = self.pendingTransferFileURLs()
-            guard !pendingFiles.isEmpty else { return }
-
-            var importedCapture: ImportedWatchMotionCapture?
-
-            for fileURL in pendingFiles {
+            // Preserve the existing inbox recovery path, but own every file before
+            // decoding it. All decoding below reads app-owned staging URLs only.
+            for fileURL in self.pendingTransferFileURLs() {
                 do {
-                    let latestImportedCapture = try self.importCaptureFile(
-                        from: fileURL,
-                        metadataName: nil,
-                        removeSourceAfterImport: true
-                    )
-                    self.log("decode/import succeeded (pending): id=\(latestImportedCapture.id) sessionID=\(latestImportedCapture.session.sessionID) takeID=\(latestImportedCapture.session.takeID ?? "nil")")
-                    importedCapture = importedCapture.map {
-                        $0.session.deviceRecordedAtStart >= latestImportedCapture.session.deviceRecordedAtStart ? $0 : latestImportedCapture
-                    } ?? latestImportedCapture
+                    _ = try self.transferStagingStore.stageReceivedFile(at: fileURL, metadataName: nil)
                 } catch {
-                    self.log("decode/import FAILED (pending) for \(fileURL.lastPathComponent): \(error.localizedDescription)")
-                    continue
+                    self.publishImportFailure("Watch inbox staging failed for \(fileURL.lastPathComponent): \(error.localizedDescription)")
                 }
             }
-
-            guard let importedCapture else { return }
-
-            DispatchQueue.main.async {
-                self.reconcileStoredCaptures()
-                self.loadStoredSessions()
-                self.lastImportStatus = "Imported pending watch capture from \(self.formatDate(importedCapture.session.deviceRecordedAtStart))."
-                self.onImportedCapture?(importedCapture)
-            }
+            self.transferStagingStore.recoverPendingTransfers(
+                onImported: self.publishImportedCapture,
+                onFailure: self.publishImportFailure
+            )
         }
     }
 
@@ -168,16 +202,32 @@ final class WatchMotionCaptureStore: NSObject, ObservableObject {
     func requestRemoteCaptureStart(
         sessionID: String,
         takeID: String,
+        takeNumber: Int? = nil,
+        watchWrist: String? = nil,
         commandID: String = UUID().uuidString.lowercased(),
         completion: @escaping (WatchCaptureControlReply) -> Void
     ) {
+        let payload = WatchCaptureCommandPayload(
+            commandID: commandID,
+            command: .start,
+            sessionID: sessionID,
+            takeID: takeID,
+            takeNumber: takeNumber,
+            watchWrist: watchWrist
+        )
+        guard !pendingWatchStopsLoadFailed, pendingWatchStops.commands.isEmpty else {
+            retryPendingWatchStops(resetBudget: true)
+            let detail = pendingWatchStopsLoadFailed
+                ? "Saved Watch Stop data could not be read. Stop the Watch manually and record without linked Watch motion until the phone's saved Stop data is repaired."
+                : "A previous Watch take still needs to stop. Wake ScratchLab on the Watch; recording can continue without linked Watch motion until that stop is confirmed."
+            completion(WatchCaptureControlReply(commandID: payload.commandID,
+                sessionID: payload.sessionID, takeID: payload.takeID,
+                syncState: .unavailable, detail: detail))
+            return
+        }
+        pendingRelayContext = WatchRelayTakeContext(payload: payload)
         requestRemoteCaptureCommand(
-            WatchCaptureCommandPayload(
-                commandID: commandID,
-                command: .start,
-                sessionID: sessionID,
-                takeID: takeID
-            ),
+            payload,
             completion: completion
         )
     }
@@ -188,15 +238,124 @@ final class WatchMotionCaptureStore: NSObject, ObservableObject {
         commandID: String = UUID().uuidString.lowercased(),
         completion: @escaping (WatchCaptureControlReply) -> Void
     ) {
-        requestRemoteCaptureCommand(
-            WatchCaptureCommandPayload(
-                commandID: commandID,
-                command: .stop,
-                sessionID: sessionID,
-                takeID: takeID
-            ),
-            completion: completion
+        let payload = WatchCaptureCommandPayload(commandID: commandID, command: .stop,
+            sessionID: sessionID, takeID: takeID)
+        guard pendingWatchStops.retain(payload) else {
+            completion(WatchCaptureControlReply(commandID: commandID, sessionID: sessionID,
+                takeID: takeID, syncState: .failed,
+                detail: "A queued Watch Stop requires an exact session and take.", stopOutcome: .identityRejected))
+            return
+        }
+        persistPendingWatchStops()
+        stopRetryAttemptsRemaining = 3
+        sendWatchStopAttempt(payload, completion: completion)
+    }
+
+    /// Durable stop intent uses the existing message transport. It remains
+    /// pending through sleep/relaunch and is retried only for its original take.
+    private func restorePendingWatchStops() {
+        guard fileManager.fileExists(atPath: pendingWatchStopsURL.path) else { return }
+        do {
+            let restored = try JSONDecoder().decode(WatchPendingStopLedger.self,
+                from: Data(contentsOf: pendingWatchStopsURL))
+            guard restored.hasValidIdentities else {
+                throw CocoaError(.fileReadCorruptFile)
+            }
+            pendingWatchStops = restored
+        } catch {
+            pendingWatchStopsLoadFailed = true
+            lastImportStatus = "Saved Watch Stop data could not be read. Stop the Watch manually; linked motion remains unavailable until the saved Stop data is repaired."
+        }
+    }
+
+    private func persistPendingWatchStops() {
+        guard !pendingWatchStopsLoadFailed else { pendingWatchStopPersistenceFailed = true; return }
+        do {
+            try fileManager.createDirectory(at: pendingWatchStopsURL.deletingLastPathComponent(),
+                withIntermediateDirectories: true)
+            try JSONEncoder().encode(pendingWatchStops).write(to: pendingWatchStopsURL, options: .atomic)
+            pendingWatchStopPersistenceFailed = false
+        } catch {
+            pendingWatchStopPersistenceFailed = true
+            lastImportStatus = "Watch Stop could not be saved for retry. Keep the phone app open and stop the Watch manually if it remains recording."
+        }
+    }
+
+    private func sendWatchStopAttempt(
+        _ payload: WatchCaptureCommandPayload,
+        completion: @escaping (WatchCaptureControlReply) -> Void
+    ) {
+        let attemptID = UUID()
+        stopCommandsInFlight[payload.commandID] = attemptID
+        requestRemoteCaptureCommand(payload) { [weak self] reply in
+            guard let self else { completion(reply); return }
+            if self.stopCommandsInFlight[payload.commandID] == attemptID {
+                self.stopCommandsInFlight.removeValue(forKey: payload.commandID)
+            }
+            if self.pendingWatchStops.settle(reply, for: payload) {
+                self.persistPendingWatchStops()
+            }
+            completion(reply)
+            self.schedulePendingWatchStopRetry()
+        }
+        // A missing WC callback must not permanently strand the durable queue.
+        DispatchQueue.main.asyncAfter(deadline: .now() + 3) { [weak self] in
+            guard let self, self.stopCommandsInFlight[payload.commandID] == attemptID else { return }
+            self.stopCommandsInFlight.removeValue(forKey: payload.commandID)
+            self.schedulePendingWatchStopRetry()
+        }
+    }
+
+    private func retryPendingWatchStops(resetBudget: Bool) {
+        if resetBudget { stopRetryAttemptsRemaining = 3 }
+        guard let watchSession, watchSession.activationState == .activated,
+              watchSession.isWatchAppInstalled, watchSession.isReachable,
+              stopRetryAttemptsRemaining > 0 else { return }
+        let commands = pendingWatchStops.commands.filter { stopCommandsInFlight[$0.commandID] == nil }
+        guard !commands.isEmpty else { return }
+        stopRetryAttemptsRemaining -= 1
+        for payload in commands {
+            sendWatchStopAttempt(payload) { _ in }
+        }
+    }
+
+    private func schedulePendingWatchStopRetry() {
+        guard pendingStopRetry == nil, !pendingWatchStops.commands.isEmpty,
+              stopRetryAttemptsRemaining > 0, watchSession?.isReachable == true else { return }
+        let retry = DispatchWorkItem { [weak self] in
+            guard let self else { return }
+            self.pendingStopRetry = nil
+            self.retryPendingWatchStops(resetBudget: false)
+        }
+        pendingStopRetry = retry
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1, execute: retry)
+    }
+
+    func updateMacConnection(isConnected: Bool) {
+        let wasConnected = isMacConnected
+        isMacConnected = isConnected
+        reconcileRelayHealth(
+            lostConnectionDetail: wasConnected && !isConnected ? "Mac connection was lost." : nil
         )
+        guard isConnected else { return }
+        onRelayLifecycle?(wasConnected ? .reconnect : .hello, activeRelayContext, nil)
+        publishReadyLifecycleIfNeeded()
+    }
+
+    func retryRelayConnection() {
+        activateIfNeeded()
+        relayInterruptionReason = nil
+        reconcileRelayHealth(lostConnectionDetail: nil)
+        onAvailabilityChange?(isWatchPaired, isWatchAppInstalled, isWatchReachable)
+        if isMacConnected {
+            onRelayLifecycle?(.reconnect, activeRelayContext, nil)
+            publishReadyLifecycleIfNeeded()
+        }
+    }
+
+    func sendRelayHeartbeat() {
+        guard isMacConnected else { return }
+        onRelayLifecycle?(.heartbeat, activeRelayContext, nil)
     }
 
     private func loadStoredSessions() {
@@ -255,6 +414,13 @@ final class WatchMotionCaptureStore: NSObject, ObservableObject {
         print("[WATCH-DEBUG] watch session state paired=\(isWatchPaired) installed=\(isWatchAppInstalled) reachable=\(isWatchReachable)")
         #endif
         onAvailabilityChange?(isWatchPaired, isWatchAppInstalled, isWatchReachable)
+        reconcileRelayHealth(
+            lostConnectionDetail: !isWatchReachable && activeRelayContext != nil
+                ? "Apple Watch connection was lost during the active take."
+                : nil
+        )
+        publishReadyLifecycleIfNeeded()
+        retryPendingWatchStops(resetBudget: true)
 
         if !session.isPaired {
             connectionSummary = "Pair your watch with this device to capture wrist motion."
@@ -283,14 +449,15 @@ final class WatchMotionCaptureStore: NSObject, ObservableObject {
 
         guard let watchSession else {
             let detail = "Watch control is unavailable on this device."
-            remoteCaptureState = .unavailable(detail)
+            if ownsRelayControlResult(payload) { remoteCaptureState = .unavailable(detail) }
             completion(
                 WatchCaptureControlReply(
                     commandID: payload.commandID,
                     sessionID: payload.sessionID,
                     takeID: payload.takeID,
                     syncState: .unavailable,
-                    detail: detail
+                    detail: detail,
+                    stopOutcome: payload.command == .stop ? .unreachable : nil
                 )
             )
             return
@@ -301,14 +468,15 @@ final class WatchMotionCaptureStore: NSObject, ObservableObject {
 
             guard activationRetriesRemaining > 0 else {
                 let detail = "Watch connectivity is still activating."
-                remoteCaptureState = .unavailable(detail)
+                if ownsRelayControlResult(payload) { remoteCaptureState = .unavailable(detail) }
                 completion(
                     WatchCaptureControlReply(
                         commandID: payload.commandID,
                         sessionID: payload.sessionID,
                         takeID: payload.takeID,
                         syncState: .unavailable,
-                        detail: detail
+                        detail: detail,
+                        stopOutcome: payload.command == .stop ? .unreachable : nil
                     )
                 )
                 return
@@ -326,44 +494,54 @@ final class WatchMotionCaptureStore: NSObject, ObservableObject {
 
         guard watchSession.isWatchAppInstalled else {
             let detail = "Install ScratchLab on the watch before remote capture."
-            remoteCaptureState = .unavailable(detail)
+            if ownsRelayControlResult(payload) { remoteCaptureState = .unavailable(detail) }
             completion(
                 WatchCaptureControlReply(
                     commandID: payload.commandID,
                     sessionID: payload.sessionID,
                     takeID: payload.takeID,
                     syncState: .unavailable,
-                    detail: detail
+                    detail: detail,
+                    stopOutcome: payload.command == .stop ? .unreachable : nil
                 )
             )
             return
         }
 
         guard watchSession.isReachable else {
-            let detail = "Open ScratchLab on the watch so this device can control motion capture."
-            remoteCaptureState = .unavailable(detail)
+            let detail = payload.command == .stop
+                ? (pendingWatchStopPersistenceFailed
+                    ? "The Watch is unreachable and may still be recording. Keep the phone app open to retry Stop, or stop it on the Watch."
+                    : "The Watch is unreachable and may still be recording. Stop is saved and will retry when ScratchLab on the Watch wakes.")
+                : "Open ScratchLab on the watch so this device can control motion capture."
+            if ownsRelayControlResult(payload) { remoteCaptureState = .unavailable(detail) }
             completion(
                 WatchCaptureControlReply(
                     commandID: payload.commandID,
                     sessionID: payload.sessionID,
                     takeID: payload.takeID,
                     syncState: .unavailable,
-                    detail: detail
+                    detail: detail,
+                    stopOutcome: payload.command == .stop ? .unreachable : nil
                 )
             )
             return
         }
 
-        remoteCaptureState = .requested
+        if ownsRelayControlResult(payload) { remoteCaptureState = .requested }
         let formatter = ISO8601DateFormatter()
-        let message: [String: Any] = [
+        var message: [String: Any] = [
             "kind": WatchCaptureCommandPayload.packetKind,
             "commandID": payload.commandID,
             "command": payload.command.rawValue,
             "sessionID": payload.sessionID,
             "takeID": payload.takeID ?? "",
+            "watchWrist": payload.watchWrist ?? "",
             "requestedAt": formatter.string(from: payload.requestedAt)
         ]
+        if let takeNumber = payload.takeNumber {
+            message["takeNumber"] = takeNumber
+        }
         watchSession.sendMessage(message, replyHandler: { reply in
             let syncState = CaptureWatchSyncState(rawValue: reply["syncState"] as? String ?? "")
                 ?? Self.legacySyncState(for: reply["status"] as? String)
@@ -371,34 +549,113 @@ final class WatchMotionCaptureStore: NSObject, ObservableObject {
             let detail = reply["detail"] as? String
             let acknowledgedAt = formatter.date(from: reply["acknowledgedAt"] as? String ?? "")
             let takeID = (reply["takeID"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines)
+            // Additive key from a Watch that knows about stop outcomes. A
+            // Watch that does not send it leaves this `nil`, and the Mac
+            // derives the outcome from `syncState` instead.
+            let reportedStopOutcome = (reply["stopOutcome"] as? String)
+                .flatMap(CaptureWatchStopOutcome.init(rawValue:))
             let controlReply = WatchCaptureControlReply(
                 commandID: reply["commandID"] as? String ?? payload.commandID,
                 sessionID: reply["sessionID"] as? String ?? payload.sessionID,
                 takeID: (takeID?.isEmpty == true) ? nil : takeID,
                 syncState: syncState,
                 detail: detail,
-                acknowledgedAt: acknowledgedAt
+                acknowledgedAt: acknowledgedAt,
+                stopOutcome: payload.command == .stop ? reportedStopOutcome : nil
             )
 
             DispatchQueue.main.async {
-                self.remoteCaptureState = Self.remoteState(for: controlReply)
+                if self.ownsRelayControlResult(payload),
+                   controlReply.sessionID == payload.sessionID, controlReply.takeID == payload.takeID {
+                    self.remoteCaptureState = Self.remoteState(for: controlReply)
+                    self.applyRelayControlResult(payload: payload, reply: controlReply)
+                }
                 completion(controlReply)
             }
         }, errorHandler: { error in
             let detail = error.localizedDescription
             DispatchQueue.main.async {
-                self.remoteCaptureState = .failed(detail)
-                completion(
-                    WatchCaptureControlReply(
+                if self.ownsRelayControlResult(payload) { self.remoteCaptureState = .failed(detail) }
+                let reply = WatchCaptureControlReply(
                         commandID: payload.commandID,
                         sessionID: payload.sessionID,
                         takeID: payload.takeID,
                         syncState: .failed,
-                        detail: detail
+                        detail: detail,
+                        stopOutcome: payload.command == .stop ? .failed : nil
                     )
-                )
+                self.applyRelayControlResult(payload: payload, reply: reply)
+                completion(reply)
             }
         })
+    }
+
+    private func ownsRelayControlResult(_ payload: WatchCaptureCommandPayload) -> Bool {
+        guard let current = pendingRelayContext ?? activeRelayContext else { return true }
+        return current.sessionID == payload.sessionID && current.takeID == payload.takeID
+    }
+
+    private func applyRelayControlResult(
+        payload: WatchCaptureCommandPayload,
+        reply: WatchCaptureControlReply
+    ) {
+        guard ownsRelayControlResult(payload),
+              reply.sessionID == payload.sessionID, reply.takeID == payload.takeID else { return }
+        switch payload.command {
+        case .start:
+            if reply.syncState == .acknowledged, let context = WatchRelayTakeContext(payload: payload) {
+                pendingRelayContext = nil
+                recentlyEndedRelayContext = nil
+                finalLiveRelayContext = nil
+                activeRelayContext = context
+                relayInterruptionReason = nil
+                hadRequiredRelayConnections = true
+                onRelayLifecycle?(.takeBegin, context, nil)
+            } else if reply.syncState != .requested {
+                pendingRelayContext = nil
+                let detail = reply.detail ?? "Watch motion capture did not acknowledge."
+                relayInterruptionReason = detail
+                onRelayLifecycle?(.error, WatchRelayTakeContext(payload: payload), detail)
+            }
+        case .stop:
+            if reply.syncState == .notRequested {
+                pendingRelayContext = nil
+                let completedContext = activeRelayContext
+                if let completedContext, finalLiveRelayContext != completedContext {
+                    recentlyEndedRelayContext = completedContext
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 5) { [weak self] in
+                        guard self?.recentlyEndedRelayContext == completedContext else { return }
+                        self?.recentlyEndedRelayContext = nil
+                    }
+                } else {
+                    recentlyEndedRelayContext = nil
+                }
+                onRelayLifecycle?(.takeEnd, completedContext, nil)
+                activeRelayContext = nil
+                relayInterruptionReason = nil
+                publishReadyLifecycleIfNeeded()
+            } else if reply.syncState != .requested {
+                let detail = reply.detail ?? "Watch motion capture did not stop cleanly."
+                relayInterruptionReason = detail
+                onRelayLifecycle?(.error, activeRelayContext, detail)
+            }
+        }
+    }
+
+    private func reconcileRelayHealth(lostConnectionDetail: String?) {
+        let hasRequiredConnections = isMacConnected && isWatchReachable
+        if hasRequiredConnections {
+            hadRequiredRelayConnections = true
+            relayInterruptionReason = nil
+        } else if let lostConnectionDetail, hadRequiredRelayConnections || activeRelayContext != nil {
+            relayInterruptionReason = lostConnectionDetail
+            onRelayLifecycle?(.error, activeRelayContext, lostConnectionDetail)
+        }
+    }
+
+    private func publishReadyLifecycleIfNeeded() {
+        guard isMacConnected, isWatchReachable, activeRelayContext == nil else { return }
+        onRelayLifecycle?(.relayReady, nil, nil)
     }
 
     private static func remoteState(for reply: WatchCaptureControlReply) -> RemoteCaptureState {
@@ -433,58 +690,65 @@ final class WatchMotionCaptureStore: NSObject, ObservableObject {
         }
     }
 
-    private func importTransferredFile(_ sessionFile: WCSessionFile) {
+    private func decodePhoneCaptureCommand(from message: [String: Any]) -> PhoneCaptureCommandPayload? {
+        guard message["kind"] as? String == PhoneCaptureCommandPayload.packetKind,
+              let command = PhoneCaptureCommandPayload.Command(
+                rawValue: message["command"] as? String ?? ""
+              ) else {
+            return nil
+        }
+        let requestedAt = ISO8601DateFormatter().date(
+            from: message["requestedAt"] as? String ?? ""
+        ) ?? Date()
+        return PhoneCaptureCommandPayload(
+            commandID: message["commandID"] as? String ?? UUID().uuidString.lowercased(),
+            command: command,
+            requestedAt: requestedAt
+        )
+    }
+
+    private func phoneCaptureReplyDictionary(_ reply: WatchCaptureControlReply) -> [String: Any] {
+        let formatter = ISO8601DateFormatter()
+        return [
+            "kind": WatchCaptureControlReply.packetKind,
+            "commandID": reply.commandID,
+            "sessionID": reply.sessionID,
+            "takeID": reply.takeID ?? "",
+            "syncState": reply.syncState.rawValue,
+            "detail": reply.detail ?? "",
+            "acknowledgedAt": formatter.string(from: reply.acknowledgedAt ?? Date())
+        ]
+    }
+
+    private func importStagedTransfer(at stagedURL: URL) {
         processingQueue.async {
-            do {
-                let importedCapture = try self.importCaptureFile(
-                    from: sessionFile.fileURL,
-                    metadataName: sessionFile.metadata?["fileName"] as? String,
-                    removeSourceAfterImport: false
-                )
+            self.transferStagingStore.processStagedFile(
+                at: stagedURL,
+                onImported: self.publishImportedCapture,
+                onFailure: self.publishImportFailure
+            )
+        }
+    }
 
-                self.log("decode/import succeeded: id=\(importedCapture.id) sessionID=\(importedCapture.session.sessionID) takeID=\(importedCapture.session.takeID ?? "nil")")
-
-                DispatchQueue.main.async {
-                    self.reconcileStoredCaptures()
-                    self.importedSessions.removeAll { $0.id == importedCapture.id }
-                    self.loadStoredSessions()
-                    self.lastImportStatus = "Imported \(self.formatDate(importedCapture.session.deviceRecordedAtStart)) from your watch."
-                    self.onImportedCapture?(importedCapture)
-                }
-            } catch {
-                self.log("decode/import FAILED for \(sessionFile.fileURL.lastPathComponent): \(error.localizedDescription)")
-
-                DispatchQueue.main.async {
-                    self.lastImportStatus = "Watch transfer failed to import. Open the watch app and try stopping another capture."
-                }
+    private func publishImportedCapture(_ durableCapture: WatchTransferStagingStore.ImportedCapture) {
+        let importedCapture = ImportedWatchMotionCapture(fileURL: durableCapture.fileURL, session: durableCapture.session)
+        DispatchQueue.main.async {
+            self.reconcileStoredCaptures()
+            self.loadStoredSessions()
+            self.lastImportStatus = "Imported \(self.formatDate(importedCapture.session.deviceRecordedAtStart)) from your watch."
+            if let onImportedCapture = self.onImportedCapture {
+                onImportedCapture(importedCapture)
+            } else {
+                self.pendingImportNotifications.append(importedCapture)
             }
         }
     }
 
-    private func importCaptureFile(from sourceURL: URL, metadataName: String?, removeSourceAfterImport: Bool) throws -> ImportedWatchMotionCapture {
-        let destinationURL = uniqueCaptureURL(for: sourceURL, metadataName: metadataName)
-
-        if fileManager.fileExists(atPath: destinationURL.path) {
-            try fileManager.removeItem(at: destinationURL)
-        }
-
-        try fileManager.copyItem(at: sourceURL, to: destinationURL)
-
-        guard let importedCapture = decodeCapture(at: destinationURL) else {
-            throw CocoaError(.fileReadCorruptFile)
-        }
-
-        if removeSourceAfterImport {
-            removeImportedSourceIfPossible(sourceURL)
-        }
-
-        return importedCapture
-    }
-
-    private func uniqueCaptureURL(for sourceURL: URL, metadataName: String?) -> URL {
-        let baseName = metadataName ?? sourceURL.lastPathComponent
-        let sanitizedName = baseName.replacingOccurrences(of: "/", with: "-")
-        return captureDirectoryURL.appendingPathComponent(sanitizedName)
+    private func publishImportFailure(_ message: String) {
+        // Observable in Release as well as through published store state; staged decode/import
+        // failures also have a persistent adjacent .error.txt diagnostic.
+        NSLog("[WatchImport] %@", message)
+        DispatchQueue.main.async { self.lastImportStatus = message }
     }
 
     private func pendingTransferFileURLs() -> [URL] {
@@ -503,24 +767,6 @@ final class WatchMotionCaptureStore: NSObject, ObservableObject {
             let lhsDate = (try? lhs.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate) ?? .distantPast
             let rhsDate = (try? rhs.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate) ?? .distantPast
             return lhsDate > rhsDate
-        }
-    }
-
-    private func removeImportedSourceIfPossible(_ sourceURL: URL) {
-        try? fileManager.removeItem(at: sourceURL)
-
-        var currentDirectory = sourceURL.deletingLastPathComponent()
-        while currentDirectory.path.hasPrefix(watchConnectivityInboxURL.path),
-              currentDirectory != watchConnectivityInboxURL {
-            let contents = (try? fileManager.contentsOfDirectory(
-                at: currentDirectory,
-                includingPropertiesForKeys: nil,
-                options: [.skipsHiddenFiles]
-            )) ?? []
-
-            guard contents.isEmpty else { break }
-            try? fileManager.removeItem(at: currentDirectory)
-            currentDirectory = currentDirectory.deletingLastPathComponent()
         }
     }
 
@@ -564,9 +810,7 @@ final class WatchMotionCaptureStore: NSObject, ObservableObject {
     }
 
     var captureDirectoryURL: URL {
-        let appSupportURL = fileManager.urls(for: .applicationSupportDirectory, in: .userDomainMask).first
-            ?? fileManager.urls(for: .documentDirectory, in: .userDomainMask).first!
-        return appSupportURL.appendingPathComponent("WatchMotionCaptures", isDirectory: true)
+        transferStagingStore.captureDirectoryURL
     }
 
     private var watchConnectivityInboxURL: URL {
@@ -618,11 +862,107 @@ extension WatchMotionCaptureStore: WCSessionDelegate {
         }
     }
 
+    func session(
+        _ session: WCSession,
+        didReceiveMessage message: [String: Any],
+        replyHandler: @escaping ([String: Any]) -> Void
+    ) {
+        guard let payload = decodePhoneCaptureCommand(from: message) else {
+            replyHandler([
+                "kind": WatchCaptureControlReply.packetKind,
+                "syncState": CaptureWatchSyncState.failed.rawValue,
+                "detail": "Unsupported watch control request."
+            ])
+            return
+        }
+
+        DispatchQueue.main.async {
+            guard let onPhoneCaptureCommand = self.onPhoneCaptureCommand else {
+                let reply = WatchCaptureControlReply(
+                    commandID: payload.commandID,
+                    sessionID: "",
+                    takeID: nil,
+                    syncState: .unavailable,
+                    detail: "Open Capture on iPhone and finish System Check before starting from Watch.",
+                    acknowledgedAt: Date()
+                )
+                replyHandler(self.phoneCaptureReplyDictionary(reply))
+                return
+            }
+
+            onPhoneCaptureCommand(payload) { reply in
+                replyHandler(self.phoneCaptureReplyDictionary(reply))
+            }
+        }
+    }
+
     func session(_ session: WCSession, didReceive file: WCSessionFile) {
         log("received file from watch: \(file.fileURL.lastPathComponent) metadata=\(file.metadata ?? [:])")
         #if DEBUG
         print("[WATCH-DEBUG] iPhone received watch file name=\(file.fileURL.lastPathComponent)")
         #endif
-        importTransferredFile(file)
+        do {
+            // WCSessionFile.fileURL expires when this delegate returns. Only the
+            // stable app-owned URL may cross into asynchronous work.
+            let stagedURL = try transferStagingStore.stageReceivedFile(
+                at: file.fileURL,
+                metadataName: file.metadata?["fileName"] as? String
+            )
+            importStagedTransfer(at: stagedURL)
+        } catch {
+            publishImportFailure("Watch receipt staging failed: \(error.localizedDescription)")
+        }
+    }
+
+    private func handleLiveMotionMessageData(
+        _ messageData: Data,
+        replyHandler: ((Data) -> Void)?
+    ) {
+        guard let batch = try? WatchMotionCaptureCodec.decoder.decode(
+            WatchMotionRelayBatch.self,
+            from: messageData
+        ) else {
+            replyHandler?(Data())
+            return
+        }
+
+        DispatchQueue.main.async {
+            let isAuthorized = batch.kind == WatchMotionRelayBatch.packetKind
+                && (batch.context == self.activeRelayContext
+                    || batch.context == self.pendingRelayContext
+                    || batch.context == self.recentlyEndedRelayContext)
+
+            if isAuthorized {
+                self.latestLiveMotionBatchAt = Date()
+                self.onLiveMotionBatch?(batch)
+                if batch.isFinal {
+                    self.finalLiveRelayContext = batch.context
+                    if self.recentlyEndedRelayContext == batch.context {
+                        self.recentlyEndedRelayContext = nil
+                    }
+                }
+            } else {
+                self.lastImportStatus = "Rejected stale or unknown Watch motion for \(batch.context.takeID)."
+            }
+
+            let acknowledgement = WatchMotionRelayAcknowledgement(
+                batch: batch,
+                accepted: isAuthorized
+            )
+            let acknowledgementData = (try? WatchMotionCaptureCodec.encoder.encode(acknowledgement)) ?? Data()
+            replyHandler?(acknowledgementData)
+        }
+    }
+
+    func session(_ session: WCSession, didReceiveMessageData messageData: Data) {
+        handleLiveMotionMessageData(messageData, replyHandler: nil)
+    }
+
+    func session(
+        _ session: WCSession,
+        didReceiveMessageData messageData: Data,
+        replyHandler: @escaping (Data) -> Void
+    ) {
+        handleLiveMotionMessageData(messageData, replyHandler: replyHandler)
     }
 }

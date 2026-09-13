@@ -8,8 +8,8 @@
 //
 // Scope guardrails (deliberate):
 // - Self-contained. `SampleManager` is iOS-only, so this resolver does NOT
-//   reference it; bundled `ScratchSamples/*.wav` are flattened into the bundle
-//   root and resolve directly as `<id>.wav` on both platforms.
+//   reference it; most bundled `ScratchSamples/*.wav` are flattened into the
+//   bundle root and resolve directly as `<id>.wav` on both platforms.
 // - Custom/imported samples (iOS `SampleManager`'s Documents/ScratchSamples)
 //   are not resolved here — neither of the consolidated call sites handled them.
 
@@ -17,26 +17,33 @@ import Foundation
 
 enum ScratchSampleResolver {
 
-    /// Sample IDs whose bundle path is not the flattened `<id>.wav` form. The
-    /// only such case today is the macOS DVS "Ahh" bootstrap, which reuses the
-    /// `VirtualPlatter/ahhh.wav` resource.
+    /// Sample IDs whose bundle path is not the flattened `<id>.wav` form.
+    /// Both Ahhh entry points intentionally use the approved Virtual Platter
+    /// recording so an older flattened resource cannot win bundle lookup.
     private static let subdirectoryPaths: [String: String] = [
+        "ahhh": "VirtualPlatter/ahhh.wav",
         "dvs_ahhh": "VirtualPlatter/ahhh.wav",
     ]
 
     /// Resolves a scratch sample ID to a playable bundle URL, or nil when the
     /// sample is unknown. The common case is a direct `<id>.wav` lookup against
     /// the flattened bundle root; a small set of IDs live in a subdirectory.
-    static func url(for sampleID: String) -> URL? {
+    static func url(
+        for sampleID: String,
+        resourceRoot: URL? = Bundle.main.resourceURL
+    ) -> URL? {
         guard !sampleID.isEmpty else { return nil }
 
-        if let url = Bundle.main.url(forResource: sampleID, withExtension: "wav") {
-            return url
+        if let path = Self.subdirectoryPaths[sampleID],
+           let root = resourceRoot {
+            let url = root.appendingPathComponent(path)
+            if FileManager.default.fileExists(atPath: url.path) {
+                return url
+            }
         }
 
-        if let path = Self.subdirectoryPaths[sampleID],
-           let root = Bundle.main.resourceURL {
-            let url = root.appendingPathComponent(path)
+        if let root = resourceRoot {
+            let url = root.appendingPathComponent("\(sampleID).wav")
             if FileManager.default.fileExists(atPath: url.path) {
                 return url
             }

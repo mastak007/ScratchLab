@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" width="240" height="240" viewBox="0 0 240 240" role="img" aria-labelledby="title desc">
+  <title id="title">ScratchLab launch symbol</title>
+  <desc id="desc">A compact centered ScratchLab symbol for the iOS launch screen.</desc>
+  <svg x="24" y="37" width="192" height="166" viewBox="120 70 784 680">
+    <g fill="none" stroke-linecap="round" stroke-linejoin="round">
+      <path d="M280 320 C325 185 420 125 512 125 C604 125 699 185 744 320" stroke="#E8E4DC" stroke-width="28"/>
+      <path d="M280 520 C330 655 425 700 512 700 C599 700 694 655 744 520" stroke="#0EA5E9" stroke-width="32"/>
+      <path d="M160 410 H230 L250 410 L270 374 L288 450 L310 334 L332 480 L356 346 L378 448 L400 390 L422 420 L450 410" stroke="#E8E4DC" stroke-width="15"/>
+      <path d="M574 410 H610 L630 382 L650 438 L680 315 L706 480 L735 350 L760 450 L784 410 H864" stroke="#0EA5E9" stroke-width="19"/>
+      <path d="M512 366 L556 410 L512 454 L468 410 Z" fill="#E8E4DC" stroke="none"/>
+    </g>
+  </svg>
+</svg>

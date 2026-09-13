@@ -9,11 +9,10 @@
 // Advanced's coarse Lock/Unlock + slider entry point — one calibration
 // model, three presentations.
 //
-// The manual "Edit Boxes" affordance is compiled only into Debug builds
-// (canonical consolidation, 2026-08-22, per Phase 2 direction): auto-detected
-// deck/mixer zones remain visible at `lockedOpacity` in every build for AR
-// notation alignment, but hand-adjusting them is a developer calibration
-// tool, not a beta-tester-facing control.
+// The manual "Edit Boxes" affordance is available in normal builds so macOS
+// matches the iOS calibration interaction. Editing remains disabled while a
+// take is recording, and all changes persist through the shared calibration
+// model.
 
 import SwiftUI
 
@@ -29,14 +28,11 @@ struct CalibrationCameraOverlay: View {
                 // off here whenever a take is actively recording.
                 .allowsHitTesting(!captureEngine.isRoutineRecording)
 
-            #if DEBUG
             editBoxesControl
                 .padding(10)
-            #endif
         }
     }
 
-    #if DEBUG
     private var editBoxesControl: some View {
         Button {
             captureEngine.calibrationLocked.toggle()
@@ -56,5 +52,4 @@ struct CalibrationCameraOverlay: View {
                 : (captureEngine.calibrationLocked ? "Edit deck and mixer boxes" : "Finish editing calibration boxes")
         )
     }
-    #endif
 }

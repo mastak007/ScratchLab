@@ -52,6 +52,350 @@ final class ScratchSamplePlaybackControllerMIDIPlatterTests: XCTestCase {
         return (controller, { clock.now = $0 }, { steps.value = $0 })
     }
 
+    private func renderPositionBlock(_ controller: ScratchSamplePlaybackController) {
+        var left = [Float](repeating: 0, count: 64)
+        left.withUnsafeMutableBufferPointer { output in
+            controller.dvsContinuousRenderer.testOnly_render(left: output.baseAddress!, right: nil, frameCount: 64)
+        }
+    }
+
+    /// The physical counter is sampled after each real elapsed control slot;
+    /// the audio renderer runs through that slot before receiving the next
+    /// measurement. This differs from tests that advance the target after
+    /// rendering and can therefore hide a lasting stop-position error.
+    private enum IdleObservationFault: CaseIterable {
+        case missing, racing, wrongCounter, newConnection, newDevice, stale
+    }
+
+    private func physicalMIDIRenderResult(
+        stepDeltas: [Int], idleFault: IdleObservationFault? = nil
+    ) throws -> (
+        stoppedErrorFrames: Double, peakPCM: Float, maximumMovingErrorFrames: Double
+    ) {
+        final class Clock { var now = 0.0 }
+        let clock = Clock()
+        let tracker = ScratchPlatterTracker()
+        let controller = ScratchSamplePlaybackController(schedulingClock: { clock.now })
+        controller.testOnly_installSyntheticSample(try makeSyntheticLoopBuffer(), sampleID: "physical-position")
+        var testingIdle = false
+        var observationReads = 0
+        controller.testOnly_setRightDeckAccumulatedStepsProvider({
+            tracker.accumulatedSteps(for: ScratchPlatterTracker.rightChannel)
+        }, observation: {
+            guard let observed = tracker.latestObservation(for: ScratchPlatterTracker.rightChannel) else { return nil }
+            guard testingIdle, let idleFault else { return observed }
+            observationReads += 1
+            if idleFault == .missing { return nil }
+            let input = observed.input
+            return MIDIPlatterStepObservation(input: MIDIPlatterInputIdentity(
+                timestamp: input.timestamp,
+                deviceName: idleFault == .newDevice ? "Other controller" : input.deviceName,
+                channel: input.channel, value: input.value,
+                connectionGeneration: input.connectionGeneration
+                    + (idleFault == .newConnection || (idleFault == .racing && observationReads.isMultiple(of: 2)) ? 1 : 0)),
+                accumulatedSteps: observed.accumulatedSteps + (idleFault == .wrongCounter ? 1 : 0))
+        })
+        var rawValue = 64
+        func ingestValue() {
+            tracker.ingest(channel: ScratchPlatterTracker.rightChannel, value: rawValue,
+                inputIdentity: MIDIPlatterInputIdentity(timestamp: clock.now, deviceName: "Rane ONE MKII",
+                    channel: ScratchPlatterTracker.rightChannel, value: rawValue, connectionGeneration: 7))
+        }
+        ingestValue()
+        controller.testOnly_midiCoalescingTick()
+        var peak: Float = 0
+        var maximumMovingError = 0.0
+        func renderSlot() {
+            var pcm = [Float](repeating: 0, count: 735)
+            pcm.withUnsafeMutableBufferPointer { output in
+                controller.dvsContinuousRenderer.testOnly_render(
+                    left: output.baseAddress!, right: nil, frameCount: output.count)
+            }
+            peak = max(peak, pcm.map(abs).max() ?? 0)
+            clock.now += 735 / Self.rate
+        }
+        for delta in stepDeltas {
+            renderSlot()
+            for _ in 0..<abs(delta) {
+                rawValue = (rawValue + (delta > 0 ? 1 : 127)) % 128
+                ingestValue()
+            }
+            controller.testOnly_midiCoalescingTick()
+            let physical = controller.currentPlaybackPositionSnapshot().unwrappedFramePosition
+            let error = DVSContinuousVinylRenderCore.wrappedSignedDelta(
+                controller.dvsContinuousRenderer.testOnly_corePhase - Double(controller.hotCueOnsetFrame) - physical,
+                loop: controller.continuousLoopFrames)
+            maximumMovingError = max(maximumMovingError, abs(error))
+        }
+        // No more physical movement: the next quiet tick owns stop, followed
+        // by six render slots so the existing 3 ms gain ramp is fully silent.
+        testingIdle = true
+        if idleFault == .stale { clock.now += 0.3 }
+        for _ in 0..<7 {
+            renderSlot()
+            controller.testOnly_midiCoalescingTick()
+        }
+        let physical = controller.currentPlaybackPositionSnapshot().unwrappedFramePosition
+        let error = DVSContinuousVinylRenderCore.wrappedSignedDelta(
+            controller.dvsContinuousRenderer.testOnly_corePhase - Double(controller.hotCueOnsetFrame) - physical,
+            loop: controller.continuousLoopFrames)
+        return (error, peak, maximumMovingError)
+    }
+
+    func testPhysicalMIDISlowPushStopsAtMeasuredSamplePosition() throws {
+        let result = try physicalMIDIRenderResult(stepDeltas: Array(repeating: 4, count: 30))
+        XCTAssertGreaterThan(result.peakPCM, 0.1, "Exercise actual sample PCM, not only a control target.")
+        XCTAssertEqual(result.stoppedErrorFrames, 0, accuracy: 1,
+            "Stopped physical/render offset=\(result.stoppedErrorFrames) frames; maximum moving error=\(result.maximumMovingErrorFrames).")
+    }
+
+    func testPhysicalMIDIReversalStopsAtMeasuredSamplePosition() throws {
+        let result = try physicalMIDIRenderResult(
+            stepDeltas: Array(repeating: 4, count: 12) + Array(repeating: -3, count: 8))
+        XCTAssertGreaterThan(result.peakPCM, 0.1)
+        XCTAssertEqual(result.stoppedErrorFrames, 0, accuracy: 1,
+            "Reversed physical/render offset=\(result.stoppedErrorFrames) frames; maximum moving error=\(result.maximumMovingErrorFrames).")
+    }
+
+    func testPhysicalMIDINetZeroRoundTripStopsAtOriginalSamplePosition() throws {
+        let result = try physicalMIDIRenderResult(
+            stepDeltas: Array(repeating: 4, count: 30) + Array(repeating: -4, count: 30))
+        XCTAssertGreaterThan(result.peakPCM, 0.1)
+        XCTAssertEqual(result.stoppedErrorFrames, 0, accuracy: 1,
+            "Net-zero physical/render offset=\(result.stoppedErrorFrames) frames; maximum moving error=\(result.maximumMovingErrorFrames).")
+    }
+
+    func testPhysicalMIDIIdleRejectsUntrustedEndpointObservations() throws {
+        for fault in IdleObservationFault.allCases {
+            let result = try physicalMIDIRenderResult(
+                stepDeltas: Array(repeating: 4, count: 30), idleFault: fault)
+            XCTAssertGreaterThan(result.peakPCM, 0.1)
+            XCTAssertGreaterThan(abs(result.stoppedErrorFrames), 1,
+                "\(fault) must keep ordinary idle phase instead of repositioning from untrusted MIDI metadata.")
+        }
+    }
+
+    func testRenderedCursorRequiresCurrentContinuousOwnerAndPreservesLogicalPosition() throws {
+        let (controller, setNow, setSteps) = try makeController()
+        XCTAssertNil(controller.currentPlaybackPositionSnapshot().renderedFramePosition)
+        setNow(0); setSteps(0)
+        controller.testOnly_midiCoalescingTick()
+        setNow(1.0 / 60); setSteps(40)
+        controller.testOnly_midiCoalescingTick()
+        XCTAssertNil(controller.currentPlaybackPositionSnapshot().renderedFramePosition,
+                     "published movement is not a rendered position")
+        let logical = controller.currentPlaybackPositionSnapshot().unwrappedFramePosition
+        renderPositionBlock(controller)
+        let first = try XCTUnwrap(controller.currentPlaybackPositionSnapshot().renderedFramePosition)
+        XCTAssertEqual(first, controller.dvsContinuousRenderer.testOnly_corePhase - Double(controller.hotCueOnsetFrame), accuracy: 1e-12)
+        renderPositionBlock(controller)
+        XCTAssertNotEqual(first, controller.currentPlaybackPositionSnapshot().renderedFramePosition)
+        XCTAssertEqual(controller.currentPlaybackPositionSnapshot().unwrappedFramePosition, logical,
+                       "read-head telemetry cannot change the logical cue-relative position")
+
+        controller.midiUsesContinuousRenderer = false
+        XCTAssertNil(controller.currentPlaybackPositionSnapshot().renderedFramePosition)
+        controller.midiUsesContinuousRenderer = true
+        renderPositionBlock(controller)
+        XCTAssertNil(controller.currentPlaybackPositionSnapshot().renderedFramePosition,
+                     "re-enabling cannot reuse a previous mode's control receipt")
+        setNow(2.0 / 60); setSteps(80)
+        controller.testOnly_midiCoalescingTick()
+        renderPositionBlock(controller)
+        XCTAssertNotNil(controller.currentPlaybackPositionSnapshot().renderedFramePosition)
+        controller.setDVSOwnership(active: true)
+        controller.waitForAudioQueue()
+        renderPositionBlock(controller)
+        XCTAssertNil(controller.currentPlaybackPositionSnapshot().renderedFramePosition,
+                     "a DVS handoff cannot relabel the previous MIDI cursor")
+    }
+
+    func testRenderedCursorRejectsSameIDReloadAndUnloadWhileDVSOwnsPlayback() throws {
+        let (controller, _, _) = try makeController()
+        controller.setDVSOwnership(active: true)
+        controller.waitForAudioQueue()
+        controller.positionDidChangeContinuous(steps: 0, direction: .forward, segmentWindow: 1.0 / 60)
+        controller.waitForAudioQueue()
+        controller.positionDidChangeContinuous(steps: 40, direction: .forward, segmentWindow: 1.0 / 60)
+        controller.waitForAudioQueue()
+        renderPositionBlock(controller)
+        XCTAssertNotNil(controller.currentPlaybackPositionSnapshot().renderedFramePosition)
+        controller.testOnly_installSyntheticSample(try makeSyntheticLoopBuffer(), sampleID: "synthetic")
+        XCTAssertTrue(controller.testOnly_dvsOwnsPlatterRender)
+        XCTAssertNil(controller.currentPlaybackPositionSnapshot().renderedFramePosition,
+                     "matching the sample name cannot validate an old render table")
+        renderPositionBlock(controller)
+        XCTAssertNotNil(controller.currentPlaybackPositionSnapshot().renderedFramePosition)
+        controller.dvsUsesContinuousRenderer = false
+        XCTAssertNil(controller.currentPlaybackPositionSnapshot().renderedFramePosition)
+        controller.unload()
+        controller.waitForAudioQueue()
+        XCTAssertNil(controller.currentPlaybackPositionSnapshot().renderedFramePosition)
+    }
+
+    private final class LoopInput {
+        var now = 1.0
+        var steps = 0
+        var connectionGeneration: UInt64 = 7
+        var deviceName = "Rane ONE MKII"
+        var metadataReads = 0
+        var raceMetadata = false
+        var mismatchSteps = false
+        var metadataAvailable = true
+
+        func observation() -> MIDIPlatterStepObservation? {
+            metadataReads += 1
+            guard metadataAvailable else { return nil }
+            let identity = MIDIPlatterInputIdentity(
+                timestamp: now, deviceName: deviceName, channel: 1,
+                value: ((steps % 128) + 128) % 128,
+                connectionGeneration: connectionGeneration
+                    + (raceMetadata && metadataReads.isMultiple(of: 2) ? 1 : 0)
+            )
+            return MIDIPlatterStepObservation(input: identity, accumulatedSteps: steps + (mismatchSteps ? 1 : 0))
+        }
+    }
+
+    private func makeLoopContextController(loaded: Bool = true) throws -> (ScratchSamplePlaybackController, LoopInput) {
+        let input = LoopInput()
+        let controller = ScratchSamplePlaybackController(schedulingClock: { input.now })
+        if loaded {
+            controller.testOnly_installSyntheticSample(try makeSyntheticLoopBuffer(), sampleID: "loop-context")
+        }
+        controller.testOnly_setRightDeckAccumulatedStepsProvider({ input.steps }, observation: { input.observation() })
+        return (controller, input)
+    }
+
+    private func advanceLoopContext(_ controller: ScratchSamplePlaybackController, _ input: LoopInput,
+                                    steps: Int, time: Double) {
+        input.steps = steps
+        input.now = time
+        controller.testOnly_midiCoalescingTick()
+    }
+
+    func testPlaybackLoopContextRequiresLoadedSampleAndPublishedMIDIMotion() throws {
+        let (controller, input) = try makeLoopContextController(loaded: false)
+        XCTAssertNil(controller.currentPlaybackLoopContext())
+        advanceLoopContext(controller, input, steps: 0, time: 1)
+        XCTAssertNil(controller.currentPlaybackLoopContext())
+        controller.testOnly_installSyntheticSample(try makeSyntheticLoopBuffer(), sampleID: "loop-context")
+        advanceLoopContext(controller, input, steps: 0, time: 1.01)
+        XCTAssertNil(controller.currentPlaybackLoopContext(), "priming is not a publication")
+        advanceLoopContext(controller, input, steps: 40, time: 1.03)
+        let context = try XCTUnwrap(controller.currentPlaybackLoopContext())
+        XCTAssertEqual(context.anchor.value, 40)
+        XCTAssertEqual(context.anchor.timestamp, 1.03)
+        XCTAssertEqual(context.phaseSteps, 40, accuracy: 1e-9)
+        XCTAssertEqual(context.validFromTimestamp, 1.01)
+        XCTAssertGreaterThan(context.loopLengthInSteps, 0)
+        XCTAssertEqual(context.sampleID, "loop-context")
+    }
+
+    func testPlaybackLoopContextRejectsRacingOrMismatchedMetadataWithoutChangingPlayback() throws {
+        for mismatchSteps in [false, true] {
+            let (controller, input) = try makeLoopContextController()
+            advanceLoopContext(controller, input, steps: 0, time: 1)
+            input.raceMetadata = !mismatchSteps
+            input.mismatchSteps = mismatchSteps
+            advanceLoopContext(controller, input, steps: 40, time: 1.02)
+            XCTAssertNil(controller.currentPlaybackLoopContext())
+            XCTAssertEqual(controller.testOnly_midiContinuousAccumulatedSteps, 40)
+            XCTAssertEqual(controller.dvsContinuousRenderer.lastPublishedActive, true)
+            XCTAssertGreaterThan(try XCTUnwrap(controller.dvsContinuousRenderer.lastPublishedVelocity), 0)
+        }
+    }
+
+    func testPlaybackLoopContextRecoversAfterMetadataRaceWithoutChangingOrigin() throws {
+        let (controller, input) = try makeLoopContextController()
+        advanceLoopContext(controller, input, steps: 0, time: 1)
+        advanceLoopContext(controller, input, steps: 40, time: 1.02)
+        let before = try XCTUnwrap(controller.currentPlaybackLoopContext())
+        input.raceMetadata = true
+        advanceLoopContext(controller, input, steps: 80, time: 1.04)
+        XCTAssertNil(controller.currentPlaybackLoopContext())
+        input.raceMetadata = false
+        advanceLoopContext(controller, input, steps: 120, time: 1.06)
+        let after = try XCTUnwrap(controller.currentPlaybackLoopContext())
+        XCTAssertEqual(after.generation, before.generation)
+        XCTAssertEqual(after.validFromTimestamp, before.validFromTimestamp)
+        XCTAssertEqual(after.phaseSteps, 120, accuracy: 1e-9)
+        XCTAssertEqual(after.anchor.timestamp, 1.06)
+    }
+
+    func testPlaybackLoopContextRetiresMissingInputAndLegacyMode() throws {
+        let (controller, input) = try makeLoopContextController()
+        advanceLoopContext(controller, input, steps: 0, time: 1)
+        advanceLoopContext(controller, input, steps: 40, time: 1.02)
+        XCTAssertNotNil(controller.currentPlaybackLoopContext())
+        input.metadataAvailable = false
+        XCTAssertNil(controller.currentPlaybackLoopContext())
+        advanceLoopContext(controller, input, steps: 80, time: 1.04)
+        input.metadataAvailable = true
+        XCTAssertNil(controller.currentPlaybackLoopContext())
+        advanceLoopContext(controller, input, steps: 120, time: 1.06)
+        XCTAssertNotNil(controller.currentPlaybackLoopContext())
+        controller.midiUsesContinuousRenderer = false
+        XCTAssertNil(controller.currentPlaybackLoopContext())
+        controller.midiUsesContinuousRenderer = true
+        XCTAssertNil(controller.currentPlaybackLoopContext(), "a routing reset needs a new publication")
+    }
+
+    func testPlaybackLoopContextRetiresOnSameSampleReloadAndUnload() throws {
+        let (controller, input) = try makeLoopContextController()
+        advanceLoopContext(controller, input, steps: 0, time: 1)
+        advanceLoopContext(controller, input, steps: 40, time: 1.02)
+        let old = try XCTUnwrap(controller.currentPlaybackLoopContext())
+        input.now = 1.04
+        controller.testOnly_installSyntheticSample(try makeSyntheticLoopBuffer(), sampleID: "loop-context")
+        XCTAssertNil(controller.currentPlaybackLoopContext())
+        advanceLoopContext(controller, input, steps: 80, time: 1.05)
+        XCTAssertNil(controller.currentPlaybackLoopContext())
+        advanceLoopContext(controller, input, steps: 120, time: 1.07)
+        let reloaded = try XCTUnwrap(controller.currentPlaybackLoopContext())
+        XCTAssertGreaterThan(reloaded.generation, old.generation)
+        XCTAssertEqual(reloaded.phaseSteps, 40, accuracy: 1e-9)
+        XCTAssertGreaterThanOrEqual(reloaded.validFromTimestamp, 1.04)
+        controller.unload()
+        XCTAssertNil(controller.currentPlaybackLoopContext())
+    }
+
+    func testPlaybackLoopContextRetiresDVSOwnershipAndReanchorsOnMIDIReentry() throws {
+        let (controller, input) = try makeLoopContextController()
+        advanceLoopContext(controller, input, steps: 0, time: 1)
+        advanceLoopContext(controller, input, steps: 40, time: 1.02)
+        let before = try XCTUnwrap(controller.currentPlaybackLoopContext())
+        input.now = 1.03
+        controller.setDVSOwnership(active: true)
+        XCTAssertNil(controller.currentPlaybackLoopContext())
+        advanceLoopContext(controller, input, steps: 400, time: 1.04)
+        XCTAssertNil(controller.currentPlaybackLoopContext())
+        input.now = 1.05
+        controller.setDVSOwnership(active: false)
+        XCTAssertNil(controller.currentPlaybackLoopContext())
+        advanceLoopContext(controller, input, steps: 400, time: 1.06)
+        XCTAssertNil(controller.currentPlaybackLoopContext())
+        advanceLoopContext(controller, input, steps: 440, time: 1.08)
+        let after = try XCTUnwrap(controller.currentPlaybackLoopContext())
+        XCTAssertGreaterThan(after.generation, before.generation)
+        XCTAssertGreaterThanOrEqual(after.validFromTimestamp, 1.05)
+        XCTAssertEqual(after.anchor.timestamp, 1.08)
+    }
+
+    func testPlaybackLoopContextRetiresInputConnectionAndStalledPublication() throws {
+        let (controller, input) = try makeLoopContextController()
+        advanceLoopContext(controller, input, steps: 0, time: 1)
+        advanceLoopContext(controller, input, steps: 40, time: 1.02)
+        let before = try XCTUnwrap(controller.currentPlaybackLoopContext())
+        input.connectionGeneration += 1
+        XCTAssertNil(controller.currentPlaybackLoopContext())
+        advanceLoopContext(controller, input, steps: 80, time: 1.04)
+        let reconnected = try XCTUnwrap(controller.currentPlaybackLoopContext())
+        XCTAssertGreaterThan(reconnected.generation, before.generation)
+        XCTAssertEqual(reconnected.anchor.connectionGeneration, input.connectionGeneration)
+        advanceLoopContext(controller, input, steps: 120, time: 2)
+        XCTAssertNil(controller.currentPlaybackLoopContext(), "sanitized velocity did not publish the advanced phase")
+    }
+
     // MARK: - Forward / backward phase advancement
 
     func testMIDIContinuousForwardMotionAdvancesPhaseAndPublishesPositiveVelocity() throws {

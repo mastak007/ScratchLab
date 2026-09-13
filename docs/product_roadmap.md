@@ -1,5 +1,11 @@
 # ScratchLab Product Roadmap
 
+## Current decision — 13 September 2026
+
+Karl selected a free learner app and a focused validation sequence: finish CXL capture, collect a small set of excellent examples, complete three foundational skills on one supported setup, then run a four-week trial with roughly ten learners. Test direct sponsorship/institutional funding as the payer model; ads are a possible supplement, not assumed income. The prior learner-payment criterion is superseded. See [free learner pilot and funding assessment](free_learner_pilot.md).
+
+Watch is optional CXL research capture only when it answers a useful question; no learner Watch requirement. Live online battles, private Memoji-style avatars and automatic live judging are [saved for later](future_product_ideas.md). They are not new current milestones. The older tracks and completion labels below are historical planning context; they do not override the current ML limitations in PROFILE.md or establish that scoring is production-ready.
+
 This roadmap is intentionally split into three independent product surfaces so consumer scope doesn't drift into research scope and vice-versa. Each track moves on its own cadence; nothing in *Studio / research* or *Experimental* may block a *Consumer coaching* release.
 
 See:

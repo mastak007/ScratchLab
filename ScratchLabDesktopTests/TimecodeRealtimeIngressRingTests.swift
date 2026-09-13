@@ -386,11 +386,20 @@ final class TimecodeRealtimeIngressRingTests: XCTestCase {
 
         let consumerThread = Thread {
             while true {
-                let drained = ring.drainPending { _ in
+                _ = ring.drainPending { _ in
                     drainedLock.lock(); drainedCount += 1; drainedLock.unlock()
                 }
                 stopLock.lock(); let finished = producerFinished; stopLock.unlock()
-                if finished, drained == 0 { break }
+                if finished {
+                    // The producer can publish after the drain above and then
+                    // set `producerFinished` before this thread takes the
+                    // lock. Once completion is observed no more writes can
+                    // arrive, so one final drain closes that handoff window.
+                    _ = ring.drainPending { _ in
+                        drainedLock.lock(); drainedCount += 1; drainedLock.unlock()
+                    }
+                    break
+                }
             }
         }
         consumerThread.start()

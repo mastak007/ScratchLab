@@ -8,6 +8,7 @@ struct LevelSelectView: View {
     @EnvironmentObject var progressManager: ProgressManager
     @EnvironmentObject var audioEngine: AudioEngine
     @Environment(\.dismiss) var dismiss
+    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
     
     @State private var selectedPracticeScratch: Scratch?
     @State private var showingComboChallenge = false
@@ -97,21 +98,30 @@ struct LevelSelectView: View {
     
     var body: some View {
         GeometryReader { geometry in
+            let isLandscape = geometry.size.width > geometry.size.height
+            let landscapeNeedsScrolling = dynamicTypeSize.isAccessibilitySize || geometry.size.height < 300
+
             ZStack {
                 BackgroundView()
-                
-                ScrollView(showsIndicators: false) {
-                    VStack(spacing: 24) {
-                        headerView
 
-                        VStack(spacing: 20) {
-                            practiceSelectionSection
-                            comboCard
+                if isLandscape {
+                    if landscapeNeedsScrolling {
+                        ScrollView(showsIndicators: false) {
+                            portraitContent
+                                .padding(.top, ScratchLabDesign.Spacing.md)
+                                .padding(.bottom, max(geometry.safeAreaInsets.bottom, ScratchLabDesign.Spacing.lg))
                         }
-                        .padding(.horizontal, 20)
+                    } else {
+                        landscapeContent
+                            .padding(.horizontal, ScratchLabDesign.Spacing.xl)
+                            .padding(.vertical, ScratchLabDesign.Spacing.md)
                     }
-                    .padding(.top, geometry.safeAreaInsets.top + 12)
-                    .padding(.bottom, max(geometry.safeAreaInsets.bottom, 20) + 20)
+                } else {
+                    ScrollView(showsIndicators: false) {
+                        portraitContent
+                            .padding(.top, geometry.safeAreaInsets.top + ScratchLabDesign.Spacing.md)
+                            .padding(.bottom, max(geometry.safeAreaInsets.bottom, ScratchLabDesign.Spacing.xl) + ScratchLabDesign.Spacing.xl)
+                    }
                 }
             }
         }
@@ -142,6 +152,55 @@ struct LevelSelectView: View {
             )
             .environmentObject(audioEngine)
             .environmentObject(progressManager)
+        }
+    }
+
+    private var portraitContent: some View {
+        VStack(spacing: ScratchLabDesign.Spacing.xxl) {
+            headerView
+
+            VStack(spacing: ScratchLabDesign.Spacing.xl) {
+                practiceSelectionSection
+                comboCard
+            }
+            .padding(.horizontal, ScratchLabDesign.Spacing.xl)
+        }
+    }
+
+    private var landscapeContent: some View {
+        VStack(spacing: ScratchLabDesign.Spacing.md) {
+            HStack(alignment: .firstTextBaseline, spacing: ScratchLabDesign.Spacing.lg) {
+                Text("LIVE PRACTICE")
+                    .font(ScratchLabDesign.Typo.title2)
+                    .foregroundColor(ScratchLabDesign.Sem.textPrimary)
+
+                Text("Choose a scratch or combo, then open the existing live setup.")
+                    .font(ScratchLabDesign.Typo.bodySecondary)
+                    .foregroundColor(ScratchLabDesign.Sem.textSecondary)
+                    .lineLimit(1)
+
+                Spacer(minLength: 0)
+            }
+
+            LazyVGrid(
+                columns: Array(
+                    repeating: GridItem(
+                        .flexible(minimum: 150),
+                        spacing: ScratchLabDesign.Spacing.md,
+                        alignment: .top
+                    ),
+                    count: 3
+                ),
+                alignment: .center,
+                spacing: ScratchLabDesign.Spacing.md
+            ) {
+                ForEach(practiceScratchOptions) { scratch in
+                    landscapePracticeScratchCard(for: scratch)
+                }
+
+                landscapeComboCard
+            }
+            .frame(maxHeight: .infinity, alignment: .center)
         }
     }
     
@@ -235,6 +294,55 @@ struct LevelSelectView: View {
         .scratchLabCard(.standard)
     }
 
+    private var landscapeComboCard: some View {
+        VStack(alignment: .leading, spacing: ScratchLabDesign.Spacing.sm) {
+            HStack(alignment: .top, spacing: ScratchLabDesign.Spacing.sm) {
+                Text("BABY FLOW")
+                    .font(ScratchLabDesign.Typo.title3)
+                    .foregroundColor(ScratchLabDesign.Sem.textPrimary)
+
+                Spacer(minLength: 0)
+
+                Text(comboProgress?.comboCompleted == true ? "CLEARED" : "LIVE")
+                    .font(ScratchLabDesign.Typo.statusPill)
+                    .foregroundColor(comboProgress?.comboCompleted == true ? ScratchLabDesign.Sem.textOnAccent : ScratchLabDesign.Sem.textSecondary)
+                    .padding(.horizontal, ScratchLabDesign.Spacing.sm)
+                    .padding(.vertical, ScratchLabDesign.Spacing.xxs)
+                    .background(comboProgress?.comboCompleted == true ? ScratchLabDesign.Sem.success : ScratchLabDesign.Surface.subtleFill)
+                    .clipShape(Capsule())
+            }
+
+            Text("Lock 4 baby scratches into one visual loop at 100 BPM.")
+                .font(ScratchLabDesign.Typo.bodySmall)
+                .foregroundColor(ScratchLabDesign.Sem.textSecondary)
+                .lineLimit(3)
+
+            HStack(spacing: ScratchLabDesign.Spacing.md) {
+                Label("\(Int(comboProgress?.comboAccuracy ?? 0))%", systemImage: "star.fill")
+                Label(comboStatusValue, systemImage: comboProgress?.comboCompleted == true ? "checkmark.seal.fill" : "repeat")
+            }
+            .font(ScratchLabDesign.Typo.bodySecondary)
+            .foregroundColor(ScratchLabDesign.Sem.textSecondary)
+            .lineLimit(1)
+            .minimumScaleFactor(0.8)
+
+            Spacer(minLength: 0)
+
+            Button(action: { showingComboChallenge = true }) {
+                Label(
+                    comboProgress?.comboCompleted == true ? "Run Again" : "Start Combo",
+                    systemImage: "point.3.filled.connected.trianglepath.dotted"
+                )
+                .lineLimit(1)
+                .minimumScaleFactor(0.75)
+            }
+            .scratchLabPrimaryButton(fillsWidth: true)
+        }
+        .landscapeChoiceCard()
+        .accessibilityElement(children: .contain)
+        .accessibilityLabel("Baby Flow combo challenge. \(comboStatusText)")
+    }
+
     @ViewBuilder
     private func practiceScratchCard(for scratch: Scratch) -> some View {
         let isBabyScratch = scratch.id == babyScratch.id
@@ -300,6 +408,88 @@ struct LevelSelectView: View {
             .scratchLabPrimaryButton()
         }
         .scratchLabCard(isBabyScratch ? .selected : .standard)
+    }
+
+    @ViewBuilder
+    private func landscapePracticeScratchCard(for scratch: Scratch) -> some View {
+        let isBabyScratch = scratch.id == babyScratch.id
+
+        VStack(alignment: .leading, spacing: ScratchLabDesign.Spacing.sm) {
+            HStack(alignment: .top, spacing: ScratchLabDesign.Spacing.sm) {
+                Text(scratch.name.uppercased())
+                    .font(ScratchLabDesign.Typo.title3)
+                    .foregroundColor(ScratchLabDesign.Sem.textPrimary)
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.8)
+
+                Spacer(minLength: 0)
+
+                Text(isBabyScratch ? "FOUNDATION" : "COACH")
+                    .font(ScratchLabDesign.Typo.statusPill)
+                    .foregroundColor(isBabyScratch ? ScratchLabDesign.Sem.textOnAccent : ScratchLabDesign.Sem.textSecondary)
+                    .padding(.horizontal, ScratchLabDesign.Spacing.sm)
+                    .padding(.vertical, ScratchLabDesign.Spacing.xxs)
+                    .background(isBabyScratch ? ScratchLabDesign.Sem.accent : ScratchLabDesign.Surface.subtleFill)
+                    .clipShape(Capsule())
+            }
+
+            Text(scratch.description)
+                .font(ScratchLabDesign.Typo.bodySmall)
+                .foregroundColor(ScratchLabDesign.Sem.textSecondary)
+                .lineLimit(3)
+
+            if isBabyScratch {
+                HStack(spacing: ScratchLabDesign.Spacing.md) {
+                    Label("\(Int(progressManager.babyScratchProgress?.bestAccuracy ?? 0))%", systemImage: "star.fill")
+                    Label("\(progressManager.babyScratchProgress?.practiceCount ?? 0) takes", systemImage: "waveform.path.ecg")
+                }
+                .font(ScratchLabDesign.Typo.bodySecondary)
+                .foregroundColor(ScratchLabDesign.Sem.textSecondary)
+                .lineLimit(1)
+                .minimumScaleFactor(0.8)
+            } else {
+                Label("Coach card + local demo audio", systemImage: "waveform.badge.mic")
+                    .font(ScratchLabDesign.Typo.bodySecondary)
+                    .foregroundColor(ScratchLabDesign.Sem.textSecondary)
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.8)
+            }
+
+            Spacer(minLength: 0)
+
+            Button(action: { selectedPracticeScratch = scratch }) {
+                Label(isBabyScratch ? "Start Baby Scratch" : "Start Chirp Flare", systemImage: "play.fill")
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.75)
+            }
+            .scratchLabPrimaryButton(fillsWidth: true)
+        }
+        .landscapeChoiceCard(isSelected: isBabyScratch)
+        .accessibilityElement(children: .contain)
+    }
+}
+
+private extension View {
+    func landscapeChoiceCard(isSelected: Bool = false) -> some View {
+        frame(maxWidth: .infinity, minHeight: 190, maxHeight: 250, alignment: .leading)
+            .padding(ScratchLabDesign.Card.compactPadding)
+            .background(
+                ScratchLabDesign.Surface.card,
+                in: RoundedRectangle(
+                    cornerRadius: ScratchLabDesign.Card.compactCornerRadius,
+                    style: .continuous
+                )
+            )
+            .overlay {
+                RoundedRectangle(
+                    cornerRadius: ScratchLabDesign.Card.compactCornerRadius,
+                    style: .continuous
+                )
+                .stroke(
+                    isSelected ? ScratchLabDesign.Sem.accent.opacity(0.72) : Color.primary.opacity(0.06),
+                    lineWidth: isSelected ? 1.5 : 1
+                )
+            }
     }
 }
 

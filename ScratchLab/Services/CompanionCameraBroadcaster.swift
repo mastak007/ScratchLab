@@ -3,6 +3,7 @@ import AVFoundation
 import UIKit
 import MultipeerConnectivity
 import CoreImage
+import Network
 
 final class CompanionCameraBroadcaster: NSObject, ObservableObject {
     enum CameraPosition: String, CaseIterable, Identifiable {
@@ -153,6 +154,16 @@ final class CompanionCameraBroadcaster: NSObject, ObservableObject {
     @Published private(set) var isStorageReady = true
     @Published private(set) var nextTakeNumberPreview = 1
     @Published private(set) var pendingWatchControlCommand: WatchControlCommandEvent?
+    /// Delivers a Mac control command straight to the relay, without waiting
+    /// for a SwiftUI view to notice `pendingWatchControlCommand` changed.
+    ///
+    /// Every other relay concern here is already a direct closure. This one was
+    /// the exception, routed through an `.onChange` in the app's view body, so
+    /// capture control depended on the view-update cycle: a take whose command
+    /// arrived while that view was not updating forwarded nothing, and the Mac
+    /// saw an unexplained timeout in both directions with no watch motion at
+    /// all. Delivery must not depend on rendering.
+    var onWatchControlCommand: ((WatchCaptureCommandPayload) -> Void)?
     var onWatchCaptureAcknowledged: ((UUID) -> Void)?
     var recordingSessionID = CaptureCore.LocalRecordingNaming.sessionID() {
         didSet {
@@ -161,19 +172,38 @@ final class CompanionCameraBroadcaster: NSObject, ObservableObject {
         }
     }
     var recordingSessionConfig: CaptureSessionConfig?
+    /// Optional Watch request that belongs to the next local recording. The
+    /// request is folded into the initial sidecar on the capture queue so a
+    /// linked Watch start can never be reported later as `notRequested`.
+    var recordingWatchRequest: WatchCaptureCommandPayload?
+    private var recordingWatchReply: WatchCaptureControlReply?
 
     let captureSession = AVCaptureSession()
 
     private let serviceType = "scrcamfeed"
+    private let directServiceType = "_scrcamfeed._tcp"
     private let peerID = MCPeerID(displayName: UIDevice.current.name)
     private lazy var session = MCSession(peer: peerID, securityIdentity: nil, encryptionPreference: .required)
     private lazy var advertiser = MCNearbyServiceAdvertiser(
         peer: peerID,
-        discoveryInfo: ["role": "camera"],
+        discoveryInfo: ["role": "companion"],
         serviceType: serviceType
     )
 
     private let captureQueue = DispatchQueue(label: "scratchlab.companion.capture")
+    /// Control-plane sends to the Mac: watch status, availability, relay
+    /// lifecycle.
+    ///
+    /// Deliberately NOT `captureQueue`. That queue is also the video output's
+    /// sample-buffer delegate queue, so anything dispatched to it waits behind
+    /// every camera frame. Relaying the watch's stop acknowledgement on it put
+    /// that acknowledgement behind the video pipeline and is why the Mac's stop
+    /// handshake timed out while the watch had in fact already stopped.
+    private let controlQueue = DispatchQueue(label: "scratchlab.companion.control")
+    private let relayQueue = DispatchQueue(label: "scratchlab.companion.relay")
+    private let directConnectionLock = NSLock()
+    private var directListener: NWListener?
+    private var directConnection: NWConnection?
     private let videoOutput = AVCaptureVideoDataOutput()
     private let movieOutput = AVCaptureMovieFileOutput()
     private let ciContext = CIContext()
@@ -190,6 +220,8 @@ final class CompanionCameraBroadcaster: NSObject, ObservableObject {
     private var activeRecordingURL: URL?
     private var activeRecordingSidecar: CaptureCore.LocalRecordingSidecar?
     private var activeRecordingSidecarURL: URL?
+    private var pendingRecordingFinalizations: [(RecordingSummary?) -> Void] = []
+    private var stopRequestedWhileRecordingStarts = false
     private var rotationCoordinator: AVCaptureDevice.RotationCoordinator?
     private var rotationAngleObservation: NSKeyValueObservation?
 
@@ -223,7 +255,21 @@ final class CompanionCameraBroadcaster: NSObject, ObservableObject {
     func startRelayAdvertisingIfNeeded() {
         guard !isAdvertising else { return }
         isAdvertising = true
-        advertiser.startAdvertisingPeer()
+        startDirectRelayListener()
+    }
+
+    /// Reconnect transport without stopping local camera capture or deleting queued Watch files.
+    func reconnectMacRelay() {
+        guard !isRecording else { return }
+        directListener?.cancel()
+        directListener = nil
+        replaceDirectConnection(nil)
+        session.disconnect()
+        connectedPeerNames = []
+        isBroadcasting = false
+        isAdvertising = false
+        connectionStatus = "Reconnecting to ScratchLab on Mac…"
+        startRelayAdvertisingIfNeeded()
     }
 
     func stopCaptureServices() {
@@ -247,11 +293,14 @@ final class CompanionCameraBroadcaster: NSObject, ObservableObject {
     func stop() {
         stopCaptureServices()
         advertiser.stopAdvertisingPeer()
+        directListener?.cancel()
+        directListener = nil
+        replaceDirectConnection(nil)
         isAdvertising = false
     }
 
     func toggleRecording() {
-        isRecording ? stopRecording() : startRecording()
+        isRecording ? stopRecording(onFinalized: nil) : startRecording()
     }
 
     func beginRecording(captureTiming: CaptureTimingMetadata? = nil) {
@@ -259,7 +308,15 @@ final class CompanionCameraBroadcaster: NSObject, ObservableObject {
     }
 
     func endRecording() {
-        stopRecording()
+        stopRecording(onFinalized: nil)
+    }
+
+    /// Stops the exact local recording currently owned by the movie output
+    /// and completes only after its media + sidecar finalization callback has
+    /// run. The completion is delivered on the main queue so capture UI state
+    /// does not depend solely on a separately published observation.
+    func endRecording(onFinalized: @escaping (RecordingSummary?) -> Void) {
+        stopRecording(onFinalized: onFinalized)
     }
 
     func validateStorageLocation() -> Bool {
@@ -296,6 +353,12 @@ final class CompanionCameraBroadcaster: NSObject, ObservableObject {
             if FileManager.default.fileExists(atPath: summary.sidecarURL.path) {
                 try FileManager.default.removeItem(at: summary.sidecarURL)
             }
+            let scratchAudioURL = summary.sidecarURL
+                .deletingPathExtension()
+                .appendingPathExtension("wav")
+            if FileManager.default.fileExists(atPath: scratchAudioURL.path) {
+                try FileManager.default.removeItem(at: scratchAudioURL)
+            }
 
             DispatchQueue.main.async {
                 if self.lastRecordingSummary == summary {
@@ -315,7 +378,7 @@ final class CompanionCameraBroadcaster: NSObject, ObservableObject {
 
     func sendWatchCaptureSession(_ captureSession: WatchMotionCaptureSession, fileName: String) {
         captureQueue.async {
-            guard !self.session.connectedPeers.isEmpty else {
+            guard self.hasConnectedRelay else {
                 #if DEBUG
                 print("[WATCH-DEBUG] transfer failed/retrying — no Mac peer connected, sessionID=\(captureSession.sessionID) takeID=\(captureSession.takeID ?? "nil") id=\(captureSession.id)")
                 #endif
@@ -328,11 +391,9 @@ final class CompanionCameraBroadcaster: NSObject, ObservableObject {
             print("[WATCH-DEBUG] forwarding watch file to Mac sessionID=\(captureSession.sessionID) takeID=\(captureSession.takeID ?? "nil") id=\(captureSession.id)")
             #endif
 
-            do {
-                try self.session.send(encoded, toPeers: self.session.connectedPeers, with: .reliable)
-            } catch {
+            if !self.sendRelayPacket(encoded, reliability: .reliable) {
                 #if DEBUG
-                print("[WATCH-DEBUG] transfer failed/retrying — forward to Mac failed: \(error.localizedDescription) id=\(captureSession.id)")
+                print("[WATCH-DEBUG] transfer failed/retrying — forward to Mac failed id=\(captureSession.id)")
                 #endif
                 DispatchQueue.main.async {
                     self.connectionStatus = "Unable to relay watch motion to Mac. Check connection."
@@ -341,11 +402,79 @@ final class CompanionCameraBroadcaster: NSObject, ObservableObject {
         }
     }
 
+    func sendWatchMotionBatch(_ batch: WatchMotionRelayBatch) {
+        captureQueue.async {
+            guard self.hasConnectedRelay,
+                  let encoded = try? PropertyListEncoder().encode(batch) else { return }
+            // Five small batches per second is low enough for reliable delivery, and a
+            // missing sequence prevents the Mac assembler from producing an exportable
+            // Watch artifact. Capture integrity is more important than shaving latency.
+            if !self.sendRelayPacket(encoded, reliability: .reliable) {
+                DispatchQueue.main.async {
+                    self.connectionStatus = "Live watch motion relay was interrupted."
+                }
+            }
+        }
+    }
+
+    func sendWatchRelayLifecycle(
+        _ event: WatchRelayLifecycleEvent,
+        context: WatchRelayTakeContext?,
+        detail: String?
+    ) {
+        controlQueue.async {
+            guard self.hasConnectedRelay else { return }
+            let packet = WatchRelayLifecyclePacket(event: event, context: context, detail: detail)
+            guard let encoded = try? PropertyListEncoder().encode(packet) else { return }
+            _ = self.sendRelayPacket(encoded, reliability: .reliable)
+        }
+    }
+
+    /// Persists finalized controller/notation evidence into the exact sidecar
+    /// represented by `summary`, returning the matching in-memory summary for
+    /// Guided Capture review/export. The write is atomic and intentionally
+    /// fails to the caller instead of silently exporting a stale sidecar.
+    func persistingDetectedNotation(
+        _ detectedNotation: CaptureCore.DetectedNotationSnapshot?,
+        in summary: RecordingSummary
+    ) throws -> RecordingSummary {
+        let updatedSidecar = summary.sidecar.withDetectedNotation(detectedNotation)
+        try writeRecordingSidecar(updatedSidecar, to: summary.sidecarURL)
+        return RecordingSummary(
+            mediaURL: summary.mediaURL,
+            sidecarURL: summary.sidecarURL,
+            sidecar: updatedSidecar,
+            statusMessage: summary.statusMessage
+        )
+    }
+
+    /// Records the Watch's acknowledgement/failure against the active take.
+    /// The reply is retained on the capture queue so it is also applied when it
+    /// arrives just before `prepareRecording` has created the initial sidecar.
+    func recordWatchControlReply(_ reply: WatchCaptureControlReply) {
+        captureQueue.async {
+            self.recordingWatchReply = reply
+            guard var sidecar = self.activeRecordingSidecar,
+                  sidecar.sessionID == reply.sessionID,
+                  sidecar.takeID == reply.takeID else { return }
+            sidecar = sidecar.withWatchSync(reply)
+            guard let sidecarURL = self.activeRecordingSidecarURL else { return }
+            do {
+                try self.writeRecordingSidecar(sidecar, to: sidecarURL)
+                self.activeRecordingSidecar = sidecar
+            } catch {
+                DispatchQueue.main.async {
+                    self.recordingStatus = "Watch sync status could not be saved with this take."
+                }
+            }
+        }
+    }
+
     /// Relays the local WCSession's live view of the watch (paired / installed / reachable) to
     /// the Mac, so macOS never has to (and never does) infer reachability merely from pairing.
     func sendWatchAvailability(isPaired: Bool, isInstalled: Bool, isReachable: Bool) {
-        captureQueue.async {
-            guard !self.session.connectedPeers.isEmpty else { return }
+        controlQueue.async {
+            guard self.hasConnectedRelay else { return }
             let packet = WatchAvailabilityPacket(isPaired: isPaired, isInstalled: isInstalled, isReachable: isReachable)
             guard let encoded = try? PropertyListEncoder().encode(packet) else { return }
 
@@ -353,25 +482,21 @@ final class CompanionCameraBroadcaster: NSObject, ObservableObject {
             print("[WATCH-DEBUG] forwarding watch availability to Mac paired=\(isPaired) installed=\(isInstalled) reachable=\(isReachable)")
             #endif
 
-            do {
-                try self.session.send(encoded, toPeers: self.session.connectedPeers, with: .reliable)
-            } catch {
+            if !self.sendRelayPacket(encoded, reliability: .reliable) {
                 #if DEBUG
-                print("[WATCH-DEBUG] transfer failed/retrying — forward watch availability to Mac failed: \(error.localizedDescription)")
+                print("[WATCH-DEBUG] transfer failed/retrying — forward watch availability to Mac failed")
                 #endif
             }
         }
     }
 
     func sendWatchControlStatus(_ reply: WatchCaptureControlReply) {
-        captureQueue.async {
-            guard !self.session.connectedPeers.isEmpty else { return }
+        controlQueue.async {
+            guard self.hasConnectedRelay else { return }
             let packet = WatchControlStatusPacket(reply: reply)
             guard let encoded = try? PropertyListEncoder().encode(packet) else { return }
 
-            do {
-                try self.session.send(encoded, toPeers: self.session.connectedPeers, with: .reliable)
-            } catch {
+            if !self.sendRelayPacket(encoded, reliability: .reliable) {
                 DispatchQueue.main.async {
                     self.connectionStatus = "Unable to relay watch status to Mac. Check connection."
                 }
@@ -409,6 +534,7 @@ final class CompanionCameraBroadcaster: NSObject, ObservableObject {
                 self.activeRecordingSidecarURL = preparedRecording.sidecarURL
                 self.applyVideoRotationToCaptureOutputs()
                 DispatchQueue.main.async {
+                    self.lastRecordingSummary = nil
                     self.recordingStatus = "Starting local recording"
                 }
                 self.movieOutput.startRecording(to: preparedRecording.mediaURL, recordingDelegate: self)
@@ -420,13 +546,38 @@ final class CompanionCameraBroadcaster: NSObject, ObservableObject {
         }
     }
 
-    private func stopRecording() {
+    private func stopRecording(onFinalized: ((RecordingSummary?) -> Void)?) {
         captureQueue.async {
-            guard self.movieOutput.isRecording else { return }
-            DispatchQueue.main.async {
-                self.recordingStatus = "Stopping recording"
+            if let onFinalized {
+                self.pendingRecordingFinalizations.append(onFinalized)
             }
-            self.movieOutput.stopRecording()
+
+            if self.movieOutput.isRecording {
+                DispatchQueue.main.async {
+                    self.recordingStatus = "Stopping recording"
+                }
+                self.movieOutput.stopRecording()
+                return
+            }
+
+            // `startRecording(to:)` returns before AVCaptureFileOutput reports
+            // didStart. A fast Save Take can therefore arrive while the staged
+            // sidecar exists but `isRecording` is still false. Remember that
+            // stop and execute it from didStart rather than losing the request.
+            if self.activeRecordingSidecar != nil {
+                self.stopRequestedWhileRecordingStarts = true
+                DispatchQueue.main.async {
+                    self.recordingStatus = "Waiting for recorder to finish starting"
+                }
+                return
+            }
+
+            let completions = self.pendingRecordingFinalizations
+            self.pendingRecordingFinalizations.removeAll()
+            DispatchQueue.main.async {
+                self.recordingStatus = "The camera recorder was not active when Save Take was requested."
+                completions.forEach { $0(nil) }
+            }
         }
     }
 
@@ -743,7 +894,7 @@ final class CompanionCameraBroadcaster: NSObject, ObservableObject {
     }
 
     private func sendFrame(_ sampleBuffer: CMSampleBuffer) {
-        guard !session.connectedPeers.isEmpty else { return }
+        guard hasConnectedRelay else { return }
 
         let now = CACurrentMediaTime()
         guard now - lastSentFrameTime >= previewFrameInterval else { return }
@@ -779,15 +930,215 @@ final class CompanionCameraBroadcaster: NSObject, ObservableObject {
 
             guard let encoded = try? PropertyListEncoder().encode(packet) else { return }
 
-            do {
-                try session.send(encoded, toPeers: session.connectedPeers, with: .unreliable)
+            if self.sendRelayPacket(encoded, reliability: .unreliable) {
                 DispatchQueue.main.async {
                     self.isBroadcasting = true
                 }
-            } catch {
+            } else {
                 DispatchQueue.main.async {
                     self.connectionStatus = "Unable to send video. Check connection."
                 }
+            }
+        }
+    }
+
+    private var hasConnectedRelay: Bool {
+        if let connection = directConnectionSnapshot(), case .ready = connection.state { return true }
+        return !session.connectedPeers.isEmpty
+    }
+
+    private func replaceDirectConnection(_ connection: NWConnection?) {
+        directConnectionLock.lock()
+        let previous = directConnection
+        directConnection = connection
+        directConnectionLock.unlock()
+        if previous !== connection {
+            previous?.cancel()
+        }
+    }
+
+    private func directConnectionSnapshot() -> NWConnection? {
+        directConnectionLock.lock()
+        defer { directConnectionLock.unlock() }
+        return directConnection
+    }
+
+    private func startDirectRelayListener() {
+        do {
+            let parameters = NWParameters.tcp
+            parameters.includePeerToPeer = true
+            let listener = try NWListener(using: parameters)
+            listener.service = NWListener.Service(
+                name: UIDevice.current.name,
+                type: directServiceType
+            )
+            listener.stateUpdateHandler = { [weak self, weak listener] state in
+                guard let self, let listener, self.directListener === listener else { return }
+                switch state {
+                case .ready:
+                    DispatchQueue.main.async {
+                        if self.connectedPeerNames.isEmpty {
+                            self.connectionStatus = "Waiting for ScratchLab CXL"
+                        }
+                    }
+                case .failed(let error):
+                    DispatchQueue.main.async {
+                        guard self.directListener === listener else { return }
+                        self.isAdvertising = false
+                        self.directListener = nil
+                        self.connectionStatus = "Unable to start companion relay: \(error.localizedDescription)"
+                    }
+                    listener.cancel()
+                case .cancelled:
+                    DispatchQueue.main.async {
+                        guard self.directListener === listener else { return }
+                        self.directListener = nil
+                        self.isAdvertising = false
+                    }
+                default:
+                    break
+                }
+            }
+            listener.newConnectionHandler = { [weak self] connection in
+                self?.acceptDirectConnection(connection)
+            }
+            directListener = listener
+            listener.start(queue: relayQueue)
+        } catch {
+            connectionStatus = "Unable to start companion relay: \(error.localizedDescription)"
+        }
+    }
+
+    private func acceptDirectConnection(_ connection: NWConnection) {
+        replaceDirectConnection(connection)
+        connection.stateUpdateHandler = { [weak self, weak connection] state in
+            guard let self, let connection, self.directConnectionSnapshot() === connection else { return }
+            switch state {
+            case .ready:
+                let peerName = self.directPeerName(connection.endpoint)
+                DispatchQueue.main.async {
+                    guard self.directConnectionSnapshot() === connection else { return }
+                    self.connectedPeerNames = [peerName]
+                    self.connectionStatus = self.isRunning
+                        ? "Streaming \(self.selectedCameraPosition.title.lowercased()) camera to \(peerName)"
+                        : "Watch relay connected to \(peerName)"
+                }
+                self.receiveDirectPacketLength(on: connection, peerName: peerName)
+            case .waiting(let error):
+                DispatchQueue.main.async {
+                    guard self.directConnectionSnapshot() === connection else { return }
+                    self.connectedPeerNames = []
+                    self.isBroadcasting = false
+                    self.connectionStatus = "Mac relay paused: \(error.localizedDescription). Use Reconnect Mac."
+                }
+            case .failed, .cancelled:
+                if self.directConnectionSnapshot() === connection {
+                    self.replaceDirectConnection(nil)
+                    DispatchQueue.main.async {
+                        self.connectedPeerNames = []
+                        self.isBroadcasting = false
+                        self.connectionStatus = "Waiting for ScratchLab CXL"
+                    }
+                }
+            default:
+                break
+            }
+        }
+        connection.start(queue: relayQueue)
+    }
+
+    private func directPeerName(_ endpoint: NWEndpoint) -> String {
+        if case .hostPort(let host, _) = endpoint {
+            return host.debugDescription
+        }
+        return "ScratchLab CXL"
+    }
+
+    private func receiveDirectPacketLength(on connection: NWConnection, peerName: String) {
+        connection.receive(minimumIncompleteLength: 4, maximumLength: 4) { [weak self, weak connection] data, _, isComplete, error in
+            guard let self, let connection else { return }
+            guard error == nil, !isComplete, let data, data.count == 4 else {
+                connection.cancel()
+                return
+            }
+            let length = data.withUnsafeBytes { rawBuffer in
+                Int(UInt32(bigEndian: rawBuffer.loadUnaligned(as: UInt32.self)))
+            }
+            guard length > 0, length <= 16_000_000 else {
+                connection.cancel()
+                return
+            }
+            self.receiveDirectPacketBody(length: length, on: connection, peerName: peerName)
+        }
+    }
+
+    private func receiveDirectPacketBody(length: Int, on connection: NWConnection, peerName: String) {
+        connection.receive(minimumIncompleteLength: length, maximumLength: length) { [weak self, weak connection] data, _, isComplete, error in
+            guard let self, let connection else { return }
+            guard error == nil, !isComplete, let data, data.count == length else {
+                connection.cancel()
+                return
+            }
+            self.session(
+                self.session,
+                didReceive: data,
+                fromPeer: MCPeerID(displayName: peerName)
+            )
+            self.receiveDirectPacketLength(on: connection, peerName: peerName)
+        }
+    }
+
+    private func sendRelayPacket(_ data: Data, reliability: MCSessionSendDataMode) -> Bool {
+        if let connection = directConnectionSnapshot() {
+            guard data.count <= Int(UInt32.max) else { return false }
+            var length = UInt32(data.count).bigEndian
+            var framed = Data(bytes: &length, count: MemoryLayout<UInt32>.size)
+            framed.append(data)
+            connection.send(content: framed, completion: .contentProcessed { [weak self] error in
+                guard error != nil else { return }
+                DispatchQueue.main.async {
+                    self?.connectionStatus = "Companion relay connection was interrupted."
+                }
+            })
+            return true
+        }
+
+        guard !session.connectedPeers.isEmpty else { return false }
+        do {
+            try session.send(data, toPeers: session.connectedPeers, with: reliability)
+            return true
+        } catch {
+            return false
+        }
+    }
+
+    private func handleReceivedRelayPacket(_ data: Data) {
+        if let commandPacket = try? PropertyListDecoder().decode(WatchControlCommandPacket.self, from: data),
+           commandPacket.payload.kind == WatchCaptureCommandPayload.packetKind {
+            DispatchQueue.main.async {
+                self.sendWatchControlStatus(
+                    WatchCaptureControlReply(
+                        commandID: commandPacket.payload.commandID,
+                        sessionID: commandPacket.payload.sessionID,
+                        takeID: commandPacket.payload.takeID,
+                        syncState: .requested,
+                        detail: "Relay received the command and is forwarding it to the watch.",
+                        acknowledgedAt: Date()
+                    )
+                )
+                self.pendingWatchControlCommand = WatchControlCommandEvent(
+                    payload: commandPacket.payload,
+                    requestedAt: Date()
+                )
+                self.onWatchControlCommand?(commandPacket.payload)
+            }
+            return
+        }
+
+        if let ackPacket = try? PropertyListDecoder().decode(WatchCaptureRelayAckPacket.self, from: data),
+           ackPacket.kind == WatchCaptureRelayAckPacket.packetKind {
+            DispatchQueue.main.async {
+                self.onWatchCaptureAcknowledged?(ackPacket.captureID)
             }
         }
     }
@@ -806,7 +1157,7 @@ final class CompanionCameraBroadcaster: NSObject, ObservableObject {
             roleLabel: roleLabel
         )
 
-        let sidecar = CaptureCore.LocalRecordingSidecar.recording(
+        var sidecar = CaptureCore.LocalRecordingSidecar.recording(
             sessionID: sessionID,
             sessionConfig: recordingSessionConfig,
             takeIdentity: takeIdentity,
@@ -820,6 +1171,16 @@ final class CompanionCameraBroadcaster: NSObject, ObservableObject {
             captureTiming: captureTiming,
             startedAt: startedAt
         )
+        if let request = recordingWatchRequest,
+           request.sessionID == sessionID,
+           request.takeID == takeIdentity.takeID {
+            sidecar = sidecar.withPendingWatchRequest(request)
+        }
+        if let reply = recordingWatchReply,
+           reply.sessionID == sessionID,
+           reply.takeID == takeIdentity.takeID {
+            sidecar = sidecar.withWatchSync(reply)
+        }
 
         return PreparedRecording(mediaURL: files.mediaURL, sidecarURL: files.sidecarURL, sidecar: sidecar)
     }
@@ -854,6 +1215,8 @@ final class CompanionCameraBroadcaster: NSObject, ObservableObject {
             activeRecordingURL = nil
             activeRecordingSidecar = nil
             activeRecordingSidecarURL = nil
+            recordingWatchRequest = nil
+            recordingWatchReply = nil
         }
 
         let captureErrorDescription = error?.localizedDescription
@@ -934,9 +1297,18 @@ extension CompanionCameraBroadcaster: AVCaptureFileOutputRecordingDelegate {
     func fileOutput(_ output: AVCaptureFileOutput,
                     didStartRecordingTo fileURL: URL,
                     from connections: [AVCaptureConnection]) {
-        DispatchQueue.main.async {
-            self.isRecording = true
-            self.recordingStatus = "Recording to \(fileURL.lastPathComponent)"
+        captureQueue.async {
+            let shouldStopImmediately = self.stopRequestedWhileRecordingStarts
+            self.stopRequestedWhileRecordingStarts = false
+            DispatchQueue.main.async {
+                self.isRecording = true
+                self.recordingStatus = shouldStopImmediately
+                    ? "Stopping recording"
+                    : "Recording to \(fileURL.lastPathComponent)"
+            }
+            if shouldStopImmediately {
+                self.movieOutput.stopRecording()
+            }
         }
     }
 
@@ -944,20 +1316,26 @@ extension CompanionCameraBroadcaster: AVCaptureFileOutputRecordingDelegate {
                     didFinishRecordingTo outputFileURL: URL,
                     from connections: [AVCaptureConnection],
                     error: Error?) {
-        let (statusMessage, summary) = finalizeRecording(outputFileURL: outputFileURL, error: error)
-        DispatchQueue.main.async {
-            self.isRecording = false
+        captureQueue.async {
+            let (statusMessage, summary) = self.finalizeRecording(outputFileURL: outputFileURL, error: error)
+            let completions = self.pendingRecordingFinalizations
+            self.pendingRecordingFinalizations.removeAll()
+            self.stopRequestedWhileRecordingStarts = false
+            DispatchQueue.main.async {
+                self.isRecording = false
 
-            if error == nil {
-                self.lastRecordingName = outputFileURL.lastPathComponent
-            }
+                if error == nil {
+                    self.lastRecordingName = outputFileURL.lastPathComponent
+                }
 
-            if let summary {
-                self.lastRecordingSummary = summary
+                if let summary {
+                    self.lastRecordingSummary = summary
+                }
+                self.recordingStatus = statusMessage
+                completions.forEach { $0(summary) }
             }
-            self.recordingStatus = statusMessage
+            self.refreshNextTakeNumberPreview()
         }
-        refreshNextTakeNumberPreview()
     }
 }
 
@@ -973,14 +1351,18 @@ extension CompanionCameraBroadcaster: MCSessionDelegate {
             self.connectedPeerNames = session.connectedPeers.map(\.displayName).sorted()
             switch state {
             case .connected:
-                self.connectionStatus = "Streaming \(self.selectedCameraPosition.title.lowercased()) camera to \(peerID.displayName)"
+                self.connectionStatus = self.isRunning
+                    ? "Streaming \(self.selectedCameraPosition.title.lowercased()) camera to \(peerID.displayName)"
+                    : "Watch relay connected to \(peerID.displayName)"
             case .connecting:
                 self.connectionStatus = "Connecting to \(peerID.displayName)"
             case .notConnected:
                 self.isBroadcasting = false
                 self.connectionStatus = self.connectedPeerNames.isEmpty
                     ? "Searching for nearby ScratchLab"
-                    : "Streaming \(self.selectedCameraPosition.title.lowercased()) camera to \(self.connectedPeerNames.joined(separator: ", "))"
+                    : (self.isRunning
+                        ? "Streaming \(self.selectedCameraPosition.title.lowercased()) camera to \(self.connectedPeerNames.joined(separator: ", "))"
+                        : "Watch relay connected to \(self.connectedPeerNames.joined(separator: ", "))")
             @unknown default:
                 self.connectionStatus = "Connection state changed"
             }
@@ -988,26 +1370,7 @@ extension CompanionCameraBroadcaster: MCSessionDelegate {
     }
 
     func session(_ session: MCSession, didReceive data: Data, fromPeer peerID: MCPeerID) {
-        if let commandPacket = try? PropertyListDecoder().decode(WatchControlCommandPacket.self, from: data),
-           commandPacket.payload.kind == WatchCaptureCommandPayload.packetKind {
-            DispatchQueue.main.async {
-                self.pendingWatchControlCommand = WatchControlCommandEvent(
-                    payload: commandPacket.payload,
-                    requestedAt: Date()
-                )
-            }
-            return
-        }
-
-        if let ackPacket = try? PropertyListDecoder().decode(WatchCaptureRelayAckPacket.self, from: data),
-           ackPacket.kind == WatchCaptureRelayAckPacket.packetKind {
-            #if DEBUG
-            print("[WATCH-DEBUG] Mac acknowledged import id=\(ackPacket.captureID)")
-            #endif
-            DispatchQueue.main.async {
-                self.onWatchCaptureAcknowledged?(ackPacket.captureID)
-            }
-        }
+        handleReceivedRelayPacket(data)
     }
 
     func session(_ session: MCSession, didReceive stream: InputStream, withName streamName: String, fromPeer peerID: MCPeerID) {}

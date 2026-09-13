@@ -124,6 +124,13 @@ struct DVSVinylSampleTable {
 
 // MARK: - Control snapshot
 
+/// Measured direct-MIDI endpoint for one installed sample. It may reconcile
+/// accumulated render drift only after the ordinary idle ramp is silent.
+struct MIDIIdlePhaseAnchor {
+    let sampleIdentity: UInt64
+    let sourceFrame: Double
+}
+
 /// Plain sanitized control values as read from the atomic mailbox (or
 /// constructed directly by deterministic tests).
 struct DVSVinylControlSnapshot {
@@ -135,6 +142,7 @@ struct DVSVinylControlSnapshot {
     /// boundary. Unlike ordinary drift correction, this must reposition the
     /// render head exactly so the cue onset lands at 12 o'clock.
     var snapPhase: Bool = false
+    var midiIdleAnchor: MIDIIdlePhaseAnchor? = nil
 }
 
 // MARK: - Pure render core (single-owner state + deterministic math)
@@ -205,6 +213,7 @@ struct DVSContinuousVinylRenderCore {
     private(set) var velocity: Double = 0
     private(set) var gain: Double = 0
     private(set) var pendingPhaseCorrection: Double = 0
+    private var pendingMIDIIdleAnchor: MIDIIdlePhaseAnchor?
     /// Last-ingested target for the learned-mixer user gain (crossfader ×
     /// right upfader, already combined and clamped by the control side).
     /// Starts at 1.0 (unity) so audio is never muted before any mixer
@@ -261,6 +270,7 @@ struct DVSContinuousVinylRenderCore {
         velocity = 0
         gain = 0
         pendingPhaseCorrection = 0
+        pendingMIDIIdleAnchor = nil
         controlVelocity = 0
         controlActive = false
         framesSinceControlUpdate = Int.max / 2
@@ -279,6 +289,12 @@ struct DVSContinuousVinylRenderCore {
             sourceSampleRate: sampleSourceRate
         )
         controlActive = snapshot.active
+        pendingMIDIIdleAnchor = nil
+        if !snapshot.active, let anchor = snapshot.midiIdleAnchor,
+           anchor.sampleIdentity != 0, anchor.sampleIdentity == sampleIdentity,
+           anchor.sourceFrame.isFinite {
+            pendingMIDIIdleAnchor = anchor
+        }
         if snapshot.authoritativePhase.isFinite {
             controlAuthoritativePhase = snapshot.authoritativePhase
             if sampleLoopFrames > 0 {
@@ -397,6 +413,17 @@ struct DVSContinuousVinylRenderCore {
             userMixerGain += (targetUserMixerGain - userMixerGain) * userMixerGainCoefficient
 
             if gain < 0.000_001 {
+                if !controlActive, let anchor = pendingMIDIIdleAnchor,
+                   anchor.sampleIdentity == sampleIdentity {
+                    // Reconcile a measured MIDI endpoint while no PCM is
+                    // emitted. Audible velocity/correction/gain ramps above
+                    // are unchanged; DVS and unmeasured idle never enter here.
+                    phase = anchor.sourceFrame.truncatingRemainder(dividingBy: loop)
+                    if phase < 0 { phase += loop }
+                    velocity = 0
+                    pendingPhaseCorrection = 0
+                    pendingMIDIIdleAnchor = nil
+                }
                 left[i] = 0
                 right?[i] = 0
                 continue
@@ -503,6 +530,13 @@ private final class DVSVinylRenderMailbox {
     let phaseBits = Atomic<UInt64>(Double.zero.bitPattern)
     let activeWord = Atomic<UInt64>(0)
     let snapPhaseWord = Atomic<UInt64>(0)
+    // A sample identity, measured frame and control epoch must agree before
+    // permitting a silent reposition. Separate versioned publication keeps
+    // that stronger contract out of the existing tolerant velocity mailbox.
+    let midiIdleAnchorSequence = Atomic<UInt64>(0)
+    let midiIdleAnchorEpoch = Atomic<UInt64>(0)
+    let midiIdleAnchorIdentity = Atomic<UInt64>(0)
+    let midiIdleAnchorFrameBits = Atomic<UInt64>(Double.zero.bitPattern)
     let sampleTablePointer = Atomic<UnsafeMutableRawPointer?>(nil)
     /// Learned-mixer user gain (crossfader × right upfader), already
     /// combined and clamped by the control side. Independent of
@@ -523,8 +557,15 @@ private final class DVSVinylRenderMailbox {
     let renderIngestCount = Atomic<UInt64>(0)
     let lastIngestedTableIdentity = Atomic<UInt64>(0)
     let lastIngestedInitialPhaseBits = Atomic<UInt64>(Double.zero.bitPattern)
-    let renderPhaseBits = Atomic<UInt64>(Double.zero.bitPattern)
     #endif
+
+    // Coherent, read-only render -> UI telemetry. Sequence odd means a
+    // publication is in progress. All accesses are sequentially consistent;
+    // the reader makes at most two attempts and never blocks the callback.
+    let renderPositionSequence = Atomic<UInt64>(0)
+    let renderPhaseBits = Atomic<UInt64>(Double.zero.bitPattern)
+    let renderPositionTableIdentity = Atomic<UInt64>(0)
+    let renderPositionControlEpoch = Atomic<UInt64>(0)
 
     /// Render-owned core; after init, touched only by the render path
     /// (`DVSContinuousVinylRenderer.performRender`).
@@ -537,6 +578,25 @@ private final class DVSVinylRenderMailbox {
     /// `sampleTablePointer`.
     var retainedPCMAllocations: [UnsafeMutablePointer<Float>] = []
     var retainedTableAllocations: [UnsafeMutablePointer<DVSVinylSampleTable>] = []
+
+    func publishMIDIIdleAnchor(_ anchor: MIDIIdlePhaseAnchor?, epoch: UInt64) {
+        midiIdleAnchorSequence.wrappingAdd(1, ordering: .sequentiallyConsistent)
+        midiIdleAnchorEpoch.store(epoch, ordering: .sequentiallyConsistent)
+        midiIdleAnchorIdentity.store(anchor?.sampleIdentity ?? 0, ordering: .sequentiallyConsistent)
+        midiIdleAnchorFrameBits.store((anchor?.sourceFrame ?? 0).bitPattern, ordering: .sequentiallyConsistent)
+        midiIdleAnchorSequence.wrappingAdd(1, ordering: .sequentiallyConsistent)
+    }
+
+    func midiIdleAnchor(for epoch: UInt64) -> MIDIIdlePhaseAnchor? {
+        let before = midiIdleAnchorSequence.load(ordering: .sequentiallyConsistent)
+        guard before > 0, before.isMultiple(of: 2) else { return nil }
+        let anchorEpoch = midiIdleAnchorEpoch.load(ordering: .sequentiallyConsistent)
+        let identity = midiIdleAnchorIdentity.load(ordering: .sequentiallyConsistent)
+        let frame = Double(bitPattern: midiIdleAnchorFrameBits.load(ordering: .sequentiallyConsistent))
+        let after = midiIdleAnchorSequence.load(ordering: .sequentiallyConsistent)
+        guard before == after, anchorEpoch == epoch, identity != 0, frame.isFinite else { return nil }
+        return MIDIIdlePhaseAnchor(sampleIdentity: identity, sourceFrame: frame)
+    }
 
     init(outputSampleRate: Double) {
         core = .allocate(capacity: 1)
@@ -667,7 +727,8 @@ final class DVSContinuousVinylRenderer {
             velocity: Double(bitPattern: mailbox.velocityBits.load(ordering: .relaxed)),
             authoritativePhase: Double(bitPattern: mailbox.phaseBits.load(ordering: .relaxed)),
             active: mailbox.activeWord.load(ordering: .relaxed) != 0,
-            snapPhase: mailbox.snapPhaseWord.load(ordering: .relaxed) != 0
+            snapPhase: mailbox.snapPhaseWord.load(ordering: .relaxed) != 0,
+            midiIdleAnchor: mailbox.midiIdleAnchor(for: epoch)
         )
         mailbox.core.pointee.ingest(snapshot: snapshot)
         // Learned-mixer user gain: one relaxed atomic load, independent of
@@ -676,10 +737,49 @@ final class DVSContinuousVinylRenderer {
             Double(bitPattern: mailbox.userMixerGainBits.load(ordering: .relaxed))
         )
         let silent = mailbox.core.pointee.render(left: left, right: right, frameCount: frameCount)
-        #if DEBUG
-        mailbox.renderPhaseBits.store(mailbox.core.pointee.phase.bitPattern, ordering: .relaxed)
-        #endif
+        if frameCount > 0 {
+            mailbox.renderPositionSequence.wrappingAdd(1, ordering: .sequentiallyConsistent)
+            mailbox.renderPhaseBits.store(mailbox.core.pointee.phase.bitPattern, ordering: .sequentiallyConsistent)
+            mailbox.renderPositionTableIdentity.store(mailbox.core.pointee.sampleIdentity, ordering: .sequentiallyConsistent)
+            mailbox.renderPositionControlEpoch.store(epoch, ordering: .sequentiallyConsistent)
+            mailbox.renderPositionSequence.wrappingAdd(1, ordering: .sequentiallyConsistent)
+        }
         return silent
+    }
+
+    /// Source read-head phase after the latest rendered block, not the
+    /// control target or a speaker-latency-compensated presentation timestamp.
+    struct RenderPositionSnapshot: Equatable {
+        let sampleIdentity: UInt64
+        let controlEpoch: UInt64
+        let sourceFrame: Double
+    }
+
+    /// Control-side boundary used to reject telemetry from an earlier owner.
+    var currentControlEpoch: UInt64 { mailbox.controlEpoch.load(ordering: .acquiring) }
+
+    var currentInstalledSampleIdentity: UInt64? {
+        guard let raw = mailbox.sampleTablePointer.load(ordering: .acquiring) else { return nil }
+        return raw.assumingMemoryBound(to: DVSVinylSampleTable.self).pointee.identity
+    }
+
+    /// No render-core reads on the UI/control thread. A reload remains
+    /// unavailable until that exact immutable table has actually rendered.
+    func currentRenderPositionSnapshot() -> RenderPositionSnapshot? {
+        for _ in 0..<2 {
+            let before = mailbox.renderPositionSequence.load(ordering: .sequentiallyConsistent)
+            guard before > 0, before.isMultiple(of: 2) else { continue }
+            let phase = Double(bitPattern: mailbox.renderPhaseBits.load(ordering: .sequentiallyConsistent))
+            let identity = mailbox.renderPositionTableIdentity.load(ordering: .sequentiallyConsistent)
+            let epoch = mailbox.renderPositionControlEpoch.load(ordering: .sequentiallyConsistent)
+            let after = mailbox.renderPositionSequence.load(ordering: .sequentiallyConsistent)
+            guard before == after, phase.isFinite, identity != 0 else { continue }
+            guard let raw = mailbox.sampleTablePointer.load(ordering: .acquiring) else { return nil }
+            let table = raw.assumingMemoryBound(to: DVSVinylSampleTable.self).pointee
+            guard table.identity == identity, phase >= 0, phase < table.loopFrames else { return nil }
+            return RenderPositionSnapshot(sampleIdentity: identity, controlEpoch: epoch, sourceFrame: phase)
+        }
+        return nil
     }
 
     // MARK: - Control-side API (controller audio queue only)
@@ -757,6 +857,7 @@ final class DVSContinuousVinylRenderer {
             velocity,
             sourceSampleRate: installedSourceSampleRate
         )
+        mailbox.publishMIDIIdleAnchor(nil, epoch: 0)
         mailbox.velocityBits.store(safeVelocity.bitPattern, ordering: .relaxed)
         if authoritativePhase.isFinite {
             mailbox.phaseBits.store(authoritativePhase.bitPattern, ordering: .relaxed)
@@ -773,9 +874,14 @@ final class DVSContinuousVinylRenderer {
     }
 
     /// Publishes the idle/settle state (velocity target zero, inactive).
-    /// The published authoritative phase — and the renderer's retained
-    /// phase — are untouched: stopping never resets phase.
-    func publishIdle() {
+    /// Ordinary/DVS idle preserves phase. Direct MIDI may supply a current
+    /// measured endpoint for reconciliation after the gain ramp is silent.
+    func publishIdle(midiAnchor: MIDIIdlePhaseAnchor? = nil) {
+        let anchor = midiAnchor.flatMap { value in
+            value.sampleIdentity == currentInstalledSampleIdentity && value.sourceFrame.isFinite ? value : nil
+        }
+        let nextEpoch = mailbox.controlEpoch.load(ordering: .relaxed) &+ 1
+        mailbox.publishMIDIIdleAnchor(anchor, epoch: nextEpoch)
         mailbox.velocityBits.store(Double.zero.bitPattern, ordering: .relaxed)
         mailbox.activeWord.store(0, ordering: .relaxed)
         mailbox.snapPhaseWord.store(0, ordering: .relaxed)
@@ -839,6 +945,6 @@ final class DVSContinuousVinylRenderer {
     var renderIngestCount: UInt64 { mailbox.renderIngestCount.load(ordering: .relaxed) }
     var lastIngestedTableIdentity: UInt64 { mailbox.lastIngestedTableIdentity.load(ordering: .relaxed) }
     var lastIngestedInitialPhase: Double { Double(bitPattern: mailbox.lastIngestedInitialPhaseBits.load(ordering: .relaxed)) }
-    var currentRenderPhase: Double { Double(bitPattern: mailbox.renderPhaseBits.load(ordering: .relaxed)) }
+    var currentRenderPhase: Double { Double(bitPattern: mailbox.renderPhaseBits.load(ordering: .sequentiallyConsistent)) }
 #endif
 }

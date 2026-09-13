@@ -48,7 +48,22 @@ struct SessionExportMetadata: Codable, Equatable, Sendable {
     let timingPrintedToRecording: String
     let handedness: String?
     let takeCount: Int
+    /// Measured playable duration across every take in the export.
     let totalDurationSeconds: Double
+    /// The take length the operator asked for, when one was recorded. Kept
+    /// separate from `totalDurationSeconds` so a shortfall between what was
+    /// requested and what was captured stays visible instead of being papered
+    /// over by one ambiguous number.
+    let plannedTakeDurationSeconds: Double?
+    /// The longest a take in this session was allowed to run.
+    ///
+    /// A safety cap, not an intent. Recorded separately from
+    /// `plannedTakeDurationSeconds` so an open-ended take can state its bound
+    /// without claiming anyone planned it.
+    let maximumTakeDurationSeconds: Double?
+    /// IANA zone the session's calendar date is read in, persisted at session
+    /// creation. See `CaptureCanonicalFormatting`'s session date policy.
+    let sessionTimeZoneIdentifier: String?
     let deckProfile: String?
     let cameraProfile: String?
     let watchWrist: String?
@@ -82,6 +97,9 @@ struct SessionExportMetadata: Codable, Equatable, Sendable {
         handedness: String? = nil,
         takeCount: Int,
         totalDurationSeconds: Double,
+        plannedTakeDurationSeconds: Double? = nil,
+        maximumTakeDurationSeconds: Double? = nil,
+        sessionTimeZoneIdentifier: String? = nil,
         deckProfile: String? = nil,
         cameraProfile: String? = nil,
         watchWrist: String? = nil,
@@ -115,6 +133,9 @@ struct SessionExportMetadata: Codable, Equatable, Sendable {
         self.handedness = handedness
         self.takeCount = takeCount
         self.totalDurationSeconds = totalDurationSeconds
+        self.plannedTakeDurationSeconds = plannedTakeDurationSeconds
+        self.maximumTakeDurationSeconds = maximumTakeDurationSeconds
+        self.sessionTimeZoneIdentifier = sessionTimeZoneIdentifier
         self.deckProfile = deckProfile
         self.cameraProfile = cameraProfile
         self.watchWrist = watchWrist
@@ -162,6 +183,9 @@ extension SessionExportMetadata {
             handedness: config.normalizedHandedness,
             takeCount: config.takeCount,
             totalDurationSeconds: totalDurationSeconds ?? config.takeDurationSeconds ?? 0,
+            plannedTakeDurationSeconds: RoutineCaptureDefaults.plannedTakeDurationSeconds(for: config),
+            maximumTakeDurationSeconds: config.maximumTakeDurationSeconds,
+            sessionTimeZoneIdentifier: config.sessionTimeZoneIdentifier,
             deckProfile: deckProfile,
             cameraProfile: cameraProfile,
             watchWrist: watchWrist,
@@ -179,6 +203,10 @@ struct SessionExportTake: Sendable {
     let audioArtifactURL: URL?
     let sidecarURL: URL
     let watchCaptureSession: WatchMotionCaptureSession?
+    /// Original persisted Watch JSON used to construct `watchCaptureSession`.
+    /// Guided/recovered production takes provide this so export validates the
+    /// real source artifact instead of trusting an in-memory projection alone.
+    let sourceWatchMotionURL: URL?
     let drillName: String?
     let duration: TimeInterval
     let quality: String?
@@ -191,6 +219,18 @@ struct SessionExportTake: Sendable {
     let syncClapUsed: Bool?
     let note: String?
     let captureTiming: CaptureTimingMetadata?
+    /// Typed provenance behind `motionPresent`. Additive and optional: `nil`
+    /// means a caller that predates source-aware motion resolution, and is
+    /// treated as the historical Watch-only claim by export validation.
+    ///
+    /// `SessionExportTake` is an in-memory input struct, not a serialized
+    /// type, so this adds no on-disk export-schema field.
+    let motionSources: [CaptureMotionSource]?
+    /// How this take's crossfader was recognised, when it produced any fader
+    /// evidence. Additive and optional: `nil` means no fader evidence carried
+    /// provenance. Like `motionSources`, this lives on an in-memory input
+    /// struct and adds no on-disk export-schema field.
+    let faderMappingSource: FaderMappingSource?
 
     init(
         takeID: String,
@@ -211,7 +251,10 @@ struct SessionExportTake: Sendable {
         verbalSlateUsed: Bool?,
         syncClapUsed: Bool?,
         note: String?,
-        captureTiming: CaptureTimingMetadata? = nil
+        captureTiming: CaptureTimingMetadata? = nil,
+        motionSources: [CaptureMotionSource]? = nil,
+        faderMappingSource: FaderMappingSource? = nil,
+        sourceWatchMotionURL: URL? = nil
     ) {
         self.takeID = takeID
         self.takeNumber = takeNumber
@@ -232,6 +275,28 @@ struct SessionExportTake: Sendable {
         self.syncClapUsed = syncClapUsed
         self.note = note
         self.captureTiming = captureTiming
+        self.motionSources = motionSources
+        self.faderMappingSource = faderMappingSource
+        self.sourceWatchMotionURL = sourceWatchMotionURL
+    }
+
+    /// Whether export must find a valid linked Watch artifact to honour this
+    /// take's motion claim.
+    ///
+    /// A take whose motion came from controller platter evidence has no Watch
+    /// file to point at and must not be rejected for lacking one. `nil`
+    /// sources keep the historical Watch-only behaviour so pre-existing
+    /// callers and fixtures validate exactly as before.
+    var claimsWatchBackedMotion: Bool {
+        guard motionPresent == true else { return false }
+        guard let motionSources else { return true }
+        return motionSources.contains(.watch)
+    }
+
+    /// A motion claim with no source behind it is a contradiction, not a
+    /// Watch-backed take, and must fail validation on its own terms.
+    var claimsMotionWithoutAnySource: Bool {
+        motionPresent == true && motionSources?.isEmpty == true
     }
 }
 
@@ -259,6 +324,75 @@ struct SessionExportTakeCaptureMetadata: Codable, Equatable, Sendable {
     let labelSource: String
     let labelConfidence: Double?
     let notationConfidence: Double?
+    /// Why this take stopped: a `CaptureStopReason` raw value, or `nil` for a
+    /// take recorded before stop reasons were captured.
+    let stopReason: String?
+    /// The duration the operator explicitly selected for this take, or `nil`
+    /// for an open-ended take stopped by hand.
+    let plannedTakeDurationSeconds: Double?
+    /// The cap this take ran under. Not an intent.
+    let maximumTakeDurationSeconds: Double?
+    /// Measured playable duration of this take's media.
+    let actualTakeDurationSeconds: Double?
+    /// The take's Watch sync state, verbatim from the sidecar.
+    ///
+    /// The canonical manifest's `watch_source` is a two-valued dataset field
+    /// (`watch` / `none`) and cannot say *why* motion is absent. It collapses
+    /// `notRequested`, `timedOut`, `unavailable`, and `failed` into one
+    /// indistinguishable "none", which is exactly the degraded-state
+    /// mislabelling `AI_CONTEXT.md` forbids. This preserves the distinction
+    /// without changing that contract.
+    let watchSyncState: String?
+    /// The motion artifact this take's sidecar links, if any.
+    let watchLinkedMotionFileName: String?
+    /// Whether that artifact actually reached the archive.
+    ///
+    /// A take whose sidecar links motion that did not export is a real defect,
+    /// and stating both halves separately is what makes it visible.
+    let watchMotionExported: Bool
+    /// What happened when the Mac asked the Watch to stop for this take: a
+    /// `CaptureWatchStopOutcome` raw value.
+    ///
+    /// Distinct from `watchSyncState` (the *start* handshake) and from
+    /// `watch_source` (a two-valued dataset field). Without it, a Watch that
+    /// kept recording past the end of the take is indistinguishable from one
+    /// that stopped on cue.
+    let watchStopOutcome: String
+    /// The Watch's or relay's own words about that outcome, when there were any.
+    let watchStopDetail: String?
+    /// Where the Watch's motion artifact for this take got to: a
+    /// `CaptureWatchMotionTransferState` raw value.
+    let watchMotionTransferState: String
+    /// When this take's media recording was allocated.
+    ///
+    /// The Watch's window and the take's window do not share a start. Without
+    /// both, a reader comparing bare *durations* cannot tell a Watch that began
+    /// early from a Watch that ran late — which is exactly how a 5.411 s
+    /// lead-in was misreported as 5.411 s of overrun. These four instants are
+    /// what make the two answerable separately.
+    let takeStartedAt: Date?
+    /// When the Mac dispatched the Watch stop for this take: the authoritative
+    /// end of the take's media window. `nil` when no stop was requested.
+    let takeStopRequestedAt: Date?
+    /// When the linked Watch capture began, by the Watch's own clock.
+    let watchCaptureStartedAt: Date?
+    /// When the linked Watch capture ended, by the Watch's own clock. Compared
+    /// against `takeStopRequestedAt`, this is the real overrun.
+    let watchCaptureEndedAt: Date?
+    /// When the Watch handled the stop, by its own clock, and when the Mac
+    /// finished waiting.
+    ///
+    /// These split the stop handshake into its two legs. A stop that reads
+    /// `timedOut` is only actionable once you can say which direction was slow.
+    let watchStopHandledAt: Date?
+    let watchStopResolvedAt: Date?
+    /// When the iPhone relay confirmed it had the stop command. Absent on a
+    /// timeout means the relay never heard it.
+    let watchStopRelayReceivedAt: Date?
+    /// Exact pre-recording CXL configuration and portable count-in/media offset.
+    /// Legacy captures omit these; bound captures never recreate their beat from a mode name.
+    let referenceCaptureIntent: ReferenceCaptureIntent?
+    let recordingStartOffsetSeconds: Double?
 }
 
 struct SessionExportMetadataDocument: Codable, Equatable, Sendable {
@@ -473,6 +607,107 @@ struct SessionExportMixerMidiEvent: Codable, Equatable, Sendable {
     let mappedControl: String?
 }
 
+enum SessionExportEvidenceBounds {
+    static func boundedSnapshot(
+        _ snapshot: CaptureCore.DetectedNotationSnapshot,
+        to duration: TimeInterval
+    ) -> CaptureCore.DetectedNotationSnapshot {
+        guard duration.isFinite, duration >= 0 else { return snapshot }
+
+        let movementEvents = snapshot.recordMovementEvents.compactMap { event -> CaptureCore.DetectedNotationRecordMovementEvent? in
+            guard let interval = boundedInterval(
+                start: event.startTime,
+                end: event.endTime,
+                duration: duration
+            ) else { return nil }
+            let sourceDuration = event.endTime - event.startTime
+            let startFraction = sourceDuration > 0 ? (interval.start - event.startTime) / sourceDuration : 0
+            let endFraction = sourceDuration > 0 ? (interval.end - event.startTime) / sourceDuration : 1
+            let positionDelta = event.endPosition - event.startPosition
+            return CaptureCore.DetectedNotationRecordMovementEvent(
+                startTime: interval.start,
+                endTime: interval.end,
+                startPosition: event.startPosition + (positionDelta * startFraction),
+                endPosition: event.startPosition + (positionDelta * endFraction),
+                direction: event.direction,
+                movementKind: event.movementKind,
+                speed: event.speed,
+                confidence: event.confidence,
+                source: event.source
+            )
+        }
+        let audioEvents = snapshot.audioEvents.compactMap { event -> CaptureCore.DetectedNotationAudioEvent? in
+            guard let interval = boundedInterval(
+                start: event.startTime,
+                end: event.endTime,
+                duration: duration
+            ) else { return nil }
+            return CaptureCore.DetectedNotationAudioEvent(
+                startTime: interval.start,
+                endTime: interval.end,
+                duration: interval.end - interval.start,
+                peakLevel: event.peakLevel,
+                rmsLevel: event.rmsLevel,
+                confidence: event.confidence,
+                eventKind: event.eventKind,
+                source: event.source
+            )
+        }
+        let faderEvents = snapshot.faderEvents.compactMap { event -> CaptureCore.DetectedNotationFaderEvent? in
+            guard let interval = boundedInterval(
+                start: event.startTime,
+                end: event.endTime,
+                duration: duration
+            ) else { return nil }
+            let sourceDuration = event.endTime - event.startTime
+            let startFraction = sourceDuration > 0 ? (interval.start - event.startTime) / sourceDuration : 0
+            let endFraction = sourceDuration > 0 ? (interval.end - event.startTime) / sourceDuration : 1
+            let valueDelta = event.toValue - event.fromValue
+            return CaptureCore.DetectedNotationFaderEvent(
+                startTime: interval.start,
+                endTime: interval.end,
+                eventKind: event.eventKind,
+                control: event.control,
+                fromValue: event.fromValue + (valueDelta * startFraction),
+                toValue: event.fromValue + (valueDelta * endFraction),
+                source: event.source,
+                confidence: event.confidence
+            )
+        }
+        let mixerMidiEvents = snapshot.mixerMidiEvents.filter {
+            $0.takeRelativeTime.isFinite
+                && $0.takeRelativeTime >= 0
+                && $0.takeRelativeTime <= duration
+        }
+
+        return CaptureCore.DetectedNotationSnapshot(
+            notationSource: snapshot.notationSource,
+            notationConfidence: snapshot.notationConfidence,
+            detectedLabel: snapshot.detectedLabel,
+            labelSource: snapshot.labelSource,
+            labelConfidence: snapshot.labelConfidence,
+            detectionSources: snapshot.detectionSources,
+            recordMovementEvents: movementEvents,
+            audioEvents: audioEvents,
+            faderEvents: faderEvents,
+            mixerMidiEvents: mixerMidiEvents,
+            capturedAt: snapshot.capturedAt
+        )
+    }
+
+    private static func boundedInterval(
+        start: TimeInterval,
+        end: TimeInterval,
+        duration: TimeInterval
+    ) -> (start: TimeInterval, end: TimeInterval)? {
+        guard start.isFinite, end.isFinite, end > start else { return nil }
+        let boundedStart = max(0, start)
+        let boundedEnd = min(duration, end)
+        guard boundedEnd > boundedStart else { return nil }
+        return (boundedStart, boundedEnd)
+    }
+}
+
 struct SessionExportNotationBeatGrid: Codable, Equatable, Sendable {
     let bpm: Int
     let beatsPerBar: Int
@@ -545,11 +780,20 @@ struct SessionExportPackage: Sendable {
     let metadata: SessionExportMetadata
     let takes: [SessionExportTake]
     let calibrationData: Data?
+    var referenceTearEvidenceByTakeID: [String: Data] = [:]
+    /// Optional CXL recommendation/notes companions, bound like tear evidence.
+    var referenceReviewMetadataByTakeID: [String: Data] = [:]
 }
 
 enum SessionExportSource: Sendable {
     case package(SessionExportPackage)
-    case localRecordingSession(lastRecordingURL: URL, sessionName: String, config: CaptureSessionConfig?)
+    case localRecordingSession(
+        lastRecordingURL: URL,
+        sessionName: String,
+        config: CaptureSessionConfig?,
+        referenceTearEvidenceByTakeID: [String: Data] = [:],
+        referenceReviewMetadataByTakeID: [String: Data] = [:]
+    )
 }
 
 struct SessionExportResult: Identifiable, Equatable, Sendable {
@@ -607,6 +851,219 @@ enum SessionExportError: Error, Equatable, Sendable {
     }
 }
 
+/// Names the exact staged-package check that rejected an export.
+///
+/// Export deliberately reports one coarse `SessionExportError` so operator
+/// copy stays stable, but "This session has inconsistent metadata." names
+/// nothing an operator or a device log can act on. This enum carries the
+/// failing check alongside that error.
+///
+/// Cases are a closed vocabulary of check names only — never file paths,
+/// performer names, notes, or any other capture content — so the detail is
+/// safe to show in the UI and to write into the capture journal.
+enum SessionExportValidationReason: String, Equatable, Sendable {
+    case stagedDocumentUnreadable
+    case stagedSessionMetadataDocumentMismatch
+    case stagedExportMetadataDocumentMismatch
+    case stagedReviewDocumentMismatch
+    case stagedReplayDocumentMismatch
+    case stagedDocumentIdentityMismatch
+    case stagedCanonicalArtifactMismatch
+    case stagedGeneratedAudioMismatch
+    case platterMotionWithoutRecordedMovement
+    case capturedAudioHasNoDynamicChannelPair
+    case referenceTearEvidenceInvalid
+    case referenceTearEvidenceSourceMismatch
+    case unmatchedReferenceTearEvidence
+    case stagedReferenceTearEvidenceMismatch
+    case referenceReviewMetadataInvalid
+    case referenceReviewMetadataSourceMismatch
+    case unmatchedReferenceReviewMetadata
+    case stagedReferenceReviewMetadataMismatch
+
+    var detailText: String {
+        switch self {
+        case .stagedDocumentUnreadable:
+            return "Export blocked: a generated manifest in this session could not be read back."
+        case .stagedSessionMetadataDocumentMismatch:
+            return "Export blocked: manifests/session_metadata.json did not match the session it was generated from."
+        case .stagedExportMetadataDocumentMismatch:
+            return "Export blocked: manifests/export_metadata.json did not match the session it was generated from."
+        case .stagedReviewDocumentMismatch:
+            return "Export blocked: manifests/session_review.json did not match the session it was generated from."
+        case .stagedReplayDocumentMismatch:
+            return "Export blocked: manifests/session_replay.json did not match the session it was generated from."
+        case .stagedDocumentIdentityMismatch:
+            return "Export blocked: a generated manifest named a different session or take set than this export."
+        case .stagedCanonicalArtifactMismatch:
+            return "Export blocked: a staged canonical media artifact did not match its manifest hash."
+        case .stagedGeneratedAudioMismatch:
+            return "Export blocked: a staged generated audio artifact did not match the rendered source."
+        case .platterMotionWithoutRecordedMovement:
+            return "Export blocked: a take claims platter motion but its notation recorded no movement events."
+        case .referenceTearEvidenceInvalid:
+            return "Export blocked: requested Reference Tear evidence could not be validated."
+        case .referenceTearEvidenceSourceMismatch:
+            return "Export blocked: the captured sidecar changed after Reference Tear analysis. Its saved evidence must be reviewed against the current source before export."
+        case .unmatchedReferenceTearEvidence:
+            return "Export blocked: requested Reference Tear evidence does not match a take in this archive."
+        case .stagedReferenceTearEvidenceMismatch:
+            return "Export blocked: staged Reference Tear evidence did not match its validated source and document."
+        case .referenceReviewMetadataInvalid:
+            return "Export blocked: the saved repetition recommendation or review notes could not be validated."
+        case .referenceReviewMetadataSourceMismatch:
+            return "Export blocked: the review recommendation belongs to a different take, sidecar or original media."
+        case .unmatchedReferenceReviewMetadata:
+            return "Export blocked: review metadata does not match a take in this archive."
+        case .stagedReferenceReviewMetadataMismatch:
+            return "Export blocked: staged review metadata did not match its validated source and document."
+        case .capturedAudioHasNoDynamicChannelPair:
+            return "Export blocked: no dynamic audio was captured in any channel pair — every pair was silent or a constant DC signal, so no scratch stem could be written."
+        }
+    }
+}
+
+/// A staged-package rejection that carries both the operator-facing
+/// `SessionExportError` and the specific check that failed.
+///
+/// `exportError` keeps the existing user message and retry/cancel semantics
+/// unchanged; `reason` is the diagnosable detail. Callers that only care about
+/// the coarse outcome read `exportError`.
+struct SessionExportValidationFailure: Error, Equatable, Sendable {
+    let reason: SessionExportValidationReason
+    let exportError: SessionExportError
+
+    init(
+        _ reason: SessionExportValidationReason,
+        exportError: SessionExportError = .invalidSessionMetadata
+    ) {
+        self.reason = reason
+        self.exportError = exportError
+    }
+
+    var validationReport: SessionValidationReport {
+        SessionValidationReport(suggestedError: exportError, issues: [reason.detailText])
+    }
+}
+
+/// A rejection that already carries the operator-facing sentence naming the
+/// artifact or field that failed.
+///
+/// `exportError` keeps the coarse retry/cancel semantics the export UI already
+/// switches on; `issue` is what the operator actually reads. Use this wherever
+/// a check knows *which* artifact it rejected - throwing a bare
+/// `SessionExportError` there throws that knowledge away.
+struct SessionExportArtifactRejection: Error, Equatable, Sendable {
+    let issue: String
+    let exportError: SessionExportError
+
+    init(issue: String, exportError: SessionExportError) {
+        self.issue = issue
+        self.exportError = exportError
+    }
+
+    var validationReport: SessionValidationReport {
+        SessionValidationReport(suggestedError: exportError, issues: [issue])
+    }
+}
+
+/// Renders any error raised while building or validating the canonical export
+/// into a message that names the artifact or field that was rejected.
+///
+/// Export used to funnel three genuinely different outcomes into the same two
+/// sentences: "This session is missing required files." and "ScratchLab could
+/// not validate the canonical export artifacts." Neither names the take, the
+/// artifact, or the check, so a session whose `.mov`, `.wav` and `.json` are
+/// all present and non-empty reported as if files were absent. Validation is
+/// unchanged - every check that rejected before still rejects. Only what the
+/// operator is told changed.
+///
+/// What may appear in the text: check names, artifact *file names*
+/// (`lastPathComponent` only, never a full path), take numbers, coding-key
+/// paths from a decode failure, and the underlying framework error. What may
+/// never appear: performer names, notes, or any other capture content.
+enum SessionExportFailureText {
+
+    /// The single entry point every catch-all in validation and export uses.
+    static func issue(for error: Error, while activity: String) -> String {
+        if let rejection = error as? SessionExportArtifactRejection {
+            return rejection.issue
+        }
+        if let failure = error as? SessionExportValidationFailure {
+            return failure.reason.detailText
+        }
+        if let exportError = error as? SessionExportError {
+            return exportError.userMessage
+        }
+        return "Export blocked while \(activity): \(describe(error))"
+    }
+
+    /// Why a sidecar that exists on disk could not be read back.
+    ///
+    /// `try?` on the sidecar decode is what turned a schema mismatch into
+    /// "This session is missing required files." The file is right there; the
+    /// operator needs the field that failed, not a claim that it is absent.
+    static func unreadableSidecarIssue(_ error: Error, fileName: String) -> String {
+        "Export blocked: ScratchLab could not read \(fileName). \(describe(error))"
+    }
+
+    static func missingSidecarIssue(fileName: String) -> String {
+        "Export blocked: \(fileName) is missing from the capture folder."
+    }
+
+    /// Human-readable detail for an error raised by Foundation, AVFoundation
+    /// or `Codable`, in that order of specificity.
+    static func describe(_ error: Error) -> String {
+        if let decodingError = error as? DecodingError {
+            return describeDecoding(decodingError)
+        }
+        if let encodingError = error as? EncodingError {
+            return describeEncoding(encodingError)
+        }
+        if let localized = error as? LocalizedError, let description = localized.errorDescription {
+            return description
+        }
+        let nsError = error as NSError
+        let base = nsError.localizedDescription
+        return "\(base) (\(nsError.domain) \(nsError.code))"
+    }
+
+    private static func describeDecoding(_ error: DecodingError) -> String {
+        switch error {
+        case .keyNotFound(let key, let context):
+            return "Required field '\(codingPath(context.codingPath, appending: key))' is missing."
+        case .typeMismatch(let type, let context):
+            return "Field '\(codingPath(context.codingPath))' is not a \(type)."
+        case .valueNotFound(let type, let context):
+            return "Field '\(codingPath(context.codingPath))' holds no \(type) value."
+        case .dataCorrupted(let context):
+            let path = codingPath(context.codingPath)
+            if path.isEmpty {
+                return "The file is not valid JSON. \(context.debugDescription)"
+            }
+            return "Field '\(path)' could not be decoded. \(context.debugDescription)"
+        @unknown default:
+            return "The file could not be decoded."
+        }
+    }
+
+    private static func describeEncoding(_ error: EncodingError) -> String {
+        switch error {
+        case .invalidValue(_, let context):
+            let path = codingPath(context.codingPath)
+            return path.isEmpty
+                ? "A generated document held a value that cannot be encoded."
+                : "Field '\(path)' held a value that cannot be encoded."
+        @unknown default:
+            return "A generated document could not be encoded."
+        }
+    }
+
+    private static func codingPath(_ path: [CodingKey], appending key: CodingKey? = nil) -> String {
+        (path + (key.map { [$0] } ?? [])).map(\.stringValue).joined(separator: ".")
+    }
+}
+
 enum TakeArtifactReadiness: Equatable, Sendable {
     case recording
     case finalizing
@@ -638,6 +1095,8 @@ struct TakeArtifactStatusSnapshot: Equatable, Sendable, Identifiable {
     let takeNumber: Int
     let bpm: Int?
     let targetLabel: String?
+    let sessionConfig: CaptureSessionConfig?
+    let startedAt: Date?
     let audioSourceURL: URL?
     let videoSourceURL: URL?
     let audioExists: Bool
@@ -650,7 +1109,50 @@ struct TakeArtifactStatusSnapshot: Equatable, Sendable, Identifiable {
     let detectedLabel: String?
     let labelConfidence: Double?
 
+    init(
+        takeID: String,
+        takeNumber: Int,
+        bpm: Int?,
+        targetLabel: String?,
+        sessionConfig: CaptureSessionConfig? = nil,
+        startedAt: Date? = nil,
+        audioSourceURL: URL?,
+        videoSourceURL: URL?,
+        audioExists: Bool,
+        videoExists: Bool,
+        audioBytes: Int64,
+        videoBytes: Int64,
+        finalizedAt: Date?,
+        readiness: TakeArtifactReadiness,
+        detectedNotation: CaptureCore.DetectedNotationSnapshot?,
+        detectedLabel: String?,
+        labelConfidence: Double?
+    ) {
+        self.takeID = takeID
+        self.takeNumber = takeNumber
+        self.bpm = bpm
+        self.targetLabel = targetLabel
+        self.sessionConfig = sessionConfig
+        self.startedAt = startedAt
+        self.audioSourceURL = audioSourceURL
+        self.videoSourceURL = videoSourceURL
+        self.audioExists = audioExists
+        self.videoExists = videoExists
+        self.audioBytes = audioBytes
+        self.videoBytes = videoBytes
+        self.finalizedAt = finalizedAt
+        self.readiness = readiness
+        self.detectedNotation = detectedNotation
+        self.detectedLabel = detectedLabel
+        self.labelConfidence = labelConfidence
+    }
+
     var id: String { takeID }
+
+    var recordedDuration: TimeInterval? {
+        guard let startedAt, let finalizedAt else { return nil }
+        return max(0, finalizedAt.timeIntervalSince(startedAt))
+    }
 }
 
 enum ArtifactPreflight {
@@ -678,17 +1180,35 @@ enum ArtifactPreflight {
         fileManager: FileManager = .default,
         configuration: Configuration = .exportDefault
     ) -> FileCheckResult {
-        let deadline = Date().addingTimeInterval(configuration.timeout)
+        checkFileReady(
+            url: url,
+            fileManager: fileManager,
+            configuration: configuration,
+            now: Date.init,
+            sleep: Thread.sleep(forTimeInterval:)
+        )
+    }
+
+    /// Per-call time and waiting dependencies let tests observe real file
+    /// changes without relying on background writes meeting wall-clock deadlines.
+    static func checkFileReady(
+        url: URL,
+        fileManager: FileManager,
+        configuration: Configuration,
+        now: () -> Date,
+        sleep: (TimeInterval) -> Void
+    ) -> FileCheckResult {
+        let deadline = now().addingTimeInterval(configuration.timeout)
         var lastObservedSize: Int64 = 0
         var lastObservedExists = false
 
-        while Date() <= deadline {
+        while now() <= deadline {
             let current = fileState(at: url, fileManager: fileManager)
             lastObservedExists = current.exists
             lastObservedSize = current.bytes
 
             if current.exists, current.bytes > 0 {
-                Thread.sleep(forTimeInterval: configuration.stabilityInterval)
+                sleep(configuration.stabilityInterval)
                 let stabilized = fileState(at: url, fileManager: fileManager)
                 if stabilized.exists, stabilized.bytes == current.bytes, stabilized.bytes > 0 {
                     return FileCheckResult(
@@ -702,7 +1222,7 @@ enum ArtifactPreflight {
                 lastObservedSize = stabilized.bytes
             }
 
-            Thread.sleep(forTimeInterval: configuration.pollInterval)
+            sleep(configuration.pollInterval)
         }
 
         return FileCheckResult(
@@ -988,6 +1508,16 @@ final class SessionExportCoordinator: ObservableObject {
         }
     }
 
+    var canRetry: Bool {
+        if case .failed = state { return true }
+        return false
+    }
+
+    var wasCancelled: Bool {
+        if case .cancelled = state { return true }
+        return false
+    }
+
     func prepareShare(
         for source: SessionExportSource,
         options: SessionExportOptions = SessionExportOptions()
@@ -995,6 +1525,7 @@ final class SessionExportCoordinator: ObservableObject {
         guard !isPreparing else { return }
 
         cleanupWorkItem?.cancel()
+        discardPreviousTemporaryResult()
         archiveBuilder.cleanupStaleExports()
         shareRequest = nil
         sizeWarning = nil
@@ -1034,6 +1565,13 @@ final class SessionExportCoordinator: ObservableObject {
                 state = .readyToShare(result)
                 statusMessage = "Ready to share"
                 shareRequest = SessionShareRequest(archiveURL: result.archiveURL, subject: result.subject)
+            } catch let validationFailure as SessionExportValidationFailure {
+                // Surface which check rejected the export instead of only the
+                // coarse message. `handleFailure` already prefers the report's
+                // summary, so the operator sees the named conflict and the
+                // failure stays visible and retryable.
+                validationReport = validationFailure.validationReport
+                handleFailure(validationFailure.exportError)
             } catch let exportError as SessionExportError {
                 handleFailure(exportError)
             } catch {
@@ -1051,6 +1589,7 @@ final class SessionExportCoordinator: ObservableObject {
         guard !isPreparing else { return }
 
         cleanupWorkItem?.cancel()
+        discardPreviousTemporaryResult()
         archiveBuilder.cleanupStaleExports()
         shareRequest = nil
         sizeWarning = nil
@@ -1111,6 +1650,9 @@ final class SessionExportCoordinator: ObservableObject {
                     : nil
                 state = .shareCompleted(savedResult)
                 statusMessage = "Export saved."
+            } catch let validationFailure as SessionExportValidationFailure {
+                validationReport = validationFailure.validationReport
+                handleFailure(validationFailure.exportError)
             } catch let exportError as SessionExportError {
                 handleFailure(exportError)
             } catch {
@@ -1127,29 +1669,34 @@ final class SessionExportCoordinator: ObservableObject {
     }
 
     func markSharePresented() {
-        guard let lastResult else { return }
-        state = .presentingShareSheet(lastResult)
+        guard case let .readyToShare(readyResult) = state,
+              let lastResult,
+              readyResult == lastResult,
+              shareRequest?.archiveURL == readyResult.archiveURL else { return }
+        state = .presentingShareSheet(readyResult)
         statusMessage = "Ready to share"
     }
 
     func handleShareOutcome(_ outcome: SessionShareOutcome) {
+        guard case let .presentingShareSheet(presentedResult) = state,
+              lastResult == presentedResult else {
+            // A late callback from an older sheet must not replace a newer
+            // visible failure/preparation state. An outcome received while
+            // idle is still a real presenter error, never a success.
+            if case .idle = state {
+                handleFailure(.unableToPresentShareOptions)
+            }
+            return
+        }
         shareRequest = nil
 
         switch outcome {
         case .completed:
-            state = lastResult.map(SessionExportState.shareCompleted) ?? .shareCompleted(
-                SessionExportResult(
-                    archiveURL: FileManager.default.temporaryDirectory.appendingPathComponent("scratchlab.zip"),
-                    archiveSizeBytes: 0,
-                    sessionName: "ScratchLab Session",
-                    createdAt: Date(),
-                    shouldCleanupAfterUse: true
-                )
-            )
+            state = .shareCompleted(presentedResult)
             statusMessage = "Export complete."
             scheduleCleanupIfNeeded(after: 120)
         case .cancelled:
-            state = .cancelled(lastResult)
+            state = .cancelled(presentedResult)
             statusMessage = "Share cancelled."
             scheduleCleanupIfNeeded(after: 120)
         case .failed:
@@ -1189,7 +1736,7 @@ final class SessionExportCoordinator: ObservableObject {
     }
 
     private func recordValidationBlockIfNeeded(for source: SessionExportSource, report: SessionValidationReport) {
-        guard case .localRecordingSession(let lastRecordingURL, _, _) = source else { return }
+        guard case .localRecordingSession(let lastRecordingURL, _, _, _, _) = source else { return }
         let sidecarURL = CaptureCore.LocalRecordingFiles.sidecarURL(forMediaURL: lastRecordingURL)
         guard let sidecar = try? SessionArchiveBuilder().decodeSidecarForAudit(at: sidecarURL) else { return }
         guard let storageKind = Self.storageKind(for: lastRecordingURL) else { return }
@@ -1223,6 +1770,14 @@ final class SessionExportCoordinator: ObservableObject {
         }
         cleanupWorkItem = workItem
         DispatchQueue.main.asyncAfter(deadline: .now() + delay, execute: workItem)
+    }
+
+    private func discardPreviousTemporaryResult() {
+        guard let lastResult else { return }
+        if lastResult.shouldCleanupAfterUse {
+            try? FileManager.default.removeItem(at: lastResult.archiveURL)
+        }
+        self.lastResult = nil
     }
 
     #if os(macOS)
@@ -1306,6 +1861,538 @@ final class SessionExportCoordinator: ObservableObject {
         lhs.standardizedFileURL.resolvingSymlinksInPath() == rhs.standardizedFileURL.resolvingSymlinksInPath()
     }
     #endif
+}
+
+/// Projects a multichannel capture down to a playable stereo stem.
+///
+/// Two hardware truths drive every rule here, both measured on session
+/// 20435e68 (macOS, "Rane ONE MKII"):
+///
+/// 1. A DVS interface presents control, status, and programme lines side by
+///    side, and a dead control line reads as a **constant**: high absolute
+///    value, no movement. Total signal energy cannot separate it from
+///    programme audio — a channel frozen at -0.70 carries more sum-of-squares
+///    energy (0.49/sample) than a scratch performance at 0.56 RMS
+///    (0.31/sample). Ranking is therefore on the AC component (deviation about
+///    a channel's own mean), never on raw level.
+///
+/// 2. A capture can be *effectively mono*: one live channel beside exact
+///    zeros, and that live channel may sit on a large DC offset. Take-02's
+///    programme channel measured dc=-0.695 against acRMS=0.564. That channel
+///    is **recoverable** — it is the performance — so a rule that rejects it
+///    for having more DC than AC throws away the only usable audio. Only the
+///    absence of AC content marks a channel dead.
+enum SessionExportAudioProjection {
+    private static let chunkFrameCount: AVAudioFrameCount = 16_384
+
+    // MARK: - Validity thresholds
+
+    /// What a channel must look like to count as real captured audio.
+    ///
+    /// Absolute float-sample thresholds, not ratios of the loudest channel:
+    /// "the best of a bad set" must still be able to fail.
+    enum SignalValidity {
+        /// AC RMS (~-80 dBFS) below which a channel carries no usable audio.
+        /// This is the *only* liveness test — a channel is dead when it does
+        /// not move, whatever its DC offset.
+        static let minimumChannelACRMS: Double = 0.000_1
+        /// |DC| (~-60 dBFS) below which an offset is not worth naming.
+        static let dcOffsetFloor: Double = 0.001
+        /// |DC| (~-40 dBFS) above which the offset is removed from the written
+        /// stem. A -0.70 offset destroys headroom and thumps on playback; the
+        /// raw take-02 channel already peaked past full scale because of it.
+        static let dcRemovalThreshold: Double = 0.01
+    }
+
+    // MARK: - Measurements
+
+    /// Per-channel signal shape, measured over every frame of the source.
+    struct ChannelStatistics: Equatable, Sendable {
+        let channelIndex: Int
+        /// Mean sample value — the channel's DC offset.
+        let dcOffset: Double
+        let rms: Double
+        /// RMS of the signal about its own mean. This, not `rms`, is what
+        /// distinguishes audio from a constant.
+        let acRMS: Double
+
+        var variance: Double { acRMS * acRMS }
+
+        /// The channel carries real content. The single liveness test.
+        var isDynamic: Bool { acRMS >= SignalValidity.minimumChannelACRMS }
+
+        /// A constant line: no movement, parked at some value. Unusable.
+        var isDCFrozen: Bool {
+            !isDynamic && abs(dcOffset) > SignalValidity.dcOffsetFloor
+        }
+
+        /// Live, but riding an offset large enough to spoil the stem.
+        var requiresDCRemoval: Bool {
+            isDynamic && abs(dcOffset) > SignalValidity.dcRemovalThreshold
+        }
+
+        var debugSummary: String {
+            let flags: String
+            if isDCFrozen {
+                flags = "DC-FROZEN"
+            } else if !isDynamic {
+                flags = "SILENT"
+            } else if requiresDCRemoval {
+                flags = "live,dc-offset"
+            } else {
+                flags = "live"
+            }
+            return String(
+                format: "ch%02d dc=%+.6f rms=%.6f acRMS=%.6f var=%.8f %@",
+                channelIndex, dcOffset, rms, acRMS, variance, flags
+            )
+        }
+    }
+
+    /// Why a channel pair cannot be used as the exported stem.
+    ///
+    /// A closed vocabulary of check names only — never file paths, performer
+    /// names, or any other capture content — so it is safe to log.
+    enum PairRejection: String, Equatable, Sendable {
+        /// The pair names a channel the source does not have.
+        case outOfRange
+        /// Neither channel carries dynamic audio (silent, frozen, or both).
+        case noDynamicChannel
+
+        var detailText: String {
+            switch self {
+            case .outOfRange:
+                return "names a channel this capture does not have"
+            case .noDynamicChannel:
+                return "carries no dynamic audio on either channel"
+            }
+        }
+    }
+
+    /// One candidate pair with the AC energy it was ranked by.
+    struct PairEnergy: Equatable, Sendable {
+        let firstChannelIndex: Int
+        let secondChannelIndex: Int?
+        /// Summed variance of the pair's channels. DC contributes nothing.
+        let acEnergy: Double
+        let rejection: PairRejection?
+
+        var isUsable: Bool { rejection == nil }
+
+        var debugSummary: String {
+            let pair = secondChannelIndex.map { "\(firstChannelIndex)/\($0)" } ?? "\(firstChannelIndex)"
+            let verdict = rejection.map { "REJECTED(\($0.rawValue))" } ?? "usable"
+            return String(format: "pair %@ acEnergy=%.8f %@", pair, acEnergy, verdict)
+        }
+    }
+
+    /// How the exported pair was arrived at.
+    enum PairSelectionOutcome: Equatable, Sendable {
+        /// The hardware-profile hint was measured and held up.
+        case preferredPairAccepted
+        /// The hint was measured, failed, and a scanned pair replaced it.
+        case fallbackAfterRejectedPreferredPair(PairRejection)
+        /// No hint was supplied; the strongest usable pair was scanned for.
+        case strongestPairWithoutPreference
+
+        var usedFallback: Bool {
+            if case .fallbackAfterRejectedPreferredPair = self { return true }
+            return false
+        }
+
+        var summary: String {
+            switch self {
+            case .preferredPairAccepted:
+                return "preferred-pair-accepted"
+            case let .fallbackAfterRejectedPreferredPair(rejection):
+                return "pair-selection-fallback-used(preferred-pair-\(rejection.rawValue))"
+            case .strongestPairWithoutPreference:
+                return "strongest-pair-no-preference"
+            }
+        }
+    }
+
+    /// Everything the selection decided and why, for deterministic logging
+    /// and for tests to assert on without re-deriving it.
+    struct SelectionDiagnostics: Equatable, Sendable {
+        let sourceChannelCount: Int
+        let sourceFrameCount: Int64
+        let preferredPair: AudioHardwareRouteState.StereoPair?
+        let outcome: PairSelectionOutcome
+        /// Source channel written to output left / right. They are equal when
+        /// the pair had only one live channel.
+        let leftSourceChannelIndex: Int
+        let rightSourceChannelIndex: Int
+        /// The selected pair before mono-recovery, for provenance.
+        let selectedFirstChannelIndex: Int
+        let selectedSecondChannelIndex: Int?
+        /// The pair had a dead partner, so the live channel was sent to both
+        /// sides instead of exporting a half-silent (or DC-frozen) stem.
+        let duplicatedLiveChannel: Bool
+        /// DC removed from output left / right, 0 when none was removed.
+        let removedDCOffsets: [Double]
+        /// Strongest AC energy first; ties broken by channel index.
+        let pairEnergyRanking: [PairEnergy]
+        let sourceStatistics: [ChannelStatistics]
+        /// The two channels as actually written: index 0 = left, 1 = right.
+        let selectedOutputStatistics: [ChannelStatistics]
+
+        var usedFallback: Bool { outcome.usedFallback }
+
+        var debugSummary: String {
+            let preferredText = preferredPair
+                .map { "\($0.firstChannelIndex)/\($0.secondChannelIndex)" } ?? "none"
+            let selectedText = selectedSecondChannelIndex
+                .map { "\(selectedFirstChannelIndex)/\($0)" } ?? "\(selectedFirstChannelIndex) (mono)"
+            var lines = [
+                "[AUDIO-EXPORT-PROJECTION] sourceChannels=\(sourceChannelCount) sourceFrames=\(sourceFrameCount)",
+                "  preferredPair=\(preferredText) outcome=\(outcome.summary) fallback=\(usedFallback)",
+                "  selectedPair=\(selectedText)",
+                "  wrote left=ch\(leftSourceChannelIndex) right=ch\(rightSourceChannelIndex) "
+                    + "duplicatedLiveChannel=\(duplicatedLiveChannel)",
+                String(
+                    format: "  removedDCOffset left=%+.6f right=%+.6f",
+                    removedDCOffsets.first ?? 0,
+                    removedDCOffsets.count > 1 ? removedDCOffsets[1] : 0
+                ),
+                "  pairEnergyRanking (AC, strongest first):",
+            ]
+            lines.append(contentsOf: pairEnergyRanking.map { "    \($0.debugSummary)" })
+            lines.append("  source channels:")
+            lines.append(contentsOf: sourceStatistics.map { "    \($0.debugSummary)" })
+            lines.append("  selected output:")
+            lines.append(contentsOf: selectedOutputStatistics.map { "    \($0.debugSummary)" })
+            return lines.joined(separator: "\n")
+        }
+    }
+
+    // MARK: - Projection
+
+    /// Writes `sourceURL`'s best usable channel pair to `destinationURL` as
+    /// playable stereo.
+    ///
+    /// `preferredPair` is a **hint only**. It comes from a device-name
+    /// hardware profile, which knows nothing about how this particular take
+    /// was patched, so it is measured like any other candidate and discarded
+    /// when it does not hold up.
+    ///
+    /// Three guardrails stand between a capture and a stem:
+    /// - a pair is usable only if a channel in it actually moves;
+    /// - if the pair's partner is dead, the live channel is written to both
+    ///   sides, so a frozen or silent channel is never exported;
+    /// - a large DC offset is removed from what is written.
+    ///
+    /// When nothing in the source moves this throws rather than writing an
+    /// unusable stem — a silent fallback here is what shipped DC-only stems.
+    @discardableResult
+    static func writePlayableStereo(
+        from sourceURL: URL,
+        to destinationURL: URL,
+        preferredPair: AudioHardwareRouteState.StereoPair? = nil
+    ) throws -> SelectionDiagnostics {
+        guard FileManager.default.fileExists(atPath: sourceURL.path) else {
+            throw SessionExportError.missingRequiredFiles
+        }
+        let sourceFile = try AVAudioFile(
+            forReading: sourceURL,
+            commonFormat: .pcmFormatFloat32,
+            interleaved: false
+        )
+        let sourceFormat = sourceFile.processingFormat
+        let channelCount = Int(sourceFormat.channelCount)
+        guard channelCount > 0,
+              sourceFile.length > 0,
+              sourceFormat.commonFormat == .pcmFormatFloat32 else {
+            throw SessionExportError.unableToPrepareExport
+        }
+
+        let statistics = try channelStatistics(
+            in: sourceFile,
+            channelCount: channelCount,
+            sourceFormat: sourceFormat
+        )
+        let diagnostics = try selectPair(
+            channelCount: channelCount,
+            sourceFrameCount: sourceFile.length,
+            statistics: statistics,
+            preferredPair: preferredPair
+        )
+        sourceFile.framePosition = 0
+
+        guard let stereoFormat = AVAudioFormat(
+            commonFormat: .pcmFormatFloat32,
+            sampleRate: sourceFormat.sampleRate,
+            channels: 2,
+            interleaved: false
+        ) else {
+            throw SessionExportError.unableToPrepareExport
+        }
+        let destinationFile = try AVAudioFile(
+            forWriting: destinationURL,
+            settings: stereoFormat.settings
+        )
+        guard let sourceBuffer = AVAudioPCMBuffer(
+            pcmFormat: sourceFormat,
+            frameCapacity: chunkFrameCount
+        ), let stereoBuffer = AVAudioPCMBuffer(
+            pcmFormat: stereoFormat,
+            frameCapacity: chunkFrameCount
+        ) else {
+            throw SessionExportError.unableToPrepareExport
+        }
+
+        let leftIndex = diagnostics.leftSourceChannelIndex
+        let rightIndex = diagnostics.rightSourceChannelIndex
+        let leftOffset = Float(diagnostics.removedDCOffsets[0])
+        let rightOffset = Float(diagnostics.removedDCOffsets[1])
+        while sourceFile.framePosition < sourceFile.length {
+            sourceBuffer.frameLength = 0
+            try sourceFile.read(into: sourceBuffer, frameCount: chunkFrameCount)
+            let frameCount = Int(sourceBuffer.frameLength)
+            guard frameCount > 0,
+                  let sourceChannels = sourceBuffer.floatChannelData,
+                  let stereoChannels = stereoBuffer.floatChannelData else {
+                break
+            }
+            stereoBuffer.frameLength = sourceBuffer.frameLength
+            if leftOffset == 0 {
+                stereoChannels[0].update(from: sourceChannels[leftIndex], count: frameCount)
+            } else {
+                for frame in 0..<frameCount {
+                    stereoChannels[0][frame] = sourceChannels[leftIndex][frame] - leftOffset
+                }
+            }
+            if rightOffset == 0 {
+                stereoChannels[1].update(from: sourceChannels[rightIndex], count: frameCount)
+            } else {
+                for frame in 0..<frameCount {
+                    stereoChannels[1][frame] = sourceChannels[rightIndex][frame] - rightOffset
+                }
+            }
+            try destinationFile.write(from: stereoBuffer)
+        }
+        return diagnostics
+    }
+
+    // MARK: - Analysis
+
+    /// Measures every channel over every frame.
+    ///
+    /// Deliberately not strided: a strided read can land on one phase of a
+    /// periodic waveform and report a real signal as a constant, and variance
+    /// is now the value the export is gated on. The extra arithmetic is
+    /// negligible beside the file read that was already happening.
+    private static func channelStatistics(
+        in sourceFile: AVAudioFile,
+        channelCount: Int,
+        sourceFormat: AVAudioFormat
+    ) throws -> [ChannelStatistics] {
+        guard let buffer = AVAudioPCMBuffer(
+            pcmFormat: sourceFormat,
+            frameCapacity: chunkFrameCount
+        ) else {
+            throw SessionExportError.unableToPrepareExport
+        }
+        var sums = [Double](repeating: 0, count: channelCount)
+        var squareSums = [Double](repeating: 0, count: channelCount)
+        var analysedFrames = 0
+        sourceFile.framePosition = 0
+        while sourceFile.framePosition < sourceFile.length {
+            buffer.frameLength = 0
+            try sourceFile.read(into: buffer, frameCount: chunkFrameCount)
+            let frameCount = Int(buffer.frameLength)
+            guard frameCount > 0, let channels = buffer.floatChannelData else { break }
+            for channel in 0..<channelCount {
+                let samples = channels[channel]
+                var sum = 0.0
+                var squareSum = 0.0
+                for frame in 0..<frameCount {
+                    let sample = Double(samples[frame])
+                    sum += sample
+                    squareSum += sample * sample
+                }
+                sums[channel] += sum
+                squareSums[channel] += squareSum
+            }
+            analysedFrames += frameCount
+        }
+        guard analysedFrames > 0 else {
+            throw SessionExportError.unableToPrepareExport
+        }
+
+        let frames = Double(analysedFrames)
+        return (0..<channelCount).map { channel in
+            let mean = sums[channel] / frames
+            let meanSquare = squareSums[channel] / frames
+            // Clamped: the E[x²]-E[x]² identity can land microscopically
+            // below zero on a constant channel.
+            let variance = max(0, meanSquare - (mean * mean))
+            return ChannelStatistics(
+                channelIndex: channel,
+                dcOffset: mean,
+                rms: meanSquare.squareRoot(),
+                acRMS: variance.squareRoot()
+            )
+        }
+    }
+
+    private static func rejection(
+        first: Int,
+        second: Int?,
+        statistics: [ChannelStatistics],
+        channelCount: Int
+    ) -> PairRejection? {
+        guard first >= 0, first < channelCount else { return .outOfRange }
+        if let second, second < 0 || second >= channelCount { return .outOfRange }
+        var members = [statistics[first]]
+        if let second { members.append(statistics[second]) }
+        // Liveness is the only gate. A dead partner does not condemn the pair:
+        // the live channel is recovered to both sides at write time.
+        guard members.contains(where: { $0.isDynamic }) else { return .noDynamicChannel }
+        return nil
+    }
+
+    /// Contiguous candidate pairs, strongest AC energy first.
+    private static func rankedPairCandidates(
+        channelCount: Int,
+        statistics: [ChannelStatistics]
+    ) -> [PairEnergy] {
+        let starts: [Int] = channelCount > 1
+            ? Array(stride(from: 0, to: channelCount - 1, by: 2))
+            : [0]
+        let candidates = starts.map { start -> PairEnergy in
+            let second = channelCount > 1 ? start + 1 : nil
+            let energy = statistics[start].variance
+                + (second.map { statistics[$0].variance } ?? 0)
+            return PairEnergy(
+                firstChannelIndex: start,
+                secondChannelIndex: second,
+                acEnergy: energy,
+                rejection: rejection(
+                    first: start,
+                    second: second,
+                    statistics: statistics,
+                    channelCount: channelCount
+                )
+            )
+        }
+        return candidates.sorted {
+            $0.acEnergy == $1.acEnergy
+                ? $0.firstChannelIndex < $1.firstChannelIndex
+                : $0.acEnergy > $1.acEnergy
+        }
+    }
+
+    private static func selectPair(
+        channelCount: Int,
+        sourceFrameCount: AVAudioFramePosition,
+        statistics: [ChannelStatistics],
+        preferredPair: AudioHardwareRouteState.StereoPair?
+    ) throws -> SelectionDiagnostics {
+        let ranking = rankedPairCandidates(channelCount: channelCount, statistics: statistics)
+
+        func diagnostics(
+            first: Int,
+            second: Int?,
+            outcome: PairSelectionOutcome
+        ) -> SelectionDiagnostics {
+            // Mono recovery: never export a dead channel next to a live one.
+            // Whichever channel of the pair actually moves is written to both
+            // sides, which is what makes a DC-frozen or silent partner
+            // harmless instead of ruinous.
+            let firstIsLive = statistics[first].isDynamic
+            let secondIsLive = second.map { statistics[$0].isDynamic } ?? false
+            let left: Int
+            let right: Int
+            let duplicated: Bool
+            switch (firstIsLive, secondIsLive) {
+            case (true, true):
+                left = first
+                right = second ?? first
+                duplicated = false
+            case (false, true):
+                left = second ?? first
+                right = second ?? first
+                duplicated = true
+            default:
+                left = first
+                right = first
+                duplicated = second != nil || channelCount > 1
+            }
+
+            let leftOffset = statistics[left].requiresDCRemoval ? statistics[left].dcOffset : 0
+            let rightOffset = statistics[right].requiresDCRemoval ? statistics[right].dcOffset : 0
+
+            func writtenStatistics(outputIndex: Int, source: Int, removed: Double) -> ChannelStatistics {
+                let dc = statistics[source].dcOffset - removed
+                let ac = statistics[source].acRMS
+                return ChannelStatistics(
+                    channelIndex: outputIndex,
+                    dcOffset: dc,
+                    rms: ((ac * ac) + (dc * dc)).squareRoot(),
+                    acRMS: ac
+                )
+            }
+
+            return SelectionDiagnostics(
+                sourceChannelCount: channelCount,
+                sourceFrameCount: Int64(sourceFrameCount),
+                preferredPair: preferredPair,
+                outcome: outcome,
+                leftSourceChannelIndex: left,
+                rightSourceChannelIndex: right,
+                selectedFirstChannelIndex: first,
+                selectedSecondChannelIndex: second,
+                duplicatedLiveChannel: duplicated,
+                removedDCOffsets: [leftOffset, rightOffset],
+                pairEnergyRanking: ranking,
+                sourceStatistics: statistics,
+                selectedOutputStatistics: [
+                    writtenStatistics(outputIndex: 0, source: left, removed: leftOffset),
+                    writtenStatistics(outputIndex: 1, source: right, removed: rightOffset),
+                ]
+            )
+        }
+
+        func strongestUsable() throws -> PairEnergy {
+            guard let best = ranking.first(where: { $0.isUsable }) else {
+                throw SessionExportValidationFailure(
+                    .capturedAudioHasNoDynamicChannelPair,
+                    exportError: .unableToPrepareExport
+                )
+            }
+            return best
+        }
+
+        if let preferredPair {
+            let preferredSecond: Int? = channelCount > 1 ? preferredPair.secondChannelIndex : nil
+            if let rejection = rejection(
+                first: preferredPair.firstChannelIndex,
+                second: preferredSecond,
+                statistics: statistics,
+                channelCount: channelCount
+            ) {
+                let best = try strongestUsable()
+                return diagnostics(
+                    first: best.firstChannelIndex,
+                    second: best.secondChannelIndex,
+                    outcome: .fallbackAfterRejectedPreferredPair(rejection)
+                )
+            }
+            return diagnostics(
+                first: preferredPair.firstChannelIndex,
+                second: preferredSecond,
+                outcome: .preferredPairAccepted
+            )
+        }
+
+        let best = try strongestUsable()
+        return diagnostics(
+            first: best.firstChannelIndex,
+            second: best.secondChannelIndex,
+            outcome: .strongestPairWithoutPreference
+        )
+    }
 }
 
 struct SessionArchiveBuilder: Sendable {
@@ -1422,6 +2509,43 @@ struct SessionArchiveBuilder: Sendable {
         }
     }
 
+    /// Review metadata must be valid, bound to the take's current sidecar bytes
+    /// and name exactly the take's original media with unchanged hashes.
+    private static func validatedReviewMetadataSource(
+        _ data: Data, rawSidecarData: Data, take: SessionExportTake
+    ) throws -> ReferenceTearEvidenceSourceBinding {
+        let expectedSource: ReferenceTearEvidenceSourceBinding
+        let document: ReferenceReviewMetadataDocument
+        do {
+            expectedSource = try ReferenceTearEvidenceCodec.makeSourceBinding(
+                rawSidecarData: rawSidecarData, fileName: take.sidecarURL.lastPathComponent)
+            document = try ReferenceReviewMetadataCodec.decodeDocument(data)
+        } catch {
+            throw SessionExportValidationFailure(.referenceReviewMetadataInvalid)
+        }
+        guard document.sourceBinding == expectedSource else {
+            throw SessionExportValidationFailure(.referenceReviewMetadataSourceMismatch)
+        }
+        let current: [ReferenceReviewMetadataDocument.OriginalMedia]
+        do {
+            current = try ReferenceReviewMetadataCodec.originalMedia(
+                primaryMediaURL: take.mediaURL, sidecarData: rawSidecarData)
+        } catch {
+            throw SessionExportValidationFailure(.referenceReviewMetadataSourceMismatch)
+        }
+        guard Set(document.originalMedia.map(\.fileName)) == Set(current.map(\.fileName)),
+              document.originalMedia.allSatisfy(current.contains) else {
+            throw SessionExportValidationFailure(.referenceReviewMetadataSourceMismatch)
+        }
+        return expectedSource
+    }
+
+    private struct ResolvedReferenceTearEvidence {
+        let data: Data
+        let sourceBinding: ReferenceTearEvidenceSourceBinding
+        let fileName: String
+    }
+
     private struct CanonicalTakeContext {
         let take: SessionExportTake
         let sidecar: CaptureCore.LocalRecordingSidecar
@@ -1435,6 +2559,8 @@ struct SessionArchiveBuilder: Sendable {
         let watchFileName: String?
         let notationFileName: String
         let notationDocument: SessionExportNotationDocument
+        let referenceTearEvidence: ResolvedReferenceTearEvidence?
+        let referenceReviewMetadata: ResolvedReferenceTearEvidence?
         let captureMetadata: SessionExportTakeCaptureMetadata
         let verbalSlateUsed: Bool
         let syncClapUsed: Bool
@@ -1446,6 +2572,13 @@ struct SessionArchiveBuilder: Sendable {
         let takeLogRows: [CanonicalTakeLogRow]
         let takes: [CanonicalTakeContext]
         let sessionRootName: String
+
+        var boundSidecars: [String: CaptureCore.LocalRecordingSidecar] {
+            Dictionary(uniqueKeysWithValues: takes.compactMap { context in
+                context.referenceTearEvidence == nil && context.referenceReviewMetadata == nil
+                    ? nil : (context.take.takeID, context.sidecar)
+            })
+        }
     }
 
     private struct ResolvedNotationExport {
@@ -1463,6 +2596,77 @@ struct SessionArchiveBuilder: Sendable {
         let scratchWithBeatAvailability: String
     }
 
+    /// The exact existing raw-export group, without staging media or duplicating
+    /// metadata compatibility rules in Reference Authoring.
+    struct LocalRecordingExportGroup {
+        let capturedSessionID: String
+        let sourceDirectoryURL: URL
+        let seedSidecarURL: URL
+        let sidecarURLsByTakeID: [String: URL]
+        fileprivate let signature: SessionCanonicalMetadataSignature?
+
+        func includes(
+            sourceBinding: ReferenceTearEvidenceSourceBinding,
+            sourceSidecarURL: URL
+        ) throws -> Bool {
+            let sourceURL = sourceSidecarURL.standardizedFileURL.resolvingSymlinksInPath()
+            // A selected source must never become an ordinary exclusion after
+            // a late sidecar rewrite changes its identity or metadata group.
+            if sourceURL == seedSidecarURL || sidecarURLsByTakeID.values.contains(sourceURL) {
+                guard try Data(contentsOf: sourceURL) == sourceBinding.rawSidecarData else {
+                    throw SessionExportValidationFailure(.referenceTearEvidenceSourceMismatch)
+                }
+                guard sourceBinding.capturedSessionID == capturedSessionID,
+                      sidecarURLsByTakeID[sourceBinding.capturedTakeID] == sourceURL else {
+                    throw SessionExportValidationFailure(.unmatchedReferenceTearEvidence)
+                }
+            }
+            guard sourceBinding.capturedSessionID == capturedSessionID,
+                  sourceURL.deletingLastPathComponent() == sourceDirectoryURL else {
+                return false
+            }
+            let sidecar = try SessionArchiveBuilder.decodeSidecar(data: sourceBinding.rawSidecarData)
+            guard SessionArchiveBuilder.metadataSignature(for: sidecar) == signature else {
+                return false
+            }
+            guard sourceBinding.rawSidecarFileName == sourceURL.lastPathComponent,
+                  sidecarURLsByTakeID[sourceBinding.capturedTakeID] == sourceURL else {
+                throw SessionExportValidationFailure(.unmatchedReferenceTearEvidence)
+            }
+            return true
+        }
+    }
+
+    func localRecordingExportGroup(lastRecordingURL: URL) throws -> LocalRecordingExportGroup {
+        let directory = lastRecordingURL.deletingLastPathComponent()
+            .standardizedFileURL.resolvingSymlinksInPath()
+        let seedURL = CaptureCore.LocalRecordingFiles.sidecarURL(forMediaURL: lastRecordingURL)
+            .standardizedFileURL.resolvingSymlinksInPath()
+        let seed = try decodeSidecar(at: seedURL)
+        let selectedURLs = try matchingCompatibleLocalRecordingSidecarURLs(
+            in: directory, seedSidecar: seed
+        )
+        var urlsByTakeID: [String: URL] = [:]
+        for url in selectedURLs {
+            guard let number = CaptureCore.LocalRecordingNaming.appLocalTakeNumber(
+                for: url.deletingPathExtension().lastPathComponent, sessionID: seed.sessionID
+            ) else { throw SessionExportError.invalidSessionMetadata }
+            let takeID = CaptureCore.LocalRecordingNaming.takeIdentity(
+                sessionID: seed.sessionID, takeNumber: number
+            ).takeID
+            guard urlsByTakeID.updateValue(
+                url.standardizedFileURL.resolvingSymlinksInPath(), forKey: takeID
+            ) == nil else { throw SessionExportError.invalidSessionMetadata }
+        }
+        return LocalRecordingExportGroup(
+            capturedSessionID: seed.sessionID,
+            sourceDirectoryURL: directory,
+            seedSidecarURL: seedURL,
+            sidecarURLsByTakeID: urlsByTakeID,
+            signature: Self.metadataSignature(for: seed)
+        )
+    }
+
     func preparePackage(from source: SessionExportSource) throws -> SessionExportPackage {
         switch source {
         case .package(let package):
@@ -1472,12 +2676,15 @@ struct SessionArchiveBuilder: Sendable {
             }
             try validatePackageContents(hydratedPackage)
             return hydratedPackage
-        case .localRecordingSession(let lastRecordingURL, let sessionName, let config):
+        case .localRecordingSession(let lastRecordingURL, let sessionName, let config,
+                                    let referenceTearEvidenceByTakeID, let referenceReviewMetadataByTakeID):
             if let report = validationReport(
                 for: .localRecordingSession(
                     lastRecordingURL: lastRecordingURL,
                     sessionName: sessionName,
-                    config: config
+                    config: config,
+                    referenceTearEvidenceByTakeID: referenceTearEvidenceByTakeID,
+                    referenceReviewMetadataByTakeID: referenceReviewMetadataByTakeID
                 )
             ) {
                 throw report.suggestedError
@@ -1485,7 +2692,9 @@ struct SessionArchiveBuilder: Sendable {
             let package = try packageForLocalRecordingSession(
                 lastRecordingURL: lastRecordingURL,
                 sessionName: sessionName,
-                config: config
+                config: config,
+                referenceTearEvidenceByTakeID: referenceTearEvidenceByTakeID,
+                referenceReviewMetadataByTakeID: referenceReviewMetadataByTakeID
             )
             try validatePackageContents(package)
             return package
@@ -1496,7 +2705,8 @@ struct SessionArchiveBuilder: Sendable {
         switch source {
         case .package(let package):
             return packageValidationReport(for: hydratePackageForExport(package))
-        case .localRecordingSession(let lastRecordingURL, _, let config):
+        case .localRecordingSession(let lastRecordingURL, _, let config, let referenceTearEvidenceByTakeID,
+                                    let referenceReviewMetadataByTakeID):
             do {
                 let sessionDirectory = lastRecordingURL.deletingLastPathComponent()
                 let seedSidecarURL = CaptureCore.LocalRecordingFiles.sidecarURL(forMediaURL: lastRecordingURL)
@@ -1513,7 +2723,7 @@ struct SessionArchiveBuilder: Sendable {
                         issues: [SessionExportError.missingRequiredFiles.userMessage]
                     )
                 }
-                let localIssues = localRecordingBlockingIssues(
+                let localIssues = try localRecordingBlockingIssues(
                     in: sessionDirectory,
                     seedSidecar: seedSidecar,
                     fileManager: FileManager.default
@@ -1528,7 +2738,9 @@ struct SessionArchiveBuilder: Sendable {
                 let package = try packageForLocalRecordingSession(
                     lastRecordingURL: lastRecordingURL,
                     sessionName: "",
-                    config: config
+                    config: config,
+                    referenceTearEvidenceByTakeID: referenceTearEvidenceByTakeID,
+                    referenceReviewMetadataByTakeID: referenceReviewMetadataByTakeID
                 )
                 let issues = packageValidationIssues(package)
                 return issues.isEmpty ? nil : SessionValidationReport(
@@ -1567,16 +2779,30 @@ struct SessionArchiveBuilder: Sendable {
         let archiveURL = archiveDirectory
             .appendingPathComponent(folderName)
             .appendingPathExtension("zip")
+        let verificationRoot = archiveDirectory
+            .appendingPathComponent("verify-\(UUID().uuidString)", isDirectory: true)
         let signpostID = ScratchLabPerformanceSignpost.begin("ExportZIP")
         defer { ScratchLabPerformanceSignpost.end("ExportZIP", signpostID) }
-
         do {
             if fileManager.fileExists(atPath: archiveURL.path) {
                 try fileManager.removeItem(at: archiveURL)
             }
 
             try fileManager.createDirectory(at: stagedSessionURL, withIntermediateDirectories: true)
-            try stagePackage(package, options: options, at: stagedSessionURL, fileManager: fileManager)
+            try stagePackage(
+                package,
+                context: canonicalContext,
+                options: options,
+                at: stagedSessionURL,
+                fileManager: fileManager
+            )
+            try validateStagedPackage(
+                package,
+                context: canonicalContext,
+                options: options,
+                at: stagedSessionURL,
+                fileManager: fileManager
+            )
             try fileManager.zipItem(
                 at: stagedSessionURL,
                 to: archiveURL,
@@ -1584,6 +2810,21 @@ struct SessionArchiveBuilder: Sendable {
                 compressionMethod: .deflate
             )
             let archiveSize = try fileSize(for: archiveURL, fileManager: fileManager)
+            guard archiveSize > 0 else {
+                throw SessionExportError.unableToCreateArchive
+            }
+            try fileManager.createDirectory(at: verificationRoot, withIntermediateDirectories: true)
+            try fileManager.unzipItem(at: archiveURL, to: verificationRoot)
+            let extractedSessionURL = verificationRoot.appendingPathComponent(folderName, isDirectory: true)
+            try validateStagedPackage(
+                package,
+                context: canonicalContext,
+                options: options,
+                at: extractedSessionURL,
+                fileManager: fileManager
+            )
+            try cleanupStagingRoot(verificationRoot, fileManager: fileManager)
+            try cleanupStagingRoot(stagingRoot, fileManager: fileManager)
             return SessionExportResult(
                 archiveURL: archiveURL,
                 archiveSizeBytes: archiveSize,
@@ -1591,11 +2832,19 @@ struct SessionArchiveBuilder: Sendable {
                 createdAt: package.metadata.createdAt,
                 shouldCleanupAfterUse: true
             )
+        } catch let validationFailure as SessionExportValidationFailure {
+            try? fileManager.removeItem(at: archiveURL)
+            try? cleanupStagingRoot(verificationRoot, fileManager: fileManager)
+            try? cleanupStagingRoot(stagingRoot, fileManager: fileManager)
+            throw validationFailure
         } catch let exportError as SessionExportError {
+            try? fileManager.removeItem(at: archiveURL)
+            try? cleanupStagingRoot(verificationRoot, fileManager: fileManager)
             try? cleanupStagingRoot(stagingRoot, fileManager: fileManager)
             throw exportError
         } catch {
             try? fileManager.removeItem(at: archiveURL)
+            try? cleanupStagingRoot(verificationRoot, fileManager: fileManager)
             try? cleanupStagingRoot(stagingRoot, fileManager: fileManager)
             throw SessionExportError.unableToCreateArchive
         }
@@ -1609,24 +2858,65 @@ struct SessionArchiveBuilder: Sendable {
         )
     }
 
-    func metadataDocument(for package: SessionExportPackage) throws -> SessionExportMetadataDocument {
+    func metadataDocument(
+        for package: SessionExportPackage,
+        sidecarSnapshots: [String: CaptureCore.LocalRecordingSidecar] = [:]
+    ) throws -> SessionExportMetadataDocument {
         let hydratedPackage = hydratePackageForExport(package)
         let takes = try hydratedPackage.takes.map { take in
-            try resolvedTakeCaptureMetadata(for: take, packageMetadata: hydratedPackage.metadata)
+            try resolvedTakeCaptureMetadata(
+                for: take, packageMetadata: hydratedPackage.metadata,
+                sidecarSnapshot: sidecarSnapshots[take.takeID]
+            )
         }
 
         return SessionExportMetadataDocument(session: hydratedPackage.metadata, takes: takes)
     }
 
-    func reviewDocument(for package: SessionExportPackage) -> SessionExportReviewDocument {
+    /// Playable duration of a take, measured from the captured audio itself.
+    ///
+    /// The wall-clock span between sidecar `startedAt` and `endedAt` is not a
+    /// take duration: it also contains camera/writer startup before the first
+    /// media sample and mux/finalization after the last one. Reporting that as
+    /// the take length labels a 19.2 s recording as a 24 s completed take.
+    static func playableMediaDurationSeconds(audioArtifactURL: URL?) -> TimeInterval? {
+        guard let audioArtifactURL,
+              let audioFile = try? AVAudioFile(forReading: audioArtifactURL),
+              audioFile.length > 0,
+              audioFile.processingFormat.sampleRate > 0 else {
+            return nil
+        }
+        return Double(audioFile.length) / audioFile.processingFormat.sampleRate
+    }
+
+    private func capturedMediaDuration(for take: SessionExportTake) -> TimeInterval? {
+        Self.playableMediaDurationSeconds(audioArtifactURL: take.audioArtifactURL)
+    }
+
+    private func exportBoundedSnapshot(
+        for take: SessionExportTake,
+        sidecar: CaptureCore.LocalRecordingSidecar
+    ) -> CaptureCore.DetectedNotationSnapshot? {
+        guard let snapshot = sidecar.detectedNotation else { return nil }
+        let duration = capturedMediaDuration(for: take) ?? max(0, take.duration)
+        return SessionExportEvidenceBounds.boundedSnapshot(snapshot, to: duration)
+    }
+
+    func reviewDocument(
+        for package: SessionExportPackage,
+        generatedAt: Date = Date(),
+        sidecarSnapshots: [String: CaptureCore.LocalRecordingSidecar] = [:]
+    ) -> SessionExportReviewDocument {
         let takes = package.takes.map { take -> SessionExportReviewTake in
-            let sidecar = try? decodeSidecar(at: take.sidecarURL)
+            let sidecar = sidecarSnapshots[take.takeID] ?? (try? decodeSidecar(at: take.sidecarURL))
             let report: SessionQualityReport? = {
-                guard let snapshot = sidecar?.detectedNotation else { return nil }
-                let duration = snapshot.capturedEvidenceEndTime ?? take.duration
+                guard let sidecar,
+                      let snapshot = exportBoundedSnapshot(for: take, sidecar: sidecar) else { return nil }
+                let duration = capturedMediaDuration(for: take) ?? max(0, take.duration)
                 return SessionQualityAnalyzer.analyze(
                     snapshot: snapshot,
-                    takeDuration: duration
+                    takeDuration: duration,
+                    now: generatedAt
                 )
             }()
             return SessionExportReviewTake(
@@ -1638,19 +2928,22 @@ struct SessionArchiveBuilder: Sendable {
         }
         return SessionExportReviewDocument(
             sessionID: package.metadata.sessionID,
+            generatedAt: generatedAt,
             takes: takes
         )
     }
 
     func replayDocument(
         for package: SessionExportPackage,
-        generatedAt: Date = Date()
+        generatedAt: Date = Date(),
+        sidecarSnapshots: [String: CaptureCore.LocalRecordingSidecar] = [:]
     ) -> SessionExportReplayDocument {
         let takes = package.takes.map { take -> SessionExportReplayTake in
-            let sidecar = try? decodeSidecar(at: take.sidecarURL)
+            let sidecar = sidecarSnapshots[take.takeID] ?? (try? decodeSidecar(at: take.sidecarURL))
             let timeline: SessionReplayTimeline? = {
-                guard let snapshot = sidecar?.detectedNotation else { return nil }
-                let duration = snapshot.capturedEvidenceEndTime ?? take.duration
+                guard let sidecar,
+                      let snapshot = exportBoundedSnapshot(for: take, sidecar: sidecar) else { return nil }
+                let duration = capturedMediaDuration(for: take) ?? max(0, take.duration)
                 return SessionReplayTimeline.build(
                     from: snapshot,
                     takeDuration: duration
@@ -1671,12 +2964,16 @@ struct SessionArchiveBuilder: Sendable {
 
     func exportMetadataDocument(
         for package: SessionExportPackage,
-        options: SessionExportOptions
+        options: SessionExportOptions,
+        sidecarSnapshots: [String: CaptureCore.LocalRecordingSidecar] = [:]
     ) throws -> SessionExportArtifactMetadataDocument {
         let hydratedPackage = hydratePackageForExport(package)
         let artifactMetadata = try hydratedPackage.takes.map { take -> SessionExportArtifactMetadata in
-            let captureMetadata = try resolvedTakeCaptureMetadata(for: take, packageMetadata: hydratedPackage.metadata)
-            let sidecar = try decodeSidecar(at: take.sidecarURL)
+            let captureMetadata = try resolvedTakeCaptureMetadata(
+                for: take, packageMetadata: hydratedPackage.metadata,
+                sidecarSnapshot: sidecarSnapshots[take.takeID]
+            )
+            let sidecar = try sidecarSnapshots[take.takeID] ?? decodeSidecar(at: take.sidecarURL)
             let captureValues = resolvedTakeCaptureValues(
                 for: take,
                 sidecar: sidecar,
@@ -1818,7 +3115,9 @@ struct SessionArchiveBuilder: Sendable {
     private func packageForLocalRecordingSession(
         lastRecordingURL: URL,
         sessionName: String,
-        config providedConfig: CaptureSessionConfig?
+        config providedConfig: CaptureSessionConfig?,
+        referenceTearEvidenceByTakeID: [String: Data] = [:],
+        referenceReviewMetadataByTakeID: [String: Data] = [:]
     ) throws -> SessionExportPackage {
         let fileManager = FileManager.default
         guard fileManager.fileExists(atPath: lastRecordingURL.path) else {
@@ -1836,7 +3135,7 @@ struct SessionArchiveBuilder: Sendable {
             throw SessionExportError.missingRequiredFiles
         }
 
-        let unresolvedIssues = localRecordingBlockingIssues(
+        let unresolvedIssues = try localRecordingBlockingIssues(
             in: sessionDirectory,
             seedSidecar: seedSidecar,
             fileManager: fileManager
@@ -1850,10 +3149,15 @@ struct SessionArchiveBuilder: Sendable {
             seedSidecar: seedSidecar,
             fileManager: fileManager
         )
-            .compactMap { sidecarURL -> SessionExportTake? in
-                guard let sidecar = try? decodeSidecar(at: sidecarURL),
-                sidecar.recordingStatus == "completed" else {
-                    return nil
+            .map { sidecarURL -> SessionExportTake in
+                let sidecar: CaptureCore.LocalRecordingSidecar
+                do {
+                    sidecar = try decodeSidecar(at: sidecarURL)
+                } catch {
+                    throw SessionExportError.invalidSessionMetadata
+                }
+                guard sidecar.recordingStatus == "completed" else {
+                    throw SessionExportError.invalidSessionMetadata
                 }
 
                 let snapshot = localRecordingArtifactStatus(
@@ -1865,14 +3169,26 @@ struct SessionArchiveBuilder: Sendable {
                 guard snapshot.readiness == .ready,
                       let mediaURL = snapshot.videoSourceURL,
                       let audioArtifactURL = snapshot.audioSourceURL else {
-                    return nil
+                    throw SessionExportError.missingRequiredFiles
                 }
 
-                let duration = max(
+                // Actual playable duration. The wall-clock span is only a
+                // fallback for a take whose audio artifact cannot be read.
+                let wallClockSpan = max(
                     0,
                     (sidecar.endedAt ?? sidecar.startedAt).timeIntervalSince(sidecar.startedAt)
                 )
-                let linkedWatchCapture = self.resolveLinkedWatchCapture(for: sidecar)
+                let duration = Self.playableMediaDurationSeconds(
+                    audioArtifactURL: audioArtifactURL
+                ) ?? wallClockSpan
+                let linkedWatchArtifact = self.resolveLinkedWatchCaptureArtifact(for: sidecar)
+                // Same resolver and same persisted sidecar notation the live
+                // capture path uses, so a recovered take and a live-exported
+                // take report identical motion evidence.
+                let motionEvidence = CaptureMotionEvidenceResolver.resolve(
+                    detectedNotation: sidecar.detectedNotation,
+                    watchCaptureLinked: linkedWatchArtifact != nil
+                )
 
                 return SessionExportTake(
                     takeID: sidecar.takeID,
@@ -1881,19 +3197,22 @@ struct SessionArchiveBuilder: Sendable {
                     mediaURL: mediaURL,
                     audioArtifactURL: audioArtifactURL,
                     sidecarURL: sidecarURL,
-                    watchCaptureSession: linkedWatchCapture,
+                    watchCaptureSession: linkedWatchArtifact?.session,
                     drillName: nil,
                     duration: duration,
                     quality: nil,
                     comboTagged: false,
                     audioPresent: true,
-                    motionPresent: linkedWatchCapture != nil,
+                    motionPresent: motionEvidence.motionPresent,
                     syncStatus: sidecar.watchSyncState.rawValue,
                     recordingStatus: sidecar.recordingStatus,
                     verbalSlateUsed: false,
                     syncClapUsed: false,
                     note: nil,
-                    captureTiming: sidecar.captureTiming
+                    captureTiming: sidecar.captureTiming,
+                    motionSources: motionEvidence.motionSources,
+                    faderMappingSource: motionEvidence.faderMappingSource,
+                    sourceWatchMotionURL: linkedWatchArtifact?.fileURL
                 )
             }
             .sorted { $0.takeNumber < $1.takeNumber }
@@ -1902,7 +3221,7 @@ struct SessionArchiveBuilder: Sendable {
             throw SessionExportError.missingRequiredFiles
         }
 
-        let completedSidecars = takes.compactMap { try? decodeSidecar(at: $0.sidecarURL) }
+        let completedSidecars = try takes.map { try decodeSidecar(at: $0.sidecarURL) }
         let earliestTakeDate = completedSidecars.map(\.startedAt).min() ?? seedSidecar.startedAt
         let latestTakeDate = completedSidecars.map { $0.endedAt ?? $0.startedAt }.max() ?? earliestTakeDate
         let totalDurationSeconds = takes.reduce(0) { $0 + $1.duration }
@@ -1926,7 +3245,11 @@ struct SessionArchiveBuilder: Sendable {
             deviceInfo: deviceInfo(from: seedSidecar)
         )
 
-        return SessionExportPackage(metadata: metadata, takes: takes, calibrationData: nil)
+        return SessionExportPackage(
+            metadata: metadata, takes: takes, calibrationData: nil,
+            referenceTearEvidenceByTakeID: referenceTearEvidenceByTakeID,
+            referenceReviewMetadataByTakeID: referenceReviewMetadataByTakeID
+        )
     }
 
     private func validatePackageContents(_ package: SessionExportPackage) throws {
@@ -1955,11 +3278,11 @@ struct SessionArchiveBuilder: Sendable {
 
     private func stagePackage(
         _ package: SessionExportPackage,
+        context: CanonicalSessionContext,
         options: SessionExportOptions,
         at stagedSessionURL: URL,
         fileManager: FileManager
     ) throws {
-        let context = try canonicalContext(for: package)
         try createCanonicalDirectorySkeleton(
             at: stagedSessionURL,
             allowedBPMs: context.manifest.allowedBPMs,
@@ -1976,6 +3299,14 @@ struct SessionArchiveBuilder: Sendable {
                 .appendingPathComponent("notation", isDirectory: true)
                 .appendingPathComponent(takeContext.notationFileName)
             try fileManager.copyItem(at: takeContext.take.mediaURL, to: videoURL)
+            if let camera = takeContext.sidecar.secondaryCamera {
+                if let secondURL = try camera.verifiedURL(beside: takeContext.take.mediaURL) {
+                    try fileManager.copyItem(at: secondURL, to: SecondaryCameraEvidence.url(beside: videoURL))
+                }
+                let encoder = JSONEncoder()
+                encoder.outputFormatting = [.sortedKeys, .prettyPrinted]
+                try encoder.encode(camera).write(to: videoURL.deletingPathExtension().appendingPathExtension("second-camera.json"), options: .atomic)
+            }
             guard let audioArtifactURL = takeContext.take.audioArtifactURL else {
                 throw SessionExportError.missingRequiredFiles
             }
@@ -1983,18 +3314,40 @@ struct SessionArchiveBuilder: Sendable {
                 at: audioURL.deletingLastPathComponent(),
                 withIntermediateDirectories: true
             )
-            try fileManager.copyItem(at: audioArtifactURL, to: audioURL)
+            // Throws when no pair carries dynamic audio, which also stops the
+            // beat_only / scratch_with_beat renders below: those stems are
+            // only ever derived from a scratch stem that passed this check.
+            let audioProjection = try SessionExportAudioProjection.writePlayableStereo(
+                from: audioArtifactURL,
+                to: audioURL,
+                preferredPair: RoutineCaptureAudioHardwareProfile.preferredProgramStereoPair(
+                    forDeviceName: takeContext.sidecar.audioDeviceName,
+                    deviceUniqueID: takeContext.sidecar.audioDeviceUniqueID
+                )
+            )
             #if DEBUG
+            print("[AUDIO-CAPTURE-DEBUG] take=\(takeContext.sidecar.takeID)")
+            print(audioProjection.debugSummary)
             if let exportedFile = try? AVAudioFile(forReading: audioURL) {
                 print("[AUDIO-CAPTURE-DEBUG] exported scratch frames=\(exportedFile.length)")
             }
+            #else
+            _ = audioProjection
             #endif
+            for artifact in try Self.boundBeatExportArtifacts(
+                sidecar: takeContext.sidecar, mediaURL: takeContext.take.mediaURL,
+                sidecarURL: takeContext.take.sidecarURL, takeNumber: takeContext.take.takeNumber
+            ) {
+                let destination = stagedSessionURL.appendingPathComponent(artifact.relativePath)
+                try fileManager.createDirectory(at: destination.deletingLastPathComponent(), withIntermediateDirectories: true)
+                try fileManager.copyItem(at: artifact.sourceURL, to: destination)
+            }
             if takeContext.stemAvailability["beat_only"] == "available"
                 || takeContext.stemAvailability["scratch_with_beat"] == "available" {
                 let beatBuffer = try renderedBeatStemBuffer(
                     for: takeContext.take,
                     captureMetadata: takeContext.captureMetadata,
-                    scratchAudioURL: audioArtifactURL
+                    scratchAudioURL: audioURL
                 )
                 if let beatOnlyFileName = takeContext.beatOnlyFileName {
                     let beatOnlyURL = stagedSessionURL
@@ -2007,7 +3360,7 @@ struct SessionArchiveBuilder: Sendable {
                         .appendingPathComponent("audio", isDirectory: true)
                         .appendingPathComponent(scratchWithBeatFileName)
                     let mixedBuffer = try mixedScratchWithTimingBuffer(
-                        scratchURL: audioArtifactURL,
+                        scratchURL: audioURL,
                         timingBuffer: beatBuffer
                     )
                     try writeAudioBuffer(mixedBuffer, to: scratchWithBeatURL)
@@ -2015,6 +3368,18 @@ struct SessionArchiveBuilder: Sendable {
             }
             let notationData = try Self.jsonEncoder.encode(takeContext.notationDocument)
             try notationData.write(to: notationURL, options: .atomic)
+            if let evidence = takeContext.referenceTearEvidence {
+                try evidence.data.write(
+                    to: stagedSessionURL.appendingPathComponent("notation/\(evidence.fileName)"),
+                    options: .atomic
+                )
+            }
+            if let reviewMetadata = takeContext.referenceReviewMetadata {
+                try reviewMetadata.data.write(
+                    to: stagedSessionURL.appendingPathComponent("notation/\(reviewMetadata.fileName)"),
+                    options: .atomic
+                )
+            }
 
 #if DEBUG
             // Copy DEBUG companion files (raw-platter debug, per-observation
@@ -2062,31 +3427,506 @@ struct SessionArchiveBuilder: Sendable {
         try takeLogCSV.write(to: takeLogURL, atomically: true, encoding: .utf8)
 
         let metadataDocumentURL = manifestsURL.appendingPathComponent("session_metadata.json")
-        let metadataDocument = try metadataDocument(for: package)
+        let metadataDocument = try metadataDocument(for: package, sidecarSnapshots: context.boundSidecars)
         let metadataData = try Self.jsonEncoder.encode(metadataDocument)
         try metadataData.write(to: metadataDocumentURL, options: .atomic)
 
         let exportMetadataDocumentURL = manifestsURL.appendingPathComponent("export_metadata.json")
-        let exportMetadataDocument = try exportMetadataDocument(for: package, options: options)
+        let exportMetadataDocument = try exportMetadataDocument(for: package, options: options, sidecarSnapshots: context.boundSidecars)
         let exportMetadataData = try Self.jsonEncoder.encode(exportMetadataDocument)
         try exportMetadataData.write(to: exportMetadataDocumentURL, options: .atomic)
 
         let reviewDocumentURL = manifestsURL.appendingPathComponent("session_review.json")
-        let reviewDocument = reviewDocument(for: package)
+        let reviewDocument = reviewDocument(for: package, sidecarSnapshots: context.boundSidecars)
         let reviewDocumentData = try Self.jsonEncoder.encode(reviewDocument)
         try reviewDocumentData.write(to: reviewDocumentURL, options: .atomic)
 
         let replayDocumentURL = manifestsURL.appendingPathComponent("session_replay.json")
-        let replayDocument = replayDocument(for: package, generatedAt: reviewDocument.generatedAt)
+        let replayDocument = replayDocument(for: package, generatedAt: reviewDocument.generatedAt, sidecarSnapshots: context.boundSidecars)
         let replayDocumentData = try Self.jsonEncoder.encode(replayDocument)
         try replayDocumentData.write(to: replayDocumentURL, options: .atomic)
 
         try stageExportMixArtifacts(
             package,
+            context: context,
             options: options,
             at: stagedSessionURL,
             fileManager: fileManager
         )
+    }
+
+    /// Verifies the bytes that will actually be zipped, rather than treating
+    /// successful copy/write calls as proof of a trustworthy export. Source
+    /// sidecars remain staging inputs (the v4 package schema is unchanged),
+    /// while their generated notation/motion/metadata projections are checked
+    /// against the staged files before success can be reported.
+    private func validateStagedPackage(
+        _ package: SessionExportPackage,
+        context: CanonicalSessionContext,
+        options: SessionExportOptions,
+        at stagedSessionURL: URL,
+        fileManager: FileManager
+    ) throws {
+        guard context.takes.count == package.takes.count,
+              context.manifest.takes.count == context.takes.count,
+              !context.takes.isEmpty else {
+            throw SessionExportError.invalidSessionMetadata
+        }
+
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .iso8601
+        var stagedPathOwners: [String: String] = [:]
+
+        for (takeContext, manifestTake) in zip(context.takes, context.manifest.takes) {
+            let take = takeContext.take
+
+            let sidecarData = try nonemptyData(
+                at: take.sidecarURL,
+                fileManager: fileManager,
+                missingError: .missingRequiredFiles
+            )
+            if let evidence = takeContext.referenceTearEvidence,
+               sidecarData != evidence.sourceBinding.rawSidecarData {
+                throw SessionExportValidationFailure(.referenceTearEvidenceSourceMismatch)
+            }
+            if let reviewMetadata = takeContext.referenceReviewMetadata,
+               sidecarData != reviewMetadata.sourceBinding.rawSidecarData {
+                throw SessionExportValidationFailure(.referenceReviewMetadataSourceMismatch)
+            }
+            let sourceSidecar: CaptureCore.LocalRecordingSidecar
+            do {
+                sourceSidecar = try decoder.decode(
+                    CaptureCore.LocalRecordingSidecar.self,
+                    from: sidecarData
+                )
+            } catch {
+                throw SessionExportError.invalidSessionMetadata
+            }
+            guard sourceSidecar.sessionID == package.metadata.sessionID,
+                  sourceSidecar.takeID == take.takeID,
+                  sourceSidecar.appLocalTakeNumber == take.takeNumber,
+                  sourceSidecar.mediaFileName == take.mediaURL.lastPathComponent,
+                  sourceSidecar.sidecarFileName == take.sidecarURL.lastPathComponent,
+                  sourceSidecar.recordingStatus == "completed" else {
+                throw SessionExportError.invalidSessionMetadata
+            }
+
+            if let evidence = takeContext.referenceTearEvidence {
+                let relativePath = "notation/\(evidence.fileName)"
+                guard manifestTake.files["reference_tear_evidence"] == relativePath,
+                      manifestTake.artifacts["reference_tear_evidence"]?.path == relativePath else {
+                    throw SessionExportValidationFailure(.stagedReferenceTearEvidenceMismatch)
+                }
+                let stagedEvidence = try nonemptyData(
+                    at: stagedSessionURL.appendingPathComponent(relativePath),
+                    fileManager: fileManager, missingError: .missingRequiredFiles
+                )
+                guard stagedEvidence == evidence.data else {
+                    throw SessionExportValidationFailure(.stagedReferenceTearEvidenceMismatch)
+                }
+                do {
+                    _ = try ReferenceTearEvidenceCodec.decode(stagedEvidence, expectedSource: evidence.sourceBinding)
+                } catch {
+                    throw SessionExportValidationFailure(.stagedReferenceTearEvidenceMismatch)
+                }
+            } else if manifestTake.files["reference_tear_evidence"] != nil
+                        || manifestTake.artifacts["reference_tear_evidence"] != nil {
+                throw SessionExportValidationFailure(.stagedReferenceTearEvidenceMismatch)
+            }
+            if let reviewMetadata = takeContext.referenceReviewMetadata {
+                let relativePath = "notation/\(reviewMetadata.fileName)"
+                guard manifestTake.files["reference_review_metadata"] == relativePath,
+                      manifestTake.artifacts["reference_review_metadata"]?.path == relativePath else {
+                    throw SessionExportValidationFailure(.stagedReferenceReviewMetadataMismatch)
+                }
+                let stagedReview = try nonemptyData(
+                    at: stagedSessionURL.appendingPathComponent(relativePath),
+                    fileManager: fileManager, missingError: .missingRequiredFiles
+                )
+                guard stagedReview == reviewMetadata.data,
+                      (try? ReferenceReviewMetadataCodec.decode(stagedReview, expectedSource: reviewMetadata.sourceBinding)) != nil else {
+                    throw SessionExportValidationFailure(.stagedReferenceReviewMetadataMismatch)
+                }
+            } else if manifestTake.files["reference_review_metadata"] != nil
+                        || manifestTake.artifacts["reference_review_metadata"] != nil {
+                throw SessionExportValidationFailure(.stagedReferenceReviewMetadataMismatch)
+            }
+
+            let uniqueFiles = Set(manifestTake.files.values)
+            guard uniqueFiles.contains("video/\(takeContext.videoFileName)"),
+                  uniqueFiles.contains(takeContext.scratchOnlyRelativePath),
+                  uniqueFiles.contains("notation/\(takeContext.notationFileName)") else {
+                throw SessionExportError.invalidSessionMetadata
+            }
+            for relativePath in uniqueFiles {
+                if let existingOwner = stagedPathOwners[relativePath], existingOwner != take.takeID {
+                    throw SessionExportError.invalidSessionMetadata
+                }
+                stagedPathOwners[relativePath] = take.takeID
+                _ = try nonemptyFileSize(
+                    at: stagedSessionURL.appendingPathComponent(relativePath),
+                    fileManager: fileManager,
+                    missingError: .missingRequiredFiles
+                )
+            }
+
+            var artifactByPath: [String: CanonicalArtifactRecord] = [:]
+            for artifact in manifestTake.artifacts.values {
+                if let existing = artifactByPath[artifact.path],
+                   (existing.bytes != artifact.bytes || existing.sha256 != artifact.sha256) {
+                    throw SessionExportError.invalidSessionMetadata
+                }
+                artifactByPath[artifact.path] = artifact
+            }
+            for artifact in artifactByPath.values {
+                let artifactURL = stagedSessionURL.appendingPathComponent(artifact.path)
+                let bytes = try nonemptyFileSize(
+                    at: artifactURL,
+                    fileManager: fileManager,
+                    missingError: .missingRequiredFiles
+                )
+                guard bytes == artifact.bytes,
+                      try sha256Hex(at: artifactURL) == artifact.sha256 else {
+                    throw SessionExportValidationFailure(.stagedCanonicalArtifactMismatch)
+                }
+            }
+            if let binding = takeContext.sidecar.sessionConfig?.referenceCaptureIntent?.beatSpec {
+                let takeBeatRoot = stagedSessionURL.appendingPathComponent(
+                    "beat_assets/take_\(CaptureCore.LocalRecordingNaming.paddedTakeNumber(take.takeNumber))", isDirectory: true
+                )
+                _ = try ReferenceBeatAssetStore.resolve(binding: binding, rootURL: takeBeatRoot)
+                let copiedSidecar = try decodeSidecar(at: takeBeatRoot.appendingPathComponent("take_sidecar.json"))
+                guard copiedSidecar.sessionID == takeContext.sidecar.sessionID,
+                      copiedSidecar.takeID == takeContext.sidecar.takeID,
+                      copiedSidecar.sessionConfig?.referenceCaptureIntent == takeContext.sidecar.sessionConfig?.referenceCaptureIntent,
+                      copiedSidecar.captureTiming == takeContext.sidecar.captureTiming else {
+                    throw SessionExportError.invalidSessionMetadata
+                }
+            }
+
+            let notationURL = stagedSessionURL
+                .appendingPathComponent("notation", isDirectory: true)
+                .appendingPathComponent(takeContext.notationFileName)
+            let notationData = try nonemptyData(
+                at: notationURL,
+                fileManager: fileManager,
+                missingError: .missingRequiredFiles
+            )
+            let notation: SessionExportNotationDocument
+            do {
+                notation = try decoder.decode(SessionExportNotationDocument.self, from: notationData)
+            } catch {
+                throw SessionExportError.invalidSessionMetadata
+            }
+            let expectedNotationData = try Self.jsonEncoder.encode(takeContext.notationDocument)
+            guard notationData == expectedNotationData,
+                  notation.sessionID == package.metadata.sessionID,
+                  notation.takeID == take.takeID,
+                  notation.takeNumber == take.takeNumber else {
+                throw SessionExportError.invalidSessionMetadata
+            }
+            // Fail-closed and deliberately kept: a take may claim platter
+            // motion only when its notation actually recorded movement. This
+            // is a device-specific path that has not been reproduced on
+            // hardware, so it stays strict and now reports which check fired.
+            if take.motionSources?.contains(.platter) == true,
+               notation.recordMovementEvents.isEmpty {
+                throw SessionExportValidationFailure(.platterMotionWithoutRecordedMovement)
+            }
+            if take.motionSources?.contains(.watch) == true {
+                guard let watchFileName = takeContext.watchFileName,
+                      uniqueFiles.contains("watch/\(watchFileName)") else {
+                    throw SessionExportError.missingRequiredFiles
+                }
+            }
+
+            let exportPaths = exportArtifactPaths(for: take, options: options)
+            for relativePath in [
+                exportPaths.scratchFile,
+                exportPaths.timingFile,
+                exportPaths.rawTakeFile,
+            ].compactMap({ $0 }) {
+                if let existingOwner = stagedPathOwners[relativePath], existingOwner != take.takeID {
+                    throw SessionExportError.invalidSessionMetadata
+                }
+                stagedPathOwners[relativePath] = take.takeID
+                let exportURL = stagedSessionURL.appendingPathComponent(relativePath)
+                _ = try nonemptyFileSize(
+                    at: exportURL,
+                    fileManager: fileManager,
+                    missingError: .missingRequiredFiles
+                )
+                do {
+                    let audioFile = try AVAudioFile(forReading: exportURL)
+                    guard audioFile.length > 0 else {
+                        throw SessionExportError.unableToPrepareExport
+                    }
+                } catch let exportError as SessionExportError {
+                    throw exportError
+                } catch {
+                    throw SessionExportError.unableToPrepareExport
+                }
+            }
+            if let rawTakeFile = exportPaths.rawTakeFile {
+                guard let sourceAudioURL = take.audioArtifactURL else {
+                    throw SessionExportError.missingRequiredFiles
+                }
+                let rawTakeURL = stagedSessionURL.appendingPathComponent(rawTakeFile)
+                let rawTakeBytes = try nonemptyFileSize(
+                    at: rawTakeURL,
+                    fileManager: fileManager,
+                    missingError: .missingRequiredFiles
+                )
+                let sourceAudioBytes = try nonemptyFileSize(
+                    at: sourceAudioURL,
+                    fileManager: fileManager,
+                    missingError: .missingRequiredFiles
+                )
+                guard rawTakeBytes == sourceAudioBytes,
+                      try sha256Hex(at: rawTakeURL) == sha256Hex(at: sourceAudioURL) else {
+                    throw SessionExportError.unableToPrepareExport
+                }
+            }
+
+            if options.mixMode != .scratchOnly {
+                guard take.audioArtifactURL != nil else {
+                    throw SessionExportError.missingRequiredFiles
+                }
+                let canonicalScratchURL = stagedSessionURL
+                    .appendingPathComponent(takeContext.scratchOnlyRelativePath)
+                let timingBuffer = try renderedExportTimingBuffer(
+                    for: take,
+                    captureMetadata: takeContext.captureMetadata,
+                    sidecar: takeContext.sidecar,
+                    packageMetadata: package.metadata,
+                    scratchAudioURL: canonicalScratchURL
+                )
+                if let timingFile = exportPaths.timingFile {
+                    try validateGeneratedAudioBuffer(
+                        timingBuffer,
+                        source: "beat_only",
+                        at: stagedSessionURL.appendingPathComponent(timingFile),
+                        fileManager: fileManager
+                    )
+                }
+                if let scratchFile = exportPaths.scratchFile {
+                    let scratchURL = stagedSessionURL.appendingPathComponent(scratchFile)
+                    switch options.mixMode {
+                    case .scratchWithTiming:
+                        let mixedBuffer = try mixedScratchWithTimingBuffer(
+                            scratchURL: canonicalScratchURL,
+                            timingBuffer: timingBuffer
+                        )
+                        try validateGeneratedAudioBuffer(
+                            mixedBuffer,
+                            source: "scratch_with_beat",
+                            at: scratchURL,
+                            fileManager: fileManager
+                        )
+                    case .stemsFolder:
+                        guard try nonemptyFileSize(
+                            at: scratchURL,
+                            fileManager: fileManager,
+                            missingError: .missingRequiredFiles
+                        ) == nonemptyFileSize(
+                            at: canonicalScratchURL,
+                            fileManager: fileManager,
+                            missingError: .missingRequiredFiles
+                        ),
+                        try sha256Hex(at: scratchURL) == sha256Hex(at: canonicalScratchURL) else {
+                            throw SessionExportError.unableToPrepareExport
+                        }
+                    case .scratchOnly, .timingOnly:
+                        throw SessionExportError.invalidSessionMetadata
+                    }
+                }
+            }
+        }
+
+        let manifestsURL = stagedSessionURL.appendingPathComponent("manifests", isDirectory: true)
+        let manifestData = try nonemptyData(
+            at: manifestsURL.appendingPathComponent("session_manifest.json"),
+            fileManager: fileManager,
+            missingError: .missingRequiredFiles
+        )
+        let stagedManifest: CanonicalSessionManifest
+        do {
+            stagedManifest = try decoder.decode(CanonicalSessionManifest.self, from: manifestData)
+        } catch {
+            throw SessionExportError.invalidSessionMetadata
+        }
+        guard manifestData == (try Self.jsonEncoder.encode(context.manifest)),
+              stagedManifest.sessionRoot == context.sessionRootName,
+              stagedManifest.takes.count == context.takes.count else {
+            throw SessionExportError.invalidSessionMetadata
+        }
+
+        let metadataData = try nonemptyData(
+            at: manifestsURL.appendingPathComponent("session_metadata.json"),
+            fileManager: fileManager,
+            missingError: .missingRequiredFiles
+        )
+        let exportMetadataData = try nonemptyData(
+            at: manifestsURL.appendingPathComponent("export_metadata.json"),
+            fileManager: fileManager,
+            missingError: .missingRequiredFiles
+        )
+        let reviewData = try nonemptyData(
+            at: manifestsURL.appendingPathComponent("session_review.json"),
+            fileManager: fileManager,
+            missingError: .missingRequiredFiles
+        )
+        let replayData = try nonemptyData(
+            at: manifestsURL.appendingPathComponent("session_replay.json"),
+            fileManager: fileManager,
+            missingError: .missingRequiredFiles
+        )
+        let metadata: SessionExportMetadataDocument
+        let exportMetadata: SessionExportArtifactMetadataDocument
+        let review: SessionExportReviewDocument
+        let replay: SessionExportReplayDocument
+        do {
+            metadata = try decoder.decode(SessionExportMetadataDocument.self, from: metadataData)
+            exportMetadata = try decoder.decode(SessionExportArtifactMetadataDocument.self, from: exportMetadataData)
+            review = try decoder.decode(SessionExportReviewDocument.self, from: reviewData)
+            replay = try decoder.decode(SessionExportReplayDocument.self, from: replayData)
+        } catch {
+            throw SessionExportValidationFailure(.stagedDocumentUnreadable)
+        }
+
+        // Compare the staged BYTES against the same documents re-encoded through
+        // the one canonical encoder that wrote them — exactly what
+        // `session_manifest.json` and every notation document above already do.
+        //
+        // Decoding first and comparing the decoded VALUES is lossy: the
+        // canonical encoder's `.iso8601` strategy writes whole seconds, so any
+        // session whose `createdAt` carries a fractional component decoded back
+        // as a different `Date` and a byte-identical, fully valid export was
+        // rejected as inconsistent metadata. That is why a freshly kept take
+        // failed while a take recovered from disk did not: recovery derives
+        // `createdAt` from an already-serialized sidecar date, so it is always
+        // whole-second, whereas a live kept session carries the sub-second
+        // `Date` the session was created with.
+        //
+        // Re-encoding applies the identical, deterministic serialization to
+        // both sides, so the check stays exact — and in fact stricter, because
+        // it now also proves the staged file is the canonical byte-for-byte
+        // serialization rather than merely an equal-valued one. Nothing is
+        // rounded, mutated, defaulted, or trusted.
+        let expectedMetadata = try metadataDocument(for: package, sidecarSnapshots: context.boundSidecars)
+        let expectedExportMetadata = try exportMetadataDocument(for: package, options: options, sidecarSnapshots: context.boundSidecars)
+        let expectedReview = reviewDocument(for: package, generatedAt: review.generatedAt, sidecarSnapshots: context.boundSidecars)
+        let expectedReplay = replayDocument(for: package, generatedAt: review.generatedAt, sidecarSnapshots: context.boundSidecars)
+        let expectedTakeIDs = Set(context.takes.map(\.take.takeID))
+
+        guard metadataData == (try Self.jsonEncoder.encode(expectedMetadata)) else {
+            throw SessionExportValidationFailure(.stagedSessionMetadataDocumentMismatch)
+        }
+        guard exportMetadataData == (try Self.jsonEncoder.encode(expectedExportMetadata)) else {
+            throw SessionExportValidationFailure(.stagedExportMetadataDocumentMismatch)
+        }
+        guard reviewData == (try Self.jsonEncoder.encode(expectedReview)) else {
+            throw SessionExportValidationFailure(.stagedReviewDocumentMismatch)
+        }
+        guard replayData == (try Self.jsonEncoder.encode(expectedReplay)) else {
+            throw SessionExportValidationFailure(.stagedReplayDocumentMismatch)
+        }
+        guard metadata.session.sessionID == package.metadata.sessionID,
+              metadata.takes.count == context.takes.count,
+              Set(metadata.takes.map(\.takeID)) == expectedTakeIDs,
+              exportMetadata.sessionID == package.metadata.sessionID,
+              exportMetadata.takes.count == context.takes.count,
+              Set(exportMetadata.takes.map(\.takeID)) == expectedTakeIDs,
+              review.takes.count == context.takes.count,
+              Set(review.takes.map(\.takeID)) == expectedTakeIDs,
+              replay.sessionID == package.metadata.sessionID,
+              replay.schemaVersion == expectedReplay.schemaVersion,
+              replay.takes == expectedReplay.takes,
+              replay.generatedAt == review.generatedAt,
+              replay.takes.count == context.takes.count,
+              Set(replay.takes.map(\.takeID)) == expectedTakeIDs else {
+            throw SessionExportValidationFailure(.stagedDocumentIdentityMismatch)
+        }
+
+        let takeLogData = try nonemptyData(
+            at: manifestsURL.appendingPathComponent("take_log.csv"),
+            fileManager: fileManager,
+            missingError: .missingRequiredFiles
+        )
+        guard let takeLog = String(data: takeLogData, encoding: .utf8) else {
+            throw SessionExportError.invalidSessionMetadata
+        }
+        guard takeLog == makeCanonicalTakeLogCSV(from: context.takeLogRows) else {
+            throw SessionExportError.invalidSessionMetadata
+        }
+        let takeLogLines = takeLog.split(whereSeparator: \.isNewline)
+        guard takeLogLines.count == context.takes.count + 1 else {
+            throw SessionExportError.invalidSessionMetadata
+        }
+        for takeContext in context.takes {
+            guard takeLog.contains("video/\(takeContext.videoFileName)"),
+                  takeLog.contains(takeContext.scratchOnlyRelativePath) else {
+                throw SessionExportError.invalidSessionMetadata
+            }
+        }
+    }
+
+    private func nonemptyData(
+        at url: URL,
+        fileManager: FileManager,
+        missingError: SessionExportError
+    ) throws -> Data {
+        guard fileManager.fileExists(atPath: url.path) else { throw missingError }
+        let data = try Data(contentsOf: url)
+        guard !data.isEmpty else { throw missingError }
+        return data
+    }
+
+    private func nonemptyFileSize(
+        at url: URL,
+        fileManager: FileManager,
+        missingError: SessionExportError
+    ) throws -> Int64 {
+        guard fileManager.fileExists(atPath: url.path) else { throw missingError }
+        let attributes = try fileManager.attributesOfItem(atPath: url.path)
+        let bytes = (attributes[.size] as? NSNumber)?.int64Value ?? 0
+        guard bytes > 0 else { throw missingError }
+        return bytes
+    }
+
+    private func sha256Hex(at url: URL) throws -> String {
+        let handle = try FileHandle(forReadingFrom: url)
+        defer { try? handle.close() }
+        var hash = SHA256()
+        while true {
+            let data = try handle.read(upToCount: 1_048_576) ?? Data()
+            guard !data.isEmpty else { break }
+            hash.update(data: data)
+        }
+        return hash.finalize().map { String(format: "%02x", $0) }.joined()
+    }
+
+    private func validateGeneratedAudioBuffer(
+        _ buffer: AVAudioPCMBuffer,
+        source: String,
+        at stagedURL: URL,
+        fileManager: FileManager
+    ) throws {
+        let expected = try generatedAudioArtifactRecord(
+            source: source,
+            buffer: buffer,
+            stagedURL: stagedURL,
+            fileManager: fileManager
+        )
+        let actualBytes = try nonemptyFileSize(
+            at: stagedURL,
+            fileManager: fileManager,
+            missingError: .missingRequiredFiles
+        )
+        guard actualBytes == expected.bytes,
+              try sha256Hex(at: stagedURL) == expected.sha256 else {
+            throw SessionExportValidationFailure(.stagedGeneratedAudioMismatch)
+        }
     }
 
     private func makeCanonicalTakeLogCSV(from rows: [CanonicalTakeLogRow]) -> String {
@@ -2114,7 +3954,10 @@ struct SessionArchiveBuilder: Sendable {
     }
 
     private func decodeSidecar(at url: URL) throws -> CaptureCore.LocalRecordingSidecar {
-        let data = try Data(contentsOf: url)
+        try Self.decodeSidecar(data: Data(contentsOf: url))
+    }
+
+    private static func decodeSidecar(data: Data) throws -> CaptureCore.LocalRecordingSidecar {
         let decoder = JSONDecoder()
         decoder.dateDecodingStrategy = .iso8601
         return try decoder.decode(CaptureCore.LocalRecordingSidecar.self, from: data)
@@ -2189,9 +4032,10 @@ struct SessionArchiveBuilder: Sendable {
 
     private func resolvedTakeCaptureMetadata(
         for take: SessionExportTake,
-        packageMetadata: SessionExportMetadata
+        packageMetadata: SessionExportMetadata,
+        sidecarSnapshot: CaptureCore.LocalRecordingSidecar? = nil
     ) throws -> SessionExportTakeCaptureMetadata {
-        let sidecar = try decodeSidecar(at: take.sidecarURL)
+        let sidecar = try sidecarSnapshot ?? decodeSidecar(at: take.sidecarURL)
         let captureValues = resolvedTakeCaptureValues(
             for: take,
             sidecar: sidecar,
@@ -2226,8 +4070,47 @@ struct SessionArchiveBuilder: Sendable {
             notationSource: notationExport.document.notationSource.rawValue,
             labelSource: notationExport.document.labelSource.rawValue,
             labelConfidence: notationExport.document.labelConfidence,
-            notationConfidence: notationExport.document.notationConfidence
+            notationConfidence: notationExport.document.notationConfidence,
+            stopReason: sidecar.stopReason,
+            plannedTakeDurationSeconds: RoutineCaptureDefaults.plannedTakeDurationSeconds(
+                for: SessionExportMetadataResolver.validatedSessionConfig(from: sidecar)
+            ),
+            maximumTakeDurationSeconds: SessionExportMetadataResolver
+                .validatedSessionConfig(from: sidecar)?.maximumTakeDurationSeconds,
+            actualTakeDurationSeconds: Self.playableMediaDurationSeconds(
+                audioArtifactURL: take.audioArtifactURL
+            ) ?? take.duration,
+            watchSyncState: sidecar.watchSyncState.rawValue,
+            watchLinkedMotionFileName: sidecar.linkedMotionFileName,
+            watchMotionExported: take.sourceWatchMotionURL != nil,
+            watchStopOutcome: (sidecar.watchStopDiagnostics?.outcome
+                ?? .notRequested).rawValue,
+            watchStopDetail: sidecar.watchStopDiagnostics?.detail,
+            watchMotionTransferState: resolvedWatchMotionTransferState(
+                for: take,
+                sidecar: sidecar
+            ).rawValue,
+            takeStartedAt: sidecar.startedAt,
+            takeStopRequestedAt: sidecar.watchStopDiagnostics?.requestedAt,
+            watchCaptureStartedAt: take.watchCaptureSession?.startedAt,
+            watchCaptureEndedAt: take.watchCaptureSession?.endedAt,
+            watchStopHandledAt: sidecar.watchStopDiagnostics?.watchHandledAt,
+            watchStopResolvedAt: sidecar.watchStopDiagnostics?.resolvedAt,
+            watchStopRelayReceivedAt: sidecar.watchStopDiagnostics?.relayReceivedAt,
+            referenceCaptureIntent: sidecar.sessionConfig?.referenceCaptureIntent,
+            recordingStartOffsetSeconds: sidecar.captureTiming?.recordingStartOffsetSeconds
         )
+    }
+
+    /// The archive is the last word on where a take's motion ended up: a file
+    /// that reached it is `completed` whatever the sidecar recorded mid-flight.
+    private func resolvedWatchMotionTransferState(
+        for take: SessionExportTake,
+        sidecar: CaptureCore.LocalRecordingSidecar
+    ) -> CaptureWatchMotionTransferState {
+        if take.sourceWatchMotionURL != nil { return .completed }
+        if sidecar.linkedMotionFileName != nil { return .pending }
+        return sidecar.watchStopDiagnostics?.motionTransferState ?? .notApplicable
     }
 
     private func notationFileName(for takeNumber: Int) -> String {
@@ -2274,7 +4157,7 @@ struct SessionArchiveBuilder: Sendable {
             }
         }
 
-        let detectedNotation = sidecar.detectedNotation
+        let detectedNotation = exportBoundedSnapshot(for: take, sidecar: sidecar)
         let detectedMovementEvents = (detectedNotation?.recordMovementEvents ?? []).map {
             SessionExportRecordMovementEvent(from: $0)
         }
@@ -2436,6 +4319,114 @@ struct SessionArchiveBuilder: Sendable {
         return token
     }
 
+    struct BoundBeatExportArtifact {
+        let source: String
+        let relativePath: String
+        let sourceURL: URL
+    }
+
+    /// Every bound take carries its own portable asset set. Export never falls
+    /// back to a global library, another take, or newly synthesized samples.
+    static func boundBeatExportArtifacts(
+        sidecar: CaptureCore.LocalRecordingSidecar, mediaURL: URL,
+        sidecarURL: URL, takeNumber: Int
+    ) throws -> [BoundBeatExportArtifact] {
+        guard let binding = sidecar.sessionConfig?.referenceCaptureIntent?.beatSpec else { return [] }
+        let prepared = try ReferenceBeatAssetStore.resolve(
+            binding: binding,
+            rootURL: mediaURL.deletingLastPathComponent().appendingPathComponent("beat_assets", isDirectory: true)
+        )
+        let prefix = "beat_assets/take_\(CaptureCore.LocalRecordingNaming.paddedTakeNumber(takeNumber))/\(binding.id)"
+        let assets = [
+            ("reference_beat_master", prepared.productionMasterURL),
+            ("reference_beat_analysis", prepared.sparseAnalysisURL),
+            ("reference_beat_manifest", prepared.manifestURL),
+            ("reference_beat_rights", prepared.rightsReceiptURL)
+        ]
+        return assets.map { source, url in
+            BoundBeatExportArtifact(source: source, relativePath: "\(prefix)/\(url.lastPathComponent)", sourceURL: url)
+        } + [BoundBeatExportArtifact(
+            source: "reference_take_sidecar",
+            relativePath: "beat_assets/take_\(CaptureCore.LocalRecordingNaming.paddedTakeNumber(takeNumber))/take_sidecar.json",
+            sourceURL: sidecarURL
+        )]
+    }
+
+    /// Derive the take-length timing stem from the exact PCM that was played,
+    /// preserving its loop boundary and portable recording origin. Conversion
+    /// changes only the output format, never the recipe or beat placement.
+    static func renderedBoundBeatStem(
+        binding: ReferenceBeatSpecBinding, beatRootURL: URL,
+        recordingStartOffsetSeconds: Double?, outputFormat: AVAudioFormat,
+        frameCount: AVAudioFrameCount
+    ) throws -> AVAudioPCMBuffer {
+        let expectedOffset = Double(binding.countInFrameCount) / Double(binding.sampleRate)
+        guard let offset = recordingStartOffsetSeconds,
+              ReferenceRecordingOriginPolicy.accepts(offset: offset, countIn: expectedOffset, sampleRate: binding.sampleRate),
+              frameCount > 0, outputFormat.sampleRate.isFinite, outputFormat.sampleRate > 0 else {
+            throw ReferencePackageIOError.packageRejected(["The bound beat has no valid portable recording origin."])
+        }
+        let prepared = try ReferenceBeatAssetStore.resolve(binding: binding, rootURL: beatRootURL)
+        let playback = try ScratchLabBeatEngine.loadPreparedPlayback(
+            preparedBeat: prepared, mode: prepared.mode, bpm: binding.bpm
+        )
+        let loop = playback.loopBuffer
+        guard let loopChannels = loop.floatChannelData,
+              let countInChannels = playback.countInBuffer.floatChannelData,
+              playback.countInBuffer.frameLength > 0, loop.frameLength > 0 else {
+            throw SessionExportError.invalidSessionMetadata
+        }
+        // A small real loop continuation supplies the converter's filter tail;
+        // it is not silence padding. The returned buffer has exactly WAV length.
+        let sourceCount = ceil(Double(frameCount) * loop.format.sampleRate / outputFormat.sampleRate) + 256
+        guard sourceCount <= Double(UInt32.max),
+              let source = AVAudioPCMBuffer(pcmFormat: loop.format, frameCapacity: AVAudioFrameCount(sourceCount)),
+              let sourceChannels = source.floatChannelData,
+              let destination = AVAudioPCMBuffer(pcmFormat: outputFormat, frameCapacity: frameCount) else {
+            throw SessionExportError.unableToPrepareExport
+        }
+        source.frameLength = source.frameCapacity
+        let startFrame = Int(((offset - expectedOffset) * loop.format.sampleRate).rounded())
+        guard startFrame >= -Int(playback.countInBuffer.frameLength) else {
+            throw ReferencePackageIOError.packageRejected(["The measured media origin precedes the available count-in audio."])
+        }
+        let loopFrames = Int(loop.frameLength)
+        for channel in 0..<Int(loop.format.channelCount) {
+            for frame in 0..<Int(source.frameLength) {
+                let relativeFrame = startFrame + frame
+                if relativeFrame < 0 {
+                    sourceChannels[channel][frame] = countInChannels[channel][Int(playback.countInBuffer.frameLength) + relativeFrame]
+                } else {
+                    sourceChannels[channel][frame] = loopChannels[channel][relativeFrame % loopFrames]
+                }
+            }
+        }
+        if source.format == outputFormat {
+            guard let outputChannels = destination.floatChannelData else { throw SessionExportError.unableToPrepareExport }
+            destination.frameLength = frameCount
+            for channel in 0..<Int(outputFormat.channelCount) {
+                outputChannels[channel].update(from: sourceChannels[channel], count: Int(frameCount))
+            }
+            return destination
+        }
+        guard let converter = AVAudioConverter(from: source.format, to: outputFormat) else {
+            throw SessionExportError.unableToPrepareExport
+        }
+        converter.primeMethod = .none
+        var suppliedInput = false
+        var conversionError: NSError?
+        let status = converter.convert(to: destination, error: &conversionError) { _, inputStatus in
+            if suppliedInput { inputStatus.pointee = .endOfStream; return nil }
+            suppliedInput = true
+            inputStatus.pointee = .haveData
+            return source
+        }
+        guard status != .error, conversionError == nil, destination.frameLength == frameCount else {
+            throw ReferencePackageIOError.packageRejected(["The exact beat asset could not be converted to the captured audio format."])
+        }
+        return destination
+    }
+
     private func renderedBeatStemBuffer(
         for take: SessionExportTake,
         captureMetadata: SessionExportTakeCaptureMetadata,
@@ -2443,16 +4434,31 @@ struct SessionArchiveBuilder: Sendable {
     ) throws -> AVAudioPCMBuffer {
         let scratchAudioFile = try AVAudioFile(forReading: scratchAudioURL)
         let scratchFormat = scratchAudioFile.processingFormat
+        guard scratchAudioFile.length > 0, scratchFormat.sampleRate > 0 else {
+            throw SessionExportError.invalidSessionMetadata
+        }
+        let capturedDurationSeconds =
+            Double(scratchAudioFile.length) / scratchFormat.sampleRate
+        if let binding = captureMetadata.referenceCaptureIntent?.beatSpec {
+            return try Self.renderedBoundBeatStem(
+                binding: binding,
+                beatRootURL: take.mediaURL.deletingLastPathComponent().appendingPathComponent("beat_assets", isDirectory: true),
+                recordingStartOffsetSeconds: captureMetadata.recordingStartOffsetSeconds,
+                outputFormat: scratchFormat,
+                frameCount: AVAudioFrameCount(clamping: scratchAudioFile.length)
+            )
+        }
         return try ScratchLabBeatEngine.renderedTimingBuffer(
             mode: BeatEngineMode(rawValue: captureMetadata.beatEngineMode) ?? .silent,
             bpm: captureMetadata.bpm ?? CaptureClickTrackDefaults.defaultTimedBPM,
-            durationSeconds: max(0, take.duration),
+            durationSeconds: capturedDurationSeconds,
             countInBeats: captureMetadata.countInBeats,
             beatsPerBar: captureMetadata.beatsPerBar,
             clickStartHostTime: captureMetadata.clickStartHostTime,
             recordingStartHostTime: captureMetadata.recordingStartHostTime,
             sampleRate: scratchFormat.sampleRate,
-            channelCount: scratchFormat.channelCount
+            channelCount: scratchFormat.channelCount,
+            exactFrameCount: AVAudioFrameCount(clamping: scratchAudioFile.length)
         )
     }
 
@@ -2479,38 +4485,28 @@ struct SessionArchiveBuilder: Sendable {
 
     private func stageExportMixArtifacts(
         _ package: SessionExportPackage,
+        context: CanonicalSessionContext,
         options: SessionExportOptions,
         at stagedSessionURL: URL,
         fileManager: FileManager
     ) throws {
         guard options.mixMode != .scratchOnly else { return }
 
-        for take in package.takes {
+        for takeContext in context.takes {
+            let take = takeContext.take
             guard let scratchAudioURL = take.audioArtifactURL else {
                 throw SessionExportError.missingRequiredFiles
             }
+            let canonicalScratchURL = stagedSessionURL
+                .appendingPathComponent(takeContext.scratchOnlyRelativePath)
 
-            let sidecar = try decodeSidecar(at: take.sidecarURL)
-            let captureMetadata = try resolvedTakeCaptureMetadata(for: take, packageMetadata: package.metadata)
-            let captureValues = resolvedTakeCaptureValues(
-                for: take,
-                sidecar: sidecar,
-                packageMetadata: package.metadata
-            )
             let artifactPaths = exportArtifactPaths(for: take, options: options)
-            let scratchAudioFile = try AVAudioFile(forReading: scratchAudioURL)
-            let scratchFormat = scratchAudioFile.processingFormat
-
-            let timingBuffer = try ScratchLabBeatEngine.renderedTimingBuffer(
-                mode: BeatEngineMode(rawValue: captureMetadata.beatEngineMode) ?? .silent,
-                bpm: captureValues.canonicalBPM ?? CaptureClickTrackDefaults.defaultTimedBPM,
-                durationSeconds: max(0, take.duration),
-                countInBeats: captureMetadata.countInBeats,
-                beatsPerBar: captureMetadata.beatsPerBar,
-                clickStartHostTime: captureMetadata.clickStartHostTime,
-                recordingStartHostTime: captureMetadata.recordingStartHostTime,
-                sampleRate: scratchFormat.sampleRate,
-                channelCount: scratchFormat.channelCount
+            let timingBuffer = try renderedExportTimingBuffer(
+                for: take,
+                captureMetadata: takeContext.captureMetadata,
+                sidecar: takeContext.sidecar,
+                packageMetadata: package.metadata,
+                scratchAudioURL: canonicalScratchURL
             )
 
             if let timingFile = artifactPaths.timingFile {
@@ -2533,7 +4529,7 @@ struct SessionArchiveBuilder: Sendable {
                         withIntermediateDirectories: true
                     )
                     let mixedBuffer = try mixedScratchWithTimingBuffer(
-                        scratchURL: scratchAudioURL,
+                        scratchURL: canonicalScratchURL,
                         timingBuffer: timingBuffer
                     )
                     try writeAudioBuffer(mixedBuffer, to: scratchURL)
@@ -2561,10 +4557,52 @@ struct SessionArchiveBuilder: Sendable {
                     if fileManager.fileExists(atPath: scratchURL.path) {
                         try fileManager.removeItem(at: scratchURL)
                     }
-                    try fileManager.copyItem(at: scratchAudioURL, to: scratchURL)
+                    try fileManager.copyItem(at: canonicalScratchURL, to: scratchURL)
                 }
             }
         }
+    }
+
+    private func renderedExportTimingBuffer(
+        for take: SessionExportTake,
+        captureMetadata: SessionExportTakeCaptureMetadata,
+        sidecar: CaptureCore.LocalRecordingSidecar,
+        packageMetadata: SessionExportMetadata,
+        scratchAudioURL: URL
+    ) throws -> AVAudioPCMBuffer {
+        let captureValues = resolvedTakeCaptureValues(
+            for: take,
+            sidecar: sidecar,
+            packageMetadata: packageMetadata
+        )
+        let scratchAudioFile = try AVAudioFile(forReading: scratchAudioURL)
+        guard scratchAudioFile.length > 0 else {
+            throw SessionExportError.invalidSessionMetadata
+        }
+        let scratchFormat = scratchAudioFile.processingFormat
+        let capturedDurationSeconds =
+            Double(scratchAudioFile.length) / scratchFormat.sampleRate
+        if let binding = captureMetadata.referenceCaptureIntent?.beatSpec {
+            return try Self.renderedBoundBeatStem(
+                binding: binding,
+                beatRootURL: take.mediaURL.deletingLastPathComponent().appendingPathComponent("beat_assets", isDirectory: true),
+                recordingStartOffsetSeconds: captureMetadata.recordingStartOffsetSeconds,
+                outputFormat: scratchFormat,
+                frameCount: AVAudioFrameCount(clamping: scratchAudioFile.length)
+            )
+        }
+        return try ScratchLabBeatEngine.renderedTimingBuffer(
+            mode: BeatEngineMode(rawValue: captureMetadata.beatEngineMode) ?? .silent,
+            bpm: captureValues.canonicalBPM ?? CaptureClickTrackDefaults.defaultTimedBPM,
+            durationSeconds: capturedDurationSeconds,
+            countInBeats: captureMetadata.countInBeats,
+            beatsPerBar: captureMetadata.beatsPerBar,
+            clickStartHostTime: captureMetadata.clickStartHostTime,
+            recordingStartHostTime: captureMetadata.recordingStartHostTime,
+            sampleRate: scratchFormat.sampleRate,
+            channelCount: scratchFormat.channelCount,
+            exactFrameCount: AVAudioFrameCount(clamping: scratchAudioFile.length)
+        )
     }
 
     private func exportArtifactPaths(
@@ -2624,9 +4662,77 @@ struct SessionArchiveBuilder: Sendable {
         }
         try scratchFile.read(into: scratchBuffer)
 
-        guard let mixedBuffer = AVAudioPCMBuffer(
+        return try Self.mixScratchWithTiming(
+            scratchBuffer: scratchBuffer,
+            timingBuffer: timingBuffer
+        ).buffer
+    }
+
+    /// Outcome of mixing a captured scratch stem with a rendered timing stem.
+    struct ScratchTimingMixResult {
+        let buffer: AVAudioPCMBuffer
+        /// Gain applied to the *generated* timing stem inside the mix.
+        let timingGain: Float
+        /// Gain applied to the finished mix, and therefore to the captured
+        /// scratch. `1.0` means the recording was passed through untouched,
+        /// which is the expected result.
+        let mixGain: Float
+    }
+
+    /// Largest timing-stem gain, no greater than `baseGain`, for which
+    /// `scratch + gain * timing` stays inside `ceiling` at every frame.
+    ///
+    /// Returns `nil` when no non-negative gain works, which can only happen if
+    /// the captured scratch already exceeds the ceiling on its own.
+    ///
+    /// Per frame the binding constraint is `|s + g*t| <= C`, i.e.
+    /// `g <= (C - s*sign(t)) / |t|`; the minimum of those bounds is exact, so
+    /// this is a single pass with no search and no dynamics.
+    static func resolvedTimingMixGain(
+        scratchChannels: UnsafePointer<UnsafeMutablePointer<Float>>,
+        timingChannels: UnsafePointer<UnsafeMutablePointer<Float>>,
+        channelCount: Int,
+        timingChannelCount: Int,
+        frameCount: Int,
+        ceiling: Float,
+        baseGain: Float
+    ) -> Float? {
+        var gain = baseGain
+        for channel in 0..<channelCount {
+            let scratch = scratchChannels[channel]
+            let timing = timingChannels[min(channel, timingChannelCount - 1)]
+            for frame in 0..<frameCount {
+                let timingSample = timing[frame]
+                guard timingSample != 0 else { continue }
+                let scratchSample = scratch[frame]
+                let signedScratch = timingSample > 0 ? scratchSample : -scratchSample
+                let bound = (ceiling - signedScratch) / abs(timingSample)
+                if bound < gain { gain = bound }
+                if gain < 0 { return nil }
+            }
+        }
+        return gain
+    }
+
+    /// Sums a captured scratch buffer with a rendered timing stem.
+    ///
+    /// Requires frame-identical inputs — the export renders the timing stem at
+    /// the scratch file's exact length precisely so the stems stay sample
+    /// aligned — and produces a mix that is inside full scale without clipping.
+    ///
+    /// The captured scratch is held at unity. Headroom for the mix is found by
+    /// lowering the *generated* timing stem, never the recording; the whole mix
+    /// is only attenuated in the one case where the scratch alone is already
+    /// over the ceiling, and the returned `mixGain` reports when that happened.
+    static func mixScratchWithTiming(
+        scratchBuffer: AVAudioPCMBuffer,
+        timingBuffer: AVAudioPCMBuffer
+    ) throws -> ScratchTimingMixResult {
+        let scratchFormat = scratchBuffer.format
+        guard scratchBuffer.frameLength == timingBuffer.frameLength,
+              let mixedBuffer = AVAudioPCMBuffer(
             pcmFormat: scratchFormat,
-            frameCapacity: max(scratchBuffer.frameCapacity, timingBuffer.frameCapacity)
+            frameCapacity: scratchBuffer.frameCapacity
         ),
         let mixedChannels = mixedBuffer.floatChannelData,
         let scratchChannels = scratchBuffer.floatChannelData,
@@ -2634,29 +4740,55 @@ struct SessionArchiveBuilder: Sendable {
             throw SessionExportError.unableToPrepareExport
         }
 
-        let frameCount = max(Int(scratchBuffer.frameLength), Int(timingBuffer.frameLength))
+        let frameCount = Int(scratchBuffer.frameLength)
+        let channelCount = Int(scratchFormat.channelCount)
+        let timingChannelCount = Int(timingBuffer.format.channelCount)
         mixedBuffer.frameLength = AVAudioFrameCount(frameCount)
-        for channel in 0..<Int(scratchFormat.channelCount) {
+        for channel in 0..<channelCount {
             mixedChannels[channel].initialize(repeating: 0, count: frameCount)
         }
 
+        let ceiling = ScratchLabBeatEngine.GeneratedAudioHeadroom.amplitude(
+            forDBFS: ScratchLabBeatEngine.GeneratedAudioHeadroom.mixCeilingDBFS
+        )
+        let resolvedGain = Self.resolvedTimingMixGain(
+            scratchChannels: scratchChannels,
+            timingChannels: timingChannels,
+            channelCount: channelCount,
+            timingChannelCount: timingChannelCount,
+            frameCount: frameCount,
+            ceiling: ceiling,
+            baseGain: timingMixGain
+        )
+        let timingGain = max(0, resolvedGain ?? 0)
+
         for frame in 0..<frameCount {
-            for channel in 0..<Int(scratchFormat.channelCount) {
-                let scratchSample = frame < Int(scratchBuffer.frameLength)
-                    ? scratchChannels[channel][frame]
-                    : 0
-                let timingSample = frame < Int(timingBuffer.frameLength)
-                    ? timingChannels[min(channel, Int(timingBuffer.format.channelCount) - 1)][frame]
-                    : 0
-                mixedChannels[channel][frame] = max(
-                    -1,
-                    min(1, scratchSample + (timingSample * 0.55))
-                )
+            for channel in 0..<channelCount {
+                let scratchSample = scratchChannels[channel][frame]
+                let timingSample = timingChannels[min(channel, timingChannelCount - 1)][frame]
+                // Sum unclamped. The old `min(1, max(-1, ...))` here was hard
+                // clipping: it flattened every overshoot to exactly +/-1.0 and
+                // baked that distortion into the exported stem.
+                mixedChannels[channel][frame] = scratchSample + (timingSample * timingGain)
             }
         }
 
-        return mixedBuffer
+        // Only reachable when the captured scratch alone is over the ceiling,
+        // in which case there is no gain on the generated stem that can help.
+        let mixGain = ScratchLabBeatEngine.GeneratedAudioHeadroom.applyCeiling(
+            ScratchLabBeatEngine.GeneratedAudioHeadroom.mixCeilingDBFS,
+            to: mixedBuffer
+        )
+
+        return ScratchTimingMixResult(
+            buffer: mixedBuffer,
+            timingGain: timingGain,
+            mixGain: mixGain
+        )
     }
+
+    /// Level the rendered timing stem sits at underneath the captured scratch.
+    static let timingMixGain: Float = 0.55
 
     private func writeAudioBuffer(_ buffer: AVAudioPCMBuffer, to url: URL) throws {
         let file = try AVAudioFile(
@@ -2692,6 +4824,16 @@ struct SessionArchiveBuilder: Sendable {
             options: [.skipsHiddenFiles]
         )
         .filter { $0.pathExtension.lowercased() == "json" }
+        .filter { url in
+            let stem = url.deletingPathExtension().lastPathComponent
+            let debugCompanionSuffixes = [
+                "raw_platter_debug",
+                "raw_platter_timeline",
+                "movement_trace",
+                "movement_diagnostics",
+            ]
+            return !debugCompanionSuffixes.contains { stem.hasSuffix("_\($0)") }
+        }
         .filter {
             CaptureCore.LocalRecordingNaming.appLocalTakeNumber(
                 for: $0.deletingPathExtension().lastPathComponent,
@@ -2748,12 +4890,12 @@ struct SessionArchiveBuilder: Sendable {
         seedSidecar: CaptureCore.LocalRecordingSidecar,
         fileManager: FileManager,
         preflightConfiguration: ArtifactPreflight.Configuration = .exportDefault
-    ) -> [String] {
-        let sidecarURLs = (try? matchingCompatibleLocalRecordingSidecarURLs(
+    ) throws -> [String] {
+        let sidecarURLs = try matchingCompatibleLocalRecordingSidecarURLs(
             in: sessionDirectory,
             seedSidecar: seedSidecar,
             fileManager: fileManager
-        )) ?? []
+        )
 
         return sidecarURLs.compactMap { sidecarURL in
             guard let sidecar = try? decodeSidecar(at: sidecarURL) else {
@@ -2785,6 +4927,8 @@ struct SessionArchiveBuilder: Sendable {
         let targetLabel = sidecar.sessionConfig?.scratchType.flatMap {
             $0 == .unknown ? nil : $0.title
         }
+        let sessionConfig = sidecar.sessionConfig
+        let startedAt = sidecar.startedAt
 
         if sidecar.recordingStatus == "recording" {
             return TakeArtifactStatusSnapshot(
@@ -2792,6 +4936,8 @@ struct SessionArchiveBuilder: Sendable {
                 takeNumber: sidecar.appLocalTakeNumber,
                 bpm: bpm,
                 targetLabel: targetLabel,
+                sessionConfig: sessionConfig,
+                startedAt: startedAt,
                 audioSourceURL: audioURL,
                 videoSourceURL: mediaURL,
                 audioExists: fileManager.fileExists(atPath: audioURL.path),
@@ -2812,6 +4958,8 @@ struct SessionArchiveBuilder: Sendable {
                 takeNumber: sidecar.appLocalTakeNumber,
                 bpm: bpm,
                 targetLabel: targetLabel,
+                sessionConfig: sessionConfig,
+                startedAt: startedAt,
                 audioSourceURL: audioURL,
                 videoSourceURL: mediaURL,
                 audioExists: fileManager.fileExists(atPath: audioURL.path),
@@ -2837,6 +4985,8 @@ struct SessionArchiveBuilder: Sendable {
                 takeNumber: sidecar.appLocalTakeNumber,
                 bpm: bpm,
                 targetLabel: targetLabel,
+                sessionConfig: sessionConfig,
+                startedAt: startedAt,
                 audioSourceURL: audioURL,
                 videoSourceURL: mediaURL,
                 audioExists: fileManager.fileExists(atPath: audioURL.path),
@@ -2856,6 +5006,8 @@ struct SessionArchiveBuilder: Sendable {
                 takeNumber: sidecar.appLocalTakeNumber,
                 bpm: bpm,
                 targetLabel: targetLabel,
+                sessionConfig: sessionConfig,
+                startedAt: startedAt,
                 audioSourceURL: audioURL,
                 videoSourceURL: mediaURL,
                 audioExists: fileManager.fileExists(atPath: audioURL.path),
@@ -2883,6 +5035,8 @@ struct SessionArchiveBuilder: Sendable {
                     takeNumber: sidecar.appLocalTakeNumber,
                     bpm: bpm,
                     targetLabel: targetLabel,
+                    sessionConfig: sessionConfig,
+                    startedAt: startedAt,
                     audioSourceURL: audioURL,
                     videoSourceURL: mediaURL,
                     audioExists: false,
@@ -2909,6 +5063,8 @@ struct SessionArchiveBuilder: Sendable {
                 takeNumber: sidecar.appLocalTakeNumber,
                 bpm: bpm,
                 targetLabel: targetLabel,
+                sessionConfig: sessionConfig,
+                startedAt: startedAt,
                 audioSourceURL: audioURL,
                 videoSourceURL: mediaURL,
                 audioExists: audioCheck.exists,
@@ -2928,6 +5084,8 @@ struct SessionArchiveBuilder: Sendable {
                 takeNumber: sidecar.appLocalTakeNumber,
                 bpm: bpm,
                 targetLabel: targetLabel,
+                sessionConfig: sessionConfig,
+                startedAt: startedAt,
                 audioSourceURL: audioURL,
                 videoSourceURL: mediaURL,
                 audioExists: true,
@@ -2947,6 +5105,8 @@ struct SessionArchiveBuilder: Sendable {
             takeNumber: sidecar.appLocalTakeNumber,
             bpm: bpm,
             targetLabel: targetLabel,
+            sessionConfig: sessionConfig,
+            startedAt: startedAt,
             audioSourceURL: audioURL,
             videoSourceURL: mediaURL,
             audioExists: true,
@@ -2991,20 +5151,42 @@ struct SessionArchiveBuilder: Sendable {
             seedSessionID: seedSidecar.sessionID,
             fileManager: fileManager
         )
-        guard let seedSignature = metadataSignature(for: seedSidecar) else {
-            return sidecarURLs
-        }
+        let seedSignature = Self.metadataSignature(for: seedSidecar)
 
-        return sidecarURLs.filter { sidecarURL in
-            guard let sidecar = try? decodeSidecar(at: sidecarURL),
-                  let sidecarSignature = metadataSignature(for: sidecar) else {
-                return false
+        var compatibleSidecarURLs: [URL] = []
+        for sidecarURL in sidecarURLs {
+            let sidecar: CaptureCore.LocalRecordingSidecar
+            do {
+                sidecar = try decodeSidecar(at: sidecarURL)
+            } catch {
+                throw SessionExportError.invalidSessionMetadata
             }
-            return sidecarSignature == seedSignature
+            guard let filenameTakeNumber = CaptureCore.LocalRecordingNaming.appLocalTakeNumber(
+                for: sidecarURL.deletingPathExtension().lastPathComponent,
+                sessionID: seedSidecar.sessionID
+            ),
+            sidecar.sessionID == seedSidecar.sessionID,
+            sidecar.appLocalTakeNumber == filenameTakeNumber,
+            sidecar.takeID == CaptureCore.LocalRecordingNaming.takeIdentity(
+                sessionID: seedSidecar.sessionID,
+                takeNumber: filenameTakeNumber
+            ).takeID,
+            sidecar.sidecarFileName == sidecarURL.lastPathComponent else {
+                throw SessionExportError.invalidSessionMetadata
+            }
+
+            // A session ID can span intentional routine/configuration groups.
+            // Validate every candidate fail-closed, then export only the group
+            // selected by the seed take instead of treating another valid group
+            // as corruption or silently accepting malformed data.
+            if Self.metadataSignature(for: sidecar) == seedSignature {
+                compatibleSidecarURLs.append(sidecarURL)
+            }
         }
+        return compatibleSidecarURLs
     }
 
-    private func metadataSignature(
+    private static func metadataSignature(
         for sidecar: CaptureCore.LocalRecordingSidecar
     ) -> SessionCanonicalMetadataSignature? {
         guard let sessionConfig = SessionExportMetadataResolver.validatedSessionConfig(from: sidecar) else {
@@ -3068,23 +5250,39 @@ struct SessionArchiveBuilder: Sendable {
                     issues.append("\(takeLabel) failed and is not exportable.")
                 }
             }
-            if let motionPresent = take.motionPresent, motionPresent,
-               let watchCaptureSession = take.watchCaptureSession {
-                if !WatchAssociationResolver.isLinkedCaptureValid(
-                    sessionID: package.metadata.sessionID,
-                    takeID: take.takeID,
-                    captureSession: watchCaptureSession
-                ) {
-                    issues.append("Take \(take.takeID) has a watch artifact that is not linked to this session/take.")
+            if take.claimsMotionWithoutAnySource {
+                issues.append("Take \(take.takeID) claims motion, but no motion source was recorded for it.")
+            } else if take.claimsWatchBackedMotion {
+                if let watchCaptureSession = take.watchCaptureSession {
+                    if !WatchAssociationResolver.isLinkedCaptureValid(
+                        sessionID: package.metadata.sessionID,
+                        takeID: take.takeID,
+                        captureSession: watchCaptureSession
+                    ) {
+                        issues.append("Take \(take.takeID) has a watch artifact that is not linked to this session/take.")
+                    }
+                } else {
+                    issues.append("Take \(take.takeID) claims watch motion, but no linked watch artifact was supplied.")
                 }
-            } else if take.motionPresent == true {
-                issues.append("Take \(take.takeID) claims watch motion, but no linked watch artifact was supplied.")
+            } else if let watchCaptureSession = take.watchCaptureSession,
+                      !WatchAssociationResolver.isLinkedCaptureValid(
+                        sessionID: package.metadata.sessionID,
+                        takeID: take.takeID,
+                        captureSession: watchCaptureSession
+                      ) {
+                // Controller/DVS-backed motion still must not ship a watch
+                // artifact belonging to a different session or take.
+                issues.append("Take \(take.takeID) has a watch artifact that is not linked to this session/take.")
             }
         }
 
         if issues.isEmpty {
             do {
                 _ = try canonicalPreview(for: package)
+            } catch let failure as SessionExportValidationFailure {
+                // Name the check that rejected it (e.g. no dynamic audio in any
+                // channel pair) rather than the generic message below.
+                issues.append(failure.reason.detailText)
             } catch let error as SessionExportError {
                 issues.append(error.userMessage)
             } catch {
@@ -3166,14 +5364,19 @@ struct SessionArchiveBuilder: Sendable {
                 verbalSlateUsed: resolvedVerbalSlateUsed,
                 syncClapUsed: resolvedSyncClapUsed,
                 note: take.note,
-                captureTiming: take.captureTiming
+                captureTiming: take.captureTiming,
+                motionSources: take.motionSources,
+                faderMappingSource: take.faderMappingSource,
+                sourceWatchMotionURL: take.sourceWatchMotionURL
             )
         }
 
         return SessionExportPackage(
             metadata: package.metadata,
             takes: hydratedTakes,
-            calibrationData: package.calibrationData
+            calibrationData: package.calibrationData,
+            referenceTearEvidenceByTakeID: package.referenceTearEvidenceByTakeID,
+            referenceReviewMetadataByTakeID: package.referenceReviewMetadataByTakeID
         )
     }
 
@@ -3188,22 +5391,19 @@ struct SessionArchiveBuilder: Sendable {
     }
 
     private func archiveFolderName(for metadata: SessionExportMetadata) -> String {
-        let formatter = DateFormatter()
-        formatter.calendar = Calendar(identifier: .gregorian)
-        formatter.dateFormat = "yyyy_MM_dd"
-        let dateString = formatter.string(from: metadata.createdAt)
-        let sanitizedSessionName = sanitizedArchiveLabel(for: metadata, allowedBPMs: nil)
-        return "session_\(dateString)_\(sanitizedSessionName)"
+        archiveFolderName(for: metadata, allowedBPMs: nil)
     }
 
     private func archiveFolderName(
         for metadata: SessionExportMetadata,
-        allowedBPMs: [Int]
+        allowedBPMs: [Int]?
     ) -> String {
-        let formatter = DateFormatter()
-        formatter.calendar = Calendar(identifier: .gregorian)
-        formatter.dateFormat = "yyyy_MM_dd"
-        let dateString = formatter.string(from: metadata.createdAt)
+        // Same helper as the manifest `date`, so the folder and the manifest
+        // can never disagree about which calendar day this session is.
+        let dateString = CaptureCanonicalFormatting.sessionFolderDateString(
+            metadata.createdAt,
+            timeZoneIdentifier: metadata.sessionTimeZoneIdentifier
+        )
         let sanitizedSessionName = sanitizedArchiveLabel(for: metadata, allowedBPMs: allowedBPMs)
         return "session_\(dateString)_\(sanitizedSessionName)"
     }
@@ -3377,6 +5577,12 @@ struct SessionArchiveBuilder: Sendable {
               !package.metadata.sessionID.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
             throw SessionExportError.invalidSessionMetadata
         }
+        guard Set(package.referenceTearEvidenceByTakeID.keys).isSubset(of: Set(package.takes.map(\.takeID))) else {
+            throw SessionExportValidationFailure(.unmatchedReferenceTearEvidence)
+        }
+        guard Set(package.referenceReviewMetadataByTakeID.keys).isSubset(of: Set(package.takes.map(\.takeID))) else {
+            throw SessionExportValidationFailure(.unmatchedReferenceReviewMetadata)
+        }
         let exportScratchTypeToken = CaptureCanonicalFormatting.exportScratchTypeToken(
             scratchTypeID: package.metadata.scratchTypeID,
             scratchTypeName: package.metadata.scratchTypeName,
@@ -3398,10 +5604,16 @@ struct SessionArchiveBuilder: Sendable {
         }
         let resolvedScratchTypeToken = exportScratchTypeToken ?? CaptureCanonicalRules.scratchTypeName
 
-        let dateString = CaptureCanonicalFormatting.sessionDateString(package.metadata.createdAt)
+        let dateString = CaptureCanonicalFormatting.sessionDateString(
+            package.metadata.createdAt,
+            timeZoneIdentifier: package.metadata.sessionTimeZoneIdentifier
+        )
         let fileManager = FileManager.default
         var seenTakeIDs = Set<String>()
-        var seenTakeKeys = Set<String>()
+        var seenTakeNumbers = Set<Int>()
+        var seenMediaPaths = Set<String>()
+        var seenSidecarPaths = Set<String>()
+        var seenAudioPaths = Set<String>()
         var decodedSidecars: [CaptureCore.LocalRecordingSidecar] = []
         var takeContexts: [CanonicalTakeContext] = []
         var bpmCoverage = Set<Int>()
@@ -3429,7 +5641,43 @@ struct SessionArchiveBuilder: Sendable {
                 throw SessionExportError.invalidSessionMetadata
             }
 
-            let sidecar = try decodeSidecar(at: take.sidecarURL)
+            // A requested companion and every generated document use this one
+            // snapshot. Later source writes fail explicitly during validation.
+            let companionData = package.referenceTearEvidenceByTakeID[take.takeID]
+            let reviewMetadataData = package.referenceReviewMetadataByTakeID[take.takeID]
+            let boundSource: ReferenceTearEvidenceSourceBinding?
+            let reviewSource: ReferenceTearEvidenceSourceBinding?
+            let sidecar: CaptureCore.LocalRecordingSidecar
+            if companionData != nil || reviewMetadataData != nil {
+                let rawData = try Data(contentsOf: take.sidecarURL)
+                sidecar = try Self.decodeSidecar(data: rawData)
+                reviewSource = try reviewMetadataData.map {
+                    try Self.validatedReviewMetadataSource($0, rawSidecarData: rawData, take: take)
+                }
+                if let companionData {
+                    do {
+                        let expectedSource = try ReferenceTearEvidenceCodec.makeSourceBinding(
+                            rawSidecarData: rawData, fileName: take.sidecarURL.lastPathComponent
+                        )
+                        let document = try ReferenceTearEvidenceCodec.decodeDocument(companionData)
+                        guard document.sourceBinding == expectedSource else {
+                            throw SessionExportValidationFailure(.referenceTearEvidenceSourceMismatch)
+                        }
+                        _ = try ReferenceTearEvidenceCodec.decode(companionData, expectedSource: expectedSource)
+                        boundSource = expectedSource
+                    } catch let failure as SessionExportValidationFailure {
+                        throw failure
+                    } catch {
+                        throw SessionExportValidationFailure(.referenceTearEvidenceInvalid)
+                    }
+                } else {
+                    boundSource = nil
+                }
+            } else {
+                sidecar = try decodeSidecar(at: take.sidecarURL)
+                boundSource = nil
+                reviewSource = nil
+            }
             let captureValues = resolvedTakeCaptureValues(
                 for: take,
                 sidecar: sidecar,
@@ -3445,17 +5693,44 @@ struct SessionArchiveBuilder: Sendable {
                   sidecar.appLocalTakeNumber == take.takeNumber else {
                 throw SessionExportError.invalidSessionMetadata
             }
+            let mediaBaseName = take.mediaURL.deletingPathExtension().lastPathComponent
+            guard take.sidecarURL.deletingPathExtension().lastPathComponent == mediaBaseName,
+                  audioArtifactURL.deletingPathExtension().lastPathComponent == mediaBaseName,
+                  sidecar.mediaFileName == take.mediaURL.lastPathComponent,
+                  sidecar.sidecarFileName == take.sidecarURL.lastPathComponent else {
+                // A valid WAV from another take is still the wrong artifact.
+                // Current capture paths deliberately share one take basename.
+                throw SessionExportError.invalidSessionMetadata
+            }
             if let configuredBPM = captureValues.bpm, configuredBPM != canonicalBPM {
                 throw SessionExportError.invalidSessionMetadata
             }
 
-            let takeKey = "\(canonicalBPM)-\(take.takeNumber)"
             guard seenTakeIDs.insert(take.takeID).inserted,
-                  seenTakeKeys.insert(takeKey).inserted else {
+                  seenTakeNumbers.insert(take.takeNumber).inserted,
+                  seenMediaPaths.insert(take.mediaURL.standardizedFileURL.path).inserted,
+                  seenSidecarPaths.insert(take.sidecarURL.standardizedFileURL.path).inserted,
+                  seenAudioPaths.insert(audioArtifactURL.standardizedFileURL.path).inserted else {
                 throw SessionExportError.invalidSessionMetadata
             }
 
-            if sidecar.linkedMotionFileName != nil || take.motionPresent == true {
+            if take.claimsMotionWithoutAnySource {
+                throw SessionExportError.invalidSessionMetadata
+            }
+            try validateSourceWatchMotionArtifact(
+                for: take,
+                sessionID: package.metadata.sessionID,
+                fileManager: fileManager
+            )
+            if take.syncStatus == CaptureWatchSyncState.acknowledged.rawValue,
+               take.watchCaptureSession == nil {
+                throw SessionExportError.missingRequiredFiles
+            }
+            // A watch file is required only when the sidecar names one or the
+            // take's motion claim actually rests on the Watch. Controller
+            // platter evidence is motion in its own right and has no watch
+            // artifact to validate against.
+            if sidecar.linkedMotionFileName != nil || take.claimsWatchBackedMotion {
                 guard let watchCaptureSession = take.watchCaptureSession,
                       WatchAssociationResolver.isLinkedCaptureValid(
                         sessionID: package.metadata.sessionID,
@@ -3464,8 +5739,14 @@ struct SessionArchiveBuilder: Sendable {
                       ) else {
                     throw SessionExportError.invalidSessionMetadata
                 }
-            } else if let motionPresent = take.motionPresent, motionPresent {
-                throw SessionExportError.invalidSessionMetadata
+            } else if let watchCaptureSession = take.watchCaptureSession {
+                guard WatchAssociationResolver.isLinkedCaptureValid(
+                    sessionID: package.metadata.sessionID,
+                    takeID: take.takeID,
+                    captureSession: watchCaptureSession
+                ) else {
+                    throw SessionExportError.invalidSessionMetadata
+                }
             }
 
             let videoExtension = take.mediaURL.pathExtension.lowercased()
@@ -3510,8 +5791,31 @@ struct SessionArchiveBuilder: Sendable {
             )
             let captureMetadata = try resolvedTakeCaptureMetadata(
                 for: take,
-                packageMetadata: package.metadata
+                packageMetadata: package.metadata,
+                sidecarSnapshot: boundSource == nil ? nil : sidecar
             )
+            let referenceTearEvidence: ResolvedReferenceTearEvidence?
+            if let companionData, let boundSource {
+                let stem = URL(fileURLWithPath: notationExport.fileName)
+                    .deletingPathExtension().lastPathComponent
+                referenceTearEvidence = ResolvedReferenceTearEvidence(
+                    data: companionData, sourceBinding: boundSource,
+                    fileName: stem + "_reference_tear_evidence.json"
+                )
+            } else {
+                referenceTearEvidence = nil
+            }
+            let referenceReviewMetadata: ResolvedReferenceTearEvidence?
+            if let reviewMetadataData, let reviewSource {
+                let stem = URL(fileURLWithPath: notationExport.fileName)
+                    .deletingPathExtension().lastPathComponent
+                referenceReviewMetadata = ResolvedReferenceTearEvidence(
+                    data: reviewMetadataData, sourceBinding: reviewSource,
+                    fileName: stem + "_reference_review_metadata.json"
+                )
+            } else {
+                referenceReviewMetadata = nil
+            }
 
             decodedSidecars.append(sidecar)
             bpmCoverage.insert(canonicalBPM)
@@ -3533,6 +5837,8 @@ struct SessionArchiveBuilder: Sendable {
                     watchFileName: watchFileName,
                     notationFileName: notationExport.fileName,
                     notationDocument: notationExport.document,
+                    referenceTearEvidence: referenceTearEvidence,
+                    referenceReviewMetadata: referenceReviewMetadata,
                     captureMetadata: captureMetadata,
                     verbalSlateUsed: verbalSlateUsed,
                     syncClapUsed: syncClapUsed,
@@ -3567,7 +5873,7 @@ struct SessionArchiveBuilder: Sendable {
                 takeNumber: context.take.takeNumber,
                 segmentCount: CaptureCanonicalRules.segmentCount,
                 cameraID: "camA",
-                audioSource: "serato",
+                audioSource: "scratchlab_output",
                 watchSource: context.watchFileName == nil ? "none" : "watch",
                 verbalSlateUsed: context.verbalSlateUsed,
                 syncClapUsed: context.syncClapUsed,
@@ -3586,24 +5892,28 @@ struct SessionArchiveBuilder: Sendable {
             scratchType: resolvedScratchTypeToken,
             allowedBPMs: manifestAllowedBPMs,
             segmentCount: CaptureCanonicalRules.segmentCount,
-            verbalSlateRequired: true,
-            syncClapRequired: true,
+            verbalSlateRequired: false,
+            syncClapRequired: false,
             sessionRoot: sessionRootName,
             notes: package.metadata.notes ?? "",
             takes: manifestTakes
         )
 
-        let takeLogRows = takeContexts.map {
+        let takeLogRows = takeContexts.map { context in
+            // Raw-media references must come from the same authoritative
+            // per-take names the manifest's `canonicalFilesMap` emits, so
+            // take_log.csv and session_manifest.json never disagree. ScratchLab
+            // captures a single camera, so there is no `raw_camB` artifact.
             CanonicalTakeLogRow(
-                bpm: $0.canonicalBPM,
-                takeNumber: $0.take.takeNumber,
-                rawCamA: "",
+                bpm: context.canonicalBPM,
+                takeNumber: context.take.takeNumber,
+                rawCamA: "video/\(context.videoFileName)",
                 rawCamB: "",
-                rawAudio: "",
-                rawWatch: "",
-                verbalSlateUsed: $0.verbalSlateUsed,
-                syncClapUsed: $0.syncClapUsed,
-                notes: $0.notes
+                rawAudio: context.scratchOnlyRelativePath,
+                rawWatch: context.watchFileName.map { "watch/\($0)" } ?? "",
+                verbalSlateUsed: context.verbalSlateUsed,
+                syncClapUsed: context.syncClapUsed,
+                notes: context.notes
             )
         }
 
@@ -3665,6 +5975,19 @@ struct SessionArchiveBuilder: Sendable {
             "scratch_only": context.scratchOnlyRelativePath,
             "notation": "notation/\(context.notationFileName)"
         ]
+        if let camera = context.sidecar.secondaryCamera {
+            let primary = URL(fileURLWithPath: context.videoFileName)
+            files["camB_metadata"] = "video/" + primary.deletingPathExtension().appendingPathExtension("second-camera.json").lastPathComponent
+            if try camera.verifiedURL(beside: context.take.mediaURL) != nil {
+                files["camB"] = "video/" + SecondaryCameraEvidence.url(beside: primary).lastPathComponent
+            }
+        }
+        if let evidence = context.referenceTearEvidence {
+            files["reference_tear_evidence"] = "notation/\(evidence.fileName)"
+        }
+        if let reviewMetadata = context.referenceReviewMetadata {
+            files["reference_review_metadata"] = "notation/\(reviewMetadata.fileName)"
+        }
         if let beatOnlyFileName = context.beatOnlyFileName {
             files["beat_only"] = "audio/\(beatOnlyFileName)"
         }
@@ -3674,11 +5997,48 @@ struct SessionArchiveBuilder: Sendable {
         if let watchFileName = context.watchFileName {
             files["watch"] = "watch/\(watchFileName)"
         }
+        for artifact in try Self.boundBeatExportArtifacts(
+            sidecar: context.sidecar, mediaURL: context.take.mediaURL,
+            sidecarURL: context.take.sidecarURL, takeNumber: context.take.takeNumber
+        ) {
+            files[artifact.source] = artifact.relativePath
+        }
         return files
     }
 
     private func canonicalArtifactsMap(for context: CanonicalTakeContext, sessionRootURL: URL) throws -> [String: CanonicalArtifactRecord] {
         var artifacts: [String: CanonicalArtifactRecord] = [:]
+        for artifact in try Self.boundBeatExportArtifacts(
+            sidecar: context.sidecar, mediaURL: context.take.mediaURL,
+            sidecarURL: context.take.sidecarURL, takeNumber: context.take.takeNumber
+        ) {
+            let data = try Data(contentsOf: artifact.sourceURL)
+            let probe: [String: SessionExportProbeValue]
+            if artifact.source == "reference_beat_master" || artifact.source == "reference_beat_analysis" {
+                probe = try probeAudio(url: artifact.sourceURL)
+            } else {
+                guard (try? JSONSerialization.jsonObject(with: data)) != nil else {
+                    throw SessionExportError.invalidSessionMetadata
+                }
+                probe = ["kind": .string("json")]
+            }
+            artifacts[artifact.source] = CanonicalArtifactRecord(
+                path: artifact.relativePath, bytes: Int64(data.count),
+                sha256: SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined(), probe: probe
+            )
+        }
+        if let evidence = context.referenceTearEvidence {
+            artifacts["reference_tear_evidence"] = try artifactRecord(
+                source: "reference_tear_evidence", generatedData: evidence.data,
+                stagedURL: sessionRootURL.appendingPathComponent("notation/\(evidence.fileName)")
+            )
+        }
+        if let reviewMetadata = context.referenceReviewMetadata {
+            artifacts["reference_review_metadata"] = try artifactRecord(
+                source: "reference_review_metadata", generatedData: reviewMetadata.data,
+                stagedURL: sessionRootURL.appendingPathComponent("notation/\(reviewMetadata.fileName)")
+            )
+        }
 
         let videoTargetURL = sessionRootURL.appendingPathComponent("video/\(context.videoFileName)")
         artifacts["camA"] = try artifactRecord(
@@ -3687,13 +6047,50 @@ struct SessionArchiveBuilder: Sendable {
             stagedURL: videoTargetURL
         )
 
+        if let camera = context.sidecar.secondaryCamera {
+            let encoder = JSONEncoder()
+            encoder.outputFormatting = [.sortedKeys, .prettyPrinted]
+            artifacts["camB_metadata"] = try artifactRecord(source: "camB_metadata", generatedData: encoder.encode(camera),
+                stagedURL: videoTargetURL.deletingPathExtension().appendingPathExtension("second-camera.json"))
+            if let secondURL = try camera.verifiedURL(beside: context.take.mediaURL) {
+                artifacts["camB"] = try artifactRecord(source: "camB", fileURL: secondURL,
+                    stagedURL: SecondaryCameraEvidence.url(beside: videoTargetURL))
+            }
+        }
+
         guard let audioArtifactURL = context.take.audioArtifactURL else {
             throw SessionExportError.missingRequiredFiles
         }
         let audioTargetURL = sessionRootURL.appendingPathComponent(context.scratchOnlyRelativePath)
+        let projectionDirectory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("ScratchLabStereoProjections", isDirectory: true)
+        try FileManager.default.createDirectory(
+            at: projectionDirectory,
+            withIntermediateDirectories: true
+        )
+        let projectedAudioURL = projectionDirectory
+            .appendingPathComponent(UUID().uuidString)
+            .appendingPathExtension("wav")
+        defer { try? FileManager.default.removeItem(at: projectedAudioURL) }
+        // Same gate as `stagePackage`: an invalid scratch stem throws here and
+        // the beat stems below are never derived from it.
+        let audioProjection = try SessionExportAudioProjection.writePlayableStereo(
+            from: audioArtifactURL,
+            to: projectedAudioURL,
+            preferredPair: RoutineCaptureAudioHardwareProfile.preferredProgramStereoPair(
+                forDeviceName: context.sidecar.audioDeviceName,
+                deviceUniqueID: context.sidecar.audioDeviceUniqueID
+            )
+        )
+        #if DEBUG
+        print("[AUDIO-CAPTURE-DEBUG] take=\(context.sidecar.takeID) canonical artifacts")
+        print(audioProjection.debugSummary)
+        #else
+        _ = audioProjection
+        #endif
         let scratchArtifact = try artifactRecord(
             source: "scratch_only",
-            fileURL: audioArtifactURL,
+            fileURL: projectedAudioURL,
             stagedURL: audioTargetURL
         )
         artifacts["serato"] = scratchArtifact
@@ -3703,7 +6100,7 @@ struct SessionArchiveBuilder: Sendable {
             let beatBuffer = try renderedBeatStemBuffer(
                 for: context.take,
                 captureMetadata: context.captureMetadata,
-                scratchAudioURL: audioArtifactURL
+                scratchAudioURL: projectedAudioURL
             )
             artifacts["beat_only"] = try generatedAudioArtifactRecord(
                 source: "beat_only",
@@ -3713,7 +6110,7 @@ struct SessionArchiveBuilder: Sendable {
             )
             if let scratchWithBeatFileName = context.scratchWithBeatFileName {
                 let mixedBuffer = try mixedScratchWithTimingBuffer(
-                    scratchURL: audioArtifactURL,
+                    scratchURL: projectedAudioURL,
                     timingBuffer: beatBuffer
                 )
                 artifacts["scratch_with_beat"] = try generatedAudioArtifactRecord(
@@ -3767,6 +6164,34 @@ struct SessionArchiveBuilder: Sendable {
         fileURL: URL?,
         generatedData: Data?
     ) throws -> [String: SessionExportProbeValue] {
+        // JSON evidence is always validated, including media-fixture overrides.
+        // The generic unknown-artifact rejection remains unchanged.
+        if source == "camB_metadata" {
+            guard let generatedData else { throw SessionExportError.missingRequiredFiles }
+            guard let camera = try? JSONDecoder().decode(SecondaryCameraEvidence.self, from: generatedData),
+                  camera.status != .recording else {
+                throw SessionExportError.invalidSessionMetadata
+            }
+            return ["kind": .string("json")]
+        }
+        if source == "reference_tear_evidence" {
+            guard let generatedData else { throw SessionExportError.missingRequiredFiles }
+            do {
+                let document = try ReferenceTearEvidenceCodec.decodeDocument(generatedData)
+                return ["kind": .string("json"), "schema_version": .string(document.schemaVersion)]
+            } catch {
+                throw SessionExportValidationFailure(.referenceTearEvidenceInvalid)
+            }
+        }
+        if source == "reference_review_metadata" {
+            guard let generatedData else { throw SessionExportError.missingRequiredFiles }
+            do {
+                let document = try ReferenceReviewMetadataCodec.decodeDocument(generatedData)
+                return ["kind": .string("json"), "schema_version": .string(document.schemaVersion)]
+            } catch {
+                throw SessionExportValidationFailure(.referenceReviewMetadataInvalid)
+            }
+        }
         if let artifactProbeOverride {
             let overrideSource: String
             switch source {
@@ -3778,7 +6203,7 @@ struct SessionArchiveBuilder: Sendable {
             return try artifactProbeOverride(overrideSource, fileURL, generatedData)
         }
         switch source {
-        case "camA":
+        case "camA", "camB":
             guard let fileURL else { throw SessionExportError.missingRequiredFiles }
             return try probeVideo(url: fileURL)
         case "serato", "scratch_only", "beat_only", "scratch_with_beat", "raw_original":
@@ -3866,6 +6291,47 @@ struct SessionArchiveBuilder: Sendable {
         return try result.get()
     }
 
+    private func validateSourceWatchMotionArtifact(
+        for take: SessionExportTake,
+        sessionID: String,
+        fileManager: FileManager
+    ) throws {
+        if take.motionSources?.contains(.watch) == true,
+           take.sourceWatchMotionURL == nil {
+            throw SessionExportError.missingRequiredFiles
+        }
+        guard let sourceURL = take.sourceWatchMotionURL else { return }
+        let sourceData = try nonemptyData(
+            at: sourceURL,
+            fileManager: fileManager,
+            missingError: .missingRequiredFiles
+        )
+        let sourceSession: WatchMotionCaptureSession
+        do {
+            sourceSession = try WatchMotionCaptureCodec.decoder.decode(
+                WatchMotionCaptureSession.self,
+                from: sourceData
+            )
+        } catch {
+            throw SessionExportError.invalidSessionMetadata
+        }
+        guard let suppliedSession = take.watchCaptureSession,
+              WatchAssociationResolver.isLinkedCaptureValid(
+                sessionID: sessionID,
+                takeID: take.takeID,
+                captureSession: sourceSession
+              ),
+              WatchAssociationResolver.isLinkedCaptureValid(
+                sessionID: sessionID,
+                takeID: take.takeID,
+                captureSession: suppliedSession
+              ),
+              CaptureCanonicalFormatting.watchCSV(for: sourceSession)
+                == CaptureCanonicalFormatting.watchCSV(for: suppliedSession) else {
+            throw SessionExportError.invalidSessionMetadata
+        }
+    }
+
     private func probeAudio(url: URL) throws -> [String: SessionExportProbeValue] {
         let audioFile = try AVAudioFile(forReading: url)
         let format = audioFile.processingFormat
@@ -3874,7 +6340,7 @@ struct SessionArchiveBuilder: Sendable {
         let frameCount = Int(audioFile.length)
         let sampleWidthBytes = max(1, Int(audioFile.fileFormat.streamDescription.pointee.mBitsPerChannel) / 8)
         let duration = sampleRate > 0 ? round((Double(frameCount) / Double(sampleRate)) * 1_000_000) / 1_000_000 : 0
-        guard sampleRate > 0, channelCount > 0, frameCount >= 0 else {
+        guard sampleRate > 0, channelCount > 0, frameCount > 0, duration > 0 else {
             throw SessionExportError.invalidSessionMetadata
         }
 
@@ -3925,7 +6391,9 @@ struct SessionArchiveBuilder: Sendable {
         }
     }
 
-    private func resolveLinkedWatchCapture(for sidecar: CaptureCore.LocalRecordingSidecar) -> WatchMotionCaptureSession? {
+    func resolveLinkedWatchCaptureArtifact(
+        for sidecar: CaptureCore.LocalRecordingSidecar
+    ) -> (session: WatchMotionCaptureSession, fileURL: URL)? {
         let candidateDirectories = [
             FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first?
                 .appendingPathComponent("WatchMotionCaptures", isDirectory: true),
@@ -3933,7 +6401,9 @@ struct SessionArchiveBuilder: Sendable {
                 .appendingPathComponent("ScratchLab", isDirectory: true)
                 .appendingPathComponent("RelayedWatchCaptures", isDirectory: true)
         ]
-        guard let fileName = sidecar.linkedMotionFileName else { return nil }
+        guard let fileName = sidecar.linkedMotionFileName,
+              !fileName.isEmpty, fileName != ".", fileName != "..",
+              !fileName.contains("/"), !fileName.contains("\\") else { return nil }
 
         for directory in candidateDirectories.compactMap({ $0 }) {
             let fileURL = directory.appendingPathComponent(fileName)
@@ -3941,12 +6411,13 @@ struct SessionArchiveBuilder: Sendable {
                   let capture = try? WatchMotionCaptureCodec.decoder.decode(WatchMotionCaptureSession.self, from: data) else {
                 continue
             }
+            if let captureID = sidecar.linkedMotionCaptureID, capture.id != captureID { continue }
             if WatchAssociationResolver.isLinkedCaptureValid(
                 sessionID: sidecar.sessionID,
                 takeID: sidecar.takeID,
                 captureSession: capture
             ) {
-                return capture
+                return (capture, fileURL)
             }
         }
 

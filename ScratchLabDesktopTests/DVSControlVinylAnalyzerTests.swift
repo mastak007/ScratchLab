@@ -1,3 +1,4 @@
+import AVFAudio
 import XCTest
 @testable import ScratchLab
 
@@ -974,4 +975,114 @@ final class DVSControlVinylAnalyzerTests: XCTestCase {
             "A final explicit reset must always leave retention empty, no matter how updater/control operations interleaved")
     }
 #endif
+
+    // MARK: - iOS DVS wiring coverage
+    //
+    // These exercise the exact same `SeratoControlVinylAnalyzer.analyze`
+    // entry point AudioEngine.swift's `processDVSAnalysis` now calls per
+    // tap buffer — realistic 1024-frame chunking at the real Rane ONE MKII
+    // rate (48000 Hz), and a real hardware capture, rather than only
+    // whole-buffer synthetic vectors at 44100 Hz.
+
+    /// Directory of Karl's local, untracked hardware captures. Never
+    /// committed (see `TimecodeFixtureValidationTests.skipIfHardwareFixturesAbsent`'s
+    /// doc comment) — any environment without it (fresh clone, CI) must
+    /// skip, not fail.
+    private var localHardwareFixtureDirectory: URL {
+        URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .appendingPathComponent(
+                "debug_captures/timecode/hardware_fixtures/20260731",
+                isDirectory: true
+            )
+    }
+
+    private func loadStereoPairFixture(
+        captureFolder: String
+    ) throws -> (left: [Float], right: [Float], sampleRate: Double) {
+        let url = localHardwareFixtureDirectory
+            .appendingPathComponent(captureFolder, isDirectory: true)
+            .appendingPathComponent("pair_3_4_float32.wav")
+        let file = try AVAudioFile(forReading: url)
+        let format = file.processingFormat
+        let buffer = try XCTUnwrap(
+            AVAudioPCMBuffer(pcmFormat: format, frameCapacity: AVAudioFrameCount(file.length)),
+            "Could not allocate PCM buffer for fixture at \(url.path)"
+        )
+        try file.read(into: buffer)
+        let floatData = try XCTUnwrap(buffer.floatChannelData, "Fixture at \(url.path) has no float channel data")
+        XCTAssertGreaterThanOrEqual(format.channelCount, 2, "pair_3_4_float32.wav fixtures are always stereo")
+        let frameLength = Int(buffer.frameLength)
+        let left = Array(UnsafeBufferPointer(start: floatData[0], count: frameLength))
+        let right = Array(UnsafeBufferPointer(start: floatData[1], count: frameLength))
+        return (left, right, format.sampleRate)
+    }
+
+    /// Real Rane ONE MKII capture, decoded through `SeratoControlVinylAnalyzer`
+    /// in the same 1024-frame chunks AudioEngine's `installTap` delivers —
+    /// proves the fixture decodes end-to-end through the production entry
+    /// point, not just that the WAV file is readable.
+    func testHardwareFixturePairThreeFourDecodesThroughSeratoControlVinylAnalyzer() throws {
+        let directory = localHardwareFixtureDirectory
+        var isDirectory: ObjCBool = false
+        guard FileManager.default.fileExists(atPath: directory.path, isDirectory: &isDirectory),
+              isDirectory.boolValue else {
+            throw XCTSkip("Hardware fixture directory not present locally: \(directory.path)")
+        }
+
+        let entries = try FileManager.default.contentsOfDirectory(atPath: directory.path)
+        let captureFolder = try XCTUnwrap(
+            entries.first { $0.contains("steady_normal") },
+            "steady_normal capture folder not found under \(directory.path)"
+        )
+
+        let fixture = try loadStereoPairFixture(captureFolder: captureFolder)
+        let analyzer = SeratoControlVinylAnalyzer(sampleRate: fixture.sampleRate, channelCount: 2)
+
+        let chunkSize = 1024
+        var sawSignal = false
+        var offset = 0
+        while offset < fixture.left.count {
+            let end = min(offset + chunkSize, fixture.left.count)
+            let status = analyzer.analyze(
+                left: Array(fixture.left[offset..<end]),
+                right: Array(fixture.right[offset..<end]),
+                sampleRate: fixture.sampleRate,
+                hostTime: nil
+            )
+            if status.hasSignal { sawSignal = true }
+            offset = end
+        }
+        XCTAssertTrue(sawSignal, "Expected at least one 1024-frame chunk of \(captureFolder) to report hasSignal == true")
+    }
+
+    /// Streams synthetic quadrature timecode through `analyze` in 1024-frame
+    /// chunks at 48000 Hz — AudioEngine's real tap buffer size and the
+    /// validated Rane ONE MKII rate — including a final, shorter partial
+    /// chunk (the shape every real audio stream ends on). Must never crash
+    /// and must keep producing a status with sane invariants throughout.
+    func testTapSizedChunksAtHardwareSampleRateDoNotCrash() {
+        let analyzer = SeratoControlVinylAnalyzer(sampleRate: 48000, channelCount: 2)
+        let (left, right) = makeQuadraturePair(
+            sampleRate: 48000,
+            frameCount: 1024 * 5 + 137,
+            phaseShiftPerFrame: 0.002
+        )
+        let chunkSize = 1024
+        var offset = 0
+        while offset < left.count {
+            let end = min(offset + chunkSize, left.count)
+            let status = analyzer.analyze(
+                left: Array(left[offset..<end]),
+                right: Array(right[offset..<end]),
+                sampleRate: 48000,
+                hostTime: UInt64(offset)
+            )
+            XCTAssertGreaterThanOrEqual(status.rms, 0)
+            XCTAssertGreaterThanOrEqual(status.confidence, 0)
+            XCTAssertLessThanOrEqual(status.confidence, 1)
+            offset = end
+        }
+    }
 }

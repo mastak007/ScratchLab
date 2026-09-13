@@ -15,6 +15,36 @@ import Foundation
 import QuartzCore
 import Synchronization
 
+/// One immutable, downsampled overview of the exact PCM range installed in
+/// `IOScratchRenderer`. It changes only when a new platter sample is loaded;
+/// live playhead updates are polled separately so SwiftUI never republishes
+/// the waveform array at display cadence.
+struct PlatterSampleWaveform: Equatable, Sendable {
+    let sampleID: String
+    let displayName: String
+    let amplitudes: [Float]
+    let sampleRate: Double
+    let contentFrameCount: Int
+
+    var duration: TimeInterval {
+        guard sampleRate > 0 else { return 0 }
+        return Double(contentFrameCount) / sampleRate
+    }
+}
+
+/// Read-only UI snapshot of the renderer's real, smoothed audio position.
+/// Negative/past-end regions remain explicit so the visual does not falsely
+/// wrap a backward move to the end of the sample.
+struct PlatterSamplePlayheadSnapshot: Equatable, Sendable {
+    typealias Region = PlatterSamplePositionProjection.Region
+
+    let waveform: PlatterSampleWaveform
+    let framePosition: Double
+    let positionSeconds: TimeInterval
+    let progress: Double
+    let region: Region
+}
+
 /// Keeps the platter-to-renderer control clock off the main actor. RANE CC6
 /// traffic also drives live SwiftUI notation state, so sharing `.main` with
 /// that bursty publication path makes the velocity sampling interval uneven
@@ -83,7 +113,10 @@ private final class IOScratchMIDIControlLoop: @unchecked Sendable {
             now: CACurrentMediaTime()
         )
         renderer.update(
-            relativePlatterSteps: phase - hotCuePhase,
+            relativePlatterSteps: PlatterCoordinateSemantics.samplePosition(
+                rawSignedPosition: phase,
+                hotCueOrigin: hotCuePhase
+            ),
             signedVelocityStepsPerSecond: result?.velocity ?? 0
         )
     }
@@ -207,7 +240,12 @@ private final class IOScratchCaptureTap: @unchecked Sendable {
 @MainActor
 final class IOScratchPlaybackEngine: ObservableObject {
 
+    @Published private(set) var platterSampleStatus = "No platter sample loaded"
+    @Published private(set) var platterSampleWaveform: PlatterSampleWaveform?
+    @Published private(set) var audioOwnershipMode: ScratchAudioOwnershipMode
+
     private let engine = AVAudioEngine()
+    private let defaults: UserDefaults
     private var renderer: IOScratchRenderer?
     private var outputConfiguration: OutputConfiguration?
     private let midiControlLoop = IOScratchMIDIControlLoop()
@@ -215,7 +253,7 @@ final class IOScratchPlaybackEngine: ObservableObject {
 
     private struct OutputConfiguration: Equatable {
         let preferredHardwareChannelCount: Int
-        let usesDeck2ChannelMap: Bool
+        let outputPairStartIndex: Int?
         let routeName: String
     }
 
@@ -230,7 +268,50 @@ final class IOScratchPlaybackEngine: ObservableObject {
     private let platterLogInterval: TimeInterval = 0.5
     #endif
 
-    init() {}
+    init(defaults: UserDefaults = .standard) {
+        self.defaults = defaults
+        audioOwnershipMode = ScratchAudioOwnershipMode.load(from: defaults)
+        if !audioOwnershipMode.allowsLocalScratchPlayback {
+            platterSampleStatus = audioOwnershipMode.detail
+        }
+    }
+
+    func setAudioOwnershipMode(_ mode: ScratchAudioOwnershipMode) {
+        guard audioOwnershipMode != mode else { return }
+        audioOwnershipMode = mode
+        mode.persist(to: defaults)
+        if mode.allowsLocalScratchPlayback {
+            platterSampleStatus = "Standalone audio enabled — load AHHH to arm the platter."
+        } else {
+            stop()
+            platterSampleWaveform = nil
+            platterSampleStatus = mode.detail
+        }
+    }
+
+    /// Samples the renderer's lock-free callback snapshot. `TimelineView`
+    /// reads this at display cadence; no timer or `@Published` mutation is
+    /// introduced into the audio engine.
+    var platterSamplePlayheadSnapshot: PlatterSamplePlayheadSnapshot? {
+        guard let waveform = platterSampleWaveform,
+              let renderer,
+              waveform.sampleRate > 0,
+              waveform.contentFrameCount > 0 else { return nil }
+
+        let projection = PlatterSamplePositionProjection.resolve(
+            framePosition: renderer.currentUnwrappedFramePositionSnapshot(),
+            contentFrameCount: waveform.contentFrameCount,
+            sampleRate: waveform.sampleRate
+        )
+
+        return PlatterSamplePlayheadSnapshot(
+            waveform: waveform,
+            framePosition: projection.framePosition,
+            positionSeconds: projection.positionSeconds,
+            progress: projection.progress,
+            region: projection.region
+        )
+    }
 
     /// Load a scratch sample by ID into the renderer's PCM buffer.
     private func load(sampleID: String) async throws -> IOScratchRenderer? {
@@ -246,8 +327,69 @@ final class IOScratchPlaybackEngine: ObservableObject {
         let frameCount = AVAudioFrameCount(file.length)
         guard let buffer = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: frameCount) else { return nil }
         try file.read(into: buffer)
-        renderer.load(buffer: buffer)
+        guard let metadata = renderer.load(buffer: buffer) else { return nil }
+        platterSampleWaveform = Self.makeWaveform(
+            buffer: buffer,
+            metadata: metadata,
+            sampleID: playbackSampleID
+        )
         return renderer
+    }
+
+    private static func makeWaveform(
+        buffer: AVAudioPCMBuffer,
+        metadata: ScratchSampleLoadMetadata,
+        sampleID: String,
+        binCount: Int = 128
+    ) -> PlatterSampleWaveform {
+        let contentFrameCount = max(0, metadata.contentFrameCount)
+        let displayName = sampleID == "dvs_ahhh" ? "AHHH" : sampleID.uppercased()
+        guard contentFrameCount > 0,
+              binCount > 0,
+              let channels = buffer.floatChannelData else {
+            return PlatterSampleWaveform(
+                sampleID: sampleID,
+                displayName: displayName,
+                amplitudes: [],
+                sampleRate: metadata.sampleRate,
+                contentFrameCount: contentFrameCount
+            )
+        }
+
+        let channelCount = max(1, Int(buffer.format.channelCount))
+        var amplitudes = [Float](repeating: 0, count: binCount)
+        for bin in 0..<binCount {
+            let localStart = bin * contentFrameCount / binCount
+            let localEnd = max(localStart + 1, (bin + 1) * contentFrameCount / binCount)
+            var peak: Float = 0
+            var sumSquares: Double = 0
+            var sampleCount = 0
+
+            for channelIndex in 0..<channelCount {
+                let channel = channels[channelIndex]
+                for localFrame in localStart..<min(localEnd, contentFrameCount) {
+                    let value = channel[metadata.cueStartFrame + localFrame]
+                    peak = max(peak, abs(value))
+                    sumSquares += Double(value * value)
+                    sampleCount += 1
+                }
+            }
+
+            let rms = sampleCount > 0
+                ? Float((sumSquares / Double(sampleCount)).squareRoot())
+                : 0
+            amplitudes[bin] = max(peak * 0.65, rms * 1.6)
+        }
+
+        let normalizationPeak = max(amplitudes.max() ?? 0, Float.leastNonzeroMagnitude)
+        amplitudes = amplitudes.map { min(max($0 / normalizationPeak, 0), 1) }
+        return PlatterSampleWaveform(
+            sampleID: sampleID,
+            displayName: displayName,
+            amplitudes: amplitudes,
+            sampleRate: metadata.sampleRate,
+            contentFrameCount: contentFrameCount
+        )
     }
 
     /// Load a hot-cue sample, arm the renderer at the top, and activate its
@@ -255,6 +397,12 @@ final class IOScratchPlaybackEngine: ObservableObject {
     /// frame (silent at frame 0 until platter movement, via
     /// `updatePlatterPosition`, moves the playhead) rather than free-running.
     func playHotCue(sampleID: String) {
+        guard audioOwnershipMode.allowsLocalScratchPlayback else {
+            platterSampleStatus = audioOwnershipMode.detail
+            return
+        }
+        platterSampleStatus = "Loading platter sample…"
+        platterSampleWaveform = nil
         #if DEBUG
         print("[MIDI-DEBUG] hotcue playback requested · sample=\(sampleID)")
         #endif
@@ -262,6 +410,7 @@ final class IOScratchPlaybackEngine: ObservableObject {
         Task {
             do {
                 guard let renderer = try await load(sampleID: sampleID) else {
+                    platterSampleStatus = "Platter sample not found"
                     #if DEBUG
                     print("[MIDI-DEBUG] sample playback failed · reason=audio route unavailable")
                     #endif
@@ -275,15 +424,47 @@ final class IOScratchPlaybackEngine: ObservableObject {
                     renderer: renderer,
                     hotCuePhase: hotCuePlatterPhase ?? 0
                 )
+                platterSampleStatus = sampleID == "ahhh" || sampleID == "dvs_ahhh"
+                    ? "AHHH loaded — move the right platter"
+                    : "Sample loaded — move the right platter"
                 #if DEBUG
                 print("[MIDI-DEBUG] sample armed · \(sampleID)")
                 #endif
             } catch {
+                platterSampleStatus = "Could not load platter sample: \(error.localizedDescription)"
                 #if DEBUG
                 print("[MIDI-DEBUG] sample playback failed · reason=\(error.localizedDescription)")
                 #endif
             }
         }
+    }
+
+    /// Explicit UI action that arms the validated one-revolution AHHH asset.
+    /// Audio remains platter-driven: loading does not free-run the sample.
+    func loadPlatterAHHH() {
+        playHotCue(sampleID: "dvs_ahhh")
+    }
+
+    /// Applies the learned right-deck channel fader to scratch playback.
+    func setRightUpfaderGain(_ normalizedGain: Double) {
+        rightUpfaderGain = FaderCurveResponse.gain(
+            forNormalizedPosition: normalizedGain,
+            response: FaderCurveResponse(zeroAt: 0, oneAt: 1, shape: .linear)
+        )
+        publishUserMixerGain()
+    }
+
+    /// Applies the same sharp scratch cut-in curve used by macOS.
+    func setCrossfaderPosition(_ normalizedPosition: Double) {
+        crossfaderRightDeckGain = FaderCurveResponse.gain(
+            forNormalizedPosition: normalizedPosition,
+            response: FaderCurveResponse(
+                zeroAt: 0,
+                oneAt: MIDIFaderCurveConstants.sharpScratchCutInWidth,
+                shape: .linear
+            )
+        )
+        publishUserMixerGain()
     }
 
     /// Stop playback entirely and reset the playhead.
@@ -345,13 +526,35 @@ final class IOScratchPlaybackEngine: ObservableObject {
     private func startEngineIfNeeded() throws {
         if !engine.isRunning {
             try engine.start()
+            #if DEBUG
+            // A channel map can be accepted at assignment time and then dropped
+            // or renegotiated when the engine starts and a format is committed,
+            // so the post-start state is logged separately from the configure
+            // stage rather than inferred from it.
+            logRaneRoutingDiagnostic(stage: "after-engine-start")
+            #endif
         }
     }
 
-    /// Builds the graph for the route observed at hot-cue load time. The RANE
-    /// ONE MKII exposes Deck 1 on physical outputs 1/2 and Deck 2 on 3/4, so a
-    /// four-channel discrete source writes only channels 2/3 (zero-based).
-    /// Every other route retains the existing two-channel stereo graph.
+    private var rightUpfaderGain: Double = 1
+    private var crossfaderRightDeckGain: Double = 1
+
+    private func publishUserMixerGain() {
+        renderer?.setUserMixerGain(rightUpfaderGain * crossfaderRightDeckGain)
+    }
+
+    /// Builds the graph for the route observed at hot-cue load time.
+    ///
+    /// On a recognized RANE route, ScratchLab's audio must reach the **right
+    /// deck**, physical USB output 3/4 (destination indices 2/3) — see
+    /// `RanePlaybackRoutingPolicy` for the measured hardware truth and why the
+    /// previous `>= 14` gate silently defeated this. Every other route keeps
+    /// the ordinary two-channel stereo graph, unchanged.
+    ///
+    /// A recognized RANE that cannot be routed to the right deck now throws
+    /// rather than degrading to stereo: plain stereo lands on the device's
+    /// first pair, 1/2, which is the **left** deck, so a silent fallback plays
+    /// AHHH on the wrong channel strip with no indication anything is wrong.
     private func prepareRendererForCurrentRoute() async throws -> IOScratchRenderer {
         let session = AVAudioSession.sharedInstance()
         try await Task.detached(priority: .userInitiated) {
@@ -359,12 +562,16 @@ final class IOScratchPlaybackEngine: ObservableObject {
         }.value
 
         let routeName = session.currentRoute.outputs.first?.portName ?? "System Output"
-        let normalizedRouteName = routeName.lowercased()
-        let isRaneOne = normalizedRouteName.contains("rane") && normalizedRouteName.contains("one")
-        let supportsDeck2Pair = session.maximumOutputNumberOfChannels >= 4
+        let isRaneOne = RanePlaybackRoutingPolicy.matchesRaneRoute(portName: routeName)
+        // Ask the connected route for everything it has rather than a guessed
+        // constant. The RANE ONE MKII reports 10 outputs, so the previous
+        // hardcoded 14 requirement could never be satisfied.
+        let requestedChannelCount = isRaneOne
+            ? max(session.maximumOutputNumberOfChannels, RanePlaybackRoutingPolicy.minimumRequiredOutputChannels)
+            : 2
         let configuration = OutputConfiguration(
-            preferredHardwareChannelCount: isRaneOne && supportsDeck2Pair ? 4 : 2,
-            usesDeck2ChannelMap: isRaneOne && supportsDeck2Pair,
+            preferredHardwareChannelCount: requestedChannelCount,
+            outputPairStartIndex: isRaneOne ? RanePlaybackRoutingPolicy.rightDeckPairStartIndex : nil,
             routeName: routeName
         )
         if configuration == outputConfiguration, let renderer {
@@ -378,7 +585,7 @@ final class IOScratchPlaybackEngine: ObservableObject {
         }
         engine.disconnectNodeOutput(engine.mainMixerNode)
 
-        try session.setPreferredOutputNumberOfChannels(configuration.preferredHardwareChannelCount)
+        try session.setPreferredOutputNumberOfChannels(requestedChannelCount)
         let renderer = IOScratchRenderer()
         engine.attach(renderer.sourceNode)
         let stereoFormat = renderer.sourceNode.outputFormat(forBus: 0)
@@ -389,19 +596,83 @@ final class IOScratchPlaybackEngine: ObservableObject {
         )
         engine.connect(engine.mainMixerNode, to: engine.outputNode, format: stereoFormat)
 
-        // The output unit's channel map is destination-indexed. Preserve the
-        // renderer's proven stereo graph and place it on the RANE's four-channel
-        // hardware surface as: Deck 1 L/R = silence, Deck 2 L/R = source L/R.
-        // Generic routes clear the override and retain ordinary stereo output.
-        engine.outputNode.auAudioUnit.channelMap = configuration.usesDeck2ChannelMap
-            ? [-1, -1, 0, 1]
-            : nil
+        // Decide from what the hardware actually reported after the request —
+        // the granted session count and the output node's own channel count —
+        // never from the requested value.
+        let grantedChannelCount = session.outputNumberOfChannels
+        let outputNodeChannelCount = Int(engine.outputNode.outputFormat(forBus: 0).channelCount)
+        let decision = RanePlaybackRoutingPolicy.decide(
+            portName: routeName,
+            grantedOutputChannels: grantedChannelCount,
+            outputNodeChannels: outputNodeChannelCount
+        )
+
+        switch decision {
+        case let .raneRightDeck(channelMap):
+            engine.outputNode.auAudioUnit.channelMap = channelMap.map(NSNumber.init(value:))
+            // Assignment is not proof: read the map back and confirm it still
+            // places the renderer on the right deck before allowing playback.
+            let applied = engine.outputNode.auAudioUnit.channelMap?.map(\.intValue)
+            guard RanePlaybackRoutingPolicy.mapPlacesRendererOnRightDeck(applied) else {
+                engine.detach(renderer.sourceNode)
+                outputConfiguration = nil
+                throw IOScratchPlaybackRoutingError.raneRightDeckUnavailable(
+                    .channelMapRejected(
+                        expectedPairStartIndex: RanePlaybackRoutingPolicy.rightDeckPairStartIndex,
+                        applied: applied
+                    )
+                )
+            }
+        case .ordinaryStereo:
+            engine.outputNode.auAudioUnit.channelMap = nil
+        case let .unroutable(failure):
+            engine.detach(renderer.sourceNode)
+            outputConfiguration = nil
+            throw IOScratchPlaybackRoutingError.raneRightDeckUnavailable(failure)
+        }
+
         self.renderer = renderer
+        renderer.setUserMixerGain(rightUpfaderGain * crossfaderRightDeckGain)
         outputConfiguration = configuration
 
         #if DEBUG
-        print("[SCRATCH-DEBUG] playback output configured · route=\(routeName) hardwareChannels=\(configuration.preferredHardwareChannelCount) channelMap=\(engine.outputNode.auAudioUnit.channelMap ?? [])")
+        logRaneRoutingDiagnostic(stage: "configured", session: session, decision: decision)
         #endif
         return renderer
     }
+
+    #if DEBUG
+    /// Concise requested-versus-granted routing readout. Read-only, and
+    /// compiled out of release builds — there is no Release logging here.
+    ///
+    /// Reports the five facts that actually distinguish routing outcomes:
+    /// route recognition, requested vs granted channels, what the output node
+    /// exposes, and whether the applied map really lands on the right deck.
+    /// The old log printed the *requested* channel count, which read `14` even
+    /// when the map was never installed — that is what hid this bug.
+    private func logRaneRoutingDiagnostic(
+        stage: String,
+        session: AVAudioSession = .sharedInstance(),
+        decision: RanePlaybackRoutingPolicy.Decision? = nil
+    ) {
+        let routeName = session.currentRoute.outputs.first?.portName ?? "System Output"
+        let applied = engine.outputNode.auAudioUnit.channelMap?.map(\.intValue)
+        let outcome: String
+        switch decision {
+        case .raneRightDeck: outcome = "raneRightDeck"
+        case .ordinaryStereo: outcome = "ordinaryStereo"
+        case let .unroutable(failure): outcome = "unroutable(\(failure))"
+        case nil: outcome = "n/a"
+        }
+        print(
+            "[RANE-ROUTING] stage=\(stage) route=\(routeName) "
+            + "rane=\(RanePlaybackRoutingPolicy.matchesRaneRoute(portName: routeName)) "
+            + "granted=\(session.outputNumberOfChannels) max=\(session.maximumOutputNumberOfChannels) "
+            + "outputNode=\(engine.outputNode.outputFormat(forBus: 0).channelCount) "
+            + "map=\(applied.map { "[\($0.map(String.init).joined(separator: ","))]" } ?? "nil") "
+            + "onRightDeck=\(RanePlaybackRoutingPolicy.mapPlacesRendererOnRightDeck(applied)) "
+            + "decision=\(outcome) running=\(engine.isRunning)"
+        )
+    }
+    #endif
 }

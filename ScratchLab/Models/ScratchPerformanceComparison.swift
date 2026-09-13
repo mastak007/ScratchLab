@@ -1247,6 +1247,12 @@ struct SemanticError: Equatable, Sendable {
         case movementTooShort
         case movementTooLong
         case missedMovement
+        case missingTearHold
+        case extraTearHold
+        case tearHoldEarly
+        case tearHoldLate
+        case subdivisionRatioMismatch
+        case motionShapeMismatch
         // FADER
         case missedCut
         case extraCut
@@ -1431,10 +1437,725 @@ extension SemanticError {
         case .movementTooShort: return "Movement too short"
         case .movementTooLong: return "Movement too long"
         case .missedMovement: return "Missed movement"
+        case .missingTearHold: return "Missing tear hold"
+        case .extraTearHold: return "Extra tear hold"
+        case .tearHoldEarly: return "Hold early"
+        case .tearHoldLate: return "Hold late"
+        case .subdivisionRatioMismatch: return "Subdivision rhythm"
+        case .motionShapeMismatch: return "Motion shape"
         case .missedCut: return "Missed cut"
         case .extraCut: return "Extra cut"
         case .earlyCut: return "Cut early"
         case .lateCut: return "Cut late"
+        }
+    }
+}
+
+// MARK: - Canonical tear comparison
+
+/// Compares explicitly selected canonical values. It does not select a target,
+/// classify a take, change evidence, or award an overall grade. The same entry
+/// point accepts live review values and values restored from a companion file.
+enum CanonicalTearComparison {
+    typealias Record = ScratchNotation.GestureRecord
+
+    enum Axis: Int, CaseIterable, Equatable, Sendable {
+        case directionOrder, holdCount, holdTiming, subdivisionRatios
+        case motionShape, faderTiming, evidenceQuality
+
+        var title: String {
+            switch self {
+            case .directionOrder: return "Gesture direction and order"
+            case .holdCount: return "Tear-hold count"
+            case .holdTiming: return "Hold onset and release"
+            case .subdivisionRatios: return "Moving-duration ratios"
+            case .motionShape: return "Motion continuity and sampled shape"
+            case .faderTiming: return "Fader timing"
+            case .evidenceQuality: return "Evidence quality"
+            }
+        }
+    }
+
+    enum Assessment: Equatable, Sendable {
+        case withinTolerance, outsideTolerance, partiallyAssessed, unavailable, notRequested
+        var title: String {
+            switch self {
+            case .withinTolerance: return "Within tolerance"
+            case .outsideTolerance: return "Outside tolerance"
+            case .partiallyAssessed: return "Partially assessed"
+            case .unavailable: return "Unavailable"
+            case .notRequested: return "Not requested"
+            }
+        }
+    }
+
+    enum UnavailableReason: String, Codable, CaseIterable, Equatable, Sendable {
+        case invalidTempoOrOrigin, invalidConfiguration, missingTarget, missingPerformance
+        case invalidTarget, invalidPerformance, unsupportedTimingDomain
+        case unknownEvidence, ambiguousEvidence, lowConfidence, correctedTiming, unmeasuredTiming
+        case inferredHoldEvidence
+        case coordinateMismatch, insufficientCurveSamples, interpolatedCurve, missingCurve
+        case missingAuthoredRatio, missingFaderEvidence, unmatchedGesture, unmatchedHold
+        case unmatchedFaderEvent, nonFiniteMeasurement, comparisonLimitExceeded
+        case unobservedInterGestureInterval
+
+        var title: String {
+            switch self {
+            case .invalidTempoOrOrigin: return "A finite positive tempo and explicit time origin are required."
+            case .invalidConfiguration: return "Comparison tolerances are invalid."
+            case .missingTarget: return "Select an authored target."
+            case .missingPerformance: return "No performed gesture evidence is selected."
+            case .invalidTarget: return "The authored target has invalid or unsupported evidence."
+            case .invalidPerformance: return "Performed evidence has invalid or unordered boundaries."
+            case .unsupportedTimingDomain: return "Targets must use beats and performed records must use seconds."
+            case .unknownEvidence: return "Motion evidence or its reviewed classification is unknown."
+            case .ambiguousEvidence: return "Reviewed evidence is ambiguous or contradicts its boundaries."
+            case .lowConfidence: return "Motion confidence is below the comparison requirement."
+            case .correctedTiming: return "Corrected boundaries are not measured timing."
+            case .unmeasuredTiming: return "Measured timing is unavailable."
+            case .inferredHoldEvidence: return "Hold boundaries are inferred; their count and timing are descriptive, not assessed."
+            case .coordinateMismatch: return "The two curves use different coordinate spaces."
+            case .insufficientCurveSamples: return "Endpoints alone cannot establish within-run speed shape."
+            case .interpolatedCurve: return "Interpolated travel runs cannot establish measured speed shape."
+            case .missingCurve: return "A measured or authored curve is missing."
+            case .missingAuthoredRatio: return "The target specifies no moving-duration ratio."
+            case .missingFaderEvidence: return "Usable fader evidence is missing."
+            case .unmatchedGesture: return "A gesture has no corresponding selected gesture."
+            case .unmatchedHold: return "A hold has no corresponding hold for timing comparison."
+            case .unmatchedFaderEvent: return "A fader transition has no corresponding transition."
+            case .nonFiniteMeasurement: return "The requested measurement cannot be represented finitely."
+            case .comparisonLimitExceeded: return "The selected evidence exceeds the bounded comparison size."
+            case .unobservedInterGestureInterval: return "The canonical gesture records do not describe the interval between these gestures."
+            }
+        }
+    }
+
+    struct Configuration: Equatable, Sendable {
+        var timingToleranceMilliseconds: Double
+        /// Absolute difference between moving-duration shares, not a demand
+        /// for equal subdivisions. This is an internal teaching tolerance.
+        var ratioShareTolerance: Double
+        var normalizedShapeRMSTolerance: Double
+        var normalizedContinuityTolerance: Double
+        var minimumMotionConfidence: Double
+        /// Shape RMS 0.10, continuity 1e-6 and confidence 0.75 are provisional
+        /// internal teaching/assessability choices, not hardware calibration.
+        /// Existing beginner timing remains unchanged at 50 milliseconds.
+        static let internalReview = Configuration(
+            timingToleranceMilliseconds: NotationFeedbackState.lateOffsetThresholdMs,
+            ratioShareTolerance: 0.10, normalizedShapeRMSTolerance: 0.10,
+            normalizedContinuityTolerance: 0.000001, minimumMotionConfidence: 0.75
+        )
+
+        fileprivate var isValid: Bool {
+            let tolerances = [timingToleranceMilliseconds, ratioShareTolerance,
+                              normalizedShapeRMSTolerance, normalizedContinuityTolerance]
+            return tolerances.allSatisfy { $0.isFinite && $0 >= 0 }
+                && minimumMotionConfidence.isFinite && (0...1).contains(minimumMotionConfidence)
+        }
+    }
+
+    struct Measurement: Equatable, Sendable {
+        enum Kind: Equatable, Sendable {
+            case direction, missingGesture, extraGesture, holdCount
+            case holdOnset, holdRelease, missingHold, extraHold, subdivisionRatio
+            case continuity, sampledShape, faderState, faderOffset, missingFader, extraFader
+            case supportedGestureShare
+            case interGestureGap
+        }
+        enum Unit: Equatable, Sendable { case count, milliseconds, share, normalizedPosition }
+        let kind: Kind
+        let targetID: String?
+        let performedID: String?
+        let expected: Double?
+        let observed: Double?
+        let signedError: Double?
+        let tolerance: Double?
+        let unit: Unit?
+        let detail: String
+        let isWithinTolerance: Bool?
+
+        init(kind: Kind, targetID: String? = nil, performedID: String? = nil,
+             expected: Double? = nil, observed: Double? = nil, signedError: Double? = nil,
+             tolerance: Double? = nil, unit: Unit? = nil, detail: String,
+             isWithinTolerance: Bool? = nil) {
+            self.kind = kind
+            self.targetID = targetID
+            self.performedID = performedID
+            self.expected = expected
+            self.observed = observed
+            self.signedError = signedError
+            self.tolerance = tolerance
+            self.unit = unit
+            self.detail = detail
+            self.isWithinTolerance = isWithinTolerance
+        }
+    }
+
+    struct Dimension: Equatable, Sendable {
+        let axis: Axis
+        let assessment: Assessment
+        /// Percentage of this dimension's assessable observations within its
+        /// stated tolerance. Evidence quality reports the supported directional
+        /// travel share only when no evidence-quality limitation remains.
+        /// Partial results never include unavailable observations as passes.
+        let scorePercentage: Double?
+        let measurements: [Measurement]
+        let unavailableReasons: [UnavailableReason]
+    }
+
+    struct Result: Equatable, Sendable {
+        let dimensions: [Dimension]
+        let semanticErrors: [SemanticError]
+        let coaching: [String]
+    }
+
+    private struct Accumulator {
+        let axis: Axis
+        var measurements: [Measurement] = []
+        var reasons: [UnavailableReason] = []
+        var notRequested = false
+
+        var dimension: Dimension {
+            let checks = measurements.compactMap(\.isWithinTolerance)
+            let reasons = UnavailableReason.allCases.filter { self.reasons.contains($0) }
+            let assessment: Assessment
+            if notRequested { assessment = .notRequested }
+            else if checks.isEmpty { assessment = .unavailable }
+            else if !reasons.isEmpty { assessment = .partiallyAssessed }
+            else { assessment = checks.allSatisfy { $0 } ? .withinTolerance : .outsideTolerance }
+            var score: Double? = checks.isEmpty ? nil
+                : Double(checks.filter { $0 }.count) / Double(checks.count) * 100
+            if axis == .evidenceQuality,
+               let share = measurements.first(where: { $0.kind == .supportedGestureShare })?.observed {
+                // The supported directional travel share remains inspectable, but it is
+                // not a complete quality score when another channel is unknown.
+                score = reasons.isEmpty ? share * 100 : nil
+            }
+            return Dimension(axis: axis, assessment: assessment,
+                             scorePercentage: notRequested ? nil : score,
+                             measurements: measurements, unavailableReasons: reasons)
+        }
+    }
+
+    /// Gesture arrays are compared in the caller's selected order, never
+    /// reordered or matched by their direction/name/hold count. Within paired
+    /// gestures, holds and fader transitions use an order-preserving alignment
+    /// with maximal cardinality and minimum onset-time error. Equal counts
+    /// therefore pair by ordinal even when early/late; timing tolerance never
+    /// converts a late hold into a missing hold. Extra/missing events remain
+    /// explicit. The origin is supplied by the caller, not estimated here.
+    ///
+    /// Limitations accompany evidence, including restored companion values.
+    /// Unknown/ambiguous limits prevent affected motion judgments; inferred
+    /// holds do not invalidate independently measured direction. Their counts
+    /// remain descriptive, without learner verdicts. Corrected timing
+    /// prevents measured timing/ratio claims; interpolated curves prevent shape
+    /// claims. Independent fader observations are assessed independently.
+    static func compare(
+        target: [Record], performed: [Record], bpm: Double,
+        performedOriginSeconds: Double,
+        configuration: Configuration = .internalReview,
+        performedLimitations: [String: [UnavailableReason]] = [:]
+    ) -> Result {
+        var axes = Axis.allCases.map { Accumulator(axis: $0) }
+        func add(_ axis: Axis, _ measurement: Measurement) {
+            axes[axis.rawValue].measurements.append(measurement)
+        }
+        func limit(_ selectedAxes: [Axis], _ reasons: [UnavailableReason]) {
+            for axis in selectedAxes { axes[axis.rawValue].reasons.append(contentsOf: reasons) }
+        }
+        func finish() -> Result {
+            let dimensions = axes.map(\.dimension)
+            let errors = semanticErrors(for: dimensions)
+            var coaching = Array(errors.prefix(3).map(\.performed))
+            if coaching.isEmpty {
+                if dimensions.contains(where: { !$0.unavailableReasons.isEmpty }) {
+                    coaching = ["Some evidence could not be assessed. Check the reasons beside each dimension."]
+                } else {
+                    coaching = ["The assessed tear dimensions match the selected target."]
+                }
+            }
+            return Result(dimensions: dimensions, semanticErrors: errors, coaching: coaching)
+        }
+        func fail(_ reason: UnavailableReason) -> Result {
+            limit(Axis.allCases, [reason])
+            return finish()
+        }
+        guard bpm.isFinite, bpm > 0, performedOriginSeconds.isFinite,
+              (60 / bpm).isFinite else { return fail(.invalidTempoOrOrigin) }
+        guard configuration.isValid else { return fail(.invalidConfiguration) }
+        guard !target.isEmpty else { return fail(.missingTarget) }
+        guard !performed.isEmpty else { return fail(.missingPerformance) }
+        // Protect interactive review from unbounded sequence-alignment work.
+        guard target.count <= 128, performed.count <= 128,
+              (target + performed).allSatisfy({
+                  $0.internalHolds.count <= 128 && $0.faderTransitions.count <= 128
+                      && $0.faderIntervals.count <= 256 && $0.subdivisions.count <= 129
+                      && $0.subdivisions.allSatisfy {
+                          ($0.measuredCurve?.points.count ?? 0) <= 4096
+                              && ($0.targetCurve?.points.count ?? 0) <= 4096
+                      }
+              }) else { return fail(.comparisonLimitExceeded) }
+        let sampleCount = (target + performed).reduce(0) { total, record in
+            total + record.subdivisions.reduce(0) {
+                $0 + ($1.measuredCurve?.points.count ?? 0) + ($1.targetCurve?.points.count ?? 0)
+            }
+        }
+        guard sampleCount <= 65_536 else { return fail(.comparisonLimitExceeded) }
+        guard target.allSatisfy({ $0.timingDomain == .beats }),
+              performed.allSatisfy({ $0.timingDomain == .seconds }) else {
+            return fail(.unsupportedTimingDomain)
+        }
+        guard orderedRecords(target), target.allSatisfy({
+            $0.evidence.provenance == .authored && $0.motionValidationIssues().isEmpty
+                && $0.subdivisions.allSatisfy { $0.evidence.provenance == .authored }
+                && $0.internalHolds.allSatisfy { $0.evidence.provenance == .authored }
+        }) else { return fail(.invalidTarget) }
+        guard orderedRecords(performed) else { return fail(.invalidPerformance) }
+
+        let motionAxes: [Axis] = [.directionOrder, .holdCount, .holdTiming, .subdivisionRatios, .motionShape]
+        let secondsPerBeat = 60 / bpm
+        var supportedGestures = 0
+        var anyFaderRequested = false
+
+        for (previous, next) in zip(performed, performed.dropFirst()) {
+            let gap = next.subdivisions.first!.span.startTime - previous.subdivisions.last!.span.endTime
+            if gap > 0 {
+                let gapMilliseconds = gap * 1000
+                add(.evidenceQuality, Measurement(kind: .interGestureGap,
+                    performedID: next.id, observed: gapMilliseconds.isFinite ? gapMilliseconds : nil,
+                    unit: .milliseconds, detail: "There is an unrepresented interval between selected gestures."))
+                limit([.directionOrder, .motionShape, .evidenceQuality], [.unobservedInterGestureInterval])
+            }
+        }
+
+        for index in 0..<max(target.count, performed.count) {
+            guard target.indices.contains(index), performed.indices.contains(index) else {
+                let missing = !performed.indices.contains(index)
+                add(.directionOrder, Measurement(
+                    kind: missing ? .missingGesture : .extraGesture,
+                    targetID: missing ? target[index].id : nil,
+                    performedID: missing ? nil : performed[index].id,
+                    expected: missing ? 1 : 0, observed: missing ? 0 : 1,
+                    signedError: missing ? -1 : 1, tolerance: 0, unit: .count,
+                    detail: missing ? "A selected target gesture was not performed."
+                        : "The selected performance contains an extra gesture.",
+                    isWithinTolerance: false))
+                limit([.holdCount, .holdTiming, .subdivisionRatios, .motionShape], [.unmatchedGesture])
+                if target.indices.contains(index), !target[index].faderTransitions.isEmpty {
+                    anyFaderRequested = true
+                    limit([.faderTiming], [.unmatchedGesture])
+                }
+                limit([.evidenceQuality], [.unmatchedGesture])
+                continue
+            }
+            let t = target[index]
+            let p = performed[index]
+            let supplied = performedLimitations[p.id] ?? []
+            // Preserve independent limitations even when another evidence
+            // gate below prevents this record from reaching that dimension.
+            limit([.holdTiming, .subdivisionRatios], supplied.filter {
+                [.correctedTiming, .unmeasuredTiming, .inferredHoldEvidence].contains($0)
+            })
+            limit([.motionShape], supplied.filter {
+                [.interpolatedCurve, .correctedTiming, .unmeasuredTiming, .inferredHoldEvidence].contains($0)
+            })
+            var motionReasons = supplied.filter {
+                [.unknownEvidence, .ambiguousEvidence, .invalidPerformance, .lowConfidence].contains($0)
+            }
+            if p.evidence.provenance == .unknown { motionReasons.append(.unknownEvidence) }
+            if !hasValidDirectionEvidence(p) { motionReasons.append(.invalidPerformance) }
+            let directionObservations = [p.evidence] + p.subdivisions.map(\.evidence)
+            let holdObservations = p.internalHolds.map(\.evidence)
+            let observations = directionObservations + holdObservations
+            if directionObservations.contains(where: {
+                [.authored, .inferred, .unknown].contains($0.provenance)
+            }) { motionReasons.append(.unknownEvidence) }
+            if directionObservations.contains(where: {
+                $0.observation.confidence < configuration.minimumMotionConfidence
+            }) { motionReasons.append(.lowConfidence) }
+            // Derive each channel's limitations before the direction gate so
+            // unsupported travel cannot hide inferred or corrected hold timing.
+            var holdReasons = supplied.filter { $0 == .inferredHoldEvidence }
+            if !p.motionValidationIssues().isEmpty { holdReasons.append(.invalidPerformance) }
+            if holdObservations.contains(where: { $0.provenance == .inferred }) {
+                holdReasons.append(.inferredHoldEvidence)
+            }
+            if holdObservations.contains(where: { [.authored, .unknown].contains($0.provenance) }) {
+                holdReasons.append(.unknownEvidence)
+            }
+            if holdObservations.contains(where: {
+                $0.observation.confidence < configuration.minimumMotionConfidence
+            }) { holdReasons.append(.lowConfidence) }
+            var timingReasons = holdReasons + supplied.filter { $0 == .correctedTiming || $0 == .unmeasuredTiming }
+            if observations.contains(where: { $0.provenance == .manuallyCorrected }) {
+                timingReasons.append(.correctedTiming)
+            }
+            if observations.contains(where: { $0.provenance != .measured }) {
+                timingReasons.append(.unmeasuredTiming)
+            }
+            limit([.holdCount], holdReasons)
+            limit([.holdTiming, .subdivisionRatios, .motionShape, .evidenceQuality], timingReasons)
+            limit([.evidenceQuality], supplied + motionReasons)
+            let faderObservations = p.faderTransitions.map(\.evidence) + p.faderIntervals.map(\.evidence)
+            let validFaderEvidence = p.faderValidationIssues().isEmpty
+                && !faderObservations.isEmpty && faderObservations.allSatisfy {
+                    $0.provenance == .measured
+                        && $0.observation.confidence >= configuration.minimumMotionConfidence
+                }
+            let completeFaderCoverage = validFaderEvidence && faderCovers(
+                p, from: p.subdivisions.first!.span.startTime, to: p.subdivisions.last!.span.endTime)
+            if !completeFaderCoverage {
+                limit([.evidenceQuality], [.missingFaderEvidence])
+            }
+            if motionReasons.isEmpty {
+                supportedGestures += 1
+                add(.directionOrder, Measurement(
+                    kind: .direction, targetID: t.id, performedID: p.id,
+                    detail: "Expected \(t.direction.rawValue); performed \(p.direction.rawValue).",
+                    isWithinTolerance: t.direction == p.direction))
+                let countError = Double(p.internalHolds.count - t.internalHolds.count)
+                add(.holdCount, Measurement(
+                    kind: .holdCount, targetID: t.id, performedID: p.id,
+                    expected: Double(t.internalHolds.count), observed: Double(p.internalHolds.count),
+                    signedError: countError, tolerance: holdReasons.isEmpty ? 0 : nil, unit: .count,
+                    detail: holdReasons.isEmpty
+                        ? "Expected \(t.internalHolds.count) holds; reviewed structure contains \(p.internalHolds.count)."
+                        : "Target has \(t.internalHolds.count) holds; available structure describes \(p.internalHolds.count) (not assessed).",
+                    isWithinTolerance: holdReasons.isEmpty ? countError == 0 : nil))
+
+                if timingReasons.isEmpty {
+                    let targetTimes = t.internalHolds.map { $0.span.startTime * secondsPerBeat }
+                    let performedTimes = p.internalHolds.map { $0.span.startTime - performedOriginSeconds }
+                    if (targetTimes + performedTimes).allSatisfy(\.isFinite) {
+                        let pairs = orderedPairs(target: targetTimes, performed: performedTimes)
+                        for (ti, pi) in pairs {
+                            let th = t.internalHolds[ti], ph = p.internalHolds[pi]
+                            for (kind, expectedTime, observedTime) in [
+                                (Measurement.Kind.holdOnset, th.span.startTime * secondsPerBeat,
+                                 ph.span.startTime - performedOriginSeconds),
+                                (.holdRelease, th.span.endTime * secondsPerBeat,
+                                 ph.span.endTime - performedOriginSeconds)
+                            ] {
+                                let offset = (observedTime - expectedTime) * 1000
+                                guard offset.isFinite, (expectedTime * 1000).isFinite,
+                                      (observedTime * 1000).isFinite else {
+                                    limit([.holdTiming], [.nonFiniteMeasurement]); continue
+                                }
+                                add(.holdTiming, Measurement(
+                                    kind: kind, targetID: th.id, performedID: ph.id,
+                                    expected: expectedTime * 1000, observed: observedTime * 1000,
+                                    signedError: offset, tolerance: configuration.timingToleranceMilliseconds,
+                                    unit: .milliseconds,
+                                    detail: "Hold \(kind == .holdOnset ? "onset" : "release"): \(String(format: "%+.1f", offset)) ms.",
+                                    isWithinTolerance: abs(offset) <= configuration.timingToleranceMilliseconds))
+                            }
+                        }
+                        for ti in t.internalHolds.indices where !pairs.contains(where: { $0.0 == ti }) {
+                            add(.holdTiming, Measurement(kind: .missingHold, targetID: t.internalHolds[ti].id,
+                                detail: "A target hold has no performed timing observation."))
+                            limit([.holdTiming], [.unmatchedHold])
+                        }
+                        for pi in p.internalHolds.indices where !pairs.contains(where: { $0.1 == pi }) {
+                            add(.holdTiming, Measurement(kind: .extraHold, performedID: p.internalHolds[pi].id,
+                                detail: "An extra hold has no authored timing."))
+                            limit([.holdTiming], [.unmatchedHold])
+                        }
+                    } else { limit([.holdTiming], [.nonFiniteMeasurement]) }
+
+                    if let weights = t.authoredSubdivisionRatio {
+                        if let shares = p.measuredSubdivisionRatio, weights.count == shares.count {
+                            let total = weights.reduce(0, +)
+                            if total.isFinite, total > 0 {
+                                for i in weights.indices {
+                                    let expected = weights[i] / total
+                                    let delta = shares[i] - expected
+                                    add(.subdivisionRatios, Measurement(
+                                        kind: .subdivisionRatio, targetID: t.subdivisions[i].id,
+                                        performedID: p.subdivisions[i].id, expected: expected, observed: shares[i],
+                                        signedError: delta, tolerance: configuration.ratioShareTolerance, unit: .share,
+                                        detail: "Moving share: \(String(format: "%.3f", shares[i])); target \(String(format: "%.3f", expected)).",
+                                        isWithinTolerance: abs(delta) <= configuration.ratioShareTolerance))
+                                }
+                            } else { limit([.subdivisionRatios], [.nonFiniteMeasurement]) }
+                        } else { limit([.subdivisionRatios], [.unmatchedHold]) }
+                    } else { limit([.subdivisionRatios], [.missingAuthoredRatio]) }
+                }
+                let shape = compareShape(target: t, performed: p, limitations: supplied + timingReasons,
+                                         configuration: configuration)
+                for measurement in shape.measurements { add(.motionShape, measurement) }
+                limit([.motionShape], shape.reasons)
+                limit([.evidenceQuality], shape.reasons)
+            } else {
+                limit(motionAxes, motionReasons)
+            }
+
+            // An open interval is not a timed cut request. Plain tears never
+            // earn missing/extra-cut penalties, even when a click was captured.
+            guard !t.faderTransitions.isEmpty else { continue }
+            anyFaderRequested = true
+            guard t.faderValidationIssues().isEmpty,
+                  t.faderTransitions.allSatisfy({ $0.evidence.provenance == .authored }) else {
+                limit([.faderTiming, .evidenceQuality], [.invalidTarget]); continue
+            }
+            guard validFaderEvidence else {
+                limit([.faderTiming, .evidenceQuality], [.missingFaderEvidence]); continue
+            }
+            if !completeFaderCoverage { limit([.faderTiming], [.missingFaderEvidence]) }
+            let targetTimes = t.faderTransitions.map { $0.time * secondsPerBeat }
+            let performedTimes = p.faderTransitions.map { $0.time - performedOriginSeconds }
+            guard (targetTimes + performedTimes).allSatisfy(\.isFinite) else {
+                limit([.faderTiming], [.nonFiniteMeasurement]); continue
+            }
+            let pairs = orderedPairs(target: targetTimes, performed: performedTimes)
+            for (ti, pi) in pairs {
+                let te = t.faderTransitions[ti], pe = p.faderTransitions[pi]
+                let offset = (performedTimes[pi] - targetTimes[ti]) * 1000
+                add(.faderTiming, Measurement(kind: .faderState, targetID: te.id, performedID: pe.id,
+                    detail: "Expected fader \(te.state.rawValue); observed \(pe.state.rawValue).",
+                    isWithinTolerance: te.state == pe.state))
+                guard offset.isFinite, (targetTimes[ti] * 1000).isFinite,
+                      (performedTimes[pi] * 1000).isFinite else {
+                    limit([.faderTiming], [.nonFiniteMeasurement]); continue
+                }
+                add(.faderTiming, Measurement(kind: .faderOffset, targetID: te.id, performedID: pe.id,
+                    expected: targetTimes[ti] * 1000, observed: performedTimes[pi] * 1000,
+                    signedError: offset, tolerance: configuration.timingToleranceMilliseconds,
+                    unit: .milliseconds, detail: "Fader transition: \(String(format: "%+.1f", offset)) ms.",
+                    isWithinTolerance: abs(offset) <= configuration.timingToleranceMilliseconds))
+            }
+            for ti in t.faderTransitions.indices where !pairs.contains(where: { $0.0 == ti }) {
+                let expectedTime = targetTimes[ti] + performedOriginSeconds
+                let margin = configuration.timingToleranceMilliseconds / 1000
+                guard faderCovers(p, from: expectedTime - margin, to: expectedTime + margin) else {
+                    limit([.faderTiming], [.missingFaderEvidence]); continue
+                }
+                add(.faderTiming, Measurement(kind: .missingFader, targetID: t.faderTransitions[ti].id,
+                    detail: "An authored fader transition was not observed.", isWithinTolerance: false))
+            }
+            for pi in p.faderTransitions.indices where !pairs.contains(where: { $0.1 == pi }) {
+                add(.faderTiming, Measurement(kind: .extraFader, performedID: p.faderTransitions[pi].id,
+                    detail: "An extra fader transition was observed.", isWithinTolerance: false))
+            }
+        }
+        axes[Axis.faderTiming.rawValue].notRequested = !anyFaderRequested
+        axes[Axis.holdTiming.rawValue].notRequested = target.allSatisfy { $0.internalHolds.isEmpty }
+            && performed.allSatisfy { $0.internalHolds.isEmpty }
+        let share = Double(supportedGestures) / Double(max(target.count, performed.count))
+        add(.evidenceQuality, Measurement(kind: .supportedGestureShare,
+            expected: 1, observed: share, signedError: share - 1, tolerance: 0, unit: .share,
+            detail: "\(supportedGestures) of \(max(target.count, performed.count)) selected gesture pairs have supported directional motion.",
+            isWithinTolerance: share == 1))
+        return finish()
+    }
+
+    private static func orderedRecords(_ records: [Record]) -> Bool {
+        var ids = Set<String>()
+        var previousEnd: Double?
+        for record in records {
+            guard !record.id.isEmpty, ids.insert(record.id).inserted,
+                  let start = record.subdivisions.first?.span.startTime,
+                  let end = record.subdivisions.last?.span.endTime,
+                  start.isFinite, end.isFinite, start >= 0, end > start,
+                  previousEnd.map({ start >= $0 }) ?? true else { return false }
+            previousEnd = end
+        }
+        return true
+    }
+
+    /// Direction depends on the record and travel subdivisions. Validate
+    /// those observations independently of the separate hold channel; the
+    /// full canonical motion validation still gates hold-derived dimensions.
+    private static func hasValidDirectionEvidence(_ record: Record) -> Bool {
+        guard Record.evidenceIssues(record.evidence, platter: true).isEmpty else { return false }
+        var ids = Set([record.id])
+        var previousEnd: Double?
+        for subdivision in record.subdivisions {
+            let span = subdivision.span
+            guard !subdivision.id.isEmpty, ids.insert(subdivision.id).inserted,
+                  span.startTime.isFinite, span.endTime.isFinite, span.startTime >= 0,
+                  span.endTime > span.startTime,
+                  previousEnd.map({ span.startTime >= $0 }) ?? true,
+                  Record.evidenceIssues(subdivision.evidence, platter: true).isEmpty else { return false }
+            for curve in [subdivision.measuredCurve, subdivision.targetCurve].compactMap({ $0 }) {
+                guard Record.evidenceIssues(curve.evidence, platter: true).isEmpty,
+                      curve.points.count >= 2, curve.points.first?.time == span.startTime,
+                      curve.points.last?.time == span.endTime,
+                      curve.points.allSatisfy({ $0.time.isFinite && $0.position.isFinite }),
+                      zip(curve.points, curve.points.dropFirst()).allSatisfy({ pair in
+                          pair.0.time < pair.1.time
+                      }) else {
+                    return false
+                }
+            }
+            if subdivision.measuredCurve?.evidence.provenance == .authored { return false }
+            previousEnd = span.endTime
+        }
+        return !record.subdivisions.isEmpty
+    }
+
+    /// Align the shorter ordered sequence to a subsequence of the longer one.
+    /// Ties retain the earlier event. No timing window erases a measured error.
+    private static func orderedPairs(target: [Double], performed: [Double]) -> [(Int, Int)] {
+        guard !target.isEmpty, !performed.isEmpty else { return [] }
+        let swapped = target.count > performed.count
+        let short = swapped ? performed : target
+        let long = swapped ? target : performed
+        let scale = max(1, (short + long).map { abs($0) }.max() ?? 1)
+        var costs = Array(repeating: Array(repeating: Double.infinity, count: long.count + 1),
+                          count: short.count + 1)
+        var matched = Array(repeating: Array(repeating: false, count: long.count + 1),
+                            count: short.count + 1)
+        costs[0] = Array(repeating: 0, count: long.count + 1)
+        for i in 1...short.count {
+            for j in i...long.count {
+                let match = costs[i - 1][j - 1] + abs(short[i - 1] / scale - long[j - 1] / scale)
+                let skip = costs[i][j - 1]
+                if match < skip || j == i {
+                    costs[i][j] = match
+                    matched[i][j] = true
+                } else { costs[i][j] = skip }
+            }
+        }
+        var pairs: [(Int, Int)] = []
+        var i = short.count, j = long.count
+        while i > 0 && j > 0 {
+            if matched[i][j] {
+                pairs.append(swapped ? (j - 1, i - 1) : (i - 1, j - 1))
+                i -= 1
+            }
+            j -= 1
+        }
+        return Array(pairs.reversed())
+    }
+
+    private static func compareShape(
+        target: Record, performed: Record, limitations: [UnavailableReason],
+        configuration: Configuration
+    ) -> (measurements: [Measurement], reasons: [UnavailableReason]) {
+        var reasons = limitations.filter {
+            [.interpolatedCurve, .correctedTiming, .unmeasuredTiming, .inferredHoldEvidence,
+             .unknownEvidence, .invalidPerformance, .lowConfidence].contains($0)
+        }
+        if target.coordinateSpace != performed.coordinateSpace { reasons.append(.coordinateMismatch) }
+        if target.subdivisions.count != performed.subdivisions.count { reasons.append(.unmatchedHold) }
+        let targetCurves = target.subdivisions.compactMap(\.targetCurve)
+        let performedCurves = performed.subdivisions.compactMap(\.measuredCurve)
+        if targetCurves.count != target.subdivisions.count
+            || performedCurves.count != performed.subdivisions.count { reasons.append(.missingCurve) }
+        if performedCurves.contains(where: { $0.points.count < 3 }) { reasons.append(.insufficientCurveSamples) }
+        if performedCurves.contains(where: { $0.evidence.provenance != .measured }) {
+            reasons.append(.unmeasuredTiming)
+        }
+        if performedCurves.contains(where: {
+            $0.evidence.observation.confidence < configuration.minimumMotionConfidence
+        }) { reasons.append(.lowConfidence) }
+        guard reasons.isEmpty else { return ([], reasons) }
+        guard let ts = targetCurves.first?.points.first?.position,
+              let te = targetCurves.last?.points.last?.position,
+              let ps = performedCurves.first?.points.first?.position,
+              let pe = performedCurves.last?.points.last?.position else { return ([], [.missingCurve]) }
+        let targetTravel = te - ts, performedTravel = pe - ps
+        guard targetTravel.isFinite, performedTravel.isFinite,
+              abs(targetTravel) > 0, abs(performedTravel) > 0 else {
+            return ([], [.nonFiniteMeasurement])
+        }
+        var measurements: [Measurement] = []
+        for i in performedCurves.indices {
+            let tc = targetCurves[i], pc = performedCurves[i]
+            let tSpan = target.subdivisions[i].span, pSpan = performed.subdivisions[i].span
+            var squaredErrors: [Double] = []
+            for point in pc.points {
+                let fraction = (point.time - pSpan.startTime) / pSpan.duration
+                let targetTime = tSpan.startTime + fraction * tSpan.duration
+                let expected = (interpolate(tc.points, at: targetTime) - ts) / targetTravel
+                let observed = (point.position - ps) / performedTravel
+                let delta = observed - expected
+                squaredErrors.append(delta * delta)
+            }
+            let rms = sqrt(squaredErrors.reduce(0, +) / Double(squaredErrors.count))
+            guard rms.isFinite else { return ([], [.nonFiniteMeasurement]) }
+            measurements.append(Measurement(kind: .sampledShape, targetID: target.subdivisions[i].id,
+                performedID: performed.subdivisions[i].id, expected: 0, observed: rms,
+                signedError: rms, tolerance: configuration.normalizedShapeRMSTolerance,
+                unit: .normalizedPosition, detail: "Sampled normalized shape RMS: \(String(format: "%.4f", rms)).",
+                isWithinTolerance: rms <= configuration.normalizedShapeRMSTolerance))
+            if i < performed.internalHolds.count {
+                guard let holdPosition = performed.internalHolds[i].position else {
+                    return (measurements, [.missingCurve])
+                }
+                let before = pc.points.last!.position
+                let after = performedCurves[i + 1].points.first!.position
+                let gap = max(abs(holdPosition - before), abs(after - holdPosition)) / abs(performedTravel)
+                guard gap.isFinite else { return ([], [.nonFiniteMeasurement]) }
+                measurements.append(Measurement(kind: .continuity, targetID: target.internalHolds[i].id,
+                    performedID: performed.internalHolds[i].id, expected: 0, observed: gap,
+                    signedError: gap, tolerance: configuration.normalizedContinuityTolerance,
+                    unit: .normalizedPosition, detail: "Normalized discontinuity at hold: \(String(format: "%.6f", gap)).",
+                    isWithinTolerance: gap <= configuration.normalizedContinuityTolerance))
+            }
+        }
+        return (measurements, [])
+    }
+
+    private static func interpolate(_ points: [Record.CurvePoint], at time: Double) -> Double {
+        guard let first = points.first, let last = points.last else { return .nan }
+        if time <= first.time { return first.position }
+        if time >= last.time { return last.position }
+        var lower = 0, upper = points.count - 1
+        while upper - lower > 1 {
+            let middle = lower + (upper - lower) / 2
+            if points[middle].time <= time { lower = middle } else { upper = middle }
+        }
+        let a = points[lower], b = points[upper]
+        return a.position + (b.position - a.position) * ((time - a.time) / (b.time - a.time))
+    }
+
+    /// Only bounded, previously validated measured intervals can establish
+    /// absence of a requested transition. Edges never fill uncovered time.
+    private static func faderCovers(_ record: Record, from lower: Double, to upper: Double) -> Bool {
+        guard lower.isFinite, upper.isFinite, upper >= lower else { return false }
+        var cursor = lower
+        for interval in record.faderIntervals {
+            if interval.span.endTime <= cursor { continue }
+            if interval.span.startTime > cursor { return false }
+            cursor = interval.span.endTime
+            if cursor >= upper { return true }
+        }
+        return false
+    }
+
+    private static func semanticErrors(for dimensions: [Dimension]) -> [SemanticError] {
+        dimensions.flatMap { dimension in
+            dimension.measurements.compactMap { measurement -> SemanticError? in
+                guard measurement.isWithinTolerance == false else { return nil }
+                let kind: SemanticError.Kind
+                let family: SemanticError.Family
+                switch measurement.kind {
+                case .direction: kind = .wrongDirection; family = .platter
+                case .missingGesture: kind = .missedMovement; family = .platter
+                case .extraGesture: kind = .movementTooLong; family = .platter
+                case .holdCount:
+                    kind = (measurement.signedError ?? 0) < 0 ? .missingTearHold : .extraTearHold
+                    family = .platter
+                case .holdOnset, .holdRelease:
+                    kind = (measurement.signedError ?? 0) < 0 ? .tearHoldEarly : .tearHoldLate
+                    family = .timing
+                case .subdivisionRatio: kind = .subdivisionRatioMismatch; family = .platter
+                case .continuity, .sampledShape: kind = .motionShapeMismatch; family = .platter
+                case .faderState, .missingFader: kind = .missedCut; family = .fader
+                case .extraFader: kind = .extraCut; family = .fader
+                case .faderOffset:
+                    kind = (measurement.signedError ?? 0) < 0 ? .earlyCut : .lateCut
+                    family = .fader
+                case .missingHold, .extraHold, .supportedGestureShare, .interGestureGap: return nil
+                }
+                return SemanticError(family: family, kind: kind, beatPosition: nil,
+                    magnitudeMilliseconds: measurement.unit == .milliseconds ? measurement.signedError : nil,
+                    expected: dimension.axis.title + ": follow the explicitly selected authored target.",
+                    performed: measurement.detail)
+            }
         }
     }
 }
