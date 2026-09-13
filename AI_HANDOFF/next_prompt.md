@@ -1,4 +1,18 @@
-# Current — continue TestFlight upload after Karl signs in (13 September 2026)
+# Current — finish beta review and Mac upload (13 September 2026, evening)
+
+1. Read `docs/cxl_delivery.md`.
+2. Read `/Users/karlwatson/Developer/ScratchLab-CXL-Handoff-20260913/NEXT_STEPS_AFTER_SIGN_IN.md`.
+3. iPhone/Watch build 23 (ASC build `6c121fee-cf50-4f6e-91a6-60745a19dff6`) is processed `VALID`; external state `READY_FOR_BETA_SUBMISSION`.
+4. API key M6C29AZTW5 can read and upload only. Ask Karl whether he has done the website steps, signed in to Xcode, or provided an Admin key `.p8` on this Mac. Never request secrets in chat.
+5. Then confirm the Watch app in build metadata.
+6. Create a new external group without testers or public link (not "Pro DJs"), add build 23 and submit for review.
+7. Register the CXL bundle ID and confirm the app record exists.
+8. Export and upload the Mac archive (build 21), complete its beta info and submit for review.
+9. Do not invite testers or publish.
+
+--- Previous state (historical) ---
+
+# Continue TestFlight upload after Karl signs in (13 September 2026)
 
 1. Read `docs/cxl_delivery.md`.
 2. Read `/Users/karlwatson/Developer/ScratchLab-CXL-Handoff-20260913/NEXT_STEPS_AFTER_SIGN_IN.md`.

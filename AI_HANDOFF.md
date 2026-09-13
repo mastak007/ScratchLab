@@ -1,4 +1,19 @@
-# Current — TestFlight route prepared, blocked on Apple sign-in (13 September 2026)
+# Current — iPhone build 23 uploaded and processed; beta review and Mac blocked by key permissions (13 September 2026)
+
+- **API authentication:** key M6C29AZTW5 with issuer 69a6de87-9884-47e3-e053-5b8c7c11a4d1 authenticates. It can read, validate and upload. Apple refuses bundle ID registration, cloud signing and TestFlight writes (no-op PATCH betaAppReviewDetails returned 403). Karl offered key WA9BQB34S6, but no .p8 for it exists on this Mac. The API cannot create app records.
+- **iPhone build 23:** ASC already had iOS 1.0.1 build 22 (2026-09-03), so iPhone/Watch was re-archived as build 23 with stable Xcode 26.6. It was exported offline with the existing Store profiles and verified: both bundles 23, Apple Distribution, get-task-allow false, 169/169 assets. It validated and uploaded with altool (5.3 h).
+  - ASC build and delivery ID 6c121fee-cf50-4f6e-91a6-60745a19dff6.
+  - Processing VALID, non-exempt encryption false, expires 2026-12-11.
+  - External READY_FOR_BETA_SUBMISSION, NOT submitted.
+  - Internal IN_BETA_TESTING: auto-added to the existing internal group.
+  - The API lists only the iPhone bundle, so confirm the Watch app in the ASC build metadata.
+- **Mac:** archive ready; no bundle ID, profile or app record. Needs an Admin-capable sign-in or website steps.
+- **Next steps and evidence:** the external NEXT_STEPS_AFTER_SIGN_IN.md lists every remaining click. Do not add CXL builds to the existing "Pro DJs" external group, which has a public link enabled. No external group, beta review submission or invitation exists.
+- **Disk:** about 8.7 GB free; this session's temporary caches and IPA extraction were removed.
+
+--- Previous state (historical) ---
+
+# TestFlight route prepared, blocked on Apple sign-in (13 September 2026)
 
 Karl switched the Mac to TestFlight; the Developer ID plan is superseded. He is away (Remote Control on iPhone) and has not signed in to Apple. Nothing has been uploaded, no app record created, no beta review submitted and no testers invited.
 

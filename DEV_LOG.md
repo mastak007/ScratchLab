@@ -5330,3 +5330,34 @@ External files:
 - the updated package PDF (old PDF kept)
 
 No app source changed; no XCTest gate needed for docs/packaging. Temporary Mac build caches were removed; archive and logs retained. Installed app and blank capture library unchanged.
+
+## iPhone/Watch build 23 uploaded and processed via API key; beta review and Mac blocked — 13 September 2026
+
+Karl supplied issuer ID 69a6de87-9884-47e3-e053-5b8c7c11a4d1 for local API key M6C29AZTW5.
+
+Key permissions:
+- **Allowed:** reads, validate and upload.
+- **Forbidden (403):** bundle ID registration, Xcode cloud signing/profile creation, and TestFlight writes (no-op PATCH).
+- Offered key WA9BQB34S6 has no .p8 on this Mac.
+- App records cannot be created via the API.
+
+Existing ASC state:
+- App 6761674709 already had iOS 1.0.1 build 22, so the prepared build 22 IPA was left unchanged.
+- The existing beta review contact and feedback email are set.
+- The external "Pro DJs" group has a public link and must not receive CXL builds.
+
+Build 23:
+- Re-archived as build 23 with stable Xcode 26.6 (command-line CURRENT_PROJECT_VERSION=23; source differs from dcd7a76 only in docs).
+- Exported offline with the existing Store profiles.
+- Verified iPhone+Watch 1.0.1 (23), Apple Distribution, get-task-allow false, 169/169 assets.
+- altool validate and upload succeeded; ASC build 6c121fee-cf50-4f6e-91a6-60745a19dff6.
+- Processing VALID, encryption false, external READY_FOR_BETA_SUBMISSION (not submitted), internal IN_BETA_TESTING (auto-added to existing internal group).
+- The ASC API lists only the iPhone bundle, so Watch presence in the processed build still needs confirmation in the ASC UI.
+
+Mac export with the key failed with "Cloud signing permission error"; bundle ID registration is forbidden. The archive remains ready.
+
+Files changed: docs/cxl_delivery.md, DEV_LOG.md, AI_HANDOFF.md, AI_HANDOFF/next_prompt.md.
+
+External files: ios-build23 scripts/logs/receipt, NEXT_STEPS_AFTER_SIGN_IN.md.
+
+No source change; no XCTest gate for packaging. Temporary caches and IPA extraction were removed; disk about 8.7 GB free. No external group, beta review submission or invitation.
