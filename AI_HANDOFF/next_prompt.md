@@ -1,27 +1,5 @@
-# Current — continue TestFlight upload after Karl signs in (13 September 2026)
+# Continue CXL timing repair and Cloud setup
 
-1. Read `docs/cxl_delivery.md`.
-2. Read `/Users/karlwatson/Developer/ScratchLab-CXL-Handoff-20260913/NEXT_STEPS_AFTER_SIGN_IN.md`.
-3. First confirm Karl has signed in to Xcode 26.6 and App Store Connect on Apple's screens. Never request credentials, codes, private keys or tokens in chat.
-4. Inspect the existing ScratchLab record's builds before uploading iPhone build 22.
-5. Create the separate ScratchLab CXL macOS record only if none exists.
-6. Export and upload `archives/ScratchLab-CXL-Mac.xcarchive` with `mac-testflight/evidence/ExportOptions-mac-upload.plist`, using automatic signing and `DEVELOPER_DIR` set to stable Xcode.
-7. Verify processing, including that the Watch app is present in the iPhone build.
-8. Enter the text from `TESTFLIGHT_BETA_INFO_APPROVED.md` and submit external Beta App Review.
-9. Do not invite testers or publish.
+Read AI_HANDOFF.md and git status first. Timing fix worktree: /Users/karlwatson/Developer/ScratchLab-CXL-Timing-Fix-20260913/source. Full selected gate passed: Python87;430unique XCTest cases across2configurations,856pass4skip0fail; all four platform builds pass. Candidate staged with stable Apple signing under ../staged; installed app unchanged. Preserve prior app and captures before installation, never interrupt a recording. Fresh physical capture/late Watch check remains required. Independent Claude audit snapshot is separate and must not be overwritten.
 
---- Previous state (historical) ---
-
-# CXL delivery preparation, Apple setup pending (13 September 2026)
-
-User wants the CXL Mac app plus iPhone/Watch distribution and a one-page guide. Prepared root /Users/karlwatson/Developer/ScratchLab-CXL-Handoff-20260913. Read docs/cxl_delivery.md and that root's RESULT.md first. One-page PDF is package/ScratchLab CXL Quick Start.pdf. Mac internal pilot ZIP is Development signed only; no Developer ID certificate exists in the current keychain, no notarization. Installed blank Mac app untouched.
-
-Successful stable Xcode26.6 iPhone+embedded Watch archive at archives/ScratchLab-iOS-Watch.xcarchive and Apple Distribution export at testflight-export/ScratchLab.ipa. Both version1.0.1/build22 (candidate; not checked against ASC), minimum iOS26.5/watchOS10. Signatures/profile entitlements verified, get-task-allow=false, no registered-device restriction. All169 library assets match in Mac/archive/export; Mac ZIP CRC and included guide verified. App source remains dcd7a7686575c2d7ca505677d8eb9130d60aa3d3; only documentation is changed this turn. No repeated broad tests or hardware acceptance claim.
-
-Next: user signs in to Apple in the opened App Store Connect browser tab (last seen login); confirm existing app/build versions and beta account fields; obtain CXL's tester email and Mac/iPhone/Watch models/OS versions; upload and required external review/invitation; finish proper Developer ID Mac signing/hardened runtime/notarization. Current stage_cxl_mac.py uses a WWDR development requirement, so do not blindly feed it a Developer ID certificate. Enter credentials only on Apple pages. No upload, group, invitation, notarization or external send occurred. Existing user commit/push authorization applies; source docs checkpoint separately from artifact source hash. Preserve prior actual-rig limitations.
-
-Evidence includes archive/export scripts/options and failures: use command-local -IDEBuildLocationStyle=Unique with isolated derivedDataPath for archives; global Xcode Custom paths caused first assembly failure. Export signing must be automatic for the existing Xcode-managed Store profiles; manual mapping was rejected. Temporary build/extraction/failed archive copies were cleaned after verification; final archives/packages/logs remain. Browser tab was handed off for sign-in; do not request passwords/OTP in chat.
-
---- Previous state (historical; current record above takes precedence) ---
-
-Continue the user-selected delivery setup after the required Apple sign-in or device details arrive. Do not restart the dataset audit/rebuild or run broad tests for documentation. Use the prepared archive/IPA and one-page guide. Keep Mac and companion install states truthful and preserve the blank capture library. Read the full current handoff and docs/cxl_delivery.md before changing signing or uploading.
+Latest task: set up Xcode Cloud in a separate branch/worktree. ASC API works; ciProducts empty. Initial setup requires native Xcode. GitHub mastak007/ScratchLab is PUBLIC; ignored ReferenceExamples must use private cloud-accessible dependency storage, never public media commits. Do not upload stale TestFlight artifacts as though they contain this repair. No full-suite or physical success claim.

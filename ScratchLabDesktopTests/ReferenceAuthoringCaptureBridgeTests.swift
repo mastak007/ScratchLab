@@ -927,6 +927,24 @@ final class ReferenceAuthoringCaptureBridgeTests: XCTestCase {
         XCTAssertFalse(evidence.isLinked)
     }
 
+    func testSentWatchStopRemainsPendingUntilMatchingReplyAndFileArrive() {
+        let identity = TakeIdentity(sessionID: "session-a", takeID: "take-001", takeNumber: 1)
+        let sent = makeSidecar(watchSyncState: .acknowledged, linkedMotionCaptureID: nil,
+            stopDiagnostics: CaptureWatchStopDiagnostics(outcome: .sent,
+                sessionID: identity.sessionID, takeID: identity.takeID,
+                motionTransferState: .pending))
+        let pending = ReferenceAuthoringCaptureBridge.watchEvidence(in: sent, expectedIdentity: identity)
+        XCTAssertEqual(pending, .acknowledgedTransferPending)
+        XCTAssertFalse(pending.isTerminal)
+        let landed = makeSidecar(watchSyncState: .acknowledged, linkedMotionCaptureID: UUID(),
+            linkedMotionFileName: "watch.json", stopDiagnostics: makeStopDiagnostics(transfer: .completed))
+        XCTAssertEqual(ReferenceAuthoringCaptureBridge.watchEvidence(in: landed, expectedIdentity: identity),
+            .linked(motionFileName: "watch.json"))
+        let wrong = TakeIdentity(sessionID: "other-session", takeID: "take-001", takeNumber: 1)
+        guard case .identityMismatch = ReferenceAuthoringCaptureBridge.watchEvidence(in: sent, expectedIdentity: wrong)
+        else { return XCTFail("Pending Stop must not bypass take identity.") }
+    }
+
     func testAMatchingTransferThatLandsBecomesLinked() {
         let identity = TakeIdentity(sessionID: "session-a", takeID: "take-001", takeNumber: 1)
         let evidence = ReferenceAuthoringCaptureBridge.watchEvidence(

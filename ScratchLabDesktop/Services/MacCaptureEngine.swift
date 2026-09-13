@@ -4681,15 +4681,28 @@ final class MacCaptureEngine: NSObject, ObservableObject {
     private var movementTraceRecordingStartHostTime: Double = 0
     #endif
 
-    /// Single confirmed media-start epoch for the active routine take.
-    ///
-    /// `AVCaptureMovieFileOutput.startRecording(to:)` returns long before the
-    /// first sample buffer is written — on a cold camera the gap is close to a
-    /// second. Anchoring the take timeline at the *request* therefore offsets
-    /// every movement, platter, and MIDI event from the media by that gap, and
-    /// makes the "recording duration" include camera and writer startup. This
-    /// is stamped once, in `didStartRecordingTo`, and every take-relative clock
-    /// is rebased onto it.
+    // The movie delegate has the same Objective-C selector as the data-output
+    // delegate but a different Swift signature, so it needs a small adapter.
+    private final class RoutineMovieStartDelegate: NSObject, AVCaptureFileOutputDelegate {
+        weak var owner: MacCaptureEngine?
+        init(owner: MacCaptureEngine) { self.owner = owner }
+        func fileOutputShouldProvideSampleAccurateRecordingStart(_ output: AVCaptureFileOutput) -> Bool { true }
+        func fileOutput(_ output: AVCaptureFileOutput, didOutputSampleBuffer sampleBuffer: CMSampleBuffer,
+                        from connection: AVCaptureConnection) {
+            owner?.processRoutineMovieSample(output, sampleBuffer: sampleBuffer, from: connection)
+        }
+    }
+    private lazy var routineMovieStartDelegate = RoutineMovieStartDelegate(owner: self)
+
+    /// The first movie sample's host timestamp, never delegate arrival time.
+    /// The file-output sample callback claims a prepared take under this lock.
+    private struct PendingRoutineMediaStart {
+        let mediaURL: URL
+        let recordingToken: RoutineRecordingRequestToken
+        let midiTakeToken: MIDICaptureTakeToken
+        let plannedStartHostTime: Double?
+    }
+    private var pendingRoutineMediaStart: PendingRoutineMediaStart?
     private let routineMediaEpochLock = NSLock()
     private var routineMediaStartHostTimeStorage: CFTimeInterval = 0
     /// Longest the active take may run. A safety cap unless the operator chose
@@ -4775,18 +4788,6 @@ final class MacCaptureEngine: NSObject, ObservableObject {
         }
         if captureErrorDescription != nil { return .captureError }
         return noted ?? .manual
-    }
-
-    /// Stamps the confirmed media-start epoch and returns it together with the
-    /// requested take length.
-    private func beginRoutineMediaEpoch(
-        at hostTime: CFTimeInterval
-    ) -> (mediaStart: CFTimeInterval, maximumDuration: Double) {
-        routineMediaEpochLock.lock()
-        routineMediaStartHostTimeStorage = hostTime
-        let maximum = routineMaximumTakeDurationSecondsStorage
-        routineMediaEpochLock.unlock()
-        return (hostTime, maximum)
     }
 
     private func endRoutineMediaEpoch() {
@@ -5037,7 +5038,7 @@ final class MacCaptureEngine: NSObject, ObservableObject {
     }
 
     /// Rebases every take-relative clock onto the confirmed media-start epoch
-    /// and schedules the backstop stop. Called from `didStartRecordingTo` only.
+    /// and establishes the common clock at the first movie sample.
     private func beginRoutineTakeTimelines(
         at mediaStartHostTime: CFTimeInterval,
         token: RoutineRecordingRequestToken? = nil,
@@ -5087,7 +5088,8 @@ final class MacCaptureEngine: NSObject, ObservableObject {
         routineTimedStopWorkItem?.cancel()
         routineTimedStopWorkItem = workItem
         routineMediaEpochLock.unlock()
-        sessionQueue.asyncAfter(deadline: .now() + deadline, execute: workItem)
+        let remaining = max(0, mediaStartHostTime + deadline - CACurrentMediaTime())
+        sessionQueue.asyncAfter(deadline: .now() + remaining, execute: workItem)
     }
     #if DEBUG
     /// Frozen at take finalization; drained by the export companion writer so a
@@ -5464,6 +5466,7 @@ final class MacCaptureEngine: NSObject, ObservableObject {
     }
 
     private func configureInitialState() {
+        movieOutput.delegate = routineMovieStartDelegate
         scratchPrimaryOutput = midiPersistenceDefaults.string(forKey: ScratchLabDesktopDefaultsKey.scratchPrimaryOutput)
             .flatMap(ScratchPrimaryOutput.init(rawValue:)) ?? .rane
         scratchPlaybackController.routineOutputLevelHandler = { [weak self] level in
@@ -5999,6 +6002,28 @@ final class MacCaptureEngine: NSObject, ObservableObject {
         for token: RoutineRecordingRequestToken,
         reason: CaptureStopReason = .manual
     ) -> RoutineRecordingStopRequestDisposition {
+        if let state = routineRecordingBoundaryLedger.snapshot(for: token),
+           !state.didStartRecording, state.completion == nil {
+            routineMediaEpochLock.lock()
+            if routineMediaStartHostTimeStorage > 0,
+               let mediaURL = state.mediaURL, midiTakeToken(for: mediaURL) != nil {
+                routineMediaEpochLock.unlock()
+                stopRoutineRecording(reason: reason)
+                return .accepted
+            }
+            let pending = pendingRoutineMediaStart?.recordingToken == token ? pendingRoutineMediaStart : nil
+            if pending != nil { pendingRoutineMediaStart = nil }
+            routineRecordingBoundaryLedger.failStart(token: token,
+                description: "Recording was cancelled before the first camera sample.")
+            routineMediaEpochLock.unlock()
+            if let pending {
+                scratchPlaybackController.cancelRoutineOutputCapture()
+                releaseAbandonedTakeMIDIWindow(token: pending.midiTakeToken)
+                requestWatchStopIfNeeded(reason: reason)
+                Task { @MainActor in self.isRoutineRecording = false }
+            }
+            return .rejected("Recording start was cancelled.")
+        }
         let disposition = routineRecordingBoundaryLedger.requestStop(token: token)
         if disposition == .accepted {
             stopRoutineRecording(reason: reason)
@@ -6071,7 +6096,7 @@ final class MacCaptureEngine: NSObject, ObservableObject {
         let selectedAudioID = selectedAudioDeviceUniqueID
         let audioDevices = availableAudioDevices
         let videoDevices = availableVideoDevices
-        // Resolved here but consumed only from `didStartRecordingTo`: camera
+        // Resolved here and consumed at the first movie sample: camera
         // and writer startup must not eat into the take. The plan and the cap
         // are tracked apart so a take that runs to the bound can say which one
         // it hit.
@@ -6227,10 +6252,10 @@ final class MacCaptureEngine: NSObject, ObservableObject {
                 // before this point must release nothing, or a failed start
                 // would destroy a previous stopped-but-undrained take.
                 midiTakeToken = self.openMIDIInputForRecording(mediaURL: preparedRecording.mediaURL)
-                guard midiTakeToken != nil else { throw RoutineRecordingError.sessionNotReady }
+                guard let preparedMIDIToken = midiTakeToken else { throw RoutineRecordingError.sessionNotReady }
                 // Phase 3.1 — discard any stale timeline from a previous take.
                 // The recorder is deliberately left *disarmed* until
-                // `didStartRecordingTo`: samples observed while the writer is
+                // the first movie sample: observations while the writer is
                 // still starting are not in the media, and `observe(...)`
                 // silently ignores calls outside an active recording.
                 self.platterRecorderLock.lock()
@@ -6271,16 +6296,27 @@ final class MacCaptureEngine: NSObject, ObservableObject {
                 // debugLastROI intentionally left alone — it will be
                 // updated on the next analyzed frame.
                 #endif
-                // Measured in recorded media time, so camera/writer startup
-                // cannot consume any of the take. This is the primary take
-                // boundary; the wall-clock backstop armed in
-                // `didStartRecordingTo` only covers the case where AVFoundation
-                // never reaches it.
-                self.movieOutput.maxRecordedDuration = CMTime(
-                    seconds: maximumTakeDurationSeconds,
-                    preferredTimescale: 600
+                // Capture genuine PCM before the first movie sample. The
+                // timestamped prefix is removed at finalization, not exported
+                // as part of the take. Count-in provides preparation time.
+                try self.scratchPlaybackController.beginRoutineOutputCapture(
+                    destinationURL: preparedRecording.audioURL,
+                    maximumDurationSeconds: maximumTakeDurationSeconds + 15
                 )
-                self.movieOutput.startRecording(to: preparedRecording.mediaURL, recordingDelegate: self)
+                self.routineMediaEpochLock.lock()
+                if self.routineRecordingBoundaryLedger.snapshot(for: recordingToken)?.startFailureDescription != nil {
+                    self.routineMediaEpochLock.unlock()
+                    throw RoutineRecordingError.sessionNotReady
+                }
+                self.pendingRoutineMediaStart = PendingRoutineMediaStart(
+                    mediaURL: preparedRecording.mediaURL,
+                    recordingToken: recordingToken,
+                    midiTakeToken: preparedMIDIToken,
+                    plannedStartHostTime: captureTiming?.recordingStartHostTime.map {
+                        AVAudioTime.seconds(forHostTime: $0)
+                    }
+                )
+                self.routineMediaEpochLock.unlock()
             } catch {
                 self.scratchPlaybackController.cancelRoutineOutputCapture()
                 // Arming may already have seized the MIDI window; this take
@@ -6316,6 +6352,16 @@ final class MacCaptureEngine: NSObject, ObservableObject {
         // possible; it is bounded and asynchronous, so it never delays the
         // recorder. Idempotent, so finalization asking again costs nothing.
         requestWatchStopIfNeeded(reason: reason)
+        routineMediaEpochLock.lock()
+        let cancelledStart = pendingRoutineMediaStart
+        pendingRoutineMediaStart = nil
+        routineMediaEpochLock.unlock()
+        if let cancelledStart {
+            scratchPlaybackController.cancelRoutineOutputCapture()
+            releaseAbandonedTakeMIDIWindow(token: cancelledStart.midiTakeToken)
+            routineRecordingBoundaryLedger.failStart(token: cancelledStart.recordingToken,
+                description: "Recording stopped before the camera and audio were ready.")
+        }
         sessionQueue.async {
             guard self.movieOutput.isRecording else {
                 Task { @MainActor in
@@ -14177,41 +14223,52 @@ extension MacCaptureEngine: AVCaptureVideoDataOutputSampleBufferDelegate, AVCapt
     }
 }
 
+extension MacCaptureEngine {
+    private func processRoutineMovieSample(_ output: AVCaptureFileOutput, sampleBuffer: CMSampleBuffer,
+                       from connection: AVCaptureConnection) {
+        guard connection.inputPorts.contains(where: { $0.mediaType == .video }),
+              let clock = captureSession.synchronizationClock,
+              let firstAudio = scratchPlaybackController.routineOutputCaptureFirstHostTime else { return }
+        let pts = CMSampleBufferGetPresentationTimeStamp(sampleBuffer)
+        let hostTime = CMTimeGetSeconds(CMSyncConvertTime(pts, from: clock, to: CMClockGetHostTimeClock()))
+        guard hostTime.isFinite, hostTime >= firstAudio else { return }
+        routineMediaEpochLock.lock()
+        defer { routineMediaEpochLock.unlock() }
+        guard let pending = pendingRoutineMediaStart else { return }
+        // A short, real camera preroll keeps beat 4 inside the media, including
+        // at low frame rates. Its measured offset is persisted and exported.
+        if let planned = pending.plannedStartHostTime, hostTime < planned - 0.15 { return }
+        pendingRoutineMediaStart = nil
+        routineMediaStartHostTimeStorage = hostTime
+        let duration = Self.routineMediaDuration(maximum: routineMaximumTakeDurationSecondsStorage,
+            plannedStart: pending.plannedStartHostTime, actualStart: hostTime)
+        routineMaximumTakeDurationSecondsStorage = duration
+        if var timing = activeRoutineRecordingSidecar?.captureTiming,
+           let click = timing.clickStartHostTime {
+            timing.recordingStartHostTime = AVAudioTime.hostTime(forSeconds: hostTime)
+            timing.recordingStartOffsetSeconds = hostTime - AVAudioTime.seconds(forHostTime: click)
+            activeRoutineRecordingSidecar?.captureTiming = timing
+        }
+        beginRoutineTakeTimelines(at: hostTime, token: pending.recordingToken,
+            midiTakeToken: pending.midiTakeToken)
+        secondaryCamera.begin(primaryURL: pending.mediaURL, epoch: hostTime)
+        output.maxRecordedDuration = CMTime(seconds: duration, preferredTimescale: 60000)
+        output.startRecording(to: pending.mediaURL, recordingDelegate: self)
+    }
+
+    static func routineMediaDuration(maximum: Double, plannedStart: Double?, actualStart: Double) -> Double {
+        // Preserve the musical end boundary when the first frame falls before
+        // or after the requested beat. Never extend the backing performance.
+        max(0.001, maximum + (plannedStart.map { $0 - actualStart } ?? 0))
+    }
+}
+
 extension MacCaptureEngine: AVCaptureFileOutputRecordingDelegate {
     nonisolated func fileOutput(_ output: AVCaptureFileOutput, didStartRecordingTo fileURL: URL, from connections: [AVCaptureConnection]) {
-        // AVFoundation has confirmed the first sample buffer is being written.
-        // This — not `startRecording(to:)` — is take-relative zero for every
-        // capture source, and the instant the requested take length starts
-        // counting down.
-        // The generation this exact media start belongs to. Correlating the
-        // take-start control state with it is what stops a snapshot observed
-        // for one take being adopted by the next.
-        guard let midiTakeToken = midiTakeToken(for: fileURL) else { return }
-        let startedToken = routineRecordingBoundaryLedger.didStartRecording(mediaURL: fileURL)
-        let epoch = beginRoutineMediaEpoch(at: CACurrentMediaTime())
-        secondaryCamera.begin(primaryURL: fileURL, epoch: epoch.mediaStart)
-        beginRoutineTakeTimelines(at: epoch.mediaStart, token: startedToken, midiTakeToken: midiTakeToken)
-        if let audioURL = pendingRoutineOutputAudioURL {
-            do {
-                try scratchPlaybackController.beginRoutineOutputCapture(
-                    destinationURL: audioURL
-                )
-            } catch {
-                pendingRoutineOutputAudioURL = nil
-                noteRoutineStopReason(.captureError)
-                endRoutineMediaEpoch()
-                let message = error.localizedDescription
-                Task { @MainActor in
-                    self.reportRoutineRecordingIssue(message)
-                }
-                output.stopRecording()
-                return
-            }
-        }
-        scheduleRoutineTimedStop(
-            mediaStartHostTime: epoch.mediaStart,
-            maximumDurationSeconds: epoch.maximumDuration
-        )
+        guard midiTakeToken(for: fileURL) != nil else { return }
+        _ = routineRecordingBoundaryLedger.didStartRecording(mediaURL: fileURL)
+        scheduleRoutineTimedStop(mediaStartHostTime: routineMediaStartHostTime,
+            maximumDurationSeconds: routineMaximumTakeDurationSeconds)
         Task { @MainActor in
             self.isRoutineRecording = true
             self.routineRecordingStatus = "Recording \(fileURL.lastPathComponent)"
@@ -14223,7 +14280,7 @@ extension MacCaptureEngine: AVCaptureFileOutputRecordingDelegate {
         // timeline closes here for MIDI, movement, platter, and the onboard
         // audio tap alike.
         guard let midiTakeToken = midiTakeToken(for: outputFileURL) else { return }
-        secondaryCamera.end(primaryURL: outputFileURL, hostTime: CACurrentMediaTime())
+        let mediaStart = routineMediaStartHostTime
         endRoutineMediaEpoch()
         closeMIDIRecordingWindow(token: midiTakeToken)
         pendingRoutineOutputAudioURL = nil
@@ -14232,54 +14289,64 @@ extension MacCaptureEngine: AVCaptureFileOutputRecordingDelegate {
             self.activeRoutineAudioCaptureWriter = nil
             self.publishRoutineAudioCaptureDiagnostics(snapshot)
         }
-        scratchPlaybackController.finishRoutineOutputCapture { [weak self] outcome in
-            guard let self else { return }
-            let finalError: Error?
-            switch outcome {
-            case let .exported(audioURL, frames, sampleRate, samples):
-                self.activeRoutineAudioNotationDetector?.process(
-                    samples: samples,
-                    sampleRate: sampleRate
-                )
-                Task { @MainActor in
-                    self.onboardOutputCaptureStatus = "Captured \(frames) onboard AHHH frames for this take."
-                    let second = await self.secondaryCamera.finish(primaryURL: outputFileURL, audioURL: audioURL)
-                    let muxError: Error?
-                    do {
-                        try await RoutineReviewMovieMuxer.replaceAudioTrack(
-                            videoURL: outputFileURL,
-                            onboardAudioURL: audioURL
+        Task {
+            // Read the closed original movie, before replacing its audio.
+            // File-output state may already have reset after didFinish.
+            let duration = try? await AVURLAsset(url: outputFileURL).load(.duration)
+            let mediaDuration = duration?.seconds ?? .nan
+            secondaryCamera.end(primaryURL: outputFileURL, hostTime: mediaStart + mediaDuration)
+            scratchPlaybackController.finishRoutineOutputCapture(
+                mediaStartHostTime: mediaStart,
+                mediaDurationSeconds: mediaDuration
+            ) { [weak self] outcome in
+                guard let self else { return }
+                let finalError: Error?
+                switch outcome {
+                case let .exported(audioURL, frames, sampleRate, samples):
+                    self.activeRoutineAudioNotationDetector?.process(
+                        samples: samples,
+                        sampleRate: sampleRate
+                    )
+                    Task { @MainActor in
+                        self.onboardOutputCaptureStatus = "Captured \(frames) onboard AHHH frames for this take."
+                        let second = await self.secondaryCamera.finish(primaryURL: outputFileURL, audioURL: audioURL)
+                        let muxError: Error?
+                        do {
+                            try await RoutineReviewMovieMuxer.replaceAudioTrack(
+                                videoURL: outputFileURL,
+                                onboardAudioURL: audioURL
+                            )
+                            muxError = nil
+                        } catch {
+                            muxError = error
+                        }
+                        self.finalizeRoutineRecording(
+                            outputFileURL: outputFileURL,
+                            error: muxError ?? error,
+                            midiTakeToken: midiTakeToken,
+                            secondaryCamera: second
                         )
-                        muxError = nil
-                    } catch {
-                        muxError = error
                     }
+                    return
+                case .empty:
+                    finalError = ScratchSamplePlaybackController.RoutineOutputCaptureError.emptyCapture
+                case .notArmed:
+                    finalError = ScratchSamplePlaybackController.RoutineOutputCaptureError.playbackEngineNotRunning
+                case let .error(captureError):
+                    finalError = captureError
+                }
+
+                Task { @MainActor in
+                    let second = await self.secondaryCamera.finish(primaryURL: outputFileURL, audioURL: nil)
+                    // finalizeRoutineRecording returns immediately and schedules
+                    // its second half through the admission gate.
                     self.finalizeRoutineRecording(
                         outputFileURL: outputFileURL,
-                        error: error ?? muxError,
+                        error: finalError,
                         midiTakeToken: midiTakeToken,
                         secondaryCamera: second
                     )
                 }
-                return
-            case .empty:
-                finalError = error ?? ScratchSamplePlaybackController.RoutineOutputCaptureError.emptyCapture
-            case .notArmed:
-                finalError = error ?? ScratchSamplePlaybackController.RoutineOutputCaptureError.playbackEngineNotRunning
-            case let .error(captureError):
-                finalError = error ?? captureError
-            }
-
-            Task { @MainActor in
-                let second = await self.secondaryCamera.finish(primaryURL: outputFileURL, audioURL: nil)
-                // finalizeRoutineRecording returns immediately and schedules
-                // its second half through the admission gate.
-                self.finalizeRoutineRecording(
-                    outputFileURL: outputFileURL,
-                    error: finalError,
-                    midiTakeToken: midiTakeToken,
-                    secondaryCamera: second
-                )
             }
         }
     }

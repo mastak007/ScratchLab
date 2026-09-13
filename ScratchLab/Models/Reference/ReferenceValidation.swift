@@ -150,7 +150,7 @@ enum ReferenceValidationFinding: Equatable, Sendable {
         case .watchEvidenceStateInconsistent:
             return "Watch evidence and its recorded source state disagree. Resolve the source identity before approval."
         case .watchEvidenceTransferPending:
-            return "The Apple Watch acknowledged and stopped for this take, but its motion file has not finished transferring yet. Wait for the transfer to complete; approval stays blocked until the matching wrist evidence has landed."
+            return "The Apple Watch acknowledged this take. Waiting for its Stop reply and matching motion file; no completed wrist evidence is claimed yet."
         case .watchEvidenceTransferFailed(let detail):
             return "The Apple Watch motion transfer for this take did not complete: \(detail) Re-record with the Watch capture running."
         case .watchEvidenceIdentityMismatch(let expected, let found):

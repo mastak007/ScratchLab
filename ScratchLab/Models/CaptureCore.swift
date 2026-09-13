@@ -12493,7 +12493,7 @@ enum CaptureCore {
         let videoDeviceName: String?
         let audioDeviceUniqueID: String?
         let audioDeviceName: String?
-        let captureTiming: CaptureTimingMetadata?
+        var captureTiming: CaptureTimingMetadata?
         let startedAt: Date
         var endedAt: Date?
         var recordingStatus: String

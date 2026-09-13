@@ -151,6 +151,16 @@ final class ScratchSamplePlaybackController {
     private var routineOutputCaptureArmed = false
     private var routineOutputCaptureRate: Double = 44_100
     private var routineOutputCaptureDestinationURL: URL?
+    private let routineCaptureClockLock = NSLock()
+    private var routineCaptureFirstHostTime: Double?
+    private var routineCaptureNextSampleTime: AVAudioFramePosition?
+    private var routineCaptureHasClockGap = false
+
+    var routineOutputCaptureFirstHostTime: Double? {
+        routineCaptureClockLock.lock()
+        defer { routineCaptureClockLock.unlock() }
+        return routineCaptureFirstHostTime
+    }
     private var routineOutputMeterFrames = 0
     private let routineOutputCaptureExportQueue = DispatchQueue(
         label: "com.scratchlab.controller.routineOutputCapture",
@@ -165,6 +175,7 @@ final class ScratchSamplePlaybackController {
         case invalidMixerFormat
         case emptyCapture
         case outputRouteUnavailable(String)
+        case incompleteMediaCoverage
 
         var errorDescription: String? {
             switch self {
@@ -180,6 +191,8 @@ final class ScratchSamplePlaybackController {
                 return "The onboard AHHH recording contained no audio frames."
             case .outputRouteUnavailable(let message):
                 return message
+            case .incompleteMediaCoverage:
+                return "The scratch audio stream did not cover the camera recording continuously. The original camera recording is retained; record another take after checking the audio output."
             }
         }
     }
@@ -251,17 +264,37 @@ final class ScratchSamplePlaybackController {
             routineOutputCaptureRate = sampleRate
             routineOutputCaptureDestinationURL = destinationURL
             routineOutputMeterFrames = 0
+            routineCaptureClockLock.lock()
+            routineCaptureFirstHostTime = nil
+            routineCaptureClockLock.unlock()
+            routineCaptureNextSampleTime = nil
+            routineCaptureHasClockGap = false
 
             engine.mainMixerNode.installTap(
                 onBus: 0,
                 bufferSize: 1024,
                 format: tapFormat
-            ) { [weak self] buffer, _ in
+            ) { [weak self] buffer, when in
                 guard let self,
                       let ring = self.routineOutputCaptureRing,
                       let channels = buffer.floatChannelData else { return }
                 let frameCount = Int(buffer.frameLength)
                 guard frameCount > 0 else { return }
+                if self.routineOutputCaptureWriteFrames == 0 {
+                    self.routineCaptureClockLock.lock()
+                    self.routineCaptureFirstHostTime = when.isHostTimeValid
+                        ? AVAudioTime.seconds(forHostTime: when.hostTime) : nil
+                    self.routineCaptureClockLock.unlock()
+                }
+                if !when.isSampleTimeValid || buffer.format.sampleRate != sampleRate {
+                    self.routineCaptureHasClockGap = true
+                }
+                if let next = self.routineCaptureNextSampleTime,
+                   !when.isSampleTimeValid || when.sampleTime != next {
+                    self.routineCaptureHasClockGap = true
+                }
+                self.routineCaptureNextSampleTime = when.isSampleTimeValid
+                    ? when.sampleTime + AVAudioFramePosition(frameCount) : nil
                 let capacity = self.routineOutputCaptureRingFrames
                 let left = channels[0]
                 let right = buffer.format.channelCount > 1 ? channels[1] : nil
@@ -301,9 +334,14 @@ final class ScratchSamplePlaybackController {
     }
 
     func finishRoutineOutputCapture(
+        mediaStartHostTime: Double? = nil,
+        mediaDurationSeconds: Double? = nil,
         completion: @escaping (RoutineOutputCaptureFinalizeOutcome) -> Void
     ) {
-        audioQueue.async { [weak self] in
+        // Tap delivery is buffered. Retain real trailing samples before
+        // removing the tap, then trim to the camera's exact media interval.
+        // Nothing is padded, stretched, or inferred from silence.
+        audioQueue.asyncAfter(deadline: .now() + (mediaStartHostTime == nil ? 0 : 0.3)) { [weak self] in
             guard let self,
                   self.routineOutputCaptureArmed,
                   let ring = self.routineOutputCaptureRing,
@@ -327,31 +365,62 @@ final class ScratchSamplePlaybackController {
                 return
             }
 
-            let samples = Self.orderedRoutineOutputSamples(
+            var samples = Self.orderedRoutineOutputSamples(
                 ring: ring,
                 capacity: capacity,
                 written: written
             )
             ring.deallocate()
             let sampleRate = self.routineOutputCaptureRate
+            var coverageError: Error?
+            if let mediaStartHostTime, let mediaDurationSeconds {
+                if !self.routineCaptureHasClockGap, written <= capacity,
+                   let first = self.routineOutputCaptureFirstHostTime,
+                   let range = Self.routineCaptureFrameRange(
+                       firstAudioHostTime: first, mediaStartHostTime: mediaStartHostTime,
+                       mediaDurationSeconds: mediaDurationSeconds, sampleRate: sampleRate,
+                       availableFrames: samples.count) {
+                    samples = Array(samples[range])
+                } else {
+                    // Preserve real captured PCM for diagnosis, but never mux
+                    // or approve a stream whose camera coverage is incomplete.
+                    coverageError = RoutineOutputCaptureError.incompleteMediaCoverage
+                }
+            }
+            let finalizedSamples = samples
+            let finalizedError = coverageError
             self.routineOutputCaptureExportQueue.async {
                 do {
                     try Self.writeRoutineOutputWAV(
-                        samples,
+                        finalizedSamples,
                         sampleRate: sampleRate,
                         destinationURL: destinationURL
                     )
+                    if let finalizedError { completion(.error(finalizedError)); return }
                     completion(.exported(
                         url: destinationURL,
-                        frames: samples.count,
+                        frames: finalizedSamples.count,
                         sampleRate: sampleRate,
-                        samples: samples
+                        samples: finalizedSamples
                     ))
                 } catch {
                     completion(.error(error))
                 }
             }
         }
+    }
+
+    /// Both clocks describe media presentation, independent of delegate arrival.
+    static func routineCaptureFrameRange(firstAudioHostTime: Double, mediaStartHostTime: Double,
+        mediaDurationSeconds: Double, sampleRate: Double, availableFrames: Int) -> Range<Int>? {
+        guard firstAudioHostTime.isFinite, mediaStartHostTime.isFinite,
+              mediaDurationSeconds.isFinite, mediaDurationSeconds > 0,
+              sampleRate.isFinite, sampleRate > 0, availableFrames > 0 else { return nil }
+        let firstFrame = ((mediaStartHostTime - firstAudioHostTime) * sampleRate).rounded()
+        let count = (mediaDurationSeconds * sampleRate).rounded()
+        guard firstFrame >= 0, count > 0, firstFrame + count <= Double(availableFrames) else { return nil }
+        let start = Int(firstFrame)
+        return start..<(start + Int(count))
     }
 
     private static func orderedRoutineOutputSamples(

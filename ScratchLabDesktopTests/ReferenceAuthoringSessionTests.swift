@@ -107,11 +107,10 @@ final class ReferenceAuthoringSessionTests: XCTestCase {
         // This successful-workflow fixture must observe the complete declared
         // repetitions; 0.799s of readings cannot prove a later selected range.
         let samples: [CrossfaderPositionSample] = (0..<800).map { index in
-            CrossfaderPositionSample(
-                takeRelativeTime: Double(index) * 20 / 799,
-                rawValue: crossfaderStaysOpen ? 1 : (index % 100 < 50 ? 1 : 104),
-                normalizedPosition: crossfaderStaysOpen ? 1 : (index % 100 < 50 ? 1 : 0)
-            )
+            let open = crossfaderStaysOpen || index % 100 < 50
+            let seconds = Double(index) * 20.0 / 799.0
+            return CrossfaderPositionSample(takeRelativeTime: seconds,
+                rawValue: open ? 1 : 104, normalizedPosition: open ? 1.0 : 0.0)
         }
         return ReferenceRecordedTakeArtifacts(
             audio: ReferenceArtifactMeasurement(
@@ -1262,6 +1261,41 @@ final class ReferenceAuthoringSessionTests: XCTestCase {
             "Apple Watch motion is still transferring. Save Capture will become available when it is linked."
         )
         XCTAssertFalse(session.canExportRawCapture)
+    }
+
+    func testLegacySentStopDraftAcceptsOnlyVerifiedMatchingLateMotion() throws {
+        let identity = ReferenceTakeSourceIdentity(sessionID: "capture-session", takeID: "take-001",
+            takeNumber: 1, takeToken: "token")
+        for outcome in [CaptureWatchStopOutcome.sent, .unreachable] {
+            let sidecar = CaptureCore.LocalRecordingSidecar(sessionID: identity.sessionID,
+                takeID: identity.takeID, appLocalTakeNumber: identity.takeNumber,
+                recordingRole: "routine", platform: "macOS", appSurface: "CXL",
+                sourceDeviceName: "Mac", startedAt: Date(timeIntervalSince1970: 100),
+                recordingStatus: "completed", mediaFileName: "take-001.mov", sidecarFileName: "take-001.json",
+                watchSyncState: .acknowledged, watchCommandID: identity.takeToken,
+                watchStopDiagnostics: CaptureWatchStopDiagnostics(outcome: outcome,
+                    sessionID: identity.sessionID, takeID: identity.takeID, motionTransferState: .pending))
+            let encoder = JSONEncoder(); encoder.dateEncodingStrategy = .iso8601
+            let data = try encoder.encode(sidecar)
+            let binding = ReferenceTearEvidenceSourceBinding(capturedSessionID: identity.sessionID,
+                capturedTakeID: identity.takeID, capturedTakeNumber: identity.takeNumber,
+                rawSidecarFileName: "take-001.json", rawSidecarData: data,
+                rawSidecarSHA256: ReferencePackageIO.sha256Hex(data))
+            var session = try makeFinalizedSession(watchEvidence: .transferFailed(detail: "Stop unconfirmed"),
+                sourceState: .conflict(identity: identity, detail: "Stop unconfirmed"), sourceBinding: binding)
+            let initial = session
+            session.updateWatchEvidenceForTakeInReview(.linked(motionFileName: "watch.json"),
+                sourceState: .linked(identity: identity, motionFileName: "watch.json", sha256: nil))
+            XCTAssertEqual(session, initial, "A bare linked label cannot recover an old failure.")
+            let wrong = ReferenceTakeSourceIdentity(sessionID: identity.sessionID, takeID: identity.takeID,
+                takeNumber: identity.takeNumber, takeToken: "different-command")
+            session.updateWatchEvidenceForTakeInReview(.linked(motionFileName: "watch.json"),
+                sourceState: .linked(identity: wrong, motionFileName: "watch.json", sha256: String(repeating: "a", count: 64)))
+            XCTAssertEqual(session, initial)
+            session.updateWatchEvidenceForTakeInReview(.linked(motionFileName: "watch.json"),
+                sourceState: .linked(identity: identity, motionFileName: "watch.json", sha256: String(repeating: "a", count: 64)))
+            XCTAssertEqual(session.takeInReview?.evidence.watchEvidence.isLinked, outcome == .sent)
+        }
     }
 
     func testLateVerifiedWatchHashSurvivesRefreshAndApproval() throws {

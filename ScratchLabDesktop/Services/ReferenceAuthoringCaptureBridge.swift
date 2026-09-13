@@ -313,38 +313,39 @@ final class ReferenceAuthoringCaptureBridge {
             guard let preparedBeat else {
                 return ReferenceAuthoringError.recordingFailed("The backing sound is missing.")
             }
-            var beatStartMetadata: BeatEngineStartMetadata?
             do {
+                // Prepare the camera and audio during count-in. The engine starts
+                // the movie on a sample boundary just before the first beat.
+                var armedToken: RoutineRecordingRequestToken?
                 let started = try beatEngine.start(
                     preparedBeat: preparedBeat,
                     mode: configuration.beatEngineMode,
                     bpm: configuration.bpm,
                     onRecordingStart: { [engine, beatEngine] in
-                        let outputRoute: BeatPlaybackOutputRoute?
-                        do {
-                            outputRoute = try beatEngine.verifiedPreparedOutputRoute()
-                        } catch {
+                        do { _ = try beatEngine.verifiedPreparedOutputRoute() }
+                        catch {
                             beatEngine.stop()
                             timedStart.fail(SessionExportFailureText.describe(error))
-                            return
-                        }
-                        let captureTiming = CaptureTimingMetadata(
-                            clickStartHostTime: beatStartMetadata?.clickStartHostTime,
-                            recordingStartHostTime: beatStartMetadata?.recordingStartHostTime
-                                ?? ScratchLabBeatEngine.currentHostTime(),
-                            recordingStartOffsetSeconds: beatStartMetadata.map {
-                                AVAudioTime.seconds(forHostTime: $0.recordingStartHostTime - $0.clickStartHostTime)
+                            if let token = armedToken {
+                                _ = engine.requestRoutineRecordingStop(for: token, reason: .captureError)
                             }
-                        )
-                        let token = engine.startRoutineRecording(captureTiming: captureTiming,
-                            beatOutputRoute: outputRoute)
-                        if timedStart.complete(with: token) {
-                            beatEngine.stop()
-                            _ = engine.requestRoutineRecordingStop(for: token, reason: .interrupted)
                         }
                     }
                 )
-                beatStartMetadata = started
+                let outputRoute = try beatEngine.verifiedPreparedOutputRoute()
+                let captureTiming = CaptureTimingMetadata(
+                    clickStartHostTime: started.clickStartHostTime,
+                    recordingStartHostTime: started.recordingStartHostTime,
+                    recordingStartOffsetSeconds: AVAudioTime.seconds(
+                        forHostTime: started.recordingStartHostTime - started.clickStartHostTime)
+                )
+                let token = engine.startRoutineRecording(captureTiming: captureTiming,
+                    beatOutputRoute: outputRoute)
+                armedToken = token
+                if timedStart.complete(with: token) {
+                    beatEngine.stop()
+                    _ = engine.requestRoutineRecordingStop(for: token, reason: .interrupted)
+                }
                 return nil
             } catch {
                 return error
@@ -1158,6 +1159,11 @@ final class ReferenceAuthoringCaptureBridge {
         }
         guard sidecar.watchSyncState == .acknowledged else {
             return .missing(syncState: sidecar.watchSyncState.rawValue)
+        }
+        // `sent` is an in-flight command, not a failed transfer. Finalization
+        // often wins the race with the reply; keep polling the exact take.
+        if sidecar.watchStopDiagnostics?.outcome == .sent {
+            return .acknowledgedTransferPending
         }
         if let stop = sidecar.watchStopDiagnostics, stop.outcome.isDegraded {
             return .transferFailed(

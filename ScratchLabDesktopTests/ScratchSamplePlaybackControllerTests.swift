@@ -8,6 +8,43 @@ import CoreAudio
 /// Full audio engine tests require hardware; these are logic-level tests.
 final class ScratchSamplePlaybackControllerTests: XCTestCase {
 
+    func testRoutineAudioUsesMediaClockInsteadOfLateStartCallback() throws {
+        for rate in [44_100.0, 48_000.0] {
+            // PCM was armed during count-in. A 1.03s-late delegate must
+            // not shorten the 13 1/3 second movie or shift its audio.
+            let range = try XCTUnwrap(ScratchSamplePlaybackController.routineCaptureFrameRange(
+                firstAudioHostTime: 100, mediaStartHostTime: 102,
+                mediaDurationSeconds: 40.0 / 3, sampleRate: rate,
+                availableFrames: Int(rate * 16)))
+            XCTAssertEqual(range.lowerBound, Int(rate * 2))
+            XCTAssertEqual(range.count, Int((rate * 40 / 3).rounded()))
+        }
+    }
+
+    func testRoutineAudioRejectsMissingPrefixOrTailRatherThanPadding() {
+        XCTAssertNil(ScratchSamplePlaybackController.routineCaptureFrameRange(
+            firstAudioHostTime: 103.03, mediaStartHostTime: 102,
+            mediaDurationSeconds: 40.0 / 3, sampleRate: 44_100, availableFrames: 700_000))
+        XCTAssertNil(ScratchSamplePlaybackController.routineCaptureFrameRange(
+            firstAudioHostTime: 102, mediaStartHostTime: 102,
+            mediaDurationSeconds: 40.0 / 3, sampleRate: 44_100, availableFrames: 542_430))
+        for duration in [0, -1, Double.nan, Double.infinity] {
+            XCTAssertNil(ScratchSamplePlaybackController.routineCaptureFrameRange(
+                firstAudioHostTime: 100, mediaStartHostTime: 100,
+                mediaDurationSeconds: duration, sampleRate: 48_000, availableFrames: 480_000))
+        }
+    }
+
+    func testMoviePrerollPreservesMusicalEndAtEitherFrameBoundary() {
+        for start in [99.85, 100, 100.025] {
+            XCTAssertEqual(start + MacCaptureEngine.routineMediaDuration(
+                maximum: 40.0 / 3, plannedStart: 100, actualStart: start),
+                100 + 40.0 / 3, accuracy: 0.000_001)
+        }
+        XCTAssertEqual(MacCaptureEngine.routineMediaDuration(
+            maximum: 30, plannedStart: nil, actualStart: 100), 30)
+    }
+
     // MARK: - Actual post-fader output metering (no audio hardware)
 
     func testOutputTapCannotBecomeTheControllersFinalOwner() throws {

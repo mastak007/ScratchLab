@@ -1029,6 +1029,7 @@ struct ReferenceAuthoringSession: Equatable, Sendable {
             if let existing = takes[takeIndex].tearEvidenceSourceBinding,
                existing.rawSidecarFileName != refreshedSourceBinding.rawSidecarFileName { return }
         }
+        takes[takeIndex].applyWatchEvidence(watchEvidence, sourceState: sourceState)
         if watchEvidence.isLinked,
            let refreshedSourceBinding,
            let existing = takes[takeIndex].tearEvidenceSourceBinding,
@@ -1038,7 +1039,6 @@ struct ReferenceAuthoringSession: Equatable, Sendable {
            existing.rawSidecarFileName == refreshedSourceBinding.rawSidecarFileName {
             takes[takeIndex].tearEvidenceSourceBinding = refreshedSourceBinding
         }
-        takes[takeIndex].applyWatchEvidence(watchEvidence, sourceState: sourceState)
         revalidateTakeInReview(expectation: expectation, now: now)
     }
 
@@ -1691,6 +1691,23 @@ struct ReferenceAuthoringTake: Equatable, Sendable, Identifiable {
         let currentIdentity: ReferenceTakeSourceIdentity
         switch evidence.metadata.sourceState {
         case .waitingForLateTransfer(let identity, _): currentIdentity = identity
+        case .conflict(let identity?, _):
+            // Older drafts treated Stop `sent` as a terminal failure. Recover
+            // only that proven in-flight snapshot, with the same command/take
+            // and a newly verified file digest. Real failures stay terminal.
+            guard case .transferFailed = evidence.watchEvidence,
+                  let incomingHash, incomingHash.count == 64, incomingHash.allSatisfy(\.isHexDigit),
+                  let binding = tearEvidenceSourceBinding else { return false }
+            let decoder = JSONDecoder()
+            decoder.dateDecodingStrategy = .iso8601
+            guard let sidecar = try? decoder.decode(CaptureCore.LocalRecordingSidecar.self,
+                    from: binding.rawSidecarData),
+                  sidecar.watchSyncState == .acknowledged,
+                  sidecar.watchStopDiagnostics?.outcome == .sent,
+                  sidecar.sessionID == identity.sessionID, sidecar.takeID == identity.takeID,
+                  sidecar.appLocalTakeNumber == identity.takeNumber,
+                  sidecar.watchCommandID == identity.takeToken else { return false }
+            currentIdentity = identity
         case .linked(let identity, _, let existingHash):
             currentIdentity = identity
             if let existingHash, let incomingHash, existingHash != incomingHash { return false }

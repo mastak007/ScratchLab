@@ -603,7 +603,7 @@ enum ReferenceWitnessedTimingValidator {
             || !timing.measuredWAVDurationSeconds.isFinite || timing.measuredWAVDurationSeconds <= 0
             || abs(timing.measuredWAVDurationSeconds - timing.plannedDurationSeconds)
                 > durationToleranceSeconds + max(0, timing.uncertaintySeconds) {
-            issues.append(String(format: "Recorded audio is %.2f seconds; the capture plan requires %.2f seconds. An early stop leaves the timed reference incomplete.", timing.measuredWAVDurationSeconds, timing.plannedDurationSeconds))
+            issues.append(String(format: "Recorded audio is %.2f seconds; the capture plan requires %.2f seconds. The recorded duration does not match the plan. If recording stopped automatically, save this capture for diagnosis.", timing.measuredWAVDurationSeconds, timing.plannedDurationSeconds))
         }
         if let mov = timing.measuredMOVDurationSeconds,
            (!mov.isFinite || mov <= 0
