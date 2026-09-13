@@ -1,3 +1,15 @@
+# Current — CXL delivery preparation, Apple setup pending (13 September 2026)
+
+User wants the CXL Mac app plus iPhone/Watch distribution and a one-page guide. Prepared root /Users/karlwatson/Developer/ScratchLab-CXL-Handoff-20260913. Read docs/cxl_delivery.md and that root's RESULT.md first. One-page PDF is package/ScratchLab CXL Quick Start.pdf. Mac internal pilot ZIP is Development signed only; no Developer ID certificate exists in the current keychain, no notarization. Installed blank Mac app untouched.
+
+Successful stable Xcode26.6 iPhone+embedded Watch archive at archives/ScratchLab-iOS-Watch.xcarchive and Apple Distribution export at testflight-export/ScratchLab.ipa. Both version1.0.1/build22 (candidate; not checked against ASC), minimum iOS26.5/watchOS10. Signatures/profile entitlements verified, get-task-allow=false, no registered-device restriction. All169 library assets match in Mac/archive/export; Mac ZIP CRC and included guide verified. App source remains dcd7a7686575c2d7ca505677d8eb9130d60aa3d3; only documentation is changed this turn. No repeated broad tests or hardware acceptance claim.
+
+Next: user signs in to Apple in the opened App Store Connect browser tab (last seen login); confirm existing app/build versions and beta account fields; obtain CXL's tester email and Mac/iPhone/Watch models/OS versions; upload and required external review/invitation; finish proper Developer ID Mac signing/hardened runtime/notarization. Current stage_cxl_mac.py uses a WWDR development requirement, so do not blindly feed it a Developer ID certificate. Enter credentials only on Apple pages. No upload, group, invitation, notarization or external send occurred. Existing user commit/push authorization applies; source docs checkpoint separately from artifact source hash. Preserve prior actual-rig limitations.
+
+Evidence includes archive/export scripts/options and failures: use command-local -IDEBuildLocationStyle=Unique with isolated derivedDataPath for archives; global Xcode Custom paths caused first assembly failure. Export signing must be automatic for the existing Xcode-managed Store profiles; manual mapping was rejected. Temporary build/extraction/failed archive copies were cleaned after verification; final archives/packages/logs remain. Browser tab was handed off for sign-in; do not request passwords/OTP in chat.
+
+--- Previous state (historical; current record above takes precedence) ---
+
 # Current CXL delivery — installed, empty capture library, 13 September 2026
 
 Worktree a4aa, branch codex/finish-reference-library-20260913, baseline778a7c4. The current changes are being committed and pushed under Karl's existing authorization; resolve the final checkpoint from Git. Evidence/report root: ~/Developer/ScratchLab-CXL-Review-Fix-20260913. No concurrent gate remains.
