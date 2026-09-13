@@ -5391,3 +5391,7 @@ ASC preparation: current CXL app has no builds; iOS has valid23. Created only th
 - Added repeatable CXL staging support to omit the optional full-app `ReferenceExamples` library before signing.
 - Validation: Python fixtures 87/87; first full macOS XCTest configuration 4,311 executed, 55 skipped, 0 failures; second configuration runner exited code 0 while finishing one archive test. Focused corrected route/Twelve tests passed; CXLRelease build succeeded.
 - Package: `ScratchLab-CXL-final.pkg`, 34 MB, signed with the Apple installer certificate for team `2DDKGL33BU`; payload retains PracticeReelAudio and VirtualPlatter and excludes ReferenceExamples.
+
+## 2026-09-14 — CXL App Store provisioning correction
+- ASC rejected build 21 because the main CXL bundle lacked an embedded provisioning profile. Rebuilt CXL as build 22 with the supplied `ScratchLab CXL Mac App Store` profile in manual Apple Distribution signing mode.
+- Profile validation: bundle ID `com.machelpnz.scratchlab.cxl-authoring`, team `2DDKGL33BU`, macOS platform, expiration 2027-09-13. Transporter is uploading build 22.
