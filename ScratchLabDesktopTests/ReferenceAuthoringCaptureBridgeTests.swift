@@ -157,7 +157,9 @@ final class ReferenceAuthoringCaptureBridgeTests: XCTestCase {
             recordingStartOffsetSeconds: origin.recordingStartOffsetSeconds + 1)
         let issues = ReferenceWitnessedTimingValidator.issues(timing, intent: intent, mediaTimeOrigin: mismatch)
         XCTAssertTrue(issues.contains { $0.contains("timestamps do not match") })
-        XCTAssertTrue(issues.contains { $0.contains("planned media duration") })
+        XCTAssertTrue(issues.contains { $0.contains("repetition 1 is incomplete") })
+        XCTAssertFalse(issues.contains { $0.contains("planned media duration") },
+            "Changing the measured start cannot change the intended performance duration.")
     }
 
     private func makeIsolatedEngine() -> MacCaptureEngine {

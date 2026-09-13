@@ -1,3 +1,25 @@
+# Audit-origin slice verified — 13 September 2026
+
+F1–F4 correction complete in source. Python87pass;440unique XCTest cases across2configurations=880executions,876pass4existing skips0fail. Required all-platform gate passed iOSDebug and universal fullMacRelease but ran out of disk at CXL universal packaging. After task-owned compiler-cache/unsafe-stage cleanup, CXL universal and Watch builds pass without source changes. Exact7file hashes in ../evidence/audit-correction-receipt.json. DO NOT claim the original all command exited0; its preserved exit65 is explained by disk capacity and completed by two successful build retries.
+
+Unsafe ../staged/ScratchLab CXL.app removed to prevent accidental installation and reclaim space; its original receipt remains. Corrected app is NOT staged/installed/uploaded. Original captures, installed app and Claude audit workspace unchanged. F5–F7 and approval/export dependency review stay open; this is software verification of the origin slice, not complete CXL hardware acceptance.
+
+Next: commit/push this correction under existing authorization, integrate its seven source/test files into the prepared Cloud branch, preserve Cloud-specific docs and configuration. Private dependency access is granted and30checkpoint media upload is progressing. Three manual workflows exist; first remote runs wait for completed private pin plus corrected committed source. No TestFlight distribution.
+
+--- Earlier active notes follow, superseded by completion above ---
+
+# Active independent-audit correction — 13 September 2026
+
+DO NOT INSTALL the staged d86a369 app. Claude's audit identified real origin/validation/export defects despite the earlier focused gate. Its three regression tests were run unchanged on d86a369: 3 executed, 3 failed (../evidence/audit-red.xcresult). Existing captures, installed app, old archive and Claude audit workspace remain untouched.
+
+Correction in progress in this worktree: fixed planned performance duration independent of measured camera origin; bounded 150ms preroll / one 30fps frame lateness shared with export; actual start-offset duration accounting and exact beat stem; lock-owned sidecar updates retain measured origin and late Watch association/Stop diagnostics. Six audit/origin/merge tests pass. First expanded run: 63 executed, 62 passed, one older test expected the old measured-dependent planned-duration error. That assertion has been corrected to require the explicit late-camera rejection while retaining the fixed plan. Full gate not yet rerun. No installation or hardware success claimed.
+
+Keep remaining audit findings visible: start/Stop boundary race, secondary-camera admission/end timing, and persisted pending Watch Stop recovery require separate follow-up; approval/export dependency audit was not completed by Claude. New TestFlight upload requires a build number above existing build 21 after checking ASC.
+
+Xcode Cloud setup continues separately at ~/Developer/ScratchLab-Xcode-Cloud-20260913/source. ScratchLab Cloud product 4ABF7852-6C7E-45C8-B7AD-FAD2040DBEF4 now exists; its initial workflow is inactive. CXL ASC app 6811514515 exists, but its Cloud product is not yet initialized. Private media upload restarted in resumable 90MiB checkpoints; script/evidence under that worktree's ../evidence. No Cloud build has run. Source repository is public; media stays in the private ScratchLab-ReferenceAssets repository.
+
+--- Superseded candidate record below; do not follow its installation instruction ---
+
 # Active repair — timed capture and late Watch evidence (13 September 2026)
 
 User-selected task: fix the reported Baby take stopping short and falsely reporting Watch Stop failure. Worktree: `/Users/karlwatson/Developer/ScratchLab-CXL-Timing-Fix-20260913/source`, branch `codex/cxl-timing-watch-fix-20260913`, base7b056cd. Original a4aa delivery worktree remains untouched; Claude may be handling ASC independently.

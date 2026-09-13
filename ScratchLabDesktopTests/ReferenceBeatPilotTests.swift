@@ -462,3 +462,171 @@ final class CXLBeatOutputRoutingTests: XCTestCase {
         }
     }
 }
+
+// MARK: - CXL independent audit 2026-09-13 (audit-owned, not part of the candidate diff)
+//
+// These assert the REQUIRED behaviour. All three failed on d86a369 before
+// correction, documenting two defects in how measured camera start
+// timing meets witnessed-timing validation. They drive the production
+// origin/timing builders and the candidate's own musical-end rule; nothing
+// here reimplements validation.
+final class CXLIndependentAuditTimingTests: XCTestCase {
+    private let bpm = 90
+    private let countInFrames: Int64 = 128_000 // 4 beats @ 90 BPM, 48 kHz (retained take 64b341bc)
+
+    private func intent() -> ReferenceCaptureIntent {
+        let beat = ReferenceBeatSpecBinding(id: "audit-90", version: 1, family: "fixture", bpm: bpm,
+            feel: .straight, countInFrameCount: countInFrames, loopStartFrame: countInFrames,
+            loopFrameCount: countInFrames * 4, sampleRate: 48_000,
+            productionMasterFileName: "master.wav", productionMasterSHA256: String(repeating: "a", count: 64),
+            sparseAnalysisMixFileName: "analysis.wav", sparseAnalysisMixSHA256: String(repeating: "b", count: 64),
+            availableStemSHA256: [:], rightsState: .procedurallyGeneratedOriginal, provenance: "Synthetic audit fixture")
+        return ReferenceCaptureIntent(id: "audit", parentTechniqueID: "baby_scratch", variantID: "baby_audit",
+            recipeID: "baby_scratch_1bar", startingPlatterDirection: .forward, faderForm: .faderOpenThroughout,
+            bpm: bpm, beatsPerCycle: 4, plan: .init(countInBars: 1, repetitionCount: 4, tailBars: 1), beatSpec: beat)
+    }
+
+    /// Issues for a take whose first movie sample lands `startErrorSeconds`
+    /// from the planned first performance beat. `measured` mirrors what
+    /// `processRoutineMovieSample` writes; otherwise the planned timing
+    /// prepared at count-in is persisted. Audio length follows
+    /// `MacCaptureEngine.routineMediaDuration` (musical end preserved).
+    private func issues(startErrorSeconds: Double, measured: Bool) throws -> [String] {
+        let intent = intent()
+        let clickSeconds = 103_041.782
+        let click = AVAudioTime.hostTime(forSeconds: clickSeconds)
+        let plannedSeconds = AVAudioTime.seconds(forHostTime: click) + Double(countInFrames) / 48_000
+        let actualSeconds = plannedSeconds + startErrorSeconds
+        let persistedStart = measured ? actualSeconds : plannedSeconds
+        let timing = CaptureTimingMetadata(clickStartHostTime: click,
+            recordingStartHostTime: AVAudioTime.hostTime(forSeconds: persistedStart),
+            recordingStartOffsetSeconds: persistedStart - AVAudioTime.seconds(forHostTime: click))
+        let duration = MacCaptureEngine.routineMediaDuration(maximum: 40.0 / 3,
+            plannedStart: plannedSeconds, actualStart: actualSeconds)
+        let frames = Int64((duration * 44_100).rounded())
+        let sidecar = CaptureCore.LocalRecordingSidecar(sessionID: "audit-session",
+            sessionConfig: CaptureSessionConfig(bpm: bpm, referenceCaptureIntent: intent),
+            takeID: "take-001", appLocalTakeNumber: 1, recordingRole: "mac_routine_capture",
+            platform: "macOS", appSurface: "ScratchLab Routine Recorder", sourceDeviceName: "DJ",
+            captureTiming: timing, startedAt: Date(timeIntervalSince1970: 1_788_000_000),
+            recordingStatus: "completed", mediaFileName: "audit_take001_routine.mov",
+            sidecarFileName: "audit_take001_routine.json", watchSyncState: .notRequested)
+        let origin = try XCTUnwrap(ReferenceAuthoringCaptureBridge.makeMediaTimeOrigin(captureTiming: timing))
+        let witnessed = try XCTUnwrap(ReferenceAuthoringCaptureBridge.makeWitnessedTiming(sidecar: sidecar,
+            audio: .init(fileName: "audit.wav", exists: true, byteCount: frames * 8,
+                frameCount: frames, sampleRate: 44_100), videoURL: nil, mediaTimeOrigin: origin))
+        return ReferenceWitnessedTimingValidator.issues(witnessed, intent: intent, mediaTimeOrigin: origin)
+    }
+
+    /// Candidate claims the first frame at host >= planned - 0.15 s. At 30 fps
+    /// that is 117-150 ms early. A correctly captured, complete take must validate.
+    func testAuditOnTimeTakeWithCandidateCameraPrerollValidates() throws {
+        for early in [-0.15, -0.133, -0.117] {
+            let found = try issues(startErrorSeconds: early, measured: true)
+            XCTAssertEqual(found, [], "Complete on-time take (camera \(early)s before beat 1) was rejected: \(found)")
+        }
+    }
+
+    /// Export consequence: a measured (non-count-in) origin must still render
+    /// the bound beat stem aligned to the recorded media, not reject the take.
+    func testAuditBoundBeatStemAcceptsMeasuredCameraPrerollOrigin() throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let prepared = try ReferenceBeatAssetStore.prepare(mode: .minimalFunk, bpm: 90, loopBeats: 4, rootURL: root)
+        let format = try XCTUnwrap(AVAudioFormat(standardFormatWithSampleRate: 44_100, channels: 2))
+        let countIn = Double(prepared.binding.countInFrameCount) / Double(prepared.binding.sampleRate)
+        XCTAssertNoThrow(try SessionArchiveBuilder.renderedBoundBeatStem(binding: prepared.binding, beatRootURL: root,
+            recordingStartOffsetSeconds: countIn - 0.133, outputFormat: format, frameCount: 44_100),
+            "Beat-stem export rejects the measured origin the candidate persists for an on-time take.")
+    }
+
+    /// The field defect: camera first sample ~1.03 s after beat 1, stop at the
+    /// musical end, so repetition 1 is missing its first second.
+    func testAuditLateCameraStartMissingRepetitionOneDoesNotValidate() throws {
+        // Baseline-shaped evidence (planned origin persisted) IS caught today.
+        XCTAssertFalse(try issues(startErrorSeconds: 1.03, measured: false).isEmpty)
+        // Candidate-shaped evidence (measured origin persisted) must also be caught.
+        let found = try issues(startErrorSeconds: 1.03, measured: true)
+        XCTAssertFalse(found.isEmpty,
+            "A take whose media starts 1.03 s after the first performance beat validated cleanly.")
+    }
+
+    func testOriginBoundsRejectExcessPrerollAndLateStarts() throws {
+        for delta in [-0.151, -1.0, 0.034, 1.03] {
+            XCTAssertFalse(try issues(startErrorSeconds: delta, measured: true).isEmpty)
+        }
+        XCTAssertEqual(try issues(startErrorSeconds: 0, measured: true), [])
+        XCTAssertEqual(try issues(startErrorSeconds: 1.0 / 30, measured: true), [])
+    }
+
+    func testBeatStemContainsExactCountInTailThenFirstLoopSample() throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let prepared = try ReferenceBeatAssetStore.prepare(mode: .minimalFunk, bpm: 90, loopBeats: 4, rootURL: root)
+        let played = try ScratchLabBeatEngine.loadPreparedPlayback(preparedBeat: prepared, mode: prepared.mode, bpm: 90)
+        let preroll = 6_384 // 133 ms at 48 kHz
+        let countIn = Int(played.countInBuffer.frameLength)
+        let stem = try SessionArchiveBuilder.renderedBoundBeatStem(binding: prepared.binding, beatRootURL: root,
+            recordingStartOffsetSeconds: Double(countIn - preroll) / 48_000,
+            outputFormat: played.loopBuffer.format, frameCount: AVAudioFrameCount(preroll + 512))
+        for channel in 0..<2 {
+            XCTAssertEqual(Data(bytes: stem.floatChannelData![channel], count: preroll * 4),
+                Data(bytes: played.countInBuffer.floatChannelData![channel] + countIn - preroll, count: preroll * 4))
+            XCTAssertEqual(Data(bytes: stem.floatChannelData![channel] + preroll, count: 512 * 4),
+                Data(bytes: played.loopBuffer.floatChannelData![channel], count: 512 * 4))
+        }
+    }
+
+    func testWatchStopMergeRetainsMeasuredOriginAndLatestDiskLink() throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: "audit-origin-\(UUID().uuidString)"))
+        let engine = MacCaptureEngine(autoRefreshDevices: false, midiDefaults: defaults)
+        let media = root.appendingPathComponent("audit_take001_routine.mov")
+        let url = CaptureCore.LocalRecordingFiles.sidecarURL(forMediaURL: media)
+        let click = AVAudioTime.hostTime(forSeconds: 100)
+        let countIn = Double(countInFrames) / 48_000
+        let planned = CaptureTimingMetadata(clickStartHostTime: click,
+            recordingStartHostTime: AVAudioTime.hostTime(forSeconds: 100 + countIn),
+            recordingStartOffsetSeconds: countIn)
+        let sidecar = CaptureCore.LocalRecordingSidecar(sessionID: "audit", sessionConfig: nil,
+            takeID: "take-001", appLocalTakeNumber: 1, recordingRole: "mac_routine_capture",
+            platform: "macOS", appSurface: "fixture", sourceDeviceName: "fixture", captureTiming: planned,
+            startedAt: Date(), recordingStatus: "recording", mediaFileName: media.lastPathComponent,
+            sidecarFileName: url.lastPathComponent, watchSyncState: .acknowledged)
+        try engine.testOnly_prepareSidecar(sidecar, url: url)
+        let actual = 100 + countIn - 0.133
+        engine.testOnly_recordMeasuredOrigin(actual, mediaURL: media)
+        // A late relay writes a link into the older, planned-timing disk copy.
+        let linked = sidecar.linkingWatchCapture(id: UUID(), fileName: "motion.json")
+        try linked.encodedData().write(to: url, options: .atomic)
+        let identity = TakeIdentity(sessionID: "audit", takeID: "take-001", takeNumber: 1)
+        let sent = CaptureWatchStopDiagnostics(outcome: .sent, sessionID: "audit", takeID: "take-001",
+            requestedAt: Date(), motionTransferState: .pending)
+        engine.testOnly_persistWatchStop(sent, identity: identity)
+        let decoder = JSONDecoder(); decoder.dateDecodingStrategy = .iso8601
+        let stored = try decoder.decode(CaptureCore.LocalRecordingSidecar.self, from: Data(contentsOf: url))
+        XCTAssertEqual(stored.captureTiming?.recordingStartHostTime, AVAudioTime.hostTime(forSeconds: actual))
+        XCTAssertEqual(try XCTUnwrap(stored.captureTiming?.recordingStartOffsetSeconds), countIn - 0.133, accuracy: 0.000001)
+        XCTAssertEqual(stored.linkedMotionFileName, "motion.json")
+        XCTAssertEqual(stored.captureTiming, engine.testOnly_activeSidecar?.captureTiming)
+
+        // An old camera callback must not change this take's origin.
+        engine.testOnly_recordMeasuredOrigin(200, mediaURL: root.appendingPathComponent("other.mov"))
+        XCTAssertEqual(engine.testOnly_activeSidecar?.captureTiming, stored.captureTiming)
+        DispatchQueue.concurrentPerform(iterations: 20) { index in
+            if index.isMultiple(of: 2) { engine.testOnly_recordMeasuredOrigin(actual, mediaURL: media) }
+            else { engine.testOnly_persistWatchStop(sent, identity: identity) }
+        }
+        XCTAssertEqual(engine.testOnly_activeSidecar?.captureTiming, stored.captureTiming)
+
+        let stopped = CaptureWatchStopDiagnostics(outcome: .stopped, sessionID: "audit", takeID: "take-001",
+            requestedAt: sent.requestedAt, resolvedAt: Date().addingTimeInterval(1), motionTransferState: .pending)
+        let finalSnapshot = stored.mergingLatestWatchStopDiagnostics(from: stored.withWatchStopDiagnostics(stopped))
+        XCTAssertEqual(finalSnapshot.watchStopDiagnostics, stopped)
+        XCTAssertEqual(finalSnapshot.captureTiming, stored.captureTiming)
+        XCTAssertEqual(finalSnapshot.mergingLatestWatchStopDiagnostics(from: stored).watchStopDiagnostics, stopped)
+    }
+}

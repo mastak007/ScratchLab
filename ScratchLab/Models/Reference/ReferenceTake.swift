@@ -548,6 +548,28 @@ struct ReferenceWitnessedTiming: Codable, Equatable, Sendable {
     }
 }
 
+/// Shared by camera admission, review and beat-stem export. Offsets are
+/// portable seconds, never host ticks interpreted on the reviewing device.
+enum ReferenceRecordingOriginPolicy {
+    static let maximumPrerollSeconds = 0.15
+    // Allow at most one 30-fps frame of start quantization, not camera startup delay.
+    static let maximumLatenessSeconds = 1.0 / 30.0
+
+    static func accepts(offset: Double, countIn: Double, sampleRate: Int) -> Bool {
+        guard offset.isFinite, offset >= 0, countIn.isFinite, countIn >= 0, sampleRate > 0 else { return false }
+        let error = offset - countIn
+        let sample = 1.0 / Double(sampleRate)
+        return error >= -maximumPrerollSeconds - sample && error <= maximumLatenessSeconds + sample
+    }
+
+    static func intendedDuration(intent: ReferenceCaptureIntent, beat: ReferenceBeatSpecBinding) -> Double {
+        let totalBeats = (intent.plan.countInBars + intent.plan.tailBars) * beat.timeSignatureNumerator
+            + intent.plan.repetitionCount * intent.beatsPerCycle
+        return Double(totalBeats) * 60.0 / Double(intent.bpm)
+            - Double(beat.countInFrameCount) / Double(beat.sampleRate)
+    }
+}
+
 enum ReferenceWitnessedTimingValidator {
     static let durationToleranceSeconds = 0.125
 
@@ -567,7 +589,8 @@ enum ReferenceWitnessedTimingValidator {
             issues.append("a required host-clock origin is missing")
         }
         if timing.clickStartHostTime > timing.intendedMediaOriginHostTime
-            || timing.intendedMediaOriginHostTime > timing.actualRecordingOriginHostTime {
+            || timing.clickStartHostTime > timing.actualRecordingOriginHostTime
+            || (mediaTimeOrigin == nil && timing.intendedMediaOriginHostTime > timing.actualRecordingOriginHostTime) {
             issues.append("host-clock origin ordering is impossible")
         }
         if timing.sampleRate != beat.sampleRate || beat.bpm != intent?.bpm {
@@ -584,26 +607,47 @@ enum ReferenceWitnessedTimingValidator {
         if timing.plannedRepetitions != intent?.plan.repetitionCount {
             issues.append("planned repetitions do not match capture intent")
         }
+        var expectedMediaDuration = timing.plannedDurationSeconds
         if let mediaTimeOrigin, let intent {
             issues.append(contentsOf: mediaTimeOrigin.validationIssues)
             if mediaTimeOrigin.clickStartHostTime != timing.clickStartHostTime
                 || mediaTimeOrigin.recordingStartHostTime != timing.actualRecordingOriginHostTime {
                 issues.append("media origin and witnessed host-clock timestamps do not match")
             }
-            let totalBeats = (intent.plan.countInBars + intent.plan.tailBars) * beat.timeSignatureNumerator
-                + intent.plan.repetitionCount * intent.beatsPerCycle
-            let expectedDuration = Double(totalBeats) * 60.0 / Double(intent.bpm)
-                - mediaTimeOrigin.recordingStartOffsetSeconds
+            let expectedDuration = ReferenceRecordingOriginPolicy.intendedDuration(intent: intent, beat: beat)
             if !expectedDuration.isFinite || expectedDuration <= 0
                 || abs(timing.plannedDurationSeconds - expectedDuration) > 1.0 / Double(beat.sampleRate) {
-                issues.append("planned media duration does not match the capture plan and media origin")
+                issues.append("planned media duration does not match the intended capture plan")
             }
+            let countIn = Double(beat.countInFrameCount) / Double(beat.sampleRate)
+            let startError = mediaTimeOrigin.recordingStartOffsetSeconds - countIn
+            if !ReferenceRecordingOriginPolicy.accepts(offset: mediaTimeOrigin.recordingStartOffsetSeconds,
+                countIn: countIn, sampleRate: beat.sampleRate) {
+                if startError > ReferenceRecordingOriginPolicy.maximumLatenessSeconds {
+                    issues.append(String(format: "Camera recording started %.3f seconds after the first performance beat; repetition 1 is incomplete. Save this capture for diagnosis and re-record.", startError))
+                } else {
+                    issues.append("Recorded media origin exceeds the permitted camera preroll.")
+                }
+            } else {
+                // A permitted preroll is real recorded media before beat 1.
+                // The authored performance duration itself never shrinks.
+                expectedMediaDuration = expectedDuration - startError
+            }
+            if (startError < -1.0 / Double(beat.sampleRate)
+                && timing.actualRecordingOriginHostTime >= timing.intendedMediaOriginHostTime)
+                || (startError > 1.0 / Double(beat.sampleRate)
+                && timing.actualRecordingOriginHostTime <= timing.intendedMediaOriginHostTime) {
+                issues.append("portable media offset disagrees with host-clock origin ordering")
+            }
+        } else if timing.source == .captureSidecarHostClock {
+            issues.append("portable measured media origin is missing")
         }
         if !timing.plannedDurationSeconds.isFinite || timing.plannedDurationSeconds <= 0
             || !timing.measuredWAVDurationSeconds.isFinite || timing.measuredWAVDurationSeconds <= 0
-            || abs(timing.measuredWAVDurationSeconds - timing.plannedDurationSeconds)
+            || !expectedMediaDuration.isFinite || expectedMediaDuration <= 0
+            || abs(timing.measuredWAVDurationSeconds - expectedMediaDuration)
                 > durationToleranceSeconds + max(0, timing.uncertaintySeconds) {
-            issues.append(String(format: "Recorded audio is %.2f seconds; the capture plan requires %.2f seconds. The recorded duration does not match the plan. If recording stopped automatically, save this capture for diagnosis.", timing.measuredWAVDurationSeconds, timing.plannedDurationSeconds))
+            issues.append(String(format: "Recorded audio is %.2f seconds; the capture plan requires %.2f seconds of media at this start offset. The recorded duration does not match the plan. If recording stopped automatically, save this capture for diagnosis.", timing.measuredWAVDurationSeconds, expectedMediaDuration))
         }
         if let mov = timing.measuredMOVDurationSeconds,
            (!mov.isFinite || mov <= 0

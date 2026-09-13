@@ -1086,15 +1086,7 @@ final class ReferenceAuthoringCaptureBridge {
             forSeconds: Double(beat.countInFrameCount) / sampleRate
         )
         let wavDuration = Double(audioFrames) / audioSampleRate
-        let plannedDuration: Double
-        if let mediaTimeOrigin {
-            let plannedBeats = (intent.plan.countInBars + intent.plan.tailBars) * beat.timeSignatureNumerator
-                + intent.plan.repetitionCount * intent.beatsPerCycle
-            plannedDuration = Double(plannedBeats) * 60.0 / Double(intent.bpm)
-                - mediaTimeOrigin.recordingStartOffsetSeconds
-        } else {
-            plannedDuration = Double(beat.countInFrameCount + beat.loopFrameCount) / sampleRate
-        }
+        let plannedDuration = ReferenceRecordingOriginPolicy.intendedDuration(intent: intent, beat: beat)
         let movDuration: Double?
         if let videoURL {
             let measured = CMTimeGetSeconds(AVURLAsset(url: videoURL).duration)
