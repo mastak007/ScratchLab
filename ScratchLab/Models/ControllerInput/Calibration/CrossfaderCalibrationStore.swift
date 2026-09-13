@@ -64,11 +64,9 @@ struct CrossfaderCalibrationStore: Sendable {
     static let fileName = "CrossfaderCalibrations.json"
 
     let directoryURL: URL
-    let fileManager: FileManager
 
-    init(directoryURL: URL, fileManager: FileManager = .default) {
+    init(directoryURL: URL) {
         self.directoryURL = directoryURL
-        self.fileManager = fileManager
     }
 
     var fileURL: URL { directoryURL.appendingPathComponent(Self.fileName) }
@@ -126,7 +124,7 @@ struct CrossfaderCalibrationStore: Sendable {
         document.updatedAt = now
 
         do {
-            try fileManager.createDirectory(
+            try FileManager.default.createDirectory(
                 at: directoryURL,
                 withIntermediateDirectories: true
             )
@@ -182,7 +180,7 @@ struct CrossfaderCalibrationStore: Sendable {
         }
         document.updatedAt = now
         do {
-            try fileManager.createDirectory(at: directoryURL, withIntermediateDirectories: true)
+            try FileManager.default.createDirectory(at: directoryURL, withIntermediateDirectories: true)
             let data = try Self.encoder.encode(document)
             try data.write(to: fileURL, options: .atomic)
         } catch {

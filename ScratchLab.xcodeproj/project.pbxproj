@@ -363,6 +363,33 @@
 		PVM0001000PVM001PVM00002 /* PhraseViewportModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = PVM0000000PVM001PVM00001 /* PhraseViewportModel.swift */; };
 		PVM0001000PVM001PVM00003 /* PhraseViewportModelTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = PVM0000000PVM001PVM00003 /* PhraseViewportModelTests.swift */; };
 		RANEMK2TBREF001 /* RaneOneMK2ProfileTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = RANEMK2FREF0001 /* RaneOneMK2ProfileTests.swift */; };
+		REFAU0IOS0001 /* ReferenceTechnique.swift in Sources */ = {isa = PBXBuildFile; fileRef = REFAU0FREF0001 /* ReferenceTechnique.swift */; };
+		REFAU0IOS0002 /* ReferenceTake.swift in Sources */ = {isa = PBXBuildFile; fileRef = REFAU0FREF0002 /* ReferenceTake.swift */; };
+		REFAU0IOS0003 /* ReferenceValidation.swift in Sources */ = {isa = PBXBuildFile; fileRef = REFAU0FREF0003 /* ReferenceValidation.swift */; };
+		REFAU0IOS0004 /* ReferenceRegistry.swift in Sources */ = {isa = PBXBuildFile; fileRef = REFAU0FREF0004 /* ReferenceRegistry.swift */; };
+		REFAU0IOS0005 /* ReferencePackage.swift in Sources */ = {isa = PBXBuildFile; fileRef = REFAU0FREF0005 /* ReferencePackage.swift */; };
+		REFAU0IOS0006 /* CallAndResponseSchedule.swift in Sources */ = {isa = PBXBuildFile; fileRef = REFAU0FREF0006 /* CallAndResponseSchedule.swift */; };
+		REFAU0IOS0007 /* ReferenceCapturePreflight.swift in Sources */ = {isa = PBXBuildFile; fileRef = REFAU0FREF0007 /* ReferenceCapturePreflight.swift */; };
+		REFAU0IOS0008 /* LegacyReferenceInventory.swift in Sources */ = {isa = PBXBuildFile; fileRef = REFAU0FREF0008 /* LegacyReferenceInventory.swift */; };
+		REFAU0IOS0009 /* ReferenceAuthoringSession.swift in Sources */ = {isa = PBXBuildFile; fileRef = REFAU0FREF0009 /* ReferenceAuthoringSession.swift */; };
+		REFAU0MAC0001 /* ReferenceTechnique.swift in Sources */ = {isa = PBXBuildFile; fileRef = REFAU0FREF0001 /* ReferenceTechnique.swift */; };
+		REFAU0MAC0002 /* ReferenceTake.swift in Sources */ = {isa = PBXBuildFile; fileRef = REFAU0FREF0002 /* ReferenceTake.swift */; };
+		REFAU0MAC0003 /* ReferenceValidation.swift in Sources */ = {isa = PBXBuildFile; fileRef = REFAU0FREF0003 /* ReferenceValidation.swift */; };
+		REFAU0MAC0004 /* ReferenceRegistry.swift in Sources */ = {isa = PBXBuildFile; fileRef = REFAU0FREF0004 /* ReferenceRegistry.swift */; };
+		REFAU0MAC0005 /* ReferencePackage.swift in Sources */ = {isa = PBXBuildFile; fileRef = REFAU0FREF0005 /* ReferencePackage.swift */; };
+		REFAU0MAC0006 /* CallAndResponseSchedule.swift in Sources */ = {isa = PBXBuildFile; fileRef = REFAU0FREF0006 /* CallAndResponseSchedule.swift */; };
+		REFAU0MAC0007 /* ReferenceCapturePreflight.swift in Sources */ = {isa = PBXBuildFile; fileRef = REFAU0FREF0007 /* ReferenceCapturePreflight.swift */; };
+		REFAU0MAC0008 /* LegacyReferenceInventory.swift in Sources */ = {isa = PBXBuildFile; fileRef = REFAU0FREF0008 /* LegacyReferenceInventory.swift */; };
+		REFAU0MAC0009 /* ReferenceAuthoringSession.swift in Sources */ = {isa = PBXBuildFile; fileRef = REFAU0FREF0009 /* ReferenceAuthoringSession.swift */; };
+		REFAUST0TST0001 /* ReferenceAuthoringSessionTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = REFAUST0FREF0001 /* ReferenceAuthoringSessionTests.swift */; };
+		REFAUT0TST0001 /* ReferenceAuthoringTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = REFAUT0FREF0001 /* ReferenceAuthoringTests.swift */; };
+		REFBRG0MAC0001 /* ReferenceAuthoringCaptureBridge.swift in Sources */ = {isa = PBXBuildFile; fileRef = REFBRG0FREF0001 /* ReferenceAuthoringCaptureBridge.swift */; };
+		REFBRGT0TST0001 /* ReferenceAuthoringCaptureBridgeTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = REFBRGT0FREF0001 /* ReferenceAuthoringCaptureBridgeTests.swift */; };
+		REFIO0IOS0001 /* ReferencePackageIO.swift in Sources */ = {isa = PBXBuildFile; fileRef = REFIO0FREF0001 /* ReferencePackageIO.swift */; };
+		REFIO0MAC0001 /* ReferencePackageIO.swift in Sources */ = {isa = PBXBuildFile; fileRef = REFIO0FREF0001 /* ReferencePackageIO.swift */; };
+		REFVIEW0MAC001 /* ReferenceAuthoringView.swift in Sources */ = {isa = PBXBuildFile; fileRef = REFERENCEVIEW001 /* ReferenceAuthoringView.swift */; };
+		REFVM0MAC0001 /* ReferenceAuthoringViewModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = REFVM0FREF0001 /* ReferenceAuthoringViewModel.swift */; };
+		REFVMT0TST0001 /* ReferenceAuthoringViewModelTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = REFVMT0FREF0001 /* ReferenceAuthoringViewModelTests.swift */; };
 		RLV0001000RLV001RLV00001 /* ReviewOverlayLaneView.swift in Sources */ = {isa = PBXBuildFile; fileRef = RLV0000000RLV001RLV00001 /* ReviewOverlayLaneView.swift */; };
 		RMKPLS0001IOS /* RaneOneMK2PadCandidateLabeler.swift in Sources */ = {isa = PBXBuildFile; fileRef = RMKPLS0001FREF /* RaneOneMK2PadCandidateLabeler.swift */; };
 		RMKPLS0001MAC /* RaneOneMK2PadCandidateLabeler.swift in Sources */ = {isa = PBXBuildFile; fileRef = RMKPLS0001FREF /* RaneOneMK2PadCandidateLabeler.swift */; };
@@ -586,41 +613,14 @@
 		VPRESB01VPRESB01VPRESB01 /* Resources/VirtualPlatter in Resources */ = {isa = PBXBuildFile; fileRef = VPRES001VPRES001VPRES001 /* Resources/VirtualPlatter */; };
 		VPRESMACVPRESMACVPRESMAC /* Resources/VirtualPlatter in Resources */ = {isa = PBXBuildFile; fileRef = VPRES001VPRES001VPRES001 /* Resources/VirtualPlatter */; };
 		XFCAL0IOS0001 /* CrossfaderCalibration.swift in Sources */ = {isa = PBXBuildFile; fileRef = XFCAL0FREF0001 /* CrossfaderCalibration.swift */; };
-		XFCAL0MAC0001 /* CrossfaderCalibration.swift in Sources */ = {isa = PBXBuildFile; fileRef = XFCAL0FREF0001 /* CrossfaderCalibration.swift */; };
 		XFCAL0IOS0002 /* CrossfaderCalibrationSweep.swift in Sources */ = {isa = PBXBuildFile; fileRef = XFCAL0FREF0002 /* CrossfaderCalibrationSweep.swift */; };
-		XFCAL0MAC0002 /* CrossfaderCalibrationSweep.swift in Sources */ = {isa = PBXBuildFile; fileRef = XFCAL0FREF0002 /* CrossfaderCalibrationSweep.swift */; };
 		XFCAL0IOS0003 /* CrossfaderStateDeriver.swift in Sources */ = {isa = PBXBuildFile; fileRef = XFCAL0FREF0003 /* CrossfaderStateDeriver.swift */; };
-		XFCAL0MAC0003 /* CrossfaderStateDeriver.swift in Sources */ = {isa = PBXBuildFile; fileRef = XFCAL0FREF0003 /* CrossfaderStateDeriver.swift */; };
 		XFCAL0IOS0004 /* CrossfaderCalibrationStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = XFCAL0FREF0004 /* CrossfaderCalibrationStore.swift */; };
+		XFCAL0MAC0001 /* CrossfaderCalibration.swift in Sources */ = {isa = PBXBuildFile; fileRef = XFCAL0FREF0001 /* CrossfaderCalibration.swift */; };
+		XFCAL0MAC0002 /* CrossfaderCalibrationSweep.swift in Sources */ = {isa = PBXBuildFile; fileRef = XFCAL0FREF0002 /* CrossfaderCalibrationSweep.swift */; };
+		XFCAL0MAC0003 /* CrossfaderStateDeriver.swift in Sources */ = {isa = PBXBuildFile; fileRef = XFCAL0FREF0003 /* CrossfaderStateDeriver.swift */; };
 		XFCAL0MAC0004 /* CrossfaderCalibrationStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = XFCAL0FREF0004 /* CrossfaderCalibrationStore.swift */; };
-		REFAU0IOS0001 /* ReferenceTechnique.swift in Sources */ = {isa = PBXBuildFile; fileRef = REFAU0FREF0001 /* ReferenceTechnique.swift */; };
-		REFAU0MAC0001 /* ReferenceTechnique.swift in Sources */ = {isa = PBXBuildFile; fileRef = REFAU0FREF0001 /* ReferenceTechnique.swift */; };
-		REFAU0IOS0002 /* ReferenceTake.swift in Sources */ = {isa = PBXBuildFile; fileRef = REFAU0FREF0002 /* ReferenceTake.swift */; };
-		REFAU0MAC0002 /* ReferenceTake.swift in Sources */ = {isa = PBXBuildFile; fileRef = REFAU0FREF0002 /* ReferenceTake.swift */; };
-		REFAU0IOS0003 /* ReferenceValidation.swift in Sources */ = {isa = PBXBuildFile; fileRef = REFAU0FREF0003 /* ReferenceValidation.swift */; };
-		REFAU0MAC0003 /* ReferenceValidation.swift in Sources */ = {isa = PBXBuildFile; fileRef = REFAU0FREF0003 /* ReferenceValidation.swift */; };
-		REFAU0IOS0004 /* ReferenceRegistry.swift in Sources */ = {isa = PBXBuildFile; fileRef = REFAU0FREF0004 /* ReferenceRegistry.swift */; };
-		REFAU0MAC0004 /* ReferenceRegistry.swift in Sources */ = {isa = PBXBuildFile; fileRef = REFAU0FREF0004 /* ReferenceRegistry.swift */; };
-		REFAU0IOS0005 /* ReferencePackage.swift in Sources */ = {isa = PBXBuildFile; fileRef = REFAU0FREF0005 /* ReferencePackage.swift */; };
-		REFAU0MAC0005 /* ReferencePackage.swift in Sources */ = {isa = PBXBuildFile; fileRef = REFAU0FREF0005 /* ReferencePackage.swift */; };
-		REFAU0IOS0006 /* CallAndResponseSchedule.swift in Sources */ = {isa = PBXBuildFile; fileRef = REFAU0FREF0006 /* CallAndResponseSchedule.swift */; };
-		REFAU0MAC0006 /* CallAndResponseSchedule.swift in Sources */ = {isa = PBXBuildFile; fileRef = REFAU0FREF0006 /* CallAndResponseSchedule.swift */; };
-		REFAU0IOS0007 /* ReferenceCapturePreflight.swift in Sources */ = {isa = PBXBuildFile; fileRef = REFAU0FREF0007 /* ReferenceCapturePreflight.swift */; };
-		REFAU0MAC0007 /* ReferenceCapturePreflight.swift in Sources */ = {isa = PBXBuildFile; fileRef = REFAU0FREF0007 /* ReferenceCapturePreflight.swift */; };
-		REFAU0IOS0008 /* LegacyReferenceInventory.swift in Sources */ = {isa = PBXBuildFile; fileRef = REFAU0FREF0008 /* LegacyReferenceInventory.swift */; };
-		REFAU0MAC0008 /* LegacyReferenceInventory.swift in Sources */ = {isa = PBXBuildFile; fileRef = REFAU0FREF0008 /* LegacyReferenceInventory.swift */; };
-		REFIO0IOS0001 /* ReferencePackageIO.swift in Sources */ = {isa = PBXBuildFile; fileRef = REFIO0FREF0001 /* ReferencePackageIO.swift */; };
-		REFIO0MAC0001 /* ReferencePackageIO.swift in Sources */ = {isa = PBXBuildFile; fileRef = REFIO0FREF0001 /* ReferencePackageIO.swift */; };
 		XFCALT0TST0001 /* CrossfaderCalibrationTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = XFCALT0FREF0001 /* CrossfaderCalibrationTests.swift */; };
-		REFAUT0TST0001 /* ReferenceAuthoringTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = REFAUT0FREF0001 /* ReferenceAuthoringTests.swift */; };
-		REFAU0IOS0009 /* ReferenceAuthoringSession.swift in Sources */ = {isa = PBXBuildFile; fileRef = REFAU0FREF0009 /* ReferenceAuthoringSession.swift */; };
-		REFAU0MAC0009 /* ReferenceAuthoringSession.swift in Sources */ = {isa = PBXBuildFile; fileRef = REFAU0FREF0009 /* ReferenceAuthoringSession.swift */; };
-		REFAUST0TST0001 /* ReferenceAuthoringSessionTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = REFAUST0FREF0001 /* ReferenceAuthoringSessionTests.swift */; };
-		REFBRG0MAC0001 /* ReferenceAuthoringCaptureBridge.swift in Sources */ = {isa = PBXBuildFile; fileRef = REFBRG0FREF0001 /* ReferenceAuthoringCaptureBridge.swift */; };
-		REFBRGT0TST0001 /* ReferenceAuthoringCaptureBridgeTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = REFBRGT0FREF0001 /* ReferenceAuthoringCaptureBridgeTests.swift */; };
-		REFVM0MAC0001 /* ReferenceAuthoringViewModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = REFVM0FREF0001 /* ReferenceAuthoringViewModel.swift */; };
-		REFVIEW0MAC001 /* ReferenceAuthoringView.swift in Sources */ = {isa = PBXBuildFile; fileRef = REFERENCEVIEW001 /* ReferenceAuthoringView.swift */; };
-		REFVMT0TST0001 /* ReferenceAuthoringViewModelTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = REFVMT0FREF0001 /* ReferenceAuthoringViewModelTests.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -914,6 +914,23 @@
 		PVM0000000PVM001PVM00001 /* PhraseViewportModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PhraseViewportModel.swift; sourceTree = "<group>"; };
 		PVM0000000PVM001PVM00003 /* PhraseViewportModelTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PhraseViewportModelTests.swift; sourceTree = "<group>"; };
 		RANEMK2FREF0001 /* RaneOneMK2ProfileTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RaneOneMK2ProfileTests.swift; sourceTree = "<group>"; };
+		REFAU0FREF0001 /* ReferenceTechnique.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ReferenceTechnique.swift; sourceTree = "<group>"; };
+		REFAU0FREF0002 /* ReferenceTake.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ReferenceTake.swift; sourceTree = "<group>"; };
+		REFAU0FREF0003 /* ReferenceValidation.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ReferenceValidation.swift; sourceTree = "<group>"; };
+		REFAU0FREF0004 /* ReferenceRegistry.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ReferenceRegistry.swift; sourceTree = "<group>"; };
+		REFAU0FREF0005 /* ReferencePackage.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ReferencePackage.swift; sourceTree = "<group>"; };
+		REFAU0FREF0006 /* CallAndResponseSchedule.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CallAndResponseSchedule.swift; sourceTree = "<group>"; };
+		REFAU0FREF0007 /* ReferenceCapturePreflight.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ReferenceCapturePreflight.swift; sourceTree = "<group>"; };
+		REFAU0FREF0008 /* LegacyReferenceInventory.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LegacyReferenceInventory.swift; sourceTree = "<group>"; };
+		REFAU0FREF0009 /* ReferenceAuthoringSession.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ReferenceAuthoringSession.swift; sourceTree = "<group>"; };
+		REFAUST0FREF0001 /* ReferenceAuthoringSessionTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ReferenceAuthoringSessionTests.swift; sourceTree = "<group>"; };
+		REFAUT0FREF0001 /* ReferenceAuthoringTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ReferenceAuthoringTests.swift; sourceTree = "<group>"; };
+		REFBRG0FREF0001 /* ReferenceAuthoringCaptureBridge.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ReferenceAuthoringCaptureBridge.swift; sourceTree = "<group>"; };
+		REFBRGT0FREF0001 /* ReferenceAuthoringCaptureBridgeTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ReferenceAuthoringCaptureBridgeTests.swift; sourceTree = "<group>"; };
+		REFERENCEVIEW001 /* ReferenceAuthoringView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ReferenceAuthoringView.swift; sourceTree = "<group>"; };
+		REFIO0FREF0001 /* ReferencePackageIO.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ReferencePackageIO.swift; sourceTree = "<group>"; };
+		REFVM0FREF0001 /* ReferenceAuthoringViewModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ReferenceAuthoringViewModel.swift; sourceTree = "<group>"; };
+		REFVMT0FREF0001 /* ReferenceAuthoringViewModelTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ReferenceAuthoringViewModelTests.swift; sourceTree = "<group>"; };
 		RLV0000000RLV001RLV00001 /* ReviewOverlayLaneView.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = ReviewOverlayLaneView.swift; sourceTree = "<group>"; };
 		RMKPLS0001FREF /* RaneOneMK2PadCandidateLabeler.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RaneOneMK2PadCandidateLabeler.swift; sourceTree = "<group>"; };
 		RMKPLS0002FREF /* RaneOneMK2PadCandidateLabelerTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RaneOneMK2PadCandidateLabelerTests.swift; sourceTree = "<group>"; };
@@ -1085,24 +1102,7 @@
 		XFCAL0FREF0002 /* CrossfaderCalibrationSweep.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CrossfaderCalibrationSweep.swift; sourceTree = "<group>"; };
 		XFCAL0FREF0003 /* CrossfaderStateDeriver.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CrossfaderStateDeriver.swift; sourceTree = "<group>"; };
 		XFCAL0FREF0004 /* CrossfaderCalibrationStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CrossfaderCalibrationStore.swift; sourceTree = "<group>"; };
-		REFAU0FREF0001 /* ReferenceTechnique.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ReferenceTechnique.swift; sourceTree = "<group>"; };
-		REFAU0FREF0002 /* ReferenceTake.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ReferenceTake.swift; sourceTree = "<group>"; };
-		REFAU0FREF0003 /* ReferenceValidation.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ReferenceValidation.swift; sourceTree = "<group>"; };
-		REFAU0FREF0004 /* ReferenceRegistry.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ReferenceRegistry.swift; sourceTree = "<group>"; };
-		REFAU0FREF0005 /* ReferencePackage.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ReferencePackage.swift; sourceTree = "<group>"; };
-		REFAU0FREF0006 /* CallAndResponseSchedule.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CallAndResponseSchedule.swift; sourceTree = "<group>"; };
-		REFAU0FREF0007 /* ReferenceCapturePreflight.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ReferenceCapturePreflight.swift; sourceTree = "<group>"; };
-		REFAU0FREF0008 /* LegacyReferenceInventory.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LegacyReferenceInventory.swift; sourceTree = "<group>"; };
-		REFIO0FREF0001 /* ReferencePackageIO.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ReferencePackageIO.swift; sourceTree = "<group>"; };
 		XFCALT0FREF0001 /* CrossfaderCalibrationTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CrossfaderCalibrationTests.swift; sourceTree = "<group>"; };
-		REFAUT0FREF0001 /* ReferenceAuthoringTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ReferenceAuthoringTests.swift; sourceTree = "<group>"; };
-		REFAU0FREF0009 /* ReferenceAuthoringSession.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ReferenceAuthoringSession.swift; sourceTree = "<group>"; };
-		REFAUST0FREF0001 /* ReferenceAuthoringSessionTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ReferenceAuthoringSessionTests.swift; sourceTree = "<group>"; };
-		REFBRG0FREF0001 /* ReferenceAuthoringCaptureBridge.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ReferenceAuthoringCaptureBridge.swift; sourceTree = "<group>"; };
-		REFBRGT0FREF0001 /* ReferenceAuthoringCaptureBridgeTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ReferenceAuthoringCaptureBridgeTests.swift; sourceTree = "<group>"; };
-		REFVM0FREF0001 /* ReferenceAuthoringViewModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ReferenceAuthoringViewModel.swift; sourceTree = "<group>"; };
-		REFERENCEVIEW001 /* ReferenceAuthoringView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ReferenceAuthoringView.swift; sourceTree = "<group>"; };
-		REFVMT0FREF0001 /* ReferenceAuthoringViewModelTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ReferenceAuthoringViewModelTests.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFileSystemSynchronizedRootGroup section */
@@ -1642,14 +1642,6 @@
 			path = Views;
 			sourceTree = "<group>";
 		};
-		REFVM0GRP0001 /* ViewModels */ = {
-			isa = PBXGroup;
-			children = (
-				REFVM0FREF0001 /* ReferenceAuthoringViewModel.swift */,
-			);
-			path = ViewModels;
-			sourceTree = "<group>";
-		};
 		B5000003 /* Services */ = {
 			isa = PBXGroup;
 			children = (
@@ -1788,6 +1780,30 @@
 			path = Platter;
 			sourceTree = "<group>";
 		};
+		REFAU0GRP0001 /* Reference */ = {
+			isa = PBXGroup;
+			children = (
+				REFAU0FREF0009 /* ReferenceAuthoringSession.swift */,
+				REFAU0FREF0008 /* LegacyReferenceInventory.swift */,
+				REFAU0FREF0007 /* ReferenceCapturePreflight.swift */,
+				REFAU0FREF0006 /* CallAndResponseSchedule.swift */,
+				REFAU0FREF0005 /* ReferencePackage.swift */,
+				REFAU0FREF0004 /* ReferenceRegistry.swift */,
+				REFAU0FREF0003 /* ReferenceValidation.swift */,
+				REFAU0FREF0002 /* ReferenceTake.swift */,
+				REFAU0FREF0001 /* ReferenceTechnique.swift */,
+			);
+			path = Reference;
+			sourceTree = "<group>";
+		};
+		REFVM0GRP0001 /* ViewModels */ = {
+			isa = PBXGroup;
+			children = (
+				REFVM0FREF0001 /* ReferenceAuthoringViewModel.swift */,
+			);
+			path = ViewModels;
+			sourceTree = "<group>";
+		};
 		ROM0000000ROM001ROM00001 /* Models */ = {
 			isa = PBXGroup;
 			children = (
@@ -1879,22 +1895,6 @@
 				XFCAL0FREF0001 /* CrossfaderCalibration.swift */,
 			);
 			path = Calibration;
-			sourceTree = "<group>";
-		};
-		REFAU0GRP0001 /* Reference */ = {
-			isa = PBXGroup;
-			children = (
-				REFAU0FREF0009 /* ReferenceAuthoringSession.swift */,
-				REFAU0FREF0008 /* LegacyReferenceInventory.swift */,
-				REFAU0FREF0007 /* ReferenceCapturePreflight.swift */,
-				REFAU0FREF0006 /* CallAndResponseSchedule.swift */,
-				REFAU0FREF0005 /* ReferencePackage.swift */,
-				REFAU0FREF0004 /* ReferenceRegistry.swift */,
-				REFAU0FREF0003 /* ReferenceValidation.swift */,
-				REFAU0FREF0002 /* ReferenceTake.swift */,
-				REFAU0FREF0001 /* ReferenceTechnique.swift */,
-			);
-			path = Reference;
 			sourceTree = "<group>";
 		};
 /* End PBXGroup section */
