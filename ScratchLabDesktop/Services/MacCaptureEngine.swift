@@ -13483,6 +13483,22 @@ final class MacCaptureEngine: NSObject, ObservableObject {
     ) -> String? {
         let name = selectedMIDISourceName.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !name.isEmpty, name != "Not Connected" else { return nil }
+        let lowercasedName = name.lowercased()
+        let isSeventyTwoOrTwelve = lowercasedName.contains("seventy-two")
+            || lowercasedName.contains("seventy two")
+            || lowercasedName.contains("twelve")
+        if isSeventyTwoOrTwelve {
+            // The Seventy-Two/Twelve production pair publishes platter CC6
+            // on channel 0. Keep the source identity check here so a second
+            // controller cannot become the decoder merely by arriving first.
+            guard capturedMidi.contains(where: {
+                $0.deviceName == name && $0.controller == 6 && $0.channel == 0
+            }) else {
+                return nil
+            }
+            return name
+        }
+        // Rane ONE (and other channel-1 CC6 devices): unchanged.
         guard capturedMidi.contains(where: {
             $0.deviceName == name && $0.controller == 6 && $0.channel == 1
         }) else {
@@ -13509,8 +13525,12 @@ final class MacCaptureEngine: NSObject, ObservableObject {
         ) else {
             return []
         }
+        let lowercasedDeviceName = deviceName.lowercased()
+        let channel = lowercasedDeviceName.contains("seventy-two")
+            || lowercasedDeviceName.contains("seventy two")
+            || lowercasedDeviceName.contains("twelve") ? 0 : 1
         return CaptureCore.derivePlatterMovementEvents(
-            from: capturedMidi, controller: 6, channel: 1, deviceName: deviceName)
+            from: capturedMidi, controller: 6, channel: channel, deviceName: deviceName)
     }
 
     /// Live/provisional counterpart to `resolvedControllerMovementEvents`,
@@ -13530,8 +13550,12 @@ final class MacCaptureEngine: NSObject, ObservableObject {
         ) else {
             return CaptureCore.PlatterMovementDecodeResult(committedEvents: [], provisionalMovement: nil)
         }
+        let lowercasedDeviceName = deviceName.lowercased()
+        let channel = lowercasedDeviceName.contains("seventy-two")
+            || lowercasedDeviceName.contains("seventy two")
+            || lowercasedDeviceName.contains("twelve") ? 0 : 1
         return CaptureCore.derivePlatterMovementEventsWithProvisional(
-            from: capturedMidi, controller: 6, channel: 1, deviceName: deviceName,
+            from: capturedMidi, controller: 6, channel: channel, deviceName: deviceName,
             referencePacket: referencePacket)
     }
 

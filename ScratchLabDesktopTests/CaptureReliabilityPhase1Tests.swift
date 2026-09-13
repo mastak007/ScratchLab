@@ -17294,6 +17294,41 @@ final class ControllerPlatterDecoderTests: XCTestCase {
         XCTAssertEqual(events.count, 1, "only the selected device's run decodes")
         XCTAssertEqual(events.first?.source, "controller")
     }
+
+    func testSeventyTwoTwelveRoutingUsesChannelZeroAndPreservesSourceScope() {
+        let selected = deviceRun(0, 12, from: 0.0, device: "Rane Seventy-Two", channel: 0)
+        let wrongChannel = deviceRun(80, 12, from: 0.0, device: "Rane Seventy-Two", channel: 1)
+        let wrongDevice = deviceRun(40, 12, from: 0.0, device: "Other Device", channel: 0)
+
+        let events = MacCaptureEngine.resolvedControllerMovementEvents(
+            selectedMIDISourceName: "Rane Seventy-Two",
+            capturedMidi: wrongChannel + wrongDevice + selected)
+
+        XCTAssertEqual(events.count, 1, "Seventy-Two/Twelve decoding must use only selected channel 0")
+        XCTAssertEqual(events.first?.direction, "forward")
+        XCTAssertEqual(events.first?.source, "controller")
+    }
+
+    func testTwelveNameVariantUsesChannelZero() {
+        let selected = deviceRun(0, 12, from: 0.0, device: "TWELVE MKII", channel: 0)
+
+        let events = MacCaptureEngine.resolvedControllerMovementEvents(
+            selectedMIDISourceName: "TWELVE MKII", capturedMidi: selected)
+
+        XCTAssertEqual(events.count, 1)
+        XCTAssertEqual(events.first?.source, "controller")
+    }
+
+    func testRaneOneStillUsesChannelOne() {
+        let channelZero = deviceRun(0, 12, from: 0.0, device: "Rane ONE MKII", channel: 0)
+        let channelOne = deviceRun(20, 12, from: 0.0, device: "Rane ONE MKII", channel: 1)
+
+        let events = MacCaptureEngine.resolvedControllerMovementEvents(
+            selectedMIDISourceName: "Rane ONE MKII", capturedMidi: channelZero + channelOne)
+
+        XCTAssertEqual(events.count, 1)
+        XCTAssertEqual(events.first?.direction, "forward")
+    }
 }
 
 // MARK: - Hand-pose cadence scheduler (30 fps → 15 fps quantization fix)

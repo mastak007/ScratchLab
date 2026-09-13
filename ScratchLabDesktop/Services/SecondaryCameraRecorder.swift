@@ -112,8 +112,17 @@ final class SecondaryCameraRecorder: NSObject, ObservableObject, AVCaptureVideoD
                 self.device = device
                 let rotationCoordinator = AVCaptureDevice.RotationCoordinator(device: device, previewLayer: nil)
                 coordinator = rotationCoordinator
-                selectedOrientation = Orientation(rawValue: UserDefaults.standard.string(
-                    forKey: "scratchlab.secondaryCamera.orientation." + device.uniqueID) ?? "") ?? .automatic
+                let savedOrientation = UserDefaults.standard.string(
+                    forKey: "scratchlab.secondaryCamera.orientation." + device.uniqueID
+                ).flatMap(Orientation.init(rawValue:))
+                // CXL's phone angle is the body-view camera. Apply portrait at
+                // the capture connection so the recorded asset and preview
+                // share the same orientation. A saved choice still wins.
+                let isIPhoneCamera = device.localizedName.localizedCaseInsensitiveContains("iPhone")
+                    || device.deviceType == .continuityCamera
+                    || device.deviceType == .deskViewCamera
+                selectedOrientation = savedOrientation
+                    ?? (isIPhoneCamera ? .portraitRight : .automatic)
                 guard applyRotation(selectedOrientation.angle ?? rotationCoordinator.videoRotationAngleForHorizonLevelCapture) else {
                     throw SecondaryCameraError("This camera does not support the selected rotation. Choose another orientation.")
                 }
@@ -471,12 +480,20 @@ struct SecondaryCameraPreview: NSViewRepresentable {
 
 struct SecondaryCameraLiveView: View {
     @ObservedObject var recorder: SecondaryCameraRecorder
+    var previewHeight: CGFloat = 320
+
     var body: some View {
         if !recorder.selectedID.isEmpty {
-            HStack {
-                SecondaryCameraPreview(recorder: recorder).frame(width: 180, height: 320)
-                Text(recorder.status).font(.caption)
+            VStack(alignment: .center, spacing: 6) {
+                SecondaryCameraPreview(recorder: recorder)
+                    .frame(width: previewHeight * 9 / 16, height: previewHeight)
+                    .background(Color.black)
+                Text(recorder.status)
+                    .font(.caption)
+                    .multilineTextAlignment(.center)
+                    .lineLimit(2)
             }
+            .frame(maxWidth: .infinity, minHeight: previewHeight, alignment: .top)
         }
     }
 }

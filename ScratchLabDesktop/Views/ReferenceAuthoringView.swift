@@ -95,18 +95,17 @@ struct ReferenceAuthoringView: View {
     /// real box to draw in.
     private static let liveNotationMinimumHeight: CGFloat = 180
 
-    /// Ceiling for the camera preview so the two panels coexist at the
-    /// smallest supported window without the 16:9 preview claiming the whole
-    /// scroll content and pushing notation off-screen. Framing stays a
-    /// separate, clearly visible panel — notation is never overlaid on it.
-    private static let cameraPreviewMaximumHeight: CGFloat = 360
+    /// The capture board keeps both camera feeds and both timing surfaces in
+    /// the first desktop viewport while a take is running.
+    private static let captureBoardCameraHeight: CGFloat = 380
+    private static let captureBoardSecondaryCameraWidth: CGFloat = 250
+    private static let captureBoardNotationHeight: CGFloat = 210
 
     /// Drawing height for the canonical tear chart's lane.
     ///
-    /// Sits just under `liveNotationMinimumHeight` so the chart's own header
-    /// and reason rows fit inside the 180 pt box its call sites reserve,
-    /// without the lane itself ever asking for unbounded height.
-    private static let canonicalTearChartMinimumHeight: CGFloat = 140
+    /// Gives the review chart enough vertical range for direction changes to
+    /// remain readable across a wide desktop window.
+    private static let canonicalTearChartMinimumHeight: CGFloat = 240
 
     init(
         engine: MacCaptureEngine,
@@ -159,8 +158,9 @@ struct ReferenceAuthoringView: View {
                     .id(ReferenceAuthoringNavigationRequest.Destination.review.rawValue)
                 reviewSection
             }
-            .padding(20)
-            .frame(maxWidth: 860, alignment: .leading)
+            .padding(.horizontal, 28)
+            .padding(.vertical, 20)
+            .frame(maxWidth: .infinity, alignment: .leading)
         }
         .onChange(of: viewModel.navigationRequest) { _, request in
             guard let request else { return }
@@ -751,62 +751,112 @@ struct ReferenceAuthoringView: View {
     /// `completeRoutineFinalization` reads. Camera guides configure the same
     /// measured image regions used by capture; live notation remains a preview.
     private var framingContent: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            CXLCameraCalibrationPreview(
-                captureEngine: captureEngine,
-                previewHeight: Self.cameraPreviewMaximumHeight,
-                captureInProgress: viewModel.isWorking || viewModel.session.phase == .recording
-            )
+        VStack(alignment: .leading, spacing: 12) {
+            HStack(alignment: .top, spacing: 12) {
+                captureBoardTile("AHHH PLAYHEAD") {
+                    verticalSamplePositionContent
+                }
+                .frame(width: 132)
 
-            SecondaryCameraLiveView(recorder: captureEngine.secondaryCamera)
+                captureBoardTile("MAIN CAMERA") {
+                    VStack(alignment: .leading, spacing: 6) {
+                        CXLCameraCalibrationPreview(
+                            captureEngine: captureEngine,
+                            previewHeight: Self.captureBoardCameraHeight,
+                            captureInProgress: viewModel.isWorking || viewModel.session.phase == .recording
+                        )
+                        if !captureEngine.isCameraActive {
+                            Text("Camera preview is not running. Recording is blocked until the selected camera is active.")
+                                .font(.caption)
+                                .foregroundStyle(.orange)
+                        }
+                    }
+                }
+                .frame(maxWidth: .infinity)
 
-            if !captureEngine.isCameraActive {
-                Text("Camera preview is not running. Recording is blocked until the selected camera is active.")
-                    .font(.caption)
-                    .foregroundStyle(.orange)
+                captureBoardTile("IPHONE / SECOND CAMERA") {
+                    SecondaryCameraLiveView(
+                        recorder: captureEngine.secondaryCamera,
+                        previewHeight: Self.captureBoardCameraHeight
+                    )
+                    .frame(width: Self.captureBoardSecondaryCameraWidth,
+                           height: Self.captureBoardCameraHeight,
+                           alignment: .top)
+                    .background(Color.black)
+                }
+                .frame(width: Self.captureBoardSecondaryCameraWidth)
             }
 
-            samplePositionContent
-
-            if let liveNotationTracker {
-                // All CXL techniques share one measured position track. The
-                // legacy performed card rebases each gesture independently,
-                // which detaches unequal push/pull strokes at a reversal.
-                // Keep real packet gaps and fader uncertainty in the existing
-                // canonical projection; sample playback never wraps this lane.
-                ReferenceLiveMotionContent(tracker: liveNotationTracker) { liveNotationTracker in
-                    canonicalTearChart(
-                        title: viewModel.selectedTechnique.map {
-                            "YOUR MOTION — LIVE (\($0.displayName.uppercased()))"
-                        } ?? "YOUR MOTION — LIVE",
-                        projection: ReferenceTearCanonicalProjectionBuilder.project(
-                            movementEvents: liveNotationTracker.continuousRenderedEvents,
-                            platterEvidenceIntervals: liveNotationTracker.platterEvidenceIntervals,
-                            derivation: liveNotationTracker.faderDerivation,
-                            coordinates: liveNotationTracker.continuousPlatterCoordinates
-                        ),
-                        emptyMessage: "Waiting for movement…"
-                    )
-                }
-                .frame(maxWidth: .infinity, minHeight: Self.liveNotationMinimumHeight)
-                #if DEBUG
-                LiveNotationDiagnosticsRow(tracker: liveNotationTracker)
-                #endif
-            } else {
-                // Only reachable while the route is inactive; the lane is live
-                // from entry onward. Same reserved height, so nothing shifts.
-                Text("Live motion appears here while this screen is open.")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                    .frame(
-                        maxWidth: .infinity,
-                        minHeight: Self.liveNotationMinimumHeight,
-                        alignment: .topLeading
-                    )
+            captureBoardTile("LIVE NOTATION") {
+                liveNotationContent
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(.top, 4)
+    }
+
+    private var verticalSamplePositionContent: some View {
+        VStack(alignment: .center, spacing: 8) {
+            MacSamplePositionWaveformView(
+                waveform: captureEngine.playbackWaveformSnapshot,
+                position: captureEngine.playbackPositionSnapshot,
+                positionLabel: "PLAYHEAD",
+                usesRenderedPlayhead: true
+            )
+            .frame(width: Self.captureBoardCameraHeight, height: 104)
+            .rotationEffect(.degrees(-90))
+            .frame(width: 104, height: Self.captureBoardCameraHeight)
+
+            if captureEngine.playbackWaveformSnapshot == nil {
+                Button("Load AHHH") { captureEngine.loadPlatterTestSample() }
+                    .disabled(viewModel.isWorking || captureEngine.isAudioInputSelectionLocked)
+                    .controlSize(.small)
+            }
+        }
+        .frame(maxWidth: .infinity, minHeight: Self.captureBoardCameraHeight, alignment: .top)
+        .background(Color.black.opacity(0.28), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+    }
+
+    private func captureBoardTile<Content: View>(
+        _ title: String,
+        @ViewBuilder content: () -> Content
+    ) -> some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Text(title)
+                .font(.system(size: 10, weight: .bold, design: .monospaced))
+                .foregroundStyle(.secondary)
+            content()
+        }
+        .frame(maxWidth: .infinity, alignment: .topLeading)
+    }
+
+    @ViewBuilder
+    private var liveNotationContent: some View {
+        if let liveNotationTracker {
+            ReferenceLiveMotionContent(tracker: liveNotationTracker) { liveNotationTracker in
+                canonicalTearChart(
+                    title: viewModel.selectedTechnique.map {
+                        "YOUR MOTION — LIVE (\($0.displayName.uppercased()))"
+                    } ?? "YOUR MOTION — LIVE",
+                    projection: ReferenceTearCanonicalProjectionBuilder.project(
+                        movementEvents: liveNotationTracker.continuousRenderedEvents,
+                        platterEvidenceIntervals: liveNotationTracker.platterEvidenceIntervals,
+                        derivation: liveNotationTracker.faderDerivation,
+                        coordinates: liveNotationTracker.continuousPlatterCoordinates
+                    ),
+                    emptyMessage: "Waiting for movement…"
+                )
+            }
+            .frame(maxWidth: .infinity, minHeight: Self.captureBoardNotationHeight)
+            #if DEBUG
+            LiveNotationDiagnosticsRow(tracker: liveNotationTracker)
+            #endif
+        } else {
+            Text("Live motion appears here while this screen is open.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .frame(maxWidth: .infinity, minHeight: Self.captureBoardNotationHeight, alignment: .topLeading)
+        }
     }
 
     @ViewBuilder
@@ -2190,7 +2240,22 @@ struct ReferenceAuthoringView: View {
                 .disabled(!viewModel.canEditReviewedTake)
             }
             if focusedBoundary(for: take)?.index == boundary.index {
-                ReferenceBoundaryMediaReview(controller: viewModel.mediaReview, boundary: boundary, take: take)
+                HStack(alignment: .top, spacing: 16) {
+                    ReferenceBoundaryMediaReview(
+                        controller: viewModel.mediaReview,
+                        boundary: boundary,
+                        take: take
+                    )
+                    .frame(maxWidth: .infinity, alignment: .topLeading)
+                    canonicalTearChart(
+                        title: "BOUNDARY NOTATION",
+                        projection: take.tearProjection,
+                        emptyMessage: "No notation is available for this take.",
+                        recordedBPM: take.evidence.metadata.bpm,
+                        reviewTake: take
+                    )
+                    .frame(maxWidth: .infinity, alignment: .topLeading)
+                }
             }
         }
         .padding(10)
