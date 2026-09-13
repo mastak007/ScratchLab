@@ -4722,142 +4722,6 @@ struct MacAnalyzerView: View {
         }
     }
 
-    // MARK: - Mixer & Hot-Cue Mapping (MIDI Learn checkpoint)
-    //
-    // Minimal Advanced/Debug UI for the generic per-device MIDI Learn model:
-    // left/right upfader learn+clear, hot cue 1-8 learn+clear with scratch
-    // sample assignment, active-device mapping summary, live learn feedback,
-    // and persistence/load error surfacing. Audio routing is out of scope.
-
-    private static let hotCueActions: [MIDISemanticAction] = [
-        .hotCue1, .hotCue2, .hotCue3, .hotCue4, .hotCue5, .hotCue6, .hotCue7, .hotCue8
-    ]
-
-    private var midiLearnLiveValueText: String? {
-        guard let action = captureEngine.activeMIDILearnAction else { return nil }
-        // Show only a value observed *since this Learn session started*. Before
-        // a fresh event arrives this is `nil`, so the panel never echoes the
-        // parked value of whatever control was last touched (e.g. the
-        // crossfader) as if it were this control's.
-        guard let raw = captureEngine.midiLearnObservedRawValue else {
-            return "Learning \(action.displayName)… move the control now"
-        }
-        let normalized = Double(max(0, min(127, raw))) / 127.0
-        return "Learning \(action.displayName) · raw \(raw) · normalized \(String(format: "%.2f", normalized))"
-    }
-
-    private func midiMappingStatusLabel(for action: MIDISemanticAction) -> String {
-        if let control = captureEngine.currentMIDIDeviceMapping?.control(for: action) {
-            return control.displayName
-        }
-        return "not mapped"
-    }
-
-    @ViewBuilder
-    private func midiLearnActionRow(_ action: MIDISemanticAction, title: String) -> some View {
-        let isLearningThis = captureEngine.activeMIDILearnAction == action
-        let isMapped = captureEngine.currentMIDIDeviceMapping?.control(for: action) != nil
-        HStack(spacing: 8) {
-            VStack(alignment: .leading, spacing: 2) {
-                Text(title)
-                    .font(.system(size: 12, weight: .semibold))
-                Text(isLearningThis ? (midiLearnLiveValueText ?? "Listening…") : midiMappingStatusLabel(for: action))
-                    .font(.system(size: 11, weight: .medium, design: .monospaced))
-                    .foregroundStyle(.secondary)
-                    .fixedSize(horizontal: false, vertical: true)
-            }
-            Spacer()
-            if isLearningThis {
-                Button("Cancel") { captureEngine.cancelMIDILearn() }
-                    .buttonStyle(.bordered)
-                    .controlSize(.small)
-            } else {
-                Button("Learn") { captureEngine.startMIDILearn(for: action) }
-                    .buttonStyle(.bordered)
-                    .controlSize(.small)
-                    .disabled(captureEngine.activeMIDILearnAction != nil)
-                if isMapped {
-                    Button("Clear") { captureEngine.clearMapping(for: action) }
-                        .buttonStyle(.bordered)
-                        .controlSize(.small)
-                }
-            }
-        }
-    }
-
-    /// Sorted, available bundled scratch-sample IDs for hot-cue assignment.
-    /// Excludes the legacy raw `ahhh` sample (product decision, 2026-08-14):
-    /// `dvs_ahhh` is now the only user-facing "Ahh" scratch sample. `ahhh`
-    /// stays in `knownSampleIDs`/loadable — it remains a required fixture
-    /// for the legacy-grain-path regression test suite — it is only
-    /// excluded from this picker.
-    private var availableScratchSampleIDs: [String] {
-        ScratchSamplePlaybackController.knownSampleIDs
-            .subtracting(["ahhh"])
-            .sorted()
-    }
-
-    @ViewBuilder
-    private func hotCueMappingRow(_ index: Int) -> some View {
-        let action = Self.hotCueActions[index - 1]
-        let isLearningThis = captureEngine.activeMIDILearnAction == action
-        let learnedControl = captureEngine.currentMIDIDeviceMapping?.control(for: action)
-        VStack(alignment: .leading, spacing: 4) {
-            HStack(spacing: 8) {
-                VStack(alignment: .leading, spacing: 2) {
-                    Text("Hot Cue \(index)")
-                        .font(.system(size: 12, weight: .semibold))
-                    Text(isLearningThis ? (midiLearnLiveValueText ?? "Listening…") : midiMappingStatusLabel(for: action))
-                        .font(.system(size: 11, weight: .medium, design: .monospaced))
-                        .foregroundStyle(.secondary)
-                        .fixedSize(horizontal: false, vertical: true)
-                }
-                Spacer()
-                if isLearningThis {
-                    Button("Cancel") { captureEngine.cancelMIDILearn() }
-                        .buttonStyle(.bordered)
-                        .controlSize(.small)
-                } else {
-                    Button("Learn") { captureEngine.startMIDILearn(for: action) }
-                        .buttonStyle(.bordered)
-                        .controlSize(.small)
-                        .disabled(captureEngine.activeMIDILearnAction != nil)
-                    if learnedControl != nil {
-                        Button("Clear") { captureEngine.clearMapping(for: action) }
-                            .buttonStyle(.bordered)
-                            .controlSize(.small)
-                    }
-                }
-            }
-
-            if let learnedControl {
-                Picker("Sample", selection: Binding(
-                    get: { learnedControl.assignedSampleID ?? "" },
-                    set: { newValue in
-                        guard !newValue.isEmpty else { return }
-                        captureEngine.assignSampleToHotCue(newValue, hotCueIndex: index)
-                    }
-                )) {
-                    Text("None").tag("")
-                    ForEach(availableScratchSampleIDs, id: \.self) { sampleID in
-                        Text(sampleID).tag(sampleID)
-                    }
-                }
-                .pickerStyle(.menu)
-                .labelsHidden()
-                .controlSize(.small)
-                .frame(maxWidth: 200, alignment: .leading)
-            }
-        }
-    }
-
-    private var midiMappingDeviceSummary: String {
-        guard let mapping = captureEngine.currentMIDIDeviceMapping else {
-            return "No saved mapping for this device yet."
-        }
-        return "\(mapping.deviceName) · \(mapping.controls.count) control\(mapping.controls.count == 1 ? "" : "s") mapped"
-    }
-
     private var midiControllerActivitySummary: String {
         let crossfader = captureEngine.liveCrossfaderRawValue.map { String($0) } ?? "--"
         let left = captureEngine.liveLeftUpfaderRawValue.map { String($0) } ?? "--"
@@ -4866,266 +4730,8 @@ struct MacAnalyzerView: View {
         return "LIVE · XF \(crossfader) · L \(left) · R \(right) · \(hotCue)"
     }
 
-    /// Status text for a continuous action's calibration row — live observed
-    /// range while calibrating, or the persisted range/inversion otherwise.
-    private func calibrationStatusText(for action: MIDISemanticAction, control: MIDILearnedControl, isCalibrating: Bool) -> String {
-        if isCalibrating {
-            if let observedMin = captureEngine.calibrationObservedMin, let observedMax = captureEngine.calibrationObservedMax {
-                return "\(action.displayName) calibration: observed \(observedMin)–\(observedMax) · move through full range"
-            }
-            return "\(action.displayName) calibration: move the control through its full range"
-        }
-        let invertLabel = control.inverted ? " · inverted" : ""
-        return "\(action.displayName) range \(control.minValue)–\(control.maxValue)\(invertLabel)"
-    }
-
-    /// Calibrate/Finish/Cancel + inversion toggle for one already-learned
-    /// continuous action (crossfader, left/right upfader). Nothing renders
-    /// until the action has a learned binding — calibration observes the
-    /// binding's raw range, it doesn't learn the binding itself.
-    @ViewBuilder
-    private func calibrationRow(for action: MIDISemanticAction) -> some View {
-        if let learnedControl = captureEngine.currentMIDIDeviceMapping?.control(for: action) {
-            let isCalibratingThis = captureEngine.activeCalibrationAction == action
-            HStack(spacing: 8) {
-                Text(calibrationStatusText(for: action, control: learnedControl, isCalibrating: isCalibratingThis))
-                    .font(.system(size: 11, weight: .medium, design: .monospaced))
-                    .foregroundStyle(.secondary)
-                    .fixedSize(horizontal: false, vertical: true)
-                Spacer()
-                if isCalibratingThis {
-                    Button("Finish") { captureEngine.finishCalibration() }
-                        .buttonStyle(.borderedProminent)
-                        .controlSize(.small)
-                    Button("Cancel") { captureEngine.cancelCalibration() }
-                        .buttonStyle(.bordered)
-                        .controlSize(.small)
-                } else {
-                    Button("Calibrate") { captureEngine.startCalibration(for: action) }
-                        .buttonStyle(.bordered)
-                        .controlSize(.small)
-                        .disabled(captureEngine.activeMIDILearnAction != nil || captureEngine.activeCalibrationAction != nil)
-                    Toggle("Invert", isOn: Binding(
-                        get: { learnedControl.inverted },
-                        set: { captureEngine.setInversion($0, for: action) }
-                    ))
-                    .toggleStyle(.checkbox)
-                    .font(.system(size: 11, weight: .medium))
-                    .fixedSize()
-                }
-            }
-        }
-    }
-
-    /// Resolved (persisted or migration-default) preset for a fader-curve
-    /// action, or nil if the action has no learned binding yet.
-    private func resolvedCurvePreset(for action: MIDISemanticAction) -> FaderCurvePreset? {
-        captureEngine.currentMIDIDeviceMapping?.control(for: action)?.resolvedCurveConfig.preset
-    }
-
-    /// Picker selection for a fader-curve row. While a custom-capture
-    /// session is active for THIS action, shows Custom regardless of the
-    /// still-persisted preset — selecting Custom is transactional
-    /// (`startCurveCalibration`/`finishCurveCalibration`), so the
-    /// persisted value deliberately hasn't changed yet.
-    private func curvePickerSelection(for action: MIDISemanticAction) -> FaderCurvePreset {
-        if captureEngine.activeCurveCaptureAction == action { return .custom }
-        return resolvedCurvePreset(for: action) ?? .linear
-    }
-
-    /// One action's curve row: a preset picker, plus (only while
-    /// progressively disclosed) either the Custom capture controls or a
-    /// Reset-to-default affordance for an already-custom curve. No
-    /// engineering terms (normalized values, transfer functions) ever
-    /// appear here — presets are named, captured points are shown only as
-    /// captured/not-captured state.
-    @ViewBuilder
-    private func faderCurveRow(for action: MIDISemanticAction, title: String) -> some View {
-        if captureEngine.currentMIDIDeviceMapping?.control(for: action) != nil {
-            let isCapturingThis = captureEngine.activeCurveCaptureAction == action
-            let sessionBusy = captureEngine.activeMIDILearnAction != nil
-                || captureEngine.activeCalibrationAction != nil
-                || (captureEngine.activeCurveCaptureAction != nil && !isCapturingThis)
-            VStack(alignment: .leading, spacing: 6) {
-                HStack(spacing: 8) {
-                    Text(title)
-                        .font(.system(size: 12, weight: .semibold))
-                    Spacer()
-                    Picker("", selection: Binding(
-                        get: { curvePickerSelection(for: action) },
-                        set: { newPreset in
-                            if newPreset == .custom {
-                                captureEngine.startCurveCalibration(for: action)
-                            } else {
-                                captureEngine.setCurvePreset(newPreset, for: action)
-                            }
-                        }
-                    )) {
-                        ForEach(FaderCurvePreset.availablePresets(for: action), id: \.self) { preset in
-                            Text(preset.displayName).tag(preset)
-                        }
-                    }
-                    .pickerStyle(.menu)
-                    .labelsHidden()
-                    .controlSize(.small)
-                    .frame(maxWidth: 140)
-                    .disabled(sessionBusy)
-                }
-
-                if isCapturingThis {
-                    VStack(alignment: .leading, spacing: 4) {
-                        Text("Move the control to where it should go quiet, then tap Set closed. Move it to where it should reach full volume, then tap Set full-on.")
-                            .font(.system(size: 10, weight: .regular))
-                            .foregroundStyle(.secondary)
-                            .fixedSize(horizontal: false, vertical: true)
-                        HStack(spacing: 8) {
-                            Button(captureEngine.curveCaptureHasClosedPoint ? "Closed ✓" : "Set closed") {
-                                captureEngine.captureCurveClosedPoint()
-                            }
-                            .buttonStyle(.bordered)
-                            .controlSize(.small)
-                            .disabled(!captureEngine.curveCaptureHasLiveValue)
-
-                            Button(captureEngine.curveCaptureHasFullOnPoint ? "Full-on ✓" : "Set full-on") {
-                                captureEngine.captureCurveFullOnPoint()
-                            }
-                            .buttonStyle(.bordered)
-                            .controlSize(.small)
-                            .disabled(!captureEngine.curveCaptureHasLiveValue)
-
-                            Spacer()
-
-                            Button("Finish") { captureEngine.finishCurveCalibration() }
-                                .buttonStyle(.borderedProminent)
-                                .controlSize(.small)
-                                .disabled(!captureEngine.curveCaptureCanFinish)
-
-                            Button("Cancel") { captureEngine.cancelCurveCalibration() }
-                                .buttonStyle(.bordered)
-                                .controlSize(.small)
-                        }
-                        if !captureEngine.curveCaptureError.isEmpty {
-                            Label(captureEngine.curveCaptureError, systemImage: "exclamationmark.triangle.fill")
-                                .font(.system(size: 10, weight: .semibold))
-                                .foregroundStyle(ScratchLabDesign.Sem.warning)
-                                .fixedSize(horizontal: false, vertical: true)
-                        }
-                    }
-                } else if resolvedCurvePreset(for: action) == .custom {
-                    HStack(spacing: 8) {
-                        Text("Custom cut calibrated.")
-                            .font(.system(size: 10, weight: .regular))
-                            .foregroundStyle(.secondary)
-                        Spacer()
-                        Button("Recalibrate") { captureEngine.startCurveCalibration(for: action) }
-                            .buttonStyle(.bordered)
-                            .controlSize(.small)
-                            .disabled(sessionBusy)
-                        Button("Reset to default") { captureEngine.resetCurve(for: action) }
-                            .buttonStyle(.bordered)
-                            .controlSize(.small)
-                            .disabled(sessionBusy)
-                    }
-                }
-            }
-        }
-    }
-
-    /// Compact fader-curve controls for both audible deck buses and the
-    /// crossfader. Left controls beat/demo output; right controls AHHH.
-    @ViewBuilder
-    private var faderCurveSection: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            Text("Fader Curves")
-                .font(.system(size: 11, weight: .medium))
-                .foregroundStyle(.secondary)
-            faderCurveRow(for: .crossfader, title: "Crossfader")
-            faderCurveRow(for: .leftUpfader, title: "Left Upfader")
-            faderCurveRow(for: .rightUpfader, title: "Right Upfader")
-        }
-    }
-
-    @ViewBuilder
     private var mixerAndHotCueMappingSection: some View {
-        DisclosureGroup {
-            VStack(alignment: .leading, spacing: 12) {
-                Text(midiMappingDeviceSummary)
-                    .font(.system(size: 11, weight: .medium))
-                    .foregroundStyle(.secondary)
-
-                HStack(spacing: 8) {
-                    if captureEngine.canApplyVerifiedRaneOneMKIIMapping {
-                        Button("Apply mapping + load AHHH") {
-                            captureEngine.applyVerifiedRaneOneMKIIMappingAndLoadAhhh()
-                        }
-                        .buttonStyle(.borderedProminent)
-                        .controlSize(.small)
-                        .help("Maps CC8 Ch16 crossfader, CC28 deck faders, and right-deck notes 20–27, then silently arms the validated platter sample.")
-                    }
-
-                    Button("Test AHHH audio") {
-                        captureEngine.previewPlatterTestSample()
-                    }
-                    .buttonStyle(.bordered)
-                    .controlSize(.small)
-                    .help("Plays a short audible excerpt of the exact bundled dvs_ahhh sample, then leaves it armed for right-platter movement.")
-                }
-
-                if !captureEngine.platterTestLoadStatus.isEmpty {
-                    Text(captureEngine.platterTestLoadStatus)
-                        .font(.system(size: 11, weight: .medium, design: .monospaced))
-                        .foregroundStyle(
-                            captureEngine.platterTestLoadStatus.hasPrefix("loaded:")
-                                || captureEngine.platterTestLoadStatus.hasPrefix("audible test:")
-                                ? .green
-                                : .red
-                        )
-                }
-
-                if !captureEngine.midiMappingError.isEmpty {
-                    Label(captureEngine.midiMappingError, systemImage: "exclamationmark.triangle.fill")
-                        .font(.system(size: 11, weight: .semibold))
-                        .foregroundStyle(ScratchLabDesign.Sem.warning)
-                        .fixedSize(horizontal: false, vertical: true)
-                }
-
-                if !captureEngine.calibrationError.isEmpty {
-                    Label(captureEngine.calibrationError, systemImage: "exclamationmark.triangle.fill")
-                        .font(.system(size: 11, weight: .semibold))
-                        .foregroundStyle(ScratchLabDesign.Sem.warning)
-                        .fixedSize(horizontal: false, vertical: true)
-                }
-
-                Divider()
-
-                calibrationRow(for: .crossfader)
-                midiLearnActionRow(.leftUpfader, title: "Left Upfader")
-                calibrationRow(for: .leftUpfader)
-                midiLearnActionRow(.rightUpfader, title: "Right Upfader")
-                calibrationRow(for: .rightUpfader)
-
-                Divider()
-
-                faderCurveSection
-
-                Divider()
-
-                Text("Hot Cues")
-                    .font(.system(size: 11, weight: .medium))
-                    .foregroundStyle(.secondary)
-
-                VStack(alignment: .leading, spacing: 10) {
-                    ForEach(1...8, id: \.self) { index in
-                        hotCueMappingRow(index)
-                    }
-                }
-            }
-            .padding(.top, ScratchLabDesign.Spacing.disclosureContentTop)
-        } label: {
-            Label("Mixer & Hot-Cue Mapping", systemImage: "pianokeys")
-                .font(.system(size: 13, weight: .semibold))
-                .foregroundStyle(.secondary)
-        }
+        MacMIDIControlSetupView(captureEngine: captureEngine)
     }
 
     /// Watch is an optional input, so the headline stays "Watch Optional" until
@@ -14697,5 +14303,448 @@ private final class SeratoWindowMover: ObservableObject {
             return nil
         }
         return unsafeBitCast(value, to: AXValue.self)
+    }
+}
+
+/// Shared controller setup for the full Mac app and CXL capture app.
+struct MacMIDIControlSetupView: View {
+    @ObservedObject var captureEngine: MacCaptureEngine
+    // MARK: - Mixer & Hot-Cue Mapping (MIDI Learn checkpoint)
+    //
+    // Minimal Advanced/Debug UI for the generic per-device MIDI Learn model:
+    // left/right upfader learn+clear, hot cue 1-8 learn+clear with scratch
+    // sample assignment, active-device mapping summary, live learn feedback,
+    // and persistence/load error surfacing. Audio routing is out of scope.
+
+    private static let hotCueActions: [MIDISemanticAction] = [
+        .hotCue1, .hotCue2, .hotCue3, .hotCue4, .hotCue5, .hotCue6, .hotCue7, .hotCue8
+    ]
+
+    private var midiLearnLiveValueText: String? {
+        guard let action = captureEngine.activeMIDILearnAction else { return nil }
+        // Show only a value observed *since this Learn session started*. Before
+        // a fresh event arrives this is `nil`, so the panel never echoes the
+        // parked value of whatever control was last touched (e.g. the
+        // crossfader) as if it were this control's.
+        guard let raw = captureEngine.midiLearnObservedRawValue else {
+            return "Learning \(action.displayName)… move the control now"
+        }
+        let normalized = Double(max(0, min(127, raw))) / 127.0
+        return "Learning \(action.displayName) · raw \(raw) · normalized \(String(format: "%.2f", normalized))"
+    }
+
+    private func midiMappingStatusLabel(for action: MIDISemanticAction) -> String {
+        if let control = captureEngine.currentMIDIDeviceMapping?.control(for: action) {
+            return control.displayName
+        }
+        return "not mapped"
+    }
+
+    @ViewBuilder
+    private func midiLearnActionRow(_ action: MIDISemanticAction, title: String) -> some View {
+        let isLearningThis = captureEngine.activeMIDILearnAction == action
+        let isMapped = captureEngine.currentMIDIDeviceMapping?.control(for: action) != nil
+        HStack(spacing: 8) {
+            VStack(alignment: .leading, spacing: 2) {
+                Text(title)
+                    .font(.system(size: 12, weight: .semibold))
+                Text(isLearningThis ? (midiLearnLiveValueText ?? "Listening…") : midiMappingStatusLabel(for: action))
+                    .font(.system(size: 11, weight: .medium, design: .monospaced))
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            Spacer()
+            if isLearningThis {
+                Button("Cancel") { captureEngine.cancelMIDILearn() }
+                    .buttonStyle(.bordered)
+                    .controlSize(.small)
+            } else {
+                Button("Learn") { captureEngine.startMIDILearn(for: action) }
+                    .buttonStyle(.bordered)
+                    .controlSize(.small)
+                    .disabled(captureEngine.activeMIDILearnAction != nil)
+                if isMapped {
+                    Button("Clear") { captureEngine.clearMapping(for: action) }
+                        .buttonStyle(.bordered)
+                        .controlSize(.small)
+                }
+            }
+        }
+    }
+
+    /// Sorted, available bundled scratch-sample IDs for hot-cue assignment.
+    /// Excludes the legacy raw `ahhh` sample (product decision, 2026-08-14):
+    /// `dvs_ahhh` is now the only user-facing "Ahh" scratch sample. `ahhh`
+    /// stays in `knownSampleIDs`/loadable — it remains a required fixture
+    /// for the legacy-grain-path regression test suite — it is only
+    /// excluded from this picker.
+    private var availableScratchSampleIDs: [String] {
+        ScratchSamplePlaybackController.knownSampleIDs
+            .subtracting(["ahhh"])
+            .sorted()
+    }
+
+    @ViewBuilder
+    private func hotCueMappingRow(_ index: Int) -> some View {
+        let action = Self.hotCueActions[index - 1]
+        let isLearningThis = captureEngine.activeMIDILearnAction == action
+        let learnedControl = captureEngine.currentMIDIDeviceMapping?.control(for: action)
+        VStack(alignment: .leading, spacing: 4) {
+            HStack(spacing: 8) {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Hot Cue \(index)")
+                        .font(.system(size: 12, weight: .semibold))
+                    Text(isLearningThis ? (midiLearnLiveValueText ?? "Listening…") : midiMappingStatusLabel(for: action))
+                        .font(.system(size: 11, weight: .medium, design: .monospaced))
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                Spacer()
+                if isLearningThis {
+                    Button("Cancel") { captureEngine.cancelMIDILearn() }
+                        .buttonStyle(.bordered)
+                        .controlSize(.small)
+                } else {
+                    Button("Learn") { captureEngine.startMIDILearn(for: action) }
+                        .buttonStyle(.bordered)
+                        .controlSize(.small)
+                        .disabled(captureEngine.activeMIDILearnAction != nil)
+                    if learnedControl != nil {
+                        Button("Clear") { captureEngine.clearMapping(for: action) }
+                            .buttonStyle(.bordered)
+                            .controlSize(.small)
+                    }
+                }
+            }
+
+            if let learnedControl {
+                Picker("Sample", selection: Binding(
+                    get: { learnedControl.assignedSampleID ?? "" },
+                    set: { newValue in
+                        captureEngine.assignSampleToHotCue(newValue, hotCueIndex: index)
+                    }
+                )) {
+                    Text("None").tag("")
+                    ForEach(availableScratchSampleIDs, id: \.self) { sampleID in
+                        Text(sampleID).tag(sampleID)
+                    }
+                }
+                .pickerStyle(.menu)
+                .labelsHidden()
+                .controlSize(.small)
+                .frame(maxWidth: 200, alignment: .leading)
+            }
+        }
+    }
+
+    private var midiMappingDeviceSummary: String {
+        guard let mapping = captureEngine.currentMIDIDeviceMapping else {
+            return "No saved mapping for this device yet."
+        }
+        return "\(mapping.deviceName) · \(mapping.controls.count) control\(mapping.controls.count == 1 ? "" : "s") mapped"
+    }
+
+    /// Status text for a continuous action's calibration row — live observed
+    /// range while calibrating, or the persisted range/inversion otherwise.
+    private func calibrationStatusText(for action: MIDISemanticAction, control: MIDILearnedControl, isCalibrating: Bool) -> String {
+        if isCalibrating {
+            if let observedMin = captureEngine.calibrationObservedMin, let observedMax = captureEngine.calibrationObservedMax {
+                return "\(action.displayName) calibration: observed \(observedMin)–\(observedMax) · move through full range"
+            }
+            return "\(action.displayName) calibration: move the control through its full range"
+        }
+        let invertLabel = control.inverted ? " · inverted" : ""
+        return "\(action.displayName) range \(control.minValue)–\(control.maxValue)\(invertLabel)"
+    }
+
+    /// Calibrate/Finish/Cancel + inversion toggle for one already-learned
+    /// continuous action (crossfader, left/right upfader). Nothing renders
+    /// until the action has a learned binding — calibration observes the
+    /// binding's raw range, it doesn't learn the binding itself.
+    @ViewBuilder
+    private func calibrationRow(for action: MIDISemanticAction) -> some View {
+        if let learnedControl = captureEngine.currentMIDIDeviceMapping?.control(for: action) {
+            let isCalibratingThis = captureEngine.activeCalibrationAction == action
+            HStack(spacing: 8) {
+                Text(calibrationStatusText(for: action, control: learnedControl, isCalibrating: isCalibratingThis))
+                    .font(.system(size: 11, weight: .medium, design: .monospaced))
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+                Spacer()
+                if isCalibratingThis {
+                    Button("Finish") { captureEngine.finishCalibration() }
+                        .buttonStyle(.borderedProminent)
+                        .controlSize(.small)
+                    Button("Cancel") { captureEngine.cancelCalibration() }
+                        .buttonStyle(.bordered)
+                        .controlSize(.small)
+                } else {
+                    Button("Calibrate") { captureEngine.startCalibration(for: action) }
+                        .buttonStyle(.bordered)
+                        .controlSize(.small)
+                        .disabled(captureEngine.activeMIDILearnAction != nil || captureEngine.activeCalibrationAction != nil)
+                    Toggle("Invert", isOn: Binding(
+                        get: { learnedControl.inverted },
+                        set: { captureEngine.setInversion($0, for: action) }
+                    ))
+                    .toggleStyle(.checkbox)
+                    .font(.system(size: 11, weight: .medium))
+                    .fixedSize()
+                }
+            }
+        }
+    }
+
+    /// Resolved (persisted or migration-default) preset for a fader-curve
+    /// action, or nil if the action has no learned binding yet.
+    private func resolvedCurvePreset(for action: MIDISemanticAction) -> FaderCurvePreset? {
+        captureEngine.currentMIDIDeviceMapping?.control(for: action)?.resolvedCurveConfig.preset
+    }
+
+    /// Picker selection for a fader-curve row. While a custom-capture
+    /// session is active for THIS action, shows Custom regardless of the
+    /// still-persisted preset — selecting Custom is transactional
+    /// (`startCurveCalibration`/`finishCurveCalibration`), so the
+    /// persisted value deliberately hasn't changed yet.
+    private func curvePickerSelection(for action: MIDISemanticAction) -> FaderCurvePreset {
+        if captureEngine.activeCurveCaptureAction == action { return .custom }
+        return resolvedCurvePreset(for: action) ?? .linear
+    }
+
+    /// One action's curve row: a preset picker, plus (only while
+    /// progressively disclosed) either the Custom capture controls or a
+    /// Reset-to-default affordance for an already-custom curve. No
+    /// engineering terms (normalized values, transfer functions) ever
+    /// appear here — presets are named, captured points are shown only as
+    /// captured/not-captured state.
+    @ViewBuilder
+    private func faderCurveRow(for action: MIDISemanticAction, title: String) -> some View {
+        if captureEngine.currentMIDIDeviceMapping?.control(for: action) != nil {
+            let isCapturingThis = captureEngine.activeCurveCaptureAction == action
+            let sessionBusy = captureEngine.activeMIDILearnAction != nil
+                || captureEngine.activeCalibrationAction != nil
+                || (captureEngine.activeCurveCaptureAction != nil && !isCapturingThis)
+            VStack(alignment: .leading, spacing: 6) {
+                HStack(spacing: 8) {
+                    Text(title)
+                        .font(.system(size: 12, weight: .semibold))
+                    Spacer()
+                    Picker("", selection: Binding(
+                        get: { curvePickerSelection(for: action) },
+                        set: { newPreset in
+                            if newPreset == .custom {
+                                captureEngine.startCurveCalibration(for: action)
+                            } else {
+                                captureEngine.setCurvePreset(newPreset, for: action)
+                            }
+                        }
+                    )) {
+                        ForEach(FaderCurvePreset.availablePresets(for: action), id: \.self) { preset in
+                            Text(preset.displayName).tag(preset)
+                        }
+                    }
+                    .pickerStyle(.menu)
+                    .labelsHidden()
+                    .controlSize(.small)
+                    .frame(maxWidth: 140)
+                    .disabled(sessionBusy)
+                }
+
+                if isCapturingThis {
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text("Move the control to where it should go quiet, then tap Set closed. Move it to where it should reach full volume, then tap Set full-on.")
+                            .font(.system(size: 10, weight: .regular))
+                            .foregroundStyle(.secondary)
+                            .fixedSize(horizontal: false, vertical: true)
+                        HStack(spacing: 8) {
+                            Button(captureEngine.curveCaptureHasClosedPoint ? "Closed ✓" : "Set closed") {
+                                captureEngine.captureCurveClosedPoint()
+                            }
+                            .buttonStyle(.bordered)
+                            .controlSize(.small)
+                            .disabled(!captureEngine.curveCaptureHasLiveValue)
+
+                            Button(captureEngine.curveCaptureHasFullOnPoint ? "Full-on ✓" : "Set full-on") {
+                                captureEngine.captureCurveFullOnPoint()
+                            }
+                            .buttonStyle(.bordered)
+                            .controlSize(.small)
+                            .disabled(!captureEngine.curveCaptureHasLiveValue)
+
+                            Spacer()
+
+                            Button("Finish") { captureEngine.finishCurveCalibration() }
+                                .buttonStyle(.borderedProminent)
+                                .controlSize(.small)
+                                .disabled(!captureEngine.curveCaptureCanFinish)
+
+                            Button("Cancel") { captureEngine.cancelCurveCalibration() }
+                                .buttonStyle(.bordered)
+                                .controlSize(.small)
+                        }
+                        if !captureEngine.curveCaptureError.isEmpty {
+                            Label(captureEngine.curveCaptureError, systemImage: "exclamationmark.triangle.fill")
+                                .font(.system(size: 10, weight: .semibold))
+                                .foregroundStyle(ScratchLabDesign.Sem.warning)
+                                .fixedSize(horizontal: false, vertical: true)
+                        }
+                    }
+                } else if resolvedCurvePreset(for: action) == .custom {
+                    HStack(spacing: 8) {
+                        Text("Custom cut calibrated.")
+                            .font(.system(size: 10, weight: .regular))
+                            .foregroundStyle(.secondary)
+                        Spacer()
+                        Button("Recalibrate") { captureEngine.startCurveCalibration(for: action) }
+                            .buttonStyle(.bordered)
+                            .controlSize(.small)
+                            .disabled(sessionBusy)
+                        Button("Reset to default") { captureEngine.resetCurve(for: action) }
+                            .buttonStyle(.bordered)
+                            .controlSize(.small)
+                            .disabled(sessionBusy)
+                    }
+                }
+            }
+        }
+    }
+
+    /// Compact fader-curve controls for both audible deck buses and the
+    /// crossfader. Left controls beat/demo output; right controls AHHH.
+    @ViewBuilder
+    private var faderCurveSection: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text("Fader Curves")
+                .font(.system(size: 11, weight: .medium))
+                .foregroundStyle(.secondary)
+            faderCurveRow(for: .crossfader, title: "Crossfader")
+            faderCurveRow(for: .leftUpfader, title: "Left Upfader")
+            faderCurveRow(for: .rightUpfader, title: "Right Upfader")
+        }
+    }
+
+    @ViewBuilder
+    var body: some View {
+        DisclosureGroup {
+            VStack(alignment: .leading, spacing: 12) {
+                Text(midiMappingDeviceSummary)
+                    .font(.system(size: 11, weight: .medium))
+                    .foregroundStyle(.secondary)
+
+                MacScratchUSBOutputPairSetupView(captureEngine: captureEngine)
+
+                HStack(spacing: 8) {
+                    if captureEngine.canApplyVerifiedRaneOneMKIIMapping {
+                        Button("Apply mapping + load AHHH") {
+                            captureEngine.applyVerifiedRaneOneMKIIMappingAndLoadAhhh()
+                        }
+                        .buttonStyle(.borderedProminent)
+                        .controlSize(.small)
+                        .help("Maps CC8 Ch16 crossfader, CC28 deck faders, and right-deck notes 20–27, then silently arms the validated platter sample.")
+                    }
+
+                    Button("Test AHHH audio") {
+                        captureEngine.previewPlatterTestSample()
+                    }
+                    .buttonStyle(.bordered)
+                    .controlSize(.small)
+                    .help("Plays a short audible excerpt of the exact bundled dvs_ahhh sample, then leaves it armed for right-platter movement.")
+                }
+
+                if !captureEngine.platterTestLoadStatus.isEmpty {
+                    Text(captureEngine.platterTestLoadStatus)
+                        .font(.system(size: 11, weight: .medium, design: .monospaced))
+                        .foregroundStyle(
+                            captureEngine.platterTestLoadStatus.hasPrefix("loaded:")
+                                || captureEngine.platterTestLoadStatus.hasPrefix("audible test:")
+                                ? .green
+                                : .red
+                        )
+                }
+
+                if !captureEngine.midiMappingError.isEmpty {
+                    Label(captureEngine.midiMappingError, systemImage: "exclamationmark.triangle.fill")
+                        .font(.system(size: 11, weight: .semibold))
+                        .foregroundStyle(ScratchLabDesign.Sem.warning)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+
+                if !captureEngine.calibrationError.isEmpty {
+                    Label(captureEngine.calibrationError, systemImage: "exclamationmark.triangle.fill")
+                        .font(.system(size: 11, weight: .semibold))
+                        .foregroundStyle(ScratchLabDesign.Sem.warning)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+
+                Divider()
+
+                midiLearnActionRow(.crossfader, title: "Crossfader")
+                calibrationRow(for: .crossfader)
+                midiLearnActionRow(.leftUpfader, title: "Left Upfader")
+                calibrationRow(for: .leftUpfader)
+                midiLearnActionRow(.rightUpfader, title: "Right Upfader")
+                calibrationRow(for: .rightUpfader)
+
+                Divider()
+
+                faderCurveSection
+
+                Divider()
+
+                Text("Hot Cues")
+                    .font(.system(size: 11, weight: .medium))
+                    .foregroundStyle(.secondary)
+
+                VStack(alignment: .leading, spacing: 10) {
+                    ForEach(1...8, id: \.self) { index in
+                        hotCueMappingRow(index)
+                    }
+                }
+            }
+            .padding(.top, ScratchLabDesign.Spacing.disclosureContentTop)
+        } label: {
+            Label("Mixer & Hot-Cue Mapping", systemImage: "pianokeys")
+                .font(.system(size: 13, weight: .semibold))
+                .foregroundStyle(.secondary)
+        }
+        .disabled(captureEngine.isAudioInputSelectionLocked)
+    }
+
+}
+
+
+/// Shared by the full Mac and CXL controller setup. Channel choices are saved
+/// against the selected Core Audio UID, never inferred from a mixer name.
+private struct MacScratchUSBOutputPairSetupView: View {
+    @ObservedObject var captureEngine: MacCaptureEngine
+
+    var body: some View {
+        if !captureEngine.availableScratchUSBOutputPairStarts.isEmpty {
+            VStack(alignment: .leading, spacing: 6) {
+                pairPicker("Scratch USB outputs", forBeat: false)
+                pairPicker("Beat USB outputs", forBeat: true)
+                Text("For a Seventy-Two, choose the USB pairs that feed your scratch and backing decks. Check each using Test AHHH audio and Preview backing sound, with the mixer set to the Mac's USB A/B connection. Pair choices are saved for this device; the recording still keeps scratch and beat separate.")
+                    .font(.caption).foregroundStyle(.secondary)
+            }
+        }
+    }
+
+    private func pairPicker(_ label: String, forBeat: Bool) -> some View {
+        let saved = captureEngine.selectedScratchUSBOutputPairs
+        let current = forBeat ? saved.beat : saved.scratch
+        let available = captureEngine.availableScratchUSBOutputPairStarts
+        return Picker(label, selection: Binding<Int>(
+            get: { current ?? -1 },
+            set: { captureEngine.setScratchUSBOutputPair($0 == -1 ? nil : $0, forBeat: forBeat) }
+        )) {
+            Text("Automatic (supported controller map)").tag(-1)
+            ForEach(available, id: \.self) { first in
+                Text("USB \(first + 1)/\(first + 2)").tag(first)
+            }
+            if let current, !available.contains(current) {
+                Text("USB \(current + 1)/\(current + 2) — unavailable").tag(current)
+            }
+        }
+        .disabled(captureEngine.isAudioInputSelectionLocked)
     }
 }

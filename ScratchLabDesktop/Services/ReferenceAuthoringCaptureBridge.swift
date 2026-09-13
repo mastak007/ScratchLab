@@ -1455,9 +1455,9 @@ final class ReferenceAuthoringCaptureBridge {
                 )
             }
 
-            let platterObservation = currentObservations.first {
-                $0.channel == Self.platterChannel && $0.controller == Self.platterController
-            }
+            let platterObservation = engine.selectedTwelveMIDIInputSourceID.isEmpty
+                ? currentObservations.first { $0.channel == Self.platterChannel && $0.controller == Self.platterController }
+                : engine.connectedTwelvePlatterObservation()
             let now = CACurrentMediaTime()
             let platterIsMoving = platterObservation.map {
                 now - $0.observedAt < Self.recentActivityWindow

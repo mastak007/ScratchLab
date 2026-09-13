@@ -1708,11 +1708,19 @@ struct ReferenceAuthoringTake: Equatable, Sendable, Identifiable {
             guard let sidecar = try? decoder.decode(CaptureCore.LocalRecordingSidecar.self,
                     from: binding.rawSidecarData),
                   sidecar.watchSyncState == .acknowledged,
-                  let stop = sidecar.watchStopDiagnostics,
-                  stop.outcome == .sent || (stop.outcome == .stopped && stop.motionTransferState == .pending),
                   sidecar.sessionID == identity.sessionID, sidecar.takeID == identity.takeID,
                   sidecar.appLocalTakeNumber == identity.takeNumber,
                   sidecar.watchCommandID == identity.takeToken else { return false }
+            if let stop = sidecar.watchStopDiagnostics {
+                guard stop.outcome == .sent || (stop.outcome == .stopped && stop.motionTransferState == .pending)
+                else { return false }
+            } else {
+                // Older acknowledged captures have no Stop diagnostics. The
+                // bridge still bounds their pending state at 90 seconds, so
+                // the matching verified file must also be able to resolve
+                // that timeout. Absence of diagnostics cannot clear a conflict.
+                guard case .timedOut = evidence.metadata.sourceState else { return false }
+            }
             currentIdentity = identity
         case .linked(let identity, _, let existingHash):
             currentIdentity = identity

@@ -2933,6 +2933,11 @@ final class MacCaptureEngine: NSObject, ObservableObject {
     @Published private(set) var playbackWaveformSnapshot: ScratchSamplePlaybackController.PlaybackWaveformSnapshot?
     @Published private(set) var scratchOutputMeterSnapshot: ScratchSamplePlaybackController.ScratchOutputMeterSnapshot?
     @Published private(set) var scratchOutputRoutingSnapshot: ScratchSamplePlaybackController.OutputRoutingSnapshot?
+    struct ScratchUSBOutputPairs: Codable, Equatable {
+        var scratch: Int?
+        var beat: Int?
+    }
+    @Published private(set) var scratchUSBOutputPairsByUID: [String: ScratchUSBOutputPairs] = [:]
     @Published private(set) var scratchPrimaryOutput: ScratchPrimaryOutput = .rane
     private static let playbackPositionPollInterval: TimeInterval = 0.04
     private var playbackPositionPollTimer: DispatchSourceTimer?
@@ -3558,6 +3563,35 @@ final class MacCaptureEngine: NSObject, ObservableObject {
         return "ScratchLab \(name) output"
     }
 
+    var availableScratchUSBOutputPairStarts: [Int] {
+        guard Self.isRaneHardwareDeviceName(selectedAudioDeviceName),
+              let id = Self.audioDeviceID(forUID: selectedAudioDeviceUniqueID) else { return [] }
+        let count = MacScratchOutputRoute.outputChannelCount(id)
+        guard count >= 2 else { return [] }
+        return Array(stride(from: 0, to: min(count - 1, 256), by: 2))
+    }
+
+    var selectedScratchUSBOutputPairs: ScratchUSBOutputPairs {
+        scratchUSBOutputPairsByUID[selectedAudioDeviceUniqueID] ?? .init()
+    }
+
+    func setScratchUSBOutputPair(_ start: Int?, forBeat: Bool) {
+        guard !isAudioInputSelectionLocked, !selectedAudioDeviceUniqueID.isEmpty,
+              start == nil || availableScratchUSBOutputPairStarts.contains(start!) else { return }
+        var pairs = selectedScratchUSBOutputPairs
+        if forBeat { pairs.beat = start } else { pairs.scratch = start }
+        var updated = scratchUSBOutputPairsByUID
+        updated[selectedAudioDeviceUniqueID] = pairs
+        do {
+            let data = try JSONEncoder().encode(updated)
+            midiPersistenceDefaults.set(data, forKey: "scratchlab.mac.usbOutputPairsByUID")
+            scratchUSBOutputPairsByUID = updated
+            syncScratchPlaybackOutputRoute()
+        } catch {
+            statusMessage = "Could not save the USB output pairs: \(error.localizedDescription)"
+        }
+    }
+
     func setScratchMacMonitorEnabled(_ enabled: Bool) {
         guard !isAudioInputSelectionLocked else { return }
         guard !enabled || scratchPrimaryOutput == .rane else { return }
@@ -3588,8 +3622,35 @@ final class MacCaptureEngine: NSObject, ObservableObject {
                 throw MacScratchOutputRoute.Failure(message: "Select and enable the Rane audio input before playing the backing sound, or choose Mac output.")
             }
             return .init(deviceID: Self.audioDeviceID(forUID: target.uid) ?? AudioDeviceID(kAudioObjectUnknown),
-                         deviceName: target.name, deviceUID: target.uid)
+                         deviceName: target.name, deviceUID: target.uid,
+                         explicitPairStart: self.scratchUSBOutputPairsByUID[target.uid]?.beat)
         })
+    }
+
+    /// Immutable preparation snapshot. Later hot-cue presses remain separate raw
+    /// events; this does not claim the sample stays unchanged during a take.
+    static func scratchControllerSetupAuditEvent(
+        sampleID: String?, mixerSourceID: String, platterSourceID: String,
+        mapping: MIDIDeviceMapping?, at timestamp: Date
+    ) throws -> CaptureAuditEvent {
+        let mappingJSON: Any = try mapping.map {
+            try JSONSerialization.jsonObject(with: JSONEncoder().encode($0))
+        } ?? NSNull()
+        let fields: [String: Any] = [
+            "version": 1,
+            "observationBoundary": "take_preparation",
+            "initialSampleID": sampleID.map { $0 as Any } ?? NSNull(),
+            "mixerSourceID": mixerSourceID,
+            "platterSourceID": platterSourceID.isEmpty ? mixerSourceID : platterSourceID,
+            "separatePlatterSource": !platterSourceID.isEmpty,
+            "platterProtocol": platterSourceID.isEmpty
+                ? "existing_controller_mapping" : "rane_twelve_deck2_cc1_cc2_operator_supplied_v1",
+            "physicalTicksPerRevolutionVerified": false,
+            "learnedMixerMapping": mappingJSON
+        ]
+        let data = try JSONSerialization.data(withJSONObject: fields, options: [.sortedKeys])
+        return CaptureAuditEvent(timestamp: timestamp, category: "scratch_controller_setup",
+                                 detail: String(decoding: data, as: UTF8.self))
     }
 
     static func scratchOutputRoutingAuditEvent(
@@ -5237,6 +5298,13 @@ final class MacCaptureEngine: NSObject, ObservableObject {
     private var activeRoutineDetectedNotationBuilder: RoutineDetectedNotationBuilder?
     private var midiClient: MIDIClientRef = 0
     private var midiInputPort: MIDIPortRef = 0
+    private var twelveConnection: RaneTwelveMIDIConnection?
+    private var twelveConnectionGeneration: UInt64 = 0
+    private var twelvePlatterObservation: MIDIPlatterStepObservation?
+    private var twelvePositionCount = 0
+    private var twelveSelectedSourceID = ""
+    @Published private(set) var selectedTwelveMIDIInputSourceID = ""
+    @Published private(set) var twelveMIDIStatus = "Using the main MIDI source for platter input."
     private var midiSourceEndpoints: [MIDIInputSourceChoice: MIDIEndpointRef] = [:]
     private var capturedMidiCCEvents: [CaptureCore.RawMixerMIDIEvent] = []
     private let midiCaptureLock = NSLock()
@@ -5556,6 +5624,10 @@ final class MacCaptureEngine: NSObject, ObservableObject {
 
     private func configureInitialState() {
         movieOutput.delegate = routineMovieStartDelegate
+        if let data = midiPersistenceDefaults.data(forKey: "scratchlab.mac.usbOutputPairsByUID"),
+           let saved = try? JSONDecoder().decode([String: ScratchUSBOutputPairs].self, from: data) {
+            scratchUSBOutputPairsByUID = saved
+        }
         scratchPrimaryOutput = midiPersistenceDefaults.string(forKey: ScratchLabDesktopDefaultsKey.scratchPrimaryOutput)
             .flatMap(ScratchPrimaryOutput.init(rawValue:)) ?? .rane
         scratchPlaybackController.routineOutputLevelHandler = { [weak self] level in
@@ -5600,15 +5672,30 @@ final class MacCaptureEngine: NSObject, ObservableObject {
         // provider on its own bounded cadence — it never reads the left
         // deck (channel 0), which stays tracked/diagnostic-only.
         scratchPlaybackController.configureMIDIPlatterProvider(
-            rightDeckAccumulatedSteps: { [platterTracker] in
-                platterTracker.accumulatedSteps(for: ScratchPlatterTracker.rightChannel)
+            rightDeckAccumulatedSteps: { [weak self, platterTracker] in
+                guard let self else { return 0 }
+                self.midiCaptureLock.lock()
+                let useTwelve = !self.twelveSelectedSourceID.isEmpty
+                let steps = self.twelvePlatterObservation?.accumulatedSteps ?? 0
+                self.midiCaptureLock.unlock()
+                return useTwelve ? steps : platterTracker.accumulatedSteps(for: 1)
             },
             observation: { [weak self, platterTracker] in
-                guard let self,
-                      let observation = platterTracker.latestObservation(for: ScratchPlatterTracker.rightChannel),
-                      observation.input.connectionGeneration == self.midiConnectionGeneration
-                else { return nil }
+                guard let self else { return nil }
+                self.midiCaptureLock.lock()
+                let useTwelve = !self.twelveSelectedSourceID.isEmpty
+                let twelve = self.twelvePlatterObservation
+                let twelveConnected = self.twelveConnection != nil
+                self.midiCaptureLock.unlock()
+                if useTwelve { return twelveConnected ? twelve : nil }
+                guard let observation = platterTracker.latestObservation(for: 1),
+                      observation.input.connectionGeneration == self.midiConnectionGeneration else { return nil }
                 return observation
+            },
+            requiresCorrelatedObservation: { [weak self] in
+                guard let self else { return true }
+                self.midiCaptureLock.lock(); defer { self.midiCaptureLock.unlock() }
+                return !self.twelveSelectedSourceID.isEmpty
             }
         )
         NSWorkspace.shared.notificationCenter.addObserver(
@@ -5631,6 +5718,8 @@ final class MacCaptureEngine: NSObject, ObservableObject {
             persistedCrossfaderMapping = mapping
         }
 
+        selectedTwelveMIDIInputSourceID = midiSelectionDefaults.string(forKey: "scratchlab.mac.twelveDeck2MIDIInput") ?? ""
+        twelveSelectedSourceID = selectedTwelveMIDIInputSourceID
         setupMIDIClient()
     }
 
@@ -5674,6 +5763,7 @@ final class MacCaptureEngine: NSObject, ObservableObject {
 #endif
         NSWorkspace.shared.notificationCenter.removeObserver(self)
         destroySeratoDirectCapture()
+        twelveConnection?.close()
         if midiInputPort != 0 { MIDIPortDispose(midiInputPort) }
         if midiClient != 0 { MIDIClientDispose(midiClient) }
     }
@@ -6182,6 +6272,21 @@ final class MacCaptureEngine: NSObject, ObservableObject {
         cameraProcessor.reset()
         cameraPlatterCalibrationInsufficient = false
 
+        // Capture UI-owned mapping/source values before dispatching preparation.
+        // The audit payload then travels with this exact take, including late Watch updates.
+        let controllerSetupAudit: CaptureAuditEvent
+        do {
+            controllerSetupAudit = try Self.scratchControllerSetupAuditEvent(
+                sampleID: scratchPlaybackController.diagnosticsSnapshot().loadedSampleID,
+                mixerSourceID: selectedMIDIInputSourceID,
+                platterSourceID: selectedTwelveMIDIInputSourceID,
+                mapping: currentMIDIDeviceMapping, at: Date())
+        } catch {
+            routineRecordingBoundaryLedger.failStart(token: recordingToken,
+                description: "Could not retain the controller setup: \(error.localizedDescription)")
+            requestWatchStopIfNeeded(reason: .interrupted)
+            return recordingToken
+        }
         let selectedVideoID = selectedVideoDeviceUniqueID
         let selectedAudioID = selectedAudioDeviceUniqueID
         let audioDevices = availableAudioDevices
@@ -6288,7 +6393,8 @@ final class MacCaptureEngine: NSObject, ObservableObject {
                     videoDevices: videoDevices,
                     audioDevices: audioDevices,
                     captureTiming: captureTiming,
-                    beatOutputRoute: beatOutputRoute
+                    beatOutputRoute: beatOutputRoute,
+                    controllerSetupAudit: controllerSetupAudit
                 )
                 self.routineRecordingBoundaryLedger.prepare(
                     token: recordingToken,
@@ -6780,7 +6886,8 @@ final class MacCaptureEngine: NSObject, ObservableObject {
         scratchPlaybackController.setPreferredOutputDevice(
             deviceID: Self.audioDeviceID(forUID: target.uid) ?? AudioDeviceID(kAudioObjectUnknown),
             deviceName: target.name,
-            expectedDeviceUID: target.uid
+            expectedDeviceUID: target.uid,
+            explicitPairStart: scratchUSBOutputPairsByUID[target.uid]?.scratch
         )
     }
 
@@ -7942,7 +8049,8 @@ final class MacCaptureEngine: NSObject, ObservableObject {
         videoDevices: [AVCaptureDevice],
         audioDevices: [AVCaptureDevice],
         captureTiming: CaptureTimingMetadata?,
-        beatOutputRoute: BeatPlaybackOutputRoute?
+        beatOutputRoute: BeatPlaybackOutputRoute?,
+        controllerSetupAudit: CaptureAuditEvent
     ) throws -> PreparedRoutineRecording {
         let directory = try recordingsDirectoryURL()
         let startedAt = Date()
@@ -7988,6 +8096,7 @@ final class MacCaptureEngine: NSObject, ObservableObject {
         if let cameraGuide = try cxlCameraGuideAuditEvent(videoDeviceID: selectedVideoID, at: startedAt) {
             sidecar.auditTrail.append(cameraGuide)
         }
+        sidecar.auditTrail.append(controllerSetupAudit)
         sidecar.auditTrail.append(try Self.scratchOutputRoutingAuditEvent(
             snapshot: scratchPlaybackController.outputRoutingSnapshot(),
             selectedInputUID: selectedAudioID,
@@ -8080,7 +8189,7 @@ final class MacCaptureEngine: NSObject, ObservableObject {
         // The selected MIDI source is the authoritative device for CC6 platter
         // decode. Captured here (main queue, before the async second half) so
         // the decode is deterministic even if a device list refresh lands later.
-        let selectedPlatterSourceName = selectedMIDIInputSourceName
+        let selectedPlatterSourceName = self.selectedPlatterSourceName
         #if DEBUG
         let debugSession = activeRoutineMovementDebugSession
         #else
@@ -10258,6 +10367,7 @@ final class MacCaptureEngine: NSObject, ObservableObject {
     /// Start learning a specific semantic action from incoming MIDI events.
     /// Replaces the legacy crossfader-only `startMIDILearn()`.
     func startMIDILearn(for action: MIDISemanticAction) {
+        guard !isAudioInputSelectionLocked else { return }
         midiCaptureLock.lock()
         let calibrating = isCalibrating
         let curveCapturing = isCurveCapturing
@@ -10324,21 +10434,21 @@ final class MacCaptureEngine: NSObject, ObservableObject {
     /// CC6) is what produces audio, through the same direct-MIDI
     /// continuous drive DVS's renderer uses.
     ///
-    /// Deliberately hardcoded, not parameterized: the hot-cue pad asset
-    /// `ahhh.wav` (~4.4667 s) is longer than one physical platter
-    /// revolution (`dvsLoopFrames`, ~1.8 s) and is rejected by
-    /// `midiCoalescingTick`'s loop-fit guard — this button must always
-    /// load the short, validated asset. Supporting longer samples on the
-    /// direct-MIDI path is out of scope here (hot-cue/sample-mapping
-    /// design, later).
-    func loadPlatterTestSample() {
+    func loadPlatterTestSample() { loadScratchSample("dvs_ahhh") }
+
+    /// Explicit sample selection uses the same silent loading/re-cue path as hot cues.
+    func loadScratchSample(_ sampleID: String) {
+        guard !isAudioInputSelectionLocked else { return }
+        guard ScratchSamplePlaybackController.knownSampleIDs.contains(sampleID), sampleID != "ahhh" else {
+            platterTestLoadStatus = "Sample is unavailable: \(sampleID)"
+            return
+        }
         guard allowsLocalScratchPlayback else {
             publishOnMainAsync(field: "platterTestLoadStatus") { [weak self] in
                 self?.platterTestLoadStatus = "ScratchLab audio is unavailable."
             }
             return
         }
-        let sampleID = "dvs_ahhh"
         print("[ScratchSamplePlaybackBridge] platter test load requested · sampleID=\(sampleID)")
         let requested = scratchPlaybackController.load(sampleID: sampleID, playDiagnosticPreview: false)
         guard requested else {
@@ -10371,6 +10481,7 @@ final class MacCaptureEngine: NSObject, ObservableObject {
     /// output chain are audible. Unloading first resets the controller's
     /// once-per-load preview guard, so every button press is a real test.
     func previewPlatterTestSample() {
+        guard !isAudioInputSelectionLocked else { return }
         guard allowsLocalScratchPlayback else {
             publishOnMainAsync(field: "platterTestLoadStatus") { [weak self] in
                 self?.platterTestLoadStatus = "ScratchLab audio is unavailable."
@@ -10460,6 +10571,7 @@ final class MacCaptureEngine: NSObject, ObservableObject {
     /// Applies the verified mixer/pad addresses and arms the existing
     /// right-deck platter renderer with the validated AHHH sample.
     func applyVerifiedRaneOneMKIIMappingAndLoadAhhh() {
+        guard !isAudioInputSelectionLocked else { return }
         applyVerifiedRaneOneMKIIMapping()
         loadPlatterTestSample()
     }
@@ -10907,6 +11019,7 @@ final class MacCaptureEngine: NSObject, ObservableObject {
     /// before the action has been learned at all — there is no binding to
     /// calibrate yet.
     func startCalibration(for action: MIDISemanticAction) {
+        guard !isAudioInputSelectionLocked else { return }
         guard action.hotCueIndex == nil else { return }
         midiCaptureLock.lock()
         let learning = learnSessionAction != nil
@@ -10973,6 +11086,7 @@ final class MacCaptureEngine: NSObject, ObservableObject {
     /// in-progress capture session for this action first (the user chose a
     /// complete preset instead of finishing the pending capture).
     func setCurvePreset(_ preset: FaderCurvePreset, for action: MIDISemanticAction) {
+        guard !isAudioInputSelectionLocked else { return }
         guard preset != .custom else { return }
         guard action.hotCueIndex == nil else { return }
         guard FaderCurvePreset.availablePresets(for: action).contains(preset) else { return }
@@ -11029,6 +11143,7 @@ final class MacCaptureEngine: NSObject, ObservableObject {
     /// Cancel, this DOES persist immediately. Cancels any in-progress
     /// capture session for this action first.
     func resetCurve(for action: MIDISemanticAction) {
+        guard !isAudioInputSelectionLocked else { return }
         guard action.hotCueIndex == nil else { return }
         midiCaptureLock.lock()
         let shouldCancelCurveCapture = isCurveCapturing && curveCaptureAction == action
@@ -11078,6 +11193,7 @@ final class MacCaptureEngine: NSObject, ObservableObject {
     /// pattern as `startCalibration`). Freezes the device and exact
     /// binding identity the session watches — see `CurveCaptureBindingIdentity`.
     func startCurveCalibration(for action: MIDISemanticAction) {
+        guard !isAudioInputSelectionLocked else { return }
         guard action.hotCueIndex == nil else { return }
         midiCaptureLock.lock()
         let learning = learnSessionAction != nil
@@ -11203,6 +11319,7 @@ final class MacCaptureEngine: NSObject, ObservableObject {
     /// is RIGHT NOW as the pending closed point. Pending state only — no
     /// persistence.
     func captureCurveClosedPoint() {
+        guard !isAudioInputSelectionLocked else { return }
         midiCaptureLock.lock()
         guard isCurveCapturing, let raw = curveCaptureLastRawValue else {
             midiCaptureLock.unlock()
@@ -11223,6 +11340,7 @@ final class MacCaptureEngine: NSObject, ObservableObject {
 
     /// "Set full-on" button — mirrors `captureCurveClosedPoint`.
     func captureCurveFullOnPoint() {
+        guard !isAudioInputSelectionLocked else { return }
         midiCaptureLock.lock()
         guard isCurveCapturing, let raw = curveCaptureLastRawValue else {
             midiCaptureLock.unlock()
@@ -11293,6 +11411,7 @@ final class MacCaptureEngine: NSObject, ObservableObject {
     /// active (never torn down early) so the completion's failure branch
     /// still has a live session to report against.
     func finishCurveCalibration() {
+        guard !isAudioInputSelectionLocked else { return }
         midiCaptureLock.lock()
         let action = curveCaptureAction
         let closed = curveCapturePendingClosedRawValue
@@ -11613,6 +11732,7 @@ final class MacCaptureEngine: NSObject, ObservableObject {
     /// narrow range or a session that observed no movement at all. Runs the
     /// persistence on `midiMappingPersistenceQueue`, never on main.
     func finishCalibration() {
+        guard !isAudioInputSelectionLocked else { return }
         midiCaptureLock.lock()
         let action = calibratingAction
         let observedMin = calibrationMinAccumulator
@@ -11702,6 +11822,7 @@ final class MacCaptureEngine: NSObject, ObservableObject {
     /// action, independent of calibration — an explicit, standalone toggle.
     /// Runs the persistence on `midiMappingPersistenceQueue`, never on main.
     func setInversion(_ inverted: Bool, for action: MIDISemanticAction) {
+        guard !isAudioInputSelectionLocked else { return }
         guard let existingBeforeChange = currentMIDIDeviceMapping?.control(for: action) else { return }
         // Cheap pre-check on the main-thread cache, mirroring the pattern
         // already used above: only an ACTUAL flip changes what the
@@ -11746,6 +11867,7 @@ final class MacCaptureEngine: NSObject, ObservableObject {
     /// Clear a learned mapping for a specific action, removing it from the
     /// device profile and persisting the change.
     func clearMapping(for action: MIDISemanticAction) {
+        guard !isAudioInputSelectionLocked else { return }
         // A pending curve-capture session for this action refers to a
         // binding that's about to be removed — it can never be finished
         // meaningfully. Cancel it; nothing was persisted from it, so
@@ -11780,6 +11902,7 @@ final class MacCaptureEngine: NSObject, ObservableObject {
 
     /// Clear ALL learned mappings for the current device.
     func clearDeviceMappings() {
+        guard !isAudioInputSelectionLocked else { return }
         midiCaptureLock.lock()
         let shouldCancelCurveCapture = isCurveCapturing
         midiCaptureLock.unlock()
@@ -11888,11 +12011,12 @@ final class MacCaptureEngine: NSObject, ObservableObject {
 
     /// Assign a scratch sample ID to a learned hot-cue mapping for the current device.
     func assignSampleToHotCue(_ sampleID: String, hotCueIndex: Int) {
+        guard !isAudioInputSelectionLocked else { return }
         guard let action = MIDISemanticAction.allCases.first(where: { $0.hotCueIndex == hotCueIndex }),
               !selectedMIDIInputSourceID.isEmpty,
               currentMIDIDeviceMapping?.control(for: action) != nil
         else { return }
-        guard ScratchSamplePlaybackController.knownSampleIDs.contains(sampleID) else {
+        guard sampleID.isEmpty || ScratchSamplePlaybackController.knownSampleIDs.contains(sampleID) else {
             midiMappingError = "Sample \"\(sampleID)\" is not available and was not assigned."
             return
         }
@@ -11910,7 +12034,7 @@ final class MacCaptureEngine: NSObject, ObservableObject {
                 minValue: existing.minValue,
                 maxValue: existing.maxValue,
                 inverted: existing.inverted,
-                assignedSampleID: sampleID,
+                assignedSampleID: sampleID.isEmpty ? nil : sampleID,
                 learnedAt: existing.learnedAt,
                 isVerified: existing.isVerified,
                 curveConfig: existing.curveConfig   // always nil for a hot-cue action; threaded for consistency
@@ -12566,7 +12690,7 @@ final class MacCaptureEngine: NSObject, ObservableObject {
             ? { [weak self] in self?.scratchPlaybackController.currentPlaybackLoopContext() }
             : { nil }
         return LivePerformedNotationDataSource(
-            selectedMIDISourceName: { [weak self] in self?.selectedMIDIInputSourceName ?? "Not Connected" },
+            selectedMIDISourceName: { [weak self] in self?.selectedPlatterSourceName ?? "Not Connected" },
             selectedMIDISourceIdentifier: { [weak self] in self?.selectedMIDIInputSourceID ?? "" },
             capturedMidiCCEventsSnapshot: { [weak self] in self?.capturedMidiCCEventsSnapshot() ?? [] },
             cameraMovementEventsSnapshot: { [weak self] now in self?.cameraMovementEventsSnapshot(now: now) },
@@ -12816,7 +12940,7 @@ final class MacCaptureEngine: NSObject, ObservableObject {
                 // Suppress the raw MIDI CC6 path while DVS/timecode
                 // motion is driving playback, so the two sources never
                 // publish to the playback controller at the same time.
-                if channel == ScratchPlatterTracker.rightChannel, !dvsPlaybackDriveActive {
+                if channel == ScratchPlatterTracker.rightChannel, !dvsPlaybackDriveActive, selectedTwelveMIDIInputSourceID.isEmpty {
                     if scratchPlaybackController.midiUsesContinuousRenderer {
                         // The controller's own coalescing timer
                         // independently samples the tracker at a bounded
@@ -13192,7 +13316,8 @@ final class MacCaptureEngine: NSObject, ObservableObject {
         timestamp: Double = CACurrentMediaTime(),
         ingressTicket: MIDICaptureWindowTicket? = nil,
         consumedByLearn: Bool = false,
-        inputConnectionGeneration: UInt64? = nil
+        inputConnectionGeneration: UInt64? = nil,
+        twelveConnectionGeneration: UInt64? = nil
     ) {
         // Window identity at INGRESS. `receiveMIDIPacketList` already took one
         // for the whole packet list; a direct caller takes its own here. There
@@ -13202,7 +13327,8 @@ final class MacCaptureEngine: NSObject, ObservableObject {
         // admitted into a take whose epoch was still zero.
         midiCaptureLock.lock()
         midiObservationIngressCount += 1
-        let effectiveMapping = persistedCrossfaderMapping
+        let isTwelve = twelveConnectionGeneration != nil
+        let effectiveMapping = isTwelve ? nil : persistedCrossfaderMapping
         let observationConnectionGeneration = inputConnectionGeneration ?? midiConnectionGenerationStorage
         let admissionTicket = ingressTicket ?? lockedMIDICaptureWindowTicket()
         let effectiveSourceIdentifier = sourceIdentifier
@@ -13233,14 +13359,14 @@ final class MacCaptureEngine: NSObject, ObservableObject {
         // calibration this stays `nil`; it is never back-filled from
         // `normalizedValue`, because assuming the fader spans 0-127 is the
         // defect this replaces.
-        let activeCalibration = crossfaderCalibration(
+        let activeCalibration = isTwelve ? nil : crossfaderCalibration(
             forDeviceIdentifier: effectiveSourceIdentifier ?? "",
             channel: channel,
             controller: controller
         )
         let calibratedPosition = activeCalibration?.normalized(rawValue: value)
         let calibrationID = calibratedPosition == nil ? nil : activeCalibration?.id
-        recordLiveCCObservation(
+        if !isTwelve { recordLiveCCObservation(
             sourceIdentifier: effectiveSourceIdentifier,
             connectionGeneration: observationConnectionGeneration,
             deviceName: sourceName,
@@ -13251,7 +13377,7 @@ final class MacCaptureEngine: NSObject, ObservableObject {
             calibrationID: calibrationID,
             calibration: activeCalibration,
             observedAt: timestamp
-        )
+        ) }
         // Rane ONE MK2 pad candidate labelling — diagnostic only; no routing, no scoring.
         let padLabel = RaneOneMK2PadCandidateLabeler.label(channel: channel, cc: controller, value: value)
         let summary: String
@@ -13265,7 +13391,7 @@ final class MacCaptureEngine: NSObject, ObservableObject {
         }
 
         // Gated pad-to-sample preview — diagnostic only; no scoring, no routing.
-        if let sampleID = ScratchBankPadEventRouter.sampleID(
+        if !isTwelve, let sampleID = ScratchBankPadEventRouter.sampleID(
             channel: channel, cc: controller, value: value,
             isEnabled: isScratchBankMIDIPreviewEnabled
         ) {
@@ -13282,7 +13408,7 @@ final class MacCaptureEngine: NSObject, ObservableObject {
         // learned hot-cue action at all (routing-boundary fix, 2026-08-14) — see
         // `isHotCueCandidate`'s doc comment; a continuous CC stream (fader, platter)
         // must never enter the hot-cue resolver just to immediately no-op.
-        if !consumedByLearn, isHotCueCandidate(messageType: .controlChange, channel: channel, controlNumber: controller) {
+        if !isTwelve, !consumedByLearn, isHotCueCandidate(messageType: .controlChange, channel: channel, controlNumber: controller) {
             _ = resolveAndLoadHotCueSample(messageType: .controlChange, channel: channel, controlNumber: controller, value: value)
         }
 
@@ -13290,7 +13416,7 @@ final class MacCaptureEngine: NSObject, ObservableObject {
         // Updated on every recognised pad CC (press or release) at full fidelity.
         // The monitor UI reads this @Published property independently of the
         // throttled summary/counter path.
-        if let compactLabel = Self.compactScratchBankPadLabel(
+        if !isTwelve, let compactLabel = Self.compactScratchBankPadLabel(
             channel: channel, cc: controller, value: value,
             isPreviewEnabled: isScratchBankMIDIPreviewEnabled
         ) {
@@ -13385,6 +13511,12 @@ final class MacCaptureEngine: NSObject, ObservableObject {
         // cannot become take evidence, and a take packet cannot be appended
         // into a preview or into a window that has already been drained.
         midiCaptureLock.lock()
+        if let generation = twelveConnectionGeneration {
+            guard let connection = twelveConnection, connection.generation == generation,
+                  connection.sourceID == effectiveSourceIdentifier else {
+                midiCaptureLock.unlock(); return
+            }
+        }
         guard admissionTicket.owner != .idle,
               lockedMIDICaptureWindowTicket() == admissionTicket else {
             // Compare owner, generation, epoch and optional token together.
@@ -13483,8 +13615,9 @@ final class MacCaptureEngine: NSObject, ObservableObject {
     ) -> String? {
         let name = selectedMIDISourceName.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !name.isEmpty, name != "Not Connected" else { return nil }
+        let controller = CaptureCore.capturedPlatterController(from: capturedMidi, deviceName: name)
         guard capturedMidi.contains(where: {
-            $0.deviceName == name && $0.controller == 6 && $0.channel == 1
+            $0.deviceName == name && $0.controller == controller && $0.channel == 1
         }) else {
             return nil
         }
@@ -13510,7 +13643,7 @@ final class MacCaptureEngine: NSObject, ObservableObject {
             return []
         }
         return CaptureCore.derivePlatterMovementEvents(
-            from: capturedMidi, controller: 6, channel: 1, deviceName: deviceName)
+            from: capturedMidi, controller: CaptureCore.capturedPlatterController(from: capturedMidi, deviceName: deviceName), channel: 1, deviceName: deviceName)
     }
 
     /// Live/provisional counterpart to `resolvedControllerMovementEvents`,
@@ -13531,7 +13664,7 @@ final class MacCaptureEngine: NSObject, ObservableObject {
             return CaptureCore.PlatterMovementDecodeResult(committedEvents: [], provisionalMovement: nil)
         }
         return CaptureCore.derivePlatterMovementEventsWithProvisional(
-            from: capturedMidi, controller: 6, channel: 1, deviceName: deviceName,
+            from: capturedMidi, controller: CaptureCore.capturedPlatterController(from: capturedMidi, deviceName: deviceName), channel: 1, deviceName: deviceName,
             referencePacket: referencePacket)
     }
 
@@ -13712,6 +13845,7 @@ final class MacCaptureEngine: NSObject, ObservableObject {
     }
 
     private func reconnectSelectedMIDIInput() {
+        defer { reconnectTwelveMIDIInput() }
         guard midiInputPort != 0 else { return }
         closeMIDIInput()
         guard let selectedSource = availableMIDISources.first(where: { $0.id == selectedMIDIInputSourceID }),
@@ -15654,3 +15788,187 @@ struct CameraMovementProcessor {
         rotationTracker.reset()
     }
 }
+
+/// A separate CoreMIDI source for the Twelve connected through the 72's hub.
+/// Request MIDI 1 semantics through the modern UMP API: native MIDI 2 CC
+/// resolution is not assumed to be this controller's seven-bit wire protocol.
+private final class RaneTwelveMIDIConnection {
+    let sourceID: String
+    let name: String
+    let endpoint: MIDIEndpointRef
+    let generation: UInt64
+    let decoder = RaneTwelvePlatterDecoder()
+    private(set) var port: MIDIPortRef = 0
+
+    init(sourceID: String, name: String, endpoint: MIDIEndpointRef, generation: UInt64) {
+        self.sourceID = sourceID; self.name = name
+        self.endpoint = endpoint; self.generation = generation
+    }
+
+    func connect(client: MIDIClientRef, receive: @escaping (RaneTwelveMIDIConnection, UnsafePointer<MIDIEventList>) -> Void) -> OSStatus {
+        let status = MIDIInputPortCreateWithProtocol(client, "ScratchLab.Twelve.Deck2" as CFString,
+            ._1_0, &port) { [weak self] list, _ in
+                guard let self else { return }
+                receive(self, list)
+            }
+        guard status == noErr else { return status }
+        let connectionStatus = MIDIPortConnectSource(port, endpoint, nil)
+        if connectionStatus != noErr { close() }
+        return connectionStatus
+    }
+    func close() {
+        guard port != 0 else { return }
+        MIDIPortDisconnectSource(port, endpoint)
+        MIDIPortDispose(port)
+        port = 0
+    }
+    deinit { close() }
+}
+
+private struct RaneTwelveEventContext {
+    let engine: MacCaptureEngine
+    let connection: RaneTwelveMIDIConnection
+    let ticket: MacCaptureEngine.MIDICaptureWindowTicket
+    let receivedAt: Double
+}
+
+extension MacCaptureEngine {
+    /// Mixer selection stays independent: Twelve traffic never learns or
+    /// actuates a Seventy-Two fader/pad with the same channel and CC number.
+    var selectedPlatterSourceName: String {
+        selectedTwelveMIDIInputSourceID.isEmpty ? selectedMIDIInputSourceName
+            : availableMIDISources.first { $0.id == selectedTwelveMIDIInputSourceID }?.name ?? "Not Connected"
+    }
+
+    func selectTwelveMIDIInput(sourceID: String) {
+        guard !isAudioInputSelectionLocked else { return }
+        guard sourceID.isEmpty || (sourceID != selectedMIDIInputSourceID
+            && availableMIDISources.contains { $0.id == sourceID }) else {
+            twelveMIDIStatus = "Choose the Twelve's separate MIDI source."
+            return
+        }
+        midiCaptureLock.lock(); twelveSelectedSourceID = sourceID; midiCaptureLock.unlock()
+        selectedTwelveMIDIInputSourceID = sourceID
+        midiSelectionDefaults.set(sourceID, forKey: "scratchlab.mac.twelveDeck2MIDIInput")
+        reconnectTwelveMIDIInput()
+    }
+
+    private func reconnectTwelveMIDIInput() {
+        let choice = availableMIDISources.first { $0.id == selectedTwelveMIDIInputSourceID }
+        let endpoint = choice.flatMap { midiSourceEndpoints[$0] }
+        midiCaptureLock.lock()
+        if let current = twelveConnection, let choice, let endpoint,
+           current.sourceID == choice.id, current.endpoint == endpoint,
+           choice.id != selectedMIDIInputSourceID {
+            midiCaptureLock.unlock(); return
+        }
+        let retired = twelveConnection
+        twelveConnection = nil
+        twelvePlatterObservation = nil
+        twelvePositionCount = 0
+        twelveConnectionGeneration &+= 1
+        let generation = twelveConnectionGeneration
+        midiCaptureLock.unlock()
+        retired?.close()
+        scratchPlaybackController.resetMIDIPlatterInput()
+        guard let choice, let endpoint, choice.id != selectedMIDIInputSourceID else {
+            publishOnMainAsync(field: "twelveMIDIStatus") { [weak self] in
+                guard let self else { return }
+                self.twelveMIDIStatus = self.selectedTwelveMIDIInputSourceID.isEmpty
+                    ? "Using the main MIDI source for platter input."
+                    : "Twelve source unavailable. Reconnect it or choose its MIDI source."
+            }
+            return
+        }
+        let connection = RaneTwelveMIDIConnection(sourceID: choice.id, name: choice.name,
+            endpoint: endpoint, generation: generation)
+        midiCaptureLock.lock(); twelveConnection = connection; midiCaptureLock.unlock()
+        let result = connection.connect(client: midiClient) { [weak self] connection, list in
+            self?.receiveTwelveEventList(list, connection: connection)
+        }
+        if result != noErr {
+            midiCaptureLock.lock()
+            if twelveConnection === connection { twelveConnection = nil }
+            midiCaptureLock.unlock()
+        }
+        publishOnMainAsync(field: "twelveMIDIStatus") { [weak self] in
+            self?.twelveMIDIStatus = result == noErr
+                ? "Listening: \(choice.name) · Deck 2 · Ch2 CC1/CC2 (operator-supplied protocol)"
+                : "Twelve connection failed (\(result))."
+        }
+    }
+
+    private func receiveTwelveEventList(_ list: UnsafePointer<MIDIEventList>, connection: RaneTwelveMIDIConnection) {
+        // Pin both take identity and connection for the entire borrowed list.
+        // The visitor completes before CoreMIDI's buffer is released.
+        midiCaptureLock.lock()
+        guard twelveConnection === connection else { midiCaptureLock.unlock(); return }
+        let ticket = lockedMIDICaptureWindowTicket()
+        midiObservationIngressCount += 1
+        midiCaptureLock.unlock()
+        defer {
+            midiCaptureLock.lock(); midiObservationIngressCount -= 1; midiCaptureLock.unlock()
+        }
+        var context = RaneTwelveEventContext(engine: self, connection: connection,
+            ticket: ticket, receivedAt: CACurrentMediaTime())
+        withUnsafeMutablePointer(to: &context) { pointer in
+            MIDIEventListForEachEvent(list, { rawContext, time, message in
+                guard let rawContext, message.type == .channelVoice1, message.group == 0,
+                      message.channelVoice1.status == .controlChange,
+                      message.channelVoice1.channel == 1 else { return }
+                let context = rawContext.assumingMemoryBound(to: RaneTwelveEventContext.self).pointee
+                let cc = message.channelVoice1.controlChange
+                guard cc.index == 1 || cc.index == 2, cc.data < 128 else { return }
+                context.engine.receiveTwelveCC(connection: context.connection, controller: cc.index,
+                    value: cc.data, timestamp: time == 0 ? context.receivedAt : AVAudioTime.seconds(forHostTime: time),
+                    ticket: context.ticket)
+            }, pointer)
+        }
+    }
+
+    private func receiveTwelveCC(connection: RaneTwelveMIDIConnection, controller: UInt8,
+                                 value: UInt8, timestamp: Double, ticket: MIDICaptureWindowTicket) {
+        midiCaptureLock.lock()
+        guard twelveConnection === connection else { midiCaptureLock.unlock(); return }
+        let decoded = connection.decoder.ingest(status: 0xB1, controller: controller, value: value, timestamp: timestamp)
+        if let decoded, controller == 1 {
+            twelvePositionCount += 1
+            twelvePlatterObservation = MIDIPlatterStepObservation(input: MIDIPlatterInputIdentity(
+                timestamp: timestamp, deviceName: connection.name, channel: 1, value: Int(value),
+                connectionGeneration: connection.generation), accumulatedSteps: decoded.accumulatedTicks)
+        }
+        midiCaptureLock.unlock()
+        recordReceivedMIDICCEvent(sourceIdentifier: connection.sourceID, sourceName: connection.name,
+            channel: 1, controller: Int(controller), value: Int(value),
+            mappedControl: controller == 1 ? RaneTwelvePlatterDecoder.positionMapping : RaneTwelvePlatterDecoder.velocityMapping,
+            timestamp: timestamp, ingressTicket: ticket,
+            inputConnectionGeneration: connection.generation, twelveConnectionGeneration: connection.generation)
+    }
+
+    func connectedTwelvePlatterObservation() -> LiveCCObservation? {
+        midiCaptureLock.lock(); defer { midiCaptureLock.unlock() }
+        guard let connection = twelveConnection, let observation = twelvePlatterObservation,
+              observation.input.connectionGeneration == connection.generation else { return nil }
+        return LiveCCObservation(deviceName: connection.name, channel: 1, controller: 1,
+            value: observation.input.value, calibratedPosition: nil, observedAt: observation.input.timestamp,
+            eventCount: twelvePositionCount, connectionGeneration: connection.generation, calibrationID: nil)
+    }
+}
+
+#if DEBUG
+extension MacCaptureEngine {
+    /// Installs a source identity without connecting to any physical device.
+    func testOnly_setTwelveSource(sourceID: String, name: String, generation: UInt64) {
+        midiCaptureLock.lock()
+        twelveConnection = RaneTwelveMIDIConnection(sourceID: sourceID, name: name, endpoint: 1, generation: generation)
+        twelveSelectedSourceID = sourceID
+        twelvePlatterObservation = nil
+        twelvePositionCount = 0
+        midiCaptureLock.unlock()
+    }
+    func testOnly_receiveTwelveEventList(_ list: UnsafePointer<MIDIEventList>) {
+        midiCaptureLock.lock(); let connection = twelveConnection; midiCaptureLock.unlock()
+        if let connection { receiveTwelveEventList(list, connection: connection) }
+    }
+}
+#endif

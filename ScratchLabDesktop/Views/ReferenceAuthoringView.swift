@@ -323,6 +323,24 @@ struct ReferenceAuthoringView: View {
                     }
                 }
 
+                Picker("Separate Twelve platter", selection: Binding(
+                    get: { captureEngine.selectedTwelveMIDIInputSourceID },
+                    set: { captureEngine.selectTwelveMIDIInput(sourceID: $0) }
+                )) {
+                    Text("None — use main MIDI source").tag("")
+                    ForEach(captureEngine.availableMIDISources.filter { $0.id != captureEngine.selectedMIDIInputSourceID }) { source in
+                        Text(source.name).tag(source.id)
+                    }
+                }
+                .disabled(audioSelectionIsLocked || viewModel.isWorking || exportCoordinator.isPreparing)
+                Text(captureEngine.twelveMIDIStatus).font(.caption).foregroundStyle(.secondary)
+                Text("For Seventy-Two + Twelve: select the mixer above for faders and hot cues, then the Twelve here. Set the Twelve to Deck 2. Confirm forward/back movement before recording.")
+                    .font(.caption).foregroundStyle(.secondary)
+
+                MacMIDIControlSetupView(captureEngine: captureEngine)
+                    .disabled(viewModel.isWorking || exportCoordinator.isPreparing)
+                    .onChange(of: captureEngine.scratchUSBOutputPairsByUID) { _, _ in viewModel.stopBeatPreview() }
+
                 cameraSetupControls
 
                 Picker("Audio input", selection: audioInputSelectionBinding) {
@@ -582,7 +600,7 @@ struct ReferenceAuthoringView: View {
                  : "AHHH plays through the Rane. The optional Mac monitor adds delay.")
                 .font(.caption).foregroundStyle(.secondary)
             Text(captureEngine.scratchPrimaryOutput == .rane
-                 ? "Beat and count-in: Rane left deck (USB 1/2). AHHH: right deck (USB 3/4). Cue both decks in headphones; use the left channel level for the beat."
+                 ? "Beat and scratch use the USB pairs in Mixer & Hot-Cue Mapping. Automatic routing on Rane ONE uses beat 1/2 and scratch 3/4. Check both in headphones; configure the Seventy-Two pairs explicitly."
                  : "Beat and count-in follow the Mac output. Choose Rane output to hear both decks through the Rane headphones.")
                 .font(.caption).foregroundStyle(.secondary)
             Text("Capture keeps scratch and beat separate for scratch-only, beat-only and scratch-with-beat export.")
@@ -703,6 +721,8 @@ struct ReferenceAuthoringView: View {
 
     /// Reuses the main app's loaded PCM overview with the current renderer
     /// cursor. Merely displaying it neither loads nor starts audio.
+    @State private var selectedScratchSampleID = "dvs_ahhh"
+
     private var samplePositionContent: some View {
         VStack(alignment: .leading, spacing: 6) {
             MacSamplePositionWaveformView(
@@ -713,20 +733,25 @@ struct ReferenceAuthoringView: View {
             )
             .frame(height: 112)
 
-            if captureEngine.playbackWaveformSnapshot == nil {
-                HStack {
-                    Button("Load AHHH") { captureEngine.loadPlatterTestSample() }
-                        .disabled(viewModel.isWorking || captureEngine.isAudioInputSelectionLocked)
-                    Text("Load the ScratchLab sample, then move the right platter.")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
+            HStack {
+                Picker("Scratch sample", selection: $selectedScratchSampleID) {
+                    Text("AHHH").tag("dvs_ahhh")
+                    Text("Fresh").tag("fresh")
+                    Text("Ah yeah").tag("ah_yeah")
+                    Text("Check it out").tag("check_it_out")
                 }
-                if !captureEngine.platterTestLoadStatus.isEmpty {
-                    Text(captureEngine.platterTestLoadStatus)
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
+                Button("Load / Re-cue") {
+                    captureEngine.loadScratchSample(selectedScratchSampleID)
                 }
-            } else {
+            }
+            .disabled(viewModel.isWorking || captureEngine.isAudioInputSelectionLocked || exportCoordinator.isPreparing)
+            Text("Load a sample, then move the right platter. Load / Re-cue returns to its start without playing a preview.")
+                .font(.caption).foregroundStyle(.secondary)
+            if !captureEngine.platterTestLoadStatus.isEmpty {
+                Text(captureEngine.platterTestLoadStatus)
+                    .font(.caption).foregroundStyle(.secondary)
+            }
+            if captureEngine.playbackWaveformSnapshot != nil {
                 if let waveform = captureEngine.playbackWaveformSnapshot,
                    let position = captureEngine.playbackPositionSnapshot,
                    position.loadedSampleID == waveform.sampleID,

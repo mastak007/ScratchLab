@@ -57,6 +57,7 @@ final class ScratchSamplePlaybackController {
     private let macMonitorMaximumPendingBufferCount = 12
     private let scratchOutputPeakMeter = ScratchOutputPeakMeter()
     private var requestedOutputDeviceID: AudioDeviceID?
+    private var requestedOutputPairStart: Int?
     private var requestedOutputDeviceUID: String?
     private var requestedOutputDeviceName = "System Default"
     private var activeOutputDeviceID: AudioDeviceID?
@@ -584,6 +585,8 @@ final class ScratchSamplePlaybackController {
     /// Left-deck (channel 0) steps are never read here: the isolation rule
     /// is structural, not a runtime check.
     private var rightDeckAccumulatedStepsProvider: (() -> Int)?
+    private var requiresCorrelatedMIDIObservation: (() -> Bool)?
+    private var midiRequiredCorrelationLastTick = false
     private var rightDeckObservationProvider: (() -> MIDIPlatterStepObservation?)?
     private var playbackLoopContext: PlaybackLoopContext?
     private var playbackLoopGeneration: UInt64 = 0
@@ -617,14 +620,28 @@ final class ScratchSamplePlaybackController {
 
     /// Wires the right-deck steps provider and starts the real-time
     /// coalescing timer (idempotent). Safe to call from any thread.
+    /// Retire the previous device's motion without unloading its sample.
+    func resetMIDIPlatterInput() {
+        audioQueue.async { [weak self] in
+            guard let self else { return }
+            self.midiContinuousDrive.reset()
+            self.midiContinuousWasActive = false
+            self.lastRawMIDISteps = nil
+            self.invalidatePlaybackLoopContext(at: self.schedulingClock())
+            if !self.dvsOwnershipActive { self.dvsContinuousRenderer.publishIdle() }
+        }
+    }
+
     func configureMIDIPlatterProvider(
         rightDeckAccumulatedSteps provider: @escaping () -> Int,
-        observation: (() -> MIDIPlatterStepObservation?)? = nil
+        observation: (() -> MIDIPlatterStepObservation?)? = nil,
+        requiresCorrelatedObservation: (() -> Bool)? = nil
     ) {
         audioQueue.async { [weak self] in
             guard let self else { return }
             self.rightDeckAccumulatedStepsProvider = provider
             self.rightDeckObservationProvider = observation
+            self.requiresCorrelatedMIDIObservation = requiresCorrelatedObservation
             if self.midiCoalescingTimer == nil {
                 self.startMIDICoalescingTimer()
             }
@@ -788,10 +805,23 @@ final class ScratchSamplePlaybackController {
                   !before.input.deviceName.isEmpty else { return nil }
             return before
         }()
+        let requiresCorrelation = requiresCorrelatedMIDIObservation?() == true
+        if requiresCorrelation != midiRequiredCorrelationLastTick {
+            midiContinuousDrive.reset()
+            midiRequiredCorrelationLastTick = requiresCorrelation
+        }
+        if requiresCorrelation, observation == nil {
+            midiContinuousDrive.reset()
+            playbackLoopContext = nil
+            midiContinuousWasActive = false
+            dvsContinuousRenderer.publishIdle()
+            return
+        }
         if let observation {
             let input = observation.input
             if playbackLoopInput?.deviceName != input.deviceName
                 || playbackLoopInput?.connectionGeneration != input.connectionGeneration {
+                if requiresCorrelation { midiContinuousDrive.reset() } // Retire the separate endpoint counter.
                 let earliest = max(playbackLoopValidFrom, input.timestamp)
                 invalidatePlaybackLoopContext(at: earliest)
             }
@@ -2024,14 +2054,16 @@ final class ScratchSamplePlaybackController {
     /// selected by `MacCaptureEngine`. Passing nil restores the current macOS
     /// default output. The change is serialized with all other engine work and
     /// deferred while a canonical routine-output capture tap is active.
-    func setPreferredOutputDevice(deviceID: AudioDeviceID?, deviceName: String?, expectedDeviceUID: String? = nil) {
+    func setPreferredOutputDevice(deviceID: AudioDeviceID?, deviceName: String?, expectedDeviceUID: String? = nil, explicitPairStart: Int? = nil) {
         audioQueue.async { [weak self] in
             guard let self else { return }
             let trimmedDeviceName = deviceName?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
             let name = trimmedDeviceName.isEmpty ? "System Default" : trimmedDeviceName
             guard self.requestedOutputDeviceID != deviceID || self.requestedOutputDeviceName != name
-                    || self.requestedOutputDeviceUID != expectedDeviceUID || self.outputRoutingError != nil else { return }
+                    || self.requestedOutputDeviceUID != expectedDeviceUID || self.requestedOutputPairStart != explicitPairStart
+                    || self.outputRoutingError != nil else { return }
             self.requestedOutputDeviceID = deviceID
+            self.requestedOutputPairStart = explicitPairStart
             self.requestedOutputDeviceUID = expectedDeviceUID
             self.requestedOutputDeviceName = name
             self.outputRouteNeedsApply = true
@@ -2072,7 +2104,7 @@ final class ScratchSamplePlaybackController {
             let route = try MacScratchOutputRoute.prepare(
                 engine: engine, preferredDeviceID: requestedOutputDeviceID,
                 preferredDeviceName: requestedOutputDeviceName, expectedDeviceUID: requestedOutputDeviceUID,
-                stereoOutputNode: raneOutputMixerNode
+                stereoOutputNode: raneOutputMixerNode, explicitPairStart: requestedOutputPairStart
             )
             appliedOutputRoute = route
             activeOutputDeviceID = route.deviceID
@@ -4990,10 +5022,20 @@ enum MacScratchOutputRoute {
         return result
     }
 
-    static func channelMap(deviceName: String, deviceChannels: Int, nodeChannels: Int, raneDeck: RaneDeck = .right) throws -> [Int] {
+    static func channelMap(deviceName: String, deviceChannels: Int, nodeChannels: Int, raneDeck: RaneDeck = .right, explicitPairStart: Int? = nil) throws -> [Int] {
+        if let first = explicitPairStart {
+            guard deviceChannels >= 2, nodeChannels >= 2, first >= 0, first.isMultiple(of: 2), first < deviceChannels - 1,
+                  first < nodeChannels - 1 else {
+                throw Failure(message: "The selected USB output pair is unavailable on \(deviceName). Choose an available pair before recording.")
+            }
+            var map = Array(repeating: -1, count: nodeChannels)
+            map[first] = 0
+            map[first + 1] = 1
+            return map
+        }
         if deviceName.lowercased().contains("rane") {
             guard RanePlaybackRoutingPolicy.matchesRaneRoute(portName: deviceName) else {
-                throw Failure(message: "The playback output pair for \(deviceName) has not been validated. This build supports Rane ONE playback on USB outputs 3/4.")
+                throw Failure(message: "The playback output pair for \(deviceName) has not been validated. Choose its scratch and beat USB output pairs in Mixer & Hot-Cue Mapping, then check them in headphones.")
             }
             if raneDeck == .left {
                 guard deviceChannels >= 2, nodeChannels >= 2 else {
@@ -5029,7 +5071,7 @@ enum MacScratchOutputRoute {
         }
     }
 
-    static func prepare(engine: AVAudioEngine, preferredDeviceID: AudioDeviceID?, preferredDeviceName: String?, expectedDeviceUID: String? = nil, stereoOutputNode: AVAudioNode? = nil, raneDeck: RaneDeck = .right) throws -> Applied {
+    static func prepare(engine: AVAudioEngine, preferredDeviceID: AudioDeviceID?, preferredDeviceName: String?, expectedDeviceUID: String? = nil, stereoOutputNode: AVAudioNode? = nil, raneDeck: RaneDeck = .right, explicitPairStart: Int? = nil) throws -> Applied {
         guard !engine.isRunning else {
             throw Failure(message: "Stop capture before changing the playback output.")
         }
@@ -5038,8 +5080,11 @@ enum MacScratchOutputRoute {
             throw Failure(message: "The selected playback output is no longer connected. Refresh hardware inputs and select it again.")
         }
         try validateIdentity(expectedDeviceUID: expectedDeviceUID, actualDeviceUID: uid)
+        guard explicitPairStart == nil || (expectedDeviceUID != nil && preferredDeviceID != nil) else {
+            throw Failure(message: "An explicit USB output pair must be bound to the selected audio device.")
+        }
         // Reject an unsupported selected Rane before touching the output unit.
-        _ = try channelMap(deviceName: name, deviceChannels: outputChannelCount(deviceID), nodeChannels: outputChannelCount(deviceID), raneDeck: raneDeck)
+        _ = try channelMap(deviceName: name, deviceChannels: outputChannelCount(deviceID), nodeChannels: outputChannelCount(deviceID), raneDeck: raneDeck, explicitPairStart: explicitPairStart)
         guard let unit = engine.outputNode.audioUnit else {
             throw Failure(message: "The playback output audio unit is unavailable.")
         }
@@ -5060,7 +5105,7 @@ enum MacScratchOutputRoute {
         engine.connect(outputSource, to: engine.outputNode, format: stereo)
         engine.prepare()
         let map = try channelMap(deviceName: name, deviceChannels: outputChannelCount(deviceID),
-            nodeChannels: Int(engine.outputNode.outputFormat(forBus: 0).channelCount), raneDeck: raneDeck)
+            nodeChannels: Int(engine.outputNode.outputFormat(forBus: 0).channelCount), raneDeck: raneDeck, explicitPairStart: explicitPairStart)
         var rawMap = map.map(Int32.init)
         let mapStatus = rawMap.withUnsafeMutableBytes {
             AudioUnitSetProperty(unit, kAudioOutputUnitProperty_ChannelMap, kAudioUnitScope_Input,
@@ -5070,8 +5115,9 @@ enum MacScratchOutputRoute {
             throw Failure(message: "Could not assign the playback channels on \(name) (audio error \(mapStatus)).")
         }
         let route = Applied(deviceID: deviceID, deviceUID: uid, deviceName: name,
-            channelMap: map, channelPair: RanePlaybackRoutingPolicy.matchesRaneRoute(portName: name)
-                ? (raneDeck == .left ? "1/2" : "3/4") : (map.count > 1 ? "1/2" : "1"))
+            channelMap: map, channelPair: explicitPairStart.map { "\($0 + 1)/\($0 + 2)" }
+                ?? (RanePlaybackRoutingPolicy.matchesRaneRoute(portName: name)
+                    ? (raneDeck == .left ? "1/2" : "3/4") : (map.count > 1 ? "1/2" : "1")))
         try verify(engine: engine, route: route)
         return route
     }
@@ -5119,7 +5165,7 @@ enum MacScratchOutputRoute {
         return result.isEmpty ? nil : result
     }
 
-    private static func outputChannelCount(_ deviceID: AudioDeviceID) -> Int {
+    static func outputChannelCount(_ deviceID: AudioDeviceID) -> Int {
         var address = AudioObjectPropertyAddress(mSelector: kAudioDevicePropertyStreamConfiguration,
             mScope: kAudioDevicePropertyScopeOutput, mElement: kAudioObjectPropertyElementMain)
         var size: UInt32 = 0
@@ -5152,6 +5198,7 @@ final class MacReferenceBeatOutputRouter: BeatPlaybackOutputRouting {
         var deviceID: AudioDeviceID?
         var deviceName: String?
         var deviceUID: String?
+        var explicitPairStart: Int? = nil
     }
 
     private let target: () throws -> Target
@@ -5166,7 +5213,7 @@ final class MacReferenceBeatOutputRouter: BeatPlaybackOutputRouting {
         let target = try target()
         applied = try MacScratchOutputRoute.prepare(engine: engine,
             preferredDeviceID: target.deviceID, preferredDeviceName: target.deviceName,
-            expectedDeviceUID: target.deviceUID, raneDeck: .left)
+            expectedDeviceUID: target.deviceUID, raneDeck: .left, explicitPairStart: target.explicitPairStart)
     }
 
     func verify(_ engine: AVAudioEngine) throws {

@@ -345,6 +345,29 @@ final class MacScratchPrimaryOutputRoutingTests: XCTestCase {
         }
     }
 
+    func testExplicitSeventyTwoPairsRouteOnlyChosenDestinations() throws {
+        XCTAssertEqual(try MacScratchOutputRoute.channelMap(deviceName: "Rane Seventy-Two",
+            deviceChannels: 10, nodeChannels: 10, explicitPairStart: 2),
+            [-1, -1, 0, 1, -1, -1, -1, -1, -1, -1])
+        XCTAssertEqual(try MacScratchOutputRoute.channelMap(deviceName: "Rane Seventy-Two",
+            deviceChannels: 10, nodeChannels: 10, raneDeck: .left, explicitPairStart: 0),
+            [0, 1, -1, -1, -1, -1, -1, -1, -1, -1])
+        // An explicit choice may use the same deck for beat and scratch.
+        XCTAssertEqual(try MacScratchOutputRoute.channelMap(deviceName: "Rane Seventy-Two",
+            deviceChannels: 10, nodeChannels: 10, raneDeck: .left, explicitPairStart: 2), rane.channelMap)
+    }
+
+    func testInvalidExplicitPairNeverFallsBackToAutomaticOrSpeakers() {
+        for pair in [-2, 1, 9, 10, Int.max] {
+            XCTAssertThrowsError(try MacScratchOutputRoute.channelMap(deviceName: "Rane Seventy-Two",
+                deviceChannels: 10, nodeChannels: 10, explicitPairStart: pair))
+        }
+        XCTAssertThrowsError(try MacScratchOutputRoute.channelMap(deviceName: "Rane Seventy-Two",
+            deviceChannels: 10, nodeChannels: 2, explicitPairStart: 2))
+        XCTAssertThrowsError(try MacScratchOutputRoute.channelMap(deviceName: "Rane Seventy-Two",
+            deviceChannels: 2, nodeChannels: 10, explicitPairStart: 2))
+    }
+
     func testRaneNodeShortfallIsRejectedEvenWhenDeviceHasTenOutputs() {
         XCTAssertThrowsError(try MacScratchOutputRoute.channelMap(deviceName: "Rane ONE MKII",
             deviceChannels: 10, nodeChannels: 2))
