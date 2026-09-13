@@ -4242,7 +4242,7 @@ final class CaptureReliabilityPhase1CoreTests: XCTestCase {
         )
         XCTAssertTrue(cxlConfiguration.contains("PRODUCT_BUNDLE_IDENTIFIER = com.machelpnz.scratchlab.cxl-authoring;"))
         XCTAssertTrue(cxlConfiguration.contains("DEVELOPMENT_TEAM = 2DDKGL33BU;"))
-        XCTAssertTrue(cxlConfiguration.contains("PRODUCT_NAME = ScratchLab;"))
+        XCTAssertTrue(cxlConfiguration.contains("PRODUCT_NAME = \"ScratchLab CXL\";"))
         XCTAssertTrue(cxlConfiguration.contains("CODE_SIGN_ENTITLEMENTS = ScratchLabDesktop/ScratchLabDesktop.entitlements;"))
         XCTAssertTrue(cxlConfiguration.contains("SWIFT_ACTIVE_COMPILATION_CONDITIONS = \"$(inherited) CXL_AUTHORING\";"))
         XCTAssertFalse(cxlConfiguration.contains("ENABLE_TIMECODE_LIVE_TAP"))
@@ -4257,7 +4257,7 @@ final class CaptureReliabilityPhase1CoreTests: XCTestCase {
             ),
             encoding: .utf8
         )
-        XCTAssertEqual(scheme.components(separatedBy: "buildConfiguration = \"CXLRelease\"").count - 1, 4)
+        XCTAssertEqual(scheme.components(separatedBy: "buildConfiguration = \"CXLRelease\"").count - 1, 5)
         XCTAssertFalse(scheme.contains("buildConfiguration = \"Release\""))
         XCTAssertFalse(scheme.contains("buildConfiguration = \"Debug\""))
 

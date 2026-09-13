@@ -5352,6 +5352,10 @@ Automated pre-release check started: Python capture fixtures passed 87/87. The f
 
 The verified CXL candidate was staged at `../CXL-ASC/ScratchLab CXL.app` with Apple Distribution identity `C9B7542362B8993470B7B75F47A45C8F8E9F6FFA`, team `2DDKGL33BU`, preserved entitlements/permission metadata, timestamp, and universal architectures. A signed Mac App Store package was created at `../CXL-ASC/ScratchLab-CXL.pkg` and passed `pkgutil --check-signature`. `xcrun altool --upload-package` was attempted and rejected before upload because no ASC JWT or app-specific-password authentication is configured. No build was uploaded; the existing external-delivery task remains open.
 
+## CXL contract checks — 14 September 2026
+
+The release audit exposed stale source-contract checks after the CXL capture board moved to the full-width layout: camera height, DEBUG diagnostics placement, notation sizing, product name, and the CXL scheme test action. Updated those contracts to match the intended CXLRelease-only scheme and current 380-point capture board. Focused verification passed 4/4, including `testCXLReleaseIdentityAndPermissionCopyAreExplicit` and the three camera-preview layout checks. Historical Tear evidence failures remain documented and unchanged.
+
 ## Independent-audit origin correction — 13 September 2026 (software slice complete)
 
 Claude's three new tests were run unchanged on d86a369: all three failed, confirming rejection of valid preroll, beat-export rejection, and silent acceptance of a camera starting about a second late. The staged candidate must not be installed. The intended duration was incorrectly derived from measured origin, and Watch Stop persistence could replace that measured origin with older prepared disk timing; callback/Watch sidecar access also lacked shared synchronization.

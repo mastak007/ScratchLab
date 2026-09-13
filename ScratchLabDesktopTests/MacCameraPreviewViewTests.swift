@@ -577,7 +577,7 @@ final class MacCameraPreviewViewTests: XCTestCase {
     func testTheDebugDiagnosticsRowSitsOutsideTheNotationHeight() throws {
         let source = try authoringViewSource()
         let cardRange = try XCTUnwrap(source.range(of: "ReferenceLiveMotionContent(tracker:"))
-        let minimumRange = try XCTUnwrap(source.range(of: "minHeight: Self.liveNotationMinimumHeight"))
+        let minimumRange = try XCTUnwrap(source.range(of: "minHeight: Self.captureBoardNotationHeight"))
         let debugRange = try XCTUnwrap(source.range(of: "LiveNotationDiagnosticsRow(tracker:"))
         XCTAssertLessThan(cardRange.lowerBound, minimumRange.lowerBound)
         XCTAssertLessThan(
@@ -591,11 +591,11 @@ final class MacCameraPreviewViewTests: XCTestCase {
     func testTheCameraPreviewCannotCompressTheNotationAway() throws {
         let source = try authoringViewSource()
         XCTAssertTrue(
-            source.contains("private static let cameraPreviewMaximumHeight: CGFloat = 360"),
+            source.contains("private static let captureBoardCameraHeight: CGFloat = 380"),
             "the 16:9 preview needs a ceiling so both panels fit"
         )
         XCTAssertTrue(
-            source.contains("previewHeight: Self.cameraPreviewMaximumHeight"),
+            source.contains("previewHeight: Self.captureBoardCameraHeight"),
             "the CXL camera component receives the same bounded preview height"
         )
     }
@@ -665,7 +665,7 @@ final class MacCameraPreviewViewTests: XCTestCase {
     func testTheDebugDiagnosticsRowIsExcludedFromRelease() throws {
         let source = try authoringViewSource()
         XCTAssertTrue(
-            source.contains("#if DEBUG\n                LiveNotationDiagnosticsRow"),
+            source.contains("#if DEBUG\n            LiveNotationDiagnosticsRow"),
             "the diagnostics row must stay behind a DEBUG gate"
         )
         XCTAssertTrue(
