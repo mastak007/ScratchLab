@@ -1,4 +1,4 @@
-import AVFoundation
+@preconcurrency import AVFoundation
 import CryptoKit
 import Foundation
 #if os(macOS)

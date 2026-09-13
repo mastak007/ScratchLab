@@ -62,6 +62,17 @@ def main():
         parser.error("The installed app belongs to a different signing team.")
     entitlements = run("/usr/bin/codesign", "-d", "--entitlements", ":-", str(args.installed_app))
     installed_entitlements = plistlib.loads(entitlements)
+    embedded_profile = args.built_app / "Contents" / "embedded.provisionprofile"
+    if not embedded_profile.exists():
+        parser.error("Built app is missing its embedded provisioning profile.")
+    profile_result = subprocess.run(
+        ["/usr/bin/security", "cms", "-D", "-i", str(embedded_profile)],
+        check=True, capture_output=True,
+    )
+    profile = plistlib.loads(profile_result.stdout)
+    profile_entitlements = profile["Entitlements"]
+    merged_entitlements = dict(installed_entitlements)
+    merged_entitlements.update(profile_entitlements)
     args.output.parent.mkdir(parents=True, exist_ok=True)
     run("/usr/bin/ditto", str(args.built_app), str(args.output))
     if args.exclude_reference_examples:
@@ -70,7 +81,7 @@ def main():
             import shutil
             shutil.rmtree(examples)
     entitlement_path = args.output.with_suffix(".entitlements.plist")
-    entitlement_path.write_bytes(plistlib.dumps(installed_entitlements))
+    entitlement_path.write_bytes(plistlib.dumps(merged_entitlements))
     # Apple's default Development requirement can pin the certificate CN.
     # Bind to our existing team and bundle instead, including across renewal.
     designated = (f'designated => identifier "{expected_bundle}" and anchor apple generic '
@@ -87,7 +98,7 @@ def main():
         raise RuntimeError("Candidate rejected: Apple certificate chain was not verified.")
     actual_entitlements = plistlib.loads(run(
         "/usr/bin/codesign", "-d", "--entitlements", ":-", str(args.output)))
-    if actual_entitlements != installed_entitlements:
+    if actual_entitlements != merged_entitlements:
         raise RuntimeError("Candidate rejected: entitlements changed.")
     binary = args.output / "Contents/MacOS" / built["CFBundleExecutable"]
     architectures = run("/usr/bin/lipo", "-archs", str(binary)).decode().split()
