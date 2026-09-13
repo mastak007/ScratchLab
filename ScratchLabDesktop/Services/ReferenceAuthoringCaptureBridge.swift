@@ -969,7 +969,8 @@ final class ReferenceAuthoringCaptureBridge {
     private static func makePerTakeSourceState(
         sidecar: CaptureCore.LocalRecordingSidecar,
         expectedIdentity: TakeIdentity?,
-        takeDirectory: URL
+        takeDirectory: URL,
+        now: Date = Date()
     ) -> ReferencePerTakeSourceState {
         guard let expectedIdentity else {
             return .conflict(identity: nil, detail: "the capture bridge has no reserved take identity")
@@ -997,7 +998,7 @@ final class ReferenceAuthoringCaptureBridge {
             takeNumber: expectedIdentity.takeNumber,
             takeToken: token
         )
-        let evidence = watchEvidence(in: sidecar, expectedIdentity: expectedIdentity)
+        let evidence = watchEvidence(in: sidecar, expectedIdentity: expectedIdentity, now: now)
         switch evidence {
         case .linked(let fileName):
             guard let data = verifiedWatchData(sidecar: sidecar, takeDirectory: takeDirectory) else {
@@ -1007,10 +1008,10 @@ final class ReferenceAuthoringCaptureBridge {
         case .acknowledgedTransferPending:
             return .waitingForLateTransfer(
                 identity: identity,
-                deadline: (sidecar.endedAt ?? sidecar.startedAt).addingTimeInterval(90)
+                deadline: watchTransferDeadline(for: sidecar)
             )
         case .transferFailed(let detail):
-            return sidecar.watchSyncState == .timedOut
+            return sidecar.watchSyncState == .timedOut || detail == watchTransferTimeoutDetail
                 ? .timedOut(identity: identity)
                 : .conflict(identity: identity, detail: detail)
         case .identityMismatch(_, let found):
@@ -1124,9 +1125,24 @@ final class ReferenceAuthoringCaptureBridge {
     ///
     /// The identity check comes first and is absolute: evidence naming another
     /// session or take is never attached, whatever state it is in.
+    /// Optional Watch evidence may stay pending only this long after the
+    /// latest Mac-side Stop activity for the take. A relaunch cannot extend it.
+    static let watchTransferDeadlineSeconds: TimeInterval = 90
+    static let watchTransferTimeoutDetail =
+        "The Apple Watch Stop reply or motion file did not arrive before its 90-second timeout. "
+            + "No wrist motion is attached to this take; the Mac recording is retained."
+
+    static func watchTransferDeadline(for sidecar: CaptureCore.LocalRecordingSidecar) -> Date {
+        let stop = sidecar.watchStopDiagnostics
+        let anchor = [stop?.resolvedAt, stop?.requestedAt, sidecar.endedAt, sidecar.startedAt]
+            .compactMap { $0 }.max() ?? sidecar.startedAt
+        return anchor.addingTimeInterval(watchTransferDeadlineSeconds)
+    }
+
     static func watchEvidence(
         in sidecar: CaptureCore.LocalRecordingSidecar,
-        expectedIdentity: TakeIdentity?
+        expectedIdentity: TakeIdentity?,
+        now: Date = Date()
     ) -> ReferenceWatchEvidence {
         guard let expectedIdentity else {
             return .missing(syncState: sidecar.watchSyncState.rawValue)
@@ -1154,8 +1170,10 @@ final class ReferenceAuthoringCaptureBridge {
         }
         // `sent` is an in-flight command, not a failed transfer. Finalization
         // often wins the race with the reply; keep polling the exact take.
+        let pending: ReferenceWatchEvidence = now > watchTransferDeadline(for: sidecar)
+            ? .transferFailed(detail: watchTransferTimeoutDetail) : .acknowledgedTransferPending
         if sidecar.watchStopDiagnostics?.outcome == .sent {
-            return .acknowledgedTransferPending
+            return pending
         }
         if let stop = sidecar.watchStopDiagnostics, stop.outcome.isDegraded {
             return .transferFailed(
@@ -1170,7 +1188,7 @@ final class ReferenceAuthoringCaptureBridge {
                 detail: "the transfer reported completed but no motion capture is linked to this take."
             )
         case .pending, .none:
-            return .acknowledgedTransferPending
+            return pending
         case .notApplicable:
             return .transferFailed(
                 detail: "the Watch acknowledged the start but reported no motion artifact for this take."
@@ -1203,7 +1221,8 @@ final class ReferenceAuthoringCaptureBridge {
     }
 
     /// Reopening a draft reads its own recording, never the bridge's latest take.
-    static func refreshWatchEvidence(mediaURL: URL, expectedIdentity: TakeIdentity?) -> ReferenceWatchEvidenceRefresh? {
+    static func refreshWatchEvidence(mediaURL: URL, expectedIdentity: TakeIdentity?,
+        now: Date = Date()) -> ReferenceWatchEvidenceRefresh? {
         let sidecarURL = CaptureCore.LocalRecordingFiles.sidecarURL(forMediaURL: mediaURL)
         guard let data = try? Data(contentsOf: sidecarURL) else { return nil }
         let decoder = JSONDecoder()
@@ -1217,8 +1236,8 @@ final class ReferenceAuthoringCaptureBridge {
             fileName: sidecarURL.lastPathComponent
         )
         let sourceState = Self.makePerTakeSourceState(sidecar: sidecar,
-            expectedIdentity: expectedIdentity, takeDirectory: mediaURL.deletingLastPathComponent())
-        let evidence = Self.watchEvidence(in: sidecar, expectedIdentity: expectedIdentity)
+            expectedIdentity: expectedIdentity, takeDirectory: mediaURL.deletingLastPathComponent(), now: now)
+        let evidence = Self.watchEvidence(in: sidecar, expectedIdentity: expectedIdentity, now: now)
         if case .linked = sourceState {
             return .init(evidence: evidence, sourceBinding: sourceBinding, sourceState: sourceState)
         }

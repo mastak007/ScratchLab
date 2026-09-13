@@ -1021,6 +1021,9 @@ struct ReferenceAuthoringSession: Equatable, Sendable {
     ) {
         guard case .reviewing(let takeIndex) = phase, takes.indices.contains(takeIndex) else { return }
         guard !takes[takeIndex].evidence.watchEvidence.isLinked || watchEvidence.isLinked else { return }
+        // A reached timeout or failure is never reopened as pending; only a
+        // verified matching file (checked below) may resolve it.
+        guard !(takes[takeIndex].evidence.watchEvidence.isTerminal && watchEvidence.isTransferPending) else { return }
         guard takes[takeIndex].acceptsWatchEvidence(watchEvidence, sourceState: sourceState) else { return }
         if case .linked(let identity, _, _) = sourceState, let refreshedSourceBinding {
             guard refreshedSourceBinding.capturedSessionID == identity.sessionID,
@@ -1691,10 +1694,12 @@ struct ReferenceAuthoringTake: Equatable, Sendable, Identifiable {
         let currentIdentity: ReferenceTakeSourceIdentity
         switch evidence.metadata.sourceState {
         case .waitingForLateTransfer(let identity, _): currentIdentity = identity
-        case .conflict(let identity?, _):
-            // Older drafts treated Stop `sent` as a terminal failure. Recover
-            // only that proven in-flight snapshot, with the same command/take
-            // and a newly verified file digest. Real failures stay terminal.
+        case .conflict(let identity?, _), .timedOut(let identity):
+            // Older drafts treated Stop `sent` as a terminal failure, and an
+            // optional Watch transfer can now time out. Recover only a proven
+            // in-flight snapshot (Stop sent, or stopped with its file pending),
+            // with the same command/take and a newly verified file digest.
+            // Degraded Stop outcomes stay terminal.
             guard case .transferFailed = evidence.watchEvidence,
                   let incomingHash, incomingHash.count == 64, incomingHash.allSatisfy(\.isHexDigit),
                   let binding = tearEvidenceSourceBinding else { return false }
@@ -1703,7 +1708,8 @@ struct ReferenceAuthoringTake: Equatable, Sendable, Identifiable {
             guard let sidecar = try? decoder.decode(CaptureCore.LocalRecordingSidecar.self,
                     from: binding.rawSidecarData),
                   sidecar.watchSyncState == .acknowledged,
-                  sidecar.watchStopDiagnostics?.outcome == .sent,
+                  let stop = sidecar.watchStopDiagnostics,
+                  stop.outcome == .sent || (stop.outcome == .stopped && stop.motionTransferState == .pending),
                   sidecar.sessionID == identity.sessionID, sidecar.takeID == identity.takeID,
                   sidecar.appLocalTakeNumber == identity.takeNumber,
                   sidecar.watchCommandID == identity.takeToken else { return false }

@@ -1298,6 +1298,56 @@ final class ReferenceAuthoringSessionTests: XCTestCase {
         }
     }
 
+    func testExpiredOptionalWatchUnblocksRawSaveAndContinuationAndOnlyVerifiedLateFileRecovers() throws {
+        let identity = ReferenceTakeSourceIdentity(sessionID: "capture-session", takeID: "take-001",
+            takeNumber: 1, takeToken: "token")
+        let sidecar = CaptureCore.LocalRecordingSidecar(sessionID: identity.sessionID,
+            takeID: identity.takeID, appLocalTakeNumber: identity.takeNumber,
+            recordingRole: "routine", platform: "macOS", appSurface: "CXL",
+            sourceDeviceName: "Mac", startedAt: Date(timeIntervalSince1970: 100),
+            recordingStatus: "completed", mediaFileName: "take-001.mov", sidecarFileName: "take-001.json",
+            watchSyncState: .acknowledged, watchCommandID: identity.takeToken,
+            watchStopDiagnostics: CaptureWatchStopDiagnostics(outcome: .sent,
+                sessionID: identity.sessionID, takeID: identity.takeID, motionTransferState: .pending))
+        let encoder = JSONEncoder(); encoder.dateEncodingStrategy = .iso8601
+        let data = try encoder.encode(sidecar)
+        let binding = ReferenceTearEvidenceSourceBinding(capturedSessionID: identity.sessionID,
+            capturedTakeID: identity.takeID, capturedTakeNumber: identity.takeNumber,
+            rawSidecarFileName: "take-001.json", rawSidecarData: data,
+            rawSidecarSHA256: ReferencePackageIO.sha256Hex(data))
+        var session = try makeFinalizedSession(watchEvidence: .acknowledgedTransferPending,
+            sourceState: .waitingForLateTransfer(identity: identity, deadline: .distantFuture), sourceBinding: binding)
+        XCTAssertFalse(session.canExportRawCapture)
+        XCTAssertNotNil(session.newScratchSetupBlockReason())
+
+        session.updateWatchEvidenceForTakeInReview(
+            .transferFailed(detail: ReferenceAuthoringCaptureBridge.watchTransferTimeoutDetail))
+        let expired = try XCTUnwrap(session.takeInReview)
+        XCTAssertEqual(expired.evidence.metadata.sourceState, .timedOut(identity: identity))
+        XCTAssertFalse(expired.evidence.watchEvidence.isLinked)
+        XCTAssertFalse(expired.evidence.metadata.deviceInfo.watchLinked)
+        XCTAssertTrue(session.canExportRawCapture, "An expired optional Watch must not strand the Mac capture.")
+        XCTAssertNil(session.newScratchSetupBlockReason())
+        XCTAssertNotNil(session.approvalBlockReason(), "Timeout is never a Watch pass.")
+
+        session.updateWatchEvidenceForTakeInReview(.acknowledgedTransferPending)
+        XCTAssertEqual(session.takeInReview, expired, "A reached timeout does not reopen as pending.")
+        let hash = String(repeating: "b", count: 64)
+        let wrongCommand = ReferenceTakeSourceIdentity(sessionID: identity.sessionID, takeID: identity.takeID,
+            takeNumber: identity.takeNumber, takeToken: "stale-command")
+        session.updateWatchEvidenceForTakeInReview(.linked(motionFileName: "watch.json"),
+            sourceState: .linked(identity: wrongCommand, motionFileName: "watch.json", sha256: hash))
+        XCTAssertEqual(session.takeInReview, expired, "A file for another command is rejected.")
+        session.updateWatchEvidenceForTakeInReview(.linked(motionFileName: "watch.json"),
+            sourceState: .linked(identity: identity, motionFileName: "watch.json", sha256: nil))
+        XCTAssertEqual(session.takeInReview, expired, "An unverified file is rejected.")
+        session.updateWatchEvidenceForTakeInReview(.linked(motionFileName: "watch.json"),
+            sourceState: .linked(identity: identity, motionFileName: "watch.json", sha256: hash))
+        XCTAssertEqual(session.takeInReview?.evidence.watchEvidence, .linked(motionFileName: "watch.json"))
+        XCTAssertEqual(session.takeInReview?.evidence.metadata.sourceState,
+            .linked(identity: identity, motionFileName: "watch.json", sha256: hash))
+    }
+
     func testLateVerifiedWatchHashSurvivesRefreshAndApproval() throws {
         let identity = ReferenceTakeSourceIdentity(sessionID: "capture-session", takeID: "take-001", takeNumber: 1, takeToken: "token")
         let beforeBinding = ReferenceTearEvidenceSourceBinding(

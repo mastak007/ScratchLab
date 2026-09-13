@@ -907,7 +907,8 @@ final class ReferenceAuthoringCaptureBridgeTests: XCTestCase {
                 linkedMotionCaptureID: nil,
                 stopDiagnostics: makeStopDiagnostics(transfer: .pending)
             ),
-            expectedIdentity: identity
+            expectedIdentity: identity,
+            now: Date(timeIntervalSince1970: 1_788_000_030)
         )
         XCTAssertEqual(evidence, .acknowledgedTransferPending)
         XCTAssertFalse(evidence.isLinked)
@@ -935,7 +936,8 @@ final class ReferenceAuthoringCaptureBridgeTests: XCTestCase {
             stopDiagnostics: CaptureWatchStopDiagnostics(outcome: .sent,
                 sessionID: identity.sessionID, takeID: identity.takeID,
                 motionTransferState: .pending))
-        let pending = ReferenceAuthoringCaptureBridge.watchEvidence(in: sent, expectedIdentity: identity)
+        let pending = ReferenceAuthoringCaptureBridge.watchEvidence(in: sent, expectedIdentity: identity,
+            now: Date(timeIntervalSince1970: 1_788_000_030))
         XCTAssertEqual(pending, .acknowledgedTransferPending)
         XCTAssertFalse(pending.isTerminal)
         let landed = makeSidecar(watchSyncState: .acknowledged, linkedMotionCaptureID: UUID(),
@@ -945,6 +947,77 @@ final class ReferenceAuthoringCaptureBridgeTests: XCTestCase {
         let wrong = TakeIdentity(sessionID: "other-session", takeID: "take-001", takeNumber: 1)
         guard case .identityMismatch = ReferenceAuthoringCaptureBridge.watchEvidence(in: sent, expectedIdentity: wrong)
         else { return XCTFail("Pending Stop must not bypass take identity.") }
+    }
+
+    /// F7: a Stop left `sent` by an earlier launch must reach an explicit,
+    /// terminal timeout instead of blocking the take forever.
+    func testPersistedSentStopFromAnEarlierLaunchExpiresToExplicitTimeout() {
+        let identity = TakeIdentity(sessionID: "session-a", takeID: "take-001", takeNumber: 1)
+        let sent = makeSidecar(watchSyncState: .acknowledged, linkedMotionCaptureID: nil,
+            stopDiagnostics: CaptureWatchStopDiagnostics(outcome: .sent, sessionID: identity.sessionID,
+                takeID: identity.takeID, requestedAt: Date(timeIntervalSince1970: 1_788_000_020),
+                motionTransferState: .pending))
+        let expired = ReferenceAuthoringCaptureBridge.watchEvidence(in: sent, expectedIdentity: identity)
+        XCTAssertTrue(expired.isTerminal, "A Stop reply that never arrived must not stay pending forever.")
+        guard case .transferFailed(let detail) = expired else { return XCTFail("Expected explicit timeout, got \(expired)") }
+        XCTAssertTrue(detail.localizedCaseInsensitiveContains("timeout"))
+    }
+
+    func testOptionalWatchPendingDeadlineUsesLatestMacStopActivityAndStaysIdentityBound() throws {
+        let identity = TakeIdentity(sessionID: "session-a", takeID: "take-001", takeNumber: 1)
+        let requested = Date(timeIntervalSince1970: 1_788_000_100)
+        let sent = makeSidecar(watchSyncState: .acknowledged, linkedMotionCaptureID: nil,
+            stopDiagnostics: CaptureWatchStopDiagnostics(outcome: .sent, sessionID: identity.sessionID,
+                takeID: identity.takeID, requestedAt: requested, motionTransferState: .pending))
+        let deadline = ReferenceAuthoringCaptureBridge.watchTransferDeadline(for: sent)
+        XCTAssertEqual(deadline, requested.addingTimeInterval(90))
+        XCTAssertEqual(ReferenceAuthoringCaptureBridge.watchEvidence(in: sent, expectedIdentity: identity, now: deadline),
+            .acknowledgedTransferPending, "The deadline itself is still inside the bounded wait.")
+        XCTAssertEqual(ReferenceAuthoringCaptureBridge.watchEvidence(in: sent, expectedIdentity: identity,
+            now: deadline.addingTimeInterval(0.001)),
+            .transferFailed(detail: ReferenceAuthoringCaptureBridge.watchTransferTimeoutDetail))
+        // A matching stopped reply received later restarts only the file wait.
+        let replied = makeSidecar(watchSyncState: .acknowledged, linkedMotionCaptureID: nil,
+            stopDiagnostics: CaptureWatchStopDiagnostics(outcome: .stopped, sessionID: identity.sessionID,
+                takeID: identity.takeID, requestedAt: requested, resolvedAt: requested.addingTimeInterval(120),
+                motionTransferState: .pending))
+        XCTAssertEqual(ReferenceAuthoringCaptureBridge.watchEvidence(in: replied, expectedIdentity: identity,
+            now: requested.addingTimeInterval(200)), .acknowledgedTransferPending)
+        XCTAssertFalse(ReferenceAuthoringCaptureBridge.watchEvidence(in: replied, expectedIdentity: identity,
+            now: requested.addingTimeInterval(211)).isTransferPending)
+        // Expiry never bypasses identity and never invents a link.
+        let wrong = TakeIdentity(sessionID: "session-a", takeID: "take-002", takeNumber: 2)
+        guard case .identityMismatch = ReferenceAuthoringCaptureBridge.watchEvidence(in: sent, expectedIdentity: wrong,
+            now: .distantFuture) else { return XCTFail("Identity must be checked before expiry.") }
+        let failed = makeSidecar(watchSyncState: .acknowledged, linkedMotionCaptureID: nil,
+            stopDiagnostics: CaptureWatchStopDiagnostics(outcome: .unreachable, sessionID: identity.sessionID,
+                takeID: identity.takeID, requestedAt: requested, motionTransferState: .pending))
+        guard case .transferFailed(let detail) = ReferenceAuthoringCaptureBridge.watchEvidence(in: failed,
+            expectedIdentity: identity, now: requested) else { return XCTFail("A degraded Stop stays a failure.") }
+        XCTAssertNotEqual(detail, ReferenceAuthoringCaptureBridge.watchTransferTimeoutDetail)
+    }
+
+    func testRelaunchRefreshOfPersistedSentStopReachesTimeoutFromDisk() throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let identity = TakeIdentity(sessionID: "session-a", takeID: "take-001", takeNumber: 1)
+        let requested = Date(timeIntervalSince1970: 1_788_000_100)
+        let sidecar = makeSidecar(watchSyncState: .acknowledged, linkedMotionCaptureID: nil,
+            stopDiagnostics: CaptureWatchStopDiagnostics(outcome: .sent, sessionID: identity.sessionID,
+                takeID: identity.takeID, requestedAt: requested, motionTransferState: .pending))
+        let media = root.appendingPathComponent(sidecar.mediaFileName)
+        let bytes = try sidecar.encodedData()
+        try bytes.write(to: CaptureCore.LocalRecordingFiles.sidecarURL(forMediaURL: media))
+        let before = try XCTUnwrap(ReferenceAuthoringCaptureBridge.refreshWatchEvidence(mediaURL: media,
+            expectedIdentity: identity, now: requested.addingTimeInterval(10)))
+        XCTAssertEqual(before.evidence, .acknowledgedTransferPending)
+        let after = try XCTUnwrap(ReferenceAuthoringCaptureBridge.refreshWatchEvidence(mediaURL: media,
+            expectedIdentity: identity, now: requested.addingTimeInterval(91)))
+        XCTAssertEqual(after.evidence, .transferFailed(detail: ReferenceAuthoringCaptureBridge.watchTransferTimeoutDetail))
+        XCTAssertNil(after.sourceState, "Expiry attaches no Watch source.")
+        XCTAssertEqual(try Data(contentsOf: CaptureCore.LocalRecordingFiles.sidecarURL(forMediaURL: media)), bytes,
+            "Expiry is a classification; the persisted diagnostics are not rewritten.")
     }
 
     func testAMatchingTransferThatLandsBecomesLinked() {
