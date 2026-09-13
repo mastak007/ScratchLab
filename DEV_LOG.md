@@ -1,5 +1,396 @@
 # DEV_LOG
 
+## 2026-09-05 (D6 was a layout-compression defect, not a data-path defect — correcting the previous entry)
+
+### Correction
+
+The previous D6 entry concluded "no flattening boundary exists in the live chain" and closed it as "no defect proven", explaining the flat trace as the card's trailing 3.2 s window landing on a quiet period. **That conclusion was wrong.** The physical retest of take-004 disproved it: the window was NOT quiet and the trace still looked flat.
+
+Take-004's live DEBUG row, read while the platter was actively moving:
+
+```
+raw 12047 · matched 12045 · moves 54+open · span 0.157 · age 0.0s
+```
+
+12,047 raw events, 12,045 address-matched, 54 committed movements plus an open provisional stroke, a position span of 0.157, and a latest-event age of 0.0 s. The data path was healthy in every respect. Layout inspection then showed the notation card compressed to roughly 20 pt, so 0.157 of travel produced only about 3 px of visible vertical movement.
+
+Karl's original report — that the panel needed more height — was correct, and the previous slice set it aside because the brief framed D6 as "not a sizing complaint". The data-path investigation was still worth doing (it is what proved the derivation, adapter, filtering and renderer are all sound), but the defect was the box, not the drawing.
+
+### Root cause
+
+`ScratchPhraseChartView` derives its entire lane geometry from the height it is given (`laneHeight = size.height - strokeRegionTop`), so the card's height IS the vertical scale of the drawn stroke. In `ReferenceAuthoringView` the card sits inside a vertically-UNBOUNDED `ScrollView`, where `maxHeight: .infinity` resolves to the view's IDEAL height rather than filling anything — and the chart's ideal height is near zero. Capture never hit this because its copy of the card lives in a BOUNDED `ZStack` over the camera, which supplies a real height.
+
+### The repair
+
+- `liveNotationMinimumHeight = 180 pt`, applied to the card only. That sits with the established single-lane phrase-chart heights already in this codebase (118 / 120 / 150 / 160 / 190) once the card's own header row is accounted for, and well below the 320 pt minimum the STACKED target-plus-performance comparison uses — this is one performed lane, not a comparison. It is not hard-coded to the window height.
+- `cameraPreviewMaximumHeight = 360 pt` on the 16:9 preview, so at the smallest supported window the preview cannot claim the whole scroll content and push notation off-screen.
+- The idle placeholder reserves the same height, so starting a take does not shove the page down.
+- The DEBUG diagnostics row is a SIBLING of the card in the same stack, so it can never take height from the notation's guaranteed minimum.
+
+**Nothing in the data path changed.** The tracker, the coordinate calculations, `resolvedControllerMovementEventsWithProvisional`, `PerformedStrokeAdapter`, `ControllerGestureNotationDisplayScale` and the renderer's y-scale are all untouched — the renderer simply gets a real box to draw in. Camera preview remains a separate panel with no notation overlaid on it, and the collapsible framing group keeps its position below the Record controls and still releases its space when collapsed.
+
+### Files changed
+
+`ScratchLabDesktop/Views/ReferenceAuthoringView.swift` and `ScratchLabDesktopTests/MacCameraPreviewViewTests.swift`. No file added; no shared `ScratchLab/` source changed; `project.pbxproj` and schemes untouched.
+
+### Verification actually run
+
+`MacCameraPreviewViewTests`, `LivePerformedNotationTrackerTests`, `ScratchNotationPanelTests`, `ReferenceAuthoringViewModelTests`, `ReferenceAuthoringTests`, `ReferenceAuthoringSessionTests`, `ReferenceAuthoringCaptureBridgeTests`, `CrossfaderCalibrationTests` — **261/261 on each of two configurations**, 0 failures. Seven new layout regressions cover the minimum-height contract, its consistency with single-lane sizing, the DEBUG row sitting outside the allocation, the camera ceiling, camera and notation staying separate panels, the canonical renderer and safety boundaries being unchanged, and the DEBUG row compiling out of Release. `ScratchLabDesktop` Debug build passed; universal Release (`x86_64 arm64`, unsigned) passed; `git diff --check` passed. No iOS/watchOS build — no shared source changed. The complete macOS suite was not rerun; the existing caveat stands.
+
+### What the same retest also established
+
+The hardware run that produced this diagnosis also confirmed, on real hardware: the D4 unarmed calibration gate (`Nothing is being recorded yet` + `Capture Full Left`, nothing settling on its own); the D2 technique-aware fader rule (take-004 validated a Baby Scratch with 23 crossfader samples and ZERO cuts, with no "No crossfader MIDI was recorded" finding — the exact blocker that failed take-003); and the D3 approval gate (Approve disabled with its reason printed underneath). Calibration `1 / 63 / 126` committed as `Active half 63–126, Right deck, Open at far right`.
+
+### Blocking, and still open
+
+- **Watch motion transfer never completes.** Take-004: `Apple Watch: acknowledged — motion transfer pending`, and it stayed pending well past the bounded 90 s wait. The handshake, identity matching, pending reporting, non-blocking poll and approval gate all behaved correctly — the motion FILE simply never arrived. This is the next blocking diagnosis and it is a relay/transfer problem, not an authoring one.
+- **D5** — the bridge still reuses the engine's existing session ID, so take-004 landed in the preserved failed session folder alongside 001-003. Open.
+
+### Truth and safety
+
+The layout fix is NOT hardware-verified — it has not been seen on screen during a live take. Takes 001, 002, 003 and 004 of session `41949897-5458-449d-9280-65508a4f6600` are all preserved unchanged. No TTM/Tear work occurred. Nothing became approved, installed, published, packaged or training-enabled. Nothing was staged or committed.
+
+## 2026-09-05 (D4: crossfader calibration now has an explicit operator capture boundary)
+
+### The proven problem
+
+On the physical RANE test, pressing `Start Calibration Sweep` began sampling immediately. The fader's existing position plus its jitter at an end stop satisfied both the settle counter and the liveness counter before Karl had read the full-left instruction or moved anything. Stage 1 settled at whatever the fader was already parked on. Two consecutive sweeps were invalidated this way — `0 / 127 / 127` and `127 / 74 / 127` — and completing a valid sweep required a live workaround (position the fader BEFORE pressing Start).
+
+### Before / after state flow
+
+Before:
+```
+Start Calibration -> capturing(fullLeft)   [sampling immediately]
+                  -> capturing(center)     [auto-armed on settle]
+                  -> capturing(fullRight)  [auto-armed on settle]
+                  -> complete
+```
+
+After:
+```
+Start Calibration -> awaitingArm(fullLeft)   [instruction shown, NOTHING sampled]
+   press "Capture Full Left"  -> capturing(fullLeft)  [arm boundary recorded]
+                              -> awaitingArm(center)  [NOT auto-armed]
+   press "Capture Centre"     -> capturing(center)
+                              -> awaitingArm(fullRight)
+   press "Capture Full Right" -> capturing(fullRight)
+                              -> complete
+```
+
+`CrossfaderCalibrationSweepState` gains `awaitingArm(step:)`, which collects nothing at all. `CrossfaderCalibrationSweep.arming(atObservationSequence:)` records an `armBoundarySequence`; `ingesting(rawValue:observationSequence:now:)` rejects any observation whose sequence is at or before that boundary, and rejects everything while unarmed. Completing a stage clears the boundary, so the next stage cannot auto-arm. `retryingCurrentStep()` returns the current stage to `awaitingArm`, clears its measurement, its counters and its boundary, and leaves completed stages untouched.
+
+### Operator controls
+
+- `Capture Full Left` / `Capture Centre` / `Capture Full Right` — a prominent button in the unarmed state, alongside the step prompt and the line "Nothing is being recorded yet. Move the fader into position, then press the button below."
+- `Retry Current Position` — unchanged label, now returns the stage to its instruction and re-requires a Capture press.
+- The three settled raw values remain listed above `Commit Calibration`, which stays disabled until span, ordering, freshness and centre-distinctness all pass.
+
+### What did NOT change
+
+Calibrated-position formulas, the persistence format and `CrossfaderCalibrationStore` are untouched. Both `openEnd` orientations and both active decks still work — covered by a test that runs the armed flow for every `CrossfaderOpenEnd`. The message-count, recency, settle-window and centre-distinctness rules from the previous slices all still apply: a stage still needs `minimumFreshObservations` genuinely new messages and a stable hold, and `0 / 0 / 126` is still refused even when captured through explicit arm actions. No recording, Watch, approval, publication or training behaviour was touched.
+
+### Files changed
+
+`ScratchLab/Models/ControllerInput/Calibration/CrossfaderCalibrationSweep.swift`, `ScratchLab/Models/Reference/ReferenceAuthoringSession.swift`, `ScratchLabDesktop/ViewModels/ReferenceAuthoringViewModel.swift`, `ScratchLabDesktop/Views/ReferenceAuthoringView.swift`, and the tests `CrossfaderCalibrationTests.swift`, `ReferenceAuthoringSessionTests.swift`. No file added; `project.pbxproj` and schemes untouched.
+
+### Verification actually run
+
+Focused set — `CrossfaderCalibrationTests`, `ReferenceAuthoringTests`, `ReferenceAuthoringSessionTests`, `ReferenceAuthoringCaptureBridgeTests`, `ReferenceAuthoringViewModelTests`, `LivePerformedNotationTrackerTests`, `MacCameraPreviewViewTests`, `CaptureRecoveryPhase2CoreTests` — **305/305 on each of two configurations**, 0 failures. `ScratchLabDesktop` Debug build passed; universal Release (`x86_64 arm64`, unsigned) passed; generic iOS Debug build passed, because the sweep and session models are iOS-target members. `git diff --check` passed. No watchOS build — no watch source changed. The complete macOS suite was not rerun; the existing caveat stands.
+
+### Truth and safety
+
+Takes 001, 002 and 003 of session `41949897-5458-449d-9280-65508a4f6600` and the invalid `0/0/126` calibration file are preserved unchanged as diagnostic evidence. Hardware verification remains pending — the armed flow has not been run against the Rane. **D5** (the bridge reuses the engine's session ID) remains open and untouched. **D6** was investigated and closed as "no defect proven"; its DEBUG diagnostics row remains in place for the next physical take. No TTM/Tear work occurred. Nothing became approved, installed, published, packaged or training-enabled. Nothing was staged or committed.
+
+## 2026-09-05 (D6 investigated: no flattening boundary found in the live notation chain)
+
+### The finding contradicts the premise, and the measurement is the evidence
+
+D6 was raised as "a data/coordinate/rendering failure" flattening the live authoring notation. It was investigated by replaying **take-003's real captured CC6 stream** (7,597 events, `Ch2 CC6`, `Rane ONE MKII`, take-relative 0.007–16.597 s) through the exact production path and measuring the vertical span at every boundary. **No boundary flattens it.**
+
+```
+raw snapshot                     7597
+address-matched (ch1/cc6/device) 7597
+committed movement events          37   + open provisional
+committed |Δposition|          min 0.002222   max 0.179444
+lane strokes                       38
+FINAL rendered vertical span    0.717778
+```
+
+Every candidate named in the brief was tested and cleared: source identity matched (7,597 of 7,597); the channel/controller filter is correct (`channel: 1` zero-based = the panel's "Ch2"); the baseline filter admits the active take; modular values 0–127 decode without aliasing; the gesture-relative projection produces real excursions; the provisional open stroke carries real travel; `PerformedStrokeAdapter` and `ControllerGestureNotationDisplayScale` map them to a 0…1 frame with travel up to 0.718.
+
+The decisive number is the per-window one:
+
+```
+t= 0..4   strokes= 9  span=0.638
+t= 4..8   strokes=11  span=0.718
+t= 8..12  strokes=10  span=0.656
+t=12..16  strokes= 7  span=0.036
+t=16..20  strokes= 1  span=0.001
+LivePerformedNotationCard renderedDomain = 13.397 ... 16.597
+span inside that displayed window        = 0.036
+```
+
+`LivePerformedNotationCard` shows a **trailing 3.2-second window**. For take-003 that window covered the take's tail, where the platter had almost stopped. The first three quarters of the take render with a healthy span; the displayed slice was 0.036, which reads as a flat line.
+
+So the observed flatness is explained by the displayed window landing on a genuinely low-movement period, not by a coordinate or rendering defect. **No repair was invented, because no defect was proven.** Karl reported the trace was flat while he was actively moving the platter; the replay cannot settle that, because nothing recorded what the tracker held at each poll — which is exactly what the new diagnostic fixes.
+
+### What was added
+
+A compact **DEBUG-only** diagnostics row under the live notation card, authorised by the brief for precisely this purpose. `LiveNotationDiagnostics` carries the raw snapshot count, the baseline-matched count, the derived movement count (plus whether an open stroke is present), the rendered position span, and the age of the newest event. It is computed by a pure static function reading the same snapshot `computeState` reads — no second source of truth — published on the main actor with the existing ~25 Hz poll, and it starts, stops and configures nothing. It compiles out of Release.
+
+The next physical take will therefore say directly whether the path saw nothing (`raw`/`matched` near zero), derived nothing (`moves 0`), or simply displayed a quiet window (`span` small while `moves` is healthy).
+
+### Regressions added
+
+`testAlternatingPlatterMovementProducesNonZeroVerticalTravel`, `testAlternatingMovementProducesDirectionChanges`, `testAStationaryPlatterRendersFlat`, `testModularWraparoundDoesNotCreateFalseExtremeTravel`, `testFreeRunningRevolutionsKeepAGestureRelativeOrigin`, `testASourceNameMismatchProducesNoFabricatedMovement`, `testTheBaselineFilterAdmitsOnlyTheActiveTake`, `testTheProvisionalOpenStrokeRemainsVisible`, `testDiagnosticsReportTheRealCountsAndSpan`, `testDiagnosticsReportAFlatSpanWhenNothingMoved`, and `testTake003RealStreamIsNotFlattenedByTheLivePath` (asserts the real artifact renders a span > 0.5; skips where the container is absent). No existing test was weakened to accept flat output.
+
+### Motor-phase origin correction preserved
+
+`testFreeRunningRevolutionsKeepAGestureRelativeOrigin` drives 4,000 steps of continuous forward rotation followed by an ordinary alternating gesture and asserts every stroke stays inside the fixed 0…1 gesture frame with each gesture rebased to its own origin. Raw signed/unwrapped motor phase still cannot shift the lane origin, and no free-running revolution drift was reintroduced. Sample playback keeps its separate absolute coordinate authority — untouched.
+
+### Files changed
+
+`ScratchLabDesktop/Services/LivePerformedNotationTracker.swift`, `ScratchLabDesktop/Views/ReferenceAuthoringView.swift`, `ScratchLabDesktopTests/LivePerformedNotationTrackerTests.swift`. No file added; no `ScratchLab/` shared source changed; `project.pbxproj` and schemes untouched.
+
+### Verification actually run
+
+`LivePerformedNotationTrackerTests`, `CapturedNotationTravelTests`, `MIDIPlatterContinuousDriveTests`, `ScratchNotationPanelTests`, `ReferenceAuthoringViewModelTests`, `ReferenceAuthoringTests`, `ReferenceAuthoringSessionTests`, `ReferenceAuthoringCaptureBridgeTests`, `CrossfaderCalibrationTests`, `MacCameraPreviewViewTests` — **268/268 on each of two configurations**, 0 failures. `ScratchLabDesktop` Debug build passed; universal Release (`x86_64 arm64`, unsigned) passed; `git diff --check` passed. No iOS build: no shared source changed. The complete macOS suite was not rerun; the existing caveat stands — no clean full-suite result exists for this tree.
+
+### Truth and safety
+
+Takes 001, 002 and 003 of session `41949897-5458-449d-9280-65508a4f6600` are preserved unchanged; take-003 remains failed diagnostic evidence. Hardware verification remains pending — nothing in this slice has been run against the Rane, the Watch or a camera. **D4** (calibration sweep captures immediately on Start) and **D5** (bridge reuses the engine's session ID) remain open and untouched. No TTM/Tear work occurred. Nothing became approved, installed, published, packaged or training-enabled. Nothing was staged or committed.
+
+## 2026-09-05 (Validation-safety slice: D2 technique-aware fader rules, D1 Watch transfer completion, D3 approval gating)
+
+Driven entirely by the completed physical retest. Session `41949897-5458-449d-9280-65508a4f6600` takes 001, 002 and **003** are preserved unchanged as invalid hardware evidence; take-003's stem is `41949897-5458-449d-9280-65508a4f6600_take003_routine`. Nothing was approved, installed, published, packaged or made training-eligible, and nothing was staged or committed.
+
+### D2 — a correct Baby Scratch could never validate
+
+Baby Scratch declares `requiresContinuouslyOpenFader: true` and `minimumCutEventsPerRepetition: 0` — it is performed with the fader held open. `ReferenceValidator.evidenceFindings` nevertheless appended `crossfaderEvidenceMissing` whenever `crossfaderRawSamples.isEmpty`, unconditionally, ignoring the technique's own expectation. Karl performed the technique correctly on 2026-09-05 and take-003 was blocked by "No crossfader MIDI was recorded".
+
+This also corrects the earlier investigation record: the identical blocker on the 2026-09-04 take was this rule, not a capture failure. Zero crossfader samples on a baby scratch is the expected result.
+
+Fixed by making the requirement come from the technique:
+
+- Techniques that require cuts keep the old rule unchanged — empty samples, or a usable calibration with no derivation, still fail.
+- Open-fader techniques are judged on whether the fader was OPEN, through a new three-state classifier `ReferenceValidator.faderOpenEvidence(for:)`:
+  - `provenContinuouslyOpen` — calibrated intervals exist, start within `faderOpenBaselineTolerance` (0.5 s) of the take's start, and every one is open;
+  - `provenClosedAtSomePoint` — intervals exist and at least one is not open, reported as the existing `faderLeftOpenZone`;
+  - `unknown` — no usable calibration, no derivation, no intervals, or a first reading that arrives too late to say anything about the start. Reported as the new blocking `faderOpenStateUnknown`.
+- **Unknown never silently passes.** An unmeasured fader is unknown, not compliant.
+- Nothing is fabricated: the classifier reads only intervals the deriver produced from real samples, and raw observations are untouched.
+
+Practical consequence for the retest: a Baby Scratch take now needs the fader to report its position once at the start (one touch) so its open state is measured. That is a real requirement, not a workaround — without it the take genuinely does not prove the fader was open.
+
+### D1 — `watchLinked` raced the Watch motion transfer
+
+Take-003's sidecar: `watchSyncState: acknowledged`, requested and acknowledged at 17:07:42Z on the reserved identity, one stop resolved at 17:07:59Z carrying the same `sessionID`/`takeID`, `motionTransferState: pending`, `linkedMotionCaptureID: null`. The Watch worked. But `watchLinked` was computed once at macOS media finalization from `linkedMotionCaptureID`, and the motion file transfers later via relay reconciliation — so every acknowledged take reported "NO linked motion capture" and became permanently un-approvable. That gate was introduced by the previous slice; this is its repair.
+
+- New `ReferenceWatchEvidence` STATE replaces the boolean: `linked`, `acknowledgedTransferPending`, `transferFailed`, `identityMismatch`, `missing`. `isTerminal` is false only for the pending case.
+- `ReferenceAuthoringCaptureBridge.watchEvidence(in:expectedIdentity:)` classifies a finalized sidecar. The identity check is first and absolute — a sidecar, or a stop handshake, naming another session/take yields `identityMismatch` and is never attached. A transfer reporting `completed` with nothing linked is `transferFailed`, not success.
+- The bridge retains the last finalized identity and media URL and exposes `refreshWatchEvidence`, a pure re-read of that exact sidecar. It starts and stops nothing; `MacCaptureEngine.watchStopRequestHandler` remains the single Watch stop authority.
+- `ReferenceAuthoringViewModel` runs a bounded (90 s), cancellable wait polling every 2 s on the existing serial worker — never the main actor — and attaches the state through `ReferenceAuthoringSession.updateWatchEvidenceForTakeInReview`, which re-validates. Landed evidence is never reverted by a later poll. Leaving the screen cancels the wait and changes nothing else.
+- `metadata.deviceInfo.watchLinked` is now derived from the evidence state by a single writer (`ReferenceAuthoringTake.applyWatchEvidence`) and set from nothing else. `deviceInfo` became `var` to allow that in-place update.
+- Review shows the state truthfully, including "Waiting for the Watch motion transfer to complete…". Approval stays blocked while pending, failed, missing or mismatched. A timeout leaves the take pending and un-approvable rather than marking it linked.
+
+### D3 — Approve Canonical Draft was enabled against three blocking findings
+
+`ReferenceAuthoringSession.approvalBlockReason(expectation:now:)` is now the single source of truth: correct review phase, a lifecycle state that can still advance, a FRESH validation with no blocking finding, linked Watch evidence, and a selected repetition. `approveTakeInReview` re-validates and re-checks every gate itself, so a direct call cannot approve what the button would refuse — a stale passing report from before a boundary edit no longer authorises anything. The view model adds transient-work state and the button reads `canApprove`, with the block reason shown underneath.
+
+### Operator-requested layout change
+
+Karl asked for the camera/notation panel to move: at the top of the page it sat off-screen behind a scroll during a take. It is now directly under the Record controls and above the review section, inside a collapsible `DisclosureGroup` that starts expanded. Presentation only.
+
+### Files changed
+
+`ScratchLab/Models/Reference/ReferenceValidation.swift`, `ScratchLab/Models/Reference/ReferenceAuthoringSession.swift`, `ScratchLab/Models/Reference/ReferenceTake.swift`, `ScratchLabDesktop/Services/ReferenceAuthoringCaptureBridge.swift`, `ScratchLabDesktop/ViewModels/ReferenceAuthoringViewModel.swift`, `ScratchLabDesktop/Views/ReferenceAuthoringView.swift`, and the tests `ReferenceAuthoringTests.swift`, `ReferenceAuthoringSessionTests.swift`, `ReferenceAuthoringCaptureBridgeTests.swift`, `ReferenceAuthoringViewModelTests.swift`, `MacCameraPreviewViewTests.swift`. No file added; `project.pbxproj` and schemes untouched.
+
+### Verification actually run
+
+- Focused set — `ReferenceAuthoringTests`, `ReferenceAuthoringSessionTests`, `ReferenceAuthoringCaptureBridgeTests`, `ReferenceAuthoringViewModelTests`, `CrossfaderCalibrationTests`, `CaptureRecoveryPhase2CoreTests`, `LivePerformedNotationTrackerTests`, `MacCameraPreviewViewTests` — **279/279 on each of two configurations**, 0 failures.
+- `ScratchLabDesktop` Debug build passed; universal Release (`x86_64 arm64`, unsigned) passed; generic iOS Debug build passed (the changed reference models are iOS-target members). No watchOS build — no watch source changed. `git diff --check` passed.
+- The complete macOS suite was NOT run for this slice. The outstanding caveat stands: no clean full-suite result exists for this tree.
+
+### Two pre-existing tests corrected, not weakened
+
+`testMissingCrossfaderEvidenceIsReportedExplicitly` now uses a chirp, because "no crossfader MIDI" is a cut-requiring technique's rule; Baby Scratch's own open-state rule has its own cases. `testATakeWithNoLinkedWatchMotionCannotBeApproved` now uses a genuinely `missing` state, because the old fixture's "not linked" is now correctly classified as `acknowledgedTransferPending`. A `MacCameraPreviewView` source assertion was made indentation-insensitive after the panel moved.
+
+### Still open, deliberately not in this slice
+
+- **D4** — the calibration sweep starts capturing immediately, so the fader's existing position plus its jitter can settle stage 1 before the operator reads the prompt. Workaround: position the fader before pressing Start.
+- **D5** — the bridge reuses the engine's existing session ID, so take-003 landed inside the preserved failed session folder.
+- **D6** — live authoring notation rendered but stayed FLAT while the platter was actively moving. **This is a data/coordinate/rendering failure, not a sizing complaint**, and the panel must not be enlarged or redesigned in response. The retest established: ~100,061 Ch2/CC6 messages reached the DEBUG address panel; take-003 finalized with 27 platter movement events; the component rendered; the trace stayed flat. The next slice must instrument every boundary of `RANE Ch2/CC6 → take-scoped captured MIDI buffer → capturedMidiCCEventsSnapshot() → makeLivePerformedNotationDataSource() → resolvedControllerMovementEventsWithProvisional → LivePerformedNotationTracker → ReferenceAuthoringView state → LivePerformedNotationCard → ScratchPhraseChartView(.performedPlatter)` and pin the actual positions and deltas delivered at each one — event counts alone are not proof. Candidate causes: MIDI-source identity/filtering, channel/CC mapping, baseline placement, normalized vs raw controller values, gesture-relative position projection, provisional event adaptation, direction/delta collapsing, tracker replacement/re-entry state, y-domain/amplitude mapping, or the renderer receiving constant positions. The earlier fix that stops raw unwrapped motor phase from shifting the lane origin must be preserved — do not reintroduce free-running revolution drift. Acceptance: alternating forward/backward platter movement produces visible non-zero vertical travel and direction changes in the canonical live authoring renderer, while a stationary platter stays flat.
+
+### Truth and safety
+
+Nothing here is proven on hardware. The retest that produced these three defects is complete, but the repairs themselves have not been run against the Rane ONE MKII, the paired Watch or a camera. A new physical take is required.
+
+## 2026-09-05 (Reference Authoring live notation and camera preview: verified present, one lifecycle hole closed, wiring covered)
+
+### Correction to the previous entry's test status
+
+The complete macOS suite was **NOT** rerun after the source-string assertion in `testRoutineCaptureBuiltInMicrophoneGuardPrecedesRecordingPublication` was repaired. The sequence was: full suite run (3,476 tests, 51 skipped, **1 failure** — that assertion, broken by an earlier dirty slice wrapping `startRoutineRecording`'s signature), then the repair, then a rerun of `CaptureReliabilityPhase1CoreTests` alone (419/419 on each configuration). **No clean full-suite result exists for this tree.** The previous entry's verification section listed focused suites only and did not mention the full run at all; this paragraph is the correction. Nothing here claims the final full suite passed.
+
+### Verification of the two features before editing
+
+Both were already present in source from the previous slice. Traced end to end rather than inferred from file modification:
+
+- **Live notation.** `ReferenceAuthoringView` holds `@State liveNotationTracker: LivePerformedNotationTracker?`, built from `captureEngine.makeLivePerformedNotationDataSource()` — the same closure bundle Capture and Practice use, reading `capturedMidiCCEventsSnapshot()` (the take-scoped buffer finalization drains) and `cameraMovementEventsSnapshot(now:)` as fallback. The tracker's `DispatchSourceTimer` polls at 25 Hz on its own queue, computes state through `MacCaptureEngine.resolvedControllerMovementEventsWithProvisional`, and publishes via `Task { @MainActor in self.state = newState }`. Rendering goes `LivePerformedNotationCard` → `ScratchPhraseChartView(source: .performedPlatter(tracker.renderedEvents))` — the canonical renderer, not a second one.
+- **Camera preview.** `framingSection` renders `MacCameraPreviewView(session: captureEngine.captureSession, videoGravity: .resizeAspect)`. `PreviewView.updateSession` only assigns `previewLayer.session`; `dismantleNSView` only clears it. No `AVCaptureSession` is constructed, and nothing calls `startRunning`/`stopRunning`, so the screen observes the engine's session without owning or driving it.
+
+### One real hole found and closed
+
+`onChange` fires only on a transition, and `@State` is reset when the view is rebuilt. Leaving the authoring screen mid-take and returning therefore left `liveNotationTracker` nil for the rest of that take — live notation was genuinely absent in that path. Creation and clearing now go through one `syncLiveNotationTracker(isRecording:)` lifecycle point, called from the recording transition, from `.task` on appearance (so a take already in progress is picked up), and from `.onDisappear`. It is idempotent while recording, so a take can never be given a second tracker.
+
+The tracker is keyed on the authoring session's own `.recording` phase rather than `engine.isRoutineRecording`, which turns true earlier in the start sequence. The phase becomes `.recording` only after the bridge confirms the engine genuinely started, so the preview can never attribute motion to a take that has not begun.
+
+Reject, retake and a new take all leave `.recording`, and leaving `.recording` drops the tracker, so no prior take's trace can carry into the next one. Dropping the instance cancels its poll timer through `deinit`.
+
+### Files changed for this slice
+
+`ScratchLabDesktop/Views/ReferenceAuthoringView.swift` (lifecycle point + appearance seeding), `ScratchLabDesktopTests/LivePerformedNotationTrackerTests.swift`, `ScratchLabDesktopTests/MacCameraPreviewViewTests.swift`, `TASKS.md`, `DEV_LOG.md`, `AI_HANDOFF.md`, `AI_HANDOFF/next_prompt.md`. No file was added; `project.pbxproj` and schemes were not edited.
+
+### Coverage added
+
+In `LivePerformedNotationTrackerTests`: live platter CC recorded into the engine's real take-scoped buffer reaches the presentation as `.tracking` with non-empty rendered events; no movement evidence renders nothing and never presents as tracking; the publication cadence is a bounded poll rather than one publish per MIDI message; the tracker is constructed in exactly one place and reached through one named lifecycle point called from all three sites; leaving `.recording` clears it; authoring presents `LivePerformedNotationCard` and draws no `ScratchPhraseChartView`, `ScratchMotionRenderer`, `ScratchStrokeGeometry`, `Canvas` or `Path` of its own; the card really does render through the canonical phrase chart; and the engine factory reads the same two evidence closures the test substitutes into.
+
+The one substitution is `selectedMIDISourceName`. `makeLivePerformedNotationDataSource()` resolves it from the live Core MIDI device list, which a headless test cannot have — an engine with no devices reports "Not Connected", which correctly classifies as `.unavailable`. The movement evidence itself still comes from the engine's own buffer, and a separate assertion pins that the production factory reads the same closures.
+
+In `MacCameraPreviewViewTests`: attaching and dismantling a preview neither starts nor stops the session; a second preview on one session does not detach the first; authoring previews the engine's own session and constructs no session, starts/stops nothing, and adds no camera overlay; an inactive camera is stated rather than shown as an unexplained black rectangle; and the authoring view calls none of `startRoutineRecording`, `stopRoutineRecording`, `toggleRoutineRecording`, `approveTakeInReview`, `markTakePublished` or `writePackage`.
+
+### Verification actually run
+
+- `LivePerformedNotationTrackerTests` 24/24 and `MacCameraPreviewViewTests` 9/9, on each of two configurations.
+- Focused reference/calibration/authoring selection — `CrossfaderCalibrationTests`, `ReferenceAuthoringTests`, `ReferenceAuthoringSessionTests`, `ReferenceAuthoringCaptureBridgeTests`, `ReferenceAuthoringViewModelTests`, `CaptureRecoveryPhase2CoreTests` — 214/214 on each configuration.
+- `ScratchLabDesktop` Debug build passed. Universal Release build (`x86_64 arm64`, unsigned) passed. `git diff --check` passed.
+- The complete macOS suite was deliberately not rerun for this slice: the change is one view lifecycle point plus tests, and no shared model semantics moved. The outstanding full-suite caveat above still stands.
+
+### Unchanged by this slice
+
+The paired Watch start handshake and its single-stop-authority rule, the calibration liveness and centre-distinctness protections, the crossfader recency/take-scoped preflight row, and the DEBUG MIDI-address diagnostics are all untouched and still pass their own suites.
+
+### Truth and safety
+
+Still not proven on hardware. The camera preview, the live notation, the Watch handshake and the calibration rules have never been exercised against the Rane ONE MKII, the paired Watch or a real camera. Take 1 and Take 2 of session `41949897-5458-449d-9280-65508a4f6600` remain preserved as invalid diagnostic evidence, nothing is installed, published, learner-served or training-eligible, and nothing was staged or committed.
+
+## 2026-09-05 (CXL Reference Authoring: five hardware failures diagnosed, four repaired)
+
+Session `41949897-5458-449d-9280-65508a4f6600`, takes 001 and 002, recorded 2026-09-04 14:12-14:15Z on a Rane ONE MKII. Take 2's artifact stem is `41949897-5458-449d-9280-65508a4f6600_take002_routine`. Every artifact of both takes is preserved unmodified under `~/Library/Containers/com.machelpnz.scratchlab/Data/Library/Application Support/ScratchLab/RoutineCaptures/`; nothing was deleted, renamed, moved, regenerated or rewritten.
+
+### Approval, publication and training state — checked, not assumed
+
+- No reference package, registry document, approval record or draft file exists anywhere in the app container. `ReferencePackageIO.writePackage` has no production call site; `ReferenceAuthoringSession.takeReadyForPublication` and `markTakePublished` are never called from the app; `ReferenceRegistry` is constructed only inside `LegacyReferenceInventory`, which writes nothing.
+- `ReferenceAuthoringSession` is an in-memory value held by the view model. Approval mutates that value only. Whether or not Approve Canonical Draft was pressed, it persisted nothing — and it could not have succeeded: `approveTakeInReview` refuses unless `latestValidation.passes`, and take 2 carried the blocking finding "No crossfader MIDI was recorded", with no repetition selected.
+- The only things this session wrote to disk are the ordinary capture artifacts (media, WAV, sidecar, movement trace/diagnostics, raw platter timeline, funnel diagnostic), their `CaptureJournal`/`AuditSummaries` entries, and one crossfader calibration file. **Nothing was installed, published, learner-served or made training-eligible.**
+- Take 2 remains preserved as invalid diagnostic evidence. It is not, and cannot become, reference material.
+
+### Failure 1 — calibration accepted full-left 0 / centre 0 / full-right 126
+
+Two independent defects, each sufficient on its own. The persisted file (`Calibration/CrossfaderCalibrations.json`, address Ch16 CC8 = channel 15, openEnd `right`, `rightDeck`) is left in place as evidence and is now rejected on read.
+
+- **Liveness.** `ReferenceAuthoringViewModel.startCalibrationPolling` polls every 20 ms and fed `CrossfaderCalibrationSweep` whatever `MacCaptureEngine.latestCCObservation` last cached. That cache keeps returning the same value indefinitely after the last message, so twelve consecutive identical reads satisfied `settleSampleCount` in 240 ms whether or not the fader moved — or existed. A completely silent controller settled every position.
+- **Distinctness.** `CrossfaderCalibration.validationIssues()` checked `endpointBounds.contains(centerRawValue)` with an INCLUSIVE range. Centre 0 sits exactly on the left end stop and passed; endpoints 0 and 126 were distinct, and the active half (centre 0 to open 126) spanned 126, over the 16-step minimum. The calibration was therefore "usable" and was saved.
+
+Repairs: `CrossfaderCalibrationObservation` now carries the engine's per-address lifetime message count, and `ReferenceAuthoringSession.ingestCalibrationObservation` marks any reading that does not advance that count as NOT fresh. A step needs both a stable hold (`settleSampleCount`) and `minimumFreshObservations` new messages since the step began; a retry resets the fresh counter so the rejected hold's messages cannot pay for its replacement, and the first reading after a sweep opens is baselined as stale. Separately, `CrossfaderCalibration.minimumCenterMargin` (2 steps, above the settle tolerance of 1) rejects a centre indistinguishable from either end stop, with the new `centerNotDistinctFromEndpoints` issue. The two rules together mean a fader that is not moving cannot produce a committable calibration.
+
+Also removed: `latestCalibrationRawValue`'s fallback to "the most recently active address of any kind", which made the platter's ~800 Hz CC6 stream a candidate source for a crossfader calibration whenever no mapping was learned. With no learned mapping the sweep now cannot advance at all.
+
+### Failure 2 — crossfader moved, zero take-scoped samples. No software split exists.
+
+Traced end to end. `MacCaptureEngine.recordReceivedMIDICCEvent` calls `recordLiveCCObservation` (the app-lifetime counter) and then, a few lines later behind a single address-blind recording-window gate, appends to `capturedMidiCCEvents` (the take buffer). `RoutineTakeTimeline.takeRelativeTime` is the only gate between them and it does not read channel or controller. `completeRoutineFinalization` passes the drained buffer to `withMixerMidiEvents` unfiltered. There is no code path that keeps CC6 and drops CC8.
+
+The artifacts agree: take 002's sidecar holds 3,889 mixer MIDI events, every one of them channel 1 / CC6, `faderEvents` empty; take 001 holds 14,538, likewise all CC6. Earlier sessions on the same build family — `f8bac2af`, `19e1418a`, `c985dcea` — recorded 826 to 2,627 events on channel 15 / CC8 with `mappedControl: "crossfader"` and derived 20 to 73 fader events, so the capture path demonstrably works. **The evidence says no crossfader message reached the app during either take of session 41949897.**
+
+What made that look like a working crossfader is a real presentation defect, now fixed: the preflight's "Crossfader events" row reported `crossfaderEventCount` alone and called any non-zero value satisfied. That counter is app-lifetime and never resets, so after a single message it read as working for the rest of the session — unlike the platter row, which already had a recency window. The row now requires a message inside `ReferenceCapturePreflight.recentActivityWindow` to be satisfied, states the age of the last message, and while a take is recording reports the take-scoped count that actually reaches the sidecar. A new DEBUG MIDI-address panel lists every address that has carried traffic since launch with its last-seen age, so a control learned onto a silent address is visible at a glance.
+
+### Failure 3 — Apple Watch was not capturing
+
+Root cause: reference authoring never asked it to. `requestWatchCaptureStart` was called from exactly one place, `MacAnalyzerView`'s Capture record action; the authoring bridge called `engine.startRoutineRecording()` directly. Both takes' sidecars say `watchSyncState: notRequested`, `AuditSummaries/routine/sessions/41949897-….json` says `linkedWatchTakeCount: 0`, and no `AuditSummaries/relayedWatch` entry exists for the session. `ReferenceTakeMetadata.deviceInfo.watchLinked` was hardcoded `false`, and the preflight's Watch row was hardcoded unreachable and advisory.
+
+Repair (Karl's option 3): the bridge now reuses the established Capture workflow verbatim on ONE reserved identity — `reserveNextRoutineTakeIdentity()`, then `requestWatchCaptureStart` on that exact sessionID/takeID, then `applyPendingWatchReply`, then `startRoutineRecording()`. macOS recording does not begin unless the start is acknowledged; a non-acknowledgement, a timeout past `watchHandshakeTimeout` (8 s) or a cancellation drops the reservation through `cancelPendingRoutineReservation()`, which issues the Watch stop for anything the handshake may have left running, and leaves the session recordable only by explicit retry with no take created. The bounded wait runs on the existing non-main worker; the `@MainActor` handshake task always applies its reply and, if the waiter has already abandoned, releases the capture itself, so leaving the screen mid-handshake cannot orphan a recording wrist. `MacCaptureEngine.watchStopRequestHandler` remains the single stop authority (commit d3ecf2a6) — the bridge never sends a stop, and a source-level regression pins that.
+
+`watchLinked` is now read from the FINALIZED sidecar and only when it is acknowledged, has a linked motion capture, AND matches the reserved identity. The preflight Watch row is blocking, and `ReferenceValidator.watchEvidenceMissing` blocks canonical approval even if media somehow finalizes without wrist evidence.
+
+### Failure 4 — no live performed notation
+
+Not a regression: `ReferenceAuthoringView` was never wired to any live-notation stream. The screen now hosts the canonical surface Practice and Capture already use — a `LivePerformedNotationTracker` built from `engine.makeLivePerformedNotationDataSource()`, rendered by `LivePerformedNotationCard` (`ScratchPhraseChartView` / `ScratchStrokeGeometry` / `ScratchMotionRenderer`). A fresh tracker per take is the reset; it is discarded when recording ends and when the view disappears. No second renderer was created, and nothing here is persisted, scored, reviewed or exported.
+
+The 15 platter movement events in take 2 are not a sampling loss: they are the finalized derivation of 3,889 CC6 samples over a ~7 s take, and the movement diagnostics record 202 frames received and 86 builder samples.
+
+### Failure 5 — no camera preview
+
+Also not a regression, and the camera was working. `ReferenceCapturePreflight` blocks recording unless `cameraIsActive`, so the take could only have started with the session running; take 2's `.mov` is 6.6 MB and its movement diagnostics record 202 frames received and 74 hand observations. Only the preview UI was absent — `ReferenceAuthoringView` had no preview component at all. It now renders the existing `MacCameraPreviewView` over `engine.captureSession` at `.resizeAspect`, as a plain framing panel, not a notation overlay.
+
+### Also in this slice
+
+- Pattern ID and pattern name autofill from the selected technique and phrase length (`baby_scratch_1bar` / "Baby Scratch · 1 bar"). Autofill only ever writes a field that is empty or still holds a previous autofill, so an operator-authored identity is never overwritten.
+
+### Files changed
+
+`ScratchLab/Models/ControllerInput/Calibration/CrossfaderCalibration.swift`, `ScratchLab/Models/ControllerInput/Calibration/CrossfaderCalibrationSweep.swift`, `ScratchLab/Models/Reference/ReferenceAuthoringSession.swift`, `ScratchLab/Models/Reference/ReferenceCapturePreflight.swift`, `ScratchLab/Models/Reference/ReferenceValidation.swift`, `ScratchLabDesktop/Services/ReferenceAuthoringCaptureBridge.swift`, `ScratchLabDesktop/ViewModels/ReferenceAuthoringViewModel.swift`, `ScratchLabDesktop/Views/ReferenceAuthoringView.swift`, `ScratchLabDesktop/Views/MacAnalyzerView.swift`, and the test files `CrossfaderCalibrationTests.swift`, `ReferenceAuthoringTests.swift`, `ReferenceAuthoringSessionTests.swift`, `ReferenceAuthoringCaptureBridgeTests.swift`, `ReferenceAuthoringViewModelTests.swift`, `CaptureReliabilityPhase1Tests.swift`. No file was added and `project.pbxproj`/schemes were not edited. All pre-existing dirty hunks are preserved.
+
+### Verification
+
+- Focused suites: `CrossfaderCalibrationTests`, `ReferenceAuthoringTests`, `ReferenceAuthoringSessionTests`, `ReferenceAuthoringCaptureBridgeTests`, `ReferenceAuthoringViewModelTests` — 154/154 on each of two configurations (308 executions, 0 failures, 0 skipped).
+- `CaptureRecoveryPhase2CoreTests` (the class holding the DEBUG-route regression and the new take-scoped MIDI regressions) — 60/60 on each configuration.
+- `LivePerformedNotationTrackerTests`, `MacCameraPreviewViewTests`, `MIDILearnEngineTests`, `MIDILearnHangFixTests`, `MIDIPacketBoundsCrashFixTests` — all passed on each configuration.
+
+### Truth and safety
+
+Hardware verification is NOT complete. Every repair above is proven only by deterministic tests and builds; none of it is proven against the Rane ONE MKII, the paired Watch, the camera or the routed audio path. A new clean physical take is required before any of this is called working. No existing recording or bundled reference became training-eligible, and no canonical reference was installed or published.
+
+## 2026-09-05 (Reference Authoring setup-status presentation correction)
+
+- Corrected root cause: the first physical CXL Reference Authoring smoke did not prove a setup deadlock. Apply Setup completed and cleared `isWorking`; a later preflight refresh, ordered behind configuration on `ReferenceAuthoringWorker`'s FIFO queue, populated live RANE hardware evidence and could only have run after configuration returned. `ReferenceAuthoringSession` intentionally stays in `.configuring` until calibration begins, but the view rendered the raw phase name as `Configuring`, making a persistent workflow phase look like an active operation.
+- Hardware record correction: the DEBUG route opened without a hang. The authoring preflight showed Rane ONE MKII controller/audio, learned Ch16 CC8 crossfader, raw value 32, 1,089 crossfader observations, 20,440 moving platter observations, audio peak 0.1794, `MacBook Pro Camera`, no committed calibration, and an unavailable Watch. This was partial Phase A evidence only. The test stopped on the ambiguous status; no calibration, recording, finalization, review, approval, package, publication, installation, or training action occurred. Phases B-M remain not run and the physical hardware gate remains incomplete.
+- Selected task: correct only setup-status presentation. No state-machine, concurrency, calibration, capture/finalization, Watch, export, package, lifecycle, publication, installation, training, left-deck, or upfader behavior changed.
+- Files changed for this slice: `ScratchLabDesktop/ViewModels/ReferenceAuthoringViewModel.swift`, `ScratchLabDesktop/Views/ReferenceAuthoringView.swift`, `ScratchLabDesktopTests/ReferenceAuthoringViewModelTests.swift`, `TASKS.md`, `DEV_LOG.md`, `AI_HANDOFF.md`, and `AI_HANDOFF/next_prompt.md`. No file was added. `project.pbxproj` and schemes were not edited; all prior dirty hunks remain preserved.
+- Implementation: `ReferenceAuthoringViewModel.workflowStatusText` is a pure, directly tested presentation mapping over session phase, configuration completeness, and a private Apply Setup operation identity. It reports `Setup required` for incomplete configuration, `Applying setup…` only while Apply Setup owns the busy state, and `Setup applied — calibrate crossfader` after configuration while the session correctly remains `.configuring`. Existing calibrating, ready-to-record, recording, reviewing, and approved-draft labels are retained. `ReferenceAuthoringView` now renders this derived status rather than the enum name.
+- Recording safety is unchanged: the button still requires `.readyToRecord`, a latest preflight with no blocking findings, and `isWorking == false`; `.readyToRecord` itself still requires a valid committed calibration through the existing session transitions.
+- Regression verification: `ReferenceAuthoringViewModelTests` passed 8/8 on each of two configurations (16 executions). New coverage tests every required presentation value and deterministically blocks the first preflight refresh ahead of Apply Setup, then proves the busy presentation clears, the session stays `.configuring`, populated preflight reaches the view model, and polling continues. The complete focused calibration/reference/session/bridge/view-model/DEBUG-route selection passed 131/131 on each configuration (262 executions, 0 failures, 0 skipped).
+- Build/checks: explicit `ScratchLabDesktop` Debug build passed. `git diff --check` passed before documentation and is rerun at handoff. The full macOS suite and Release build were not required because shared compilation/conditional routing did not change.
+- Existing warnings only: `CrossfaderCalibrationStore.fileManager` remains non-Sendable under future Swift 6 mode; existing `MacAnalyzerView` implicit/weak-capture diagnostics and sandboxed test-host audio/runtime messages remain. No new warning or failure was attributed to this slice.
+- Next hardware action: relaunch only the newly built Debug app, repeat Apply Setup, require the corrected `Setup applied — calibrate crossfader` status with current live preflight evidence, then resume at the full-left/centre/full-right calibration and Retry/commit phases. Do not claim hardware success until phases A-M are directly observed.
+
+## 2026-09-05 (Reference Authoring stop/finalization generation boundary)
+
+- Root cause: the commit-boundary audit found that `ReferenceAuthoringCaptureBridge.stopRecording` sampled `isRoutineFinalizationPending` immediately after enqueueing `MacCaptureEngine.stopRoutineRecording`. AVFoundation had not necessarily entered `finalizeRoutineRecording` yet, so the initial `false` could be mistaken for completion; the bridge then inspected global `lastRoutineRecordingURL`, which could still name the previous take. A transient true -> false poll could also be missed entirely.
+- Selected task: fix exactly that correlation race before any TTM/Tear work, without changing capture timing, Watch stop, export/package schemas, calibration semantics, authoring choices/lifecycle, publication, installation, or training eligibility.
+- Files changed for this slice: `ScratchLabDesktop/Services/MacCaptureEngine.swift`, `ScratchLabDesktop/Services/ReferenceAuthoringCaptureBridge.swift`, `ScratchLabDesktop/ViewModels/ReferenceAuthoringViewModel.swift`, `ScratchLabDesktop/Views/ReferenceAuthoringView.swift`, `ScratchLabDesktopTests/ReferenceAuthoringCaptureBridgeTests.swift`, `ScratchLabDesktopTests/ReferenceAuthoringViewModelTests.swift`, `TASKS.md`, `DEV_LOG.md`, `AI_HANDOFF.md`, and `AI_HANDOFF/next_prompt.md`; comment-only truth corrections in `ScratchLab/Models/Reference/ReferenceTake.swift` and `ScratchLabDesktopTests/ReferenceAuthoringTests.swift` now say seven lifecycle states and package model validation rather than claiming package round-trip coverage. `project.pbxproj` and schemes were not edited; all pre-existing dirty hunks were preserved.
+- Implementation: `MacCaptureEngine.startRoutineRecording` now returns an engine-allocated generation token. A lock-protected ledger binds that token to the exact prepared `takeID` and media URL, marks only the matching AVFoundation `didStartRecordingTo` callback as started, records a matching stop request, records entry into `finalizeRoutineRecording`, and retains a terminal success/failure completion. The bridge stores only its confirmed token, refuses to stop another generation, and builds artifacts only from that token's terminal URL. It no longer reads `lastRoutineRecordingURL` or `isRoutineFinalizationPending`.
+- Cancellation: the stop wait remains on the dedicated serial worker and uses a monotonic cancellation generation. Leaving the DEBUG view cancels only transient polling/the bridge wait; it does not issue an additional capture command, delete an artifact, append a reference take, approve/publish/install anything, or change training availability. An explicitly requested engine finalization continues normally and may be retried against the same token. The existing 30 s timeout remains fail-loud.
+- Regression verification: `ReferenceAuthoringCaptureBridgeTests` passed 26/26 on each of two test-plan configurations; `ReferenceAuthoringViewModelTests` passed 6/6 on each. The combined calibration/reference/session/bridge/view-model/DEBUG-route selection passed 129/129 on each configuration (258 executions, 0 failures, 0 skipped). Coverage proves the initial pre-finalization window is not completion, a previous generation/URL is ignored, stop is bound to the correct generation and `takeID`, terminal success requires finalization entry, cancellation exits without applying artifacts, timeout reports the bounded failure, and main-thread misuse remains fail-loud.
+- Builds: explicit `ScratchLabDesktop` Debug build passed. Explicit unsigned universal Release build passed, with the executable confirmed `x86_64 arm64` by `lipo`. `git diff --check` passed before documentation and is rerun at handoff. The full macOS suite was not rerun because the requested focused gates were clean.
+- Remaining warnings: the pre-existing `CrossfaderCalibrationStore.fileManager` non-Sendable warning and existing `MacAnalyzerView` implicit/weak capture warnings remain. No new warning was attributed to this slice.
+- Truth/safety: the race is resolved in code but physical RANE/camera/audio smoke is still pending, so the hardware flow is not yet claimed functionally complete. No canonical reference was recorded, published, installed, or enabled for training. Calibrated MIDI fields persist in the capture sidecar but are still omitted by the canonical detected-notation export mapper. Package models/validation exist, but no end-to-end `ReferencePackageIO` round-trip test exists. The remaining stable-device-identity, stale-preflight, upfader/left-deck, package-safety, registry/inventory, metadata, and stale-review-control findings remain open and unchanged.
+
+## 2026-09-04 (DEBUG-only CXL Reference Authoring hardware-test route)
+
+- Root cause/current access limitation: the implemented macOS reference-authoring screen was intentionally unreachable, so Karl could not perform the first physical RANE/crossfader/audio smoke test without a temporary route. A later commit-boundary audit found its stop/finalization race; the 2026-09-05 entry above supersedes any implication that the hardware flow was already complete.
+- Selected task: add exactly one DEBUG-only Advanced entry, labelled `CXL Reference Authoring — Hardware Test`, using the existing Advanced-section pattern and live `MacCaptureEngine`.
+- Files changed in this slice: `ScratchLabDesktop/Views/MacAnalyzerView.swift`, `ScratchLabDesktopTests/CaptureReliabilityPhase1Tests.swift`, `TASKS.md`, `DEV_LOG.md`, `AI_HANDOFF.md`, and `AI_HANDOFF/next_prompt.md`.
+- Implementation: added `AdvancedSection.referenceAuthoringHardwareTest`, its exact title/icon mapping, and `ReferenceAuthoringView(engine: captureEngine, operatorName: lastPerformerName)` inside existing `#if DEBUG` gates. Selecting another Advanced section closes the view through the existing SwiftUI lifecycle and cancellation behavior.
+- Safety: opening the route only constructs in-memory authoring state. It does not start capture, approve/create persistent canonical data, install/publish a package, modify training availability, or touch existing recordings/bundled references. No mock capture, audition playback, TTM work, or production Advanced route was added.
+- Focused regression: added `testMacReferenceAuthoringHardwareRouteIsDebugOnly`, guarding the enum case, exact label, icon mapping, and live-engine presentation behind DEBUG compilation. Final focused reference/calibration/routing run passed 122/122 selected tests. An initial compile attempt caught a missing `operatorName`; the route now reuses the existing persisted `lastPerformerName` and the rerun passed.
+- Builds: explicit `ScratchLabDesktop` Debug build passed; explicit universal Release build passed. The private route token is present in the Debug `MacAnalyzerView.o` and absent from the Release object, confirming the hardware-test path compiles out of Release.
+- Full macOS suite: passed in 613.329 seconds. The result reports 3,805 tests, 3,754 passed, 51 skipped, and 0 failed across two configurations (7,638 total test runs including parameterized runs). The known ingress-ring flake did not reproduce. Two generic main-thread runtime warnings were recorded; no route UI was instantiated by this suite, and no failure was associated with them.
+- Existing compiler warnings remain, including `CrossfaderCalibrationStore.fileManager` Sendable conformance and unrelated capture/test warnings. No new route warning remains.
+- Diff inspection: `git diff --check` passed. This slice did not modify `ScratchLab.xcodeproj/project.pbxproj`; its dirty reference/calibration memberships and build-number edits pre-dated this slice and were preserved.
+- Hardware verification remains pending. No canonical reference was installed, published, or enabled for training.
+
+## 2026-09-04 (minimal macOS CXL Reference Authoring screen + serial worker)
+
+- Root cause: the shared reference-authoring session and real macOS capture bridge existed, but there was no functional SwiftUI authoring surface or concurrency boundary. Calling the bridge's blocking readiness hooks from a main-actor view model would have risked deadlocking the UI.
+- Selected task: add exactly one minimal macOS reference-authoring slice without exposing it from Advanced or installing generated references for training.
+- Files changed: `ScratchLabDesktop/ViewModels/ReferenceAuthoringViewModel.swift`, `ScratchLabDesktop/Views/ReferenceAuthoringView.swift`, `ScratchLabDesktopTests/ReferenceAuthoringViewModelTests.swift`, `ScratchLab.xcodeproj/project.pbxproj`, `TASKS.md`, `DEV_LOG.md`, `AI_HANDOFF.md`, and `AI_HANDOFF/next_prompt.md`.
+- Implemented a main-actor observable view model backed by a dedicated serial worker that exclusively owns and mutates `ReferenceAuthoringSession` and invokes all potentially blocking capture-bridge hooks off the main thread.
+- Added cancellable preflight and crossfader-calibration polling, explicit technique/pattern/variant configuration, calibration retry/commit, real bridge record/stop actions, four-repetition review, boundary adjustment, selection, reject/retake, and approval.
+- Approval remains draft-only and displays the exact truth: `Approved canonical draft. Not installed for training.` No publish/install action was added.
+- Audition playback was omitted: the existing `ScratchBankPadAudioPlayer` only resolves bundled sample IDs and cannot safely play arbitrary finalized capture URLs without introducing a second playback implementation.
+- Added focused tests for worker thread isolation, polling cancellation, bridge errors and invalid stop, advisory auto-detection, approval safety, and legacy-reference unavailability.
+- Verification: 121/121 focused reference-authoring/calibration tests passed, and the `ScratchLabDesktop` macOS build passed. Only pre-existing warnings were emitted. The full test suite was not run.
+- Follow-up: manually smoke-test this currently unexposed screen with real hardware before adding an Advanced navigation entry.
+
 ## 2026-08-31 (Review latest-take and upfader notation physical defect)
 
 - Root cause: the live Review UI displayed Take 1 while Take 2 was newest, amplified by two simultaneously running ScratchLab binaries, one from stale `build/CodexProducts-ios-save-tests`. Separately, the CoreMIDI loop persisted mapped identity only for its legacy crossfader path, even though it evaluated the complete learned mapping for gain; shared fader derivation then accepted only `crossfader`. RANE CC28 could therefore be captured but never classified or rendered as upfader notation.
@@ -3921,3 +4312,101 @@ Four `Info.plist` findings from the audit, applied with explicit approval. `SOUL
 - Alignment: `watchCaptureEndedAt` 04:16:47Z against `takeStopRequestedAt` 04:16:47Z, so **overrun 0 s**. Lead-in 3.000 s, at but not over the 3.0 s warning threshold. The watch CSV runs 16.335 s against 13.3 s of take audio; the entire 3.035 s difference is lead-in, which is precisely the distinction the duration-based check could not make.
 - Confirms the diagnosis in the previous entry: the defect was the relay minting a fresh `commandID` instead of forwarding the Mac's, so no reply could ever match the command being awaited. Carrying the ID through fixed both handshakes at once.
 - The two serializations removed earlier (watch replying only after writing its motion file; the iPhone relaying acknowledgements on the camera's sample-buffer queue) were genuine improvements but were not the cause, and this run does not attribute anything to them.
+
+## 2026-09-05 - Watch receipt now owns temporary files before the delegate returns
+
+- Selected exactly the receipt-to-durable-iPhone-staging slice. `WatchMotionCaptureStore.session(_:didReceive:)` previously passed `WCSessionFile.fileURL` into asynchronous work and returned before its first copy. WatchConnectivity can delete that temporary file when the delegate returns. Takes 003/004 of `41949897-5458-449d-9280-65508a4f6600` remain missing-transfer evidence; the code repair does not manufacture or recover their missing motion.
+- Before: delegate -> asynchronous temporary-URL copy -> import/relay. After: delegate -> synchronous non-overwriting move into `Application Support/ScratchLab/IncomingWatchTransfers/` -> asynchronous decode/import from the stable URL -> verified existing `WatchMotionCaptures` storage -> remove only the consumed staged receipt -> existing reconciliation and import/relay notification.
+- The shared `WatchTransferStagingStore` lives in existing `StagedCaptureRecovery.swift`; no new source/test file or project membership was needed. UUID-prefixed, bounded ASCII filenames preserve a sanitized suggested name and a safe JSON extension. Metadata cannot supply path components. Capture identity comes from decoded contents, never the filename. Receipt import requires the file's explicit capture UUID instead of accepting the legacy decoder's invented UUID.
+- Exact duplicate captures reuse existing durable bytes; conflicting contents under the same capture ID remain staged with a diagnostic. Different capture IDs with colliding suggested names get separate destinations. Existing active/quarantined captures are read only for duplicate detection, never overwritten or moved by the staging helper. Existing quarantine eligibility and reconnect retry policy are unchanged.
+- Decode, identity/conflict validation, copy or verification failure retains the receipt and writes an adjacent `.error.txt`; failures publish store status and are logged in Release through `NSLog`, without firing the success callback. No new status UI or relay protocol was added. Successful import removes its own staged JSON only. Startup recovery processes staged JSON filenames in lexical order, resumes an interrupted copy without overwriting it, preserves failures and is idempotent. Recovery notifications that finish before the app installs `onImportedCapture` are retained until that callback is installed.
+- Files changed in this slice: `ScratchLab/Services/WatchMotionCaptureStore.swift`, `ScratchLab/Services/StagedCaptureRecovery.swift`, the existing `ScratchLabDesktopTests/CaptureReliabilityPhase1Tests.swift`, `TASKS.md`, `DEV_LOG.md`, `AI_HANDOFF.md`, `AI_HANDOFF/next_prompt.md`. All earlier dirty hunks remain. `project.pbxproj` and both shared schemes retain their starting SHA-256 hashes.
+- Focused verification: `WatchMotionCaptureStoreStagingTests` 18/18 (16 executable filesystem/callback tests and two iOS source-wiring checks). With existing receipt/control, iPhone wiring, relay-stop and reconciliation suites, 123/123 passed on each of two configurations. The final isolated rerun also passed 123/123 per configuration, zero skips/failures. Coverage includes synchronous ownership, deleting/reusing the old temporary URL before async import, duplicate/conflicting deliveries, filename traversal, failed decoding/storage, required capture identity, deterministic relaunch recovery, interruption after copy/before cleanup, recovery idempotency, exact session/take/capture IDs, selective cleanup and success-only notifications. The actual iOS delegate is compile-checked and wired to the executable shared boundary; a real WatchConnectivity transfer remains a hardware test.
+- Full gate: `scripts/build.sh all` ran serially and exited 0. Python capture-pipeline fixtures: 82/82. On each of the two macOS configurations: 3,572 XCTest cases reported (52 existing skips, zero failures), plus 366 Swift Testing cases passed. Thus 7,876 native cases reported across configurations, including 104 skips and zero failures. iOS build passed; native macOS build passed; watchOS target build passed with the script's existing signing-disabled flags. No unrelated build/test failure required a workaround or repair. Logs: `build/watch-receipt-focused.log`, `build/watch-receipt-focused-isolated.log`, `build/watch-receipt-build-all.log`.
+- Test isolation and preservation exception: the first focused run used `TEST_RUNNER_CFFIXED_USER_HOME`, but the sandbox overrode it. Existing test-host/stop-test behavior refreshed 24 older relayed-Watch audit summaries, changed older session `9f75b6da-5b4b-4a7a-b234-465be2ce0128` take-001's stop diagnostics and its two routine audit summaries, and appended six routine journal entries. These were not restored, removed or disguised. Takes 001-004's 27 recording/sidecar/diagnostic files and five audit summaries, calibration, and the 19 motion files present at this implementation's start were checksum-compared and unchanged. Subsequent focused/full tests used only a test-time `PRODUCT_BUNDLE_IDENTIFIER=com.machelpnz.scratchlab.watch-staging-verification` override, creating a separate sandbox container. A temporary `xcodebuild` wrapper at `/private/tmp/scratchlab-watch-build-gate.yoXo1A/xcodebuild` applies that override only to `test`; all production build invocations use their original settings. The script invocation was `PATH="/private/tmp/scratchlab-watch-build-gate.yoXo1A:$PATH" ./scripts/build.sh all`. No project/scheme setting was edited.
+- Still separate and unresolved: final live-batch identity is cleared before final send; quarantined captures are excluded from reconnect retries; Mac acknowledgement does not prove durable retention; D5 reuses the prior session; D6's layout fix is not hardware-verified. TTM/Tear is untouched and blocked. The 90-second authoring bound, schemas, control authority and training/reference lifecycle are unchanged.
+- Hardware retest remains pending: on one new Take 005, retain the engine's actual reserved identity, prove durable iPhone JSON (including automatic quarantine if the unchanged policy moves it), matching Mac relay/reconciliation and linked sidecar ID/filename within 90 seconds, and observe D6's trace while moving. Stop on the first failed boundary; do not record another take to hide it. No device deployment, new hardware recording, reference approval, installation, publication or training enablement occurred in this slice. Nothing was staged in git, committed or pushed.
+
+## 2026-09-05 - Receipt-staging checkpoint after Take 006 (documentation only; no commit)
+
+### Root cause, scope and git baseline
+
+- The first failed boundary for Takes 003/004 was WCSessionFile receipt -> durable iPhone ownership: the delegate returned before asynchronous code copied the OS-owned temporary URL. The existing-file repair synchronously moves into Application Support/ScratchLab/IncomingWatchTransfers before returning; asynchronous decode/import sees only the stable URL. Content identity, unique safe names, non-overwriting duplicate handling, retained failures/diagnostics, success-only cleanup/callback and deterministic startup recovery remain as described in the implementation entry above.
+- Baseline HEAD: d3ecf2a69bde57f7d6ac681b6dbdd37347c83e97, branch feature/ios-capture-camera-ux, ahead 2. Index empty. There were 15 modified tracked files and 22 untracked regular files, not a clean receipt-only tree. All 661 tracked/untracked regular-file hashes still produced aggregate SHA-256 1cb645aca45f5d0b1a6e4de0342437fdbeac12cf9f60548f01eb24cb77ed5311 before this checkpoint's documentation edits, matching deployment and physical-test baselines.
+- Re-read AGENTS.md, SOUL.md, PROFILE.md, AI_CONTEXT.md and current workflow records; inspected complete receipt source/test diffs, the four workflow-file diffs (including their unrelated historical additions/deletions), the D6 preview-test diff and the complete untracked authoring view. No source, test, project, scheme, resource, signing, schema or timeout edit was made here.
+- Receipt implementation files: ScratchLab/Services/WatchMotionCaptureStore.swift, ScratchLab/Services/StagedCaptureRecovery.swift, existing ScratchLabDesktopTests/CaptureReliabilityPhase1Tests.swift. D6's earlier changes remain in ScratchLabDesktop/Views/ReferenceAuthoringView.swift and ScratchLabDesktopTests/MacCameraPreviewViewTests.swift. This checkpoint changes only TASKS.md, DEV_LOG.md, AI_HANDOFF.md and AI_HANDOFF/next_prompt.md.
+- Protected baseline hashes: project.pbxproj e85f2fd0e5eff9a82396657b5847f848be46cfa05aac70d6ade525fae1076569; ScratchLab.xcscheme dbd9a4fc8eba2f93b94c1099a9fe683c3f46fc327cf8a7cac16f58fd98130cbd; ScratchLabDesktop.xcscheme 8d9b6c940bd9a099f1b9bb8ba38825b5f8be02d06ed8c3c11ad7e63249ae5230. The project file's existing 146-addition/6-deletion diff is older authoring/calibration membership and build 21->22 work, not this slice; shared schemes have no diff. Historical handoff records Karl's approval for earlier membership wiring; this checkpoint neither grants retrospective approval to other historical settings nor changes any protected file.
+
+### Verification confirmed, not rerun
+
+No tests, builds, app launches, deployment or capture commands were run during this checkpoint. The source is unchanged from the already-tested/deployed state. The existing focused log and full script log were read; the existing full result bundle was inspected with xcresulttool (permission was needed for Xcode's result-database preparation, not to run a test host).
+
+Exact focused command recorded in build/watch-receipt-focused-isolated.log:
+
+~~~sh
+xcodebuild -project ScratchLab.xcodeproj -scheme ScratchLabDesktop -destination 'platform=macOS' \
+  -only-testing:ScratchLabDesktopTests/WatchMotionCaptureStoreStagingTests \
+  -only-testing:ScratchLabDesktopTests/CaptureRecoveryPhase2CoreTests \
+  -only-testing:ScratchLabDesktopTests/WatchMotionStopCommandResolverTests \
+  -only-testing:ScratchLabDesktopTests/CaptureWatchStopOutcomeTests \
+  -only-testing:ScratchLabDesktopTests/WatchStopDiagnosticsSidecarTests \
+  -only-testing:ScratchLabDesktopTests/MacWatchStopDispatchTests \
+  -only-testing:ScratchLabDesktopTests/RoutineFinalizationWatchMergeTests \
+  -only-testing:ScratchLabDesktopTests/WatchSyncStateExportTests \
+  -only-testing:ScratchLabDesktopTests/CaptureReliabilityPhase1CoreTests/testWatchStartStopControlsTheIPhoneCaptureStateMachine \
+  -only-testing:ScratchLabDesktopTests/CaptureReliabilityPhase1CoreTests/testIOSCaptureOwnsScratchStemAndPersistsControllerAndWatchEvidence \
+  -only-testing:ScratchLabDesktopTests/CaptureReliabilityPhase1CoreTests/testWatchCommandPayloadRoundTripsSessionAndTake \
+  -only-testing:ScratchLabDesktopTests/CaptureReliabilityPhase1CoreTests/testWatchAckSuccessAndTimeoutRemainDeterministic \
+  test PRODUCT_BUNDLE_IDENTIFIER=com.machelpnz.scratchlab.watch-staging-verification
+~~~
+
+- Actual destination: My Mac, arm64, 00008132-0016242C11F0801C, macOS 26.6.2 (25G83). Test-plan configurations are Test Scheme Action and Configuration 2, not two architectures. Xcode-beta 27.0 was used.
+- Per configuration: staging 18, recovery/reconciliation 60, four exact iPhone/control methods 4, stop outcome 13, Mac stop dispatch 10, finalization merge 3, Watch stop resolver 7, stop sidecar 6, sync/export 2 = 123 passed, 0 failed, 0 skipped. Across both: 246 passed. The new staging 18 consist of 16 executable filesystem/callback tests and 2 source-wiring checks; this is not 18 physical WCSession delegate tests.
+- The focused log records /Users/karlwatson/Library/Developer/Xcode/DerivedData/ScratchLab-adtligzspmjlrfgzsrwcckpokdcr/Logs/Test/Test-ScratchLabDesktop-2026.09.05_09-53-38-+1200.xcresult. That bundle is no longer present at checkpoint; counts are confirmed from the retained log, not an invented bundle inspection.
+- Full serial command, already successful: PATH="/private/tmp/scratchlab-watch-build-gate.yoXo1A:$PATH" ./scripts/build.sh all. The wrapper still exists and was read: it adds PRODUCT_BUNDLE_IDENTIFIER=com.machelpnz.scratchlab.watch-staging-verification only to test invocations, passing ordinary build invocations unchanged. A temporary home alone was insufficient; never substitute a production-container test run.
+- Script phases, from build/watch-receipt-build-all.log: python3 scripts/test_capture_pipeline.py: 82 passed, 0 failed; xcodebuild -project ScratchLab.xcodeproj -scheme ScratchLabDesktop -destination 'platform=macOS' test with the test-only override: PASS; -scheme ScratchLab -destination 'generic/platform=iOS' build: PASS; -scheme ScratchLabDesktop -destination 'platform=macOS' build: PASS; -target ScratchLabWatch -sdk watchos CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO build: PASS. Actual script uses the absolute project path. Gate exit 0; no unrelated failure was silently skipped or repaired.
+- Console counts per configuration: 3,572 XCTest cases = 3,520 passed + 52 skipped + 0 failed; Swift Testing 366 passed. Thus 3,938 logical cases, 3,886 passed + 52 skipped per configuration. The earlier 7,876 figure counts those logical cases across both configurations, NOT parameter-expanded executions.
+- Available full bundle: /Users/karlwatson/Library/Developer/Xcode/DerivedData/ScratchLab-adtligzspmjlrfgzsrwcckpokdcr/Logs/Test/Test-ScratchLabDesktop-2026.09.05_09-55-33-+1200.xcresult. xcresulttool get test-results summary confirms Passed, 3,938 unique tests, 3,886 passed / 52 skipped / 0 failed, and 7,904 parameter-expanded runs across both configurations: 7,800 passed / 104 skipped / 0 failed. Two generic main-thread runtime warnings remain. No failed test is hidden by the counting distinction.
+- Within that full gate, MacCameraPreviewViewTests (including D6 layout guards) passed 16/16 per configuration. LivePerformedNotationTrackerTests reported 35 cases: 34 passed, 1 skipped, 0 failed per configuration. The older D6 261/261 focused result is historical; no separate D6 log/bundle was re-established here. The full gate is supporting coverage, not a substituted claim that a new focused D6 run occurred.
+- Final checkpoint verification: git diff --check passed after the four documentation edits. Per-file SHA-256 comparison confirmed all 657 non-checkpoint-document files unchanged, with no file added or missing; project/schemes retain the hashes above. The pre-existing DEV_LOG/AI_HANDOFF diff bodies were compared in memory and contain only the intended appended/current-checkpoint changes; TASKS contains only the selected status corrections and next_prompt the intended replacement. Index remains empty and HEAD unchanged. No broader or wrong-target selector was run as a replacement for the recorded focused selection.
+
+### Authorized deployment and physical evidence now supersede the pending-Take-005 handoff
+
+- Take 005 was performed with the old iPhone 1.0.1 (21); it is NOT verification of the repaired receiver. It remains missing-transfer evidence with Takes 003/004. D6 was hardware-verified on Take 005: Karl confirmed vertical motion and reversals; screenshot DEBUG row was raw 3778 · matched 3750 · moves 11+open · span 0.219 · age 0.0s. No detector label is treated as human-confirmed technique truth.
+- The separately authorized deployment built signed Debug iOS 1.0.1 (22), installed and launched it on K, CoreDevice 1F80398A-96C8-537A-B0EE-821E186918B9. The corrected isolated build used /private/tmp/scratchlab-receipt-deploy.VM6jTU/DerivedData plus explicit SYMROOT/OBJROOT; its ios-build-isolated.log records success. The first attempt's DerivedData argument alone did not override the user's product locations and refreshed the usual derived iOS/Watch products; it was not the installed candidate. No source/project setting was altered to fix that invocation.
+- Mac remained running 1.0.1 (22). Watch stayed 1.0.1 (21), compatible unchanged sender code; it was not unnecessarily reinstalled. The upgraded phone container migrated from E958A8F5-1A5D-4D89-80D9-358779C87FA9 to 138602D2-791C-4C5A-9516-DBD09F3347A6 with the two existing quarantined motion files checksum-preserved. IncomingWatchTransfers existed empty after real app startup; no fake transfer was made.
+- Karl then explicitly authorized exactly Take 006. He confirmed preflight, current valid calibration 1 / 63 / 126 (Right deck, open at far right), supported setup, and Watch acknowledgement before Mac recording. He had already scratched and stopped before the in-take fader observation could be established. No retry or Take 007 was made.
+
+Matching identity and times (UTC; local date was September 5):
+
+- sessionID: 41949897-5458-449d-9280-65508a4f6600; takeID: take-006.
+- Watch start command: 59432ebb-90fa-433a-84e7-2b4e52f0e9de, requested/acknowledged at 2026-09-04T22:40:06Z.
+- Watch stop command: 87a8dc08-95d3-4da9-bf65-98c0dd388cee; requested, relayed, handled and resolved stopped at 22:40:14Z, one attempt.
+- Motion captureID / linkedMotionCaptureID: D3687AE4-9476-40AD-BB00-0A7AE6DE29BC.
+- Motion file / linkedMotionFileName: scratch-motion-2026-09-04T22-40-06Z-D3687A.json.
+- iPhone durable bytes reached WatchMotionCaptures/Quarantine by 22:40:16Z. Journal 1788561616344-14ddd971-8583-42fb-852a-d1495a6481d4.json says: Watch Capture quarantined because no matching staged take exists. This is the unchanged phone association policy, not a decode failure. The matching file relayed successfully despite this quarantine.
+- Mac RelayedWatchCaptures has the identical 680,516-byte JSON; SHA-256 on phone copy and Mac: 75eedfa94b2740e5693a1306289491b4e0f44f8034c218da70081e1060ee8310. Matching relay audit/journal and take-sidecar watch_linked/watch_reconciled events exist at 22:40:19Z. Exact sidecar: RoutineCaptures/41949897-5458-449d-9280-65508a4f6600_take006_routine.json.
+- 835 motion samples. Elapsed 0...8.300746416665788 s; CoreMotion 27154.745942750003...27163.04668916667; both strictly increasing. Watch 22:40:06...22:40:14Z plausibly overlaps Mac take 22:40:06...22:40:15Z. Approximate stop-to-phone import 2 s; stop-to-Mac link 5 s, limited by timestamp resolution and within the unchanged 90-second bound.
+- Transient IncomingWatchTransfers filename was NOT directly observed: it was already consumed before inspection. The successful receipt path is supported by the repaired build and durable matching bytes; do not claim the fleeting staging entry was seen.
+- Take 006 review reports 17 platter movements and 0 crossfader samples; all 5,195 raw MIDI events are channel 1 / CC6 (UI Ch2/CC6), and faderEvents is empty. Baby validation blocks missing trustworthy calibrated fader evidence, not merely zero cuts. Continuously-open acceptance with fresh in-take evidence was NOT exercised on Take 006. The screenshot shows expanded reversing geometry and Watch motion streaming during recording, but its DEBUG row is cropped and cannot be reconstructed from Take 005's row.
+- Transfer/data linkage passed; the complete physical checklist did NOT pass. A nested watchStopDiagnostics.motionTransferState still says pending despite non-null verified link fields; preserve/report that discrepancy separately.
+
+### Artifacts, preservation and safety
+
+- Normal Take 006 additions: six RoutineCaptures files under its exact stem (.mov, .wav, .json, _funnel_diag.txt, _movement_diagnostics.json, _movement_trace.json); one Mac motion JSON; three new routine/relayedWatch take/session audit summaries; eight routine and two relayedWatch journal entries = 20 Mac files. Phone added its durable quarantined JSON and two importedWatch journal entries; the transient staging receipt was normally consumed. Read-only inspection copies remain under /private/tmp/scratchlab-receipt-deploy.VM6jTU/phone-watch-take006 and phone-watch-take006-journal.
+- Takes 001-005's 33 recording/sidecar/diagnostic files, five take audit summaries, 19 older Mac motion files and the current calibration remained checksum-identical through Take 006. Both old iPhone motion files were checksum-identical after installation and Take 006. A fresh checkpoint comparison of all 93 selected post-Take-006 Mac evidence files found zero changed and zero missing.
+- Do NOT claim every production artifact stayed byte-identical. The earlier failed temporary-home test isolation refreshed 24 older relay summaries, changed older 9f75b6da-5b4b-4a7a-b234-465be2ce0128 take-001 stop metadata and two routine summaries, and appended six routine journal entries. Take 006's normal Mac reconciliation refreshed those 24 older relay summaries again, plus the current routine session aggregate: of 83 pre-Take-006 protected files, 58 were unchanged, 25 changed, none missing. These documented metadata mutations remain intact; no unverified restoration was attempted. Take 005's operator calibration commit is also historical, not a checkpoint edit.
+- No raw capture was deleted or rewritten. No existing recording or bundled reference was made valid, canonical, approved, published, installed as a reference or training-eligible; a successful transfer is not a valid technique performance. No detector inference was presented as human ground truth. No ScratchBook GPL source/code/data was copied into ScratchLab. No Take 007, package, publication or training action occurred. This checkpoint wrote no production artifact.
+- No commit: CaptureReliabilityPhase1Tests.swift mixes the receipt class with the earlier function-signature assertion correction, DEBUG authoring-route guard and four crossfader-buffer tests; MacCameraPreviewViewTests.swift mixes D6 with earlier preview/lifecycle guards; the untracked authoring view and all four workflow documents span earlier slices. Thus the user's no-mixed-touched-file condition is not met. No whole-file or partial staging was attempted, no unrelated work was committed, HEAD is unchanged, and nothing was pushed.
+- Remaining independent risks: final live-batch identity cleared before final send; quarantined captures omitted from reconnect retries; Mac acknowledgement before durable retention is proven; stale nested transfer state; D5 session reuse/local review numbering; incomplete take-scoped fader hardware observation and broader authoring phases. D6 layout is no longer pending. TTM/Tear, schemas, 90-second bound and reference/training lifecycle stay unchanged.
+- Exact next authorized-scope proposal: the numbered read-only commit-isolation audit in AI_HANDOFF/next_prompt.md. It does not authorize a new take, staging, commit, implementation, production test host or deployment.
+
+## 2026-09-08 - Scratch Visualizer takeaways placed in the product roadmap
+
+- Selected task: incorporate the strongest reusable workflow ideas found in the installed Scratch Visualizer resources into ScratchLab's plan, without changing the active implementation queue or runtime behavior.
+- Files changed: `docs/product_roadmap.md`, `DEV_LOG.md`.
+- Added four roadmap items: finalized-take Review transport, a synchronized derived replay trace, a guided rig-verification workflow with a versioned receipt, and portable verified rig profiles.
+- Placed them at the relevant CXL stages: Prompt 17 for finalized Review transport and the first in-memory trace consumer; Prompt 19 for deterministic package/reopen support if the consumer justifies persistence; Prompt 20 for guided software verification and receipt creation; Prompt 21 for fresh RANE acceptance; profile portability follows hardware proof.
+- Added fail-closed evidence rules: raw artifacts remain authoritative, timing corrections are additive and auditable, missing lanes remain unknown, capability gates are reported separately, imported profiles require stable identity matching and live revalidation, and none of this expands ScratchLab into deck emulation or a DAW.
+- Build result: not run. This is a Markdown-only planning change with no source, project, schema, resource, signing, or runtime modification.
+- Follow-up: implement each item only in its stated stage and keep the portable-profile slice behind the Prompt 21 hardware gate.

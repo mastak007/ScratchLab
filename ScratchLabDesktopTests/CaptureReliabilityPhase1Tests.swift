@@ -3200,8 +3200,12 @@ final class CaptureReliabilityPhase1CoreTests: XCTestCase {
             encoding: .utf8
         )
 
+        // Matched on the function NAME, not on a formatting of its parameter
+        // list. The literal used to include `(captureTiming:`, so wrapping the
+        // signature across lines silently turned this guard-ordering assertion
+        // into an XCTUnwrap failure instead of a coverage report.
         let startTail = engineSource[try XCTUnwrap(
-            engineSource.range(of: "func startRoutineRecording(captureTiming:")
+            engineSource.range(of: "func startRoutineRecording(")
         ).lowerBound...]
         let guardRange = try XCTUnwrap(startTail.range(of: "Self.shouldBlockRoutineCapture("))
         let publishRange = try XCTUnwrap(startTail.range(of: "self.isRoutineRecording = true"))
@@ -12007,6 +12011,36 @@ final class CaptureRecoveryPhase2CoreTests: XCTestCase {
         )
     }
 
+    func testMacReferenceAuthoringHardwareRouteIsDebugOnly() throws {
+        let sourceURL = projectRootURL().appendingPathComponent("ScratchLabDesktop/Views/MacAnalyzerView.swift")
+        let source = try String(contentsOf: sourceURL, encoding: .utf8)
+
+        XCTAssertTrue(
+            source.contains(
+                "#if DEBUG\n        case referenceAuthoringHardwareTest\n        case captureDetails"
+            ),
+            "The reference-authoring hardware-test section must remain inside the AdvancedSection DEBUG gate"
+        )
+        XCTAssertTrue(
+            source.contains(
+                "#if DEBUG\n            case .referenceAuthoringHardwareTest: return \"CXL Reference Authoring — Hardware Test\""
+            ),
+            "The hardware-test label must remain inside the AdvancedSection DEBUG gate"
+        )
+        XCTAssertTrue(
+            source.contains(
+                "#if DEBUG\n            case .referenceAuthoringHardwareTest: return \"wrench.and.screwdriver\""
+            ),
+            "The hardware-test icon mapping must remain inside the AdvancedSection DEBUG gate"
+        )
+        XCTAssertTrue(
+            source.contains(
+                "#if DEBUG\n        case .referenceAuthoringHardwareTest:\n            ReferenceAuthoringView(\n                engine: captureEngine,\n                companionReceiver: companionReceiver,\n                operatorName: lastPerformerName\n            )\n        case .captureDetails:"
+            ),
+            "The live reference-authoring route must remain inside the Advanced content DEBUG gate"
+        )
+    }
+
     func testPracticeViewReplacesOverconfidentTerminologyWithEstimateLanguage() throws {
         let sourceURL = projectRootURL().appendingPathComponent("ScratchLab/Views/PracticeModeView.swift")
         let source = try String(contentsOf: sourceURL, encoding: .utf8)
@@ -14147,6 +14181,107 @@ extension CaptureReliabilityPhase1CoreTests {
         XCTAssertEqual(engine.midiLearnState, .learned(MacCaptureEngine.CrossfaderCCMapping(channel: 1, controller: 11)))
         XCTAssertEqual(engine.midiLearnFeedback, "Learned Xfader: CC11 Ch2")
         XCTAssertEqual(engine.lastMIDIEventSummary, "Received CC11 Ch2 Value64")
+    }
+
+    // MARK: - Take-scoped crossfader capture (2026-09-04 hardware smoke)
+    //
+    // Take 41949897…_take002 recorded 3,889 MIDI events, every one of them
+    // channel 1 / CC6 (platter), and zero on the learned crossfader address
+    // (channel 15 / CC8). The live preflight row showed a non-zero crossfader
+    // count at the same time, which read as "the crossfader is working".
+    //
+    // These cases pin down that there is no software path that can keep the
+    // platter and drop the crossfader: both go through the SAME function, and
+    // the only gate between the live counter and the take buffer is the
+    // recording window, which is address-blind.
+
+    func testALiveCrossfaderCCDuringAnActiveTakeReachesTheTakeScopedBuffer() {
+        let engine = MacCaptureEngine(autoRefreshDevices: false)
+        engine.beginLiveMIDICapture()
+        defer { engine.endLiveMIDICaptureIfIdle() }
+        let start = CACurrentMediaTime()
+
+        // Platter and crossfader interleaved, exactly as the packet loop
+        // delivers them.
+        engine.recordReceivedMIDICCEvent(
+            sourceName: "Rane ONE MKII", channel: 1, controller: 6, value: 51,
+            timestamp: start + 0.001, recordingStartTime: start
+        )
+        engine.recordReceivedMIDICCEvent(
+            sourceName: "Rane ONE MKII", channel: 15, controller: 8, value: 12,
+            mappedControl: "crossfader",
+            timestamp: start + 0.002, recordingStartTime: start
+        )
+
+        let captured = engine.capturedMidiCCEventsSnapshot()
+        XCTAssertEqual(captured.count, 2)
+        XCTAssertTrue(
+            captured.contains { $0.channel == 15 && $0.controller == 8 && $0.mappedControl == "crossfader" },
+            "A crossfader CC received during an active take must reach the take-scoped buffer."
+        )
+        XCTAssertTrue(captured.contains { $0.channel == 1 && $0.controller == 6 })
+    }
+
+    func testLiveObservationAndTakeScopedCaptureCannotDisagreeAboutAnAddress() {
+        let engine = MacCaptureEngine(autoRefreshDevices: false)
+        engine.beginLiveMIDICapture()
+        defer { engine.endLiveMIDICaptureIfIdle() }
+        let start = CACurrentMediaTime()
+
+        for index in 0..<5 {
+            engine.recordReceivedMIDICCEvent(
+                sourceName: "Rane ONE MKII", channel: 15, controller: 8, value: 10 + index,
+                mappedControl: "crossfader",
+                timestamp: start + 0.001 * Double(index + 1), recordingStartTime: start
+            )
+        }
+
+        let observation = engine.latestCCObservation(channel: 15, controller: 8)
+        let takeScoped = engine.capturedMidiCCEventsSnapshot()
+            .filter { $0.channel == 15 && $0.controller == 8 }
+        XCTAssertEqual(observation?.eventCount, 5)
+        XCTAssertEqual(
+            takeScoped.count, 5,
+            "The live counter and the take buffer are filled from the same call; they cannot diverge while a take is open."
+        )
+        // Both paths address the control the same 0-based way. The UI's
+        // "Ch16" is a 1-based rendering of this same channel 15.
+        XCTAssertEqual(observation?.channel, 15)
+        XCTAssertEqual(takeScoped.first?.channel, 15)
+    }
+
+    func testCrossfaderEventsAreNotCapturedBeforeTheTakeWindowOpens() {
+        let engine = MacCaptureEngine(autoRefreshDevices: false)
+        // No `beginLiveMIDICapture()` — no recording window is open.
+        engine.recordReceivedMIDICCEvent(
+            sourceName: "Rane ONE MKII", channel: 15, controller: 8, value: 12,
+            mappedControl: "crossfader"
+        )
+        XCTAssertTrue(
+            engine.capturedMidiCCEventsSnapshot().isEmpty,
+            "Traffic outside a take must not enter the take timeline."
+        )
+        XCTAssertEqual(
+            engine.latestCCObservation(channel: 15, controller: 8)?.eventCount, 1,
+            "The app-lifetime observation is still recorded — which is exactly why it is not evidence about a take."
+        )
+    }
+
+    func testTheTakeScopedSnapshotIsNonDestructive() {
+        let engine = MacCaptureEngine(autoRefreshDevices: false)
+        engine.beginLiveMIDICapture()
+        defer { engine.endLiveMIDICaptureIfIdle() }
+        let start = CACurrentMediaTime()
+        engine.recordReceivedMIDICCEvent(
+            sourceName: "Rane ONE MKII", channel: 15, controller: 8, value: 12,
+            mappedControl: "crossfader",
+            timestamp: start + 0.001, recordingStartTime: start
+        )
+        XCTAssertEqual(engine.capturedMidiCCEventsSnapshot().count, 1)
+        XCTAssertEqual(
+            engine.capturedMidiCCEventsSnapshot().count, 1,
+            "Reading the buffer for the live UI must not consume the events finalization still has to extract."
+        )
     }
 
     func testClearCrossfaderMappingRemovesMapping() {
@@ -22192,6 +22327,296 @@ final class MacWatchStopDispatchTests: XCTestCase {
 private final class UncheckedBox<Value>: @unchecked Sendable {
     var value: Value
     init(_ value: Value) { self.value = value }
+}
+
+/// File-system behavior runs against isolated fixtures; two source checks pin
+/// the iOS-only delegate/callback wiring to this shared, executable boundary.
+final class WatchMotionCaptureStoreStagingTests: XCTestCase {
+    private let captureID = UUID(uuidString: "11111111-2222-3333-4444-555555555555")!
+
+    private func fixture(id: UUID? = nil, takeID: String = "take-005") -> WatchMotionCaptureSession {
+        let sample = WatchMotionSample(
+            elapsedTime: 0, coreMotionTimestamp: 100,
+            attitudeRoll: 0, attitudePitch: 0, attitudeYaw: 0,
+            quaternionX: 0, quaternionY: 0, quaternionZ: 0, quaternionW: 1,
+            gravityX: 0, gravityY: -1, gravityZ: 0,
+            userAccelerationX: 0, userAccelerationY: 0, userAccelerationZ: 0,
+            rotationRateX: 0, rotationRateY: 0, rotationRateZ: 0
+        )
+        let start = Date(timeIntervalSince1970: 1_783_000_000)
+        return WatchMotionCaptureSession(
+            id: id ?? captureID, sessionID: "staging-test-session", takeID: takeID,
+            commandID: "staging-test-command", requestedAt: start, acknowledgedAt: start,
+            syncState: .acknowledged, sourceDeviceName: "Fixture Watch", sampleRateHz: 100,
+            startedAt: start, endedAt: start.addingTimeInterval(1), deviceRecordedAtStart: start,
+            deviceRecordedAtEnd: start.addingTimeInterval(1), appVersion: "test", timingMetadata: nil,
+            samples: [sample]
+        )
+    }
+
+    private func makeStore() throws -> (URL, WatchTransferStagingStore) {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent("WatchReceiptTests-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        addTeardownBlock { try FileManager.default.removeItem(at: root) }
+        return (root, WatchTransferStagingStore(applicationSupportURL: root.appendingPathComponent("Application Support")))
+    }
+
+    private func source(_ session: WatchMotionCaptureSession, root: URL, name: String = "temporary.json") throws -> URL {
+        let url = root.appendingPathComponent(name)
+        try WatchMotionCaptureCodec.encoder.encode(session).write(to: url)
+        return url
+    }
+
+    private func importCapture(_ stagedURL: URL, store: WatchTransferStagingStore) throws -> WatchTransferStagingStore.ImportedCapture {
+        var imported: WatchTransferStagingStore.ImportedCapture?
+        store.processStagedFile(at: stagedURL, onImported: { imported = $0 }, onFailure: { XCTFail($0) })
+        return try XCTUnwrap(imported)
+    }
+
+    func testReceiptSynchronouslyMovesBytesIntoOwnedStagingBeforeReturning() throws {
+        let (root, store) = try makeStore()
+        let original = try source(fixture(), root: root)
+        let bytes = try Data(contentsOf: original)
+        let staged = try store.stageReceivedFile(at: original, metadataName: "watch.json")
+        XCTAssertFalse(FileManager.default.fileExists(atPath: original.path))
+        XCTAssertEqual(staged.deletingLastPathComponent(), store.incomingDirectoryURL)
+        XCTAssertTrue(staged.path.contains("Application Support/ScratchLab/IncomingWatchTransfers/"))
+        XCTAssertEqual(try Data(contentsOf: staged), bytes)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: store.captureDirectoryURL.path))
+    }
+
+    func testAsyncImportReadsOnlyStagedURLAfterOriginalURLIsDeleted() throws {
+        let (root, store) = try makeStore()
+        let session = fixture()
+        let original = try source(session, root: root)
+        let staged = try store.stageReceivedFile(at: original, metadataName: "watch.json")
+        // Simulate the system reusing and deleting its temporary path after return.
+        try Data("unrelated temporary bytes".utf8).write(to: original)
+        try FileManager.default.removeItem(at: original)
+        let finished = expectation(description: "durable import from staged URL")
+        DispatchQueue(label: "watch-receipt-test").async {
+            store.processStagedFile(at: staged, onImported: { imported in
+                XCTAssertEqual(imported.session, session)
+                XCTAssertTrue(FileManager.default.fileExists(atPath: imported.fileURL.path))
+                XCTAssertFalse(FileManager.default.fileExists(atPath: staged.path))
+                finished.fulfill()
+            }, onFailure: { message in
+                XCTFail(message)
+                finished.fulfill()
+            })
+        }
+        wait(for: [finished], timeout: 3)
+    }
+
+    func testDelegateStagesBeforeDispatchAndDoesNotCaptureWCSessionFile() throws {
+        let root = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
+        let source = try String(contentsOf: root.appendingPathComponent("ScratchLab/Services/WatchMotionCaptureStore.swift"), encoding: .utf8)
+        let delegateStart = try XCTUnwrap(source.range(of: "func session(_ session: WCSession, didReceive file: WCSessionFile)"))
+        let delegateEnd = try XCTUnwrap(source.range(of: "private func handleLiveMotionMessageData", range: delegateStart.upperBound..<source.endIndex))
+        let delegate = String(source[delegateStart.lowerBound..<delegateEnd.lowerBound])
+        let move = try XCTUnwrap(delegate.range(of: "try transferStagingStore.stageReceivedFile("))
+        let enqueue = try XCTUnwrap(delegate.range(of: "importStagedTransfer(at: stagedURL)"))
+        XCTAssertLessThan(move.lowerBound, enqueue.lowerBound)
+        XCTAssertFalse(delegate.contains(".async"))
+        let asyncStart = try XCTUnwrap(source.range(of: "private func importStagedTransfer(at stagedURL: URL)"))
+        let asyncEnd = try XCTUnwrap(source.range(of: "private func publishImportedCapture", range: asyncStart.upperBound..<source.endIndex))
+        let asyncBody = String(source[asyncStart.lowerBound..<asyncEnd.lowerBound])
+        XCTAssertTrue(asyncBody.contains("processingQueue.async"))
+        XCTAssertTrue(asyncBody.contains("at: stagedURL"))
+        XCTAssertFalse(asyncBody.contains("WCSessionFile"))
+        XCTAssertFalse(asyncBody.contains("fileURL"))
+        XCTAssertFalse(source.contains("importTransferredFile"))
+    }
+
+    func testStoreStartupRecoversAndRetainsNotificationsUntilRelayIsInstalled() throws {
+        let root = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
+        let source = try String(contentsOf: root.appendingPathComponent("ScratchLab/Services/WatchMotionCaptureStore.swift"), encoding: .utf8)
+        let initializer = try XCTUnwrap(source.range(of: "override init()"))
+        let end = try XCTUnwrap(source.range(of: "func unsentCaptures()", range: initializer.upperBound..<source.endIndex))
+        XCTAssertTrue(source[initializer.lowerBound..<end.lowerBound].contains("checkForPendingImports()"))
+        XCTAssertTrue(source.contains("onImported: self.publishImportedCapture"))
+        XCTAssertTrue(source.contains("pendingImportNotifications.append(importedCapture)"))
+        XCTAssertTrue(source.contains("pending.forEach(onImportedCapture)"))
+    }
+
+    func testDuplicateDeliveryPreservesExistingValidBytesAndFilename() throws {
+        let (root, store) = try makeStore()
+        let session = fixture()
+        let first = try importCapture(store.stageReceivedFile(at: source(session, root: root), metadataName: "original.json"), store: store)
+        let bytes = try Data(contentsOf: first.fileURL)
+        let duplicate = try importCapture(store.stageReceivedFile(at: source(session, root: root), metadataName: "different-name.json"), store: store)
+        XCTAssertEqual(duplicate.fileURL, first.fileURL)
+        XCTAssertEqual(try Data(contentsOf: first.fileURL), bytes)
+        XCTAssertEqual(try FileManager.default.contentsOfDirectory(atPath: store.captureDirectoryURL.path), ["original.json"])
+    }
+
+    func testConflictingDuplicatePreservesBothExistingCaptureAndFailedStaging() throws {
+        let (root, store) = try makeStore()
+        let first = try importCapture(store.stageReceivedFile(at: source(fixture(), root: root), metadataName: "watch.json"), store: store)
+        let originalBytes = try Data(contentsOf: first.fileURL)
+        let staged = try store.stageReceivedFile(at: source(fixture(takeID: "take-006"), root: root), metadataName: "watch.json")
+        var failures: [String] = []
+        store.processStagedFile(at: staged, onImported: { _ in XCTFail("Conflicting capture must not relay") }, onFailure: { failures.append($0) })
+        XCTAssertEqual(failures.count, 1)
+        XCTAssertTrue(failures[0].contains("different contents"))
+        XCTAssertEqual(try Data(contentsOf: first.fileURL), originalBytes)
+        XCTAssertTrue(FileManager.default.fileExists(atPath: staged.path))
+        XCTAssertTrue(FileManager.default.fileExists(atPath: staged.appendingPathExtension("error.txt").path))
+    }
+
+    func testDifferentCaptureWithSameFilenameNeverOverwritesExistingCapture() throws {
+        let (root, store) = try makeStore()
+        let first = try importCapture(store.stageReceivedFile(at: source(fixture(), root: root), metadataName: "watch.json"), store: store)
+        let bytes = try Data(contentsOf: first.fileURL)
+        let secondSession = fixture(id: UUID(uuidString: "AAAAAAAA-BBBB-CCCC-DDDD-EEEEEEEEEEEE"), takeID: "take-006")
+        let second = try importCapture(store.stageReceivedFile(at: source(secondSession, root: root), metadataName: "watch.json"), store: store)
+        XCTAssertNotEqual(first.fileURL, second.fileURL)
+        XCTAssertEqual(second.session, secondSession)
+        XCTAssertEqual(try Data(contentsOf: first.fileURL), bytes)
+    }
+
+    func testUntrustedMetadataCannotEscapeStagingOrImportDirectory() throws {
+        let (root, store) = try makeStore()
+        for name in ["../../escape.json", "/tmp/escape.json", "..\\..\\escape.json", "..", ".", "", "💥/\u{0}bad.json", String(repeating: "x", count: 500)] {
+            let staged = try store.stageReceivedFile(at: source(fixture(), root: root), metadataName: name)
+            XCTAssertEqual(staged.standardizedFileURL.deletingLastPathComponent(), store.incomingDirectoryURL.standardizedFileURL)
+            XCTAssertLessThan(staged.lastPathComponent.utf8.count, 255)
+            let imported = try importCapture(staged, store: store)
+            XCTAssertEqual(imported.fileURL.deletingLastPathComponent(), store.captureDirectoryURL)
+        }
+        XCTAssertFalse(FileManager.default.fileExists(atPath: root.appendingPathComponent("escape.json").path))
+    }
+
+    func testSameMetadataProducesDistinctStagedFilesWithoutReplacingEither() throws {
+        let (root, store) = try makeStore()
+        let first = try store.stageReceivedFile(at: source(fixture(), root: root), metadataName: "same.json")
+        let bytes = try Data(contentsOf: first)
+        let second = try store.stageReceivedFile(at: source(fixture(takeID: "take-006"), root: root), metadataName: "same.json")
+        XCTAssertNotEqual(first, second)
+        XCTAssertEqual(try Data(contentsOf: first), bytes)
+        XCTAssertNotEqual(try Data(contentsOf: second), bytes)
+    }
+
+    func testFailedDecodeRetainsBytesAndDiagnosticAndNeverNotifiesRelay() throws {
+        let (root, store) = try makeStore()
+        let original = root.appendingPathComponent("broken.json")
+        let bytes = Data("not a capture".utf8)
+        try bytes.write(to: original)
+        let staged = try store.stageReceivedFile(at: original, metadataName: nil)
+        var failures: [String] = []
+        store.processStagedFile(at: staged, onImported: { _ in XCTFail("Invalid bytes cannot relay") }, onFailure: { failures.append($0) })
+        XCTAssertEqual(try Data(contentsOf: staged), bytes)
+        XCTAssertEqual(failures.count, 1)
+        XCTAssertEqual(try String(contentsOf: staged.appendingPathExtension("error.txt"), encoding: .utf8), failures[0])
+    }
+
+    func testMissingCaptureIDIsRejectedWithoutInventingIdentity() throws {
+        let (root, store) = try makeStore()
+        var json = try XCTUnwrap(JSONSerialization.jsonObject(with: WatchMotionCaptureCodec.encoder.encode(fixture())) as? [String: Any])
+        json.removeValue(forKey: "id")
+        let original = root.appendingPathComponent("missing-id.json")
+        try JSONSerialization.data(withJSONObject: json).write(to: original)
+        let staged = try store.stageReceivedFile(at: original, metadataName: nil)
+        var failure: String?
+        store.processStagedFile(at: staged, onImported: { _ in XCTFail("Must not invent capture ID") }, onFailure: { failure = $0 })
+        XCTAssertNotNil(failure)
+        XCTAssertTrue(FileManager.default.fileExists(atPath: staged.path))
+    }
+
+    func testDurableStorageFailureRetainsStagingAndDoesNotRelay() throws {
+        let (root, store) = try makeStore()
+        let staged = try store.stageReceivedFile(at: source(fixture(), root: root), metadataName: nil)
+        try Data("occupied by a file".utf8).write(to: store.captureDirectoryURL)
+        var failures: [String] = []
+        store.processStagedFile(at: staged, onImported: { _ in XCTFail("Failed durable write cannot relay") }, onFailure: { failures.append($0) })
+        XCTAssertEqual(failures.count, 1)
+        XCTAssertTrue(FileManager.default.fileExists(atPath: staged.path))
+        XCTAssertEqual(try String(contentsOf: store.captureDirectoryURL, encoding: .utf8), "occupied by a file")
+    }
+
+    func testRelaunchRecoversDeterministicallyAndRepeatedRecoveryIsIdempotent() throws {
+        let (root, store) = try makeStore()
+        let first = fixture()
+        let second = fixture(id: UUID(uuidString: "AAAAAAAA-BBBB-CCCC-DDDD-EEEEEEEEEEEE"), takeID: "take-006")
+        let a = try store.stageReceivedFile(at: source(first, root: root), metadataName: "first.json")
+        let z = try store.stageReceivedFile(at: source(second, root: root), metadataName: "second.json")
+        try FileManager.default.moveItem(at: a, to: store.incomingDirectoryURL.appendingPathComponent("a.json"))
+        try FileManager.default.moveItem(at: z, to: store.incomingDirectoryURL.appendingPathComponent("z.json"))
+        let relaunched = WatchTransferStagingStore(applicationSupportURL: root.appendingPathComponent("Application Support"))
+        var sessions: [WatchMotionCaptureSession] = []
+        relaunched.recoverPendingTransfers(onImported: { sessions.append($0.session) }, onFailure: { XCTFail($0) })
+        XCTAssertEqual(sessions, [first, second])
+        let files = try FileManager.default.contentsOfDirectory(at: relaunched.captureDirectoryURL, includingPropertiesForKeys: nil)
+        let bytes = try files.map { try Data(contentsOf: $0) }
+        let nextLaunch = WatchTransferStagingStore(applicationSupportURL: root.appendingPathComponent("Application Support"))
+        nextLaunch.recoverPendingTransfers(onImported: { _ in XCTFail("No receipt should be imported twice") }, onFailure: { XCTFail($0) })
+        XCTAssertEqual(try files.map { try Data(contentsOf: $0) }, bytes)
+        XCTAssertEqual(try FileManager.default.contentsOfDirectory(atPath: nextLaunch.incomingDirectoryURL.path), [])
+    }
+
+    func testRecoveryAfterDurableCopyBeforeStagedCleanupReusesExistingCapture() throws {
+        let (root, store) = try makeStore()
+        let staged = try store.stageReceivedFile(at: source(fixture(), root: root), metadataName: "watch.json")
+        try FileManager.default.createDirectory(at: store.captureDirectoryURL, withIntermediateDirectories: true)
+        let existing = store.captureDirectoryURL.appendingPathComponent("watch.json")
+        try FileManager.default.copyItem(at: staged, to: existing)
+        let originalBytes = try Data(contentsOf: existing)
+        let relaunched = WatchTransferStagingStore(applicationSupportURL: root.appendingPathComponent("Application Support"))
+        var notifications = 0
+        relaunched.recoverPendingTransfers(onImported: { imported in
+            notifications += 1
+            XCTAssertEqual(imported.fileURL, existing)
+        }, onFailure: { XCTFail($0) })
+        XCTAssertEqual(notifications, 1)
+        XCTAssertEqual(try Data(contentsOf: existing), originalBytes)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: staged.path))
+        XCTAssertEqual(try FileManager.default.contentsOfDirectory(atPath: store.captureDirectoryURL.path), ["watch.json"])
+    }
+
+    func testSuccessfulImportDeletesOnlyItsReceiptAndPreservesExactIdentity() throws {
+        let (root, store) = try makeStore()
+        let expected = fixture()
+        let staged = try store.stageReceivedFile(at: source(expected, root: root), metadataName: "wrong-session-take-999.json")
+        let other = try store.stageReceivedFile(at: source(fixture(takeID: "take-006"), root: root), metadataName: "other.json")
+        let otherBytes = try Data(contentsOf: other)
+        let imported = try importCapture(staged, store: store)
+        XCTAssertEqual(imported.session.sessionID, expected.sessionID)
+        XCTAssertEqual(imported.session.takeID, expected.takeID)
+        XCTAssertEqual(imported.session.id, captureID)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: staged.path))
+        XCTAssertEqual(try Data(contentsOf: other), otherBytes)
+    }
+
+    func testRecoveryPreservesFailuresWhileImportingValidReceipts() throws {
+        let (root, store) = try makeStore()
+        let valid = try store.stageReceivedFile(at: source(fixture(), root: root), metadataName: "valid.json")
+        let invalid = store.incomingDirectoryURL.appendingPathComponent("broken.json")
+        try Data("broken".utf8).write(to: invalid)
+        var successes = 0
+        var failures = 0
+        store.recoverPendingTransfers(onImported: { _ in successes += 1 }, onFailure: { _ in failures += 1 })
+        XCTAssertEqual(successes, 1)
+        XCTAssertEqual(failures, 1)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: valid.path))
+        XCTAssertEqual(try String(contentsOf: invalid, encoding: .utf8), "broken")
+        XCTAssertTrue(FileManager.default.fileExists(atPath: invalid.appendingPathExtension("error.txt").path))
+    }
+
+    func testRecoveryFollowedByAlreadyQueuedImportDoesNotRepeatNotification() throws {
+        let (root, store) = try makeStore()
+        let staged = try store.stageReceivedFile(at: source(fixture(), root: root), metadataName: nil)
+        var callbacks = 0
+        store.recoverPendingTransfers(onImported: { _ in callbacks += 1 }, onFailure: { XCTFail($0) })
+        store.processStagedFile(at: staged, onImported: { _ in callbacks += 1 }, onFailure: { XCTFail($0) })
+        XCTAssertEqual(callbacks, 1)
+    }
+
+    func testMissingUnprocessedFileIsAnObservableFailure() throws {
+        let (_, store) = try makeStore()
+        var failures: [String] = []
+        store.processStagedFile(at: store.incomingDirectoryURL.appendingPathComponent("missing.json"), onImported: { _ in XCTFail("Missing file cannot pass") }, onFailure: { failures.append($0) })
+        XCTAssertEqual(failures.count, 1)
+    }
 }
 
 /// The Watch's own decision table: idempotent, identity-scoped, honest.

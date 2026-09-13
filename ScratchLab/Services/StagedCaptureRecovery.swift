@@ -1,5 +1,175 @@
 import Foundation
 
+/// Owns WatchConnectivity receipts before its temporary URLs expire. Staging is
+/// synchronous; import/recovery must run on the store's serial processing queue.
+/// Kept here with the existing disk-recovery code so both app targets can test it.
+final class WatchTransferStagingStore {
+    struct ImportedCapture {
+        let fileURL: URL
+        let session: WatchMotionCaptureSession
+    }
+
+    private enum ImportError: LocalizedError {
+        case unsafeFile
+        case conflictingCapture(UUID)
+        case verificationFailed
+
+        var errorDescription: String? {
+            switch self {
+            case .unsafeFile: return "Watch transfer must be a regular file inside the staging directory."
+            case .conflictingCapture(let id): return "Watch capture \(id) already exists with different contents."
+            case .verificationFailed: return "The durable Watch capture could not be verified."
+            }
+        }
+    }
+
+    let incomingDirectoryURL: URL
+    let captureDirectoryURL: URL
+    private let fileManager: FileManager
+    // A recovery scan may consume a receipt before its already-enqueued import runs.
+    private var completedTransfers: Set<URL> = []
+
+    init(applicationSupportURL: URL, fileManager: FileManager = .default) {
+        self.fileManager = fileManager
+        incomingDirectoryURL = applicationSupportURL
+            .appendingPathComponent("ScratchLab/IncomingWatchTransfers", isDirectory: true)
+        captureDirectoryURL = applicationSupportURL.appendingPathComponent("WatchMotionCaptures", isDirectory: true)
+    }
+
+    /// Must finish before WCSessionDelegate.session(_:didReceive:) returns.
+    func stageReceivedFile(at temporaryURL: URL, metadataName: String?) throws -> URL {
+        try ensureDirectory(incomingDirectoryURL)
+        try requireRegularFile(temporaryURL)
+        let safeName = sanitizedFileName(metadataName ?? temporaryURL.lastPathComponent)
+        var stagedURL: URL
+        repeat {
+            stagedURL = incomingDirectoryURL.appendingPathComponent("\(UUID().uuidString)--\(safeName)")
+        } while fileManager.fileExists(atPath: stagedURL.path)
+        // moveItem refuses an existing destination, including a collision after the check.
+        try fileManager.moveItem(at: temporaryURL, to: stagedURL)
+        return stagedURL
+    }
+
+    func recoverPendingTransfers(
+        onImported: (ImportedCapture) -> Void,
+        onFailure: (String) -> Void
+    ) {
+        do {
+            try ensureDirectory(incomingDirectoryURL)
+            let files = try fileManager.contentsOfDirectory(at: incomingDirectoryURL, includingPropertiesForKeys: nil)
+                .filter { $0.pathExtension == "json" }
+                .sorted { $0.lastPathComponent < $1.lastPathComponent }
+            for fileURL in files {
+                processStagedFile(at: fileURL, onImported: onImported, onFailure: onFailure)
+            }
+        } catch {
+            onFailure("Watch transfer recovery failed: \(error.localizedDescription)")
+        }
+    }
+
+    func processStagedFile(
+        at stagedURL: URL,
+        onImported: (ImportedCapture) -> Void,
+        onFailure: (String) -> Void
+    ) {
+        guard !completedTransfers.contains(stagedURL) else { return }
+        do {
+            let imported = try importStagedFile(at: stagedURL)
+            // The durable file has been decoded and checked before removing our receipt.
+            try fileManager.removeItem(at: stagedURL)
+            completedTransfers.insert(stagedURL)
+            onImported(imported)
+        } catch {
+            let message = "Watch transfer import failed for \(stagedURL.lastPathComponent): \(error.localizedDescription)"
+            var diagnostic = message
+            if isStagedURL(stagedURL) {
+                do {
+                    try Data(message.utf8).write(to: stagedURL.appendingPathExtension("error.txt"), options: .atomic)
+                } catch {
+                    diagnostic += " Diagnostic write also failed: \(error.localizedDescription)"
+                }
+            }
+            onFailure(diagnostic)
+        }
+    }
+
+    private func importStagedFile(at stagedURL: URL) throws -> ImportedCapture {
+        guard isStagedURL(stagedURL) else { throw ImportError.unsafeFile }
+        try requireRegularFile(stagedURL)
+        let incoming = try decodeCapture(at: stagedURL)
+        try ensureDirectory(captureDirectoryURL)
+
+        // Read quarantine for duplicate detection only. Its eligibility/retry policy
+        // is unchanged, and neither existing file nor sidecar is rewritten here.
+        let quarantine = captureDirectoryURL.appendingPathComponent("Quarantine", isDirectory: true)
+        let directories = [captureDirectoryURL] + (fileManager.fileExists(atPath: quarantine.path) ? [quarantine] : [])
+        var duplicate: ImportedCapture?
+        for directory in directories {
+            let files = try fileManager.contentsOfDirectory(at: directory, includingPropertiesForKeys: nil)
+                .filter { $0.pathExtension.lowercased() == "json" }
+                .sorted { $0.lastPathComponent < $1.lastPathComponent }
+            for fileURL in files {
+                guard let existing = try? decodeCapture(at: fileURL), existing.id == incoming.id else { continue }
+                guard existing == incoming else { throw ImportError.conflictingCapture(incoming.id) }
+                if duplicate == nil { duplicate = ImportedCapture(fileURL: fileURL, session: existing) }
+            }
+        }
+        if let duplicate { return duplicate }
+
+        // The UUID prefix is only a staging collision guard, never capture identity.
+        let stagedName = stagedURL.lastPathComponent
+        let name = stagedName.count > 38 && UUID(uuidString: String(stagedName.prefix(36))) != nil
+            && stagedName.dropFirst(36).hasPrefix("--")
+            ? String(stagedName.dropFirst(38)) : stagedName
+        let safeName = sanitizedFileName(name)
+        var destinationURL = captureDirectoryURL.appendingPathComponent(safeName)
+        while fileManager.fileExists(atPath: destinationURL.path) {
+            destinationURL = captureDirectoryURL.appendingPathComponent("\(UUID().uuidString)--\(safeName)")
+        }
+        // Never remove/replace an imported capture, even if its filename collides.
+        try fileManager.copyItem(at: stagedURL, to: destinationURL)
+        let stored = try decodeCapture(at: destinationURL)
+        guard stored == incoming else { throw ImportError.verificationFailed }
+        return ImportedCapture(fileURL: destinationURL, session: stored)
+    }
+
+    private func decodeCapture(at url: URL) throws -> WatchMotionCaptureSession {
+        try requireRegularFile(url)
+        let data = try Data(contentsOf: url)
+        // The legacy decoder invents a UUID when id is absent. A received file
+        // must supply its own identity for duplicate detection and crash recovery.
+        struct Identity: Decodable { let id: UUID }
+        _ = try JSONDecoder().decode(Identity.self, from: data)
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .iso8601
+        return try decoder.decode(WatchMotionCaptureSession.self, from: data)
+    }
+
+    private func sanitizedFileName(_ value: String) -> String {
+        let leaf = value.replacingOccurrences(of: "\\", with: "/").split(separator: "/").last.map(String.init) ?? "capture"
+        let allowed = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-_."
+        let sanitized = String(leaf.prefix(140).map { allowed.contains($0) ? $0 : "_" })
+            .trimmingCharacters(in: CharacterSet(charactersIn: "."))
+        let name = sanitized.isEmpty ? "capture" : sanitized
+        return name.hasSuffix(".json") ? name : name + ".json"
+    }
+
+    private func isStagedURL(_ url: URL) -> Bool {
+        url.standardizedFileURL.deletingLastPathComponent() == incomingDirectoryURL.standardizedFileURL
+    }
+
+    private func requireRegularFile(_ url: URL) throws {
+        let values = try url.resourceValues(forKeys: [.isRegularFileKey, .isSymbolicLinkKey])
+        guard values.isRegularFile == true, values.isSymbolicLink != true else { throw ImportError.unsafeFile }
+    }
+
+    private func ensureDirectory(_ url: URL) throws {
+        try fileManager.createDirectory(at: url, withIntermediateDirectories: true)
+        let values = try url.resourceValues(forKeys: [.isDirectoryKey, .isSymbolicLinkKey])
+        guard values.isDirectory == true, values.isSymbolicLink != true else { throw ImportError.unsafeFile }
+    }
+}
+
 enum StagedCaptureStorageKind: String, Codable, Sendable {
     case companion
     case routine

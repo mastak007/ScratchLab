@@ -8586,6 +8586,14 @@ enum CaptureCore {
         let channel: Int
         let controller: Int
         let value: Int
+        /// `value / 127` — the position of this sample across the CONTROLLER'S
+        /// FULL RANGE.
+        ///
+        /// This is NOT a fader position for a deck. A right-deck cut on a RANE
+        /// ONE MKII runs centre-to-left, so a complete, correct gesture only
+        /// ever traverses part of the full range and reads here as a fraction
+        /// of it. Preserved unchanged so every historical export keeps its
+        /// meaning; new consumers read `calibratedPosition` instead.
         let normalizedValue: Double
         let mappedControl: String?
         /// How this control was recognised — the user's learned mapping, or a
@@ -8593,6 +8601,20 @@ enum CaptureCore {
         /// before provenance existed decode with `nil`, which means "unknown
         /// provenance", never "learned".
         let mappingSource: FaderMappingSource?
+        /// Position across the CALIBRATED ACTIVE HALF for this deck: `0`
+        /// fully closed, `1` fully open.
+        ///
+        /// Optional and additive. `nil` means no calibration was in force when
+        /// this sample was recorded, which is exactly what every sidecar
+        /// written before crossfader calibration existed decodes as. `nil`
+        /// must never be read as "0" or back-filled from `normalizedValue` —
+        /// the whole point is that the uncalibrated number is not a deck
+        /// position.
+        let calibratedPosition: Double?
+        /// Identity of the calibration that produced `calibratedPosition`, so
+        /// a package can be re-derived years later against the same
+        /// measurements. `nil` whenever `calibratedPosition` is `nil`.
+        let calibrationID: String?
 
         init(
             timestamp: Double,
@@ -8603,7 +8625,9 @@ enum CaptureCore {
             value: Int,
             normalizedValue: Double,
             mappedControl: String?,
-            mappingSource: FaderMappingSource? = nil
+            mappingSource: FaderMappingSource? = nil,
+            calibratedPosition: Double? = nil,
+            calibrationID: String? = nil
         ) {
             self.timestamp = timestamp
             self.takeRelativeTime = takeRelativeTime
@@ -8614,6 +8638,8 @@ enum CaptureCore {
             self.normalizedValue = normalizedValue
             self.mappedControl = mappedControl
             self.mappingSource = mappingSource
+            self.calibratedPosition = calibratedPosition
+            self.calibrationID = calibrationID
         }
     }
 
@@ -8826,6 +8852,25 @@ enum CaptureCore {
 
         guard crossfaderEvents.count >= 2 else { return [] }
 
+        // Position authority. When EVERY sample in this control's stream
+        // carries a calibrated position, that is what the gates below measure;
+        // otherwise the legacy `normalizedValue` is used and this derivation
+        // behaves exactly as it did before calibration existed.
+        //
+        // The choice is all-or-nothing on purpose. Mixing calibrated and
+        // full-range positions inside one stream would put two different
+        // coordinate systems on the same axis, and a delta computed across the
+        // seam would be meaningless. A partially-calibrated stream is treated
+        // as uncalibrated, which is the honest reading.
+        let usesCalibratedPositions = crossfaderEvents.allSatisfy {
+            $0.calibratedPosition != nil
+        }
+        func position(of event: RawMixerMIDIEvent) -> Double {
+            usesCalibratedPositions
+                ? (event.calibratedPosition ?? event.normalizedValue)
+                : event.normalizedValue
+        }
+
         // A primitive is one *monotonic run* of the stream, not one adjacent
         // sample pair. Crossfader update rates differ by two orders of
         // magnitude between controllers (a RANE ONE MKII streams CC8 at
@@ -8848,8 +8893,8 @@ enum CaptureCore {
         var runSign = 0
         var runStart = 0
         for index in 0..<(crossfaderEvents.count - 1) {
-            let change = crossfaderEvents[index + 1].normalizedValue
-                - crossfaderEvents[index].normalizedValue
+            let change = position(of: crossfaderEvents[index + 1])
+                - position(of: crossfaderEvents[index])
             let sign = change > 0 ? 1 : (change < 0 ? -1 : 0)
             if sign == 0 { continue }
             let gap = crossfaderEvents[index + 1].takeRelativeTime
@@ -8872,7 +8917,7 @@ enum CaptureCore {
             let previous = crossfaderEvents[run.startIndex]
             let current = crossfaderEvents[run.endIndex]
             let duration = current.takeRelativeTime - previous.takeRelativeTime
-            let delta = abs(current.normalizedValue - previous.normalizedValue)
+            let delta = abs(position(of: current) - position(of: previous))
             guard duration > 0, delta >= minimumValueDelta else { return nil }
 
             let cutCandidate = delta >= minimumCutDelta && duration <= maximumCutDuration
@@ -8893,8 +8938,8 @@ enum CaptureCore {
             return PrimitiveEvent(
                 startTime: previous.takeRelativeTime,
                 endTime: current.takeRelativeTime,
-                fromValue: previous.normalizedValue,
-                toValue: current.normalizedValue,
+                fromValue: position(of: previous),
+                toValue: position(of: current),
                 confidence: confidence,
                 isCutCandidate: cutCandidate
             )

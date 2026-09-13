@@ -519,6 +519,7 @@ struct MacAnalyzerView: View {
         case midiFader
         case monitor
 #if DEBUG
+        case referenceAuthoringHardwareTest
         case captureDetails
         case timecodeInput
 #endif
@@ -533,6 +534,7 @@ struct MacAnalyzerView: View {
             case .midiFader:      return "MIDI & fader"
             case .monitor:        return "Performer Monitor"
 #if DEBUG
+            case .referenceAuthoringHardwareTest: return "CXL Reference Authoring — Hardware Test"
             case .captureDetails: return "Diagnostics"
             case .timecodeInput:  return "DVS / timecode"
 #endif
@@ -547,6 +549,7 @@ struct MacAnalyzerView: View {
             case .midiFader:      return "slider.horizontal.3"
             case .monitor:        return "dot.radiowaves.left.and.right"
 #if DEBUG
+            case .referenceAuthoringHardwareTest: return "wrench.and.screwdriver"
             case .captureDetails: return "doc.text.magnifyingglass"
             case .timecodeInput:  return "waveform.badge.magnifyingglass"
 #endif
@@ -3742,6 +3745,12 @@ struct MacAnalyzerView: View {
                     .disabled(captureEngine.isRoutineRecording)
             }
 #if DEBUG
+        case .referenceAuthoringHardwareTest:
+            ReferenceAuthoringView(
+                engine: captureEngine,
+                companionReceiver: companionReceiver,
+                operatorName: lastPerformerName
+            )
         case .captureDetails:
             VStack(alignment: .leading, spacing: ScratchLabDesign.Spacing.cardGroup) {
                 if selectedRoutineSession != nil {

@@ -648,6 +648,214 @@ final class LowLatencySinkLifecycle {
     }
 }
 
+/// Stable identity for one routine-recording request. The generation is
+/// allocated before the engine's asynchronous start work begins and follows
+/// that exact request through confirmed media start and finalization.
+struct RoutineRecordingRequestToken: Equatable, Hashable, Sendable {
+    let generation: UInt64
+}
+
+/// Durable terminal evidence for one routine-recording generation. Unlike the
+/// UI's transient `isRoutineFinalizationPending` flag, this record remains
+/// queryable after finalization has completed, so a waiter cannot miss it.
+struct RoutineRecordingFinalizationCompletion: Equatable, Sendable {
+    let token: RoutineRecordingRequestToken
+    let takeID: String
+    let mediaURL: URL
+    let succeeded: Bool
+    let statusMessage: String
+}
+
+/// Lock-protected lifecycle state exposed read-only to the reference-authoring
+/// bridge. Every identity-bearing field comes from the same prepared take.
+struct RoutineRecordingBoundarySnapshot: Equatable, Sendable {
+    let token: RoutineRecordingRequestToken
+    let takeID: String?
+    let mediaURL: URL?
+    let didStartRecording: Bool
+    let stopWasRequested: Bool
+    let didEnterFinalization: Bool
+    let completion: RoutineRecordingFinalizationCompletion?
+    let startFailureDescription: String?
+}
+
+enum RoutineRecordingStopRequestDisposition: Equatable, Sendable {
+    case accepted
+    case alreadyCompleted(RoutineRecordingFinalizationCompletion)
+    case rejected(String)
+}
+
+/// A small, engine-owned ledger for the asynchronous AVFoundation lifecycle.
+/// The engine writes it at request/preparation/delegate/finalization boundaries;
+/// consumers can safely sample it from a non-main worker without observing a
+/// lossy false -> true -> false UI flag transition.
+final class RoutineRecordingBoundaryLedger: @unchecked Sendable {
+    private struct Record {
+        let token: RoutineRecordingRequestToken
+        var takeID: String?
+        var mediaURL: URL?
+        var didStartRecording = false
+        var stopWasRequested = false
+        var didEnterFinalization = false
+        var completion: RoutineRecordingFinalizationCompletion?
+        var startFailureDescription: String?
+
+        var snapshot: RoutineRecordingBoundarySnapshot {
+            RoutineRecordingBoundarySnapshot(
+                token: token,
+                takeID: takeID,
+                mediaURL: mediaURL,
+                didStartRecording: didStartRecording,
+                stopWasRequested: stopWasRequested,
+                didEnterFinalization: didEnterFinalization,
+                completion: completion,
+                startFailureDescription: startFailureDescription
+            )
+        }
+    }
+
+    private let lock = NSLock()
+    private var nextGeneration: UInt64 = 0
+    private var records: [RoutineRecordingRequestToken: Record] = [:]
+    private var activeToken: RoutineRecordingRequestToken?
+    private let retainedTerminalRecordLimit = 32
+
+    func beginRequest() -> RoutineRecordingRequestToken {
+        lock.lock()
+        defer { lock.unlock() }
+        pruneTerminalRecordsIfNeeded()
+        nextGeneration &+= 1
+        let token = RoutineRecordingRequestToken(generation: nextGeneration)
+        records[token] = Record(token: token)
+        return token
+    }
+
+    func prepare(
+        token: RoutineRecordingRequestToken,
+        takeID: String,
+        mediaURL: URL
+    ) {
+        lock.lock()
+        defer { lock.unlock() }
+        guard var record = records[token], record.startFailureDescription == nil else { return }
+        record.takeID = takeID
+        record.mediaURL = mediaURL
+        records[token] = record
+        activeToken = token
+    }
+
+    @discardableResult
+    func didStartRecording(mediaURL: URL) -> RoutineRecordingRequestToken? {
+        lock.lock()
+        defer { lock.unlock() }
+        guard let token = activeToken,
+              var record = records[token],
+              record.mediaURL == mediaURL,
+              record.startFailureDescription == nil else {
+            return nil
+        }
+        record.didStartRecording = true
+        records[token] = record
+        return token
+    }
+
+    func failStart(token: RoutineRecordingRequestToken, description: String) {
+        lock.lock()
+        defer { lock.unlock() }
+        guard var record = records[token], record.completion == nil else { return }
+        record.startFailureDescription = description
+        records[token] = record
+        if activeToken == token {
+            activeToken = nil
+        }
+    }
+
+    func requestStop(
+        token: RoutineRecordingRequestToken
+    ) -> RoutineRecordingStopRequestDisposition {
+        lock.lock()
+        defer { lock.unlock() }
+        guard var record = records[token] else {
+            return .rejected("The requested recording generation is unknown.")
+        }
+        if let completion = record.completion {
+            return .alreadyCompleted(completion)
+        }
+        if let failure = record.startFailureDescription {
+            return .rejected(failure)
+        }
+        guard activeToken == token, record.didStartRecording else {
+            return .rejected("The requested recording generation is not the active confirmed take.")
+        }
+        record.stopWasRequested = true
+        records[token] = record
+        return .accepted
+    }
+
+    @discardableResult
+    func enterFinalization(mediaURL: URL) -> RoutineRecordingRequestToken? {
+        lock.lock()
+        defer { lock.unlock() }
+        guard let token = activeToken,
+              var record = records[token],
+              record.mediaURL == mediaURL,
+              record.didStartRecording else {
+            return nil
+        }
+        record.didEnterFinalization = true
+        records[token] = record
+        return token
+    }
+
+    @discardableResult
+    func completeFinalization(
+        token: RoutineRecordingRequestToken,
+        succeeded: Bool,
+        statusMessage: String
+    ) -> RoutineRecordingFinalizationCompletion? {
+        lock.lock()
+        defer { lock.unlock() }
+        guard var record = records[token],
+              record.didEnterFinalization,
+              let takeID = record.takeID,
+              let mediaURL = record.mediaURL else {
+            return nil
+        }
+        let completion = RoutineRecordingFinalizationCompletion(
+            token: token,
+            takeID: takeID,
+            mediaURL: mediaURL,
+            succeeded: succeeded,
+            statusMessage: statusMessage
+        )
+        record.completion = completion
+        records[token] = record
+        if activeToken == token {
+            activeToken = nil
+        }
+        return completion
+    }
+
+    func snapshot(
+        for token: RoutineRecordingRequestToken
+    ) -> RoutineRecordingBoundarySnapshot? {
+        lock.lock()
+        defer { lock.unlock() }
+        return records[token]?.snapshot
+    }
+
+    private func pruneTerminalRecordsIfNeeded() {
+        let terminalTokens = records.values
+            .filter { $0.completion != nil || $0.startFailureDescription != nil }
+            .map(\.token)
+            .sorted { $0.generation < $1.generation }
+        let removalCount = max(0, records.count - retainedTerminalRecordLimit + 1)
+        for token in terminalTokens.prefix(removalCount) where token != activeToken {
+            records.removeValue(forKey: token)
+        }
+    }
+}
+
 final class MacCaptureEngine: NSObject, ObservableObject {
     enum LiveRecordDirection: String, Equatable {
         case forward
@@ -3026,7 +3234,13 @@ final class MacCaptureEngine: NSObject, ObservableObject {
     /// pending (admission closed, awaiting the admitted builder tasks). Prevents
     /// a second take from starting and re-opening the gate before the prior
     /// take's builder has been drained.
-    private var isRoutineFinalizationPending = false
+    // `@Published`/`private(set)` (read-only externally, same as every other
+    // internal-write/external-read flag in this class): this is the
+    // authoritative "a take's async finalize is still running" signal, and
+    // `ReferenceAuthoringCaptureBridge` needs to observe its true→false
+    // transition to know a stopped take has actually finished writing before
+    // reading its sidecar back. No existing internal read/write site changes.
+    @Published private(set) var isRoutineFinalizationPending = false
     @Published private(set) var routineRecordingStatus = "Pick camera and audio to record a routine."
     @Published private(set) var lastRoutineRecordingURL: URL?
     @Published private(set) var lastRoutineRecordingSessionID: String?
@@ -3806,6 +4020,9 @@ final class MacCaptureEngine: NSObject, ObservableObject {
     /// on the main queue) so the main queue / MainActor is never blocked waiting
     /// for the admitted `@MainActor` builder tasks.
     private let finalizationQueue = DispatchQueue(label: "scratchlab.mac.capture.finalize")
+    /// Durable, per-generation start/stop/finalization correlation for clients
+    /// that must wait for one exact take rather than sample transient UI state.
+    private let routineRecordingBoundaryLedger = RoutineRecordingBoundaryLedger()
     private let handPoseRequest = VNDetectHumanHandPoseRequest()
     private let scratchDetector = MacScratchDetector()
     private let rigLayoutDetector = DJRigLayoutDetector()
@@ -4002,6 +4219,7 @@ final class MacCaptureEngine: NSObject, ObservableObject {
     /// Host-time anchor captured at recording start, used to produce
     /// take-relative trace timestamps.
     private var movementTraceRecordingStartHostTime: Double = 0
+    #endif
 
     /// Single confirmed media-start epoch for the active routine take.
     ///
@@ -4165,6 +4383,7 @@ final class MacCaptureEngine: NSObject, ObservableObject {
         routineMediaEpochLock.unlock()
         sessionQueue.asyncAfter(deadline: .now() + deadline, execute: workItem)
     }
+    #if DEBUG
     /// Frozen at take finalization; drained by the export companion writer so a
     /// later take cannot overwrite the trace/diagnostics of an earlier one.
     private(set) var lastMovementTraceExport: MovementTraceExport?
@@ -4250,6 +4469,11 @@ final class MacCaptureEngine: NSObject, ObservableObject {
     /// applies. Lock-protected alongside `learnSessionAction`.
     private var midiLearnRequestID: UInt64 = 0
     private var persistedCrossfaderMapping: CrossfaderCCMapping? = nil
+    /// Calibrations cached for the MIDI read thread. Guarded by
+    /// `midiCaptureLock`, refreshed only by `reloadCrossfaderCalibrations()`.
+    private var cachedCrossfaderCalibrations: [CrossfaderCalibration] = []
+    /// Test seam: redirects calibration persistence to a temporary directory.
+    var crossfaderCalibrationDirectoryOverride: URL? = nil
     private var pendingRoutineTakeIdentity: TakeIdentity?
     private var pendingWatchReply: WatchCaptureControlReply?
     private var routineArtifactRefreshTask: Task<Void, Never>?
@@ -4436,6 +4660,11 @@ final class MacCaptureEngine: NSObject, ObservableObject {
                 self.midiLearnState = .learned(mapping)
             }
         }
+
+        // Load calibrations into the MIDI-thread cache before any controller
+        // traffic can arrive, so the first sample of the first take is already
+        // calibrated rather than silently uncalibrated.
+        reloadCrossfaderCalibrations()
 
         rescanRoutineCaptures()
         refreshDevices()
@@ -4750,7 +4979,33 @@ final class MacCaptureEngine: NSObject, ObservableObject {
     }
 
     func toggleRoutineRecording() {
-        isRoutineRecording ? stopRoutineRecording() : startRoutineRecording()
+        if isRoutineRecording {
+            stopRoutineRecording()
+        } else {
+            startRoutineRecording()
+        }
+    }
+
+    /// Read-only, thread-safe lifecycle evidence for one exact recording
+    /// request. This deliberately does not expose the ledger for mutation.
+    func routineRecordingBoundary(
+        for token: RoutineRecordingRequestToken
+    ) -> RoutineRecordingBoundarySnapshot? {
+        routineRecordingBoundaryLedger.snapshot(for: token)
+    }
+
+    /// Correlate a stop with one confirmed recording generation. A stale token
+    /// can never stop a newer take; an already-completed matching generation is
+    /// returned as durable terminal evidence without touching capture state.
+    func requestRoutineRecordingStop(
+        for token: RoutineRecordingRequestToken,
+        reason: CaptureStopReason = .manual
+    ) -> RoutineRecordingStopRequestDisposition {
+        let disposition = routineRecordingBoundaryLedger.requestStop(token: token)
+        if disposition == .accepted {
+            stopRoutineRecording(reason: reason)
+        }
+        return disposition
     }
 
     @MainActor
@@ -4758,14 +5013,22 @@ final class MacCaptureEngine: NSObject, ObservableObject {
         routineRecordingStatus = message
     }
 
-    func startRoutineRecording(captureTiming: CaptureTimingMetadata? = nil) {
+    @discardableResult
+    func startRoutineRecording(
+        captureTiming: CaptureTimingMetadata? = nil
+    ) -> RoutineRecordingRequestToken {
+        let recordingToken = routineRecordingBoundaryLedger.beginRequest()
         // A prior take's asynchronous finalization may still be pending; refuse
         // to start a new take (and re-open the admission gate) until it completes.
         guard !isRoutineFinalizationPending else {
+            routineRecordingBoundaryLedger.failStart(
+                token: recordingToken,
+                description: "A previous routine take is still finalizing."
+            )
             // The watch may already have acknowledged a start for the take this
             // refusal abandons. Nothing downstream would ever stop it.
             requestWatchStopIfNeeded(reason: .interrupted)
-            return
+            return recordingToken
         }
 
         let selectedAudioChoice = availableAudioDevices
@@ -4780,11 +5043,15 @@ final class MacCaptureEngine: NSObject, ObservableObject {
                captureMode: config.captureMode,
                beatEngineMode: config.beatEngineMode
            ) {
+            routineRecordingBoundaryLedger.failStart(
+                token: recordingToken,
+                description: Self.isolatedCaptureBuiltInMicrophoneMessage
+            )
             requestWatchStopIfNeeded(reason: .interrupted)
             Task { @MainActor in
                 self.routineRecordingStatus = Self.isolatedCaptureBuiltInMicrophoneMessage
             }
-            return
+            return recordingToken
         }
 
         // Reset the shared camera processor (cadence phase, held anchor, and
@@ -4817,36 +5084,50 @@ final class MacCaptureEngine: NSObject, ObservableObject {
         }
 
         sessionQueue.async {
-            guard !self.movieOutput.isRecording else { return }
+            guard !self.movieOutput.isRecording else {
+                self.routineRecordingBoundaryLedger.failStart(
+                    token: recordingToken,
+                    description: "Another routine take is already recording."
+                )
+                return
+            }
             guard !selectedVideoID.isEmpty else {
+                let message = RoutineRecordingError.missingVideo.errorDescription ?? "Unable to start recording."
+                self.routineRecordingBoundaryLedger.failStart(token: recordingToken, description: message)
                 self.requestWatchStopIfNeeded(reason: .interrupted)
                 Task { @MainActor in
                     self.isRoutineRecording = false
-                    self.routineRecordingStatus = RoutineRecordingError.missingVideo.errorDescription ?? "Unable to start recording."
+                    self.routineRecordingStatus = message
                 }
                 return
             }
             guard !selectedAudioID.isEmpty else {
+                let message = RoutineRecordingError.missingAudio.errorDescription ?? "Unable to start recording."
+                self.routineRecordingBoundaryLedger.failStart(token: recordingToken, description: message)
                 self.requestWatchStopIfNeeded(reason: .interrupted)
                 Task { @MainActor in
                     self.isRoutineRecording = false
-                    self.routineRecordingStatus = RoutineRecordingError.missingAudio.errorDescription ?? "Unable to start recording."
+                    self.routineRecordingStatus = message
                 }
                 return
             }
             guard videoDevices.contains(where: { $0.uniqueID == selectedVideoID }) else {
+                let message = RoutineRecordingError.selectedVideoUnavailable.errorDescription ?? "Unable to start recording."
+                self.routineRecordingBoundaryLedger.failStart(token: recordingToken, description: message)
                 self.requestWatchStopIfNeeded(reason: .interrupted)
                 Task { @MainActor in
                     self.isRoutineRecording = false
-                    self.routineRecordingStatus = RoutineRecordingError.selectedVideoUnavailable.errorDescription ?? "Unable to start recording."
+                    self.routineRecordingStatus = message
                 }
                 return
             }
             guard audioDevices.contains(where: { $0.uniqueID == selectedAudioID }) else {
+                let message = RoutineRecordingError.selectedAudioUnavailable.errorDescription ?? "Unable to start recording."
+                self.routineRecordingBoundaryLedger.failStart(token: recordingToken, description: message)
                 self.requestWatchStopIfNeeded(reason: .interrupted)
                 Task { @MainActor in
                     self.isRoutineRecording = false
-                    self.routineRecordingStatus = RoutineRecordingError.selectedAudioUnavailable.errorDescription ?? "Unable to start recording."
+                    self.routineRecordingStatus = message
                 }
                 return
             }
@@ -4878,6 +5159,11 @@ final class MacCaptureEngine: NSObject, ObservableObject {
                     videoDevices: videoDevices,
                     audioDevices: audioDevices,
                     captureTiming: captureTiming
+                )
+                self.routineRecordingBoundaryLedger.prepare(
+                    token: recordingToken,
+                    takeID: preparedRecording.sidecar.takeID,
+                    mediaURL: preparedRecording.mediaURL
                 )
                 try? CaptureJournalStore.appendTransactionBegan(
                     storageKind: .routine,
@@ -4981,12 +5267,17 @@ final class MacCaptureEngine: NSObject, ObservableObject {
                 self.requestWatchStopIfNeeded(reason: .interrupted)
                 let message = (error as? LocalizedError)?.errorDescription
                     ?? error.localizedDescription
+                self.routineRecordingBoundaryLedger.failStart(
+                    token: recordingToken,
+                    description: message
+                )
                 Task { @MainActor in
                     self.isRoutineRecording = false
                     self.routineRecordingStatus = message
                 }
             }
         }
+        return recordingToken
     }
 
     func stopRoutineRecording(reason: CaptureStopReason = .manual) {
@@ -5364,6 +5655,53 @@ final class MacCaptureEngine: NSObject, ObservableObject {
         }
 
         return uid?.takeRetainedValue() as String?
+    }
+
+    private static func audioDeviceID(forUID requestedUID: String) -> AudioDeviceID? {
+        var devicesAddress = AudioObjectPropertyAddress(
+            mSelector: kAudioHardwarePropertyDevices,
+            mScope: kAudioObjectPropertyScopeGlobal,
+            mElement: kAudioObjectPropertyElementMain
+        )
+        var dataSize: UInt32 = 0
+        guard AudioObjectGetPropertyDataSize(
+            AudioObjectID(kAudioObjectSystemObject),
+            &devicesAddress,
+            0,
+            nil,
+            &dataSize
+        ) == noErr else { return nil }
+        let count = Int(dataSize) / MemoryLayout<AudioDeviceID>.size
+        var devices = Array(repeating: AudioDeviceID(0), count: count)
+        guard AudioObjectGetPropertyData(
+            AudioObjectID(kAudioObjectSystemObject),
+            &devicesAddress,
+            0,
+            nil,
+            &dataSize,
+            &devices
+        ) == noErr else { return nil }
+
+        return devices.first { deviceID in
+            var uidAddress = AudioObjectPropertyAddress(
+                mSelector: kAudioDevicePropertyDeviceUID,
+                mScope: kAudioObjectPropertyScopeGlobal,
+                mElement: kAudioObjectPropertyElementMain
+            )
+            var uidSize = UInt32(MemoryLayout<Unmanaged<CFString>?>.size)
+            var uid: Unmanaged<CFString>?
+            let status = withUnsafeMutableBytes(of: &uid) { ptr in
+                AudioObjectGetPropertyData(
+                    deviceID,
+                    &uidAddress,
+                    0,
+                    nil,
+                    &uidSize,
+                    ptr.baseAddress!
+                )
+            }
+            return status == noErr && (uid?.takeRetainedValue() as String?) == requestedUID
+        }
     }
 
 #if ENABLE_TIMECODE_LIVE_TAP
@@ -5848,53 +6186,6 @@ final class MacCaptureEngine: NSObject, ObservableObject {
             to: TimecodeCMSampleBufferAdapter.captureDeviceDebugInfo,
             diagnostic: diagnostic
         )
-    }
-
-    private static func audioDeviceID(forUID requestedUID: String) -> AudioDeviceID? {
-        var devicesAddress = AudioObjectPropertyAddress(
-            mSelector: kAudioHardwarePropertyDevices,
-            mScope: kAudioObjectPropertyScopeGlobal,
-            mElement: kAudioObjectPropertyElementMain
-        )
-        var dataSize: UInt32 = 0
-        guard AudioObjectGetPropertyDataSize(
-            AudioObjectID(kAudioObjectSystemObject),
-            &devicesAddress,
-            0,
-            nil,
-            &dataSize
-        ) == noErr else { return nil }
-        let count = Int(dataSize) / MemoryLayout<AudioDeviceID>.size
-        var devices = Array(repeating: AudioDeviceID(0), count: count)
-        guard AudioObjectGetPropertyData(
-            AudioObjectID(kAudioObjectSystemObject),
-            &devicesAddress,
-            0,
-            nil,
-            &dataSize,
-            &devices
-        ) == noErr else { return nil }
-
-        return devices.first { deviceID in
-            var uidAddress = AudioObjectPropertyAddress(
-                mSelector: kAudioDevicePropertyDeviceUID,
-                mScope: kAudioObjectPropertyScopeGlobal,
-                mElement: kAudioObjectPropertyElementMain
-            )
-            var uidSize = UInt32(MemoryLayout<Unmanaged<CFString>?>.size)
-            var uid: Unmanaged<CFString>?
-            let status = withUnsafeMutableBytes(of: &uid) { ptr in
-                AudioObjectGetPropertyData(
-                    deviceID,
-                    &uidAddress,
-                    0,
-                    nil,
-                    &uidSize,
-                    ptr.baseAddress!
-                )
-            }
-            return status == noErr && (uid?.takeRetainedValue() as String?) == requestedUID
-        }
     }
 
     /// Read-only query of the properties that actually govern the frame
@@ -6455,6 +6746,9 @@ final class MacCaptureEngine: NSObject, ObservableObject {
     /// captures the take's state, and schedules the second half via
     /// `group.notify(queue: finalizationQueue)`.
     private func finalizeRoutineRecording(outputFileURL: URL, error: Error?) {
+        let recordingToken = routineRecordingBoundaryLedger.enterFinalization(
+            mediaURL: outputFileURL
+        )
         // Backstop for every terminal path that does not go through
         // `stopRoutineRecording` — most importantly AVFoundation ending the
         // take itself at `maxRecordedDuration`, and any capture error. A stop
@@ -6475,7 +6769,8 @@ final class MacCaptureEngine: NSObject, ObservableObject {
                 captureErrorDescription: captureErrorDescription,
                 statusMessage: message,
                 sessionID: nil,
-                sidecar: nil)
+                sidecar: nil,
+                recordingToken: recordingToken)
             return
         }
 
@@ -6517,7 +6812,8 @@ final class MacCaptureEngine: NSObject, ObservableObject {
                 audioDetector: audioDetector,
                 labelSource: labelSource,
                 selectedPlatterSourceName: selectedPlatterSourceName,
-                debugSession: debugSession)
+                debugSession: debugSession,
+                recordingToken: recordingToken)
         }
     }
 
@@ -6535,7 +6831,8 @@ final class MacCaptureEngine: NSObject, ObservableObject {
         audioDetector: ScratchAudioNotationDetector?,
         labelSource: String,
         selectedPlatterSourceName: String,
-        debugSession: RoutineMovementDebugSession?
+        debugSession: RoutineMovementDebugSession?,
+        recordingToken: RoutineRecordingRequestToken?
     ) {
         var sidecar = sidecar
 
@@ -6706,7 +7003,8 @@ final class MacCaptureEngine: NSObject, ObservableObject {
             captureErrorDescription: captureErrorDescription,
             statusMessage: statusMessage,
             sessionID: sessionID,
-            sidecar: finalizedSidecar)
+            sidecar: finalizedSidecar,
+            recordingToken: recordingToken)
     }
 
     /// `AVCaptureMovieFileOutput` may finish a manually stopped recording with
@@ -6730,9 +7028,22 @@ final class MacCaptureEngine: NSObject, ObservableObject {
         captureErrorDescription: String?,
         statusMessage: String,
         sessionID: String?,
-        sidecar: CaptureCore.LocalRecordingSidecar?
+        sidecar: CaptureCore.LocalRecordingSidecar?,
+        recordingToken: RoutineRecordingRequestToken?
     ) {
         Task { @MainActor in
+            if let recordingToken {
+                let completionSucceeded = captureErrorDescription == nil && sidecar != nil
+                let completionStatus = captureErrorDescription
+                    ?? (sidecar == nil
+                        ? "Recording finalization did not produce a completed sidecar."
+                        : statusMessage)
+                self.routineRecordingBoundaryLedger.completeFinalization(
+                    token: recordingToken,
+                    succeeded: completionSucceeded,
+                    statusMessage: completionStatus
+                )
+            }
             self.isRoutineRecording = false
             if captureErrorDescription == nil {
                 self.lastRoutineRecordingURL = outputFileURL
@@ -10788,6 +11099,157 @@ final class MacCaptureEngine: NSObject, ObservableObject {
         reconnectSelectedMIDIInput()
     }
 
+    // MARK: - Crossfader calibration
+
+    /// Directory the shared `CrossfaderCalibrationStore` persists into.
+    ///
+    /// Sits beside `RoutineCaptures` under Application Support so a
+    /// calibration survives app restarts and travels with the capture folder
+    /// an operator would back up.
+    static func crossfaderCalibrationDirectoryURL(
+        fileManager: FileManager = .default
+    ) -> URL {
+        let baseDirectory = fileManager.urls(for: .applicationSupportDirectory, in: .userDomainMask).first
+            ?? fileManager.urls(for: .documentDirectory, in: .userDomainMask).first
+            ?? fileManager.homeDirectoryForCurrentUser.appendingPathComponent("Documents", isDirectory: true)
+        return baseDirectory
+            .appendingPathComponent("ScratchLab", isDirectory: true)
+            .appendingPathComponent("Calibration", isDirectory: true)
+    }
+
+    var crossfaderCalibrationStore: CrossfaderCalibrationStore {
+        CrossfaderCalibrationStore(
+            directoryURL: crossfaderCalibrationDirectoryOverride
+                ?? Self.crossfaderCalibrationDirectoryURL()
+        )
+    }
+
+    /// Re-read calibrations from disk into the MIDI-thread cache.
+    ///
+    /// Must be called after saving a calibration. The cache exists because
+    /// `recordReceivedMIDICCEvent` runs on the Core MIDI read thread at up to
+    /// ~800 Hz for a single platter; touching the file system there would be
+    /// a real-time violation.
+    func reloadCrossfaderCalibrations() {
+        let loaded = crossfaderCalibrationStore.load().calibrations
+        midiCaptureLock.lock()
+        cachedCrossfaderCalibrations = loaded
+        midiCaptureLock.unlock()
+    }
+
+    /// The learned crossfader MIDI address, if MIDI Learn has confirmed one —
+    /// read-only external mirror of the private `persistedCrossfaderMapping`,
+    /// for callers (reference-authoring preflight) that need to know WHICH
+    /// address is the crossfader without duplicating the learn/persist logic
+    /// that already lives here.
+    var persistedCrossfaderMappingSnapshot: CrossfaderCCMapping? {
+        midiCaptureLock.lock()
+        defer { midiCaptureLock.unlock() }
+        return persistedCrossfaderMapping
+    }
+
+    /// The calibration for one live MIDI address, or `nil`.
+    ///
+    /// Matches on device NAME here because that is the only device identity
+    /// the CC read path carries; the calibration was written with the same
+    /// name as its identifier by `ReferenceAuthoringModel`. Channel and CC
+    /// must match exactly - a calibration for the crossfader is never applied
+    /// to the platter's CC.
+    func crossfaderCalibration(
+        forDeviceName deviceName: String,
+        channel: Int,
+        controller: Int
+    ) -> CrossfaderCalibration? {
+        midiCaptureLock.lock()
+        let calibrations = cachedCrossfaderCalibrations
+        midiCaptureLock.unlock()
+        return calibrations.first {
+            $0.address.matches(
+                deviceIdentifier: deviceName,
+                channel: channel,
+                controller: controller
+            )
+        }
+    }
+
+    // MARK: - Live MIDI CC observability (reference-authoring preflight/calibration)
+
+    /// One MIDI address's most recent observation, independent of whether a
+    /// take is currently recording.
+    struct LiveCCObservation: Equatable {
+        let deviceName: String
+        let channel: Int
+        let controller: Int
+        let value: Int
+        let calibratedPosition: Double?
+        let observedAt: CFTimeInterval
+        /// How many CC messages have been observed on this address since app
+        /// launch (or since a value was last observed for it). Not reset by a
+        /// take starting or stopping — a session-lifetime activity counter for
+        /// the preflight panel's event counts, not a take-scoped one.
+        let eventCount: Int
+    }
+
+    /// Latest observation per (channel, controller), updated on EVERY CC
+    /// message received via `recordLiveCCObservation`.
+    ///
+    /// Deliberately separate from `capturedMidiCCEvents`: that buffer only
+    /// accumulates while a take's recording window is open
+    /// (`midiRecordingStartTime`/`recordingStartTime` set) and is empty
+    /// before a take starts, so it cannot answer "what is the crossfader
+    /// doing right now" during reference-authoring preflight or a crossfader
+    /// calibration sweep — both need a live read *before* recording begins.
+    /// Guarded by `midiCaptureLock`; bounded to one entry per distinct
+    /// (channel, controller) actually seen, a handful at most.
+    private var latestCCObservationsByAddress: [String: LiveCCObservation] = [:]
+
+    private static func ccObservationKey(channel: Int, controller: Int) -> String {
+        "\(channel):\(controller)"
+    }
+
+    /// Called unconditionally from `recordReceivedMIDICCEvent`, before that
+    /// function's recording-window gate — see the doc comment on
+    /// `latestCCObservationsByAddress`.
+    private func recordLiveCCObservation(
+        deviceName: String,
+        channel: Int,
+        controller: Int,
+        value: Int,
+        calibratedPosition: Double?,
+        observedAt: CFTimeInterval
+    ) {
+        let key = Self.ccObservationKey(channel: channel, controller: controller)
+        midiCaptureLock.lock()
+        let priorCount = latestCCObservationsByAddress[key]?.eventCount ?? 0
+        latestCCObservationsByAddress[key] = LiveCCObservation(
+            deviceName: deviceName,
+            channel: channel,
+            controller: controller,
+            value: value,
+            calibratedPosition: calibratedPosition,
+            observedAt: observedAt,
+            eventCount: priorCount + 1
+        )
+        midiCaptureLock.unlock()
+    }
+
+    /// The latest observation on one address, or `nil` if nothing has been
+    /// received on it since app launch.
+    func latestCCObservation(channel: Int, controller: Int) -> LiveCCObservation? {
+        midiCaptureLock.lock()
+        defer { midiCaptureLock.unlock() }
+        return latestCCObservationsByAddress[Self.ccObservationKey(channel: channel, controller: controller)]
+    }
+
+    /// Every address observed since app launch, most-recent first. Used to
+    /// discover which address the operator is currently moving during a
+    /// calibration sweep, before any address has been confirmed.
+    func allLiveCCObservations() -> [LiveCCObservation] {
+        midiCaptureLock.lock()
+        defer { midiCaptureLock.unlock() }
+        return latestCCObservationsByAddress.values.sorted { $0.observedAt > $1.observedAt }
+    }
+
     /// Monitors/records an already-classified CC event. This function must
     /// NEVER learn, persist, cancel, or change any mapping — the sole,
     /// action-aware learn consumer is `evaluateMIDILearnForCC`, called
@@ -10809,7 +11271,31 @@ final class MacCaptureEngine: NSObject, ObservableObject {
 
         let effectiveMappedControl = mappedControl
             ?? ((effectiveMapping?.channel == channel && effectiveMapping?.controller == controller) ? "crossfader" : nil)
+        // Full-range position. Kept for schema continuity, and it is the only
+        // number available for a control that has not been calibrated - but it
+        // is NOT a deck position, so it is never what the calibrated
+        // derivation measures. See `RawMixerMIDIEvent.normalizedValue`.
         let normalizedValue = Double(value) / 127.0
+        // Calibrated position across this deck's active half, when a
+        // calibration exists for exactly this device + channel + CC. Absent
+        // calibration this stays `nil`; it is never back-filled from
+        // `normalizedValue`, because assuming the fader spans 0-127 is the
+        // defect this replaces.
+        let activeCalibration = crossfaderCalibration(
+            forDeviceName: sourceName,
+            channel: channel,
+            controller: controller
+        )
+        let calibratedPosition = activeCalibration?.normalized(rawValue: value)
+        let calibrationID = calibratedPosition == nil ? nil : activeCalibration?.id
+        recordLiveCCObservation(
+            deviceName: sourceName,
+            channel: channel,
+            controller: controller,
+            value: value,
+            calibratedPosition: calibratedPosition,
+            observedAt: timestamp
+        )
         // Rane ONE MK2 pad candidate labelling — diagnostic only; no routing, no scoring.
         let padLabel = RaneOneMK2PadCandidateLabeler.label(channel: channel, cc: controller, value: value)
         let summary: String
@@ -10942,7 +11428,9 @@ final class MacCaptureEngine: NSObject, ObservableObject {
             controller: controller,
             value: value,
             normalizedValue: normalizedValue,
-            mappedControl: effectiveMappedControl
+            mappedControl: effectiveMappedControl,
+            calibratedPosition: calibratedPosition,
+            calibrationID: calibrationID
         )
         midiCaptureLock.lock()
         capturedMidiCCEvents.append(event)
@@ -11830,6 +12318,7 @@ extension MacCaptureEngine: AVCaptureFileOutputRecordingDelegate {
         // This — not `startRecording(to:)` — is take-relative zero for every
         // capture source, and the instant the requested take length starts
         // counting down.
+        routineRecordingBoundaryLedger.didStartRecording(mediaURL: fileURL)
         let epoch = beginRoutineMediaEpoch(at: CACurrentMediaTime())
         beginRoutineTakeTimelines(at: epoch.mediaStart)
         if let audioURL = pendingRoutineOutputAudioURL {

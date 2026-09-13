@@ -40,7 +40,16 @@ final class WatchMotionCaptureStore: NSObject, ObservableObject {
     @Published private(set) var hadRequiredRelayConnections = false
     @Published private(set) var latestLiveMotionBatchAt: Date?
 
-    var onImportedCapture: ((ImportedWatchMotionCapture) -> Void)?
+    var onImportedCapture: ((ImportedWatchMotionCapture) -> Void)? {
+        didSet {
+            guard let onImportedCapture else { return }
+            let pending = pendingImportNotifications
+            pendingImportNotifications.removeAll()
+            pending.forEach(onImportedCapture)
+        }
+    }
+    // Startup recovery can finish before the app installs its relay callback.
+    private var pendingImportNotifications: [ImportedWatchMotionCapture] = []
     /// Handles Start/Stop Take requests initiated on Apple Watch. The iPhone
     /// capture view installs this only while its real guided-capture state
     /// machine is on screen.
@@ -63,6 +72,7 @@ final class WatchMotionCaptureStore: NSObject, ObservableObject {
 
     private let fileManager = FileManager.default
     private let processingQueue = DispatchQueue(label: "com.scratchlab.watch-motion-import")
+    private let transferStagingStore: WatchTransferStagingStore
     private var hasActivatedWatchSession = false
     private let macAcknowledgedCaptureIDsDefaultsKey = "com.scratchlab.watch.macAcknowledgedCaptureIDs"
 
@@ -78,6 +88,9 @@ final class WatchMotionCaptureStore: NSObject, ObservableObject {
     }
 
     override init() {
+        let applicationSupportURL = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first
+            ?? FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first!
+        transferStagingStore = WatchTransferStagingStore(applicationSupportURL: applicationSupportURL)
         super.init()
         createCaptureDirectoryIfNeeded()
         reconcileStoredCaptures()
@@ -85,6 +98,7 @@ final class WatchMotionCaptureStore: NSObject, ObservableObject {
         if let stored = UserDefaults.standard.stringArray(forKey: macAcknowledgedCaptureIDsDefaultsKey) {
             macAcknowledgedCaptureIDs = Set(stored.compactMap(UUID.init(uuidString:)))
         }
+        checkForPendingImports()
         activateIfNeeded()
     }
 
@@ -140,36 +154,19 @@ final class WatchMotionCaptureStore: NSObject, ObservableObject {
 
     func checkForPendingImports() {
         processingQueue.async {
-            let pendingFiles = self.pendingTransferFileURLs()
-            guard !pendingFiles.isEmpty else { return }
-
-            var importedCapture: ImportedWatchMotionCapture?
-
-            for fileURL in pendingFiles {
+            // Preserve the existing inbox recovery path, but own every file before
+            // decoding it. All decoding below reads app-owned staging URLs only.
+            for fileURL in self.pendingTransferFileURLs() {
                 do {
-                    let latestImportedCapture = try self.importCaptureFile(
-                        from: fileURL,
-                        metadataName: nil,
-                        removeSourceAfterImport: true
-                    )
-                    self.log("decode/import succeeded (pending): id=\(latestImportedCapture.id) sessionID=\(latestImportedCapture.session.sessionID) takeID=\(latestImportedCapture.session.takeID ?? "nil")")
-                    importedCapture = importedCapture.map {
-                        $0.session.deviceRecordedAtStart >= latestImportedCapture.session.deviceRecordedAtStart ? $0 : latestImportedCapture
-                    } ?? latestImportedCapture
+                    _ = try self.transferStagingStore.stageReceivedFile(at: fileURL, metadataName: nil)
                 } catch {
-                    self.log("decode/import FAILED (pending) for \(fileURL.lastPathComponent): \(error.localizedDescription)")
-                    continue
+                    self.publishImportFailure("Watch inbox staging failed for \(fileURL.lastPathComponent): \(error.localizedDescription)")
                 }
             }
-
-            guard let importedCapture else { return }
-
-            DispatchQueue.main.async {
-                self.reconcileStoredCaptures()
-                self.loadStoredSessions()
-                self.lastImportStatus = "Imported pending watch capture from \(self.formatDate(importedCapture.session.deviceRecordedAtStart))."
-                self.onImportedCapture?(importedCapture)
-            }
+            self.transferStagingStore.recoverPendingTransfers(
+                onImported: self.publishImportedCapture,
+                onFailure: self.publishImportFailure
+            )
         }
     }
 
@@ -606,58 +603,35 @@ final class WatchMotionCaptureStore: NSObject, ObservableObject {
         ]
     }
 
-    private func importTransferredFile(_ sessionFile: WCSessionFile) {
+    private func importStagedTransfer(at stagedURL: URL) {
         processingQueue.async {
-            do {
-                let importedCapture = try self.importCaptureFile(
-                    from: sessionFile.fileURL,
-                    metadataName: sessionFile.metadata?["fileName"] as? String,
-                    removeSourceAfterImport: false
-                )
+            self.transferStagingStore.processStagedFile(
+                at: stagedURL,
+                onImported: self.publishImportedCapture,
+                onFailure: self.publishImportFailure
+            )
+        }
+    }
 
-                self.log("decode/import succeeded: id=\(importedCapture.id) sessionID=\(importedCapture.session.sessionID) takeID=\(importedCapture.session.takeID ?? "nil")")
-
-                DispatchQueue.main.async {
-                    self.reconcileStoredCaptures()
-                    self.importedSessions.removeAll { $0.id == importedCapture.id }
-                    self.loadStoredSessions()
-                    self.lastImportStatus = "Imported \(self.formatDate(importedCapture.session.deviceRecordedAtStart)) from your watch."
-                    self.onImportedCapture?(importedCapture)
-                }
-            } catch {
-                self.log("decode/import FAILED for \(sessionFile.fileURL.lastPathComponent): \(error.localizedDescription)")
-
-                DispatchQueue.main.async {
-                    self.lastImportStatus = "Watch transfer failed to import. Open the watch app and try stopping another capture."
-                }
+    private func publishImportedCapture(_ durableCapture: WatchTransferStagingStore.ImportedCapture) {
+        let importedCapture = ImportedWatchMotionCapture(fileURL: durableCapture.fileURL, session: durableCapture.session)
+        DispatchQueue.main.async {
+            self.reconcileStoredCaptures()
+            self.loadStoredSessions()
+            self.lastImportStatus = "Imported \(self.formatDate(importedCapture.session.deviceRecordedAtStart)) from your watch."
+            if let onImportedCapture = self.onImportedCapture {
+                onImportedCapture(importedCapture)
+            } else {
+                self.pendingImportNotifications.append(importedCapture)
             }
         }
     }
 
-    private func importCaptureFile(from sourceURL: URL, metadataName: String?, removeSourceAfterImport: Bool) throws -> ImportedWatchMotionCapture {
-        let destinationURL = uniqueCaptureURL(for: sourceURL, metadataName: metadataName)
-
-        if fileManager.fileExists(atPath: destinationURL.path) {
-            try fileManager.removeItem(at: destinationURL)
-        }
-
-        try fileManager.copyItem(at: sourceURL, to: destinationURL)
-
-        guard let importedCapture = decodeCapture(at: destinationURL) else {
-            throw CocoaError(.fileReadCorruptFile)
-        }
-
-        if removeSourceAfterImport {
-            removeImportedSourceIfPossible(sourceURL)
-        }
-
-        return importedCapture
-    }
-
-    private func uniqueCaptureURL(for sourceURL: URL, metadataName: String?) -> URL {
-        let baseName = metadataName ?? sourceURL.lastPathComponent
-        let sanitizedName = baseName.replacingOccurrences(of: "/", with: "-")
-        return captureDirectoryURL.appendingPathComponent(sanitizedName)
+    private func publishImportFailure(_ message: String) {
+        // Observable in Release as well as through published store state; staged decode/import
+        // failures also have a persistent adjacent .error.txt diagnostic.
+        NSLog("[WatchImport] %@", message)
+        DispatchQueue.main.async { self.lastImportStatus = message }
     }
 
     private func pendingTransferFileURLs() -> [URL] {
@@ -676,24 +650,6 @@ final class WatchMotionCaptureStore: NSObject, ObservableObject {
             let lhsDate = (try? lhs.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate) ?? .distantPast
             let rhsDate = (try? rhs.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate) ?? .distantPast
             return lhsDate > rhsDate
-        }
-    }
-
-    private func removeImportedSourceIfPossible(_ sourceURL: URL) {
-        try? fileManager.removeItem(at: sourceURL)
-
-        var currentDirectory = sourceURL.deletingLastPathComponent()
-        while currentDirectory.path.hasPrefix(watchConnectivityInboxURL.path),
-              currentDirectory != watchConnectivityInboxURL {
-            let contents = (try? fileManager.contentsOfDirectory(
-                at: currentDirectory,
-                includingPropertiesForKeys: nil,
-                options: [.skipsHiddenFiles]
-            )) ?? []
-
-            guard contents.isEmpty else { break }
-            try? fileManager.removeItem(at: currentDirectory)
-            currentDirectory = currentDirectory.deletingLastPathComponent()
         }
     }
 
@@ -737,9 +693,7 @@ final class WatchMotionCaptureStore: NSObject, ObservableObject {
     }
 
     var captureDirectoryURL: URL {
-        let appSupportURL = fileManager.urls(for: .applicationSupportDirectory, in: .userDomainMask).first
-            ?? fileManager.urls(for: .documentDirectory, in: .userDomainMask).first!
-        return appSupportURL.appendingPathComponent("WatchMotionCaptures", isDirectory: true)
+        transferStagingStore.captureDirectoryURL
     }
 
     private var watchConnectivityInboxURL: URL {
@@ -830,7 +784,17 @@ extension WatchMotionCaptureStore: WCSessionDelegate {
         #if DEBUG
         print("[WATCH-DEBUG] iPhone received watch file name=\(file.fileURL.lastPathComponent)")
         #endif
-        importTransferredFile(file)
+        do {
+            // WCSessionFile.fileURL expires when this delegate returns. Only the
+            // stable app-owned URL may cross into asynchronous work.
+            let stagedURL = try transferStagingStore.stageReceivedFile(
+                at: file.fileURL,
+                metadataName: file.metadata?["fileName"] as? String
+            )
+            importStagedTransfer(at: stagedURL)
+        } catch {
+            publishImportFailure("Watch receipt staging failed: \(error.localizedDescription)")
+        }
     }
 
     private func handleLiveMotionMessageData(

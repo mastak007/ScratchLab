@@ -909,6 +909,124 @@ struct SessionExportValidationFailure: Error, Equatable, Sendable {
     }
 }
 
+/// A rejection that already carries the operator-facing sentence naming the
+/// artifact or field that failed.
+///
+/// `exportError` keeps the coarse retry/cancel semantics the export UI already
+/// switches on; `issue` is what the operator actually reads. Use this wherever
+/// a check knows *which* artifact it rejected - throwing a bare
+/// `SessionExportError` there throws that knowledge away.
+struct SessionExportArtifactRejection: Error, Equatable, Sendable {
+    let issue: String
+    let exportError: SessionExportError
+
+    init(issue: String, exportError: SessionExportError) {
+        self.issue = issue
+        self.exportError = exportError
+    }
+
+    var validationReport: SessionValidationReport {
+        SessionValidationReport(suggestedError: exportError, issues: [issue])
+    }
+}
+
+/// Renders any error raised while building or validating the canonical export
+/// into a message that names the artifact or field that was rejected.
+///
+/// Export used to funnel three genuinely different outcomes into the same two
+/// sentences: "This session is missing required files." and "ScratchLab could
+/// not validate the canonical export artifacts." Neither names the take, the
+/// artifact, or the check, so a session whose `.mov`, `.wav` and `.json` are
+/// all present and non-empty reported as if files were absent. Validation is
+/// unchanged - every check that rejected before still rejects. Only what the
+/// operator is told changed.
+///
+/// What may appear in the text: check names, artifact *file names*
+/// (`lastPathComponent` only, never a full path), take numbers, coding-key
+/// paths from a decode failure, and the underlying framework error. What may
+/// never appear: performer names, notes, or any other capture content.
+enum SessionExportFailureText {
+
+    /// The single entry point every catch-all in validation and export uses.
+    static func issue(for error: Error, while activity: String) -> String {
+        if let rejection = error as? SessionExportArtifactRejection {
+            return rejection.issue
+        }
+        if let failure = error as? SessionExportValidationFailure {
+            return failure.reason.detailText
+        }
+        if let exportError = error as? SessionExportError {
+            return exportError.userMessage
+        }
+        return "Export blocked while \(activity): \(describe(error))"
+    }
+
+    /// Why a sidecar that exists on disk could not be read back.
+    ///
+    /// `try?` on the sidecar decode is what turned a schema mismatch into
+    /// "This session is missing required files." The file is right there; the
+    /// operator needs the field that failed, not a claim that it is absent.
+    static func unreadableSidecarIssue(_ error: Error, fileName: String) -> String {
+        "Export blocked: ScratchLab could not read \(fileName). \(describe(error))"
+    }
+
+    static func missingSidecarIssue(fileName: String) -> String {
+        "Export blocked: \(fileName) is missing from the capture folder."
+    }
+
+    /// Human-readable detail for an error raised by Foundation, AVFoundation
+    /// or `Codable`, in that order of specificity.
+    static func describe(_ error: Error) -> String {
+        if let decodingError = error as? DecodingError {
+            return describeDecoding(decodingError)
+        }
+        if let encodingError = error as? EncodingError {
+            return describeEncoding(encodingError)
+        }
+        if let localized = error as? LocalizedError, let description = localized.errorDescription {
+            return description
+        }
+        let nsError = error as NSError
+        let base = nsError.localizedDescription
+        return "\(base) (\(nsError.domain) \(nsError.code))"
+    }
+
+    private static func describeDecoding(_ error: DecodingError) -> String {
+        switch error {
+        case .keyNotFound(let key, let context):
+            return "Required field '\(codingPath(context.codingPath, appending: key))' is missing."
+        case .typeMismatch(let type, let context):
+            return "Field '\(codingPath(context.codingPath))' is not a \(type)."
+        case .valueNotFound(let type, let context):
+            return "Field '\(codingPath(context.codingPath))' holds no \(type) value."
+        case .dataCorrupted(let context):
+            let path = codingPath(context.codingPath)
+            if path.isEmpty {
+                return "The file is not valid JSON. \(context.debugDescription)"
+            }
+            return "Field '\(path)' could not be decoded. \(context.debugDescription)"
+        @unknown default:
+            return "The file could not be decoded."
+        }
+    }
+
+    private static func describeEncoding(_ error: EncodingError) -> String {
+        switch error {
+        case .invalidValue(_, let context):
+            let path = codingPath(context.codingPath)
+            return path.isEmpty
+                ? "A generated document held a value that cannot be encoded."
+                : "Field '\(path)' held a value that cannot be encoded."
+        @unknown default:
+            return "A generated document could not be encoded."
+        }
+    }
+
+    private static func codingPath(_ path: [CodingKey], appending key: CodingKey? = nil) -> String {
+        (path + (key.map { [$0] } ?? [])).map(\.stringValue).joined(separator: ".")
+    }
+}
+
 enum TakeArtifactReadiness: Equatable, Sendable {
     case recording
     case finalizing
@@ -1392,6 +1510,10 @@ final class SessionExportCoordinator: ObservableObject {
                 state = .readyToShare(result)
                 statusMessage = "Ready to share"
                 shareRequest = SessionShareRequest(archiveURL: result.archiveURL, subject: result.subject)
+            } catch let rejection as SessionExportArtifactRejection {
+                // The check already named the artifact or field it rejected.
+                validationReport = rejection.validationReport
+                handleFailure(rejection.exportError)
             } catch let validationFailure as SessionExportValidationFailure {
                 // Surface which check rejected the export instead of only the
                 // coarse message. `handleFailure` already prefers the report's
@@ -1402,7 +1524,17 @@ final class SessionExportCoordinator: ObservableObject {
             } catch let exportError as SessionExportError {
                 handleFailure(exportError)
             } catch {
-                print("Session export failed: \(error)")
+                // Never drop an unrecognised error into a message that names
+                // nothing: render it and keep the coarse state machine intact.
+                validationReport = SessionValidationReport(
+                    suggestedError: .unableToCreateArchive,
+                    issues: [
+                        SessionExportFailureText.issue(
+                            for: error,
+                            while: "creating the session archive"
+                        )
+                    ]
+                )
                 handleFailure(.unableToCreateArchive)
             }
         }
@@ -1477,13 +1609,24 @@ final class SessionExportCoordinator: ObservableObject {
                     : nil
                 state = .shareCompleted(savedResult)
                 statusMessage = "Export saved."
+            } catch let rejection as SessionExportArtifactRejection {
+                validationReport = rejection.validationReport
+                handleFailure(rejection.exportError)
             } catch let validationFailure as SessionExportValidationFailure {
                 validationReport = validationFailure.validationReport
                 handleFailure(validationFailure.exportError)
             } catch let exportError as SessionExportError {
                 handleFailure(exportError)
             } catch {
-                print("Session export save failed: \(error)")
+                validationReport = SessionValidationReport(
+                    suggestedError: .unableToSaveArchive,
+                    issues: [
+                        SessionExportFailureText.issue(
+                            for: error,
+                            while: "saving the session archive"
+                        )
+                    ]
+                )
                 handleFailure(.unableToSaveArchive)
             }
         }
@@ -2420,11 +2563,32 @@ struct SessionArchiveBuilder: Sendable {
                         issues: [SessionExportError.sessionFolderNotFound.userMessage]
                     )
                 }
-                guard FileManager.default.fileExists(atPath: seedSidecarURL.path),
-                      let seedSidecar = try? decodeSidecar(at: seedSidecarURL) else {
+                // An ABSENT sidecar and a PRESENT-but-unreadable sidecar are
+                // different failures with different fixes. `try?` collapsed
+                // both into "This session is missing required files.", which
+                // is wrong for a `.json` that is sitting on disk and non-empty.
+                guard FileManager.default.fileExists(atPath: seedSidecarURL.path) else {
                     return SessionValidationReport(
                         suggestedError: .missingRequiredFiles,
-                        issues: [SessionExportError.missingRequiredFiles.userMessage]
+                        issues: [
+                            SessionExportFailureText.missingSidecarIssue(
+                                fileName: seedSidecarURL.lastPathComponent
+                            )
+                        ]
+                    )
+                }
+                let seedSidecar: CaptureCore.LocalRecordingSidecar
+                do {
+                    seedSidecar = try decodeSidecar(at: seedSidecarURL)
+                } catch {
+                    return SessionValidationReport(
+                        suggestedError: .invalidSessionMetadata,
+                        issues: [
+                            SessionExportFailureText.unreadableSidecarIssue(
+                                error,
+                                fileName: seedSidecarURL.lastPathComponent
+                            )
+                        ]
                     )
                 }
                 let localIssues = try localRecordingBlockingIssues(
@@ -2451,6 +2615,10 @@ struct SessionArchiveBuilder: Sendable {
                         : .invalidSessionMetadata,
                     issues: issues
                 )
+            } catch let rejection as SessionExportArtifactRejection {
+                return rejection.validationReport
+            } catch let failure as SessionExportValidationFailure {
+                return failure.validationReport
             } catch let error as SessionExportError {
                 return SessionValidationReport(
                     suggestedError: error,
@@ -2459,7 +2627,12 @@ struct SessionArchiveBuilder: Sendable {
             } catch {
                 return SessionValidationReport(
                     suggestedError: .unableToPrepareExport,
-                    issues: ["ScratchLab could not prepare this staged session for validation."]
+                    issues: [
+                        SessionExportFailureText.issue(
+                            for: error,
+                            while: "preparing this staged session for validation"
+                        )
+                    ]
                 )
             }
         }
@@ -2818,9 +2991,27 @@ struct SessionArchiveBuilder: Sendable {
         }
 
         let seedSidecarURL = CaptureCore.LocalRecordingFiles.sidecarURL(forMediaURL: lastRecordingURL)
-        guard fileManager.fileExists(atPath: seedSidecarURL.path),
-              let seedSidecar = try? decodeSidecar(at: seedSidecarURL) else {
-            throw SessionExportError.missingRequiredFiles
+        // Same split as `validationReport(for:)`: absent is a missing file,
+        // unreadable is a metadata failure that must name the failing field.
+        guard fileManager.fileExists(atPath: seedSidecarURL.path) else {
+            throw SessionExportArtifactRejection(
+                issue: SessionExportFailureText.missingSidecarIssue(
+                    fileName: seedSidecarURL.lastPathComponent
+                ),
+                exportError: .missingRequiredFiles
+            )
+        }
+        let seedSidecar: CaptureCore.LocalRecordingSidecar
+        do {
+            seedSidecar = try decodeSidecar(at: seedSidecarURL)
+        } catch {
+            throw SessionExportArtifactRejection(
+                issue: SessionExportFailureText.unreadableSidecarIssue(
+                    error,
+                    fileName: seedSidecarURL.lastPathComponent
+                ),
+                exportError: .invalidSessionMetadata
+            )
         }
 
         let unresolvedIssues = try localRecordingBlockingIssues(
@@ -2829,7 +3020,15 @@ struct SessionArchiveBuilder: Sendable {
             fileManager: fileManager
         )
         guard unresolvedIssues.isEmpty else {
-            throw SessionExportError.invalidSessionMetadata
+            // These messages already name the take and the artifact
+            // ("Take 002 audio is missing."). Throwing a bare
+            // `.invalidSessionMetadata` here discarded all of them.
+            throw SessionExportArtifactRejection(
+                issue: unresolvedIssues.joined(separator: " "),
+                exportError: unresolvedIssues.contains(where: {
+                    $0.localizedCaseInsensitiveContains("missing")
+                }) ? .missingRequiredFiles : .invalidSessionMetadata
+            )
         }
 
         let takes = try matchingCompatibleLocalRecordingSidecarURLs(
@@ -2857,7 +3056,14 @@ struct SessionArchiveBuilder: Sendable {
                 guard snapshot.readiness == .ready,
                       let mediaURL = snapshot.videoSourceURL,
                       let audioArtifactURL = snapshot.audioSourceURL else {
-                    throw SessionExportError.missingRequiredFiles
+                    // `issueMessage` already distinguishes missing audio from
+                    // missing video from a failed take; report that instead of
+                    // one message that fits none of them.
+                    throw SessionExportArtifactRejection(
+                        issue: self.issueMessage(for: snapshot)
+                            ?? "Take \(sidecar.takeID) is not exportable: its artifacts did not pass preflight.",
+                        exportError: .missingRequiredFiles
+                    )
                 }
 
                 // Actual playable duration. The wall-clock span is only a
@@ -4741,14 +4947,19 @@ struct SessionArchiveBuilder: Sendable {
         if issues.isEmpty {
             do {
                 _ = try canonicalPreview(for: package)
-            } catch let failure as SessionExportValidationFailure {
-                // Name the check that rejected it (e.g. no dynamic audio in any
-                // channel pair) rather than the generic message below.
-                issues.append(failure.reason.detailText)
-            } catch let error as SessionExportError {
-                issues.append(error.userMessage)
             } catch {
-                issues.append("ScratchLab could not validate the canonical export artifacts.")
+                // Name what actually rejected the session. A framework error
+                // raised deep in the canonical build (an unreadable sidecar
+                // field, a stem that could not be rendered or probed) used to
+                // land in an untyped `catch` and be reported as "ScratchLab
+                // could not validate the canonical export artifacts.", which
+                // names neither the artifact nor the check.
+                issues.append(
+                    SessionExportFailureText.issue(
+                        for: error,
+                        while: "building the canonical export artifacts"
+                    )
+                )
             }
         }
 
@@ -5384,11 +5595,16 @@ struct SessionArchiveBuilder: Sendable {
         var artifacts: [String: CanonicalArtifactRecord] = [:]
 
         let videoTargetURL = sessionRootURL.appendingPathComponent("video/\(context.videoFileName)")
-        artifacts["camA"] = try artifactRecord(
-            source: "camA",
-            fileURL: context.take.mediaURL,
-            stagedURL: videoTargetURL
-        )
+        artifacts["camA"] = try namedArtifactStep(
+            "the camA video artifact",
+            takeNumber: context.take.takeNumber
+        ) {
+            try artifactRecord(
+                source: "camA",
+                fileURL: context.take.mediaURL,
+                stagedURL: videoTargetURL
+            )
+        }
 
         guard let audioArtifactURL = context.take.audioArtifactURL else {
             throw SessionExportError.missingRequiredFiles
@@ -5406,51 +5622,82 @@ struct SessionArchiveBuilder: Sendable {
         defer { try? FileManager.default.removeItem(at: projectedAudioURL) }
         // Same gate as `stagePackage`: an invalid scratch stem throws here and
         // the beat stems below are never derived from it.
-        let audioProjection = try SessionExportAudioProjection.writePlayableStereo(
-            from: audioArtifactURL,
-            to: projectedAudioURL,
-            preferredPair: RoutineCaptureAudioHardwareProfile.preferredProgramStereoPair(
-                forDeviceName: context.sidecar.audioDeviceName,
-                deviceUniqueID: context.sidecar.audioDeviceUniqueID
+        let audioProjection = try namedArtifactStep(
+            "the playable stereo projection of the captured audio",
+            takeNumber: context.take.takeNumber
+        ) {
+            try SessionExportAudioProjection.writePlayableStereo(
+                from: audioArtifactURL,
+                to: projectedAudioURL,
+                preferredPair: RoutineCaptureAudioHardwareProfile.preferredProgramStereoPair(
+                    forDeviceName: context.sidecar.audioDeviceName,
+                    deviceUniqueID: context.sidecar.audioDeviceUniqueID
+                )
             )
-        )
+        }
         #if DEBUG
         print("[AUDIO-CAPTURE-DEBUG] take=\(context.sidecar.takeID) canonical artifacts")
         print(audioProjection.debugSummary)
         #else
         _ = audioProjection
         #endif
-        let scratchArtifact = try artifactRecord(
-            source: "scratch_only",
-            fileURL: projectedAudioURL,
-            stagedURL: audioTargetURL
-        )
+        let takeNumber = context.take.takeNumber
+        let scratchArtifact = try namedArtifactStep(
+            "the scratch_only audio stem",
+            takeNumber: takeNumber
+        ) {
+            try artifactRecord(
+                source: "scratch_only",
+                fileURL: projectedAudioURL,
+                stagedURL: audioTargetURL
+            )
+        }
         artifacts["serato"] = scratchArtifact
         artifacts["scratch_only"] = scratchArtifact
 
         if let beatOnlyFileName = context.beatOnlyFileName {
-            let beatBuffer = try renderedBeatStemBuffer(
-                for: context.take,
-                captureMetadata: context.captureMetadata,
-                scratchAudioURL: projectedAudioURL
-            )
-            artifacts["beat_only"] = try generatedAudioArtifactRecord(
-                source: "beat_only",
-                buffer: beatBuffer,
-                stagedURL: sessionRootURL.appendingPathComponent("audio/\(beatOnlyFileName)"),
-                fileManager: FileManager.default
-            )
-            if let scratchWithBeatFileName = context.scratchWithBeatFileName {
-                let mixedBuffer = try mixedScratchWithTimingBuffer(
-                    scratchURL: projectedAudioURL,
-                    timingBuffer: beatBuffer
+            let beatBuffer = try namedArtifactStep(
+                "the beat_only timing stem",
+                takeNumber: takeNumber
+            ) {
+                try renderedBeatStemBuffer(
+                    for: context.take,
+                    captureMetadata: context.captureMetadata,
+                    scratchAudioURL: projectedAudioURL
                 )
-                artifacts["scratch_with_beat"] = try generatedAudioArtifactRecord(
-                    source: "scratch_with_beat",
-                    buffer: mixedBuffer,
-                    stagedURL: sessionRootURL.appendingPathComponent("audio/\(scratchWithBeatFileName)"),
+            }
+            artifacts["beat_only"] = try namedArtifactStep(
+                "the beat_only audio stem",
+                takeNumber: takeNumber
+            ) {
+                try generatedAudioArtifactRecord(
+                    source: "beat_only",
+                    buffer: beatBuffer,
+                    stagedURL: sessionRootURL.appendingPathComponent("audio/\(beatOnlyFileName)"),
                     fileManager: FileManager.default
                 )
+            }
+            if let scratchWithBeatFileName = context.scratchWithBeatFileName {
+                let mixedBuffer = try namedArtifactStep(
+                    "the scratch_with_beat mix",
+                    takeNumber: takeNumber
+                ) {
+                    try mixedScratchWithTimingBuffer(
+                        scratchURL: projectedAudioURL,
+                        timingBuffer: beatBuffer
+                    )
+                }
+                artifacts["scratch_with_beat"] = try namedArtifactStep(
+                    "the scratch_with_beat audio stem",
+                    takeNumber: takeNumber
+                ) {
+                    try generatedAudioArtifactRecord(
+                        source: "scratch_with_beat",
+                        buffer: mixedBuffer,
+                        stagedURL: sessionRootURL.appendingPathComponent("audio/\(scratchWithBeatFileName)"),
+                        fileManager: FileManager.default
+                    )
+                }
             }
         }
 
@@ -5466,6 +5713,35 @@ struct SessionArchiveBuilder: Sendable {
         }
 
         return artifacts
+    }
+
+    /// Runs one canonical-artifact build step and, if it fails, rethrows a
+    /// rejection that names the artifact and the take.
+    ///
+    /// Without this, a stem that cannot be rendered, written or probed raises
+    /// a bare AVFoundation/Foundation error that the caller can only describe
+    /// as "could not validate the canonical export artifacts."
+    private func namedArtifactStep<T>(
+        _ artifactDescription: String,
+        takeNumber: Int,
+        fallbackError: SessionExportError = .unableToPrepareExport,
+        _ body: () throws -> T
+    ) throws -> T {
+        do {
+            return try body()
+        } catch let rejection as SessionExportArtifactRejection {
+            throw rejection
+        } catch let failure as SessionExportValidationFailure {
+            throw failure
+        } catch {
+            let detail = (error as? SessionExportError)?.userMessage
+                ?? SessionExportFailureText.describe(error)
+            throw SessionExportArtifactRejection(
+                issue: "Export blocked: \(artifactDescription) for "
+                    + "\(formattedTakeLabel(takeNumber)) could not be produced. \(detail)",
+                exportError: (error as? SessionExportError) ?? fallbackError
+            )
+        }
     }
 
     private func artifactRecord(

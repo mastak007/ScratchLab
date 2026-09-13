@@ -1,0 +1,726 @@
+// ReferenceAuthoringView.swift
+// ScratchLabDesktop
+
+import SwiftUI
+
+struct ReferenceAuthoringView: View {
+    @StateObject private var viewModel: ReferenceAuthoringViewModel
+    /// Held for the two live surfaces this screen renders: the camera preview
+    /// (`captureSession`) and the live-notation tracker's data source. Neither
+    /// starts, stops, or configures capture from here.
+    private let captureEngine: MacCaptureEngine
+
+    /// Live performed-notation tracker for the take currently recording, or
+    /// `nil`. A FRESH instance per take is the reset — the same ownership rule
+    /// Capture uses — so no evidence from a prior take can leak into this one.
+    @State private var liveNotationTracker: LivePerformedNotationTracker?
+    @State private var isShowingMIDIAddressDiagnostics = false
+    /// Framing panel starts open — it is the thing being watched during a
+    /// take — and can be folded away while configuring.
+    @State private var isShowingFramingPanel = true
+
+    /// Minimum height the live-notation card is guaranteed.
+    ///
+    /// `ScratchPhraseChartView` derives its whole lane geometry from
+    /// `size.height` (`laneHeight = size.height - strokeRegionTop`), so the
+    /// card's height IS the vertical scale of the drawn stroke. In this screen
+    /// the card sits inside a vertically-unbounded `ScrollView`, where
+    /// `maxHeight: .infinity` resolves to the view's IDEAL height rather than
+    /// filling anything — so it collapsed to roughly 20 pt. On take-004 the
+    /// data path was healthy (`span 0.157`, 54 committed moves, `age 0.0s`)
+    /// and that 15.7% of travel still drew only ~3 px, which reads as flat.
+    /// Capture does not hit this because its copy of the card lives in a
+    /// BOUNDED `ZStack` over the camera.
+    ///
+    /// 180 pt sits with the established single-lane phrase-chart heights in
+    /// this codebase (118 / 120 / 150 / 160 / 190) once the card's own header
+    /// row is accounted for, and well below the 320 pt minimum the STACKED
+    /// target-plus-performance comparison uses — this is one performed lane,
+    /// not a comparison. The renderer's y-scale is untouched; it simply gets a
+    /// real box to draw in.
+    private static let liveNotationMinimumHeight: CGFloat = 180
+
+    /// Ceiling for the camera preview so the two panels coexist at the
+    /// smallest supported window without the 16:9 preview claiming the whole
+    /// scroll content and pushing notation off-screen. Framing stays a
+    /// separate, clearly visible panel — notation is never overlaid on it.
+    private static let cameraPreviewMaximumHeight: CGFloat = 360
+
+    init(
+        engine: MacCaptureEngine,
+        companionReceiver: CompanionCameraReceiver?,
+        operatorName: String
+    ) {
+        self.captureEngine = engine
+        _viewModel = StateObject(
+            wrappedValue: ReferenceAuthoringViewModel(
+                engine: engine,
+                companionReceiver: companionReceiver,
+                operatorName: operatorName
+            )
+        )
+    }
+
+    var body: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 16) {
+                Text("CXL Reference Authoring")
+                    .font(.title2.weight(.semibold))
+                Text("Record a diagnostic draft, review four repetitions, and explicitly approve one canonical draft. Approval does not install or publish training data.")
+                    .foregroundStyle(.secondary)
+
+                messagePanel
+                setupSection
+                calibrationSection
+                preflightSection
+                recordingSection
+                // Directly under the Record controls on purpose: while a take
+                // is running this is the only thing the operator watches, and
+                // at the top of the page it sat off-screen behind a scroll.
+                // Collapsible so it can be folded away during setup.
+                framingSection
+                reviewSection
+            }
+            .padding(20)
+            .frame(maxWidth: 860, alignment: .leading)
+        }
+        .task {
+            viewModel.refreshAutofilledPatternIdentity()
+            viewModel.startPreflightPolling()
+            // Re-entering the screen mid-take must still show live motion.
+            // `onChange` only fires on a transition, and `@State` is reset by
+            // the fresh view, so without this the tracker would stay nil for
+            // the rest of a take the operator stepped away from.
+            syncLiveNotationTracker(isRecording: viewModel.session.phase == .recording)
+        }
+        .onChange(of: viewModel.selectedTechnique) { _, _ in
+            viewModel.refreshAutofilledPatternIdentity()
+        }
+        .onChange(of: viewModel.phraseBars) { _, _ in
+            viewModel.refreshAutofilledPatternIdentity()
+        }
+        .onChange(of: viewModel.session.phase == .recording) { _, isRecording in
+            syncLiveNotationTracker(isRecording: isRecording)
+        }
+        .onDisappear {
+            viewModel.cancelTransientWorkForViewDisappearance()
+            // The tracker owns a repeating timer; dropping it here is what
+            // stops that timer when the screen goes away. It touches no
+            // capture state — the camera session and any in-flight take are
+            // owned by the engine and are deliberately left alone.
+            syncLiveNotationTracker(isRecording: false)
+        }
+    }
+
+    /// The ONE place the live-notation tracker is created or dropped.
+    ///
+    /// A fresh instance per take is the reset — the same ownership rule
+    /// Capture uses (`MacAnalyzerView.captureLiveNotationTracker`) — so no
+    /// evidence from a prior take, a rejected take or a retake can leak into
+    /// the next one. Dropping the instance cancels its poll timer through
+    /// `deinit`; nothing here starts, stops or configures capture.
+    ///
+    /// Keyed on the authoring session's own `.recording` phase rather than on
+    /// `engine.isRoutineRecording`, which turns true earlier in the start
+    /// sequence. The phase only becomes `.recording` after the bridge has
+    /// confirmed the engine genuinely started, so the preview can never show
+    /// motion attributed to a take that has not begun.
+    private func syncLiveNotationTracker(isRecording: Bool) {
+        if isRecording {
+            guard liveNotationTracker == nil else { return }
+            liveNotationTracker = LivePerformedNotationTracker(
+                dataSource: captureEngine.makeLivePerformedNotationDataSource()
+            )
+        } else {
+            liveNotationTracker = nil
+        }
+    }
+
+    /// Camera framing + live performed notation.
+    ///
+    /// Both are PRESENTATION ONLY. The preview renders the same
+    /// `AVCaptureSession` the take is recorded from, so what CXL frames here
+    /// is exactly what lands in the take's video; the notation card is the
+    /// canonical `ScratchPhraseChartView` motion renderer Practice and Capture
+    /// already use, reading the same live evidence
+    /// `completeRoutineFinalization` reads. Neither is scored, persisted,
+    /// reviewed or exported, and neither is a second renderer.
+    private var framingSection: some View {
+        GroupBox {
+            DisclosureGroup(isExpanded: $isShowingFramingPanel) {
+                framingContent
+            } label: {
+                Text("Framing and live motion")
+                    .font(.callout.weight(.semibold))
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(.top, 4)
+        }
+    }
+
+    private var framingContent: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            MacCameraPreviewView(
+                session: captureEngine.captureSession,
+                videoGravity: .resizeAspect
+            )
+            .aspectRatio(16.0 / 9.0, contentMode: .fit)
+            .frame(maxWidth: .infinity, maxHeight: Self.cameraPreviewMaximumHeight)
+            .background(Color.black)
+            .clipShape(RoundedRectangle(cornerRadius: 6))
+
+            if !captureEngine.isCameraActive {
+                Text("Camera preview is not running. Recording is blocked until the selected camera is active.")
+                    .font(.caption)
+                    .foregroundStyle(.orange)
+            }
+
+            if let liveNotationTracker {
+                LivePerformedNotationCard(
+                    tracker: liveNotationTracker,
+                    bpm: Double(viewModel.bpm)
+                )
+                // The minimum applies to the CARD only. The DEBUG diagnostics
+                // row below is a sibling in this stack, so it can never eat
+                // into the notation's guaranteed height.
+                .frame(maxWidth: .infinity, minHeight: Self.liveNotationMinimumHeight)
+                #if DEBUG
+                LiveNotationDiagnosticsRow(tracker: liveNotationTracker)
+                #endif
+            } else {
+                // Same reserved height when idle, so starting a take does not
+                // shove the rest of the page down.
+                Text("Live motion appears here while a take is recording.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .frame(
+                        maxWidth: .infinity,
+                        minHeight: Self.liveNotationMinimumHeight,
+                        alignment: .topLeading
+                    )
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(.top, 4)
+    }
+
+    @ViewBuilder
+    private var messagePanel: some View {
+        if let message = viewModel.visibleMessage {
+            Text(message)
+                .font(.callout)
+                .textSelection(.enabled)
+                .padding(10)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .background(Color(nsColor: .controlBackgroundColor))
+                .clipShape(RoundedRectangle(cornerRadius: 8))
+        }
+    }
+
+    private var setupSection: some View {
+        GroupBox("1. Technique, pattern and variant") {
+            VStack(alignment: .leading, spacing: 10) {
+                Text("Operator: \(viewModel.session.operatorName)")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+
+                Picker("Technique", selection: $viewModel.selectedTechnique) {
+                    Text("Select a technique").tag(Optional<ReferenceTechnique>.none)
+                    ForEach(ReferenceTechnique.minimumRequiredSet) { technique in
+                        Text(technique.displayName).tag(Optional(technique))
+                    }
+                }
+                .pickerStyle(.menu)
+
+                if case .flare = viewModel.selectedTechnique {
+                    Text("Flare click count is part of the selected technique and must be chosen explicitly.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+
+                HStack {
+                    TextField("Pattern ID", text: $viewModel.patternID)
+                    TextField("Pattern name", text: $viewModel.patternName)
+                }
+                Text("Both fill in from the technique and phrase length. Edit either one and it stays yours.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                Stepper("Phrase length: \(viewModel.phraseBars) bar(s)", value: $viewModel.phraseBars, in: 1...16)
+                Stepper(
+                    "BPM: \(viewModel.bpm)",
+                    value: $viewModel.bpm,
+                    in: CaptureClickTrackDefaults.supportedBPMRange
+                )
+
+                Picker("Starting direction", selection: $viewModel.startingDirectionRawValue) {
+                    Text("Select direction").tag("")
+                    ForEach(ReferenceStartingPlatterDirection.allCases, id: \.rawValue) { direction in
+                        Text(direction.displayName).tag(direction.rawValue)
+                    }
+                }
+                Picker("Handedness", selection: $viewModel.handednessRawValue) {
+                    ForEach(CaptureSessionHandedness.allCases, id: \.rawValue) { handedness in
+                        Text(handedness.rawValue.capitalized).tag(handedness.rawValue)
+                    }
+                }
+                Picker("Fader variant", selection: $viewModel.faderVariantRawValue) {
+                    Text("Select fader variant").tag("")
+                    ForEach(ReferenceFaderVariant.allCases, id: \.rawValue) { variant in
+                        Text(variant.displayName).tag(variant.rawValue)
+                    }
+                }
+                TextField("Session notes", text: $viewModel.notes, axis: .vertical)
+                    .lineLimit(2...4)
+
+                Button("Apply Authoring Setup") {
+                    viewModel.applySetup()
+                }
+                .disabled(viewModel.isWorking || viewModel.session.phase == .recording)
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(.top, 4)
+        }
+    }
+
+    private var calibrationSection: some View {
+        GroupBox("2. Crossfader calibration") {
+            VStack(alignment: .leading, spacing: 10) {
+                HStack {
+                    Picker("Active deck", selection: $viewModel.activeDeckRawValue) {
+                        ForEach(CrossfaderActiveDeck.allCases, id: \.rawValue) { deck in
+                            Text(deck.displayName).tag(deck.rawValue)
+                        }
+                    }
+                    Picker("Open end", selection: $viewModel.crossfaderOpenEndRawValue) {
+                        ForEach(CrossfaderOpenEnd.allCases, id: \.rawValue) { end in
+                            Text(end.displayName).tag(end.rawValue)
+                        }
+                    }
+                }
+
+                Button("Start Calibration Sweep") {
+                    viewModel.beginCalibration()
+                }
+                .disabled(!viewModel.session.configurationIsComplete || viewModel.isWorking)
+
+                if let sweep = viewModel.session.calibrationSweep {
+                    Text("Live raw value: \(viewModel.state.latestCalibrationRawValue.map(String.init) ?? "No traffic")")
+                        .font(.system(.body, design: .monospaced))
+
+                    calibrationStepRow(.fullLeft, sweep: sweep)
+                    calibrationStepRow(.center, sweep: sweep)
+                    calibrationStepRow(.fullRight, sweep: sweep)
+
+                    switch sweep.state {
+                    case .awaitingArm(let step):
+                        // Unarmed: the instruction is on screen and NOTHING is
+                        // being sampled. The operator presents the position,
+                        // then presses Capture. Before D4 the sweep started
+                        // sampling immediately and could settle a stage before
+                        // the instruction had been read.
+                        Text(step.prompt)
+                            .font(.callout.weight(.semibold))
+                        Text("Nothing is being recorded yet. Move the fader into position, then press the button below.")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                        Button(step.captureActionTitle) {
+                            viewModel.armCalibrationCapture()
+                        }
+                        .buttonStyle(.borderedProminent)
+                        .disabled(viewModel.isWorking)
+                    case .capturing(let step, let settledSampleCount):
+                        Text(step.prompt)
+                            .font(.callout.weight(.semibold))
+                        ProgressView(value: sweep.settleProgress)
+                        Text("Settled samples: \(settledSampleCount) / \(sweep.settleSampleCount)")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                        // Liveness is shown separately from stability on
+                        // purpose: a stale value can hold the settle bar at
+                        // 100% while nothing is transmitting at all.
+                        ProgressView(value: sweep.freshObservationProgress)
+                        Text("New crossfader messages this position: \(sweep.freshObservationCount) / \(sweep.minimumFreshObservations)")
+                            .font(.caption)
+                            .foregroundStyle(sweep.freshObservationCount == 0 ? .orange : .secondary)
+                        if sweep.freshObservationCount == 0 {
+                            Text("Nothing has arrived on the learned crossfader address since this position began. Move the crossfader.")
+                                .font(.caption)
+                                .foregroundStyle(.orange)
+                        }
+                        Button("Retry Current Position") {
+                            viewModel.retryCalibrationStep()
+                        }
+                    case .complete(let calibration):
+                        Text(calibration.isUsable
+                            ? "Sweep settled and complete. Commit it before recording."
+                            : calibration.validationIssues().map(\.message).joined(separator: " "))
+                            .foregroundStyle(calibration.isUsable ? .green : .red)
+                        Button("Commit Calibration") {
+                            viewModel.commitCalibration()
+                        }
+                        .disabled(!calibration.isUsable || viewModel.isWorking)
+                    }
+                } else if let calibration = viewModel.session.confirmedCalibration {
+                    Text("Committed: \(calibration.address.displayName), \(calibration.activeDeck.displayName), \(calibration.openEnd.displayName).")
+                        .foregroundStyle(.green)
+                }
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(.top, 4)
+        }
+    }
+
+    private var preflightSection: some View {
+        GroupBox("3. Live preflight") {
+            VStack(alignment: .leading, spacing: 8) {
+                if let preflight = viewModel.session.latestPreflight {
+                    ForEach(preflight.checks) { check in
+                        HStack(alignment: .top) {
+                            Image(systemName: preflightSymbol(check.status))
+                                .foregroundStyle(preflightColor(check.status))
+                                .frame(width: 18)
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text(check.title).font(.callout.weight(.semibold))
+                                Text(check.detail).font(.caption).foregroundStyle(.secondary)
+                            }
+                        }
+                    }
+                } else {
+                    Text("Apply the setup to begin live checks.")
+                        .foregroundStyle(.secondary)
+                }
+
+                midiAddressDiagnostics
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(.top, 4)
+        }
+    }
+
+    /// Every MIDI address the app has actually received traffic on, with the
+    /// age of its most recent message.
+    ///
+    /// Diagnostic only — it maps nothing and decides nothing. It exists
+    /// because the 2026-09-04 smoke could not tell "the crossfader is
+    /// transmitting" from "a control was learned onto an address that has
+    /// been silent for minutes", and the take that followed contained zero
+    /// crossfader samples.
+    @ViewBuilder
+    private var midiAddressDiagnostics: some View {
+        if let snapshot = viewModel.session.latestPreflightSnapshot {
+            DisclosureGroup(isExpanded: $isShowingMIDIAddressDiagnostics) {
+                VStack(alignment: .leading, spacing: 4) {
+                    if snapshot.observedMIDIAddresses.isEmpty {
+                        Text("No MIDI traffic has been received on any address since launch.")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    } else {
+                        ForEach(snapshot.observedMIDIAddresses) { address in
+                            Text(
+                                String(
+                                    format: "%@ · raw %d · %d msgs · last %.1fs ago",
+                                    address.displayName,
+                                    address.latestRawValue,
+                                    address.eventCount,
+                                    address.secondsSinceLastMessage
+                                )
+                            )
+                            .font(.system(.caption, design: .monospaced))
+                            .foregroundStyle(
+                                address.secondsSinceLastMessage < ReferenceCapturePreflight.recentActivityWindow
+                                    ? Color.primary
+                                    : Color.secondary
+                            )
+                        }
+                    }
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(.top, 4)
+            } label: {
+                Text("MIDI addresses seen (\(snapshot.observedMIDIAddresses.count))")
+                    .font(.caption.weight(.semibold))
+            }
+        }
+    }
+
+    private var recordingSection: some View {
+        GroupBox("4. Record") {
+            VStack(alignment: .leading, spacing: 10) {
+                Text("One count-in bar, four identical repetitions, then one clean tail bar.")
+                    .foregroundStyle(.secondary)
+                HStack {
+                    Button("Record Draft") {
+                        viewModel.startRecording()
+                    }
+                    .disabled(!canRecord)
+                    Button("Stop and Finalize") {
+                        viewModel.stopRecording()
+                    }
+                    .disabled(viewModel.session.phase != .recording || viewModel.isWorking)
+                    Text(viewModel.workflowStatusText)
+                        .font(.caption.monospaced())
+                        .foregroundStyle(.secondary)
+                }
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(.top, 4)
+        }
+    }
+
+    @ViewBuilder
+    private var reviewSection: some View {
+        if let take = viewModel.reviewedTake {
+            GroupBox("5. Finalized take review") {
+                VStack(alignment: .leading, spacing: 12) {
+                    evidenceSummary(take)
+
+                    if let detected = take.autoDetectedTechnique {
+                        Text("Advisory auto-detection: \(detected.displayName)\(take.autoDetectionDisagreesWithSelection ? " (does not match CXL selection)" : "")")
+                        .foregroundStyle(take.autoDetectionDisagreesWithSelection ? Color.orange : Color.secondary)
+                    } else {
+                        Text("Advisory auto-detection: no result")
+                            .foregroundStyle(.secondary)
+                    }
+
+                    Divider()
+                    Text("Validation findings").font(.headline)
+                    if take.latestValidation.findings.isEmpty {
+                        Text("No validation findings.").foregroundStyle(.green)
+                    } else {
+                        ForEach(Array(take.latestValidation.findings.enumerated()), id: \.offset) { _, finding in
+                            HStack(alignment: .top) {
+                                Image(systemName: finding.severity == .failure ? "xmark.circle.fill" : "exclamationmark.triangle.fill")
+                                    .foregroundStyle(finding.severity == .failure ? .red : .orange)
+                                Text(finding.message).font(.callout)
+                            }
+                        }
+                    }
+
+                    Divider()
+                    Text("Four repetitions").font(.headline)
+                    Text("Audition is omitted: the existing lightweight player only resolves bundled Scratch Bank IDs and cannot safely play finalized WAV/MOV repetition ranges without a broader playback refactor.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                    ForEach(take.evidence.boundaries.repetitions) { boundary in
+                        repetitionRow(boundary, take: take)
+                    }
+
+                    TextField("Approval or rejection notes", text: $viewModel.reviewNotes, axis: .vertical)
+                        .lineLimit(2...4)
+
+                    if take.evidence.metadata.lifecycleState == .approvedCanonical {
+                        Text("Approved canonical draft. Not installed for training.")
+                            .font(.headline)
+                            .foregroundStyle(.green)
+                    } else {
+                        HStack {
+                            Button("Reject Take") { viewModel.rejectTake() }
+                            Button("Retake") { viewModel.retake() }
+                            Button("Approve Canonical Draft") { viewModel.approveCanonical() }
+                                .buttonStyle(.borderedProminent)
+                                .disabled(!viewModel.canApprove)
+                        }
+                        // Say WHY it is unavailable. A dead button with no
+                        // reason is what let the 2026-09-05 take look
+                        // approvable against three blocking findings.
+                        if let reason = viewModel.approvalBlockReason {
+                            Text(reason)
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        }
+                    }
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(.top, 4)
+            }
+        }
+    }
+
+    private func evidenceSummary(_ take: ReferenceAuthoringTake) -> some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Text("Take \(take.evidence.metadata.takeNumber): \(take.evidence.metadata.technique.displayName) · \(take.evidence.metadata.pattern.name) · \(take.evidence.metadata.bpm) BPM")
+                .font(.headline)
+            Text("Audio: \(take.evidence.audio.fileName) · \(take.evidence.audio.byteCount) bytes · \(take.evidence.audio.frameCount.map(String.init) ?? "unknown") frames · peak \(take.evidence.audio.peakLevel.map { String(format: "%.4f", $0) } ?? "unknown")")
+            if let video = take.evidence.video {
+                Text("Video: \(video.fileName) · \(video.byteCount) bytes")
+            } else {
+                Text("Video: not present")
+            }
+            Text("Sidecar: \(take.evidence.sidecar.fileName) · \(take.evidence.sidecar.byteCount) bytes")
+            Text("Platter events: \(take.evidence.platterMovementEventCount) · Crossfader samples: \(take.evidence.crossfaderRawSamples.count)")
+            // Watch evidence is stated for every take, present or absent, and
+            // comes from the finalized sidecar's own link — never from the
+            // start handshake and never from a Watch merely being connected.
+            Text(take.evidence.watchEvidence.operatorSummary)
+                .foregroundStyle(
+                    take.evidence.watchEvidence.isLinked
+                        ? Color.secondary
+                        : (take.evidence.watchEvidence.isTransferPending ? Color.orange : Color.red)
+                )
+            if viewModel.isWaitingForWatchTransfer {
+                Text("Waiting for the Watch motion transfer to complete…")
+                    .font(.caption)
+                    .foregroundStyle(.orange)
+            }
+        }
+        .font(.callout)
+        .textSelection(.enabled)
+    }
+
+    private func repetitionRow(
+        _ boundary: ReferenceRepetitionBoundary,
+        take: ReferenceAuthoringTake
+    ) -> some View {
+        VStack(alignment: .leading, spacing: 6) {
+            HStack {
+                Text("Repetition \(boundary.index + 1)").font(.callout.weight(.semibold))
+                Spacer()
+                Button(take.evidence.boundaries.selectedRepetitionIndex == boundary.index ? "Selected" : "Select for Approval") {
+                    viewModel.selectRepetitionForApproval(boundary.index)
+                }
+                .disabled(take.evidence.boundaries.selectedRepetitionIndex == boundary.index)
+            }
+            HStack {
+                Stepper(
+                    "Start beat \(boundary.startBeat, specifier: "%.2f")",
+                    value: startBeatBinding(for: boundary),
+                    in: 0...Double(take.evidence.metadata.totalBeats),
+                    step: 0.25
+                )
+                Stepper(
+                    "End beat \(boundary.endBeat, specifier: "%.2f")",
+                    value: endBeatBinding(for: boundary),
+                    in: 0...Double(take.evidence.metadata.totalBeats),
+                    step: 0.25
+                )
+            }
+        }
+        .padding(10)
+        .background(Color(nsColor: .controlBackgroundColor))
+        .clipShape(RoundedRectangle(cornerRadius: 8))
+    }
+
+    private func startBeatBinding(for boundary: ReferenceRepetitionBoundary) -> Binding<Double> {
+        Binding(
+            get: { currentBoundary(index: boundary.index)?.startBeat ?? boundary.startBeat },
+            set: { newValue in
+                let current = currentBoundary(index: boundary.index) ?? boundary
+                viewModel.adjustRepetitionBoundary(
+                    index: boundary.index,
+                    startBeat: newValue,
+                    endBeat: current.endBeat
+                )
+            }
+        )
+    }
+
+    private func endBeatBinding(for boundary: ReferenceRepetitionBoundary) -> Binding<Double> {
+        Binding(
+            get: { currentBoundary(index: boundary.index)?.endBeat ?? boundary.endBeat },
+            set: { newValue in
+                let current = currentBoundary(index: boundary.index) ?? boundary
+                viewModel.adjustRepetitionBoundary(
+                    index: boundary.index,
+                    startBeat: current.startBeat,
+                    endBeat: newValue
+                )
+            }
+        )
+    }
+
+    private func currentBoundary(index: Int) -> ReferenceRepetitionBoundary? {
+        viewModel.reviewedTake?.evidence.boundaries.repetitions.first { $0.index == index }
+    }
+
+    private var canRecord: Bool {
+        viewModel.session.phase == .readyToRecord
+            && viewModel.session.latestPreflight?.blocksRecording == false
+            && !viewModel.isWorking
+    }
+
+    private func calibrationStepName(_ step: CrossfaderCalibrationStep) -> String {
+        switch step {
+        case .fullLeft: return "Full left"
+        case .center: return "Centre"
+        case .fullRight: return "Full right"
+        }
+    }
+
+    private func calibrationStepRow(
+        _ step: CrossfaderCalibrationStep,
+        sweep: CrossfaderCalibrationSweep
+    ) -> some View {
+        HStack {
+            Text(calibrationStepName(step))
+                .frame(width: 90, alignment: .leading)
+            Text(calibrationStatus(step: step, sweep: sweep))
+                .foregroundStyle(sweep.capturedValues[step] == nil ? Color.secondary : Color.green)
+        }
+    }
+
+    private func calibrationStatus(
+        step: CrossfaderCalibrationStep,
+        sweep: CrossfaderCalibrationSweep
+    ) -> String {
+        if let value = sweep.capturedValues[step] {
+            return "Settled at raw \(value)"
+        }
+        return sweep.state.currentStep == step ? "Hold now" : "Waiting"
+    }
+
+    private func preflightSymbol(_ status: ReferencePreflightCheck.Status) -> String {
+        switch status {
+        case .satisfied: return "checkmark.circle.fill"
+        case .blocking: return "xmark.circle.fill"
+        case .advisory: return "exclamationmark.triangle.fill"
+        }
+    }
+
+    private func preflightColor(_ status: ReferencePreflightCheck.Status) -> Color {
+        switch status {
+        case .satisfied: return .green
+        case .blocking: return .red
+        case .advisory: return .orange
+        }
+    }
+
+}
+
+#if DEBUG
+/// Compact, bounded, read-only counters for the live notation path.
+///
+/// Exists because the 2026-09-05 authoring take looked flat and nothing
+/// recorded what the tracker actually held at that moment. Replaying that
+/// take's captured MIDI proved the chain itself produces a healthy vertical
+/// span, so the next physical test needs live counters to tell "the path saw
+/// nothing" apart from "the displayed window covered a quiet period".
+///
+/// Reads published tracker state only. Starts, stops and configures nothing.
+struct LiveNotationDiagnosticsRow: View {
+    @ObservedObject var tracker: LivePerformedNotationTracker
+
+    var body: some View {
+        if let diagnostics = tracker.diagnostics {
+            Text(
+                String(
+                    format: "raw %d · matched %d · moves %d%@ · span %.3f · age %@",
+                    diagnostics.rawSnapshotCount,
+                    diagnostics.baselineMatchedCount,
+                    diagnostics.committedMovementCount,
+                    diagnostics.hasProvisional ? "+open" : "",
+                    diagnostics.renderedPositionSpan,
+                    diagnostics.latestEventAge < 0
+                        ? "—"
+                        : String(format: "%.1fs", diagnostics.latestEventAge)
+                )
+            )
+            .font(.system(.caption2, design: .monospaced))
+            .foregroundStyle(diagnostics.renderedPositionSpan < 0.01 ? .orange : .secondary)
+        } else {
+            Text("live notation diagnostics: no poll yet")
+                .font(.system(.caption2, design: .monospaced))
+                .foregroundStyle(.secondary)
+        }
+    }
+}
+#endif

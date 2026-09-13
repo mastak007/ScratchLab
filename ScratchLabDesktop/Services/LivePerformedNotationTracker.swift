@@ -37,6 +37,32 @@ struct LivePerformedNotationDataSource {
     let cameraMovementEventsSnapshot: (_ now: CFTimeInterval) -> [CaptureCore.DetectedNotationRecordMovementEvent]?
 }
 
+/// Bounded, read-only counters describing ONE tracker poll.
+///
+/// Added after the 2026-09-05 authoring take rendered a visually flat trace.
+/// Replaying that take's captured MIDI through this exact path produced a
+/// healthy 0.718 vertical span for its first ~12 s and 0.036 for the trailing
+/// 3.2 s window the card displays — so the chain was not flattening anything,
+/// and no record existed of what the tracker actually held at the moment the
+/// operator was watching. These counters make that attributable live.
+///
+/// Presentation only: nothing here is persisted, scored, exported, or allowed
+/// to influence capture.
+struct LiveNotationDiagnostics: Equatable, Sendable {
+    /// Events in the engine's take-scoped buffer before any filtering.
+    let rawSnapshotCount: Int
+    /// Events surviving the tracker's baseline filter.
+    let baselineMatchedCount: Int
+    /// Committed movement events the decoder produced.
+    let committedMovementCount: Int
+    /// Whether an open provisional stroke is present.
+    let hasProvisional: Bool
+    /// Vertical span across every rendered stroke, in lane units.
+    let renderedPositionSpan: Double
+    /// Age of the newest event in the buffer, in seconds.
+    let latestEventAge: Double
+}
+
 enum LiveNotationTrackingState: Equatable {
     case unavailable
     case waiting
@@ -51,6 +77,8 @@ enum LiveNotationTrackingState: Equatable {
 /// `freeze()` stops polling while retaining the completed Practice trace.
 final class LivePerformedNotationTracker: ObservableObject {
     @Published private(set) var state: LiveNotationTrackingState = .waiting
+    /// Latest poll's counters. DEBUG surfaces only; never read by rendering.
+    @Published private(set) var diagnostics: LiveNotationDiagnostics?
     @Published private(set) var isFrozen = false
     @Published private(set) var frozenAt: Date?
 
@@ -150,10 +178,48 @@ final class LivePerformedNotationTracker: ObservableObject {
         let dataSource = self.dataSource
         let baseline = self.baselineTimestamp
         let newState = Self.computeState(dataSource: dataSource, baselineTimestamp: baseline)
+        let newDiagnostics = Self.diagnostics(
+            dataSource: dataSource,
+            baselineTimestamp: baseline,
+            state: newState
+        )
         Task { @MainActor [weak self] in
             guard let self, !self.isFrozen else { return }
             self.state = newState
+            self.diagnostics = newDiagnostics
         }
+    }
+
+    /// Pure counter derivation, testable without a timer. Reads the same
+    /// snapshot `computeState` reads; adds no second source of truth.
+    static func diagnostics(
+        dataSource: LivePerformedNotationDataSource,
+        baselineTimestamp: Double,
+        state: LiveNotationTrackingState,
+        now: Double = CACurrentMediaTime()
+    ) -> LiveNotationDiagnostics {
+        let snapshot = dataSource.capturedMidiCCEventsSnapshot()
+        let matched = snapshot.filter { $0.timestamp > baselineTimestamp }
+        let rendered = renderedEvents(for: state)
+        let positions = rendered.flatMap { [$0.startPosition, $0.endPosition] }
+        let span = (positions.max() ?? 0) - (positions.min() ?? 0)
+        let committedCount: Int
+        let hasProvisional: Bool
+        if case .tracking(let committed, let provisional) = state {
+            committedCount = committed.count
+            hasProvisional = provisional != nil
+        } else {
+            committedCount = 0
+            hasProvisional = false
+        }
+        return LiveNotationDiagnostics(
+            rawSnapshotCount: snapshot.count,
+            baselineMatchedCount: matched.count,
+            committedMovementCount: committedCount,
+            hasProvisional: hasProvisional,
+            renderedPositionSpan: span,
+            latestEventAge: matched.last.map { max(0, now - $0.timestamp) } ?? -1
+        )
     }
 
     /// Pure decision function — no timer, no `@Published`, no main-actor
