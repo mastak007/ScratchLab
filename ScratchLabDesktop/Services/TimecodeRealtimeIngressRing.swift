@@ -142,14 +142,14 @@ public enum TimecodeRealtimeIngressPublishOutcome: Equatable {
 /// caller must not retain `samples(forChannel:)`'s result (or this view)
 /// past the handler's return; the ring may overwrite that slot's memory as
 /// soon as `drainPending` advances past it.
-public struct TimecodeRealtimeIngressSlotView: Sendable {
+public struct TimecodeRealtimeIngressSlotView: @unchecked Sendable {
     public let channelCount: Int
     public let frameCount: Int
     public let sampleRate: Double
     public let hostTime: UInt64
     public let sampleTime: Int64
 
-    private let channelBase: UnsafePointer<Float>
+    nonisolated(unsafe) private let channelBase: UnsafePointer<Float>
     private let frameStride: Int
 
     fileprivate init(

@@ -272,9 +272,9 @@ final class ScratchLabBeatEngine: ObservableObject {
         }
 
         let totalFrameCount = max(1, Int(ceil(max(0, durationSeconds) * sampleRate)))
-        guard let format = AVAudioFormat(
-            standardFormatWithSampleRate: sampleRate,
-            channels: channelCount
+        guard let format = ClickTrackEngine.deinterleavedFloatFormat(
+            sampleRate: sampleRate,
+            channelCount: channelCount
         ),
         let buffer = AVAudioPCMBuffer(
             pcmFormat: format,

@@ -348,4 +348,112 @@ final class MIDIPacketBoundsCrashFixTests: XCTestCase {
         XCTAssertEqual(messages.count, 2)
         XCTAssertEqual(messages.map(\.data2), [0x10, 0x11])
     }
+
+    // MARK: - Hotcue 1 dispatch pipeline (2026-08-21 follow-up)
+    //
+    // The bounds-safety fix above is confirmed already in place; these tests
+    // cover the one thing the existing suite didn't: the real Hotcue-1 →
+    // "dvs_ahhh" route, driven from a genuine `MIDIPacketList`, through the
+    // learned-mapping resolver — using `testOnly_hotCueLoadObserver`
+    // (a narrow DEBUG hook fired at both real dispatch points in
+    // `MacCaptureEngine`) rather than adding spy state to the production
+    // `ScratchSamplePlaybackController`.
+
+    /// A learned Hotcue 1 mapping on channel 6 (0-indexed), note 20 —
+    /// deliberately a channel/note combination `ScratchBankPadEventRouter`'s
+    /// note table does NOT cover (see `ScratchBankPadEventRouter.swift`,
+    /// which only maps channels 4/5), and one of the exact combinations the
+    /// TEMP HARDWARE DIAGNOSTIC fallback's own heuristic also matches — so
+    /// these tests exercise the real boundary between the production
+    /// learned-mapping route and that fallback, not just the parser.
+    private func hotCue1Mapping(assignedSampleID: String = "dvs_ahhh") -> MIDIDeviceMapping {
+        MIDIDeviceMapping(
+            deviceIdentifier: "midi_test-fixture-device",
+            deviceName: "Test Fixture Device",
+            controls: [
+                MIDILearnedControl(
+                    action: .hotCue1,
+                    messageType: .note,
+                    channel: 6,
+                    controlNumber: 20,
+                    assignedSampleID: assignedSampleID
+                )
+            ]
+        )
+    }
+
+    /// A single Note On packet for the learned Hotcue 1 mapping must route
+    /// through the production resolver exactly once and dispatch exactly one
+    /// load of the assigned sample.
+    func testHotCue1NoteOnRoutesExactlyOnceToAssignedSample() {
+        let engine = MacCaptureEngine(autoRefreshDevices: false)
+        engine.testOnly_setDeviceMapping(hotCue1Mapping())
+        var observedLoads: [String] = []
+        engine.testOnly_hotCueLoadObserver = { observedLoads.append($0) }
+
+        let fixture = MIDIPacketListFixture(packets: [[[0x96, 20, 100]]])  // Note On ch6 note20 vel100
+        engine.testOnly_receiveMIDIPacketList(fixture.pointer)
+        RunLoop.main.run(until: Date().addingTimeInterval(0.05))
+
+        XCTAssertEqual(observedLoads, ["dvs_ahhh"])
+    }
+
+    /// A Note Off, and a Note On with velocity 0, for the same learned
+    /// Hotcue 1 mapping must never dispatch a load.
+    func testHotCue1NoteOffAndZeroVelocityNoteOnNeverLoad() {
+        let engine = MacCaptureEngine(autoRefreshDevices: false)
+        engine.testOnly_setDeviceMapping(hotCue1Mapping())
+        var observedLoads: [String] = []
+        engine.testOnly_hotCueLoadObserver = { observedLoads.append($0) }
+
+        let fixture = MIDIPacketListFixture(packets: [
+            [[0x86, 20, 0]],    // Note Off ch6 note20
+            [[0x96, 20, 0]],    // Note On ch6 note20 velocity 0 (release convention)
+        ])
+        engine.testOnly_receiveMIDIPacketList(fixture.pointer)
+        RunLoop.main.run(until: Date().addingTimeInterval(0.05))
+
+        XCTAssertTrue(observedLoads.isEmpty, "Note Off / velocity-zero Note On must never trigger a load")
+    }
+
+    /// Two separate, valid rapid Note On presses for the same learned Hotcue
+    /// 1 mapping must dispatch exactly two loads total — one per press —
+    /// never fused into one and never duplicated.
+    func testHotCue1TwoRapidPressesLoadExactlyTwiceTotal() {
+        let engine = MacCaptureEngine(autoRefreshDevices: false)
+        engine.testOnly_setDeviceMapping(hotCue1Mapping())
+        var observedLoads: [String] = []
+        engine.testOnly_hotCueLoadObserver = { observedLoads.append($0) }
+
+        let firstPress = MIDIPacketListFixture(packets: [[[0x96, 20, 100]]])
+        engine.testOnly_receiveMIDIPacketList(firstPress.pointer)
+        RunLoop.main.run(until: Date().addingTimeInterval(0.05))
+
+        let secondPress = MIDIPacketListFixture(packets: [[[0x96, 20, 100]]])
+        engine.testOnly_receiveMIDIPacketList(secondPress.pointer)
+        RunLoop.main.run(until: Date().addingTimeInterval(0.05))
+
+        XCTAssertEqual(observedLoads, ["dvs_ahhh", "dvs_ahhh"], "exactly two loads total, one per press")
+    }
+
+    /// Duplicate-routing proof: a single raw packet whose channel/note also
+    /// satisfies the TEMP HARDWARE DIAGNOSTIC fallback's own heuristic
+    /// (channel 6, note 20) must still dispatch exactly one load once a
+    /// production learned mapping exists for it — proving one packet cannot
+    /// reach the loader twice through two different routing paths. This is
+    /// the exact latent-double-trigger shape flagged during the crash
+    /// investigation; the assertion is on `MacCaptureEngine`'s dispatch
+    /// behavior, independent of whichever routing path actually fires.
+    func testSinglePacketCannotDoubleRouteThroughTempFallback() {
+        let engine = MacCaptureEngine(autoRefreshDevices: false)
+        engine.testOnly_setDeviceMapping(hotCue1Mapping())
+        var observedLoads: [String] = []
+        engine.testOnly_hotCueLoadObserver = { observedLoads.append($0) }
+
+        let fixture = MIDIPacketListFixture(packets: [[[0x96, 20, 100]]])
+        engine.testOnly_receiveMIDIPacketList(fixture.pointer)
+        RunLoop.main.run(until: Date().addingTimeInterval(0.05))
+
+        XCTAssertEqual(observedLoads.count, 1, "one packet must never reach the loader through two routing paths")
+    }
 }

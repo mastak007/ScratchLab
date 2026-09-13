@@ -1,0 +1,17 @@
+{
+  "version": 1,
+  "skills": {
+    "swift-format": {
+      "source": "wendyliga/skills",
+      "sourceType": "github",
+      "skillPath": "skills/swift-format/SKILL.md",
+      "computedHash": "24a5c85e4e890af731a6d020fac43482c109b1e7c7dd5ab7e15ee5f0ef0d87cf"
+    },
+    "xcode": {
+      "source": "wendyliga/skills",
+      "sourceType": "github",
+      "skillPath": "skills/xcode/SKILL.md",
+      "computedHash": "c96214d924f293e707a05720327e76f54ec1765c59d7f3578b1f1146235e74aa"
+    }
+  }
+}

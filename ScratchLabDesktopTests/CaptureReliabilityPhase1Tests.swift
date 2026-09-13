@@ -1913,6 +1913,32 @@ final class CaptureReliabilityPhase1CoreTests: XCTestCase {
         XCTAssertEqual(audioFile.length, AVAudioFramePosition(frameCount))
     }
 
+    func testBeatStemRendersForRaneMultichannelScratchAudio() throws {
+        // The Rane ONE MKII capture's MOV audio track is 8-channel (7.1) AAC;
+        // `derivedAudioArtifactURL` extracts it as-is, so the beat-stem render
+        // receives `channelCount = 8`. `AVAudioFormat(standardFormatWithSampleRate:
+        // channels:)` returns nil above stereo, which previously surfaced as
+        // `unableToStartAudio` during export validation. Both the click-track
+        // branch (`renderedClickTrackBuffer`) and the non-click branch
+        // (`renderedTimingBuffer`'s own format creation) must accept it.
+        for mode in [BeatEngineMode.silent, BeatEngineMode.clickTrack] {
+            let buffer = try ScratchLabBeatEngine.renderedTimingBuffer(
+                mode: mode,
+                bpm: 95,
+                durationSeconds: 0.25,
+                countInBeats: 4,
+                beatsPerBar: 4,
+                clickStartHostTime: nil,
+                recordingStartHostTime: nil,
+                sampleRate: 48_000,
+                channelCount: 8
+            )
+            XCTAssertEqual(buffer.format.channelCount, 8, "\(mode) must render an 8-channel beat stem")
+            XCTAssertEqual(buffer.format.sampleRate, 48_000, accuracy: 0.5)
+            XCTAssertGreaterThan(buffer.frameLength, 0)
+        }
+    }
+
     private func makeNonInterleavedFloatSampleBuffer(
         channels: [[Float]],
         sampleRate: Double

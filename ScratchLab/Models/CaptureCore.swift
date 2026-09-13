@@ -1706,6 +1706,38 @@ private final class ScratchCoachAVAudioPlayerAdapter: ScratchCoachDemoPlayable {
     }
 }
 
+/// Deterministic, documented resolution outcome for a requested demo audio
+/// file. `.fallback` never claims to be the exact requested source — a
+/// caller reporting status to the user must branch on this to say so
+/// honestly.
+enum DemoAudioResolution: Equatable {
+    case exact(URL)
+    case fallback(URL, actualFileName: String)
+    case unavailable
+}
+
+/// Pure resolver — no bundle/file-system access of its own, takes a lookup
+/// closure so it's trivially testable with an injected bundle or synthetic
+/// data. Fallback is opt-in per call site (`allowsFallback`) so a lesson
+/// with no real fallback resource never silently borrows one from an
+/// unrelated lesson.
+enum DemoAudioResolver {
+    static func resolve(
+        requestedFileName: String,
+        allowsFallback: Bool,
+        fallbackFileName: String = "baby_reel_callresponse.wav",
+        lookup: (String) -> URL?
+    ) -> DemoAudioResolution {
+        if let url = lookup(requestedFileName) {
+            return .exact(url)
+        }
+        if allowsFallback, let fallbackURL = lookup(fallbackFileName) {
+            return .fallback(fallbackURL, actualFileName: fallbackFileName)
+        }
+        return .unavailable
+    }
+}
+
 @MainActor
 final class ScratchCoachDemoAudioPlayer: ObservableObject {
     typealias ResourceURLProvider = (String) -> URL?
@@ -1713,6 +1745,11 @@ final class ScratchCoachDemoAudioPlayer: ObservableObject {
 
     @Published private(set) var playbackState: ScratchCoachDemoPlaybackState = .stopped
     @Published private(set) var isAudioAvailable = false
+    /// True when the currently loaded audio is a fallback resource, not the
+    /// exact file that was requested — set only by `configure(url:sourceFileName:isFallback:)`.
+    /// `configure(withAudioFileNamed:)` never sets this true (it has no
+    /// fallback concept of its own).
+    @Published private(set) var isUsingFallbackAudio = false
 
     private let resourceURLProvider: ResourceURLProvider
     private let playerFactory: PlayerFactory
@@ -1799,6 +1836,30 @@ final class ScratchCoachDemoAudioPlayer: ObservableObject {
             playbackState = .stopped
         } catch {
             logger.error("Failed to load coach demo audio \(nextAudioFile, privacy: .public): \(error.localizedDescription, privacy: .public)")
+            clearLoadedAudio()
+        }
+    }
+
+    /// Configures playback directly from an already-resolved URL, skipping
+    /// this player's own `resourceURLProvider` lookup entirely. For callers
+    /// that resolved the exact/fallback URL themselves (e.g. via
+    /// `DemoAudioResolver`) — guarantees a single resolution point instead
+    /// of two independent lookups that could disagree.
+    func configure(url: URL, sourceFileName: String, isFallback: Bool) {
+        guard sourceFileName != currentAudioFile || player == nil else { return }
+
+        clearLoadedAudio()
+        currentAudioFile = sourceFileName
+
+        do {
+            let nextPlayer = try playerFactory(url)
+            nextPlayer.prepareToPlay()
+            player = nextPlayer
+            isAudioAvailable = true
+            isUsingFallbackAudio = isFallback
+            playbackState = .stopped
+        } catch {
+            logger.error("Failed to load coach demo audio \(sourceFileName, privacy: .public): \(error.localizedDescription, privacy: .public)")
             clearLoadedAudio()
         }
     }
@@ -1921,6 +1982,7 @@ final class ScratchCoachDemoAudioPlayer: ObservableObject {
         stop()
         player = nil
         isAudioAvailable = false
+        isUsingFallbackAudio = false
         syncClock.reset()
     }
 
@@ -4590,24 +4652,45 @@ final class ScratchLabDemoModeController: ObservableObject {
 
     func startDemo() {
         stopDemo()
-        guard let audioURL = audioURLProvider(audioFileName) else {
-            statusMessage = "Bundled demo audio is unavailable."
-            isReady = false
-            return
-        }
-
+        guard let resolved = resolveDemoAudio() else { return }
         do {
             analyzer = ScratchLabDemoModeAnalyzer(
-                sampleBuffer: try ScratchLabDemoAudioSampleBuffer(audioURL: audioURL)
+                sampleBuffer: try ScratchLabDemoAudioSampleBuffer(audioURL: resolved.url)
             )
-            demoPlayer.configure(with: instruction)
+            demoPlayer.configure(url: resolved.url, sourceFileName: resolved.sourceFileName, isFallback: resolved.isFallback)
             demoPlayer.replay()
             isReady = true
-            statusMessage = "Bundled baby scratch demo is playing with synced coach feedback."
+            statusMessage = resolved.isFallback
+                ? "Playing the bundled call-response practice reel — the exact demo track isn't in this build."
+                : "Bundled baby scratch demo is playing with synced coach feedback."
             startAnalysisTimer()
         } catch {
             statusMessage = "ScratchLab could not load the bundled demo."
             isReady = false
+        }
+    }
+
+    /// Resolves `audioFileName` through `DemoAudioResolver` — exact match
+    /// preferred; falls back to the bundled Baby Scratch call-response reel
+    /// only when `audioFileName` actually is the Baby Scratch dry demo (no
+    /// other lesson borrows this fallback). On `.unavailable`, sets
+    /// `statusMessage`/`isReady` and returns `nil` so callers can bail out
+    /// with one `guard`.
+    private func resolveDemoAudio() -> (url: URL, sourceFileName: String, isFallback: Bool)? {
+        let resolution = DemoAudioResolver.resolve(
+            requestedFileName: audioFileName,
+            allowsFallback: audioFileName == ScratchLabDemoSessionBuilder.demoAudioFileName,
+            lookup: audioURLProvider
+        )
+        switch resolution {
+        case .exact(let url):
+            return (url, audioFileName, false)
+        case .fallback(let url, let actualFileName):
+            return (url, actualFileName, true)
+        case .unavailable:
+            statusMessage = "Bundled demo audio is unavailable."
+            isReady = false
+            return nil
         }
     }
 
@@ -4667,18 +4750,16 @@ final class ScratchLabDemoModeController: ObservableObject {
     /// to start aligned with the beat engine's reported start time.
     func prepareDemoForBeatAlignment() {
         stopDemo()
-        guard let audioURL = audioURLProvider(audioFileName) else {
-            statusMessage = "Bundled demo audio is unavailable."
-            isReady = false
-            return
-        }
+        guard let resolved = resolveDemoAudio() else { return }
         do {
             analyzer = ScratchLabDemoModeAnalyzer(
-                sampleBuffer: try ScratchLabDemoAudioSampleBuffer(audioURL: audioURL)
+                sampleBuffer: try ScratchLabDemoAudioSampleBuffer(audioURL: resolved.url)
             )
-            demoPlayer.configure(with: instruction)
+            demoPlayer.configure(url: resolved.url, sourceFileName: resolved.sourceFileName, isFallback: resolved.isFallback)
             isReady = true
-            statusMessage = "Demo ready — waiting for beat."
+            statusMessage = resolved.isFallback
+                ? "Demo ready (call-response practice reel) — waiting for beat."
+                : "Demo ready — waiting for beat."
         } catch {
             statusMessage = "ScratchLab could not load the bundled demo."
             isReady = false
@@ -6135,6 +6216,26 @@ enum CaptureCore {
         let noiseFilteredRunCount: Int
     }
 
+    /// The run still in progress at the end of the input snapshot, when
+    /// `decodePlatterCore` is asked not to force-close it. Distinct from
+    /// `DetectedNotationRecordMovementEvent` on purpose — a trailing run has
+    /// not been closed by a turnaround or a gap, so it is never a completed
+    /// stroke, even if `meetsNoiseGates` happens to already be true.
+    struct TrailingPlatterRun: Equatable, Sendable {
+        let startTime: Double
+        let currentTime: Double
+        let startPosition: Double
+        let currentPosition: Double
+        let direction: String
+        let movementKind: ScratchMovementKind
+        /// Signed cumulative displacement (steps) since `startTime`.
+        let displacement: Double
+        /// Whether this run would already pass `minRunDuration`/`minRunSteps`
+        /// if it were closed right now — informational only; it is still an
+        /// open run and must never be treated as committed.
+        let meetsNoiseGates: Bool
+    }
+
     /// Stage-by-stage decode diagnostics for a platter telemetry stream.
     /// Mirrors `derivePlatterMovementEvents` exactly (same core, same filters),
     /// but returns the intermediate counts.
@@ -6177,6 +6278,22 @@ enum CaptureCore {
     /// Shared decode core: filters, integrates modular signed deltas, segments
     /// same-sign runs, and emits movement events, returning both the events and
     /// the stage-by-stage diagnostics.
+    ///
+    /// `forceCloseTrailingRun`: when `true` (the default, and the only
+    /// behavior used by `derivePlatterMovementEvents`/
+    /// `platterMovementDecodeDiagnostics` — unchanged from before this
+    /// parameter existed), the run still in progress at the end of
+    /// `mixerMidiEvents` is force-closed and, if it passes the noise gates,
+    /// emitted as a completed event exactly like every other run. That is
+    /// correct for finalization (there is no "more data coming"), but it is
+    /// NOT a live/provisional stroke — it's a genuinely completed event
+    /// synthesized only because the input snapshot ended. When `false`
+    /// (used by `derivePlatterMovementEventsWithProvisional` for a live,
+    /// in-progress attempt), the trailing run is never force-closed into
+    /// `events`; its live state is returned separately via `trailingRun` so
+    /// callers can render it as an explicitly open/provisional stroke
+    /// without it ever appearing in — or being mistaken for — a committed
+    /// event.
     private static func decodePlatterCore(
         from mixerMidiEvents: [RawMixerMIDIEvent],
         controller: Int,
@@ -6185,8 +6302,9 @@ enum CaptureCore {
         ringModulus: Int,
         minRunDuration: Double,
         minRunSteps: Int,
-        maxEventGap: Double
-    ) -> (events: [DetectedNotationRecordMovementEvent], diagnostics: PlatterDecodeDiagnostics) {
+        maxEventGap: Double,
+        forceCloseTrailingRun: Bool = true
+    ) -> (events: [DetectedNotationRecordMovementEvent], diagnostics: PlatterDecodeDiagnostics, trailingRun: TrailingPlatterRun?) {
         let events = mixerMidiEvents
             .filter {
                 $0.controller == controller
@@ -6198,7 +6316,7 @@ enum CaptureCore {
         guard events.count >= 2 else {
             return ([], PlatterDecodeDiagnostics(
                 filteredEventCount: filteredEventCount, rawRunCount: 0,
-                noiseFilteredRunCount: 0))
+                noiseFilteredRunCount: 0), nil)
         }
 
         let half = ringModulus / 2
@@ -6238,8 +6356,19 @@ enum CaptureCore {
                 runSign = sign
             }
         }
+        // The run still open when the input ends (`runSign != 0` after the
+        // loop): force-closed into `runs` for finalization (unchanged
+        // behavior), or reserved separately as `trailingRunCandidate` for a
+        // live/provisional caller — never both, so a trailing run can never
+        // be double-counted as both committed and provisional.
+        var trailingRunCandidate: Run?
         if runSign != 0 {
-            runs.append(Run(startIdx: runStart, endIdx: deltas.count))
+            let trailing = Run(startIdx: runStart, endIdx: deltas.count)
+            if forceCloseTrailingRun {
+                runs.append(trailing)
+            } else {
+                trailingRunCandidate = trailing
+            }
         }
         let rawRunCount = runs.count
 
@@ -6278,9 +6407,95 @@ enum CaptureCore {
                 source: "controller"
             ))
         }
+        // Describe the still-open trailing run (if any) using the exact same
+        // math as every committed run above — never relabeling a finalized
+        // event, since this run was deliberately excluded from `runs` and
+        // never went through the emit/noise-gate loop as a candidate.
+        var trailingRun: TrailingPlatterRun?
+        if let trailing = trailingRunCandidate {
+            let startTime = events[trailing.startIdx].takeRelativeTime
+            let currentTime = events[trailing.endIdx].takeRelativeTime
+            let startPos = (positions[trailing.startIdx] - minPos) / span
+            let currentPos = (positions[trailing.endIdx] - minPos) / span
+            let displacement = positions[trailing.endIdx] - positions[trailing.startIdx]
+            let duration = currentTime - startTime
+            let direction = displacement > 0 ? "forward" : "backward"
+            trailingRun = TrailingPlatterRun(
+                startTime: startTime,
+                currentTime: currentTime,
+                startPosition: startPos,
+                currentPosition: currentPos,
+                direction: direction,
+                movementKind: direction == "forward" ? .normalPush : .normalPull,
+                displacement: displacement,
+                meetsNoiseGates: duration > 0 && duration >= minRunDuration && abs(displacement) >= Double(minRunSteps)
+            )
+        }
         return (result, PlatterDecodeDiagnostics(
             filteredEventCount: filteredEventCount, rawRunCount: rawRunCount,
-            noiseFilteredRunCount: result.count))
+            noiseFilteredRunCount: result.count), trailingRun)
+    }
+
+    struct ProvisionalPlatterMovement: Equatable, Sendable {
+        let startTime: Double
+        let currentTime: Double
+        let startPosition: Double
+        let currentPosition: Double
+        let direction: String
+        let movementKind: ScratchMovementKind
+        let displacement: Double
+    }
+
+    struct PlatterMovementDecodeResult: Equatable, Sendable {
+        /// Turnaround/gap-closed strokes. Append-only across successive
+        /// calls with a growing `mixerMidiEvents` prefix — never mutated
+        /// retroactively, since `decodePlatterCore`'s run segmentation is
+        /// deterministic over the same prefix of events.
+        let committedEvents: [DetectedNotationRecordMovementEvent]
+        /// The current open stroke since the last committed turnaround, or
+        /// nil if the platter is idle / has produced no run yet. Never fed
+        /// into finalization — preview-only.
+        let provisionalMovement: ProvisionalPlatterMovement?
+    }
+
+    /// Live/provisional variant of `derivePlatterMovementEvents`, sharing
+    /// the exact same filter/integrate/segment core (`decodePlatterCore`)
+    /// rather than a second reconstruction algorithm. The only behavioral
+    /// difference from `derivePlatterMovementEvents` is that the run still
+    /// open at the end of `mixerMidiEvents` is never force-closed into a
+    /// committed event — it is exposed separately as `provisionalMovement`.
+    /// Calling this repeatedly with a monotonically growing
+    /// `mixerMidiEvents` prefix (e.g. from a live poll) yields a
+    /// `committedEvents` array that only ever grows/extends, since a run
+    /// already closed by an earlier call's data can never be re-opened by
+    /// more data arriving after it.
+    static func derivePlatterMovementEventsWithProvisional(
+        from mixerMidiEvents: [RawMixerMIDIEvent],
+        controller: Int,
+        channel: Int? = nil,
+        deviceName: String? = nil,
+        ringModulus: Int = 128,
+        minRunDuration: Double = 0.08,
+        minRunSteps: Int = 8,
+        maxEventGap: Double = 0.10
+    ) -> PlatterMovementDecodeResult {
+        let core = decodePlatterCore(
+            from: mixerMidiEvents, controller: controller, channel: channel,
+            deviceName: deviceName, ringModulus: ringModulus,
+            minRunDuration: minRunDuration, minRunSteps: minRunSteps,
+            maxEventGap: maxEventGap, forceCloseTrailingRun: false)
+        let provisional = core.trailingRun.map {
+            ProvisionalPlatterMovement(
+                startTime: $0.startTime,
+                currentTime: $0.currentTime,
+                startPosition: $0.startPosition,
+                currentPosition: $0.currentPosition,
+                direction: $0.direction,
+                movementKind: $0.movementKind,
+                displacement: $0.displacement
+            )
+        }
+        return PlatterMovementDecodeResult(committedEvents: core.events, provisionalMovement: provisional)
     }
 
     struct LocalRecordingSidecar: Codable, Equatable {

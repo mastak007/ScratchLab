@@ -3083,7 +3083,7 @@ struct SessionArchiveBuilder: Sendable {
             } catch let error as SessionExportError {
                 issues.append(error.userMessage)
             } catch {
-                issues.append("ScratchLab could not validate the canonical export artifacts.")
+                issues.append("ScratchLab could not validate the canonical export artifacts (\(error)).")
             }
         }
 

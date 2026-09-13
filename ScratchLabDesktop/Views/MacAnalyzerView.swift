@@ -1,4 +1,5 @@
 import SwiftUI
+import Combine
 import AVFoundation
 import AppKit
 import ApplicationServices
@@ -240,6 +241,14 @@ private struct DebugTimecodeCaptureCard: View {
         .padding(12)
         .background(.white.opacity(0.04), in: RoundedRectangle(cornerRadius: 10))
     }
+}
+#endif
+
+#if DEBUG
+private final class OverlayCache: ObservableObject {
+    var timeline: ReviewOverlayTimeline?
+    var diagnostics: OverlayTimingDiagnostics?
+    var sourceStamp: Date?
 }
 #endif
 
@@ -601,6 +610,15 @@ struct MacAnalyzerView: View {
     /// legacy timed `practiceRunCard` above it — this coordinator never
     /// reads `captureEngine.lastScratchDetection`.
     @StateObject private var practiceCoordinator = PracticeGameplayCoordinator()
+    /// Live performed-notation preview for the active Practice scored
+    /// attempt (`.copying`) — constructed fresh when the attempt's real
+    /// recording starts, discarded (nil) the instant it ends, so evidence
+    /// from one attempt can never leak into the next. Never feeds Review/export.
+    @State private var practiceLiveNotationTracker: LivePerformedNotationTracker?
+    /// Live performed-notation preview for the active Capture take —
+    /// constructed fresh per take at record-start, discarded at stop.
+    /// Fully decoupled from `completeRoutineFinalization`'s own pipeline.
+    @State private var captureLiveNotationTracker: LivePerformedNotationTracker?
     // REMOVED: @ObservedObject private var runtimeDiagnostics — see Fix 1.
     // ScratchLabRuntimeDiagnostics.shared is read directly in leaf computed
     // properties so the root MacAnalyzerView.body is not invalidated at
@@ -658,13 +676,10 @@ struct MacAnalyzerView: View {
     @State private var showNotationOverlay = false
     @State private var showCameraPassthrough = false
     #if DEBUG
-    /// Cache the overlay timeline and its diagnostics so neither
-    /// `ReviewOverlayTimeline.build()` nor `OverlayTimingDiagnostics.compute()`
-    /// re-runs on every SwiftUI body evaluation — only when the captured
-    /// snapshot identity (capturedAt) or target notation changes.
-    @State private var cachedOverlayTimeline: ReviewOverlayTimeline?
-    @State private var cachedOverlayDiagnostics: OverlayTimingDiagnostics?
-    @State private var cachedOverlaySourceStamp: Date? = nil
+    /// Holds cached overlay timeline and diagnostics between SwiftUI body
+    /// evaluations. Stored as a reference type so mutations to its properties
+    /// do not trigger SwiftUI's state-during-update assertion.
+    @StateObject private var overlayCache = OverlayCache()
     #endif
     @State private var isShowingRawJSONInspector = false
     #if DEBUG
@@ -788,6 +803,42 @@ struct MacAnalyzerView: View {
             Text(scheduleLine).font(.caption).foregroundStyle(.secondary)
             Text(scheduleCountsLine).font(.caption).foregroundStyle(.secondary)
             Text(engineLine).font(.caption).foregroundStyle(.secondary)
+            playbackPositionTrack
+        }
+    }
+
+    /// Live "ahh" read-position track — a horizontal bar with a moving marker
+    /// at the throttled `playbackPositionSnapshot.normalizedPosition`, plus a
+    /// frame/total readout. Minimal diagnostic companion to the DVS drive text
+    /// above; a static waveform render is a follow-up (no AVAudioFile peak
+    /// renderer exists yet).
+    private var playbackPositionTrack: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Text("Sample read position")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+            if let snapshot = captureEngine.playbackPositionSnapshot, snapshot.totalFrames > 0 {
+                GeometryReader { geo in
+                    ZStack(alignment: .leading) {
+                        Capsule()
+                            .fill(Color.white.opacity(0.12))
+                            .frame(height: 4)
+                            .frame(maxHeight: .infinity, alignment: .center)
+                        Rectangle()
+                            .fill(ScratchLabDesign.Sem.textAccent)
+                            .frame(width: 2, height: 12)
+                            .offset(x: geo.size.width * CGFloat(snapshot.normalizedPosition) - 1)
+                    }
+                }
+                .frame(height: 16)
+                Text("frame \(snapshot.currentSampleFrame) / \(snapshot.totalFrames)")
+                    .font(.system(size: 10, design: .monospaced))
+                    .foregroundStyle(.secondary)
+            } else {
+                Text("no sample loaded")
+                    .font(.system(size: 10))
+                    .foregroundStyle(.secondary)
+            }
         }
     }
 
@@ -965,6 +1016,7 @@ struct MacAnalyzerView: View {
         }
         .onChange(of: routineSessionStore.selectedSessionID) { _, _ in
             synchronizeSelectedRoutineSession()
+            practiceLiveNotationTracker = nil
         }
         .onDisappear {
             beatEngine.stop()
@@ -976,6 +1028,7 @@ struct MacAnalyzerView: View {
             practiceBeatStore.handleLeavingPractice()
             cancelTestLabPracticeSession()
             captureEngine.setPerformerMonitorStreamingEnabled(false)
+            practiceLiveNotationTracker = nil
 #if ENABLE_TIMECODE_LIVE_TAP
             dvsControlProcessingLoop.stop()
 #endif
@@ -1001,6 +1054,7 @@ struct MacAnalyzerView: View {
             demoWithBeatStartUptime = nil
             practiceBeatStore.handleLeavingPractice()
             cancelTestLabPracticeSession()
+            practiceLiveNotationTracker = nil
         }
         .onChange(of: scenePhase) { _, newPhase in
             handleScenePhaseChange(newPhase)
@@ -1164,12 +1218,20 @@ struct MacAnalyzerView: View {
                     maxWidth: ScratchLabDesign.Sidebar.practiceMax
                 )
 
-            VStack(spacing: ScratchLabDesign.Stage.headerToContent) {
-                practiceStageHeader
-                practiceTeachingNotation
-                practiceOptionalLiveInput
+            // Wrapped in a ScrollView (matching the `practiceSidebar` pattern
+            // above) so header + notation + camera stay reachable at short
+            // macOS window heights instead of being compressed/clipped by
+            // the HSplitView pane with no scroll fallback. Single ScrollView,
+            // no nesting — none of the content below has a scroll of its own,
+            // so normal trackpad scrolling is never trapped.
+            ScrollView {
+                VStack(spacing: ScratchLabDesign.Stage.headerToContent) {
+                    practiceStageHeader
+                    practiceTeachingNotation
+                    practiceOptionalLiveInput
+                }
+                .padding(ScratchLabDesign.Stage.outerPadding)
             }
-            .padding(ScratchLabDesign.Stage.outerPadding)
             .background(ScratchLabDesign.Surface.canvas)
         }
     }
@@ -1182,6 +1244,30 @@ struct MacAnalyzerView: View {
     /// `ScratchPhraseChartView` / `ScratchMotionRenderer` the iOS lane and
     /// Review use). When the demo (WATCH/LISTEN) or a scored COPY runs, the
     /// panel animates with a playhead; otherwise it shows the target phrase.
+
+    /// How the Practice notation viewport is anchored to the playhead.
+    /// `.trailingEdge` pins the playhead to the right edge so the target
+    /// scrolls underneath it (Karl's reference video); `.centered` keeps the
+    /// previous symmetric window with future target strokes visible ahead of
+    /// the playhead. Pure presentation — no scoring/export/data impact.
+    private enum PracticeNotationDomainMode {
+        case centered
+        case trailingEdge
+    }
+
+    private func practiceNotationDomain(
+        now: TimeInterval,
+        mode: PracticeNotationDomainMode
+    ) -> ClosedRange<TimeInterval> {
+        let windowSeconds: Double = 1.44 + 1.76 // reuse the existing 3.2s viewport
+        switch mode {
+        case .centered:
+            return (now - 1.44)...(now + 1.76)
+        case .trailingEdge:
+            return (now - windowSeconds)...now
+        }
+    }
+
     private var practiceTeachingNotation: some View {
         VStack(alignment: .leading, spacing: 10) {
             HStack(alignment: .firstTextBaseline, spacing: 8) {
@@ -1204,7 +1290,7 @@ struct MacAnalyzerView: View {
                         presentation: .standard,
                         source: .target(notation),
                         bpm: 79,
-                        domain: (now - 1.44)...(now + 1.76),
+                        domain: practiceNotationDomain(now: now, mode: .trailingEdge),
                         playheadTime: now,
                         mode: practicePresentationState.notationMode,
                         canvasHeightOverride: 320
@@ -1229,8 +1315,18 @@ struct MacAnalyzerView: View {
             if liveInputEnabled {
                 liveCameraStage(
                     title: "Practice Camera",
-                    subtitle: "\(selectedCameraName) · \(captureEngine.selectedVideoSourceDescription)"
+                    subtitle: "\(selectedCameraName) · \(captureEngine.selectedVideoSourceDescription)",
+                    videoGravity: .resizeAspect,
+                    showsCalibrationOverlay: true
                 )
+                // Adaptive bounded height: the card's own `.aspectRatio(16/9,
+                // contentMode: .fit)` already shrinks proportionally with
+                // whatever width is available, so this `maxHeight` is purely
+                // a ceiling — it never forces a fixed height that could clip
+                // content at a different window size, it only stops the
+                // camera from dominating the Practice viewport when there's
+                // plenty of vertical room.
+                .frame(maxHeight: 320)
                 .padding(.top, ScratchLabDesign.Spacing.disclosureContentTop)
             } else {
                 VStack(alignment: .leading, spacing: 10) {
@@ -1244,15 +1340,12 @@ struct MacAnalyzerView: View {
                 .padding(.top, ScratchLabDesign.Spacing.disclosureContentTop)
             }
         } label: {
-            HStack(spacing: 8) {
-                Label("Camera / live input", systemImage: "video")
-                    .font(ScratchLabDesign.Typo.disclosureLabel)
-                    .foregroundStyle(.secondary)
-                Spacer(minLength: 8)
-                Text(liveInputEnabled ? "On" : "Off")
-                    .font(ScratchLabDesign.Typo.statusPill)
-                    .foregroundStyle(liveInputEnabled ? ScratchLabDesign.Sem.danger : .secondary)
-            }
+            cameraDisclosureRow(
+                title: "Camera / live input",
+                subtitle: liveInputEnabled ? "Live camera preview below" : "Optional live input for practice",
+                status: liveInputEnabled ? "OPEN" : "CLOSED",
+                statusColor: liveInputEnabled ? ScratchLabDesign.Sem.textAccent : ScratchLabDesign.Sem.textSecondary
+            )
         }
         .padding(.horizontal, 4)
     }
@@ -1311,25 +1404,66 @@ struct MacAnalyzerView: View {
                     maxWidth: ScratchLabDesign.Sidebar.captureMax
                 )
 
-            VStack(spacing: ScratchLabDesign.Stage.headerToContent) {
-                captureStageHeader
+            // Wrapped in a ScrollView (matching Practice's short-window fix)
+            // so header + live notation + camera stay reachable even if the
+            // column's natural content exceeds the window height. Single
+            // ScrollView, no nesting.
+            ScrollView {
+                VStack(spacing: ScratchLabDesign.Stage.headerToContent) {
+                    captureStageHeader
 
-                if !hasRoutineSessions {
-                    captureEmptyStateStage
-                } else {
-                    captureCameraSection
+                    if !hasRoutineSessions {
+                        captureEmptyStateStage
+                    } else {
+                        // Live notation is the primary recording surface —
+                        // ordered ahead of the (optional, height-capped,
+                        // collapsed-by-default) camera so it's never pushed
+                        // below the fold by an open camera disclosure.
+                        if let captureLiveNotationTracker {
+                            LivePerformedNotationCard(
+                                tracker: captureLiveNotationTracker,
+                                isDimmedForCalibrationEditing: !captureEngine.calibrationLocked
+                            )
+                        }
+                        captureCameraSection
+                    }
                 }
+                .padding(ScratchLabDesign.Stage.outerPadding)
             }
-            .padding(ScratchLabDesign.Stage.outerPadding)
             .background(ScratchLabDesign.Surface.canvas)
         }
+        .onChange(of: captureEngine.isRoutineRecording) { _, isRecording in
+            // Skip when a Practice scored attempt (not a Capture-tab take)
+            // is what actually started/stopped this recording — that case
+            // is owned by `practiceLiveNotationTracker` above, and a take
+            // can only ever be one or the other, never both at once.
+            guard !isPracticeScoredAttemptActive else { return }
+            if isRecording {
+                // Fresh tracker per take — a new instance is the reset, so
+                // no evidence from a prior take can leak into this one.
+                captureLiveNotationTracker = LivePerformedNotationTracker(
+                    dataSource: captureEngine.makeLivePerformedNotationDataSource()
+                )
+            } else {
+                captureLiveNotationTracker = nil
+            }
+        }
+    }
+
+    private var isPracticeScoredAttemptActive: Bool {
+        if case .copying = practiceCoordinator.state { return true }
+        return false
     }
 
     /// Camera is an optional visual guide, not the dominant Capture surface.
     /// It stays collapsed unless the user explicitly opens it; recording does
     /// not depend on it, and the collapsed disclosure never resizes the core
-    /// workflow. The standard preview is the clean live feed only — no
-    /// scrim/hand/deck/mixer overlays (calibration lives in Advanced).
+    /// workflow. The preview is plain video, height-capped — no calibration
+    /// overlay, no recognition/tracking boxes, no gamification chrome.
+    /// Calibration box editing for Capture stays reachable through Advanced's
+    /// Lock/Unlock + slider entry point and the Performer Monitor window's
+    /// own editor, both already backed by the same `captureEngine`
+    /// `zoneAdjustments`/`calibrationLocked` state.
     private var captureCameraSection: some View {
         DisclosureGroup(isExpanded: $showCaptureCamera) {
             Group {
@@ -1344,20 +1478,30 @@ struct MacAnalyzerView: View {
                     }
                 }
             }
+            // Bounded ceiling, not a fixed height: `cameraStageCard`'s own
+            // `.aspectRatio(16/9, contentMode: .fit)` still shrinks with
+            // available width, so this only stops the camera from
+            // consuming the whole Capture column when there's vertical
+            // room to spare — camera is optional supporting content, never
+            // the primary Capture surface. Applied uniformly (not
+            // conditioned on recording state) so opening/closing the
+            // disclosure or starting a take never produces a layout jump.
+            .frame(maxHeight: 320)
             .padding(.top, ScratchLabDesign.Spacing.disclosureContentTop)
         } label: {
-            HStack(spacing: 8) {
-                Label("Camera / visual guide", systemImage: "video")
-                    .font(ScratchLabDesign.Typo.disclosureLabel)
-                    .foregroundStyle(.secondary)
-                Spacer(minLength: 8)
-                Text(showCaptureCamera ? "Open" : "Closed")
-                    .font(ScratchLabDesign.Typo.statusPill)
-                    .foregroundStyle(.secondary)
-            }
+            cameraDisclosureRow(
+                title: "Camera / visual guide",
+                subtitle: showCaptureCamera ? "Plain preview below · no overlays" : "Optional visual guide",
+                status: showCaptureCamera ? "OPEN" : "CLOSED",
+                statusColor: showCaptureCamera ? ScratchLabDesign.Sem.textAccent : ScratchLabDesign.Sem.textSecondary
+            )
         }
         .padding(.horizontal, 4)
-        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+        // No `maxHeight: .infinity` here (unlike the pre-fix version) — a
+        // collapsed or height-capped disclosure must size to its own
+        // content, not claim all remaining vertical space in the Capture
+        // column and starve the live notation card below it.
+        .frame(maxWidth: .infinity, alignment: .top)
         .onChange(of: showCaptureCamera) { _, opened in
             // The optional preview must initialise only when the user opens it
             // (and permission allows it). `start()` is idempotent — it requests
@@ -2427,9 +2571,8 @@ struct MacAnalyzerView: View {
             }
 #if ENABLE_TIMECODE_LIVE_TAP
             .onAppear {
-                captureEngine.timecodeAudioCallback = { [weak timecodePipeline] left, right, sampleRate, hostTime in
-                    guard let pipeline = timecodePipeline,
-                          pipeline.liveTapEnabled,
+                captureEngine.timecodeAudioCallback = { [pipeline = timecodePipeline] left, right, sampleRate, hostTime in
+                    guard pipeline.liveTapEnabled,
                           pipeline.mode != .disabled else { return }
 
                     // The callback deposits audio into a lock-protected,
@@ -2506,13 +2649,47 @@ struct MacAnalyzerView: View {
         )
     }
 
-    private func liveCameraStage(title: String, subtitle: String) -> some View {
+    /// - Parameters:
+    ///   - videoGravity: defaults to `.resizeAspectFill` (unchanged behavior
+    ///     for Capture and every other existing caller). Practice's live
+    ///     camera passes `.resizeAspect` so the full frame is visible,
+    ///     letterboxed rather than cropped.
+    ///   - showsCalibrationOverlay: defaults to `false`. ScratchLab V3.2's
+    ///     Capture preview is plain video — no recognition/tracking boxes,
+    ///     no gamification chrome (`DeckGamificationOverlay`'s stars/"Stars
+    ///     won" HUD renders unconditionally whenever it's present at all).
+    ///     Practice opts in explicitly (Karl's prior directive was scoped to
+    ///     Practice; Capture's own pre-existing disclosure subtitle already
+    ///     promised "Plain preview below · no overlays" — restoring that,
+    ///     not changing it).
+    private func liveCameraStage(
+        title: String,
+        subtitle: String,
+        videoGravity: AVLayerVideoGravity = .resizeAspectFill,
+        showsCalibrationOverlay: Bool = false
+    ) -> some View {
         cameraStageCard(title: title, subtitle: subtitle) {
-            // Standard camera preview: the live feed only. No scrim, no
-            // deck/mixer drag boxes, no hand-region pill, no coaching overlay
-            // — those calibration overlays live in Advanced only.
-            MacCameraPreviewView(session: captureEngine.captureSession)
+            // Plain camera preview. Calibration box editing (when opted in)
+            // renders directly on the camera image via `CalibrationCameraOverlay`
+            // — Advanced keeps its own separate, coarser Lock/Unlock + slider
+            // entry point; Performer Monitor keeps its own existing
+            // calibration editor — all three share the exact same
+            // `captureEngine.zoneAdjustments`/`calibrationLocked` state.
+            ZStack(alignment: .topTrailing) {
+                MacCameraPreviewView(session: captureEngine.captureSession, videoGravity: videoGravity)
+                if showsCalibrationOverlay {
+                    CalibrationCameraOverlay(captureEngine: captureEngine)
+                }
+            }
         }
+        // Slice X.Perf.2: the disclosure (Practice `practiceOptionalLiveInput` /
+        // Capture `captureCameraSection`) animates its content height over
+        // SwiftUI's default duration; the AppKit `AVCaptureVideoPreviewLayer`
+        // (`resizeAspectFill`) would crop to each intermediate non-16:9 bounds
+        // during that animation, leaving a half-frame preview. Disable the
+        // animation for just this card so the layer settles to its final 16:9
+        // bounds while the disclosure chrome still animates around it.
+        .transaction { $0.disablesAnimations = true }
     }
 
     private var companionStage: some View {
@@ -3999,11 +4176,13 @@ struct MacAnalyzerView: View {
         if practiceBeatStore.isPlaying {
             return "Stop the practice beat to hear the coach demo."
         }
-        if !babyScratchDemo.isAudioAvailable {
-            return "Demo audio unavailable for this scratch."
-        }
-        if let lastErrorMessage = babyScratchDemo.lastErrorMessage {
-            return lastErrorMessage
+        // Reads `demoModeController` — the single controller Practice's
+        // actual Listen/Pause/Restart buttons drive (see `practiceCoachCard`)
+        // — not `babyScratchDemo`, which is a separate coordinator for the
+        // Advanced tab's Notation Lab and must never be the source of truth
+        // for status text adjacent to the Listen controls.
+        if !demoModeController.isReady {
+            return demoModeController.statusMessage
         }
         return coachInstruction.demoAudioRole == "withBeat"
             ? "Coach demo includes beat and scratch together."
@@ -4719,6 +4898,48 @@ struct MacAnalyzerView: View {
         )
     }
 
+    /// Figma `CameraDisclosureRow` (node 174:23) — the camera disclosure header
+    /// as a bordered surface card: title + subtitle on the left, a state pill on
+    /// the right. Surface fill, 1pt default border, 8pt radius, 16/12 padding,
+    /// title 14pt medium / subtitle 10pt regular / pill 10pt medium.
+    private func cameraDisclosureRow(
+        title: String,
+        subtitle: String,
+        status: String,
+        statusColor: Color
+    ) -> some View {
+        HStack(alignment: .center, spacing: ScratchLabDesign.Spacing.md) {
+            VStack(alignment: .leading, spacing: 2) {
+                Text(title)
+                    .font(.system(size: 14, weight: .medium))
+                    .foregroundStyle(ScratchLabDesign.Sem.textPrimary)
+                    .lineLimit(1)
+                Text(subtitle)
+                    .font(.system(size: 10, weight: .regular))
+                    .foregroundStyle(ScratchLabDesign.Sem.textSecondary)
+                    .lineLimit(1)
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+
+            Text(status)
+                .font(.system(size: 10, weight: .medium))
+                .foregroundStyle(statusColor)
+                .lineLimit(1)
+        }
+        .padding(.horizontal, ScratchLabDesign.Spacing.lg)
+        .padding(.vertical, ScratchLabDesign.Spacing.md)
+        .frame(height: 60)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(
+            ScratchLabDesign.Surface.surface,
+            in: RoundedRectangle(cornerRadius: 8, style: .continuous)
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 8, style: .continuous)
+                .stroke(ScratchLabDesign.Border.default, lineWidth: 1)
+        )
+    }
+
     private func cameraStageCard<Content: View>(title: String, subtitle: String, @ViewBuilder content: () -> Content) -> some View {
         VStack(alignment: .leading, spacing: 10) {
             VStack(alignment: .leading, spacing: 3) {
@@ -5205,7 +5426,6 @@ struct MacAnalyzerView: View {
         case .playing:           return "Playing"
         case .paused:            return "Paused"
         case .stopped:           return "Idle"
-        default:                 return "Idle"
         }
     }
 
@@ -7444,9 +7664,9 @@ struct MacAnalyzerView: View {
     ) -> (ReviewOverlayTimeline, OverlayTimingDiagnostics) {
         #if DEBUG
         let stamp = capturedSnapshot.capturedAt
-        if let cached = cachedOverlayTimeline,
-           let cachedDiag = cachedOverlayDiagnostics,
-           cachedOverlaySourceStamp == stamp {
+        if let cached = overlayCache.timeline,
+           let cachedDiag = overlayCache.diagnostics,
+           overlayCache.sourceStamp == stamp {
             return (cached, cachedDiag)
         }
         #endif
@@ -7459,9 +7679,9 @@ struct MacAnalyzerView: View {
         )
         let diag = OverlayTimingDiagnostics.compute(overlay: built)
         #if DEBUG
-        cachedOverlayTimeline = built
-        cachedOverlayDiagnostics = diag
-        cachedOverlaySourceStamp = stamp
+        overlayCache.timeline = built
+        overlayCache.diagnostics = diag
+        overlayCache.sourceStamp = stamp
         #endif
         return (built, diag)
     }
@@ -7959,6 +8179,13 @@ struct MacAnalyzerView: View {
             guard case .copying(let session) = practiceCoordinator.state else { return }
             if isRecording {
                 schedulePracticeAttemptAutoStop(after: session.closesAfterSeconds)
+                // Fresh tracker per attempt — a new instance is the reset,
+                // so no evidence from a prior attempt can leak into this one.
+                practiceLiveNotationTracker = LivePerformedNotationTracker(
+                    dataSource: captureEngine.makeLivePerformedNotationDataSource()
+                )
+            } else {
+                practiceLiveNotationTracker = nil
             }
         }
         .onChange(of: captureEngine.lastRoutineDetectedNotation) { _, snapshot in
@@ -8026,6 +8253,16 @@ struct MacAnalyzerView: View {
                         .frame(height: 90)
                         .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
                     }
+                }
+                // Live performed notation — its own separate card, never
+                // layered on the camera (that's reserved for the deck/mixer
+                // calibration overlay). Only present while this attempt's
+                // recording is actually running.
+                if let practiceLiveNotationTracker {
+                    LivePerformedNotationCard(
+                        tracker: practiceLiveNotationTracker,
+                        isDimmedForCalibrationEditing: !captureEngine.calibrationLocked
+                    )
                 }
                 Text("Copying one cycle — closes automatically in about \(String(format: "%.1f", session.closesAfterSeconds))s.")
                     .font(.system(size: 12, weight: .medium))
@@ -8126,6 +8363,12 @@ struct MacAnalyzerView: View {
             handleMainCaptureAction()
         }
         practiceCoordinator.abortAttempt()
+        // Explicit reset even when `isRoutineRecording` had already gone
+        // false before this call (see the doc comment above) — the
+        // `onChange(of: captureEngine.isRoutineRecording)` handler only
+        // fires on a real transition, so a stale tracker needs this
+        // direct clear as a backstop.
+        practiceLiveNotationTracker = nil
     }
 
     /// Schedules the ONE pending auto-stop for the active attempt,
@@ -8873,6 +9116,21 @@ struct MacAnalyzerView: View {
 
     @MainActor
     private func handleRoutineRecordingButton() async {
+        // Calibration recording guard: Capture must not start while
+        // calibration editing remains open — refuse explicitly (never a
+        // silent background lock-flip) and require the user to tap Done
+        // first. Checked before the count-in/beat/reservation flow even
+        // starts, so no path below this can reach `startRoutineRecording`.
+        // Only guards the START transition (`!isRoutineRecording`) — Stop
+        // is never blocked by calibration state.
+        if CaptureGuideEditModel.recordActionIsBlockedByCalibration(
+            isRoutineRecording: captureEngine.isRoutineRecording,
+            calibrationLocked: captureEngine.calibrationLocked
+        ) {
+            captureEngine.reportRoutineRecordingIssue("Finish editing calibration boxes — tap Done before recording.")
+            return
+        }
+
         practiceBeatStore.handleRecordingFlowStarted()
 
         if routineCountInBeat != nil {

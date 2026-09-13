@@ -382,7 +382,6 @@ final class MIDILearnedMappingStore: Sendable {
     static let `default` = MIDILearnedMappingStore()
 
     private let baseURL: URL
-    private let fileManager = FileManager.default
     private let encoder = JSONEncoder()
     private let decoder = JSONDecoder()
 
@@ -390,12 +389,12 @@ final class MIDILearnedMappingStore: Sendable {
         if let baseURL {
             self.baseURL = baseURL
         } else {
-            let appSupport = fileManager.urls(for: .applicationSupportDirectory, in: .userDomainMask).first!
+            let appSupport = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first!
             self.baseURL = appSupport.appendingPathComponent("ScratchLab/MIDIMappings", isDirectory: true)
         }
         // Synchronous and one-time: a `save()` called immediately after init must
         // never race an async directory-creation task and silently no-op.
-        try? fileManager.createDirectory(at: self.baseURL, withIntermediateDirectories: true)
+        try? FileManager.default.createDirectory(at: self.baseURL, withIntermediateDirectories: true)
     }
 
     /// Filename for a device mapping, derived from the stable device identifier.
@@ -419,14 +418,14 @@ final class MIDILearnedMappingStore: Sendable {
     /// silently returning nil, so callers can surface a persistence error to the user.
     func loadOrThrow(deviceIdentifier: String) throws -> MIDIDeviceMapping? {
         let url = fileURL(for: deviceIdentifier)
-        guard fileManager.fileExists(atPath: url.path) else { return nil }
+        guard FileManager.default.fileExists(atPath: url.path) else { return nil }
         let data = try Data(contentsOf: url)
         return try MIDIDeviceMapping.decode(from: data, decoder: decoder)
     }
 
     /// Load all stored device mappings.
     func loadAll() -> [MIDIDeviceMapping] {
-        guard let files = try? fileManager.contentsOfDirectory(at: baseURL, includingPropertiesForKeys: nil)
+        guard let files = try? FileManager.default.contentsOfDirectory(at: baseURL, includingPropertiesForKeys: nil)
         else { return [] }
         return files
             .filter { $0.pathExtension == "json" }
@@ -452,12 +451,12 @@ final class MIDILearnedMappingStore: Sendable {
     /// Delete the learned mapping for a device.
     func delete(deviceIdentifier: String) {
         let url = fileURL(for: deviceIdentifier)
-        try? fileManager.removeItem(at: url)
+        try? FileManager.default.removeItem(at: url)
     }
 
     /// List all device identifiers with stored mappings.
     func storedDeviceIdentifiers() -> [String] {
-        guard let files = try? fileManager.contentsOfDirectory(at: baseURL, includingPropertiesForKeys: nil)
+        guard let files = try? FileManager.default.contentsOfDirectory(at: baseURL, includingPropertiesForKeys: nil)
         else { return [] }
         return files
             .filter { $0.pathExtension == "json" }

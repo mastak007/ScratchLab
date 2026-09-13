@@ -11,6 +11,7 @@
 // the `#if DEBUG` "Virtual Platter Prototype" entry in MainMenuView.swift.
 
 import SwiftUI
+import Combine
 import AVFoundation
 import os
 

@@ -68,6 +68,7 @@
 		8E2BDEAD0BB509A80C9FAB5F /* Archive+MemoryFile.swift in Sources */ = {isa = PBXBuildFile; fileRef = F02E4CEF8129F5BD651B9FFE /* Archive+MemoryFile.swift */; };
 		923253E866827B1462A8E5DF /* Archive+Deprecated.swift in Sources */ = {isa = PBXBuildFile; fileRef = DB69DF9CBCEC2665AE51DEF0 /* Archive+Deprecated.swift */; };
 		9DFB00E0039ACBB0C00A6622 /* DeckGamificationOverlay.swift in Sources */ = {isa = PBXBuildFile; fileRef = B2000009 /* DeckGamificationOverlay.swift */; };
+		CCOV0001CCOV001CCOV00001 /* CalibrationCameraOverlay.swift in Sources */ = {isa = PBXBuildFile; fileRef = CCOV0000CCOV001CCOV00001 /* CalibrationCameraOverlay.swift */; };
 		A1000001 /* ScratchLabApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = A2000001 /* ScratchLabApp.swift */; };
 		A1000002 /* MainMenuView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A2000002 /* MainMenuView.swift */; };
 		A1000003 /* LevelSelectView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A2000003 /* LevelSelectView.swift */; };
@@ -198,6 +199,10 @@
 		DRN1001000DRN001DRN00002 /* Notation/DebugReviewNotationCard.swift in Sources */ = {isa = PBXBuildFile; fileRef = DRN1000000DRN001DRN00001 /* Notation/DebugReviewNotationCard.swift */; };
 		DRT2011000DRT002DRT00001 /* DebugReviewNotationCardTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = DRT2010000DRT002DRT00001 /* DebugReviewNotationCardTests.swift */; };
 		DTF0001000DTF001DTF00001 /* DemoTimingFoundationTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = DTF0000000DTF001DTF00001 /* DemoTimingFoundationTests.swift */; };
+		DART0001DART001DART00001 /* DemoAudioResolverTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = DART0000DART001DART00001 /* DemoAudioResolverTests.swift */; };
+		MCPV0001MCPV001MCPV00001 /* MacCameraPreviewViewTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = MCPV0000MCPV001MCPV00001 /* MacCameraPreviewViewTests.swift */; };
+		CALT0001CALT001CALT00001 /* CalibrationCameraOverlayTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = CALT0000CALT001CALT00001 /* CalibrationCameraOverlayTests.swift */; };
+		CCLR0001CCLR001CCLR00001 /* CaptureCameraLayoutRegressionTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = CCLR0000CCLR001CCLR00001 /* CaptureCameraLayoutRegressionTests.swift */; };
 		DVP0MAC001DVP001DVP00001 /* DVSControlVinylPanel.swift in Sources */ = {isa = PBXBuildFile; fileRef = DVP0000000DVP001DVP00001 /* DVSControlVinylPanel.swift */; };
 		DVS0IOS001DVS001DVS00001 /* DVSTimecodeStatus.swift in Sources */ = {isa = PBXBuildFile; fileRef = DVS0000000DVS001DVS00001 /* DVSTimecodeStatus.swift */; };
 		DVS0MAC001DVS001DVS00001 /* DVSTimecodeStatus.swift in Sources */ = {isa = PBXBuildFile; fileRef = DVS0000000DVS001DVS00001 /* DVSTimecodeStatus.swift */; };
@@ -234,6 +239,7 @@
 		MIDCRV0MAC0001 /* MIDIFaderCurve.swift in Sources */ = {isa = PBXBuildFile; fileRef = MIDCRV0FREF0001 /* MIDIFaderCurve.swift */; };
 		MIDCRV0TBF0001 /* MIDIFaderCurveTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = MIDCRV0TREF0001 /* MIDIFaderCurveTests.swift */; };
 		MIDIPKT0TBF0001 /* MIDIPacketBoundsCrashFixTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = MIDIPKT0TREF0001 /* MIDIPacketBoundsCrashFixTests.swift */; };
+		LPNT0002TBF0001 /* LivePerformedNotationTrackerTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = LPNT0002TREF0001 /* LivePerformedNotationTrackerTests.swift */; };
 		MIDIUMG0TBF0001 /* MIDIUserMixerGainTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = MIDIUMG0TREF0001 /* MIDIUserMixerGainTests.swift */; };
 		MIDLRN0TBF0001 /* MIDILearnedMappingTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = MIDLRN0TREF0001 /* MIDILearnedMappingTests.swift */; };
 		MIDLRN0TBF0002 /* MIDILearnEngineTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = MIDLRN0TREF0002 /* MIDILearnEngineTests.swift */; };
@@ -528,6 +534,7 @@
 		TOM1001000TOM001TOM00002 /* Notation/Timing/TimingOriginMarker.swift in Sources */ = {isa = PBXBuildFile; fileRef = TOM1000000TOM001TOM00001 /* Notation/Timing/TimingOriginMarker.swift */; };
 		TOM2011000TOM002TOM00001 /* TimingOriginMarkerTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = TOM2010000TOM002TOM00001 /* TimingOriginMarkerTests.swift */; };
 		TRIR0000001TRIR0BUILDPROD /* TimecodeRealtimeIngressRing.swift in Sources */ = {isa = PBXBuildFile; fileRef = TRIR0000000TRIR0FILEPROD /* TimecodeRealtimeIngressRing.swift */; };
+		LPNT0000001LPNT0BUILDPROD /* LivePerformedNotationTracker.swift in Sources */ = {isa = PBXBuildFile; fileRef = LPNT0000000LPNT0FILEPROD /* LivePerformedNotationTracker.swift */; };
 		TRIR0000003TRIR0BUILDTEST /* TimecodeRealtimeIngressRingTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = TRIR0000002TRIR0FILETEST /* TimecodeRealtimeIngressRingTests.swift */; };
 		TSDEA001TSDEA001TSDEA001 /* TimecodeSignedRateDenseEstimator.swift in Sources */ = {isa = PBXBuildFile; fileRef = TSDER001TSDER001TSDER001 /* TimecodeSignedRateDenseEstimator.swift */; };
 		TSDEB001TSDEB001TSDEB001 /* TimecodeSignedRateDenseEstimator.swift in Sources */ = {isa = PBXBuildFile; fileRef = TSDER001TSDER001TSDER001 /* TimecodeSignedRateDenseEstimator.swift */; };
@@ -660,6 +667,7 @@
 		B2000007 /* CompanionCameraReceiver.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CompanionCameraReceiver.swift; sourceTree = "<group>"; };
 		B2000008 /* DJRigLayoutDetector.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DJRigLayoutDetector.swift; sourceTree = "<group>"; };
 		B2000009 /* DeckGamificationOverlay.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DeckGamificationOverlay.swift; sourceTree = "<group>"; };
+		CCOV0000CCOV001CCOV00001 /* CalibrationCameraOverlay.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CalibrationCameraOverlay.swift; sourceTree = "<group>"; };
 		B2000010 /* AppIcon.icns */ = {isa = PBXFileReference; lastKnownFileType = image.icns; path = AppIcon.icns; sourceTree = "<group>"; };
 		B2000011 /* ScratchLabDesktop.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = ScratchLabDesktop.entitlements; sourceTree = "<group>"; };
 		B9886FB2B8E07860472DD229 /* WatchCaptureView.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = WatchCaptureView.swift; sourceTree = "<group>"; };
@@ -706,6 +714,10 @@
 		DRN1000000DRN001DRN00001 /* Notation/DebugReviewNotationCard.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Notation/DebugReviewNotationCard.swift; sourceTree = "<group>"; };
 		DRT2010000DRT002DRT00001 /* DebugReviewNotationCardTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DebugReviewNotationCardTests.swift; sourceTree = "<group>"; };
 		DTF0000000DTF001DTF00001 /* DemoTimingFoundationTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DemoTimingFoundationTests.swift; sourceTree = "<group>"; };
+		DART0000DART001DART00001 /* DemoAudioResolverTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DemoAudioResolverTests.swift; sourceTree = "<group>"; };
+		MCPV0000MCPV001MCPV00001 /* MacCameraPreviewViewTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MacCameraPreviewViewTests.swift; sourceTree = "<group>"; };
+		CALT0000CALT001CALT00001 /* CalibrationCameraOverlayTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CalibrationCameraOverlayTests.swift; sourceTree = "<group>"; };
+		CCLR0000CCLR001CCLR00001 /* CaptureCameraLayoutRegressionTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CaptureCameraLayoutRegressionTests.swift; sourceTree = "<group>"; };
 		DVP0000000DVP001DVP00001 /* DVSControlVinylPanel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DVSControlVinylPanel.swift; sourceTree = "<group>"; };
 		DVS0000000DVS001DVS00001 /* DVSTimecodeStatus.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DVSTimecodeStatus.swift; sourceTree = "<group>"; };
 		DVSL000000DVS001DVSL0001 /* DVSLiveLogger.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DVSLiveLogger.swift; sourceTree = "<group>"; };
@@ -733,6 +745,7 @@
 		MIDCRV0FREF0001 /* MIDIFaderCurve.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MIDIFaderCurve.swift; sourceTree = "<group>"; };
 		MIDCRV0TREF0001 /* MIDIFaderCurveTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MIDIFaderCurveTests.swift; sourceTree = "<group>"; };
 		MIDIPKT0TREF0001 /* MIDIPacketBoundsCrashFixTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MIDIPacketBoundsCrashFixTests.swift; sourceTree = "<group>"; };
+		LPNT0002TREF0001 /* LivePerformedNotationTrackerTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LivePerformedNotationTrackerTests.swift; sourceTree = "<group>"; };
 		MIDIUMG0TREF0001 /* MIDIUserMixerGainTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MIDIUserMixerGainTests.swift; sourceTree = "<group>"; };
 		MIDLRN0TREF0001 /* MIDILearnedMappingTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MIDILearnedMappingTests.swift; sourceTree = "<group>"; };
 		MIDLRN0TREF0002 /* MIDILearnEngineTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MIDILearnEngineTests.swift; sourceTree = "<group>"; };
@@ -951,6 +964,7 @@
 		TOM1000000TOM001TOM00001 /* Notation/Timing/TimingOriginMarker.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Notation/Timing/TimingOriginMarker.swift; sourceTree = "<group>"; };
 		TOM2010000TOM002TOM00001 /* TimingOriginMarkerTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TimingOriginMarkerTests.swift; sourceTree = "<group>"; };
 		TRIR0000000TRIR0FILEPROD /* TimecodeRealtimeIngressRing.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TimecodeRealtimeIngressRing.swift; sourceTree = "<group>"; };
+		LPNT0000000LPNT0FILEPROD /* LivePerformedNotationTracker.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LivePerformedNotationTracker.swift; sourceTree = "<group>"; };
 		TRIR0000002TRIR0FILETEST /* TimecodeRealtimeIngressRingTests.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = TimecodeRealtimeIngressRingTests.swift; sourceTree = "<group>"; };
 		TSDER001TSDER001TSDER001 /* TimecodeSignedRateDenseEstimator.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = TimecodeSignedRateDenseEstimator.swift; sourceTree = "<group>"; };
 		TSDTR001TSDTR001TSDTR001 /* TimecodeSignedRateDenseEstimatorTests.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = TimecodeSignedRateDenseEstimatorTests.swift; sourceTree = "<group>"; };
@@ -1006,6 +1020,10 @@
 				SNT0000000SNT001SNT00002 /* ScratchNotationTimelineTests.swift */,
 				PVM0000000PVM001PVM00003 /* PhraseViewportModelTests.swift */,
 				DTF0000000DTF001DTF00001 /* DemoTimingFoundationTests.swift */,
+				DART0000DART001DART00001 /* DemoAudioResolverTests.swift */,
+				MCPV0000MCPV001MCPV00001 /* MacCameraPreviewViewTests.swift */,
+				CALT0000CALT001CALT00001 /* CalibrationCameraOverlayTests.swift */,
+				CCLR0000CCLR001CCLR00001 /* CaptureCameraLayoutRegressionTests.swift */,
 				NST0000000NST001NST00001 /* NotationSheetTests.swift */,
 				SNCM000000SNCM01SNCM0001 /* ScratchNotationCanonicalModelTests.swift */,
 				SNFE000000SNFE01SNFE0001 /* ScratchNotationFaderEventTests.swift */,
@@ -1042,6 +1060,7 @@
 				MIDLRN0TREF0001 /* MIDILearnedMappingTests.swift */,
 				MIDLRN0TREF0002 /* MIDILearnEngineTests.swift */,
 				MIDIPKT0TREF0001 /* MIDIPacketBoundsCrashFixTests.swift */,
+				LPNT0002TREF0001 /* LivePerformedNotationTrackerTests.swift */,
 				DVSUMG0TREF0001 /* DVSContinuousVinylRendererUserMixerGainTests.swift */,
 				SPCUMG0TREF0001 /* ScratchSamplePlaybackControllerUserMixerGainTests.swift */,
 				MIDIUMG0TREF0001 /* MIDIUserMixerGainTests.swift */,
@@ -1453,6 +1472,7 @@
 				B2000003 /* MacCameraPreviewView.swift */,
 				B2000004 /* HandMotionOverlay.swift */,
 				B2000009 /* DeckGamificationOverlay.swift */,
+				CCOV0000CCOV001CCOV00001 /* CalibrationCameraOverlay.swift */,
 				NV00000001NV0001NV000001 /* NotationVisualizerView.swift */,
 				SLB0000001SLB001SLB00001 /* ScratchLabBrandMark.swift */,
 				SNC0000001SNC001SNC00001 /* ScratchNotationCanvasView.swift */,
@@ -1474,6 +1494,7 @@
 			children = (
 				B2000005 /* MacCaptureEngine.swift */,
 				TRIR0000000TRIR0FILEPROD /* TimecodeRealtimeIngressRing.swift */,
+				LPNT0000000LPNT0FILEPROD /* LivePerformedNotationTracker.swift */,
 				SBPA0001FREF /* ScratchBankPadAudioPlayer.swift */,
 				SSPC0001FREF /* ScratchSamplePlaybackController.swift */,
 				DCVR0001FREF /* DVSContinuousVinylRenderer.swift */,
@@ -1715,7 +1736,7 @@
 			attributes = {
 				BuildIndependentTargetsInParallel = 1;
 				LastSwiftUpdateCheck = 2640;
-				LastUpgradeCheck = 2640;
+				LastUpgradeCheck = 2660;
 				TargetAttributes = {
 					517A55FF2FAE1C02009EC734 = {
 						CreatedOnToolsVersion = 26.4.1;
@@ -1818,8 +1839,10 @@
 				210F31D6E01243445A04B700 /* MacCameraPreviewView.swift in Sources */,
 				DCD5EDA8C6A78B3F7A94B170 /* HandMotionOverlay.swift in Sources */,
 				9DFB00E0039ACBB0C00A6622 /* DeckGamificationOverlay.swift in Sources */,
+				CCOV0001CCOV001CCOV00001 /* CalibrationCameraOverlay.swift in Sources */,
 				B554DA1DDE31EE39B501D9C0 /* MacCaptureEngine.swift in Sources */,
 				TRIR0000001TRIR0BUILDPROD /* TimecodeRealtimeIngressRing.swift in Sources */,
+				LPNT0000001LPNT0BUILDPROD /* LivePerformedNotationTracker.swift in Sources */,
 				SBPA0001DSRC /* ScratchBankPadAudioPlayer.swift in Sources */,
 				SSPC0001MAC /* ScratchSamplePlaybackController.swift in Sources */,
 				DCVR0001MAC /* DVSContinuousVinylRenderer.swift in Sources */,
@@ -2211,6 +2234,10 @@
 				SNT0001000SNT001SNT00002 /* ScratchNotationTimelineTests.swift in Sources */,
 				PVM0001000PVM001PVM00003 /* PhraseViewportModelTests.swift in Sources */,
 				DTF0001000DTF001DTF00001 /* DemoTimingFoundationTests.swift in Sources */,
+				DART0001DART001DART00001 /* DemoAudioResolverTests.swift in Sources */,
+				MCPV0001MCPV001MCPV00001 /* MacCameraPreviewViewTests.swift in Sources */,
+				CALT0001CALT001CALT00001 /* CalibrationCameraOverlayTests.swift in Sources */,
+				CCLR0001CCLR001CCLR00001 /* CaptureCameraLayoutRegressionTests.swift in Sources */,
 				NST0001000NST001NST00001 /* NotationSheetTests.swift in Sources */,
 				SNCM001000SNCM01SNCM0001 /* ScratchNotationCanonicalModelTests.swift in Sources */,
 				SNFE001000SNFE01SNFE0001 /* ScratchNotationFaderEventTests.swift in Sources */,
@@ -2247,6 +2274,7 @@
 				MIDLRN0TBF0001 /* MIDILearnedMappingTests.swift in Sources */,
 				MIDLRN0TBF0002 /* MIDILearnEngineTests.swift in Sources */,
 				MIDIPKT0TBF0001 /* MIDIPacketBoundsCrashFixTests.swift in Sources */,
+				LPNT0002TBF0001 /* LivePerformedNotationTrackerTests.swift in Sources */,
 				DVSUMG0TBF0001 /* DVSContinuousVinylRendererUserMixerGainTests.swift in Sources */,
 				SPCUMG0TBF0001 /* ScratchSamplePlaybackControllerUserMixerGainTests.swift in Sources */,
 				MIDIUMG0TBF0001 /* MIDIUserMixerGainTests.swift in Sources */,
@@ -2375,6 +2403,7 @@
 			isa = XCBuildConfiguration;
 			buildSettings = {
 				CODE_SIGN_STYLE = Automatic;
+				DEAD_CODE_STRIPPING = YES;
 				DEVELOPMENT_TEAM = 2DDKGL33BU;
 				ENABLE_HARDENED_RUNTIME = YES;
 				GCC_C_LANGUAGE_STANDARD = gnu17;
@@ -2393,6 +2422,7 @@
 			isa = XCBuildConfiguration;
 			buildSettings = {
 				CODE_SIGN_STYLE = Automatic;
+				DEAD_CODE_STRIPPING = YES;
 				DEVELOPMENT_TEAM = 2DDKGL33BU;
 				ENABLE_HARDENED_RUNTIME = YES;
 				GCC_C_LANGUAGE_STANDARD = gnu17;
@@ -2648,6 +2678,7 @@
 				BUNDLE_LOADER = "$(TEST_HOST)";
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 15;
+				DEAD_CODE_STRIPPING = YES;
 				DEVELOPMENT_TEAM = 2DDKGL33BU;
 				GENERATE_INFOPLIST_FILE = YES;
 				MACOSX_DEPLOYMENT_TARGET = 15.0;
@@ -2668,6 +2699,7 @@
 				BUNDLE_LOADER = "$(TEST_HOST)";
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 15;
+				DEAD_CODE_STRIPPING = YES;
 				DEVELOPMENT_TEAM = 2DDKGL33BU;
 				GENERATE_INFOPLIST_FILE = YES;
 				MACOSX_DEPLOYMENT_TARGET = 15.0;

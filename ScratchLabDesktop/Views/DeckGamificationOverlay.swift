@@ -78,6 +78,25 @@ struct CaptureGuideEditModel {
         showRigGuides && (!calibrationLocked || isUsingManualRigGuide)
     }
 
+    /// Pure presentation calculation for the zone-guide opacity — extracted
+    /// so it's unit-testable directly instead of via SwiftUI view
+    /// introspection. Full opacity while editable; `lockedOpacity` (a
+    /// per-call-site parameter, ~0.15–0.20 for a subtle, non-obstructive
+    /// guide) otherwise. `DeckGamificationOverlay`'s own default
+    /// (`lockedOpacity: 0`) preserves the exact prior fully-invisible
+    /// behavior for callers that don't opt into a visible locked state.
+    static func guideOpacity(isEditable: Bool, lockedOpacity: Double) -> Double {
+        isEditable ? 1.0 : lockedOpacity
+    }
+
+    /// Pure recording-guard decision, extracted from `handleRoutineRecordingButton`
+    /// for direct unit testing. True exactly when starting a take must be
+    /// refused because calibration editing is still open — never fires
+    /// while already recording (that's a Stop, not a Start).
+    static func recordActionIsBlockedByCalibration(isRoutineRecording: Bool, calibrationLocked: Bool) -> Bool {
+        !isRoutineRecording && !calibrationLocked
+    }
+
     static func movedAdjustment(
         from snapshot: MacCaptureEngine.ZoneAdjustment,
         translation: CGSize,
@@ -166,6 +185,14 @@ struct CaptureGuideEditModel {
 
 struct DeckGamificationOverlay: View {
     @ObservedObject var detector: MacCaptureEngine
+    /// Opacity for the zone guides while calibration is locked. Default `0`
+    /// preserves the exact prior fully-invisible-when-locked behavior — the
+    /// Performer Monitor call site never even reaches this branch (its own
+    /// `if captureEngine.showRigGuides` wrapper already omits this view
+    /// entirely while locked, unchanged). Practice/Capture's
+    /// `CalibrationCameraOverlay` passes ~0.15–0.20 for a subtle,
+    /// non-obstructive persistent guide instead.
+    var lockedOpacity: Double = 0
     // Slice X.1.1: this used to be a hardcoded `false`, which collapsed
     // every overlay box to opacity 0 and disabled hit-testing — meaning
     // the deck/mixer calibration boxes were INVISIBLE everywhere even
@@ -227,39 +254,44 @@ struct DeckGamificationOverlay: View {
                 ForEach(layout.zones) { zone in
                     let rect = convert(zone.boundingBox, in: size)
                     let isHighlighted = detector.highlightedZoneRole == zone.role
+                    // Guides render whenever a rig layout exists, not only
+                    // while `showRigGuides` (unlocked) — this is what keeps
+                    // them visible-but-faint at `lockedOpacity` when locked,
+                    // instead of disappearing entirely. Performer Monitor is
+                    // unaffected: its own call site only instantiates this
+                    // whole view while `showRigGuides` (unlocked) is true.
+                    let editMode = isInteractiveCalibrationVisible
+                    RoundedRectangle(cornerRadius: 20, style: .continuous)
+                        .stroke(zoneColor(for: zone.role), lineWidth: isHighlighted ? 4 : (editMode ? 2.5 : 1.2))
+                        .background(
+                            RoundedRectangle(cornerRadius: 20, style: .continuous)
+                                .fill(zoneColor(for: zone.role).opacity(isHighlighted ? 0.16 : (editMode ? 0.08 : 0.03)))
+                        )
+                        .frame(width: rect.width, height: rect.height)
+                        .position(x: rect.midX, y: rect.midY)
 
-                    if detector.showRigGuides {
-                        let editMode = isInteractiveCalibrationVisible
-                        RoundedRectangle(cornerRadius: 20, style: .continuous)
-                            .stroke(zoneColor(for: zone.role), lineWidth: isHighlighted ? 4 : (editMode ? 2.5 : 1.2))
-                            .background(
-                                RoundedRectangle(cornerRadius: 20, style: .continuous)
-                                    .fill(zoneColor(for: zone.role).opacity(isHighlighted ? 0.16 : (editMode ? 0.08 : 0.03)))
-                            )
-                            .frame(width: rect.width, height: rect.height)
-                            .position(x: rect.midX, y: rect.midY)
+                    if editMode {
+                        // Minimal labels are editable-only — locked mode
+                        // shows no label chrome at all, per the "minimal
+                        // labels when locked" requirement.
+                        VStack(alignment: .leading, spacing: 4) {
+                            Text(zone.role.title)
+                                .font(.system(size: 12, weight: .bold))
+                                .foregroundStyle(.white)
 
-                        if editMode {
-                            VStack(alignment: .leading, spacing: 4) {
-                                Text(zone.role.title)
-                                    .font(.system(size: 12, weight: .bold))
-                                    .foregroundStyle(.white)
-
-                                Text(zoneHint(for: zone.role))
-                                    .font(.system(size: 10, weight: .medium))
-                                    .foregroundStyle(.white.opacity(0.75))
-                            }
-                            .padding(.horizontal, 10)
-                            .padding(.vertical, 8)
-                            .background(Color.black.opacity(0.68), in: RoundedRectangle(cornerRadius: 14, style: .continuous))
-                            .position(x: rect.midX, y: max(rect.minY + 28, 32))
+                            Text(zoneHint(for: zone.role))
+                                .font(.system(size: 10, weight: .medium))
+                                .foregroundStyle(.white.opacity(0.75))
                         }
+                        .padding(.horizontal, 10)
+                        .padding(.vertical, 8)
+                        .background(Color.black.opacity(0.68), in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+                        .position(x: rect.midX, y: max(rect.minY + 28, 32))
                     }
-
                 }
             }
             .allowsHitTesting(false)
-            .opacity(isCalibrationEditMode ? 1 : 0)
+            .opacity(CaptureGuideEditModel.guideOpacity(isEditable: isCalibrationEditMode, lockedOpacity: lockedOpacity))
             .allowsHitTesting(isCalibrationEditMode)
 
             if isInteractiveCalibrationVisible {

@@ -1,0 +1,4 @@
+interface:
+  display_name: "Xcode"
+  short_description: "Drive Xcode state and tools through MCP"
+  default_prompt: "Use $xcode to inspect or drive Xcode workspace state, builds, tests, previews, runtime logs, device interaction, and project configuration."

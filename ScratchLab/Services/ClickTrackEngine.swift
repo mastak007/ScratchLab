@@ -194,6 +194,41 @@ final class ClickTrackEngine: ObservableObject {
         return buffer
     }
 
+    /// Creates a deinterleaved Float32 format for `channelCount`, falling back
+    /// to an explicit `DiscreteInOrder` channel layout for channel counts (>2)
+    /// that `standardFormatWithSampleRate:channels:` and the plain
+    /// `commonFormat:` convenience init cannot express. Mirrors the multichannel
+    /// fallback already used by `RoutineAudioCaptureWriter.pcmFormat` for the
+    /// Rane ONE MKII's high-channel-count captures, so the beat stem matches the
+    /// captured scratch audio's real channel count instead of throwing
+    /// `unableToStartAudio`.
+    static func deinterleavedFloatFormat(
+        sampleRate: Double,
+        channelCount: AVAudioChannelCount
+    ) -> AVAudioFormat? {
+        if let format = AVAudioFormat(
+            commonFormat: .pcmFormatFloat32,
+            sampleRate: sampleRate,
+            channels: channelCount,
+            interleaved: false
+        ) {
+            return format
+        }
+        guard let layout = AVAudioChannelLayout(
+            layoutTag: AudioChannelLayoutTag(
+                kAudioChannelLayoutTag_DiscreteInOrder | UInt32(channelCount)
+            )
+        ) else {
+            return nil
+        }
+        return AVAudioFormat(
+            commonFormat: .pcmFormatFloat32,
+            sampleRate: sampleRate,
+            interleaved: false,
+            channelLayout: layout
+        )
+    }
+
     static func renderedClickTrackBuffer(
         bpm requestedBPM: Int,
         durationSeconds: Double,
@@ -203,9 +238,9 @@ final class ClickTrackEngine: ObservableObject {
     ) throws -> AVAudioPCMBuffer {
         let bpm = CaptureClickTrackDefaults.clampedBPM(requestedBPM)
         let totalFrameCount = max(1, Int(ceil(max(0, durationSeconds) * sampleRate)))
-        guard let format = AVAudioFormat(
-            standardFormatWithSampleRate: sampleRate,
-            channels: channelCount
+        guard let format = Self.deinterleavedFloatFormat(
+            sampleRate: sampleRate,
+            channelCount: channelCount
         ),
         let buffer = AVAudioPCMBuffer(
             pcmFormat: format,
