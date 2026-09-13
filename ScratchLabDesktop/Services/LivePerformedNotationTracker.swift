@@ -41,17 +41,30 @@ struct LivePerformedNotationDataSource {
     /// the existing `CrossfaderStateDeriver`. Defaults to `nil` so synthetic
     /// data sources that only exercise platter motion stay source-compatible.
     let activeCrossfaderCalibration: () -> CrossfaderCalibration?
+    /// Length of the loaded sample's playback loop, in PLATTER STEPS, or
+    /// `nil` when nothing is loaded / no loop is bounded.
+    ///
+    /// This is the loop the audio actually wraps at — `hotCueLoopFrames`
+    /// divided by the unchanged real-vinyl-RPM `midiFramesPerStep` — not an
+    /// assumed revolution, so a sample shorter than one revolution wraps the
+    /// notation exactly where it wraps the sound. It is PRESENTATION input
+    /// only: it bounds how platter travel is drawn and never reaches the
+    /// decoder. Defaults to `nil` so existing data sources are unchanged and
+    /// the lane stays unbounded, exactly as before.
+    let activeLoopLengthInSteps: () -> Double?
 
     init(
         selectedMIDISourceName: @escaping () -> String,
         capturedMidiCCEventsSnapshot: @escaping () -> [CaptureCore.RawMixerMIDIEvent],
         cameraMovementEventsSnapshot: @escaping (_ now: CFTimeInterval) -> [CaptureCore.DetectedNotationRecordMovementEvent]?,
-        activeCrossfaderCalibration: @escaping () -> CrossfaderCalibration? = { nil }
+        activeCrossfaderCalibration: @escaping () -> CrossfaderCalibration? = { nil },
+        activeLoopLengthInSteps: @escaping () -> Double? = { nil }
     ) {
         self.selectedMIDISourceName = selectedMIDISourceName
         self.capturedMidiCCEventsSnapshot = capturedMidiCCEventsSnapshot
         self.cameraMovementEventsSnapshot = cameraMovementEventsSnapshot
         self.activeCrossfaderCalibration = activeCrossfaderCalibration
+        self.activeLoopLengthInSteps = activeLoopLengthInSteps
     }
 }
 
@@ -90,7 +103,12 @@ enum LiveNotationTrackingState: Equatable {
         continuousCommitted: [CaptureCore.DetectedNotationRecordMovementEvent],
         continuousProvisional: CaptureCore.ProvisionalPlatterMovement?,
         platterEvidenceIntervals: [CaptureCore.PlatterEvidenceInterval],
-        faderDerivation: CrossfaderDerivation?
+        faderDerivation: CrossfaderDerivation?,
+        /// Sample-loop period in the SAME normalised units
+        /// `continuousCommitted` positions are in, or `nil` when no sample
+        /// loop is loaded. Presentation only — see
+        /// `LivePerformedNotationTracker.continuousWrapPeriod`.
+        wrapPeriod: Double?
     )
 }
 
@@ -192,7 +210,7 @@ final class LivePerformedNotationTracker: ObservableObject {
     static func renderedEvents(
         for state: LiveNotationTrackingState
     ) -> [CaptureCore.DetectedNotationRecordMovementEvent] {
-        guard case .tracking(let committed, let provisional, _, _, _, _) = state else { return [] }
+        guard case .tracking(let committed, let provisional, _, _, _, _, _) = state else { return [] }
         guard let provisional else { return committed }
         let duration = max(0, provisional.currentTime - provisional.startTime)
         // Keep controller speed in raw steps/second, matching committed
@@ -225,7 +243,7 @@ final class LivePerformedNotationTracker: ObservableObject {
     static func continuousRenderedEvents(
         for state: LiveNotationTrackingState
     ) -> [CaptureCore.DetectedNotationRecordMovementEvent] {
-        guard case .tracking(_, _, let continuousCommitted, let continuousProvisional, _, _) = state else { return [] }
+        guard case .tracking(_, _, let continuousCommitted, let continuousProvisional, _, _, _) = state else { return [] }
         var events = continuousCommitted
         if let continuousProvisional {
             let duration = max(0, continuousProvisional.currentTime - continuousProvisional.startTime)
@@ -302,7 +320,7 @@ final class LivePerformedNotationTracker: ObservableObject {
     /// `decodePlatterCore`'s provenance intervals (observed stillness, packet
     /// gaps, clock discontinuities) for the canonical live Tear projection.
     var platterEvidenceIntervals: [CaptureCore.PlatterEvidenceInterval] {
-        if case .tracking(_, _, _, _, let intervals, _) = state { return intervals }
+        if case .tracking(_, _, _, _, let intervals, _, _) = state { return intervals }
         return []
     }
 
@@ -310,8 +328,37 @@ final class LivePerformedNotationTracker: ObservableObject {
     /// Tear projection, or `nil` when no usable calibration / CC8 evidence
     /// exists (the projection then truthfully reports FADER UNKNOWN).
     var faderDerivation: CrossfaderDerivation? {
-        if case .tracking(_, _, _, _, _, let derivation) = state { return derivation }
+        if case .tracking(_, _, _, _, _, let derivation, _) = state { return derivation }
         return nil
+    }
+
+    /// The sample loop expressed in the continuous lane's own normalised
+    /// units, or `nil` when no loop is loaded.
+    ///
+    /// The renderer draws platter position as bounded loop PHASE when this is
+    /// present: bottom is phase 0, top is one loop, and a boundary crossing
+    /// is a pen-up rather than a stroke. It is derived, never measured — the
+    /// physical decoder neither produces nor consumes it, and
+    /// `continuousRenderedEvents` is identical with or without it.
+    var continuousWrapPeriod: Double? {
+        if case .tracking(_, _, _, _, _, _, let period) = state { return period }
+        return nil
+    }
+
+    /// A loop length in platter steps becomes a period in the decoder's own
+    /// normalised units, so geometry can bound the lane without re-decoding.
+    ///
+    /// Fails closed to `nil` — no loop, a non-finite or non-positive loop, or
+    /// a degenerate normalisation span all leave the lane unbounded rather
+    /// than inventing a boundary.
+    static func continuousWrapPeriod(
+        loopLengthInSteps: Double?,
+        normalizationSpanSteps: Double
+    ) -> Double? {
+        guard let loopLengthInSteps, loopLengthInSteps.isFinite, loopLengthInSteps > 0,
+              normalizationSpanSteps.isFinite, normalizationSpanSteps > 0 else { return nil }
+        let period = loopLengthInSteps / normalizationSpanSteps
+        return period.isFinite && period > 0 ? period : nil
     }
 
     private func startPolling(interval: TimeInterval) {
@@ -355,7 +402,7 @@ final class LivePerformedNotationTracker: ObservableObject {
         let span = (positions.max() ?? 0) - (positions.min() ?? 0)
         let committedCount: Int
         let hasProvisional: Bool
-        if case .tracking(let committed, let provisional, _, _, _, _) = state {
+        if case .tracking(let committed, let provisional, _, _, _, _, _) = state {
             committedCount = committed.count
             hasProvisional = provisional != nil
         } else {
@@ -420,7 +467,13 @@ final class LivePerformedNotationTracker: ObservableObject {
                 continuousCommitted: controllerResult.continuousEvents,
                 continuousProvisional: controllerResult.continuousProvisionalMovement,
                 platterEvidenceIntervals: controllerResult.platterEvidenceIntervals,
-                faderDerivation: faderDerivation
+                faderDerivation: faderDerivation,
+                // Derived from the decode that just ran, so the period is
+                // always stated in the same units as the positions it bounds.
+                wrapPeriod: continuousWrapPeriod(
+                    loopLengthInSteps: dataSource.activeLoopLengthInSteps(),
+                    normalizationSpanSteps: controllerResult.normalizationSpanSteps
+                )
             )
         }
 
@@ -431,7 +484,10 @@ final class LivePerformedNotationTracker: ObservableObject {
                 continuousCommitted: cameraEvents,
                 continuousProvisional: nil,
                 platterEvidenceIntervals: [],
-                faderDerivation: faderDerivation
+                faderDerivation: faderDerivation,
+                // Camera evidence carries no platter-step basis, so there is
+                // nothing to state a loop period against.
+                wrapPeriod: nil
             )
         }
 

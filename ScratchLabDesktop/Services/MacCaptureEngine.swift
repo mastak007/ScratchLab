@@ -11573,6 +11573,12 @@ final class MacCaptureEngine: NSObject, ObservableObject {
                     channel: mapping.channel,
                     controller: mapping.controller
                 )
+            },
+            // The loop the loaded sample actually wraps at. Presentation only:
+            // it bounds how the live lane DRAWS platter travel and never
+            // reaches the platter decoder.
+            activeLoopLengthInSteps: { [weak self] in
+                self?.scratchPlaybackController.loopLengthInPlatterSteps
             }
         )
     }

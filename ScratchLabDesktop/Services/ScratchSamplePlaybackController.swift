@@ -735,6 +735,23 @@ final class ScratchSamplePlaybackController {
     /// paths share this one real-time-calibrated rate again.
     private var midiFramesPerStep: Double = 1
 
+    /// The loaded sample's playback loop expressed in PLATTER STEPS, or `nil`
+    /// when nothing is loaded / no loop is bounded.
+    ///
+    /// This is the loop the audio genuinely wraps at — `hotCueLoopFrames`
+    /// over the unchanged real-vinyl-RPM `midiFramesPerStep` — so a sample
+    /// shorter than one revolution reports its own shorter loop rather than
+    /// an assumed revolution. Read-only and derived; nothing here changes
+    /// playback, and the value is only ever used to BOUND how notation draws
+    /// platter travel.
+    var loopLengthInPlatterSteps: Double? {
+        audioQueue.sync {
+            guard loadedSampleID != nil, midiFramesPerStep > 0, hotCueLoopFrames > 0 else { return nil }
+            let steps = hotCueLoopFrames / midiFramesPerStep
+            return steps.isFinite && steps > 0 ? steps : nil
+        }
+    }
+
     /// First frame of `forwardBuffer` the hot-cue continuous tick
     /// (`midiCoalescingTick`) treats as "cue position 0" (2026-08-13 onset-
     /// alignment fix). Detected once per load via

@@ -39,6 +39,13 @@ struct ScratchPhraseChartView: View {
     /// behaviour preserved). When set, the chart maps `[lowerBound, upperBound]`
     /// onto the full chart width; the bundled notation JSON is never mutated.
     /// Ignored by `.captured` and `.empty` sources.
+    /// Draws the `.canonical` platter lane as bounded sample-loop PHASE
+    /// instead of unbounded displacement: bottom is phase 0, top is one loop,
+    /// and a loop boundary is a pen-up rather than a stroke back down the
+    /// lane. Presentation only — it bounds how measured travel is DRAWN and
+    /// changes no record, no direction and no evidence. `nil` (the default)
+    /// keeps every existing lane exactly as it is.
+    var wrapPeriod: Double? = nil
     var targetWindow: ClosedRange<TimeInterval>? = nil
     /// Displayed time window for the `.captured` source. When set, the chart
     /// maps `[lowerBound, upperBound]` onto the full width instead of fitting
@@ -132,7 +139,9 @@ struct ScratchPhraseChartView: View {
                                records: [ScratchNotation.GestureRecord],
                                layer: ScratchStrokeGeometry.CanonicalLayer,
                                frame: ScratchStrokeGeometry.CanonicalFrame) {
-        let geometry = ScratchStrokeGeometry.canonicalGeometry(records: records, layer: layer, frame: frame)
+        let geometry = ScratchStrokeGeometry.canonicalGeometry(
+            records: records, layer: layer, frame: frame, wrapPeriod: wrapPeriod
+        )
         let start = frame.timeRange.lowerBound
         let duration = frame.timeRange.upperBound - start
         let pps = size.width / CGFloat(duration)

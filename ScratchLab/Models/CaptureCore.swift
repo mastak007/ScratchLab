@@ -11812,7 +11812,8 @@ enum CaptureCore {
         maxEventGap: Double,
         forceCloseTrailingRun: Bool = true
     ) -> (events: [DetectedNotationRecordMovementEvent], diagnostics: PlatterDecodeDiagnostics,
-          trailingRun: TrailingPlatterRun?, intervals: [PlatterEvidenceInterval]) {
+          trailingRun: TrailingPlatterRun?, intervals: [PlatterEvidenceInterval],
+          originSteps: Double, spanSteps: Double) {
         // Preserve receive order. Sorting by time hides clock regressions.
         let selected = mixerMidiEvents.enumerated().filter {
             $0.element.controller == controller
@@ -11839,7 +11840,7 @@ enum CaptureCore {
                 kind: .insufficientSampling, firstPacketIndex: selected.first?.offset,
                 lastPacketIndex: selected.last?.offset))
             return ([], PlatterDecodeDiagnostics(filteredEventCount: filteredEventCount,
-                    rawRunCount: 0, noiseFilteredRunCount: 0), nil, intervals)
+                    rawRunCount: 0, noiseFilteredRunCount: 0), nil, intervals, 0, 1)
         }
 
         // An unspecified source must still resolve uniquely. Mixed sources
@@ -11849,7 +11850,7 @@ enum CaptureCore {
             intervals.append(PlatterEvidenceInterval(startTime: times.min() ?? 0,
                 endTime: times.max() ?? 0, kind: .unknown))
             return ([], PlatterDecodeDiagnostics(filteredEventCount: filteredEventCount,
-                rawRunCount: 0, noiseFilteredRunCount: 0), nil, intervals)
+                rawRunCount: 0, noiseFilteredRunCount: 0), nil, intervals, 0, 1)
         }
         let half = ringModulus / 2
         var positions = [Double](repeating: 0, count: events.count)
@@ -11983,7 +11984,7 @@ enum CaptureCore {
         }
         return (result, PlatterDecodeDiagnostics(
             filteredEventCount: filteredEventCount, rawRunCount: rawRunCount,
-            noiseFilteredRunCount: result.count), trailingRun, intervals)
+            noiseFilteredRunCount: result.count), trailingRun, intervals, minPos, span)
     }
 
     struct ProvisionalPlatterMovement: Equatable, Sendable {
@@ -12023,21 +12024,42 @@ enum CaptureCore {
         /// place a platter hold. Carried verbatim, never reinterpreted.
         let platterEvidenceIntervals: [PlatterEvidenceInterval]
 
-        /// The continuous fields and provenance intervals are optional
-        /// trailing arguments so the engine's fail-closed empty constructor
-        /// and the iOS call sites keep compiling unchanged.
+        /// The step-domain basis `decodePlatterCore` used to span-normalise
+        /// `continuousEvents`:
+        ///
+        ///     stepPosition = normalizationOriginSteps
+        ///         + normalizedPosition * normalizationSpanSteps
+        ///
+        /// Exposed so a PRESENTATION layer can express a normalised position
+        /// back in cumulative platter steps — the units a sample loop's
+        /// length is measured in — without re-decoding the stream or keeping
+        /// a second integrator. Nothing here changes an emitted position, and
+        /// the decoder never reads it back.
+        let normalizationOriginSteps: Double
+        /// Always `>= 1` (the decoder floors the span), so dividing by it is
+        /// safe. `1` on the fail-closed empty decodes, where no stream was
+        /// normalised at all.
+        let normalizationSpanSteps: Double
+
+        /// The continuous fields, provenance intervals and normalisation
+        /// basis are optional trailing arguments so the engine's fail-closed
+        /// empty constructor and the iOS call sites keep compiling unchanged.
         init(
             committedEvents: [DetectedNotationRecordMovementEvent],
             provisionalMovement: ProvisionalPlatterMovement?,
             continuousEvents: [DetectedNotationRecordMovementEvent] = [],
             continuousProvisionalMovement: ProvisionalPlatterMovement? = nil,
-            platterEvidenceIntervals: [PlatterEvidenceInterval] = []
+            platterEvidenceIntervals: [PlatterEvidenceInterval] = [],
+            normalizationOriginSteps: Double = 0,
+            normalizationSpanSteps: Double = 1
         ) {
             self.committedEvents = committedEvents
             self.provisionalMovement = provisionalMovement
             self.continuousEvents = continuousEvents
             self.continuousProvisionalMovement = continuousProvisionalMovement
             self.platterEvidenceIntervals = platterEvidenceIntervals
+            self.normalizationOriginSteps = normalizationOriginSteps
+            self.normalizationSpanSteps = normalizationSpanSteps
         }
     }
 
@@ -12112,7 +12134,9 @@ enum CaptureCore {
             provisionalMovement: provisional,
             continuousEvents: core.events,
             continuousProvisionalMovement: continuousProvisional,
-            platterEvidenceIntervals: core.intervals
+            platterEvidenceIntervals: core.intervals,
+            normalizationOriginSteps: core.originSteps,
+            normalizationSpanSteps: core.spanSteps
         )
     }
 

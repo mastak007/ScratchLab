@@ -2351,4 +2351,140 @@ final class ReferenceTearCanonicalProjectionTests: XCTestCase {
         XCTAssertEqual(live.records.first?.internalHolds.count, 1)
         XCTAssertEqual(finalized.records.first?.internalHolds.count, 1)
     }
+
+    // MARK: - Sample-loop notation phase (presentation-only wrap)
+
+    /// Build the live-preview projection the way `ReferenceAuthoringView` does,
+    /// then hand it to the shared canonical geometry at a stated wrap period.
+    private func loopGeometry(
+        _ events: [CaptureCore.DetectedNotationRecordMovementEvent],
+        wrapPeriod: Double?,
+        timeRange: ClosedRange<Double>
+    ) throws -> (ReferenceTearCanonicalProjection, ScratchStrokeGeometry.CanonicalGeometry) {
+        let projection = ReferenceTearCanonicalProjectionBuilder.project(
+            movementEvents: events,
+            platterEvidenceIntervals: [],
+            derivation: nil,
+            referenceTakeID: "live-preview",
+            coordinates: .normalizedTakeLocal()
+        )
+        let frame = try XCTUnwrap(
+            ScratchStrokeGeometry.CanonicalFrame(
+                timeRange: timeRange,
+                positionRange: try XCTUnwrap(projection.positionRange),
+                coordinateSpace: projection.coordinateSpace,
+                beatsPerMinute: 95
+            )
+        )
+        return (
+            projection,
+            ScratchStrokeGeometry.canonicalGeometry(
+                records: projection.records,
+                layer: .performance,
+                frame: frame,
+                wrapPeriod: wrapPeriod
+            )
+        )
+    }
+
+    /// Untouched forward playback through three sample loops draws three
+    /// rising traces, each bottom to top, with NO connector between them.
+    func testThreeForwardSampleLoopsDrawThreeRisingTracesAndNoConnector() throws {
+        // One continuous forward run covering exactly three loop periods.
+        let events = [normalizedRun(start: 0.0, end: 3.0, direction: "forward", from: 0.0, to: 3.0)]
+        let (projection, geometry) = try loopGeometry(events, wrapPeriod: 1.0, timeRange: 0...3.0)
+
+        let travel = geometry.motion.segments.filter { !$0.isHold }
+        XCTAssertEqual(travel.count, 3, "one rising trace per sample loop, got \(travel.count)")
+        XCTAssertTrue(
+            travel.allSatisfy { $0.endPosition > $0.startPosition },
+            "a loop wrap must never draw a descending trace"
+        )
+        for (index, segment) in travel.enumerated() {
+            XCTAssertEqual(segment.startPosition, 0, accuracy: 1e-9, "loop \(index) starts at the bottom")
+            XCTAssertEqual(segment.endPosition, 1, accuracy: 1e-9, "loop \(index) ends at the top")
+        }
+        // A wrap is a presentation discontinuity, never absent evidence.
+        XCTAssertTrue(geometry.missingMotion.isEmpty, "a loop wrap is not MOTION UNKNOWN")
+        // And never a reversal: one forward gesture throughout.
+        XCTAssertEqual(projection.records.count, 1)
+        XCTAssertEqual(projection.records.first?.direction, .forward)
+        XCTAssertTrue(
+            travel.allSatisfy { $0.kind == .stroke(.forward) },
+            "every drawn loop stays a forward stroke"
+        )
+    }
+
+    /// The same physical evidence without a loop period keeps today's single
+    /// unbounded rising trace - the wrap is opt-in presentation only.
+    func testWithoutALoopPeriodTheTraceStaysOneUnwrappedRamp() throws {
+        let events = [normalizedRun(start: 0.0, end: 3.0, direction: "forward", from: 0.0, to: 3.0)]
+        let (_, geometry) = try loopGeometry(events, wrapPeriod: nil, timeRange: 0...3.0)
+        let travel = geometry.motion.segments.filter { !$0.isHold }
+        XCTAssertEqual(travel.count, 1, "no wrap period means no split")
+        XCTAssertEqual(try XCTUnwrap(travel.first).startPosition, 0, accuracy: 1e-9)
+        XCTAssertEqual(try XCTUnwrap(travel.first).endPosition, 1, accuracy: 1e-9)
+    }
+
+    /// A DJ physically pulling the platter back must still draw a descending
+    /// trace. A loop reset and a negative platter delta are not the same thing.
+    func testRealBackwardPlatterMotionStillDrawsADescendingTrace() throws {
+        let events = [
+            normalizedRun(start: 0.00, end: 0.40, direction: "forward", from: 0.0, to: 0.4),
+            normalizedRun(start: 0.50, end: 0.90, direction: "backward", from: 0.4, to: 0.1)
+        ]
+        let (projection, geometry) = try loopGeometry(events, wrapPeriod: 1.0, timeRange: 0...0.9)
+
+        XCTAssertEqual(projection.records.map(\.direction), [.forward, .backward])
+        let travel = geometry.motion.segments.filter { !$0.isHold }
+        XCTAssertTrue(
+            travel.contains { $0.endPosition < $0.startPosition },
+            "genuine backward platter movement must draw a descending trace"
+        )
+        XCTAssertTrue(travel.contains { $0.endPosition > $0.startPosition })
+    }
+
+    /// forward -> backward -> forward inside ONE loop stays continuous
+    /// bidirectional motion; nothing is split because no lap boundary is
+    /// crossed.
+    func testForwardBackwardForwardInsideOneLoopStaysContinuous() throws {
+        let events = [
+            normalizedRun(start: 0.00, end: 0.20, direction: "forward", from: 0.10, to: 0.40),
+            normalizedRun(start: 0.20, end: 0.40, direction: "backward", from: 0.40, to: 0.20),
+            normalizedRun(start: 0.40, end: 0.60, direction: "forward", from: 0.20, to: 0.50)
+        ]
+        let (_, geometry) = try loopGeometry(events, wrapPeriod: 1.0, timeRange: 0...0.6)
+        let travel = geometry.motion.segments.filter { !$0.isHold }
+        XCTAssertTrue(travel.contains { $0.endPosition > $0.startPosition })
+        XCTAssertTrue(travel.contains { $0.endPosition < $0.startPosition })
+        // Time-contiguous evidence inside one loop: nothing is uncovered, and
+        // no wrap occurs, so the lane has no discontinuity at all.
+        XCTAssertTrue(geometry.missingMotion.isEmpty)
+        XCTAssertTrue(
+            travel.allSatisfy { $0.startPosition >= 0 && $0.endPosition <= 1 },
+            "wrapped phase stays inside the lane"
+        )
+    }
+
+    /// Backward across the loop origin must wrap to the TOP, not fabricate a
+    /// huge forward jump. Truth comes from the physical signed motion.
+    func testBackwardAcrossTheLoopOriginWrapsToTheTopWithoutAForwardJump() throws {
+        // 0.2 down to -0.3: one physical backward run crossing the origin.
+        let events = [normalizedRun(start: 0.0, end: 1.0, direction: "backward", from: 0.2, to: -0.3)]
+        let (projection, geometry) = try loopGeometry(events, wrapPeriod: 1.0, timeRange: 0...1.0)
+
+        XCTAssertEqual(projection.records.first?.direction, .backward)
+        let travel = geometry.motion.segments.filter { !$0.isHold }
+        XCTAssertEqual(travel.count, 2, "one wrap crossing splits the run in two")
+        XCTAssertTrue(
+            travel.allSatisfy { $0.endPosition < $0.startPosition },
+            "a backward run stays descending on both sides of the origin"
+        )
+        XCTAssertTrue(
+            travel.allSatisfy { $0.kind == .stroke(.backward) },
+            "the wrap must not relabel backward travel as forward"
+        )
+        XCTAssertEqual(try XCTUnwrap(travel.first).endPosition, 0, accuracy: 1e-9)
+        XCTAssertEqual(try XCTUnwrap(travel.last).startPosition, 1, accuracy: 1e-9)
+    }
 }
