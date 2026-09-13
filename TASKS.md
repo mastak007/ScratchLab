@@ -1,3 +1,12 @@
+- [x] User-selected CXL camera/export/review and recovery fixes (13 September 2026, SOFTWARE VERIFIED; INSTALLED): finalization-owned camera attachment and exact verified startup ownership; recovered original Baby cameras; inline audio/video bounds review, validated Approve & Save Capture, camera changes/reconnect and saved portrait orientation; Mac/iPhone relay retry and truthful readiness. Final all4 platform builds and Python87 pass;269unique XCTest/600executions including overlaps,0fail/skip. Signed installed SHA71674b5c59a5; iPhone updated. Physical camera/Watch checks remain pending. See ~/Developer/ScratchLab-CXL-Review-Fix-20260913/RESULT.md.
+
+- [x] User-requested blank CXL capture library (13 September 2026):505 generated capture/draft/Watch/beat/journal/audit files moved to an external archive and hash-verified; app reopened with zero drafts/captures. Calibration, MIDI mapping and bundled examples retained.
+
+- [x] User-requested Developer cleanup (13 September 2026):62 verified generated build/cache/staging paths removed; observed free-space gain40.3GB with48.2GB available. Source/Git, reference libraries, captures/backups, audit work and test reports preserved. Build products must be regenerated; exact removal receipt in CXL-Review-Fix evidence.
+
+- [ ] Physical check of installed camera/review/relay fixes: upright portrait preview and recorded second view, real second-camera ZIP, and actual Mac/iPhone/Watch connection. CXL library is intentionally blank for delivery; a new diagnostic recording will repopulate it.
+
+
 - [x] User-selected CXL beat routing (13 September 2026, SOFTWARE VERIFIED; INSTALLED): CXL preview/count-in/backing follow the selected output. Rane ONE/MKII uses leftUSB1/2 for beat and unchanged rightUSB3/4 for scratch; output identity/map rechecked before capture and retained in the take audit. Dry scratch, exact beat and combined export remain separate. Final combined508 unique/1016 executions plus downstream33 unique/66 executions pass with4 existing skips total;3 known baseline Tear methods explicitly excluded. Python87 and all4 platform builds pass. Signed installed SHAeb4fa86d, physical headphone result pending. See ~/Developer/ScratchLab-CXL-Integration-20260913/RESULT.md.
 
 - [ ] Physical check on the combined CXL build: choose Rane output, preview backing, cue both decks and confirm beat plus AHHH in headphones; then verify a short timed take, preferred repetition/notes, separate audio exports and draft reopen. The direct-Mac coloured-meter fault remains a separate unconfirmed observation.

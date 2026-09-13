@@ -5944,8 +5944,24 @@ final class MacCaptureEngine: NSObject, ObservableObject {
     /// Records that the operator deliberately chose this exact camera. The
     /// CXL route uses this bit to distinguish a prior silent first-device
     /// fallback from a camera the operator actually reviewed in Setup.
+    @MainActor
     func selectVideoInput(uniqueID: String) {
+        guard !isAudioInputSelectionLocked else { return }
+        if isRunning, uniqueID != selectedVideoDeviceUniqueID {
+            isCaptureInputStarting = true
+            isRoutineCaptureReady = false
+            isCameraActive = false
+        }
         setSelectedVideoDeviceUniqueID(uniqueID, origin: .explicitUserChoice)
+    }
+
+    @MainActor
+    func reconnectSelectedVideoInput() {
+        guard !isAudioInputSelectionLocked, isRunning else { return }
+        isCaptureInputStarting = true
+        isRoutineCaptureReady = false
+        isCameraActive = false
+        reconfigureSession()
     }
 
     func autoSelectCaptureAudioDeviceIfNeeded() {
@@ -7842,7 +7858,8 @@ final class MacCaptureEngine: NSObject, ObservableObject {
     /// captures the take's state, and schedules the second half via
     /// `group.notify(queue: finalizationQueue)`.
     private func finalizeRoutineRecording(
-        outputFileURL: URL, error: Error?, midiTakeToken: MIDICaptureTakeToken?
+        outputFileURL: URL, error: Error?, midiTakeToken: MIDICaptureTakeToken?,
+        secondaryCamera: SecondaryCameraEvidence?
     ) {
         guard midiTakeToken != nil,
               midiCaptureWindowTicket.takeToken == midiTakeToken else { return }
@@ -7919,6 +7936,7 @@ final class MacCaptureEngine: NSObject, ObservableObject {
                 stopReason: stopReason,
                 sidecar: sidecar,
                 sidecarURL: sidecarURL,
+                secondaryCamera: secondaryCamera,
                 builder: builder,
                 audioDetector: audioDetector,
                 labelSource: labelSource,
@@ -7939,6 +7957,7 @@ final class MacCaptureEngine: NSObject, ObservableObject {
         stopReason: CaptureStopReason,
         sidecar: CaptureCore.LocalRecordingSidecar,
         sidecarURL: URL,
+        secondaryCamera: SecondaryCameraEvidence?,
         builder: RoutineDetectedNotationBuilder?,
         audioDetector: ScratchAudioNotationDetector?,
         labelSource: String,
@@ -8074,7 +8093,8 @@ final class MacCaptureEngine: NSObject, ObservableObject {
         sidecar = sidecar.finalized(
             mediaFileName: outputFileURL.lastPathComponent,
             captureErrorDescription: captureErrorDescription,
-            stopReason: stopReason
+            stopReason: stopReason,
+            secondaryCamera: secondaryCamera
         )
         .withDetectedNotation(notationSnapshot)
         // The take-start control state is written BESIDE the detected
@@ -12274,7 +12294,7 @@ final class MacCaptureEngine: NSObject, ObservableObject {
     }
     func testOnly_finalizeWithoutSidecar(mediaURL: URL, token: MIDICaptureTakeToken) {
         precondition(activeRoutineRecordingSidecar == nil)
-        finalizeRoutineRecording(outputFileURL: mediaURL, error: nil, midiTakeToken: token)
+        finalizeRoutineRecording(outputFileURL: mediaURL, error: nil, midiTakeToken: token, secondaryCamera: nil)
     }
     func testOnly_openTakeMIDIEpoch(at hostTime: CFTimeInterval) {
         beginMIDIRecordingWindow(at: hostTime, token: midiCaptureWindowTicket.takeToken)
@@ -14224,11 +14244,6 @@ extension MacCaptureEngine: AVCaptureFileOutputRecordingDelegate {
                 Task { @MainActor in
                     self.onboardOutputCaptureStatus = "Captured \(frames) onboard AHHH frames for this take."
                     let second = await self.secondaryCamera.finish(primaryURL: outputFileURL, audioURL: audioURL)
-                    self.sessionQueue.sync {
-                        if self.activeRoutineRecordingSidecar?.mediaFileName == outputFileURL.lastPathComponent {
-                            self.activeRoutineRecordingSidecar?.secondaryCamera = second
-                        }
-                    }
                     let muxError: Error?
                     do {
                         try await RoutineReviewMovieMuxer.replaceAudioTrack(
@@ -14242,7 +14257,8 @@ extension MacCaptureEngine: AVCaptureFileOutputRecordingDelegate {
                     self.finalizeRoutineRecording(
                         outputFileURL: outputFileURL,
                         error: error ?? muxError,
-                        midiTakeToken: midiTakeToken
+                        midiTakeToken: midiTakeToken,
+                        secondaryCamera: second
                     )
                 }
                 return
@@ -14256,17 +14272,13 @@ extension MacCaptureEngine: AVCaptureFileOutputRecordingDelegate {
 
             Task { @MainActor in
                 let second = await self.secondaryCamera.finish(primaryURL: outputFileURL, audioURL: nil)
-                self.sessionQueue.sync {
-                    if self.activeRoutineRecordingSidecar?.mediaFileName == outputFileURL.lastPathComponent {
-                        self.activeRoutineRecordingSidecar?.secondaryCamera = second
-                    }
-                }
                 // finalizeRoutineRecording returns immediately and schedules
                 // its second half through the admission gate.
                 self.finalizeRoutineRecording(
                     outputFileURL: outputFileURL,
                     error: finalError,
-                    midiTakeToken: midiTakeToken
+                    midiTakeToken: midiTakeToken,
+                    secondaryCamera: second
                 )
             }
         }

@@ -258,6 +258,20 @@ final class CompanionCameraBroadcaster: NSObject, ObservableObject {
         startDirectRelayListener()
     }
 
+    /// Reconnect transport without stopping local camera capture or deleting queued Watch files.
+    func reconnectMacRelay() {
+        guard !isRecording else { return }
+        directListener?.cancel()
+        directListener = nil
+        replaceDirectConnection(nil)
+        session.disconnect()
+        connectedPeerNames = []
+        isBroadcasting = false
+        isAdvertising = false
+        connectionStatus = "Reconnecting to ScratchLab on Mac…"
+        startRelayAdvertisingIfNeeded()
+    }
+
     func stopCaptureServices() {
         isRunning = false
         rotationAngleObservation?.invalidate()
@@ -929,10 +943,8 @@ final class CompanionCameraBroadcaster: NSObject, ObservableObject {
     }
 
     private var hasConnectedRelay: Bool {
-        directConnectionLock.lock()
-        let hasDirectConnection = directConnection != nil
-        directConnectionLock.unlock()
-        return hasDirectConnection || !session.connectedPeers.isEmpty
+        if let connection = directConnectionSnapshot(), case .ready = connection.state { return true }
+        return !session.connectedPeers.isEmpty
     }
 
     private func replaceDirectConnection(_ connection: NWConnection?) {
@@ -961,7 +973,7 @@ final class CompanionCameraBroadcaster: NSObject, ObservableObject {
                 type: directServiceType
             )
             listener.stateUpdateHandler = { [weak self, weak listener] state in
-                guard let self, let listener else { return }
+                guard let self, let listener, self.directListener === listener else { return }
                 switch state {
                 case .ready:
                     DispatchQueue.main.async {
@@ -971,9 +983,18 @@ final class CompanionCameraBroadcaster: NSObject, ObservableObject {
                     }
                 case .failed(let error):
                     DispatchQueue.main.async {
+                        guard self.directListener === listener else { return }
+                        self.isAdvertising = false
+                        self.directListener = nil
                         self.connectionStatus = "Unable to start companion relay: \(error.localizedDescription)"
                     }
                     listener.cancel()
+                case .cancelled:
+                    DispatchQueue.main.async {
+                        guard self.directListener === listener else { return }
+                        self.directListener = nil
+                        self.isAdvertising = false
+                    }
                 default:
                     break
                 }
@@ -991,17 +1012,25 @@ final class CompanionCameraBroadcaster: NSObject, ObservableObject {
     private func acceptDirectConnection(_ connection: NWConnection) {
         replaceDirectConnection(connection)
         connection.stateUpdateHandler = { [weak self, weak connection] state in
-            guard let self, let connection else { return }
+            guard let self, let connection, self.directConnectionSnapshot() === connection else { return }
             switch state {
             case .ready:
                 let peerName = self.directPeerName(connection.endpoint)
                 DispatchQueue.main.async {
+                    guard self.directConnectionSnapshot() === connection else { return }
                     self.connectedPeerNames = [peerName]
                     self.connectionStatus = self.isRunning
                         ? "Streaming \(self.selectedCameraPosition.title.lowercased()) camera to \(peerName)"
                         : "Watch relay connected to \(peerName)"
                 }
                 self.receiveDirectPacketLength(on: connection, peerName: peerName)
+            case .waiting(let error):
+                DispatchQueue.main.async {
+                    guard self.directConnectionSnapshot() === connection else { return }
+                    self.connectedPeerNames = []
+                    self.isBroadcasting = false
+                    self.connectionStatus = "Mac relay paused: \(error.localizedDescription). Use Reconnect Mac."
+                }
             case .failed, .cancelled:
                 if self.directConnectionSnapshot() === connection {
                     self.replaceDirectConnection(nil)

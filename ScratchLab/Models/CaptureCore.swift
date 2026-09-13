@@ -12668,9 +12668,14 @@ enum CaptureCore {
             endedAt: Date = Date(),
             mediaFileName: String,
             captureErrorDescription: String?,
-            stopReason: CaptureStopReason? = nil
+            stopReason: CaptureStopReason? = nil,
+            secondaryCamera: SecondaryCameraEvidence? = nil
         ) -> LocalRecordingSidecar {
             var finalized = self
+            // The camera writer's completed result belongs to this finalization.
+            // A Watch reply may have refreshed `self` from an older on-disk
+            // sidecar while the media was being muxed; it cannot erase this result.
+            if let secondaryCamera { finalized.secondaryCamera = secondaryCamera }
             finalized.endedAt = endedAt
             finalized.mediaFileName = mediaFileName
             finalized.recordingStatus = captureErrorDescription == nil ? "completed" : "failed"

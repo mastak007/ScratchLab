@@ -1253,6 +1253,7 @@ struct StagedCaptureRecoveryManager {
 
         var issues: [StagedCaptureIssue] = []
         var sidecarBaseNames = Set<String>()
+        var secondaryCameraFileNames = Set<String>()
 
         for (sidecarURL, sidecar) in sidecars {
             sidecarBaseNames.insert(sidecarURL.deletingPathExtension().lastPathComponent)
@@ -1285,6 +1286,13 @@ struct StagedCaptureRecoveryManager {
                     rootDirectoryOverride: auditRootDirectoryOverride
                 )
                 continue
+            }
+
+            // A second camera has its own filename but belongs to the primary
+            // take's sidecar. Verify that exact attachment before orphan cleanup.
+            if let camera = sidecar.secondaryCamera,
+               let cameraURL = try? camera.verifiedURL(beside: mediaURL) {
+                secondaryCameraFileNames.insert(cameraURL.lastPathComponent)
             }
 
             var updatedSidecar = sidecar
@@ -1375,6 +1383,7 @@ struct StagedCaptureRecoveryManager {
             let lowercasedExtension = url.pathExtension.lowercased()
             guard ["mov", "wav"].contains(lowercasedExtension) else { return false }
             return !sidecarBaseNames.contains(url.deletingPathExtension().lastPathComponent)
+                && !secondaryCameraFileNames.contains(url.lastPathComponent)
         }
 
         for orphanedURL in orphanedMediaURLs {

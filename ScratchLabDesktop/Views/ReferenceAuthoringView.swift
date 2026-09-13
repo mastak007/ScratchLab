@@ -323,33 +323,7 @@ struct ReferenceAuthoringView: View {
                     }
                 }
 
-                Picker("Camera input", selection: videoInputSelectionBinding) {
-                    Text("Choose a camera…").tag("")
-                    ForEach(captureEngine.availableVideoDevices, id: \.uniqueID) { device in
-                        Text(device.localizedName).tag(device.uniqueID)
-                    }
-                }
-                .pickerStyle(.menu)
-                .disabled(hardwareSelectionIsLocked)
-                .accessibilityIdentifier("cxl.hardware.videoInput")
-
-                if captureEngine.selectedVideoDeviceUniqueID.isEmpty {
-                    Text("Camera: not selected")
-                        .font(.caption.monospaced())
-                        .foregroundStyle(.secondary)
-                } else {
-                    Text(
-                        "Camera: \(captureEngine.selectedVideoDeviceName) "
-                            + "[\(captureEngine.selectedVideoDeviceUniqueID)]"
-                    )
-                    .font(.caption.monospaced())
-                    .foregroundStyle(.secondary)
-                    .textSelection(.enabled)
-                }
-
-                SecondaryCameraSetupView(recorder: captureEngine.secondaryCamera,
-                    devices: captureEngine.availableVideoDevices,
-                    primaryID: captureEngine.selectedVideoDeviceUniqueID, locked: hardwareSelectionIsLocked)
+                cameraSetupControls
 
                 Picker("Audio input", selection: audioInputSelectionBinding) {
                     if captureEngine.availableAudioDevices.isEmpty {
@@ -398,7 +372,7 @@ struct ReferenceAuthoringView: View {
                     .foregroundStyle(.secondary)
 
                 if let companionReceiver {
-                    CompanionRelaySetupView(receiver: companionReceiver)
+                    CompanionRelaySetupView(receiver: companionReceiver, locked: cameraSelectionIsLocked)
                 }
 
                 Button("Refresh Hardware Inputs") {
@@ -418,6 +392,52 @@ struct ReferenceAuthoringView: View {
         }
     }
 
+    private var cameraSetupControls: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Picker("Camera input", selection: videoInputSelectionBinding) {
+                Text("Choose a camera…").tag("")
+                ForEach(captureEngine.availableVideoDevices, id: \.uniqueID) { device in
+                    Text(device.localizedName).tag(device.uniqueID)
+                }
+            }
+            .pickerStyle(.menu)
+            .disabled(cameraSelectionIsLocked)
+            .accessibilityIdentifier("cxl.hardware.videoInput")
+
+            if captureEngine.selectedVideoDeviceUniqueID.isEmpty {
+                Text("Camera: not selected")
+                    .font(.caption.monospaced())
+                    .foregroundStyle(.secondary)
+            } else {
+                Text(
+                    "Camera: \(captureEngine.selectedVideoDeviceName) "
+                        + "[\(captureEngine.selectedVideoDeviceUniqueID)]"
+                )
+                .font(.caption.monospaced())
+                .foregroundStyle(.secondary)
+                .textSelection(.enabled)
+            }
+
+            SecondaryCameraSetupView(recorder: captureEngine.secondaryCamera,
+                devices: captureEngine.availableVideoDevices,
+                primaryID: captureEngine.selectedVideoDeviceUniqueID, locked: cameraSelectionIsLocked)
+
+            Button("Reconnect selected cameras") {
+                captureEngine.reconnectSelectedVideoInput()
+                if let device = captureEngine.availableVideoDevices.first(where: {
+                    $0.uniqueID == captureEngine.secondaryCamera.selectedID
+                }) {
+                    captureEngine.secondaryCamera.configure(device: device,
+                        primaryID: captureEngine.selectedVideoDeviceUniqueID)
+                }
+            }
+            .disabled(cameraSelectionIsLocked || !captureEngine.isRoutineCaptureReady)
+            Text("You can change either camera between takes. Reconnect retries the current cameras; saved recordings keep their original views.")
+                .font(.caption).foregroundStyle(.secondary)
+
+        }
+    }
+
     private var hardwareSelectionIsLocked: Bool {
         viewModel.isWorking
             || captureEngine.isCaptureInputStarting
@@ -430,6 +450,10 @@ struct ReferenceAuthoringView: View {
         viewModel.isWorking
             || viewModel.session.phase == .recording
             || captureEngine.isAudioInputSelectionLocked
+    }
+
+    private var cameraSelectionIsLocked: Bool {
+        audioSelectionIsLocked || exportCoordinator.isPreparing
     }
 
     private var canActivateCaptureInput: Bool {
@@ -1266,10 +1290,11 @@ struct ReferenceAuthoringView: View {
             .foregroundStyle(.secondary)
     }
 
-    private func saveRawCapture() {
+    private func saveRawCapture(approvingCanonical: Bool = false) {
         Task {
             guard let source = await viewModel.rawCaptureExportSource(
-                config: captureEngine.recordingSessionConfig
+                config: captureEngine.recordingSessionConfig,
+                approvingCanonical: approvingCanonical
             ) else { return }
             exportCoordinator.saveArchiveCopy(for: source)
         }
@@ -1281,6 +1306,10 @@ struct ReferenceAuthoringView: View {
             GroupBox("5. Finalized take review") {
                 VStack(alignment: .leading, spacing: 12) {
                     continuationControls
+                    if !viewModel.isReviewingSavedDraft {
+                        Button("Change cameras for next take") { viewModel.showCameraSetup() }
+                            .disabled(!viewModel.canOpenSavedDraft || cameraSelectionIsLocked)
+                    }
                     HStack {
                         Button("Save for Later") { viewModel.saveDraftForLater() }
                             .disabled(!viewModel.canOpenSavedDraft || exportCoordinator.isPreparing)
@@ -1291,7 +1320,8 @@ struct ReferenceAuthoringView: View {
                         }
                     }
                     evidenceSummary(take)
-                    ReferenceMediaReviewStatus(controller: viewModel.mediaReview)
+                    ReferenceMediaReviewStatus(controller: viewModel.mediaReview,
+                        showsVideo: focusedBoundary(for: take) == nil)
                     if viewModel.session.takeInReview == nil {
                         Text("Previous take — read-only. You can play or save it; recording a new take starts a new review.")
                             .font(.callout).foregroundStyle(.secondary)
@@ -1350,7 +1380,7 @@ struct ReferenceAuthoringView: View {
                             .font(.caption).foregroundStyle(.secondary)
                     } else {
                     Text("Four repetitions").font(.headline)
-                    Text("Play each repetition to check it. Start and End beat trim its review range. Mark as Preferred records CXL's best repetition (1–4); it is saved with the draft, included in Save Capture and used if you approve. Marking does not approve the take or change the original recording.")
+                    Text("Play each repetition to check it. Start and End beat trim its review range. Mark as Preferred records CXL's best repetition (1–4); it is saved with the draft, included in Save Capture and used if you approve. Change your pick by marking another repetition, or use Clear. Marking does not approve the take or change the original recording.")
                         .font(.caption).foregroundStyle(.secondary)
                     if let preferred = take.evidence.boundaries.selectedRepetitionIndex {
                         Text("Preferred: repetition \(preferred + 1)" + (take.preferenceMark.map {
@@ -1366,6 +1396,8 @@ struct ReferenceAuthoringView: View {
                         repetitionRow(boundary, take: take)
                     }
                     }
+
+                    reviewCompletionControls(take)
 
                     Divider()
                     if take.evidence.metadata.technique == .tear {
@@ -1385,7 +1417,7 @@ struct ReferenceAuthoringView: View {
                     // Approving marks ONE draft canonical inside this session.
                     // It is not an export, and it publishes, installs and
                     // enables nothing — those are separate, later actions.
-                    Text("Approving a canonical draft is not export, publication, installation, or training eligibility. Use Save Capture… above to export the raw take; it is independent of approval.")
+                    Text("Approval marks the selected repetition as a canonical draft. Approve & Save Capture also opens the capture ZIP save dialog. Neither action publishes, installs or enables training.")
                         .font(.caption)
                         .foregroundStyle(.secondary)
 
@@ -1432,8 +1464,10 @@ struct ReferenceAuthoringView: View {
                         HStack {
                             Button("Reject Take") { viewModel.rejectTake() }
                                 .disabled(!viewModel.canRejectReviewedTake)
-                            Button("Approve Canonical Draft") { viewModel.approveCanonical() }
+                            Button("Approve & Save Capture…") { saveRawCapture(approvingCanonical: true) }
                                 .buttonStyle(.borderedProminent)
+                                .disabled(!viewModel.canApprove)
+                            Button("Approve Canonical Draft Only") { viewModel.approveCanonical() }
                                 .disabled(!viewModel.canApprove)
                         }
                         // Say WHY it is unavailable. A dead button with no
@@ -1445,10 +1479,33 @@ struct ReferenceAuthoringView: View {
                                 .foregroundStyle(.secondary)
                         }
                     }
+                    rawExportControls
                 }
+                .disabled(exportCoordinator.isPreparing)
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .padding(.top, 4)
             }
+        }
+    }
+
+    private func reviewCompletionControls(_ take: ReferenceAuthoringTake) -> some View {
+        VStack(alignment: .leading, spacing: 6) {
+            if take.evidence.metadata.lifecycleState != .approvedCanonical,
+               take.evidence.metadata.captureIntent?.isMovementCheck != true {
+                Button("Approve & Save Capture…") { saveRawCapture(approvingCanonical: true) }
+                    .buttonStyle(.borderedProminent)
+                    .disabled(!viewModel.canApprove)
+                if let reason = viewModel.approvalBlockReason {
+                    Text(reason).font(.caption).foregroundStyle(.orange)
+                }
+            } else if take.evidence.metadata.lifecycleState == .approvedCanonical {
+                Text("Canonical draft approved. Save Capture exports the ZIP; cancelling a save keeps the approved draft.")
+                    .font(.caption).foregroundStyle(.secondary)
+            }
+            if let message = viewModel.visibleMessage {
+                Text(message).font(.caption).textSelection(.enabled)
+            }
+            rawExportControls
         }
     }
 
@@ -2099,11 +2156,13 @@ struct ReferenceAuthoringView: View {
             HStack {
                 Text("Repetition \(boundary.index + 1)").font(.callout.weight(.semibold))
                 Spacer()
-                Button(focusedBoundary(for: take)?.index == boundary.index ? "Notation highlighted" : "Show notation") {
+                Button(focusedBoundary(for: take)?.index == boundary.index ? "Review selected" : "Review bounds") {
                     focusMotion(on: boundary, take: take)
+                    viewModel.mediaReview.previewBoundary(boundary, take: take)
                 }
                 Button(take.evidence.boundaries.selectedRepetitionIndex == boundary.index ? "Preferred" : "Mark as Preferred") {
                     focusMotion(on: boundary, take: take)
+                    viewModel.mediaReview.previewBoundary(boundary, take: take)
                     viewModel.markPreferredRepetition(boundary.index)
                 }
                 .disabled(!viewModel.canEditReviewedTake || take.evidence.boundaries.selectedRepetitionIndex == boundary.index)
@@ -2129,6 +2188,9 @@ struct ReferenceAuthoringView: View {
                     step: 0.25
                 )
                 .disabled(!viewModel.canEditReviewedTake)
+            }
+            if focusedBoundary(for: take)?.index == boundary.index {
+                ReferenceBoundaryMediaReview(controller: viewModel.mediaReview, boundary: boundary, take: take)
             }
         }
         .padding(10)
@@ -2249,6 +2311,7 @@ struct ReferenceAuthoringView: View {
 
 private struct CompanionRelaySetupView: View {
     @ObservedObject var receiver: CompanionCameraReceiver
+    var locked: Bool
 
     var body: some View {
         VStack(alignment: .leading, spacing: 4) {
@@ -2262,6 +2325,14 @@ private struct CompanionRelaySetupView: View {
             .disabled(receiver.isBrowsingForPeers)
             .accessibilityIdentifier("cxl.hardware.enableCompanionRelay")
 
+            if receiver.isBrowsingForPeers {
+                Button("Reconnect iPhone relay") { receiver.reconnectCompanion() }
+                    .disabled(locked || receiver.relayedWatchCaptureStore.activeTakeContext != nil)
+                ForEach(receiver.discoveredPeers) { peer in
+                    Button("Connect to \(peer.name)") { receiver.connect(to: peer) }
+                        .disabled(locked || !receiver.connectedPeerNames.isEmpty)
+                }
+            }
             Text(receiver.connectionStatus)
                 .font(.caption)
                 .foregroundStyle(.secondary)
@@ -2275,6 +2346,7 @@ private struct CompanionRelaySetupView: View {
 
 private struct ReferenceMediaReviewStatus: View {
     @ObservedObject var controller: ReferenceFinalizedMediaReviewController
+    var showsVideo = true
 
     var body: some View {
         VStack(alignment: .leading, spacing: 4) {
@@ -2284,9 +2356,12 @@ private struct ReferenceMediaReviewStatus: View {
                 Button("Stop playback") { controller.stop() }
                     .disabled(!controller.canPlay)
             }
-            if let player = controller.videoPlayer {
+            if showsVideo, let player = controller.videoPlayer {
                 ReferenceRecordedVideo(player: player)
                     .frame(height: 240)
+            } else if !showsVideo {
+                Text("Video is beside the selected repetition's boundary controls below.")
+                    .font(.caption).foregroundStyle(.secondary)
             }
             Text(summary).font(.caption)
                 .foregroundStyle(isBlocking ? Color.orange : Color.secondary)
@@ -2329,6 +2404,45 @@ private struct ReferenceMediaReviewStatus: View {
             String(format: "WAV/MOV duration mismatch: %.3f s / %.3f s.", wav, mov)
         case .synchronizationUnavailable(let detail): "Synchronization unavailable: \(detail)"
         }
+    }
+}
+
+/// Uses the very same player as whole-take review: one audio clock and both
+/// recorded angles, kept beside the trim controls while the operator reviews.
+private struct ReferenceBoundaryMediaReview: View {
+    @ObservedObject var controller: ReferenceFinalizedMediaReviewController
+    let boundary: ReferenceRepetitionBoundary
+    let take: ReferenceAuthoringTake
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            if let player = controller.videoPlayer {
+                ReferenceRecordedVideo(player: player)
+                    .frame(height: 180)
+                    .overlay(alignment: .bottomLeading) {
+                        TimelineView(.animation(minimumInterval: 0.1)) { _ in
+                            Text(String(format: "Recorded take · %.2f s", max(0, player.currentTime().seconds)))
+                                .font(.caption.monospacedDigit()).padding(4)
+                                .background(.black.opacity(0.7)).foregroundStyle(.white)
+                        }
+                    }
+            }
+            HStack {
+                Button("Show start") { controller.previewBoundary(boundary, take: take) }
+                Button("Show end") { controller.previewBoundary(boundary, take: take, atEnd: true) }
+                Button("Play with rest context") {
+                    controller.play(repetition: boundary, take: take, contextBeats: 4)
+                }
+                Button("Play whole take") { controller.playWholeTake() }
+            }.disabled(!controller.canPlay)
+            Text("Play repetition checks the chosen bounds. Rest context includes up to four beats before and after, so you can hear a cut-off movement. Changing a bound pauses and shows that edge. Original media stays unchanged.")
+                .font(.caption).foregroundStyle(.secondary)
+            if let message = controller.playbackMessage {
+                Text(message).font(.caption).foregroundStyle(.orange)
+            }
+        }
+        .onChange(of: boundary.startBeat) { _, _ in controller.previewBoundary(boundary, take: take) }
+        .onChange(of: boundary.endBeat) { _, _ in controller.previewBoundary(boundary, take: take, atEnd: true) }
     }
 }
 

@@ -5,11 +5,35 @@ import SwiftUI
 /// Optional local/Continuity camera. Its serial queue owns the session, writer
 /// and take token. Network preview packets are never promoted to recordings.
 final class SecondaryCameraRecorder: NSObject, ObservableObject, AVCaptureVideoDataOutputSampleBufferDelegate {
+    enum Orientation: String, CaseIterable, Sendable {
+        case automatic, landscape, portraitRight, portraitLeft, upsideDown
+        var label: String {
+            switch self {
+            case .automatic: return "Automatic"
+            case .landscape: return "Landscape (0°)"
+            case .portraitRight: return "Portrait (90°)"
+            case .portraitLeft: return "Portrait (270°)"
+            case .upsideDown: return "Landscape (180°)"
+            }
+        }
+        var angle: CGFloat? {
+            switch self {
+            case .automatic: return nil
+            case .landscape: return 0
+            case .portraitRight: return 90
+            case .portraitLeft: return 270
+            case .upsideDown: return 180
+            }
+        }
+    }
+
     let session = AVCaptureSession()
     @Published private(set) var status = "Second camera is off"
     @Published private(set) var selectedID = ""
     @Published private(set) var ready = false
     @Published private(set) var rotation: CGFloat = 0
+    @Published private(set) var orientation: Orientation = .automatic
+    private var selectedOrientation: Orientation = .automatic
     private let queue = DispatchQueue(label: "scratchlab.secondary-camera")
     private let output = AVCaptureVideoDataOutput()
     private var device: AVCaptureDevice?
@@ -84,10 +108,16 @@ final class SecondaryCameraRecorder: NSObject, ObservableObject, AVCaptureVideoD
                 self.device = device
                 let rotationCoordinator = AVCaptureDevice.RotationCoordinator(device: device, previewLayer: nil)
                 coordinator = rotationCoordinator
-                applyRotation(rotationCoordinator.videoRotationAngleForHorizonLevelCapture)
+                selectedOrientation = Orientation(rawValue: UserDefaults.standard.string(
+                    forKey: "scratchlab.secondaryCamera.orientation." + device.uniqueID) ?? "") ?? .automatic
+                guard applyRotation(selectedOrientation.angle ?? rotationCoordinator.videoRotationAngleForHorizonLevelCapture) else {
+                    throw SecondaryCameraError("This camera does not support the selected rotation. Choose another orientation.")
+                }
+                DispatchQueue.main.async { [orientation = selectedOrientation] in self.orientation = orientation }
                 rotationObservation = rotationCoordinator.observe(\.videoRotationAngleForHorizonLevelCapture, options: [.new]) { [weak self] value, _ in
                     self?.queue.async { [weak self] in
                         guard let self, self.active == nil, self.finishing == nil else { return }
+                        guard self.selectedOrientation == .automatic else { return }
                         self.applyRotation(value.videoRotationAngleForHorizonLevelCapture)
                     }
                 }
@@ -99,7 +129,26 @@ final class SecondaryCameraRecorder: NSObject, ObservableObject, AVCaptureVideoD
         }
     }
 
-    private func applyRotation(_ angle: CGFloat) {
+    func setOrientation(_ orientation: Orientation) {
+        queue.async { [self] in
+            guard active == nil, finishing == nil, let device else { return }
+            let angle = orientation.angle ?? coordinator?.videoRotationAngleForHorizonLevelCapture ?? 0
+            guard applyRotation(angle) else {
+                publish("This camera does not support that rotation; the previous orientation is unchanged.",
+                    id: device.uniqueID, ready: previewReadyPublished)
+                return
+            }
+            selectedOrientation = orientation
+            UserDefaults.standard.set(orientation.rawValue, forKey: "scratchlab.secondaryCamera.orientation." + device.uniqueID)
+            latestFrameHostTime = 0
+            previewReadyPublished = false
+            DispatchQueue.main.async { self.orientation = orientation }
+            publish("Updating camera orientation…", id: device.uniqueID, ready: false)
+        }
+    }
+
+    @discardableResult
+    private func applyRotation(_ angle: CGFloat) -> Bool {
         if let connection = output.connection(with: .video), connection.isVideoRotationAngleSupported(angle) {
             connection.videoRotationAngle = angle
             if connection.isVideoMirroringSupported {
@@ -108,7 +157,9 @@ final class SecondaryCameraRecorder: NSObject, ObservableObject, AVCaptureVideoD
             }
             captureRotation = angle
             DispatchQueue.main.async { self.rotation = angle }
+            return true
         }
+        return false
     }
 
     func begin(primaryURL: URL, epoch: Double) {
@@ -346,6 +397,17 @@ struct SecondaryCameraSetupView: View {
                     Text(device.deviceType == .deskViewCamera ? "\(device.localizedName) (processed overhead)" : device.localizedName).tag(device.uniqueID)
                 }
             }.disabled(locked)
+            if !recorder.selectedID.isEmpty {
+                Picker("Second camera orientation", selection: Binding(
+                    get: { recorder.orientation }, set: { recorder.setOrientation($0) }
+                )) {
+                    ForEach(SecondaryCameraRecorder.Orientation.allCases, id: \.self) {
+                        Text($0.label).tag($0)
+                    }
+                }.disabled(locked)
+                Text("If turning the phone does not change the picture, choose Portrait (90°) or Portrait (270°) until it is upright. This rotates both preview and recording and is saved for this camera. Set it before recording.")
+                    .font(.caption).foregroundStyle(.secondary)
+            }
             Text("For an iPhone body view, mount it upright in portrait with your upper body and decks visible. Use Continuity Camera on the same Apple Account; a USB cable can help with connection. Keep the main landscape camera aimed at your hands and fader.")
                 .font(.caption).foregroundStyle(.secondary)
             Text("Continuity Camera keeps the iPhone locked. Watch relay from that same phone is not verified for this setup; use another camera if you also need the paired iPhone to relay Watch motion. Watch motion is optional.")

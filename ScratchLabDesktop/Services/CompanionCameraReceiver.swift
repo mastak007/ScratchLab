@@ -616,6 +616,19 @@ final class CompanionCameraReceiver: NSObject, ObservableObject {
     }
 
     @MainActor
+    func reconnectCompanion() {
+        guard relayedWatchCaptureStore.activeTakeContext == nil else { return }
+        disconnect()
+        directBrowser?.cancel()
+        directBrowser = nil
+        directEndpointLookup.removeAll()
+        attemptedAutoConnectPeerIDs.removeAll()
+        discoveredPeers = []
+        isBrowsingForPeers = false
+        startBrowsingForCompanionIfNeeded()
+    }
+
+    @MainActor
     func requestWatchCaptureStart(
         sessionID: String,
         takeID: String,
@@ -836,10 +849,8 @@ final class CompanionCameraReceiver: NSObject, ObservableObject {
     }
 
     private var hasConnectedRelay: Bool {
-        directConnectionLock.lock()
-        let hasDirectConnection = directConnection != nil
-        directConnectionLock.unlock()
-        return hasDirectConnection || !session.connectedPeers.isEmpty
+        if let connection = directConnectionSnapshot(), case .ready = connection.state { return true }
+        return !session.connectedPeers.isEmpty
     }
 
     private func replaceDirectConnection(_ connection: NWConnection?) {
@@ -867,16 +878,16 @@ final class CompanionCameraReceiver: NSObject, ObservableObject {
             using: parameters
         )
         directBrowser = browser
-        browser.stateUpdateHandler = { [weak self] state in
-            guard let self else { return }
+        browser.stateUpdateHandler = { [weak self, weak browser] state in
+            guard let self, let browser, self.directBrowser === browser else { return }
             if case .failed(let error) = state {
                 DispatchQueue.main.async {
                     self.connectionStatus = "Unable to search for companion device: \(error.localizedDescription)"
                 }
             }
         }
-        browser.browseResultsChangedHandler = { [weak self] results, _ in
-            guard let self else { return }
+        browser.browseResultsChangedHandler = { [weak self, weak browser] results, _ in
+            guard let self, let browser, self.directBrowser === browser else { return }
             let endpoints = Dictionary(uniqueKeysWithValues: results.map { result in
                 (result.endpoint.debugDescription, result.endpoint)
             })
@@ -892,6 +903,7 @@ final class CompanionCameraReceiver: NSObject, ObservableObject {
             .sorted { $0.name < $1.name }
 
             DispatchQueue.main.async {
+                guard self.directBrowser === browser else { return }
                 self.directEndpointLookup = endpoints
                 self.discoveredPeers = summaries
                 if self.connectedPeerNames.isEmpty {
@@ -913,10 +925,11 @@ final class CompanionCameraReceiver: NSObject, ObservableObject {
         let connection = NWConnection(to: endpoint, using: parameters)
         replaceDirectConnection(connection)
         connection.stateUpdateHandler = { [weak self, weak connection] state in
-            guard let self, let connection else { return }
+            guard let self, let connection, self.directConnectionSnapshot() === connection else { return }
             switch state {
             case .ready:
                 DispatchQueue.main.async {
+                    guard self.directConnectionSnapshot() === connection else { return }
                     self.connectedPeerNames = [peerName]
                     self.connectionStatus = "Receiving companion feed from \(peerName)"
                     self.relayedWatchCaptureStore.notePeerConnection(isConnected: true)
@@ -924,7 +937,10 @@ final class CompanionCameraReceiver: NSObject, ObservableObject {
                 self.receiveDirectPacketLength(on: connection, peerName: peerName)
             case .waiting(let error):
                 DispatchQueue.main.async {
-                    self.connectionStatus = "Companion connection paused: \(error.localizedDescription)"
+                    guard self.directConnectionSnapshot() === connection else { return }
+                    self.connectedPeerNames = []
+                    self.relayedWatchCaptureStore.notePeerConnection(isConnected: false)
+                    self.connectionStatus = "Companion connection paused: \(error.localizedDescription). Use Reconnect iPhone relay."
                 }
             case .failed, .cancelled:
                 if self.directConnectionSnapshot() === connection {

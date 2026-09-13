@@ -10813,6 +10813,39 @@ final class CaptureRecoveryPhase2CoreTests: XCTestCase {
         XCTAssertEqual(sessionSummary.takeCount, 1)
     }
 
+    func testRecoveryKeepsOnlyTheExactVerifiedSecondCameraAttachment() throws {
+        for variant in ["valid", "changed", "wrong-take"] {
+            let root = try makeTemporaryDirectory()
+            let movie = root.appendingPathComponent("take.mov")
+            let sidecarURL = root.appendingPathComponent("take.json")
+            let cameraURL = SecondaryCameraEvidence.url(beside: movie)
+            let bytes = Data("recorded second camera".utf8)
+            try Data("primary movie".utf8).write(to: movie)
+            try bytes.write(to: cameraURL)
+            var camera = SecondaryCameraEvidence(deviceID: "phone", deviceName: "Phone",
+                rotationDegrees: 90, status: .captured)
+            camera.fileName = variant == "wrong-take" ? "other.second-camera.mov" : cameraURL.lastPathComponent
+            camera.sha256 = ReferencePackageIO.sha256Hex(bytes)
+            camera.firstFrameSeconds = 0; camera.lastFrameSeconds = 1; camera.frameCount = 30
+            let sidecar = try makeRecordingSidecar(sessionID: "camera-recovery",
+                takeIdentity: CaptureCore.LocalRecordingNaming.takeIdentity(sessionID: "camera-recovery", takeNumber: 1),
+                mediaURL: movie, sidecarURL: sidecarURL, startedAt: Date())
+                .finalized(mediaFileName: movie.lastPathComponent, captureErrorDescription: nil, secondaryCamera: camera)
+            let original = try sidecar.encodedData()
+            try original.write(to: sidecarURL)
+            if variant == "changed" { try Data("changed movie".utf8).write(to: cameraURL) }
+            let manager = StagedCaptureRecoveryManager(auditRootDirectoryOverride: root.appendingPathComponent("audit"))
+            let report = manager.recoverRecordingDirectory(at: root, storageKind: .routine)
+            XCTAssertEqual(FileManager.default.fileExists(atPath: cameraURL.path), variant == "valid", variant)
+            XCTAssertEqual(report.quarantinedArtifactCount, variant == "valid" ? 0 : 1, variant)
+            XCTAssertEqual(try Data(contentsOf: sidecarURL), original)
+            if variant == "valid" {
+                XCTAssertEqual(try Data(contentsOf: cameraURL), bytes)
+                XCTAssertEqual(manager.recoverRecordingDirectory(at: root, storageKind: .routine).quarantinedArtifactCount, 0)
+            }
+        }
+    }
+
     func testOrphanedMediaArtifactsAreQuarantined() throws {
         let root = try makeTemporaryDirectory()
         let orphanMovie = root.appendingPathComponent("orphan.mov")
@@ -22710,7 +22743,8 @@ final class MacWatchStopDispatchTests: XCTestCase {
             "CXL must start the selected backing sound after four count-in clicks through the beat engine's recording boundary."
         )
         XCTAssertTrue(
-            referenceBridgeSource.contains("engine.startRoutineRecording(captureTiming: captureTiming)"),
+            referenceBridgeSource.contains("engine.startRoutineRecording(captureTiming: captureTiming,")
+                && referenceBridgeSource.contains("beatOutputRoute: outputRoute)"),
             "CXL must persist the click and recording host-time boundary used by the audible count-in."
         )
         XCTAssertFalse(

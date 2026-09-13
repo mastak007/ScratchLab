@@ -1357,12 +1357,17 @@ final class ReferenceAuthoringViewModel: ObservableObject {
     /// The export source for the raw diagnostic capture, or `nil` when there
     /// is nothing stable to export. Reuses the existing session-archive
     /// pipeline; this screen builds no second archive format.
-    func rawCaptureExportSource(config: CaptureSessionConfig?) async -> SessionExportSource? {
+    func rawCaptureExportSource(config: CaptureSessionConfig?, approvingCanonical: Bool = false) async -> SessionExportSource? {
         rawCaptureExportError = nil
-        guard canExportRawCapture else {
-            rawCaptureExportError = rawCaptureExportBlockReason
+        let blockReason = approvingCanonical ? approvalBlockReason : rawCaptureExportBlockReason
+        guard blockReason == nil else {
+            rawCaptureExportError = blockReason
             return nil
         }
+        let expectedTakeID = reviewedTake?.id
+        let notes = reviewNotes
+        reviewNotesSaveTask?.cancel()
+        if mediaReview.state != .loading { mediaReview.stop() }
         isWorking = true
         isPreparingRawCaptureExport = true
         defer {
@@ -1370,9 +1375,23 @@ final class ReferenceAuthoringViewModel: ObservableObject {
             isPreparingRawCaptureExport = false
         }
         do {
-            if let takeID = reviewedTake?.id {
+            if approvingCanonical {
+                let update = await worker.approveCanonical(notes: notes)
+                apply(update)
+                guard update.errorMessage == nil, reviewedTake?.id == expectedTakeID,
+                      reviewedTake?.evidence.metadata.lifecycleState == .approvedCanonical else {
+                    rawCaptureExportError = update.errorMessage ?? "The draft could not be approved. No capture was exported."
+                    return nil
+                }
+                visibleMessage = "Canonical draft approved and saved on this Mac. Choose a destination to save the capture ZIP. Cancelling the dialog keeps the approved draft."
+            } else if let takeID = expectedTakeID {
                 // Export the notes currently shown, not a debounced older copy.
-                apply(await worker.saveDraft(reviewNotes: reviewNotes, expectedTakeID: takeID))
+                let update = await worker.saveDraft(reviewNotes: notes, expectedTakeID: takeID)
+                apply(update)
+                guard update.errorMessage == nil else {
+                    rawCaptureExportError = update.errorMessage
+                    return nil
+                }
             }
             guard let snapshot = try await worker.rawCaptureExportSnapshot(config: config) else {
                 rawCaptureExportError = "The finalized capture is no longer available for export."
@@ -1787,6 +1806,8 @@ final class ReferenceAuthoringViewModel: ObservableObject {
     }
 
     func adjustRepetitionBoundary(index: Int, startBeat: Double, endBeat: Double) {
+        guard canEditReviewedTake else { return }
+        if mediaReview.state != .loading { mediaReview.stop() }
         Task { [weak self] in
             guard let self else { return }
             apply(await worker.adjustRepetitionBoundary(
@@ -1795,6 +1816,13 @@ final class ReferenceAuthoringViewModel: ObservableObject {
                 endBeat: endBeat
             ))
         }
+    }
+
+    func showCameraSetup() {
+        guard canOpenSavedDraft, !isReviewingSavedDraft else { return }
+        if mediaReview.state != .loading { mediaReview.stop() }
+        navigationRequest = .init(destination: .setup)
+        visibleMessage = "Choose the main and optional second camera in Hardware inputs. Changes apply to the next recording; saved takes keep their original cameras."
     }
 
     func selectRepetitionForApproval(_ index: Int) {

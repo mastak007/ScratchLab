@@ -624,7 +624,18 @@ final class ReferenceTearEvidencePipelineTests: XCTestCase {
         var camera = SecondaryCameraEvidence(deviceID: "fixture-phone", deviceName: "Portrait Phone", rotationDegrees: 90, status: .captured)
         camera.fileName = secondURL.lastPathComponent; camera.sha256 = ReferencePackageIO.sha256Hex(original)
         camera.frameCount = 30; camera.firstFrameSeconds = 0.03; camera.lastFrameSeconds = 1
-        sidecar.secondaryCamera = camera
+        // Reproduce the hardware ordering: Watch Stop refreshes the active
+        // sidecar from disk while the second-camera/movie mux is finishing.
+        // That disk copy has no second camera. The finalization-owned result
+        // must survive into the draft and the real archive.
+        sidecar = sidecar.withWatchStopDiagnostics(.init(outcome: .timedOut,
+            sessionID: sidecar.sessionID, takeID: sidecar.takeID,
+            detail: "Synthetic late Watch Stop", requestedAt: Date(),
+            resolvedAt: Date(), attemptCount: 1, motionTransferState: .notApplicable))
+        XCTAssertNil(sidecar.secondaryCamera)
+        sidecar = sidecar.finalized(mediaFileName: first.mediaURL.lastPathComponent,
+            captureErrorDescription: nil, secondaryCamera: camera)
+        XCTAssertEqual(sidecar.watchStopDiagnostics?.outcome, .timedOut)
         let data = try sidecar.encodedData(); try data.write(to: first.sidecarURL)
         let files = Fixture(directory: first.directory, mediaURL: first.mediaURL, sidecarURL: first.sidecarURL,
             sidecarData: data, config: first.config, raw: first.raw)
@@ -650,6 +661,61 @@ final class ReferenceTearEvidencePipelineTests: XCTestCase {
             sha256: ReferencePackageIO.sha256Hex(original))), "The optional second camera is bound by hash.")
         try Data("changed".utf8).write(to: secondURL)
         XCTAssertThrowsError(try ReferenceDraftStore(directory: root).load(id: take.id))
+    }
+
+    func testBoundaryPreviewSeeksRecordedVideoWithOneAudioTrackAndRestContext() async throws {
+        let strokes = (0..<10).flatMap { index in
+            Self.packets(index.isMultiple(of: 2) ? 1 : -1, start: 0.1 + Double(index), duration: 0.8)
+        }
+        let files = try await fixture(Self.withFader(strokes))
+        let owner = worker([files])
+        let take = try await record(owner)
+        let originalMovie = try Data(contentsOf: files.mediaURL)
+        let controller = ReferenceFinalizedMediaReviewController()
+        controller.load(take: take, mediaURL: files.mediaURL, beatRootURL: nil)
+        let boundary = try XCTUnwrap(take.evidence.boundaries.repetitions.first { $0.index == 1 })
+        controller.previewBoundary(boundary, take: take)
+        XCTAssertEqual(controller.state, .loading, "An early click must not cancel media loading.")
+        let deadline = Date().addingTimeInterval(10)
+        while controller.state == .loading, Date() < deadline { try await Task.sleep(for: .milliseconds(20)) }
+        XCTAssertTrue(controller.canPlay)
+        let player = try XCTUnwrap(controller.videoPlayer)
+        player.isMuted = true
+        let asset = try XCTUnwrap(player.currentItem?.asset)
+        let audioTracks = try await asset.loadTracks(withMediaType: .audio)
+        XCTAssertEqual(audioTracks.count, 1, "Whole-take and inline review share the one WAV-backed player.")
+        let start = boundary.startSeconds(metadata: take.evidence.metadata)
+        let end = boundary.endSeconds(metadata: take.evidence.metadata)
+        controller.previewBoundary(boundary, take: take)
+        try await waitForPlayer(player, at: start)
+        XCTAssertEqual(player.rate, 0)
+        controller.previewBoundary(boundary, take: take, atEnd: true)
+        try await waitForPlayer(player, at: end - 1 / 30)
+        XCTAssertEqual(player.rate, 0)
+        controller.play(repetition: boundary, take: take, contextBeats: 4)
+        let playingDeadline = Date().addingTimeInterval(5)
+        while controller.state != .playing(repetition: boundary.index), Date() < playingDeadline {
+            try await Task.sleep(for: .milliseconds(20))
+        }
+        XCTAssertEqual(controller.state, .playing(repetition: boundary.index))
+        XCTAssertEqual(player.currentItem?.forwardPlaybackEndTime.seconds ?? -1,
+            min(controller.durationSeconds, end + 4 * 60 / Double(take.evidence.metadata.bpm)), accuracy: 0.001)
+        controller.stop()
+        // A rapid changed edge supersedes the old seek and keeps playback paused.
+        controller.previewBoundary(boundary, take: take)
+        controller.previewBoundary(boundary, take: take, atEnd: true)
+        try await waitForPlayer(player, at: end - 1 / 30)
+        XCTAssertEqual(player.rate, 0)
+        XCTAssertEqual(try Data(contentsOf: files.mediaURL), originalMovie)
+        XCTAssertEqual(try Data(contentsOf: files.sidecarURL), files.sidecarData)
+    }
+
+    private func waitForPlayer(_ player: AVPlayer, at seconds: Double) async throws {
+        let deadline = Date().addingTimeInterval(5)
+        while abs(player.currentTime().seconds - seconds) > 0.01, Date() < deadline {
+            try await Task.sleep(for: .milliseconds(20))
+        }
+        XCTAssertEqual(player.currentTime().seconds, seconds, accuracy: 0.01)
     }
 
     func testPreferredRepetitionAndNotesSurviveRestartAndRealArchiveWithoutApproval() async throws {
@@ -958,14 +1024,31 @@ final class ReferenceTearEvidencePipelineTests: XCTestCase {
         let beforeSelection = await fresh.approveCanonical(notes: "No selection must reject")
         XCTAssertNotNil(beforeSelection.errorMessage)
         _ = await fresh.selectRepetitionForApproval(0)
-        let approved = await fresh.approveCanonical(notes: "Reviewed later; synthetic evidence only")
-        guard approved.errorMessage == nil else {
-            XCTFail(approved.errorMessage ?? "Approval failed")
-            return
-        }
-        let take = try XCTUnwrap(approved.state.session.takes.last)
+        let model = ReferenceAuthoringViewModel(worker: fresh, initialState: await fresh.snapshot())
+        model.reviewNotes = "Reviewed later; synthetic evidence only"
+        model.mediaReview.load(take: try XCTUnwrap(model.reviewedTake), mediaURL: files.mediaURL, beatRootURL: nil)
+        let deadline = Date().addingTimeInterval(10)
+        while model.mediaReview.state == .loading, Date() < deadline { try await Task.sleep(for: .milliseconds(20)) }
+        XCTAssertNil(model.approvalBlockReason)
+        let source = await model.rawCaptureExportSource(config: nil, approvingCanonical: true)
+        let archiveSource = try XCTUnwrap(source, model.rawCaptureExportError ?? "Approve and save failed")
+        let approvedArchive = try await Task.detached { try Self.archive(archiveSource, in: files.directory) }.value
+        let take = try XCTUnwrap(model.reviewedTake)
         XCTAssertEqual(take.evidence.metadata.lifecycleState, .approvedCanonical)
         XCTAssertEqual(take.evidence.metadata.reviewDecision?.notes, "Reviewed later; synthetic evidence only")
+        XCTAssertFalse(model.isWorking)
+        XCTAssertFalse(model.isPreparingRawCaptureExport)
+        let reviewDocument = try ReferenceReviewMetadataCodec.decodeDocument(XCTUnwrap(approvedArchive.reviews[unlinked.takeID]))
+        XCTAssertEqual(reviewDocument.lifecycleStateAtExport, .approvedCanonical)
+        XCTAssertEqual(reviewDocument.preferredRepetition?.repetitionNumber, 1)
+        XCTAssertEqual(try ReferenceDraftStore(directory: root).load(id: take.id).evidence.metadata.lifecycleState, .approvedCanonical)
+        // Dismissing a save panel cannot undo approval. A normal Save Capture
+        // retry uses the same source; another approval request must be refused.
+        let duplicate = await model.rawCaptureExportSource(config: nil, approvingCanonical: true)
+        XCTAssertNil(duplicate)
+        let retry = await model.rawCaptureExportSource(config: nil)
+        XCTAssertNotNil(retry)
+        XCTAssertEqual(model.reviewedTake?.evidence.metadata.lifecycleState, .approvedCanonical)
         let checked = try await fresh.verifiedTakeForExport()
         let destination = files.directory.appendingPathComponent("approved")
         let package = try await Task.detached {
@@ -1984,6 +2067,10 @@ final class ReferenceAuthoringViewModelTests: XCTestCase {
         XCTAssertNotEqual(model.reviewedTake?.evidence.metadata.lifecycleState, .approvedCanonical)
         XCTAssertTrue(model.canEditReviewedTake)
         XCTAssertTrue(model.approvalBlockReasons.contains { $0.contains("BeatSpec") })
+        let refusedCombined = await model.rawCaptureExportSource(config: nil, approvingCanonical: true)
+        XCTAssertNil(refusedCombined)
+        XCTAssertTrue(model.rawCaptureExportError?.contains("BeatSpec") == true)
+        XCTAssertNotEqual(model.reviewedTake?.evidence.metadata.lifecycleState, .approvedCanonical)
         model.retake()
         let retained = await waitUntil { model.session.phase == .readyToRecord && !model.isWorking }
         XCTAssertTrue(retained)
@@ -2006,6 +2093,23 @@ final class ReferenceAuthoringViewModelTests: XCTestCase {
             XCTAssertNil(ReferenceFinalizedMediaReviewController.playableRange(start: start, end: 20, duration: 10.5))
         }
         XCTAssertNil(ReferenceFinalizedMediaReviewController.playableRange(start: 5, end: 4, duration: 10.5))
+    }
+
+    func testReturningToCameraSetupKeepsTheReviewedTakeAndPreference() async throws {
+        let hooks = ReferenceAuthoringRecordingHooks(startRecording: { .success(()) },
+            stopRecording: { .success(self.goodArtifacts()) },
+            currentPreflightSnapshot: { self.passingSnapshot() }, latestCalibrationObservation: { nil })
+        let worker = makeWorker(session: readySession(), hooks: hooks)
+        _ = await worker.startRecording()
+        _ = await worker.stopRecording()
+        _ = await worker.markPreferredRepetition(1)
+        let state = await worker.snapshot()
+        let model = ReferenceAuthoringViewModel(worker: worker, initialState: state)
+        model.showCameraSetup()
+        XCTAssertEqual(model.navigationRequest?.destination, .setup)
+        XCTAssertEqual(model.session, state.session)
+        XCTAssertEqual(model.reviewedTake?.evidence.boundaries.selectedRepetitionIndex, 1)
+        XCTAssertTrue(model.visibleMessage?.contains("next recording") == true)
     }
     private final class LockedBox<Value>: @unchecked Sendable {
         private let lock = NSLock()

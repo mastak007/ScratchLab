@@ -231,16 +231,38 @@ final class ReferenceFinalizedMediaReviewController: ObservableObject {
         playRange(start: 0, end: durationSeconds, playingState: .playingTake)
     }
 
-    func play(repetition boundary: ReferenceRepetitionBoundary, take: ReferenceAuthoringTake) {
-        guard loadedTakeID == take.evidence.metadata.referenceTakeID else { return }
+    func play(repetition boundary: ReferenceRepetitionBoundary, take: ReferenceAuthoringTake, contextBeats: Double = 0) {
+        guard canPlay, loadedTakeID == take.evidence.metadata.referenceTakeID else { return }
+        guard Self.playableRange(start: boundary.startSeconds(metadata: take.evidence.metadata),
+            end: boundary.endSeconds(metadata: take.evidence.metadata), duration: durationSeconds) != nil else {
+            stop()
+            playbackMessage = "That repetition is outside the recorded take. Adjust its start and end."
+            return
+        }
+        let context = max(0, contextBeats) * 60 / Double(take.evidence.metadata.bpm)
         playRange(
-            start: boundary.startSeconds(metadata: take.evidence.metadata),
-            end: boundary.endSeconds(metadata: take.evidence.metadata),
+            start: boundary.startSeconds(metadata: take.evidence.metadata) - context,
+            end: boundary.endSeconds(metadata: take.evidence.metadata) + context,
             playingState: .playing(repetition: boundary.index)
         )
     }
 
-    private func playRange(start: Double, end: Double, playingState: State) {
+    /// Seek the shared audio/video player to a trim edge without playing or
+    /// modifying the recording. End uses the last frame inside the range.
+    func previewBoundary(_ boundary: ReferenceRepetitionBoundary, take: ReferenceAuthoringTake, atEnd: Bool = false) {
+        guard canPlay, loadedTakeID == take.evidence.metadata.referenceTakeID else { return }
+        let start = boundary.startSeconds(metadata: take.evidence.metadata)
+        let end = boundary.endSeconds(metadata: take.evidence.metadata)
+        guard let range = Self.playableRange(start: start, end: end, duration: durationSeconds) else {
+            stop()
+            playbackMessage = "That repetition is outside the recorded take. Adjust its start and end."
+            return
+        }
+        playRange(start: atEnd ? max(range.lowerBound, range.upperBound - 1 / 30) : range.lowerBound,
+            end: range.upperBound, playingState: .stopped, autoplay: false)
+    }
+
+    private func playRange(start: Double, end: Double, playingState: State, autoplay: Bool = true) {
         guard canPlay, let audioPlayer else { return }
         guard let range = Self.playableRange(start: start, end: end, duration: durationSeconds) else {
             playbackMessage = "That repetition is outside the recorded take. Use Play whole take or adjust its start and end."
@@ -265,7 +287,7 @@ final class ReferenceFinalizedMediaReviewController: ObservableObject {
             audioPlayer.currentItem?.forwardPlaybackEndTime = CMTime(
                 seconds: range.upperBound, preferredTimescale: 48_000
             )
-            audioPlayer.play()
+            if autoplay { audioPlayer.play() }
             state = playingState
         }
     }

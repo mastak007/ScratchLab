@@ -22,6 +22,16 @@ struct WatchCaptureHubView: View {
                     .fixedSize(horizontal: false, vertical: true)
 
                 stateContent
+                if localNetworkRationaleAccepted {
+                    Text(broadcaster.connectionStatus)
+                        .font(ScratchLabDesign.Typo.bodySmall)
+                    Button("Reconnect Mac") {
+                        broadcaster.reconnectMacRelay()
+                        watchMotionCaptureStore.retryRelayConnection()
+                    }
+                    .buttonStyle(.bordered)
+                    .disabled(watchMotionCaptureStore.relayState == .active || broadcaster.isRecording)
+                }
             }
             .padding(.horizontal, 32)
             .padding(.top, 34)
@@ -68,7 +78,7 @@ struct WatchCaptureHubView: View {
             )
             Button("Retry Connection") {
                 localNetworkRationaleAccepted = true
-                broadcaster.startRelayAdvertisingIfNeeded()
+                broadcaster.reconnectMacRelay()
                 watchMotionCaptureStore.retryRelayConnection()
             }
             .font(ScratchLabDesign.Typo.buttonPrimary)

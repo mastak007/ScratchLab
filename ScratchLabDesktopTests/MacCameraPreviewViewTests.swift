@@ -902,6 +902,66 @@ final class ReferenceAuthoringRouteActivationTests: XCTestCase {
         }
     }
 
+    func testCameraCanChangeBetweenTakesAndRetryWithoutAdvertisingStaleReadiness() {
+        withAudioSelectionEngine { engine in
+            engine.start()
+            finishAudioConfiguration(engine, audioID: "virtual-audio", ready: true)
+            var cameras: [String] = []
+            engine.captureInputReconfigurationOverride = { _, videoID in
+                cameras.append(videoID)
+                XCTAssertFalse(engine.isRoutineCaptureReady)
+                XCTAssertFalse(engine.isCameraActive)
+                XCTAssertTrue(engine.isCaptureInputStarting)
+            }
+            engine.selectVideoInput(uniqueID: "replacement-camera")
+            XCTAssertEqual(cameras, ["replacement-camera"])
+            engine.selectVideoInput(uniqueID: "another-camera")
+            XCTAssertEqual(engine.selectedVideoDeviceUniqueID, "replacement-camera")
+            finishAudioConfiguration(engine, audioID: "virtual-audio", ready: true)
+            XCTAssertFalse(engine.isCameraActive, "The old camera callback cannot enable the new route.")
+            engine.captureInputConfigurationDidFinish(selectedAudioID: "virtual-audio", selectedVideoID: "replacement-camera",
+                sessionIsReady: true, selectedVideoIsAttached: true, attachedAudioUniqueID: "virtual-audio",
+                audioName: "virtual-audio", videoName: "replacement-camera")
+            XCTAssertTrue(engine.isCameraActive)
+            engine.reconnectSelectedVideoInput()
+            XCTAssertEqual(cameras, ["replacement-camera", "replacement-camera"])
+            XCTAssertFalse(engine.isRoutineCaptureReady)
+            XCTAssertEqual(engine.selectedAudioDeviceUniqueID, "virtual-audio")
+        }
+    }
+
+    func testCameraFailureAllowsAnotherChoiceAndDoesNotStartHardwareUntilEnabled() {
+        withAudioSelectionEngine { engine in
+            engine.start()
+            finishAudioConfiguration(engine, audioID: "virtual-audio", ready: false)
+            var requests = 0
+            engine.liveInputStartupOverride = { requests += 1 }
+            engine.selectVideoInput(uniqueID: "replacement-camera")
+            engine.reconnectSelectedVideoInput()
+            XCTAssertEqual(requests, 0)
+            XCTAssertFalse(engine.isRoutineCaptureReady)
+            engine.start()
+            XCTAssertEqual(requests, 1)
+            XCTAssertEqual(engine.selectedVideoDeviceUniqueID, "replacement-camera")
+        }
+    }
+
+    func testCameraCannotChangeWhileATakeStillOwnsCapture() {
+        withAudioSelectionEngine { engine in
+            let token = engine.testOnly_armTakeMIDIWindow()
+            engine.selectVideoInput(uniqueID: "replacement-camera")
+            engine.reconnectSelectedVideoInput()
+            XCTAssertEqual(engine.selectedVideoDeviceUniqueID, "camera")
+            engine.testOnly_openTakeMIDIEpoch(at: 10)
+            engine.testOnly_closeTakeMIDIEpoch()
+            engine.selectVideoInput(uniqueID: "replacement-camera")
+            XCTAssertEqual(engine.selectedVideoDeviceUniqueID, "camera")
+            _ = engine.testOnly_drainTakeMIDIWindow(token: token)
+            engine.selectVideoInput(uniqueID: "replacement-camera")
+            XCTAssertEqual(engine.selectedVideoDeviceUniqueID, "replacement-camera")
+        }
+    }
+
     func testSelectingCurrentAudioPreservesReadyPreview() {
         withAudioSelectionEngine { engine in
             engine.start()
