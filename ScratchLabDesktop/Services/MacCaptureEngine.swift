@@ -14470,6 +14470,11 @@ extension MacCaptureEngine: AVCaptureFileOutputRecordingDelegate {
         // audio tap alike.
         guard let midiTakeToken = midiTakeToken(for: outputFileURL) else { return }
         let mediaStart = routineMediaStartHostTime
+        // Close second-camera admission now; the primary duration load below
+        // is asynchronous and must not let later frames into this take.
+        secondaryCamera.end(primaryURL: outputFileURL, hostTime: SecondaryCameraRecorder.takeEndHostTime(
+            mediaStartHostTime: mediaStart, maximumDurationSeconds: routineMaximumTakeDurationSeconds,
+            observedAt: CACurrentMediaTime()))
         endRoutineMediaEpoch()
         closeMIDIRecordingWindow(token: midiTakeToken)
         pendingRoutineOutputAudioURL = nil
@@ -14483,7 +14488,6 @@ extension MacCaptureEngine: AVCaptureFileOutputRecordingDelegate {
             // File-output state may already have reset after didFinish.
             let duration = try? await AVURLAsset(url: outputFileURL).load(.duration)
             let mediaDuration = duration?.seconds ?? .nan
-            secondaryCamera.end(primaryURL: outputFileURL, hostTime: mediaStart + mediaDuration)
             scratchPlaybackController.finishRoutineOutputCapture(
                 mediaStartHostTime: mediaStart,
                 mediaDurationSeconds: mediaDuration
@@ -14498,7 +14502,8 @@ extension MacCaptureEngine: AVCaptureFileOutputRecordingDelegate {
                     )
                     Task { @MainActor in
                         self.onboardOutputCaptureStatus = "Captured \(frames) onboard AHHH frames for this take."
-                        let second = await self.secondaryCamera.finish(primaryURL: outputFileURL, audioURL: audioURL)
+                        let second = await self.secondaryCamera.finish(primaryURL: outputFileURL, audioURL: audioURL,
+                            mediaDurationSeconds: mediaDuration)
                         let muxError: Error?
                         do {
                             try await RoutineReviewMovieMuxer.replaceAudioTrack(
@@ -14526,7 +14531,8 @@ extension MacCaptureEngine: AVCaptureFileOutputRecordingDelegate {
                 }
 
                 Task { @MainActor in
-                    let second = await self.secondaryCamera.finish(primaryURL: outputFileURL, audioURL: nil)
+                    let second = await self.secondaryCamera.finish(primaryURL: outputFileURL, audioURL: nil,
+                        mediaDurationSeconds: mediaDuration)
                     // finalizeRoutineRecording returns immediately and schedules
                     // its second half through the admission gate.
                     self.finalizeRoutineRecording(

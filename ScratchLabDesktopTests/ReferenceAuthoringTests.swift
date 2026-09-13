@@ -3835,6 +3835,48 @@ final class SecondaryCameraTests: XCTestCase {
         evidence.lastFrameSeconds = 0.97; evidence.maximumFrameGapSeconds = 0.3
         XCTAssertTrue(SecondaryCameraRecorder.hasIncompleteCoverage(evidence, duration: 1))
     }
+
+    /// F6: readiness is the second camera's own frame freshness. A primary
+    /// sample presented well before the second camera's latest frame (a
+    /// delayed primary callback) must not reject a live second angle.
+    func testReadinessUsesSecondCameraFreshnessNotPrimaryPresentationTime() {
+        XCTAssertTrue(SecondaryCameraRecorder.isFreshForTake(sessionRunning: true,
+            lastFrameArrivalHostTime: 500, now: 500.05))
+        XCTAssertFalse(SecondaryCameraRecorder.isFreshForTake(sessionRunning: false,
+            lastFrameArrivalHostTime: 500, now: 500.05), "A stopped session is not recording.")
+        XCTAssertFalse(SecondaryCameraRecorder.isFreshForTake(sessionRunning: true,
+            lastFrameArrivalHostTime: 498.9, now: 500), "A frozen preview is not fresh.")
+        XCTAssertFalse(SecondaryCameraRecorder.isFreshForTake(sessionRunning: true,
+            lastFrameArrivalHostTime: 0, now: 500), "No frame has ever arrived.")
+        XCTAssertFalse(SecondaryCameraRecorder.isFreshForTake(sessionRunning: true,
+            lastFrameArrivalHostTime: 500.2, now: 500))
+    }
+
+    /// F6: the take-end admission bound is known when the primary movie
+    /// finishes, before its duration loads, and never exceeds the primary.
+    func testSecondCameraTakeEndIsEarlierOfPrimaryLimitAndObservedStop() {
+        XCTAssertEqual(SecondaryCameraRecorder.takeEndHostTime(mediaStartHostTime: 100,
+            maximumDurationSeconds: 40.0 / 3, observedAt: 120), 100 + 40.0 / 3, accuracy: 0.000_001)
+        XCTAssertEqual(SecondaryCameraRecorder.takeEndHostTime(mediaStartHostTime: 100,
+            maximumDurationSeconds: 40.0 / 3, observedAt: 105), 105, "A manual stop ends earlier.")
+        for (start, maximum) in [(0.0, 13.0), (.nan, 13.0), (100.0, .nan), (100.0, 0.0)] {
+            XCTAssertEqual(SecondaryCameraRecorder.takeEndHostTime(mediaStartHostTime: start,
+                maximumDurationSeconds: maximum, observedAt: 105), 105)
+        }
+    }
+
+    /// F6: an unknown primary interval cannot prove coverage, and frames after
+    /// the primary media ended are outside the take.
+    func testInvalidOrOverrunPrimaryIntervalIsNeverCompleteCoverage() {
+        var evidence = SecondaryCameraEvidence(deviceID: "phone", deviceName: "Phone", rotationDegrees: 90, status: .captured)
+        evidence.firstFrameSeconds = 0.03; evidence.lastFrameSeconds = 0.97; evidence.frameCount = 29
+        for invalid in [Double.nan, .infinity, -1, 0] {
+            XCTAssertTrue(SecondaryCameraRecorder.hasIncompleteCoverage(evidence, duration: invalid),
+                "Duration \(invalid) cannot prove second-camera coverage.")
+        }
+        evidence.lastFrameSeconds = 1.5
+        XCTAssertTrue(SecondaryCameraRecorder.hasIncompleteCoverage(evidence, duration: 1))
+    }
     func testOptionalAbsenceAndFailedCameraHaveNoExportArtifact() throws {
         let primary = URL(fileURLWithPath: "/tmp/take.mov")
         var evidence = SecondaryCameraEvidence(deviceID: "phone", deviceName: "Phone", rotationDegrees: 90, status: .unavailable)

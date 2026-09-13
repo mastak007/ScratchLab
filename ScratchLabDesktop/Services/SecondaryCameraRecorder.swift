@@ -43,6 +43,9 @@ final class SecondaryCameraRecorder: NSObject, ObservableObject, AVCaptureVideoD
     private var active: Active?
     private var frozen: [URL: SecondaryCameraEvidence] = [:]
     private var latestFrameHostTime: Double = 0
+    /// Host time when this camera last delivered a frame. Readiness uses the
+    /// second camera's own freshness, never the primary presentation clock.
+    private var latestFrameArrivalHostTime: Double = 0
     private var previewReadyPublished = false
     private var finishing: URL?
     private var healthTimer: DispatchSourceTimer?
@@ -84,6 +87,7 @@ final class SecondaryCameraRecorder: NSObject, ObservableObject, AVCaptureVideoD
             coordinator = nil
             rotationObservation = nil
             latestFrameHostTime = 0
+            latestFrameArrivalHostTime = 0
             previewReadyPublished = false
             defer { session.commitConfiguration() }
             guard let device else {
@@ -168,7 +172,8 @@ final class SecondaryCameraRecorder: NSObject, ObservableObject, AVCaptureVideoD
             let url = SecondaryCameraEvidence.url(beside: primaryURL)
             var evidence = SecondaryCameraEvidence(deviceID: device.uniqueID, deviceName: device.localizedName,
                 rotationDegrees: Double(captureRotation), status: .unavailable)
-            guard session.isRunning, epoch - latestFrameHostTime < 1, epoch >= latestFrameHostTime - 0.1 else {
+            guard epoch.isFinite, Self.isFreshForTake(sessionRunning: session.isRunning,
+                    lastFrameArrivalHostTime: latestFrameArrivalHostTime, now: CACurrentMediaTime()) else {
                 evidence.detail = "No recent second-camera frames at take start; main camera continued."
                 frozen[primaryURL] = evidence
                 publish(evidence.detail!, id: device.uniqueID, ready: false)
@@ -186,6 +191,7 @@ final class SecondaryCameraRecorder: NSObject, ObservableObject, AVCaptureVideoD
         let now = host.seconds
         guard now.isFinite else { return }
         latestFrameHostTime = now
+        latestFrameArrivalHostTime = CACurrentMediaTime()
         if !previewReadyPublished, let device, finishing == nil {
             previewReadyPublished = true
             publish(active == nil ? "Ready — \(device.localizedName)" : "Recording \(device.localizedName)",
@@ -249,16 +255,35 @@ final class SecondaryCameraRecorder: NSObject, ObservableObject, AVCaptureVideoD
         active?.evidence.droppedFrameCount += 1
     }
 
+    /// Stops admitting frames presented after `hostTime`. An invalid bound
+    /// closes admission at the moment the request is handled.
     func end(primaryURL: URL, hostTime: Double) {
         queue.async { [self] in
             guard active?.primaryURL == primaryURL else { return }
-            active?.endHostTime = hostTime
+            let bound = hostTime.isFinite ? hostTime : CACurrentMediaTime()
+            let current = active?.endHostTime
+            active?.endHostTime = min(current ?? bound, bound)
         }
+    }
+
+    static func isFreshForTake(sessionRunning: Bool, lastFrameArrivalHostTime: Double, now: Double) -> Bool {
+        sessionRunning && lastFrameArrivalHostTime > 0 && now.isFinite
+            && now >= lastFrameArrivalHostTime && now - lastFrameArrivalHostTime < 1
+    }
+
+    /// Latest presentation time a second-camera frame may have to belong to a
+    /// primary take that is finishing: its planned limit or the stop observed
+    /// now, whichever is earlier. Without a measured start, only `observedAt`.
+    static func takeEndHostTime(mediaStartHostTime: Double, maximumDurationSeconds: Double,
+                                observedAt: Double) -> Double {
+        guard mediaStartHostTime.isFinite, mediaStartHostTime > 0,
+              maximumDurationSeconds.isFinite, maximumDurationSeconds > 0 else { return observedAt }
+        return min(observedAt, mediaStartHostTime + maximumDurationSeconds)
     }
 
     /// Completes before the primary sidecar is sealed. No late attachment can
     /// mutate an already saved draft or bind this angle to the following take.
-    func finish(primaryURL: URL, audioURL: URL?) async -> SecondaryCameraEvidence? {
+    func finish(primaryURL: URL, audioURL: URL?, mediaDurationSeconds: Double) async -> SecondaryCameraEvidence? {
         let fallback: SecondaryCameraEvidence? = await MainActor.run {
             guard !selectedID.isEmpty else { return nil }
             var evidence = SecondaryCameraEvidence(deviceID: selectedID, deviceName: selectedID,
@@ -310,8 +335,10 @@ final class SecondaryCameraRecorder: NSObject, ObservableObject, AVCaptureVideoD
                             evidence.fileName = take.url.lastPathComponent
                             evidence.sha256 = ReferencePackageIO.sha256Hex(try Data(contentsOf: take.url))
                             evidence.status = .captured
-                            let duration = (take.endHostTime ?? take.epoch) - take.epoch
-                            if Self.hasIncompleteCoverage(evidence, duration: duration) {
+                            if !(mediaDurationSeconds.isFinite && mediaDurationSeconds > 0) {
+                                evidence.status = .partial
+                                evidence.detail = "The primary movie duration was unavailable, so second-camera coverage could not be verified; original timing is retained."
+                            } else if Self.hasIncompleteCoverage(evidence, duration: mediaDurationSeconds) {
                                 evidence.status = .partial
                                 evidence.detail = "Second camera contains missing frames or incomplete coverage; original timing is retained."
                             }
@@ -340,7 +367,9 @@ final class SecondaryCameraRecorder: NSObject, ObservableObject, AVCaptureVideoD
     }
 
     static func hasIncompleteCoverage(_ evidence: SecondaryCameraEvidence, duration: Double) -> Bool {
-        evidence.droppedFrameCount > 0 || evidence.maximumFrameGapSeconds > 0.2
+        guard duration.isFinite, duration > 0 else { return true }
+        return evidence.droppedFrameCount > 0 || evidence.maximumFrameGapSeconds > 0.2
+            || (evidence.lastFrameSeconds ?? 0) > duration + 0.2
             || (evidence.firstFrameSeconds ?? .infinity) > 0.2
             || duration - (evidence.lastFrameSeconds ?? 0) > 0.2
     }
