@@ -817,6 +817,18 @@ struct NotationFeedbackOverlay: View {
                     }
                     .opacity(glowOpacity)
                 }
+
+                if !state.gameplayOutcomeLabel.isEmpty {
+                    Text(state.gameplayOutcomeLabel)
+                        .font(.system(size: 10, weight: .black, design: .rounded))
+                        .tracking(1.2)
+                        .foregroundStyle(style.glowColor ?? ScratchLabDesign.Sem.textPrimary)
+                        .padding(.horizontal, 8)
+                        .padding(.vertical, 4)
+                        .background(.black.opacity(0.72), in: Capsule())
+                        .position(x: cx, y: max(16, cy - 34))
+                        .accessibilityLabel("Scratch feedback: \(state.gameplayOutcomeLabel)")
+                }
             }
         }
         .allowsHitTesting(false)

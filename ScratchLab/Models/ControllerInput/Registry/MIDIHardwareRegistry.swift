@@ -1,13 +1,13 @@
 import Foundation
 
 // Pro-DJ MIDI registry layer (future-facing): the known-hardware registry and its
-// identity→profile matching, plus the minimal verified RANE seed entry.
+// identity→profile matching, plus the verified RANE seed and official Pioneer
+// controller candidates.
 //
 // Scope guardrails (deliberate):
 // - Pure value logic only. No Core MIDI, no audio, no playback, no UI.
-// - The registry starts SMALL on purpose: one verified seed (RANE ONE). The architecture
-//   supports many tiers of gear (Rane Twelve, DJM-S9, DDJ-SRT/1000SRT, CDJ/XDJ, Denon,
-//   Numark, …) but those entries are added incrementally in later slices, not here.
+// - Profiles sourced from official MIDI lists remain heuristic until exercised on the
+//   actual connected unit and firmware.
 // - Matching is name/manufacturer-fragment based and ranked by certification tier. An
 //   unknown device yields NO certified match and resolves to an explicit unverified
 //   fallback, so the caller always has a profile to drive the MIDI-Learn path.
@@ -33,8 +33,15 @@ struct MIDIHardwareRegistry {
         self.profiles = profiles
     }
 
-    /// The shipped registry. Minimal by design — one verified seed for now.
-    static let shared = MIDIHardwareRegistry(profiles: [.raneOneSeed])
+    /// The shipped registry. Model-specific Pioneer entries stay separate so a user can
+    /// select and verify the exact controller they are using.
+    static let shared = MIDIHardwareRegistry(profiles: [
+        .raneOneSeed,
+        .pioneerDJMS9Candidate,
+        .pioneerDDJREV5Candidate,
+        .pioneerDDJREV7Candidate,
+        .pioneerDDJFLX10Candidate
+    ])
 
     /// Manufacturer-only matches are never trusted beyond this tier — a generic "USB MIDI
     /// Device" advertising manufacturer "RANE" is at best a candidate to verify, NOT a
@@ -128,6 +135,115 @@ struct MIDIHardwareRegistry {
 }
 
 extension MIDIControllerProfile {
+    /// Official Pioneer MIDI-list bindings shared by the REV5 and REV7 families.
+    /// The top-jog CC34 stream is the vinyl-mode scratch-motion source and uses the
+    /// documented 0x41 clockwise / 0x3F counterclockwise difference values.
+    private static func pioneerDDJBindings(deckCount: Int) -> [MIDIControlBinding] {
+        var bindings: [MIDIControlBinding] = []
+        for deck in 0..<deckCount {
+            bindings.append(MIDIControlBinding(
+                role: MIDIControlRole(kind: .platterMovement, deck: deck, label: "Deck \(deck + 1) Jog"),
+                signal: .relativeCC(number: 34, encoding: .binaryOffset),
+                channel: deck,
+                notes: "Official Pioneer MIDI list: vinyl-mode top-jog rotation, CC34 (0x22); 0x40 is the centre and 0x41/0x3F indicate direction. Verify vinyl mode and motion on the connected unit."
+            ))
+            bindings.append(MIDIControlBinding(
+                role: MIDIControlRole(kind: .channelFader, deck: deck, label: "Deck \(deck + 1) Channel Fader"),
+                signal: .highResCCPair(msb: 19, lsb: 51),
+                channel: deck,
+                notes: "Official Pioneer MIDI list: channel fader CC19 MSB + CC51 LSB on the deck MIDI channel."
+            ))
+        }
+        bindings.append(MIDIControlBinding(
+            role: MIDIControlRole(kind: .crossfader),
+            signal: .highResCCPair(msb: 31, lsb: 63),
+            channel: 6,
+            notes: "Official Pioneer MIDI list: crossfader CC31 MSB + CC63 LSB on MIDI channel 7. Verify direction and range on the connected unit."
+        ))
+        return bindings
+    }
+
+    /// DDJ-REV5: official MIDI list exposes four deck channels (1–4), with the
+    /// two physical jog wheels serving the selected deck layers.
+    static let pioneerDDJREV5Candidate = MIDIControllerProfile(
+        identifier: "pioneer-ddj-rev5",
+        displayName: "Pioneer DJ DDJ-REV5",
+        manufacturer: "Pioneer DJ",
+        model: "DDJ-REV5",
+        confidence: .heuristic,
+        matching: MIDIProfileMatching(nameFragments: ["ddj-rev5", "ddj rev5", "ddjrev5"]),
+        deckCount: 4,
+        bindings: pioneerDDJBindings(deckCount: 4),
+        notes: "Official DDJ-REV5 MIDI message list. Four deck MIDI channels are modelled; physical jog availability depends on the selected deck and the controller's vinyl mode. Verify the connected unit before capture."
+    )
+
+    /// DDJ-REV7: official MIDI list exposes two deck channels and motorized jog
+    /// wheels. Motorized hardware does not by itself certify capture correctness.
+    static let pioneerDDJREV7Candidate = MIDIControllerProfile(
+        identifier: "pioneer-ddj-rev7",
+        displayName: "Pioneer DJ DDJ-REV7",
+        manufacturer: "Pioneer DJ",
+        model: "DDJ-REV7",
+        confidence: .heuristic,
+        matching: MIDIProfileMatching(nameFragments: ["ddj-rev7", "ddj rev7", "ddjrev7"]),
+        deckCount: 2,
+        bindings: pioneerDDJBindings(deckCount: 2),
+        notes: "Official DDJ-REV7 MIDI message list. The controller has two motorized jog wheels; verify jog direction, vinyl mode, fader ranges, and firmware on the connected unit before capture."
+    )
+
+    /// DDJ-FLX10: official MIDI list exposes four deck channels and the same
+    /// vinyl-mode top-jog CC34 scratch stream used by the existing complete v1 profile.
+    static let pioneerDDJFLX10Candidate = MIDIControllerProfile(
+        identifier: "pioneer-ddj-flx10",
+        displayName: "Pioneer DJ DDJ-FLX10",
+        manufacturer: "Pioneer DJ",
+        model: "DDJ-FLX10",
+        confidence: .heuristic,
+        matching: MIDIProfileMatching(nameFragments: ["ddj-flx10", "ddj flx10", "ddjflx10"]),
+        deckCount: 4,
+        bindings: pioneerDDJBindings(deckCount: 4),
+        notes: "Official DDJ-FLX10 MIDI message list. Four deck channels are modelled; physical jog availability depends on the selected deck layer. Verify the connected unit before capture."
+    )
+
+    /// Candidate profile for a Pioneer DJM-S9 mixer. The MIDI addresses come from
+    /// Pioneer DJ's published MIDI message list, but this profile is intentionally
+    /// heuristic until ScratchLab observes the exact unit and firmware in a guided
+    /// verification pass. The S9 has no platter messages; platter evidence must come
+    /// from Phase HID or the DVS control-tone audio path.
+    static let pioneerDJMS9Candidate = MIDIControllerProfile(
+        identifier: "pioneer-djm-s9",
+        displayName: "Pioneer DJM-S9",
+        manufacturer: "Pioneer DJ",
+        model: "DJM-S9",
+        confidence: .heuristic,
+        matching: MIDIProfileMatching(
+            nameFragments: ["djm-s9", "djm s9"],
+            manufacturerFragments: ["pioneer", "alphatheta"]
+        ),
+        deckCount: 0,
+        bindings: [
+            MIDIControlBinding(
+                role: MIDIControlRole(kind: .channelFader, deck: 0, label: "Channel 1 Fader"),
+                signal: .highResCCPair(msb: 19, lsb: 51),
+                channel: 0,
+                notes: "Pioneer MIDI list: channel 1 fader, CC19 MSB + CC51 LSB. Verify on the connected S9 before capture."
+            ),
+            MIDIControlBinding(
+                role: MIDIControlRole(kind: .channelFader, deck: 1, label: "Channel 2 Fader"),
+                signal: .highResCCPair(msb: 19, lsb: 51),
+                channel: 1,
+                notes: "Pioneer MIDI list: channel 2 fader, CC19 MSB + CC51 LSB. Verify on the connected S9 before capture."
+            ),
+            MIDIControlBinding(
+                role: MIDIControlRole(kind: .crossfader),
+                signal: .highResCCPair(msb: 31, lsb: 63),
+                channel: 6,
+                notes: "Pioneer MIDI list: crossfader, CC31 MSB + CC63 LSB on MIDI channel 7. Verify direction and range on the connected S9."
+            )
+        ],
+        notes: "Mixer-only candidate. Phase platter motion is not MIDI from the S9; use Phase HID through supported DJ software or DVS control-tone audio into the S9 USB interface."
+    )
+
     /// Minimal VERIFIED seed profile, built from ScratchLab's already-verified RANE facts:
     /// the platter is a relative CC6 ring counter (±1/event, ~3932 steps/rev), the
     /// crossfader is absolute CC8, and the platter pitch bend is a diagnostic-only stream

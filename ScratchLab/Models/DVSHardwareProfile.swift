@@ -48,6 +48,43 @@ enum DVSHardwareProfile {
     }
 }
 
+/// Capture route for a Phase-equipped pair of motorized turntables.
+///
+/// Phase remotes communicate to supported DJ software over HID, or produce a
+/// DVS control signal through the Receiver's RCA outputs. SL Capture does not
+/// decode the proprietary Phase HID protocol. The supported direct app route
+/// is therefore the DVS signal entering the DJM-S9 USB audio interface; the S9
+/// MIDI profile supplies mixer/fader evidence alongside that audio stream.
+enum PhaseCapturePath: String, CaseIterable, Codable, Sendable {
+    case dvsThroughDJMS9 = "phase_dvs_through_djm_s9"
+    case hidThroughSupportedDJSoftware = "phase_hid_through_supported_dj_software"
+
+    var title: String {
+        switch self {
+        case .dvsThroughDJMS9: return "Phase DVS through DJM-S9"
+        case .hidThroughSupportedDJSoftware: return "Phase HID through DJ software"
+        }
+    }
+
+    var isSupportedBySLCapture: Bool {
+        self == .dvsThroughDJMS9
+    }
+
+    var setupInstruction: String {
+        switch self {
+        case .dvsThroughDJMS9:
+            return "Connect each Phase Receiver RCA output to the DJM-S9 line inputs, connect the S9 by USB, select the matching DVS input pair, and verify two clean control-tone channels before recording."
+        case .hidThroughSupportedDJSoftware:
+            return "Phase HID is handled by supported DJ software. SL Capture does not receive Phase HID directly; use the DVS route for in-app platter evidence."
+        }
+    }
+
+    static func matchesDJMS9DeviceName(_ name: String) -> Bool {
+        let normalized = name.lowercased().replacingOccurrences(of: "-", with: " ")
+        return normalized.contains("djm s9")
+    }
+}
+
 /// Known-good program-audio input pairs for routine capture/export.
 /// This is deliberately separate from `DVSHardwareProfile`: the RANE DVS
 /// control-vinyl input is 3/4, while the audible master program return is

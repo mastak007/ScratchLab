@@ -4134,6 +4134,13 @@ final class CaptureReliabilityPhase1CoreTests: XCTestCase {
         XCTAssertFalse(task.contains("activateCaptureInput()"))
         XCTAssertTrue(hardwareSection.contains("GroupBox(\"Hardware inputs\")"))
         XCTAssertTrue(hardwareSection.contains("Picker(\"MIDI source\""))
+        XCTAssertTrue(hardwareSection.contains("Picker(\"Controller profile\""))
+        XCTAssertTrue(hardwareSection.contains("availableMIDIProfileOptions"))
+        XCTAssertTrue(hardwareSection.contains("Automatic / Custom MIDI Learn"))
+        XCTAssertTrue(hardwareSection.contains("Known DDJ and DJM-S9 profiles appear"))
+        XCTAssertTrue(hardwareSection.contains("captureEngine.selectedMIDIInputSourceID"))
+        XCTAssertTrue(hardwareSection.contains("captureEngine.availableMIDISources"))
+        XCTAssertTrue(hardwareSection.contains("Phase DVS + DJM-S9"))
         XCTAssertTrue(hardwareSection.contains("Picker(\"Camera input\""))
         XCTAssertTrue(hardwareSection.contains("Choose a camera…"))
         XCTAssertTrue(hardwareSection.contains("Picker(\"Audio input\""))
@@ -4166,7 +4173,7 @@ final class CaptureReliabilityPhase1CoreTests: XCTestCase {
         )
         let cxlRelease = try sourceSlice(
             in: source,
-            from: "#if CXL_AUTHORING\n        Window(\"ScratchLab CXL\"",
+            from: "#if CXL_AUTHORING\n        Window(CXLReleaseRouteContract.displayName",
             through: ".windowResizability(.contentMinSize)\n        #else"
         )
         let fullApp = try sourceSlice(
@@ -4190,6 +4197,13 @@ final class CaptureReliabilityPhase1CoreTests: XCTestCase {
         XCTAssertTrue(fullApp.contains("#if DEBUG\n        // DEBUG-only:"))
         XCTAssertTrue(source.contains("private var cxlReleaseContent"))
         XCTAssertTrue(source.contains("ReferenceAuthoringView("))
+        XCTAssertTrue(source.contains("NDAAgreementGateView {"))
+        XCTAssertTrue(source.contains("static let displayName = \"SL Capture\""))
+        XCTAssertTrue(source.contains("static let storageKey = \"SLCapture.NDAAgreementVersion\""))
+        XCTAssertTrue(source.contains("Button(\"Agree and Continue\""))
+        XCTAssertTrue(source.contains("Button(\"Decline and Quit\""))
+        XCTAssertTrue(source.contains("store.acceptCurrentVersion()"))
+        XCTAssertTrue(source.contains("NSApplication.shared.terminate(nil)"))
         XCTAssertTrue(source.contains("#if CXL_AUTHORING\n        let activateAuxiliaryServices = false\n        #else\n        let activateAuxiliaryServices = !isRunningTests\n        #endif"))
         XCTAssertTrue(source.contains("allowsSeratoDirectCaptureDiscovery: activateAuxiliaryServices"))
         XCTAssertTrue(source.contains("prefersPhysicalCaptureAudio: true"))
@@ -4241,8 +4255,8 @@ final class CaptureReliabilityPhase1CoreTests: XCTestCase {
         )
         XCTAssertTrue(cxlConfiguration.contains("PRODUCT_BUNDLE_IDENTIFIER = com.machelpnz.scratchlab.cxl-authoring;"))
         XCTAssertTrue(cxlConfiguration.contains("DEVELOPMENT_TEAM = 2DDKGL33BU;"))
-        XCTAssertTrue(cxlConfiguration.contains("PRODUCT_NAME = \"ScratchLab CXL\";"))
-        XCTAssertTrue(cxlConfiguration.contains("CODE_SIGN_ENTITLEMENTS = ScratchLabDesktop/ScratchLabDesktop.entitlements;"))
+        XCTAssertTrue(cxlConfiguration.contains("PRODUCT_NAME = \"SL Capture\";"))
+        XCTAssertTrue(cxlConfiguration.contains("CODE_SIGN_ENTITLEMENTS = ScratchLabDesktop/ScratchLabCXL.entitlements;"))
         XCTAssertTrue(cxlConfiguration.contains("SWIFT_ACTIVE_COMPILATION_CONDITIONS = \"$(inherited) CXL_AUTHORING\";"))
         XCTAssertFalse(cxlConfiguration.contains("ENABLE_TIMECODE_LIVE_TAP"))
         XCTAssertFalse(cxlConfiguration.contains("DEBUG"))
@@ -4651,10 +4665,17 @@ final class CaptureReliabilityPhase1CoreTests: XCTestCase {
         XCTAssertTrue(source.contains("AdaptiveSidebarView("))
         XCTAssertTrue(source.contains("homeScrollContent(geometry: geometry)"))
 
-        for tab in ["home", "practice", "capture", "review", "advanced"] {
+        for tab in ["home", "learn", "practice"] {
             XCTAssertTrue(
                 source.contains(".tag(WorkspaceTab.\(tab))"),
                 "Compact iOS navigation must expose the \(tab) workspace"
+            )
+        }
+
+        for tab in ["capture", "review", "advanced"] {
+            XCTAssertFalse(
+                source.contains(".tag(WorkspaceTab.\(tab))"),
+                "Learner navigation must not expose the former \(tab) workspace"
             )
         }
 
@@ -25049,7 +25070,7 @@ final class SessionArchiveReferenceTearEvidenceTests: XCTestCase {
 /// Exercises the same PCM buffers and sample positions queued by the live
 /// player, without starting an audio device or relying on wall-clock timers.
 final class CXLBeatCountInSchedulingTests: XCTestCase {
-    private let drumModes: [BeatEngineMode] = [.boomBapTrainer, .minimalFunk, .battleLoop]
+    private let drumModes: [BeatEngineMode] = [.boomBapTrainer, .minimalFunk, .battleLoop, .ghostPocket, .pocketDouble, .dropTheory]
 
     private func samples(_ buffer: AVAudioPCMBuffer) throws -> [Float] {
         let channel = try XCTUnwrap(buffer.floatChannelData?.pointee)

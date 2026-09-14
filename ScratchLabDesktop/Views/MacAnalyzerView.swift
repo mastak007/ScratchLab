@@ -286,20 +286,11 @@ struct MacAnalyzerView: View {
         }
 
         static func resolved(from storedValue: String) -> WorkspaceTab {
-            if let tab = WorkspaceTab(rawValue: storedValue) {
-                return tab
-            }
-
-            switch storedValue {
-            case "testLab":
-                return .practice
-            case "routineLab":
-                return .capture
-            case "notationLab":
-                return .advanced
-            default:
-                return .practice
-            }
+            // The release ScratchLab product is the learner surface. Legacy
+            // stored values from the former Capture/Review/Advanced shell
+            // resolve to Practice so an upgrade cannot reopen authoring UI.
+            _ = storedValue
+            return .practice
         }
     }
 
@@ -683,6 +674,7 @@ struct MacAnalyzerView: View {
     @State private var reviewStateSelection: CaptureCore.SessionReviewState = .unreviewed
     @State private var reviewNotesDraft: String = ""
     @State private var showingReferenceExamples = false
+    @State private var isShowingControllerSetup = false
     @State private var reviewerNameDraft: String = ""
     @State private var showNotationOverlay = false
     @State private var showCameraPassthrough = false
@@ -1142,6 +1134,9 @@ struct MacAnalyzerView: View {
         }) {
             RawJSONInspectorView(viewModel: rawJSONInspector)
         }
+        .sheet(isPresented: $isShowingControllerSetup) {
+            releaseControllerSetupSheet
+        }
         #if DEBUG
         .sheet(isPresented: $isShowingStagingInspector) {
             StagingInspectorView(contexts: stagingInspectorContexts)
@@ -1203,44 +1198,7 @@ struct MacAnalyzerView: View {
     private var workspaceRail: some View {
         VStack(spacing: 0) {
             VStack(spacing: ScratchLabDesign.Spacing.sm) {
-                ForEach(WorkspaceTab.allCases) { tab in
-                    Button {
-                        workspaceTab = tab
-                    } label: {
-                        ZStack(alignment: .leading) {
-                            if workspaceTab == tab {
-                                Rectangle()
-                                    .fill(ScratchLabDesign.Sem.accent)
-                                    .frame(width: 3, height: 34)
-                            }
-
-                            VStack(spacing: 3) {
-                                Text(String(tab.title.prefix(1)))
-                                    .font(.system(size: 11, weight: .bold))
-                                Text(tab.title)
-                                    .font(.system(size: 9, weight: .medium))
-                                Text("⌘\(tabShortcutNumber(tab))")
-                                    .font(.system(size: 7, design: .monospaced))
-                                    .foregroundStyle(workspaceTab == tab
-                                                     ? ScratchLabDesign.Sem.textSecondary
-                                                     : ScratchLabDesign.Sem.textTertiary)
-                            }
-                            .foregroundStyle(workspaceTab == tab
-                                             ? ScratchLabDesign.Sem.textAccent
-                                             : ScratchLabDesign.Sem.textSecondary)
-                            .frame(maxWidth: .infinity, maxHeight: .infinity)
-                        }
-                        .frame(width: 78, height: 70)
-                        .background(workspaceTab == tab
-                                    ? ScratchLabDesign.Surface.raised
-                                    : ScratchLabDesign.Surface.surface)
-                        .clipShape(RoundedRectangle(cornerRadius: ScratchLabDesign.Radius.control, style: .continuous))
-                    }
-                    .buttonStyle(.plain)
-                    .keyboardShortcut(KeyEquivalent(Character("\(tabShortcutNumber(tab))")), modifiers: .command)
-                    .accessibilityLabel(Text(tab.title))
-                    .accessibilityValue(Text(workspaceTab == tab ? "Selected" : "Not selected"))
-                }
+                practiceRailButton
             }
             .frame(height: 320)
             .padding(.top, 72)
@@ -1255,6 +1213,46 @@ struct MacAnalyzerView: View {
                 .fill(ScratchLabDesign.Border.default)
                 .frame(width: 1)
         }
+    }
+
+    private var practiceRailButton: some View {
+        let tab = WorkspaceTab.practice
+        return Button {
+            workspaceTab = tab
+        } label: {
+            ZStack(alignment: .leading) {
+                if workspaceTab == tab {
+                    Rectangle()
+                        .fill(ScratchLabDesign.Sem.accent)
+                        .frame(width: 3, height: 34)
+                }
+
+                VStack(spacing: 3) {
+                    Text(String(tab.title.prefix(1)))
+                        .font(.system(size: 11, weight: .bold))
+                    Text(tab.title)
+                        .font(.system(size: 9, weight: .medium))
+                    Text("⌘\(tabShortcutNumber(tab))")
+                        .font(.system(size: 7, design: .monospaced))
+                        .foregroundStyle(workspaceTab == tab
+                                         ? ScratchLabDesign.Sem.textSecondary
+                                         : ScratchLabDesign.Sem.textTertiary)
+                }
+                .foregroundStyle(workspaceTab == tab
+                                 ? ScratchLabDesign.Sem.textAccent
+                                 : ScratchLabDesign.Sem.textSecondary)
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+            }
+            .frame(width: 78, height: 70)
+            .background(workspaceTab == tab
+                        ? ScratchLabDesign.Surface.raised
+                        : ScratchLabDesign.Surface.surface)
+            .clipShape(RoundedRectangle(cornerRadius: ScratchLabDesign.Radius.control, style: .continuous))
+        }
+        .buttonStyle(.plain)
+        .keyboardShortcut(KeyEquivalent(Character("\(tabShortcutNumber(tab))")), modifiers: .command)
+        .accessibilityLabel(Text(tab.title))
+        .accessibilityValue(Text(workspaceTab == tab ? "Selected" : "Not selected"))
     }
 
     private func tabShortcutNumber(_ tab: WorkspaceTab) -> Int {
@@ -1285,6 +1283,15 @@ struct MacAnalyzerView: View {
             Text(workspaceContextDetail)
                 .font(.system(size: 14, weight: .medium))
                 .foregroundStyle(ScratchLabDesign.Sem.textSecondary)
+
+            Button {
+                isShowingControllerSetup = true
+            } label: {
+                Label("Controller setup", systemImage: "slider.horizontal.3")
+            }
+            .buttonStyle(.bordered)
+            .controlSize(.small)
+            .accessibilityIdentifier("release-controller-setup")
         }
         .padding(.horizontal, ScratchLabDesign.Spacing.xxl)
         .frame(height: 44)
@@ -1300,7 +1307,7 @@ struct MacAnalyzerView: View {
             case .copyActive: return "COPY ACTIVE"
             case .paused: return "PAUSED"
             case .result: return "RESULT"
-            case .review: return "REVIEW"
+            case .review: return "RESULT"
             case .lessonComplete: return "COMPLETE"
             }
         case .capture: return "SESSION"
@@ -1315,6 +1322,43 @@ struct MacAnalyzerView: View {
         case .capture: return "Routine capture"
         case .review: return hasRecordedTake ? "Recorded take" : "No take selected"
         case .advanced: return "Technical workspace"
+        }
+    }
+
+    private var releaseControllerSetupSheet: some View {
+        ScrollView(showsIndicators: false) {
+            VStack(alignment: .leading, spacing: ScratchLabDesign.Spacing.cardGroup) {
+                VStack(alignment: .leading, spacing: ScratchLabDesign.Spacing.xs) {
+                    Text("CONTROLLER SETUP")
+                        .font(ScratchLabDesign.Typo.metricLabel)
+                        .foregroundStyle(ScratchLabDesign.Sem.textSecondary)
+                    Text("Connect a supported controller or map its controls manually")
+                        .font(.system(size: 24, weight: .bold))
+                        .foregroundStyle(ScratchLabDesign.Sem.textPrimary)
+                    Text("DDJ and DJM-S9 MIDI endpoints appear when connected. Phase uses its DVS connection through the DJM-S9. An unrecognized controller can use the same per-control MIDI Learn workflow.")
+                        .font(.system(size: 14, weight: .medium))
+                        .foregroundStyle(ScratchLabDesign.Sem.textSecondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+
+                HardwareProfileCard(
+                    name: detectedControllerName,
+                    classification: controllerDetection?.profile.publicDisplayFamily ?? "Connect a MIDI source",
+                    tier: controllerDetection?.profile.verificationTier ?? .knownOptionUnverified,
+                    readiness: controllerMappingState.inputReadiness
+                )
+
+                midiMonitorCard
+            }
+            .padding(24)
+        }
+        .frame(minWidth: 820, minHeight: 620)
+        .toolbar {
+            ToolbarItem(placement: .cancellationAction) {
+                Button("Done") {
+                    isShowingControllerSetup = false
+                }
+            }
         }
     }
 
@@ -1480,7 +1524,7 @@ struct MacAnalyzerView: View {
                         .frame(maxWidth: .infinity, alignment: .leading)
 
                     LessonProgressIndicator(
-                        stages: [.watch, .listen, .copy, .result, .review],
+                        stages: [.watch, .listen, .copy, .result],
                         current: practiceLessonStage
                     )
                     .fixedSize(horizontal: true, vertical: false)
@@ -1496,7 +1540,7 @@ struct MacAnalyzerView: View {
                         practiceFigmaLessonStatus
                     }
                     LessonProgressIndicator(
-                        stages: [.watch, .listen, .copy, .result, .review],
+                        stages: [.watch, .listen, .copy, .result],
                         current: practiceLessonStage
                     )
                 }
@@ -1508,7 +1552,7 @@ struct MacAnalyzerView: View {
                     .frame(width: 563, alignment: .leading)
 
                 LessonProgressIndicator(
-                    stages: [.watch, .listen, .copy, .result, .review],
+                    stages: [.watch, .listen, .copy, .result],
                     current: practiceLessonStage,
                     desktopLayout: true,
                     desktopCompact: true
@@ -1542,7 +1586,7 @@ struct MacAnalyzerView: View {
         case .copyActive, .paused:
             return "Copy the target motion while ScratchLab compares your movement in real time."
         case .result, .review, .lessonComplete:
-            return "Compare your recorded motion with the target and review the result."
+            return "See your result, then choose whether to try the cycle again."
         case .ready, .listening:
             return "Watch the target, then listen and copy one clean Baby Scratch cycle."
         }
@@ -1558,6 +1602,12 @@ struct MacAnalyzerView: View {
                 .foregroundStyle(ScratchLabDesign.Sem.textPrimary)
         }
         .fixedSize(horizontal: true, vertical: false)
+    }
+
+    private var learnerPracticeStatusLabel: String {
+        practicePresentationState == .review
+            ? "RESULT"
+            : practicePresentationState.label
     }
 
     private var practiceDisplayedBPM: Double {
@@ -1630,7 +1680,7 @@ struct MacAnalyzerView: View {
         case .listening: return .listen
         case .copyActive, .paused: return .copy
         case .result: return .result
-        case .review, .lessonComplete: return .review
+        case .review, .lessonComplete: return .result
         }
     }
 
@@ -1668,7 +1718,7 @@ struct MacAnalyzerView: View {
         case .copyActive: return "COPY ACTIVE"
         case .paused: return "COPY PAUSED"
         case .result: return "RESULT"
-        case .review: return "REVIEW"
+        case .review: return "RESULT"
         case .lessonComplete: return "LESSON COMPLETE"
         }
     }
@@ -1680,7 +1730,7 @@ struct MacAnalyzerView: View {
         case .copyActive: return "Match the motion"
         case .paused: return "Attempt paused"
         case .result: return "See how you did"
-        case .review: return "Review your attempt"
+        case .review: return "See how you did"
         case .lessonComplete: return "Lesson complete"
         }
     }
@@ -1698,7 +1748,7 @@ struct MacAnalyzerView: View {
         case .result:
             return "Compare your captured cycle with the target before trying again."
         case .review:
-            return "Inspect timing, direction, and fader evidence from the completed attempt."
+            return "Compare your completed cycle with the target, then try again."
         case .lessonComplete:
             return "You completed the Baby Scratch lesson with a saved result."
         }
@@ -1773,23 +1823,8 @@ struct MacAnalyzerView: View {
                 stopPracticeScoredAttempt()
             }
         case .result, .review, .lessonComplete:
-            ViewThatFits(in: .horizontal) {
-                HStack(spacing: 12) {
-                    practiceFigmaButton("Review attempt", primary: true) {
-                        workspaceTab = .review
-                    }
-                    practiceFigmaButton("Try again", primary: false) {
-                        retryPracticeScoredAttempt()
-                    }
-                }
-                VStack(alignment: .leading, spacing: 10) {
-                    practiceFigmaButton("Review attempt", primary: true) {
-                        workspaceTab = .review
-                    }
-                    practiceFigmaButton("Try again", primary: false) {
-                        retryPracticeScoredAttempt()
-                    }
-                }
+            practiceFigmaButton("Try again", primary: true) {
+                retryPracticeScoredAttempt()
             }
         }
     }
@@ -2112,7 +2147,7 @@ struct MacAnalyzerView: View {
 
                 Spacer(minLength: 8)
 
-                Text(practicePresentationState.label)
+                Text(learnerPracticeStatusLabel)
                     .font(.system(size: 11, weight: .semibold, design: .monospaced))
                     .foregroundStyle(practicePresentationState.variant.color)
             }
@@ -3827,10 +3862,10 @@ struct MacAnalyzerView: View {
 
             Spacer()
 
-            StatusBadge(title: "Practice", value: practicePresentationState.label, variant: practicePresentationState.variant)
+            StatusBadge(title: "Practice", value: learnerPracticeStatusLabel, variant: practicePresentationState.variant)
 
-            Button("Open Capture") {
-                workspaceTab = .capture
+            Button("Controller setup") {
+                isShowingControllerSetup = true
             }
             .scratchLabSecondaryButton()
         }

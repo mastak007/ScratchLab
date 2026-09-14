@@ -1,6 +1,6 @@
 // MainMenuView.swift
 // ScratchLab - Main Menu
-// Primary companion home for capture and monitoring
+// Primary learner home for guided practice and controller setup
 
 import SwiftUI
 import UIKit
@@ -9,10 +9,8 @@ import Network
 struct MainMenuView: View {
     private enum WorkspaceTab: Hashable {
         case home
+        case learn
         case practice
-        case capture
-        case review
-        case advanced
     }
 
     @EnvironmentObject var progressManager: ProgressManager
@@ -22,6 +20,7 @@ struct MainMenuView: View {
     @Environment(\.horizontalSizeClass) private var horizontalSizeClass
     @State private var showingProfile = false
     @State private var showingSettings = false
+    @State private var showingLearnHub = false
     @State private var showingPracticeHub = false
     @State private var showingCaptureHub = false
     @State private var showingAdvancedHub = false
@@ -35,9 +34,8 @@ struct MainMenuView: View {
                 if usesNavigationSidebar(in: geometry.size) {
                     HStack(spacing: 0) {
                         AdaptiveSidebarView(
+                            showingLearnHub: $showingLearnHub,
                             showingPracticeHub: $showingPracticeHub,
-                            showingCaptureHub: $showingCaptureHub,
-                            showingAdvancedHub: $showingAdvancedHub,
                             showingReferenceExamples: $showingReferenceExamples
                         )
                         .frame(width: 240)
@@ -76,6 +74,9 @@ struct MainMenuView: View {
         .navigationDestination(isPresented: $showingAdvancedHub) {
             AdvancedHubView()
         }
+        .navigationDestination(isPresented: $showingLearnHub) {
+            LevelSelectView()
+        }
         .navigationDestination(isPresented: $showingCaptureHub) {
             if ProcessInfo.processInfo.isiOSAppOnMac {
                 UnsupportedCompanionCameraView()
@@ -97,7 +98,7 @@ struct MainMenuView: View {
 
     /// Figma's compact workspace navigation maps to a real system `TabView`.
     /// Destination taps continue to use the app's established presentation
-    /// routes, so Practice/Capture/Advanced keep their existing back and
+    /// routes, so Learn and Practice keep their existing back and
     /// dismissal semantics rather than being duplicated as tab-root flows.
     private func compactWorkspaceNavigation(geometry: GeometryProxy) -> some View {
         TabView(selection: $selectedWorkspaceTab) {
@@ -105,23 +106,15 @@ struct MainMenuView: View {
                 .tabItem { Label("Home", systemImage: "house") }
                 .tag(WorkspaceTab.home)
 
+            NavigationStack {
+                LevelSelectView()
+            }
+                .tabItem { Label("Learn", systemImage: "graduationcap") }
+                .tag(WorkspaceTab.learn)
+
             practiceWorkspaceLanding
                 .tabItem { Label("Practice", systemImage: "waveform") }
                 .tag(WorkspaceTab.practice)
-
-            captureWorkspaceLanding
-                .tabItem { Label("Capture", systemImage: "record.circle") }
-                .tag(WorkspaceTab.capture)
-
-            reviewWorkspaceLanding
-                .tabItem { Label("Review", systemImage: "checkmark.seal") }
-                .tag(WorkspaceTab.review)
-
-            NavigationStack {
-                AdvancedHubView()
-            }
-                .tabItem { Label("Advanced", systemImage: "slider.horizontal.3") }
-                .tag(WorkspaceTab.advanced)
         }
         .tabViewStyle(.sidebarAdaptable)
         .tint(ScratchLabDesign.Sem.accent)
@@ -227,14 +220,11 @@ struct MainMenuView: View {
                 switch destination {
                 case .home:
                     selectedWorkspaceTab = .home
+                case .learn:
+                    showingLearnHub = true
+                    selectedWorkspaceTab = .home
                 case .practice:
                     showingPracticeHub = true
-                    selectedWorkspaceTab = .home
-                case .capture, .review:
-                    showingCaptureHub = true
-                    selectedWorkspaceTab = .home
-                case .advanced:
-                    showingAdvancedHub = true
                     selectedWorkspaceTab = .home
                 }
             }
@@ -301,11 +291,7 @@ struct MainMenuView: View {
                     phoneLandscapePracticeCard
                         .frame(width: 286)
 
-                    captureLandscapeTile(isExtraCompact: false)
-                        .frame(width: 214)
-                    reviewLandscapeTile(isExtraCompact: false)
-                        .frame(width: 214)
-                    advancedLandscapeTile(isExtraCompact: false)
+                    learnerLandscapeTile(isExtraCompact: false)
                         .frame(width: 248)
                     landscapeInfoTile(
                         title: "Recent result",
@@ -459,9 +445,7 @@ struct MainMenuView: View {
         if isExtraCompact {
             VStack(spacing: 10) {
                 HStack(alignment: .top, spacing: 10) {
-                    captureLandscapeTile(isExtraCompact: true)
-                    reviewLandscapeTile(isExtraCompact: true)
-                    advancedLandscapeTile(isExtraCompact: true)
+                    learnerLandscapeTile(isExtraCompact: true)
                 }
 
                 HStack(alignment: .top, spacing: 10) {
@@ -479,12 +463,7 @@ struct MainMenuView: View {
             }
         } else {
             Grid(horizontalSpacing: 12, verticalSpacing: 12) {
-                GridRow {
-                    captureLandscapeTile(isExtraCompact: false)
-                    reviewLandscapeTile(isExtraCompact: false)
-                }
-
-                advancedLandscapeTile(isExtraCompact: false)
+                learnerLandscapeTile(isExtraCompact: false)
                     .gridCellColumns(2)
 
                 GridRow {
@@ -501,6 +480,19 @@ struct MainMenuView: View {
                 }
             }
         }
+    }
+
+    private func learnerLandscapeTile(isExtraCompact: Bool) -> some View {
+        landscapeWorkspaceTile(
+            eyebrow: "LEARN",
+            title: "Skill path",
+            detail: "Choose a scratch lesson and build your accuracy.",
+            systemImage: "graduationcap.fill",
+            status: "Continue learning",
+            action: { showingLearnHub = true },
+            minimumHeight: isExtraCompact ? 80 : 108,
+            isExtraCompact: isExtraCompact
+        )
     }
 
     private func captureLandscapeTile(isExtraCompact: Bool) -> some View {
@@ -674,29 +666,50 @@ struct MainMenuView: View {
 
     // MARK: - V3.2 Home content (Figma node 33:2)
 
-    /// The Home body: a lesson-focused Practice hero matching macOS's Current
-    /// Lesson hierarchy, an entry into the existing on-device Capture flow,
-    /// an entry into Review, an entry into the existing Advanced / Mac
-    /// Companion hub, a Recent result card driven by real session history,
-    /// and a Device status card driven by real audio-engine state. Camera
-    /// and DVS/timecode sync are described with static, honest copy — camera
-    /// is genuinely optional for Practice and DVS sync is genuinely not part
-    /// of the iPhone flow in this app (a macOS + controller workflow), so
-    /// neither line is a placeholder or an invented capability claim.
+    /// The Home body is learner-focused. Capture and authoring workflows live
+    /// in the separate SL Capture product; this app presents lessons, practice
+    /// and real progress only.
     private var homeContent: some View {
         VStack(alignment: .leading, spacing: ScratchLabDesign.Spacing.itemRow) {
             practiceEntryCard
 
-            captureEntryCard
-
-            reviewEntryCard
-
-            advancedEntryCard
+            learnerPathCard
 
             HomeInfoCard(title: "Recent result", detail: recentResultDetail)
 
             HomeInfoCard(title: "Device status", detail: deviceStatusDetail)
         }
+    }
+
+    private var learnerPathCard: some View {
+        Button { showingLearnHub = true } label: {
+            HStack(spacing: ScratchLabDesign.Spacing.md) {
+                Image(systemName: "graduationcap.fill")
+                    .font(.title2)
+                    .foregroundStyle(ScratchLabDesign.Sem.accent)
+
+                VStack(alignment: .leading, spacing: ScratchLabDesign.Spacing.xxs) {
+                    Text("LEARN")
+                        .font(ScratchLabDesign.Typo.metricLabel)
+                        .foregroundStyle(ScratchLabDesign.Sem.accent)
+                    Text("Build your scratch skills")
+                        .font(ScratchLabDesign.Typo.cardHeading)
+                        .foregroundStyle(ScratchLabDesign.Sem.textPrimary)
+                    Text("Follow the lesson path, repeat each move, and track your progress.")
+                        .font(ScratchLabDesign.Typo.bodySecondary)
+                        .foregroundStyle(ScratchLabDesign.Sem.textSecondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+
+                Spacer(minLength: ScratchLabDesign.Spacing.sm)
+                Image(systemName: "chevron.right")
+                    .foregroundStyle(ScratchLabDesign.Sem.textTertiary)
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+        }
+        .buttonStyle(.plain)
+        .scratchLabCard(.standard)
+        .accessibilityLabel("Learn: Build your scratch skills")
     }
 
     /// iOS entry counterpart of macOS's `practiceHeaderCard`: one coherent
@@ -1828,13 +1841,13 @@ private struct AdvancedMIDIControllerView: View {
             ScrollView(showsIndicators: false) {
                 VStack(alignment: .leading, spacing: ScratchLabDesign.Spacing.cardSection) {
                     VStack(alignment: .leading, spacing: ScratchLabDesign.Spacing.xs) {
-                        Text("ADVANCED")
+                        Text("CONTROLLER SETUP")
                             .font(ScratchLabDesign.Typo.metricLabel)
                             .foregroundStyle(ScratchLabDesign.Sem.textSecondary)
                         AdaptiveWorkspaceHeader(
                             title: "MIDI & Controller",
                             status: midiManager.readinessState == .receivingMessages ? .ready : .needsAttention,
-                            detail: "Select a source, map Hot Cue 1, and assign ScratchLab AHHH"
+                            detail: "Connect a supported controller or map its controls manually"
                         )
                     }
 
@@ -1849,23 +1862,32 @@ private struct AdvancedMIDIControllerView: View {
 
                     midiSourceCard
 
-                    VStack(spacing: 0) {
-                        AdvancedMappingRow(label: "Crossfader", value: mappingDescription(for: .crossfader))
-                        Divider().overlay(ScratchLabDesign.Border.default)
-                        AdvancedMappingRow(label: "Left upfader", value: mappingDescription(for: .leftUpfader))
-                        Divider().overlay(ScratchLabDesign.Border.default)
-                        AdvancedMappingRow(label: "Right upfader", value: mappingDescription(for: .rightUpfader))
-                        Divider().overlay(ScratchLabDesign.Border.default)
-                        AdvancedMappingRow(
-                            label: "Right-deck pads",
-                            value: RaneOneMKIIVerifiedLearnedMapping.isComplete(midiLearnCoordinator.currentMapping)
-                                ? "Hot Cues 1–8 mapped"
-                                : "Mapping incomplete"
-                        )
-                        Divider().overlay(ScratchLabDesign.Border.default)
-                        AdvancedMappingRow(label: "Hot Cue 1", value: hotCueOneDescription)
+                    VStack(alignment: .leading, spacing: ScratchLabDesign.Spacing.sm) {
+                        Text("SUPPORTED SETUPS")
+                            .font(ScratchLabDesign.Typo.metricLabel)
+                            .foregroundStyle(ScratchLabDesign.Sem.textSecondary)
+                        Text("Connected DDJ and DJM-S9 MIDI endpoints appear above when the hardware is plugged in. Phase is supported through its DVS connection to a DJM-S9. If a controller is not recognized, select its MIDI source and use MIDI Learn to map the controls you use.")
+                            .font(ScratchLabDesign.Typo.bodySmall)
+                            .foregroundStyle(ScratchLabDesign.Sem.textSecondary)
+                            .fixedSize(horizontal: false, vertical: true)
                     }
                     .scratchLabCard(.standard)
+
+                    VStack(alignment: .leading, spacing: 0) {
+                        Text("MAPPING OVERVIEW")
+                            .font(ScratchLabDesign.Typo.metricLabel)
+                            .foregroundStyle(ScratchLabDesign.Sem.textSecondary)
+                            .padding(.bottom, ScratchLabDesign.Spacing.xs)
+                        AdvancedMappingRow(label: "Mixer controls", value: "\(mappedMixerControlCount)/3 mapped")
+                        Divider().overlay(ScratchLabDesign.Border.default)
+                        AdvancedMappingRow(label: "Performance pads", value: "\(mappedHotCueCount)/8 mapped")
+                    }
+                    .scratchLabCard(.standard)
+
+                    MIDIDetailedMappingList(
+                        canLearn: selectedSource != nil,
+                        feedbackAccessibilityIdentifier: "advanced-midi-learn-feedback"
+                    )
 
                     hotCueOneCard
                 }
@@ -1983,13 +2005,6 @@ private struct AdvancedMIDIControllerView: View {
                 .fixedSize(horizontal: false, vertical: true)
                 .accessibilityIdentifier("advanced-platter-sample-status")
 
-            if !midiLearnCoordinator.feedback.isEmpty {
-                Text(midiLearnCoordinator.feedback)
-                    .font(ScratchLabDesign.Typo.bodySmall)
-                    .foregroundStyle(ScratchLabDesign.Sem.accent)
-                    .fixedSize(horizontal: false, vertical: true)
-                    .accessibilityIdentifier("advanced-midi-learn-feedback")
-            }
         }
         .scratchLabCard(.standard)
     }
@@ -2027,18 +2042,124 @@ private struct AdvancedMIDIControllerView: View {
         midiControllerDispatcher.updateMapping(deviceIdentifier: source.id, deviceName: source.name)
     }
 
-    private func mappingDescription(for action: MIDISemanticAction) -> String {
-        guard let control = midiLearnCoordinator.control(for: action) else { return "Not mapped" }
-        let type = control.messageType == .controlChange ? "CC" : "Note"
-        return "Channel \(control.channel) · \(type)\(control.controlNumber)"
+    private var mappedMixerControlCount: Int {
+        [.crossfader, .leftUpfader, .rightUpfader]
+            .count { midiLearnCoordinator.control(for: $0) != nil }
     }
 
-    private var hotCueOneDescription: String {
-        guard let control = hotCueOneControl else { return "Not mapped · no sample" }
-        let sample = control.assignedSampleID == "dvs_ahhh"
-            ? "AHHH"
-            : (control.assignedSampleID ?? "No sample")
-        return "Channel \(control.channel) · Note\(control.controlNumber) · \(sample)"
+    private var mappedHotCueCount: Int {
+        (1...8).filter { index in
+            let action = MIDISemanticAction(rawValue: "hotCue\(index)")
+            return action.map { midiLearnCoordinator.control(for: $0) != nil } == true
+        }.count
+    }
+}
+
+struct MIDIDetailedMappingList: View {
+    @EnvironmentObject private var midiLearnCoordinator: IOSMIDILearnCoordinator
+
+    let canLearn: Bool
+    var feedbackAccessibilityIdentifier: String? = nil
+
+    private let faderActions: [MIDISemanticAction] = [
+        .crossfader, .leftUpfader, .rightUpfader
+    ]
+    private let hotCueActions: [MIDISemanticAction] = [
+        .hotCue1, .hotCue2, .hotCue3, .hotCue4,
+        .hotCue5, .hotCue6, .hotCue7, .hotCue8
+    ]
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: ScratchLabDesign.Spacing.sm) {
+            Text("DETAILED MIDI MAPPING")
+                .font(ScratchLabDesign.Typo.metricLabel)
+                .foregroundStyle(ScratchLabDesign.Sem.textSecondary)
+
+            Text("Learn each physical control on the selected device. Existing mappings are saved per MIDI source and can be cleared or relearned at any time.")
+                .font(ScratchLabDesign.Typo.bodySmall)
+                .foregroundStyle(ScratchLabDesign.Sem.textSecondary)
+                .fixedSize(horizontal: false, vertical: true)
+
+            Text("MIXER CONTROLS")
+                .font(ScratchLabDesign.Typo.caption)
+                .foregroundStyle(ScratchLabDesign.Sem.accent)
+                .padding(.top, ScratchLabDesign.Spacing.xs)
+
+            ForEach(faderActions, id: \.rawValue) { action in
+                mappingRow(action)
+                if action != faderActions.last {
+                    Divider().overlay(ScratchLabDesign.Border.default)
+                }
+            }
+
+            Text("PERFORMANCE PADS")
+                .font(ScratchLabDesign.Typo.caption)
+                .foregroundStyle(ScratchLabDesign.Sem.accent)
+                .padding(.top, ScratchLabDesign.Spacing.xs)
+
+            ForEach(hotCueActions, id: \.rawValue) { action in
+                mappingRow(action)
+                if action != hotCueActions.last {
+                    Divider().overlay(ScratchLabDesign.Border.default)
+                }
+            }
+
+            if !midiLearnCoordinator.feedback.isEmpty {
+                Text(midiLearnCoordinator.feedback)
+                    .font(ScratchLabDesign.Typo.bodySmall)
+                    .foregroundStyle(ScratchLabDesign.Sem.accent)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .accessibilityIdentifier(feedbackAccessibilityIdentifier ?? "midi-learn-feedback")
+            }
+        }
+        .scratchLabCard(.standard)
+    }
+
+    private func mappingRow(_ action: MIDISemanticAction) -> some View {
+        let learned = midiLearnCoordinator.control(for: action)
+        let isLearning = midiLearnCoordinator.activeAction == action
+
+        return VStack(alignment: .leading, spacing: ScratchLabDesign.Spacing.xs) {
+            HStack(spacing: ScratchLabDesign.Spacing.sm) {
+                VStack(alignment: .leading, spacing: ScratchLabDesign.Spacing.xxs) {
+                    Text(action.displayName)
+                        .font(ScratchLabDesign.Typo.controlValue)
+                        .foregroundStyle(ScratchLabDesign.Sem.textPrimary)
+                    Text(learned.map(mappingDetail) ?? "Not mapped")
+                        .font(ScratchLabDesign.Typo.caption)
+                        .foregroundStyle(ScratchLabDesign.Sem.textSecondary)
+                }
+
+                Spacer(minLength: ScratchLabDesign.Spacing.sm)
+
+                if learned != nil {
+                    Button("Clear") {
+                        midiLearnCoordinator.clear(action)
+                    }
+                    .buttonStyle(.borderless)
+                    .font(ScratchLabDesign.Typo.caption)
+                    .foregroundStyle(ScratchLabDesign.Sem.textSecondary)
+                }
+
+                Button(isLearning ? "Cancel" : (learned == nil ? "Learn" : "Relearn")) {
+                    if isLearning {
+                        midiLearnCoordinator.cancelLearning()
+                    } else {
+                        midiLearnCoordinator.startLearning(action)
+                    }
+                }
+                .buttonStyle(.bordered)
+                .tint(isLearning ? ScratchLabDesign.Sem.warning : ScratchLabDesign.Sem.accent)
+                .disabled(!canLearn && !isLearning)
+                .accessibilityIdentifier("midi-learn-\(action.rawValue)")
+            }
+        }
+        .padding(.vertical, ScratchLabDesign.Spacing.xs)
+    }
+
+    private func mappingDetail(_ control: MIDILearnedControl) -> String {
+        let type = control.messageType == .controlChange ? "CC" : "Note"
+        return "\(type) \(control.controlNumber) · Ch \(control.channel + 1)"
     }
 }
 
@@ -2463,9 +2584,8 @@ private struct DemoModeView: View {
 // Capture/Review, and Advanced state MainMenuView owns, so there is no
 // duplicate navigation state or alternate workflow.
 private struct AdaptiveSidebarView: View {
+    @Binding var showingLearnHub: Bool
     @Binding var showingPracticeHub: Bool
-    @Binding var showingCaptureHub: Bool
-    @Binding var showingAdvancedHub: Bool
     @Binding var showingReferenceExamples: Bool
 
     var body: some View {
@@ -2478,11 +2598,9 @@ private struct AdaptiveSidebarView: View {
                 .font(.system(size: 11, weight: .semibold))
                 .foregroundStyle(.secondary)
 
+            sidebarLink("Learn", systemImage: "graduationcap") { showingLearnHub = true }
             sidebarLink("Practice", systemImage: "waveform") { showingPracticeHub = true }
-            sidebarLink("Capture", systemImage: "record.circle") { showingCaptureHub = true }
-            sidebarLink("Review via Capture", systemImage: "checkmark.seal") { showingCaptureHub = true }
             sidebarLink("Reference examples", systemImage: "play.rectangle.on.rectangle") { showingReferenceExamples = true }
-            sidebarLink("Advanced / Mac Companion", systemImage: "slider.horizontal.3") { showingAdvancedHub = true }
 
             Spacer()
         }
@@ -2744,6 +2862,25 @@ struct SettingsView: View {
                                 }
                             }
                         }
+                    }
+
+                    Section("Controller Setup") {
+                        NavigationLink {
+                            AdvancedMIDIControllerView()
+                        } label: {
+                            Label {
+                                VStack(alignment: .leading, spacing: 4) {
+                                    Text("MIDI & Controller Mapping")
+                                    Text("DDJ, DJM-S9, Phase, and custom MIDI Learn")
+                                        .font(.caption)
+                                        .foregroundStyle(.secondary)
+                                }
+                            } icon: {
+                                Image(systemName: "slider.horizontal.3")
+                                    .foregroundStyle(ScratchLabDesign.Sem.accent)
+                            }
+                        }
+                        .accessibilityIdentifier("settings-controller-setup")
                     }
 
                     Section("About") {

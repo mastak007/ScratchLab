@@ -7,6 +7,7 @@ import SwiftUI
 struct LevelSelectView: View {
     @EnvironmentObject var progressManager: ProgressManager
     @EnvironmentObject var audioEngine: AudioEngine
+    @EnvironmentObject private var practiceBeatStore: PracticeBeatStore
     @Environment(\.dismiss) var dismiss
     @Environment(\.dynamicTypeSize) private var dynamicTypeSize
     
@@ -50,6 +51,10 @@ struct LevelSelectView: View {
 
     private var practiceScratchOptions: [Scratch] {
         [babyScratch, chirpFlareScratch]
+    }
+
+    private var scratchBreakModes: [BeatEngineMode] {
+        BeatEngineMode.practiceModes.filter(\.beatEnabled)
     }
 
     private var babyComboChallenge: ComboScratch {
@@ -161,6 +166,7 @@ struct LevelSelectView: View {
 
             VStack(spacing: ScratchLabDesign.Spacing.xl) {
                 practiceSelectionSection
+                beatVariationSection
                 comboCard
             }
             .padding(.horizontal, ScratchLabDesign.Spacing.xl)
@@ -227,6 +233,52 @@ struct LevelSelectView: View {
                 practiceScratchCard(for: scratch)
             }
         }
+    }
+
+    private var beatVariationSection: some View {
+        VStack(alignment: .leading, spacing: 16) {
+            VStack(alignment: .leading, spacing: 6) {
+                Text("CHOOSE A BEAT")
+                    .font(ScratchLabDesign.Typo.pageEyebrow)
+                    .foregroundColor(ScratchLabDesign.Sem.textTertiary)
+                Text("Six open scratch-break variations. Your choice is remembered for the live setup.")
+                    .font(ScratchLabDesign.Typo.bodySecondary)
+                    .foregroundColor(ScratchLabDesign.Sem.textSecondary)
+            }
+
+            LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible())], spacing: 10) {
+                ForEach(scratchBreakModes) { mode in
+                    Button {
+                        practiceBeatStore.selectBeatMode(mode)
+                    } label: {
+                        HStack(spacing: 8) {
+                            Image(systemName: practiceBeatStore.selectedBeatMode == mode
+                                  ? "checkmark.circle.fill"
+                                  : "circle")
+                            Text(mode.title)
+                                .lineLimit(1)
+                                .minimumScaleFactor(0.8)
+                            Spacer(minLength: 0)
+                        }
+                        .font(ScratchLabDesign.Typo.controlValue)
+                        .foregroundColor(practiceBeatStore.selectedBeatMode == mode
+                                         ? ScratchLabDesign.Sem.textOnAccent
+                                         : ScratchLabDesign.Sem.textPrimary)
+                        .padding(.horizontal, 12)
+                        .frame(minHeight: 44)
+                        .background(
+                            practiceBeatStore.selectedBeatMode == mode
+                                ? ScratchLabDesign.Sem.accent
+                                : ScratchLabDesign.Surface.controlFill,
+                            in: RoundedRectangle(cornerRadius: ScratchLabDesign.Radius.control, style: .continuous)
+                        )
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityIdentifier("learn-beat-\(mode.rawValue)")
+                }
+            }
+        }
+        .scratchLabCard(.standard)
     }
 
     private var comboCard: some View {
@@ -502,6 +554,7 @@ struct LevelSelectView_Previews: PreviewProvider {
         .environmentObject(GameState())
         .environmentObject(AudioEngine())
         .environmentObject(ProgressManager())
+        .environmentObject(PracticeBeatStore())
     }
 }
 #endif

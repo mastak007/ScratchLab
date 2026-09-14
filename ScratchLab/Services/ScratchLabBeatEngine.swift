@@ -68,8 +68,27 @@ final class ScratchLabBeatEngine: ObservableObject {
         let kick: Bool
         let snare: Bool
         let hat: Bool
+        let openHat: Bool
+        let ghostSnare: Bool
+        let percussion: Bool
 
-        static let silent = StepVoicing(kick: false, snare: false, hat: false)
+        init(
+            kick: Bool = false,
+            snare: Bool = false,
+            hat: Bool = false,
+            openHat: Bool = false,
+            ghostSnare: Bool = false,
+            percussion: Bool = false
+        ) {
+            self.kick = kick
+            self.snare = snare
+            self.hat = hat
+            self.openHat = openHat
+            self.ghostSnare = ghostSnare
+            self.percussion = percussion
+        }
+
+        static let silent = StepVoicing()
     }
 
     private static let preRollLeadInSeconds = 0.12
@@ -568,9 +587,7 @@ final class ScratchLabBeatEngine: ObservableObject {
         let renderedSteps = makeRenderedStepSamples(mode: mode, sampleRate: sampleRate)
         let beatFrames = max(1, Int((60.0 / Double(bpm) * sampleRate).rounded()))
         let framesPerBar = beatFrames * beatsPerBar
-        let swingFrames = mode == .minimalFunk
-            ? Int((Double(beatFrames) * mode.defaultSwingAmount).rounded())
-            : 0
+        let swingFrames = Int((Double(beatFrames) * mode.defaultSwingAmount).rounded())
         let startStepIndex = max(0, startBeatIndex * 2)
         let renderedDurationSeconds = Double(totalFrameCount) / sampleRate
         let totalStepCount = Int(ceil(renderedDurationSeconds / max(0.0001, 60.0 / Double(bpm) / 2.0))) + 8
@@ -659,8 +676,7 @@ final class ScratchLabBeatEngine: ObservableObject {
             stepBuffers: stepBuffers,
             beatFrameLength: beatFrames,
             framesPerBar: beatFrames * CaptureClickTrackDefaults.beatsPerBar,
-            swingFrameOffset: mode == .minimalFunk
-                ? Int((Double(beatFrames) * mode.defaultSwingAmount).rounded()) : 0,
+            swingFrameOffset: Int((Double(beatFrames) * mode.defaultSwingAmount).rounded()),
             sampleRate: sampleRate
         )
     }
@@ -698,13 +714,23 @@ final class ScratchLabBeatEngine: ObservableObject {
 
     private static func makeRenderedStepSamples(mode: BeatEngineMode, sampleRate: Double) -> [[Float]] {
         let kick = kickSamples(sampleRate: sampleRate)
-        let snare = snareSamples(sampleRate: sampleRate, aggressive: mode == .battleLoop)
+        let snare = snareSamples(
+            sampleRate: sampleRate,
+            aggressive: [.battleLoop, .pocketDouble, .dropTheory].contains(mode),
+            ghost: false
+        )
+        let ghostSnare = snareSamples(sampleRate: sampleRate, aggressive: false, ghost: true)
         let hat = hatSamples(sampleRate: sampleRate)
+        let openHat = openHatSamples(sampleRate: sampleRate)
+        let percussion = percussionSamples(sampleRate: sampleRate)
         return stepPattern(for: mode).map { step in
             mixStepSamples(
                 kick: step.kick ? kick : [],
                 snare: step.snare ? snare : [],
-                hat: step.hat ? hat : []
+                ghostSnare: step.ghostSnare ? ghostSnare : [],
+                hat: step.hat ? hat : [],
+                openHat: step.openHat ? openHat : [],
+                percussion: step.percussion ? percussion : []
             )
         }
     }
@@ -832,45 +858,92 @@ final class ScratchLabBeatEngine: ObservableObject {
             return Array(repeating: .silent, count: 8)
         case .boomBapTrainer:
             return [
-                StepVoicing(kick: true, snare: false, hat: true),
-                StepVoicing(kick: false, snare: false, hat: true),
-                StepVoicing(kick: false, snare: true, hat: true),
-                StepVoicing(kick: false, snare: false, hat: true),
-                StepVoicing(kick: false, snare: false, hat: true),
-                StepVoicing(kick: false, snare: false, hat: true),
-                StepVoicing(kick: false, snare: true, hat: true),
-                StepVoicing(kick: false, snare: false, hat: true)
+                StepVoicing(kick: true, hat: true, percussion: true),
+                StepVoicing(hat: true),
+                StepVoicing(snare: true, hat: true),
+                StepVoicing(hat: true, percussion: true),
+                StepVoicing(kick: true, hat: true),
+                StepVoicing(hat: true, ghostSnare: true),
+                StepVoicing(snare: true, hat: true),
+                StepVoicing(hat: true, openHat: true, percussion: true)
             ]
         case .minimalFunk:
             return [
-                StepVoicing(kick: true, snare: false, hat: true),
-                StepVoicing(kick: false, snare: false, hat: true),
-                StepVoicing(kick: false, snare: true, hat: true),
-                StepVoicing(kick: false, snare: false, hat: true),
-                StepVoicing(kick: true, snare: false, hat: true),
-                StepVoicing(kick: false, snare: false, hat: true),
-                StepVoicing(kick: false, snare: true, hat: true),
-                StepVoicing(kick: false, snare: false, hat: true)
+                StepVoicing(kick: true, hat: true),
+                StepVoicing(hat: true, percussion: true),
+                StepVoicing(snare: true, hat: true),
+                StepVoicing(hat: true, ghostSnare: true),
+                StepVoicing(kick: true, hat: true, percussion: true),
+                StepVoicing(hat: true, openHat: true),
+                StepVoicing(snare: true, hat: true),
+                StepVoicing(hat: true, ghostSnare: true, percussion: true)
             ]
         case .battleLoop:
             return [
-                StepVoicing(kick: true, snare: false, hat: false),
-                StepVoicing(kick: false, snare: false, hat: true),
-                StepVoicing(kick: false, snare: true, hat: false),
-                .silent,
-                .silent,
-                StepVoicing(kick: false, snare: false, hat: true),
-                StepVoicing(kick: false, snare: true, hat: false),
-                .silent
+                StepVoicing(kick: true, hat: true, percussion: true),
+                StepVoicing(hat: true),
+                StepVoicing(snare: true, hat: true),
+                StepVoicing(kick: true, ghostSnare: true, percussion: true),
+                StepVoicing(kick: true, hat: true),
+                StepVoicing(hat: true, openHat: true, ghostSnare: true),
+                StepVoicing(snare: true, hat: true),
+                StepVoicing(hat: true, percussion: true)
+            ]
+        case .ghostPocket:
+            return [
+                StepVoicing(kick: true, hat: true),
+                StepVoicing(hat: true, ghostSnare: true),
+                StepVoicing(snare: true, hat: true),
+                StepVoicing(kick: true, hat: true, percussion: true),
+                StepVoicing(kick: true, hat: true),
+                StepVoicing(hat: true, openHat: true),
+                StepVoicing(snare: true, hat: true, ghostSnare: true),
+                StepVoicing(hat: true, percussion: true)
+            ]
+        case .pocketDouble:
+            return [
+                StepVoicing(kick: true, hat: true, percussion: true),
+                StepVoicing(hat: true),
+                StepVoicing(snare: true, hat: true),
+                StepVoicing(hat: true, percussion: true),
+                StepVoicing(kick: true, hat: true, ghostSnare: true),
+                StepVoicing(hat: true, openHat: true),
+                StepVoicing(snare: true, hat: true),
+                StepVoicing(kick: true, hat: true, percussion: true)
+            ]
+        case .dropTheory:
+            return [
+                StepVoicing(kick: true, hat: true),
+                StepVoicing(hat: true, openHat: true),
+                StepVoicing(snare: true, hat: true),
+                StepVoicing(kick: true, ghostSnare: true, percussion: true),
+                StepVoicing(kick: true, hat: true),
+                StepVoicing(hat: true),
+                StepVoicing(snare: true, hat: true),
+                StepVoicing(hat: true, openHat: true, percussion: true)
             ]
         }
     }
 
-    private static func mixStepSamples(kick: [Float], snare: [Float], hat: [Float]) -> [Float] {
-        let frameCount = max(1, max(kick.count, max(snare.count, hat.count)))
+    private static func mixStepSamples(
+        kick: [Float],
+        snare: [Float],
+        ghostSnare: [Float],
+        hat: [Float],
+        openHat: [Float],
+        percussion: [Float]
+    ) -> [Float] {
+        let frameCount = max(1, [kick, snare, ghostSnare, hat, openHat, percussion].map(\.count).max() ?? 0)
         var samples = Array(repeating: Float(0), count: frameCount)
 
-        for (source, gain) in [(kick, Float(1.0)), (snare, Float(0.9)), (hat, Float(0.45))] {
+        for (source, gain) in [
+            (kick, Float(1.0)),
+            (snare, Float(0.88)),
+            (ghostSnare, Float(0.38)),
+            (hat, Float(0.34)),
+            (openHat, Float(0.28)),
+            (percussion, Float(0.42))
+        ] {
             for index in 0..<source.count {
                 samples[index] += source[index] * gain
             }
@@ -887,32 +960,63 @@ final class ScratchLabBeatEngine: ObservableObject {
             let envelope = exp(-time * 18.0)
             let body = sin(2.0 * .pi * frequency * time)
             let transient = sin(2.0 * .pi * 240.0 * time) * exp(-time * 42.0)
-            return Float((body + (transient * 0.3)) * envelope) * 0.9
+            let saturated = tanh((body + (transient * 0.3)) * 1.25)
+            return Float(saturated * envelope) * 0.92
         }
     }
 
-    private static func snareSamples(sampleRate: Double, aggressive: Bool) -> [Float] {
-        let frameCount = max(1, Int((sampleRate * 0.12).rounded()))
+    private static func snareSamples(sampleRate: Double, aggressive: Bool, ghost: Bool) -> [Float] {
+        let frameCount = max(1, Int((sampleRate * (ghost ? 0.075 : 0.19)).rounded()))
         return (0..<frameCount).map { frame in
             let time = Double(frame) / sampleRate
-            let envelope = exp(-time * (aggressive ? 36.0 : 28.0))
-            let noise = sin(2.0 * .pi * 1_900.0 * time)
-                + sin(2.0 * .pi * 2_700.0 * time)
-                + sin(2.0 * .pi * 3_400.0 * time)
-            let tone = sin(2.0 * .pi * (aggressive ? 220.0 : 180.0) * time) * exp(-time * 20.0)
-            return Float(((noise * 0.16) + (tone * 0.4)) * envelope) * (aggressive ? 1.0 : 0.85)
+            let envelope = exp(-time * (ghost ? 48.0 : (aggressive ? 27.0 : 23.0)))
+            let noise = deterministicNoise(frame: frame, seed: aggressive ? 31 : 17)
+            let filteredNoise = noise - (frame > 0 ? deterministicNoise(frame: frame - 1, seed: aggressive ? 31 : 17) * 0.72 : 0)
+            let tone = sin(2.0 * .pi * (aggressive ? 205.0 : 185.0) * time) * exp(-time * 15.0)
+            let clap = sin(2.0 * .pi * 1_450.0 * time) * exp(-time * 42.0)
+            return Float(((filteredNoise * 0.62) + (tone * 0.34) + (clap * 0.16)) * envelope)
+                * (ghost ? 0.52 : (aggressive ? 1.0 : 0.9))
         }
     }
 
     private static func hatSamples(sampleRate: Double) -> [Float] {
-        let frameCount = max(1, Int((sampleRate * 0.045).rounded()))
+        let frameCount = max(1, Int((sampleRate * 0.055).rounded()))
         return (0..<frameCount).map { frame in
             let time = Double(frame) / sampleRate
-            let envelope = exp(-time * 85.0)
-            let noise = sin(2.0 * .pi * 6_500.0 * time)
-                + sin(2.0 * .pi * 8_100.0 * time)
-                + sin(2.0 * .pi * 9_700.0 * time)
-            return Float(noise * 0.12 * envelope)
+            let envelope = exp(-time * 72.0)
+            let noise = deterministicNoise(frame: frame, seed: 71)
+            let metallic = sin(2.0 * .pi * 7_400.0 * time) + sin(2.0 * .pi * 10_100.0 * time)
+            return Float((noise * 0.42 + metallic * 0.09) * envelope)
         }
+    }
+
+    private static func openHatSamples(sampleRate: Double) -> [Float] {
+        let frameCount = max(1, Int((sampleRate * 0.19).rounded()))
+        return (0..<frameCount).map { frame in
+            let time = Double(frame) / sampleRate
+            let envelope = exp(-time * 25.0)
+            let noise = deterministicNoise(frame: frame, seed: 91)
+            let metallic = sin(2.0 * .pi * 7_900.0 * time) + sin(2.0 * .pi * 11_300.0 * time)
+            return Float((noise * 0.3 + metallic * 0.075) * envelope)
+        }
+    }
+
+    private static func percussionSamples(sampleRate: Double) -> [Float] {
+        let frameCount = max(1, Int((sampleRate * 0.11).rounded()))
+        return (0..<frameCount).map { frame in
+            let time = Double(frame) / sampleRate
+            let envelope = exp(-time * 34.0)
+            let tone = sin(2.0 * .pi * 420.0 * time) + sin(2.0 * .pi * 690.0 * time)
+            let click = deterministicNoise(frame: frame, seed: 113) * exp(-time * 75.0)
+            return Float((tone * 0.16 + click * 0.3) * envelope)
+        }
+    }
+
+    private static func deterministicNoise(frame: Int, seed: Int) -> Double {
+        var value = UInt64(bitPattern: Int64(frame &* 1_664_525 &+ seed &* 1_013_904_223))
+        value ^= value >> 13
+        value &*= 1_274_126_177
+        value ^= value >> 16
+        return (Double(value & 0xFFFF) / 32_767.5) - 1.0
     }
 }

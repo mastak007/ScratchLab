@@ -166,6 +166,11 @@ struct PracticeModeView: View {
     // presentation state only; Result independently resolves its finalized
     // gesture-relative view from the same raw attempt evidence.
     @State private var livePerformedMovementEvents: [CaptureCore.DetectedNotationRecordMovementEvent] = []
+    // Signature of the last controller comparison rendered by the live HUD.
+    // This prevents the 25 Hz MIDI preview stream from retriggering the same
+    // reward animation on every redraw.
+    @State private var liveControllerFeedbackSignature: String?
+    @State private var latestControllerAttempt: PracticeAttemptResult?
 
     let durationOptions: [(String, TimeInterval)] = [
         ("5 min", 300),
@@ -569,6 +574,7 @@ struct PracticeModeView: View {
                         bpm: Double(practiceBeatStore.bpmValue),
                         evidence: practiceResultNotation,
                         reviewSummary: practiceReviewSummary,
+                        controllerAttempt: latestControllerAttempt,
                         continueButtonTitle: isComboChallengeMode ? "Run It Again" : "Practice Again",
                         onContinue: { showingResults = false; resetSession() },
                         onExit: { dismiss() }
@@ -752,6 +758,17 @@ struct PracticeModeView: View {
                     .foregroundStyle(ScratchLabDesign.Sem.accent)
 
                 Spacer(minLength: 8)
+
+                if !notationFeedbackState.gameplayOutcomeLabel.isEmpty {
+                    Text(notationFeedbackState.gameplayOutcomeLabel)
+                        .font(.system(size: 10, weight: .black, design: .rounded))
+                        .tracking(1.2)
+                        .foregroundStyle(feedbackColor)
+                        .padding(.horizontal, 8)
+                        .padding(.vertical, 4)
+                        .background(.black.opacity(0.72), in: Capsule())
+                        .accessibilityLabel("Scratch feedback: \(notationFeedbackState.gameplayOutcomeLabel)")
+                }
 
                 Text("CAMERA CLEAN · NOTATION SEPARATE")
                     .font(ScratchLabDesign.Typo.statusPill)
@@ -1902,10 +1919,12 @@ struct PracticeModeView: View {
         comboBestRunCount = 0
         comboTrackedLoopCount = 0
         comboCompleted = false
-        comboCompletionQueued = false
-        sessionProgressPersisted = false
-        livePerformedMovementEvents = []
-        midiControllerDispatcher.resetCapturedPlatterEvents()
+            comboCompletionQueued = false
+            sessionProgressPersisted = false
+            livePerformedMovementEvents = []
+            liveControllerFeedbackSignature = nil
+            latestControllerAttempt = nil
+            midiControllerDispatcher.resetCapturedPlatterEvents()
         comboPhraseStartedAt = nil
         lastComboLockAt = nil
         sessionTipText = isComboChallengeMode
@@ -2035,6 +2054,8 @@ struct PracticeModeView: View {
         comboCompletionQueued = false
         sessionProgressPersisted = false
         livePerformedMovementEvents = []
+        liveControllerFeedbackSignature = nil
+        latestControllerAttempt = nil
         midiControllerDispatcher.resetCapturedPlatterEvents()
         comboPhraseStartedAt = nil
         lastComboLockAt = nil
@@ -2062,6 +2083,8 @@ struct PracticeModeView: View {
         comboCompletionQueued = false
         sessionProgressPersisted = false
         livePerformedMovementEvents = []
+        liveControllerFeedbackSignature = nil
+        latestControllerAttempt = nil
         comboPhraseStartedAt = nil
         lastComboLockAt = nil
         sessionTipText = ""
@@ -2351,12 +2374,59 @@ struct PracticeModeView: View {
         let events = midiControllerDispatcher.livePlatterMovementEvents
         guard events != livePerformedMovementEvents else { return }
         livePerformedMovementEvents = events
+        updateLiveControllerFeedback()
         #if DEBUG
         print("[SCRATCH-DEBUG] practice live state updated · movementEvents=\(events.count)")
         if !events.isEmpty {
             print("[NOTATION-DEBUG] renderer received live performance data · movementEvents=\(events.count)")
         }
         #endif
+    }
+
+    /// Projects the current MIDI platter window through the shared comparison
+    /// engine. This is live coaching only: the existing microphone result path
+    /// remains responsible for the session's audio estimate and persisted
+    /// progress, while this path adds direction-aware controller feedback when
+    /// the evidence is present.
+    private func updateLiveControllerFeedback() {
+        guard isSessionActive, !isPaused,
+              let pattern = ScratchNotation.canonicalBeatPattern(forScratchID: activeScratch.id),
+              let snapshot = midiControllerDispatcher.detectedNotationSnapshot(),
+              let latestEvent = snapshot.recordMovementEvents.last,
+              let clock = PerformanceBeatClock(
+                  bpm: Double(practiceBeatStore.bpmValue),
+                  beatZeroTime: Double(CaptureClickTrackDefaults.countInBeats) * 60.0 / Double(practiceBeatStore.bpmValue)
+              ) else {
+            return
+        }
+
+        let latestBeat = clock.beats(fromSeconds: latestEvent.startTime)
+        guard latestBeat >= 0, pattern.durationBeats > 0 else { return }
+        let cycleIndex = max(0, Int(floor(latestBeat / pattern.durationBeats)))
+        guard let result = PracticeAttemptEvidenceResolver.liveCycleAttempt(
+            pattern: pattern,
+            bpm: Double(practiceBeatStore.bpmValue),
+            countInBeats: CaptureClickTrackDefaults.countInBeats,
+            cycleIndex: cycleIndex,
+            snapshot: snapshot
+        ) else {
+            return
+        }
+
+        let feedback = NotationFeedbackState.from(comparison: result.comparison)
+        guard feedback != .neutral else { return }
+        let signature = "(cycleIndex)|(feedback)|(result.comparison.matchedStrokes.count)|(result.comparison.missingTargetStrokeIndices.count)|(result.comparison.extraPerformedStrokeIndices.count)"
+        guard signature != liveControllerFeedbackSignature else { return }
+        liveControllerFeedbackSignature = signature
+        notationFeedbackState = feedback
+        lastFeedback = result.coaching
+        feedbackColor = feedback.isReward
+            ? ScratchLabDesign.Sem.success
+            : (feedback.isTimingCorrection ? ScratchLabDesign.Sem.warning : ScratchLabDesign.Sem.danger)
+        withAnimation(.easeOut(duration: 0.3)) {
+            showFeedback = true
+            showAccuracyBurst = feedback.isReward
+        }
     }
 
     /// Rolling live window, matching the macOS tracker card's visible domain.
@@ -3265,14 +3335,6 @@ private struct PracticeReadyOverlay: View {
     @State private var isControllerSetupExpanded = false
     @State private var isDetailedMappingExpanded = false
 
-    private let faderActions: [MIDISemanticAction] = [
-        .crossfader, .leftUpfader, .rightUpfader
-    ]
-    private let hotCueActions: [MIDISemanticAction] = [
-        .hotCue1, .hotCue2, .hotCue3, .hotCue4,
-        .hotCue5, .hotCue6, .hotCue7, .hotCue8
-    ]
-
     private var presentation: ScratchNotationPanelPresentation {
         ScratchLabAdaptiveLayout.notationPresentation(isRegularWidth: horizontalSizeClass == .regular)
     }
@@ -3597,15 +3659,7 @@ private struct PracticeReadyOverlay: View {
 
                 DisclosureGroup("Fine-tune mappings", isExpanded: $isDetailedMappingExpanded) {
                     ScrollView(showsIndicators: true) {
-                        VStack(spacing: 7) {
-                            ForEach(faderActions, id: \.rawValue) { action in
-                                midiLearnRow(action)
-                            }
-
-                        ForEach(hotCueActions, id: \.rawValue) { action in
-                            midiLearnRow(action)
-                        }
-                    }
+                        MIDIDetailedMappingList(canLearn: canLearnMIDI)
                         .padding(.top, 6)
                     }
                     .frame(maxHeight: 150)
@@ -3614,13 +3668,6 @@ private struct PracticeReadyOverlay: View {
                 .font(ScratchLabDesign.Typo.caption)
                 .foregroundStyle(ScratchLabDesign.Sem.textPrimary)
 
-                if !midiLearnCoordinator.feedback.isEmpty {
-                    Text(midiLearnCoordinator.feedback)
-                        .font(ScratchLabDesign.Typo.caption)
-                        .foregroundStyle(ScratchLabDesign.Sem.accent)
-                        .fixedSize(horizontal: false, vertical: true)
-                        .accessibilityIdentifier("midi-learn-feedback")
-                }
             }
             .padding(.top, 6)
         } label: {
@@ -3663,42 +3710,6 @@ private struct PracticeReadyOverlay: View {
         return "LIVE · XF \(crossfader) · L \(left) · R \(right) · \(hotCue)"
     }
 
-    private func midiLearnRow(_ action: MIDISemanticAction) -> some View {
-        let learned = midiLearnCoordinator.control(for: action)
-        let isLearning = midiLearnCoordinator.activeAction == action
-        return VStack(alignment: .leading, spacing: 7) {
-            HStack(spacing: 10) {
-                VStack(alignment: .leading, spacing: 2) {
-                    Text(action.displayName)
-                        .font(ScratchLabDesign.Typo.sectionLabel)
-                        .foregroundStyle(ScratchLabDesign.Sem.textPrimary)
-                    Text(learned.map(mappingDetail) ?? "Not mapped")
-                        .font(.system(size: 10, weight: .medium))
-                        .foregroundStyle(ScratchLabDesign.Sem.textSecondary)
-                }
-                Spacer(minLength: 8)
-                if learned != nil {
-                    Button("Clear") { midiLearnCoordinator.clear(action) }
-                        .buttonStyle(.borderless)
-                        .font(ScratchLabDesign.Typo.caption)
-                        .foregroundStyle(ScratchLabDesign.Sem.textSecondary)
-                }
-                Button(isLearning ? "Cancel" : (learned == nil ? "Learn" : "Relearn")) {
-                    if isLearning {
-                        midiLearnCoordinator.cancelLearning()
-                    } else {
-                        midiLearnCoordinator.startLearning(action)
-                    }
-                }
-                .buttonStyle(.bordered)
-                .tint(isLearning ? ScratchLabDesign.Sem.warning : ScratchLabDesign.Sem.accent)
-                .disabled(!canLearnMIDI && !isLearning)
-                .accessibilityIdentifier("midi-learn-\(action.rawValue)")
-            }
-
-        }
-    }
-
     private var canLearnMIDI: Bool { midiLearnCoordinator.selectedDeviceName != nil }
 
     private var midiDeviceDetail: String {
@@ -3719,11 +3730,6 @@ private struct PracticeReadyOverlay: View {
         case .deviceConnected: return ScratchLabDesign.Sem.warning
         case .receivingMessages: return ScratchLabDesign.Sem.success
         }
-    }
-
-    private func mappingDetail(_ control: MIDILearnedControl) -> String {
-        let type = control.messageType == .controlChange ? "CC" : "Note"
-        return "\(type) \(control.controlNumber) · Ch \(control.channel + 1)"
     }
 
     private var readyActions: some View {
@@ -4586,6 +4592,7 @@ struct ResultsOverlayView: View {
     let bpm: Double
     let evidence: PracticeResultNotation
     let reviewSummary: PracticeReviewSummary?
+    let controllerAttempt: PracticeAttemptResult?
     let continueButtonTitle: String
     let onContinue: () -> Void
     let onExit: () -> Void
@@ -4698,6 +4705,10 @@ struct ResultsOverlayView: View {
                 PracticeReviewCard(summary: reviewSummary)
             }
 
+            if let controllerAttempt {
+                PracticeControllerComparisonCard(attempt: controllerAttempt)
+            }
+
             if let detailNote {
                 Text(detailNote)
                     .font(ScratchLabDesign.Typo.bodySmall)
@@ -4782,6 +4793,10 @@ struct ResultsOverlayView: View {
     private var resultReview: some View {
         if let reviewSummary {
             PracticeReviewCard(summary: reviewSummary)
+                .padding(.horizontal, isLandscapeViewport ? 0 : 32)
+        }
+        if let controllerAttempt {
+            PracticeControllerComparisonCard(attempt: controllerAttempt)
                 .padding(.horizontal, isLandscapeViewport ? 0 : 32)
         }
         if let detailNote {
@@ -4918,6 +4933,69 @@ private struct PerformanceTraceUnavailableCard: View {
         .scratchLabCard(.warning)
         .accessibilityElement(children: .combine)
         .accessibilityLabel("Performance trace unavailable for this input mode")
+    }
+}
+
+private struct PracticeControllerComparisonCard: View {
+    let attempt: PracticeAttemptResult
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack {
+                Text("CONTROLLER COMPARISON")
+                    .font(.system(size: 11, weight: .semibold))
+                    .tracking(0.6)
+                    .foregroundColor(ScratchLabDesign.Sem.textTertiary)
+                Spacer()
+                Text(gradeLabel)
+                    .font(ScratchLabDesign.Typo.statusPill)
+                    .foregroundColor(ScratchLabDesign.Sem.accent)
+            }
+
+            Text("Latest MIDI-scored cycle · (attempt.techniqueID)")
+                .font(ScratchLabDesign.Typo.sectionLabel)
+                .foregroundColor(ScratchLabDesign.Sem.textPrimary)
+
+            HStack(spacing: 8) {
+                comparisonMetric(title: "Overall", value: attempt.overallScore)
+                comparisonMetric(title: "Timing", value: attempt.timingScore)
+                comparisonMetric(title: "Direction", value: attempt.directionScore)
+            }
+
+            if let coaching = attempt.coaching.first {
+                Text(coaching)
+                    .font(ScratchLabDesign.Typo.bodySecondary)
+                    .foregroundColor(ScratchLabDesign.Sem.textSecondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+
+            Text("This comparison uses controller platter and fader evidence. The main practice estimate above remains audio-based until hardware validation is complete.")
+                .font(ScratchLabDesign.Typo.caption)
+                .foregroundColor(ScratchLabDesign.Sem.textTertiary)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+        .scratchLabCard(.standard)
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel("Controller comparison. (gradeLabel). Latest MIDI-scored cycle.")
+    }
+
+    private var gradeLabel: String {
+        guard let grade = attempt.grade else { return "NOT ASSESSABLE" }
+        return grade.rawValue == "keepPracticing"
+            ? "KEEP PRACTICING"
+            : grade.rawValue.uppercased()
+    }
+
+    private func comparisonMetric(title: String, value: Double?) -> some View {
+        VStack(alignment: .leading, spacing: 3) {
+            Text(title)
+                .font(ScratchLabDesign.Typo.caption)
+                .foregroundColor(ScratchLabDesign.Sem.textSecondary)
+            Text(value.map { "\(Int($0.rounded()))%" } ?? "—")
+                .font(.system(size: 14, weight: .semibold, design: .monospaced))
+                .foregroundColor(ScratchLabDesign.Sem.textPrimary)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
     }
 }
 

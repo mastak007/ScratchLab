@@ -1,4 +1,5 @@
 import SwiftUI
+import AppKit
 
 private enum ScratchLabDesktopWindowID {
     static let mainWindow = "main-window"
@@ -9,6 +10,7 @@ private enum ScratchLabDesktopWindowID {
 }
 
 enum CXLReleaseRouteContract {
+    static let displayName = "SL Capture"
     static let minimumWidth: CGFloat = 900
     static let minimumHeight: CGFloat = 700
     static let normalWidth: CGFloat = 1180
@@ -64,7 +66,7 @@ struct ScratchLabDesktopApp: App {
 
     var body: some Scene {
         #if CXL_AUTHORING
-        Window("ScratchLab CXL", id: ScratchLabDesktopWindowID.mainWindow) {
+        Window(CXLReleaseRouteContract.displayName, id: ScratchLabDesktopWindowID.mainWindow) {
             cxlReleaseContent
         }
         .defaultSize(
@@ -107,15 +109,17 @@ struct ScratchLabDesktopApp: App {
         if isRunningTests {
             Color.clear.frame(width: 1, height: 1)
         } else {
-            ReferenceAuthoringView(
-                engine: captureEngine,
-                companionReceiver: companionReceiver,
-                operatorName: NSFullUserName()
-            )
-            .frame(
-                minWidth: CXLReleaseRouteContract.minimumWidth,
-                minHeight: CXLReleaseRouteContract.minimumHeight
-            )
+            NDAAgreementGateView {
+                ReferenceAuthoringView(
+                    engine: captureEngine,
+                    companionReceiver: companionReceiver,
+                    operatorName: NSFullUserName()
+                )
+                .frame(
+                    minWidth: CXLReleaseRouteContract.minimumWidth,
+                    minHeight: CXLReleaseRouteContract.minimumHeight
+                )
+            }
         }
     }
 
@@ -151,6 +155,98 @@ struct ScratchLabDesktopApp: App {
                 .environmentObject(progressManager)
                 .frame(minWidth: 900, minHeight: 620)
         }
+    }
+}
+
+private enum NDAAgreement {
+    static let version = "2026-09-14"
+    static let storageKey = "SLCapture.NDAAgreementVersion"
+    static let title = "Non-Disclosure Agreement"
+    static let summary = ""
+        + "By selecting Agree, you agree to keep SL Capture confidential. "
+        + "You must not share or publish recordings, screenshots, or details of the app, "
+        + "or discuss it publicly or with other DJs. Audio, video, motion, and other data "
+        + "captured through the app belongs to ScratchLab. ScratchLab may revoke access at any time."
+}
+
+private struct NDAAgreementStore {
+    let defaults: UserDefaults
+
+    init(defaults: UserDefaults = .standard) {
+        self.defaults = defaults
+    }
+
+    var hasAcceptedCurrentVersion: Bool {
+        defaults.string(forKey: NDAAgreement.storageKey) == NDAAgreement.version
+    }
+
+    func acceptCurrentVersion() {
+        defaults.set(NDAAgreement.version, forKey: NDAAgreement.storageKey)
+    }
+}
+
+private struct NDAAgreementGateView<Content: View>: View {
+    @State private var isAccepted: Bool
+    private let store: NDAAgreementStore
+    private let content: () -> Content
+
+    init(
+        store: NDAAgreementStore = NDAAgreementStore(),
+        @ViewBuilder content: @escaping () -> Content
+    ) {
+        self.store = store
+        self.content = content
+        _isAccepted = State(initialValue: store.hasAcceptedCurrentVersion)
+    }
+
+    var body: some View {
+        if isAccepted {
+            content()
+        } else {
+            NDAAgreementView(
+                onAgree: {
+                    store.acceptCurrentVersion()
+                    isAccepted = true
+                },
+                onDecline: {
+                    NSApplication.shared.terminate(nil)
+                }
+            )
+        }
+    }
+}
+
+private struct NDAAgreementView: View {
+    let onAgree: () -> Void
+    let onDecline: () -> Void
+
+    var body: some View {
+        VStack(spacing: 20) {
+            Image(systemName: "lock.shield")
+                .font(.system(size: 44))
+                .foregroundStyle(Color.accentColor)
+
+            Text(NDAAgreement.title)
+                .font(.title.bold())
+
+            Text(NDAAgreement.summary)
+                .font(.body)
+                .multilineTextAlignment(.center)
+                .frame(maxWidth: 620)
+
+            Text("You must agree before SL Capture can open.")
+                .font(.callout)
+                .foregroundStyle(.secondary)
+
+            HStack(spacing: 12) {
+                Button("Decline and Quit", role: .cancel, action: onDecline)
+                Button("Agree and Continue", action: onAgree)
+                    .keyboardShortcut(.defaultAction)
+            }
+        }
+        .padding(48)
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .background(.regularMaterial)
     }
 }
 

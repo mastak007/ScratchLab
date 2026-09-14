@@ -5409,3 +5409,136 @@ ASC preparation: current CXL app has no builds; iOS has valid23. Created only th
 - Archived and exported with Xcode using the supplied Mac App Store profile and matching Apple Distribution certificate; exported installer is `../CXL-ASC/ScratchLab-CXL-build23.pkg` (about 38 MB).
 - Verification: Xcode DistributionSummary confirms version 1.0.1/build 23, bundle ID `com.machelpnz.scratchlab.cxl-authoring`, profile `ScratchLab CXL Mac App Store`, team `2DDKGL33BU`; `pkgutil --check-signature` passes with the matching 3rd Party Mac Developer Installer certificate.
 - Transporter accepted build 23 and is uploading/analyzing it for App Store Connect.
+## 2026-09-14 — SL Capture DJ tester NDA launch gate
+
+Selected task: user requested a DJ-facing name away from CXL and an NDA agreement before opening the app. The CXL macOS route now displays `SL Capture`, preserves bundle ID `com.machelpnz.scratchlab.cxl-authoring` and the existing signing configuration, and wraps the authoring UI in a blocking first-launch NDA gate. The condensed agreement covers confidentiality, no sharing or public discussion, ScratchLab ownership of captured audio/video/motion data, and revocable access. Acceptance is stored by agreement version in UserDefaults; a future version change forces reacceptance. Declining terminates the app.
+
+Files changed: `ScratchLabDesktop/ScratchLabDesktopApp.swift`, `ScratchLab.xcodeproj/project.pbxproj`, `ScratchLabDesktopTests/CaptureReliabilityPhase1Tests.swift`, `TASKS.md`. Verification: CXLRelease build succeeded; focused CXL route and identity tests passed 2/2. The full `scripts/build.sh cxl` XCTest run was stopped after the user asked whether it was necessary; it is not repeated for this isolated UI/launch change. Existing Xcode/audio sandbox diagnostics remain unrelated.
+
+Follow-up: update the App Store Connect app name/metadata and create a fresh signed/staged build before sending this version to DJs. The NDA is an app-level acceptance record and is not added to session exports.
+## 2026-09-14 — Phase + DJM-S9 capture pathway
+
+- Selected slice: add a safe Phase capture pathway for a Pioneer DJM-S9 mixer and Phase-equipped PLX-1000 setup.
+- Research: Phase is HID over USB with supported DJ software or DVS over RCA; it is not a generic MIDI controller. Pioneer’s DJM-S9 MIDI list documents high-resolution channel faders on CC19/51 and crossfader on CC31/63, with the crossfader on MIDI channel 7.
+- Files changed: `ScratchLab/Models/ControllerInput/Registry/MIDIHardwareRegistry.swift`, `ScratchLab/Models/DVSHardwareProfile.swift`, `ScratchLabDesktopTests/MIDIHardwareRegistryTests.swift`, `docs/phase_djm_s9_capture.md`, `TASKS.md`.
+- Implementation: added a heuristic, verification-required DJM-S9 mixer profile; added `PhaseCapturePath` with a supported DVS-through-S9 route and an explicitly unsupported direct-HID route; added registry/path tests and operator verification steps.
+- Risk: no physical Phase/DJM-S9 rig was available in this software pass, so channel order, firmware, DVS signal health, and real-take acceptance remain open.
+- Follow-up implementation: added a Capture pathway picker and one-action `selectPhaseDVSInput()` route. It requires both reported DJM-S9 audio and MIDI endpoints, resets DVS pair selection to Auto, and refuses partial/guessed selection.
+- Focused verification after wiring: 49 `MIDIHardwareRegistryTests` passed, 0 failures.
+
+## 2026-09-14 — Separate Pioneer DDJ capture inputs
+
+- Selected slice: add distinct viable MIDI input profiles for DDJ-REV5, DDJ-REV7, and DDJ-FLX10.
+- Research: official Pioneer MIDI lists document vinyl-mode top-jog rotation on CC34 with 0x41/0x3F direction values, channel-fader CC19/51, and crossfader CC31/63 on MIDI channel 7. The REV5 and FLX10 expose four deck MIDI channels; the REV7 exposes two and has motorized jog wheels.
+- Files changed: `ScratchLab/Models/ControllerInput/Registry/MIDIHardwareRegistry.swift`, `ScratchLabDesktop/Views/ReferenceAuthoringView.swift`, `ScratchLabDesktopTests/MIDIHardwareRegistryTests.swift`, `docs/pioneer_ddj_capture.md`, `TASKS.md`.
+- Implementation: added three separate heuristic registry profiles with model-specific matching and bindings; added an explicit Controller profile picker that selects the matching discovered MIDI endpoint; added profile status text and cross-match/contents tests.
+- Verification: `MIDIHardwareRegistryTests` passed 51/51; macOS `ScratchLabDesktop` Debug build succeeded. No physical DDJ hardware was connected, so runtime MIDI direction, deck selection, audio routing, and capture/export acceptance remain open.
+
+## 2026-09-14 — Connected controller choices and custom MIDI Learn
+
+- Updated the CXL Capture Setup picker so Pioneer DDJ profiles and the DJM-S9 profile are derived from the currently discovered MIDI endpoints. A profile is shown only when its matching endpoint is present and selecting it selects that endpoint; the Phase DVS + DJM-S9 pathway remains available as a separate capture-path choice.
+- Renamed the fallback choice to `Automatic / Custom MIDI Learn` and added operator guidance pointing unknown controllers to the existing per-device Learn controls for crossfader and both deck faders. Learned mappings remain persisted against the selected MIDI device.
+- Added source-level route assertions for the dynamic profile list, custom fallback, source/profile synchronization, and Phase/DJM-S9 availability.
+- Physical DDJ, Phase Receiver and DJM-S9 verification remains open; no connected hardware was present during this pass.
+
+Validation update: the focused CXL route test passed 1/1 after this follow-up. `scripts/build.sh` was started and reached the archive-heavy ReferenceTearEvidencePipelineTests with observed cases passing, then was stopped after more than twelve minutes to avoid leaving the test host running; it did not produce a final full-gate result. No hardware was connected.
+## 2026-09-14 — SL Capture local launch repair
+
+- Root cause: the installed `SL Capture.app` was an arm64-only Apple Distribution/App Store style bundle; macOS terminated launch with `Taskgated Invalid Signature` before the app reached its UI.
+- Staged `Build/Products/CXLRelease/SL Capture.app` with `scripts/stage_cxl_mac.py`; receipt verified bundle identifier `com.machelpnz.scratchlab.cxl-authoring`, team `2DDKGL33BU`, preserved permission metadata/entitlements, and universal `arm64`/`x86_64` slices.
+- Preserved the prior installed bundles at `/Users/karlwatson/Applications/SL Capture backup 20260914.app`, `/Users/karlwatson/Applications/SL Capture App Store backup 20260914.app`, and `/Users/karlwatson/Applications/SL Capture DeveloperID-profile backup 20260914.app`.
+- Installed a locally runnable Developer ID variant at `/Users/karlwatson/Applications/SL Capture.app` with the App Store-only application/team/keychain entitlements removed and the same sandbox, camera, audio, file, and network permissions retained. `codesign --verify`, `spctl`, and direct arm64 launch passed; CUA now sees the NDA window.
+- User must accept the displayed NDA before further in-app verification. Physical controller verification remains open.
+## 2026-09-14 — Six 92 BPM scratch-break variations
+
+- Added `scripts/generate_scratch_breaks.py` and generated six original stereo PCM loops under `generated_scratch_breaks/`.
+- Each loop is 92 BPM, 4/4, one-bar count-in plus an exact 16-bar loop, with 60% swing, sparse kick/bass, strict 2/4 snares, swung 8th hats, 4th-bar fills, and 8th-bar bass drops.
+- Each WAV has a companion JSON step matrix; validation passed for all six matrices and all WAVs are 44.1 kHz stereo.
+- Supplied Scratch Visualizer WAVs were used as stylistic references only; no audio was copied or embedded.
+## 2026-09-14 — Six in-app scratch-break choices
+
+- Extended `BeatEngineMode.practiceModes` from three drum choices to six: Dusty Break, Funk Pocket, Battle Break, Ghost Pocket, Pocket Double, and Drop Theory. Existing serialized mode identifiers remain unchanged; the three new modes use new stable identifiers and pattern names.
+- Added distinct shared procedural step patterns and swing handling for the three new modes, updated the CXL authoring picker guidance, and expanded count-in scheduling coverage to all six drum modes.
+- Fixed the pre-existing CXLRelease compile guard around the DEBUG-only timecode adapter reset so the target can build without enabling the DEBUG timecode prototype.
+- Verification: CXLRelease build succeeded; staged receipt passed team/permission/entitlement/universal-architecture checks; installed `/Users/karlwatson/Applications/SL Capture.app` launched and remains running. Physical controller/audio listening verification remains open.
+## 2026-09-14 — Uploaded six-option CXL build 24 to ASC
+
+- Incremented only the CXL Mac target from build 23 to build 24 because ASC already had `ScratchLab CXL` build 23 valid.
+- CXLRelease build and archive succeeded. The archive is retained at `/Users/karlwatson/Developer/ScratchLab-CXL-Final-Capture-Fixes-20260913/asc-upload-build24/ScratchLab-CXL-Mac-build24.xcarchive` with export log at `/Users/karlwatson/Developer/ScratchLab-CXL-Final-Capture-Fixes-20260913/asc-upload-build24/export.log`.
+- `xcodebuild -exportArchive` completed the direct App Store Connect upload and reported `Upload succeeded` / `EXPORT SUCCEEDED` for `SL Capture.pkg`.
+- ASC API polling immediately afterward still listed builds 23, 21, and 11 only; build 24 is awaiting ASC processing and has not yet reached `VALID` in the API response. No TestFlight group or review submission was changed.
+## 2026-09-14 — CXL upload identity check
+
+- Confirmed the uploaded build 24 archive is the actual `SL Capture` product: bundle display name `SL Capture`, universal arm64/x86_64, six beat modes, connected-endpoint DDJ/DJM-S9 profile selection, and custom MIDI Learn path are present in the source used for the archive.
+- ASC upload target is app record `ScratchLab CXL` (`6811514515`) because that is the existing record for bundle ID `com.machelpnz.scratchlab.cxl-authoring`. The binary itself is named `SL Capture`.
+- The read/upload API key cannot update the ASC app name or localization (`403`, API key does not allow the request). App Store Connect is open at its login screen for the account owner to rename the editable en-US app localization to `SL Capture`.
+
+## 2026-09-14 — ASC SL Capture metadata and TestFlight setup
+
+- Updated the existing App Store Connect CXL app record display name to `SL Capture` through the ASC web UI; bundle ID remains `com.machelpnz.scratchlab.cxl-authoring`.
+- Confirmed Mac build `1.0.1 (24)` upload is complete and `Ready to Submit` in TestFlight.
+- Confirmed TestFlight beta description, feedback/privacy fields, reviewer notes, and existing reviewer contact values are present; created internal group `SL Capture Internal` with the available Mac builds.
+- Left App Review submission pending so the final submit/release action remains operator-controlled.
+
+## 2026-09-14 — ScratchLab learner shell split, slice 1
+- Selected implementation slice: remove capture and authoring surfaces from the learner root while retaining the separate SL Capture target.
+- Files changed: `ScratchLab/Views/MainMenuView.swift`, `DEV_LOG.md`.
+- Implemented: learner navigation now exposes Home, Learn, Practice, and Reference examples; Capture, Review via Capture, and Advanced were removed from compact tabs, the iPad sidebar, and Home workspace cards. Learn routes to the existing `LevelSelectView`.
+- Build result: `scripts/build.sh ios` reached the macOS XCTest gate but exited 65 because four existing `ScratchExampleReviewTests` cases could not open bundled `manifest.json`; the changed SwiftUI file compiled. A standalone `xcodebuild ... -scheme ScratchLab ... build` then passed. The XCTest failure is a test-resource/environment issue and is unrelated to navigation.
+- Follow-up: expose shared DDJ, DJM-S9, Phase, and detailed MIDI mapping through learner Settings, then connect the six beat variations and shared real-time evaluation model.
+
+## 2026-09-14 — Learner controller setup entry point, slice 2
+- Selected implementation slice: make the existing shared MIDI setup and learned mapping flow reachable from the learner app without restoring capture or authoring navigation.
+- Files changed: `ScratchLab/Views/MainMenuView.swift`, `DEV_LOG.md`.
+- Implemented: Settings now opens the existing MIDI/controller mapping view. The view explains connected DDJ and DJM-S9 endpoint discovery, Phase through DJM-S9 DVS, and custom MIDI Learn fallback for unrecognized hardware.
+- Build result: standalone `xcodebuild -project ScratchLab.xcodeproj -scheme ScratchLab -destination generic/platform=iOS build` passed.
+- Follow-up: verify the shared mapping view on physical DDJ, DJM-S9, and Phase/DVS setups before extending the learner evaluator.
+
+## 2026-09-14 — Learner beat selection, slice 3
+- Selected implementation slice: expose the six generated scratch-break variations in the learner lesson flow.
+- Files changed: `ScratchLab/Views/LevelSelectView.swift`, `DEV_LOG.md`.
+- Implemented: Learn now offers Dusty Break, Funk Pocket, Battle Break, Ghost Pocket, Pocket Double, and Drop Theory. Selection uses the existing `PracticeBeatStore`, persists across sessions, and remains available to the existing live practice setup.
+- Build result: standalone `xcodebuild -project ScratchLab.xcodeproj -scheme ScratchLab -destination generic/platform=iOS build` passed.
+- Follow-up: build the shared real-time hit/miss evaluation slice from MIDI timing and platter motion evidence, with audio onset data as supporting evidence only.
+
+## 2026-09-14 — Learner live feedback outcome, slice 4
+- Selected implementation slice: make the existing live feedback state visibly communicate hit, adjustment, or miss.
+- Files changed: `ScratchLab/Models/NotationFeedbackState.swift`, `ScratchLab/Views/ScratchMotionLane.swift`, `DEV_LOG.md`.
+- Implemented: the existing accuracy/timing feedback state now projects to an explicit `HIT`, `ADJUST`, or `MISS` badge at the live action line. The badge uses the existing animated glow/pulse state and does not infer platter direction without direction evidence.
+- Build result: standalone `xcodebuild -project ScratchLab.xcodeproj -scheme ScratchLab -destination generic/platform=iOS build` passed.
+- Follow-up: connect MIDI platter evidence to the shared comparison coordinator so direction and target timing can be scored when a supported controller is present.
+
+## 2026-09-14 — Live MIDI comparison feedback, slice 5
+- Selected implementation slice: connect the learner's live MIDI platter window to the shared direction-aware comparison rules.
+- Files changed: `ScratchLab/Models/ScratchGameplayAttempt.swift`, `ScratchLab/Views/PracticeModeView.swift`, `DEV_LOG.md`.
+- Implemented: added a cycle-scoped live resolver over the existing beat clock, stroke matching, fader thresholds, and direction comparison. iOS Practice now projects new controller evidence into the existing animated feedback state, including the landscape HUD, while audio scoring and persisted progress remain unchanged.
+- Build result: standalone `xcodebuild -project ScratchLab.xcodeproj -scheme ScratchLab -destination generic/platform=iOS build` passed.
+- Follow-up: verify live outcomes with physical controller traces, then decide how a completed MIDI comparison should contribute to the learner result score.
+
+## 2026-09-14 — Controller comparison in learner results, slice 6
+- Selected implementation slice: carry the latest live MIDI comparison into the learner Results surface without mixing unverified hardware scoring into progression.
+- Files changed: `ScratchLab/Views/PracticeModeView.swift`, `DEV_LOG.md`.
+- Implemented: Results now show a controller comparison card with latest-cycle overall, timing, direction, grade, and coaching values when controller evidence exists. The existing audio estimate remains the primary practice result and progress input until physical hardware validation is complete.
+- Build result: standalone `xcodebuild -project ScratchLab.xcodeproj -scheme ScratchLab -destination generic/platform=iOS build` passed.
+- Follow-up: physical validation of DDJ, DJM-S9, and Phase/DVS traces before changing learner progression scoring.
+
+## 2026-09-14 — Generic learner MIDI mapping, slice 7
+- Selected implementation slice: make the learner controller setup useful for every supported or unrecognized MIDI source by sharing the existing detailed Learn controls with Settings.
+- Files changed: \`ScratchLab/Views/MainMenuView.swift\`, \`ScratchLab/Views/PracticeModeView.swift\`, \`DEV_LOG.md\`.
+- Implemented: Settings now shows a mapping overview plus per-control Learn, Relearn, and Clear actions for Crossfader, both upfaders, and Hot Cues 1–8. The shared list is also used by Practice, so the two learner entry points cannot drift. Connected DDJ/DJM-S9 sources remain dynamic, Phase remains documented through DJM-S9 DVS, and unknown controllers use the same manual mapping path.
+- Build result: standalone \`xcodebuild -project ScratchLab.xcodeproj -scheme ScratchLab -destination generic/platform=iOS build\` passed. \`git diff --check\` passed. The full \`scripts/build.sh ios\` gate remains affected by the existing four \`ScratchExampleReviewTests\` missing-\`manifest.json\` failures documented above.
+- Follow-up: physical MIDI traces are still required to confirm each controller's actual message type, channel, direction, and platter/DVS path before hardware evidence is treated as validated learner scoring.
+
+## 2026-09-14 — SL release learner shell, slice 8
+- Selected implementation slice: split the macOS ScratchLab release shell from SL Capture by making the release route learner-only while preserving the separate CXL authoring target.
+- Files changed: `ScratchLabDesktop/Views/MacAnalyzerView.swift`, `DEV_LOG.md`.
+- Implemented: legacy persisted Capture, Review, and Advanced workspace values now resolve to Practice; the release rail exposes only Practice; learner result actions stay in the learner result flow; Controller setup opens from Practice and reuses the existing Mac dynamic MIDI source picker plus the full fader and Hot Cue 1–8 mapper. DDJ and DJM-S9 endpoints remain dynamic, Phase is documented through DJM-S9 DVS, and unknown controllers retain manual MIDI Learn.
+- Build result: `xcodebuild -project ScratchLab.xcodeproj -scheme ScratchLabDesktop -destination 'platform=macOS' build` passed. `git diff --check` passed. Existing warnings remain in `CrossfaderCalibrationStore.swift` and the practice audio setup capture list.
+- Follow-up: physical DDJ, DJM-S9, and Phase/DVS traces are still required to confirm actual message types, channels, direction, platter source, and DVS audio routing before hardware evidence is treated as validated learner scoring.
+
+## 2026-09-14 — Release rail enforcement, slice 9
+- Selected implementation slice: make the macOS ScratchLab release rail a single explicit Practice route and align the release learner workflow and contract tests with that boundary.
+- Files changed: `ScratchLabDesktop/Views/MacAnalyzerView.swift`, `ScratchLab/Views/MainMenuView.swift`, `ScratchLabDesktopTests/CaptureReliabilityPhase1Tests.swift`, `TASKS.md`, `DEV_LOG.md`.
+- Implemented: the visible macOS release rail now contains Practice only; legacy persisted Capture, Review, and Advanced values resolve to Practice; the learner progress header ends at Result; and Controller setup remains reachable from Practice with dynamic MIDI source selection and the detailed fader/Hot Cue mapper. The iOS source contract now asserts learner tabs only. The separate CXL target remains the authoring application.
+- Build result: targeted learner-navigation XCTest passed; macOS Release `ScratchLabDesktop` build passed; CXLRelease `SL Capture` build passed; `git diff --check` passed. The broad `scripts/build.sh` attempt ran the 87/87 Python fixtures, then recorded the expected old navigation contract failure before the macOS test host repeatedly restarted; it was terminated with exit 143. Existing Swift concurrency and practice-audio capture warnings remain.
+- Follow-up: run physical DDJ, DJM-S9, and Phase/DVS traces before treating controller comparison as validated learner scoring; AR camera overlays remain future work.

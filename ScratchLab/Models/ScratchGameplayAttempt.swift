@@ -254,6 +254,42 @@ enum PracticeAttemptEvidenceResolver {
         countInBeats: Int,
         snapshot: CaptureCore.DetectedNotationSnapshot
     ) -> PracticeAttemptResult? {
+        cycleAttempt(
+            pattern: pattern,
+            bpm: bpm,
+            countInBeats: countInBeats,
+            cycleIndex: 0,
+            snapshot: snapshot
+        )
+    }
+
+    /// Builds the current canonical cycle from a live controller snapshot.
+    /// The caller supplies the cycle index from the same take-relative beat
+    /// clock used by the finished-take path; no wall-clock or technique guess
+    /// is made here.
+    static func liveCycleAttempt(
+        pattern: ScratchNotation.BeatPattern,
+        bpm: Double,
+        countInBeats: Int,
+        cycleIndex: Int,
+        snapshot: CaptureCore.DetectedNotationSnapshot
+    ) -> PracticeAttemptResult? {
+        cycleAttempt(
+            pattern: pattern,
+            bpm: bpm,
+            countInBeats: countInBeats,
+            cycleIndex: cycleIndex,
+            snapshot: snapshot
+        )
+    }
+
+    private static func cycleAttempt(
+        pattern: ScratchNotation.BeatPattern,
+        bpm: Double,
+        countInBeats: Int,
+        cycleIndex: Int,
+        snapshot: CaptureCore.DetectedNotationSnapshot
+    ) -> PracticeAttemptResult? {
         guard bpm.isFinite, bpm > 0 else { return nil }
         guard !snapshot.recordMovementEvents.isEmpty else { return nil }
         // Beat 0 of the click (incl. count-in) is at take-relative 0 in both
@@ -278,7 +314,7 @@ enum PracticeAttemptEvidenceResolver {
             techniqueID: pattern.scratchID,
             pattern: pattern,
             bpm: bpm,
-            cycleIndex: 0,
+            cycleIndex: cycleIndex,
             performed: performed,
             strokeCorrectToleranceBeats: toleranceBeats,
             faderCorrectToleranceBeats: toleranceBeats

@@ -77,6 +77,72 @@ final class MIDIHardwareRegistryTests: XCTestCase {
         XCTAssertEqual(resolved.profile.identifier, "rane-one")
     }
 
+    func testDJMS9MatchesAsVerificationRequiredCandidate() {
+        let match = MIDIHardwareRegistry.shared.bestMatch(
+            for: MIDIDeviceIdentity(sourceName: "DJM-S9", manufacturer: "Pioneer DJ")
+        )
+
+        XCTAssertEqual(match?.profile.identifier, "pioneer-djm-s9")
+        XCTAssertEqual(match?.confidence, .heuristic)
+        XCTAssertEqual(match?.profile.deckCount, 0)
+        XCTAssertEqual(match?.profile.binding(for: .crossfader)?.signal,
+                       .highResCCPair(msb: 31, lsb: 63))
+        XCTAssertEqual(match?.profile.binding(for: .crossfader)?.channel, 6)
+    }
+
+    func testDDJProfilesAreSeparateModelSpecificCandidates() {
+        let cases: [(String, String, Int)] = [
+            ("DDJ-REV5", "pioneer-ddj-rev5", 4),
+            ("DDJ-REV7", "pioneer-ddj-rev7", 2),
+            ("DDJ-FLX10", "pioneer-ddj-flx10", 4)
+        ]
+
+        for (name, identifier, deckCount) in cases {
+            let match = MIDIHardwareRegistry.shared.bestMatch(
+                for: MIDIDeviceIdentity(sourceName: name, manufacturer: "Pioneer DJ")
+            )
+            XCTAssertEqual(match?.profile.identifier, identifier, name)
+            XCTAssertEqual(match?.confidence, .heuristic, name)
+            XCTAssertEqual(match?.profile.deckCount, deckCount, name)
+            XCTAssertEqual(
+                match?.profile.binding(for: .platterMovement, deck: 0)?.signal,
+                .relativeCC(number: 34, encoding: .binaryOffset),
+                name
+            )
+            XCTAssertEqual(
+                match?.profile.binding(for: .crossfader)?.signal,
+                .highResCCPair(msb: 31, lsb: 63),
+                name
+            )
+            XCTAssertEqual(match?.profile.binding(for: .crossfader)?.channel, 6, name)
+        }
+    }
+
+    func testDDJNamesDoNotCrossMatchEachOther() {
+        let names = ["DDJ-REV5", "DDJ-REV7", "DDJ-FLX10"]
+        let identifiers = names.map { name in
+            MIDIHardwareRegistry.shared.bestMatch(
+                for: MIDIDeviceIdentity(sourceName: name)
+            )?.profile.identifier
+        }
+        XCTAssertEqual(identifiers, [
+            "pioneer-ddj-rev5",
+            "pioneer-ddj-rev7",
+            "pioneer-ddj-flx10"
+        ])
+    }
+
+    func testPhasePathDoesNotClaimDirectHIDSupport() {
+        XCTAssertTrue(PhaseCapturePath.dvsThroughDJMS9.isSupportedBySLCapture)
+        XCTAssertFalse(PhaseCapturePath.hidThroughSupportedDJSoftware.isSupportedBySLCapture)
+    }
+
+    func testPhasePathRecognisesDJMS9AudioAndMIDINames() {
+        XCTAssertTrue(PhaseCapturePath.matchesDJMS9DeviceName("DJM-S9"))
+        XCTAssertTrue(PhaseCapturePath.matchesDJMS9DeviceName("Pioneer DJM S9"))
+        XCTAssertFalse(PhaseCapturePath.matchesDJMS9DeviceName("RANE ONE MKII"))
+    }
+
     // MARK: - Ranking / confidence
 
     func testMatchesRankedByConfidenceThenSpecificity() {

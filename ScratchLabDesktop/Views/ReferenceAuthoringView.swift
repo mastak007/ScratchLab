@@ -37,6 +37,8 @@ struct ReferenceAuthoringView: View {
     /// a replayed or duplicated value produce none.
     @State private var lastHandledMIDIWindowReleaseCount: Int?
     @State private var isShowingMIDIAddressDiagnostics = false
+    @State private var selectedCapturePath: PhaseCapturePath? = nil
+    @State private var selectedMIDIProfileID = "automatic"
     @State private var showingReferenceExamples = false
     /// Framing panel starts open — it is the thing being watched during a
     /// take — and can be folded away while configuring.
@@ -266,6 +268,24 @@ struct ReferenceAuthoringView: View {
     private var hardwareSetupSection: some View {
         GroupBox("Hardware inputs") {
             VStack(alignment: .leading, spacing: 10) {
+                Picker("Capture pathway", selection: $selectedCapturePath) {
+                    Text("Existing hardware route").tag(nil as PhaseCapturePath?)
+                    Text("Phase DVS + DJM-S9").tag(PhaseCapturePath.dvsThroughDJMS9 as PhaseCapturePath?)
+                }
+                .pickerStyle(.menu)
+                .disabled(hardwareSelectionIsLocked)
+                .onChange(of: selectedCapturePath) { _, path in
+                    guard path == .dvsThroughDJMS9 else { return }
+                    if !captureEngine.selectPhaseDVSInput() {
+                        selectedCapturePath = nil
+                    }
+                }
+                if selectedCapturePath == .dvsThroughDJMS9 {
+                    Text(PhaseCapturePath.dvsThroughDJMS9.setupInstruction)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+
                 Picker("MIDI source", selection: midiSourceSelectionBinding) {
                     if captureEngine.availableMIDISources.isEmpty {
                         Text("No MIDI source detected").tag("")
@@ -282,6 +302,47 @@ struct ReferenceAuthoringView: View {
                 )
                 .accessibilityIdentifier("cxl.hardware.midiSource")
 
+                Picker("Controller profile", selection: $selectedMIDIProfileID) {
+                    Text("Automatic / Custom MIDI Learn").tag("automatic")
+                    ForEach(availableMIDIProfileOptions, id: \.identifier) { profile in
+                        Text(profile.displayName).tag(profile.identifier)
+                    }
+                }
+                .pickerStyle(.menu)
+                .disabled(hardwareSelectionIsLocked)
+                .onChange(of: selectedMIDIProfileID) { _, profileID in
+                    guard profileID != "automatic",
+                          let source = captureEngine.availableMIDISources.first(where: {
+                              MIDIHardwareRegistry.shared.bestMatch(
+                                  for: MIDIDeviceIdentity(sourceName: $0.name)
+                              )?.profile.identifier == profileID
+                    }) else {
+                        return
+                    }
+                    captureEngine.selectedMIDIInputSourceID = source.id
+                }
+                .onChange(of: captureEngine.selectedMIDIInputSourceID) { _, sourceID in
+                    selectedMIDIProfileID = profileIdentifier(for: sourceID)
+                }
+                .onChange(of: captureEngine.availableMIDISources) { _, _ in
+                    selectedMIDIProfileID = profileIdentifier(for: captureEngine.selectedMIDIInputSourceID)
+                }
+
+                Text("Known DDJ and DJM-S9 profiles appear when their MIDI endpoint is connected. For any other controller, leave this on Automatic / Custom MIDI Learn and use the mapping panel below to learn the crossfader and both deck faders from the controls you move.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+
+                if let profile = MIDIHardwareRegistry.shared.bestMatch(
+                    for: MIDIDeviceIdentity(sourceName: captureEngine.selectedMIDIInputSourceName)
+                )?.profile,
+                   profile.identifier != "pioneer-djm-s9",
+                   profile.identifier != "rane-one" {
+                    Text("Profile: \(profile.displayName) · \(profile.deckCount) deck MIDI layout · verification required")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+
                 Text(
                     "MIDI: \(captureEngine.selectedMIDIInputSourceName) "
                         + "[\(captureEngine.selectedMIDIInputSourceID)] · "
@@ -291,6 +352,19 @@ struct ReferenceAuthoringView: View {
                 .font(.caption.monospaced())
                 .foregroundStyle(.secondary)
                 .textSelection(.enabled)
+
+                if MIDIHardwareRegistry.shared.bestMatch(
+                    for: MIDIDeviceIdentity(sourceName: captureEngine.selectedMIDIInputSourceName)
+                )?.profile.identifier == "pioneer-djm-s9" {
+                    Label {
+                        Text(PhaseCapturePath.dvsThroughDJMS9.setupInstruction)
+                    } icon: {
+                        Image(systemName: "waveform.path.ecg")
+                    }
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .accessibilityIdentifier("cxl.hardware.phaseDVSSetup")
+                }
 
                 HStack(spacing: 8) {
                     Text(crossfaderLearnStatusText)
@@ -510,6 +584,32 @@ struct ReferenceAuthoringView: View {
             get: { captureEngine.selectedMIDIInputSourceID },
             set: { captureEngine.selectedMIDIInputSourceID = $0 }
         )
+    }
+
+    private var availableMIDIProfileOptions: [MIDIControllerProfile] {
+        var profiles: [MIDIControllerProfile] = []
+        for source in captureEngine.availableMIDISources {
+            guard let profile = MIDIHardwareRegistry.shared.bestMatch(
+                for: MIDIDeviceIdentity(sourceName: source.name)
+            )?.profile,
+            profile.identifier != "rane-one",
+            !profiles.contains(where: { $0.identifier == profile.identifier }) else {
+                continue
+            }
+            profiles.append(profile)
+        }
+        return profiles.sorted { $0.displayName < $1.displayName }
+    }
+
+    private func profileIdentifier(for sourceID: String) -> String {
+        guard let source = captureEngine.availableMIDISources.first(where: { $0.id == sourceID }),
+              let profile = MIDIHardwareRegistry.shared.bestMatch(
+                  for: MIDIDeviceIdentity(sourceName: source.name)
+              )?.profile,
+              ["pioneer-ddj-rev5", "pioneer-ddj-rev7", "pioneer-ddj-flx10", "pioneer-djm-s9"].contains(profile.identifier) else {
+            return "automatic"
+        }
+        return profile.identifier
     }
 
     private var audioInputSelectionBinding: Binding<String> {
@@ -990,7 +1090,7 @@ struct ReferenceAuthoringView: View {
                 Button(viewModel.isPreviewingBeat ? "Stop preview" : "Preview backing sound") {
                     viewModel.toggleBeatPreview()
                 }
-                Text("Boom Bap Trainer is a straight drum beat. Minimal Funk adds swing; Battle Loop is more forceful. Click track plays metronome clicks only. Preview follows the chosen output and does not record.")
+                Text("Six original backing variations are available: Dusty Break, Funk Pocket, Battle Break, Ghost Pocket, Pocket Double, and Drop Theory. Click track plays metronome clicks only. Preview follows the chosen output and does not record.")
                     .font(.caption).foregroundStyle(.secondary)
                 }
 

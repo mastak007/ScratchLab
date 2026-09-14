@@ -28,6 +28,17 @@ enum NotationFeedbackState: Equatable, Sendable {
 
 extension NotationFeedbackState {
 
+    /// Short gameplay outcome for the live learner HUD. This is a presentation
+    /// projection of the existing feedback state, not a second scoring rule.
+    var gameplayOutcomeLabel: String {
+        switch self {
+        case .excellent, .correct: return "HIT"
+        case .close, .early, .late: return "ADJUST"
+        case .wrongDirection, .missed: return "MISS"
+        case .neutral: return ""
+        }
+    }
+
     // Thresholds kept as statics so tests can verify boundary conditions
     // without repeating magic numbers.
     static let excellentAccuracyThreshold: Double = 90

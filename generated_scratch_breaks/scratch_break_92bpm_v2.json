@@ -1,0 +1,698 @@
+{
+  "tempo_bpm": 92,
+  "time_signature": "4/4",
+  "swing_percent": 60,
+  "count_in_bars": 1,
+  "loop_bars": 16,
+  "loop_start_seconds": 2.608695652173913,
+  "loop_length_seconds": 41.73913043478261,
+  "frequency_design": "Kick/bass below 250 Hz; snare body below 2 kHz; hat air above 5 kHz; no melodic midrange.",
+  "bars": [
+    {
+      "kick": [
+        0,
+        4,
+        6,
+        8,
+        11,
+        12
+      ],
+      "kick_ghost": [
+        2,
+        7,
+        15
+      ],
+      "snare": [
+        4,
+        12
+      ],
+      "rimshot": [
+        4,
+        12
+      ],
+      "hat_8th_swing": [
+        0,
+        2,
+        4,
+        6,
+        8,
+        10,
+        12,
+        14
+      ],
+      "open_hat": [
+        7
+      ],
+      "bass_root": [
+        0,
+        8
+      ],
+      "fill_muted_tom": [],
+      "bass_drop_last_two_beats": false
+    },
+    {
+      "kick": [
+        0,
+        4,
+        6,
+        8,
+        11,
+        12
+      ],
+      "kick_ghost": [
+        2,
+        7,
+        15
+      ],
+      "snare": [
+        4,
+        12
+      ],
+      "rimshot": [
+        4,
+        12
+      ],
+      "hat_8th_swing": [
+        0,
+        2,
+        4,
+        6,
+        8,
+        10,
+        12,
+        14
+      ],
+      "open_hat": [
+        7
+      ],
+      "bass_root": [
+        0,
+        8
+      ],
+      "fill_muted_tom": [],
+      "bass_drop_last_two_beats": false
+    },
+    {
+      "kick": [
+        0,
+        4,
+        6,
+        8,
+        11,
+        12
+      ],
+      "kick_ghost": [
+        2,
+        7,
+        15
+      ],
+      "snare": [
+        4,
+        12
+      ],
+      "rimshot": [
+        4,
+        12
+      ],
+      "hat_8th_swing": [
+        0,
+        2,
+        4,
+        6,
+        8,
+        10,
+        12,
+        14
+      ],
+      "open_hat": [
+        7
+      ],
+      "bass_root": [
+        0,
+        8
+      ],
+      "fill_muted_tom": [],
+      "bass_drop_last_two_beats": false
+    },
+    {
+      "kick": [
+        0,
+        4,
+        6,
+        8,
+        12
+      ],
+      "kick_ghost": [
+        2,
+        7,
+        15
+      ],
+      "snare": [
+        4,
+        12
+      ],
+      "rimshot": [
+        4,
+        12
+      ],
+      "hat_8th_swing": [
+        0,
+        2,
+        4,
+        6,
+        8,
+        10,
+        12,
+        14
+      ],
+      "open_hat": [
+        7
+      ],
+      "bass_root": [
+        0,
+        8
+      ],
+      "fill_muted_tom": [
+        11,
+        13,
+        14,
+        15
+      ],
+      "bass_drop_last_two_beats": false
+    },
+    {
+      "kick": [
+        0,
+        4,
+        6,
+        8,
+        11,
+        12
+      ],
+      "kick_ghost": [
+        2,
+        7,
+        15
+      ],
+      "snare": [
+        4,
+        12
+      ],
+      "rimshot": [
+        4,
+        12
+      ],
+      "hat_8th_swing": [
+        0,
+        2,
+        4,
+        6,
+        8,
+        10,
+        12,
+        14
+      ],
+      "open_hat": [
+        7
+      ],
+      "bass_root": [
+        0,
+        8
+      ],
+      "fill_muted_tom": [],
+      "bass_drop_last_two_beats": false
+    },
+    {
+      "kick": [
+        0,
+        4,
+        6,
+        8,
+        11,
+        12
+      ],
+      "kick_ghost": [
+        2,
+        7,
+        15
+      ],
+      "snare": [
+        4,
+        12
+      ],
+      "rimshot": [
+        4,
+        12
+      ],
+      "hat_8th_swing": [
+        0,
+        2,
+        4,
+        6,
+        8,
+        10,
+        12,
+        14
+      ],
+      "open_hat": [
+        7
+      ],
+      "bass_root": [
+        0,
+        8
+      ],
+      "fill_muted_tom": [],
+      "bass_drop_last_two_beats": false
+    },
+    {
+      "kick": [
+        0,
+        4,
+        6,
+        8,
+        11,
+        12
+      ],
+      "kick_ghost": [
+        2,
+        7,
+        15
+      ],
+      "snare": [
+        4,
+        12
+      ],
+      "rimshot": [
+        4,
+        12
+      ],
+      "hat_8th_swing": [
+        0,
+        2,
+        4,
+        6,
+        8,
+        10,
+        12,
+        14
+      ],
+      "open_hat": [
+        7
+      ],
+      "bass_root": [
+        0,
+        8
+      ],
+      "fill_muted_tom": [],
+      "bass_drop_last_two_beats": false
+    },
+    {
+      "kick": [
+        0,
+        4,
+        6,
+        8,
+        12
+      ],
+      "kick_ghost": [
+        2,
+        7,
+        15
+      ],
+      "snare": [
+        4,
+        12
+      ],
+      "rimshot": [
+        4,
+        12
+      ],
+      "hat_8th_swing": [
+        0,
+        2,
+        4,
+        6,
+        8,
+        10,
+        12,
+        14
+      ],
+      "open_hat": [
+        7
+      ],
+      "bass_root": [
+        0
+      ],
+      "fill_muted_tom": [
+        11,
+        13,
+        14,
+        15
+      ],
+      "bass_drop_last_two_beats": true
+    },
+    {
+      "kick": [
+        0,
+        4,
+        6,
+        8,
+        11,
+        12
+      ],
+      "kick_ghost": [
+        2,
+        7,
+        15
+      ],
+      "snare": [
+        4,
+        12
+      ],
+      "rimshot": [
+        4,
+        12
+      ],
+      "hat_8th_swing": [
+        0,
+        2,
+        4,
+        6,
+        8,
+        10,
+        12,
+        14
+      ],
+      "open_hat": [
+        7
+      ],
+      "bass_root": [
+        0,
+        8
+      ],
+      "fill_muted_tom": [],
+      "bass_drop_last_two_beats": false
+    },
+    {
+      "kick": [
+        0,
+        4,
+        6,
+        8,
+        11,
+        12
+      ],
+      "kick_ghost": [
+        2,
+        7,
+        15
+      ],
+      "snare": [
+        4,
+        12
+      ],
+      "rimshot": [
+        4,
+        12
+      ],
+      "hat_8th_swing": [
+        0,
+        2,
+        4,
+        6,
+        8,
+        10,
+        12,
+        14
+      ],
+      "open_hat": [
+        7
+      ],
+      "bass_root": [
+        0,
+        8
+      ],
+      "fill_muted_tom": [],
+      "bass_drop_last_two_beats": false
+    },
+    {
+      "kick": [
+        0,
+        4,
+        6,
+        8,
+        11,
+        12
+      ],
+      "kick_ghost": [
+        2,
+        7,
+        15
+      ],
+      "snare": [
+        4,
+        12
+      ],
+      "rimshot": [
+        4,
+        12
+      ],
+      "hat_8th_swing": [
+        0,
+        2,
+        4,
+        6,
+        8,
+        10,
+        12,
+        14
+      ],
+      "open_hat": [
+        7
+      ],
+      "bass_root": [
+        0,
+        8
+      ],
+      "fill_muted_tom": [],
+      "bass_drop_last_two_beats": false
+    },
+    {
+      "kick": [
+        0,
+        4,
+        6,
+        8,
+        12
+      ],
+      "kick_ghost": [
+        2,
+        7,
+        15
+      ],
+      "snare": [
+        4,
+        12
+      ],
+      "rimshot": [
+        4,
+        12
+      ],
+      "hat_8th_swing": [
+        0,
+        2,
+        4,
+        6,
+        8,
+        10,
+        12,
+        14
+      ],
+      "open_hat": [
+        7
+      ],
+      "bass_root": [
+        0,
+        8
+      ],
+      "fill_muted_tom": [
+        11,
+        13,
+        14,
+        15
+      ],
+      "bass_drop_last_two_beats": false
+    },
+    {
+      "kick": [
+        0,
+        4,
+        6,
+        8,
+        11,
+        12
+      ],
+      "kick_ghost": [
+        2,
+        7,
+        15
+      ],
+      "snare": [
+        4,
+        12
+      ],
+      "rimshot": [
+        4,
+        12
+      ],
+      "hat_8th_swing": [
+        0,
+        2,
+        4,
+        6,
+        8,
+        10,
+        12,
+        14
+      ],
+      "open_hat": [
+        7
+      ],
+      "bass_root": [
+        0,
+        8
+      ],
+      "fill_muted_tom": [],
+      "bass_drop_last_two_beats": false
+    },
+    {
+      "kick": [
+        0,
+        4,
+        6,
+        8,
+        11,
+        12
+      ],
+      "kick_ghost": [
+        2,
+        7,
+        15
+      ],
+      "snare": [
+        4,
+        12
+      ],
+      "rimshot": [
+        4,
+        12
+      ],
+      "hat_8th_swing": [
+        0,
+        2,
+        4,
+        6,
+        8,
+        10,
+        12,
+        14
+      ],
+      "open_hat": [
+        7
+      ],
+      "bass_root": [
+        0,
+        8
+      ],
+      "fill_muted_tom": [],
+      "bass_drop_last_two_beats": false
+    },
+    {
+      "kick": [
+        0,
+        4,
+        6,
+        8,
+        11,
+        12
+      ],
+      "kick_ghost": [
+        2,
+        7,
+        15
+      ],
+      "snare": [
+        4,
+        12
+      ],
+      "rimshot": [
+        4,
+        12
+      ],
+      "hat_8th_swing": [
+        0,
+        2,
+        4,
+        6,
+        8,
+        10,
+        12,
+        14
+      ],
+      "open_hat": [
+        7
+      ],
+      "bass_root": [
+        0,
+        8
+      ],
+      "fill_muted_tom": [],
+      "bass_drop_last_two_beats": false
+    },
+    {
+      "kick": [
+        0,
+        4,
+        6,
+        8,
+        12
+      ],
+      "kick_ghost": [
+        2,
+        7,
+        15
+      ],
+      "snare": [
+        4,
+        12
+      ],
+      "rimshot": [
+        4,
+        12
+      ],
+      "hat_8th_swing": [
+        0,
+        2,
+        4,
+        6,
+        8,
+        10,
+        12,
+        14
+      ],
+      "open_hat": [
+        7
+      ],
+      "bass_root": [
+        0
+      ],
+      "fill_muted_tom": [
+        11,
+        13,
+        14,
+        15
+      ],
+      "bass_drop_last_two_beats": true
+    }
+  ]
+}
