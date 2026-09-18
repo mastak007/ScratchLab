@@ -1,5 +1,14 @@
 import Foundation
 
+// Audio-only target used by the learner release Practice surface. This is
+// deliberately separate from the Capture/CXL reference-motion resources:
+// Practice can ship a clean teaching phrase without changing authoring or
+// capture timing.
+enum ScratchLabPracticeReference {
+    static let cxlBabyScratchAudioFileName = "cxl_baby_target.wav"
+    static let cxlBabyScratchBPM = 79.0
+}
+
 // Call-and-response timing manifest for the practice Demo mode.
 //
 // A `PracticeReelTimeline` describes one demo-audio file as an ordered list of

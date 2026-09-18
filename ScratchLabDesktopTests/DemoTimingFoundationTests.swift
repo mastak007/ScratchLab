@@ -567,24 +567,24 @@ struct LaneWiringTests {
         #expect(!demoBranch.contains("startAnalyzing"))
     }
 
-    @Test("iOS Baby Demo selects the exact BBB audio and motion before the legacy reel")
-    func babyDemoUsesExactBBBReference() throws {
+    @Test("iOS Baby Demo selects the clean CXL audio and notation before the legacy reel")
+    func babyDemoUsesCleanCXLReference() throws {
         let source = try practiceSource()
         let configuration = try sliceBetween(source,
             from: "private func configureDemoPlayback()",
             to: "private func loadDemoReelTimeline()")
 
-        #expect(configuration.contains("ScratchNotation.babyScratchDemo != nil"))
-        #expect(configuration.contains("demoPlayer.configure(with: coachInstruction)"))
+        #expect(configuration.contains("ScratchNotation.babyScratch != nil"))
+        #expect(configuration.contains("ScratchLabPracticeReference.cxlBabyScratchAudioFileName"))
         #expect(configuration.contains("return"))
-        #expect(configuration.range(of: "demoPlayer.configure(with: coachInstruction)")!.lowerBound
+        #expect(configuration.range(of: "ScratchLabPracticeReference.cxlBabyScratchAudioFileName")!.lowerBound
             < configuration.range(of: "loadDemoReelTimeline()")!.lowerBound)
 
         let lane = try sliceBetween(source,
             from: "private var activeLaneTargetNotation",
             to: "private func notationLanePanel")
-        #expect(lane.contains("ScratchNotation.babyScratchDemo ?? targetNotation"))
-        #expect(lane.contains("ScratchLabDemoSessionBuilder.demoBPM"))
+        #expect(lane.contains("ScratchNotation.babyScratch ?? targetNotation"))
+        #expect(lane.contains("ScratchLabPracticeReference.cxlBabyScratchBPM"))
     }
 
     @Test("A future non-Baby reel can still fall back gracefully")

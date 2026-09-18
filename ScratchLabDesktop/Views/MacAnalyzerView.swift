@@ -600,10 +600,12 @@ struct MacAnalyzerView: View {
     @StateObject private var sessionExportCoordinator = SessionExportCoordinator()
     @StateObject private var routineSessionSetup = SessionSetupViewModel(surface: .macRoutine)
     @StateObject private var babyScratchDemo = BabyScratchDemoPlaybackCoordinator()
-    // Practice demo playback is beatless. Its replacement recording will be
-    // captured and re-authored later; until then the UI shows the original
-    // deterministic Baby Scratch target rather than claiming an audio mapping.
-    @StateObject private var demoModeController = ScratchLabDemoModeController()
+    // Practice demo playback is beatless and release-only. Capture keeps its
+    // own CXL reference resources; this controller uses the clean CXL audio
+    // while learner notation remains the existing canonical Baby Scratch target.
+    @StateObject private var demoModeController = ScratchLabDemoModeController(
+        audioFileName: ScratchLabPracticeReference.cxlBabyScratchAudioFileName
+    )
     @StateObject private var rawJSONInspector = RawJSONInspectorViewModel()
     /// WATCH → COPY → RESULT state for one deterministic, canonical-cycle
     /// scored attempt (`practiceScoredAttemptCard`). Independent of the
@@ -2199,9 +2201,10 @@ struct MacAnalyzerView: View {
     private var practiceTeachingSequenceNotation: ScratchNotation? {
         switch practicePresentationState {
         case .ready, .listening:
-            // Watch follows the exact motion timeline paired with the bundled
-            // 16.048-second demo audio, including its two-second lead-in.
-            return ScratchNotation.babyScratchDemo ?? ScratchNotation.babyScratch
+            // Watch follows the clean CXL audio while rendering the existing
+            // canonical Baby Scratch target. Unreviewed inferred CXL motion is
+            // not promoted into learner truth.
+            return ScratchNotation.babyScratch
         case .copyActive, .paused, .result, .review, .lessonComplete:
             // Scored copy/review remains the short canonical teaching cycle.
             return ScratchNotation.babyScratch

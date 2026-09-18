@@ -198,6 +198,13 @@ struct PracticeModeView: View {
             .materialized(bpm: Double(practiceBeatStore.bpmValue))
     }
 
+    private var practiceReadyTargetNotation: ScratchNotation? {
+        guard scratch.id == CaptureSessionScratchType.babyScratch.rawValue else {
+            return targetNotation
+        }
+        return ScratchNotation.babyScratch ?? targetNotation
+    }
+
     private var assistModeBinding: Binding<PracticeAssistMode> {
         Binding(
             get: { PracticeAssistMode(rawValue: practiceAssistModeRaw) ?? .open },
@@ -597,7 +604,7 @@ struct PracticeModeView: View {
                             scratch: activeScratch,
                             micStatusTitle: micStatusTitle,
                             micStatusColor: micStatusColor,
-                            targetNotation: targetNotation,
+                            targetNotation: practiceReadyTargetNotation,
                             bpm: Double(practiceBeatStore.bpmValue),
                             topSafeAreaInset: geometry.safeAreaInsets.top,
                             bottomSafeAreaInset: geometry.safeAreaInsets.bottom,
@@ -1417,25 +1424,23 @@ struct PracticeModeView: View {
     }
 
     /// The target rendered during the active session. Baby Scratch demo-audio
-    /// modes use the exact 32-stroke BBB timeline paired with
-    /// `baby_noBeat.wav`; scored modes keep the BPM-materialized canonical
-    /// teaching pattern. This distinction is session-only, so the Ready card
-    /// continues to show the concise canonical target.
+    /// modes use the CXL audio with the existing canonical Baby Scratch
+    /// notation; scored modes keep the BPM-materialized canonical teaching pattern.
     private var activeLaneTargetNotation: ScratchNotation? {
         guard isDemoAudioMode,
               activeScratch.id == CaptureSessionScratchType.babyScratch.rawValue else {
             return targetNotation
         }
-        return ScratchNotation.babyScratchDemo ?? targetNotation
+        return ScratchNotation.babyScratch ?? targetNotation
     }
 
-    /// Beat-grid tempo for the active lane. The bundled BBB recording is a
+    /// Beat-grid tempo for the active lane. The bundled CXL recording is a
     /// fixed 79 BPM reference and must not inherit an unrelated user-selected
     /// practice tempo.
     private var activeLaneBPM: Double {
         if isDemoAudioMode,
            activeScratch.id == CaptureSessionScratchType.babyScratch.rawValue {
-            return Double(ScratchLabDemoSessionBuilder.demoBPM)
+            return ScratchLabPracticeReference.cxlBabyScratchBPM
         }
         return Double(practiceBeatStore.bpmValue)
     }
@@ -1959,17 +1964,16 @@ struct PracticeModeView: View {
 
     /// Configures the Demo-mode audio and the matching notation surface.
     ///
-    /// Baby Scratch now uses the exact BBB reference pair:
-    /// `CoachDemoAudio/baby_noBeat.wav` plus
-    /// `CoachDemoMotion/baby_scratch_strokes.json`. The older 42-second
-    /// call-and-response reel remains only as a fallback for a future scratch
-    /// that has no extracted full-demo notation; it must never override the
-    /// current Baby Scratch asset merely because both resources are bundled.
+    /// Baby Scratch uses the release-only CXL audio while retaining the
+    /// existing canonical Baby Scratch notation. The older call-and-response
+    /// reel remains a fallback for a future scratch with no dedicated audio.
     private func configureDemoPlayback() {
         if activeScratch.id == CaptureSessionScratchType.babyScratch.rawValue,
-           ScratchNotation.babyScratchDemo != nil {
+           ScratchNotation.babyScratch != nil {
             demoReel = nil
-            demoPlayer.configure(with: coachInstruction)
+            demoPlayer.configure(
+                withAudioFileNamed: ScratchLabPracticeReference.cxlBabyScratchAudioFileName
+            )
             return
         }
 
