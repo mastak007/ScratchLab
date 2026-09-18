@@ -16919,6 +16919,222 @@ final class ControllerPlatterDecoderTests: XCTestCase {
         return events
     }
 
+
+    // MARK: - Dense platter trajectory
+
+    func testNonUniformForwardVelocityRemainsOneMovementEvent() throws {
+        let raw: [(Int, Double)] = [
+            (0, 0.00),
+            (20, 0.05),
+            (40, 0.10),
+            (42, 0.15),
+            (44, 0.20),
+            (70, 0.25),
+            (100, 0.30)
+        ]
+
+        let decoded = decode(raw)
+
+        XCTAssertEqual(decoded.count, 1)
+
+        let event = try XCTUnwrap(decoded.first)
+        XCTAssertEqual(event.direction, "forward")
+        XCTAssertEqual(event.startTime, 0.00, accuracy: 1e-9)
+        XCTAssertEqual(event.endTime, 0.30, accuracy: 1e-9)
+        XCTAssertEqual(event.startPosition, 0.0, accuracy: 1e-9)
+        XCTAssertEqual(event.endPosition, 1.0, accuracy: 1e-9)
+        XCTAssertEqual(event.speed, 100.0 / 0.30, accuracy: 1e-9)
+    }
+
+    func testMeasuredTrajectoryPreservesNonUniformForwardVelocity() throws {
+        let raw: [(Int, Double)] = [
+            (0, 0.00),
+            (20, 0.05),
+            (40, 0.10),
+            (42, 0.15),
+            (44, 0.20),
+            (70, 0.25),
+            (100, 0.30)
+        ]
+
+        let segments = CaptureCore.derivePlatterTrajectory(
+            from: raw.map { midiEvent($0.0, $0.1) },
+            controller: 6,
+            channel: 1
+        )
+
+        XCTAssertEqual(segments.count, 1)
+
+        let segment = try XCTUnwrap(segments.first)
+        let measured = try XCTUnwrap(
+            segment.samples.first {
+                abs($0.takeRelativeTime - 0.20) < 1e-9
+            }
+        )
+
+        XCTAssertEqual(
+            measured.displacementSteps,
+            44.0,
+            accuracy: 1e-9
+        )
+
+        let endpointLinearSteps =
+            100.0 * ((measured.takeRelativeTime - 0.00) / (0.30 - 0.00))
+
+        XCTAssertEqual(endpointLinearSteps, 200.0 / 3.0, accuracy: 1e-9)
+        XCTAssertGreaterThan(
+            abs(measured.displacementSteps - endpointLinearSteps),
+            20.0
+        )
+    }
+
+    func testMeasuredTrajectorySplitsAtPacketGap() throws {
+        let raw: [(Int, Double)] = [
+            (0, 0.00),
+            (20, 0.03),
+            (40, 0.06),
+            (60, 0.30),
+            (80, 0.33),
+            (100, 0.36)
+        ]
+
+        let segments = CaptureCore.derivePlatterTrajectory(
+            from: raw.map { midiEvent($0.0, $0.1) },
+            controller: 6,
+            channel: 1
+        )
+
+        XCTAssertEqual(segments.count, 2)
+
+        let first = try XCTUnwrap(segments.first)
+        let second = try XCTUnwrap(segments.last)
+        let firstEnd = try XCTUnwrap(first.samples.last)
+        let secondStart = try XCTUnwrap(second.samples.first)
+
+        XCTAssertEqual(firstEnd.takeRelativeTime, 0.06, accuracy: 1e-9)
+        XCTAssertEqual(secondStart.takeRelativeTime, 0.30, accuracy: 1e-9)
+
+        XCTAssertFalse(
+            first.samples.contains {
+                abs($0.takeRelativeTime - 0.30) < 1e-9
+            }
+        )
+        XCTAssertFalse(
+            second.samples.contains {
+                abs($0.takeRelativeTime - 0.06) < 1e-9
+            }
+        )
+    }
+
+    func testMeasuredTrajectoryDoesNotSplitAtPhysicalReversal() throws {
+        let raw: [(Int, Double)] = [
+            (0, 0.00),
+            (20, 0.05),
+            (40, 0.10),
+            (30, 0.15),
+            (20, 0.20)
+        ]
+
+        let segments = CaptureCore.derivePlatterTrajectory(
+            from: raw.map { midiEvent($0.0, $0.1) },
+            controller: 6,
+            channel: 1
+        )
+
+        XCTAssertEqual(segments.count, 1)
+
+        let segment = try XCTUnwrap(segments.first)
+        XCTAssertEqual(segment.samples.count, raw.count)
+
+        let reversal = try XCTUnwrap(
+            segment.samples.first {
+                abs($0.takeRelativeTime - 0.10) < 1e-9
+            }
+        )
+
+        XCTAssertEqual(
+            reversal.displacementSteps,
+            40.0,
+            accuracy: 1e-9
+        )
+
+        let finalSample = try XCTUnwrap(segment.samples.last)
+        XCTAssertEqual(
+            finalSample.displacementSteps,
+            20.0,
+            accuracy: 1e-9
+        )
+    }
+
+    func testMeasuredTrajectoryRestartsMeasuredDisplacementAfterPacketGap() throws {
+        let raw: [(Int, Double)] = [
+            (0, 0.00),
+            (20, 0.03),
+            (40, 0.06),
+            (100, 0.30),
+            (110, 0.33),
+            (120, 0.36)
+        ]
+
+        let segments = CaptureCore.derivePlatterTrajectory(
+            from: raw.map { midiEvent($0.0, $0.1) },
+            controller: 6,
+            channel: 1
+        )
+
+        XCTAssertEqual(segments.count, 2)
+
+        let first = try XCTUnwrap(segments.first)
+        let second = try XCTUnwrap(segments.last)
+
+        let firstStart = try XCTUnwrap(first.samples.first)
+        let firstEnd = try XCTUnwrap(first.samples.last)
+        let secondStart = try XCTUnwrap(second.samples.first)
+        let secondEnd = try XCTUnwrap(second.samples.last)
+
+        XCTAssertEqual(firstStart.displacementSteps, 0.0, accuracy: 1e-9)
+        XCTAssertEqual(firstEnd.displacementSteps, 40.0, accuracy: 1e-9)
+        XCTAssertEqual(secondStart.displacementSteps, 0.0, accuracy: 1e-9)
+        XCTAssertEqual(secondEnd.displacementSteps, 20.0, accuracy: 1e-9)
+    }
+
+    func testMeasuredTrajectoryDoesNotSplitAtObservedStillness() throws {
+        let raw: [(Int, Double)] = [
+            (0, 0.00),
+            (20, 0.05),
+            (40, 0.10),
+            (40, 0.15),
+            (40, 0.20),
+            (60, 0.25),
+            (80, 0.30)
+        ]
+
+        let segments = CaptureCore.derivePlatterTrajectory(
+            from: raw.map { midiEvent($0.0, $0.1) },
+            controller: 6,
+            channel: 1
+        )
+
+        XCTAssertEqual(segments.count, 1)
+
+        let segment = try XCTUnwrap(segments.first)
+        XCTAssertEqual(segment.samples.count, raw.count)
+
+        let stationarySamples = segment.samples.filter {
+            $0.takeRelativeTime >= 0.10 && $0.takeRelativeTime <= 0.20
+        }
+
+        XCTAssertEqual(stationarySamples.count, 3)
+        XCTAssertTrue(
+            stationarySamples.allSatisfy {
+                abs($0.displacementSteps - 40.0) < 1e-9
+            }
+        )
+
+        let finalSample = try XCTUnwrap(segment.samples.last)
+        XCTAssertEqual(finalSample.displacementSteps, 80.0, accuracy: 1e-9)
+    }
+
     // MARK: - Modular wraparound (both directions)
 
     func testModularWrapForwardDoesNotCreateFalseReversal() {

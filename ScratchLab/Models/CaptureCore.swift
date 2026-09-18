@@ -11925,6 +11925,15 @@ enum CaptureCore {
     /// callers can render it as an explicitly open/provisional stroke
     /// without it ever appearing in — or being mistaken for — a committed
     /// event.
+    struct PlatterTrajectorySample: Equatable, Sendable {
+        let takeRelativeTime: Double
+        let displacementSteps: Double
+    }
+
+    struct PlatterTrajectorySegment: Equatable, Sendable {
+        let samples: [PlatterTrajectorySample]
+    }
+
     private static func decodePlatterCore(
         from mixerMidiEvents: [RawMixerMIDIEvent],
         controller: Int,
@@ -11938,7 +11947,8 @@ enum CaptureCore {
         referencePacket: RawMixerMIDIEvent? = nil
     ) -> (events: [DetectedNotationRecordMovementEvent], diagnostics: PlatterDecodeDiagnostics,
           trailingRun: TrailingPlatterRun?, intervals: [PlatterEvidenceInterval],
-          originSteps: Double, spanSteps: Double, referencePositionSteps: Double?) {
+          originSteps: Double, spanSteps: Double, referencePositionSteps: Double?,
+          trajectorySegments: [PlatterTrajectorySegment]) {
         // Preserve receive order. Sorting by time hides clock regressions.
         let selected = mixerMidiEvents.enumerated().filter {
             $0.element.controller == controller
@@ -11965,7 +11975,7 @@ enum CaptureCore {
                 kind: .insufficientSampling, firstPacketIndex: selected.first?.offset,
                 lastPacketIndex: selected.last?.offset))
             return ([], PlatterDecodeDiagnostics(filteredEventCount: filteredEventCount,
-                    rawRunCount: 0, noiseFilteredRunCount: 0), nil, intervals, 0, 1, nil)
+                    rawRunCount: 0, noiseFilteredRunCount: 0), nil, intervals, 0, 1, nil, [])
         }
 
         // An unspecified source must still resolve uniquely. Mixed sources
@@ -11975,12 +11985,15 @@ enum CaptureCore {
             intervals.append(PlatterEvidenceInterval(startTime: times.min() ?? 0,
                 endTime: times.max() ?? 0, kind: .unknown))
             return ([], PlatterDecodeDiagnostics(filteredEventCount: filteredEventCount,
-                rawRunCount: 0, noiseFilteredRunCount: 0), nil, intervals, 0, 1, nil)
+                rawRunCount: 0, noiseFilteredRunCount: 0), nil, intervals, 0, 1, nil, [])
         }
         let half = ringModulus / 2
         var positions = [Double](repeating: 0, count: events.count)
         struct Run { let startIdx: Int; let endIdx: Int }
+        struct TrajectoryRange { let startIdx: Int; let endIdx: Int }
         var runs: [Run] = []
+        var trajectoryRanges: [TrajectoryRange] = []
+        var trajectoryStart = 0
         var runSign = 0
         var runStart = 0
         var stillStart: Int?
@@ -12014,6 +12027,10 @@ enum CaptureCore {
                     : (sourceChanged || invalidCounter || ambiguousDelta) ? .unknown
                     : gap == 0 ? .insufficientSampling : .packetGap
                 intervals.append(interval(i, i + 1, kind))
+                trajectoryRanges.append(
+                    TrajectoryRange(startIdx: trajectoryStart, endIdx: i)
+                )
+                trajectoryStart = i + 1
                 // No displacement can be timed across missing/invalid packets.
                 // The first post-boundary packet is a NEW counter baseline.
                 continue
@@ -12035,6 +12052,9 @@ enum CaptureCore {
             }
         }
         finishStillness(at: events.count - 1)
+        trajectoryRanges.append(
+            TrajectoryRange(startIdx: trajectoryStart, endIdx: events.count - 1)
+        )
         var trailingRunCandidate: Run?
         if runSign != 0 {
             let trailing = Run(startIdx: runStart, endIdx: events.count - 1)
@@ -12042,6 +12062,18 @@ enum CaptureCore {
             else { trailingRunCandidate = trailing }
         }
         let rawRunCount = runs.count
+
+        let trajectorySegments = trajectoryRanges.map { range in
+            let origin = positions[range.startIdx]
+            return PlatterTrajectorySegment(
+                samples: (range.startIdx...range.endIdx).map { index in
+                    PlatterTrajectorySample(
+                        takeRelativeTime: events[index].takeRelativeTime,
+                        displacementSteps: positions[index] - origin
+                    )
+                }
+            )
+        }
 
         // 3. Normalize the integrated position to 0…1 over the stream's range.
         let minPos = positions.min() ?? 0
@@ -12115,7 +12147,29 @@ enum CaptureCore {
             referencePacket.flatMap { packet in
                 let matches = events.indices.filter { events[$0] == packet }
                 return matches.count == 1 ? positions[matches[0]] : nil
-            })
+            }, trajectorySegments)
+    }
+
+    static func derivePlatterTrajectory(
+        from mixerMidiEvents: [RawMixerMIDIEvent],
+        controller: Int,
+        channel: Int? = nil,
+        deviceName: String? = nil,
+        ringModulus: Int = 128,
+        minRunDuration: Double = 0.08,
+        minRunSteps: Int = 8,
+        maxEventGap: Double = 0.10
+    ) -> [PlatterTrajectorySegment] {
+        decodePlatterCore(
+            from: mixerMidiEvents,
+            controller: controller,
+            channel: channel,
+            deviceName: deviceName,
+            ringModulus: ringModulus,
+            minRunDuration: minRunDuration,
+            minRunSteps: minRunSteps,
+            maxEventGap: maxEventGap
+        ).trajectorySegments
     }
 
     struct ProvisionalPlatterMovement: Equatable, Sendable {
