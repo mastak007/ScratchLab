@@ -2695,6 +2695,73 @@ final class ReferenceTearCanonicalProjectionTests: XCTestCase {
         )
     }
 
+    /// Dense live and finalized projections of equivalent physical motion
+    /// must retain the same measured velocity profile after each coordinate
+    /// space is rescaled onto its own span. This catches either path silently
+    /// falling back to endpoint-linear geometry.
+    func testDenseLiveAndFinalizedProjectionsPreserveTheSameMeasuredShape() throws {
+        let liveEvent = calibratedRun(
+            start: 0.00, end: 0.30,
+            direction: "forward",
+            steps: 540
+        )
+        let finalizedEvent = normalizedRun(
+            start: 0.00, end: 0.30,
+            direction: "forward",
+            from: 0.0, to: 1.0
+        )
+
+        let trajectory = CaptureCore.PlatterTrajectorySegment(
+            boundaryBefore: nil,
+            samples: [
+                .init(takeRelativeTime: 0.00, displacementSteps: 0),
+                .init(takeRelativeTime: 0.05, displacementSteps: 108),
+                .init(takeRelativeTime: 0.10, displacementSteps: 216),
+                .init(takeRelativeTime: 0.15, displacementSteps: 226),
+                .init(takeRelativeTime: 0.20, displacementSteps: 238),
+                .init(takeRelativeTime: 0.25, displacementSteps: 378),
+                .init(takeRelativeTime: 0.30, displacementSteps: 540)
+            ]
+        )
+
+        let live = ReferenceTearCanonicalProjectionBuilder.project(
+            movementEvents: [liveEvent],
+            platterTrajectorySegments: [trajectory],
+            derivation: nil,
+            referenceTakeID: "dense-live",
+            coordinates: .raneOneMKIIDirectMIDI()
+        )
+
+        let finalized = ReferenceTearCanonicalProjectionBuilder.project(
+            movementEvents: [finalizedEvent],
+            platterTrajectorySegments: [trajectory],
+            derivation: nil,
+            referenceTakeID: "dense-finalized",
+            coordinates: .normalizedTakeLocal()
+        )
+
+        XCTAssertEqual(live.coordinateSpace, .platterRevolutions)
+        XCTAssertEqual(finalized.coordinateSpace, .normalizedTakeLocalDisplacement)
+
+        let liveTrack = rescaledToOwnSpan(positionTrack(live))
+        let finalizedTrack = rescaledToOwnSpan(positionTrack(finalized))
+
+        XCTAssertEqual(liveTrack.count, 7)
+        XCTAssertEqual(finalizedTrack.count, 7)
+        XCTAssertEqual(liveTrack.count, finalizedTrack.count)
+
+        for (livePosition, finalizedPosition) in zip(liveTrack, finalizedTrack) {
+            XCTAssertEqual(livePosition, finalizedPosition, accuracy: 1e-9)
+        }
+
+        let midpoint = try XCTUnwrap(liveTrack.indices.contains(4) ? liveTrack[4] : nil)
+        XCTAssertNotEqual(
+            midpoint,
+            0.20 / 0.30,
+            "Dense parity must preserve measured non-uniform velocity rather than endpoint interpolation."
+        )
+    }
+
     // MARK: - Dense canonical platter geometry
 
     func testDenseTrajectoryPreservesMeasuredNonUniformVelocity() throws {
