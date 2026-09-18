@@ -6123,6 +6123,33 @@ final class MacCaptureEngine: NSObject, ObservableObject {
         setSelectedAudioDeviceUniqueID(uniqueID, origin: .explicitUserChoice)
     }
 
+    /// Selects the complete Phase DVS + DJM-S9 input route in one operator action.
+    /// The S9 audio endpoint carries the DVS control tones; its MIDI endpoint is
+    /// selected separately for crossfader and channel-fader evidence. No device
+    /// is guessed: both endpoints must be discovered by their reported names.
+    @MainActor
+    @discardableResult
+    func selectPhaseDVSInput() -> Bool {
+        guard !isAudioInputSelectionLocked else { return false }
+        guard let audioDevice = availableAudioDevices.first(where: {
+            PhaseCapturePath.matchesDJMS9DeviceName($0.localizedName)
+        }) else {
+            return false
+        }
+        guard let midiSource = availableMIDISources.first(where: {
+            PhaseCapturePath.matchesDJMS9DeviceName($0.name)
+        }) else {
+            return false
+        }
+
+#if DEBUG && ENABLE_TIMECODE_LIVE_TAP
+        TimecodeCMSampleBufferAdapter.channelPairSelection = .auto
+#endif
+        selectedMIDIInputSourceID = midiSource.id
+        setSelectedAudioDeviceUniqueID(audioDevice.uniqueID, origin: .explicitUserChoice)
+        return true
+    }
+
     /// Records that the operator deliberately chose this exact camera. The
     /// CXL route uses this bit to distinguish a prior silent first-device
     /// fallback from a camera the operator actually reviewed in Setup.

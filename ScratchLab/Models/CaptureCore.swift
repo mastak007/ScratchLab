@@ -398,6 +398,9 @@ enum BeatEngineMode: String, CaseIterable, Codable, Sendable, Identifiable {
     case boomBapTrainer = "boom_bap_trainer"
     case minimalFunk = "minimal_funk"
     case battleLoop = "battle_loop"
+    case ghostPocket = "ghost_pocket"
+    case pocketDouble = "pocket_double"
+    case dropTheory = "drop_theory"
 
     var id: String { rawValue }
 
@@ -408,17 +411,23 @@ enum BeatEngineMode: String, CaseIterable, Codable, Sendable, Identifiable {
         case .clickTrack:
             return "Click track"
         case .boomBapTrainer:
-            return "Boom Bap Trainer"
+            return "Dusty Break"
         case .minimalFunk:
-            return "Minimal Funk"
+            return "Funk Pocket"
         case .battleLoop:
-            return "Battle Loop"
+            return "Battle Break"
+        case .ghostPocket:
+            return "Ghost Pocket"
+        case .pocketDouble:
+            return "Pocket Double"
+        case .dropTheory:
+            return "Drop Theory"
         }
     }
 
     var beatEnabled: Bool {
         switch self {
-        case .boomBapTrainer, .minimalFunk, .battleLoop:
+        case .boomBapTrainer, .minimalFunk, .battleLoop, .ghostPocket, .pocketDouble, .dropTheory:
             return true
         case .silent, .clickTrack:
             return false
@@ -437,6 +446,12 @@ enum BeatEngineMode: String, CaseIterable, Codable, Sendable, Identifiable {
             return "minimal-funk"
         case .battleLoop:
             return "battle-loop"
+        case .ghostPocket:
+            return "ghost-pocket"
+        case .pocketDouble:
+            return "pocket-double"
+        case .dropTheory:
+            return "drop-theory"
         case .silent, .clickTrack:
             return nil
         }
@@ -446,20 +461,23 @@ enum BeatEngineMode: String, CaseIterable, Codable, Sendable, Identifiable {
         switch self {
         case .minimalFunk:
             return CaptureBeatEngineDefaults.minimalFunkSwingAmount
+        case .ghostPocket, .pocketDouble, .dropTheory:
+            return CaptureBeatEngineDefaults.scratchBreakSwingAmount
         case .silent, .clickTrack, .boomBapTrainer, .battleLoop:
             return 0
         }
     }
 
     static var practiceModes: [BeatEngineMode] {
-        [.clickTrack, .boomBapTrainer, .minimalFunk, .battleLoop]
+        [.clickTrack, .boomBapTrainer, .minimalFunk, .battleLoop, .ghostPocket, .pocketDouble, .dropTheory]
     }
 }
 
 enum CaptureBeatEngineDefaults {
-    static let beatPatternVersion = "scratchlab-beats-v1"
-    static let engineVersion = "scratchlab-beat-engine-v1"
+    static let beatPatternVersion = "scratchlab-breaks-v2"
+    static let engineVersion = "scratchlab-beat-engine-v2"
     static let minimalFunkSwingAmount = 0.08
+    static let scratchBreakSwingAmount = 0.08
 }
 
 enum TimingPrintedToRecordingState: String, Codable, Sendable, Identifiable {
