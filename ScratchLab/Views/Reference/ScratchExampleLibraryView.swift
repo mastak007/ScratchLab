@@ -443,7 +443,7 @@ private final class ScratchExampleReviewState: ObservableObject {
         playbackObservations[key] = item.observe(\.status, options: [.initial, .new]) { [weak self] item, _ in
             guard item.status == .failed else { return }
             let message = item.error?.localizedDescription ?? "The media could not be played."
-            Task { @MainActor [weak self, weak player] in
+            Task { @MainActor [weak self, weak player = player] in
                 guard let self, let player, !self.closed,
                       [self.referenceVideo, self.takeVideo, self.takeAudio].contains(where: { $0 === player }) else { return }
                 self.error = "\(name): \(message)"

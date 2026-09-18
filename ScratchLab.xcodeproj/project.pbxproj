@@ -640,12 +640,9 @@
 		B5DD68C0FBB29078B178D060 /* OfflineScratchAdvisory.swift in Sources */ = {isa = PBXBuildFile; fileRef = 91CC302EB8FC61DAB6F93D04 /* OfflineScratchAdvisory.swift */; };
 		85152E11F5EFCD868CCFE66C /* OfflineScratchAdvisory.swift in Sources */ = {isa = PBXBuildFile; fileRef = 91CC302EB8FC61DAB6F93D04 /* OfflineScratchAdvisory.swift */; };
 		97E459A72AA35734FE882873 /* ScratchExampleLibrary.swift in Sources */ = {isa = PBXBuildFile; fileRef = 828B6960CCF300FCE42DA14E /* ScratchExampleLibrary.swift */; };
-		D595623DC46ECF984577879E /* ScratchExampleLibrary.swift in Sources */ = {isa = PBXBuildFile; fileRef = 828B6960CCF300FCE42DA14E /* ScratchExampleLibrary.swift */; };
 		708E12C48DBB35B9E5F6348C /* ScratchExampleLibraryView.swift in Sources */ = {isa = PBXBuildFile; fileRef = FD61E3264990D2426532F9D7 /* ScratchExampleLibraryView.swift */; };
-		41506097F616F7E879F16853 /* ScratchExampleLibraryView.swift in Sources */ = {isa = PBXBuildFile; fileRef = FD61E3264990D2426532F9D7 /* ScratchExampleLibraryView.swift */; };
 		89C461ED345103E19C39F552 /* ScratchExampleLibraryTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = EC728221716BE6CB459F9375 /* ScratchExampleLibraryTests.swift */; };
 		1FAA36479025DA730287DCDF /* ReferenceExamples in Resources */ = {isa = PBXBuildFile; fileRef = 6C298CA3B9C8C704842435BF /* ReferenceExamples */; };
-		ED16A5AC12C038BDBAB4A2D1 /* ReferenceExamples in Resources */ = {isa = PBXBuildFile; fileRef = 6C298CA3B9C8C704842435BF /* ReferenceExamples */; };
 		24ADAE74DFC1CF02482965AD /* ScratchExampleReviewTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5265CFE12A44A84B549A52DB /* ScratchExampleReviewTests.swift */; };
 /* End PBXBuildFile section */
 
@@ -2112,7 +2109,6 @@
 		A6000003 /* Resources */ = {
 			isa = PBXResourcesBuildPhase;
 			files = (
-				ED16A5AC12C038BDBAB4A2D1 /* ReferenceExamples in Resources */,
 				219D8D60A93840FC9A724C11 /* Resources/CoachInstructions in Resources */,
 				51C2E59E2FA1B00000E87B79 /* Resources/Coach/Coach.usdz in Resources */,
 				219D8D61A93840FC9A724C11 /* Resources/CoachDemoAudio in Resources */,
@@ -2410,8 +2406,6 @@
 		A6000002 /* Sources */ = {
 			isa = PBXSourcesBuildPhase;
 			files = (
-				41506097F616F7E879F16853 /* ScratchExampleLibraryView.swift in Sources */,
-				D595623DC46ECF984577879E /* ScratchExampleLibrary.swift in Sources */,
 				85152E11F5EFCD868CCFE66C /* OfflineScratchAdvisory.swift in Sources */,
 				040835607CB63DAEBA40F98B /* ScratchHandPoseFrameExtractor.swift in Sources */,
 				93A2C62CF41FDA1635E6CB5E /* ActionTrainerFeatures.swift in Sources */,
