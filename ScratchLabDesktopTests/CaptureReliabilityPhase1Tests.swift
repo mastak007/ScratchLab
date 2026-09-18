@@ -17135,6 +17135,135 @@ final class ControllerPlatterDecoderTests: XCTestCase {
         XCTAssertEqual(finalSample.displacementSteps, 80.0, accuracy: 1e-9)
     }
 
+
+    // MARK: - Dense platter trajectory boundary contract
+
+    func testTrajectoryClockRegressionCreatesBoundary() throws {
+        let raw: [(Int, Double)] = [
+            (0, 0.00),
+            (20, 0.05),
+            (40, 0.10),
+            (60, 0.08),
+            (80, 0.13),
+            (100, 0.18)
+        ]
+
+        let segments = CaptureCore.derivePlatterTrajectory(
+            from: raw.map { midiEvent($0.0, $0.1) },
+            controller: 6,
+            channel: 1
+        )
+
+        XCTAssertEqual(segments.count, 2)
+        let firstEnd = try XCTUnwrap(segments[0].samples.last)
+        let secondStart = try XCTUnwrap(segments[1].samples.first)
+        XCTAssertEqual(firstEnd.takeRelativeTime, 0.10, accuracy: 1e-9)
+        XCTAssertEqual(secondStart.takeRelativeTime, 0.08, accuracy: 1e-9)
+        XCTAssertEqual(secondStart.displacementSteps, 0.0, accuracy: 1e-9)
+    }
+
+    func testTrajectoryEqualTimestampCreatesBoundaryWithoutDroppingEvidence() throws {
+        let raw: [(Int, Double)] = [
+            (0, 0.00),
+            (20, 0.05),
+            (40, 0.10),
+            (60, 0.10),
+            (80, 0.15),
+            (100, 0.20)
+        ]
+
+        let segments = CaptureCore.derivePlatterTrajectory(
+            from: raw.map { midiEvent($0.0, $0.1) },
+            controller: 6,
+            channel: 1
+        )
+
+        XCTAssertEqual(segments.count, 2)
+        XCTAssertEqual(segments.flatMap(\.samples).count, raw.count)
+        let firstEnd = try XCTUnwrap(segments[0].samples.last)
+        let secondStart = try XCTUnwrap(segments[1].samples.first)
+        XCTAssertEqual(firstEnd.takeRelativeTime, 0.10, accuracy: 1e-9)
+        XCTAssertEqual(secondStart.takeRelativeTime, 0.10, accuracy: 1e-9)
+        XCTAssertEqual(secondStart.displacementSteps, 0.0, accuracy: 1e-9)
+    }
+
+    func testTrajectoryAmbiguousHalfRingDeltaCreatesBoundary() throws {
+        let raw: [(Int, Double)] = [
+            (0, 0.00),
+            (20, 0.03),
+            (84, 0.06),
+            (90, 0.09),
+            (100, 0.12)
+        ]
+
+        let segments = CaptureCore.derivePlatterTrajectory(
+            from: raw.map { midiEvent($0.0, $0.1) },
+            controller: 6,
+            channel: 1
+        )
+
+        XCTAssertEqual(segments.count, 2)
+        let secondStart = try XCTUnwrap(segments[1].samples.first)
+        XCTAssertEqual(secondStart.takeRelativeTime, 0.06, accuracy: 1e-9)
+        XCTAssertEqual(secondStart.displacementSteps, 0.0, accuracy: 1e-9)
+    }
+
+    func testTrajectoryModularWrapRemainsContinuous() throws {
+        let raw: [(Int, Double)] = [
+            (120, 0.00),
+            (124, 0.03),
+            (127, 0.06),
+            (2, 0.09),
+            (6, 0.12),
+            (10, 0.15)
+        ]
+
+        let segments = CaptureCore.derivePlatterTrajectory(
+            from: raw.map { midiEvent($0.0, $0.1) },
+            controller: 6,
+            channel: 1
+        )
+
+        XCTAssertEqual(segments.count, 1)
+        XCTAssertEqual(segments[0].samples.count, raw.count)
+        let firstSample = try XCTUnwrap(segments[0].samples.first)
+        let lastSample = try XCTUnwrap(segments[0].samples.last)
+        XCTAssertEqual(firstSample.displacementSteps, 0.0, accuracy: 1e-9)
+        XCTAssertEqual(lastSample.displacementSteps, 18.0, accuracy: 1e-9)
+    }
+
+    func testTrajectoryMixedSourceFailsClosed() {
+        var events: [CaptureCore.RawMixerMIDIEvent] = [
+            midiEvent(0, 0.00),
+            midiEvent(20, 0.03),
+            midiEvent(40, 0.06)
+        ]
+
+        events.append(
+            .init(
+                timestamp: 0.09,
+                takeRelativeTime: 0.09,
+                deviceName: "Other Controller",
+                channel: 1,
+                controller: 6,
+                value: 60,
+                normalizedValue: 60.0 / 127.0,
+                mappedControl: nil
+            )
+        )
+
+        let segments = CaptureCore.derivePlatterTrajectory(
+            from: events,
+            controller: 6,
+            channel: 1
+        )
+
+        XCTAssertTrue(
+            segments.isEmpty,
+            "Mixed-source input currently fails closed before trajectory segmentation"
+        )
+    }
+
     // MARK: - Modular wraparound (both directions)
 
     func testModularWrapForwardDoesNotCreateFalseReversal() {
