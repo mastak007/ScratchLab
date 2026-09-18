@@ -11931,6 +11931,7 @@ enum CaptureCore {
     }
 
     struct PlatterTrajectorySegment: Equatable, Sendable {
+        let boundaryBefore: PlatterEvidenceInterval.Kind?
         let samples: [PlatterTrajectorySample]
     }
 
@@ -11990,7 +11991,11 @@ enum CaptureCore {
         let half = ringModulus / 2
         var positions = [Double](repeating: 0, count: events.count)
         struct Run { let startIdx: Int; let endIdx: Int }
-        struct TrajectoryRange { let startIdx: Int; let endIdx: Int }
+        struct TrajectoryRange {
+            let startIdx: Int
+            let endIdx: Int
+            let boundaryAfter: PlatterEvidenceInterval.Kind?
+        }
         var runs: [Run] = []
         var trajectoryRanges: [TrajectoryRange] = []
         var trajectoryStart = 0
@@ -12028,7 +12033,11 @@ enum CaptureCore {
                     : gap == 0 ? .insufficientSampling : .packetGap
                 intervals.append(interval(i, i + 1, kind))
                 trajectoryRanges.append(
-                    TrajectoryRange(startIdx: trajectoryStart, endIdx: i)
+                    TrajectoryRange(
+                        startIdx: trajectoryStart,
+                        endIdx: i,
+                        boundaryAfter: kind
+                    )
                 )
                 trajectoryStart = i + 1
                 // No displacement can be timed across missing/invalid packets.
@@ -12053,7 +12062,11 @@ enum CaptureCore {
         }
         finishStillness(at: events.count - 1)
         trajectoryRanges.append(
-            TrajectoryRange(startIdx: trajectoryStart, endIdx: events.count - 1)
+            TrajectoryRange(
+                startIdx: trajectoryStart,
+                endIdx: events.count - 1,
+                boundaryAfter: nil
+            )
         )
         var trailingRunCandidate: Run?
         if runSign != 0 {
@@ -12063,9 +12076,10 @@ enum CaptureCore {
         }
         let rawRunCount = runs.count
 
-        let trajectorySegments = trajectoryRanges.map { range in
+        let trajectorySegments = trajectoryRanges.enumerated().map { offset, range in
             let origin = positions[range.startIdx]
             return PlatterTrajectorySegment(
+                boundaryBefore: offset == 0 ? nil : trajectoryRanges[offset - 1].boundaryAfter,
                 samples: (range.startIdx...range.endIdx).map { index in
                     PlatterTrajectorySample(
                         takeRelativeTime: events[index].takeRelativeTime,

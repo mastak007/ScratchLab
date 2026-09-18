@@ -17155,6 +17155,8 @@ final class ControllerPlatterDecoderTests: XCTestCase {
         )
 
         XCTAssertEqual(segments.count, 2)
+        XCTAssertNil(segments[0].boundaryBefore)
+        XCTAssertEqual(segments[1].boundaryBefore, .clockDiscontinuity)
         let firstEnd = try XCTUnwrap(segments[0].samples.last)
         let secondStart = try XCTUnwrap(segments[1].samples.first)
         XCTAssertEqual(firstEnd.takeRelativeTime, 0.10, accuracy: 1e-9)
@@ -17180,6 +17182,8 @@ final class ControllerPlatterDecoderTests: XCTestCase {
 
         XCTAssertEqual(segments.count, 2)
         XCTAssertEqual(segments.flatMap(\.samples).count, raw.count)
+        XCTAssertNil(segments[0].boundaryBefore)
+        XCTAssertEqual(segments[1].boundaryBefore, .insufficientSampling)
         let firstEnd = try XCTUnwrap(segments[0].samples.last)
         let secondStart = try XCTUnwrap(segments[1].samples.first)
         XCTAssertEqual(firstEnd.takeRelativeTime, 0.10, accuracy: 1e-9)
@@ -17203,6 +17207,8 @@ final class ControllerPlatterDecoderTests: XCTestCase {
         )
 
         XCTAssertEqual(segments.count, 2)
+        XCTAssertNil(segments[0].boundaryBefore)
+        XCTAssertEqual(segments[1].boundaryBefore, .unknown)
         let secondStart = try XCTUnwrap(segments[1].samples.first)
         XCTAssertEqual(secondStart.takeRelativeTime, 0.06, accuracy: 1e-9)
         XCTAssertEqual(secondStart.displacementSteps, 0.0, accuracy: 1e-9)
@@ -17225,6 +17231,7 @@ final class ControllerPlatterDecoderTests: XCTestCase {
         )
 
         XCTAssertEqual(segments.count, 1)
+        XCTAssertNil(segments[0].boundaryBefore)
         XCTAssertEqual(segments[0].samples.count, raw.count)
         let firstSample = try XCTUnwrap(segments[0].samples.first)
         let lastSample = try XCTUnwrap(segments[0].samples.last)
