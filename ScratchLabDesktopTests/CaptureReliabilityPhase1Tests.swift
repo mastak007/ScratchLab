@@ -6602,6 +6602,7 @@ final class CaptureReliabilityPhase1CoreTests: XCTestCase {
         let expectedFileNames: Set<String> = [
             "baby_noBeat.wav",
             "chirpflare_noBeat.wav",
+            "cxl_baby_target.wav",
         ]
 
         XCTAssertEqual(fileNames, expectedFileNames)

@@ -35,8 +35,8 @@ final class LivePerformedNotationTrackerTests: XCTestCase {
         )
 
         XCTAssertTrue(source.contains("practiceNotationWindow(at: time, notation: notation)"))
-        XCTAssertTrue(source.contains("@StateObject private var demoModeController = ScratchLabDemoModeController()"))
-        XCTAssertTrue(source.contains("return ScratchNotation.babyScratchDemo ?? ScratchNotation.babyScratch"))
+        XCTAssertTrue(source.contains("@StateObject private var demoModeController = ScratchLabDemoModeController("))
+        XCTAssertTrue(source.contains("audioFileName: ScratchLabPracticeReference.cxlBabyScratchAudioFileName"))
         XCTAssertTrue(source.contains("return ScratchNotation.babyScratch"))
         XCTAssertTrue(source.contains("showBeatGrid: false"))
         XCTAssertTrue(source.contains("Text(\"NO BEAT\")"))
@@ -451,7 +451,7 @@ final class LivePerformedNotationTrackerTests: XCTestCase {
             cameraMovementEventsSnapshot: { _ in cameraEvents }
         )
         let state = LivePerformedNotationTracker.computeState(dataSource: dataSource, baselineTimestamp: 0)
-        guard case .tracking(let committed, let provisional, _, _, _, _, _) = state else {
+        guard case .tracking(let committed, let provisional, _, _, _, _, _, _) = state else {
             return XCTFail("expected .tracking via camera fallback, got \(state)")
         }
         XCTAssertEqual(committed, cameraEvents)
@@ -466,7 +466,7 @@ final class LivePerformedNotationTrackerTests: XCTestCase {
             displacement: 0.6
         )
         let events = LivePerformedNotationTracker.renderedEvents(
-            for: .tracking(committed: [], provisional: openStroke, continuousCommitted: [], continuousProvisional: nil, platterEvidenceIntervals: [], faderDerivation: nil, wrapPeriod: nil)
+            for: .tracking(committed: [], provisional: openStroke, continuousCommitted: [], continuousProvisional: nil, trajectorySegments: [], platterEvidenceIntervals: [], faderDerivation: nil, wrapPeriod: nil)
         )
 
         XCTAssertEqual(events.count, 1)
@@ -499,6 +499,7 @@ final class LivePerformedNotationTrackerTests: XCTestCase {
             provisional: nil,
             continuousCommitted: continuous,
             continuousProvisional: nil,
+            trajectorySegments: [],
             platterEvidenceIntervals: [],
             faderDerivation: nil,
             wrapPeriod: nil
@@ -543,6 +544,7 @@ final class LivePerformedNotationTrackerTests: XCTestCase {
             committed: [], provisional: nil,
             continuousCommitted: [freeSpin, tearForward, tearReverse],
             continuousProvisional: nil,
+            trajectorySegments: [],
             platterEvidenceIntervals: [],
             faderDerivation: nil,
             wrapPeriod: nil
@@ -584,6 +586,7 @@ final class LivePerformedNotationTrackerTests: XCTestCase {
             committed: [], provisional: nil,
             continuousCommitted: [freeSpin, tearForward, tearReverse],
             continuousProvisional: nil,
+            trajectorySegments: [],
             platterEvidenceIntervals: [],
             faderDerivation: nil,
             wrapPeriod: nil
@@ -592,6 +595,7 @@ final class LivePerformedNotationTrackerTests: XCTestCase {
             committed: [], provisional: nil,
             continuousCommitted: [tearForward, tearReverse],
             continuousProvisional: nil,
+            trajectorySegments: [],
             platterEvidenceIntervals: [],
             faderDerivation: nil,
             wrapPeriod: nil
@@ -640,6 +644,7 @@ final class LivePerformedNotationTrackerTests: XCTestCase {
             committed: [], provisional: nil,
             continuousCommitted: [freeSpin, ascent1, ascent2, descent1, descent2],
             continuousProvisional: nil,
+            trajectorySegments: [],
             platterEvidenceIntervals: [],
             faderDerivation: nil,
             wrapPeriod: nil
@@ -677,6 +682,7 @@ final class LivePerformedNotationTrackerTests: XCTestCase {
             committed: [], provisional: nil,
             continuousCommitted: [freeSpin, tearForward],
             continuousProvisional: provisional,
+            trajectorySegments: [],
             platterEvidenceIntervals: [],
             faderDerivation: nil,
             wrapPeriod: nil
@@ -709,11 +715,138 @@ final class LivePerformedNotationTrackerTests: XCTestCase {
             for: .tracking(
                 committed: [], provisional: nil,
                 continuousCommitted: [committed], continuousProvisional: open,
+                trajectorySegments: [],
                 platterEvidenceIntervals: [], faderDerivation: nil, wrapPeriod: nil
             )
         )
         XCTAssertEqual(rendered.count, 1)
         XCTAssertEqual(rendered[0].confidence, 0.9)
+    }
+
+
+    /// The real live decoder's packet-dense trajectory must survive the
+    /// tracker boundary and refine the canonical Tear curve. Endpoint-only
+    /// interpolation would erase the deliberately non-uniform packet timing
+    /// represented by this fixture.
+    func testLiveCanonicalTearProjectionPreservesDenseMeasuredTrajectory() throws {
+        let device = "Rane ONE MKII"
+
+        // One forward run with deliberately non-uniform displacement over
+        // time, followed by enough reverse motion to commit the forward run.
+        let samples: [(time: Double, value: Int)] = [
+            (0.00, 0),
+            (0.02, 8),
+            (0.04, 16),
+            (0.06, 24),
+            (0.08, 25),
+            (0.10, 26),
+            (0.12, 27),
+            (0.14, 40),
+            (0.16, 55),
+            (0.18, 70),
+            (0.20, 85),
+            (0.22, 84),
+            (0.24, 83),
+            (0.26, 82),
+            (0.28, 81),
+            (0.30, 80),
+            (0.32, 79),
+            (0.34, 78),
+            (0.36, 77),
+            (0.38, 76),
+            (0.40, 75)
+        ]
+
+        let raw = samples.map { sample in
+            midiEvent(
+                value: sample.value,
+                takeRelativeTime: sample.time,
+                deviceName: device
+            )
+        }
+
+        let dataSource = LivePerformedNotationDataSource(
+            selectedMIDISourceName: { device },
+            capturedMidiCCEventsSnapshot: { raw },
+            cameraMovementEventsSnapshot: { _ in nil }
+        )
+
+        let state = LivePerformedNotationTracker.computeState(
+            dataSource: dataSource,
+            baselineTimestamp: -1
+        )
+
+        guard case .tracking(
+            _,
+            _,
+            _,
+            _,
+            let trajectory,
+            let intervals,
+            let fader,
+            _
+        ) = state else {
+            return XCTFail("expected live controller tracking")
+        }
+
+        XCTAssertFalse(
+            trajectory.isEmpty,
+            "the live state must retain the decoder's dense measured trajectory"
+        )
+
+        let rendered =
+            LivePerformedNotationTracker.continuousRenderedEvents(for: state)
+
+        XCTAssertFalse(rendered.isEmpty)
+
+        let projection = ReferenceTearCanonicalProjectionBuilder.project(
+            movementEvents: rendered,
+            platterTrajectorySegments: trajectory,
+            platterEvidenceIntervals: intervals,
+            derivation: fader,
+            referenceTakeID: "live-dense-trajectory",
+            coordinates: .normalizedTakeLocal()
+        )
+
+        let record = try XCTUnwrap(projection.records.first)
+        let curve = try XCTUnwrap(record.subdivisions.first?.measuredCurve)
+
+        XCTAssertGreaterThan(
+            curve.points.count,
+            2,
+            "live canonical projection must use packet-dense geometry, not only movement-event endpoints"
+        )
+
+        let first = try XCTUnwrap(curve.points.first)
+        let last = try XCTUnwrap(curve.points.last)
+
+        XCTAssertGreaterThan(last.time, first.time)
+
+        let interior = curve.points.dropFirst().dropLast()
+        XCTAssertFalse(interior.isEmpty)
+
+        let maximumDeviation = interior.map { point -> Double in
+            let timeFraction =
+                (point.time - first.time)
+                / (last.time - first.time)
+
+            let linearPosition =
+                first.position
+                + timeFraction * (last.position - first.position)
+
+            return abs(point.position - linearPosition)
+        }.max() ?? 0
+
+        XCTAssertGreaterThan(
+            maximumDeviation,
+            0.02,
+            "the live curve must preserve measured non-uniform platter velocity rather than collapse to endpoint interpolation"
+        )
+
+        XCTAssertTrue(
+            record.internalHolds.isEmpty,
+            "dense trajectory refinement must not manufacture a Tear hold"
+        )
     }
 
     // MARK: - Live evidence parity (stillness + crossfader wiring)
@@ -816,7 +949,7 @@ final class LivePerformedNotationTrackerTests: XCTestCase {
             activeCrossfaderCalibration: { calibration }
         )
         let state = LivePerformedNotationTracker.computeState(dataSource: dataSource, baselineTimestamp: 0)
-        guard case .tracking(_, _, _, _, let platterIntervals, let faderDerivation, _) = state else {
+        guard case .tracking(_, _, _, _, _, let platterIntervals, let faderDerivation, _) = state else {
             return XCTFail("expected .tracking, got \(state)")
         }
         XCTAssertTrue(
@@ -841,7 +974,7 @@ final class LivePerformedNotationTrackerTests: XCTestCase {
             activeCrossfaderCalibration: { calibration }
         )
         let state = LivePerformedNotationTracker.computeState(dataSource: dataSource, baselineTimestamp: 0)
-        guard case .tracking(_, _, _, _, _, let faderDerivation, _) = state else {
+        guard case .tracking(_, _, _, _, _, _, let faderDerivation, _) = state else {
             return XCTFail("expected .tracking, got \(state)")
         }
         XCTAssertNotNil(faderDerivation)
@@ -862,7 +995,7 @@ final class LivePerformedNotationTrackerTests: XCTestCase {
             activeCrossfaderCalibration: { nil }
         )
         let state = LivePerformedNotationTracker.computeState(dataSource: dataSource, baselineTimestamp: 0)
-        guard case .tracking(_, _, _, _, _, let faderDerivation, _) = state else {
+        guard case .tracking(_, _, _, _, _, _, let faderDerivation, _) = state else {
             return XCTFail("expected .tracking, got \(state)")
         }
         XCTAssertNil(faderDerivation, "no usable calibration must yield no fader derivation (UNKNOWN, not fabricated OPEN)")
@@ -883,7 +1016,7 @@ final class LivePerformedNotationTrackerTests: XCTestCase {
             activeCrossfaderCalibration: { calibration }
         )
         let state = LivePerformedNotationTracker.computeState(dataSource: dataSource, baselineTimestamp: 0.0)
-        guard case .tracking(_, _, _, _, _, let faderDerivation, _) = state else {
+        guard case .tracking(_, _, _, _, _, _, let faderDerivation, _) = state else {
             return XCTFail("expected .tracking, got \(state)")
         }
         XCTAssertNil(faderDerivation, "pre-baseline CC8 must not enter the live take's fader derivation")
@@ -900,7 +1033,7 @@ final class LivePerformedNotationTrackerTests: XCTestCase {
             activeCrossfaderTakeStartState: { self.parkedFaderState() }
         )
         let state = LivePerformedNotationTracker.computeState(dataSource: dataSource, baselineTimestamp: 0)
-        guard case .tracking(_, _, _, _, _, let derivation, _) = state else {
+        guard case .tracking(_, _, _, _, _, _, let derivation, _) = state else {
             return XCTFail("expected tracking")
         }
         XCTAssertEqual(derivation?.intervals.first?.state, .open)
@@ -920,7 +1053,7 @@ final class LivePerformedNotationTrackerTests: XCTestCase {
                 activeCrossfaderCalibration: { calibration },
                 activeCrossfaderTakeStartState: { snapshot }
             )
-            guard case .tracking(_, _, _, _, _, let derivation, _) = LivePerformedNotationTracker.computeState(
+            guard case .tracking(_, _, _, _, _, _, let derivation, _) = LivePerformedNotationTracker.computeState(
                 dataSource: dataSource,
                 baselineTimestamp: 0
             ) else { return XCTFail("expected tracking") }
@@ -964,7 +1097,7 @@ final class LivePerformedNotationTrackerTests: XCTestCase {
             activeCrossfaderCalibration: { calibrationAvailable ? activeCalibration : nil },
             activeCrossfaderTakeStartState: { takeStart }, activeCrossfaderState: snapshot
         ), baselineTimestamp: 1_000)
-        guard case .tracking(_, _, _, _, let evidence, let derivation, _) = state else {
+        guard case .tracking(_, _, _, _, _, let evidence, let derivation, _) = state else {
             XCTFail("expected controller movement")
             throw NSError(domain: "LiveHeldFaderFixture", code: 1)
         }
@@ -1180,7 +1313,7 @@ final class LivePerformedNotationTrackerTests: XCTestCase {
         let state = LivePerformedNotationTracker.computeState(
             dataSource: dataSource, baselineTimestamp: baseline
         )
-        guard case .tracking(_, _, _, _, let platterIntervals, let faderDerivation, _) = state else {
+        guard case .tracking(_, _, _, _, _, let platterIntervals, let faderDerivation, _) = state else {
             return XCTFail("expected .tracking, got \(state)")
         }
 
@@ -1278,7 +1411,7 @@ final class LivePerformedNotationTrackerTests: XCTestCase {
     ) throws -> (events: [CaptureCore.DetectedNotationRecordMovementEvent],
                  projection: ReferenceTearCanonicalProjection,
                  geometry: ScratchStrokeGeometry.CanonicalGeometry) {
-        guard case .tracking(_, _, _, _, let intervals, let fader, let period) = state else {
+        guard case .tracking(_, _, _, _, _, let intervals, let fader, let period) = state else {
             XCTFail("expected real controller tracking")
             throw NSError(domain: "LoopFixture", code: 1)
         }
@@ -1354,7 +1487,7 @@ final class LivePerformedNotationTrackerTests: XCTestCase {
                     deviceName: "Rane ONE MKII")
             }
         let state = loopState(stream, context: nil, baseline: -1)
-        guard case .tracking(_, _, _, _, let evidence, _, _) = state else {
+        guard case .tracking(_, _, _, _, _, let evidence, _, _) = state else {
             return XCTFail("expected measured controller motion")
         }
         let gap = try XCTUnwrap(evidence.first { $0.kind == .packetGap })
@@ -1373,7 +1506,7 @@ final class LivePerformedNotationTrackerTests: XCTestCase {
         let stream = loopStream([7_200, -900, 900, -900, 900])
         let context = loopContext(anchor: try XCTUnwrap(stream.last), phase: 1_800)
         let state = loopState(stream, context: context)
-        guard case .tracking(_, _, _, _, _, _, let period) = state else { return XCTFail("expected tracking") }
+        guard case .tracking(_, _, _, _, _, _, _, let period) = state else { return XCTFail("expected tracking") }
         XCTAssertEqual(period, 1)
         let rendered = try connectedLoopGeometry(state)
         XCTAssertEqual(rendered.events.count, 3, "the long free spin and first return have left the rolling window")
@@ -1507,7 +1640,7 @@ final class LivePerformedNotationTrackerTests: XCTestCase {
         let state = loopState(later, context: loopContext(
             anchor: try XCTUnwrap(later.last), phase: 1_800, validFrom: epoch,
             generation: 2, sampleID: "fresh-ahhh"))
-        guard case .tracking(_, _, _, _, _, _, let period) = state else { return XCTFail("expected tracking") }
+        guard case .tracking(_, _, _, _, _, _, _, let period) = state else { return XCTFail("expected tracking") }
         XCTAssertEqual(period, 1, "raw history may predate the sample once every visible stroke belongs to its epoch")
         let rendered = try connectedLoopGeometry(state)
         XCTAssertEqual(try XCTUnwrap(rendered.events.first).startPosition, 0.25, accuracy: 1e-9)
@@ -1595,7 +1728,7 @@ final class LivePerformedNotationTrackerTests: XCTestCase {
                     timestamp: event.timestamp + offset, deviceName: event.deviceName)
             }
             let state = loopState(interrupted, context: nil)
-            guard case .tracking(_, _, _, _, let evidence, _, _) = state else { return XCTFail("expected tracking") }
+            guard case .tracking(_, _, _, _, _, let evidence, _, _) = state else { return XCTFail("expected tracking") }
             XCTAssertTrue(evidence.contains { $0.kind == (clockOnly ? .clockDiscontinuity : .packetGap) })
             try assertUnwrappedFallback(interrupted,
                 context: loopContext(anchor: try XCTUnwrap(interrupted.last)))
@@ -1619,7 +1752,7 @@ final class LivePerformedNotationTrackerTests: XCTestCase {
             stream,
             context: loopContext(anchor: try XCTUnwrap(stream.last))
         )
-        guard case .tracking(_, _, let committed, let alignedOpen, let evidence, _, let period) = state else {
+        guard case .tracking(_, _, let committed, let alignedOpen, _, let evidence, _, let period) = state else {
             return XCTFail("expected aligned controller tracking")
         }
         XCTAssertNotNil(period, "the fixture must exercise the aligned copy boundary")
@@ -1653,7 +1786,7 @@ final class LivePerformedNotationTrackerTests: XCTestCase {
             stream,
             context: loopContext(anchor: try XCTUnwrap(stream.last))
         )
-        guard case .tracking(_, _, let committed, let alignedOpen, let evidence, _, let period) = state else {
+        guard case .tracking(_, _, let committed, let alignedOpen, _, let evidence, _, let period) = state else {
             return XCTFail("expected aligned controller tracking")
         }
         XCTAssertNotNil(period, "the fixture must exercise the aligned copy boundary")
@@ -1676,8 +1809,8 @@ final class LivePerformedNotationTrackerTests: XCTestCase {
             selectedMIDISourceName: "Rane ONE MKII", capturedMidi: stream)
         let unwrapped = loopState(stream, context: nil)
         let wrapped = loopState(stream, context: loopContext(anchor: try XCTUnwrap(stream.last), phase: 1_800))
-        guard case .tracking(let physical, let open, _, _, let evidence, let fader, _) = wrapped,
-              case .tracking(let oldPhysical, let oldOpen, _, _, let oldEvidence, let oldFader, _) = unwrapped else {
+        guard case .tracking(let physical, let open, _, _, _, let evidence, let fader, _) = wrapped,
+              case .tracking(let oldPhysical, let oldOpen, _, _, _, let oldEvidence, let oldFader, _) = unwrapped else {
             return XCTFail("expected tracking")
         }
         XCTAssertEqual(physical, oldPhysical)
@@ -1711,7 +1844,7 @@ final class LivePerformedNotationTrackerTests: XCTestCase {
         )
         let tracker = LivePerformedNotationTracker(dataSource: dataSource, pollInterval: 60)
         let visibleBeforeFreeze = LivePerformedNotationTracker.renderedEvents(
-            for: .tracking(committed: [event], provisional: nil, continuousCommitted: [], continuousProvisional: nil, platterEvidenceIntervals: [], faderDerivation: nil, wrapPeriod: nil)
+            for: .tracking(committed: [event], provisional: nil, continuousCommitted: [], continuousProvisional: nil, trajectorySegments: [], platterEvidenceIntervals: [], faderDerivation: nil, wrapPeriod: nil)
         )
 
         tracker.freeze()
@@ -1753,8 +1886,14 @@ final class LivePerformedNotationTrackerTests: XCTestCase {
             .appendingPathComponent("ScratchLab/Models/Reference/ReferenceAuthoringSession.swift")
         let sessionSource = try String(contentsOf: sessionURL, encoding: .utf8)
         XCTAssertTrue(
-            sessionSource.contains("var tearProjection: ReferenceTearCanonicalProjection {\n        restoredTearProjection ?? ReferenceTearCanonicalProjectionBuilder.project(tearReview)\n    }"),
-            "the take must retain restored canonical output and otherwise use the shared review builder",
+            sessionSource.contains("if let restoredTearProjection {"),
+            "the take must preserve restored historical canonical output",
+            file: file, line: line
+        )
+        XCTAssertTrue(
+            sessionSource.contains("CaptureCore.derivePlatterMotionEvidence(")
+                && sessionSource.contains("platterTrajectorySegments: platterEvidence.trajectorySegments"),
+            "a fresh finalized take must derive dense platter trajectory from retained raw MIDI and feed the shared projection builder",
             file: file, line: line
         )
     }
@@ -1813,7 +1952,7 @@ final class LivePerformedNotationTrackerTests: XCTestCase {
             dataSource: engineBackedDataSource(engine: engine, deviceName: deviceName),
             baselineTimestamp: baseline
         )
-        guard case .tracking(let committed, let provisional, _, _, _, _, _) = state else {
+        guard case .tracking(let committed, let provisional, _, _, _, _, _, _) = state else {
             return XCTFail("expected .tracking from real captured platter telemetry, got \(state)")
         }
         XCTAssertFalse(
@@ -2163,6 +2302,7 @@ final class LivePerformedNotationTrackerTests: XCTestCase {
             provisional: decoded.provisionalMovement,
             continuousCommitted: decoded.continuousEvents,
             continuousProvisional: decoded.continuousProvisionalMovement,
+            trajectorySegments: decoded.trajectorySegments,
             platterEvidenceIntervals: decoded.platterEvidenceIntervals,
             faderDerivation: nil,
             wrapPeriod: nil
@@ -2227,6 +2367,7 @@ final class LivePerformedNotationTrackerTests: XCTestCase {
                 provisional: decoded.provisionalMovement,
                 continuousCommitted: [],
                 continuousProvisional: nil,
+                trajectorySegments: [],
                 platterEvidenceIntervals: [],
                 faderDerivation: nil,
                 wrapPeriod: nil
@@ -2322,6 +2463,7 @@ final class LivePerformedNotationTrackerTests: XCTestCase {
                 provisional: decoded.provisionalMovement,
                 continuousCommitted: [],
                 continuousProvisional: nil,
+                trajectorySegments: [],
                 platterEvidenceIntervals: [],
                 faderDerivation: nil,
                 wrapPeriod: nil
@@ -2385,7 +2527,7 @@ final class LivePerformedNotationTrackerTests: XCTestCase {
         let provisional = try? XCTUnwrap(decoded.provisionalMovement)
         XCTAssertNotNil(provisional)
         let rendered = LivePerformedNotationTracker.renderedEvents(
-            for: .tracking(committed: [], provisional: decoded.provisionalMovement, continuousCommitted: [], continuousProvisional: nil, platterEvidenceIntervals: [], faderDerivation: nil, wrapPeriod: nil)
+            for: .tracking(committed: [], provisional: decoded.provisionalMovement, continuousCommitted: [], continuousProvisional: nil, trajectorySegments: [], platterEvidenceIntervals: [], faderDerivation: nil, wrapPeriod: nil)
         )
         XCTAssertEqual(rendered.count, 1)
         XCTAssertGreaterThan(
