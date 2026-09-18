@@ -83,12 +83,12 @@ Current export persistence:
 | `bpm` | integer/null | no | Operator-entered BPM when available |
 | `captureMode` | string | yes | `calibration_no_click` or `timed_click` |
 | `clickEnabled` | boolean | yes | Shared mode-derived click state |
-| `beatEngineMode` | string | yes | `silent`, `click_track`, `boom_bap_trainer`, `minimal_funk`, or `battle_loop` |
+| `beatEngineMode` | string | yes | `silent`, `click_track`, `boom_bap_trainer`, `minimal_funk`, `battle_loop`, `ghost_pocket`, `pocket_double`, or `drop_theory` |
 | `beatEnabled` | boolean | yes | True when the timing source is a generated practice beat |
 | `beatPatternName` | string/null | no | Generated beat pattern token when a practice beat is selected |
-| `beatPatternVersion` | string | yes | Currently `scratchlab-beats-v1` |
+| `beatPatternVersion` | string | yes | Current release: `scratchlab-breaks-v2` |
 | `swingAmount` | number | yes | Currently `0.0` except for swung patterns like `minimal_funk` |
-| `engineVersion` | string | yes | Currently `scratchlab-beat-engine-v1` |
+| `engineVersion` | string | yes | Current release: `scratchlab-beat-engine-v2` |
 | `countInBeats` | integer | yes | Currently `4` |
 | `beatsPerBar` | integer | yes | Currently `4` |
 | `clickAccentPattern` | string | yes | Currently `accent-first-beat` |

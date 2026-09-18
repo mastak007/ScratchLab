@@ -47,15 +47,18 @@ Timed-capture tempo rules:
 - custom BPM range: `60...140`
 - beat 1 uses the stronger accent pattern `accent-first-beat`
 - click schema version: `scratchlab-click-v1`
-- practice-beat engine version: `scratchlab-beat-engine-v1`
-- practice-beat pattern version: `scratchlab-beats-v1`
+- practice-beat engine version: `scratchlab-beat-engine-v2`
+- practice-beat pattern version: `scratchlab-breaks-v2`
 
 Optional practice-beat timing sources:
 
 - `Click track`: default timed-capture timing source and the recommended timing source for dataset collection
-- `Boom Bap Trainer`: sparse generated kick/snare/hat pattern for practice only
-- `Minimal Funk`: light generated kick/snare/hat pattern with mild swing for practice only
-- `Battle Loop`: sparse generated battle-style pattern for practice only
+- `Dusty Break`: original layered boom-bap break with a firm pocket and open scratch space for practice only
+- `Funk Pocket`: original swung break with ghost notes and offbeat accents for practice only
+- `Battle Break`: original harder break with syncopated kick, snare, hat, and percussion accents for practice only
+- `Ghost Pocket`: generated scratch-practice break for practice only
+- `Pocket Double`: generated scratch-practice break for practice only
+- `Drop Theory`: generated scratch-practice break for practice only
 
 Dataset guidance:
 
