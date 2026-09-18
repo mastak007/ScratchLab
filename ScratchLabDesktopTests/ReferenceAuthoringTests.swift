@@ -2695,6 +2695,146 @@ final class ReferenceTearCanonicalProjectionTests: XCTestCase {
         )
     }
 
+    // MARK: - Dense canonical platter geometry
+
+    func testDenseTrajectoryPreservesMeasuredNonUniformVelocity() throws {
+        let event = normalizedRun(
+            start: 0.00, end: 0.30,
+            direction: "forward",
+            from: 0.0, to: 1.0
+        )
+        let trajectory = CaptureCore.PlatterTrajectorySegment(
+            boundaryBefore: nil,
+            samples: [
+                .init(takeRelativeTime: 0.00, displacementSteps: 0),
+                .init(takeRelativeTime: 0.05, displacementSteps: 20),
+                .init(takeRelativeTime: 0.10, displacementSteps: 40),
+                .init(takeRelativeTime: 0.15, displacementSteps: 42),
+                .init(takeRelativeTime: 0.20, displacementSteps: 44),
+                .init(takeRelativeTime: 0.25, displacementSteps: 70),
+                .init(takeRelativeTime: 0.30, displacementSteps: 100)
+            ]
+        )
+
+        let projection = ReferenceTearCanonicalProjectionBuilder.project(
+            movementEvents: [event],
+            platterTrajectorySegments: [trajectory],
+            derivation: nil,
+            referenceTakeID: "dense-forward",
+            coordinates: .normalizedTakeLocal()
+        )
+
+        let record = try XCTUnwrap(projection.records.first)
+        let curve = try XCTUnwrap(record.subdivisions.first?.measuredCurve)
+
+        XCTAssertEqual(curve.points.count, 7)
+        let measured = try XCTUnwrap(
+            curve.points.first { abs($0.time - 0.20) < 1e-9 }
+        )
+        XCTAssertEqual(measured.position, 0.44, accuracy: 1e-9)
+        XCTAssertNotEqual(
+            measured.position,
+            measured.time / 0.30,
+            "Dense geometry must preserve measured velocity, not endpoint-linear interpolation."
+        )
+    }
+
+    func testDenseTrajectoryPreservesReverseShape() throws {
+        let event = normalizedRun(
+            start: 0.00, end: 0.30,
+            direction: "backward",
+            from: 1.0, to: 0.0
+        )
+        let trajectory = CaptureCore.PlatterTrajectorySegment(
+            boundaryBefore: nil,
+            samples: [
+                .init(takeRelativeTime: 0.00, displacementSteps: 0),
+                .init(takeRelativeTime: 0.10, displacementSteps: -20),
+                .init(takeRelativeTime: 0.20, displacementSteps: -80),
+                .init(takeRelativeTime: 0.30, displacementSteps: -100)
+            ]
+        )
+
+        let projection = ReferenceTearCanonicalProjectionBuilder.project(
+            movementEvents: [event],
+            platterTrajectorySegments: [trajectory],
+            derivation: nil,
+            referenceTakeID: "dense-reverse",
+            coordinates: .normalizedTakeLocal()
+        )
+
+        let curve = try XCTUnwrap(
+            projection.records.first?.subdivisions.first?.measuredCurve
+        )
+        let expectedPositions = [1.0, 0.8, 0.2, 0.0]
+        XCTAssertEqual(curve.points.count, expectedPositions.count)
+        for (point, expected) in zip(curve.points, expectedPositions) {
+            XCTAssertEqual(point.position, expected, accuracy: 1e-9)
+        }
+    }
+
+    func testDenseTrajectoryDoesNotBridgeADiscontinuity() throws {
+        let event = normalizedRun(
+            start: 0.00, end: 0.30,
+            direction: "forward",
+            from: 0.0, to: 1.0
+        )
+        let trajectory = [
+            CaptureCore.PlatterTrajectorySegment(
+                boundaryBefore: nil,
+                samples: [
+                    .init(takeRelativeTime: 0.00, displacementSteps: 0),
+                    .init(takeRelativeTime: 0.10, displacementSteps: 40)
+                ]
+            ),
+            CaptureCore.PlatterTrajectorySegment(
+                boundaryBefore: .packetGap,
+                samples: [
+                    .init(takeRelativeTime: 0.20, displacementSteps: 0),
+                    .init(takeRelativeTime: 0.30, displacementSteps: 60)
+                ]
+            )
+        ]
+
+        let projection = ReferenceTearCanonicalProjectionBuilder.project(
+            movementEvents: [event],
+            platterTrajectorySegments: trajectory,
+            derivation: nil,
+            referenceTakeID: "dense-gap",
+            coordinates: .normalizedTakeLocal()
+        )
+
+        let curve = try XCTUnwrap(
+            projection.records.first?.subdivisions.first?.measuredCurve
+        )
+        XCTAssertEqual(
+            curve.points.count, 2,
+            "No dense curve may be manufactured across a packet discontinuity."
+        )
+        XCTAssertEqual(curve.startPosition, 0.0)
+        XCTAssertEqual(curve.endPosition, 1.0)
+    }
+
+    func testMissingDenseTrajectoryLeavesExistingProjectionUnchanged() {
+        let withoutArgument = ReferenceTearCanonicalProjectionBuilder.project(
+            movementEvents: normalizedTearEvents,
+            platterEvidenceIntervals: syntheticObservedPlatterStillness(normalizedTearEvents),
+            derivation: derivation(openFrom: 0, to: 0.60),
+            referenceTakeID: "sparse-existing",
+            coordinates: .normalizedTakeLocal()
+        )
+        let explicitEmpty = ReferenceTearCanonicalProjectionBuilder.project(
+            movementEvents: normalizedTearEvents,
+            platterTrajectorySegments: [],
+            platterEvidenceIntervals: syntheticObservedPlatterStillness(normalizedTearEvents),
+            derivation: derivation(openFrom: 0, to: 0.60),
+            referenceTakeID: "sparse-existing",
+            coordinates: .normalizedTakeLocal()
+        )
+
+        XCTAssertEqual(withoutArgument, explicitEmpty)
+    }
+
     /// A record whose declared space differs from the frame's is drawn as
     /// explicit MOTION UNKNOWN through the SHARED renderer — the units repair
     /// cannot silently mix two coordinates into one curve.

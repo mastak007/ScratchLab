@@ -11763,6 +11763,9 @@ enum CaptureCore {
     struct PlatterMotionEvidence: Equatable, Sendable {
         let events: [DetectedNotationRecordMovementEvent]
         let intervals: [PlatterEvidenceInterval]
+        /// Dense measured trajectory from the same decoder pass as `events`.
+        /// Derived presentation evidence only; never persisted or exported.
+        let trajectorySegments: [PlatterTrajectorySegment]
 
         /// Retain every decoded run omitted by a later filter. A retained
         /// endpoint-only event cannot prove stillness in the omitted region.
@@ -11776,7 +11779,11 @@ enum CaptureCore {
                 PlatterEvidenceInterval(startTime: $0.startTime, endTime: $0.endTime,
                                         kind: .discardedMotion, stage: .normalization)
             }
-            return Self(events: normalizedEvents, intervals: intervals + discarded)
+            return Self(
+                events: normalizedEvents,
+                intervals: intervals + discarded,
+                trajectorySegments: trajectorySegments
+            )
         }
     }
 
@@ -11804,7 +11811,11 @@ enum CaptureCore {
             deviceName: deviceName, ringModulus: ringModulus,
             minRunDuration: minRunDuration, minRunSteps: minRunSteps,
             maxEventGap: maxEventGap)
-        return PlatterMotionEvidence(events: core.events, intervals: core.intervals)
+        return PlatterMotionEvidence(
+            events: core.events,
+            intervals: core.intervals,
+            trajectorySegments: core.trajectorySegments
+        )
     }
 
     struct PlatterDecodeDiagnostics: Equatable {
@@ -12264,6 +12275,14 @@ enum CaptureCore {
         /// anchor. Never feeds segmentation, normalization or persisted data.
         let referencePositionSteps: Double?
 
+        /// Dense measured platter trajectory from the SAME decoder pass that
+        /// produced `continuousEvents`. Segments are split at packet/clock/
+        /// sampling discontinuities and retain that boundary provenance.
+        ///
+        /// Presentation evidence only. This does not alter segmentation,
+        /// scoring, persistence or export.
+        let trajectorySegments: [PlatterTrajectorySegment]
+
         /// The continuous fields, provenance intervals and normalisation
         /// basis are optional trailing arguments so the engine's fail-closed
         /// empty constructor and the iOS call sites keep compiling unchanged.
@@ -12275,7 +12294,8 @@ enum CaptureCore {
             platterEvidenceIntervals: [PlatterEvidenceInterval] = [],
             normalizationOriginSteps: Double = 0,
             normalizationSpanSteps: Double = 1,
-            referencePositionSteps: Double? = nil
+            referencePositionSteps: Double? = nil,
+            trajectorySegments: [PlatterTrajectorySegment] = []
         ) {
             self.committedEvents = committedEvents
             self.provisionalMovement = provisionalMovement
@@ -12285,6 +12305,7 @@ enum CaptureCore {
             self.normalizationOriginSteps = normalizationOriginSteps
             self.normalizationSpanSteps = normalizationSpanSteps
             self.referencePositionSteps = referencePositionSteps
+            self.trajectorySegments = trajectorySegments
         }
     }
 
@@ -12366,7 +12387,8 @@ enum CaptureCore {
             platterEvidenceIntervals: core.intervals,
             normalizationOriginSteps: core.originSteps,
             normalizationSpanSteps: core.spanSteps,
-            referencePositionSteps: core.referencePositionSteps
+            referencePositionSteps: core.referencePositionSteps,
+            trajectorySegments: core.trajectorySegments
         )
     }
 

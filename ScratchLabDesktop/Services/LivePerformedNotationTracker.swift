@@ -133,6 +133,7 @@ enum LiveNotationTrackingState: Equatable {
         provisional: CaptureCore.ProvisionalPlatterMovement?,
         continuousCommitted: [CaptureCore.DetectedNotationRecordMovementEvent],
         continuousProvisional: CaptureCore.ProvisionalPlatterMovement?,
+        trajectorySegments: [CaptureCore.PlatterTrajectorySegment],
         platterEvidenceIntervals: [CaptureCore.PlatterEvidenceInterval],
         faderDerivation: CrossfaderDerivation?,
         /// Sample-loop length in the same calibrated platter revolutions as
@@ -239,7 +240,7 @@ final class LivePerformedNotationTracker: ObservableObject {
     static func renderedEvents(
         for state: LiveNotationTrackingState
     ) -> [CaptureCore.DetectedNotationRecordMovementEvent] {
-        guard case .tracking(let committed, let provisional, _, _, _, _, _) = state else { return [] }
+        guard case .tracking(let committed, let provisional, _, _, _, _, _, _) = state else { return [] }
         guard let provisional else { return committed }
         let duration = max(0, provisional.currentTime - provisional.startTime)
         // Keep controller speed in raw steps/second, matching committed
@@ -271,7 +272,7 @@ final class LivePerformedNotationTracker: ObservableObject {
     static func continuousRenderedEvents(
         for state: LiveNotationTrackingState
     ) -> [CaptureCore.DetectedNotationRecordMovementEvent] {
-        guard case .tracking(_, _, let continuousCommitted, let continuousProvisional, _, _, let period) = state else { return [] }
+        guard case .tracking(_, _, let continuousCommitted, let continuousProvisional, _, _, _, let period) = state else { return [] }
         var events = continuousCommitted
         // The general preview may show any open run. Canonical Tear review
         // only sees it after the shared decoder's evidence gates pass, so an
@@ -349,10 +350,20 @@ final class LivePerformedNotationTracker: ObservableObject {
             : .raneOneMKIIDirectMIDI()
     }
 
+    /// Dense measured platter trajectory from the same decoder pass as the
+    /// live movement events. This remains raw step-domain evidence here; no
+    /// presentation coordinate claim is made by this accessor.
+    var platterTrajectorySegments: [CaptureCore.PlatterTrajectorySegment] {
+        if case .tracking(_, _, _, _, let trajectory, _, _, _) = state {
+            return trajectory
+        }
+        return []
+    }
+
     /// `decodePlatterCore`'s provenance intervals (observed stillness, packet
     /// gaps, clock discontinuities) for the canonical live Tear projection.
     var platterEvidenceIntervals: [CaptureCore.PlatterEvidenceInterval] {
-        if case .tracking(_, _, _, _, let intervals, _, _) = state { return intervals }
+        if case .tracking(_, _, _, _, _, let intervals, _, _) = state { return intervals }
         return []
     }
 
@@ -360,14 +371,14 @@ final class LivePerformedNotationTracker: ObservableObject {
     /// Tear projection, or `nil` when no usable calibration / CC8 evidence
     /// exists (the projection then truthfully reports FADER UNKNOWN).
     var faderDerivation: CrossfaderDerivation? {
-        if case .tracking(_, _, _, _, _, let derivation, _) = state { return derivation }
+        if case .tracking(_, _, _, _, _, _, let derivation, _) = state { return derivation }
         return nil
     }
 
     /// Loop length in calibrated revolutions, retaining the playback origin.
     /// An unknown alignment keeps the existing unwrapped presentation.
     var continuousWrapPeriod: Double? {
-        if case .tracking(_, _, _, _, _, _, let period) = state { return period }
+        if case .tracking(_, _, _, _, _, _, _, let period) = state { return period }
         return nil
     }
 
@@ -488,7 +499,7 @@ final class LivePerformedNotationTracker: ObservableObject {
         let span = (positions.max() ?? 0) - (positions.min() ?? 0)
         let committedCount: Int
         let hasProvisional: Bool
-        if case .tracking(let committed, let provisional, _, _, _, _, _) = state {
+        if case .tracking(let committed, let provisional, _, _, _, _, _, _) = state {
             committedCount = committed.count
             hasProvisional = provisional != nil
         } else {
@@ -579,6 +590,7 @@ final class LivePerformedNotationTracker: ObservableObject {
                 provisional: controllerResult.provisionalMovement,
                 continuousCommitted: aligned?.events ?? controllerResult.continuousEvents,
                 continuousProvisional: aligned?.provisional ?? controllerResult.continuousProvisionalMovement,
+                trajectorySegments: controllerResult.trajectorySegments,
                 platterEvidenceIntervals: controllerResult.platterEvidenceIntervals,
                 faderDerivation: faderDerivation,
                 wrapPeriod: aligned?.period
@@ -591,6 +603,7 @@ final class LivePerformedNotationTracker: ObservableObject {
                 provisional: nil,
                 continuousCommitted: cameraEvents,
                 continuousProvisional: nil,
+                trajectorySegments: [],
                 platterEvidenceIntervals: [],
                 faderDerivation: faderDerivation,
                 // Camera evidence carries no platter-step basis, so there is

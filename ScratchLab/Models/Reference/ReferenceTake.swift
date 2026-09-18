@@ -3130,7 +3130,8 @@ enum ReferenceTearCanonicalProjectionBuilder {
 
     static func project(
         _ review: ReferenceTearSegmentationReview,
-        configuration: ReferenceTearReviewConfiguration = ReferenceTearReviewConfiguration()
+        configuration: ReferenceTearReviewConfiguration = ReferenceTearReviewConfiguration(),
+        platterTrajectorySegments: [CaptureCore.PlatterTrajectorySegment] = []
     ) -> ReferenceTearCanonicalProjection {
         var records: [ScratchNotation.GestureRecord] = []
         var reasons: [ReferenceTearProjectionReason] = []
@@ -3142,7 +3143,8 @@ enum ReferenceTearCanonicalProjectionBuilder {
             let built = buildRecord(
                 candidate: candidate,
                 review: review,
-                configuration: configuration
+                configuration: configuration,
+                platterTrajectorySegments: platterTrajectorySegments
             )
             records.append(built.record)
             reasons.append(contentsOf: built.reasons)
@@ -3183,6 +3185,7 @@ enum ReferenceTearCanonicalProjectionBuilder {
     /// projection for live preview.
     static func project(
         movementEvents: [CaptureCore.DetectedNotationRecordMovementEvent],
+        platterTrajectorySegments: [CaptureCore.PlatterTrajectorySegment] = [],
         platterEvidenceIntervals: [CaptureCore.PlatterEvidenceInterval] = [],
         derivation: CrossfaderDerivation? = nil,
         referenceTakeID: String = "live-preview",
@@ -3198,7 +3201,8 @@ enum ReferenceTearCanonicalProjectionBuilder {
                 coordinates: coordinates,
                 configuration: configuration
             ),
-            configuration: configuration
+            configuration: configuration,
+            platterTrajectorySegments: platterTrajectorySegments
         )
     }
 
@@ -3213,7 +3217,8 @@ enum ReferenceTearCanonicalProjectionBuilder {
     private static func buildRecord(
         candidate: ReferenceTearCandidate,
         review: ReferenceTearSegmentationReview,
-        configuration: ReferenceTearReviewConfiguration
+        configuration: ReferenceTearReviewConfiguration,
+        platterTrajectorySegments: [CaptureCore.PlatterTrajectorySegment]
     ) -> BuiltRecord {
         var reasons: [ReferenceTearProjectionReason] = []
         let coordinateSpace = declaredCoordinateSpace(for: review)
@@ -3286,9 +3291,32 @@ enum ReferenceTearCanonicalProjectionBuilder {
         for (segment, event) in zip(travelSegments, backingEvents) {
             let displacement = event.endPosition - event.startPosition
             guard displacement.isFinite else { return unknownRecord(.noPlacedMotion) }
-            track.append((segment.span.startTime, cursor))
+
+            if let dense = denseTrack(
+                for: event,
+                from: platterTrajectorySegments,
+                startPosition: cursor,
+                endPosition: cursor + displacement,
+                tolerance: configuration.timeTolerance
+            ) {
+                for point in dense {
+                    if let last = track.last,
+                       abs(last.time - point.time) <= configuration.timeTolerance {
+                        guard abs(last.position - point.position) <= configuration.timeTolerance else {
+                            return unknownRecord(.noPlacedMotion)
+                        }
+                        continue
+                    }
+                    guard (track.last?.time ?? -.infinity) < point.time else {
+                        return unknownRecord(.noPlacedMotion)
+                    }
+                    track.append(point)
+                }
+            } else {
+                track.append((segment.span.startTime, cursor))
+                track.append((segment.span.endTime, cursor + displacement))
+            }
             cursor += displacement
-            track.append((segment.span.endTime, cursor))
         }
         reasons.append(.measuredPlatterTravel)
         reasons.append(
@@ -3396,6 +3424,87 @@ enum ReferenceTearCanonicalProjectionBuilder {
         guard candidateSpan.endTime > cursor else { return nil }
         spans.append(ReferenceTearTimeSpan(startTime: cursor, endTime: candidateSpan.endTime))
         return spans
+    }
+
+    /// Refines one already-accepted movement event with packet-dense platter
+    /// measurements. The event remains authoritative for its time span,
+    /// direction and declared coordinate basis; dense samples contribute only
+    /// the measured intra-run shape.
+    ///
+    /// A trajectory segment is usable only when it uniquely contains BOTH
+    /// event endpoints. That prevents interpolation across packet/clock/
+    /// sampling discontinuities. Any ambiguity fails closed to the caller's
+    /// existing two-endpoint geometry.
+    private static func denseTrack(
+        for event: CaptureCore.DetectedNotationRecordMovementEvent,
+        from trajectorySegments: [CaptureCore.PlatterTrajectorySegment],
+        startPosition: Double,
+        endPosition: Double,
+        tolerance: Double
+    ) -> [(time: Double, position: Double)]? {
+        guard event.startTime.isFinite, event.endTime.isFinite,
+              event.endTime > event.startTime,
+              startPosition.isFinite, endPosition.isFinite else { return nil }
+
+        let matching = trajectorySegments.filter { segment in
+            guard let first = segment.samples.first,
+                  let last = segment.samples.last else { return false }
+            return first.takeRelativeTime <= event.startTime + tolerance
+                && last.takeRelativeTime >= event.endTime - tolerance
+        }
+        guard matching.count == 1 else { return nil }
+
+        let samples = matching[0].samples.filter {
+            $0.takeRelativeTime >= event.startTime - tolerance
+                && $0.takeRelativeTime <= event.endTime + tolerance
+        }
+        guard samples.count >= 2,
+              let first = samples.first,
+              let last = samples.last,
+              abs(first.takeRelativeTime - event.startTime) <= tolerance,
+              abs(last.takeRelativeTime - event.endTime) <= tolerance else {
+            return nil
+        }
+
+        let measuredTravel = last.displacementSteps - first.displacementSteps
+        let projectedTravel = endPosition - startPosition
+        guard measuredTravel.isFinite, projectedTravel.isFinite,
+              abs(measuredTravel) > tolerance,
+              abs(projectedTravel) > tolerance,
+              (measuredTravel > 0) == (projectedTravel > 0) else {
+            return nil
+        }
+
+        var result: [(time: Double, position: Double)] = []
+        result.reserveCapacity(samples.count)
+
+        for sample in samples {
+            guard sample.takeRelativeTime.isFinite,
+                  sample.displacementSteps.isFinite else { return nil }
+            let fraction =
+                (sample.displacementSteps - first.displacementSteps) / measuredTravel
+            let position = startPosition + fraction * projectedTravel
+            guard fraction.isFinite, position.isFinite else { return nil }
+
+            if let previous = result.last {
+                guard sample.takeRelativeTime > previous.time else { return nil }
+                let delta = position - previous.position
+                if projectedTravel > 0 {
+                    guard delta >= -tolerance else { return nil }
+                } else {
+                    guard delta <= tolerance else { return nil }
+                }
+            }
+            result.append((sample.takeRelativeTime, position))
+        }
+
+        guard let firstResult = result.first,
+              let lastResult = result.last,
+              abs(firstResult.position - startPosition) <= tolerance,
+              abs(lastResult.position - endPosition) <= tolerance else {
+            return nil
+        }
+        return result
     }
 
     // MARK: Geometry

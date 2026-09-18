@@ -1454,6 +1454,104 @@ final class ReferenceTearEvidencePipelineTests: XCTestCase {
         return after
     }
 
+    /// Regression: finalized reference projection must retain the measured
+    /// packet-level velocity profile from the raw sidecar. Endpoints alone are
+    /// insufficient: the interior point must differ from endpoint-linear
+    /// interpolation when the physical packet trajectory is deliberately
+    /// non-uniform.
+    func testFreshFinalizedTakeProjectsDenseMeasuredTrajectoryFromRetainedRawMIDI() async throws {
+        let start = 0.1
+        let duration = 0.3
+        let count = 80
+
+        // Monotonic forward travel with deliberately non-uniform velocity:
+        // only 25% of the physical displacement has occurred halfway through
+        // the run, then the platter accelerates through the second half.
+        //
+        // Adjacent deltas remain below the ring-counter half-range, so this is
+        // one valid decoder trajectory rather than an ambiguous counter jump.
+        let platter: [Raw] = (0...count).map { index in
+            let fraction = Double(index) / Double(count)
+            let displacement = Int((80.0 * fraction * fraction).rounded())
+            let value = (20 + displacement) % 128
+            let time = ((start + fraction * duration) * 1_000_000_000).rounded()
+                / 1_000_000_000
+            return Raw(
+                timestamp: time,
+                takeRelativeTime: time,
+                deviceName: "Rane ONE MKII",
+                channel: 1,
+                controller: 6,
+                value: value,
+                normalizedValue: Double(value) / 127,
+                mappedControl: nil
+            )
+        }
+
+        let files = try await fixture(try Self.withFader(platter))
+        let take = try await record(worker([files]))
+
+        XCTAssertEqual(take.evidence.rawMixerMIDIEvents, files.raw)
+        XCTAssertFalse(take.evidence.rawMixerMIDIEvents.isEmpty)
+
+        let record = try XCTUnwrap(take.tearProjection.records.first)
+        let curve = try XCTUnwrap(record.subdivisions.first?.measuredCurve)
+
+        XCTAssertGreaterThan(
+            curve.points.count,
+            2,
+            "the finalized take must expose packet-dense measured geometry, not endpoint-only interpolation"
+        )
+
+        let derived = CaptureCore.derivePlatterMotionEvidence(
+            from: take.evidence.rawMixerMIDIEvents
+        ).retaining(normalizedEvents: take.evidence.platterMovementEvents)
+
+        XCTAssertFalse(derived.trajectorySegments.isEmpty)
+
+        let expected = ReferenceTearCanonicalProjectionBuilder.project(
+            take.tearReview,
+            platterTrajectorySegments: derived.trajectorySegments
+        )
+        XCTAssertEqual(take.tearProjection, expected)
+
+        let expectedCurve = try XCTUnwrap(
+            expected.records.first?.subdivisions.first?.measuredCurve
+        )
+
+        XCTAssertEqual(
+            curve.points,
+            expectedCurve.points,
+            "finalized geometry must exactly match geometry independently re-derived from the retained raw MIDI trajectory"
+        )
+
+        let firstPoint = try XCTUnwrap(expectedCurve.points.first)
+        let lastPoint = try XCTUnwrap(expectedCurve.points.last)
+        XCTAssertGreaterThan(lastPoint.time, firstPoint.time)
+
+        let interiorPoints = expectedCurve.points.dropFirst().dropLast()
+        XCTAssertFalse(
+            interiorPoints.isEmpty,
+            "the fixture must produce packet-dense interior geometry"
+        )
+
+        let maximumDeviation = interiorPoints.map { point -> Double in
+            let timeFraction =
+                (point.time - firstPoint.time)
+                / (lastPoint.time - firstPoint.time)
+            let linearPosition =
+                firstPoint.position
+                + timeFraction * (lastPoint.position - firstPoint.position)
+            return abs(point.position - linearPosition)
+        }.max() ?? 0
+
+        XCTAssertGreaterThan(
+            maximumDeviation,
+            0.01,
+            "the independently re-derived raw-MIDI trajectory must itself be detectably non-linear, otherwise this fixture cannot detect endpoint interpolation"
+        )
+    }
+
     func testOneTwoThreeHoldsInBothDirectionsSurviveTheRealArchive() async throws {
         for direction in [1, -1] {
             for count in 1...3 {
@@ -1647,8 +1745,16 @@ final class ReferenceTearEvidencePipelineTests: XCTestCase {
         XCTAssertNil(continued.errorMessage)
         XCTAssertNil(continuedTake.restoredTearProjection)
         XCTAssertNil(continuedTake.restoredTearPerformedLimitations)
-        XCTAssertEqual(continuedTake.tearProjection,
-            ReferenceTearCanonicalProjectionBuilder.project(continuedTake.tearReview))
+        let continuedPlatterEvidence = CaptureCore.derivePlatterMotionEvidence(
+            from: continuedTake.evidence.rawMixerMIDIEvents
+        ).retaining(normalizedEvents: continuedTake.evidence.platterMovementEvents)
+        XCTAssertEqual(
+            continuedTake.tearProjection,
+            ReferenceTearCanonicalProjectionBuilder.project(
+                continuedTake.tearReview,
+                platterTrajectorySegments: continuedPlatterEvidence.trajectorySegments
+            )
+        )
         let continuedBoundaries = try XCTUnwrap(continuedTake.tearReview.candidate(id: candidate.id)).boundaries
         let restoredIDs = Set(boundaries.map(\.id))
         let laterAnnotations = continuedBoundaries.filter { $0.origin == .operatorAdded && !restoredIDs.contains($0.id) }

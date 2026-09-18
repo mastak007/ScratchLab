@@ -1655,7 +1655,18 @@ struct ReferenceAuthoringTake: Equatable, Sendable, Identifiable {
     }
 
     var tearProjection: ReferenceTearCanonicalProjection {
-        restoredTearProjection ?? ReferenceTearCanonicalProjectionBuilder.project(tearReview)
+        if let restoredTearProjection {
+            return restoredTearProjection
+        }
+
+        let platterEvidence = CaptureCore.derivePlatterMotionEvidence(
+            from: evidence.rawMixerMIDIEvents
+        ).retaining(normalizedEvents: evidence.platterMovementEvents)
+
+        return ReferenceTearCanonicalProjectionBuilder.project(
+            tearReview,
+            platterTrajectorySegments: platterEvidence.trajectorySegments
+        )
     }
 
     /// Intrinsic limitations only. Inter-gesture gaps depend on the selected

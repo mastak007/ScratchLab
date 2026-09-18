@@ -965,6 +965,7 @@ struct ReferenceAuthoringView: View {
                     } ?? "YOUR MOTION — LIVE",
                     projection: ReferenceTearCanonicalProjectionBuilder.project(
                         movementEvents: liveNotationTracker.continuousRenderedEvents,
+                        platterTrajectorySegments: liveNotationTracker.platterTrajectorySegments,
                         platterEvidenceIntervals: liveNotationTracker.platterEvidenceIntervals,
                         derivation: liveNotationTracker.faderDerivation,
                         coordinates: liveNotationTracker.continuousPlatterCoordinates
