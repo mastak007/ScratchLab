@@ -2043,9 +2043,20 @@ struct MacAnalyzerView: View {
                         targetWindow: practiceNotationWindow(at: now, notation: notation),
                         playheadTime: now,
                         showPlayhead: tracker != nil,
-                        livePerformedEvents: tracker.map {
-                            practiceLiveEventsForCurrentCycle(tracker: $0, notation: notation)
-                        } ?? [],
+                        livePerformedProjection: tracker.map { tracker in
+                            PracticePerformedNotationPresentation.project(
+                                movementEvents: tracker.platterTrajectorySegments.isEmpty
+                                    ? tracker.renderedEvents : tracker.continuousRenderedEvents,
+                                trajectorySegments: tracker.platterTrajectorySegments,
+                                evidenceIntervals: tracker.platterEvidenceIntervals,
+                                coordinates: tracker.platterTrajectorySegments.isEmpty
+                                    ? .raneOneMKIIDirectMIDI() : tracker.continuousPlatterCoordinates
+                            )
+                        },
+                        livePerformedTimeOffset: tracker.map {
+                            notation.timelineDuration > 0
+                                ? floor($0.elapsedTime / notation.timelineDuration) * notation.timelineDuration : 0
+                        } ?? 0,
                         backgroundColor: .clear
                     )
                 }
@@ -2077,31 +2088,6 @@ struct MacAnalyzerView: View {
         case .unavailable: return "No motion signal"
         case .waiting: return "Waiting for movement…"
         case .tracking: return "Tracking"
-        }
-    }
-
-    private func practiceLiveEventsForCurrentCycle(
-        tracker: LivePerformedNotationTracker,
-        notation: ScratchNotation
-    ) -> [CaptureCore.DetectedNotationRecordMovementEvent] {
-        let duration = notation.timelineDuration
-        guard duration > 0 else { return [] }
-        let cycleStart = floor(tracker.elapsedTime / duration) * duration
-        let cycleEnd = cycleStart + duration
-
-        return tracker.renderedEvents.compactMap { event in
-            guard event.endTime >= cycleStart, event.startTime <= cycleEnd else { return nil }
-            return CaptureCore.DetectedNotationRecordMovementEvent(
-                startTime: event.startTime - cycleStart,
-                endTime: event.endTime - cycleStart,
-                startPosition: event.startPosition,
-                endPosition: event.endPosition,
-                direction: event.direction,
-                movementKind: event.movementKind,
-                speed: event.speed,
-                confidence: event.confidence,
-                source: event.source
-            )
         }
     }
 

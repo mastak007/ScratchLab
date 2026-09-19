@@ -14,6 +14,285 @@ import SwiftUI
 import XCTest
 @testable import ScratchLab
 
+final class PracticePerformedTrajectoryTests: XCTestCase {
+    private let values = [0, 8, 16, 24, 25, 26, 27, 40, 55, 70, 85,
+                          70, 55, 40, 27, 26, 25, 24, 16, 8, 0]
+
+    private func raw(timeOffset: Double = 0) -> [CaptureCore.RawMixerMIDIEvent] {
+        values.enumerated().map { index, value in
+            let time = timeOffset + Double(index) * 0.02
+            return CaptureCore.RawMixerMIDIEvent(
+                timestamp: 100 + time, takeRelativeTime: time,
+                deviceName: "Rane ONE MKII", channel: 1, controller: 6,
+                value: value, normalizedValue: Double(value) / 127, mappedControl: nil
+            )
+        }
+    }
+
+    private func liveProjection(_ raw: [CaptureCore.RawMixerMIDIEvent]) -> ReferenceTearCanonicalProjection {
+        let decoded = CaptureCore.derivePlatterMovementEventsWithProvisional(from: raw, controller: 6, channel: 1)
+        return PracticePerformedNotationPresentation.project(
+            movementEvents: decoded.continuousEvents,
+            provisional: decoded.continuousProvisionalMovement,
+            trajectorySegments: decoded.trajectorySegments,
+            evidenceIntervals: decoded.platterEvidenceIntervals
+        )
+    }
+
+    func testDenseLiveSamplesReachThePracticePanelWithoutStraightening() throws {
+        let projection = liveProjection(raw())
+        guard case .canonical(let records, let layer, let frame) = PracticePerformedNotationPresentation.source(
+            projection: projection, bpm: 150, domain: 0...0.4
+        ) else { return XCTFail("Practice must consume the canonical measured source") }
+        let curves = try records.map { try XCTUnwrap($0.subdivisions.first?.measuredCurve) }
+        XCTAssertEqual(curves.map { $0.points.count }, [11, 11])
+        XCTAssertEqual(curves[0].points.map(\.time), (0...10).map { Double($0) * 0.02 })
+        XCTAssertEqual(curves[0].points[6].position, 27.0 / 85, accuracy: 1e-9)
+        XCTAssertNotEqual(curves[0].points[6].position, 0.6, "the actual slowdown must survive")
+        let geometry = ScratchStrokeGeometry.canonicalGeometry(records: records, layer: layer, frame: frame)
+        XCTAssertEqual(geometry.motion.segments.count, 20)
+        XCTAssertEqual(geometry.motion.position(at: 0.12), 27.0 / 85, accuracy: 1e-9)
+        XCTAssertTrue(geometry.missingMotion.isEmpty)
+    }
+
+    func testMeasuredReversalKeepsOneSharedApex() throws {
+        let projection = liveProjection(raw())
+        XCTAssertEqual(projection.records.map(\.direction), [.forward, .backward])
+        let curves = try projection.records.map { try XCTUnwrap($0.subdivisions.first?.measuredCurve) }
+        XCTAssertEqual(curves[0].points.last, curves[1].points.first)
+        let geometry = try XCTUnwrap(PracticePerformedNotationPresentation.geometry(projection: projection, bpm: 150))
+        XCTAssertEqual(geometry.motion.segments[9].endPosition, geometry.motion.segments[10].startPosition)
+        XCTAssertTrue(projection.records.allSatisfy { $0.internalHolds.isEmpty })
+    }
+
+    func testPracticeResultUsesTheSameDenseFinalizedEvidence() throws {
+        let evidence = CaptureCore.derivePlatterMotionEvidence(from: raw(), controller: 6, channel: 1)
+        let projection = PracticePerformedNotationPresentation.project(
+            movementEvents: evidence.events, trajectorySegments: evidence.trajectorySegments,
+            evidenceIntervals: evidence.intervals
+        )
+        let geometry = try XCTUnwrap(PracticePerformedNotationPresentation.geometry(projection: projection, bpm: 150))
+        XCTAssertEqual(geometry.motion.segments.count, 20)
+        XCTAssertEqual(geometry.motion.position(at: 0.12), 27.0 / 85, accuracy: 1e-9)
+        XCTAssertEqual(projection, ReferenceTearCanonicalProjectionBuilder.project(
+            movementEvents: evidence.events, platterTrajectorySegments: evidence.trajectorySegments,
+            platterEvidenceIntervals: evidence.intervals
+        ))
+    }
+
+    func testMacTrackerDenseEvidenceMatchesTheUnchangedCaptureProjection() throws {
+        let packets = raw()
+        let state = LivePerformedNotationTracker.computeState(
+            dataSource: LivePerformedNotationDataSource(
+                selectedMIDISourceName: { "Rane ONE MKII" },
+                capturedMidiCCEventsSnapshot: { packets },
+                cameraMovementEventsSnapshot: { _ in nil }
+            ), baselineTimestamp: 99
+        )
+        guard case .tracking(_, _, _, _, let trajectory, let intervals, _, _) = state else {
+            return XCTFail("Real tracker must retain the dense decoder result")
+        }
+        let projection = PracticePerformedNotationPresentation.project(
+            movementEvents: LivePerformedNotationTracker.continuousRenderedEvents(for: state),
+            trajectorySegments: trajectory, evidenceIntervals: intervals
+        )
+        let practice = try XCTUnwrap(PracticePerformedNotationPresentation.geometry(projection: projection, bpm: 150))
+        let capture = LivePerformedNotationCard.chartPresentation(
+            for: state, bpm: 150, window: nil, emptyMessage: "No motion"
+        )
+        guard case .canonical(let records, let layer, let frame) = capture.source else {
+            return XCTFail("Existing Capture must remain dense")
+        }
+        XCTAssertNil(capture.wrapPeriod)
+        XCTAssertEqual(practice, ScratchStrokeGeometry.canonicalGeometry(records: records, layer: layer, frame: frame))
+        XCTAssertEqual(practice.motion.segments.count, 20)
+    }
+
+    func testEveryDecoderBoundaryRemainsAPenUpInPractice() throws {
+        let kinds: [CaptureCore.PlatterEvidenceInterval.Kind] = [
+            .packetGap, .clockDiscontinuity, .insufficientSampling, .unknown
+        ]
+        for kind in kinds {
+            let interrupted = raw().enumerated().map { index, event in
+                var time = event.takeRelativeTime
+                var host = event.timestamp
+                var value = event.value
+                if index > 10 {
+                    switch kind {
+                    case .packetGap: time += 0.2; host += 0.2
+                    case .clockDiscontinuity: host += 0.2
+                    case .insufficientSampling:
+                        time -= 0.02; host -= 0.02
+                        if index == 11 { time = 0.2; host = 100.2 }
+                    case .unknown: value = (value + 79) % 128
+                    default: break
+                    }
+                }
+                return CaptureCore.RawMixerMIDIEvent(
+                    timestamp: host, takeRelativeTime: time, deviceName: event.deviceName,
+                    channel: 1, controller: 6, value: value,
+                    normalizedValue: Double(value) / 127, mappedControl: nil
+                )
+            }
+            let decoded = CaptureCore.derivePlatterMovementEventsWithProvisional(
+                from: interrupted, controller: 6, channel: 1
+            )
+            XCTAssertTrue(decoded.trajectorySegments.contains { $0.boundaryBefore == kind }, "\(kind)")
+            let boundary = try XCTUnwrap(decoded.platterEvidenceIntervals.first { $0.kind == kind })
+            let geometry = try XCTUnwrap(PracticePerformedNotationPresentation.geometry(
+                projection: liveProjection(interrupted), bpm: 150
+            ))
+            XCTAssertFalse(geometry.motion.isEmpty)
+            XCTAssertTrue(geometry.motion.segments.allSatisfy {
+                $0.endTime <= boundary.startTime + 1e-9 || $0.startTime >= boundary.endTime - 1e-9
+            }, "Practice must not connect across \(kind)")
+        }
+    }
+
+    func testUncorrelatedDenseEvidenceNeverFallsBackToEndpoints() throws {
+        let evidence = CaptureCore.derivePlatterMotionEvidence(from: raw(), controller: 6, channel: 1)
+        let projection = PracticePerformedNotationPresentation.project(
+            movementEvents: evidence.events,
+            trajectorySegments: [.init(boundaryBefore: .unknown, samples: [])],
+            evidenceIntervals: evidence.intervals
+        )
+        let geometry = try XCTUnwrap(PracticePerformedNotationPresentation.geometry(projection: projection, bpm: 150))
+        XCTAssertTrue(geometry.motion.isEmpty)
+        XCTAssertFalse(geometry.missingMotion.isEmpty)
+    }
+
+    func testEndpointFallbackRequiresAbsentTrajectoryAndSupportedEvidence() throws {
+        let evidence = CaptureCore.derivePlatterMotionEvidence(from: raw(), controller: 6, channel: 1)
+        let projection = PracticePerformedNotationPresentation.project(
+            movementEvents: evidence.events, trajectorySegments: [], evidenceIntervals: evidence.intervals
+        )
+        XCTAssertEqual(projection.records.flatMap(\.subdivisions).compactMap(\.measuredCurve).map { $0.points.count }, [2, 2])
+        let geometry = try XCTUnwrap(PracticePerformedNotationPresentation.geometry(projection: projection, bpm: 150))
+        XCTAssertEqual(geometry.motion.segments.count, 2)
+
+        let unknown = evidence.events.map { event in
+            CaptureCore.DetectedNotationRecordMovementEvent(
+                startTime: event.startTime, endTime: event.endTime,
+                startPosition: event.startPosition, endPosition: event.endPosition,
+                direction: event.direction, movementKind: event.movementKind,
+                speed: event.speed, confidence: event.confidence, source: "unknown"
+            )
+        }
+        let unsupported = PracticePerformedNotationPresentation.project(
+            movementEvents: unknown, trajectorySegments: [], evidenceIntervals: []
+        )
+        XCTAssertTrue(try XCTUnwrap(PracticePerformedNotationPresentation.geometry(
+            projection: unsupported, bpm: 150
+        )).motion.isEmpty)
+        if case .empty = PracticePerformedNotationPresentation.source(projection: nil, bpm: 150) {} else {
+            XCTFail("No evidence must remain empty")
+        }
+    }
+
+    func testSparseFallbackDoesNotInventAHoldAcrossAPacketGap() throws {
+        let packets = raw() + raw(timeOffset: 1)
+        let evidence = CaptureCore.derivePlatterMotionEvidence(from: packets, controller: 6, channel: 1)
+        let projection = PracticePerformedNotationPresentation.project(
+            movementEvents: evidence.events, trajectorySegments: [], evidenceIntervals: evidence.intervals
+        )
+        let geometry = try XCTUnwrap(PracticePerformedNotationPresentation.geometry(projection: projection, bpm: 150))
+        XCTAssertFalse(geometry.motion.isEmpty)
+        XCTAssertTrue(geometry.motion.segments.allSatisfy { $0.endTime <= 0.4 + 1e-9 || $0.startTime >= 1 - 1e-9 })
+    }
+
+    func testSparseFallbackCannotSpanAnExplicitUnsupportedInterval() throws {
+        let evidence = CaptureCore.derivePlatterMotionEvidence(from: raw(), controller: 6, channel: 1)
+        for kind: CaptureCore.PlatterEvidenceInterval.Kind in [
+            .packetGap, .clockDiscontinuity, .insufficientSampling, .unknown, .discardedMotion
+        ] {
+            let projection = PracticePerformedNotationPresentation.project(
+                movementEvents: [try XCTUnwrap(evidence.events.first)], trajectorySegments: [],
+                evidenceIntervals: [.init(startTime: 0.08, endTime: 0.12, kind: kind)]
+            )
+            guard let geometry = PracticePerformedNotationPresentation.geometry(projection: projection, bpm: 150) else {
+                XCTAssertTrue(projection.isEmpty, "Unplaceable sparse evidence stays empty")
+                continue
+            }
+            XCTAssertTrue(geometry.motion.segments.allSatisfy {
+                $0.endTime <= 0.08 || $0.startTime >= 0.12
+            }, "Sparse endpoints cannot authorize motion across \(kind)")
+        }
+    }
+
+    func testShortProvisionalCannotBypassExistingNoiseGates() {
+        let packets = Array(raw().prefix(3))
+        let decoded = CaptureCore.derivePlatterMovementEventsWithProvisional(from: packets, controller: 6, channel: 1)
+        XCTAssertEqual(decoded.continuousProvisionalMovement?.meetsNoiseGates, false)
+        XCTAssertTrue(liveProjection(packets).isEmpty)
+    }
+
+    func testProjectionLeavesTargetScoringAndCaptureEvidenceUnchanged() throws {
+        let packets = raw()
+        let events = CaptureCore.derivePlatterMovementEvents(from: packets, controller: 6, channel: 1)
+        let snapshot = CaptureCore.DetectedNotationSnapshot(
+            notationSource: "detected", notationConfidence: 0.9,
+            detectedLabel: nil, labelSource: "unknown", labelConfidence: nil,
+            detectionSources: ["controller"], recordMovementEvents: events,
+            audioEvents: [], faderEvents: [], mixerMidiEvents: packets,
+            capturedAt: Date(timeIntervalSince1970: 0)
+        )
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.sortedKeys]
+        let before = try encoder.encode(snapshot)
+        let target = try XCTUnwrap(ScratchNotation.babyScratchCycle.materialized(bpm: 150))
+        let targetBytes = try encoder.encode(target)
+        let targetPath = ScratchStrokeGeometry.motionPath(for: LaneContent(notation: target, beatsPerMinute: 150))
+        let attempt = try XCTUnwrap(PracticeAttemptEvidenceResolver.liveCycleAttempt(
+            pattern: ScratchNotation.babyScratchCycle, bpm: 150, countInBeats: 0, cycleIndex: 0, snapshot: snapshot
+        ))
+        _ = PracticePerformedNotationPresentation.source(projection: liveProjection(packets), bpm: 150)
+        XCTAssertEqual(try encoder.encode(snapshot), before)
+        XCTAssertEqual(try encoder.encode(target), targetBytes)
+        XCTAssertEqual(ScratchStrokeGeometry.motionPath(for: LaneContent(notation: target, beatsPerMinute: 150)), targetPath)
+        XCTAssertEqual(CaptureCore.derivePlatterMovementEvents(from: packets, controller: 6, channel: 1), events)
+        XCTAssertEqual(PracticeAttemptEvidenceResolver.liveCycleAttempt(
+            pattern: ScratchNotation.babyScratchCycle, bpm: 150, countInBeats: 0, cycleIndex: 0, snapshot: snapshot
+        ), attempt)
+    }
+
+    func testMacCycleViewportKeepsEveryMeasuredTimeAndClipsWithoutReconnecting() throws {
+        let projection = liveProjection(raw(timeOffset: 2))
+        let before = projection
+        let geometry = try XCTUnwrap(PracticePerformedNotationPresentation.geometry(
+            projection: projection, bpm: 150, domain: 2.1...2.3
+        ))
+        XCTAssertEqual(projection, before)
+        XCTAssertEqual(geometry.motion.segments.first?.startTime, 2.1)
+        XCTAssertEqual(geometry.motion.segments.last?.endTime, 2.3)
+        XCTAssertGreaterThan(geometry.motion.segments.count, 2)
+        XCTAssertEqual(geometry.motion.position(at: 2.12), 27.0 / 85, accuracy: 1e-9)
+    }
+
+    func testBothPracticeSurfacesConsumeProjectionWithoutChangingCaptureOrCXLWiring() throws {
+        let root = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
+        func source(_ path: String) throws -> String {
+            try String(contentsOf: root.appendingPathComponent(path), encoding: .utf8)
+        }
+        let mac = try source("ScratchLabDesktop/Views/MacAnalyzerView.swift")
+        let ios = try source("ScratchLab/Views/PracticeModeView.swift")
+        let dispatcher = try source("ScratchLab/MIDI/iOSMIDIManager.swift")
+        let chart = try source("ScratchLabDesktop/Views/ScratchPhraseChartView.swift")
+        XCTAssertTrue(mac.contains("livePerformedProjection: tracker.map"))
+        XCTAssertFalse(mac.contains("practiceLiveEventsForCurrentCycle"))
+        XCTAssertFalse(ios.contains("source: .performedPlatter("))
+        XCTAssertTrue(ios.contains("performedProjection: midiControllerDispatcher.practiceResultNotationProjection"))
+        XCTAssertTrue(ios.contains("updateLivePerformedNotation(events)"))
+        XCTAssertTrue(ios.contains("projection: livePerformedProjection"))
+        XCTAssertTrue(dispatcher.contains("trajectorySegments: result.trajectorySegments"))
+        XCTAssertTrue(dispatcher.contains("trajectorySegments: evidence.trajectorySegments"))
+        XCTAssertTrue(chart.contains("let start = windowStart + livePerformedTimeOffset"))
+        XCTAssertTrue(chart.contains("ScratchMotionRenderer.draw(geometry.motion"))
+        // Defaults leave every pre-existing non-Practice chart call unchanged.
+        XCTAssertTrue(chart.contains("var livePerformedProjection: ReferenceTearCanonicalProjection? = nil"))
+        XCTAssertTrue(mac.contains("LivePerformedNotationCard("))
+    }
+}
+
 final class ScratchNotationPanelTests: XCTestCase {
 
     // MARK: - Fixtures

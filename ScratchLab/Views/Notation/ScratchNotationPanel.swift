@@ -1,5 +1,62 @@
 import SwiftUI
 
+/// Practice-only presentation boundary. Reuses the Capture/CXL projector;
+/// movement summaries remain independent inputs to scoring and persistence.
+enum PracticePerformedNotationPresentation {
+    static func project(
+        movementEvents: [CaptureCore.DetectedNotationRecordMovementEvent],
+        provisional: CaptureCore.ProvisionalPlatterMovement? = nil,
+        trajectorySegments: [CaptureCore.PlatterTrajectorySegment],
+        evidenceIntervals: [CaptureCore.PlatterEvidenceInterval],
+        coordinates: CaptureCore.PlatterNotationCoordinates = .normalizedTakeLocal()
+    ) -> ReferenceTearCanonicalProjection {
+        var events = movementEvents
+        if let provisional, provisional.meetsNoiseGates {
+            let duration = provisional.currentTime - provisional.startTime
+            events.append(CaptureCore.DetectedNotationRecordMovementEvent(
+                startTime: provisional.startTime, endTime: provisional.currentTime,
+                startPosition: provisional.startPosition, endPosition: provisional.currentPosition,
+                direction: provisional.direction, movementKind: provisional.movementKind,
+                speed: duration > 0 ? abs(provisional.displacement) / duration : 0,
+                confidence: 0.80, source: "live_preview"
+            ))
+        }
+        return ReferenceTearCanonicalProjectionBuilder.project(
+            movementEvents: events,
+            platterTrajectorySegments: trajectorySegments,
+            platterEvidenceIntervals: evidenceIntervals,
+            coordinates: coordinates
+        )
+    }
+
+    static func source(
+        projection: ReferenceTearCanonicalProjection?,
+        bpm: Double,
+        domain: ClosedRange<TimeInterval>? = nil
+    ) -> ScratchPhraseChartView.ChartSource {
+        guard let projection, !projection.records.isEmpty,
+              let timeRange = domain ?? projection.timeRange,
+              let frame = ScratchStrokeGeometry.CanonicalFrame(
+                timeRange: timeRange,
+                positionRange: projection.positionRange ?? -0.5...0.5,
+                coordinateSpace: projection.coordinateSpace,
+                beatsPerMinute: bpm
+              ) else { return .empty("No supported platter motion") }
+        return .canonical(projection.records, layer: .performance, frame: frame)
+    }
+
+    static func geometry(
+        projection: ReferenceTearCanonicalProjection?,
+        bpm: Double,
+        domain: ClosedRange<TimeInterval>? = nil
+    ) -> ScratchStrokeGeometry.CanonicalGeometry? {
+        guard case .canonical(let records, let layer, let frame) = source(
+            projection: projection, bpm: bpm, domain: domain
+        ) else { return nil }
+        return ScratchStrokeGeometry.canonicalGeometry(records: records, layer: layer, frame: frame)
+    }
+}
+
 // The canonical cross-platform ScratchNotationPanel — the shared TARGET / MY
 // PERFORMANCE notation card approved in Figma (component `ScratchNotationPanel`,
 // node 148:123; three modes Target / Live / Review; presentation Standard /

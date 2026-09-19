@@ -164,8 +164,9 @@ struct PracticeModeView: View {
     @State private var notationFeedbackState: NotationFeedbackState = .neutral
     // Active-attempt performance evidence for the live notation lane. This is
     // presentation state only; Result independently resolves its finalized
-    // gesture-relative view from the same raw attempt evidence.
+    // dense projection from the same raw attempt evidence.
     @State private var livePerformedMovementEvents: [CaptureCore.DetectedNotationRecordMovementEvent] = []
+    @State private var livePerformedProjection: ReferenceTearCanonicalProjection?
     // Signature of the last controller comparison rendered by the live HUD.
     // This prevents the 25 Hz MIDI preview stream from retriggering the same
     // reward animation on every redraw.
@@ -580,6 +581,7 @@ struct PracticeModeView: View {
                         targetNotation: targetNotation,
                         bpm: Double(practiceBeatStore.bpmValue),
                         evidence: practiceResultNotation,
+                        performedProjection: midiControllerDispatcher.practiceResultNotationProjection,
                         reviewSummary: practiceReviewSummary,
                         controllerAttempt: latestControllerAttempt,
                         continueButtonTitle: isComboChallengeMode ? "Run It Again" : "Practice Again",
@@ -653,8 +655,8 @@ struct PracticeModeView: View {
             cleanupSession()
             practiceBeatStore.handleLeavingPractice()
         }
-        .onReceive(midiControllerDispatcher.$livePlatterMovementEvents) { _ in
-            updateLivePerformedNotation()
+        .onReceive(midiControllerDispatcher.$livePlatterMovementEvents) { events in
+            updateLivePerformedNotation(events)
         }
         .overlay {
             if showMicRationale {
@@ -803,7 +805,11 @@ struct PracticeModeView: View {
                 .foregroundStyle(ScratchLabDesign.Notation.performanceTrace)
 
             if !livePerformedMovementEvents.isEmpty {
-                PracticeLandscapePerformedTrace(events: livePerformedMovementEvents)
+                PracticeLandscapePerformedTrace(
+                    projection: livePerformedProjection,
+                    bpm: Double(practiceBeatStore.bpmValue),
+                    visibleWindow: livePerformanceDomain
+                )
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
                     .layoutPriority(1)
             } else {
@@ -1711,7 +1717,11 @@ struct PracticeModeView: View {
                         ScratchNotationPanel(
                             lane: .performance,
                             presentation: .standard,
-                            source: .performedPlatter(livePerformedMovementEvents),
+                            source: PracticePerformedNotationPresentation.source(
+                                projection: livePerformedProjection,
+                                bpm: Double(practiceBeatStore.bpmValue),
+                                domain: performedDomain
+                            ),
                             bpm: Double(practiceBeatStore.bpmValue),
                             domain: performedDomain,
                             mode: .liveComparison,
@@ -1927,6 +1937,7 @@ struct PracticeModeView: View {
             comboCompletionQueued = false
             sessionProgressPersisted = false
             livePerformedMovementEvents = []
+            livePerformedProjection = nil
             liveControllerFeedbackSignature = nil
             latestControllerAttempt = nil
             midiControllerDispatcher.resetCapturedPlatterEvents()
@@ -2058,6 +2069,7 @@ struct PracticeModeView: View {
         comboCompletionQueued = false
         sessionProgressPersisted = false
         livePerformedMovementEvents = []
+        livePerformedProjection = nil
         liveControllerFeedbackSignature = nil
         latestControllerAttempt = nil
         midiControllerDispatcher.resetCapturedPlatterEvents()
@@ -2087,6 +2099,7 @@ struct PracticeModeView: View {
         comboCompletionQueued = false
         sessionProgressPersisted = false
         livePerformedMovementEvents = []
+        livePerformedProjection = nil
         liveControllerFeedbackSignature = nil
         latestControllerAttempt = nil
         comboPhraseStartedAt = nil
@@ -2370,12 +2383,14 @@ struct PracticeModeView: View {
     /// Practice attempt. SwiftUI then invalidates the existing performance
     /// `ScratchNotationPanel`; no renderer geometry or notation grammar is
     /// reimplemented here.
-    private func updateLivePerformedNotation() {
+    private func updateLivePerformedNotation(_ events: [CaptureCore.DetectedNotationRecordMovementEvent]) {
         // Reference-only Demo collects nothing; every other mode — including
         // Demo + My Motion — feeds the live performed lane from the always-on
         // MIDI platter stream. Camera/mic are irrelevant to this path.
         guard isSessionActive, !isPaused, !isReferenceOnlyDemo else { return }
-        let events = midiControllerDispatcher.livePlatterMovementEvents
+        // Intermediate samples can change without changing stroke endpoints.
+        // Consume the coalesced projection before the summary equality guard.
+        livePerformedProjection = midiControllerDispatcher.livePlatterNotationProjection
         guard events != livePerformedMovementEvents else { return }
         livePerformedMovementEvents = events
         updateLiveControllerFeedback()
@@ -2569,43 +2584,19 @@ private struct PracticeLandscapeTargetTrace: View {
 }
 
 /// Transparent measured-performance trace for landscape camera Practice. It
-/// adapts the already-published movement events with the canonical adapter and
+/// consumes the already-published dense projection with the canonical geometry and
 /// renderer and never writes back to capture, MIDI, or notation state.
 private struct PracticeLandscapePerformedTrace: View {
-    let events: [CaptureCore.DetectedNotationRecordMovementEvent]
-    private let motionPath: MotionPath
-    private let visibleWindow: ClosedRange<TimeInterval>?
-
-    init(events: [CaptureCore.DetectedNotationRecordMovementEvent]) {
-        self.events = events
-        let strokes = events.compactMap(PerformedStrokeAdapter.laneStroke)
-        let end = max(events.map(\.endTime).max() ?? 0.1, 0.1)
-        let content = LaneContent(
-            strokes: strokes,
-            segments: [],
-            beatsPerMinute: nil,
-            duration: end,
-            loops: false
-        )
-        if let frame = PerformedStrokeAdapter.gestureRelativeNormalizationFrame(for: events) {
-            self.motionPath = ScratchStrokeGeometry.motionPath(
-                for: content,
-                normalizingTo: frame
-            )
-        } else {
-            self.motionPath = ScratchStrokeGeometry.motionPath(for: content)
-        }
-
-        if let first = events.first, let last = events.last {
-            self.visibleWindow = first.startTime...max(first.startTime + 0.1, last.endTime)
-        } else {
-            self.visibleWindow = nil
-        }
-    }
+    let projection: ReferenceTearCanonicalProjection?
+    let bpm: Double
+    let visibleWindow: ClosedRange<TimeInterval>?
 
     var body: some View {
         Canvas { context, size in
-            guard let visibleWindow else { return }
+            guard let visibleWindow,
+                  let geometry = PracticePerformedNotationPresentation.geometry(
+                    projection: projection, bpm: bpm, domain: visibleWindow
+                  ) else { return }
             let duration = max(visibleWindow.upperBound - visibleWindow.lowerBound, 0.1)
             let viewport = LaneViewport(
                 size: size,
@@ -2615,7 +2606,7 @@ private struct PracticeLandscapePerformedTrace: View {
                 secondsAhead: duration
             )
             ScratchMotionRenderer.draw(
-                motionPath,
+                geometry.motion,
                 in: context,
                 viewport: viewport,
                 style: .performance
@@ -4595,6 +4586,7 @@ struct ResultsOverlayView: View {
     let targetNotation: ScratchNotation?
     let bpm: Double
     let evidence: PracticeResultNotation
+    let performedProjection: ReferenceTearCanonicalProjection
     let reviewSummary: PracticeReviewSummary?
     let controllerAttempt: PracticeAttemptResult?
     let continueButtonTitle: String
@@ -4766,7 +4758,8 @@ struct ResultsOverlayView: View {
     @ViewBuilder
     private var resultNotation: some View {
         if !isCombo {
-            PracticeResultNotationSection(target: targetNotation, bpm: bpm, evidence: evidence)
+            PracticeResultNotationSection(target: targetNotation, bpm: bpm, evidence: evidence,
+                                          performedProjection: performedProjection)
                 .padding(.horizontal, isLandscapeViewport ? 0 : 32)
         }
     }
@@ -4875,6 +4868,7 @@ private struct PracticeResultNotationSection: View {
     let target: ScratchNotation?
     let bpm: Double
     let evidence: PracticeResultNotation
+    let performedProjection: ReferenceTearCanonicalProjection
     @Environment(\.horizontalSizeClass) private var horizontalSizeClass
 
     private var presentation: ScratchNotationPanelPresentation {
@@ -4894,11 +4888,13 @@ private struct PracticeResultNotationSection: View {
                 )
 
                 switch evidence {
-                case .comparison(let performed):
+                case .comparison:
                     ScratchNotationPanel(
                         lane: .performance,
                         presentation: presentation,
-                        source: .performedPlatter(performed),
+                        source: PracticePerformedNotationPresentation.source(
+                            projection: performedProjection, bpm: bpm, domain: domain
+                        ),
                         bpm: bpm,
                         domain: domain
                     )

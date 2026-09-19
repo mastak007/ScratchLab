@@ -4807,7 +4807,7 @@ final class CaptureReliabilityPhase1CoreTests: XCTestCase {
         XCTAssertTrue(waveformSource.contains("LOAD AHHH TO SEE SAMPLE POSITION"))
         XCTAssertFalse(waveformSource.localizedCaseInsensitiveContains("Serato owns"))
         XCTAssertTrue(practiceSource.contains("SamplePositionWaveformView()"))
-        XCTAssertTrue(practiceSource.contains("gestureRelativeNormalizationFrame(for: events)"))
+        XCTAssertTrue(practiceSource.contains("projection: livePerformedProjection"))
         XCTAssertTrue(practiceSource.contains("gestureRelativePlatterNotationEvents"))
         XCTAssertGreaterThanOrEqual(captureSource.components(separatedBy: "SamplePositionWaveformView()").count - 1, 2)
         XCTAssertTrue(captureSource.contains("gestureRelativeNormalizationFrame(for: events)"))

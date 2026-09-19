@@ -403,6 +403,9 @@ final class IOSMIDIControllerDispatcher: ObservableObject {
     /// than SwiftUI should redraw, so this is refreshed at the same ~25 Hz
     /// cadence as the macOS live tracker rather than publishing every packet.
     @Published private(set) var livePlatterMovementEvents: [CaptureCore.DetectedNotationRecordMovementEvent] = []
+    /// Same coalesced decoder pass, retained only for Practice presentation.
+    /// Assigned before publishing the unchanged movement-summary stream.
+    private(set) var livePlatterNotationProjection: ReferenceTearCanonicalProjection?
     @Published private(set) var crossfaderMIDIValue: Int?
     @Published private(set) var leftUpfaderMIDIValue: Int?
     @Published private(set) var rightUpfaderMIDIValue: Int?
@@ -474,6 +477,7 @@ final class IOSMIDIControllerDispatcher: ObservableObject {
         capturedPlatterMIDIEvents.removeAll()
         capturedCrossfaderMIDIEvents.removeAll()
         capturedUpfaderMIDIEvents.removeAll()
+        livePlatterNotationProjection = nil
         livePlatterMovementEvents.removeAll()
         liveNotationDecodeAnchorIndex = 0
         captureBaselineTimestamp = CACurrentMediaTime()
@@ -533,6 +537,21 @@ final class IOSMIDIControllerDispatcher: ObservableObject {
             from: withinTakeWindow(capturedPlatterMIDIEvents),
             controller: 6,
             channel: ScratchPlatterTracker.rightChannel
+        )
+    }
+
+    /// Result display uses the existing finalized decoder's dense evidence.
+    /// Snapshot/scoring/export continue to read their original event streams.
+    var practiceResultNotationProjection: ReferenceTearCanonicalProjection {
+        let evidence = CaptureCore.derivePlatterMotionEvidence(
+            from: withinTakeWindow(capturedPlatterMIDIEvents),
+            controller: 6,
+            channel: ScratchPlatterTracker.rightChannel
+        )
+        return PracticePerformedNotationPresentation.project(
+            movementEvents: evidence.events,
+            trajectorySegments: evidence.trajectorySegments,
+            evidenceIntervals: evidence.intervals
         )
     }
 
@@ -619,6 +638,12 @@ final class IOSMIDIControllerDispatcher: ObservableObject {
             .takeRelativeTime ?? 0
         let cutoff = max(0, latestTime - Self.liveNotationWindowDuration)
         let committed = result.committedEvents.filter { $0.endTime >= cutoff }
+        livePlatterNotationProjection = PracticePerformedNotationPresentation.project(
+            movementEvents: result.continuousEvents.filter { $0.endTime >= cutoff },
+            provisional: result.continuousProvisionalMovement,
+            trajectorySegments: result.trajectorySegments,
+            evidenceIntervals: result.platterEvidenceIntervals
+        )
         advanceLiveNotationAnchor(
             past: result.committedEvents,
             before: cutoff

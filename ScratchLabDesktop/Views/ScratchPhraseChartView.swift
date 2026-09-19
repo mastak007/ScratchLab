@@ -70,6 +70,10 @@ struct ScratchPhraseChartView: View {
     /// the target's time and vertical axes. Nothing here mutates, scores, or
     /// persists the events.
     var livePerformedEvents: [CaptureCore.DetectedNotationRecordMovementEvent] = []
+    /// Practice retains canonical measured curves, including unknown spans.
+    /// The offset changes only the viewport clock, never the evidence times.
+    var livePerformedProjection: ReferenceTearCanonicalProjection? = nil
+    var livePerformedTimeOffset: TimeInterval = 0
     /// Captured fader spans for the `.performedPlatter` source's fader lane.
     /// Empty means "no trustworthy fader capture" — the lane shows a subdued
     /// "Fader not captured" state instead of inventing an open line. Non-empty
@@ -320,6 +324,24 @@ struct ScratchPhraseChartView: View {
         duration: TimeInterval,
         targetFrame: ClosedRange<CGFloat>
     ) {
+        if let livePerformedProjection {
+            guard livePerformedTimeOffset.isFinite,
+                  let geometry = PracticePerformedNotationPresentation.geometry(
+                    projection: livePerformedProjection, bpm: bpm
+                  ) else { return }
+            let start = windowStart + livePerformedTimeOffset
+            let viewport = LaneViewport(size: size, now: start, axis: .horizontal,
+                                        actionLineFraction: 0, secondsAhead: duration)
+            var platterContext = ctx
+            platterContext.clip(to: Path(CGRect(origin: .zero, size: size)))
+            ScratchMotionRenderer.draw(geometry.motion, in: platterContext,
+                                       viewport: viewport, style: Self.performedStyle)
+            drawUnknownIntervals(geometry.missingMotion, label: "MOTION UNKNOWN",
+                                 ctx: platterContext, start: start,
+                                 pps: size.width / CGFloat(duration),
+                                 top: 16, height: max(0, size.height - 30))
+            return
+        }
         let strokes = events.compactMap(PerformedStrokeAdapter.laneStroke)
         guard !strokes.isEmpty else { return }
 
