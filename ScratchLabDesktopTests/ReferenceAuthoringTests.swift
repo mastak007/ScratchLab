@@ -2846,40 +2846,48 @@ final class ReferenceTearCanonicalProjectionTests: XCTestCase {
             direction: "forward",
             from: 0.0, to: 1.0
         )
-        let trajectory = [
-            CaptureCore.PlatterTrajectorySegment(
-                boundaryBefore: nil,
-                samples: [
-                    .init(takeRelativeTime: 0.00, displacementSteps: 0),
-                    .init(takeRelativeTime: 0.10, displacementSteps: 40)
-                ]
-            ),
-            CaptureCore.PlatterTrajectorySegment(
-                boundaryBefore: .packetGap,
-                samples: [
-                    .init(takeRelativeTime: 0.20, displacementSteps: 0),
-                    .init(takeRelativeTime: 0.30, displacementSteps: 60)
-                ]
-            )
+        let boundaries: [CaptureCore.PlatterEvidenceInterval.Kind] = [
+            .packetGap, .clockDiscontinuity, .insufficientSampling, .unknown
         ]
+        for boundary in boundaries {
+            let trajectory = [
+                CaptureCore.PlatterTrajectorySegment(
+                    boundaryBefore: nil,
+                    samples: [
+                        .init(takeRelativeTime: 0.00, displacementSteps: 0),
+                        .init(takeRelativeTime: 0.10, displacementSteps: 40)
+                    ]
+                ),
+                CaptureCore.PlatterTrajectorySegment(
+                    boundaryBefore: boundary,
+                    samples: [
+                        .init(takeRelativeTime: 0.20, displacementSteps: 0),
+                        .init(takeRelativeTime: 0.30, displacementSteps: 60)
+                    ]
+                )
+            ]
 
-        let projection = ReferenceTearCanonicalProjectionBuilder.project(
-            movementEvents: [event],
-            platterTrajectorySegments: trajectory,
-            derivation: nil,
-            referenceTakeID: "dense-gap",
-            coordinates: .normalizedTakeLocal()
-        )
+            let projection = ReferenceTearCanonicalProjectionBuilder.project(
+                movementEvents: [event],
+                platterTrajectorySegments: trajectory,
+                derivation: nil,
+                referenceTakeID: "dense-gap",
+                coordinates: .normalizedTakeLocal()
+            )
 
-        let curve = try XCTUnwrap(
-            projection.records.first?.subdivisions.first?.measuredCurve
-        )
-        XCTAssertEqual(
-            curve.points.count, 2,
-            "No dense curve may be manufactured across a packet discontinuity."
-        )
-        XCTAssertEqual(curve.startPosition, 0.0)
-        XCTAssertEqual(curve.endPosition, 1.0)
+            let subdivision = try XCTUnwrap(projection.records.first?.subdivisions.first)
+            XCTAssertNil(subdivision.measuredCurve,
+                         "endpoint fallback must not bridge a supplied \(boundary) boundary")
+            let frame = try XCTUnwrap(ScratchStrokeGeometry.CanonicalFrame(
+                timeRange: 0...0.30, positionRange: 0...1,
+                coordinateSpace: projection.coordinateSpace, beatsPerMinute: 90
+            ))
+            let geometry = ScratchStrokeGeometry.canonicalGeometry(
+                records: projection.records, layer: .performance, frame: frame
+            )
+            XCTAssertTrue(geometry.motion.segments.isEmpty)
+            XCTAssertEqual(geometry.missingMotion, [0...0.30])
+        }
     }
 
     func testMissingDenseTrajectoryLeavesExistingProjectionUnchanged() {

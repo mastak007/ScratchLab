@@ -849,6 +849,214 @@ final class LivePerformedNotationTrackerTests: XCTestCase {
         )
     }
 
+    // MARK: - Actual live card -> shared canonical geometry
+
+    private func liveCardGeometry(
+        _ state: LiveNotationTrackingState
+    ) throws -> (records: [ScratchNotation.GestureRecord],
+                 geometry: ScratchStrokeGeometry.CanonicalGeometry,
+                 period: Double?) {
+        let presentation = LivePerformedNotationCard.chartPresentation(
+            for: state, bpm: 90, window: nil, emptyMessage: "No motion"
+        )
+        guard case .canonical(let records, let layer, let frame) = presentation.source else {
+            XCTFail("dense live evidence must reach the card's canonical renderer")
+            throw NSError(domain: "LiveCardFixture", code: 1)
+        }
+        return (records, ScratchStrokeGeometry.canonicalGeometry(
+            records: records, layer: layer, frame: frame, wrapPeriod: presentation.wrapPeriod
+        ), presentation.wrapPeriod)
+    }
+
+    func testLiveCardPreservesDensePointsAndMeasuredReversalApex() throws {
+        let values = [0, 8, 16, 24, 25, 26, 27, 40, 55, 70, 85,
+                      70, 55, 40, 27, 26, 25, 24, 16, 8, 0]
+        let raw = values.enumerated().map { index, value in
+            midiEvent(value: value, takeRelativeTime: Double(index) * 0.02,
+                      deviceName: "Rane ONE MKII")
+        }
+        let finalBefore = CaptureCore.derivePlatterMovementEvents(from: raw, controller: 6, channel: 1)
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.sortedKeys]
+        let rawBefore = try encoder.encode(raw)
+        let rendered = try liveCardGeometry(loopState(raw, context: nil, baseline: -1))
+        XCTAssertNil(rendered.period)
+        XCTAssertEqual(rendered.records.map(\.direction), [.forward, .backward])
+        let curves = try rendered.records.map { try XCTUnwrap($0.subdivisions.first?.measuredCurve) }
+        XCTAssertEqual(curves.map { $0.points.count }, [11, 11])
+        XCTAssertEqual(curves[0].points[6].position, 27.0 / 85, accuracy: 1e-9)
+        XCTAssertEqual(curves[0].points.last, curves[1].points.first,
+                       "both strokes must share the measured apex")
+        XCTAssertEqual(rendered.geometry.motion.segments.count, 20)
+        XCTAssertTrue(rendered.geometry.missingMotion.isEmpty)
+        XCTAssertTrue(rendered.records.allSatisfy { $0.internalHolds.isEmpty })
+        XCTAssertEqual(try encoder.encode(raw), rawBefore)
+        XCTAssertEqual(CaptureCore.derivePlatterMovementEvents(from: raw, controller: 6, channel: 1), finalBefore)
+    }
+
+    func testLiveCardNeverBridgesDecoderDiscontinuities() throws {
+        let raw = loopStream([160])
+        let kinds: [CaptureCore.PlatterEvidenceInterval.Kind] = [
+            .packetGap, .clockDiscontinuity, .insufficientSampling, .unknown
+        ]
+        for kind in kinds {
+            let interrupted = raw.enumerated().map { index, event in
+                var time = event.takeRelativeTime
+                var host = event.timestamp
+                var value = event.value
+                if index > 80 {
+                    switch kind {
+                    case .packetGap: time += 0.2; host += 0.2
+                    case .clockDiscontinuity: host += 0.2
+                    case .insufficientSampling:
+                        time -= 0.00125; host -= 0.00125
+                        if index == 81 { time = raw[80].takeRelativeTime; host = raw[80].timestamp }
+                    case .unknown: value = (value + 63) % 128
+                    default: break
+                    }
+                }
+                return midiEvent(value: value, takeRelativeTime: time, timestamp: host,
+                                 deviceName: event.deviceName)
+            }
+            let state = loopState(interrupted,
+                context: loopContext(anchor: try XCTUnwrap(interrupted.last)))
+            guard case .tracking(_, _, _, _, let trajectory, let evidence, _, _) = state else {
+                return XCTFail("expected measured motion on each side of \(kind)")
+            }
+            XCTAssertTrue(trajectory.contains { $0.boundaryBefore == kind })
+            let boundary = try XCTUnwrap(evidence.first { $0.kind == kind })
+            let rendered = try liveCardGeometry(state)
+            XCTAssertNil(rendered.period, "loop correspondence cannot span \(kind)")
+            XCTAssertFalse(rendered.geometry.motion.segments.isEmpty)
+            for segment in rendered.geometry.motion.segments {
+                XCTAssertTrue(segment.endTime <= boundary.startTime + 1e-9
+                    || segment.startTime >= boundary.endTime - 1e-9,
+                    "no renderer segment may bridge \(kind)")
+            }
+            if boundary.endTime > boundary.startTime {
+                let midpoint = (boundary.startTime + boundary.endTime) / 2
+                XCTAssertTrue(rendered.geometry.missingMotion.contains { $0.contains(midpoint) })
+            }
+        }
+    }
+
+    func testLiveCardDenseSampleLoopsLiftThePenInBothDirections() throws {
+        for direction in [1, -1] {
+            let raw = loopStream([direction * 360])
+            let state = loopState(raw, context: loopContext(
+                anchor: try XCTUnwrap(raw.last), length: 120
+            ))
+            let rendered = try liveCardGeometry(state)
+            XCTAssertEqual(try XCTUnwrap(rendered.period), 120.0 / 3_600, accuracy: 1e-12)
+            XCTAssertEqual(rendered.records.count, 1)
+            XCTAssertTrue(rendered.records[0].internalHolds.isEmpty)
+            XCTAssertEqual(rendered.records[0].direction, direction > 0 ? .forward : .backward)
+            let segments = rendered.geometry.motion.segments
+            XCTAssertGreaterThanOrEqual(segments.count, 360, "retain all intermediate measured points")
+            XCTAssertTrue(rendered.geometry.missingMotion.isEmpty, "wrapping is not missing motion")
+            for segment in segments {
+                XCTAssertEqual(segment.kind, .stroke(direction > 0 ? .forward : .backward))
+                XCTAssertTrue(segment.startPosition.isFinite && segment.endPosition.isFinite)
+                XCTAssertGreaterThanOrEqual(min(segment.startPosition, segment.endPosition), -1e-9)
+                XCTAssertLessThanOrEqual(max(segment.startPosition, segment.endPosition), 1 + 1e-9)
+                XCTAssertGreaterThanOrEqual(Double(direction) * Double(segment.endPosition - segment.startPosition), -1e-9)
+            }
+            let penUps = zip(segments, segments.dropFirst()).filter {
+                abs($0.endPosition - $1.startPosition) > 0.5
+            }
+            XCTAssertEqual(penUps.count, 2)
+            for (before, after) in penUps {
+                XCTAssertEqual(before.endTime, after.startTime, accuracy: 1e-9)
+                XCTAssertEqual(before.endPosition, direction > 0 ? 1 : 0, accuracy: 1e-9)
+                XCTAssertEqual(after.startPosition, direction > 0 ? 0 : 1, accuracy: 1e-9)
+            }
+        }
+    }
+
+    func testLiveCardInvalidOrStaleLoopContextKeepsDenseUnwrappedGeometry() throws {
+        let raw = loopStream([160, -160])
+        let anchor = try XCTUnwrap(raw.last)
+        let unwrapped = try liveCardGeometry(loopState(raw, context: nil))
+        for length in [0, -1, Double.nan, .infinity] {
+            let rendered = try liveCardGeometry(loopState(raw, context: loopContext(anchor: anchor, length: length)))
+            XCTAssertNil(rendered.period)
+            XCTAssertEqual(rendered.geometry, unwrapped.geometry)
+            XCTAssertEqual(rendered.records, unwrapped.records)
+        }
+        let stale = try liveCardGeometry(loopState(raw, context: loopContext(
+            anchor: anchor, validFrom: anchor.timestamp + 1, generation: 2, sampleID: "reloaded"
+        )))
+        XCTAssertNil(stale.period)
+        XCTAssertEqual(stale.geometry, unwrapped.geometry)
+    }
+
+    func testLiveCardFaderCannotCreateOrChangePlatterGeometry() throws {
+        let raw = loopStream([160], epoch: 0)
+        let unknown = try liveCardGeometry(loopState(raw, context: nil, baseline: -1))
+        let motionEnd = try XCTUnwrap(unknown.geometry.motion.segments.last).endTime
+        for value in [0, 52] {
+            let fader = [0.0, motionEnd].map { crossfaderCC8Event(value: value, takeRelativeTime: $0) }
+            func state(_ platter: [CaptureCore.RawMixerMIDIEvent]) -> LiveNotationTrackingState {
+                LivePerformedNotationTracker.computeState(dataSource: .init(
+                    selectedMIDISourceName: { "Rane ONE MKII" },
+                    selectedMIDISourceIdentifier: { "midi_rane" },
+                    capturedMidiCCEventsSnapshot: { platter + fader },
+                    cameraMovementEventsSnapshot: { _ in nil },
+                    activeCrossfaderCalibration: { self.usableCrossfaderCalibration() }
+                ), baselineTimestamp: -1)
+            }
+            let onlyFader = LivePerformedNotationCard.chartPresentation(
+                for: state([]), bpm: 90, window: nil, emptyMessage: "No motion"
+            )
+            guard case .empty = onlyFader.source else { return XCTFail("fader-only input created motion") }
+            let rendered = try liveCardGeometry(state(raw))
+            XCTAssertEqual(rendered.geometry.missingMotion, unknown.geometry.missingMotion)
+            XCTAssertEqual(rendered.records.map(\.subdivisions), unknown.records.map(\.subdivisions))
+            XCTAssertEqual(rendered.geometry.motion.segments.count, unknown.geometry.motion.segments.count)
+            for (actual, original) in zip(rendered.geometry.motion.segments, unknown.geometry.motion.segments) {
+                XCTAssertEqual(actual.startTime, original.startTime, accuracy: 1e-9)
+                XCTAssertEqual(actual.endTime, original.endTime, accuracy: 1e-9)
+                XCTAssertEqual(actual.startPosition, original.startPosition, accuracy: 1e-9)
+                XCTAssertEqual(actual.endPosition, original.endPosition, accuracy: 1e-9)
+                XCTAssertEqual(actual.kind, original.kind)
+            }
+            XCTAssertTrue(rendered.geometry.motion.segments.contains {
+                $0.evidenceStyle == (value == 0 ? .open : .closed)
+            }, "the calibrated fader still annotates the independent platter stream")
+        }
+    }
+
+    func testLiveCardRetainsEndpointFallbackOnlyWithoutDenseTrajectory() throws {
+        let events = [CaptureCore.DetectedNotationRecordMovementEvent(
+            startTime: 0, endTime: 0.2, startPosition: 0, endPosition: 1,
+            direction: "forward", movementKind: .normalPush, speed: 1, confidence: 0.9, source: "camera"
+        )]
+        let state = LiveNotationTrackingState.tracking(
+            committed: events, provisional: nil, continuousCommitted: events, continuousProvisional: nil,
+            trajectorySegments: [], platterEvidenceIntervals: [], faderDerivation: nil, wrapPeriod: nil
+        )
+        let presentation = LivePerformedNotationCard.chartPresentation(
+            for: state, bpm: 90, window: nil, emptyMessage: "No motion"
+        )
+        guard case .performedPlatter(let actual) = presentation.source else {
+            return XCTFail("camera/event-only evidence keeps the existing fallback")
+        }
+        XCTAssertEqual(actual, events)
+        XCTAssertNil(presentation.wrapPeriod)
+    }
+
+    func testLiveCardRejectedDenseEvidenceCannotFallBackToAnEndpointStroke() throws {
+        let raw = platterEvents(signedRunSteps: [20, -20]).map {
+            midiEvent(value: $0.value, takeRelativeTime: $0.takeRelativeTime,
+                      deviceName: "Rane ONE MKII")
+        }
+        let rendered = try liveCardGeometry(loopState(raw, context: nil, baseline: -1))
+        XCTAssertNil(try XCTUnwrap(rendered.records.first?.subdivisions.first).measuredCurve,
+                     "a low-confidence committed run cannot become an endpoint stroke")
+        XCTAssertTrue(rendered.geometry.missingMotion.contains { $0.contains(0.1) })
+        XCTAssertFalse(rendered.geometry.motion.segments.contains { $0.startTime < 0.2 - 1e-9 })
+    }
+
     // MARK: - Live evidence parity (stillness + crossfader wiring)
 
     private func crossfaderCC8Event(
@@ -2203,7 +2411,10 @@ final class LivePerformedNotationTrackerTests: XCTestCase {
         let source = try String(contentsOf: url, encoding: .utf8)
         XCTAssertTrue(source.contains("struct LivePerformedNotationCard: View"))
         XCTAssertTrue(source.contains("ScratchPhraseChartView("))
-        XCTAssertTrue(source.contains(".performedPlatter(tracker.renderedEvents)"))
+        XCTAssertTrue(source.contains("source: presentation.source"))
+        XCTAssertTrue(source.contains("wrapPeriod: presentation.wrapPeriod"))
+        XCTAssertTrue(source.contains("platterTrajectorySegments: trajectory"))
+        XCTAssertTrue(source.contains(".performedPlatter(events)"), "retain the evidence-only fallback")
     }
 
     /// The substituted closure above is the ONLY difference from production.

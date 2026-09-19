@@ -733,7 +733,42 @@ struct LivePerformedNotationCard: View {
     /// canvas is composited over the camera.
     var isDimmedForCalibrationEditing: Bool = false
 
+    /// Select the existing canonical projection whenever the decoder supplied
+    /// measured trajectory. A rejected/unknown canonical curve must not fall
+    /// back to an endpoint stroke and hide its evidence boundary.
+    static func chartPresentation(
+        for state: LiveNotationTrackingState,
+        bpm: Double,
+        window: ClosedRange<TimeInterval>?,
+        emptyMessage: String
+    ) -> (source: ScratchPhraseChartView.ChartSource, wrapPeriod: Double?) {
+        guard case .tracking(_, _, _, _, let trajectory, let intervals, let fader, let period) = state,
+              !trajectory.isEmpty else {
+            let events = LivePerformedNotationTracker.renderedEvents(for: state)
+            return (events.isEmpty ? .empty(emptyMessage) : .performedPlatter(events), nil)
+        }
+        let projection = ReferenceTearCanonicalProjectionBuilder.project(
+            movementEvents: LivePerformedNotationTracker.continuousRenderedEvents(for: state),
+            platterTrajectorySegments: trajectory,
+            platterEvidenceIntervals: intervals,
+            derivation: fader,
+            coordinates: period == nil ? .normalizedTakeLocal() : .raneOneMKIIDirectMIDI()
+        )
+        guard let timeRange = window ?? projection.timeRange,
+              !projection.records.isEmpty,
+              let frame = ScratchStrokeGeometry.CanonicalFrame(
+                timeRange: timeRange,
+                positionRange: projection.positionRange ?? -0.5...0.5,
+                coordinateSpace: projection.coordinateSpace,
+                beatsPerMinute: bpm
+              ) else { return (.empty(emptyMessage), nil) }
+        return (.canonical(projection.records, layer: .performance, frame: frame), period)
+    }
+
     var body: some View {
+        let presentation = Self.chartPresentation(
+            for: tracker.state, bpm: bpm, window: renderedDomain, emptyMessage: emptyMessage
+        )
         VStack(alignment: .leading, spacing: 10) {
             HStack {
                 Text(tracker.isFrozen ? "YOUR MOTION — COMPLETED ATTEMPT" : "YOUR MOTION — LIVE")
@@ -746,10 +781,9 @@ struct LivePerformedNotationCard: View {
             }
 
             ScratchPhraseChartView(
-                source: tracker.renderedEvents.isEmpty
-                    ? .empty(emptyMessage)
-                    : .performedPlatter(tracker.renderedEvents),
+                source: presentation.source,
                 bpm: bpm,
+                wrapPeriod: presentation.wrapPeriod,
                 capturedWindow: renderedDomain,
                 backgroundColor: .clear
             )

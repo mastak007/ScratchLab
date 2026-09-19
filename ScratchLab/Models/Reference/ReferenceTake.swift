@@ -3292,13 +3292,20 @@ enum ReferenceTearCanonicalProjectionBuilder {
             let displacement = event.endPosition - event.startPosition
             guard displacement.isFinite else { return unknownRecord(.noPlacedMotion) }
 
-            if let dense = denseTrack(
-                for: event,
-                from: platterTrajectorySegments,
-                startPosition: cursor,
-                endPosition: cursor + displacement,
-                tolerance: configuration.timeTolerance
-            ) {
+            if platterTrajectorySegments.isEmpty {
+                track.append((segment.span.startTime, cursor))
+                track.append((segment.span.endTime, cursor + displacement))
+            } else {
+                // Supplied trajectory is evidence, including its boundaries.
+                // A failed correlation cannot authorize a straight line over
+                // a discontinuity. Only absent trajectory permits endpoints.
+                guard let dense = denseTrack(
+                    for: event,
+                    from: platterTrajectorySegments,
+                    startPosition: cursor,
+                    endPosition: cursor + displacement,
+                    tolerance: configuration.timeTolerance
+                ) else { return unknownRecord(.noPlacedMotion) }
                 for point in dense {
                     if let last = track.last,
                        abs(last.time - point.time) <= configuration.timeTolerance {
@@ -3312,9 +3319,6 @@ enum ReferenceTearCanonicalProjectionBuilder {
                     }
                     track.append(point)
                 }
-            } else {
-                track.append((segment.span.startTime, cursor))
-                track.append((segment.span.endTime, cursor + displacement))
             }
             cursor += displacement
         }
@@ -3433,8 +3437,8 @@ enum ReferenceTearCanonicalProjectionBuilder {
     ///
     /// A trajectory segment is usable only when it uniquely contains BOTH
     /// event endpoints. That prevents interpolation across packet/clock/
-    /// sampling discontinuities. Any ambiguity fails closed to the caller's
-    /// existing two-endpoint geometry.
+    /// sampling discontinuities. Any ambiguity fails closed to unknown motion;
+    /// only an absent trajectory permits the existing endpoint fallback.
     private static func denseTrack(
         for event: CaptureCore.DetectedNotationRecordMovementEvent,
         from trajectorySegments: [CaptureCore.PlatterTrajectorySegment],
