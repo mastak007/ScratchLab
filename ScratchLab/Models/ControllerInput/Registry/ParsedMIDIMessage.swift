@@ -3,7 +3,7 @@ import Foundation
 /// Pure, device-agnostic parsed MIDI 1.0 message. Side-effect free value type used by the
 /// registry layer to match bindings and count verification events. No Core MIDI, audio, or
 /// playback dependency.
-struct ParsedMIDIMessage: Equatable {
+struct ParsedMIDIMessage: Equatable, Sendable {
     /// MIDI channel 0…15.
     let channel: UInt8
     /// Decoded message kind.
@@ -19,7 +19,7 @@ struct ParsedMIDIMessage: Equatable {
 /// Message-type discriminator for the pure parsed-MIDI layer. Only the cases needed by the
 /// registry matcher are included; SysEx, program change, aftertouch etc. are omitted
 /// deliberately — the registry never matches against them.
-enum MIDIMessageType: Equatable {
+enum MIDIMessageType: Equatable, Sendable {
     case controlChange
     case pitchBend
     case noteOn

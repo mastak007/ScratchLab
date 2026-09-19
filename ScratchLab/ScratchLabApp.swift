@@ -56,7 +56,7 @@ private struct RootContainerView: View {
     @Environment(\.scenePhase) private var scenePhase
     @StateObject private var gameState = GameState()
     @StateObject private var audioEngine = AudioEngine()
-    @StateObject private var midiManager = IOSMIDIManager()
+    @StateObject private var midiManager: IOSMIDIManager
     @StateObject private var midiLearnCoordinator = IOSMIDILearnCoordinator()
     @StateObject private var transportState: TransportState
     @StateObject private var scratchPlaybackEngine: IOScratchPlaybackEngine
@@ -71,13 +71,16 @@ private struct RootContainerView: View {
     private let watchRelayHeartbeat = Timer.publish(every: 2, on: .main, in: .common).autoconnect()
 
     init() {
+        let evidence = MIDIAttemptEvidence()
+        _midiManager = StateObject(wrappedValue: IOSMIDIManager(evidence: evidence))
         let transportState = TransportState()
         let scratchPlaybackEngine = IOScratchPlaybackEngine()
         _transportState = StateObject(wrappedValue: transportState)
         _scratchPlaybackEngine = StateObject(wrappedValue: scratchPlaybackEngine)
         _midiControllerDispatcher = StateObject(wrappedValue: IOSMIDIControllerDispatcher(
             transportState: transportState,
-            playbackEngine: scratchPlaybackEngine
+            playbackEngine: scratchPlaybackEngine,
+            evidence: evidence
         ))
     }
 
@@ -142,7 +145,7 @@ private struct RootContainerView: View {
             midiControllerDispatcher?.receivePlatterAudioMessage(message)
         }
         midiManager.onMessage = { [weak midiLearnCoordinator, weak midiControllerDispatcher] message in
-            midiLearnCoordinator?.receive(message)
+            midiLearnCoordinator?.receive(message.message)
             midiControllerDispatcher?.receive(message)
         }
         configureMIDILearnDevice()

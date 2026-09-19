@@ -2027,6 +2027,7 @@ struct PracticeModeView: View {
     }
     
     private func endSession() {
+        midiControllerDispatcher.markCaptureStopped()
         finalizeComboLoopProgress()
         demoReel = nil
         sessionTimer?.invalidate()
@@ -2072,7 +2073,7 @@ struct PracticeModeView: View {
         livePerformedProjection = nil
         liveControllerFeedbackSignature = nil
         latestControllerAttempt = nil
-        midiControllerDispatcher.resetCapturedPlatterEvents()
+        midiControllerDispatcher.clearCapturedPlatterEvents()
         comboPhraseStartedAt = nil
         lastComboLockAt = nil
         sessionTipText = ""
@@ -2082,6 +2083,7 @@ struct PracticeModeView: View {
     }
     
     private func cleanupSession() {
+        midiControllerDispatcher.markCaptureStopped()
         sessionTimer?.invalidate()
         audioEngine.stopAnalyzing()
         practiceBeatStore.stopPlayback()

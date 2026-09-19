@@ -1,5 +1,7 @@
 import Combine
 import CoreMIDI
+import AVFoundation
+import Darwin
 import Foundation
 import QuartzCore
 import os
@@ -34,7 +36,10 @@ private func scratchLabIOSMIDIReadProc(
     let manager = Unmanaged<IOSMIDIManager>
         .fromOpaque(readProcRefCon)
         .takeUnretainedValue()
-    manager.receive(packetList)
+    guard let sourceConnectionRefCon else { return }
+    let connection = Unmanaged<IOSMIDIManager.ConnectedSource>
+        .fromOpaque(sourceConnectionRefCon).takeUnretainedValue()
+    manager.receive(packetList, connection: connection)
 }
 
 private func scratchLabIOSMIDINotifyProc(
@@ -45,7 +50,15 @@ private func scratchLabIOSMIDINotifyProc(
     let manager = Unmanaged<IOSMIDIManager>
         .fromOpaque(refCon)
         .takeUnretainedValue()
-    manager.scheduleSourceRefresh()
+    let removedObject: MIDIObjectRef?
+    if notification.pointee.messageID == .msgObjectRemoved,
+       notification.pointee.messageSize >= MemoryLayout<MIDIObjectAddRemoveNotification>.size {
+        removedObject = UnsafeRawPointer(notification)
+            .assumingMemoryBound(to: MIDIObjectAddRemoveNotification.self).pointee.child
+    } else {
+        removedObject = nil
+    }
+    manager.scheduleSourceRefresh(removedObject: removedObject)
 }
 
 /// iOS CoreMIDI transport only. This service discovers and listens to MIDI
@@ -65,8 +78,10 @@ final class IOSMIDIManager: ObservableObject {
     @Published private(set) var validMessageCount = 0
 
     /// Optional transport-level observation hook. Callers receive parsed
-    /// messages only; no controller behaviour is attached here.
-    var onMessage: ((ParsedMIDIMessage) -> Void)?
+    /// messages with immutable ingress provenance; no controller behaviour is attached here.
+    var onMessage: ((MIDIIngressMessage) -> Void)?
+
+    private nonisolated let evidence: MIDIAttemptEvidence
 
     private nonisolated let platterMessageSink = IOSMIDIPlatterMessageSink()
 
@@ -80,14 +95,24 @@ final class IOSMIDIManager: ObservableObject {
         platterMessageSink.setHandler(handler)
     }
 
-    private struct ConnectedSource {
+    fileprivate final class ConnectedSource: Sendable {
         let source: Source
         let endpoint: MIDIEndpointRef
+        let generation = UUID()
+
+        init(source: Source, endpoint: MIDIEndpointRef) {
+            self.source = source
+            self.endpoint = endpoint
+        }
     }
 
     private var midiClient: MIDIClientRef = 0
     private var inputPort: MIDIPortRef = 0
     private var connectedSources: [ConnectedSource] = []
+    // CoreMIDI may already have a callback in flight at disconnect. Retain its
+    // immutable refCon until port disposal, and reject retired generations at
+    // publication. No callback lock or mutable source lookup is needed.
+    private var retiredSources: [ConnectedSource] = []
     private var hasReceivedValidMessage = false
 
     #if DEBUG
@@ -96,7 +121,8 @@ final class IOSMIDIManager: ObservableObject {
     private let messageLogInterval: TimeInterval = 1.0
     #endif
 
-    init(automaticallyStarts: Bool = true) {
+    init(automaticallyStarts: Bool = true, evidence: MIDIAttemptEvidence) {
+        self.evidence = evidence
         if automaticallyStarts {
             start()
         }
@@ -159,14 +185,25 @@ final class IOSMIDIManager: ObservableObject {
 
         let discovered = discoverSources()
         let previousIDs = Set(connectedSources.map(\.source.id))
-        let nextIDs = Set(discovered.map(\.source.id))
-
-        for connected in connectedSources {
-            MIDIPortDisconnectSource(inputPort, connected.endpoint)
+        let retained = connectedSources.filter { old in
+            discovered.contains { $0.source == old.source && $0.endpoint == old.endpoint }
         }
-        connectedSources = discovered.filter {
-            MIDIPortConnectSource(inputPort, $0.endpoint, nil) == noErr
+        for old in connectedSources where !retained.contains(where: { $0 === old }) {
+            MIDIPortDisconnectSource(inputPort, old.endpoint)
+            retiredSources.append(old)
         }
+        connectedSources = discovered.compactMap { item in
+            if let existing = retained.first(where: { $0.source == item.source && $0.endpoint == item.endpoint }) {
+                return existing
+            }
+            let connection = ConnectedSource(source: item.source, endpoint: item.endpoint)
+            guard MIDIPortConnectSource(inputPort, item.endpoint,
+                                        Unmanaged.passUnretained(connection).toOpaque()) == noErr else { return nil }
+            return connection
+        }
+        evidence.updateConnections(Dictionary(uniqueKeysWithValues: connectedSources.map {
+            ($0.source.id, $0.generation)
+        }), at: IOSMIDIManager.evidenceHostTime())
 
         if previousIDs != Set(connectedSources.map(\.source.id)) {
             hasReceivedValidMessage = false
@@ -180,7 +217,7 @@ final class IOSMIDIManager: ObservableObject {
         )
 
         #if DEBUG
-        loggedSourceIDs.formIntersection(nextIDs)
+        loggedSourceIDs.formIntersection(Set(sources.map(\.id)))
         for source in sources where loggedSourceIDs.insert(source.id).inserted {
             print("[MIDI-DEBUG] device discovered · \(source.name)")
         }
@@ -192,6 +229,7 @@ final class IOSMIDIManager: ObservableObject {
             for connected in connectedSources {
                 MIDIPortDisconnectSource(inputPort, connected.endpoint)
             }
+            retiredSources.append(contentsOf: connectedSources)
             connectedSources = []
             MIDIPortDispose(inputPort)
             inputPort = 0
@@ -203,16 +241,38 @@ final class IOSMIDIManager: ObservableObject {
         resetPublishedState()
     }
 
-    nonisolated fileprivate func scheduleSourceRefresh() {
+    nonisolated fileprivate func scheduleSourceRefresh(removedObject: MIDIObjectRef?) {
         Task { @MainActor [weak self] in
-            self?.refreshSources()
+            guard let self else { return }
+            // Do not miss a fast unplug/replug merely because discovery sees
+            // the same endpoint again when this queued notification executes.
+            if let removedObject {
+                let removed = self.connectedSources.filter { $0.endpoint == removedObject }
+                for connection in removed {
+                    MIDIPortDisconnectSource(self.inputPort, connection.endpoint)
+                }
+                self.retiredSources.append(contentsOf: removed)
+                self.connectedSources.removeAll { $0.endpoint == removedObject }
+                self.evidence.updateConnections(Dictionary(uniqueKeysWithValues: self.connectedSources.map {
+                    ($0.source.id, $0.generation)
+                }), at: IOSMIDIManager.evidenceHostTime())
+            }
+            self.refreshSources()
         }
     }
 
+    nonisolated static func evidenceHostTime() -> TimeInterval {
+        AVAudioTime.seconds(forHostTime: mach_absolute_time())
+    }
+
     nonisolated fileprivate func receive(
-        _ packetList: UnsafePointer<MIDIPacketList>
+        _ packetList: UnsafePointer<MIDIPacketList>, connection: ConnectedSource
     ) {
-        var parsedMessages: [ParsedMIDIMessage] = []
+        // Capture before parsing or hopping executors. Loading the ticket is
+        // lock-free; a reset/stop invalidates it before any buffers can change.
+        let receivedAt = Self.evidenceHostTime()
+        let generation = evidence.ingressGeneration.load(ordering: .acquiring)
+        var parsedMessages: [MIDIIngressMessage] = []
         let packetCount = Int(packetList.pointee.numPackets)
         guard packetCount > 0 else { return }
 
@@ -230,32 +290,47 @@ final class IOSMIDIManager: ObservableObject {
                 start: UnsafeRawPointer(packet).advanced(by: dataOffset),
                 count: length
             )
-            MIDIChannelMessageParser.parse(bytes) { message in
-                if let parsed = message.parsedMessage {
-                    parsedMessages.append(parsed)
-                }
+            let timestamp = packet.pointee.timeStamp
+            // CoreMIDI timestamps use the host clock. Zero from an input
+            // source supplies no usable event time; do not synthesize one.
+            let packetTime = timestamp == 0 ? nil
+                : AVAudioTime.seconds(forHostTime: timestamp)
+            let metadata = MIDIIngressMetadata(
+                sourceID: connection.source.id, sourceName: connection.source.name,
+                connectionID: connection.generation, packetTime: packetTime,
+                receivedAt: receivedAt, attemptGeneration: generation
+            )
+            MIDIChannelMessageParser.parse(bytes, metadata: metadata) {
+                parsedMessages.append($0)
             }
             packet = MIDIPacketNext(packet)
         }
 
         guard !parsedMessages.isEmpty else { return }
-        for message in parsedMessages
-        where message.messageType == .controlChange
+        for ingress in parsedMessages {
+            let message = ingress.message
+            if message.messageType == .controlChange
             && message.controlNumber == 6
             && (Int(message.channel) == ScratchPlatterTracker.leftChannel
                 || Int(message.channel) == ScratchPlatterTracker.rightChannel) {
-            platterMessageSink.receive(message)
+                platterMessageSink.receive(message)
+            }
         }
-        Task { @MainActor [weak self] in
+        Task { @MainActor [weak self, parsedMessages] in
             self?.publish(parsedMessages)
         }
     }
 
-    private func publish(_ messages: [ParsedMIDIMessage]) {
-        guard !sources.isEmpty else { return }
+    private func publish(_ batch: [MIDIIngressMessage]) {
+        let messages = batch.filter { ingress in
+            connectedSources.contains {
+                $0.source.id == ingress.metadata.sourceID && $0.generation == ingress.metadata.connectionID
+            }
+        }
+        guard !messages.isEmpty else { return }
         hasReceivedValidMessage = true
         validMessageCount &+= messages.count
-        latestMessage = messages.last
+        latestMessage = messages.last?.message
         readinessState = .receivingMessages
         messages.forEach { onMessage?($0) }
 
@@ -268,11 +343,11 @@ final class IOSMIDIManager: ObservableObject {
         #endif
     }
 
-    private func discoverSources() -> [ConnectedSource] {
+    private func discoverSources() -> [(source: Source, endpoint: MIDIEndpointRef)] {
         let count = MIDIGetNumberOfSources()
         guard count > 0 else { return [] }
 
-        var discovered: [ConnectedSource] = []
+        var discovered: [(source: Source, endpoint: MIDIEndpointRef)] = []
         discovered.reserveCapacity(count)
         for index in 0..<count {
             let endpoint = MIDIGetSource(index)
@@ -300,7 +375,7 @@ final class IOSMIDIManager: ObservableObject {
             let sourceID = resolvedUniqueID.map { "midi_\($0)" }
                 ?? "endpoint_\(endpoint)"
             discovered.append(
-                ConnectedSource(
+                (
                     source: Source(
                         id: sourceID,
                         name: name,
@@ -318,7 +393,9 @@ final class IOSMIDIManager: ObservableObject {
     }
 
     private func resetPublishedState() {
+        retiredSources.append(contentsOf: connectedSources)
         connectedSources = []
+        evidence.updateConnections([:], at: IOSMIDIManager.evidenceHostTime())
         sources = []
         hasReceivedValidMessage = false
         readinessState = .unavailable
@@ -350,6 +427,7 @@ final class IOSMIDIControllerDispatcher: ObservableObject {
     /// virtual platter and macOS transport paths observe.
     private let transportState: TransportState
 
+    private let evidence: MIDIAttemptEvidence
     private let learnStore: MIDILearnedMappingStore
     private var currentMapping: MIDIDeviceMapping?
     /// Identity of the connected source, used only to let `MIDIActionResolver`
@@ -387,18 +465,18 @@ final class IOSMIDIControllerDispatcher: ObservableObject {
     /// for Practice/Review notation — no separate decode algorithm. This is
     /// purely a notation/state feed; it plays no part in scratch audio or
     /// hotcue behaviour. Reset per attempt via `resetCapturedPlatterEvents()`.
-    private(set) var capturedPlatterMIDIEvents: [CaptureCore.RawMixerMIDIEvent] = []
+    var capturedPlatterMIDIEvents: [CaptureCore.RawMixerMIDIEvent] { evidence.platterEvents }
     /// Per-attempt learned crossfader telemetry. This stays separate from the
     /// platter array so the existing platter decoders keep their exact input,
     /// then both streams are merged only when the take snapshot is finalized.
-    private(set) var capturedCrossfaderMIDIEvents: [CaptureCore.RawMixerMIDIEvent] = []
+    var capturedCrossfaderMIDIEvents: [CaptureCore.RawMixerMIDIEvent] { evidence.crossfaderEvents }
     /// Per-attempt upfader (channel-fader) telemetry. Kept in its own array
     /// for the same reason the crossfader is: the platter decoders must keep
     /// their exact input, and `deriveDetectedNotationFaderEvents` must keep
     /// seeing only crossfader samples. Upfader movement is recorded as raw
     /// evidence only - it drives gain, and the canonical notation model has
     /// no upfader lane, so nothing here is turned into notation events.
-    private(set) var capturedUpfaderMIDIEvents: [CaptureCore.RawMixerMIDIEvent] = []
+    var capturedUpfaderMIDIEvents: [CaptureCore.RawMixerMIDIEvent] { evidence.upfaderEvents }
     /// Coalesced live renderer input. Raw platter MIDI can arrive much faster
     /// than SwiftUI should redraw, so this is refreshed at the same ~25 Hz
     /// cadence as the macOS live tracker rather than publishing every packet.
@@ -411,8 +489,7 @@ final class IOSMIDIControllerDispatcher: ObservableObject {
     @Published private(set) var rightUpfaderMIDIValue: Int?
     @Published private(set) var lastHotCueIndex: Int?
     @Published private(set) var lastHotCueSampleID: String?
-    private var captureBaselineTimestamp: Double = CACurrentMediaTime()
-    private var liveNotationUpdateScheduled = false
+    private var liveNotationScheduledGeneration: UInt64?
     private static let liveNotationUpdateInterval: TimeInterval = 0.04
     private static let liveNotationWindowDuration: TimeInterval = 3.2
     /// Index into the append-only per-attempt raw stream. It moves only to an
@@ -428,7 +505,6 @@ final class IOSMIDIControllerDispatcher: ObservableObject {
     private static let motorReleaseMinimumDuration: TimeInterval = 0.28
     private static let motorReleaseStepsPerSecondRange = 1_700.0...2_300.0
     private var isSuppressingReleasedMotorRotation = false
-    private static let iOSPlatterDeviceName = "iOS RANE Platter"
 
     #if DEBUG
     private var lastPlatterDebugLogUptime: TimeInterval = -.infinity
@@ -438,16 +514,19 @@ final class IOSMIDIControllerDispatcher: ObservableObject {
     init(
         transportState: TransportState,
         playbackEngine: IOScratchPlaybackEngine,
+        evidence: MIDIAttemptEvidence,
         learnStore: MIDILearnedMappingStore = .default
     ) {
         self.transportState = transportState
         self.playbackEngine = playbackEngine
+        self.evidence = evidence
         self.learnStore = learnStore
     }
 
     /// Refresh the learned mapping for the active device so hot-cue presses
     /// resolve against the right per-device assignments.
     func updateMapping(deviceIdentifier: String?, deviceName: String? = nil) {
+        evidence.selectSource(deviceIdentifier, at: IOSMIDIManager.evidenceHostTime())
         currentMapping = deviceIdentifier.flatMap { learnStore.load(deviceIdentifier: $0) }
         // Prefer the caller's live endpoint name; fall back to the saved
         // mapping's name so a previously-learned device keeps its identity.
@@ -470,37 +549,32 @@ final class IOSMIDIControllerDispatcher: ObservableObject {
         return .certifiedRegistry
     }
 
-    /// Clears accumulated CC6 telemetry and rebaselines the take-relative
-    /// clock. Call at the start of each new Practice attempt/take so a prior
-    /// attempt's movement can never leak into the next one's notation trace.
+    /// Begin a fresh evidence owner before any asynchronous message can append.
     func resetCapturedPlatterEvents() {
-        capturedPlatterMIDIEvents.removeAll()
-        capturedCrossfaderMIDIEvents.removeAll()
-        capturedUpfaderMIDIEvents.removeAll()
+        evidence.begin(at: IOSMIDIManager.evidenceHostTime())
+        clearLiveNotation()
+    }
+
+    /// Reset/exit is closed; only an explicit start opens the next attempt.
+    func clearCapturedPlatterEvents() {
+        evidence.clear(at: IOSMIDIManager.evidenceHostTime())
+        clearLiveNotation()
+    }
+
+    private func clearLiveNotation() {
+        liveNotationScheduledGeneration = nil
         livePlatterNotationProjection = nil
         livePlatterMovementEvents.removeAll()
         liveNotationDecodeAnchorIndex = 0
-        captureBaselineTimestamp = CACurrentMediaTime()
-        captureStopRelativeTime = nil
         isSuppressingReleasedMotorRotation = false
         #if DEBUG
         print("[SCRATCH-DEBUG] shared scratch state reset for new attempt")
         #endif
     }
 
-    /// Take-relative instant Stop was requested, or nil while the take is still
-    /// running. Finalization is not instantaneous — the movie-file callback can
-    /// arrive well after Stop, and the finalization watchdog exists for exactly
-    /// that window — so without this bound a fader move made after Stop would
-    /// be decoded into the finished take's evidence.
-    private var captureStopRelativeTime: Double?
-
-    /// Marks the end of the take window. Called when Stop is requested, in the
-    /// same `CACurrentMediaTime()` domain as `captureBaselineTimestamp`, so the
-    /// bound never has to be reconciled against the sidecar's wall-clock dates.
     func markCaptureStopped() {
-        guard captureStopRelativeTime == nil else { return }
-        captureStopRelativeTime = max(0, CACurrentMediaTime() - captureBaselineTimestamp)
+        evidence.seal(at: IOSMIDIManager.evidenceHostTime())
+        liveNotationScheduledGeneration = nil
     }
 
     /// Drops events that arrived after Stop, via the shared boundary rule.
@@ -511,7 +585,7 @@ final class IOSMIDIControllerDispatcher: ObservableObject {
     ) -> [CaptureCore.RawMixerMIDIEvent] {
         CaptureMotionEvidenceResolver.eventsWithinTakeWindow(
             events,
-            stopRelativeTime: captureStopRelativeTime
+            stopRelativeTime: evidence.stopRelativeTime
         )
     }
 
@@ -743,11 +817,13 @@ final class IOSMIDIControllerDispatcher: ObservableObject {
     }
 
     private func scheduleLiveNotationUpdate() {
-        guard !liveNotationUpdateScheduled else { return }
-        liveNotationUpdateScheduled = true
+        guard let generation = evidence.activeGeneration,
+              liveNotationScheduledGeneration != generation else { return }
+        liveNotationScheduledGeneration = generation
         DispatchQueue.main.asyncAfter(deadline: .now() + Self.liveNotationUpdateInterval) { [weak self] in
-            guard let self else { return }
-            self.liveNotationUpdateScheduled = false
+            guard let self, self.evidence.activeGeneration == generation,
+                  self.liveNotationScheduledGeneration == generation else { return }
+            self.liveNotationScheduledGeneration = nil
             let suppressMotorRotation = self.isLikelyReleasedMotorRotation
             #if DEBUG
             if suppressMotorRotation != self.isSuppressingReleasedMotorRotation {
@@ -805,7 +881,8 @@ final class IOSMIDIControllerDispatcher: ObservableObject {
 
     /// Process one parsed MIDI message. Transport presses toggle the shared
     /// transport state; hot-cue pads resolve through the shared trigger resolver.
-    func receive(_ message: ParsedMIDIMessage) {
+    func receive(_ ingress: MIDIIngressMessage) {
+        let message = ingress.message
         // Platter fast path — mirrors macOS's `MacCaptureEngine
         // .dispatchMIDIChannelVoiceMessage`, which intercepts the raw CC6
         // ring-counter on channel 0/1 before generic action resolution.
@@ -815,7 +892,7 @@ final class IOSMIDIControllerDispatcher: ObservableObject {
         // the iOS parity gap this fixes.
         if message.messageType == .controlChange, message.controlNumber == 6,
            Int(message.channel) == ScratchPlatterTracker.leftChannel || Int(message.channel) == ScratchPlatterTracker.rightChannel {
-            handlePlatterCC(message)
+            handlePlatterCC(ingress)
             return
         }
 
@@ -855,22 +932,8 @@ final class IOSMIDIControllerDispatcher: ObservableObject {
             let learnedControl = currentMapping?.control(for: .crossfader)
             let normalizedValue = learnedControl?.normalizedValue(from: value)
                 ?? MIDIControlNormalization.sevenBit(value)
-            let eventTimestamp = CACurrentMediaTime()
-            capturedCrossfaderMIDIEvents.append(
-                CaptureCore.RawMixerMIDIEvent(
-                    timestamp: eventTimestamp,
-                    takeRelativeTime: max(0, eventTimestamp - captureBaselineTimestamp),
-                    deviceName: currentMapping?.deviceName
-                        ?? currentDeviceIdentity?.sourceName
-                        ?? "iOS MIDI Controller",
-                    channel: Int(message.channel),
-                    controller: Int(message.controlNumber),
-                    value: value,
-                    normalizedValue: normalizedValue,
-                    mappedControl: "crossfader",
-                    mappingSource: source
-                )
-            )
+            evidence.record(ingress, normalizedValue: normalizedValue,
+                            mappedControl: "crossfader", mappingSource: source)
             // Evidence-only for the certified-registry fallback: recognising a
             // crossfader from the hardware registry must never start cutting
             // ScratchLab's audio on a device the user never mapped. Only an
@@ -892,22 +955,10 @@ final class IOSMIDIControllerDispatcher: ObservableObject {
             let upfaderControl = deck == 0 ? "leftUpfader" : "rightUpfader"
             let upfaderLearnedControl = currentMapping?
                 .control(for: deck == 0 ? .leftUpfader : .rightUpfader)
-            let upfaderTimestamp = CACurrentMediaTime()
-            capturedUpfaderMIDIEvents.append(
-                CaptureCore.RawMixerMIDIEvent(
-                    timestamp: upfaderTimestamp,
-                    takeRelativeTime: max(0, upfaderTimestamp - captureBaselineTimestamp),
-                    deviceName: currentMapping?.deviceName
-                        ?? currentDeviceIdentity?.sourceName
-                        ?? "iOS MIDI Controller",
-                    channel: Int(message.channel),
-                    controller: Int(message.controlNumber),
-                    value: value,
-                    normalizedValue: upfaderLearnedControl?.normalizedValue(from: value)
-                        ?? MIDIControlNormalization.sevenBit(value),
-                    mappedControl: upfaderControl
-                )
-            )
+            evidence.record(ingress,
+                            normalizedValue: upfaderLearnedControl?.normalizedValue(from: value)
+                                ?? MIDIControlNormalization.sevenBit(value),
+                            mappedControl: upfaderControl)
 
             // The loaded scratch sample remains right-deck-owned, so the
             // right upfader is the primary gain source. If this device has
@@ -949,7 +1000,8 @@ final class IOSMIDIControllerDispatcher: ObservableObject {
     /// applies), publish the resulting `PlatterPosition` to the playback
     /// engine. The left deck (channel 0) is tracked for parity/diagnostics
     /// but never drives playback, matching macOS.
-    private func handlePlatterCC(_ message: ParsedMIDIMessage) {
+    private func handlePlatterCC(_ ingress: MIDIIngressMessage) {
+        let message = ingress.message
         let channel = Int(message.channel)
         let delta = platterTracker.ingest(channel: channel, value: Int(message.value))
         let steps = platterTracker.accumulatedSteps(for: channel)
@@ -960,18 +1012,8 @@ final class IOSMIDIControllerDispatcher: ObservableObject {
         // both decks, matching this dispatcher's existing "both decks
         // tracked for parity/diagnostics" precedent; `platterMovementEvents`
         // filters to the right deck at decode time, same as macOS.
-        let eventTimestamp = CACurrentMediaTime()
-        capturedPlatterMIDIEvents.append(CaptureCore.RawMixerMIDIEvent(
-            timestamp: eventTimestamp,
-            takeRelativeTime: max(0, eventTimestamp - captureBaselineTimestamp),
-            deviceName: Self.iOSPlatterDeviceName,
-            channel: channel,
-            controller: 6,
-            value: Int(message.value),
-            normalizedValue: Double(message.value) / 127.0,
-            mappedControl: nil
-        ))
-        if channel == ScratchPlatterTracker.rightChannel {
+        let accepted = evidence.record(ingress, normalizedValue: Double(message.value) / 127.0)
+        if accepted, channel == ScratchPlatterTracker.rightChannel {
             scheduleLiveNotationUpdate()
         }
         #if DEBUG

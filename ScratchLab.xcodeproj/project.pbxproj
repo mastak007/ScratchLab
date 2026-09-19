@@ -264,12 +264,15 @@
 		MIDCRV0MAC0001 /* MIDIFaderCurve.swift in Sources */ = {isa = PBXBuildFile; fileRef = MIDCRV0FREF0001 /* MIDIFaderCurve.swift */; };
 		MIDCRV0TBF0001 /* MIDIFaderCurveTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = MIDCRV0TREF0001 /* MIDIFaderCurveTests.swift */; };
 		MIDIPKT0TBF0001 /* MIDIPacketBoundsCrashFixTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = MIDIPKT0TREF0001 /* MIDIPacketBoundsCrashFixTests.swift */; };
+		MIDEVD0TBF0001 /* MIDIAttemptEvidenceTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = MIDEVD0TREF0001 /* MIDIAttemptEvidenceTests.swift */; };
 		MIDIUMG0TBF0001 /* MIDIUserMixerGainTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = MIDIUMG0TREF0001 /* MIDIUserMixerGainTests.swift */; };
 		MIDLRN0TBF0001 /* MIDILearnedMappingTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = MIDLRN0TREF0001 /* MIDILearnedMappingTests.swift */; };
 		MIDLRN0TBF0002 /* MIDILearnEngineTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = MIDLRN0TREF0002 /* MIDILearnEngineTests.swift */; };
 		MIDLRN0TBF0003 /* MIDILearnHangFixTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = MIDLRN0TREF0003 /* MIDILearnHangFixTests.swift */; };
 		MIDPRS0IOS0001 /* MIDIChannelMessageParser.swift in Sources */ = {isa = PBXBuildFile; fileRef = MIDPRS0FREF0001 /* MIDIChannelMessageParser.swift */; };
+		MIDEVD0IOS0001 /* MIDIAttemptEvidence.swift in Sources */ = {isa = PBXBuildFile; fileRef = MIDEVD0FREF0001 /* MIDIAttemptEvidence.swift */; };
 		MIDPRS0MAC0001 /* MIDIChannelMessageParser.swift in Sources */ = {isa = PBXBuildFile; fileRef = MIDPRS0FREF0001 /* MIDIChannelMessageParser.swift */; };
+		MIDEVD0MAC0001 /* MIDIAttemptEvidence.swift in Sources */ = {isa = PBXBuildFile; fileRef = MIDEVD0FREF0001 /* MIDIAttemptEvidence.swift */; };
 		MIDRDY0IOS0001 /* MIDIReadinessState.swift in Sources */ = {isa = PBXBuildFile; fileRef = MIDRDY0FREF0001 /* MIDIReadinessState.swift */; };
 		MIDRDY0MAC0001 /* MIDIReadinessState.swift in Sources */ = {isa = PBXBuildFile; fileRef = MIDRDY0FREF0001 /* MIDIReadinessState.swift */; };
 		MIDREG0IOS0001 /* MIDIControlRole.swift in Sources */ = {isa = PBXBuildFile; fileRef = MIDREG0FREF0001 /* MIDIControlRole.swift */; };
@@ -870,11 +873,13 @@
 		MIDCRV0FREF0001 /* MIDIFaderCurve.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MIDIFaderCurve.swift; sourceTree = "<group>"; };
 		MIDCRV0TREF0001 /* MIDIFaderCurveTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MIDIFaderCurveTests.swift; sourceTree = "<group>"; };
 		MIDIPKT0TREF0001 /* MIDIPacketBoundsCrashFixTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MIDIPacketBoundsCrashFixTests.swift; sourceTree = "<group>"; };
+		MIDEVD0TREF0001 /* MIDIAttemptEvidenceTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MIDIAttemptEvidenceTests.swift; sourceTree = "<group>"; };
 		MIDIUMG0TREF0001 /* MIDIUserMixerGainTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MIDIUserMixerGainTests.swift; sourceTree = "<group>"; };
 		MIDLRN0TREF0001 /* MIDILearnedMappingTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MIDILearnedMappingTests.swift; sourceTree = "<group>"; };
 		MIDLRN0TREF0002 /* MIDILearnEngineTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MIDILearnEngineTests.swift; sourceTree = "<group>"; };
 		MIDLRN0TREF0003 /* MIDILearnHangFixTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MIDILearnHangFixTests.swift; sourceTree = "<group>"; };
 		MIDPRS0FREF0001 /* MIDIChannelMessageParser.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MIDIChannelMessageParser.swift; sourceTree = "<group>"; };
+		MIDEVD0FREF0001 /* MIDIAttemptEvidence.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MIDIAttemptEvidence.swift; sourceTree = "<group>"; };
 		MIDRDY0FREF0001 /* MIDIReadinessState.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MIDIReadinessState.swift; sourceTree = "<group>"; };
 		MIDREG0FREF0001 /* MIDIControlRole.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MIDIControlRole.swift; sourceTree = "<group>"; };
 		MIDREG0FREF0002 /* MIDIControlBinding.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MIDIControlBinding.swift; sourceTree = "<group>"; };
@@ -1238,6 +1243,7 @@
 				MIDLRN0TREF0001 /* MIDILearnedMappingTests.swift */,
 				MIDLRN0TREF0002 /* MIDILearnEngineTests.swift */,
 				MIDIPKT0TREF0001 /* MIDIPacketBoundsCrashFixTests.swift */,
+				MIDEVD0TREF0001 /* MIDIAttemptEvidenceTests.swift */,
 				DVSUMG0TREF0001 /* DVSContinuousVinylRendererUserMixerGainTests.swift */,
 				SPCUMG0TREF0001 /* ScratchSamplePlaybackControllerUserMixerGainTests.swift */,
 				MIDIUMG0TREF0001 /* MIDIUserMixerGainTests.swift */,
@@ -1748,6 +1754,7 @@
 			children = (
 				XFCAL0GRP0001 /* Calibration */,
 				MIDPRS0FREF0001 /* MIDIChannelMessageParser.swift */,
+				MIDEVD0FREF0001 /* MIDIAttemptEvidence.swift */,
 				MIDRDY0FREF0001 /* MIDIReadinessState.swift */,
 				MIDAR0FREF0001 /* MIDIActionResolver.swift */,
 				HCTR0000FREF0001 /* HotCueTriggerResolver.swift */,
@@ -2289,6 +2296,7 @@
 				MIDREG0MAC0005 /* MIDIVerification.swift in Sources */,
 				MIDREG0MAC0006 /* ParsedMIDIMessage.swift in Sources */,
 				MIDPRS0MAC0001 /* MIDIChannelMessageParser.swift in Sources */,
+				MIDEVD0MAC0001 /* MIDIAttemptEvidence.swift in Sources */,
 				MIDRDY0MAC0001 /* MIDIReadinessState.swift in Sources */,
 				MIDREG0MAC0007 /* MIDILearnedMapping.swift in Sources */,
 				MIDCRV0MAC0001 /* MIDIFaderCurve.swift in Sources */,
@@ -2447,6 +2455,7 @@
 				MIDREG0IOS0005 /* MIDIVerification.swift in Sources */,
 				MIDREG0IOS0006 /* ParsedMIDIMessage.swift in Sources */,
 				MIDPRS0IOS0001 /* MIDIChannelMessageParser.swift in Sources */,
+				MIDEVD0IOS0001 /* MIDIAttemptEvidence.swift in Sources */,
 				MIDRDY0IOS0001 /* MIDIReadinessState.swift in Sources */,
 				MIDREG0IOS0007 /* MIDILearnedMapping.swift in Sources */,
 				MIDCRV0IOS0001 /* MIDIFaderCurve.swift in Sources */,
@@ -2685,6 +2694,7 @@
 				MIDLRN0TBF0001 /* MIDILearnedMappingTests.swift in Sources */,
 				MIDLRN0TBF0002 /* MIDILearnEngineTests.swift in Sources */,
 				MIDIPKT0TBF0001 /* MIDIPacketBoundsCrashFixTests.swift in Sources */,
+				MIDEVD0TBF0001 /* MIDIAttemptEvidenceTests.swift in Sources */,
 				DVSUMG0TBF0001 /* DVSContinuousVinylRendererUserMixerGainTests.swift in Sources */,
 				SPCUMG0TBF0001 /* ScratchSamplePlaybackControllerUserMixerGainTests.swift in Sources */,
 				MIDIUMG0TBF0001 /* MIDIUserMixerGainTests.swift in Sources */,
