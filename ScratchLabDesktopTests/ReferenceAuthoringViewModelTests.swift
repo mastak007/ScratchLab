@@ -237,7 +237,120 @@ final class ReferenceTearEvidencePipelineTests: XCTestCase {
                 axis: .horizontal, actionLineFraction: 0, secondsAhead: 2))
         let push = try XCTUnwrap(pixels.first)
         XCTAssertLessThan(push.b.y, push.a.y, "Forward must rise on the actual Canvas input.")
-        XCTAssertEqual(try JSONEncoder().encode(raw), frozen)
+        // Independent encodings may reorder object members. Preserve exact typed
+        // values and field presence without imposing a canonical byte contract.
+        XCTAssertEqual(try rawSnapshot(JSONEncoder().encode(raw)), try rawSnapshot(frozen))
+    }
+
+    /// The raw fixture has scalar fields only. Typed decoding preserves Double/Int
+    /// semantics; the extra guard prevents Codable from hiding unknown keys or
+    /// treating an absent optional field as indistinguishable from explicit null.
+    private struct RawSnapshot: Decodable, Equatable {
+        let event: CaptureCore.RawMixerMIDIEvent
+        let presentKeys: Set<String>
+        let nullKeys: Set<String>
+
+        private struct Key: CodingKey {
+            let stringValue: String
+            var intValue: Int? { nil }
+            init?(stringValue: String) { self.stringValue = stringValue }
+            init?(intValue: Int) { return nil }
+        }
+
+        init(from decoder: Decoder) throws {
+            let fields = try decoder.container(keyedBy: Key.self)
+            presentKeys = Set(fields.allKeys.map(\.stringValue))
+            let supported: Set<String> = [
+                "timestamp", "takeRelativeTime", "deviceIdentifier", "deviceName",
+                "channel", "controller", "value", "normalizedValue", "mappedControl",
+                "mappingSource", "calibratedPosition", "calibrationID"
+            ]
+            guard presentKeys.isSubset(of: supported) else {
+                throw DecodingError.dataCorrupted(.init(codingPath: decoder.codingPath,
+                    debugDescription: "Unexpected raw MIDI fields: \(presentKeys.subtracting(supported))"))
+            }
+            nullKeys = Set(try fields.allKeys.filter { try fields.decodeNil(forKey: $0) }.map(\.stringValue))
+            event = try CaptureCore.RawMixerMIDIEvent(from: decoder)
+        }
+    }
+
+    private func rawSnapshot(_ data: Data) throws -> [RawSnapshot] {
+        try JSONDecoder().decode([RawSnapshot].self, from: data)
+    }
+
+    private var snapshotEventJSON: String {
+        #"{"timestamp":0.07,"takeRelativeTime":0.07,"deviceName":"Rane ONE MKII","channel":1,"controller":6,"value":43,"normalizedValue":0.33858267716535434}"#
+    }
+
+    private func snapshotJSON(_ events: [String]) throws -> [RawSnapshot] {
+        try rawSnapshot(Data(("[" + events.joined(separator: ",") + "]").utf8))
+    }
+
+    func testRawSnapshotAcceptsObjectMemberReordering() throws {
+        let reordered = #"{"value":43,"timestamp":0.07,"deviceName":"Rane ONE MKII","takeRelativeTime":0.07,"channel":1,"normalizedValue":0.33858267716535434,"controller":6}"#
+        XCTAssertNotEqual(snapshotEventJSON, reordered)
+        XCTAssertEqual(try snapshotJSON([snapshotEventJSON]), try snapshotJSON([reordered]))
+    }
+
+    func testRawSnapshotRejectsEventReorderingAndCountChanges() throws {
+        let second = snapshotEventJSON.replacingOccurrences(of: "0.07", with: "0.08")
+        let original = try snapshotJSON([snapshotEventJSON, second])
+        XCTAssertNotEqual(original, try snapshotJSON([second, snapshotEventJSON]))
+        XCTAssertNotEqual(original, try snapshotJSON([snapshotEventJSON]))
+        XCTAssertNotEqual(original, try snapshotJSON([snapshotEventJSON, second, second]))
+    }
+
+    func testRawSnapshotRejectsExactScalarAndMetadataChanges() throws {
+        let original = try snapshotJSON([snapshotEventJSON])
+        let changes = [
+            (#""channel":1"#, #""channel":2"#),
+            (#""controller":6"#, #""controller":7"#),
+            (#""value":43"#, #""value":44"#),
+            (#""timestamp":0.07"#, #""timestamp":0.07000000000000002"#),
+            (#""takeRelativeTime":0.07"#, #""takeRelativeTime":0.07000000000000002"#),
+            ("0.33858267716535434", "0.3385826771653544"),
+            ("Rane ONE MKII", "Other source")
+        ]
+        for (before, after) in changes {
+            XCTAssertNotEqual(original, try snapshotJSON([
+                snapshotEventJSON.replacingOccurrences(of: before, with: after)]), before)
+        }
+    }
+
+    func testRawSnapshotRejectsMissingRequiredFields() throws {
+        for field in [#""timestamp":0.07,"#, #""takeRelativeTime":0.07,"#,
+                      #""deviceName":"Rane ONE MKII","#, #""channel":1,"#,
+                      #""controller":6,"#, #""value":43,"#,
+                      #","normalizedValue":0.33858267716535434"#] {
+            XCTAssertThrowsError(try snapshotJSON([
+                snapshotEventJSON.replacingOccurrences(of: field, with: "")]), field)
+        }
+    }
+
+    func testRawSnapshotPreservesOptionalPresenceNullAndValues() throws {
+        let absent = try snapshotJSON([snapshotEventJSON])
+        for key in ["deviceIdentifier", "mappedControl", "mappingSource", "calibratedPosition", "calibrationID"] {
+            let null = String(snapshotEventJSON.dropLast()) + ",\"\(key)\":null}"
+            XCTAssertNotEqual(absent, try snapshotJSON([null]), key)
+            XCTAssertEqual(try snapshotJSON([null]), try snapshotJSON([null]))
+        }
+        for key in ["deviceIdentifier", "mappedControl", "calibrationID"] {
+            let a = String(snapshotEventJSON.dropLast()) + ",\"\(key)\":\"a\"}"
+            let b = String(snapshotEventJSON.dropLast()) + ",\"\(key)\":\"b\"}"
+            XCTAssertNotEqual(try snapshotJSON([a]), try snapshotJSON([b]), key)
+        }
+        let a = String(snapshotEventJSON.dropLast()) + #", "calibratedPosition":0.5}"#
+        let b = String(snapshotEventJSON.dropLast()) + #", "calibratedPosition":0.5000000000000001}"#
+        XCTAssertNotEqual(try snapshotJSON([a]), try snapshotJSON([b]))
+    }
+
+    func testRawSnapshotRejectsUnexpectedDirectionGeometryAndMetadataFields() throws {
+        // Direction/geometry belong to derived notation, not the raw event schema.
+        // They must never be silently ignored if introduced into this comparison.
+        for field in [#""direction":"forward""#, #""direction":"backward""#,
+                      #""startPosition":0"#, #""endPosition":1"#, #""metadata":"changed""#] {
+            XCTAssertThrowsError(try snapshotJSON([String(snapshotEventJSON.dropLast()) + "," + field + "}"]))
+        }
     }
 
     func testWholeTakePlaybackAdvancesAfterSeek() async throws {
