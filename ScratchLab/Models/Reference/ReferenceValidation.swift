@@ -822,6 +822,29 @@ enum ReferenceValidator {
         }
 
         for repetition in repetitions {
+            let start = repetition.startSeconds(metadata: metadata)
+            let end = repetition.endSeconds(metadata: metadata)
+            guard repetition.startBeat.isFinite, repetition.endBeat.isFinite,
+                  start.isFinite, end.isFinite else {
+                findings.append(.repetitionBoundariesInconsistent(
+                    detail: "repetition \(repetition.index + 1) has no finite recorded media range."))
+                continue
+            }
+            // Preserve the existing one-frame allowance for the nominal first
+            // beat. Edited ranges must not borrow missing media from count-in;
+            // playback clamping is not evidence that a reviewed range exists.
+            let sampleRate = evidence.audio.sampleRate ?? metadata.witnessedTiming.map { Double($0.sampleRate) }
+            let sampleTolerance = sampleRate.flatMap { $0.isFinite && $0 > 0 ? 1.0 / $0 : nil } ?? 1e-9
+            let nominalFirstBeat = Double(metadata.countInBars * metadata.pattern.beatsPerBar)
+            let allowsFirstFrameQuantization = metadata.mediaTimeOrigin != nil && repetition.index == 0
+                && repetition.startBeat == nominalFirstBeat
+            let earliestStart = allowsFirstFrameQuantization
+                ? -ReferenceRecordingOriginPolicy.maximumLatenessSeconds - sampleTolerance : -sampleTolerance
+            if start < earliestStart {
+                findings.append(.repetitionBoundariesInconsistent(detail: String(
+                    format: "repetition %d starts %.3f seconds before the recording. Move Start beat into the recorded media before approving.",
+                    repetition.index + 1, -start)))
+            }
             if repetition.durationBeats <= 0 {
                 findings.append(
                     .repetitionBoundariesInconsistent(

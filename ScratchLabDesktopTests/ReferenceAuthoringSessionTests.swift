@@ -1555,6 +1555,27 @@ final class ReferenceAuthoringSessionTests: XCTestCase {
         XCTAssertEqual(session.takeInReview?.evidence.metadata.lifecycleState, .draft)
     }
 
+    func testDirectApprovalRejectsBeforeMediaTrimAndRecoversAfterBoundaryCorrection() throws {
+        var session = try reviewedSessionWithPendingWatch()
+        session.updateWatchEvidenceForTakeInReview(.linked(motionFileName: "scratch-motion.json"))
+        session.selectRepetitionForApproval(0)
+        XCTAssertTrue(session.canApproveTakeInReview(), session.approvalBlockReason() ?? "")
+        session.adjustRepetitionBoundary(repetitionIndex: 0, startBeat: -1, endBeat: 8)
+        XCTAssertTrue(session.approvalBlockReason()?.contains("before the recording") == true)
+        XCTAssertThrowsError(try session.approveTakeInReview(notes: ""))
+        XCTAssertEqual(session.takeInReview?.evidence.metadata.lifecycleState, .draft)
+        session.adjustRepetitionBoundary(repetitionIndex: 0, startBeat: 4, endBeat: 8)
+        XCTAssertTrue(session.canApproveTakeInReview(), session.approvalBlockReason() ?? "")
+        XCTAssertTrue(session.clearPreferredRepetition())
+        XCTAssertFalse(session.canApproveTakeInReview(), "Correcting bounds cannot bypass the selection gate.")
+        XCTAssertThrowsError(try session.approveTakeInReview(notes: ""))
+        XCTAssertEqual(session.takeInReview?.evidence.metadata.lifecycleState, .draft)
+        session.selectRepetitionForApproval(0)
+        try session.approveTakeInReview(notes: "corrected recorded range")
+        XCTAssertEqual(session.takes.last?.evidence.metadata.lifecycleState, .approvedCanonical)
+        XCTAssertEqual(session.phase, .complete)
+    }
+
     func testApprovalBlockReasonIsNilOnlyWhenEveryGateIsSatisfied() throws {
         var session = try reviewedSessionWithPendingWatch()
         XCTAssertNotNil(session.approvalBlockReason(), "pending watch + no repetition")

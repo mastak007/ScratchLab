@@ -965,6 +965,93 @@ final class ReferenceAuthoringTests: XCTestCase {
         )
     }
 
+    func testSeptember20PreferredRangeBeforeRecordedMediaFailsApprovalValidation() {
+        let origin = ReferenceMediaTimeOrigin(clickStartHostTime: 1_195_554_550_955,
+            recordingStartHostTime: 1_195_615_732_252, recordingStartOffsetSeconds: 2.5492207486677216)
+        let metadata = makeMetadata(bpm: 90, lifecycleState: .approvedCanonical, mediaTimeOrigin: origin)
+        var boundaries = ReferencePhraseBoundaries.nominal(for: metadata)
+        boundaries.selectedRepetitionIndex = 0
+        boundaries.repetitions[0].startBeat = 3
+        boundaries.repetitions[0].endBeat = 6.25
+        let evidence = makeEvidence(metadata: metadata, boundaries: boundaries)
+        XCTAssertEqual(boundaries.repetitions[0].startSeconds(metadata: metadata), -0.5492207486677216, accuracy: 1e-9)
+        let report = ReferenceValidator.validate(evidence)
+        XCTAssertFalse(report.passes)
+        XCTAssertTrue(report.failureMessages.contains { $0.contains("before the recording") })
+        XCTAssertEqual(evidence.metadata.lifecycleState, .approvedCanonical,
+            "Fresh validation rejects the range without rewriting historical approval or evidence.")
+        boundaries.repetitions[0].startBeat = 4
+        boundaries.repetitions[0].endBeat = 8
+        XCTAssertTrue(ReferenceValidator.validate(makeEvidence(metadata: metadata, boundaries: boundaries)).passes)
+    }
+
+    func testEditedRangeWithinRealPrerollRemainsValid() {
+        let origin = ReferenceMediaTimeOrigin(clickStartHostTime: 100, recordingStartHostTime: 200,
+            recordingStartOffsetSeconds: 2.5492207486677216)
+        let metadata = makeMetadata(bpm: 90, mediaTimeOrigin: origin)
+        var boundaries = ReferencePhraseBoundaries.nominal(for: metadata)
+        boundaries.repetitions[0].startBeat = 3.9
+        XCTAssertGreaterThan(boundaries.repetitions[0].startSeconds(metadata: metadata), 0)
+        XCTAssertTrue(ReferenceValidator.validate(makeEvidence(metadata: metadata, boundaries: boundaries)).passes)
+    }
+
+    func testNominalFirstFrameQuantizationDoesNotAuthorizeAnEarlierTrim() {
+        let origin = ReferenceMediaTimeOrigin(clickStartHostTime: 100, recordingStartHostTime: 200,
+            recordingStartOffsetSeconds: 4.0 * 60 / 90 + 0.02)
+        let metadata = makeMetadata(bpm: 90, mediaTimeOrigin: origin)
+        var boundaries = ReferencePhraseBoundaries.nominal(for: metadata)
+        XCTAssertTrue(ReferenceValidator.validate(makeEvidence(metadata: metadata, boundaries: boundaries)).passes)
+        boundaries.repetitions[0].startBeat = 3.99
+        XCTAssertTrue(ReferenceValidator.validate(makeEvidence(metadata: metadata, boundaries: boundaries))
+            .failureMessages.contains { $0.contains("before the recording") })
+        boundaries = ReferencePhraseBoundaries.nominal(for: metadata)
+        boundaries.repetitions[1].startBeat = 4
+        XCTAssertTrue(ReferenceValidator.validate(makeEvidence(metadata: metadata, boundaries: boundaries))
+            .failureMessages.contains { $0.contains("repetition 2 starts") && $0.contains("before the recording") },
+            "The nominal first beat does not grant a later repetition the first-frame allowance.")
+    }
+
+    func testNonfiniteReviewBoundsFailClosed() {
+        let metadata = makeMetadata()
+        for value in [Double.nan, .infinity, -.infinity] {
+            var boundaries = ReferencePhraseBoundaries.nominal(for: metadata)
+            boundaries.repetitions[0].startBeat = value
+            XCTAssertTrue(ReferenceValidator.validate(makeEvidence(metadata: metadata, boundaries: boundaries))
+                .failureMessages.contains { $0.contains("finite recorded media range") })
+        }
+    }
+
+    func testNonfiniteReviewEndBoundsFailClosed() {
+        let metadata = makeMetadata()
+        for value in [Double.nan, .infinity, -.infinity] {
+            var boundaries = ReferencePhraseBoundaries.nominal(for: metadata)
+            boundaries.repetitions[0].endBeat = value
+            XCTAssertTrue(ReferenceValidator.validate(makeEvidence(metadata: metadata, boundaries: boundaries))
+                .failureMessages.contains { $0.contains("finite recorded media range") })
+        }
+    }
+
+    func testFiniteReviewBeatsWithNonfiniteConvertedMediaTimesFailClosed() {
+        let metadata = makeMetadata(bpm: 50)
+        for editsStart in [true, false] {
+            var boundaries = ReferencePhraseBoundaries.nominal(for: metadata)
+            if editsStart {
+                boundaries.repetitions[0].startBeat = -Double.greatestFiniteMagnitude
+            } else {
+                boundaries.repetitions[0].endBeat = Double.greatestFiniteMagnitude
+            }
+            let repetition = boundaries.repetitions[0]
+            XCTAssertTrue(repetition.startBeat.isFinite)
+            XCTAssertTrue(repetition.endBeat.isFinite)
+            XCTAssertFalse(editsStart
+                ? repetition.startSeconds(metadata: metadata).isFinite
+                : repetition.endSeconds(metadata: metadata).isFinite)
+            let report = ReferenceValidator.validate(makeEvidence(metadata: metadata, boundaries: boundaries))
+            XCTAssertFalse(report.passes)
+            XCTAssertTrue(report.failureMessages.contains { $0.contains("finite recorded media range") })
+        }
+    }
+
     func testNoSelectedRepetitionBlocksApproval() {
         let metadata = makeMetadata()
         var boundaries = ReferencePhraseBoundaries.nominal(for: metadata)
