@@ -1021,6 +1021,7 @@ struct MacAnalyzerView: View {
             )
         )
         .onDisappear {
+            _ = captureEngine.cancelOrdinaryRoutineStart()
             beatEngine.stop()
             babyScratchDemo.stop()
             practiceBeatStore.handleLeavingPractice()
@@ -5768,6 +5769,15 @@ struct MacAnalyzerView: View {
     private func beginReadyCaptureUsingExistingFlow() async {
         isStartingCaptureFromReadyCard = true
         defer { isStartingCaptureFromReadyCard = false }
+        guard ensureCaptureSessionForRecording() != nil else { return }
+        let startRequest: OrdinaryRoutineStartRequest
+        do {
+            startRequest = try captureEngine.beginOrdinaryRoutineStart(
+                configuration: resolvedCaptureConfigForRecording())
+        } catch {
+            captureEngine.reportRoutineRecordingIssue(error.localizedDescription)
+            return
+        }
 
         if !liveInputEnabled {
             startMacLiveInput()
@@ -5777,16 +5787,20 @@ struct MacAnalyzerView: View {
         // Reuse the same bounded readiness wait already used by Practice.
         // Recording admission and all calibration/session semantics remain in
         // `handleMainCaptureAction` / `handleRoutineRecordingButton`.
-        guard await waitForPracticeCaptureReadiness() else {
+        let ready = await waitForPracticeCaptureReadiness()
+        guard captureEngine.ownsOrdinaryRoutineStart(startRequest) else { return }
+        guard ready else {
+            _ = captureEngine.cancelOrdinaryRoutineStart()
             captureEngine.reportRoutineRecordingIssue(
                 "Capture inputs are not ready. Check the required audio input and any enabled camera, then try again."
             )
             return
         }
-        handleMainCaptureAction()
+        handleMainCaptureAction(startRequest: startRequest)
     }
 
-    private func handleMainCaptureAction() {
+    private func handleMainCaptureAction(startRequest: OrdinaryRoutineStartRequest? = nil) {
+        if let startRequest, !captureEngine.ownsOrdinaryRoutineStart(startRequest) { return }
         guard liveInputEnabled else {
             startMacLiveInput()
             return
@@ -5797,7 +5811,7 @@ struct MacAnalyzerView: View {
                 captureEngine.stopCXLCapture()
             }
             Task {
-                await handleRoutineRecordingButton()
+                await handleRoutineRecordingButton(startRequest: startRequest)
             }
             return
         }
@@ -5814,7 +5828,7 @@ struct MacAnalyzerView: View {
               selectedAudioDevice != nil,
               !captureEngine.selectedVideoDeviceUniqueID.isEmpty else {
             Task {
-                await handleRoutineRecordingButton()
+                await handleRoutineRecordingButton(startRequest: startRequest)
             }
             return
         }
@@ -5826,7 +5840,7 @@ struct MacAnalyzerView: View {
         )
 
         Task {
-            await handleRoutineRecordingButton()
+            await handleRoutineRecordingButton(startRequest: startRequest)
         }
     }
 
@@ -9943,13 +9957,25 @@ struct MacAnalyzerView: View {
         practiceAttemptStartInProgress = true
         defer { practiceAttemptStartInProgress = false }
         practiceScoredAttemptUnavailableMessage = "Preparing camera and audio…"
+        guard ensureCaptureSessionForRecording() != nil else { return false }
+        let startRequest: OrdinaryRoutineStartRequest
+        do {
+            startRequest = try captureEngine.beginOrdinaryRoutineStart(
+                configuration: resolvedCaptureConfigForRecording())
+        } catch {
+            practiceScoredAttemptUnavailableMessage = error.localizedDescription
+            return false
+        }
 
         if !liveInputEnabled {
             startMacLiveInput()
         }
         captureEngine.autoSelectCaptureAudioDeviceIfNeeded()
 
-        guard await waitForPracticeCaptureReadiness() else {
+        let ready = await waitForPracticeCaptureReadiness()
+        guard captureEngine.ownsOrdinaryRoutineStart(startRequest) else { return false }
+        guard ready else {
+            _ = captureEngine.cancelOrdinaryRoutineStart()
             practiceScoredAttemptUnavailableMessage =
                 "Live capture isn't ready. Check the camera and audio input in Capture, then try again."
             return false
@@ -9960,9 +9986,11 @@ struct MacAnalyzerView: View {
             pattern: pattern, bpm: Double(bpmValue),
             countInBeats: routineSessionSetup.config.countInBeats
         )
-        handleMainCaptureAction()
+        handleMainCaptureAction(startRequest: startRequest)
 
-        guard await waitForPracticeRecordingStart() else {
+        let recordingStarted = await waitForPracticeRecordingStart()
+        guard captureEngine.ownsOrdinaryRoutineCapture(startRequest) else { return false }
+        guard recordingStarted else {
             practiceCoordinator.abortAttempt()
             practiceScoredAttemptUnavailableMessage = captureEngine.routineRecordingStatus
             return false
@@ -10009,6 +10037,10 @@ struct MacAnalyzerView: View {
         if captureEngine.isRoutineRecording {
             handleMainCaptureAction()
         } else {
+            if captureEngine.cancelOrdinaryRoutineStart() {
+                beatEngine.stop()
+                routineCountInBeat = nil
+            }
             // No finalization can arrive when recording never started (or
             // already failed), so retain an explicit escape from a stuck UI.
             practiceCoordinator.abortAttempt()
@@ -10808,7 +10840,8 @@ struct MacAnalyzerView: View {
     }
 
     @MainActor
-    private func handleRoutineRecordingButton() async {
+    private func handleRoutineRecordingButton(startRequest: OrdinaryRoutineStartRequest? = nil) async {
+        if let startRequest, !captureEngine.ownsOrdinaryRoutineStart(startRequest) { return }
         // Calibration recording guard: Capture must not start while
         // calibration editing remains open — refuse explicitly (never a
         // silent background lock-flip) and require the user to tap Done
@@ -10820,6 +10853,7 @@ struct MacAnalyzerView: View {
             isRoutineRecording: captureEngine.isRoutineRecording,
             calibrationLocked: captureEngine.calibrationLocked
         ) {
+            if startRequest != nil { _ = captureEngine.cancelOrdinaryRoutineStart() }
             captureEngine.reportRoutineRecordingIssue("Finish editing calibration boxes — tap Done before recording.")
             return
         }
@@ -10838,11 +10872,13 @@ struct MacAnalyzerView: View {
 
         if !captureEngine.isRoutineRecording,
            let routineMetadataStatusMessage {
+            if startRequest != nil { _ = captureEngine.cancelOrdinaryRoutineStart() }
             captureEngine.reportRoutineRecordingIssue(routineMetadataStatusMessage)
             return
         }
 
         guard ensureCaptureSessionForRecording() != nil else {
+            if startRequest != nil { _ = captureEngine.cancelOrdinaryRoutineStart() }
             captureEngine.reportRoutineRecordingIssue("ScratchLab could not create a capture session.")
             return
         }
@@ -10861,65 +10897,81 @@ struct MacAnalyzerView: View {
             return
         }
 
+        let request: OrdinaryRoutineStartRequest
         do {
-            let takeIdentity = try captureEngine.reserveNextRoutineTakeIdentity()
-            let reply = await companionReceiver.requestWatchCaptureStart(
+            request = try startRequest ?? captureEngine.beginOrdinaryRoutineStart(configuration: resolvedConfig)
+        } catch {
+            captureEngine.reportRoutineRecordingIssue(error.localizedDescription)
+            return
+        }
+        let takeIdentity = request.identity
+        guard let reply = await captureEngine.awaitOrdinaryWatchReply(for: request, send: {
+            await companionReceiver.requestWatchCaptureStart(
                 sessionID: takeIdentity.sessionID,
                 takeID: takeIdentity.takeID,
                 takeNumber: takeIdentity.takeNumber,
-                watchWrist: resolvedConfig.normalizedHandedness
+                watchWrist: request.configuration.normalizedHandedness)
+        }) else { return }
+        guard captureEngine.ownsOrdinaryRoutineStart(request) else { return }
+        if reply.syncState != .acknowledged {
+            captureEngine.reportRoutineRecordingIssue(
+                reply.detail ?? "Watch motion did not acknowledge. Routine recording will continue in degraded mode."
             )
-            captureEngine.applyPendingWatchReply(reply)
-            if reply.syncState != .acknowledged {
-                captureEngine.reportRoutineRecordingIssue(
-                    reply.detail ?? "Watch motion did not acknowledge. Routine recording will continue in degraded mode."
-                )
-            }
-
-            if routineSessionSetup.captureMode == .timedClick {
-                var beatStartMetadata: BeatEngineStartMetadata?
-                let startedBeat = try beatEngine.start(
-                    mode: routineSessionSetup.beatEngineMode,
-                    bpm: routineSessionSetup.bpmValue ?? CaptureClickTrackDefaults.defaultTimedBPM,
-                    onCountInBeat: { beat in
-                        Task { @MainActor in
-                            routineCountInBeat = beat
-                            captureEngine.reportRoutineRecordingIssue(
-                                "Get ready. Count-in beat \(beat) of \(CaptureClickTrackDefaults.countInBeats)."
-                            )
-                        }
-                    },
-                    onRecordingStart: {
-                        let captureTiming = CaptureTimingMetadata(
-                            clickStartHostTime: beatStartMetadata?.clickStartHostTime,
-                            recordingStartHostTime: beatStartMetadata?.recordingStartHostTime
-                                ?? ScratchLabBeatEngine.currentHostTime()
-                        )
-                        Task { @MainActor in
-                            routineCountInBeat = nil
-                            captureEngine.recordingSessionConfig = routineSessionSetup.config
-                            captureEngine.startRoutineRecording(captureTiming: captureTiming)
-                        }
-                    }
-                )
-                beatStartMetadata = startedBeat
-                captureEngine.reportRoutineRecordingIssue("Get ready.")
-                return
-            }
-
-            routineCountInBeat = nil
-            captureEngine.startRoutineRecording(
-                captureTiming: CaptureTimingMetadata(
-                    clickStartHostTime: nil,
-                    recordingStartHostTime: ScratchLabBeatEngine.currentHostTime()
-                )
-            )
-        } catch {
-            _ = captureEngine.cancelPendingRoutineReservation()
-            beatEngine.stop()
-            routineCountInBeat = nil
-            captureEngine.reportRoutineRecordingIssue(error.localizedDescription)
         }
+
+        if request.configuration.captureMode == .timedClick {
+            var beatStartMetadata: BeatEngineStartMetadata?
+            beatEngine.requestStart(
+                mode: request.configuration.beatEngineMode,
+                bpm: request.configuration.bpm ?? CaptureClickTrackDefaults.defaultTimedBPM,
+                isStillOwned: { captureEngine.ownsOrdinaryRoutineStart(request) },
+                onCountInBeat: { beat in
+                    Task { @MainActor in
+                        guard captureEngine.ownsOrdinaryRoutineStart(request) else { return }
+                        routineCountInBeat = beat
+                        captureEngine.reportRoutineRecordingIssue(
+                            "Get ready. Count-in beat \(beat) of \(CaptureClickTrackDefaults.countInBeats)."
+                        )
+                    }
+                },
+                onRecordingStart: {
+                    Task { @MainActor in
+                        guard captureEngine.ownsOrdinaryRoutineStart(request) else { return }
+                        guard let started = beatStartMetadata else {
+                            beatEngine.stop()
+                            _ = captureEngine.cancelPendingRoutineReservation()
+                            captureEngine.reportRoutineRecordingIssue("Timed capture did not receive prepared start metadata.")
+                            return
+                        }
+                        guard beatEngine.isCurrentTimedStart(started) else { return }
+                        let captureTiming = started.captureTiming
+                        routineCountInBeat = nil
+                        captureEngine.startRoutineRecording(captureTiming: captureTiming, ordinaryStart: request)
+                    }
+                }
+            ) { result in
+                guard captureEngine.ownsOrdinaryRoutineStart(request) else { return }
+                switch result {
+                case .success(let started):
+                    beatStartMetadata = started
+                    captureEngine.reportRoutineRecordingIssue("Get ready.")
+                case .failure(let error):
+                    _ = captureEngine.cancelPendingRoutineStart(request)
+                    routineCountInBeat = nil
+                    captureEngine.reportRoutineRecordingIssue(error.localizedDescription)
+                }
+            }
+            captureEngine.reportRoutineRecordingIssue("Preparing timed audio…")
+            return
+        }
+
+        routineCountInBeat = nil
+        captureEngine.startRoutineRecording(
+            captureTiming: CaptureTimingMetadata(
+                clickStartHostTime: nil,
+                recordingStartHostTime: ScratchLabBeatEngine.currentHostTime()
+            ), ordinaryStart: request
+        )
     }
 
     private var audioCard: some View {

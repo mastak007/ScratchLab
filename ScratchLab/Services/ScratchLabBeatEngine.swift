@@ -17,6 +17,12 @@ protocol BeatPlaybackOutputRouting: AnyObject {
     var route: BeatPlaybackOutputRoute? { get }
     func prepare(_ engine: AVAudioEngine) throws
     func verify(_ engine: AVAudioEngine) throws
+    /// Snapshot UI-owned routing choices before enqueuing device work.
+    func snapshotForRequest() throws -> any BeatPlaybackOutputRouting
+}
+
+extension BeatPlaybackOutputRouting {
+    func snapshotForRequest() throws -> any BeatPlaybackOutputRouting { self }
 }
 
 protocol ClickTrackTimingEngine: AnyObject {
@@ -25,11 +31,20 @@ protocol ClickTrackTimingEngine: AnyObject {
         onCountInBeat: ((Int) -> Void)?,
         onRecordingStart: (() -> Void)?
     ) throws -> ClickTrackStartMetadata
+    func startOwned(bpm: Int, isCurrent: @escaping () -> Bool,
+                    onCountInBeat: ((Int) -> Void)?, onRecordingStart: (() -> Void)?) throws -> ClickTrackStartMetadata
     func stop()
     func setOutputGain(_ normalizedGain: Double)
 }
 
 extension ClickTrackTimingEngine {
+    func startOwned(bpm: Int, isCurrent: @escaping () -> Bool,
+                    onCountInBeat: ((Int) -> Void)?, onRecordingStart: (() -> Void)?) throws -> ClickTrackStartMetadata {
+        guard isCurrent() else { throw ScratchLabBeatEngineError.supersededStart }
+        let result = try start(bpm: bpm, onCountInBeat: onCountInBeat, onRecordingStart: onRecordingStart)
+        guard isCurrent() else { throw ScratchLabBeatEngineError.supersededStart }
+        return result
+    }
     func setOutputGain(_ normalizedGain: Double) {}
 }
 
@@ -50,15 +65,55 @@ struct BeatEngineStartMetadata: Equatable, Sendable {
     let swingAmount: Double
     let engineVersion: String
     var outputRoute: BeatPlaybackOutputRoute? = nil
+    // Runtime ownership only; not part of CaptureTimingMetadata or export schemas.
+    var requestGeneration: UUID? = nil
+
+    /// Shared adapter used by both ordinary capture surfaces. No clock is read
+    /// while transporting the prepared start into persisted capture metadata.
+    var captureTiming: CaptureTimingMetadata {
+        CaptureTimingMetadata(clickStartHostTime: clickStartHostTime,
+                              recordingStartHostTime: recordingStartHostTime)
+    }
+}
+
+/// Immutable host-clock plan for one ordinary start. Wall-clock audit dates
+/// describe observed events separately; they never schedule this plan.
+struct OrdinaryTimedCaptureOrigin: Equatable, Sendable {
+    let generation: UUID
+    let playbackStartHostTime: UInt64
+    let recordingStartHostTime: UInt64
+    let beatDurationSeconds: Double
+
+    init(generation: UUID, preparedAt hostTime: UInt64, leadInSeconds: Double,
+         beatDurationSeconds: Double, countInDurationSeconds: Double) {
+        self.generation = generation
+        self.beatDurationSeconds = beatDurationSeconds
+        playbackStartHostTime = hostTime + AVAudioTime.hostTime(forSeconds: leadInSeconds)
+        recordingStartHostTime = playbackStartHostTime
+            + AVAudioTime.hostTime(forSeconds: countInDurationSeconds)
+    }
+
+    func countInHostTime(beatIndex: Int) -> UInt64 {
+        playbackStartHostTime + AVAudioTime.hostTime(forSeconds: Double(beatIndex) * beatDurationSeconds)
+    }
+
+    /// AVAudio host time and Dispatch uptime share the monotonic uptime clock.
+    /// Convert units rather than sampling another "now" to reconstruct a deadline.
+    static func deadline(for hostTime: UInt64) -> DispatchTime {
+        DispatchTime(uptimeNanoseconds: UInt64(AVAudioTime.seconds(forHostTime: hostTime) * 1_000_000_000))
+    }
 }
 
 enum ScratchLabBeatEngineError: LocalizedError {
     case unableToStartAudio
+    case supersededStart
 
     var errorDescription: String? {
         switch self {
         case .unableToStartAudio:
             return "ScratchLab could not start the beat engine."
+        case .supersededStart:
+            return "The timed audio start was cancelled or replaced."
         }
     }
 }
@@ -124,9 +179,51 @@ final class ScratchLabBeatEngine: ObservableObject {
     }
 
     private let clickTrackEngine: ClickTrackTimingEngine
-    private let outputRouting: (any BeatPlaybackOutputRouting)?
-    private let audioEngine = AVAudioEngine()
-    private let playerNode = AVAudioPlayerNode()
+    private final class RoutingSnapshot: BeatPlaybackOutputRouting {
+        var current: any BeatPlaybackOutputRouting
+        init(_ current: any BeatPlaybackOutputRouting) { self.current = current }
+        var route: BeatPlaybackOutputRoute? { current.route }
+        func prepare(_ engine: AVAudioEngine) throws { try current.prepare(engine) }
+        func verify(_ engine: AVAudioEngine) throws { try current.verify(engine) }
+    }
+    private final class AudioGraph {
+        let engine = AVAudioEngine()
+        let player = AVAudioPlayerNode()
+        init(format: AVAudioFormat?) {
+            engine.attach(player)
+            if let format { engine.connect(player, to: engine.mainMixerNode, format: format) }
+            engine.prepare()
+        }
+        func stop() {
+            player.stop()
+            player.reset()
+            if engine.isRunning { engine.stop() }
+        }
+    }
+    private let routingProvider: (any BeatPlaybackOutputRouting)?
+    private let outputRouting: RoutingSnapshot?
+    private var audioGraph: AudioGraph?
+    private var graph: AudioGraph {
+        if let audioGraph { return audioGraph }
+        let created = AudioGraph(format: playerFormat)
+        audioGraph = created
+        return created
+    }
+    private var audioEngine: AVAudioEngine { graph.engine }
+    private var playerNode: AVAudioPlayerNode { graph.player }
+
+    // One fixed device worker per existing engine; requests do not create
+    // replacement workers when an external call remains blocked.
+    let audioOperationQueue: DispatchQueue
+    private let audioOperationKey = DispatchSpecificKey<UInt8>()
+    private let requestLock = NSLock()
+    private var requestGeneration = UUID()
+    private var pendingOperation: (() -> Void)?
+    private var pendingRejection: (() -> Void)?
+    private var activeRejection: (() -> Void)?
+    private var operationScheduled = false
+    private var desiredGain = 1.0
+    private var gainScheduled = false
     private let schedulingQueue = DispatchQueue(label: "scratchlab.beatengine.scheduler")
 
     private var playerFormat = AVAudioFormat(
@@ -140,41 +237,238 @@ final class ScratchLabBeatEngine: ObservableObject {
     private var preparedPlayback: PreparedPlayback?
     private var scheduledStepCount = 0
     private var consumedStepCount = 0
-    private var activeGeneration = UUID()
+    private var activeGeneration: UUID {
+        get { requestLock.withLock { requestGeneration } }
+        set {
+            let retired = requestLock.withLock { () -> (() -> Void)? in
+                guard requestGeneration != newValue else { return nil }
+                requestGeneration = newValue
+                let reject = activeRejection
+                activeRejection = nil
+                return reject
+            }
+            // Retire the logical client immediately. The device operation may
+            // still be inside C and remains owned by the same fixed worker.
+            retired?()
+        }
+    }
     private var isRunning = false
     private var pendingUIWorkItems: [DispatchWorkItem] = []
 
+#if DEBUG
+    // Deterministic offline seams: only replace device preparation/output and
+    // clock delivery, leaving the production request/origin/callback flow intact.
+    var testOnly_preparedOutput: (() throws -> Void)?
+    var testOnly_preparedPlaybackScheduled: ((BeatEngineStartMetadata) -> Void)?
+    var testOnly_pendingOperationCount: Int { requestLock.withLock { pendingOperation == nil ? 0 : 1 } }
+    var testOnly_ordinaryPreparation: (() throws -> PlaybackSchedule)?
+    var testOnly_ordinaryHostTime: (() -> UInt64)?
+    var testOnly_ordinaryPlaybackScheduled: ((OrdinaryTimedCaptureOrigin) -> Void)?
+    var testOnly_ordinaryCallbackScheduled: ((UInt64, @escaping () -> Void) -> Void)?
+#endif
+
     init(clickTrackEngine: ClickTrackTimingEngine? = nil,
-         outputRouting: (any BeatPlaybackOutputRouting)? = nil) {
-        self.outputRouting = outputRouting
-        self.clickTrackEngine = clickTrackEngine ?? ClickTrackEngine(outputRouting: outputRouting)
-        audioEngine.attach(playerNode)
-        if let playerFormat {
-            audioEngine.connect(playerNode, to: audioEngine.mainMixerNode, format: playerFormat)
-        }
-        audioEngine.prepare()
+         outputRouting: (any BeatPlaybackOutputRouting)? = nil,
+         audioOperationQueue: DispatchQueue? = nil) {
+        routingProvider = outputRouting
+        let routing = outputRouting.map(RoutingSnapshot.init)
+        self.outputRouting = routing
+        self.clickTrackEngine = clickTrackEngine ?? ClickTrackEngine(outputRouting: routing)
+        self.audioOperationQueue = audioOperationQueue
+            ?? DispatchQueue(label: "scratchlab.beatengine.device.\(UUID().uuidString)")
+        self.audioOperationQueue.setSpecific(key: audioOperationKey, value: 1)
     }
 
     deinit {
-        stop()
+        // The queue owns final device teardown too; dropping a UI owner never
+        // joins an external call. No replacement worker is spawned on Stop.
+        let retainedGraph = audioGraph
+        let click = clickTrackEngine
+        audioOperationQueue.async {
+            click.stop()
+            retainedGraph?.stop()
+        }
     }
+
+    private func onAudioQueue<T>(_ work: () throws -> T) rethrows -> T {
+        if DispatchQueue.getSpecific(key: audioOperationKey) != nil { return try work() }
+        return try audioOperationQueue.sync(execute: work)
+    }
+
+    private func enqueueLatest(_ work: @escaping () -> Void, rejected: (() -> Void)? = nil) {
+        let admission = requestLock.withLock { () -> (Bool, (() -> Void)?) in
+            let old = pendingRejection
+            pendingOperation = work
+            pendingRejection = rejected
+            let schedule = !operationScheduled
+            operationScheduled = true
+            return (schedule, old)
+        }
+        admission.1?()
+        if admission.0 { audioOperationQueue.async { [weak self] in self?.drainOperations() } }
+    }
+
+    private func drainOperations() {
+        let work = requestLock.withLock { () -> (() -> Void)? in
+            let next = pendingOperation
+            activeRejection = pendingRejection
+            pendingOperation = nil
+            pendingRejection = nil
+            return next
+        }
+        work?()
+        let again = requestLock.withLock {
+            activeRejection = nil
+            if pendingOperation != nil { return true }
+            operationScheduled = false
+            return false
+        }
+        if again { audioOperationQueue.async { [weak self] in self?.drainOperations() } }
+    }
+
+    /// Main-queue callback delivery can race a worker returning its metadata.
+    /// Hold at most the five count-in callbacks until readiness is published.
+    private final class CallbackPublication {
+        private let completionLock = NSLock()
+        private var completed = false
+        func claimCompletion() -> Bool {
+            completionLock.withLock {
+                guard !completed else { return false }
+                completed = true
+                return true
+            }
+        }
+        private var prepared = false
+        private var failed = false
+        private var pending: [() -> Void] = []
+        func receive(_ callback: @escaping () -> Void) {
+            DispatchQueue.main.async {
+                guard !self.failed else { return }
+                if self.prepared { callback() } else { self.pending.append(callback) }
+            }
+        }
+        func complete(_ result: Result<BeatEngineStartMetadata, Error>,
+                      completion: (Result<BeatEngineStartMetadata, Error>) -> Void) {
+            completion(result)
+            switch result {
+            case .success:
+                prepared = true
+                let callbacks = pending
+                pending.removeAll()
+                callbacks.forEach { $0() }
+            case .failure:
+                failed = true
+                pending.removeAll()
+            }
+        }
+    }
+
+    /// Nonblocking admission. Routing choices are snapshotted on the caller's
+    /// MainActor; device work and its fixed-size replacement mailbox stay here.
+    @MainActor @discardableResult
+    func requestStart(mode: BeatEngineMode, bpm: Int, usesClickCountIn: Bool = false,
+        isStillOwned: @escaping () -> Bool = { true },
+        onCountInBeat: ((Int) -> Void)? = nil, onRecordingStart: (() -> Void)? = nil,
+        completion: @escaping (Result<BeatEngineStartMetadata, Error>) -> Void) -> UUID {
+        let generation = UUID()
+        activeGeneration = generation
+        let routing = Result { try routingProvider?.snapshotForRequest() }
+        let publication = CallbackPublication()
+        let current = { [weak self] in self?.activeGeneration == generation && isStillOwned() }
+        let deliver: (Result<BeatEngineStartMetadata, Error>) -> Void = { result in
+            guard publication.claimCompletion() else { return }
+            DispatchQueue.main.async {
+                publication.complete(current() ? result : .failure(ScratchLabBeatEngineError.supersededStart),
+                                     completion: completion)
+            }
+        }
+        enqueueLatest({ [weak self] in
+            guard let self, current() else { deliver(.failure(ScratchLabBeatEngineError.supersededStart)); return }
+            do {
+                if let snapshot = try routing.get() { self.outputRouting?.current = snapshot }
+                _ = try self.startOnAudioQueue(mode: mode, bpm: bpm, usesClickCountIn: usesClickCountIn,
+                    generation: generation, isStillOwned: isStillOwned,
+                    onCountInBeat: { beat in publication.receive { if current() { onCountInBeat?(beat) } } },
+                    onRecordingStart: { publication.receive { if current() { onRecordingStart?() } } },
+                    prepared: { deliver(.success($0)) })
+            } catch { deliver(.failure(error)) }
+        }, rejected: { deliver(.failure(ScratchLabBeatEngineError.supersededStart)) })
+        return generation
+    }
+
+    @MainActor @discardableResult
+    func requestPreparedStart(_ beat: ReferencePreparedBeat, mode: BeatEngineMode, bpm: Int,
+        isStillOwned: @escaping () -> Bool,
+        onRecordingStart: (() -> Void)? = nil,
+        completion: @escaping (Result<BeatEngineStartMetadata, Error>) -> Void) -> UUID {
+        let generation = UUID()
+        activeGeneration = generation
+        let routing = Result { try routingProvider?.snapshotForRequest() }
+        let publication = CallbackPublication()
+        let current = { [weak self] in self?.activeGeneration == generation && isStillOwned() }
+        let deliver: (Result<BeatEngineStartMetadata, Error>) -> Void = { result in
+            guard publication.claimCompletion() else { return }
+            DispatchQueue.main.async {
+                publication.complete(current() ? result : .failure(ScratchLabBeatEngineError.supersededStart),
+                                     completion: completion)
+            }
+        }
+        enqueueLatest({ [weak self] in
+            guard let self, current() else { deliver(.failure(ScratchLabBeatEngineError.supersededStart)); return }
+            do {
+                let metadata = try self.start(preparedBeat: beat, mode: mode, bpm: bpm,
+                    onRecordingStart: { publication.receive { if current() { onRecordingStart?() } } },
+                    reservedStart: (generation, try routing.get()), isStillOwned: isStillOwned)
+                deliver(.success(metadata))
+            } catch { deliver(.failure(error)) }
+        }, rejected: { deliver(.failure(ScratchLabBeatEngineError.supersededStart)) })
+        return generation
+    }
+
+    /// Verification remains device work. A retired request neither verifies a
+    /// successor's graph nor publishes a route failure into that successor.
+    func requestPreparedOutputVerification(for metadata: BeatEngineStartMetadata,
+        completion: @escaping (Result<BeatPlaybackOutputRoute?, Error>) -> Void) {
+        guard isCurrentTimedStart(metadata) else { return }
+        audioOperationQueue.async { [weak self] in
+            guard let self, self.isCurrentTimedStart(metadata) else { return }
+            let result = Result { try self.verifiedPreparedOutputRoute() }
+            DispatchQueue.main.async {
+                guard self.isCurrentTimedStart(metadata) else { return }
+                completion(result)
+            }
+        }
+    }
+
+    func isCurrentRequest(_ generation: UUID) -> Bool { activeGeneration == generation }
 
     static func currentHostTime() -> UInt64 {
         ClickTrackEngine.currentHostTime()
     }
 
     func hardResetBeatPlayback() {
+        let generation = UUID()
+        activeGeneration = generation
+        enqueueLatest { [weak self] in
+            guard let self, self.activeGeneration == generation else { return }
+            self.resetBeatPlayback(for: generation)
+        }
+    }
+
+    private func resetBeatPlayback(for generation: UUID) {
         cancelPendingUICallbacks()
         clickTrackEngine.stop()
 
-        schedulingQueue.sync {
-            self.activeGeneration = UUID()
+        let isCurrent = schedulingQueue.sync {
+            guard self.activeGeneration == generation else { return false }
             self.isRunning = false
             self.scheduledStepCount = 0
             self.consumedStepCount = 0
             self.playbackSchedule = nil
             self.preparedPlayback = nil
+            return true
         }
+        guard isCurrent else { return }
 
         playerNode.stop()
         playerNode.reset()
@@ -193,23 +487,32 @@ final class ScratchLabBeatEngine: ObservableObject {
         audioEngine.prepare()
     }
 
-    func start(
-        mode: BeatEngineMode,
-        bpm requestedBPM: Int,
-        usesClickCountIn: Bool = false,
-        onCountInBeat: ((Int) -> Void)? = nil,
-        onRecordingStart: (() -> Void)? = nil
-    ) throws -> BeatEngineStartMetadata {
-        hardResetBeatPlayback()
+    func start(mode: BeatEngineMode, bpm: Int, usesClickCountIn: Bool = false,
+        onCountInBeat: ((Int) -> Void)? = nil, onRecordingStart: (() -> Void)? = nil) throws -> BeatEngineStartMetadata {
+        let generation = UUID()
+        activeGeneration = generation
+        return try onAudioQueue {
+            try startOnAudioQueue(mode: mode, bpm: bpm, usesClickCountIn: usesClickCountIn,
+                generation: generation, onCountInBeat: onCountInBeat, onRecordingStart: onRecordingStart)
+        }
+    }
+
+    private func startOnAudioQueue(mode: BeatEngineMode, bpm requestedBPM: Int, usesClickCountIn: Bool,
+        generation: UUID, isStillOwned: @escaping () -> Bool = { true },
+        onCountInBeat: ((Int) -> Void)?, onRecordingStart: (() -> Void)?,
+        prepared: ((BeatEngineStartMetadata) -> Void)? = nil) throws -> BeatEngineStartMetadata {
+        guard activeGeneration == generation, isStillOwned() else { throw ScratchLabBeatEngineError.supersededStart }
+        resetBeatPlayback(for: generation)
+        guard activeGeneration == generation, isStillOwned() else { throw ScratchLabBeatEngineError.supersededStart }
 
         let bpm = CaptureClickTrackDefaults.clampedBPM(requestedBPM)
         if mode == .clickTrack {
-            let clickMetadata = try clickTrackEngine.start(
-                bpm: bpm,
+            let clickMetadata = try clickTrackEngine.startOwned(
+                bpm: bpm, isCurrent: { [weak self] in self?.activeGeneration == generation && isStillOwned() },
                 onCountInBeat: onCountInBeat,
                 onRecordingStart: onRecordingStart
             )
-            return BeatEngineStartMetadata(
+            let metadata = BeatEngineStartMetadata(
                 bpm: clickMetadata.bpm,
                 countInBeats: clickMetadata.countInBeats,
                 beatsPerBar: clickMetadata.beatsPerBar,
@@ -223,76 +526,85 @@ final class ScratchLabBeatEngine: ObservableObject {
                 beatPatternVersion: CaptureBeatEngineDefaults.beatPatternVersion,
                 swingAmount: 0,
                 engineVersion: CaptureBeatEngineDefaults.engineVersion,
-                outputRoute: outputRouting?.route
+                outputRoute: outputRouting?.route,
+                requestGeneration: generation
             )
+            prepared?(metadata)
+            return metadata
         }
 
-        let beatDurationSeconds = 60.0 / Double(bpm)
-        let startDelay = Self.preRollLeadInSeconds
-        let legacyClickStartHostTime = Self.currentHostTime() + AVAudioTime.hostTime(forSeconds: startDelay)
-        let sampleRate = resolvedSampleRate()
-
-        do {
-            try configurePlayerFormat(sampleRate: sampleRate)
-            try outputRouting?.prepare(audioEngine)
-            if !audioEngine.isRunning {
-                try audioEngine.start()
-            }
-            try outputRouting?.verify(audioEngine)
-        } catch {
-            stop()
-            throw error
-        }
-
-        currentMode = mode
-        currentBPM = bpm
-        currentSwingAmount = mode.defaultSwingAmount
+        // Stop or a newer start invalidates this exact request.
         let schedule: PlaybackSchedule
         do {
-            schedule = try Self.makePlaybackSchedule(
-                mode: mode,
-                bpm: bpm,
-                sampleRate: sampleRate,
-                usesClickCountIn: usesClickCountIn
-            )
+#if DEBUG
+            if let prepare = testOnly_ordinaryPreparation {
+                schedule = try prepare()
+            } else {
+                schedule = try prepareOrdinaryPlayback(mode: mode, bpm: bpm, usesClickCountIn: usesClickCountIn,
+                    isCurrent: { self.activeGeneration == generation && isStillOwned() })
+            }
+#else
+            schedule = try prepareOrdinaryPlayback(mode: mode, bpm: bpm, usesClickCountIn: usesClickCountIn,
+                    isCurrent: { self.activeGeneration == generation && isStillOwned() })
+#endif
         } catch {
-            stop()
+            // A failed obsolete preparation must not stop its successor.
+            if activeGeneration == generation { stopAudioOnQueue() }
             throw error
         }
-        let recordingDelay = schedule.countInBuffer != nil
-            ? schedule.countInDurationSeconds
-            : Double(CaptureClickTrackDefaults.countInBeats) * beatDurationSeconds
-        // Prepare the opted-in count-in before choosing its future start:
-        // audio-device startup must not consume any of the four audible beats.
-        let clickStartHostTime = schedule.countInBuffer != nil
-            ? Self.currentHostTime() + AVAudioTime.hostTime(forSeconds: startDelay)
-            : legacyClickStartHostTime
-        let recordingStartHostTime = clickStartHostTime + AVAudioTime.hostTime(forSeconds: recordingDelay)
 
-        let generation = UUID()
-        schedulingQueue.sync {
-            self.activeGeneration = generation
+        let origin: OrdinaryTimedCaptureOrigin? = schedulingQueue.sync {
+            guard self.activeGeneration == generation, isStillOwned() else { return nil }
+            self.currentMode = mode
+            self.currentBPM = bpm
+            self.currentSwingAmount = mode.defaultSwingAmount
             self.isRunning = true
             self.playbackSchedule = schedule
             self.scheduledStepCount = 0
             self.consumedStepCount = 0
-            if let countInBuffer = schedule.countInBuffer {
-                self.playerNode.scheduleBuffer(
-                    countInBuffer,
-                    at: AVAudioTime(sampleTime: 0, atRate: sampleRate),
-                    options: []
-                )
+#if DEBUG
+            let offline = self.testOnly_ordinaryPreparation != nil
+#else
+            let offline = false
+#endif
+            if !offline {
+                if let countInBuffer = schedule.countInBuffer {
+                    self.playerNode.scheduleBuffer(countInBuffer,
+                        at: AVAudioTime(sampleTime: 0, atRate: schedule.sampleRate), options: [])
+                }
+                self.scheduleStepsIfNeeded()
             }
-            self.scheduleStepsIfNeeded()
+            // Route, startup, PCM and initial buffer scheduling are complete.
+            // No startup cost can consume this request's timed lead-in.
+#if DEBUG
+            let preparedAt = self.testOnly_ordinaryHostTime?() ?? Self.currentHostTime()
+#else
+            let preparedAt = Self.currentHostTime()
+#endif
+            let beatDuration = schedule.countInBuffer != nil
+                ? Double(schedule.beatFrameLength) / schedule.sampleRate : 60.0 / Double(bpm)
+            return OrdinaryTimedCaptureOrigin(generation: generation, preparedAt: preparedAt,
+                leadInSeconds: Self.preRollLeadInSeconds, beatDurationSeconds: beatDuration,
+                countInDurationSeconds: schedule.countInBuffer != nil
+                    ? schedule.countInDurationSeconds
+                    : Double(CaptureClickTrackDefaults.countInBeats) * beatDuration)
         }
-
-        playerNode.play(at: AVAudioTime(hostTime: clickStartHostTime))
+        guard let origin else { throw ScratchLabBeatEngineError.supersededStart }
+#if DEBUG
+        if testOnly_ordinaryPreparation != nil {
+            testOnly_ordinaryPlaybackScheduled?(origin)
+        } else {
+            playerNode.play(at: AVAudioTime(hostTime: origin.playbackStartHostTime))
+        }
+#else
+        playerNode.play(at: AVAudioTime(hostTime: origin.playbackStartHostTime))
+#endif
         let metadata = BeatEngineStartMetadata(
             bpm: bpm,
             countInBeats: CaptureClickTrackDefaults.countInBeats,
             beatsPerBar: CaptureClickTrackDefaults.beatsPerBar,
-            clickStartHostTime: clickStartHostTime,
-            recordingStartHostTime: recordingStartHostTime,
+            clickStartHostTime: origin.playbackStartHostTime,
+            recordingStartHostTime: origin.recordingStartHostTime,
             clickAccentPattern: CaptureClickTrackDefaults.clickAccentPattern,
             clickVersion: CaptureClickTrackDefaults.clickVersion,
             beatEngineMode: mode,
@@ -301,18 +613,65 @@ final class ScratchLabBeatEngine: ObservableObject {
             beatPatternVersion: CaptureBeatEngineDefaults.beatPatternVersion,
             swingAmount: mode.defaultSwingAmount,
             engineVersion: CaptureBeatEngineDefaults.engineVersion,
-            outputRoute: outputRouting?.route
+            outputRoute: outputRouting?.route,
+                requestGeneration: generation
         )
-        scheduleUICallbacks(
-            generation: generation,
-            bpm: bpm,
-            countInStartHostTime: schedule.countInBuffer != nil ? clickStartHostTime : nil,
-            countInBeatDurationSeconds: Double(schedule.beatFrameLength) / sampleRate,
-            recordingStartHostTime: schedule.countInBuffer != nil ? recordingStartHostTime : nil,
-            onCountInBeat: onCountInBeat,
-            onRecordingStart: onRecordingStart
-        )
+        prepared?(metadata)
+        scheduleOrdinaryUICallbacks(origin: origin,
+            onCountInBeat: onCountInBeat, onRecordingStart: onRecordingStart)
         return metadata
+    }
+
+    /// Recheck at the consuming actor boundary, not only before enqueuing a
+    /// callback. A cancelled/replaced start can never authorize a later take.
+    func isCurrentTimedStart(_ metadata: BeatEngineStartMetadata) -> Bool {
+        guard let generation = metadata.requestGeneration else { return false }
+        return activeGeneration == generation
+    }
+
+    private func prepareOrdinaryPlayback(mode: BeatEngineMode, bpm: Int,
+                                         usesClickCountIn: Bool, isCurrent: () -> Bool) throws -> PlaybackSchedule {
+        let sampleRate = resolvedSampleRate()
+        try configurePlayerFormat(sampleRate: sampleRate)
+        guard isCurrent() else { throw ScratchLabBeatEngineError.supersededStart }
+        try outputRouting?.prepare(audioEngine)
+        guard isCurrent() else { throw ScratchLabBeatEngineError.supersededStart }
+        if !audioEngine.isRunning { try audioEngine.start() }
+        guard isCurrent() else { throw ScratchLabBeatEngineError.supersededStart }
+        try outputRouting?.verify(audioEngine)
+        guard isCurrent() else { throw ScratchLabBeatEngineError.supersededStart }
+        return try Self.makePlaybackSchedule(mode: mode, bpm: bpm,
+            sampleRate: sampleRate, usesClickCountIn: usesClickCountIn)
+    }
+
+    private func scheduleOrdinaryUICallbacks(origin: OrdinaryTimedCaptureOrigin,
+                                           onCountInBeat: ((Int) -> Void)?,
+                                           onRecordingStart: (() -> Void)?) {
+        cancelPendingUICallbacks()
+        func schedule(at hostTime: UInt64, _ callback: @escaping () -> Void) {
+            let delivery = { [weak self] in
+                guard let self, self.schedulingQueue.sync(execute: {
+                    self.activeGeneration == origin.generation
+                }) else { return }
+                callback()
+            }
+#if DEBUG
+            if let schedule = testOnly_ordinaryCallbackScheduled {
+                schedule(hostTime, delivery)
+                return
+            }
+#endif
+            let workItem = DispatchWorkItem(block: delivery)
+            pendingUIWorkItems.append(workItem)
+            DispatchQueue.main.asyncAfter(deadline: OrdinaryTimedCaptureOrigin.deadline(for: hostTime),
+                                          execute: workItem)
+        }
+        for index in 0..<CaptureClickTrackDefaults.countInBeats {
+            schedule(at: origin.countInHostTime(beatIndex: index)) {
+                onCountInBeat?((index % CaptureClickTrackDefaults.beatsPerBar) + 1)
+            }
+        }
+        schedule(at: origin.recordingStartHostTime) { onRecordingStart?() }
     }
 
     /// CXL playback consumes the exact verified production WAV that is bound
@@ -323,27 +682,55 @@ final class ScratchLabBeatEngine: ObservableObject {
         mode: BeatEngineMode,
         bpm: Int,
         onCountInBeat: ((Int) -> Void)? = nil,
-        onRecordingStart: (() -> Void)? = nil
+        onRecordingStart: (() -> Void)? = nil,
+        reservedStart: (UUID, (any BeatPlaybackOutputRouting)?)? = nil,
+        isStillOwned: @escaping () -> Bool = { true }
     ) throws -> BeatEngineStartMetadata {
-        hardResetBeatPlayback()
+        let generation = reservedStart?.0 ?? UUID()
+        if reservedStart == nil { activeGeneration = generation }
+        return try onAudioQueue {
+        guard activeGeneration == generation, isStillOwned() else { throw ScratchLabBeatEngineError.supersededStart }
+        if let routing = reservedStart?.1 { outputRouting?.current = routing }
+        resetBeatPlayback(for: generation)
         do {
             let playback = try Self.loadPreparedPlayback(preparedBeat: preparedBeat, mode: mode, bpm: bpm)
             let sampleRate = playback.loopBuffer.format.sampleRate
+#if DEBUG
+            let offline = testOnly_preparedOutput != nil
+            if let prepare = testOnly_preparedOutput {
+                try prepare()
+                guard activeGeneration == generation, isStillOwned() else { throw ScratchLabBeatEngineError.supersededStart }
+            } else {
             try configurePlayerFormat(sampleRate: sampleRate, channelCount: playback.loopBuffer.format.channelCount)
+            guard activeGeneration == generation, isStillOwned() else { throw ScratchLabBeatEngineError.supersededStart }
             try outputRouting?.prepare(audioEngine)
+            guard activeGeneration == generation, isStillOwned() else { throw ScratchLabBeatEngineError.supersededStart }
             try audioEngine.start()
+            guard activeGeneration == generation, isStillOwned() else { throw ScratchLabBeatEngineError.supersededStart }
             try outputRouting?.verify(audioEngine)
+            guard activeGeneration == generation, isStillOwned() else { throw ScratchLabBeatEngineError.supersededStart }
+            }
+#else
+            let offline = false
+            try configurePlayerFormat(sampleRate: sampleRate, channelCount: playback.loopBuffer.format.channelCount)
+            guard activeGeneration == generation, isStillOwned() else { throw ScratchLabBeatEngineError.supersededStart }
+            try outputRouting?.prepare(audioEngine)
+            guard activeGeneration == generation, isStillOwned() else { throw ScratchLabBeatEngineError.supersededStart }
+            try audioEngine.start()
+            guard activeGeneration == generation, isStillOwned() else { throw ScratchLabBeatEngineError.supersededStart }
+            try outputRouting?.verify(audioEngine)
+            guard activeGeneration == generation, isStillOwned() else { throw ScratchLabBeatEngineError.supersededStart }
+#endif
             currentMode = mode
             currentBPM = bpm
             currentSwingAmount = mode.defaultSwingAmount
             let countInFrames = playback.countInBuffer.frameLength
             let clickStart = Self.currentHostTime() + AVAudioTime.hostTime(forSeconds: Self.preRollLeadInSeconds)
             let recordingStart = clickStart + AVAudioTime.hostTime(forSeconds: Double(countInFrames) / sampleRate)
-            let generation = UUID()
             schedulingQueue.sync {
-                self.activeGeneration = generation
                 self.isRunning = true
                 self.preparedPlayback = playback
+                if !offline {
                 self.playerNode.scheduleBuffer(
                     playback.countInBuffer,
                     at: AVAudioTime(sampleTime: 0, atRate: sampleRate), options: []
@@ -353,15 +740,16 @@ final class ScratchLabBeatEngine: ObservableObject {
                     at: AVAudioTime(sampleTime: AVAudioFramePosition(countInFrames), atRate: sampleRate),
                     options: [.loops]
                 )
+                }
             }
-            playerNode.play(at: AVAudioTime(hostTime: clickStart))
+            if !offline { playerNode.play(at: AVAudioTime(hostTime: clickStart)) }
             scheduleUICallbacks(
                 generation: generation, bpm: bpm, countInStartHostTime: clickStart,
                 countInBeatDurationSeconds: Double(countInFrames) / 4.0 / sampleRate,
                 recordingStartHostTime: recordingStart,
                 onCountInBeat: onCountInBeat, onRecordingStart: onRecordingStart
             )
-            return BeatEngineStartMetadata(
+            let metadata = BeatEngineStartMetadata(
                 bpm: bpm, countInBeats: 4, beatsPerBar: 4,
                 clickStartHostTime: clickStart, recordingStartHostTime: recordingStart,
                 clickAccentPattern: CaptureClickTrackDefaults.clickAccentPattern,
@@ -371,11 +759,17 @@ final class ScratchLabBeatEngine: ObservableObject {
                 beatPatternVersion: CaptureBeatEngineDefaults.beatPatternVersion,
                 swingAmount: mode.defaultSwingAmount,
                 engineVersion: CaptureBeatEngineDefaults.engineVersion,
-                outputRoute: outputRouting?.route
+                outputRoute: outputRouting?.route,
+                requestGeneration: generation
             )
+#if DEBUG
+            testOnly_preparedPlaybackScheduled?(metadata)
+#endif
+            return metadata
         } catch {
-            stop()
+            if activeGeneration == generation { stopAudioOnQueue() }
             throw error
+        }
         }
     }
 
@@ -435,30 +829,45 @@ final class ScratchLabBeatEngine: ObservableObject {
     }
 
     func stop() {
+        let generation = UUID()
+        activeGeneration = generation
+        enqueueLatest { [weak self] in
+            guard let self, self.activeGeneration == generation else { return }
+            self.stopAudioOnQueue()
+        }
+    }
+
+    private func stopAudioOnQueue() {
         clickTrackEngine.stop()
         cancelPendingUICallbacks()
-
         schedulingQueue.sync {
-            self.activeGeneration = UUID()
             self.isRunning = false
             self.scheduledStepCount = 0
             self.consumedStepCount = 0
             self.playbackSchedule = nil
             self.preparedPlayback = nil
         }
-
-        playerNode.stop()
-        playerNode.reset()
-        if audioEngine.isRunning {
-            audioEngine.stop()
-        }
+        audioGraph?.stop()
     }
 
     func setOutputGain(_ normalizedGain: Double) {
-        let finiteGain = normalizedGain.isFinite ? normalizedGain : 0
-        let clampedGain = min(max(finiteGain, 0), 1)
-        playerNode.volume = Float(clampedGain)
-        clickTrackEngine.setOutputGain(clampedGain)
+        let gain = min(max(normalizedGain.isFinite ? normalizedGain : 0, 0), 1)
+        let enqueue = requestLock.withLock {
+            desiredGain = gain
+            if gainScheduled { return false }
+            gainScheduled = true
+            return true
+        }
+        guard enqueue else { return }
+        audioOperationQueue.async { [weak self] in
+            guard let self else { return }
+            let gain = self.requestLock.withLock {
+                self.gainScheduled = false
+                return self.desiredGain
+            }
+            self.playerNode.volume = Float(gain)
+            self.clickTrackEngine.setOutputGain(gain)
+        }
     }
 
     /// Peak-level policy for audio ScratchLab *generates* (timing/beat stems and

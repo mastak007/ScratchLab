@@ -35,14 +35,43 @@ import XCTest
 
 final class MIDILearnHangFixTests: XCTestCase {
 
+    private var mappingRoot: URL!
+    private var mappingStore: MIDILearnedMappingStore!
+    private var midiDefaults: UserDefaults!
+    private var defaultsSuite: String!
+
+    override func setUp() {
+        super.setUp()
+        mappingRoot = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        mappingStore = MIDILearnedMappingStore(baseURL: mappingRoot)
+        defaultsSuite = "scratchlab.4c.hang.\(UUID().uuidString)"
+        midiDefaults = UserDefaults(suiteName: defaultsSuite)!
+        ScratchAudioOwnershipMode.scratchLabStandalone.persist(to: midiDefaults)
+    }
+    override func tearDown() {
+        midiDefaults.removePersistentDomain(forName: defaultsSuite)
+        try? FileManager.default.removeItem(at: mappingRoot)
+        mappingStore = nil
+        midiDefaults = nil
+        super.tearDown()
+    }
+    private func makeEngine() -> MacCaptureEngine {
+        MacCaptureEngine(autoRefreshDevices: false, midiDefaults: midiDefaults, midiMappingStore: mappingStore)
+    }
+    private func drainMIDIPublication(_ engine: MacCaptureEngine) {
+        let done = expectation(description: "mapping persistence and publication completed")
+        engine.testOnly_afterMappingPersistenceAndPublication { done.fulfill() }
+        wait(for: [done], timeout: 2)
+    }
+
     private func cleanUpMIDIMapping(deviceIdentifier: String) {
-        MIDILearnedMappingStore.default.delete(deviceIdentifier: deviceIdentifier)
+        mappingStore!.delete(deviceIdentifier: deviceIdentifier)
     }
 
     // MARK: 1. Bounded-time Learn button API under continuous MIDI traffic
 
     func testFaderLearnButtonsRemainResponsiveUnderConcurrentCC6Flood() {
-        let engine = MacCaptureEngine(autoRefreshDevices: false)
+        let engine = makeEngine()
         let deviceID = "midi_test_hang_concurrent_flood"
         engine.selectedMIDIInputSourceID = deviceID
         defer { cleanUpMIDIMapping(deviceIdentifier: deviceID) }
@@ -75,10 +104,10 @@ final class MIDILearnHangFixTests: XCTestCase {
             engine.startMIDILearn(for: action)
             let elapsed = Date().timeIntervalSince(start)
             XCTAssertLessThan(elapsed, 1.0, "startMIDILearn(for: \(action)) must return within a bounded time even under a concurrent CC6 flood — this is exactly the click that hung on hardware")
-            RunLoop.main.run(until: Date().addingTimeInterval(0.05))
+            drainMIDIPublication(engine)
             XCTAssertEqual(engine.activeMIDILearnAction, action)
             engine.cancelMIDILearn()
-            RunLoop.main.run(until: Date().addingTimeInterval(0.05))
+            drainMIDIPublication(engine)
         }
     }
 
@@ -89,25 +118,25 @@ final class MIDILearnHangFixTests: XCTestCase {
         // init. Preserve the user's value while ensuring this flood test
         // starts from the nil mapping its assertions require.
         let legacyMappingKey = "scratchlab.mac.crossfaderMIDIMapping"
-        let originalLegacyMapping = UserDefaults.standard.object(forKey: legacyMappingKey)
-        UserDefaults.standard.removeObject(forKey: legacyMappingKey)
+        let originalLegacyMapping = midiDefaults!.object(forKey: legacyMappingKey)
+        midiDefaults!.removeObject(forKey: legacyMappingKey)
         defer {
             if let originalLegacyMapping {
-                UserDefaults.standard.set(originalLegacyMapping, forKey: legacyMappingKey)
+                midiDefaults!.set(originalLegacyMapping, forKey: legacyMappingKey)
             } else {
-                UserDefaults.standard.removeObject(forKey: legacyMappingKey)
+                midiDefaults!.removeObject(forKey: legacyMappingKey)
             }
         }
 
         for action: MIDISemanticAction in [.crossfader, .leftUpfader, .rightUpfader] {
             let deviceID = "midi_test_hang_10k_\(action.rawValue)"
             cleanUpMIDIMapping(deviceIdentifier: deviceID)
-            let engine = MacCaptureEngine(autoRefreshDevices: false)
+            let engine = makeEngine()
             engine.selectedMIDIInputSourceID = deviceID
             defer { cleanUpMIDIMapping(deviceIdentifier: deviceID) }
 
             engine.startMIDILearn(for: action)
-            RunLoop.main.run(until: Date().addingTimeInterval(0.05))
+            drainMIDIPublication(engine)
 
             let start = Date()
             for i in 0..<10_000 {
@@ -121,7 +150,7 @@ final class MIDILearnHangFixTests: XCTestCase {
             let elapsed = Date().timeIntervalSince(start)
             XCTAssertLessThan(elapsed, 5.0, "10,000 CC6 events must never hang or take unbounded time — this is the exact flood rate (~800 Hz) that hit the hardware hang")
 
-            RunLoop.main.run(until: Date().addingTimeInterval(0.05))
+            drainMIDIPublication(engine)
 
             XCTAssertEqual(engine.activeMIDILearnAction, action, "The learn session must remain active — CC6 must never end or steal it")
             XCTAssertNil(engine.crossfaderCCMapping, "CC6 must never be captured as the crossfader mapping")
@@ -138,17 +167,17 @@ final class MIDILearnHangFixTests: XCTestCase {
     // MARK: 3 & 4. Exactly-once win for left/right upfader
 
     func testLeftUpfaderLearnWinsExactlyOnceOnIntendedCC() {
-        let engine = MacCaptureEngine(autoRefreshDevices: false)
+        let engine = makeEngine()
         let deviceID = "midi_test_hang_left_upfader_once"
         engine.selectedMIDIInputSourceID = deviceID
         defer { cleanUpMIDIMapping(deviceIdentifier: deviceID) }
 
         engine.startMIDILearn(for: .leftUpfader)
-        RunLoop.main.run(until: Date().addingTimeInterval(0.05))
+        drainMIDIPublication(engine)
 
         let first = engine.evaluateMIDILearnForCC(channel: 0, controller: 20, value: 64)
         let second = engine.evaluateMIDILearnForCC(channel: 0, controller: 20, value: 70)
-        RunLoop.main.run(until: Date().addingTimeInterval(0.05))
+        drainMIDIPublication(engine)
 
         XCTAssertTrue(first.consumedByLearn, "The first eligible event must win the session")
         XCTAssertFalse(second.consumedByLearn, "A second event after the session already ended must not also be consumed")
@@ -158,17 +187,17 @@ final class MIDILearnHangFixTests: XCTestCase {
     }
 
     func testRightUpfaderLearnWinsExactlyOnceOnIntendedCC() {
-        let engine = MacCaptureEngine(autoRefreshDevices: false)
+        let engine = makeEngine()
         let deviceID = "midi_test_hang_right_upfader_once"
         engine.selectedMIDIInputSourceID = deviceID
         defer { cleanUpMIDIMapping(deviceIdentifier: deviceID) }
 
         engine.startMIDILearn(for: .rightUpfader)
-        RunLoop.main.run(until: Date().addingTimeInterval(0.05))
+        drainMIDIPublication(engine)
 
         let first = engine.evaluateMIDILearnForCC(channel: 1, controller: 21, value: 64)
         let second = engine.evaluateMIDILearnForCC(channel: 1, controller: 21, value: 70)
-        RunLoop.main.run(until: Date().addingTimeInterval(0.05))
+        drainMIDIPublication(engine)
 
         XCTAssertTrue(first.consumedByLearn)
         XCTAssertFalse(second.consumedByLearn)
@@ -180,19 +209,19 @@ final class MIDILearnHangFixTests: XCTestCase {
     // MARK: 5. Crossfader accepts CC8 raw channel 15 while CC6 traffic continues
 
     func testCrossfaderLearnAcceptsCC8Channel15WhileCC6TrafficContinues() {
-        let engine = MacCaptureEngine(autoRefreshDevices: false)
+        let engine = makeEngine()
         let deviceID = "midi_test_hang_crossfader_cc8_amid_cc6"
         engine.selectedMIDIInputSourceID = deviceID
         defer { cleanUpMIDIMapping(deviceIdentifier: deviceID) }
 
         engine.startMIDILearn(for: .crossfader)
-        RunLoop.main.run(until: Date().addingTimeInterval(0.05))
+        drainMIDIPublication(engine)
 
         for i in 0..<500 {
             _ = engine.evaluateMIDILearnForCC(channel: 1, controller: 6, value: i % 128)
         }
         let result = engine.evaluateMIDILearnForCC(channel: 15, controller: 8, value: 100)
-        RunLoop.main.run(until: Date().addingTimeInterval(0.05))
+        drainMIDIPublication(engine)
 
         XCTAssertTrue(result.consumedByLearn)
         XCTAssertEqual(result.crossfaderMapping, MacCaptureEngine.CrossfaderCCMapping(channel: 15, controller: 8))
@@ -202,15 +231,15 @@ final class MIDILearnHangFixTests: XCTestCase {
     // MARK: 6. Repeated MIDI after completion cannot relearn or overwrite
 
     func testRepeatedMIDIAfterLearnCompletionCannotRelearnOrOverwrite() {
-        let engine = MacCaptureEngine(autoRefreshDevices: false)
+        let engine = makeEngine()
         let deviceID = "midi_test_hang_no_relearn_after_completion"
         engine.selectedMIDIInputSourceID = deviceID
         defer { cleanUpMIDIMapping(deviceIdentifier: deviceID) }
 
         engine.startMIDILearn(for: .crossfader)
-        RunLoop.main.run(until: Date().addingTimeInterval(0.05))
+        drainMIDIPublication(engine)
         _ = engine.evaluateMIDILearnForCC(channel: 15, controller: 8, value: 100)
-        RunLoop.main.run(until: Date().addingTimeInterval(0.05))
+        drainMIDIPublication(engine)
         XCTAssertEqual(engine.crossfaderCCMapping, MacCaptureEngine.CrossfaderCCMapping(channel: 15, controller: 8))
 
         // Further traffic after learning already ended — including on the
@@ -219,7 +248,7 @@ final class MIDILearnHangFixTests: XCTestCase {
             _ = engine.evaluateMIDILearnForCC(channel: 15, controller: 8, value: i % 128)
             _ = engine.evaluateMIDILearnForCC(channel: 0, controller: 20, value: i % 128)
         }
-        RunLoop.main.run(until: Date().addingTimeInterval(0.05))
+        drainMIDIPublication(engine)
 
         XCTAssertEqual(
             engine.crossfaderCCMapping, MacCaptureEngine.CrossfaderCCMapping(channel: 15, controller: 8),
@@ -232,23 +261,23 @@ final class MIDILearnHangFixTests: XCTestCase {
     // MARK: 7. Learn → Cancel → Learn another action rejects stale state/publications
 
     func testCancelThenLearnAnotherActionDoesNotLeakStaleSessionState() {
-        let engine = MacCaptureEngine(autoRefreshDevices: false)
+        let engine = makeEngine()
         let deviceID = "midi_test_hang_cancel_then_learn_another"
         engine.selectedMIDIInputSourceID = deviceID
         defer { cleanUpMIDIMapping(deviceIdentifier: deviceID) }
 
         engine.startMIDILearn(for: .leftUpfader)
-        RunLoop.main.run(until: Date().addingTimeInterval(0.05))
+        drainMIDIPublication(engine)
         engine.cancelMIDILearn()
-        RunLoop.main.run(until: Date().addingTimeInterval(0.05))
+        drainMIDIPublication(engine)
         XCTAssertNil(engine.activeMIDILearnAction)
 
         engine.startMIDILearn(for: .rightUpfader)
-        RunLoop.main.run(until: Date().addingTimeInterval(0.05))
+        drainMIDIPublication(engine)
         XCTAssertEqual(engine.activeMIDILearnAction, .rightUpfader)
 
         let strayResult = engine.evaluateMIDILearnForCC(channel: 0, controller: 20, value: 64)
-        RunLoop.main.run(until: Date().addingTimeInterval(0.05))
+        drainMIDIPublication(engine)
 
         XCTAssertTrue(strayResult.consumedByLearn, "The currently-active session (right upfader) claims the first eligible event")
         XCTAssertEqual(
@@ -259,7 +288,7 @@ final class MIDILearnHangFixTests: XCTestCase {
     }
 
     func testStaleNoMIDIWarningFromCancelledGenerationNeverApplies() {
-        let engine = MacCaptureEngine(autoRefreshDevices: false)
+        let engine = makeEngine()
         let deviceID = "midi_test_hang_stale_generation"
         engine.selectedMIDIInputSourceID = deviceID
         defer { cleanUpMIDIMapping(deviceIdentifier: deviceID) }
@@ -267,13 +296,13 @@ final class MIDILearnHangFixTests: XCTestCase {
         // First session: crossfader — its delayed "no MIDI" warning uses
         // distinct text ("Check IAC Driver...") from any other action's.
         engine.startMIDILearn(for: .crossfader)
-        RunLoop.main.run(until: Date().addingTimeInterval(0.05))
+        drainMIDIPublication(engine)
         engine.cancelMIDILearn()
-        RunLoop.main.run(until: Date().addingTimeInterval(0.05))
+        drainMIDIPublication(engine)
 
         // Second session: a different generation, different action.
         engine.startMIDILearn(for: .leftUpfader)
-        RunLoop.main.run(until: Date().addingTimeInterval(0.05))
+        drainMIDIPublication(engine)
 
         // Let both sessions' 2.5s delayed warnings get a chance to fire.
         RunLoop.main.run(until: Date().addingTimeInterval(2.7))
@@ -303,22 +332,22 @@ final class MIDILearnHangFixTests: XCTestCase {
     func testCrossfaderLearnPersistenceDoesNotBlockTheCallingThread() {
         let deviceID = "midi_test_hang_no_sync_persistence"
         let defaultsKey = "scratchlab.mac.crossfaderMIDIMapping"
-        let originalLegacyMapping = UserDefaults.standard.object(forKey: defaultsKey)
-        UserDefaults.standard.removeObject(forKey: defaultsKey)
+        let originalLegacyMapping = midiDefaults!.object(forKey: defaultsKey)
+        midiDefaults!.removeObject(forKey: defaultsKey)
         defer {
             cleanUpMIDIMapping(deviceIdentifier: deviceID)
             if let originalLegacyMapping {
-                UserDefaults.standard.set(originalLegacyMapping, forKey: defaultsKey)
+                midiDefaults!.set(originalLegacyMapping, forKey: defaultsKey)
             } else {
-                UserDefaults.standard.removeObject(forKey: defaultsKey)
+                midiDefaults!.removeObject(forKey: defaultsKey)
             }
         }
         cleanUpMIDIMapping(deviceIdentifier: deviceID)
-        let engine = MacCaptureEngine(autoRefreshDevices: false)
+        let engine = makeEngine()
         engine.selectedMIDIInputSourceID = deviceID
 
         engine.startMIDILearn(for: .crossfader)
-        RunLoop.main.run(until: Date().addingTimeInterval(0.05))
+        drainMIDIPublication(engine)
 
         let start = Date()
         let result = engine.evaluateMIDILearnForCC(channel: 15, controller: 8, value: 100)
@@ -327,9 +356,9 @@ final class MIDILearnHangFixTests: XCTestCase {
         XCTAssertLessThan(elapsed, 0.05, "Learning the crossfader must enqueue persistence and return immediately, never block on JSON encode + UserDefaults I/O inline")
 
         engine.testOnly_waitForMappingPersistenceQueue()
-        RunLoop.main.run(until: Date().addingTimeInterval(0.1))
+        drainMIDIPublication(engine)
         XCTAssertNotNil(
-            UserDefaults.standard.data(forKey: defaultsKey),
+            midiDefaults!.data(forKey: defaultsKey),
             "Persistence must complete once the queue is drained"
         )
     }
@@ -337,17 +366,17 @@ final class MIDILearnHangFixTests: XCTestCase {
     func testHotCueSampleLoadDoesNotBlockTheCallingThread() {
         let defaults = UserDefaults(suiteName: "MIDILearnHangFixTests.hotcue.\(UUID().uuidString)")!
         ScratchAudioOwnershipMode.scratchLabStandalone.persist(to: defaults)
-        let engine = MacCaptureEngine(autoRefreshDevices: false, midiDefaults: defaults)
+        let engine = MacCaptureEngine(autoRefreshDevices: false, midiDefaults: defaults, midiMappingStore: mappingStore)
         let deviceID = "midi_test_hang_no_sync_sample_load"
         engine.selectedMIDIInputSourceID = deviceID
         defer { cleanUpMIDIMapping(deviceIdentifier: deviceID) }
 
         engine.startMIDILearn(for: .hotCue1)
         engine.receiveNoteOnPadEvent(channel: 10, noteNumber: 40, velocity: 127)
-        RunLoop.main.run(until: Date().addingTimeInterval(0.05))
+        drainMIDIPublication(engine)
         engine.assignSampleToHotCue("ahhh", hotCueIndex: 1)
         engine.testOnly_waitForMappingPersistenceQueue()
-        RunLoop.main.run(until: Date().addingTimeInterval(0.05))
+        drainMIDIPublication(engine)
 
         let start = Date()
         engine.receiveNoteOnPadEvent(channel: 10, noteNumber: 40, velocity: 127)
@@ -373,29 +402,29 @@ final class MIDILearnHangFixTests: XCTestCase {
     private func learnControl(_ engine: MacCaptureEngine, action: MIDISemanticAction, channel: Int, controller: Int) {
         engine.startMIDILearn(for: action)
         _ = engine.evaluateMIDILearnForCC(channel: channel, controller: controller, value: 50)
-        RunLoop.main.run(until: Date().addingTimeInterval(0.05))
+        drainMIDIPublication(engine)
     }
 
     // 1. 10,000 matching fader events produce correct raw min/max.
     func testTenThousandMatchingFaderEventsProduceCorrectRawMinMax() {
-        let engine = MacCaptureEngine(autoRefreshDevices: false)
+        let engine = makeEngine()
         let deviceID = "midi_test_calib_pub_10k_raw"
         engine.selectedMIDIInputSourceID = deviceID
         defer { cleanUpMIDIMapping(deviceIdentifier: deviceID) }
 
         learnControl(engine, action: .leftUpfader, channel: 0, controller: 20)
         engine.startCalibration(for: .leftUpfader)
-        RunLoop.main.run(until: Date().addingTimeInterval(0.05))
+        drainMIDIPublication(engine)
 
         // Full 0...127 sweep, out of order, repeated many times over.
         for i in 0..<10_000 {
             engine.evaluateCalibrationForCC(channel: 0, controller: 20, value: i % 128)
         }
-        RunLoop.main.run(until: Date().addingTimeInterval(0.05))
+        drainMIDIPublication(engine)
 
         engine.finishCalibration()
         engine.testOnly_waitForMappingPersistenceQueue()
-        RunLoop.main.run(until: Date().addingTimeInterval(0.05))
+        drainMIDIPublication(engine)
 
         let control = engine.currentMIDIDeviceMapping?.control(for: .leftUpfader)
         XCTAssertEqual(control?.minValue, 0, "The raw accumulator must have captured the true minimum despite the throttled publish")
@@ -404,14 +433,14 @@ final class MIDILearnHangFixTests: XCTestCase {
 
     // 2. UI publication count remains bounded, not matching the event count.
     func testCalibrationPublicationCountIsBoundedNotOneToOneWithEvents() {
-        let engine = MacCaptureEngine(autoRefreshDevices: false)
+        let engine = makeEngine()
         let deviceID = "midi_test_calib_pub_bounded_count"
         engine.selectedMIDIInputSourceID = deviceID
         defer { cleanUpMIDIMapping(deviceIdentifier: deviceID) }
 
         learnControl(engine, action: .rightUpfader, channel: 1, controller: 21)
         engine.startCalibration(for: .rightUpfader)
-        RunLoop.main.run(until: Date().addingTimeInterval(0.05))
+        drainMIDIPublication(engine)
 
         let start = Date()
         for i in 0..<10_000 {
@@ -420,7 +449,7 @@ final class MIDILearnHangFixTests: XCTestCase {
         let elapsed = Date().timeIntervalSince(start)
         XCTAssertLessThan(elapsed, 5.0, "10,000 matching fader events must never hang or take unbounded time")
 
-        RunLoop.main.run(until: Date().addingTimeInterval(0.05))
+        drainMIDIPublication(engine)
 
         XCTAssertLessThanOrEqual(
             engine.testOnly_calibrationObservedPublishCount, 50,
@@ -432,14 +461,14 @@ final class MIDILearnHangFixTests: XCTestCase {
 
     // 3. Cancel with a publication pending: stale values cannot reappear.
     func testCancelWithPublicationPendingCannotRestoreStaleValues() {
-        let engine = MacCaptureEngine(autoRefreshDevices: false)
+        let engine = makeEngine()
         let deviceID = "midi_test_calib_pub_cancel_pending"
         engine.selectedMIDIInputSourceID = deviceID
         defer { cleanUpMIDIMapping(deviceIdentifier: deviceID) }
 
         learnControl(engine, action: .crossfader, channel: 15, controller: 8)
         engine.startCalibration(for: .crossfader)
-        RunLoop.main.run(until: Date().addingTimeInterval(0.05))
+        drainMIDIPublication(engine)
 
         // This first matching event synchronously enqueues a publish (it is
         // still only PENDING — nothing has yielded to the run loop yet).
@@ -449,7 +478,7 @@ final class MIDILearnHangFixTests: XCTestCase {
         engine.cancelCalibration()
 
         // Now let both the stale publication and the cancel's own publish drain.
-        RunLoop.main.run(until: Date().addingTimeInterval(0.1))
+        drainMIDIPublication(engine)
 
         XCTAssertNil(engine.calibrationObservedMin, "A stale pending publication must never restore calibration UI after Cancel")
         XCTAssertNil(engine.calibrationObservedMax, "A stale pending publication must never restore calibration UI after Cancel")
@@ -458,14 +487,14 @@ final class MIDILearnHangFixTests: XCTestCase {
 
     // 4. Finish with a publication pending: stale values cannot reappear.
     func testFinishWithPublicationPendingCannotRestoreStaleValues() {
-        let engine = MacCaptureEngine(autoRefreshDevices: false)
+        let engine = makeEngine()
         let deviceID = "midi_test_calib_pub_finish_pending"
         engine.selectedMIDIInputSourceID = deviceID
         defer { cleanUpMIDIMapping(deviceIdentifier: deviceID) }
 
         learnControl(engine, action: .leftUpfader, channel: 0, controller: 20)
         engine.startCalibration(for: .leftUpfader)
-        RunLoop.main.run(until: Date().addingTimeInterval(0.05))
+        drainMIDIPublication(engine)
 
         // Enqueue a pending publish, then immediately finish (a valid, wide
         // range so finish actually succeeds and persists) before that
@@ -475,7 +504,7 @@ final class MIDILearnHangFixTests: XCTestCase {
         engine.finishCalibration()
 
         engine.testOnly_waitForMappingPersistenceQueue()
-        RunLoop.main.run(until: Date().addingTimeInterval(0.1))
+        drainMIDIPublication(engine)
 
         XCTAssertNil(engine.calibrationObservedMin, "A stale pending publication must never restore calibration UI after Finish")
         XCTAssertNil(engine.calibrationObservedMax, "A stale pending publication must never restore calibration UI after Finish")
@@ -488,26 +517,26 @@ final class MIDILearnHangFixTests: XCTestCase {
 
     // 5. Starting a new calibration: the old generation cannot overwrite it.
     func testNewCalibrationSessionRejectsStalePublicationFromOldGeneration() {
-        let engine = MacCaptureEngine(autoRefreshDevices: false)
+        let engine = makeEngine()
         let deviceID = "midi_test_calib_pub_new_generation"
         engine.selectedMIDIInputSourceID = deviceID
         defer { cleanUpMIDIMapping(deviceIdentifier: deviceID) }
 
         learnControl(engine, action: .crossfader, channel: 15, controller: 8)
         engine.startCalibration(for: .crossfader)
-        RunLoop.main.run(until: Date().addingTimeInterval(0.05))
+        drainMIDIPublication(engine)
 
         // Enqueue a pending publish for the OLD generation, then immediately
         // cancel and start a NEW calibration session before it runs.
         engine.evaluateCalibrationForCC(channel: 15, controller: 8, value: 10)
         engine.cancelCalibration()
         engine.startCalibration(for: .crossfader)
-        RunLoop.main.run(until: Date().addingTimeInterval(0.1))
+        drainMIDIPublication(engine)
 
         // A genuine event in the NEW session must be reflected correctly —
         // proving the old generation's stale value (10) never leaked in.
         engine.evaluateCalibrationForCC(channel: 15, controller: 8, value: 99)
-        RunLoop.main.run(until: Date().addingTimeInterval(0.05))
+        drainMIDIPublication(engine)
 
         XCTAssertEqual(engine.calibrationObservedMin, 99, "The old generation's stale publication must never overwrite the new session's values")
         XCTAssertEqual(engine.calibrationObservedMax, 99)

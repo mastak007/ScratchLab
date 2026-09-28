@@ -711,33 +711,40 @@ struct CompanionCameraView: View {
         if captureStore.sessionSetup.captureMode == .timedClick {
             captureStore.beginTimedCapture(nextTakeNumber: broadcaster.nextTakeNumberPreview)
 
-            do {
-                var beatStartMetadata: BeatEngineStartMetadata?
-                let startedBeat = try beatEngine.start(
-                    mode: captureStore.sessionSetup.beatEngineMode,
-                    bpm: captureStore.sessionSetup.bpmValue ?? CaptureClickTrackDefaults.defaultTimedBPM,
-                    onCountInBeat: { beat in
-                        Task { @MainActor in
-                            captureStore.updateCountInBeat(beat)
+            var beatRequest: UUID?
+            var beatStartMetadata: BeatEngineStartMetadata?
+            beatRequest = beatEngine.requestStart(
+                mode: captureStore.sessionSetup.beatEngineMode,
+                bpm: captureStore.sessionSetup.bpmValue ?? CaptureClickTrackDefaults.defaultTimedBPM,
+                onCountInBeat: { beat in
+                    Task { @MainActor in
+                        guard let beatRequest, beatEngine.isCurrentRequest(beatRequest) else { return }
+                        captureStore.updateCountInBeat(beat)
+                    }
+                },
+                onRecordingStart: {
+                    Task { @MainActor in
+                        guard let beatRequest, beatEngine.isCurrentRequest(beatRequest) else { return }
+                        guard let started = beatStartMetadata else {
+                            beatEngine.stop()
+                            captureStore.cancelPendingCapture(message: "Timed capture did not receive prepared start metadata.")
+                            return
                         }
-                    },
-                    onRecordingStart: {
-                        let captureTiming = CaptureTimingMetadata(
-                            clickStartHostTime: beatStartMetadata?.clickStartHostTime,
-                            recordingStartHostTime: beatStartMetadata?.recordingStartHostTime
-                                ?? ScratchLabBeatEngine.currentHostTime()
-                        )
-                        Task { @MainActor in
-                            captureStore.startTimedRecording {
-                                beginLinkedRecording(captureTiming: captureTiming)
-                            }
+                        guard beatEngine.isCurrentTimedStart(started) else { return }
+                        let captureTiming = started.captureTiming
+                        captureStore.startTimedRecording {
+                            beginLinkedRecording(captureTiming: captureTiming)
                         }
                     }
-                )
-                beatStartMetadata = startedBeat
-            } catch {
-                beatEngine.stop()
-                captureStore.cancelPendingCapture(message: error.localizedDescription)
+                }
+            ) { result in
+                guard let beatRequest, beatEngine.isCurrentRequest(beatRequest) else { return }
+                switch result {
+                case .success(let started): beatStartMetadata = started
+                case .failure(let error):
+                    beatEngine.stop()
+                    captureStore.cancelPendingCapture(message: error.localizedDescription)
+                }
             }
             return
         }

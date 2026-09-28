@@ -29,9 +29,30 @@ final class ClickTrackEngine: ObservableObject {
     private static let clickDurationSeconds = 0.018
     private static let internalSampleRate = 48_000.0
 
-    private let audioEngine = AVAudioEngine()
+    private final class AudioGraph {
+        let engine = AVAudioEngine()
+        let player = AVAudioPlayerNode()
+        init(format: AVAudioFormat?) {
+            engine.attach(player)
+            if let format { engine.connect(player, to: engine.mainMixerNode, format: format) }
+            engine.prepare()
+        }
+        func stop() {
+            player.stop()
+            player.reset()
+            if engine.isRunning { engine.stop() }
+        }
+    }
+    private var audioGraph: AudioGraph?
+    private var graph: AudioGraph {
+        if let audioGraph { return audioGraph }
+        let created = AudioGraph(format: playerFormat)
+        audioGraph = created
+        return created
+    }
+    private var audioEngine: AVAudioEngine { graph.engine }
+    private var playerNode: AVAudioPlayerNode { graph.player }
     private let outputRouting: (any BeatPlaybackOutputRouting)?
-    private let playerNode = AVAudioPlayerNode()
     private let schedulingQueue = DispatchQueue(label: "scratchlab.clicktrack.engine")
 
     private var accentBeatBuffer: AVAudioPCMBuffer?
@@ -50,15 +71,11 @@ final class ClickTrackEngine: ObservableObject {
 
     init(outputRouting: (any BeatPlaybackOutputRouting)? = nil) {
         self.outputRouting = outputRouting
-        audioEngine.attach(playerNode)
-        if let playerFormat {
-            audioEngine.connect(playerNode, to: audioEngine.mainMixerNode, format: playerFormat)
-        }
-        audioEngine.prepare()
     }
 
     deinit {
-        stop()
+        let retainedGraph = audioGraph
+        schedulingQueue.async { retainedGraph?.stop() }
     }
 
     static func currentHostTime() -> UInt64 {
@@ -70,6 +87,13 @@ final class ClickTrackEngine: ObservableObject {
         onCountInBeat: ((Int) -> Void)? = nil,
         onRecordingStart: (() -> Void)? = nil
     ) throws -> ClickTrackStartMetadata {
+        try startOwned(bpm: requestedBPM, isCurrent: { true },
+                       onCountInBeat: onCountInBeat, onRecordingStart: onRecordingStart)
+    }
+
+    func startOwned(bpm requestedBPM: Int, isCurrent: @escaping () -> Bool,
+                    onCountInBeat: ((Int) -> Void)?, onRecordingStart: (() -> Void)?) throws -> ClickTrackStartMetadata {
+        guard isCurrent() else { throw ScratchLabBeatEngineError.supersededStart }
         stop()
 
         let bpm = CaptureClickTrackDefaults.clampedBPM(requestedBPM)
@@ -79,10 +103,13 @@ final class ClickTrackEngine: ObservableObject {
 
         do {
             try configurePlayerFormat(sampleRate: sampleRate)
+            guard isCurrent() else { throw ScratchLabBeatEngineError.supersededStart }
             try outputRouting?.prepare(audioEngine)
+            guard isCurrent() else { throw ScratchLabBeatEngineError.supersededStart }
             if !audioEngine.isRunning {
                 try audioEngine.start()
             }
+            guard isCurrent() else { throw ScratchLabBeatEngineError.supersededStart }
             try outputRouting?.verify(audioEngine)
         } catch {
             stop()
@@ -101,6 +128,7 @@ final class ClickTrackEngine: ObservableObject {
             throw ClickTrackEngineError.unableToStartAudio
         }
 
+        guard isCurrent() else { throw ScratchLabBeatEngineError.supersededStart }
         // Device startup must finish before the four audible count-in beats.
         let clickStartHostTime = Self.currentHostTime() + AVAudioTime.hostTime(forSeconds: startDelay)
         let recordingStartHostTime = clickStartHostTime
@@ -129,8 +157,8 @@ final class ClickTrackEngine: ObservableObject {
         scheduleUICallbacks(
             generation: generation,
             metadata: metadata,
-            onCountInBeat: onCountInBeat,
-            onRecordingStart: onRecordingStart
+            onCountInBeat: { beat in if isCurrent() { onCountInBeat?(beat) } },
+            onRecordingStart: { if isCurrent() { onRecordingStart?() } }
         )
         return metadata
     }
@@ -146,11 +174,7 @@ final class ClickTrackEngine: ObservableObject {
             self.beatFrameLength = 0
         }
 
-        playerNode.stop()
-        playerNode.reset()
-        if audioEngine.isRunning {
-            audioEngine.stop()
-        }
+        audioGraph?.stop()
     }
 
     func setOutputGain(_ normalizedGain: Double) {

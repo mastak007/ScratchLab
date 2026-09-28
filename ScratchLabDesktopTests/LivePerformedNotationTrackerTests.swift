@@ -30,8 +30,16 @@ final class LivePerformedNotationTrackerTests: XCTestCase {
         XCTAssertTrue(source.contains("practiceCanonicalPattern?.materialized(bpm: practiceTeachingBPM)"))
         XCTAssertFalse(source.contains("sampledPlaybackTime()"))
         XCTAssertFalse(source.contains("cxl_baby_target.wav"))
-        XCTAssertTrue(source.contains("guard await waitForPracticeCaptureReadiness() else"))
-        XCTAssertTrue(source.contains("guard await waitForPracticeRecordingStart() else"))
+        XCTAssertTrue(source.contains("""
+        let ready = await waitForPracticeCaptureReadiness()
+                guard captureEngine.ownsOrdinaryRoutineStart(startRequest) else { return false }
+                guard ready else {
+        """))
+        XCTAssertTrue(source.contains("""
+        let recordingStarted = await waitForPracticeRecordingStart()
+                guard captureEngine.ownsOrdinaryRoutineCapture(startRequest) else { return false }
+                guard recordingStarted else {
+        """))
         XCTAssertTrue(source.contains("routineSessionSetup.scratchType = .babyScratch"))
     }
 
@@ -2993,16 +3001,22 @@ final class LivePerformedNotationTrackerTests: XCTestCase {
         let token = engine.testOnly_armTakeMIDIWindow()
         let mediaStart = CACurrentMediaTime()
         engine.testOnly_openTakeMIDIEpoch(at: mediaStart)
+        let eventTimes = (1...9).map { mediaStart + 0.01 * Double($0) }
         for index in 0..<9 {
             engine.recordReceivedMIDICCEvent(
                 sourceName: "Rane ONE MKII",
                 channel: 1, controller: 6, value: index % 128,
-                timestamp: mediaStart + 0.01 * Double(index + 1)
+                timestamp: eventTimes[index]
             )
         }
 
         // Stop: epoch closed, ownership deliberately retained.
-        engine.testOnly_closeTakeMIDIEpoch()
+        let admitted = engine.capturedMidiCCEventsSnapshot()
+        XCTAssertEqual(admitted.map(\.timestamp), eventTimes)
+        XCTAssertEqual(admitted.map(\.value), Array(0..<9))
+        XCTAssertEqual(admitted.map(\.takeRelativeTime), eventTimes.map { $0 - mediaStart })
+        // The synthetic take ends exactly at its final intended event.
+        engine.testOnly_closeTakeMIDIEpoch(at: eventTimes[9 - 1], token: token)
         XCTAssertFalse(engine.isRoutineRecording)
         XCTAssertFalse(engine.isRoutineFinalizationPending)
         XCTAssertEqual(
@@ -3018,8 +3032,10 @@ final class LivePerformedNotationTrackerTests: XCTestCase {
             engine.capturedMidiCCEventsSnapshot().count, 9,
             "preview cleanup must never clear undrained take evidence"
         )
+        let drained = engine.testOnly_drainTakeMIDIWindow(token: token)
+        XCTAssertEqual(drained, admitted)
         XCTAssertEqual(
-            engine.testOnly_drainTakeMIDIWindow(token: token)?.count, 9,
+            drained?.count, 9,
             "finalization must still receive the whole take"
         )
     }
@@ -3142,7 +3158,8 @@ final class LivePerformedNotationTrackerTests: XCTestCase {
 
     /// (7) The finalization paths that never drain must still release the
     /// window, or the preview could never re-arm for the rest of the session.
-    func testEarlyReturnFinalizationPathsReleaseTheWindow() throws {
+    @MainActor
+    func testEarlyReturnFinalizationPathsReleaseTheWindow() async throws {
         let engine = MacCaptureEngine(autoRefreshDevices: false)
         let token = engine.testOnly_armTakeMIDIWindow()
         let mediaStart = CACurrentMediaTime()
@@ -3168,24 +3185,10 @@ final class LivePerformedNotationTrackerTests: XCTestCase {
             "and the preview can claim the window again"
         )
 
-        // Both no-drain paths must actually call it.
-        let source = try engineSource()
-        let armFailure = try XCTUnwrap(
-            source.range(of: "self.scratchPlaybackController.cancelRoutineOutputCapture()")
-        )
-        XCTAssertTrue(
-            String(source[armFailure.upperBound...].prefix(700))
-                .contains("releaseAbandonedTakeMIDIWindow(token: midiTakeToken)"),
-            "a take that fails to start must hand the window back"
-        )
-        let noSidecar = try XCTUnwrap(
-            source.range(of: "guard let sidecar = activeRoutineRecordingSidecar else {")
-        )
-        XCTAssertTrue(
-            String(source[noSidecar.upperBound...].prefix(900))
-                .contains("releaseAbandonedTakeMIDIWindow(token: midiTakeToken)"),
-            "the no-sidecar finalization early return must hand the window back"
-        )
+        // Drive the real failure helper after MIDI arming, then the no-sidecar
+        // release/publication interleaving. Factoring is not the contract:
+        // A must retire without clearing B, and B must still finalize normally.
+        try await RoutineFinalizationPublicationOwnershipTests.verifyEarlyReturnContract(in: self)
     }
 
     /// (8) Repeated preview → take → preview generations stay isolated. No
@@ -3223,17 +3226,24 @@ final class LivePerformedNotationTrackerTests: XCTestCase {
             let mediaStart = CACurrentMediaTime()
             engine.testOnly_openTakeMIDIEpoch(at: mediaStart)
             seenGenerations.append(engine.midiCaptureWindowTicket.generation)
+            let eventTimes = (1...cycle).map { mediaStart + 0.01 * Double($0) }
             for index in 0..<cycle {
                 engine.recordReceivedMIDICCEvent(
                     sourceName: "Rane ONE MKII",
                     channel: 1, controller: 6, value: index,
-                    timestamp: mediaStart + 0.01 * Double(index + 1)
+                    timestamp: eventTimes[index]
                 )
             }
-            engine.testOnly_closeTakeMIDIEpoch()
+            let admitted = engine.capturedMidiCCEventsSnapshot()
+            XCTAssertEqual(admitted.map(\.timestamp), eventTimes)
+            XCTAssertEqual(admitted.map(\.value), Array(0..<cycle))
+            XCTAssertEqual(admitted.map(\.takeRelativeTime), eventTimes.map { $0 - mediaStart })
+            // The synthetic take ends exactly at its final intended event.
+            engine.testOnly_closeTakeMIDIEpoch(at: eventTimes[cycle - 1], token: token)
             seenGenerations.append(engine.midiCaptureWindowTicket.generation)
 
             let drained = engine.testOnly_drainTakeMIDIWindow(token: token)
+            XCTAssertEqual(drained, admitted)
             seenGenerations.append(engine.midiCaptureWindowTicket.generation)
             XCTAssertEqual(
                 drained?.count, cycle,
@@ -3325,16 +3335,23 @@ final class LivePerformedNotationTrackerTests: XCTestCase {
         let token = engine.testOnly_armTakeMIDIWindow()
         let mediaStart = CACurrentMediaTime()
         engine.testOnly_openTakeMIDIEpoch(at: mediaStart)
+        let eventTimes = (1...10).map { mediaStart + 0.01 * Double($0) }
         for index in 0..<10 {
             engine.recordReceivedMIDICCEvent(
                 sourceName: "Rane ONE MKII",
                 channel: 1, controller: 6, value: 22,
-                timestamp: mediaStart + 0.01 * Double(index + 1)
+                timestamp: eventTimes[index]
             )
         }
-        engine.testOnly_closeTakeMIDIEpoch()
+        let admitted = engine.capturedMidiCCEventsSnapshot()
+        XCTAssertEqual(admitted.map(\.timestamp), eventTimes)
+        XCTAssertEqual(admitted.map(\.value), Array(repeating: 22, count: 10))
+        XCTAssertEqual(admitted.map(\.takeRelativeTime), eventTimes.map { $0 - mediaStart })
+        // The synthetic take ends exactly at its final intended event.
+        engine.testOnly_closeTakeMIDIEpoch(at: eventTimes[10 - 1], token: token)
 
         let drained = try XCTUnwrap(engine.testOnly_drainTakeMIDIWindow(token: token))
+        XCTAssertEqual(drained, admitted)
         XCTAssertEqual(drained.count, 10, "no loss")
         XCTAssertFalse(
             drained.contains { $0.value == 111 },
@@ -3454,13 +3471,19 @@ final class LivePerformedNotationTrackerTests: XCTestCase {
         )
 
         // Same again after Stop closes the epoch on a take that HAS captured.
+        let finalEventTime = now + 0.01
         engine.testOnly_openTakeMIDIEpoch(at: now)
         engine.recordReceivedMIDICCEvent(
             sourceName: "Rane ONE MKII",
-            channel: 1, controller: 6, value: 6, timestamp: now + 0.01
+            channel: 1, controller: 6, value: 6, timestamp: finalEventTime
         )
         XCTAssertEqual(engine.capturedMidiCCEventsSnapshot().count, 1)
-        engine.testOnly_closeTakeMIDIEpoch()
+        let admitted = engine.capturedMidiCCEventsSnapshot()
+        XCTAssertEqual(admitted.map(\.timestamp), [finalEventTime])
+        XCTAssertEqual(admitted.map(\.value), [6])
+        XCTAssertEqual(admitted.map(\.takeRelativeTime), [finalEventTime - now])
+        // The synthetic take ends exactly at its final intended event.
+        engine.testOnly_closeTakeMIDIEpoch(at: finalEventTime, token: token)
         XCTAssertEqual(engine.midiCaptureWindowTicket.epochStartHostTime, 0)
         engine.recordReceivedMIDICCEvent(
             sourceName: "Rane ONE MKII",
@@ -3470,7 +3493,9 @@ final class LivePerformedNotationTrackerTests: XCTestCase {
             engine.capturedMidiCCEventsSnapshot().count, 1,
             "nothing may be admitted after Stop closed the epoch"
         )
-        XCTAssertEqual(engine.testOnly_drainTakeMIDIWindow(token: token)?.count, 1)
+        let drained = engine.testOnly_drainTakeMIDIWindow(token: token)
+        XCTAssertEqual(drained, admitted)
+        XCTAssertEqual(drained?.count, 1)
     }
 
     /// No cached or caller-supplied epoch may override the active ticket.
@@ -3564,19 +3589,26 @@ final class LivePerformedNotationTrackerTests: XCTestCase {
     /// The production shape: `startRoutineRecording` holds an optional token
     /// that is nil until arming actually happened, and its catch releases only
     /// that token.
+    @MainActor
     func testAFailedStartCannotAbandonAnotherTakesStoppedEvidence() throws {
         let engine = MacCaptureEngine(autoRefreshDevices: false)
         let stoppedTake = engine.testOnly_armTakeMIDIWindow()
         let start = CACurrentMediaTime()
         engine.testOnly_openTakeMIDIEpoch(at: start)
+        let eventTimes = (1...6).map { start + 0.01 * Double($0) }
         for index in 0..<6 {
             engine.recordReceivedMIDICCEvent(
                 sourceName: "Rane ONE MKII",
                 channel: 1, controller: 6, value: index,
-                timestamp: start + 0.01 * Double(index + 1)
+                timestamp: eventTimes[index]
             )
         }
-        engine.testOnly_closeTakeMIDIEpoch()
+        let admitted = engine.capturedMidiCCEventsSnapshot()
+        XCTAssertEqual(admitted.map(\.timestamp), eventTimes)
+        XCTAssertEqual(admitted.map(\.value), Array(0..<6))
+        XCTAssertEqual(admitted.map(\.takeRelativeTime), eventTimes.map { $0 - start })
+        // The synthetic take ends exactly at its final intended event.
+        engine.testOnly_closeTakeMIDIEpoch(at: eventTimes[6 - 1], token: stoppedTake)
 
         let beforeFailedStart = engine.midiCaptureWindowTicket
         // Actual start entry point fails before device discovery or recording.
@@ -3598,7 +3630,9 @@ final class LivePerformedNotationTrackerTests: XCTestCase {
             "a stopped take's undrained evidence must survive an unrelated failed start"
         )
         XCTAssertEqual(engine.midiCaptureWindowTicket.takeToken, stoppedTake)
-        XCTAssertEqual(try XCTUnwrap(engine.testOnly_drainTakeMIDIWindow(token: stoppedTake)).count, 6)
+        let drained = try XCTUnwrap(engine.testOnly_drainTakeMIDIWindow(token: stoppedTake))
+        XCTAssertEqual(drained, admitted)
+        XCTAssertEqual(drained.count, 6)
 
         // The production catch is token-scoped and conditional on arming.
         let source = try engineSource()

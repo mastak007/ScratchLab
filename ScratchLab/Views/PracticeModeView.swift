@@ -1364,7 +1364,7 @@ struct PracticeModeView: View {
         .accessibilityLabel(practiceBeatStore.isBeatEnabled
                             ? (practiceBeatStore.isPlaying
                                ? PracticeBeatUIContract.stopLabel
-                               : PracticeBeatUIContract.playLabel)
+                               : (practiceBeatStore.isPreparingPlayback ? "Cancel audio preparation" : PracticeBeatUIContract.playLabel))
                             : "Beat Off")
         .accessibilityHint(practiceBeatStore.isBeatEnabled
             ? "Stops or resumes the selected practice beat"
@@ -1380,7 +1380,7 @@ struct PracticeModeView: View {
         guard practiceBeatStore.isBeatEnabled else { return "Beat Off" }
         return practiceBeatStore.isPlaying
             ? PracticeBeatUIContract.stopLabel
-            : PracticeBeatUIContract.playLabel
+            : (practiceBeatStore.isPreparingPlayback ? "Cancel audio preparation" : PracticeBeatUIContract.playLabel)
     }
 
     private func handleBeatButton() {
@@ -2827,7 +2827,7 @@ private extension SessionSetupOverlay {
             Button(action: { practiceBeatStore.togglePlayback() }) {
                 Text(practiceBeatStore.isPlaying
                      ? PracticeBeatUIContract.stopLabel
-                     : PracticeBeatUIContract.playLabel)
+                     : (practiceBeatStore.isPreparingPlayback ? "Cancel audio preparation" : PracticeBeatUIContract.playLabel))
                     .font(ScratchLabDesign.Typo.sectionLabel)
                     .foregroundStyle(ScratchLabDesign.Sem.textOnAccent)
                     .frame(maxWidth: .infinity)
@@ -4371,7 +4371,7 @@ private struct PracticeBeatControlsCard: View {
             }
 
             Button(action: { practiceBeatStore.togglePlayback() }) {
-                Text(practiceBeatStore.isPlaying ? PracticeBeatUIContract.stopLabel : PracticeBeatUIContract.playLabel)
+                Text(practiceBeatStore.isPlaying ? PracticeBeatUIContract.stopLabel : (practiceBeatStore.isPreparingPlayback ? "Cancel audio preparation" : PracticeBeatUIContract.playLabel))
                     .font(.system(size: 15, weight: .bold))
                     .foregroundColor(ScratchLabDesign.Sem.textOnAccent)
                     .frame(maxWidth: .infinity)

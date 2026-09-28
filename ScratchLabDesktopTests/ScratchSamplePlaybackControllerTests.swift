@@ -4320,3 +4320,231 @@ final class RealAudioIntegrationAdmissionTests: XCTestCase {
         XCTAssertEqual(ScratchSamplePlaybackController.scratchOutputPeak(in: buffer), 0.25)
     }
 }
+
+/// Exercises the production request/worker/publication flow with only external
+/// output startup held or failed. All PCM is generated in an isolated test root.
+@MainActor
+final class ScratchPlaybackResponsivenessTests: XCTestCase {
+    @MainActor private final class Fixture {
+        let root: URL
+        let defaults: UserDefaults
+        let suite = "scratchlab.4b.playback.\(UUID().uuidString)"
+        let engine: MacCaptureEngine
+        var controller: ScratchSamplePlaybackController { engine.testOnly_scratchPlaybackController }
+        init() throws {
+            root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+            try FileManager.default.createDirectory(at: root.appendingPathComponent("VirtualPlatter"), withIntermediateDirectories: true)
+            let format = AVAudioFormat(standardFormatWithSampleRate: 48_000, channels: 1)!
+            let pcm = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: 512)!
+            pcm.frameLength = 512
+            for i in 0..<512 { pcm.floatChannelData![0][i] = Float(sin(Double(i) * 0.07)) * 0.2 }
+            for name in ["VirtualPlatter/ahhh.wav", "fresh.wav"] {
+                let file = try AVAudioFile(forWriting: root.appendingPathComponent(name), settings: format.settings)
+                try file.write(from: pcm)
+            }
+            defaults = UserDefaults(suiteName: suite)!
+            engine = MacCaptureEngine(autoRefreshDevices: false, midiDefaults: defaults, sampleResourceRoot: root)
+            engine.setScratchAudioOwnershipMode(.scratchLabStandalone)
+            controller.testOnly_prepareOutput = {}
+            controller.testOnly_previewScheduled = {}
+        }
+        func clean() {
+            defaults.removePersistentDomain(forName: suite)
+            try? FileManager.default.removeItem(at: root)
+        }
+    }
+
+    private func drain(_ controller: ScratchSamplePlaybackController) async {
+        let worker = expectation(description: "audio operations returned")
+        controller.testOnly_afterAudioQueue { worker.fulfill() }
+        await fulfillment(of: [worker], timeout: 5)
+        let main = expectation(description: "owned completion delivered")
+        DispatchQueue.main.async { main.fulfill() }
+        await fulfillment(of: [main], timeout: 5)
+    }
+
+    func testLoadRecueReturnsOnMainWhileBindingIsHeld() async throws {
+        let f = try Fixture(); defer { f.clean() }
+        let entered = expectation(description: "binding entered off MainActor")
+        let release = DispatchSemaphore(value: 0)
+        f.controller.testOnly_prepareOutput = {
+            XCTAssertFalse(Thread.isMainThread)
+            entered.fulfill()
+            release.wait()
+        }
+        f.engine.loadPlatterTestSample()
+        XCTAssertEqual(f.engine.platterTestLoadStatus, "loading: dvs_ahhh")
+        await fulfillment(of: [entered], timeout: 5)
+        XCTAssertNil(f.controller.presentationSnapshot())
+        release.signal()
+        await drain(f.controller)
+        XCTAssertEqual(f.engine.platterTestLoadStatus, "loaded: dvs_ahhh")
+    }
+
+    func testAudibleTestReturnsWhileBindingIsHeldAndPublishesAfterRelease() async throws {
+        let f = try Fixture(); defer { f.clean() }
+        let entered = expectation(description: "binding entered")
+        let release = DispatchSemaphore(value: 0)
+        f.controller.testOnly_prepareOutput = { entered.fulfill(); release.wait() }
+        f.engine.previewPlatterTestSample()
+        XCTAssertEqual(f.engine.platterTestLoadStatus, "preparing audible test: dvs_ahhh")
+        await fulfillment(of: [entered], timeout: 5)
+        release.signal()
+        await drain(f.controller)
+        XCTAssertEqual(f.engine.platterTestLoadStatus, "audible test: dvs_ahhh")
+    }
+
+    func testOrdinaryFailurePublishesFailureThroughRealCompletion() async throws {
+        let f = try Fixture(); defer { f.clean() }
+        f.controller.testOnly_prepareOutput = { throw NSError(domain: "offline binding", code: 1,
+            userInfo: [NSLocalizedDescriptionKey: "injected output failure"]) }
+        f.engine.loadPlatterTestSample()
+        await drain(f.controller)
+        XCTAssertEqual(f.engine.platterTestLoadStatus, "load failed: injected output failure")
+        XCTAssertFalse(f.controller.diagnosticsSnapshot().engineRunning)
+    }
+
+    func testHeldA1CannotPublishIntoA2AndRepeatedRequestsAreCoalesced() async throws {
+        let f = try Fixture(); defer { f.clean() }
+        let entered = expectation(description: "A1 binding held")
+        let release = DispatchSemaphore(value: 0)
+        var preparations = 0
+        f.controller.testOnly_prepareOutput = {
+            preparations += 1
+            if preparations == 1 { entered.fulfill(); release.wait() }
+        }
+        var completions: [String] = []
+        f.controller.load(sampleID: "dvs_ahhh", playDiagnosticPreview: false) { _ in completions.append("A1") }
+        await fulfillment(of: [entered], timeout: 5)
+        for _ in 0..<1000 {
+            f.controller.load(sampleID: "fresh", playDiagnosticPreview: false) { _ in completions.append("A2") }
+        }
+        XCTAssertEqual(f.controller.testOnly_pendingLoadCount, 1)
+        XCTAssertNil(f.controller.presentationSnapshot())
+        release.signal()
+        await drain(f.controller)
+        XCTAssertEqual(preparations, 2)
+        XCTAssertEqual(completions, ["A2"])
+        XCTAssertEqual(f.controller.statusLabel, "loaded: fresh · System Default")
+    }
+
+    func testHeldFailureCannotReplaceSuccessorStatus() async throws {
+        let f = try Fixture(); defer { f.clean() }
+        let entered = expectation(description: "old binding held")
+        let release = DispatchSemaphore(value: 0)
+        var calls = 0
+        f.controller.testOnly_prepareOutput = {
+            calls += 1
+            if calls == 1 {
+                entered.fulfill(); release.wait()
+                throw NSError(domain: "old failure", code: 1)
+            }
+        }
+        f.engine.loadPlatterTestSample()
+        await fulfillment(of: [entered], timeout: 5)
+        f.engine.loadScratchSample("fresh")
+        XCTAssertEqual(f.engine.platterTestLoadStatus, "loading: fresh")
+        release.signal()
+        await drain(f.controller)
+        XCTAssertEqual(f.engine.platterTestLoadStatus, "loaded: fresh")
+    }
+
+    func testNewRequestImmediatelyInvalidatesPriorPresentation() async throws {
+        let f = try Fixture(); defer { f.clean() }
+        f.engine.loadPlatterTestSample()
+        await drain(f.controller)
+        _ = f.controller.presentationSnapshot()
+        await drain(f.controller)
+        XCTAssertEqual(f.controller.presentationSnapshot()?.position.loadedSampleID, "dvs_ahhh")
+        let entered = expectation(description: "replacement binding held")
+        let release = DispatchSemaphore(value: 0)
+        f.controller.testOnly_prepareOutput = { entered.fulfill(); release.wait() }
+        f.engine.loadScratchSample("fresh")
+        await fulfillment(of: [entered], timeout: 5)
+        for _ in 0..<1000 { XCTAssertNil(f.controller.presentationSnapshot()) }
+        XCTAssertNil(f.engine.scratchOutputMeterSnapshot)
+        XCTAssertNil(f.engine.playbackWaveformSnapshot)
+        release.signal()
+        await drain(f.controller)
+    }
+
+    func testLoadAfterHeldUnloadKeepsSuccessorArmed() async throws {
+        let f = try Fixture(); defer { f.clean() }
+        let entered = expectation(description: "binding held")
+        let release = DispatchSemaphore(value: 0)
+        var calls = 0
+        f.controller.testOnly_prepareOutput = {
+            calls += 1
+            if calls == 1 { entered.fulfill(); release.wait() }
+        }
+        f.engine.loadPlatterTestSample()
+        await fulfillment(of: [entered], timeout: 5)
+        f.controller.unload()
+        f.engine.loadScratchSample("fresh")
+        release.signal()
+        await drain(f.controller)
+        XCTAssertEqual(f.engine.platterTestLoadStatus, "loaded: fresh")
+        XCTAssertEqual(f.controller.diagnosticsSnapshot().loadedSampleID, "fresh")
+    }
+
+    func testUnloadRetiresHeldLoadCompletion() async throws {
+        let f = try Fixture(); defer { f.clean() }
+        let entered = expectation(description: "binding held")
+        let release = DispatchSemaphore(value: 0)
+        f.controller.testOnly_prepareOutput = { entered.fulfill(); release.wait() }
+        var published = false
+        f.controller.load(sampleID: "dvs_ahhh", playDiagnosticPreview: false) { _ in published = true }
+        await fulfillment(of: [entered], timeout: 5)
+        f.controller.unload()
+        XCTAssertNil(f.controller.presentationSnapshot())
+        release.signal()
+        await drain(f.controller)
+        XCTAssertFalse(published)
+        XCTAssertEqual(f.controller.statusLabel, "idle")
+        XCTAssertNil(f.controller.diagnosticsSnapshot().loadedSampleID)
+    }
+
+    func testExplicitAudibleTestReplaysButSilentRecueDoesNot() async throws {
+        let f = try Fixture(); defer { f.clean() }
+        var previews = 0
+        f.controller.testOnly_previewScheduled = { previews += 1 }
+        f.engine.loadPlatterTestSample()
+        await drain(f.controller)
+        XCTAssertEqual(previews, 0)
+        f.engine.previewPlatterTestSample()
+        await drain(f.controller)
+        f.engine.previewPlatterTestSample()
+        await drain(f.controller)
+        XCTAssertEqual(previews, 2)
+        f.engine.loadPlatterTestSample()
+        await drain(f.controller)
+        XCTAssertEqual(previews, 2)
+    }
+}
+
+extension ScratchPlaybackResponsivenessTests {
+    func testHeldLoadCannotPublishReadinessAheadOfNewlyRequestedOutputRoute() async throws {
+        let f = try Fixture(); defer { f.clean() }
+        let loadEntered = expectation(description: "load binding held")
+        let routeEntered = expectation(description: "replacement route binding held")
+        let loadRelease = DispatchSemaphore(value: 0), routeRelease = DispatchSemaphore(value: 0)
+        let calls = NSLock()
+        var callCount = 0
+        f.controller.testOnly_prepareOutput = {
+            let index = calls.withLock { callCount += 1; return callCount }
+            if index == 1 { loadEntered.fulfill(); loadRelease.wait() }
+            else if index == 2 { routeEntered.fulfill(); routeRelease.wait() }
+        }
+        f.engine.loadPlatterTestSample()
+        await fulfillment(of: [loadEntered], timeout: 5)
+        f.controller.setPreferredOutputDevice(deviceID: 4242, deviceName: "Offline replacement")
+        loadRelease.signal()
+        await fulfillment(of: [routeEntered], timeout: 5)
+        XCTAssertEqual(f.engine.platterTestLoadStatus, "loading: dvs_ahhh")
+        XCTAssertNil(f.controller.presentationSnapshot())
+        routeRelease.signal()
+        await drain(f.controller)
+        XCTAssertEqual(f.engine.platterTestLoadStatus, "loaded: dvs_ahhh")
+        XCTAssertEqual(calls.withLock { callCount }, 2)
+    }
+}

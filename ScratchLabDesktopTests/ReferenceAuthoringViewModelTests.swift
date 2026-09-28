@@ -1256,7 +1256,77 @@ final class ReferenceTearEvidencePipelineTests: XCTestCase {
         try original.write(to: draftURL)
     }
 
-    private func worker(_ fixtures: [Fixture], draftStore: ReferenceDraftStore? = nil, preparedBeat: ReferencePreparedBeat? = nil, technique: ReferenceTechnique = .tear) -> ReferenceAuthoringWorker {
+    private final class LateFixtureState: @unchecked Sendable {
+        private let lock = NSLock()
+        private var terminal = false
+        private var calls = 0
+        let token = RoutineRecordingRequestToken(generation: 101)
+        var status: ReferenceRecordingFinalizationStatus {
+            lock.withLock { terminal ? .completed(token) : .pending }
+        }
+        var stopCount: Int { lock.withLock { calls } }
+        func complete() { lock.withLock { terminal = true } }
+        func shouldTimeout() -> Bool { lock.withLock { calls += 1; return calls == 1 } }
+    }
+
+    func testLateReviewAndSavedDraftKeepEndpointBoundedDenseEvidenceAndExactHashes() async throws {
+        let defaults = UserDefaults(suiteName: "slice3-endpoint-\(UUID())")!
+        let engine = MacCaptureEngine(autoRefreshDevices: false, midiDefaults: defaults)
+        let midiToken = engine.testOnly_armTakeMIDIWindow()
+        engine.testOnly_openTakeMIDIEpoch(at: 100)
+        let input = try Self.withFader(Self.tear(holds: 1) + Self.packets(-1, start: 1.3, phase: 90))
+        for packet in input {
+            engine.recordReceivedMIDICCEvent(sourceName: packet.deviceName, channel: packet.channel,
+                controller: packet.controller, value: packet.value, mappedControl: packet.mappedControl,
+                timestamp: 100 + packet.takeRelativeTime)
+        }
+        let observed = engine.capturedMidiCCEventsSnapshot()
+        let endpoint = 101.1
+        XCTAssertTrue(observed.contains { $0.timestamp > endpoint })
+        engine.testOnly_closeTakeMIDIEpoch(at: endpoint, token: midiToken)
+        let bounded = try XCTUnwrap(engine.testOnly_drainTakeMIDIWindow(token: midiToken))
+        XCTAssertEqual(bounded, observed.filter { $0.timestamp <= endpoint })
+        let files = try await fixture(bounded)
+        let late = LateFixtureState()
+        let store = ReferenceDraftStore(directory: files.directory.appendingPathComponent("late-drafts"))
+        let owner = worker([files], draftStore: store, late: late)
+        let started = await owner.startRecording()
+        XCTAssertNil(started.errorMessage)
+        let model = ReferenceAuthoringViewModel(worker: owner, initialState: started.state)
+        model.stopRecording()
+        for _ in 0..<200 where model.isWorking { try await Task.sleep(for: .milliseconds(5)) }
+        XCTAssertEqual(late.stopCount, 1)
+        XCTAssertTrue(model.session.takes.isEmpty)
+        late.complete()
+        model.startPreflightPolling(intervalNanoseconds: 1_000_000)
+        defer { model.cancelTransientWorkForViewDisappearance() }
+        for _ in 0..<400 where model.reviewedTake == nil || model.isWorking { try await Task.sleep(for: .milliseconds(5)) }
+        let take = try XCTUnwrap(model.reviewedTake)
+        XCTAssertEqual(model.session.phase, .reviewing(takeIndex: 0))
+        XCTAssertNil(model.state.draftSaveError)
+        XCTAssertEqual(take.evidence.rawMixerMIDIEvents, bounded)
+        XCTAssertFalse(take.evidence.rawMixerMIDIEvents.contains { $0.timestamp > endpoint })
+        XCTAssertTrue(take.tearProjection.records.flatMap(\.subdivisions).contains { ($0.measuredCurve?.points.count ?? 0) > 2 })
+        XCTAssertEqual(take.tearEvidenceSourceBinding?.rawSidecarData, files.sidecarData)
+        XCTAssertEqual(take.tearEvidenceSourceBinding?.rawSidecarSHA256, ReferencePackageIO.sha256Hex(files.sidecarData))
+        let saved = try store.load(id: take.id)
+        XCTAssertEqual(saved.evidence, take.evidence)
+        XCTAssertEqual(saved.projection, take.tearProjection)
+        XCTAssertEqual(saved.sourceBinding.rawSidecarData, files.sidecarData)
+        model.captureRecordingDidStop()
+        _ = await owner.stopRecording(expectedFinalizationToken: late.token)
+        XCTAssertEqual(late.stopCount, 2)
+        XCTAssertEqual(try Data(contentsOf: files.sidecarURL), files.sidecarData)
+        // Existing artifact verification must still reject changed bytes after
+        // late Review, without replacing its selected evidence.
+        let audioURL = files.mediaURL.deletingPathExtension().appendingPathExtension("wav")
+        var changed = try Data(contentsOf: audioURL); changed.append(0)
+        try changed.write(to: audioURL)
+        XCTAssertThrowsError(try store.load(id: take.id))
+        XCTAssertEqual(model.reviewedTake, take)
+    }
+
+    private func worker(_ fixtures: [Fixture], draftStore: ReferenceDraftStore? = nil, preparedBeat: ReferencePreparedBeat? = nil, technique: ReferenceTechnique = .tear, late: LateFixtureState? = nil) -> ReferenceAuthoringWorker {
         let sequence = RecordingSequence(fixtures, bindIdentity: preparedBeat != nil)
         let calibration = Self.calibration
         var session = ReferenceAuthoringSession(authoringSessionID: "pipeline-authoring", operatorName: "Synthetic Reviewer")
@@ -1265,7 +1335,10 @@ final class ReferenceTearEvidencePipelineTests: XCTestCase {
         session.declareVariant(startingDirection: .forward, faderVariant: .faderOpenThroughout, handedness: .right)
         session.confirmedCalibration = calibration
         session.phase = .readyToRecord
-        let hooks = ReferenceAuthoringRecordingHooks(startRecording: { .success(()) }, stopRecording: { sequence.stop() },
+        let hooks = ReferenceAuthoringRecordingHooks(startRecording: { .success(()) }, stopRecording: {
+            if late?.shouldTimeout() == true { return .failure(.recordingFailed("Finalization did not complete within 30s.")) }
+            return sequence.stop()
+        },
             currentPreflightSnapshot: {
                 ReferencePreflightSnapshot(controllerName: "Rane ONE MKII", controllerIdentifier: "Rane ONE MKII",
                     observedCrossfaderAddress: calibration.address, latestCrossfaderRawValue: 0, calibration: calibration,
@@ -1275,7 +1348,8 @@ final class ReferenceTearEvidencePipelineTests: XCTestCase {
             }, latestCalibrationObservation: { nil })
         return ReferenceAuthoringWorker(session: session,
             driver: ReferenceAuthoringWorkerDriver(hooks: hooks, lastFinalizedRecordingURLProvider: { sequence.lastURL },
-                prepareBeatHandler: { _, _, _ in preparedBeat }),
+                prepareBeatHandler: { _, _, _ in preparedBeat },
+                recordingFinalizationStatusProvider: { late?.status ?? .none }),
             calibrationStore: CrossfaderCalibrationStore(directoryURL: fixtures[0].directory.appendingPathComponent("calibration")),
             draftStore: draftStore)
     }
@@ -2545,13 +2619,23 @@ final class ReferenceAuthoringViewModelTests: XCTestCase {
     }
 
     func testBridgeErrorAndInvalidStopTransitionAreSurfacedWithoutChangingPhase() async {
+        let stopCalls = LockedBox(0)
+        let statusReads = LockedBox(0)
         let startFailureHooks = ReferenceAuthoringRecordingHooks(
             startRecording: { .failure(.recordingFailed("Synthetic bridge failure.")) },
-            stopRecording: { .success(self.goodArtifacts()) },
+            stopRecording: {
+                stopCalls.update { $0 += 1 }
+                return .success(self.goodArtifacts())
+            },
             currentPreflightSnapshot: { self.passingSnapshot() },
             latestCalibrationObservation: { nil }
         )
-        let failingWorker = makeWorker(session: readySession(), hooks: startFailureHooks)
+        let driver = ReferenceAuthoringWorkerDriver(hooks: startFailureHooks,
+            recordingFinalizationStatusProvider: {
+                statusReads.update { $0 += 1 }
+                return .completed(RoutineRecordingRequestToken(generation: 100))
+            })
+        let failingWorker = makeWorker(session: readySession(), hooks: startFailureHooks, driver: driver)
         let failedStart = await failingWorker.startRecording()
         XCTAssertEqual(failedStart.errorMessage, "Recording failed: Synthetic bridge failure.")
         XCTAssertEqual(failedStart.state.session.phase, .readyToRecord)
@@ -2559,6 +2643,69 @@ final class ReferenceAuthoringViewModelTests: XCTestCase {
         let invalidStop = await failingWorker.stopRecording()
         XCTAssertEqual(invalidStop.errorMessage, "No recording is in progress.")
         XCTAssertEqual(invalidStop.state.session.phase, .readyToRecord)
+        XCTAssertEqual(invalidStop.state, failedStart.state)
+        XCTAssertTrue(invalidStop.state.session.takes.isEmpty)
+        XCTAssertNil(invalidStop.state.consumedFinalizationToken)
+        XCTAssertNil(invalidStop.state.finalizedMediaURL)
+        XCTAssertEqual(stopCalls.read(), 0)
+        XCTAssertEqual(statusReads.read(), 0)
+    }
+
+    func testUntokenedStopBeforeRecordingFailsWhileTokenScopedStopRemainsANoop() async {
+        for session in [ReferenceAuthoringSession(authoringSessionID: "not-started", operatorName: "Karl"), readySession()] {
+            let stopCalls = LockedBox(0)
+            let statusReads = LockedBox(0)
+            let token = RoutineRecordingRequestToken(generation: 101)
+            let hooks = ReferenceAuthoringRecordingHooks(startRecording: { .success(()) }, stopRecording: {
+                stopCalls.update { $0 += 1 }
+                return .success(self.goodArtifacts())
+            }, currentPreflightSnapshot: { self.passingSnapshot() }, latestCalibrationObservation: { nil })
+            let driver = ReferenceAuthoringWorkerDriver(hooks: hooks, recordingFinalizationStatusProvider: {
+                statusReads.update { $0 += 1 }
+                return .completed(token)
+            })
+            let worker = makeWorker(session: session, hooks: hooks, driver: driver)
+            let before = await worker.snapshot()
+            let reconciliation = await worker.stopRecording(expectedFinalizationToken: token)
+            XCTAssertNil(reconciliation.errorMessage)
+            XCTAssertEqual(reconciliation.state, before)
+            let invalidStop = await worker.stopRecording()
+            XCTAssertEqual(invalidStop.errorMessage, "No recording is in progress.")
+            XCTAssertEqual(invalidStop.state, before)
+            XCTAssertEqual(stopCalls.read(), 0)
+            XCTAssertEqual(statusReads.read(), 0)
+        }
+    }
+
+    func testOrdinaryInvalidStopDoesNotAttemptToPersistAnExistingReviewDraft() async throws {
+        let stopCalls = LockedBox(0)
+        let hooks = ReferenceAuthoringRecordingHooks(startRecording: { .success(()) }, stopRecording: {
+            stopCalls.update { $0 += 1 }
+            return .success(self.goodArtifacts())
+        }, currentPreflightSnapshot: { self.passingSnapshot() }, latestCalibrationObservation: { nil })
+        var session = readySession()
+        try session.beginRecording(using: hooks).get()
+        _ = try session.finishRecording(using: hooks).get()
+        XCTAssertEqual(session.phase, .reviewing(takeIndex: 0))
+        XCTAssertEqual(stopCalls.read(), 1)
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("InvalidStopReview-\(UUID().uuidString)")
+        // This in-memory review has no persisted sidecar binding. An attempted
+        // autosave would produce a draftSaveError and mutate the returned state.
+        let mediaURL = directory.appendingPathComponent("synthetic-reference.mov")
+        let worker = ReferenceAuthoringWorker(session: session,
+            driver: ReferenceAuthoringWorkerDriver(hooks: hooks, lastFinalizedRecordingURLProvider: { mediaURL }),
+            calibrationStore: CrossfaderCalibrationStore(directoryURL: directory.appendingPathComponent("calibration")),
+            draftStore: ReferenceDraftStore(directory: directory.appendingPathComponent("drafts")))
+        let before = await worker.snapshot()
+        let invalidStop = await worker.stopRecording()
+        XCTAssertEqual(invalidStop.errorMessage, "No recording is in progress.")
+        XCTAssertEqual(invalidStop.state, before)
+        XCTAssertEqual(invalidStop.state.session.takes.count, 1)
+        XCTAssertEqual(invalidStop.state.finalizedMediaURL, mediaURL)
+        XCTAssertNil(invalidStop.state.draftSaveError)
+        XCTAssertEqual(stopCalls.read(), 1)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: directory.path))
     }
 
     func testAutoDetectionNeverOverwritesCXLTechniqueSelection() async {
@@ -2999,6 +3146,260 @@ final class ReferenceAuthoringViewModelTests: XCTestCase {
         XCTAssertEqual(owner.session, retained)
         XCTAssertEqual(model.session.phase, .reviewing(takeIndex: 0))
         XCTAssertNil(model.navigationRequest)
+    }
+
+    func testLateFinalizationAfterTimeoutOpensReviewWithoutAnotherStopClick() async {
+        let status = LockedBox(ReferenceRecordingFinalizationStatus.pending)
+        let stops = LockedBox(0)
+        let token = RoutineRecordingRequestToken(generation: 42)
+        let hooks = ReferenceAuthoringRecordingHooks(startRecording: { .success(()) }, stopRecording: {
+            stops.update { $0 += 1 }
+            if stops.read() == 1 {
+                return .failure(.recordingFailed("Finalization did not complete within 30s."))
+            }
+            return .success(self.goodArtifacts())
+        }, currentPreflightSnapshot: { self.passingSnapshot() }, latestCalibrationObservation: { nil })
+        let driver = ReferenceAuthoringWorkerDriver(hooks: hooks,
+            recordingFinalizationStatusProvider: { status.read() })
+        let worker = makeWorker(session: readySession(), hooks: hooks, driver: driver)
+        let recording = await worker.startRecording()
+        let model = ReferenceAuthoringViewModel(worker: worker, initialState: recording.state, beatPreviewEngine: BeatPreviewSpy())
+        model.captureRecordingDidStop()
+        let timedOut = await waitUntil { !model.isWorking && stops.read() == 1 }
+        XCTAssertTrue(timedOut)
+        XCTAssertEqual(model.session.phase, .recording)
+        XCTAssertEqual(model.workflowStatusText, "Recording stopped — preparing review…")
+        XCTAssertTrue(model.isPreparingRecordedTake)
+        XCTAssertTrue(model.visibleMessage?.contains("open automatically") == true)
+        model.startPreflightPolling(intervalNanoseconds: 1_000_000)
+        defer { model.cancelPreflightPolling() }
+        status.update { $0 = .completed(token) }
+        let reviewed = await waitUntil { !model.isWorking && model.session.takes.count == 1 }
+        XCTAssertTrue(reviewed)
+        XCTAssertEqual(model.session.phase, .reviewing(takeIndex: 0))
+        XCTAssertEqual(model.reviewedTake?.evidence.metadata.lifecycleState, .draft)
+        XCTAssertFalse(model.isPreparingRecordedTake)
+        XCTAssertEqual(model.workflowStatusText, "Reviewing")
+        model.captureRecordingDidStop()
+        XCTAssertEqual(stops.read(), 2, "Only the timed-out wait and one completion consumption are needed.")
+    }
+
+    func testLateFinalizationFailureIsSurfacedOnceAndPollingCancellationIsRespected() async {
+        let status = LockedBox(ReferenceRecordingFinalizationStatus.pending)
+        let stops = LockedBox(0)
+        let reads = LockedBox(0)
+        let hooks = ReferenceAuthoringRecordingHooks(startRecording: { .success(()) }, stopRecording: {
+            stops.update { $0 += 1 }
+            return .failure(.recordingFailed(stops.read() == 1
+                ? "Finalization did not complete within 30s." : "Recorded media failed verification."))
+        }, currentPreflightSnapshot: { self.passingSnapshot() }, latestCalibrationObservation: { nil })
+        let driver = ReferenceAuthoringWorkerDriver(hooks: hooks, recordingFinalizationStatusProvider: {
+            reads.update { $0 += 1 }; return status.read()
+        })
+        let worker = makeWorker(session: readySession(), hooks: hooks, driver: driver)
+        let recording = await worker.startRecording()
+        let model = ReferenceAuthoringViewModel(worker: worker, initialState: recording.state, beatPreviewEngine: BeatPreviewSpy())
+        model.captureRecordingDidStop()
+        let timedOut = await waitUntil { !model.isWorking && stops.read() == 1 }
+        XCTAssertTrue(timedOut)
+        model.startPreflightPolling(intervalNanoseconds: 1_000_000)
+        model.cancelPreflightPolling()
+        status.update { $0 = .failed(RoutineRecordingRequestToken(generation: 43)) }
+        let snapshot = await worker.snapshot()
+        XCTAssertEqual(snapshot.session.phase, .recording)
+        XCTAssertEqual(stops.read(), 1, "Leaving the screen must not consume a completion.")
+        model.startPreflightPolling(intervalNanoseconds: 1_000_000)
+        defer { model.cancelPreflightPolling() }
+        let surfaced = await waitUntil { !model.isWorking && stops.read() == 2 }
+        XCTAssertTrue(surfaced)
+        let before = reads.read()
+        let polled = await waitUntil { reads.read() >= before + 5 }
+        XCTAssertTrue(polled)
+        XCTAssertEqual(stops.read(), 2, "A terminal error must not produce an automatic retry loop.")
+        XCTAssertTrue(model.session.takes.isEmpty)
+        XCTAssertEqual(model.visibleMessage, "Recording failed: Recorded media failed verification.")
+        XCTAssertEqual(model.workflowStatusText, "Recording finalization failed")
+    }
+
+    func testCompletionArrivingWithTimeoutResponseIsReconciledWithoutPolling() async {
+        let status = LockedBox(ReferenceRecordingFinalizationStatus.pending)
+        let stops = LockedBox(0)
+        let hooks = ReferenceAuthoringRecordingHooks(startRecording: { .success(()) }, stopRecording: {
+            stops.update { $0 += 1 }
+            if stops.read() == 1 {
+                status.update { $0 = .completed(RoutineRecordingRequestToken(generation: 44)) }
+                return .failure(.recordingFailed("Finalization did not complete within 30s."))
+            }
+            return .success(self.goodArtifacts())
+        }, currentPreflightSnapshot: { self.passingSnapshot() }, latestCalibrationObservation: { nil })
+        let driver = ReferenceAuthoringWorkerDriver(hooks: hooks,
+            recordingFinalizationStatusProvider: { status.read() })
+        let worker = makeWorker(session: readySession(), hooks: hooks, driver: driver)
+        let recording = await worker.startRecording()
+        let model = ReferenceAuthoringViewModel(worker: worker, initialState: recording.state, beatPreviewEngine: BeatPreviewSpy())
+        model.captureRecordingDidStop()
+        let reviewed = await waitUntil { !model.isWorking && model.session.takes.count == 1 }
+        XCTAssertTrue(reviewed)
+        XCTAssertEqual(stops.read(), 2)
+        XCTAssertEqual(model.session.phase, .reviewing(takeIndex: 0))
+    }
+
+    func testFinalizationStatusRequiresMatchingStartedTakeAndCompletionIdentity() {
+        let token = RoutineRecordingRequestToken(generation: 45)
+        let stale = RoutineRecordingRequestToken(generation: 44)
+        let media = URL(fileURLWithPath: "/synthetic/current.mov")
+        func boundary(completionToken: RoutineRecordingRequestToken, takeID: String = "take-1",
+                      url: URL? = nil, started: Bool = true, succeeded: Bool = true) -> RoutineRecordingBoundarySnapshot {
+            RoutineRecordingBoundarySnapshot(token: token, takeID: "take-1", mediaURL: media,
+                didStartRecording: started, stopWasRequested: true, didEnterFinalization: true,
+                completion: RoutineRecordingFinalizationCompletion(token: completionToken, takeID: takeID,
+                    mediaURL: url ?? media, succeeded: succeeded, statusMessage: "result"), startFailureDescription: nil)
+        }
+        XCTAssertEqual(ReferenceRecordingFinalizationStatus.resolve(token: token, boundary: nil), .unavailable)
+        XCTAssertEqual(ReferenceRecordingFinalizationStatus.resolve(token: stale, boundary: boundary(completionToken: token)), .unavailable)
+        XCTAssertEqual(ReferenceRecordingFinalizationStatus.resolve(token: token, boundary: boundary(completionToken: token, started: false)), .unavailable)
+        XCTAssertEqual(ReferenceRecordingFinalizationStatus.resolve(token: token, boundary: boundary(completionToken: stale)), .unavailable)
+        XCTAssertEqual(ReferenceRecordingFinalizationStatus.resolve(token: token, boundary: boundary(completionToken: token, takeID: "other")), .unavailable)
+        XCTAssertEqual(ReferenceRecordingFinalizationStatus.resolve(token: token, boundary: boundary(completionToken: token, url: URL(fileURLWithPath: "/other.mov"))), .unavailable)
+        XCTAssertEqual(ReferenceRecordingFinalizationStatus.resolve(token: token, boundary: boundary(completionToken: token)), .completed(token))
+        XCTAssertEqual(ReferenceRecordingFinalizationStatus.resolve(token: token, boundary: boundary(completionToken: token, succeeded: false)), .failed(token))
+    }
+
+    func testLateFinalizationReentryAndSequentialTakesConsumeEachTokenOnce() async throws {
+        let tokenA = RoutineRecordingRequestToken(generation: 70)
+        let tokenB = RoutineRecordingRequestToken(generation: 71)
+        let status = LockedBox(ReferenceRecordingFinalizationStatus.pending)
+        let stops = LockedBox(0)
+        let hooks = ReferenceAuthoringRecordingHooks(startRecording: { .success(()) }, stopRecording: {
+            stops.update { $0 += 1 }
+            if stops.read() == 1 { return .failure(.recordingFailed("Finalization did not complete within 30s.")) }
+            return .success(self.goodArtifacts(suffix: stops.read() == 2 ? "A" : "B"))
+        }, currentPreflightSnapshot: { self.passingSnapshot() }, latestCalibrationObservation: { nil })
+        let driver = ReferenceAuthoringWorkerDriver(hooks: hooks, recordingFinalizationStatusProvider: { status.read() })
+        let worker = makeWorker(session: readySession(), hooks: hooks, driver: driver)
+        _ = await worker.startRecording()
+        _ = await worker.stopRecording()
+        status.update { $0 = .completed(tokenA) }
+        let a = await worker.stopRecording(expectedFinalizationToken: tokenA)
+        XCTAssertEqual(a.state.session.takes.count, 1)
+        let model = ReferenceAuthoringViewModel(worker: worker, initialState: a.state, beatPreviewEngine: BeatPreviewSpy())
+        model.startPreflightPolling(intervalNanoseconds: 1_000_000)
+        model.captureRecordingDidStop()
+        model.stopRecording()
+        model.cancelTransientWorkForViewDisappearance()
+        let id = try XCTUnwrap(a.state.session.takeInReview?.id)
+        let retake = await worker.retake(afterTakeID: id)
+        XCTAssertNil(retake.errorMessage)
+        status.update { $0 = .none }
+        let started = await worker.startRecording()
+        XCTAssertNil(started.errorMessage)
+        // A poll snapshot for A cannot issue a stop or publish into active B.
+        let stale = await worker.stopRecording(expectedFinalizationToken: tokenA)
+        XCTAssertEqual(stale.state.session.phase, .recording)
+        XCTAssertEqual(stops.read(), 2)
+        status.update { $0 = .completed(tokenB) }
+        let staleTerminal = await worker.stopRecording(expectedFinalizationToken: tokenA)
+        XCTAssertEqual(staleTerminal.state.session.takes.count, 1)
+        XCTAssertEqual(stops.read(), 2)
+        let b = await worker.stopRecording(expectedFinalizationToken: tokenB)
+        let duplicate = await worker.stopRecording(expectedFinalizationToken: tokenB)
+        XCTAssertNil(b.errorMessage)
+        XCTAssertEqual(b.state.session.takes.count, 2)
+        XCTAssertEqual(duplicate.state.session, b.state.session)
+        XCTAssertEqual(b.state.session.takes[0], a.state.session.takes[0])
+        XCTAssertNotEqual(b.state.session.takes[0].id, b.state.session.takes[1].id)
+        XCTAssertEqual(b.state.session.takeInReview?.evidence.audio.fileName, "synthetic-reference-B.wav")
+        XCTAssertEqual(stops.read(), 3)
+    }
+
+    func testFastTerminalFailureIsConsumedOnceAcrossReentryAndNewSessionHasNoStaleFailure() async {
+        let failed = RoutineRecordingRequestToken(generation: 80)
+        let next = RoutineRecordingRequestToken(generation: 81)
+        let status = LockedBox(ReferenceRecordingFinalizationStatus.pending)
+        let stops = LockedBox(0)
+        let hooks = ReferenceAuthoringRecordingHooks(startRecording: { .success(()) }, stopRecording: {
+            stops.update { $0 += 1 }
+            if stops.read() == 1 {
+                status.update { $0 = .failed(failed) }
+                return .failure(.recordingFailed("Owned terminal failure"))
+            }
+            return .success(self.goodArtifacts(suffix: "new-session"))
+        }, currentPreflightSnapshot: { self.passingSnapshot() }, latestCalibrationObservation: { nil })
+        let driver = ReferenceAuthoringWorkerDriver(hooks: hooks, recordingFinalizationStatusProvider: { status.read() })
+        let worker = makeWorker(session: readySession(), hooks: hooks, driver: driver)
+        _ = await worker.startRecording()
+        let failure = await worker.stopRecording()
+        XCTAssertEqual(failure.errorMessage, "Recording failed: Owned terminal failure")
+        XCTAssertEqual(failure.state.consumedFinalizationToken, failed)
+        let reentered = ReferenceAuthoringViewModel(worker: worker, initialState: failure.state, beatPreviewEngine: BeatPreviewSpy())
+        reentered.startPreflightPolling(intervalNanoseconds: 1_000_000)
+        reentered.stopRecording()
+        _ = await worker.stopRecording(expectedFinalizationToken: failed)
+        _ = await worker.snapshot()
+        reentered.cancelTransientWorkForViewDisappearance()
+        XCTAssertEqual(stops.read(), 1)
+        XCTAssertFalse(reentered.isPreparingRecordedTake)
+        // Existing terminal-failure recovery is a new authoring session; do not
+        // invent a retake transition from the failed .recording phase.
+        status.update { $0 = .none }
+        let successor = makeWorker(session: readySession(), hooks: hooks, driver: driver)
+        _ = await successor.startRecording()
+        status.update { $0 = .completed(next) }
+        let stale = await successor.stopRecording(expectedFinalizationToken: failed)
+        XCTAssertNil(stale.errorMessage)
+        XCTAssertTrue(stale.state.session.takes.isEmpty)
+        let success = await successor.stopRecording(expectedFinalizationToken: next)
+        XCTAssertNil(success.errorMessage)
+        XCTAssertEqual(success.state.session.takes.count, 1)
+        XCTAssertEqual(stops.read(), 2)
+    }
+
+    func testCancelledQueuedReconciliationCannotConsumeOrPublishCompletion() async {
+        let entered = expectation(description: "worker queue occupied")
+        let release = DispatchSemaphore(value: 0)
+        defer { release.signal() }
+        let block = LockedBox(false)
+        let stops = LockedBox(0)
+        let token = RoutineRecordingRequestToken(generation: 90)
+        let hooks = ReferenceAuthoringRecordingHooks(startRecording: { .success(()) }, stopRecording: {
+            stops.update { $0 += 1 }; return .success(self.goodArtifacts())
+        }, currentPreflightSnapshot: {
+            if block.read() { entered.fulfill(); _ = release.wait(timeout: .now() + 3) }
+            return self.passingSnapshot()
+        }, latestCalibrationObservation: { nil })
+        let driver = ReferenceAuthoringWorkerDriver(hooks: hooks, recordingFinalizationStatusProvider: { .completed(token) })
+        let worker = makeWorker(session: readySession(), hooks: hooks, driver: driver)
+        _ = await worker.startRecording()
+        block.update { $0 = true }
+        let occupying = Task { await worker.refreshPreflight() }
+        await fulfillment(of: [entered], timeout: 2)
+        let cancelled = Task { await worker.stopRecording(expectedFinalizationToken: token) }
+        cancelled.cancel()
+        block.update { $0 = false }
+        release.signal()
+        _ = await occupying.value
+        let result = await cancelled.value
+        XCTAssertEqual(stops.read(), 0)
+        XCTAssertTrue(result.state.session.takes.isEmpty)
+        XCTAssertNil(result.state.consumedFinalizationToken)
+        let reentered = await worker.stopRecording(expectedFinalizationToken: token)
+        XCTAssertEqual(reentered.state.session.takes.count, 1)
+        XCTAssertEqual(stops.read(), 1)
+    }
+
+    func testPreflightPollingDoesNotRetainAbandonedViewModel() async {
+        let hooks = ReferenceAuthoringRecordingHooks(startRecording: { .success(()) },
+            stopRecording: { .success(self.goodArtifacts()) }, currentPreflightSnapshot: { self.passingSnapshot() },
+            latestCalibrationObservation: { nil })
+        let worker = makeWorker(session: readySession(), hooks: hooks)
+        let snapshot = await worker.snapshot()
+        var model: ReferenceAuthoringViewModel? = ReferenceAuthoringViewModel(worker: worker,
+            initialState: snapshot, beatPreviewEngine: BeatPreviewSpy())
+        weak var observed = model
+        model?.startPreflightPolling(intervalNanoseconds: 1_000_000)
+        _ = await worker.snapshot()
+        model = nil
+        XCTAssertNil(observed)
     }
 
     func testStopBeforeStartPublicationIsRecoveredByActiveRecordingReconciliationExactlyOnce() async {
@@ -4612,5 +5013,42 @@ final class ReferenceMotionReviewViewportTests: XCTestCase {
         XCTAssertEqual(ReferenceMotionReviewViewport.visibleFractions(8...12, in: 8...12), 0...1)
         XCTAssertEqual(ReferenceMotionReviewViewport.visibleFractions(0...4, in: 2...10), 0...0.25)
         XCTAssertNil(ReferenceMotionReviewViewport.visibleFractions(0...4, in: 8...12))
+    }
+}
+
+extension ReferenceAuthoringViewModelTests {
+    func testBackingPreviewHeldBindingCanBeStoppedWithoutLateReadiness() async throws {
+        let entered = expectation(description: "preview binding held"), release = DispatchSemaphore(value: 0)
+        let beat = ScratchLabBeatEngine()
+        let schedule = try ScratchLabBeatEngine.makePlaybackSchedule(mode: .boomBapTrainer,
+            bpm: 95, sampleRate: 48_000, usesClickCountIn: false)
+        beat.testOnly_ordinaryPreparation = {
+            XCTAssertFalse(Thread.isMainThread)
+            entered.fulfill(); release.wait(); return schedule
+        }
+        beat.testOnly_ordinaryPlaybackScheduled = { _ in XCTFail("Retired preview established origin") }
+        beat.testOnly_ordinaryCallbackScheduled = { _, _ in }
+        let hooks = ReferenceAuthoringRecordingHooks(startRecording: { .success(()) },
+            stopRecording: { .success(self.goodArtifacts()) },
+            currentPreflightSnapshot: { self.passingSnapshot() }, latestCalibrationObservation: { nil })
+        let worker = makeWorker(session: readySession(), hooks: hooks)
+        let model = ReferenceAuthoringViewModel(worker: worker, initialState: await worker.snapshot(), beatPreviewEngine: beat)
+        model.toggleBeatPreview()
+        XCTAssertTrue(model.isPreparingBeatPreview)
+        XCTAssertFalse(model.isPreviewingBeat)
+        await fulfillment(of: [entered], timeout: 5)
+        model.toggleBeatPreview()
+        XCTAssertFalse(model.isPreparingBeatPreview)
+        XCTAssertFalse(model.isPreviewingBeat)
+        release.signal()
+        let drained = expectation(description: "worker returned")
+        beat.audioOperationQueue.async { drained.fulfill() }
+        await fulfillment(of: [drained], timeout: 5)
+        let published = expectation(description: "main delivered")
+        DispatchQueue.main.async { published.fulfill() }
+        await fulfillment(of: [published], timeout: 5)
+        XCTAssertFalse(model.isPreparingBeatPreview)
+        XCTAssertFalse(model.isPreviewingBeat)
+        XCTAssertFalse(model.visibleMessage?.contains("Could not play") == true)
     }
 }

@@ -1578,6 +1578,51 @@ final class ParkedCrossfaderTakeCoverageTests: XCTestCase {
         XCTAssertTrue(derive(state).events.isEmpty)
     }
 
+    func testDelayedEndpointBoundsCalibratedFaderPacketsWithoutInventingHeldCoverage() throws {
+        let (engine, token) = try begin()
+        for time in [103, 104, 104.1] { record(engine, time: time) }
+        let observed = engine.capturedMidiCCEventsSnapshot()
+        XCTAssertEqual(observed.count, 3)
+        XCTAssertTrue(observed.allSatisfy { $0.mappedControl == "crossfader" && $0.calibratedPosition != nil })
+        engine.testOnly_closeTakeMIDIEpoch(at: 104, token: token)
+        let state = try XCTUnwrap(engine.testOnly_takeCrossfaderTakeStartState())
+        let finalized = try XCTUnwrap(engine.testOnly_drainTakeMIDIWindow(token: token))
+        XCTAssertEqual(finalized, observed.filter { $0.timestamp <= 104 })
+        XCTAssertEqual(finalized.map(\.timestamp), [103, 104])
+        XCTAssertNil(state.parkedHold, "A moved/observed control must not become a parked hold after filtering.")
+        let samples = ReferenceAuthoringCaptureBridge.crossfaderPositionSamples(from: finalized)
+        XCTAssertEqual(samples.map(\.takeRelativeTime), [3, 4])
+        XCTAssertEqual(derive(state, duration: 20, samples: samples), base())
+    }
+
+    func testDelayedEndpointPreservesParkedSealWhileExcludingLaterPlatterTraffic() throws {
+        let (engine, token) = try begin()
+        for time in [103.0, 104.0, 105.0] {
+            engine.recordReceivedMIDICCEvent(sourceIdentifier: sourceID, sourceName: "Rane ONE MKII",
+                channel: 1, controller: 6, value: 32, timestamp: time, inputConnectionGeneration: 3)
+        }
+        engine.testOnly_closeTakeMIDIEpoch(at: 104, token: token)
+        // A later completion must not extend the first seal.
+        engine.testOnly_closeTakeMIDIEpoch(at: 110, token: token)
+        let state = try XCTUnwrap(engine.testOnly_takeCrossfaderTakeStartState())
+        XCTAssertEqual(state.parkedHold?.captureEndHostTime, 104)
+        XCTAssertEqual(derive(state, duration: 20).intervals.first?.endTime, 4)
+        XCTAssertTrue(derive(state, duration: 20).events.isEmpty)
+        let finalized = try XCTUnwrap(engine.testOnly_drainTakeMIDIWindow(token: token))
+        XCTAssertEqual(finalized.map(\.timestamp), [103, 104])
+        XCTAssertTrue(finalized.allSatisfy { $0.controller == 6 }, "No synthetic fader packet is added.")
+    }
+
+    func testTrimmingOnlyPostEndpointFaderPacketsCannotRestoreUnknownContinuity() throws {
+        let (engine, token) = try begin()
+        record(engine, time: 105)
+        engine.testOnly_closeTakeMIDIEpoch(at: 104, token: token)
+        let state = try XCTUnwrap(engine.testOnly_takeCrossfaderTakeStartState())
+        XCTAssertTrue(try XCTUnwrap(engine.testOnly_drainTakeMIDIWindow(token: token)).isEmpty)
+        XCTAssertNil(state.parkedHold)
+        XCTAssertEqual(derive(state, duration: 20), base(), "Filtering is not proof of an uninterrupted held state.")
+    }
+
     func testDuplicateStopCannotExtendTheSealedInterval() throws {
         let (engine, token) = try begin()
         engine.testOnly_closeTakeMIDIEpoch(at: 104, token: token)

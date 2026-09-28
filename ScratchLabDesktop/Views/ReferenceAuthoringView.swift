@@ -1074,7 +1074,7 @@ struct ReferenceAuthoringView: View {
                         Text(mode.title).tag(mode)
                     }
                 }
-                Button(viewModel.isPreviewingBeat ? "Stop preview" : "Preview backing sound") {
+                Button(viewModel.isPreparingBeatPreview ? "Cancel preview preparation" : (viewModel.isPreviewingBeat ? "Stop preview" : "Preview backing sound")) {
                     viewModel.toggleBeatPreview()
                 }
                 Text("Six original backing variations are available: Dusty Break, Funk Pocket, Battle Break, Ghost Pocket, Pocket Double, and Drop Theory. Click track plays metronome clicks only. Preview follows the chosen output and does not record.")
@@ -1374,7 +1374,10 @@ struct ReferenceAuthoringView: View {
                     Button("Stop and Finalize") {
                         viewModel.stopRecording()
                     }
-                    .disabled(viewModel.session.phase != .recording || viewModel.isWorking)
+                    .disabled(!viewModel.canStopRecording)
+                    if viewModel.isPreparingRecordedTake {
+                        ProgressView().controlSize(.small)
+                    }
                     Text(viewModel.workflowStatusText)
                         .font(.caption.monospaced())
                         .foregroundStyle(.secondary)

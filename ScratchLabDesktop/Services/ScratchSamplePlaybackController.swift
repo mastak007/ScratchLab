@@ -604,7 +604,7 @@ final class ScratchSamplePlaybackController {
     /// The observation provider additionally retires a disconnected input even
     /// before a replacement device has delivered its first packet.
     func currentPlaybackLoopContext() -> PlaybackLoopContext? {
-        audioQueue.sync {
+        readOnAudioQueue {
             guard midiUsesContinuousRenderer, !dvsOwnershipActive,
                   platterRenderOwner == .midi,
                   let context = playbackLoopContext,
@@ -622,6 +622,7 @@ final class ScratchSamplePlaybackController {
     /// coalescing timer (idempotent). Safe to call from any thread.
     /// Retire the previous device's motion without unloading its sample.
     func resetMIDIPlatterInput() {
+        invalidatePresentation()
         audioQueue.async { [weak self] in
             guard let self else { return }
             self.midiContinuousDrive.reset()
@@ -2055,8 +2056,17 @@ final class ScratchSamplePlaybackController {
     /// default output. The change is serialized with all other engine work and
     /// deferred while a canonical routine-output capture tap is active.
     func setPreferredOutputDevice(deviceID: AudioDeviceID?, deviceName: String?, expectedDeviceUID: String? = nil, explicitPairStart: Int? = nil) {
+        let routeRequest = loadRequestLock.withLock { () -> UInt64 in
+            routeRequestGeneration &+= 1
+            return routeRequestGeneration
+        }
+        invalidatePresentation()
         audioQueue.async { [weak self] in
             guard let self else { return }
+            defer {
+                self.loadRequestLock.withLock { self.completedRouteRequestGeneration = routeRequest }
+                self.publishCompletedLoadIfCurrent()
+            }
             let trimmedDeviceName = deviceName?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
             let name = trimmedDeviceName.isEmpty ? "System Default" : trimmedDeviceName
             guard self.requestedOutputDeviceID != deviceID || self.requestedOutputDeviceName != name
@@ -2341,7 +2351,30 @@ final class ScratchSamplePlaybackController {
         }
     }
 
+#if DEBUG
+    /// Replaces only external binding/startup in deterministic held-driver tests.
+    var testOnly_prepareOutput: (() throws -> Void)?
+    var testOnly_previewScheduled: (() -> Void)?
+    func testOnly_afterAudioQueue(_ completion: @escaping () -> Void) {
+        afterAudioQueueDrains(completion)
+    }
+    var testOnly_pendingLoadCount: Int { loadRequestLock.withLock { pendingLoad == nil ? 0 : 1 } }
+#endif
+
     private func ensureEngineRunning() {
+#if DEBUG
+        if let prepare = testOnly_prepareOutput {
+            do {
+                try prepare()
+                engineStarted = true
+                outputRoutingError = nil
+            } catch {
+                engineStarted = false
+                outputRoutingError = error.localizedDescription
+            }
+            return
+        }
+#endif
         guard applyRequestedOutputDeviceIfNeeded(), let route = appliedOutputRoute else { return }
         guard !engineStarted else { return }
         do {
@@ -2389,6 +2422,114 @@ final class ScratchSamplePlaybackController {
         engineStarted = false
     }
 
+    // Admission never waits for the audio worker. One active load and one
+    // replacement are retained even when a driver call has not returned.
+    private struct LoadRequest {
+        let generation: UInt64
+        let sampleID: String
+        let url: URL
+        let preview: Bool
+        let forcePreview: Bool
+        let completion: ((DVSPlaybackDiagnostics) -> Void)?
+    }
+    private let loadRequestLock = NSLock()
+    private var pendingLoad: LoadRequest?
+    private var loadWorkerScheduled = false
+    private var loadIdleObservers: [() -> Void] = []
+    private var requestedSampleID: String?
+    private var currentLoadRequest: UInt64 = 0
+    private var currentLoadCompletion: ((DVSPlaybackDiagnostics) -> Void)?
+    private var routeRequestGeneration: UInt64 = 0
+    private var completedRouteRequestGeneration: UInt64 = 0
+    // Device-queue state. Completion waits for an already-admitted route change.
+    private var completedLoadRequest: UInt64?
+
+    var admittedLoadGeneration: UInt64 { loadRequestLock.withLock { currentLoadRequest } }
+
+    private func ownsLoad(_ generation: UInt64) -> Bool {
+        loadRequestLock.withLock { currentLoadRequest == generation }
+    }
+
+    private func publishLoad(_ generation: UInt64, requiresCurrentRoute: Bool = false, _ body: @escaping () -> Void) {
+        let route = loadRequestLock.withLock { completedRouteRequestGeneration }
+        DispatchQueue.main.async { [weak self] in
+            guard let self, self.loadRequestLock.withLock({
+                self.currentLoadRequest == generation
+                    && (!requiresCurrentRoute || self.routeRequestGeneration == route)
+            }) else { return }
+            body()
+        }
+    }
+
+    private func drainLoadRequests() {
+        let request = loadRequestLock.withLock { () -> LoadRequest? in
+            let request = pendingLoad
+            pendingLoad = nil
+            return request
+        }
+        if let request, ownsLoad(request.generation) {
+            if request.forcePreview { diagnosticPreviewPlayedSampleID = nil }
+            loadOnQueue(sampleID: request.sampleID, url: request.url,
+                        playDiagnosticPreview: request.preview, generation: request.generation)
+            completedLoadRequest = request.generation
+            publishCompletedLoadIfCurrent()
+        }
+        let next = loadRequestLock.withLock { () -> (Bool, [() -> Void]) in
+            if pendingLoad != nil { return (true, []) }
+            loadWorkerScheduled = false
+            let observers = loadIdleObservers
+            loadIdleObservers.removeAll()
+            return (false, observers)
+        }
+        if next.0 {
+            // Yield to already-queued route/Stop work before the replacement.
+            audioQueue.async { [weak self] in self?.drainLoadRequests() }
+        } else {
+            for observer in next.1 { audioQueue.async(execute: observer) }
+        }
+    }
+
+    private func publishCompletedLoadIfCurrent() {
+        guard let load = completedLoadRequest else { return }
+        let route = loadRequestLock.withLock { () -> UInt64? in
+            guard currentLoadRequest == load,
+                  completedRouteRequestGeneration == routeRequestGeneration else { return nil }
+            return routeRequestGeneration
+        }
+        guard let route else { return }
+        let snapshot = diagnosticsSnapshot()
+        let outputName = activeOutputDeviceName
+        DispatchQueue.main.async { [weak self] in
+            guard let self else { return }
+            let delivery = self.loadRequestLock.withLock { () -> (Bool, ((DVSPlaybackDiagnostics) -> Void)?) in
+                guard self.currentLoadRequest == load, self.routeRequestGeneration == route else { return (false, nil) }
+                let completion = self.currentLoadCompletion
+                self.currentLoadCompletion = nil
+                return (true, completion)
+            }
+            guard delivery.0 else { return }
+            if snapshot.engineRunning, snapshot.lastLoadError == nil {
+                self.transportState.play()
+                self.statusLabel = "loaded: \(snapshot.loadedSampleID ?? "unknown") · \(outputName)"
+            }
+            delivery.1?(snapshot)
+        }
+    }
+
+    private func afterAudioQueueDrains(_ completion: @escaping () -> Void) {
+        audioQueue.async { [weak self] in
+            guard let self else { completion(); return }
+            let idle = self.loadRequestLock.withLock {
+                if self.loadWorkerScheduled {
+                    self.loadIdleObservers.append(completion)
+                    return false
+                }
+                return true
+            }
+            if idle { completion() }
+        }
+    }
+
     // MARK: - Sample loading
 
     /// Load a bundled sample into the playback buffer.
@@ -2403,25 +2544,30 @@ final class ScratchSamplePlaybackController {
     ///   example, production hot-cue and right-deck platter loads, where
     ///   platter movement should be the only audible source).
     @discardableResult
-    func load(sampleID: String, playDiagnosticPreview: Bool = true) -> Bool {
-        let generation = allocateLoadGeneration()
-        #if DEBUG
-        print("[HotCueTrace] gen=\(generation) load(sampleID:) requested · sampleID=\(sampleID) " +
-              "thread=\(Thread.isMainThread ? "main" : "bg")")
-        #endif
-        print("[ScratchSamplePlaybackController] load requested · sampleID=\(sampleID)")
-        guard let url = wavURL(for: sampleID) else {
-            print("[ScratchSamplePlaybackController] WAV not found for sample ID: \(sampleID)")
-            debugPublishOnMainAsync(field: "statusLabel.missing") { [weak self] in
-                self?.statusLabel = "missing: \(sampleID)"
-            }
+    func load(sampleID: String, playDiagnosticPreview: Bool = true,
+              forceDiagnosticPreview: Bool = false,
+              completion: ((DVSPlaybackDiagnostics) -> Void)? = nil) -> Bool {
+        let url = wavURL(for: sampleID)
+        let admission = loadRequestLock.withLock { () -> (UInt64, Bool) in
+            let generation = allocateLoadGeneration()
+            currentLoadRequest = generation
+            currentLoadCompletion = completion
+            requestedSampleID = sampleID
+            invalidatePresentation()
+            pendingLoad = url.map { LoadRequest(generation: generation, sampleID: sampleID,
+                url: $0, preview: playDiagnosticPreview, forcePreview: forceDiagnosticPreview,
+                completion: completion) }
+            let schedule = pendingLoad != nil && !loadWorkerScheduled
+            if schedule { loadWorkerScheduled = true }
+            return (generation, schedule)
+        }
+        guard url != nil else {
+            publishLoad(admission.0) { [weak self] in self?.statusLabel = "missing: \(sampleID)" }
             return false
         }
-        audioQueue.async { [weak self] in
-            self?.loadOnQueue(sampleID: sampleID, url: url, playDiagnosticPreview: playDiagnosticPreview, generation: generation)
-        }
-        Task { @MainActor [weak self] in
-            self?.transportState.play()
+        publishLoad(admission.0) { [weak self] in self?.statusLabel = "loading: \(sampleID)" }
+        if admission.1 {
+            audioQueue.async { [weak self] in self?.drainLoadRequests() }
         }
         return true
     }
@@ -2441,28 +2587,8 @@ final class ScratchSamplePlaybackController {
     /// reload/reset as before.
     @discardableResult
     func ensureLoadedForDVSDrive(sampleID: String) -> Bool {
-        guard let url = wavURL(for: sampleID) else {
-            print("[ScratchSamplePlaybackController] WAV not found for sample ID: \(sampleID)")
-            debugPublishOnMainAsync(field: "statusLabel.missing") { [weak self] in
-                self?.statusLabel = "missing: \(sampleID)"
-            }
-            return false
-        }
-        let generation = allocateLoadGeneration()
-        #if DEBUG
-        print("[HotCueTrace] gen=\(generation) ensureLoadedForDVSDrive requested · sampleID=\(sampleID) " +
-              "thread=\(Thread.isMainThread ? "main" : "bg")")
-        #endif
-        audioQueue.async { [weak self] in
-            guard let self, self.loadedSampleID != sampleID else {
-                #if DEBUG
-                print("[HotCueTrace] gen=\(generation) ensureLoadedForDVSDrive no-op · already loaded")
-                #endif
-                return
-            }
-            self.loadOnQueue(sampleID: sampleID, url: url, playDiagnosticPreview: true, generation: generation)
-        }
-        return true
+        if loadRequestLock.withLock({ requestedSampleID == sampleID }) { return true }
+        return load(sampleID: sampleID, playDiagnosticPreview: true)
     }
 
     /// Intermittent hot-cue-retrigger investigation (2026-08-14): every
@@ -2477,8 +2603,7 @@ final class ScratchSamplePlaybackController {
     private let loadGenerationCounter = Atomic<UInt64>(0)
 
     private func allocateLoadGeneration() -> UInt64 {
-        loadGenerationCounter.wrappingAdd(1, ordering: .relaxed)
-        return loadGenerationCounter.load(ordering: .relaxed)
+        loadGenerationCounter.wrappingAdd(1, ordering: .relaxed).newValue
     }
 
     private func loadOnQueue(sampleID: String, url: URL, playDiagnosticPreview: Bool, generation: UInt64) {
@@ -2501,7 +2626,7 @@ final class ScratchSamplePlaybackController {
         } catch {
             print("[ScratchSamplePlaybackController] failed to open \(sampleID): \(error)")
             lastLoadError = "open failed: \(error.localizedDescription)"
-            debugPublishOnMainAsync(field: "statusLabel.error") { [weak self] in
+            publishLoad(generation, requiresCurrentRoute: true) { [weak self] in
                 self?.statusLabel = "error: \(sampleID)"
             }
             return
@@ -2513,18 +2638,30 @@ final class ScratchSamplePlaybackController {
             return
         }
 
+        guard ownsLoad(generation) else { return }
         applyLoadedBufferState(buffer, sampleID: sampleID, generation: generation)
 
         ensureEngineRunning()
+        guard ownsLoad(generation) else { return }
         guard engineStarted else {
             let message = outputRoutingError ?? "The AHHH output could not start. Check Playback output."
             lastLoadError = message
-            debugPublishOnMainAsync(field: "statusLabel.routeFailed") { [weak self] in
+            publishLoad(generation, requiresCurrentRoute: true) { [weak self] in
                 self?.statusLabel = message
             }
             return
         }
 
+#if DEBUG
+        if playDiagnosticPreview, let preview = testOnly_previewScheduled {
+            if diagnosticPreviewPlayedSampleID != sampleID {
+                diagnosticPreviewPlayedSampleID = sampleID
+                preview()
+            }
+            publishLoad(generation, requiresCurrentRoute: true) { [weak self] in self?.statusLabel = "loaded: \(sampleID)" }
+            return
+        }
+#endif
         if !playDiagnosticPreview {
             print("[ScratchSamplePlaybackController] diagnostic preview suppressed by caller · sampleID=\(sampleID)")
         } else if diagnosticPreviewPlayedSampleID == sampleID {
@@ -2564,7 +2701,7 @@ final class ScratchSamplePlaybackController {
         print("[ScratchSamplePlaybackController] loaded \(sampleID)")
         print("[ScratchSamplePlaybackController] ready for platter · sampleID=\(sampleID) totalFrames=\(totalFrames) framesPerStep=\(String(format: "%.2f", framesPerStep))")
         let outputName = activeOutputDeviceName
-        debugPublishOnMainAsync(field: "statusLabel.loaded") { [weak self] in
+        publishLoad(generation, requiresCurrentRoute: true) { [weak self] in
             self?.statusLabel = "loaded: \(sampleID) · \(outputName)"
         }
     }
@@ -2793,7 +2930,14 @@ final class ScratchSamplePlaybackController {
     /// the DVS tick routing deterministically without bundled fixtures
     /// (the documented command-line fixture-resolution gap).
     func testOnly_installSyntheticSample(_ buffer: AVAudioPCMBuffer, sampleID: String) {
-        let generation = allocateLoadGeneration()
+        let generation = loadRequestLock.withLock { () -> UInt64 in
+            currentLoadRequest = allocateLoadGeneration()
+            currentLoadCompletion = nil
+            requestedSampleID = sampleID
+            pendingLoad = nil
+            invalidatePresentation()
+            return currentLoadRequest
+        }
         audioQueue.sync {
             self.applyLoadedBufferState(buffer, sampleID: sampleID, generation: generation)
         }
@@ -2860,6 +3004,11 @@ final class ScratchSamplePlaybackController {
     /// otherwise dispatching via `sync` so the caller blocks until `work`
     /// completes. Direct execution is safe because `audioQueue` is serial —
     /// nothing else can be interleaved either way.
+    private func readOnAudioQueue<T>(_ work: () -> T) -> T {
+        if DispatchQueue.getSpecific(key: audioQueueKey) != nil { return work() }
+        return audioQueue.sync(execute: work)
+    }
+
     private func runSynchronouslyOnAudioQueue(_ work: () -> Void) {
         if DispatchQueue.getSpecific(key: audioQueueKey) != nil {
             work()
@@ -3907,11 +4056,17 @@ final class ScratchSamplePlaybackController {
 
     /// Unload the current sample and stop audio.
     func unload() {
-        Task { @MainActor [weak self] in
-            self?.transportState.stop()
+        let generation = loadRequestLock.withLock { () -> UInt64 in
+            currentLoadRequest = allocateLoadGeneration()
+            currentLoadCompletion = nil
+            requestedSampleID = nil
+            pendingLoad = nil
+            invalidatePresentation()
+            return currentLoadRequest
         }
+        publishLoad(generation) { [weak self] in self?.transportState.stop() }
         audioQueue.async { [weak self] in
-            guard let self else { return }
+            guard let self, self.ownsLoad(generation) else { return }
             self.dvsContinuousRenderer.publishIdle()
             self.stopRampGeneration += 1
             self.cancelStopRamp()
@@ -3961,7 +4116,7 @@ final class ScratchSamplePlaybackController {
             self.lastReversalCompensated = false
             self.resetDVSGrainTiming()
             print("[ScratchSamplePlaybackController] unloaded")
-            self.debugPublishOnMainAsync(field: "unload") { [weak self] in
+            self.publishLoad(generation) { [weak self] in
                 self?.statusLabel = "idle"
                 self?.crossfaderGate = 1.0
                 self?.lastCrossfaderRawValue = nil
@@ -4161,6 +4316,58 @@ final class ScratchSamplePlaybackController {
         dvsContinuousRenderer.publishUserMixerGain(rightUpfaderGain * crossfaderRightDeckGain)
     }
 
+    struct PresentationSnapshot {
+        let position: PlaybackPositionSnapshot
+        let waveform: PlaybackWaveformSnapshot?
+        let meter: ScratchOutputMeterSnapshot
+        let routing: OutputRoutingSnapshot
+        let diagnostics: DVSPlaybackDiagnostics
+        let loopContext: PlaybackLoopContext?
+        let sampledAt: TimeInterval
+    }
+    private let presentationLock = NSLock()
+    private var presentationEpoch: UInt64 = 0
+    private var presentationRefreshPending = false
+    private var presentationCache: PresentationSnapshot?
+
+    private func invalidatePresentation() {
+        presentationLock.withLock {
+            presentationEpoch &+= 1
+            presentationCache = nil
+        }
+    }
+
+    /// UI reads never join the device queue. At most one refresh is outstanding.
+    /// Missing/stale observations stay unavailable while driver work is held.
+    func presentationSnapshot() -> PresentationSnapshot? {
+        let request = presentationLock.withLock { () -> (UInt64?, PresentationSnapshot?) in
+            let epoch: UInt64? = presentationRefreshPending ? nil : presentationEpoch
+            presentationRefreshPending = true
+            let cached = presentationCache.flatMap {
+                CACurrentMediaTime() - $0.sampledAt <= 0.25 ? $0 : nil
+            }
+            return (epoch, cached)
+        }
+        if let epoch = request.0 {
+            audioQueue.async { [weak self] in
+                guard let self else { return }
+                let snapshot = PresentationSnapshot(
+                    position: self.currentPlaybackPositionSnapshot(),
+                    waveform: self.currentPlaybackWaveformSnapshot(),
+                    meter: self.currentScratchOutputMeterSnapshot(),
+                    routing: self.outputRoutingSnapshot(),
+                    diagnostics: self.diagnosticsSnapshot(),
+                    loopContext: self.currentPlaybackLoopContext(), sampledAt: CACurrentMediaTime())
+                self.presentationLock.withLock {
+                    self.presentationRefreshPending = false
+                    guard self.presentationEpoch == epoch else { return }
+                    self.presentationCache = snapshot
+                }
+            }
+        }
+        return request.1
+    }
+
     // MARK: - Queue drain (test seam and ordered shutdown)
 
     /// Block the caller until all pending audio-queue work completes.
@@ -4168,7 +4375,9 @@ final class ScratchSamplePlaybackController {
     /// Use in tests before reading state that is mutated on the audio queue.
     /// Do not call from within the audio queue itself.
     func waitForAudioQueue() {
-        audioQueue.sync {}
+        let drained = DispatchSemaphore(value: 0)
+        afterAudioQueueDrains { drained.signal() }
+        drained.wait()
     }
 
     // MARK: - Diagnostics
@@ -4197,7 +4406,7 @@ final class ScratchSamplePlaybackController {
     /// thread, including the main thread on a UI polling timer — the
     /// audioQueue work here is a handful of variable reads, not I/O.
     func diagnosticsSnapshot() -> DVSPlaybackDiagnostics {
-        audioQueue.sync {
+        readOnAudioQueue {
             DVSPlaybackDiagnostics(
                 loadedSampleID: loadedSampleID,
                 lastLoadError: lastLoadError,
@@ -4256,7 +4465,7 @@ final class ScratchSamplePlaybackController {
     /// mutation). Safe to call from any thread — a handful of variable reads,
     /// no I/O.
     func currentPlaybackPositionSnapshot() -> PlaybackPositionSnapshot {
-        audioQueue.sync {
+        readOnAudioQueue {
             let unwrappedFramePosition: Double
             if dvsOwnershipActive {
                 unwrappedFramePosition = dvsAccumulatedSteps * framesPerStep
@@ -4301,7 +4510,7 @@ final class ScratchSamplePlaybackController {
     /// the routine-capture main mixer at unity; hardware routing is downstream.
     /// This is a stereo peak, whereas routine WAV capture later folds to mono.
     func currentScratchOutputMeterSnapshot(now: TimeInterval? = nil) -> ScratchOutputMeterSnapshot {
-        audioQueue.sync {
+        readOnAudioQueue {
             let sampledAt = now ?? CACurrentMediaTime()
             let reading = scratchOutputPeakMeter.consume(now: sampledAt)
             let available = loadedSampleID != nil && totalFrames > 0 && macMonitorTapInstalled
@@ -4335,7 +4544,7 @@ final class ScratchSamplePlaybackController {
     /// when a sample loads and is read independently from the 25 Hz playhead
     /// snapshot, so display refreshes never republish waveform bins.
     func currentPlaybackWaveformSnapshot() -> PlaybackWaveformSnapshot? {
-        audioQueue.sync { playbackWaveformSnapshot }
+        readOnAudioQueue { playbackWaveformSnapshot }
     }
 
     private static func makePlaybackWaveform(
@@ -5207,12 +5416,20 @@ final class MacReferenceBeatOutputRouter: BeatPlaybackOutputRouting {
 
     init(target: @escaping () throws -> Target) { self.target = target }
 
+    func snapshotForRequest() throws -> any BeatPlaybackOutputRouting {
+        let snapshot = try target()
+        return MacReferenceBeatOutputRouter { snapshot }
+    }
+
     func prepare(_ engine: AVAudioEngine) throws {
         applied = nil
         route = nil
         let target = try target()
+        let deviceID = target.deviceID ?? target.deviceUID.map {
+            MacCaptureEngine.audioDeviceID(forUID: $0) ?? AudioDeviceID(kAudioObjectUnknown)
+        }
         applied = try MacScratchOutputRoute.prepare(engine: engine,
-            preferredDeviceID: target.deviceID, preferredDeviceName: target.deviceName,
+            preferredDeviceID: deviceID, preferredDeviceName: target.deviceName,
             expectedDeviceUID: target.deviceUID, raneDeck: .left, explicitPairStart: target.explicitPairStart)
     }
 

@@ -1427,6 +1427,17 @@ enum RoutineCaptureDefaults {
 /// shorten the recorded media, and that is a property of these functions, not
 /// of the capture session.
 enum RoutineTakeTimeline {
+    /// A movie sample in the same host-clock domain as its first frame is
+    /// the boundary witness. A writer's duration estimate is not media proof.
+    static func sampleReachesEnd(
+        sampleHostTime: Double, mediaStartHostTime: Double, maximumDurationSeconds: Double
+    ) -> Bool {
+        guard sampleHostTime.isFinite, mediaStartHostTime.isFinite, mediaStartHostTime > 0,
+              maximumDurationSeconds.isFinite, maximumDurationSeconds > 0 else { return false }
+        let end = mediaStartHostTime + maximumDurationSeconds
+        return end.isFinite && sampleHostTime >= end
+    }
+
     /// Take-relative time for an absolute host time, or `nil` when the instant
     /// falls before media start.
     ///
@@ -3762,16 +3773,25 @@ enum BeatPlaybackState: Equatable, Sendable {
 @MainActor
 protocol PracticeBeatPlaybackEngine: AnyObject {
     func start(mode: BeatEngineMode, bpm: Int) throws
+    func requestStart(mode: BeatEngineMode, bpm: Int, completion: @escaping (Result<Void, Error>) -> Void)
     func stop()
     func hardResetBeatPlayback()
     func setOutputGain(_ normalizedGain: Double)
 }
 
 extension PracticeBeatPlaybackEngine {
+    func requestStart(mode: BeatEngineMode, bpm: Int, completion: @escaping (Result<Void, Error>) -> Void) {
+        completion(Result { try start(mode: mode, bpm: bpm) })
+    }
     func setOutputGain(_ normalizedGain: Double) {}
 }
 
 extension ScratchLabBeatEngine: PracticeBeatPlaybackEngine {
+    func requestStart(mode: BeatEngineMode, bpm: Int, completion: @escaping (Result<Void, Error>) -> Void) {
+        requestStart(mode: mode, bpm: bpm, usesClickCountIn: false) { result in
+            completion(result.map { _ in () })
+        }
+    }
     func start(mode: BeatEngineMode, bpm: Int) throws {
         _ = try start(
             mode: mode,
@@ -3802,6 +3822,8 @@ struct PracticeBeatPreferences: Codable, Equatable, Sendable {
 final class PracticeBeatStore: ObservableObject {
     @Published private(set) var preferences: PracticeBeatPreferences
     @Published private(set) var isPlaying = false
+    @Published private(set) var isPreparingPlayback = false
+    private var playbackRequest = UUID()
     @Published private(set) var playbackErrorMessage: String?
     @Published private(set) var playbackState: BeatPlaybackState = .ready
 
@@ -3919,30 +3941,38 @@ final class PracticeBeatStore: ObservableObject {
     }
 
     func togglePlayback() {
-        isPlaying ? stopPlayback() : startPlayback()
+        (isPlaying || isPreparingPlayback) ? stopPlayback() : startPlayback()
     }
 
     func startPlayback() {
         guard isBeatEnabled else { return }
-
+        let request = UUID()
+        playbackRequest = request
         playbackErrorMessage = nil
-        do {
-            try beatEngine.start(mode: preferences.beatEngineMode, bpm: preferences.bpm)
-            isPlaying = true
-            playbackState = .playing
-        } catch {
-            isPlaying = false
-            playbackErrorMessage = error.localizedDescription
-            playbackState = .failed(reason: error.localizedDescription)
+        isPreparingPlayback = true
+        isPlaying = false
+        beatEngine.requestStart(mode: preferences.beatEngineMode, bpm: preferences.bpm) { [weak self] result in
+            guard let self, self.playbackRequest == request else { return }
+            self.isPreparingPlayback = false
+            switch result {
+            case .success:
+                self.isPlaying = true
+                self.playbackState = .playing
+            case .failure(let error):
+                self.isPlaying = false
+                self.playbackErrorMessage = error.localizedDescription
+                self.playbackState = .failed(reason: error.localizedDescription)
+            }
         }
     }
 
     func stopPlayback() {
+        playbackRequest = UUID()
+        let wasPending = isPreparingPlayback
+        isPreparingPlayback = false
         beatEngine.stop()
         isPlaying = false
-        if case .playing = playbackState {
-            playbackState = .stopped
-        }
+        if wasPending || playbackState == .playing { playbackState = .stopped }
     }
 
     func retryPlayback() {
@@ -3973,7 +4003,7 @@ final class PracticeBeatStore: ObservableObject {
     }
 
     private func restartPlaybackIfNeeded() {
-        guard isPlaying else { return }
+        guard isPlaying || isPreparingPlayback else { return }
         stopPlayback()
         startPlayback()
     }

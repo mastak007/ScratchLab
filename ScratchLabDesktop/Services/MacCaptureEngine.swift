@@ -693,10 +693,22 @@ enum RoutineRecordingStopRequestDisposition: Equatable, Sendable {
 /// The engine writes it at request/preparation/delegate/finalization boundaries;
 /// consumers can safely sample it from a non-main worker without observing a
 /// lossy false -> true -> false UI flag transition.
+/// Immutable Start inputs, shared by ordinary and prepared-CXL admission before Watch.
+/// The same token is consumed by media preparation; nothing is persisted here.
+struct RoutineStartRequest {
+    let token: RoutineRecordingRequestToken
+    let identity: TakeIdentity
+    let configuration: CaptureSessionConfig
+}
+
+// Keep ordinary callers/source contracts while both surfaces use the same owner.
+typealias OrdinaryRoutineStartRequest = RoutineStartRequest
+
 final class RoutineRecordingBoundaryLedger: @unchecked Sendable {
     private struct Record {
         let token: RoutineRecordingRequestToken
         var takeID: String?
+        var reservedIdentity: TakeIdentity?
         var mediaURL: URL?
         var didStartRecording = false
         var stopWasRequested = false
@@ -722,6 +734,9 @@ final class RoutineRecordingBoundaryLedger: @unchecked Sendable {
     private var nextGeneration: UInt64 = 0
     private var records: [RoutineRecordingRequestToken: Record] = [:]
     private var activeToken: RoutineRecordingRequestToken?
+    // Same request identity, retained from admission through pre-arm cancellation.
+    private var preparationOwner: RoutineRecordingRequestToken?
+    private var outerStartOwner: RoutineRecordingRequestToken?
     private let retainedTerminalRecordLimit = 32
 
     func beginRequest() -> RoutineRecordingRequestToken {
@@ -732,6 +747,93 @@ final class RoutineRecordingBoundaryLedger: @unchecked Sendable {
         let token = RoutineRecordingRequestToken(generation: nextGeneration)
         records[token] = Record(token: token)
         return token
+    }
+
+    func admitOuterStart(token: RoutineRecordingRequestToken) {
+        lock.lock(); defer { lock.unlock() }
+        outerStartOwner = token
+    }
+
+    func reserveOuterIdentity(_ identity: TakeIdentity, token: RoutineRecordingRequestToken) {
+        lock.lock(); defer { lock.unlock() }
+        guard outerStartOwner == token else { return }
+        records[token]?.reservedIdentity = identity
+    }
+
+    func ownsOuterStart(_ token: RoutineRecordingRequestToken) -> Bool {
+        lock.lock(); defer { lock.unlock() }
+        return outerStartOwner == token && records[token]?.startFailureDescription == nil
+    }
+
+    func retireOuterStart(expected: RoutineRecordingRequestToken? = nil) -> (token: RoutineRecordingRequestToken, identity: TakeIdentity?)? {
+        lock.lock(); defer { lock.unlock() }
+        guard let token = outerStartOwner, expected == nil || expected == token else { return nil }
+        outerStartOwner = nil
+        records[token]?.startFailureDescription = "Recording start cancelled before media preparation."
+        return (token, records[token]?.reservedIdentity)
+    }
+
+    @discardableResult
+    func admitPreparation(token: RoutineRecordingRequestToken, reservedIdentity: TakeIdentity? = nil,
+                          requiresOuterOwnership: Bool = false) -> Bool {
+        lock.lock(); defer { lock.unlock() }
+        guard var record = records[token], record.startFailureDescription == nil,
+              !requiresOuterOwnership || (outerStartOwner == token
+                && record.reservedIdentity != nil && record.reservedIdentity == reservedIdentity) else { return false }
+        if let outer = outerStartOwner, outer != token {
+            records[outer]?.startFailureDescription = "Another media request took ownership."
+        }
+        outerStartOwner = nil
+        record.reservedIdentity = reservedIdentity
+        records[token] = record
+        preparationOwner = token
+        return true
+    }
+
+    var hasOuterStart: Bool {
+        lock.lock(); defer { lock.unlock() }
+        return outerStartOwner != nil
+    }
+
+    var latestPreparation: RoutineRecordingBoundarySnapshot? {
+        lock.lock(); defer { lock.unlock() }
+        return preparationOwner.flatMap { records[$0]?.snapshot }
+    }
+
+    /// Cancelled work may still own a pending file write. Do not reuse its
+    /// reserved take name merely because it has not reached disk yet.
+    func nextUnreservedTakeNumber(sessionID: String, minimum: Int) -> Int {
+        lock.lock(); defer { lock.unlock() }
+        let last = records.values.compactMap(\.reservedIdentity)
+            .filter { $0.sessionID == sessionID }.map(\.takeNumber).max()
+        return max(minimum, last.map { $0 + 1 } ?? minimum)
+    }
+
+    func ownsPreparation(token: RoutineRecordingRequestToken) -> Bool {
+        lock.lock(); defer { lock.unlock() }
+        return preparationOwner == token
+    }
+
+    func canContinuePreparation(token: RoutineRecordingRequestToken) -> Bool {
+        lock.lock(); defer { lock.unlock() }
+        guard preparationOwner == token, let record = records[token] else { return false }
+        return record.startFailureDescription == nil && !record.didStartRecording && record.completion == nil
+    }
+
+    var pendingPreparation: RoutineRecordingBoundarySnapshot? {
+        lock.lock(); defer { lock.unlock() }
+        guard let token = preparationOwner, let record = records[token],
+              !record.didStartRecording, record.completion == nil,
+              record.startFailureDescription == nil else { return nil }
+        return record.snapshot
+    }
+
+    func isCancelledPreparation(mediaURL: URL?) -> Bool {
+        lock.lock(); defer { lock.unlock() }
+        guard let mediaURL else { return false }
+        return records.values.contains {
+            $0.mediaURL == mediaURL && !$0.didStartRecording && $0.startFailureDescription != nil
+        }
     }
 
     func prepare(
@@ -865,7 +967,7 @@ final class RoutineRecordingBoundaryLedger: @unchecked Sendable {
             .map(\.token)
             .sorted { $0.generation < $1.generation }
         let removalCount = max(0, records.count - retainedTerminalRecordLimit + 1)
-        for token in terminalTokens.prefix(removalCount) where token != activeToken {
+        for token in terminalTokens.prefix(removalCount) where token != activeToken && token != preparationOwner && token != outerStartOwner {
             records.removeValue(forKey: token)
         }
     }
@@ -2568,8 +2670,13 @@ final class MacCaptureEngine: NSObject, ObservableObject {
             }
             guard oldValue != selectedMIDIInputSourceID else { return }
             midiCaptureLock.lock()
+            selectedMIDISourceOwner = MIDISelectionOwner(
+                sourceID: selectedMIDIInputSourceID,
+                selectionEpoch: selectedMIDISourceOwner.selectionEpoch + 1
+            )
             activeRoutineParkedCrossfaderCoverage = nil
             midiCaptureLock.unlock()
+            retireSelectedMIDISourceState()
             resetMIDIMonitoringState()
             reconnectSelectedMIDIInput()
         }
@@ -2614,7 +2721,7 @@ final class MacCaptureEngine: NSObject, ObservableObject {
 
     // MARK: - Expanded MIDI Learn State (Phase 3)
     /// The mapping store for per-device learned MIDI mappings.
-    private let midiMappingStore = MIDILearnedMappingStore.default
+    private let midiMappingStore: MIDILearnedMappingStore
     /// Bounded serial queue for ALL learned-mapping persistence (JSON encode +
     /// file write/delete) — learn, clear, hot-cue sample assignment, calibration,
     /// and inversion all funnel through here. Never touched from the CoreMIDI
@@ -2624,6 +2731,68 @@ final class MacCaptureEngine: NSObject, ObservableObject {
     /// clobbered by an earlier, still-in-flight write that read a stale
     /// on-disk/in-memory snapshot.
     private let midiMappingPersistenceQueue = DispatchQueue(label: "scratchlab.midi.mapping.persistence", qos: .utility)
+
+    private struct MIDISelectionOwner: Equatable, Sendable {
+        let sourceID: String
+        let selectionEpoch: UInt64
+    }
+
+    // CoreMIDI reads this snapshot under midiCaptureLock; selection changes on main.
+    private var selectedMIDISourceOwner = MIDISelectionOwner(sourceID: "", selectionEpoch: 0)
+    private struct MIDILearnOrigin {
+        let owner: MIDISelectionOwner
+        let deviceName: String
+    }
+    private var learnSessionOrigin: MIDILearnOrigin?
+
+    private func midiSelectionOwnerSnapshot() -> MIDISelectionOwner {
+        midiCaptureLock.withLock { selectedMIDISourceOwner }
+    }
+
+    private func publishSelectedMIDIState(
+        field: String,
+        owner: MIDISelectionOwner? = nil,
+        _ update: @escaping () -> Void
+    ) {
+        let owner = owner ?? midiSelectionOwnerSnapshot()
+        publishOnMainAsync(field: field) { [weak self] in
+            guard let self else { return }
+            let publish = { [weak self] in
+                guard let self, self.midiSelectionOwnerSnapshot() == owner else { return }
+                update()
+            }
+#if DEBUG
+            if let deferPublication = self.testOnly_deferSelectedMIDIPublication {
+                deferPublication(publish)
+                return
+            }
+#endif
+            publish()
+        }
+    }
+
+#if DEBUG
+    // Defers the real completion before ownership validation, for deterministic regression tests.
+    var testOnly_deferSelectedMIDIPublication: ((@escaping () -> Void) -> Void)?
+#endif
+
+    private func retireSelectedMIDISourceState() {
+        cancelMIDILearn()
+        cancelCalibration()
+        let wasCurveCapturing = midiCaptureLock.withLock { isCurveCapturing }
+        if wasCurveCapturing {
+            clearCurveCaptureSession(errorMessage: "The MIDI source changed during capture — start again.")
+        }
+        currentMIDIDeviceMapping = nil
+        crossfaderCCMapping = nil
+        midiMappingError = ""
+        calibrationError = ""
+        midiCaptureLock.withLock { persistedCrossfaderMapping = nil }
+        midiMappingPersistenceQueue.async { [weak self] in
+            self?.midiPersistenceDefaults.removeObject(forKey: ScratchLabDesktopDefaultsKey.crossfaderMIDIMapping)
+        }
+        scratchPlaybackController.resetUserMixerGainToUnity()
+    }
     /// The current device's learned mapping profile, keyed by the selected source.
     @Published private(set) var currentMIDIDeviceMapping: MIDIDeviceMapping? = nil {
         didSet {
@@ -2775,6 +2944,7 @@ final class MacCaptureEngine: NSObject, ObservableObject {
     private let scratchPlaybackController: ScratchSamplePlaybackController
     private var tempDirectAhhhTriggerArmed = true
     private let audioOwnershipLock = NSLock()
+    private var audioOwnershipRevision: UInt64 = 0
     private var audioOwnershipModeStorage: ScratchAudioOwnershipMode = .defaultMode
 
     /// Lock-backed so CoreMIDI/DVS callbacks enforce the boundary without
@@ -3381,6 +3551,14 @@ final class MacCaptureEngine: NSObject, ObservableObject {
     /// recording actions must use this stricter readiness signal.
     @Published private(set) var isRoutineCaptureReady = false
     @Published private(set) var isRoutineRecording = false
+    // Admission and current-state finalization publication share MainActor.
+    // Historical ledger completion is independent of this current owner.
+    @MainActor private var routinePublicationOwner: RoutineRecordingRequestToken?
+    @MainActor private var publishedRoutineFinalization: RoutineRecordingRequestToken?
+#if DEBUG
+    @MainActor var testOnly_holdRoutineFinalizationPublication:
+        ((RoutineRecordingRequestToken?, @escaping @MainActor () -> Void) -> Void)?
+#endif
     /// True while the asynchronous second half of routine finalization is still
     /// pending (admission closed, awaiting the admitted builder tasks). Prevents
     /// a second take from starting and re-opening the gate before the prior
@@ -3621,7 +3799,7 @@ final class MacCaptureEngine: NSObject, ObservableObject {
             guard let target = self.intendedScratchHardwareOutput else {
                 throw MacScratchOutputRoute.Failure(message: "Select and enable the Rane audio input before playing the backing sound, or choose Mac output.")
             }
-            return .init(deviceID: Self.audioDeviceID(forUID: target.uid) ?? AudioDeviceID(kAudioObjectUnknown),
+            return .init(deviceID: nil,
                          deviceName: target.name, deviceUID: target.uid,
                          explicitPairStart: self.scratchUSBOutputPairsByUID[target.uid]?.beat)
         })
@@ -3933,10 +4111,146 @@ final class MacCaptureEngine: NSObject, ObservableObject {
         availableVideoDevices.first(where: { $0.uniqueID == selectedVideoDeviceUniqueID })
     }
 
-    func reserveNextRoutineTakeIdentity() throws -> TakeIdentity {
+    @MainActor
+    func beginOrdinaryRoutineStart(configuration: CaptureSessionConfig) throws -> OrdinaryRoutineStartRequest {
+        try beginRoutineStart(configuration: configuration)
+    }
+
+    /// MainActor serializes reservation/configuration mutations across both
+    /// capture surfaces. No actor suspension occurs through reservation creation.
+    @MainActor
+    func beginRoutineStart(configuration: CaptureSessionConfig) throws -> RoutineStartRequest {
+        let midiTicket = midiCaptureWindowTicket
+        guard !isRoutineRecording, routineRecordingBoundaryLedger.pendingPreparation == nil,
+              !isRoutineFinalizationPending,
+              midiTicket.owner != .take || routineRecordingBoundaryLedger.isCancelledPreparation(
+                mediaURL: midiTicket.takeToken?.mediaURL) else {
+            throw RoutineRecordingError.sessionNotReady
+        }
+        _ = cancelOrdinaryRoutineStart()
+        let token = routineRecordingBoundaryLedger.beginRequest()
+        routineRecordingBoundaryLedger.admitOuterStart(token: token)
+        routinePublicationOwner = token
+        recordingSessionConfig = configuration
+        do {
+            let identity = try reserveNextRoutineTakeIdentity(ordinaryOwner: token)
+            routineRecordingBoundaryLedger.reserveOuterIdentity(identity, token: token)
+            return OrdinaryRoutineStartRequest(token: token, identity: identity, configuration: configuration)
+        } catch {
+            _ = cancelOrdinaryRoutineStart()
+            throw error
+        }
+    }
+
+    func ownsOrdinaryRoutineStart(_ request: OrdinaryRoutineStartRequest) -> Bool {
+        ownsRoutineStart(request)
+    }
+
+    func ownsRoutineStart(_ request: RoutineStartRequest) -> Bool {
+        routineRecordingBoundaryLedger.ownsOuterStart(request.token)
+    }
+
+    /// Capture-specific Watch state only. Connection facts are independent.
+    /// Validation and mutation share MainActor with reservation replacement.
+    @MainActor
+    @discardableResult
+    func applyPendingWatchReply(_ reply: WatchCaptureControlReply, for request: RoutineStartRequest) -> Bool {
+        guard ownsRoutineStart(request), pendingRoutineTakeIdentity == request.identity else {
+            if CaptureWatchStopPolicy.startMayHaveLeftWatchRecording(reply.syncState) {
+                _ = requestWatchStop(for: request.identity, reason: .interrupted)
+            }
+            return false
+        }
+        applyPendingWatchReply(reply)
+        return true
+    }
+
+    /// Only an exact current pending owner can clear its reservation. This is
+    /// deliberately inert after media admission, including an active CXL take.
+    @MainActor
+    @discardableResult
+    func cancelPendingRoutineStart(_ request: RoutineStartRequest) -> Bool {
+        cancelRoutineStart(expected: request.token)
+    }
+
+    /// The same token is consumed by the 4B1 ledger admission. Reservation
+    /// validation, configuration snapshot and consumption cannot interleave
+    /// with another MainActor Start; concurrent token retirement fails closed.
+    @MainActor
+    @discardableResult
+    func startRoutineRecording(for request: RoutineStartRequest,
+        captureTiming: CaptureTimingMetadata? = nil,
+        beatOutputRoute: BeatPlaybackOutputRoute? = nil) -> RoutineRecordingRequestToken {
+        guard ownsRoutineStart(request), pendingRoutineTakeIdentity == request.identity else {
+            return request.token
+        }
+        return startRoutineRecording(captureTiming: captureTiming,
+            beatOutputRoute: beatOutputRoute, ordinaryStart: request)
+    }
+
+    func ownsOrdinaryRoutineCapture(_ request: OrdinaryRoutineStartRequest) -> Bool {
+        if ownsOrdinaryRoutineStart(request) { return true }
+        guard routineRecordingBoundaryLedger.ownsPreparation(token: request.token),
+              let state = routineRecordingBoundaryLedger.snapshot(for: request.token) else { return false }
+        return state.startFailureDescription == nil && state.completion == nil
+    }
+
+    /// A late reply may release its original wrist capture, never current state.
+    @MainActor
+    func awaitOrdinaryWatchReply(
+        for request: OrdinaryRoutineStartRequest,
+        send: () async -> WatchCaptureControlReply
+    ) async -> WatchCaptureControlReply? {
+        if Task.isCancelled, ownsOrdinaryRoutineStart(request) { _ = cancelOrdinaryRoutineStart() }
+        guard ownsOrdinaryRoutineStart(request) else { return nil }
+        let reply = await send()
+        if Task.isCancelled, ownsOrdinaryRoutineStart(request) { _ = cancelOrdinaryRoutineStart() }
+        guard ownsOrdinaryRoutineStart(request) else {
+            if CaptureWatchStopPolicy.startMayHaveLeftWatchRecording(reply.syncState) {
+                _ = requestWatchStop(for: request.identity, reason: .interrupted)
+            }
+            return nil
+        }
+        applyPendingWatchReply(reply)
+        return reply
+    }
+
+    /// No driver wait and no queued unowned Stop. The original late reply
+    /// performs its exact Watch cleanup if its start was still in flight.
+    @discardableResult
+    func cancelOrdinaryRoutineStart() -> Bool {
+        cancelRoutineStart(expected: nil)
+    }
+
+    private func cancelRoutineStart(expected: RoutineRecordingRequestToken?) -> Bool {
+        guard let retired = routineRecordingBoundaryLedger.retireOuterStart(expected: expected) else { return false }
+        if let identity = retired.identity {
+            if watchOwnedTakeIdentity == identity {
+                _ = requestWatchStop(for: identity, reason: .interrupted)
+            }
+            if pendingRoutineTakeIdentity == identity {
+                pendingRoutineTakeIdentity = nil
+                pendingWatchReply = nil
+            }
+        }
+        return true
+    }
+
+    func reserveNextRoutineTakeIdentity(ordinaryOwner: RoutineRecordingRequestToken? = nil) throws -> TakeIdentity {
+        if let ordinaryOwner {
+            guard routineRecordingBoundaryLedger.ownsOuterStart(ordinaryOwner) else {
+                throw RoutineRecordingError.sessionNotReady
+            }
+        } else {
+            // A different capture surface is reserving its own take. Retire
+            // the ordinary continuation before its reservation is replaced.
+            _ = cancelOrdinaryRoutineStart()
+        }
         let directory = try recordingsDirectoryURL()
         let sessionID = recordingSessionConfig?.sessionID ?? CaptureCore.LocalRecordingNaming.sessionID()
-        let takeNumber = try CaptureCore.LocalRecordingNaming.nextTakeNumber(in: directory, sessionID: sessionID)
+        let diskTakeNumber = try CaptureCore.LocalRecordingNaming.nextTakeNumber(in: directory, sessionID: sessionID)
+        let takeNumber = routineRecordingBoundaryLedger.nextUnreservedTakeNumber(sessionID: sessionID,
+            minimum: diskTakeNumber)
         let takeIdentity = CaptureCore.LocalRecordingNaming.takeIdentity(sessionID: sessionID, takeNumber: takeNumber)
         pendingRoutineTakeIdentity = takeIdentity
         return takeIdentity
@@ -4259,6 +4573,7 @@ final class MacCaptureEngine: NSObject, ObservableObject {
     @MainActor
     func cancelPendingRoutineReservation() -> TakeIdentity? {
         let pendingIdentity = pendingRoutineTakeIdentity
+        _ = cancelOrdinaryRoutineStart()
         // A cancelled count-in still leaves an acknowledged Watch capture
         // running. Stop it before the reservation is dropped, or nothing else
         // ever will.
@@ -4798,6 +5113,7 @@ final class MacCaptureEngine: NSObject, ObservableObject {
     private var routineClaimedMediaURLStorage: URL?
     private var routineStartedMediaURLStorage: URL?
     private var routineDeferredStopMediaURLStorage: URL?
+    private var routineWriterStopIssuedMediaURLStorage: URL?
     #if DEBUG
     /// Replaces ONLY the AVFoundation writer-stop call for tests that drive
     /// simulated start callbacks without a started movie writer. Arming,
@@ -4819,8 +5135,8 @@ final class MacCaptureEngine: NSObject, ObservableObject {
     private var routineTimedStopWorkItem: DispatchWorkItem?
 
     /// Wall-clock slack allowed past the requested length before the backstop
-    /// stop fires. `AVCaptureMovieFileOutput.maxRecordedDuration` is the primary
-    /// bound and is measured in recorded media time, so it should always win.
+    /// stop fires if movie samples cease. The primary boundary is a video
+    /// sample timestamp, not AVCaptureFileOutput's inaccurate duration counter.
     private static let routineTimedStopGraceSeconds: Double = 0.75
 
     /// Confirmed media-start epoch, or 0 when no take is being written.
@@ -4855,9 +5171,7 @@ final class MacCaptureEngine: NSObject, ObservableObject {
     ) throws {
         routineMediaEpochLock.lock()
         defer { routineMediaEpochLock.unlock() }
-        if routineRecordingBoundaryLedger.snapshot(for: recordingToken)?.startFailureDescription != nil {
-            throw RoutineRecordingError.sessionNotReady
-        }
+        try requireCurrentRoutinePreparation(recordingToken)
         pendingRoutineMediaStart = PendingRoutineMediaStart(mediaURL: mediaURL, recordingToken: recordingToken,
             midiTakeToken: midiTakeToken, plannedStartHostTime: plannedStartHostTime)
     }
@@ -4874,6 +5188,7 @@ final class MacCaptureEngine: NSObject, ObservableObject {
         routineClaimedMediaURLStorage = nil
         routineStartedMediaURLStorage = nil
         routineDeferredStopMediaURLStorage = nil
+        routineWriterStopIssuedMediaURLStorage = nil
         routineMediaEpochLock.unlock()
     }
 
@@ -4917,6 +5232,7 @@ final class MacCaptureEngine: NSObject, ObservableObject {
         routineClaimedMediaURLStorage = nil
         routineStartedMediaURLStorage = nil
         routineDeferredStopMediaURLStorage = nil
+        routineWriterStopIssuedMediaURLStorage = nil
         let pendingStop = routineTimedStopWorkItem
         routineTimedStopWorkItem = nil
         routineMediaEpochLock.unlock()
@@ -5188,8 +5504,8 @@ final class MacCaptureEngine: NSObject, ObservableObject {
     }
 
     /// Backstop for the requested take length, armed only once media is
-    /// confirmed. `maxRecordedDuration` normally ends the take first; this
-    /// covers the case where AVFoundation never reaches that bound.
+    /// confirmed. The movie sample callback normally ends the take first;
+    /// this still bounds a stalled/disconnected video stream.
     private func scheduleRoutineTimedStop(
         mediaStartHostTime: CFTimeInterval,
         maximumDurationSeconds: Double
@@ -5377,6 +5693,10 @@ final class MacCaptureEngine: NSObject, ObservableObject {
     /// Guarded by `midiCaptureLock`. Non-nil exactly while a take owns the
     /// window.
     private var midiWindowTakeTokenStorage: MIDICaptureTakeToken?
+    /// First close of this take, in the same host-clock seconds as captured MIDI.
+    /// Guarded by midiCaptureLock; retained through finalization and reset with
+    /// the owned buffer. A delayed movie witness may precede buffered events.
+    private var midiRecordingEndHostTime: Double?
     /// Guarded by `midiCaptureLock`. Running minimum/maximum of the timestamps
     /// currently held in `capturedMidiCCEvents`.
     ///
@@ -5556,6 +5876,7 @@ final class MacCaptureEngine: NSObject, ObservableObject {
         prefersPhysicalCaptureAudio = Self.defaultPrefersPhysicalCaptureAudio
         self.midiSelectionDefaults = midiSelectionDefaults
         midiPersistenceDefaults = .standard
+        midiMappingStore = .default
         scratchPlaybackController = ScratchSamplePlaybackController()
         scratchAudioOwnershipMode = audioOwnershipMode
         audioOwnershipModeStorage = audioOwnershipMode
@@ -5571,6 +5892,7 @@ final class MacCaptureEngine: NSObject, ObservableObject {
         allowsSeratoDirectCaptureDiscovery: Bool = true,
         prefersPhysicalCaptureAudio: Bool = MacCaptureEngine.defaultPrefersPhysicalCaptureAudio,
         midiDefaults: UserDefaults? = nil,
+        midiMappingStore: MIDILearnedMappingStore = .default,
         sampleResourceRoot: URL? = Bundle.main.resourceURL
     ) {
         let midiSelectionDefaults = midiDefaults ?? Self.makeMIDISelectionDefaults()
@@ -5580,6 +5902,7 @@ final class MacCaptureEngine: NSObject, ObservableObject {
         self.prefersPhysicalCaptureAudio = prefersPhysicalCaptureAudio
         self.midiSelectionDefaults = midiSelectionDefaults
         midiPersistenceDefaults = midiDefaults ?? .standard
+        self.midiMappingStore = midiMappingStore
         scratchPlaybackController = ScratchSamplePlaybackController(
             sampleResourceRoot: sampleResourceRoot
         )
@@ -5607,15 +5930,18 @@ final class MacCaptureEngine: NSObject, ObservableObject {
     func setScratchAudioOwnershipMode(_ mode: ScratchAudioOwnershipMode) {
         audioOwnershipLock.lock()
         audioOwnershipModeStorage = mode
+        audioOwnershipRevision &+= 1
+        let revision = audioOwnershipRevision
         audioOwnershipLock.unlock()
         mode.persist(to: midiPersistenceDefaults)
         if !mode.allowsLocalScratchPlayback {
             scratchPlaybackController.unload()
-            scratchPlaybackController.waitForAudioQueue()
         }
+        let loadGeneration = scratchPlaybackController.admittedLoadGeneration
         publishOnMainAsync(field: "scratchAudioOwnershipMode") { [weak self] in
-            guard let self else { return }
+            guard let self, self.audioOwnershipLock.withLock({ self.audioOwnershipRevision == revision }) else { return }
             self.scratchAudioOwnershipMode = mode
+            guard self.scratchPlaybackController.admittedLoadGeneration == loadGeneration else { return }
             self.platterTestLoadStatus = mode.allowsLocalScratchPlayback
                 ? "Standalone audio enabled — load AHHH to arm the platter."
                 : mode.detail
@@ -5623,6 +5949,7 @@ final class MacCaptureEngine: NSObject, ObservableObject {
     }
 
     private func configureInitialState() {
+        selectedMIDISourceOwner = MIDISelectionOwner(sourceID: selectedMIDIInputSourceID, selectionEpoch: 0)
         movieOutput.delegate = routineMovieStartDelegate
         if let data = midiPersistenceDefaults.data(forKey: "scratchlab.mac.usbOutputPairsByUID"),
            let saved = try? JSONDecoder().decode([String: ScratchUSBOutputPairs].self, from: data) {
@@ -5808,6 +6135,7 @@ final class MacCaptureEngine: NSObject, ObservableObject {
     }
 
     func stop() {
+        _ = cancelOrdinaryRoutineStart()
         isRunning = false
         playbackPositionPollGeneration &+= 1
         playbackPositionPollTimer?.cancel()
@@ -6185,8 +6513,10 @@ final class MacCaptureEngine: NSObject, ObservableObject {
         setSelectedAudioDeviceUniqueID(device.uniqueID, origin: .explicitUserChoice)
     }
 
+    @MainActor
     func toggleRoutineRecording() {
-        if isRoutineRecording {
+        if isRoutineRecording || routineRecordingBoundaryLedger.pendingPreparation != nil
+            || routineRecordingBoundaryLedger.hasOuterStart {
             stopRoutineRecording()
         } else {
             startRoutineRecording()
@@ -6227,7 +6557,9 @@ final class MacCaptureEngine: NSObject, ObservableObject {
                 scratchPlaybackController.cancelRoutineOutputCapture()
                 releaseAbandonedTakeMIDIWindow(token: pending.midiTakeToken)
                 requestWatchStopIfNeeded(reason: reason)
-                Task { @MainActor in self.isRoutineRecording = false }
+                publishRoutinePreparation(token: token, requiresLiveRequest: false) {
+                    self.isRoutineRecording = false
+                }
             }
             return .rejected("Recording start was cancelled.")
         }
@@ -6243,15 +6575,124 @@ final class MacCaptureEngine: NSObject, ObservableObject {
         routineRecordingStatus = message
     }
 
+    /// Publication is checked on MainActor delivery, not when work is queued.
+    private func publishRoutinePreparation(
+        token: RoutineRecordingRequestToken, requiresLiveRequest: Bool = true,
+        _ update: @escaping () -> Void
+    ) {
+        Task { @MainActor [weak self] in
+            guard let self, self.routineRecordingBoundaryLedger.ownsPreparation(token: token),
+                  !requiresLiveRequest || self.routineRecordingBoundaryLedger.canContinuePreparation(token: token)
+            else { return }
+            update()
+        }
+    }
+
+    private func requireCurrentRoutinePreparation(_ token: RoutineRecordingRequestToken) throws {
+        guard routineRecordingBoundaryLedger.canContinuePreparation(token: token) else {
+            throw RoutineRecordingError.sessionNotReady
+        }
+    }
+
+    private func releaseRoutinePreparationResources(
+        token: RoutineRecordingRequestToken, midiToken: MIDICaptureTakeToken?, outputWasPrepared: Bool
+    ) {
+        if outputWasPrepared { scratchPlaybackController.cancelRoutineOutputCapture() }
+        if let midiToken { releaseAbandonedTakeMIDIWindow(token: midiToken) }
+        guard let mediaURL = routineRecordingBoundaryLedger.snapshot(for: token)?.mediaURL,
+              activeRoutineRecordingSidecar?.mediaFileName == mediaURL.lastPathComponent else { return }
+        // Keep unfinished on-disk audit evidence; it is not a completed capture.
+        // Preview owns the camera session, so cancellation does not stop it.
+        _ = builderAdmissionGate.close()
+        activeRoutineDetectedNotationBuilder = nil
+        activeRoutineAudioNotationDetector = nil
+        pendingRoutineOutputAudioURL = nil
+        routineSidecarLock.withLock {
+            activeRoutineRecordingSidecar = nil
+            activeRoutineRecordingSidecarURL = nil
+        }
+    }
+
+    /// Runs on sessionQueue after this request's work returns. A successor's
+    /// resource preparation cannot overtake it on that same serial queue.
+    private func failRoutinePreparation(
+        token: RoutineRecordingRequestToken, midiToken: MIDICaptureTakeToken?,
+        outputWasPrepared: Bool, watchIdentity: TakeIdentity?, error: Error
+    ) {
+        releaseRoutinePreparationResources(token: token, midiToken: midiToken, outputWasPrepared: outputWasPrepared)
+        guard routineRecordingBoundaryLedger.canContinuePreparation(token: token) else { return }
+        let message = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
+        routineRecordingBoundaryLedger.failStart(token: token, description: message)
+        if let watchIdentity { requestWatchStop(for: watchIdentity, reason: .interrupted) }
+        publishRoutinePreparation(token: token, requiresLiveRequest: false) {
+            self.isRoutineRecording = false
+            self.routineRecordingStatus = message
+        }
+    }
+
+    /// Retire the request without waiting for session/audio preparation. The
+    /// media lock serializes retirement with arming and the first-frame claim.
+    private func cancelRoutinePreparationBeforeClaim(reason: CaptureStopReason) -> Bool {
+        routineMediaEpochLock.lock()
+        if let latest = routineRecordingBoundaryLedger.latestPreparation,
+           !latest.didStartRecording, latest.startFailureDescription != nil {
+            routineMediaEpochLock.unlock()
+            return true // Duplicate Stop for a retired preparation is a no-op.
+        }
+        guard let pending = routineRecordingBoundaryLedger.pendingPreparation,
+              pending.mediaURL == nil || routineClaimedMediaURLStorage != pending.mediaURL else {
+            routineMediaEpochLock.unlock()
+            return false
+        }
+        routineRecordingBoundaryLedger.failStart(token: pending.token,
+            description: "Recording start cancelled before the first camera sample.")
+        let armed = pendingRoutineMediaStart?.recordingToken == pending.token ? pendingRoutineMediaStart : nil
+        if armed != nil { pendingRoutineMediaStart = nil }
+        routineMediaEpochLock.unlock()
+        // An already armed request has finished preparation. Otherwise its
+        // still-running operation releases its exact resources on return.
+        if let armed {
+            // FIFO before any successor's resource preparation; retirement itself
+            // has already completed and does not wait for this cleanup.
+            sessionQueue.async {
+                self.releaseRoutinePreparationResources(token: pending.token,
+                    midiToken: armed.midiTakeToken, outputWasPrepared: true)
+            }
+        }
+        requestWatchStopIfNeeded(reason: reason)
+        publishRoutinePreparation(token: pending.token, requiresLiveRequest: false) {
+            self.isRoutineRecording = false
+            self.routineRecordingStatus = "Recording start cancelled."
+        }
+        return true
+    }
+
+#if DEBUG
+    /// Holds/replaces only platform preparation in tests; request admission,
+    /// cancellation, publication, failure and final arming remain production code.
+    // Replace device discovery input, never the shared suitability decision.
+    var testOnly_routineAudioInputChoice: AudioInputDeviceChoice?
+    var testOnly_routinePreparation: ((RoutineRecordingRequestToken) throws -> URL)?
+    var testOnly_beforeRoutineMediaArm: ((RoutineRecordingRequestToken) throws -> Void)?
+#endif
+
+    @MainActor
     @discardableResult
     func startRoutineRecording(
         captureTiming: CaptureTimingMetadata? = nil,
-        beatOutputRoute: BeatPlaybackOutputRoute? = nil
+        beatOutputRoute: BeatPlaybackOutputRoute? = nil,
+        ordinaryStart: OrdinaryRoutineStartRequest? = nil
     ) -> RoutineRecordingRequestToken {
-        let recordingToken = routineRecordingBoundaryLedger.beginRequest()
+        let recordingToken = ordinaryStart?.token ?? routineRecordingBoundaryLedger.beginRequest()
+        if let ordinaryStart {
+            guard ownsOrdinaryRoutineStart(ordinaryStart) else { return recordingToken }
+            recordingSessionConfig = ordinaryStart.configuration
+        }
         // Refuse before touching any camera, duration, sidecar or audio state.
         // The prior take may be stopped with neither UI flag published yet.
-        guard midiCaptureWindowTicket.owner != .take else {
+        let priorMIDITicket = midiCaptureWindowTicket
+        guard priorMIDITicket.owner != .take
+                || routineRecordingBoundaryLedger.isCancelledPreparation(mediaURL: priorMIDITicket.takeToken?.mediaURL) else {
             routineRecordingBoundaryLedger.failStart(
                 token: recordingToken,
                 description: "A previous routine take still owns its MIDI evidence."
@@ -6271,9 +6712,29 @@ final class MacCaptureEngine: NSObject, ObservableObject {
             return recordingToken
         }
 
-        let selectedAudioChoice = availableAudioDevices
+        guard routineRecordingBoundaryLedger.pendingPreparation == nil,
+              routineRecordingBoundaryLedger.admitPreparation(token: recordingToken,
+                reservedIdentity: pendingRoutineTakeIdentity,
+                requiresOuterOwnership: ordinaryStart != nil) else {
+            routineRecordingBoundaryLedger.failStart(token: recordingToken,
+                description: "A recording request is already active.")
+            return recordingToken
+        }
+        routinePublicationOwner = recordingToken
+        let watchIdentity = watchOwnedTakeIdentity
+        let sessionConfig = recordingSessionConfig
+        let takeIdentity = pendingRoutineTakeIdentity
+        let watchReply = pendingWatchReply
+        // Consume on the requesting thread, before a successor can reserve.
+        // The worker only receives values; it never clears a later reservation.
+        pendingRoutineTakeIdentity = nil
+        pendingWatchReply = nil
+        var selectedAudioChoice = availableAudioDevices
             .first(where: { $0.uniqueID == selectedAudioDeviceUniqueID })
             .map { Self.audioChoice(from: $0) }
+#if DEBUG
+        if let choice = testOnly_routineAudioInputChoice { selectedAudioChoice = choice }
+#endif
         let selectedAudioSuitability = selectedAudioChoice.map {
             Self.audioInputCaptureSuitability(for: $0)
         }
@@ -6288,11 +6749,42 @@ final class MacCaptureEngine: NSObject, ObservableObject {
                 description: Self.isolatedCaptureBuiltInMicrophoneMessage
             )
             requestWatchStopIfNeeded(reason: .interrupted)
-            Task { @MainActor in
+            publishRoutinePreparation(token: recordingToken, requiresLiveRequest: false) {
                 self.routineRecordingStatus = Self.isolatedCaptureBuiltInMicrophoneMessage
             }
             return recordingToken
         }
+
+        // Deterministic preparation shares admission with platform preparation.
+#if DEBUG
+        if let prepare = testOnly_routinePreparation {
+            publishRoutinePreparation(token: recordingToken) {
+                self.isRoutineRecording = true
+                self.routineRecordingStatus = "Starting routine recording"
+            }
+            sessionQueue.async {
+                var midiToken: MIDICaptureTakeToken?
+                do {
+                    try self.requireCurrentRoutinePreparation(recordingToken)
+                    let url = try prepare(recordingToken)
+                    try self.requireCurrentRoutinePreparation(recordingToken)
+                    self.routineRecordingBoundaryLedger.prepare(token: recordingToken,
+                        takeID: url.deletingPathExtension().lastPathComponent, mediaURL: url)
+                    midiToken = self.openMIDIInputForRecording(mediaURL: url)
+                    guard let midiToken else { throw RoutineRecordingError.sessionNotReady }
+                    try self.testOnly_beforeRoutineMediaArm?(recordingToken)
+                    try self.armPendingRoutineMediaStart(mediaURL: url, recordingToken: recordingToken,
+                        midiTakeToken: midiToken, plannedStartHostTime: captureTiming?.recordingStartHostTime.map {
+                            AVAudioTime.seconds(forHostTime: $0)
+                        })
+                } catch {
+                    self.failRoutinePreparation(token: recordingToken, midiToken: midiToken,
+                        outputWasPrepared: false, watchIdentity: watchIdentity, error: error)
+                }
+            }
+            return recordingToken
+        }
+#endif
 
         // Reset the shared camera processor (cadence phase, held anchor, and
         // accumulated angle/direction) so a prior take cannot leak into this one.
@@ -6301,19 +6793,9 @@ final class MacCaptureEngine: NSObject, ObservableObject {
 
         // Capture UI-owned mapping/source values before dispatching preparation.
         // The audit payload then travels with this exact take, including late Watch updates.
-        let controllerSetupAudit: CaptureAuditEvent
-        do {
-            controllerSetupAudit = try Self.scratchControllerSetupAuditEvent(
-                sampleID: scratchPlaybackController.diagnosticsSnapshot().loadedSampleID,
-                mixerSourceID: selectedMIDIInputSourceID,
-                platterSourceID: selectedTwelveMIDIInputSourceID,
-                mapping: currentMIDIDeviceMapping, at: Date())
-        } catch {
-            routineRecordingBoundaryLedger.failStart(token: recordingToken,
-                description: "Could not retain the controller setup: \(error.localizedDescription)")
-            requestWatchStopIfNeeded(reason: .interrupted)
-            return recordingToken
-        }
+        let controllerSetup = (mixer: selectedMIDIInputSourceID,
+                               platter: selectedTwelveMIDIInputSourceID,
+                               mapping: currentMIDIDeviceMapping)
         let selectedVideoID = selectedVideoDeviceUniqueID
         let selectedAudioID = selectedAudioDeviceUniqueID
         let audioDevices = availableAudioDevices
@@ -6333,12 +6815,13 @@ final class MacCaptureEngine: NSObject, ObservableObject {
             plannedSeconds: plannedTakeDurationSeconds
         )
 
-        Task { @MainActor in
+        publishRoutinePreparation(token: recordingToken) {
             self.isRoutineRecording = true
             self.routineRecordingStatus = "Starting routine recording"
         }
 
         sessionQueue.async {
+            guard self.routineRecordingBoundaryLedger.canContinuePreparation(token: recordingToken) else { return }
             guard !self.movieOutput.isRecording else {
                 self.routineRecordingBoundaryLedger.failStart(
                     token: recordingToken,
@@ -6349,8 +6832,8 @@ final class MacCaptureEngine: NSObject, ObservableObject {
             guard !selectedVideoID.isEmpty else {
                 let message = RoutineRecordingError.missingVideo.errorDescription ?? "Unable to start recording."
                 self.routineRecordingBoundaryLedger.failStart(token: recordingToken, description: message)
-                self.requestWatchStopIfNeeded(reason: .interrupted)
-                Task { @MainActor in
+                if let watchIdentity { self.requestWatchStop(for: watchIdentity, reason: .interrupted) }
+                self.publishRoutinePreparation(token: recordingToken, requiresLiveRequest: false) {
                     self.isRoutineRecording = false
                     self.routineRecordingStatus = message
                 }
@@ -6359,8 +6842,8 @@ final class MacCaptureEngine: NSObject, ObservableObject {
             guard !selectedAudioID.isEmpty else {
                 let message = RoutineRecordingError.missingAudio.errorDescription ?? "Unable to start recording."
                 self.routineRecordingBoundaryLedger.failStart(token: recordingToken, description: message)
-                self.requestWatchStopIfNeeded(reason: .interrupted)
-                Task { @MainActor in
+                if let watchIdentity { self.requestWatchStop(for: watchIdentity, reason: .interrupted) }
+                self.publishRoutinePreparation(token: recordingToken, requiresLiveRequest: false) {
                     self.isRoutineRecording = false
                     self.routineRecordingStatus = message
                 }
@@ -6369,8 +6852,8 @@ final class MacCaptureEngine: NSObject, ObservableObject {
             guard videoDevices.contains(where: { $0.uniqueID == selectedVideoID }) else {
                 let message = RoutineRecordingError.selectedVideoUnavailable.errorDescription ?? "Unable to start recording."
                 self.routineRecordingBoundaryLedger.failStart(token: recordingToken, description: message)
-                self.requestWatchStopIfNeeded(reason: .interrupted)
-                Task { @MainActor in
+                if let watchIdentity { self.requestWatchStop(for: watchIdentity, reason: .interrupted) }
+                self.publishRoutinePreparation(token: recordingToken, requiresLiveRequest: false) {
                     self.isRoutineRecording = false
                     self.routineRecordingStatus = message
                 }
@@ -6379,8 +6862,8 @@ final class MacCaptureEngine: NSObject, ObservableObject {
             guard audioDevices.contains(where: { $0.uniqueID == selectedAudioID }) else {
                 let message = RoutineRecordingError.selectedAudioUnavailable.errorDescription ?? "Unable to start recording."
                 self.routineRecordingBoundaryLedger.failStart(token: recordingToken, description: message)
-                self.requestWatchStopIfNeeded(reason: .interrupted)
-                Task { @MainActor in
+                if let watchIdentity { self.requestWatchStop(for: watchIdentity, reason: .interrupted) }
+                self.publishRoutinePreparation(token: recordingToken, requiresLiveRequest: false) {
                     self.isRoutineRecording = false
                     self.routineRecordingStatus = message
                 }
@@ -6388,6 +6871,7 @@ final class MacCaptureEngine: NSObject, ObservableObject {
             }
 
             var midiTakeToken: MIDICaptureTakeToken?
+            var outputWasPrepared = false
             do {
                 // A stopped take retains its evidence until its own release.
                 // Refuse before preparing any new sidecar or capture state.
@@ -6414,6 +6898,7 @@ final class MacCaptureEngine: NSObject, ObservableObject {
                     throw RoutineRecordingError.missingAudioConnection
                 }
 
+                try self.requireCurrentRoutinePreparation(recordingToken)
                 let preparedRecording = try self.prepareRoutineRecording(
                     selectedVideoID: selectedVideoID,
                     selectedAudioID: selectedAudioID,
@@ -6421,8 +6906,10 @@ final class MacCaptureEngine: NSObject, ObservableObject {
                     audioDevices: audioDevices,
                     captureTiming: captureTiming,
                     beatOutputRoute: beatOutputRoute,
-                    controllerSetupAudit: controllerSetupAudit
+                    controllerSetup: controllerSetup,
+                    sessionConfig: sessionConfig, takeIdentity: takeIdentity, watchReply: watchReply
                 )
+                try self.requireCurrentRoutinePreparation(recordingToken)
                 self.routineRecordingBoundaryLedger.prepare(
                     token: recordingToken,
                     takeID: preparedRecording.sidecar.takeID,
@@ -6466,7 +6953,7 @@ final class MacCaptureEngine: NSObject, ObservableObject {
                     self.activeRoutineAudioCaptureWriter = nil
                     self.publishRoutineAudioCaptureDiagnostics(nil)
                 }
-                Task { @MainActor in
+                self.publishRoutinePreparation(token: recordingToken) {
                     self.lastRoutineDetectedNotation = nil
                     self.onboardOutputLevel = 0
                     self.onboardOutputCaptureStatus = "Recording is armed, but onboard AHHH is currently silent."
@@ -6476,6 +6963,7 @@ final class MacCaptureEngine: NSObject, ObservableObject {
                 // and no other. Nil until arming actually happened: a throw
                 // before this point must release nothing, or a failed start
                 // would destroy a previous stopped-but-undrained take.
+                try self.requireCurrentRoutinePreparation(recordingToken)
                 midiTakeToken = self.openMIDIInputForRecording(mediaURL: preparedRecording.mediaURL)
                 guard let preparedMIDIToken = midiTakeToken else { throw RoutineRecordingError.sessionNotReady }
                 // Phase 3.1 — discard any stale timeline from a previous take.
@@ -6524,10 +7012,15 @@ final class MacCaptureEngine: NSObject, ObservableObject {
                 // Capture genuine PCM before the first movie sample. The
                 // timestamped prefix is removed at finalization, not exported
                 // as part of the take. Count-in provides preparation time.
+                try self.requireCurrentRoutinePreparation(recordingToken)
                 try self.scratchPlaybackController.beginRoutineOutputCapture(
                     destinationURL: preparedRecording.audioURL,
                     maximumDurationSeconds: maximumTakeDurationSeconds + 15
                 )
+                outputWasPrepared = true
+#if DEBUG
+                try self.testOnly_beforeRoutineMediaArm?(recordingToken)
+#endif
                 try self.armPendingRoutineMediaStart(
                     mediaURL: preparedRecording.mediaURL,
                     recordingToken: recordingToken,
@@ -6537,34 +7030,16 @@ final class MacCaptureEngine: NSObject, ObservableObject {
                     }
                 )
             } catch {
-                self.scratchPlaybackController.cancelRoutineOutputCapture()
-                // Arming may already have seized the MIDI window; this take
-                // will never reach finalization, so nothing would ever drain
-                // it. Hand the window back explicitly or the pre-record
-                // preview stays closed for the rest of the session. Scoped to
-                // this take's own token, so a start that threw before arming
-                // releases nothing and can never abandon another take.
-                if let midiTakeToken {
-                    self.releaseAbandonedTakeMIDIWindow(token: midiTakeToken)
-                }
-                self.reconnectSelectedMIDIInput()
-                self.requestWatchStopIfNeeded(reason: .interrupted)
-                let message = (error as? LocalizedError)?.errorDescription
-                    ?? error.localizedDescription
-                self.routineRecordingBoundaryLedger.failStart(
-                    token: recordingToken,
-                    description: message
-                )
-                Task { @MainActor in
-                    self.isRoutineRecording = false
-                    self.routineRecordingStatus = message
-                }
+                self.failRoutinePreparation(token: recordingToken, midiToken: midiTakeToken,
+                    outputWasPrepared: outputWasPrepared, watchIdentity: watchIdentity, error: error)
             }
         }
         return recordingToken
     }
 
     func stopRoutineRecording(reason: CaptureStopReason = .manual) {
+        if cancelOrdinaryRoutineStart() { return }
+        if cancelRoutinePreparationBeforeClaim(reason: reason) { return }
         let midiTakeToken = midiCaptureWindowTicket.takeToken
         noteRoutineStopReason(reason)
         // Dispatched before the media stop so the Watch is told as early as
@@ -6618,8 +7093,21 @@ final class MacCaptureEngine: NSObject, ObservableObject {
         return .deferUntilStart
     }
 
-    /// The one routine writer stop. Runs on `sessionQueue`.
-    private func performRoutineMovieStop(midiTakeToken: MIDICaptureTakeToken?) {
+    /// The one routine writer stop. Manual/backstop requests run on sessionQueue;
+    /// a planned sample boundary must stop synchronously inside the movie delegate
+    /// to retain AVFoundation's sample-accurate stop guarantee.
+    private func performRoutineMovieStop(
+        midiTakeToken: MIDICaptureTakeToken?, endHostTime: Double = CACurrentMediaTime()
+    ) {
+        routineMediaEpochLock.lock()
+        if let claimed = routineClaimedMediaURLStorage {
+            guard routineWriterStopIssuedMediaURLStorage != claimed else {
+                routineMediaEpochLock.unlock()
+                return
+            }
+            routineWriterStopIssuedMediaURLStorage = claimed
+        }
+        routineMediaEpochLock.unlock()
         Task { @MainActor in
             self.isRoutineRecording = false
             self.routineRecordingStatus = "Finishing routine recording"
@@ -6629,7 +7117,7 @@ final class MacCaptureEngine: NSObject, ObservableObject {
                 )
             }
         }
-        closeMIDIRecordingWindow(token: midiTakeToken)
+        closeMIDIRecordingWindow(token: midiTakeToken, endHostTime: endHostTime)
         #if DEBUG
         if let override = testOnly_routineMovieWriterStopOverride {
             override()
@@ -7023,7 +7511,7 @@ final class MacCaptureEngine: NSObject, ObservableObject {
         return uid?.takeRetainedValue() as String?
     }
 
-    private static func audioDeviceID(forUID requestedUID: String) -> AudioDeviceID? {
+    static func audioDeviceID(forUID requestedUID: String) -> AudioDeviceID? {
         var devicesAddress = AudioObjectPropertyAddress(
             mSelector: kAudioHardwarePropertyDevices,
             mScope: kAudioObjectPropertyScopeGlobal,
@@ -8077,15 +8565,17 @@ final class MacCaptureEngine: NSObject, ObservableObject {
         audioDevices: [AVCaptureDevice],
         captureTiming: CaptureTimingMetadata?,
         beatOutputRoute: BeatPlaybackOutputRoute?,
-        controllerSetupAudit: CaptureAuditEvent
+        controllerSetup: (mixer: String, platter: String, mapping: MIDIDeviceMapping?),
+        sessionConfig: CaptureSessionConfig?, takeIdentity reservedIdentity: TakeIdentity?,
+        watchReply: WatchCaptureControlReply?
     ) throws -> PreparedRoutineRecording {
         let directory = try recordingsDirectoryURL()
         let startedAt = Date()
-        let sessionID = recordingSessionConfig?.sessionID
+        let sessionID = sessionConfig?.sessionID
             ?? CaptureCore.LocalRecordingNaming.sessionID()
         let takeIdentity: TakeIdentity
-        if let pendingRoutineTakeIdentity {
-            takeIdentity = pendingRoutineTakeIdentity
+        if let reservedIdentity {
+            takeIdentity = reservedIdentity
         } else {
             takeIdentity = CaptureCore.LocalRecordingNaming.takeIdentity(
                 sessionID: sessionID,
@@ -8106,7 +8596,7 @@ final class MacCaptureEngine: NSObject, ObservableObject {
         let audioDeviceName = audioDevices.first(where: { $0.uniqueID == selectedAudioID })?.localizedName ?? "Unknown audio input"
         var sidecar = CaptureCore.LocalRecordingSidecar.recording(
             sessionID: sessionID,
-            sessionConfig: recordingSessionConfig,
+            sessionConfig: sessionConfig,
             takeIdentity: takeIdentity,
             files: files,
             recordingRole: "mac_routine_capture",
@@ -8123,16 +8613,17 @@ final class MacCaptureEngine: NSObject, ObservableObject {
         if let cameraGuide = try cxlCameraGuideAuditEvent(videoDeviceID: selectedVideoID, at: startedAt) {
             sidecar.auditTrail.append(cameraGuide)
         }
-        sidecar.auditTrail.append(controllerSetupAudit)
+        sidecar.auditTrail.append(try Self.scratchControllerSetupAuditEvent(
+            sampleID: scratchPlaybackController.diagnosticsSnapshot().loadedSampleID,
+            mixerSourceID: controllerSetup.mixer, platterSourceID: controllerSetup.platter,
+            mapping: controllerSetup.mapping, at: startedAt))
         sidecar.auditTrail.append(try Self.scratchOutputRoutingAuditEvent(
             snapshot: scratchPlaybackController.outputRoutingSnapshot(),
             selectedInputUID: selectedAudioID,
             at: startedAt,
             beatOutputRoute: beatOutputRoute
         ))
-        let syncedSidecar = pendingWatchReply.map { sidecar.withWatchSync($0) } ?? sidecar
-        pendingRoutineTakeIdentity = nil
-        pendingWatchReply = nil
+        let syncedSidecar = watchReply.map { sidecar.withWatchSync($0) } ?? sidecar
 
         return PreparedRoutineRecording(
             mediaURL: files.mediaURL,
@@ -8173,7 +8664,7 @@ final class MacCaptureEngine: NSObject, ObservableObject {
         )
         // Backstop for every terminal path that does not go through
         // `stopRoutineRecording` — most importantly AVFoundation ending the
-        // take itself at `maxRecordedDuration`, and any capture error. A stop
+        // take at its measured sample boundary, and any capture error. A stop
         // already dispatched for this take is not sent twice.
         requestWatchStopIfNeeded(reason: nil)
         let captureErrorDescription = Self.routineCaptureFailureDescription(for: error)
@@ -8425,9 +8916,6 @@ final class MacCaptureEngine: NSObject, ObservableObject {
                 storageKind: .routine,
                 sidecar: sidecar)
             try writeRoutineRecordingSidecar(sidecar, to: sidecarURL)
-            Task { @MainActor in
-                self.lastRoutineDetectedNotation = notationSnapshot
-            }
             try? CaptureJournalStore.appendTransactionFinalized(
                 storageKind: .routine,
                 sidecar: sidecar)
@@ -8488,30 +8976,47 @@ final class MacCaptureEngine: NSObject, ObservableObject {
         recordingToken: RoutineRecordingRequestToken?
     ) {
         Task { @MainActor in
-            if let recordingToken {
-                let completionSucceeded = captureErrorDescription == nil && sidecar != nil
-                let completionStatus = captureErrorDescription
-                    ?? (sidecar == nil
-                        ? "Recording finalization did not produce a completed sidecar."
-                        : statusMessage)
-                self.routineRecordingBoundaryLedger.completeFinalization(
-                    token: recordingToken,
-                    succeeded: completionSucceeded,
-                    statusMessage: completionStatus
-                )
-            }
-            self.isRoutineRecording = false
-            if captureErrorDescription == nil {
-                self.lastRoutineRecordingURL = outputFileURL
-                if let sidecar {
-                    self.upsertRoutineTakeArtifactStatus(
-                        self.provisionalRoutineTakeArtifactStatus(for: sidecar, readiness: .finalizing))
+            let publish: @MainActor () -> Void = { [self] in
+                // A historical result belongs to A even after B is admitted.
+                if let recordingToken {
+                    let completionSucceeded = captureErrorDescription == nil && sidecar != nil
+                    let completionStatus = captureErrorDescription
+                        ?? (sidecar == nil
+                            ? "Recording finalization did not produce a completed sidecar."
+                            : statusMessage)
+                    self.routineRecordingBoundaryLedger.completeFinalization(
+                        token: recordingToken,
+                        succeeded: completionSucceeded,
+                        statusMessage: completionStatus
+                    )
                 }
+                // No suspension between validation and current-state mutation.
+                // Missing identity cannot authorize current-state publication.
+                guard let recordingToken,
+                      self.routinePublicationOwner == recordingToken,
+                      self.publishedRoutineFinalization != recordingToken else { return }
+                self.publishedRoutineFinalization = recordingToken
+                self.isRoutineRecording = false
+                if let sidecar { self.lastRoutineDetectedNotation = sidecar.detectedNotation }
+                if captureErrorDescription == nil {
+                    self.lastRoutineRecordingURL = outputFileURL
+                    if let sidecar {
+                        self.upsertRoutineTakeArtifactStatus(
+                            self.provisionalRoutineTakeArtifactStatus(for: sidecar, readiness: .finalizing))
+                    }
+                }
+                self.lastRoutineRecordingSessionID = sessionID
+                self.routineRecordingStatus = statusMessage
+                self.isRoutineFinalizationPending = false
+                self.refreshRoutineArtifactStatuses(publicationOwner: recordingToken)
             }
-            self.lastRoutineRecordingSessionID = sessionID
-            self.routineRecordingStatus = statusMessage
-            self.isRoutineFinalizationPending = false
-            self.refreshRoutineArtifactStatuses()
+#if DEBUG
+            if let hold = self.testOnly_holdRoutineFinalizationPublication {
+                hold(recordingToken, publish)
+                return
+            }
+#endif
+            publish()
         }
     }
 
@@ -8607,7 +9112,7 @@ final class MacCaptureEngine: NSObject, ObservableObject {
         }
     }
 
-    private func refreshRoutineArtifactStatuses() {
+    private func refreshRoutineArtifactStatuses(publicationOwner: RoutineRecordingRequestToken? = nil) {
         routineArtifactRefreshTask?.cancel()
         guard let directory = routineRecordingsFolderURL,
               let lastRoutineRecordingURL else {
@@ -8624,6 +9129,9 @@ final class MacCaptureEngine: NSObject, ObservableObject {
             }.value
             guard let self, !Task.isCancelled else { return }
             await MainActor.run {
+                if let publicationOwner {
+                    guard self.routinePublicationOwner == publicationOwner else { return }
+                }
                 guard self.routineRecordingsFolderURL == directory else { return }
                 self.routineTakeArtifactStatuses = statuses
                 self.lastRoutineDetectedNotation = statuses.last?.detectedNotation
@@ -10351,11 +10859,9 @@ final class MacCaptureEngine: NSObject, ObservableObject {
         timer.resume()
     }
 
-    /// Polls the sample-playback controller's read position at ~25 Hz and
-    /// hops a snapshot to the MainActor for the live read-position track.
-    /// The controller's `currentPlaybackPositionSnapshot()` does its own
-    /// `audioQueue.sync` read; this timer runs off that queue, so no
-    /// deadlock. Idempotent.
+    /// Reuses the existing display cadence; observations are coalesced on the
+    /// audio worker. A stalled worker leaves presentation unavailable, never
+    /// another blocked display caller or an expanding backlog of refresh jobs.
     private func startPlaybackPositionPoll() {
         guard playbackPositionPollTimer == nil else { return }
         playbackPositionPollGeneration &+= 1
@@ -10369,19 +10875,20 @@ final class MacCaptureEngine: NSObject, ObservableObject {
         )
         timer.setEventHandler { [weak self] in
             guard let self else { return }
-            let snapshot = self.scratchPlaybackController.currentPlaybackPositionSnapshot()
-            let waveform = self.scratchPlaybackController.currentPlaybackWaveformSnapshot()
-            let meter = self.scratchPlaybackController.currentScratchOutputMeterSnapshot()
-            let routing = self.scratchPlaybackController.outputRoutingSnapshot()
             Task { @MainActor in
                 guard self.isRunning, self.playbackPositionPollGeneration == pollGeneration else { return }
-                self.playbackPositionSnapshot = snapshot
-                if self.playbackWaveformSnapshot != waveform {
-                    self.playbackWaveformSnapshot = waveform
+                let observation = self.scratchPlaybackController.presentationSnapshot()
+                self.playbackPositionSnapshot = observation?.position
+                if self.playbackWaveformSnapshot != observation?.waveform {
+                    self.playbackWaveformSnapshot = observation?.waveform
                 }
-                self.publishScratchOutputMeterSnapshot(meter)
-                if self.scratchOutputRoutingSnapshot != routing {
-                    self.scratchOutputRoutingSnapshot = routing
+                if let meter = observation?.meter {
+                    self.publishScratchOutputMeterSnapshot(meter)
+                } else {
+                    self.scratchOutputMeterSnapshot = nil
+                }
+                if self.scratchOutputRoutingSnapshot != observation?.routing {
+                    self.scratchOutputRoutingSnapshot = observation?.routing
                 }
             }
         }
@@ -10405,13 +10912,16 @@ final class MacCaptureEngine: NSObject, ObservableObject {
         if calibrating { cancelCalibration() }
         if curveCapturing { cancelCurveCalibration() }
 
+        let deviceName = selectedMIDIInputSourceName
         midiCaptureLock.lock()
+        let owner = selectedMIDISourceOwner
+        learnSessionOrigin = MIDILearnOrigin(owner: owner, deviceName: deviceName)
         learnSessionAction = action
         midiLearnRequestID &+= 1
         let learnRequestID = midiLearnRequestID
         let eventCountAtStart = midiEventsReceivedCount
         midiCaptureLock.unlock()
-        publishOnMainAsync(field: "midiLearn") { [weak self] in
+        publishSelectedMIDIState(field: "midiLearn", owner: owner) { [weak self] in
             guard let self else { return }
             self.activeMIDILearnAction = action
             // Drop any value carried over from a previous Learn session so the
@@ -10442,8 +10952,11 @@ final class MacCaptureEngine: NSObject, ObservableObject {
             let warning = action == .crossfader
                 ? "No MIDI received. Check IAC Driver / MixEmergency MIDI Out."
                 : "No MIDI received. Check your controller is connected and sending MIDI."
-            self.publishOnMainAsync(field: "midiLearnFeedback") { [weak self] in
+            self.publishSelectedMIDIState(field: "midiLearnFeedback", owner: owner) { [weak self] in
                 guard let self, self.midiLearnFeedback != warning else { return }
+                guard self.midiCaptureLock.withLock({
+                    self.learnSessionAction != nil && self.midiLearnRequestID == learnRequestID
+                }) else { return }
                 self.midiLearnFeedback = warning
             }
         }
@@ -10477,27 +10990,24 @@ final class MacCaptureEngine: NSObject, ObservableObject {
             return
         }
         print("[ScratchSamplePlaybackBridge] platter test load requested · sampleID=\(sampleID)")
-        let requested = scratchPlaybackController.load(sampleID: sampleID, playDiagnosticPreview: false)
-        guard requested else {
-            publishOnMainAsync(field: "platterTestLoadStatus") { [weak self] in
-                self?.platterTestLoadStatus = "not found: \(sampleID)"
-            }
-            return
-        }
-        // Bounded: `load` only queues a small bundled-WAV read on the
-        // controller's own audio queue; draining it here from the explicit
-        // main-thread button action lets the status reflect the real
-        // outcome instead of just "a request was queued".
-        scratchPlaybackController.waitForAudioQueue()
-        let snapshot = scratchPlaybackController.diagnosticsSnapshot()
-        publishOnMainAsync(field: "platterTestLoadStatus") { [weak self] in
+        clearPendingScratchPlaybackPresentation()
+        platterTestLoadStatus = "loading: \(sampleID)"
+        let requested = scratchPlaybackController.load(sampleID: sampleID, playDiagnosticPreview: false) { [weak self] snapshot in
             guard let self else { return }
-            if snapshot.loadedSampleID == sampleID {
+            if snapshot.loadedSampleID == sampleID, snapshot.engineRunning, snapshot.lastLoadError == nil {
                 self.platterTestLoadStatus = "loaded: \(sampleID)"
             } else {
-                self.platterTestLoadStatus = "load failed: \(snapshot.lastLoadError ?? "unknown")"
+                self.platterTestLoadStatus = "load failed: \(snapshot.lastLoadError ?? "audio engine unavailable")"
             }
         }
+        if !requested { platterTestLoadStatus = "not found: \(sampleID)" }
+    }
+
+    private func clearPendingScratchPlaybackPresentation() {
+        playbackPositionSnapshot = nil
+        playbackWaveformSnapshot = nil
+        scratchOutputMeterSnapshot = nil
+        scratchOutputRoutingSnapshot = nil
     }
 
     /// Plays the controller's bounded audible diagnostic using the exact
@@ -10517,27 +11027,18 @@ final class MacCaptureEngine: NSObject, ObservableObject {
         }
         let sampleID = "dvs_ahhh"
         print("[ScratchSamplePlaybackBridge] audible platter test requested · sampleID=\(sampleID)")
-        scratchPlaybackController.unload()
-        scratchPlaybackController.waitForAudioQueue()
-
-        let requested = scratchPlaybackController.load(sampleID: sampleID, playDiagnosticPreview: true)
-        guard requested else {
-            publishOnMainAsync(field: "platterTestLoadStatus") { [weak self] in
-                self?.platterTestLoadStatus = "not found: \(sampleID)"
-            }
-            return
-        }
-
-        scratchPlaybackController.waitForAudioQueue()
-        let snapshot = scratchPlaybackController.diagnosticsSnapshot()
-        publishOnMainAsync(field: "platterTestLoadStatus") { [weak self] in
+        clearPendingScratchPlaybackPresentation()
+        platterTestLoadStatus = "preparing audible test: \(sampleID)"
+        let requested = scratchPlaybackController.load(sampleID: sampleID,
+            playDiagnosticPreview: true, forceDiagnosticPreview: true) { [weak self] snapshot in
             guard let self else { return }
-            if snapshot.loadedSampleID == sampleID, snapshot.engineRunning {
+            if snapshot.loadedSampleID == sampleID, snapshot.engineRunning, snapshot.lastLoadError == nil {
                 self.platterTestLoadStatus = "audible test: \(sampleID)"
             } else {
                 self.platterTestLoadStatus = "test failed: \(snapshot.lastLoadError ?? "audio engine unavailable")"
             }
         }
+        if !requested { platterTestLoadStatus = "not found: \(sampleID)" }
     }
 
     private func publishOnMainAsync(field: String, _ update: @escaping () -> Void) {
@@ -10562,7 +11063,7 @@ final class MacCaptureEngine: NSObject, ObservableObject {
         learnSessionAction = nil
         midiLearnRequestID &+= 1
         midiCaptureLock.unlock()
-        publishOnMainAsync(field: "midiLearn") { [weak self] in
+        publishSelectedMIDIState(field: "midiLearn") { [weak self] in
             guard let self else { return }
             self.activeMIDILearnAction = nil
             if self.midiLearnObservedRawValue != nil { self.midiLearnObservedRawValue = nil }
@@ -10576,8 +11077,8 @@ final class MacCaptureEngine: NSObject, ObservableObject {
     /// (CC value, or note number for a pad). `startMIDILearn(for:)` and
     /// `cancelMIDILearn()` clear it back to `nil` so the Learn panel never
     /// shows a stale pre-Learn value.
-    private func publishMIDILearnObservedValue(_ value: Int?) {
-        publishOnMainAsync(field: "midiLearnObservedRawValue") { [weak self] in
+    private func publishMIDILearnObservedValue(_ value: Int?, owner: MIDISelectionOwner) {
+        publishSelectedMIDIState(field: "midiLearnObservedRawValue", owner: owner) { [weak self] in
             guard let self, self.midiLearnObservedRawValue != value else { return }
             self.midiLearnObservedRawValue = value
         }
@@ -10617,7 +11118,7 @@ final class MacCaptureEngine: NSObject, ObservableObject {
         reportsSuccess: Bool
     ) {
         guard canApplyVerifiedRaneOneMKIIMapping else {
-            publishOnMainAsync(field: "midiMappingError") { [weak self] in
+            publishSelectedMIDIState(field: "midiMappingError") { [weak self] in
                 self?.midiMappingError = "Select the Rane ONE MKII MIDI source before applying its verified mapping."
             }
             return
@@ -10628,15 +11129,15 @@ final class MacCaptureEngine: NSObject, ObservableObject {
         midiLearnRequestID &+= 1
         midiCaptureLock.unlock()
 
-        let deviceID = selectedMIDIInputSourceID
+        let owner = midiSelectionOwnerSnapshot()
         let deviceName = selectedMIDIInputSourceName
-        mutateDeviceMapping(deviceID: deviceID, deviceName: deviceName, transform: { mapping in
+        mutateDeviceMapping(owner: owner, deviceName: deviceName, transform: { mapping in
             RaneOneMKIIVerifiedLearnedMapping.apply(
                 to: &mapping,
                 overwriteExisting: overwriteExisting
             )
         }, completion: { [weak self] mapping in
-            guard let self, self.selectedMIDIInputSourceID == deviceID else { return }
+            guard let self else { return }
             self.currentMIDIDeviceMapping = mapping
             self.midiMappingError = ""
             self.activeMIDILearnAction = nil
@@ -10668,8 +11169,10 @@ final class MacCaptureEngine: NSObject, ObservableObject {
         learnSessionAction = nil
         midiLearnRequestID &+= 1
         midiCaptureLock.unlock()
-        midiPersistenceDefaults.removeObject(forKey: ScratchLabDesktopDefaultsKey.crossfaderMIDIMapping)
-        publishOnMainAsync(field: "midiLearn") { [weak self] in
+        midiMappingPersistenceQueue.async { [weak self] in
+            self?.midiPersistenceDefaults.removeObject(forKey: ScratchLabDesktopDefaultsKey.crossfaderMIDIMapping)
+        }
+        publishSelectedMIDIState(field: "midiLearn") { [weak self] in
             guard let self else { return }
             self.activeMIDILearnAction = nil
             self.crossfaderCCMapping = nil
@@ -10678,27 +11181,8 @@ final class MacCaptureEngine: NSObject, ObservableObject {
         }
     }
 
-    /// Legacy-compatibility adapter, NOT the authoritative UI-state
-    /// publisher: writes the standalone pre-generalized-learn crossfader
-    /// store (`persistedCrossfaderMapping` + the single-key
-    /// `crossfaderMIDIMapping` UserDefaults entry) that launch-restore
-    /// (`init`, `startDeviceDiscoveryAfterViewMount`) and
-    /// `recordReceivedMIDICCEvent`'s mapped-control detection still read.
-    /// Called at most once per learn session — the caller
-    /// (`evaluateMIDILearnForCC`) has already atomically claimed and ended
-    /// the session before calling this, so no session-state mutation
-    /// happens here.
-    ///
-    /// Does NOT touch `crossfaderCCMapping`, `midiLearnState`, or
-    /// `midiLearnFeedback` — `applyLearnedMapping`'s completion (run via
-    /// `mutateDeviceMapping` on the same serial persistence queue) is the
-    /// single authoritative publisher of those for every learned action,
-    /// crossfader included. Publishing them here too raced that
-    /// completion: `mutateDeviceMapping` round-trips through
-    /// `midiMappingPersistenceQueue` before reaching main, so this
-    /// function's now-removed direct `publishOnMainAsync` used to land on
-    /// main *first* despite being called *second*, only for the delayed
-    /// generic completion to overwrite it back to `.idle` moments later.
+    /// Updates the selected source's legacy cache only after publication ownership
+    /// validation. Preference writes remain ordered on the persistence queue.
     private func applyLearnedCrossfaderMapping(_ mapping: CrossfaderCCMapping) {
         midiCaptureLock.lock()
         persistedCrossfaderMapping = mapping
@@ -10725,11 +11209,12 @@ final class MacCaptureEngine: NSObject, ObservableObject {
     /// so a later mutation can never be overwritten by an earlier, still-in-flight
     /// write that captured a stale snapshot.
     private func mutateDeviceMapping(
-        deviceID: String,
+        owner: MIDISelectionOwner,
         deviceName: String,
         transform: @escaping (inout MIDIDeviceMapping) -> Void,
         completion: @escaping (MIDIDeviceMapping) -> Void
     ) {
+        let deviceID = owner.sourceID
         midiMappingPersistenceQueue.async { [weak self] in
             guard let self else { return }
             var mapping = self.midiMappingStore.load(deviceIdentifier: deviceID)
@@ -10737,7 +11222,7 @@ final class MacCaptureEngine: NSObject, ObservableObject {
             mapping.deviceName = deviceName  // refresh name in case device renamed
             transform(&mapping)
             self.midiMappingStore.save(mapping)
-            DispatchQueue.main.async {
+            self.publishSelectedMIDIState(field: "currentMIDIDeviceMapping", owner: owner) {
                 completion(mapping)
             }
         }
@@ -10749,43 +11234,60 @@ final class MacCaptureEngine: NSObject, ObservableObject {
     /// deleted entirely. `completion` receives the resulting mapping, or nil if
     /// the device now has no mappings (or never had any).
     private func enqueueRemoveAction(
-        deviceID: String,
+        owner: MIDISelectionOwner,
         action: MIDISemanticAction,
         completion: @escaping (MIDIDeviceMapping?) -> Void
     ) {
+        let deviceID = owner.sourceID
         midiMappingPersistenceQueue.async { [weak self] in
             guard let self else { return }
             guard var mapping = self.midiMappingStore.load(deviceIdentifier: deviceID) else {
-                DispatchQueue.main.async { completion(nil) }
+                self.publishSelectedMIDIState(field: "currentMIDIDeviceMapping", owner: owner) { completion(nil) }
                 return
             }
             mapping.remove(action: action)
             if mapping.isEmpty {
                 self.midiMappingStore.delete(deviceIdentifier: deviceID)
-                DispatchQueue.main.async { completion(nil) }
+                self.publishSelectedMIDIState(field: "currentMIDIDeviceMapping", owner: owner) { completion(nil) }
             } else {
                 self.midiMappingStore.save(mapping)
-                DispatchQueue.main.async { completion(mapping) }
+                self.publishSelectedMIDIState(field: "currentMIDIDeviceMapping", owner: owner) { completion(mapping) }
             }
         }
     }
 
     /// Enqueues deletion of ALL learned mappings for `deviceID`, on the same
     /// serial queue as the other mutation helpers.
-    private func enqueueDeleteDevice(deviceID: String, completion: @escaping () -> Void) {
+    private func enqueueDeleteDevice(owner: MIDISelectionOwner, completion: @escaping () -> Void) {
         midiMappingPersistenceQueue.async { [weak self] in
-            self?.midiMappingStore.delete(deviceIdentifier: deviceID)
-            DispatchQueue.main.async { completion() }
+            guard let self else { return }
+            self.midiMappingStore.delete(deviceIdentifier: owner.sourceID)
+            self.publishSelectedMIDIState(field: "currentMIDIDeviceMapping", owner: owner, completion)
         }
     }
 
     /// Test-only: blocks until every mutation enqueued on
     /// `midiMappingPersistenceQueue` so far has completed its file I/O (the
-    /// main-thread `completion` callback may still be pending one more run-loop
-    /// turn after this returns — tests should follow with a brief `RunLoop.main.run`).
+    /// main-thread completion callback may still be pending after this returns).
+    /// Use testOnly_afterMappingPersistenceAndPublication when asserting UI state.
     func testOnly_waitForMappingPersistenceQueue() {
         midiMappingPersistenceQueue.sync {}
     }
+
+    #if DEBUG
+    /// Finite completion barrier for the existing mapping pipeline: persistence
+    /// publishes on main, whose legacy-cache update can enqueue one more write.
+    /// This is a transaction boundary, not a delay or a queue-idleness poll.
+    func testOnly_afterMappingPersistenceAndPublication(_ completion: @escaping () -> Void) {
+        midiMappingPersistenceQueue.async { [self] in
+            DispatchQueue.main.async {
+                self.midiMappingPersistenceQueue.async {
+                    DispatchQueue.main.async(execute: completion)
+                }
+            }
+        }
+    }
+    #endif
 
     #if DEBUG
     /// Test-only: counts how many times the coalesced MIDI-monitor publish
@@ -10851,29 +11353,21 @@ final class MacCaptureEngine: NSObject, ObservableObject {
         }
     }
 
-    private func applyLearnedMapping(_ control: MIDILearnedControl) {
+    private func applyLearnedMapping(_ control: MIDILearnedControl, origin: MIDILearnOrigin) {
         let action = control.action
-        let deviceID = selectedMIDIInputSourceID
-        let deviceName = selectedMIDIInputSourceName
-        mutateDeviceMapping(deviceID: deviceID, deviceName: deviceName, transform: { mapping in
+        let owner = origin.owner
+        let deviceName = origin.deviceName
+        mutateDeviceMapping(owner: owner, deviceName: deviceName, transform: { mapping in
             mapping.upsert(control)
         }, completion: { [weak self] mapping in
             guard let self else { return }
             self.currentMIDIDeviceMapping = mapping
             self.midiMappingError = ""
             self.activeMIDILearnAction = nil
-            // Single authoritative state transition for every learned
-            // action. Crossfader keeps its original `.learned(mapping)`
-            // state and "Learned Xfader: ..." wording — the pre-existing
-            // crossfader-only UI, `midiCrossfaderMappingStatus`, and the
-            // `473c3a3` regression test all key off that exact shape —
-            // rather than the generic `.idle` this closure uses for every
-            // other action. `applyLearnedCrossfaderMapping` (called just
-            // before this by `evaluateMIDILearnForCC`, synchronously for
-            // its legacy-persistence side effects) no longer publishes UI
-            // state itself, so there is exactly one publish here.
+            // Legacy state and curve effects share the validated publication owner.
             if action == .crossfader {
                 let crossfaderMapping = CrossfaderCCMapping(channel: control.channel, controller: control.controlNumber)
+                self.applyLearnedCrossfaderMapping(crossfaderMapping)
                 self.crossfaderCCMapping = crossfaderMapping
                 let nextState = MIDILearnState.learned(crossfaderMapping)
                 let nextFeedback = "Learned Xfader: \(crossfaderMapping.displayName)"
@@ -10904,8 +11398,10 @@ final class MacCaptureEngine: NSObject, ObservableObject {
     @discardableResult
     private func learnHotCueFromNote(channel: Int, noteNumber: Int) -> Bool {
         midiCaptureLock.lock()
+        let origin = learnSessionOrigin
         let claimedAction: MIDISemanticAction?
-        if let action = learnSessionAction, action.hotCueIndex != nil {
+        if let action = learnSessionAction, action.hotCueIndex != nil,
+           origin?.owner == selectedMIDISourceOwner {
             learnSessionAction = nil
             midiLearnRequestID &+= 1
             claimedAction = action
@@ -10913,11 +11409,11 @@ final class MacCaptureEngine: NSObject, ObservableObject {
             claimedAction = nil
         }
         midiCaptureLock.unlock()
-        guard let action = claimedAction else { return false }
+        guard let action = claimedAction, let origin else { return false }
 
         // First real event from the pad being learned — surface its note
         // number to the Learn panel.
-        publishMIDILearnObservedValue(noteNumber)
+        publishMIDILearnObservedValue(noteNumber, owner: origin.owner)
 
         let learned = MIDILearnedControl(
             action: action,
@@ -10932,7 +11428,7 @@ final class MacCaptureEngine: NSObject, ObservableObject {
             isVerified: true,
             curveConfig: nil   // hot-cue action: curve never applies
         )
-        applyLearnedMapping(learned)
+        applyLearnedMapping(learned, origin: origin)
         return true
     }
 
@@ -10992,21 +11488,22 @@ final class MacCaptureEngine: NSObject, ObservableObject {
         }
 
         midiCaptureLock.lock()
-        let claimedAction = learnSessionAction
+        let origin = learnSessionOrigin
+        let claimedAction = origin?.owner == selectedMIDISourceOwner ? learnSessionAction : nil
         if claimedAction != nil {
             learnSessionAction = nil
             midiLearnRequestID &+= 1
         }
         midiCaptureLock.unlock()
 
-        guard let learnAction = claimedAction else {
+        guard let learnAction = claimedAction, let origin else {
             return MIDILearnCCConsumeResult(consumedByLearn: false, crossfaderMapping: nil)
         }
 
         // First real event from the control being learned — surface its raw
         // value to the Learn panel (which otherwise has nothing to show but
         // the pre-Learn value).
-        publishMIDILearnObservedValue(value)
+        publishMIDILearnObservedValue(value, owner: origin.owner)
 
         let deck: Int?
         switch learnAction {
@@ -11027,14 +11524,18 @@ final class MacCaptureEngine: NSObject, ObservableObject {
             isVerified: true,
             curveConfig: nil   // fresh binding: any curve customized for a PREVIOUS binding on this action must not carry over
         )
-        applyLearnedMapping(learned)
+        applyLearnedMapping(learned, origin: origin)
 
         guard learnAction == .crossfader else {
             return MIDILearnCCConsumeResult(consumedByLearn: true, crossfaderMapping: nil)
         }
-        // Also apply legacy crossfader mapping for backward compat.
+        // Keep realtime classification immediate, but never write a successor's cache.
         let crossfaderMapping = CrossfaderCCMapping(channel: channel, controller: controller)
-        applyLearnedCrossfaderMapping(crossfaderMapping)
+        midiCaptureLock.withLock {
+            if selectedMIDISourceOwner == origin.owner {
+                persistedCrossfaderMapping = crossfaderMapping
+            }
+        }
         return MIDILearnCCConsumeResult(consumedByLearn: true, crossfaderMapping: crossfaderMapping)
     }
 
@@ -11055,7 +11556,7 @@ final class MacCaptureEngine: NSObject, ObservableObject {
         midiCaptureLock.unlock()
         guard !learning, !alreadyCalibrating, !alreadyCurveCapturing else { return }
         guard currentMIDIDeviceMapping?.control(for: action) != nil else {
-            publishOnMainAsync(field: "calibrationError") { [weak self] in
+            publishSelectedMIDIState(field: "calibrationError") { [weak self] in
                 self?.calibrationError = "Learn \(action.displayName) before calibrating it."
             }
             return
@@ -11072,7 +11573,7 @@ final class MacCaptureEngine: NSObject, ObservableObject {
         // throttle timing from a just-cancelled/finished session.
         lastCalibrationObservedPublishTime = 0
         midiCaptureLock.unlock()
-        publishOnMainAsync(field: "calibration") { [weak self] in
+        publishSelectedMIDIState(field: "calibration") { [weak self] in
             guard let self else { return }
             self.activeCalibrationAction = action
             self.calibrationObservedMin = nil
@@ -11089,7 +11590,7 @@ final class MacCaptureEngine: NSObject, ObservableObject {
         calibratingAction = nil
         calibrationGeneration &+= 1
         midiCaptureLock.unlock()
-        publishOnMainAsync(field: "calibration") { [weak self] in
+        publishSelectedMIDIState(field: "calibration") { [weak self] in
             guard let self else { return }
             self.activeCalibrationAction = nil
             self.calibrationObservedMin = nil
@@ -11133,9 +11634,9 @@ final class MacCaptureEngine: NSObject, ObservableObject {
         // skipped while the completion still acts as if something changed.
         guard existingBeforeChange.resolvedCurveConfig.preset != preset else { return }
 
-        let deviceID = selectedMIDIInputSourceID
+        let owner = midiSelectionOwnerSnapshot()
         let deviceName = selectedMIDIInputSourceName
-        mutateDeviceMapping(deviceID: deviceID, deviceName: deviceName, transform: { mapping in
+        mutateDeviceMapping(owner: owner, deviceName: deviceName, transform: { mapping in
             // Derive from the in-queue mapping — see `finishCalibration`.
             guard let existing = mapping.control(for: action) else { return }
             let newConfig = MIDIFaderCurveConfig(preset: preset, customCapture: nil)
@@ -11183,9 +11684,9 @@ final class MacCaptureEngine: NSObject, ObservableObject {
         // that's already at its default must not push/reset anything.
         guard existingBeforeChange.curveConfig != nil else { return }
 
-        let deviceID = selectedMIDIInputSourceID
+        let owner = midiSelectionOwnerSnapshot()
         let deviceName = selectedMIDIInputSourceName
-        mutateDeviceMapping(deviceID: deviceID, deviceName: deviceName, transform: { mapping in
+        mutateDeviceMapping(owner: owner, deviceName: deviceName, transform: { mapping in
             guard let existing = mapping.control(for: action), existing.curveConfig != nil else { return }
             let updated = MIDILearnedControl(
                 action: existing.action,
@@ -11229,7 +11730,7 @@ final class MacCaptureEngine: NSObject, ObservableObject {
         midiCaptureLock.unlock()
         guard !learning, !calibrating, !alreadyCapturing else { return }
         guard let existingControl = currentMIDIDeviceMapping?.control(for: action) else {
-            publishOnMainAsync(field: "curveCaptureError") { [weak self] in
+            publishSelectedMIDIState(field: "curveCaptureError") { [weak self] in
                 self?.curveCaptureError = "Learn \(action.displayName) before setting a custom curve."
             }
             return
@@ -11252,7 +11753,7 @@ final class MacCaptureEngine: NSObject, ObservableObject {
         isCurveCapturePublishPending = false
         lastCurveCapturePublishTime = 0
         midiCaptureLock.unlock()
-        publishOnMainAsync(field: "curveCapture") { [weak self] in
+        publishSelectedMIDIState(field: "curveCapture") { [weak self] in
             guard let self else { return }
             self.activeCurveCaptureAction = action
             self.curveCaptureHasClosedPoint = false
@@ -11281,6 +11782,8 @@ final class MacCaptureEngine: NSObject, ObservableObject {
     /// incoming CC message; also callable directly from tests as a seam.
     func evaluateCurveCaptureForCC(channel: Int, controller: Int, value: Int) {
         midiCaptureLock.lock()
+        let eventOwner = selectedMIDISourceOwner
+        let eventGeneration = curveCaptureGeneration
         let capturing = isCurveCapturing
         let binding = curveCaptureBindingIdentity
         midiCaptureLock.unlock()
@@ -11292,10 +11795,16 @@ final class MacCaptureEngine: NSObject, ObservableObject {
 
         let now = CACurrentMediaTime()
         midiCaptureLock.lock()
+        guard isCurveCapturing, selectedMIDISourceOwner == eventOwner,
+              curveCaptureGeneration == eventGeneration else {
+            midiCaptureLock.unlock()
+            return
+        }
         curveCaptureLastRawValue = value
         let shouldPublish = !isCurveCapturePublishPending
             && (now - lastCurveCapturePublishTime >= curveCapturePublishInterval)
         let generation = curveCaptureGeneration
+        let owner = selectedMIDISourceOwner
         if shouldPublish {
             lastCurveCapturePublishTime = now
             isCurveCapturePublishPending = true
@@ -11304,7 +11813,7 @@ final class MacCaptureEngine: NSObject, ObservableObject {
 
         guard shouldPublish else { return }
 
-        publishOnMainAsync(field: "curveCaptureObserved") { [weak self] in
+        publishSelectedMIDIState(field: "curveCaptureObserved", owner: owner) { [weak self] in
             guard let self else { return }
             self.midiCaptureLock.lock()
             let currentGeneration = self.curveCaptureGeneration
@@ -11350,14 +11859,14 @@ final class MacCaptureEngine: NSObject, ObservableObject {
         midiCaptureLock.lock()
         guard isCurveCapturing, let raw = curveCaptureLastRawValue else {
             midiCaptureLock.unlock()
-            publishOnMainAsync(field: "curveCaptureError") { [weak self] in
+            publishSelectedMIDIState(field: "curveCaptureError") { [weak self] in
                 self?.curveCaptureError = "Move the control to its closed position first."
             }
             return
         }
         curveCapturePendingClosedRawValue = raw
         midiCaptureLock.unlock()
-        publishOnMainAsync(field: "curveCapture") { [weak self] in
+        publishSelectedMIDIState(field: "curveCapture") { [weak self] in
             guard let self else { return }
             self.curveCaptureHasClosedPoint = true
             self.curveCaptureError = ""
@@ -11371,14 +11880,14 @@ final class MacCaptureEngine: NSObject, ObservableObject {
         midiCaptureLock.lock()
         guard isCurveCapturing, let raw = curveCaptureLastRawValue else {
             midiCaptureLock.unlock()
-            publishOnMainAsync(field: "curveCaptureError") { [weak self] in
+            publishSelectedMIDIState(field: "curveCaptureError") { [weak self] in
                 self?.curveCaptureError = "Move the control to its full-on position first."
             }
             return
         }
         curveCapturePendingFullOnRawValue = raw
         midiCaptureLock.unlock()
-        publishOnMainAsync(field: "curveCapture") { [weak self] in
+        publishSelectedMIDIState(field: "curveCapture") { [weak self] in
             guard let self else { return }
             self.curveCaptureHasFullOnPoint = true
             self.curveCaptureError = ""
@@ -11404,7 +11913,7 @@ final class MacCaptureEngine: NSObject, ObservableObject {
         curveCaptureBindingIdentity = nil
         curveCaptureGeneration &+= 1
         midiCaptureLock.unlock()
-        publishOnMainAsync(field: "curveCapture") { [weak self] in
+        publishSelectedMIDIState(field: "curveCapture") { [weak self] in
             guard let self else { return }
             self.activeCurveCaptureAction = nil
             self.curveCaptureHasClosedPoint = false
@@ -11451,13 +11960,13 @@ final class MacCaptureEngine: NSObject, ObservableObject {
         guard let action else { return }
 
         guard let closed, let fullOn else {
-            publishOnMainAsync(field: "curveCaptureError") { [weak self] in
+            publishSelectedMIDIState(field: "curveCaptureError") { [weak self] in
                 self?.curveCaptureError = "Set both closed and full-on before finishing."
             }
             return
         }
         guard closed != fullOn else {
-            publishOnMainAsync(field: "curveCaptureError") { [weak self] in
+            publishSelectedMIDIState(field: "curveCaptureError") { [weak self] in
                 self?.curveCaptureError = "Closed and full-on were the same position — move the control before capturing full-on, then try again."
             }
             return
@@ -11485,7 +11994,7 @@ final class MacCaptureEngine: NSObject, ObservableObject {
         let zeroAt = control.normalizedValue(from: clampedClosed)
         let oneAt = control.normalizedValue(from: clampedFullOn)
         guard zeroAt.isFinite, oneAt.isFinite, abs(oneAt - zeroAt) >= 1e-6 else {
-            publishOnMainAsync(field: "curveCaptureError") { [weak self] in
+            publishSelectedMIDIState(field: "curveCaptureError") { [weak self] in
                 self?.curveCaptureError = "Closed and full-on normalize to the same position under the current calibration — move the control further and capture full-on again."
             }
             return
@@ -11495,9 +12004,9 @@ final class MacCaptureEngine: NSObject, ObservableObject {
             preset: .custom,
             customCapture: FaderCurveCapture(closedRawValue: closed, fullOnRawValue: fullOn)
         )
-        let deviceID = selectedMIDIInputSourceID
+        let owner = midiSelectionOwnerSnapshot()
         let deviceName = selectedMIDIInputSourceName
-        mutateDeviceMapping(deviceID: deviceID, deviceName: deviceName, transform: { mapping in
+        mutateDeviceMapping(owner: owner, deviceName: deviceName, transform: { mapping in
             // Re-verify the frozen identity against the in-queue mapping —
             // never a main-thread snapshot that may predate an earlier
             // enqueued write (see `finishCalibration`). A mismatch here
@@ -11640,6 +12149,7 @@ final class MacCaptureEngine: NSObject, ObservableObject {
             pendingControllerActivity.hotCueIndex = index
             pendingControllerActivity.hotCueSampleID = sampleID
         }
+        let owner = selectedMIDISourceOwner
         let shouldSchedule = !isControllerActivityPublishPending
         if shouldSchedule {
             isControllerActivityPublishPending = true
@@ -11647,7 +12157,7 @@ final class MacCaptureEngine: NSObject, ObservableObject {
         midiCaptureLock.unlock()
 
         guard shouldSchedule else { return }
-        DispatchQueue.main.async { [weak self] in
+        publishSelectedMIDIState(field: "controllerActivity", owner: owner) { [weak self] in
             guard let self else { return }
             self.midiCaptureLock.lock()
             let snapshot = self.pendingControllerActivity
@@ -11688,6 +12198,8 @@ final class MacCaptureEngine: NSObject, ObservableObject {
     /// message; also callable directly from tests as a seam.
     func evaluateCalibrationForCC(channel: Int, controller: Int, value: Int) {
         midiCaptureLock.lock()
+        let eventOwner = selectedMIDISourceOwner
+        let eventGeneration = calibrationGeneration
         let calibrating = isCalibrating
         let action = calibratingAction
         midiCaptureLock.unlock()
@@ -11703,6 +12215,11 @@ final class MacCaptureEngine: NSObject, ObservableObject {
         // whether this particular event also triggers a UI publish below.
         let now = CACurrentMediaTime()
         midiCaptureLock.lock()
+        guard isCalibrating, selectedMIDISourceOwner == eventOwner,
+              calibrationGeneration == eventGeneration else {
+            midiCaptureLock.unlock()
+            return
+        }
         if calibrationSawAnyEvent {
             calibrationMinAccumulator = min(calibrationMinAccumulator, value)
             calibrationMaxAccumulator = max(calibrationMaxAccumulator, value)
@@ -11723,6 +12240,7 @@ final class MacCaptureEngine: NSObject, ObservableObject {
         let shouldPublish = !isCalibrationObservedPublishPending
             && (now - lastCalibrationObservedPublishTime >= calibrationPublishInterval)
         let generation = calibrationGeneration
+        let owner = selectedMIDISourceOwner
         if shouldPublish {
             lastCalibrationObservedPublishTime = now
             isCalibrationObservedPublishPending = true
@@ -11731,7 +12249,7 @@ final class MacCaptureEngine: NSObject, ObservableObject {
 
         guard shouldPublish else { return }
 
-        publishOnMainAsync(field: "calibrationObserved") { [weak self] in
+        publishSelectedMIDIState(field: "calibrationObserved", owner: owner) { [weak self] in
             guard let self else { return }
             self.midiCaptureLock.lock()
             let currentGeneration = self.calibrationGeneration
@@ -11772,7 +12290,7 @@ final class MacCaptureEngine: NSObject, ObservableObject {
 
         guard let action else { return }
 
-        publishOnMainAsync(field: "calibration") { [weak self] in
+        publishSelectedMIDIState(field: "calibration") { [weak self] in
             guard let self else { return }
             self.activeCalibrationAction = nil
             self.calibrationObservedMin = nil
@@ -11780,7 +12298,7 @@ final class MacCaptureEngine: NSObject, ObservableObject {
         }
 
         guard sawEvent else {
-            publishOnMainAsync(field: "calibrationError") { [weak self] in
+            publishSelectedMIDIState(field: "calibrationError") { [weak self] in
                 self?.calibrationError = "No movement observed for \(action.displayName) — move the control through its full travel, then finish calibration."
             }
             return
@@ -11788,7 +12306,7 @@ final class MacCaptureEngine: NSObject, ObservableObject {
 
         let observedRange = observedMax - observedMin
         guard observedRange >= Self.minimumCalibrationRange else {
-            publishOnMainAsync(field: "calibrationError") { [weak self] in
+            publishSelectedMIDIState(field: "calibrationError") { [weak self] in
                 self?.calibrationError = "Calibration for \(action.displayName) covered too narrow a range (\(observedRange) of 127) — move the control through its full travel and finish again."
             }
             return
@@ -11799,15 +12317,15 @@ final class MacCaptureEngine: NSObject, ObservableObject {
         // below, against whatever the mapping actually is by the time this
         // mutation runs (never a stale snapshot captured before enqueuing).
         guard currentMIDIDeviceMapping?.control(for: action) != nil else {
-            publishOnMainAsync(field: "calibrationError") { [weak self] in
+            publishSelectedMIDIState(field: "calibrationError") { [weak self] in
                 self?.calibrationError = "\(action.displayName) is no longer learned; learn it again before calibrating."
             }
             return
         }
 
-        let deviceID = selectedMIDIInputSourceID
+        let owner = midiSelectionOwnerSnapshot()
         let deviceName = selectedMIDIInputSourceName
-        mutateDeviceMapping(deviceID: deviceID, deviceName: deviceName, transform: { mapping in
+        mutateDeviceMapping(owner: owner, deviceName: deviceName, transform: { mapping in
             // Derive the calibrated control from whatever is ACTUALLY in the
             // mapping at the moment this runs (which reflects every earlier
             // enqueued write, in order) — never from a value captured on the
@@ -11856,9 +12374,9 @@ final class MacCaptureEngine: NSObject, ObservableObject {
         // control's raw values mean. A same-value call (e.g. a UI toggle
         // round-tripping) must not audibly reset gain for nothing.
         let didChange = existingBeforeChange.inverted != inverted
-        let deviceID = selectedMIDIInputSourceID
+        let owner = midiSelectionOwnerSnapshot()
         let deviceName = selectedMIDIInputSourceName
-        mutateDeviceMapping(deviceID: deviceID, deviceName: deviceName, transform: { mapping in
+        mutateDeviceMapping(owner: owner, deviceName: deviceName, transform: { mapping in
             // See `finishCalibration` — derive from the in-queue mapping, not a
             // main-thread snapshot that may predate an earlier in-flight write.
             guard let existing = mapping.control(for: action), existing.inverted != inverted else { return }
@@ -11904,8 +12422,8 @@ final class MacCaptureEngine: NSObject, ObservableObject {
         midiCaptureLock.unlock()
         if shouldCancelCurveCapture { cancelCurveCalibration() }
 
-        let deviceID = selectedMIDIInputSourceID
-        enqueueRemoveAction(deviceID: deviceID, action: action) { [weak self] mapping in
+        let owner = midiSelectionOwnerSnapshot()
+        enqueueRemoveAction(owner: owner, action: action) { [weak self] mapping in
             guard let self else { return }
             self.currentMIDIDeviceMapping = mapping
             // Clear legacy state too if crossfader
@@ -11913,7 +12431,9 @@ final class MacCaptureEngine: NSObject, ObservableObject {
                 self.midiCaptureLock.lock()
                 self.persistedCrossfaderMapping = nil
                 self.midiCaptureLock.unlock()
-                UserDefaults.standard.removeObject(forKey: ScratchLabDesktopDefaultsKey.crossfaderMIDIMapping)
+                self.midiMappingPersistenceQueue.async { [weak self] in
+                    self?.midiPersistenceDefaults.removeObject(forKey: ScratchLabDesktopDefaultsKey.crossfaderMIDIMapping)
+                }
                 self.crossfaderCCMapping = nil
                 // The cleared control's last value must not keep muting
                 // audio — only this control resets; the other's current
@@ -11935,15 +12455,17 @@ final class MacCaptureEngine: NSObject, ObservableObject {
         midiCaptureLock.unlock()
         if shouldCancelCurveCapture { cancelCurveCalibration() }
 
-        let deviceID = selectedMIDIInputSourceID
-        enqueueDeleteDevice(deviceID: deviceID) { [weak self] in
+        let owner = midiSelectionOwnerSnapshot()
+        enqueueDeleteDevice(owner: owner) { [weak self] in
             guard let self else { return }
             self.currentMIDIDeviceMapping = nil
             // Also clear legacy
             self.midiCaptureLock.lock()
             self.persistedCrossfaderMapping = nil
             self.midiCaptureLock.unlock()
-            UserDefaults.standard.removeObject(forKey: ScratchLabDesktopDefaultsKey.crossfaderMIDIMapping)
+            self.midiMappingPersistenceQueue.async { [weak self] in
+                self?.midiPersistenceDefaults.removeObject(forKey: ScratchLabDesktopDefaultsKey.crossfaderMIDIMapping)
+            }
             self.crossfaderCCMapping = nil
             // Neither control's mapping is trustworthy anymore.
             self.scratchPlaybackController.resetUserMixerGainToUnity()
@@ -11955,6 +12477,7 @@ final class MacCaptureEngine: NSObject, ObservableObject {
     /// Load the learned device mapping for the currently selected MIDI source.
     /// Called whenever the selected MIDI source changes.
     func loadDeviceMappingForCurrentSource() {
+        let owner = midiSelectionOwnerSnapshot()
         // A source change or mapping reload invalidates any in-progress
         // curve-capture session unconditionally (Defect 2) — its frozen
         // device ID can no longer be trusted to mean "the currently
@@ -11981,9 +12504,9 @@ final class MacCaptureEngine: NSObject, ObservableObject {
         // new one.
         scratchPlaybackController.resetUserMixerGainToUnity()
 
-        let deviceID = selectedMIDIInputSourceID
+        let deviceID = owner.sourceID
         guard !deviceID.isEmpty else {
-            publishOnMainAsync(field: "currentMIDIDeviceMapping") { [weak self] in
+            publishSelectedMIDIState(field: "currentMIDIDeviceMapping", owner: owner) { [weak self] in
                 guard let self else { return }
                 self.currentMIDIDeviceMapping = nil
                 self.midiMappingError = ""
@@ -12001,36 +12524,24 @@ final class MacCaptureEngine: NSObject, ObservableObject {
             loadedMapping = nil
             mappingError = "Could not load saved MIDI mapping for \(selectedMIDIInputSourceName): \(error.localizedDescription)"
         }
-        // Also restore legacy crossfader for backward compat
-        if let mapping = loadedMapping?.control(for: .crossfader) {
-            let legacy = CrossfaderCCMapping(channel: mapping.channel, controller: mapping.controlNumber)
-            midiCaptureLock.lock()
-            persistedCrossfaderMapping = legacy
-            midiCaptureLock.unlock()
-            publishOnMainAsync(field: "crossfaderCCMapping") { [weak self] in
-                self?.crossfaderCCMapping = legacy
-            }
-        }
-        publishOnMainAsync(field: "currentMIDIDeviceMapping") { [weak self] in
+        publishSelectedMIDIState(field: "currentMIDIDeviceMapping", owner: owner) { [weak self] in
             guard let self else { return }
+            let legacy = loadedMapping?.control(for: .crossfader).map {
+                CrossfaderCCMapping(channel: $0.channel, controller: $0.controlNumber)
+            }
+            self.midiCaptureLock.withLock { self.persistedCrossfaderMapping = legacy }
+            self.crossfaderCCMapping = legacy
             self.currentMIDIDeviceMapping = loadedMapping
             self.midiMappingError = mappingError
-        }
-
-        // The new device may have an entirely different curve configured
-        // than the previous one — push each control's resolved curve now,
-        // rather than leaving the controller holding the PREVIOUS device's
-        // stale resolved response until its next CC event happens to
-        // arrive. Controls this device hasn't learned stay at the unity
-        // reset already performed above (curve is moot while unmapped).
-        if let crossfaderControl = loadedMapping?.control(for: .crossfader) {
-            pushResolvedCurve(for: crossfaderControl)
-        }
-        if let rightUpfaderControl = loadedMapping?.control(for: .rightUpfader) {
-            pushResolvedCurve(for: rightUpfaderControl)
-        }
-        if mappingError.isEmpty {
-            seedVerifiedRaneOneMKIIMappingIfNeeded(existingMapping: loadedMapping)
+            if let crossfader = loadedMapping?.control(for: .crossfader) {
+                self.pushResolvedCurve(for: crossfader)
+            }
+            if let rightUpfader = loadedMapping?.control(for: .rightUpfader) {
+                self.pushResolvedCurve(for: rightUpfader)
+            }
+            if mappingError.isEmpty {
+                self.seedVerifiedRaneOneMKIIMappingIfNeeded(existingMapping: loadedMapping)
+            }
         }
     }
 
@@ -12047,9 +12558,9 @@ final class MacCaptureEngine: NSObject, ObservableObject {
             midiMappingError = "Sample \"\(sampleID)\" is not available and was not assigned."
             return
         }
-        let deviceID = selectedMIDIInputSourceID
+        let owner = midiSelectionOwnerSnapshot()
         let deviceName = selectedMIDIInputSourceName
-        mutateDeviceMapping(deviceID: deviceID, deviceName: deviceName, transform: { mapping in
+        mutateDeviceMapping(owner: owner, deviceName: deviceName, transform: { mapping in
             // Derive from the in-queue mapping — see `finishCalibration`.
             guard let existing = mapping.control(for: action) else { return }
             let updated = MIDILearnedControl(
@@ -12127,6 +12638,7 @@ final class MacCaptureEngine: NSObject, ObservableObject {
         print("[HotCueTrace] resolveAndLoadHotCueSample called · messageType=\(messageType) " +
               "channel=\(channel) controlNumber=\(controlNumber) value=\(value)")
         #endif
+        let owner = midiSelectionOwnerSnapshot()
         // Only handle press events (not release).
         guard value > 0 else { return false }
         guard let mapping = currentMIDIDeviceMapping else { return false }
@@ -12178,7 +12690,7 @@ final class MacCaptureEngine: NSObject, ObservableObject {
             print("[HotCueAutoLoad] load request rejected · sampleID=\(sampleID)")
             // Fail visibly: a hot cue pointing at a removed/missing sample should be
             // obvious in the UI, not a silent no-op on the pad press.
-            publishOnMainAsync(field: "midiMappingError") { [weak self] in
+            publishSelectedMIDIState(field: "midiMappingError", owner: owner) { [weak self] in
                 let message = "\(action.displayName) is mapped to missing sample \"\(sampleID)\"."
                 if self?.midiMappingError != message { self?.midiMappingError = message }
             }
@@ -12232,6 +12744,7 @@ final class MacCaptureEngine: NSObject, ObservableObject {
     /// called with `midiCaptureLock` held.
     private func lockedClearCapturedMidiCCEvents() {
         capturedMidiCCEvents = []
+        midiRecordingEndHostTime = nil
         livePreviewOldestTimestamp = nil
         livePreviewNewestTimestamp = nil
     }
@@ -12345,6 +12858,9 @@ final class MacCaptureEngine: NSObject, ObservableObject {
         midiCaptureLock.lock()
         if midiWindowOwnerStorage == .take, let token, midiWindowTakeTokenStorage == token,
            midiRecordingStartTime != 0 {
+            // Freeze the same first-close boundary used by held fader coverage.
+            // Later finish callbacks cannot extend it after epoch retirement.
+            midiRecordingEndHostTime = endHostTime
             lockedSealParkedCrossfaderCoverage(token: token, at: endHostTime)
             lockedSetMIDICaptureWindow(owner: .take, epochStartHostTime: 0, takeToken: token)
         }
@@ -12424,7 +12940,14 @@ final class MacCaptureEngine: NSObject, ObservableObject {
             midiCaptureLock.unlock()
             return nil
         }
-        let drained = capturedMidiCCEvents
+        // Admission retirement rejects new delivery; the retained endpoint also
+        // excludes events already admitted before a delayed movie callback.
+        // Preserve timestamps and arrival order, including the exact endpoint.
+        // An invalid supplied endpoint fails closed. Unsealed legacy/test drains
+        // retain their existing behavior. Passive packet diagnostics are separate.
+        let drained = midiRecordingEndHostTime.map { end in
+            capturedMidiCCEvents.filter { end.isFinite && $0.timestamp <= end }
+        } ?? capturedMidiCCEvents
         lockedClearCapturedMidiCCEvents()
         lockedSetMIDICaptureWindow(owner: .idle, epochStartHostTime: 0, takeToken: nil)
         midiCaptureLock.unlock()
@@ -12617,11 +13140,18 @@ final class MacCaptureEngine: NSObject, ObservableObject {
         persistWatchStopDiagnostics(diagnostics, for: identity)
     }
     var testOnly_activeSidecar: CaptureCore.LocalRecordingSidecar? { activeRoutineRecordingSidecar }
+    var testOnly_pendingWatchReply: WatchCaptureControlReply? { pendingWatchReply }
+    var testOnly_pendingRoutineTakeIdentity: TakeIdentity? { pendingRoutineTakeIdentity }
     /// Prepares one routine request through the production ledger, MIDI window
     /// and first-sample arming; no camera, writer or sidecar is involved.
-    func testOnly_prepareRoutineMediaStart(mediaURL: URL, plannedStartHostTime: Double?) throws -> RoutineRecordingRequestToken {
-        armRoutineTakeDuration(maximumSeconds: 40.0 / 3, plannedSeconds: 40.0 / 3)
+    func testOnly_prepareRoutineMediaStart(mediaURL: URL, plannedStartHostTime: Double?,
+        maximumSeconds: Double = 40.0 / 3, plannedSeconds: Double? = 40.0 / 3
+    ) throws -> RoutineRecordingRequestToken {
+        armRoutineTakeDuration(maximumSeconds: maximumSeconds, plannedSeconds: plannedSeconds)
         let token = routineRecordingBoundaryLedger.beginRequest()
+        guard routineRecordingBoundaryLedger.admitPreparation(token: token) else {
+            throw RoutineRecordingError.sessionNotReady
+        }
         routineRecordingBoundaryLedger.prepare(token: token,
             takeID: mediaURL.deletingPathExtension().lastPathComponent, mediaURL: mediaURL)
         guard let midiToken = openMIDIInputForRecording(mediaURL: mediaURL) else {
@@ -12645,6 +13175,11 @@ final class MacCaptureEngine: NSObject, ObservableObject {
         resolvedRoutineStopReason(captureError: captureError, captureErrorDescription: nil)
     }
 
+    @discardableResult
+    func testOnly_stopAtRoutineMovieSample(_ hostTime: Double) -> Bool {
+        stopRoutineAtMovieSampleBoundary(hostTime: hostTime)
+    }
+
     /// Test-only drivers for the exact private window transitions the capture
     /// lifecycle performs, so ownership interleavings can be exercised without
     /// a camera, a movie writer or a MIDI device. Each forwards to the
@@ -12656,6 +13191,9 @@ final class MacCaptureEngine: NSObject, ObservableObject {
     }
     func testOnly_midiTakeToken(for mediaURL: URL) -> MIDICaptureTakeToken? {
         midiTakeToken(for: mediaURL)
+    }
+    func testOnly_finalizePreparedRoutine(mediaURL: URL, token: MIDICaptureTakeToken, error: Error? = nil) {
+        finalizeRoutineRecording(outputFileURL: mediaURL, error: error, midiTakeToken: token, secondaryCamera: nil)
     }
     func testOnly_finalizeWithoutSidecar(mediaURL: URL, token: MIDICaptureTakeToken) {
         precondition(activeRoutineRecordingSidecar == nil)
@@ -12714,7 +13252,7 @@ final class MacCaptureEngine: NSObject, ObservableObject {
         includePlaybackLoopContext: Bool = true
     ) -> LivePerformedNotationDataSource {
         let playbackLoopContext: () -> PlaybackLoopContext? = includePlaybackLoopContext
-            ? { [weak self] in self?.scratchPlaybackController.currentPlaybackLoopContext() }
+            ? { [weak self] in self?.scratchPlaybackController.presentationSnapshot()?.loopContext }
             : { nil }
         return LivePerformedNotationDataSource(
             selectedMIDISourceName: { [weak self] in self?.selectedPlatterSourceName ?? "Not Connected" },
@@ -13475,6 +14013,7 @@ final class MacCaptureEngine: NSObject, ObservableObject {
         let shouldPublish = !suspendedForReview
             && !isMidiMonitorPublishPending
             && (now - lastMidiMonitorPublishTime >= midiMonitorPublishInterval)
+        let monitorOwner = selectedMIDISourceOwner
         if shouldPublish {
             lastMidiMonitorPublishTime = now
             isMidiMonitorPublishPending = true
@@ -13482,7 +14021,7 @@ final class MacCaptureEngine: NSObject, ObservableObject {
         midiCaptureLock.unlock()
 
         if shouldPublish {
-            publishOnMainAsync(field: "midiMonitor") { [weak self] in
+            publishSelectedMIDIState(field: "midiMonitor", owner: monitorOwner) { [weak self] in
                 guard let self else { return }
                 self.midiCaptureLock.lock()
                 let count = self.batchedMidiEventCount
@@ -13990,10 +14529,11 @@ final class MacCaptureEngine: NSObject, ObservableObject {
         batchedMidiCCMessage = ""
         batchedMidiSummary = "No MIDI received yet"
         lastMidiMonitorPublishTime = 0
+        isMidiMonitorPublishPending = false
         pendingControllerActivity = PendingControllerActivity()
         isControllerActivityPublishPending = false
         midiCaptureLock.unlock()
-        publishOnMainAsync(field: "midiMonitorReset") { [weak self] in
+        publishSelectedMIDIState(field: "midiMonitorReset") { [weak self] in
             guard let self else { return }
             self.midiEventsReceivedCount = 0
             self.lastMIDIEventSummary = "No MIDI received yet"
@@ -14611,16 +15151,40 @@ extension MacCaptureEngine {
         let pts = CMSampleBufferGetPresentationTimeStamp(sampleBuffer)
         let hostTime = CMTimeGetSeconds(CMSyncConvertTime(pts, from: clock, to: CMClockGetHostTimeClock()))
         guard hostTime.isFinite, hostTime >= firstAudio else { return }
+        if stopRoutineAtMovieSampleBoundary(hostTime: hostTime) { return }
         routineMediaEpochLock.lock()
         defer { routineMediaEpochLock.unlock() }
         guard let claim = claimPendingRoutineMediaStartLocked(hostTime: hostTime) else { return }
-        let pending = claim.start, duration = claim.duration
+        let pending = claim.start
         recordRoutineMeasuredOrigin(hostTime, mediaURL: pending.mediaURL)
         beginRoutineTakeTimelines(at: hostTime, token: pending.recordingToken,
             midiTakeToken: pending.midiTakeToken)
         secondaryCamera.begin(primaryURL: pending.mediaURL, epoch: hostTime)
-        output.maxRecordedDuration = CMTime(seconds: duration, preferredTimescale: 60000)
+        // Stop only on witnessed movie timing; retain the host-clock watchdog for stalls.
+        output.maxRecordedDuration = .invalid
         output.startRecording(to: pending.mediaURL, recordingDelegate: self)
+    }
+
+    /// Runs inside the existing file-output video callback, before the next
+    /// sample is written. Only one boundary may claim the current take's stop.
+    @discardableResult
+    private func stopRoutineAtMovieSampleBoundary(hostTime: Double) -> Bool {
+        routineMediaEpochLock.lock()
+        guard let mediaURL = routineClaimedMediaURLStorage,
+              routineStopReasonStorage == nil,
+              RoutineTakeTimeline.sampleReachesEnd(sampleHostTime: hostTime,
+                mediaStartHostTime: routineMediaStartHostTimeStorage,
+                maximumDurationSeconds: routineMaximumTakeDurationSecondsStorage) else {
+            routineMediaEpochLock.unlock()
+            return false
+        }
+        let reason: CaptureStopReason = routinePlannedTakeDurationSecondsStorage == nil
+            ? .mediaLimit : .plannedDurationReached
+        routineStopReasonStorage = reason
+        routineMediaEpochLock.unlock()
+        requestWatchStopIfNeeded(reason: reason)
+        performRoutineMovieStop(midiTakeToken: midiTakeToken(for: mediaURL), endHostTime: hostTime)
+        return true
     }
 
     /// Claims the prepared take for the first eligible movie sample. Call with
@@ -14638,6 +15202,7 @@ extension MacCaptureEngine {
         routineClaimedMediaURLStorage = pending.mediaURL
         routineStartedMediaURLStorage = nil
         routineDeferredStopMediaURLStorage = nil
+        routineWriterStopIssuedMediaURLStorage = nil
         let duration = Self.routineMediaDuration(maximum: routineMaximumTakeDurationSecondsStorage,
             plannedStart: pending.plannedStartHostTime, actualStart: hostTime)
         routineMaximumTakeDurationSecondsStorage = duration
@@ -14658,10 +15223,12 @@ extension MacCaptureEngine: AVCaptureFileOutputRecordingDelegate {
         routineMediaEpochLock.lock()
         let isClaimedMovie = routineClaimedMediaURLStorage == fileURL
         let wasAlreadyStarted = isClaimedMovie && routineStartedMediaURLStorage == fileURL
+        let stopAlreadyIssued = isClaimedMovie && routineWriterStopIssuedMediaURLStorage == fileURL
         if isClaimedMovie { routineStartedMediaURLStorage = fileURL }
         let stopRequested = isClaimedMovie && routineDeferredStopMediaURLStorage == fileURL
         if stopRequested { routineDeferredStopMediaURLStorage = nil }
         routineMediaEpochLock.unlock()
+        guard !stopAlreadyIssued else { return }
         if stopRequested {
             sessionQueue.async { self.performRoutineMovieStop(midiTakeToken: takeToken) }
             return

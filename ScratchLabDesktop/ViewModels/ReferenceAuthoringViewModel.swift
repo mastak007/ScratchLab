@@ -7,6 +7,43 @@
 import Combine
 import Foundation
 
+/// Observation never consumes a completion. Terminal status requires the exact
+/// started generation, take and media from the engine's durable boundary.
+enum ReferenceRecordingFinalizationStatus: Equatable, Sendable {
+    case none
+    case pending
+    case completed(RoutineRecordingRequestToken)
+    case failed(RoutineRecordingRequestToken)
+    case unavailable
+
+    var terminalToken: RoutineRecordingRequestToken? {
+        switch self {
+        case .completed(let token), .failed(let token): return token
+        default: return nil
+        }
+    }
+
+    static func resolve(token: RoutineRecordingRequestToken, boundary: RoutineRecordingBoundarySnapshot?) -> Self {
+        guard let boundary, boundary.token == token, boundary.didStartRecording else { return .unavailable }
+        if let completion = boundary.completion {
+            guard boundary.stopWasRequested, boundary.didEnterFinalization,
+                  completion.token == token, completion.takeID == boundary.takeID,
+                  completion.mediaURL == boundary.mediaURL else { return .unavailable }
+            return completion.succeeded ? .completed(token) : .failed(token)
+        }
+        return boundary.stopWasRequested || boundary.didEnterFinalization ? .pending : .none
+    }
+}
+
+/// Cancellation can arrive while an operation is waiting on the serial queue.
+/// Check it there as well as suppressing publication on the main actor.
+private final class ReferenceFinalizationCancellation: @unchecked Sendable {
+    private let lock = NSLock()
+    private var cancelled = false
+    var isCancelled: Bool { lock.withLock { cancelled } }
+    func cancel() { lock.withLock { cancelled = true } }
+}
+
 struct ReferenceAuthoringViewState: Equatable, Sendable {
     let session: ReferenceAuthoringSession
     let latestCalibrationRawValue: Int?
@@ -16,6 +53,8 @@ struct ReferenceAuthoringViewState: Equatable, Sendable {
     var reviewingSavedDraft: Bool = false
     var finalizedMediaURL: URL? = nil
     var savedReviewNotes: String = ""
+    var recordingFinalizationStatus: ReferenceRecordingFinalizationStatus = .none
+    var consumedFinalizationToken: RoutineRecordingRequestToken? = nil
 }
 
 struct ReferenceAuthoringWorkerUpdate: Equatable, Sendable {
@@ -49,10 +88,12 @@ final class ReferenceAuthoringWorkerDriver: @unchecked Sendable {
     private let lastFinalizedRecordingURLProvider: () -> URL?
     private let prepareBeatHandler: (BeatEngineMode, Int, ReferenceBeatSpecBinding?) throws -> ReferencePreparedBeat?
     private let recordingHasStoppedProvider: () -> Bool
+    private let recordingFinalizationStatusProvider: () -> ReferenceRecordingFinalizationStatus
 
     init(bridge: ReferenceAuthoringCaptureBridge, engine: MacCaptureEngine) {
         hooks = bridge.hooks
         recordingHasStoppedProvider = { bridge.activeRecordingHasStopped }
+        recordingFinalizationStatusProvider = { bridge.activeRecordingFinalizationStatus }
         prepareBeatHandler = { mode, bpm, binding in
             if let binding {
                 let prepared = try ReferenceBeatAssetStore.resolve(binding: binding)
@@ -73,10 +114,9 @@ final class ReferenceAuthoringWorkerDriver: @unchecked Sendable {
             }
         }
         finalizationWaitCancellationHandler = {
-            // Leaving the screen abandons BOTH bounded waits. The start
-            // handshake's own task still releases any Watch capture it may
-            // have left running, so this cannot orphan a recording wrist.
-            bridge.cancelPendingStartHandshake()
+            // This handler belongs to one Stop/finalization task. It must
+            // never cancel a newer pending Start on the same bridge. Pending
+            // Start/Watch cancellation follows its shared engine owner.
             bridge.cancelPendingFinalizationWait()
         }
     }
@@ -88,7 +128,8 @@ final class ReferenceAuthoringWorkerDriver: @unchecked Sendable {
         finalizationWaitCancellationHandler: @escaping () -> Void = {},
         lastFinalizedRecordingURLProvider: @escaping () -> URL? = { nil },
         prepareBeatHandler: @escaping (BeatEngineMode, Int, ReferenceBeatSpecBinding?) throws -> ReferencePreparedBeat? = { _, _, _ in nil },
-        recordingHasStoppedProvider: @escaping () -> Bool = { false }
+        recordingHasStoppedProvider: @escaping () -> Bool = { false },
+        recordingFinalizationStatusProvider: @escaping () -> ReferenceRecordingFinalizationStatus = { .none }
     ) {
         self.hooks = hooks
         self.pendingConfigurationHandler = pendingConfigurationHandler
@@ -97,10 +138,12 @@ final class ReferenceAuthoringWorkerDriver: @unchecked Sendable {
         self.lastFinalizedRecordingURLProvider = lastFinalizedRecordingURLProvider
         self.prepareBeatHandler = prepareBeatHandler
         self.recordingHasStoppedProvider = recordingHasStoppedProvider
+        self.recordingFinalizationStatusProvider = recordingFinalizationStatusProvider
     }
 
     var lastFinalizedRecordingURL: URL? { lastFinalizedRecordingURLProvider() }
     var recordingHasStopped: Bool { recordingHasStoppedProvider() }
+    var recordingFinalizationStatus: ReferenceRecordingFinalizationStatus { recordingFinalizationStatusProvider() }
 
     func prepareBeat(mode: BeatEngineMode, bpm: Int, binding: ReferenceBeatSpecBinding?) throws -> ReferencePreparedBeat? {
         try prepareBeatHandler(mode, bpm, binding)
@@ -134,6 +177,7 @@ final class ReferenceAuthoringWorker: @unchecked Sendable {
     private var lastPersistedNotes: String?
     private var reviewingSavedDraft = false
     private var savedReviewNotes = ""
+    private var consumedFinalizationToken: RoutineRecordingRequestToken?
 
     init(
         session: ReferenceAuthoringSession,
@@ -525,17 +569,48 @@ final class ReferenceAuthoringWorker: @unchecked Sendable {
         }
     }
 
-    func stopRecording() async -> ReferenceAuthoringWorkerUpdate {
-        await withTaskCancellationHandler {
+    func stopRecording(expectedFinalizationToken: RoutineRecordingRequestToken? = nil) async -> ReferenceAuthoringWorkerUpdate {
+        let cancellation = ReferenceFinalizationCancellation()
+        return await withTaskCancellationHandler {
             await enqueue { worker in
+                guard !cancellation.isCancelled else {
+                    return worker.makeUpdate()
+                }
+                guard worker.session.phase == .recording else {
+                    if expectedFinalizationToken != nil { return worker.makeUpdate() }
+                    // Reject ordinary invalid Stop without autosaving a reviewed draft.
+                    return ReferenceAuthoringWorkerUpdate(
+                        state: worker.makeState(),
+                        errorMessage: Self.message(for: ReferenceAuthoringError.noActiveRecording)
+                    )
+                }
+                let status = worker.driver.recordingFinalizationStatus
+                // Recheck on the owning queue: a poll's UI snapshot may already
+                // name an old generation. Never stop its successor to reconcile it.
+                if let expectedFinalizationToken,
+                   status.terminalToken != expectedFinalizationToken { return worker.makeUpdate() }
+                if status == .unavailable { return worker.makeUpdate() }
+                if let token = status.terminalToken {
+                    guard token != worker.consumedFinalizationToken else { return worker.makeUpdate() }
+                    worker.consumedFinalizationToken = token
+                }
                 switch worker.session.finishRecording(using: worker.driver.hooks) {
                 case .success:
                     return worker.makeUpdate()
                 case .failure(let error):
-                    return worker.makeUpdate(errorMessage: Self.message(for: error))
+                    let message = Self.message(for: error)
+                    // Timeout/cancellation consumed no terminal record. A completion
+                    // racing the deadline remains eligible for one reconciliation.
+                    if !message.hasPrefix("Recording failed: Finalization did not complete within "),
+                       message != "Recording failed: Finalization wait was cancelled.",
+                       let token = worker.driver.recordingFinalizationStatus.terminalToken {
+                        worker.consumedFinalizationToken = token
+                    }
+                    return worker.makeUpdate(errorMessage: message)
                 }
             }
         } onCancel: {
+            cancellation.cancel()
             driver.cancelPendingFinalizationWait()
         }
     }
@@ -860,6 +935,10 @@ final class ReferenceAuthoringWorker: @unchecked Sendable {
         state.reviewingSavedDraft = reviewingSavedDraft
         state.finalizedMediaURL = currentReviewMediaURL
         state.savedReviewNotes = savedReviewNotes
+        state.consumedFinalizationToken = consumedFinalizationToken
+        if session.phase == .recording {
+            state.recordingFinalizationStatus = driver.recordingFinalizationStatus
+        }
         return state
     }
 
@@ -885,6 +964,8 @@ final class ReferenceAuthoringViewModel: ObservableObject {
     private let beatPreviewEngine: any PracticeBeatPlaybackEngine
     private var mediaReviewObservation: AnyCancellable?
     @Published private(set) var isPreviewingBeat = false
+    @Published private(set) var isPreparingBeatPreview = false
+    private var beatPreviewRequest = UUID()
     @Published private(set) var state: ReferenceAuthoringViewState
     @Published private(set) var visibleMessage: String?
     @Published private(set) var isWorking = false
@@ -938,6 +1019,7 @@ final class ReferenceAuthoringViewModel: ObservableObject {
     private var preflightPollingTask: Task<Void, Never>?
     private var calibrationPollingTask: Task<Void, Never>?
     private var finalizationTask: Task<Void, Never>?
+    private var lastReconciledFinalizationToken: RoutineRecordingRequestToken?
     private var watchEvidenceTask: Task<Void, Never>?
 
     /// How long to keep waiting for a Watch motion transfer that acknowledged
@@ -1150,11 +1232,32 @@ final class ReferenceAuthoringViewModel: ObservableObject {
     }
 
     var workflowStatusText: String {
-        Self.workflowStatusText(
+        if session.phase == .recording, state.recordingFinalizationStatus == .pending {
+            return "Recording stopped — preparing review…"
+        }
+        if session.phase == .recording, state.recordingFinalizationStatus == .unavailable {
+            return "Finalization unavailable — recording identity could not be verified"
+        }
+        if session.phase == .recording, case .failed = state.recordingFinalizationStatus {
+            return "Recording finalization failed"
+        }
+        if isPreparingRecordedTake { return "Finishing recording — preparing review…" }
+        if session.phase == .recording, case .completed = state.recordingFinalizationStatus {
+            return "Recording stopped"
+        }
+        return Self.workflowStatusText(
             phase: session.phase,
             configurationIsComplete: session.configurationIsComplete,
             isApplyingSetup: isApplyingSetup && isWorking
         )
+    }
+
+    var canStopRecording: Bool {
+        session.phase == .recording && !isWorking && state.recordingFinalizationStatus == .none
+    }
+
+    var isPreparingRecordedTake: Bool {
+        session.phase == .recording && (isWorking || state.recordingFinalizationStatus == .pending)
     }
 
     /// Pure presentation mapping. `.configuring` is a persistent workflow
@@ -1581,12 +1684,12 @@ final class ReferenceAuthoringViewModel: ObservableObject {
     func startPreflightPolling(intervalNanoseconds: UInt64 = 250_000_000) {
         cancelPreflightPolling()
         isPreflightPolling = true
-        preflightPollingTask = Task { [weak self] in
-            guard let self else { return }
+        preflightPollingTask = Task { [weak self, worker] in
             while !Task.isCancelled {
                 let update = await worker.refreshPreflight()
-                guard !Task.isCancelled else { break }
-                apply(update)
+                guard !Task.isCancelled, self != nil else { break }
+                self?.apply(update)
+                self?.reconcileCompletedRecording()
                 do {
                     try await Task.sleep(nanoseconds: intervalNanoseconds)
                 } catch {
@@ -1723,13 +1826,21 @@ final class ReferenceAuthoringViewModel: ObservableObject {
     }
 
     func stopRecording() {
-        guard session.phase == .recording, !isWorking else { return }
+        finishRecording(expectedFinalizationToken: state.recordingFinalizationStatus.terminalToken)
+    }
+
+    private func finishRecording(expectedFinalizationToken: RoutineRecordingRequestToken?) {
+        guard session.phase == .recording, !isWorking,
+              state.recordingFinalizationStatus != .unavailable else { return }
+        if let token = expectedFinalizationToken {
+            guard state.consumedFinalizationToken != token else { return }
+        }
         visibleMessage = nil
         isWorking = true
         finalizationTask?.cancel()
         finalizationTask = Task { [weak self] in
             guard let self else { return }
-            let update = await worker.stopRecording()
+            let update = await worker.stopRecording(expectedFinalizationToken: expectedFinalizationToken)
             guard !Task.isCancelled else { return }
             apply(update)
             if let take = reviewedTake {
@@ -1742,8 +1853,13 @@ final class ReferenceAuthoringViewModel: ObservableObject {
                 )
             }
             visibleMessage = update.errorMessage ?? "Take finalized. Review all evidence and validation findings."
+            if state.recordingFinalizationStatus == .pending,
+               update.errorMessage?.hasPrefix("Recording failed: Finalization did not complete within ") == true {
+                visibleMessage = "Recording has stopped. Preparing the review is taking longer than expected; it will open automatically when ready."
+            }
             isWorking = false
             finalizationTask = nil
+            reconcileCompletedRecording()
             startWatchTransferWaitIfPending()
         }
     }
@@ -1753,6 +1869,18 @@ final class ReferenceAuthoringViewModel: ObservableObject {
     func captureRecordingDidStop() {
         guard session.phase == .recording, !isWorking else { return }
         stopRecording()
+    }
+
+    /// The existing preflight poll also observes durable completion. Unlike
+    /// the one-time recording flag edge, this survives a 30-second wait timeout.
+    /// Consume each token at most once, including failures, to avoid retry loops.
+    private func reconcileCompletedRecording() {
+        guard session.phase == .recording, !isWorking,
+              let token = state.recordingFinalizationStatus.terminalToken,
+              token != state.consumedFinalizationToken,
+              token != lastReconciledFinalizationToken else { return }
+        lastReconciledFinalizationToken = token
+        finishRecording(expectedFinalizationToken: token)
     }
 
     /// Wait, bounded and cancellably, for this take's Watch motion transfer.
@@ -2447,21 +2575,32 @@ final class ReferenceAuthoringViewModel: ObservableObject {
     }
 
     func toggleBeatPreview() {
-        if isPreviewingBeat { stopBeatPreview(); return }
+        if isPreviewingBeat || isPreparingBeatPreview { stopBeatPreview(); return }
         guard !isWorking, session.phase != .recording else { return }
         mediaReview.stop()
-        do {
-            try beatPreviewEngine.start(mode: beatEngineMode, bpm: bpm)
-            isPreviewingBeat = true
-            visibleMessage = "Previewing \(beatEngineMode.title) at \(bpm) BPM. Nothing is being recorded."
-        } catch {
-            beatPreviewEngine.stop()
-            isPreviewingBeat = false
-            visibleMessage = "Could not play the backing preview: \(error.localizedDescription)"
+        let request = UUID()
+        let mode = beatEngineMode, requestedBPM = bpm
+        beatPreviewRequest = request
+        isPreparingBeatPreview = true
+        visibleMessage = "Preparing backing preview…"
+        beatPreviewEngine.requestStart(mode: mode, bpm: requestedBPM) { [weak self] result in
+            guard let self, self.beatPreviewRequest == request else { return }
+            self.isPreparingBeatPreview = false
+            switch result {
+            case .success:
+                self.isPreviewingBeat = true
+                self.visibleMessage = "Previewing \(mode.title) at \(requestedBPM) BPM. Nothing is being recorded."
+            case .failure(let error):
+                self.beatPreviewEngine.stop()
+                self.isPreviewingBeat = false
+                self.visibleMessage = "Could not play the backing preview: \(error.localizedDescription)"
+            }
         }
     }
 
     func stopBeatPreview() {
+        beatPreviewRequest = UUID()
+        isPreparingBeatPreview = false
         beatPreviewEngine.stop()
         isPreviewingBeat = false
     }
