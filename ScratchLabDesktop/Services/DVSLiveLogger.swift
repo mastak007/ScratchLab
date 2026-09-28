@@ -32,7 +32,8 @@ final class DVSLiveLogger: ObservableObject {
             .appendingPathComponent("dvs_diagnostics.jsonl")
     }
 
-    func append(_ entry: DVSLogEntry) {
+    /// Completion follows file work and the corresponding main-thread status publication.
+    func append(_ entry: DVSLogEntry, completion: ((Result<Void, Error>) -> Void)? = nil) {
         let url = logURL
         queue.async { [self] in
             let now = Date()
@@ -47,6 +48,7 @@ final class DVSLiveLogger: ObservableObject {
                     self.lastWriteTimestamp = now
                     self.lastWriteError = nil
                     self.totalLinesWritten += 1
+                    completion?(.success(()))
                 }
             } catch {
                 let message = error.localizedDescription
@@ -54,12 +56,14 @@ final class DVSLiveLogger: ObservableObject {
                     self.lastWriteStatus = "Write failed"
                     self.lastWriteTimestamp = now
                     self.lastWriteError = message
+                    completion?(.failure(error))
                 }
             }
         }
     }
 
-    func clear() {
+    /// Completion follows deletion and its main-thread status publication.
+    func clear(completion: ((Result<Void, Error>) -> Void)? = nil) {
         let url = logURL
         queue.async { [self] in
             do {
@@ -71,12 +75,14 @@ final class DVSLiveLogger: ObservableObject {
                     self.lastWriteTimestamp = nil
                     self.lastWriteError = nil
                     self.totalLinesWritten = 0
+                    completion?(.success(()))
                 }
             } catch {
                 let message = error.localizedDescription
                 DispatchQueue.main.async {
                     self.lastWriteStatus = "Clear failed"
                     self.lastWriteError = message
+                    completion?(.failure(error))
                 }
             }
         }

@@ -135,6 +135,8 @@ struct ShippingMediaBoundaryTests {
         #expect(authoring.contains("viewModel.mediaReview"))
         #expect(mac.contains("captureEngine.lastRoutineRecordingURL"))
         #expect(mac.contains("shareLastRoutineSession"))
-        #expect(mac.contains("guard await waitForPracticeRecordingStart() else"))
+        #expect(mac.contains("let recordingStarted = await waitForPracticeRecordingStart()"))
+        #expect(mac.contains("guard captureEngine.ownsOrdinaryRoutineCapture(startRequest) else { return false }"))
+        #expect(mac.contains("guard recordingStarted else"))
     }
 }

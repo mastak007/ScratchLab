@@ -7,6 +7,24 @@
 import XCTest
 @testable import ScratchLab
 
+/// Original test-owned geometry; no recorded media, bundle lookup or performance claim.
+enum SyntheticNotationFixture {
+    static let target = make(leadIn: 0)
+    static let replay = make(leadIn: 2)
+
+    private static func make(leadIn: Double) -> ScratchNotation {
+        let spans: [(Double, Double)] = [(0, 0.25), (0.5, 1.25), (1.5, 1.55), (2.5, 4)]
+        return ScratchNotation(version: 1, scratchID: "synthetic_adapter",
+            demoStart: 0, demoEnd: leadIn + 4, phraseStart: leadIn,
+            phraseEnd: leadIn + 4, timingBasis: "synthetic_seconds",
+            strokes: spans.enumerated().map { index, span in
+                .init(startTime: leadIn + span.0, endTime: leadIn + span.1,
+                      direction: index.isMultiple(of: 2) ? .forward : .backward,
+                      speedClassification: .medium, faderState: .open)
+            })
+    }
+}
+
 final class LiveNotationOverlayTests: XCTestCase {
 
     // MARK: - Helpers
@@ -568,10 +586,8 @@ final class LiveNotationOverlayTests: XCTestCase {
 
     // MARK: - babyScratchDemo factory
 
-    /// The test bundle is not the main app bundle, so `Bundle.main` (the
-    /// default for the `static let`) won't find the resource. Tests call
-    /// `babyScratchDemoFromExtractedStrokes(appBundle)` with the actual
-    /// app bundle to exercise the factory logic against the shipped data.
+    /// Inspect the actual host bundle to prove retired resources remain absent.
+    /// Factory behavior is tested separately with an original temporary bundle.
     private var appBundle: Bundle {
         // The macOS test host layout:
         //   ScratchLab.app/Contents/PlugIns/ScratchLabDesktopTests.xctest
@@ -584,97 +600,8 @@ final class LiveNotationOverlayTests: XCTestCase {
         return Bundle(url: appURL) ?? Bundle(for: type(of: self))
     }
 
-    func testBabyScratchDemoFactoryProducesNonNilNotation() {
-        let demo = ScratchNotation.babyScratchDemoFromExtractedStrokes(appBundle)
-        XCTAssertNotNil(demo, "babyScratchDemo factory must produce non-nil notation from the app bundle")
-    }
-
-    func testBabyScratchDemoHasExactly32Strokes() throws {
-        let demo = try XCTUnwrap(ScratchNotation.babyScratchDemoFromExtractedStrokes(appBundle))
-        XCTAssertEqual(demo.strokes.count, 32,
-                       "Live demo must contain the selected 16 forward/backward cycles")
-        XCTAssertEqual(demo.strokes.count, demo.strokeSegments.count)
-    }
-
-    func testBabyScratchDemoHasMoreStrokesThanDeterministicTemplate() throws {
-        let demo = try XCTUnwrap(ScratchNotation.babyScratchDemoFromExtractedStrokes(appBundle))
-        let template = try XCTUnwrap(ScratchNotation.loadBabyScratchFromBundle(appBundle))
-        XCTAssertGreaterThan(demo.strokes.count, template.strokes.count,
-                             "Full-demo notation (\(demo.strokes.count) strokes) must exceed deterministic template (\(template.strokes.count) strokes)")
-        XCTAssertEqual(template.strokes.count, 12,
-                       "Deterministic authored template must have 12 strokes")
-    }
-
-    func testBabyScratchDemoTimelineDurationMatchesSelectedTake() throws {
-        let demo = try XCTUnwrap(ScratchNotation.babyScratchDemoFromExtractedStrokes(appBundle))
-        XCTAssertEqual(demo.timelineDuration, 14.048311, accuracy: 0.001,
-                       "Movement timeline must match the live take, got \(demo.timelineDuration)")
-        let phraseEnd = try XCTUnwrap(demo.phraseEnd)
-        XCTAssertEqual(demo.timelineDuration, phraseEnd, accuracy: 0.1,
-                       "timelineDuration must match phraseEnd")
-    }
-
-    func testBabyScratchDemoMetadataPreserved() throws {
-        let demo = try XCTUnwrap(ScratchNotation.babyScratchDemoFromExtractedStrokes(appBundle))
-        XCTAssertEqual(demo.scratchID, "baby")
-        XCTAssertEqual(demo.demoStart, 0.0, accuracy: 0.0001)
-        XCTAssertEqual(demo.demoEnd, 16.0483125, accuracy: 0.001)
-        let phraseStart = try XCTUnwrap(demo.phraseStart)
-        XCTAssertEqual(phraseStart, 2.0, accuracy: 0.001)
-        XCTAssertEqual(demo.timingBasis, "extracted_strokes_full_demo")
-    }
-
-    func testBabyScratchDemoStrokesSpanFullDemoRange() throws {
-        let demo = try XCTUnwrap(ScratchNotation.babyScratchDemoFromExtractedStrokes(appBundle))
-        let first = try XCTUnwrap(demo.strokes.first)
-        let last = try XCTUnwrap(demo.strokes.last)
-        XCTAssertGreaterThanOrEqual(first.startTime, 0.0)
-        XCTAssertEqual(first.startTime, 2.0, accuracy: 0.001,
-                       "First stroke must start after the two-second lead-in")
-        XCTAssertLessThan(first.endTime, 3.0,
-                          "First stroke should end early in the demo")
-        XCTAssertGreaterThan(last.endTime, 14.0,
-                             "Last stroke should end before the two-second tail")
-        XCTAssertEqual(last.endTime, 14.048311, accuracy: 0.001,
-                       "Last stroke end time must match phraseEnd")
-        XCTAssertLessThanOrEqual(last.endTime, demo.timelineDuration + 0.01)
-    }
-
-    func testBabyScratchDemoStrokesAllHaveMediumSpeedAndOpenFader() throws {
-        let demo = try XCTUnwrap(ScratchNotation.babyScratchDemoFromExtractedStrokes(appBundle))
-        for stroke in demo.strokes {
-            XCTAssertEqual(stroke.speedClassification, .medium,
-                           "All extracted demo strokes must default to .medium speed")
-            XCTAssertEqual(stroke.faderState, .open,
-                           "All Baby Scratch strokes must be fader-open")
-        }
-    }
-
-    func testBabyScratchDemoContainsBothDirections() throws {
-        let demo = try XCTUnwrap(ScratchNotation.babyScratchDemoFromExtractedStrokes(appBundle))
-        let directions = Set(demo.strokes.map(\.direction))
-        XCTAssertTrue(directions.contains(.forward),
-                      "Full-demo strokes must include at least one forward stroke")
-        XCTAssertTrue(directions.contains(.backward),
-                      "Full-demo strokes must include at least one backward stroke")
-        XCTAssertEqual(directions.count, 2,
-                       "Full-demo strokes must have exactly two distinct directions")
-    }
-
-    func testBabyScratchDemoStrokesHaveValidDirections() throws {
-        let demo = try XCTUnwrap(ScratchNotation.babyScratchDemoFromExtractedStrokes(appBundle))
-        for stroke in demo.strokes {
-            XCTAssertTrue(
-                stroke.direction == .forward || stroke.direction == .backward,
-                "Every demo stroke must have a valid direction, got \(stroke.direction)"
-            )
-            XCTAssertGreaterThan(stroke.endTime, stroke.startTime,
-                                 "Every demo stroke must have positive duration")
-        }
-    }
-
-    func testBabyScratchDemoTargetNotationModelIsNotEmpty() throws {
-        let notation = try XCTUnwrap(ScratchNotation.babyScratchDemoFromExtractedStrokes(appBundle))
+    func testSyntheticTargetNotationModelIsNotEmpty() throws {
+        let notation = SyntheticNotationFixture.replay
         let model = LiveNotationOverlayModel.targetNotation(from: notation)
         XCTAssertFalse(model.isEmpty)
         XCTAssertEqual(model.mode, .target)
@@ -686,16 +613,16 @@ final class LiveNotationOverlayTests: XCTestCase {
     // MARK: - replayNotation factory
 
     func testReplayNotationModelIsNotEmpty() throws {
-        let notation = try XCTUnwrap(ScratchNotation.babyScratchDemoFromExtractedStrokes(appBundle))
+        let notation = SyntheticNotationFixture.replay
         let model = LiveNotationOverlayModel.replayNotation(from: notation)
         XCTAssertFalse(model.isEmpty)
         XCTAssertEqual(model.mode, .captured)
         XCTAssertEqual(model.duration, notation.timelineDuration, accuracy: 0.001)
-        XCTAssertEqual(model.events.count, 32)
+        XCTAssertEqual(model.events.count, notation.strokes.count)
     }
 
     func testReplayNotationEventsHaveVaryingAmplitude() throws {
-        let notation = try XCTUnwrap(ScratchNotation.babyScratchDemoFromExtractedStrokes(appBundle))
+        let notation = SyntheticNotationFixture.replay
         let model = LiveNotationOverlayModel.replayNotation(from: notation)
         let fractions = model.events.map {
             CapturedNotationStrokeGeometry.travelFraction(for: $0)
@@ -710,24 +637,24 @@ final class LiveNotationOverlayTests: XCTestCase {
     }
 
     func testReplayNotationHidesFutureStrokes() throws {
-        let notation = try XCTUnwrap(ScratchNotation.babyScratchDemoFromExtractedStrokes(appBundle))
+        let notation = SyntheticNotationFixture.replay
         let model = LiveNotationOverlayModel.replayNotation(from: notation)
-        // The demo has a two-second silent lead-in before its first stroke.
+        // The original fixture has a two-second lead-in before its first stroke.
         let atStart = model.visibleEvents(at: 0.0)
         XCTAssertEqual(atStart.count, 0, "No strokes should be visible before the first stroke starts")
         let duringLeadIn = model.visibleEvents(at: 1.0)
         XCTAssertEqual(duringLeadIn.count, 0, "Lead-in must remain visually empty")
         let afterFirstStroke = model.visibleEvents(at: 2.5)
         XCTAssertGreaterThan(afterFirstStroke.count, 0, "The first stroke should be visible after 2.5s")
-        XCTAssertLessThan(afterFirstStroke.count, 10,
-                          "Only early strokes should be visible after 2.5s, not all 32")
+        XCTAssertLessThan(afterFirstStroke.count, notation.strokes.count,
+                          "Only early strokes should be visible after 2.5s, not all fixture strokes")
         // All strokes visible at end.
         let atEnd = model.visibleEvents(at: model.duration)
-        XCTAssertEqual(atEnd.count, 32, "All 32 strokes must be visible at the end")
+        XCTAssertEqual(atEnd.count, notation.strokes.count, "All fixture strokes must be visible at the end")
     }
 
     func testReplayNotationShortestStrokeHasAtLeastFloorAmplitude() throws {
-        let notation = try XCTUnwrap(ScratchNotation.babyScratchDemoFromExtractedStrokes(appBundle))
+        let notation = SyntheticNotationFixture.replay
         let model = LiveNotationOverlayModel.replayNotation(from: notation)
         for event in model.events {
             let fraction = CapturedNotationStrokeGeometry.travelFraction(for: event)
@@ -737,7 +664,7 @@ final class LiveNotationOverlayTests: XCTestCase {
     }
 
     func testTargetNotationBackwardCompatible() throws {
-        let notation = try XCTUnwrap(ScratchNotation.babyScratchDemoFromExtractedStrokes(appBundle))
+        let notation = SyntheticNotationFixture.replay
         let targetModel = LiveNotationOverlayModel.targetNotation(from: notation)
         XCTAssertEqual(targetModel.mode, .target)
         // targetNotation should still use fixed 0.5 amplitude.
@@ -752,180 +679,9 @@ final class LiveNotationOverlayTests: XCTestCase {
 
     // MARK: - babyScratchFull76 resource
 
-    func testBabyScratchFull76ResourceLoads() throws {
-        let notation = try XCTUnwrap(ScratchNotation.loadBabyScratchFull76FromBundle(appBundle))
-        XCTAssertEqual(notation.scratchID, "baby")
-        XCTAssertEqual(notation.strokes.count, 76)
-    }
-
-    func testBabyScratchFull76StrokeCounts() throws {
-        let notation = try XCTUnwrap(ScratchNotation.loadBabyScratchFull76FromBundle(appBundle))
-        // Partition strokes into phrases by timing
-        let strokes = notation.strokes
-        var p1=0; var p2=0; var p3=0; var p4=0
-        for s in strokes {
-            if s.startTime < 6.0          { p1 += 1 }
-            else if s.startTime < 20.0    { p2 += 1 }
-            else if s.startTime < 32.0    { p3 += 1 }
-            else                           { p4 += 1 }
-        }
-        XCTAssertEqual(p1, 19); XCTAssertEqual(p2, 19)
-        XCTAssertEqual(p3, 13); XCTAssertEqual(p4, 25)
-    }
-
-    func testBabyScratchFull76Directions() throws {
-        let notation = try XCTUnwrap(ScratchNotation.loadBabyScratchFull76FromBundle(appBundle))
-        let strokes = notation.strokes
-
-        // Partition into phrases, roughly
-        var phrases: [[ScratchNotation.Stroke]] = [[],[],[],[]]
-        for s in strokes {
-            if s.startTime < 6.0          { phrases[0].append(s) }
-            else if s.startTime < 20.0    { phrases[1].append(s) }
-            else if s.startTime < 32.0    { phrases[2].append(s) }
-            else                           { phrases[3].append(s) }
-        }
-
-        for ph in phrases {
-            XCTAssertFalse(ph.isEmpty)
-            // Odd strokes = forward, even = backward, final = forward
-            for (i, s) in ph.enumerated() {
-                let expected: ScratchNotationDirection = (i % 2 == 0) ? .forward : .backward
-                XCTAssertEqual(s.direction, expected,
-                               "Phrase stroke \(i+1) expected \(expected), got \(s.direction)")
-            }
-            // Final stroke must be forward let-go
-            XCTAssertEqual(ph.last!.direction, .forward)
-        }
-    }
-
-    func testBabyScratchFull76StrokeTimingsValid() throws {
-        let notation = try XCTUnwrap(ScratchNotation.loadBabyScratchFull76FromBundle(appBundle))
-        for s in notation.strokes {
-            XCTAssertGreaterThan(s.endTime, s.startTime,
-                                 "Every stroke must have positive duration")
-        }
-        // Monotonic within each rough phrase
-        var lastEnd = -1.0; var currentPh = 1
-        for s in notation.strokes {
-            let ph = s.startTime < 6.0 ? 1 : (s.startTime < 20.0 ? 2 : (s.startTime < 32.0 ? 3 : 4))
-            if ph != currentPh { lastEnd = -1.0; currentPh = ph }
-            XCTAssertGreaterThan(s.startTime, lastEnd - 0.001,
-                                 "Strokes must be monotonic within each phrase")
-            lastEnd = s.endTime
-        }
-    }
-
-    func testBabyScratchFull76FaderState() throws {
-        let notation = try XCTUnwrap(ScratchNotation.loadBabyScratchFull76FromBundle(appBundle))
-        for s in notation.strokes {
-            XCTAssertEqual(s.faderState, .open, "Baby Scratch is always fader-open")
-        }
-    }
-
-    func testBabyScratchFull76SpeedClassificationsRecognized() throws {
-        let notation = try XCTUnwrap(ScratchNotation.loadBabyScratchFull76FromBundle(appBundle))
-        let speeds = Set(notation.strokes.map(\.speedClassification))
-        XCTAssertTrue(speeds.isSubset(of: [.fast, .medium, .slow]),
-                      "All speed classifications must be recognized")
-    }
-
     // MARK: - babyScratchFull76BeatQuantized resource
 
-    func testBeatQuantizedResourceLoads() throws {
-        let n = try XCTUnwrap(ScratchNotation.loadBabyScratchFull76BeatQuantizedFromBundle(appBundle))
-        XCTAssertEqual(n.scratchID, "baby")
-        XCTAssertEqual(n.strokes.count, 76)
-    }
-
-    func testBeatQuantizedPhraseCounts() throws {
-        let n = try XCTUnwrap(ScratchNotation.loadBabyScratchFull76BeatQuantizedFromBundle(appBundle))
-        var counts = [0,0,0,0]
-        for s in n.strokes {
-            if s.startTime < 6.0          { counts[0] += 1 }
-            else if s.startTime < 20.0    { counts[1] += 1 }
-            else if s.startTime < 32.0    { counts[2] += 1 }
-            else                           { counts[3] += 1 }
-        }
-        XCTAssertEqual(counts, [19, 19, 13, 25])
-    }
-
-    func testBeatQuantizedDirections() throws {
-        let n = try XCTUnwrap(ScratchNotation.loadBabyScratchFull76BeatQuantizedFromBundle(appBundle))
-        let phrases = partitionStrokes(n.strokes)
-        for ph in phrases {
-            for (i, s) in ph.enumerated() {
-                let expected: ScratchNotationDirection = (i % 2 == 0) ? .forward : .backward
-                XCTAssertEqual(s.direction, expected)
-            }
-            XCTAssertEqual(ph.last!.direction, .forward)
-        }
-    }
-
-    func testBeatQuantizedNoOverlaps() throws {
-        let n = try XCTUnwrap(ScratchNotation.loadBabyScratchFull76BeatQuantizedFromBundle(appBundle))
-        let phrases = partitionStrokes(n.strokes)
-        for ph in phrases {
-            for i in 0..<(ph.count - 1) {
-                XCTAssertLessThanOrEqual(ph[i].endTime, ph[i+1].startTime + 0.001,
-                                         "Strokes must not overlap in phrase")
-            }
-        }
-    }
-
-    func testBeatQuantizedFaderState() throws {
-        let n = try XCTUnwrap(ScratchNotation.loadBabyScratchFull76BeatQuantizedFromBundle(appBundle))
-        for s in n.strokes {
-            XCTAssertEqual(s.faderState, .open)
-        }
-    }
-
     // MARK: - Notation Lab template verification
-
-    func testNotationLabTemplateIsDeterministicShortNotation() throws {
-        let template = try XCTUnwrap(ScratchNotation.loadBabyScratchFromBundle(appBundle),
-                                     "Notation/baby_scratch.json must load from the app bundle")
-        XCTAssertEqual(template.strokes.count, 12,
-                       "Notation Lab template must have 12 strokes (deterministic authored)")
-        XCTAssertEqual(template.timelineDuration, 4.700, accuracy: 0.001,
-                       "Notation Lab template loop duration must be 4.700s")
-        XCTAssertEqual(template.timingBasis, "authored_deterministic_v1",
-                       "Notation Lab template must use authored_deterministic_v1 timing basis, not audio peak detection")
-    }
-
-    func testNotationLabTemplateLoopDurationIsFromNotationNotFromReferenceTimeline() throws {
-        let template = try XCTUnwrap(ScratchNotation.loadBabyScratchFromBundle(appBundle))
-        let templateDuration = template.timelineDuration
-        let demoTimelineDuration = BabyScratchReferenceMotionTimeline.phraseEnd
-        XCTAssertEqual(templateDuration, 4.700, accuracy: 0.001,
-                       "Template loop duration must be ~4.700s")
-        XCTAssertEqual(demoTimelineDuration, 14.048311, accuracy: 0.001,
-                       "Reference timeline must match the selected live demo phrase")
-        XCTAssertNotEqual(templateDuration, demoTimelineDuration, accuracy: 1.0,
-                          "Notation Lab loop duration must not be derived from BabyScratchReferenceMotionTimeline.phraseEnd")
-    }
-
-    func testBabyScratchDemoStillAvailableForCoachPaths() throws {
-        let demo = try XCTUnwrap(ScratchNotation.babyScratchDemoFromExtractedStrokes(appBundle),
-                                  "babyScratchDemo factory must remain available for coach/audio demo paths")
-        XCTAssertEqual(demo.strokes.count, 32,
-                       "Coach-motion demo must expose all 16 forward/backward cycles")
-        XCTAssertEqual(demo.timelineDuration, 14.048311, accuracy: 0.001,
-                       "Coach-motion demo timeline must match the selected live take")
-    }
-
-    func testNotationLabTemplateAndDemoAreDistinctResources() throws {
-        let template = try XCTUnwrap(ScratchNotation.loadBabyScratchFromBundle(appBundle))
-        let demo = try XCTUnwrap(ScratchNotation.babyScratchDemoFromExtractedStrokes(appBundle))
-        XCTAssertNotEqual(template.strokes.count, demo.strokes.count,
-                          "Template (12) and demo (32) must have different stroke counts")
-        XCTAssertNotEqual(template.timingBasis, demo.timingBasis,
-                          "Template and demo must carry different timingBasis values")
-        let templateDuration = template.timelineDuration
-        let demoDuration = demo.timelineDuration
-        XCTAssertGreaterThan(demoDuration, templateDuration * 2.5,
-                             "Coach-motion demo must be substantially longer than the short template")
-    }
 
     // MARK: - NotationViewportMapper (playhead-relative scrolling math)
 
@@ -1099,52 +855,6 @@ final class LiveNotationOverlayTests: XCTestCase {
 
     // MARK: - Baby Scratch Template (post-duration-fix verification)
 
-    func testBabyScratchTemplateDurationIsFourPointSevenSeconds() throws {
-        let template = try XCTUnwrap(ScratchNotation.loadBabyScratchFromBundle(appBundle))
-        XCTAssertEqual(template.timelineDuration, 4.700, accuracy: 0.001,
-                       "Baby Scratch Template duration must be 4.700s")
-        let phraseStart = try XCTUnwrap(template.phraseStart)
-        XCTAssertEqual(phraseStart, 0.0, accuracy: 0.001)
-        let phraseEnd = try XCTUnwrap(template.phraseEnd)
-        XCTAssertEqual(phraseEnd, 4.700, accuracy: 0.001)
-    }
-
-    func testBabyScratchTemplateHasTwelveStrokes() throws {
-        let template = try XCTUnwrap(ScratchNotation.loadBabyScratchFromBundle(appBundle))
-        XCTAssertEqual(template.strokes.count, 12,
-                       "Deterministic baby scratch template must have exactly 12 strokes")
-    }
-
-    func testBabyScratchTemplateStrokesSpanFullPhrase() throws {
-        let template = try XCTUnwrap(ScratchNotation.loadBabyScratchFromBundle(appBundle))
-        let firstStart = template.strokes.first?.startTime ?? -1
-        let lastEnd = template.strokes.last?.endTime ?? -1
-        XCTAssertEqual(firstStart, 0.0, accuracy: 0.001, "First stroke must start at 0.0")
-        XCTAssertEqual(lastEnd, 4.700, accuracy: 0.001, "Last stroke must end at 4.700")
-    }
-
-    func testNotationLabTemplateSource_UsesShortTemplateNotCoachDemo() throws {
-        // The ViewModel init loads ScratchNotation.babyScratch, not .babyScratchDemo.
-        // Verify the underlying notation source used by the Notation Lab.
-        let template = try XCTUnwrap(ScratchNotation.babyScratch)
-        let demo = ScratchNotation.babyScratchDemoFromExtractedStrokes(appBundle)
-
-        // Template timelineDuration must be 4.700s (short deterministic phrase).
-        XCTAssertEqual(template.timelineDuration, 4.700, accuracy: 0.001,
-                       "Notation Lab source (babyScratch) must have 4.700s duration")
-
-        // The demo is a separate resource — longer, more strokes. The Notation Lab
-        // must use the short template, not the demo.
-        if let demo {
-            XCTAssertGreaterThan(demo.timelineDuration, template.timelineDuration * 2.5,
-                                 "Demo must be substantially longer — Notation Lab uses template")
-        }
-
-        // The strokes in the template are the deterministic 12-stroke authored phrase.
-        XCTAssertEqual(template.strokes.count, 12,
-                       "Template has 12 strokes — Notation Lab uses this, not the 32-stroke demo")
-    }
-
     func testViewportMapperIsPlayheadRelative_NotStaticClampedTimeline() {
         // A static clamped timeline would have visibleStart = max(0, now - leadIn)
         // and visibleStart = min(duration - viewportDuration, now - leadIn).
@@ -1303,6 +1013,88 @@ final class LiveNotationOverlayTests: XCTestCase {
 
         XCTAssertEqual(offsets, [0.0, 4.7, 9.4].map { $0 },
                        "End of loop with wrapping: 0, +4.7, +9.4 tiles for future continuity")
+    }
+
+    // September 26 intentionally removed these resources from shipping bundles.
+    // Original factory behavior remains available to explicitly supplied offline bundles.
+    func testRecordedNotationResourcesRemainAbsentFromShippingBundle() {
+        XCTAssertNil(ScratchNotation.loadBabyScratchFromBundle(appBundle))
+        XCTAssertNil(ScratchNotation.loadBabyScratchFull76FromBundle(appBundle))
+        XCTAssertNil(ScratchNotation.loadBabyScratchFull76BeatQuantizedFromBundle(appBundle))
+        XCTAssertNil(ScratchNotation.babyScratchDemoFromExtractedStrokes(appBundle))
+        XCTAssertNil(BabyScratchExtractedStrokeResource.loadFromBundle(appBundle))
+    }
+
+    func testRetiredNotationLabIsNotTheAdvancedOverviewRoute() throws {
+        let root = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
+        let source = try String(contentsOf: root.appendingPathComponent(
+            "ScratchLabDesktop/Views/MacAnalyzerView.swift"), encoding: .utf8)
+        let start = try XCTUnwrap(source.range(of: "private var advancedWorkspace: some View"))
+        let end = try XCTUnwrap(source.range(of: "// MARK: - Figma Advanced workspace"))
+        let route = String(source[start.lowerBound..<end.lowerBound])
+        XCTAssertTrue(route.contains("if advancedSection == .overview {\n                        advancedFigmaOverview(width: contentWidth)\n                    } else {\n                        advancedSelectedSectionContent"))
+        XCTAssertFalse(route.contains("NotationVisualizerView("))
+        // The old helper containing the lab is unreferenced; overview uses the branch above.
+        XCTAssertEqual(source.components(separatedBy: "advancedMainContent").count - 1, 1)
+    }
+
+    private func withSyntheticExtractedBundle(
+        directions: [String], _ body: (Bundle) throws -> Void
+    ) throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString).appendingPathExtension("bundle")
+        let resources = root.appendingPathComponent("Contents/Resources/CoachDemoMotion")
+        try FileManager.default.createDirectory(at: resources, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let info: [String: Any] = ["CFBundleIdentifier": "test.synthetic." + UUID().uuidString,
+                                  "CFBundlePackageType": "BNDL", "CFBundleVersion": "1"]
+        try PropertyListSerialization.data(fromPropertyList: info, format: .xml, options: 0)
+            .write(to: root.appendingPathComponent("Contents/Info.plist"))
+        let strokes: [[String: Any]] = directions.enumerated().map { i, direction in
+            ["startTime": Double(i) + 0.25, "endTime": Double(i) + 0.75,
+             "direction": direction, "holdAfter": 0.5,
+             "startProgress": direction == "backward" ? 1 : 0,
+             "endProgress": direction == "backward" ? 0 : 1]
+        }
+        let payload: [String: Any] = ["version": 1, "scratchID": "synthetic_factory",
+            "timingSource": "original_test_data", "demoStart": 0, "demoEnd": 5,
+            "phraseStart": 0.25, "phraseEnd": 4.75, "timelineDuration": 4.75, "strokes": strokes]
+        try JSONSerialization.data(withJSONObject: payload)
+            .write(to: resources.appendingPathComponent("baby_scratch_strokes.json"))
+        try body(XCTUnwrap(Bundle(url: root)))
+    }
+
+    func testExplicitSyntheticExtractedFactoryPreservesMetadataAndMapping() throws {
+        try withSyntheticExtractedBundle(directions: ["forward", "backward", "forward", "backward"]) { bundle in
+            let notation = try XCTUnwrap(ScratchNotation.babyScratchDemoFromExtractedStrokes(bundle))
+            XCTAssertEqual(notation.scratchID, "synthetic_factory")
+            XCTAssertEqual(notation.demoStart, 0)
+            XCTAssertEqual(notation.demoEnd, 5)
+            XCTAssertEqual(notation.phraseStart, 0.25)
+            XCTAssertEqual(notation.phraseEnd, 4.75)
+            XCTAssertEqual(notation.timelineDuration, 4.75)
+            XCTAssertEqual(notation.timingBasis, "extracted_strokes_full_demo")
+            XCTAssertEqual(notation.strokes.count, 4)
+            XCTAssertEqual(notation.strokes.map(\.direction), [.forward, .backward, .forward, .backward])
+            for (i, stroke) in notation.strokes.enumerated() {
+                XCTAssertEqual(stroke.startTime, Double(i) + 0.25)
+                XCTAssertEqual(stroke.endTime, Double(i) + 0.75)
+                XCTAssertEqual(stroke.speedClassification, .medium)
+                XCTAssertEqual(stroke.faderState, .open)
+            }
+        }
+    }
+
+    func testExplicitSyntheticExtractedFactoryRejectsUnknownDirection() throws {
+        try withSyntheticExtractedBundle(directions: ["forward", "sideways"]) { bundle in
+            XCTAssertNil(ScratchNotation.babyScratchDemoFromExtractedStrokes(bundle))
+        }
+    }
+
+    func testExplicitSyntheticExtractedFactoryRejectsEmptyStrokes() throws {
+        try withSyntheticExtractedBundle(directions: []) { bundle in
+            XCTAssertNil(ScratchNotation.babyScratchDemoFromExtractedStrokes(bundle))
+        }
     }
 
     // MARK: - Helpers

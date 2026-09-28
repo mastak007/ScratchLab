@@ -661,11 +661,8 @@ final class CameraNotationOverlayTests: XCTestCase {
     // MARK: - Target notation adapter
 
     func testTargetNotationAdapterMapsAllStrokes() {
-        // Use the real bundled baby_scratch.json.
-        guard let notation = ScratchNotation.babyScratch else {
-            XCTFail("Baby Scratch notation must load from bundle")
-            return
-        }
+        // Use original offline geometry, independent of removed shipping recordings.
+        let notation = SyntheticNotationFixture.target
         let model = LiveNotationOverlayModel.targetNotation(from: notation)
 
         XCTAssertEqual(model.events.count, notation.strokes.count,
@@ -680,10 +677,7 @@ final class CameraNotationOverlayTests: XCTestCase {
     }
 
     func testTargetNotationAdapterPreservesDirection() {
-        guard let notation = ScratchNotation.babyScratch else {
-            XCTFail("Baby Scratch notation must load from bundle")
-            return
-        }
+        let notation = SyntheticNotationFixture.target
         let model = LiveNotationOverlayModel.targetNotation(from: notation)
 
         for (index, event) in model.events.enumerated() {
@@ -692,7 +686,7 @@ final class CameraNotationOverlayTests: XCTestCase {
                            "Event \(index) direction must match source stroke")
         }
         // Explicit forward / backward check on known alternating indices.
-        // Stroke 0 = forward, Stroke 1 = backward per baby_scratch.json.
+        // Stroke 0 = forward, Stroke 1 = backward in the synthetic fixture.
         XCTAssertEqual(model.events[0].direction, "forward",
                        "Baby scratch stroke 0 is forward")
         XCTAssertEqual(model.events[1].direction, "backward",
@@ -700,10 +694,7 @@ final class CameraNotationOverlayTests: XCTestCase {
     }
 
     func testTargetNotationAdapterUsesFixedTravel() {
-        guard let notation = ScratchNotation.babyScratch else {
-            XCTFail("Baby Scratch notation must load from bundle")
-            return
-        }
+        let notation = SyntheticNotationFixture.target
         let model = LiveNotationOverlayModel.targetNotation(from: notation)
 
         for (index, event) in model.events.enumerated() {
@@ -735,10 +726,7 @@ final class CameraNotationOverlayTests: XCTestCase {
                        "Captured model must use actual amplitude")
 
         // Target model from the real adapter must use fixed 0.5 travel.
-        guard let notation = ScratchNotation.babyScratch else {
-            XCTFail("Baby Scratch notation must load from bundle")
-            return
-        }
+        let notation = SyntheticNotationFixture.target
         let targetModel = LiveNotationOverlayModel.targetNotation(from: notation)
         let targetTravels = targetModel.visibleEvents(at: 0)
             .map { CapturedNotationStrokeGeometry.travelFraction(for: $0) }
@@ -878,7 +866,7 @@ final class CameraNotationOverlayTests: XCTestCase {
         // matches the visible playback position — not the stale stored
         // currentTime.
         let targetModel = LiveNotationOverlayModel.targetNotation(
-            from: ScratchNotation.babyScratch
+            from: SyntheticNotationFixture.target
         )
         let capturedEvents = [
             makeEvent(startTime: 0.0, endTime: 0.5,
@@ -927,7 +915,7 @@ final class CameraNotationOverlayTests: XCTestCase {
         // Build a Coach-mode model and controller, advance time, then
         // switch to Performance mode via the real factory + seek path.
         let targetModel = LiveNotationOverlayModel.targetNotation(
-            from: ScratchNotation.babyScratch
+            from: SyntheticNotationFixture.target
         )
         let capturedEvents = [
             makeEvent(startTime: 0.0, endTime: 0.5,
@@ -968,7 +956,7 @@ final class CameraNotationOverlayTests: XCTestCase {
         // Coach duration (~5.07 s for baby_scratch) > captured duration (~1.0 s).
         // Switching Coach → Performance clamps to the shorter captured duration.
         let targetModel = LiveNotationOverlayModel.targetNotation(
-            from: ScratchNotation.babyScratch
+            from: SyntheticNotationFixture.target
         )
         let capturedEvents = [
             makeEvent(startTime: 0.0, endTime: 0.5,
@@ -1022,7 +1010,7 @@ final class CameraNotationOverlayTests: XCTestCase {
         cal.isLocked = true
 
         let targetModel = LiveNotationOverlayModel.targetNotation(
-            from: ScratchNotation.babyScratch
+            from: SyntheticNotationFixture.target
         )
         let capturedEvents = [
             makeEvent(startTime: 0.0, endTime: 0.5)
@@ -1072,7 +1060,7 @@ final class CameraNotationOverlayTests: XCTestCase {
         ]
         let snapshot = makeSnapshot(events: events)
         let targetModel = LiveNotationOverlayModel.targetNotation(
-            from: ScratchNotation.babyScratch
+            from: SyntheticNotationFixture.target
         )
 
         // Build Performance controller + model.
@@ -1107,7 +1095,7 @@ final class CameraNotationOverlayTests: XCTestCase {
         // After switching to Coach mode, all planned strokes must be
         // visible even at time 0.
         let targetModel = LiveNotationOverlayModel.targetNotation(
-            from: ScratchNotation.babyScratch
+            from: SyntheticNotationFixture.target
         )
         let events = [
             makeEvent(startTime: 0.0, endTime: 0.5)

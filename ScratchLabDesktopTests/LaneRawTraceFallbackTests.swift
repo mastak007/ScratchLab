@@ -22,7 +22,7 @@ final class LaneRawTraceFallbackTests: XCTestCase {
     /// fader events. Locks the classified-stroke fallback for every
     /// existing scored-mode call site.
     func testNotationLaneContentHasNoPhase2Channels() throws {
-        let notation = try XCTUnwrap(ScratchNotation.loadBabyScratchFromBundle())
+        let notation = SyntheticNotationFixture.target
         let content = LaneContent(notation: notation)
         XCTAssertNil(content.platterTimeline)
         XCTAssertTrue(content.faderEvents.isEmpty)

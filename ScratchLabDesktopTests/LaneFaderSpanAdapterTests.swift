@@ -78,7 +78,7 @@ final class LaneFaderSpanAdapterTests: XCTestCase {
     /// A notation with empty canonical faderEvents preserves existing
     /// behaviour exactly: `LaneContent.faderEvents` stays empty.
     func testLaneContentEmptyCanonicalFaderEventsStaysEmpty() throws {
-        let notation = try XCTUnwrap(ScratchNotation.loadBabyScratchFromBundle())
+        let notation = SyntheticNotationFixture.target
         let content = LaneContent(notation: notation)
         XCTAssertTrue(content.faderEvents.isEmpty)
     }
@@ -204,8 +204,8 @@ final class LaneFaderSpanAdapterTests: XCTestCase {
 
     /// Baby Scratch (empty canonical `faderEvents`) retains its exact
     /// existing per-stroke fader behaviour through the authority resolver.
-    func testBabyScratchLegacyNotationRetainsExistingFaderBehaviorViaAuthority() throws {
-        let notation = try XCTUnwrap(ScratchNotation.loadBabyScratchFromBundle())
+    func testSyntheticLegacyNotationRetainsExistingFaderBehaviorViaAuthority() throws {
+        let notation = SyntheticNotationFixture.target
         XCTAssertTrue(notation.faderEvents.isEmpty)
 
         let spans = notation.faderAuthoritySpans(documentEnd: notation.timelineDuration)

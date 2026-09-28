@@ -291,12 +291,14 @@ final class DVSControlVinylAnalyzerTests: XCTestCase {
         let logURL = directory.appendingPathComponent("dvs_diagnostics.jsonl")
         let logger = DVSLiveLogger(logURL: logURL)
 
-        logger.append(makeLogEntry())
-
-        let writeDeadline = Date().addingTimeInterval(2)
-        while !FileManager.default.fileExists(atPath: logURL.path), Date() < writeDeadline {
-            RunLoop.current.run(until: Date().addingTimeInterval(0.01))
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let written = expectation(description: "logger write and publication completed")
+        logger.append(makeLogEntry()) { result in
+            if case .failure(let error) = result { XCTFail("Unexpected write failure: \(error)") }
+            XCTAssertTrue(Thread.isMainThread)
+            written.fulfill()
         }
+        wait(for: [written], timeout: 2)
         let line = try String(contentsOf: logURL, encoding: .utf8)
         XCTAssertTrue(line.hasSuffix("\n"))
         XCTAssertTrue(line.contains("\"hasSignal\":false"))
@@ -304,15 +306,60 @@ final class DVSControlVinylAnalyzerTests: XCTestCase {
         XCTAssertEqual(logger.totalLinesWritten, 1)
         XCTAssertNil(logger.lastWriteError)
 
-        logger.clear()
-
-        let clearDeadline = Date().addingTimeInterval(2)
-        while FileManager.default.fileExists(atPath: logURL.path), Date() < clearDeadline {
-            RunLoop.current.run(until: Date().addingTimeInterval(0.01))
+        let cleared = expectation(description: "logger clear and publication completed")
+        logger.clear { result in
+            if case .failure(let error) = result { XCTFail("Unexpected clear failure: \(error)") }
+            XCTAssertTrue(Thread.isMainThread)
+            cleared.fulfill()
         }
+        wait(for: [cleared], timeout: 2)
         XCTAssertFalse(FileManager.default.fileExists(atPath: logURL.path))
         XCTAssertEqual(logger.lastWriteStatus, "Log cleared")
         XCTAssertEqual(logger.totalLinesWritten, 0)
+    }
+
+    func testLiveLoggerFailedWriteCompletionIncludesPublishedFailure() throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        // A directory cannot be opened as a JSONL file; no permission/environment dependency.
+        let logger = DVSLiveLogger(logURL: directory)
+        let completed = expectation(description: "failed write published")
+        logger.append(makeLogEntry()) { result in
+            if case .success = result { XCTFail("Directory accepted as a log file") }
+            XCTAssertEqual(logger.lastWriteStatus, "Write failed")
+            XCTAssertNotNil(logger.lastWriteError)
+            XCTAssertEqual(logger.totalLinesWritten, 0)
+            completed.fulfill()
+        }
+        wait(for: [completed], timeout: 2)
+    }
+
+    func testLiveLoggerQueuedCompletionsPreserveAppendClearOrder() throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let logger = DVSLiveLogger(logURL: directory.appendingPathComponent("ordered.jsonl"))
+        let completed = expectation(description: "ordered logger completions")
+        completed.expectedFulfillmentCount = 3
+        var order: [String] = []
+        for number in 1...2 {
+            logger.append(makeLogEntry()) { result in
+                if case .failure(let error) = result { XCTFail("write failed: \(error)") }
+                XCTAssertEqual(logger.totalLinesWritten, number)
+                order.append("write\(number)")
+                completed.fulfill()
+            }
+        }
+        logger.clear { result in
+            if case .failure(let error) = result { XCTFail("clear failed: \(error)") }
+            XCTAssertEqual(logger.totalLinesWritten, 0)
+            XCTAssertEqual(logger.lastWriteStatus, "Log cleared")
+            order.append("clear")
+            completed.fulfill()
+        }
+        wait(for: [completed], timeout: 2)
+        XCTAssertEqual(order, ["write1", "write2", "clear"])
+        XCTAssertFalse(FileManager.default.fileExists(atPath: logger.logURL.path))
     }
 
 #if ENABLE_TIMECODE_LIVE_TAP
