@@ -45,18 +45,13 @@ struct ScratchAnalyzerReferenceFoldersTests {
 
     // MARK: - Constants in source match disk
 
-    @Test("ScratchAnalyzer.swift uses the on-disk reference folder names")
-    func loaderUsesOnDiskFolderNames() throws {
-        let source = try String(
-            contentsOf: Self.analyzerSourceURL,
-            encoding: .utf8
-        )
-
-        // The three folder names that exist on disk MUST be present in the
-        // source so the loader actually finds them.
-        #expect(source.contains("\"reference_pro\""))
-        #expect(source.contains("\"reference_champ\""))
-        #expect(source.contains("\"reference_beginner\""))
+    @Test("No historical reference folder is a shipping analyzer dependency")
+    func loaderHasNoBundledReferenceFolders() throws {
+        let source = try String(contentsOf: Self.analyzerSourceURL, encoding: .utf8)
+        #expect(source.contains("bundledReferenceFolders: [ReferenceFolderDescriptor] = []"))
+        for name in ["reference_pro", "reference_champ", "reference_beginner"] {
+            #expect(!source.contains("\"" + name + "\""))
+        }
     }
 
     @Test("ScratchAnalyzer.swift no longer references the legacy folder names")

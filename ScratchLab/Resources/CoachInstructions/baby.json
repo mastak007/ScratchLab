@@ -12,6 +12,6 @@
   "commonMistake": "Driving the forward motion harder than the pullback so the scratch loses balance.",
   "practiceChallenge": "Land 8 steady baby scratches in a row without changing the volume or the pace.",
   "difficulty": "beginner",
-  "demoAudioFile": "baby_noBeat.wav",
+  "demoAudioFile": null,
   "demoAudioRole": "noBeat"
 }

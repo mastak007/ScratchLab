@@ -600,12 +600,6 @@ struct MacAnalyzerView: View {
     @StateObject private var sessionExportCoordinator = SessionExportCoordinator()
     @StateObject private var routineSessionSetup = SessionSetupViewModel(surface: .macRoutine)
     @StateObject private var babyScratchDemo = BabyScratchDemoPlaybackCoordinator()
-    // Practice demo playback is beatless and release-only. Capture keeps its
-    // own CXL reference resources; this controller uses the clean CXL audio
-    // while learner notation remains the existing canonical Baby Scratch target.
-    @StateObject private var demoModeController = ScratchLabDemoModeController(
-        audioFileName: ScratchLabPracticeReference.cxlBabyScratchAudioFileName
-    )
     @StateObject private var rawJSONInspector = RawJSONInspectorViewModel()
     /// WATCH → COPY → RESULT state for one deterministic, canonical-cycle
     /// scored attempt (`practiceScoredAttemptCard`). Independent of the
@@ -635,7 +629,6 @@ struct MacAnalyzerView: View {
     // the diagnostics 5 Hz publish rate.  Live data is still refreshed
     // via the remaining capture-engine-driven body evaluations.
     @State private var exportMixMode: ExportMixMode = .scratchOnly
-    @State private var isBuildingDemoExportPackage = false
     @State private var capturedNotationSnapshot: CaptureCore.DetectedNotationSnapshot?
     @State private var isPracticeSessionActive = false
     @State private var practiceTimeRemaining: TimeInterval = PracticeDuration.fiveMinutes.duration
@@ -675,7 +668,6 @@ struct MacAnalyzerView: View {
     @State private var reviewMetadataByTakeID: [String: CaptureCore.CaptureReviewMetadata] = [:]
     @State private var reviewStateSelection: CaptureCore.SessionReviewState = .unreviewed
     @State private var reviewNotesDraft: String = ""
-    @State private var showingReferenceExamples = false
     @State private var isShowingControllerSetup = false
     @State private var reviewerNameDraft: String = ""
     @State private var showNotationOverlay = false
@@ -942,13 +934,6 @@ struct MacAnalyzerView: View {
             }
         }
         .background(ScratchLabDesign.Surface.canvas)
-        .sheet(isPresented: $showingReferenceExamples) {
-            ScratchExampleLibraryView(
-                initialAudioURL: captureEngine.lastRoutineRecordingURL?
-                    .deletingPathExtension().appendingPathExtension("wav"),
-                initialVideoURL: captureEngine.lastRoutineRecordingURL
-            )
-        }
         .background(
             SessionSharePresenter(
                 request: exportShareRequestBinding,
@@ -997,11 +982,10 @@ struct MacAnalyzerView: View {
             practiceBeatStore.configurePracticeContext(scratchID: CaptureSessionScratchType.babyScratch.rawValue)
             practiceBeatStore.setBeatEnabled(false)
             captureEngine.leftUpfaderOutputHandler = {
-                [weak practiceBeatStore, weak beatEngine, weak babyScratchDemo, weak demoModeController] outputGain in
+                [weak practiceBeatStore, weak beatEngine, weak babyScratchDemo] outputGain in
                 practiceBeatStore?.setOutputGain(outputGain)
                 beatEngine?.setOutputGain(outputGain)
                 babyScratchDemo?.audioPlayer.setOutputGain(outputGain)
-                demoModeController?.demoPlayer.setOutputGain(outputGain)
             }
             applyLeftDeckOutputGain(captureEngine.leftUpfaderOutputGain)
             seratoWindowMover.refreshStatus()
@@ -1039,7 +1023,6 @@ struct MacAnalyzerView: View {
         .onDisappear {
             beatEngine.stop()
             babyScratchDemo.stop()
-            demoModeController.stopDemo()
             practiceBeatStore.handleLeavingPractice()
             captureEngine.leftUpfaderOutputHandler = nil
             cancelTestLabPracticeSession()
@@ -1053,9 +1036,11 @@ struct MacAnalyzerView: View {
             guard liveInputEnabled, StageLayout(rawValue: newValue) == .desktopDeck else { return }
             captureEngine.preferMacCameraForDesktopDeck()
         }
-        .onChange(of: demoModeController.demoPlayer.isPlaying) { wasPlaying, isPlaying in
-            guard wasPlaying, !isPlaying else { return }
-            practiceCoordinator.finishWatching()
+        .task(id: practiceCoordinator.state == .watching) {
+            while practiceCoordinator.state == .watching, !Task.isCancelled {
+                practiceCoordinator.advanceWatch(at: Date())
+                try? await Task.sleep(for: .milliseconds(16))
+            }
         }
         .onChange(of: workspaceTabRaw) { _, newValue in
             let resolvedTab = WorkspaceTab.resolved(from: newValue)
@@ -1075,7 +1060,6 @@ struct MacAnalyzerView: View {
             }
             guard resolvedTab != .practice else { return }
             babyScratchDemo.stop()
-            demoModeController.stopDemo()
             practiceBeatStore.handleLeavingPractice()
             cancelTestLabPracticeSession()
             practiceLiveNotationTracker = nil
@@ -1305,7 +1289,7 @@ struct MacAnalyzerView: View {
         case .practice:
             switch practicePresentationState {
             case .ready: return "WATCH"
-            case .listening: return "LISTEN"
+            case .watching, .listening: return "WATCH"
             case .copyActive: return "COPY ACTIVE"
             case .paused: return "PAUSED"
             case .result: return "RESULT"
@@ -1372,7 +1356,6 @@ struct MacAnalyzerView: View {
         }
         guard newPhase != .active else { return }
         babyScratchDemo.stop()
-        demoModeController.stopDemo()
         practiceBeatStore.handleAppDidBecomeInactive()
     }
 
@@ -1380,7 +1363,6 @@ struct MacAnalyzerView: View {
         practiceBeatStore.setOutputGain(normalizedGain)
         beatEngine.setOutputGain(normalizedGain)
         babyScratchDemo.audioPlayer.setOutputGain(normalizedGain)
-        demoModeController.demoPlayer.setOutputGain(normalizedGain)
     }
 
 #if ENABLE_TIMECODE_LIVE_TAP
@@ -1509,7 +1491,7 @@ struct MacAnalyzerView: View {
         switch practicePresentationState {
         case .result, .review, .lessonComplete:
             return true
-        case .ready, .listening, .copyActive, .paused:
+        case .ready, .watching, .listening, .copyActive, .paused:
             return false
         }
     }
@@ -1589,8 +1571,8 @@ struct MacAnalyzerView: View {
             return "Copy the target motion while ScratchLab compares your movement in real time."
         case .result, .review, .lessonComplete:
             return "See your result, then choose whether to try the cycle again."
-        case .ready, .listening:
-            return "Watch the target, then listen and copy one clean Baby Scratch cycle."
+        case .ready, .watching, .listening:
+            return "Watch the silent target, then copy one clean Baby Scratch cycle. Listen is unavailable."
         }
     }
 
@@ -1679,7 +1661,7 @@ struct MacAnalyzerView: View {
     private var practiceLessonStage: LessonStage {
         switch practicePresentationState {
         case .ready: return .watch
-        case .listening: return .listen
+        case .watching, .listening: return .watch
         case .copyActive, .paused: return .copy
         case .result: return .result
         case .review, .lessonComplete: return .result
@@ -1716,7 +1698,7 @@ struct MacAnalyzerView: View {
     private var practiceFigmaStepLabel: String {
         switch practicePresentationState {
         case .ready: return "WATCH FIRST"
-        case .listening: return "LISTEN"
+        case .watching, .listening: return "WATCH"
         case .copyActive: return "COPY ACTIVE"
         case .paused: return "COPY PAUSED"
         case .result: return "RESULT"
@@ -1728,7 +1710,7 @@ struct MacAnalyzerView: View {
     private var practiceFigmaCardTitle: String {
         switch practicePresentationState {
         case .ready: return "See one clean cycle"
-        case .listening: return "Hear the reference"
+        case .watching, .listening: return "Watch the authored cycle"
         case .copyActive: return "Match the motion"
         case .paused: return "Attempt paused"
         case .result: return "See how you did"
@@ -1741,8 +1723,8 @@ struct MacAnalyzerView: View {
         switch practicePresentationState {
         case .ready:
             return "Follow the forward push and smooth pull back. Keep the fader open for the whole cycle."
-        case .listening:
-            return "Listen for an even push forward and pull back at a smooth, consistent speed."
+        case .watching, .listening:
+            return "Silent notation: forward, turnaround, backward, turnaround. Keep the fader open."
         case .copyActive:
             return "Push forward and pull back smoothly with the fader open. Stay with the target shape."
         case .paused:
@@ -1764,7 +1746,7 @@ struct MacAnalyzerView: View {
                 ViewThatFits(in: .horizontal) {
                     HStack(spacing: 12) {
                         practiceFigmaButton("Watch again", primary: true) {
-                            practiceCoordinator.beginWatch()
+
                             startMacDemo()
                         }
                         practiceFigmaButton("Start copying", primary: false) {
@@ -1773,7 +1755,7 @@ struct MacAnalyzerView: View {
                     }
                     VStack(alignment: .leading, spacing: 10) {
                         practiceFigmaButton("Watch again", primary: true) {
-                            practiceCoordinator.beginWatch()
+
                             startMacDemo()
                         }
                         practiceFigmaButton("Start copying", primary: false) {
@@ -1785,27 +1767,25 @@ struct MacAnalyzerView: View {
                 ViewThatFits(in: .horizontal) {
                     HStack(spacing: 12) {
                         practiceFigmaButton("Watch demo", primary: true) {
-                            practiceCoordinator.beginWatch()
+
                             startMacDemo()
                         }
-                        practiceFigmaButton("Listen only", primary: false) {
-                            practiceCoordinator.beginWatch()
-                            startMacDemo()
-                        }
+                        Text("Listen unavailable")
+                            .foregroundStyle(.secondary)
+                            .help("No approved ScratchLab-owned scratch recording.")
                     }
                     VStack(alignment: .leading, spacing: 10) {
                         practiceFigmaButton("Watch demo", primary: true) {
-                            practiceCoordinator.beginWatch()
+
                             startMacDemo()
                         }
-                        practiceFigmaButton("Listen only", primary: false) {
-                            practiceCoordinator.beginWatch()
-                            startMacDemo()
-                        }
+                        Text("Listen unavailable")
+                            .foregroundStyle(.secondary)
+                            .help("No approved ScratchLab-owned scratch recording.")
                     }
                 }
             }
-        case .listening:
+        case .watching, .listening:
             ViewThatFits(in: .horizontal) {
                 HStack(spacing: 12) {
                     practiceFigmaButton("Restart", primary: true) { startMacDemo() }
@@ -2185,16 +2165,7 @@ struct MacAnalyzerView: View {
     }
 
     private var practiceTeachingSequenceNotation: ScratchNotation? {
-        switch practicePresentationState {
-        case .ready, .listening:
-            // Watch follows the clean CXL audio while rendering the existing
-            // canonical Baby Scratch target. Unreviewed inferred CXL motion is
-            // not promoted into learner truth.
-            return ScratchNotation.babyScratch
-        case .copyActive, .paused, .result, .review, .lessonComplete:
-            // Scored copy/review remains the short canonical teaching cycle.
-            return ScratchNotation.babyScratch
-        }
+        practiceCanonicalPattern?.materialized(bpm: practiceTeachingBPM)
     }
 
     /// Keeps roughly two bars visible while the reel's frame-authored notation
@@ -2206,7 +2177,7 @@ struct MacAnalyzerView: View {
     ) -> ClosedRange<TimeInterval> {
         let documentDuration = max(notation.timelineDuration, 0.1)
         // There is deliberately no tempo/beat grid in this lesson. Keep a
-        // stable eight-second audio window instead of inventing musical bars.
+        // bounded authored-notation window. No media duration is consulted.
         let visibleDuration = min(documentDuration, 8.0)
         let leadingContext = visibleDuration * 0.28
         let latestStart = max(0, documentDuration - visibleDuration)
@@ -2219,7 +2190,9 @@ struct MacAnalyzerView: View {
     }
 
     private var practiceTeachingBPM: Double {
-        practiceNotationBPM
+        practiceCoordinator.state == .watching
+            ? (practiceCoordinator.watchBPM ?? practiceNotationBPM)
+            : practiceNotationBPM
     }
 
     private func practiceCopyNotationTime(
@@ -2236,32 +2209,20 @@ struct MacAnalyzerView: View {
 
     private var practiceNotationShouldAnimate: Bool {
         guard !accessibilityReduceMotion else { return false }
-        return demoModeController.demoPlayer.isPlaying
+        return practiceCoordinator.state == .watching
     }
 
     private var practiceNotationCurrentTime: TimeInterval {
         guard let notation = practiceTeachingSequenceNotation else { return 0 }
-        return practiceDemoNotationTime(
-            demoModeController.demoPlayer.sampledPlaybackTime(),
-            notation: notation
-        )
+        return min(practiceCoordinator.watchClock.now(at: Date()), notation.timelineDuration)
     }
 
-    private func practiceDemoNotationTime(
-        _ elapsed: TimeInterval,
-        notation: ScratchNotation
-    ) -> TimeInterval {
-        // The audio player is the only Watch clock. Clamp at the final motion
-        // so the two-second audio tail holds the completed notation instead of
-        // wrapping back to the beginning mid-playback.
-        min(max(0, elapsed), max(0, notation.timelineDuration))
-    }
+
 
     /// The single derived Practice presentation state driving the whole
     /// Practice surface (header, notation mode, transport, actions). Inputs
     /// come from real owners only:
     /// - gameplay: `practiceCoordinator.state`
-    /// - listening: `demoModeController.demoPlayer.isPlaying`
     /// - lessonComplete: `progressManager.isScratchMastered("baby_scratch")`
     ///
     /// Pause and review have NO real owner in macOS Practice yet — there is no
@@ -2270,7 +2231,7 @@ struct MacAnalyzerView: View {
     private var practicePresentationState: PracticePresentationState {
         PracticePresentationState.derive(
             gameplay: practiceCoordinator.state,
-            isListening: demoModeController.demoPlayer.isPlaying,
+            isListening: false,
             isLessonComplete: progressManager.isScratchMastered("baby_scratch")
         )
     }
@@ -2405,11 +2366,7 @@ struct MacAnalyzerView: View {
                     .font(.system(size: 12, weight: .semibold))
                     .foregroundStyle(ScratchLabDesign.Sem.textPrimary)
                     .lineLimit(1)
-                Button { showingReferenceExamples = true } label: {
-                    Label("Reference examples", systemImage: "play.rectangle.on.rectangle")
-                }
-                .buttonStyle(.bordered)
-                .disabled(captureEngine.isRoutineRecording || captureEngine.isRoutineFinalizationPending)
+
             }
             .padding(.top, 12)
         }
@@ -2890,89 +2847,10 @@ struct MacAnalyzerView: View {
     }
 
     private var macDemoModeCard: some View {
-        VStack(alignment: .leading, spacing: 14) {
-            HStack(alignment: .top, spacing: 12) {
-                VStack(alignment: .leading, spacing: 4) {
-                    Text("Demo")
-                        .font(.system(size: 24, weight: .semibold))
-
-                    Text("Hear the Baby Scratch reference and watch the coach demonstrate the move.")
-                        .font(.system(size: 13, weight: .medium))
-                        .foregroundStyle(.secondary)
-                }
-
-                Spacer(minLength: 12)
-
-                Label("No hardware needed", systemImage: "checkmark.seal.fill")
-                    .font(.system(size: 11, weight: .bold))
-                    .foregroundStyle(ScratchLabDesign.Sem.success)
-            }
-
-            HStack(spacing: 10) {
-                macDemoMetric(title: "Feedback", value: demoModeFeedbackTitle)
-                macDemoMetric(title: "Direction", value: demoModeController.motionDirection.label)
-            }
-
-            Text(demoModeController.statusMessage)
-                .font(.system(size: 12, weight: .medium))
-                .foregroundStyle(.secondary)
-                .fixedSize(horizontal: false, vertical: true)
-
-            VStack(spacing: 10) {
-                HStack(spacing: 10) {
-                    // Play / Pause / Resume (Listen mode)
-                    let playbackState = demoModeController.demoPlayer.playbackState
-                    let primaryLabel: String = {
-                        switch playbackState {
-                        case .playing: return "Pause"
-                        case .paused:  return "Resume"
-                        default:       return "Listen"
-                        }
-                    }()
-                    let primaryIcon: String = playbackState == .playing ? "pause.fill" : "headphones"
-
-                    Button {
-                        if playbackState == .paused {
-                            demoModeController.resumeDemo()
-                        } else if playbackState == .playing {
-                            demoModeController.pauseDemo()
-                        } else {
-                            startMacDemo()
-                        }
-                    } label: {
-                        Label(primaryLabel, systemImage: primaryIcon)
-                            .frame(maxWidth: .infinity)
-                    }
-                    .scratchLabPrimaryButton(fillsWidth: true)
-
-                    Button {
-                        demoModeController.replayDemo()
-                    } label: {
-                        Label("Restart", systemImage: "arrow.counterclockwise")
-                            .frame(maxWidth: .infinity)
-                    }
-                    .buttonStyle(.bordered)
-                    .disabled(!demoModeController.isReady)
-                }
-            }
-
-            Button {
-                exportMacDemoSession()
-            } label: {
-                HStack(spacing: 8) {
-                    if isBuildingDemoExportPackage || sessionExportCoordinator.isPreparing {
-                        ProgressView()
-                            .controlSize(.small)
-                    } else {
-                        Image(systemName: "square.and.arrow.up")
-                    }
-
-                    Text(demoModeExportButtonTitle)
-                }
-                .frame(maxWidth: .infinity)
-            }
-            .buttonStyle(.bordered)
-            .disabled(isBuildingDemoExportPackage || sessionExportCoordinator.isPreparing)
+        VStack(alignment: .leading, spacing: 12) {
+            Text("Silent notation Watch").font(.headline)
+            Text("Watch the authored Baby Scratch cycle. Listen is unavailable: no approved ScratchLab-owned scratch recording is supplied.")
+            Button("Watch notation", action: startMacDemo)
         }
         .scratchLabCard(.hero)
     }
@@ -3844,7 +3722,7 @@ struct MacAnalyzerView: View {
                     .font(.system(size: 24, weight: .semibold))
                     .foregroundColor(ScratchLabDesign.Sem.textPrimary)
 
-                Text("Watch the target, listen, then copy one Baby Scratch cycle.")
+                Text("Watch the silent target, then copy one Baby Scratch cycle.")
                     .font(.system(size: 12, weight: .medium))
                     .foregroundStyle(ScratchLabDesign.Sem.textSecondary)
             }
@@ -4574,16 +4452,9 @@ struct MacAnalyzerView: View {
         captureEngine.selectedVideoDeviceName
     }
 
-    private var demoModeFeedbackTitle: String {
-        demoModeController.motionFeedback?.balance.rawValue ?? ScratchMotionBalance.listening.rawValue
-    }
 
-    private var demoModeExportButtonTitle: String {
-        if isBuildingDemoExportPackage || sessionExportCoordinator.isPreparing {
-            return "Preparing Demo ZIP"
-        }
-        return "Export demo session"
-    }
+
+
 
     private var selectedAudioDevice: AVCaptureDevice? {
         captureEngine.availableAudioDevices
@@ -5710,26 +5581,7 @@ struct MacAnalyzerView: View {
     }
 
     private var coachDemoStatusMessage: String {
-        if coachInstruction.scratchType.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-            return "Choose a scratch to load a coach demo."
-        }
-        if captureEngine.isRoutineRecording {
-            return "Coach demo pauses during routine capture."
-        }
-        if practiceBeatStore.isPlaying {
-            return "Stop the practice beat to hear the coach demo."
-        }
-        // Reads `demoModeController` — the single controller Practice's
-        // actual Listen/Pause/Restart buttons drive (see `practiceCoachCard`)
-        // — not `babyScratchDemo`, which is a separate coordinator for the
-        // Advanced tab's Notation Lab and must never be the source of truth
-        // for status text adjacent to the Listen controls.
-        if !demoModeController.isReady {
-            return demoModeController.statusMessage
-        }
-        return coachInstruction.demoAudioRole == "withBeat"
-            ? "Coach demo includes beat and scratch together."
-            : "Coach plays the scratch only — no beat behind it."
+        "Listen unavailable — no approved ScratchLab-owned scratch recording."
     }
 
     private var coachCardTheme: ScratchCoachCardTheme {
@@ -6341,7 +6193,6 @@ struct MacAnalyzerView: View {
 
     private func startMacLiveInput() {
         liveInputEnabled = true
-        demoModeController.stopDemo()
         captureEngine.start()
         if stageLayout == .desktopDeck {
             captureEngine.preferMacCameraForDesktopDeck()
@@ -6349,33 +6200,11 @@ struct MacAnalyzerView: View {
     }
 
     private func startMacDemo() {
-        if demoModeController.isReady {
-            demoModeController.replayDemo()
-        } else {
-            demoModeController.startDemo()
-        }
+        guard let pattern = practiceCanonicalPattern else { return }
+        practiceCoordinator.beginWatch(pattern: pattern, bpm: practiceNotationBPM)
     }
 
-    private func exportMacDemoSession() {
-        guard !isBuildingDemoExportPackage, !sessionExportCoordinator.isPreparing else { return }
-        isBuildingDemoExportPackage = true
 
-        Task {
-            do {
-                let package = try await Task.detached(priority: .userInitiated) {
-                    try ScratchLabDemoSessionBuilder().makePackage()
-                }.value
-                isBuildingDemoExportPackage = false
-                sessionExportCoordinator.prepareShare(
-                    for: .package(package),
-                    options: SessionExportOptions(mixMode: .scratchOnly)
-                )
-            } catch {
-                isBuildingDemoExportPackage = false
-                sessionExportCoordinator.showFailure(.unableToPrepareExport)
-            }
-        }
-    }
 
     private func shareLastRoutineSession() {
         guard let lastRoutineRecordingURL = captureEngine.lastRoutineRecordingURL else {
@@ -9684,7 +9513,7 @@ struct MacAnalyzerView: View {
                 } else {
                     StatusBadge(
                         title: "Demo",
-                        value: demoModeController.isReady ? "Replay ready" : "Demo",
+                        value: "Silent Watch",
                         variant: .success,
                         systemImage: "play.fill"
                     )
@@ -9750,63 +9579,12 @@ struct MacAnalyzerView: View {
     // model fields, or engine calls.
 
     private var practiceCoachCard: some View {
-        VStack(alignment: .leading, spacing: 14) {
-            VStack(alignment: .leading, spacing: 4) {
-                Text("Listen first")
-                    .font(ScratchLabDesign.Typo.sectionLabel)
-
-                Text("Hear the reference, then copy the same forward-and-back motion.")
-                    .font(ScratchLabDesign.Typo.bodySecondary)
-                    .foregroundStyle(.secondary)
-                    .fixedSize(horizontal: false, vertical: true)
-            }
-
-            VStack(spacing: 10) {
-                // Row 1 — Listen (scratch only) with Pause / Resume / Restart
-                HStack(spacing: 10) {
-                    let listenPlayState = demoModeController.demoPlayer.playbackState
-                    let listenLabel: String = {
-                        switch listenPlayState {
-                        case .playing: return "Pause"
-                        case .paused:  return "Resume"
-                        default:       return "Listen"
-                        }
-                    }()
-                    let listenIcon: String = listenPlayState == .playing ? "pause.fill" : "headphones"
-
-                    Button {
-                        switch listenPlayState {
-                        case .paused:  demoModeController.resumeDemo()
-                        case .playing: demoModeController.pauseDemo()
-                        default:       startMacDemo()
-                        }
-                    } label: {
-                        Label(listenLabel, systemImage: listenIcon)
-                            .frame(maxWidth: .infinity)
-                    }
-                    .scratchLabPrimaryButton(fillsWidth: true)
-
-                    Button {
-                        demoModeController.replayDemo()
-                    } label: {
-                        Label("Restart", systemImage: "arrow.counterclockwise")
-                            .frame(maxWidth: .infinity)
-                    }
-                    .buttonStyle(.bordered)
-                    .controlSize(.large)
-                    .disabled(!demoModeController.isReady)
-                }
-            }
-
-            Text(demoModeController.statusMessage)
-                .font(.system(size: 12, weight: .medium))
+        VStack(alignment: .leading, spacing: 12) {
+            Text("Silent notation Watch").font(ScratchLabDesign.Typo.sectionLabel)
+            Button("Watch notation", action: startMacDemo)
+            Text("Listen unavailable — no approved ScratchLab-owned scratch recording.")
+                .font(ScratchLabDesign.Typo.bodySecondary)
                 .foregroundStyle(.secondary)
-                .fixedSize(horizontal: false, vertical: true)
-
-            // Notation is now shown on the Practice stage strip below the camera
-            // card — a larger, zoomed scrolling view with replayReveal. The tiny
-            // sidebar version is removed to avoid clutter while the main strip is
-            // being tested.
         }
     }
 
@@ -10023,7 +9801,7 @@ struct MacAnalyzerView: View {
                 }
                 HStack(spacing: 10) {
                     Button("Watch demo") {
-                        practiceCoordinator.beginWatch()
+
                         startMacDemo()
                     }
                     .buttonStyle(.bordered)

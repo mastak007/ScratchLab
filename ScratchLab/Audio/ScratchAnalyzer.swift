@@ -138,11 +138,9 @@ class ScratchAnalyzer: ObservableObject {
     /// runtime. Folder names match the on-disk layout under
     /// `ScratchLab/Resources/`. Update this list whenever a folder is
     /// renamed or added so the loader and the tests stay in lock-step.
-    static let bundledReferenceFolders: [ReferenceFolderDescriptor] = [
-        .init(folderName: "reference_pro", tier: .professional, source: "Reference Set A"),
-        .init(folderName: "reference_champ", tier: .advanced, source: "Reference Set B"),
-        .init(folderName: "reference_beginner", tier: .learner, source: "Reference Set C"),
-    ]
+    // Legacy folder decoding is retained for offline tests only. No reference
+    // recordings are approved or resolved from the shipping bundle.
+    static let bundledReferenceFolders: [ReferenceFolderDescriptor] = []
 
     // MARK: - Configuration
 

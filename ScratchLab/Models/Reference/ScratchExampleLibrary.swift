@@ -1,6 +1,7 @@
 import CryptoKit
 import Foundation
 
+/// Offline research catalogue only; no shipping view or automatic bundle loader.
 /// Source-labelled examples and advisory models, independent of approved references.
 /// A valid catalogue proves file identity, never canonical approval or model accuracy.
 struct ScratchExampleLibrary: Sendable {
@@ -101,12 +102,6 @@ struct ScratchExampleLibrary: Sendable {
     private let rootURL: URL
     private let assetsByID: [String: Asset]
 
-    static func loadBundled(bundle: Bundle = .main) async throws -> ScratchExampleLibrary {
-        guard let root = bundle.resourceURL?.appendingPathComponent("ReferenceExamples", isDirectory: true) else {
-            throw LibraryError.invalid("the bundled library is unavailable.")
-        }
-        return try await load(rootURL: root)
-    }
 
     static func load(rootURL: URL) async throws -> ScratchExampleLibrary {
         try await Task.detached(priority: .utility) {

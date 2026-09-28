@@ -39,7 +39,6 @@ struct ReferenceAuthoringView: View {
     @State private var isShowingMIDIAddressDiagnostics = false
     @State private var selectedCapturePath: PhaseCapturePath? = nil
     @State private var selectedMIDIProfileID = "automatic"
-    @State private var showingReferenceExamples = false
     /// Framing panel starts open — it is the thing being watched during a
     /// take — and can be folded away while configuring.
     @State private var isShowingFramingPanel = true
@@ -134,14 +133,7 @@ struct ReferenceAuthoringView: View {
                 Text("Check one movement without a beat, or record four timed repetitions for reference review. Approval does not install or publish training data.")
                     .foregroundStyle(.secondary)
 
-                Button {
-                    viewModel.mediaReview.stop()
-                    viewModel.stopBeatPreview()
-                    showingReferenceExamples = true
-                } label: {
-                    Label("Reference examples", systemImage: "play.rectangle.on.rectangle")
-                }
-                .disabled(captureEngine.isRoutineRecording || captureEngine.isRoutineFinalizationPending)
+
 
                 messagePanel
                 savedDraftsSection
@@ -168,13 +160,7 @@ struct ReferenceAuthoringView: View {
             guard let request else { return }
             withAnimation { scroll.scrollTo(request.destination.rawValue, anchor: .top) }
         }
-        .sheet(isPresented: $showingReferenceExamples) {
-            ScratchExampleLibraryView(
-                initialAudioURL: viewModel.lastFinalizedRecordingURL?
-                    .deletingPathExtension().appendingPathExtension("wav"),
-                initialVideoURL: viewModel.lastFinalizedRecordingURL
-            )
-        }
+
         .task {
             await viewModel.refreshSavedDrafts()
             await captureEngine.startDeviceDiscoveryAfterViewMount(

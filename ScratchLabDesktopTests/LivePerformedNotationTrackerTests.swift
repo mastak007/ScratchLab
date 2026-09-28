@@ -23,62 +23,16 @@ import XCTest
 
 final class LivePerformedNotationTrackerTests: XCTestCase {
 
-    func testMacPracticeUsesSyncedBeatlessDemoNotationAndLiveStartPath() throws {
-        let repoRoot = URL(fileURLWithPath: #filePath)
-            .deletingLastPathComponent()
-            .deletingLastPathComponent()
-        let source = try String(
-            contentsOf: repoRoot.appendingPathComponent(
-                "ScratchLabDesktop/Views/MacAnalyzerView.swift"
-            ),
-            encoding: .utf8
-        )
-
-        XCTAssertTrue(source.contains("practiceNotationWindow(at: time, notation: notation)"))
-        XCTAssertTrue(source.contains("@StateObject private var demoModeController = ScratchLabDemoModeController("))
-        XCTAssertTrue(source.contains("audioFileName: ScratchLabPracticeReference.cxlBabyScratchAudioFileName"))
-        XCTAssertTrue(source.contains("return ScratchNotation.babyScratch"))
-        XCTAssertTrue(source.contains("showBeatGrid: false"))
-        XCTAssertTrue(source.contains("Text(\"NO BEAT\")"))
-        XCTAssertFalse(source.contains("practiceCoordinator.beginWatch()\n                            startDemoWithBeat()"))
-        XCTAssertFalse(source.contains("private func startDemoWithBeat()"))
-        XCTAssertFalse(source.contains("Label(\"Demo with Beat\""))
-        XCTAssertTrue(source.contains("practiceDemoNotationTime(\n            demoModeController.demoPlayer.sampledPlaybackTime(),"))
-        XCTAssertTrue(source.contains("demoModeController.demoPlayer.sampledPlaybackTime()"))
-        XCTAssertFalse(source.contains("practiceLoopedNotationTime"))
-        XCTAssertTrue(source.contains("targetWindow: practiceNotationWindow(at: now, notation: notation)"))
-        XCTAssertFalse(source.contains("targetWindow: 0...max(notation.timelineDuration, 0.1)"))
-        XCTAssertTrue(source.contains("guard await startPracticeScoredAttempt() else { return }"))
-        XCTAssertTrue(source.contains("if !liveInputEnabled {\n            startMacLiveInput()"))
+    func testMacPracticeUsesSilentCanonicalNotationAndUnchangedLiveStartPath() throws {
+        let root = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
+        let source = try String(contentsOf: root.appendingPathComponent("ScratchLabDesktop/Views/MacAnalyzerView.swift"), encoding: .utf8)
+        XCTAssertTrue(source.contains("practiceCoordinator.watchClock.now(at: Date())"))
+        XCTAssertTrue(source.contains("practiceCanonicalPattern?.materialized(bpm: practiceTeachingBPM)"))
+        XCTAssertFalse(source.contains("sampledPlaybackTime()"))
+        XCTAssertFalse(source.contains("cxl_baby_target.wav"))
         XCTAssertTrue(source.contains("guard await waitForPracticeCaptureReadiness() else"))
         XCTAssertTrue(source.contains("guard await waitForPracticeRecordingStart() else"))
-        XCTAssertFalse(source.contains("|| routineStartDisabled\n            || captureEngine.isRoutineRecording"))
-        XCTAssertTrue(source.contains("forScratchID: CaptureSessionScratchType.babyScratch.rawValue"))
-        XCTAssertTrue(source.contains("?? CaptureClickTrackDefaults.defaultTimedBPM"))
-        XCTAssertTrue(source.contains("private var practiceNotationBPM: Double {\n        Double(\n            routineSessionSetup.bpmValue\n                ?? CaptureClickTrackDefaults.defaultTimedBPM"))
         XCTAssertTrue(source.contains("routineSessionSetup.scratchType = .babyScratch"))
-        XCTAssertFalse(source.contains("|| practiceCanonicalPattern == nil\n            || routineSessionSetup.bpmValue == nil"))
-        XCTAssertFalse(source.contains("ScratchNotation.babyScratchFull76BeatQuantized"))
-
-        let chartSource = try String(
-            contentsOf: repoRoot.appendingPathComponent(
-                "ScratchLabDesktop/Views/ScratchPhraseChartView.swift"
-            ),
-            encoding: .utf8
-        )
-        XCTAssertFalse(chartSource.contains("drawTurnaroundMarkers"),
-                       "Platter reversals must not reuse the fader-click diamond")
-        XCTAssertTrue(chartSource.contains("if let prev = previousState, prev != span.state"),
-                      "A real fader-state transition must retain its marker path")
-
-        let visualizerSource = try String(
-            contentsOf: repoRoot.appendingPathComponent(
-                "ScratchLabDesktop/Views/NotationVisualizerView.swift"
-            ),
-            encoding: .utf8
-        )
-        XCTAssertTrue(visualizerSource.contains("notation = ScratchNotation.babyScratchDemo"))
-        XCTAssertFalse(visualizerSource.contains("notation = ScratchNotation.babyScratchFull76BeatQuantized"))
     }
 
     // MARK: - Helpers

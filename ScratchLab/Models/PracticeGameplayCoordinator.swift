@@ -62,6 +62,8 @@ struct PracticeAttemptSession: Equatable {
 final class PracticeGameplayCoordinator: ObservableObject {
     @Published private(set) var state: PracticeGameplayState = .idle
     private(set) var lastSession: PracticeAttemptSession?
+    private(set) var watchClock: LaneClock = .fixed(0)
+    private(set) var watchBPM: Double?
 
     private let now: () -> Date
 
@@ -94,9 +96,21 @@ final class PracticeGameplayCoordinator: ObservableObject {
 
     /// idle/ready/result → watching. A no-op while an attempt is open —
     /// watching never interrupts a live copy window.
-    func beginWatch() {
+    func beginWatch(pattern: ScratchNotation.BeatPattern = ScratchNotation.babyScratchCycle, bpm: Double = 90) {
         guard !isCopying else { return }
+        guard ScratchNotation.canonicalBeatPattern(forScratchID: pattern.scratchID) == pattern,
+              bpm.isFinite, bpm > 0,
+              pattern.durationBeats.isFinite, pattern.durationBeats > 0 else { return }
+        watchBPM = bpm
+        watchClock = .bounded(start: now(), duration: pattern.durationBeats * 60 / bpm)
         state = .watching
+    }
+
+    /// The host schedules ticks; the existing notation clock owns elapsed
+    /// time and completion. Late render ticks cannot extend the authored span.
+    func advanceWatch(at date: Date) {
+        guard state == .watching, watchClock.isComplete(at: date) else { return }
+        finishWatching()
     }
 
     /// watching → ready. No-op from any other state.
@@ -202,8 +216,9 @@ final class PracticeGameplayCoordinator: ObservableObject {
 /// into this enum. No surface keeps its own copy of Practice state, so the
 /// header can never say READY while notation renders a live comparison.
 enum PracticePresentationState: Equatable, Sendable {
-    case ready          // WATCH/READY — target shown, "Listen" is the next action
-    case listening      // LISTEN — reference audio playing, target-only notation
+    case watching       // Silent authored notation; never audio or scored.
+    case ready          // Authored target shown; Watch or Copy may begin.
+    case listening      // Reserved; unavailable without approved original audio.
     case copyActive     // COPY — live attempt, TARGET + MY PERFORMANCE (live)
     case paused         // PAUSED — copy frozen, attempt preserved
     case result         // RESULT — scored attempt, target + performed comparison
@@ -213,7 +228,7 @@ enum PracticePresentationState: Equatable, Sendable {
     /// The Figma `ScratchNotationPanel` mode this state selects.
     var notationMode: ScratchNotationPanelMode {
         switch self {
-        case .ready, .listening: return .targetReference
+        case .ready, .watching, .listening: return .targetReference
         case .copyActive, .paused: return .liveComparison
         case .result, .review, .lessonComplete: return .reviewComparison
         }
@@ -223,7 +238,7 @@ enum PracticePresentationState: Equatable, Sendable {
     var showsPerformance: Bool {
         switch self {
         case .copyActive, .paused, .result, .review: return true
-        case .ready, .listening, .lessonComplete: return false
+        case .ready, .watching, .listening, .lessonComplete: return false
         }
     }
 
@@ -232,6 +247,7 @@ enum PracticePresentationState: Equatable, Sendable {
     var label: String {
         switch self {
         case .ready: return "READY"
+        case .watching: return "WATCHING"
         case .listening: return "LISTENING"
         case .copyActive: return "COPY ACTIVE"
         case .paused: return "PAUSED"
@@ -246,7 +262,7 @@ enum PracticePresentationState: Equatable, Sendable {
     var variant: StatusBadgeVariant {
         switch self {
         case .ready: return .ready
-        case .listening: return .info
+        case .watching, .listening: return .info
         case .copyActive: return .accent
         case .paused: return .warning
         case .result: return .ready
@@ -270,6 +286,7 @@ enum PracticePresentationState: Equatable, Sendable {
         isReviewing: Bool = false,
         isLessonComplete: Bool = false
     ) -> PracticePresentationState {
+        if gameplay == .watching { return .watching }
         if isLessonComplete { return .lessonComplete }
         if isReviewing { return .review }
         switch gameplay {
@@ -277,7 +294,9 @@ enum PracticePresentationState: Equatable, Sendable {
             return isPaused ? .paused : .copyActive
         case .result, .unavailable:
             return .result
-        case .watching, .ready, .idle:
+        case .watching:
+            return .watching
+        case .ready, .idle:
             return isListening ? .listening : .ready
         }
     }

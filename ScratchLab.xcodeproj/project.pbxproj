@@ -18,10 +18,6 @@
 		2010AA0010AA0010AA0010AA /* CaptureReliabilityPhase1Tests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2010BB0010BB0010BB0010BB /* CaptureReliabilityPhase1Tests.swift */; };
 		210F31D6E01243445A04B700 /* MacCameraPreviewView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B2000003 /* MacCameraPreviewView.swift */; };
 		219D8D60A93840FC9A724C11 /* Resources/CoachInstructions in Resources */ = {isa = PBXBuildFile; fileRef = A2000031 /* Resources/CoachInstructions */; };
-		219D8D61A93840FC9A724C11 /* Resources/CoachDemoAudio in Resources */ = {isa = PBXBuildFile; fileRef = A2000032 /* Resources/CoachDemoAudio */; };
-		219D8D62A93840FC9A724C11 /* Resources/CoachDemoMotion in Resources */ = {isa = PBXBuildFile; fileRef = A2000035 /* Resources/CoachDemoMotion */; };
-		219D8D63A93840FC9A724C11 /* Resources/Notation in Resources */ = {isa = PBXBuildFile; fileRef = A2000036 /* Resources/Notation */; };
-		219D8D64A93840FC9A724C11 /* Resources/PracticeReelAudio in Resources */ = {isa = PBXBuildFile; fileRef = A2000043 /* Resources/PracticeReelAudio */; };
 		2286B90410380BCC202FE57B /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = A2000027 /* Assets.xcassets */; };
 		283607B7B4D70607A9ECD49F /* Date+ZIP.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4AC26632A6C58E1F015123CC /* Date+ZIP.swift */; };
 		286B96641152894682458B21 /* TimecodeInputTap.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1889754A4E4BC596F3652721 /* TimecodeInputTap.swift */; };
@@ -142,10 +138,6 @@
 		B5AA0009A1B2C3D4E5F60709 /* ScratchMotionAnalysis.swift in Sources */ = {isa = PBXBuildFile; fileRef = A2000034 /* ScratchMotionAnalysis.swift */; };
 		B7E427E9960BFF0ECAA43B45 /* Date+ZIP.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4AC26632A6C58E1F015123CC /* Date+ZIP.swift */; };
 		B9AF9ED5370241CF8BEFDB7C /* Resources/CoachInstructions in Resources */ = {isa = PBXBuildFile; fileRef = A2000031 /* Resources/CoachInstructions */; };
-		B9AF9ED6370241CF8BEFDB7C /* Resources/CoachDemoAudio in Resources */ = {isa = PBXBuildFile; fileRef = A2000032 /* Resources/CoachDemoAudio */; };
-		B9AF9ED7370241CF8BEFDB7C /* Resources/CoachDemoMotion in Resources */ = {isa = PBXBuildFile; fileRef = A2000035 /* Resources/CoachDemoMotion */; };
-		B9AF9ED8370241CF8BEFDB7C /* Resources/Notation in Resources */ = {isa = PBXBuildFile; fileRef = A2000036 /* Resources/Notation */; };
-		B9AF9EDA370241CF8BEFDB7C /* Resources/PracticeReelAudio in Resources */ = {isa = PBXBuildFile; fileRef = A2000043 /* Resources/PracticeReelAudio */; };
 		BCFC2E48C8DC97B933BA3EE3 /* TimecodeInputSample.swift in Sources */ = {isa = PBXBuildFile; fileRef = F7AD56A9978DD053CB2F5C9A /* TimecodeInputSample.swift */; };
 		BPF0011000BPF001BPF00001 /* BabyPlatterFixtureDecodeTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = BPF0010000BPF001BPF00001 /* BabyPlatterFixtureDecodeTests.swift */; };
 		C4BBF22D178BBE5493AC2B64 /* SessionExportCoordinator.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3C6C21E3D2ABD8AF9CE81ED0 /* SessionExportCoordinator.swift */; };
@@ -643,10 +635,7 @@
 		B5DD68C0FBB29078B178D060 /* OfflineScratchAdvisory.swift in Sources */ = {isa = PBXBuildFile; fileRef = 91CC302EB8FC61DAB6F93D04 /* OfflineScratchAdvisory.swift */; };
 		85152E11F5EFCD868CCFE66C /* OfflineScratchAdvisory.swift in Sources */ = {isa = PBXBuildFile; fileRef = 91CC302EB8FC61DAB6F93D04 /* OfflineScratchAdvisory.swift */; };
 		97E459A72AA35734FE882873 /* ScratchExampleLibrary.swift in Sources */ = {isa = PBXBuildFile; fileRef = 828B6960CCF300FCE42DA14E /* ScratchExampleLibrary.swift */; };
-		708E12C48DBB35B9E5F6348C /* ScratchExampleLibraryView.swift in Sources */ = {isa = PBXBuildFile; fileRef = FD61E3264990D2426532F9D7 /* ScratchExampleLibraryView.swift */; };
 		89C461ED345103E19C39F552 /* ScratchExampleLibraryTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = EC728221716BE6CB459F9375 /* ScratchExampleLibraryTests.swift */; };
-		1FAA36479025DA730287DCDF /* ReferenceExamples in Resources */ = {isa = PBXBuildFile; fileRef = 6C298CA3B9C8C704842435BF /* ReferenceExamples */; };
-		24ADAE74DFC1CF02482965AD /* ScratchExampleReviewTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5265CFE12A44A84B549A52DB /* ScratchExampleReviewTests.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -1143,10 +1132,7 @@
 		CB005F9D793DF3011342A3D7 /* ScratchHandPoseFrameExtractor.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "ScratchLab/ML/ScratchHandPoseFrameExtractor.swift"; sourceTree = SOURCE_ROOT; };
 		91CC302EB8FC61DAB6F93D04 /* OfflineScratchAdvisory.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "ScratchLab/ML/OfflineScratchAdvisory.swift"; sourceTree = SOURCE_ROOT; };
 		828B6960CCF300FCE42DA14E /* ScratchExampleLibrary.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "ScratchLab/Models/Reference/ScratchExampleLibrary.swift"; sourceTree = SOURCE_ROOT; };
-		FD61E3264990D2426532F9D7 /* ScratchExampleLibraryView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "ScratchLab/Views/Reference/ScratchExampleLibraryView.swift"; sourceTree = SOURCE_ROOT; };
 		EC728221716BE6CB459F9375 /* ScratchExampleLibraryTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "ScratchLabDesktopTests/ScratchExampleLibraryTests.swift"; sourceTree = SOURCE_ROOT; };
-		6C298CA3B9C8C704842435BF /* ReferenceExamples */ = {isa = PBXFileReference; lastKnownFileType = folder; path = "LocalReferenceLibrary/ReferenceExamples"; sourceTree = SOURCE_ROOT; };
-		5265CFE12A44A84B549A52DB /* ScratchExampleReviewTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "ScratchLabDesktopTests/ScratchExampleReviewTests.swift"; sourceTree = SOURCE_ROOT; };
 /* End PBXFileReference section */
 
 /* Begin PBXFileSystemSynchronizedRootGroup section */
@@ -1191,7 +1177,6 @@
 		2010DD0010DD0010DD0010DD /* ScratchLabDesktopTests */ = {
 			isa = PBXGroup;
 			children = (
-				5265CFE12A44A84B549A52DB /* ScratchExampleReviewTests.swift */,
 				EC728221716BE6CB459F9375 /* ScratchExampleLibraryTests.swift */,
 				REFVMT0FREF0001 /* ReferenceAuthoringViewModelTests.swift */,
 				REFBRGT0FREF0001 /* ReferenceAuthoringCaptureBridgeTests.swift */,
@@ -1412,7 +1397,6 @@
 		A5000002 /* ScratchLab */ = {
 			isa = PBXGroup;
 			children = (
-				6C298CA3B9C8C704842435BF /* ReferenceExamples */,
 				SLCORE00000000000000FR06 /* Analysis/ScratchAnalysis.swift */,
 				SLCORE00000000000000FR09 /* Analysis/ScratchAnalysisFixtureAdapter.swift */,
 				SLCORE00000000000000FR11 /* Analysis/ScratchAnalysisTimelineAdapter.swift */,
@@ -1471,7 +1455,6 @@
 		A5000004 /* Views */ = {
 			isa = PBXGroup;
 			children = (
-				FD61E3264990D2426532F9D7 /* ScratchExampleLibraryView.swift */,
 				A2000002 /* MainMenuView.swift */,
 				51C2E5852F9F900000E87B79 /* CoachPreviewView.swift */,
 				A2000003 /* LevelSelectView.swift */,
@@ -2094,10 +2077,6 @@
 				A11CE0000000000000000002 /* ScratchLabLogo.svg in Resources */,
 				B9AF9ED5370241CF8BEFDB7C /* Resources/CoachInstructions in Resources */,
 				51C2E59D2FA1B00000E87B79 /* Resources/Coach/Coach.usdz in Resources */,
-				B9AF9ED6370241CF8BEFDB7C /* Resources/CoachDemoAudio in Resources */,
-				B9AF9ED7370241CF8BEFDB7C /* Resources/CoachDemoMotion in Resources */,
-				B9AF9ED8370241CF8BEFDB7C /* Resources/Notation in Resources */,
-				B9AF9EDA370241CF8BEFDB7C /* Resources/PracticeReelAudio in Resources */,
 				VPRESMACVPRESMACVPRESMAC /* Resources/VirtualPlatter in Resources */,
 				SSSAHMAC /* ahhh.wav in Resources */,
 				SSSFRMAC /* fresh.wav in Resources */,
@@ -2118,10 +2097,6 @@
 			files = (
 				219D8D60A93840FC9A724C11 /* Resources/CoachInstructions in Resources */,
 				51C2E59E2FA1B00000E87B79 /* Resources/Coach/Coach.usdz in Resources */,
-				219D8D61A93840FC9A724C11 /* Resources/CoachDemoAudio in Resources */,
-				219D8D62A93840FC9A724C11 /* Resources/CoachDemoMotion in Resources */,
-				219D8D63A93840FC9A724C11 /* Resources/Notation in Resources */,
-				219D8D64A93840FC9A724C11 /* Resources/PracticeReelAudio in Resources */,
 				SSSAHIOS /* ahhh.wav in Resources */,
 				SSSFRIOS /* fresh.wav in Resources */,
 				SSSAYIOS /* ah_yeah.wav in Resources */,
@@ -2157,7 +2132,6 @@
 		4137724FB3900E509AAF6EDF /* Sources */ = {
 			isa = PBXSourcesBuildPhase;
 			files = (
-				708E12C48DBB35B9E5F6348C /* ScratchExampleLibraryView.swift in Sources */,
 				97E459A72AA35734FE882873 /* ScratchExampleLibrary.swift in Sources */,
 				B5DD68C0FBB29078B178D060 /* OfflineScratchAdvisory.swift in Sources */,
 				172C2858D593E3640B2D16BB /* ScratchHandPoseFrameExtractor.swift in Sources */,
@@ -2623,7 +2597,6 @@
 		F9TESTSRC10AA0010AA10AA /* Sources */ = {
 			isa = PBXSourcesBuildPhase;
 			files = (
-				24ADAE74DFC1CF02482965AD /* ScratchExampleReviewTests.swift in Sources */,
 				89C461ED345103E19C39F552 /* ScratchExampleLibraryTests.swift in Sources */,
 				REFVMT0TST0001 /* ReferenceAuthoringViewModelTests.swift in Sources */,
 				REFBRGT0TST0001 /* ReferenceAuthoringCaptureBridgeTests.swift in Sources */,

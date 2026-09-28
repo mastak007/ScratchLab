@@ -32,8 +32,8 @@ fileprivate enum PracticeAssistMode: String, CaseIterable, Identifiable {
     var title: String {
         switch self {
         case .autoCut:        return "Auto-cut"
-        case .demo:           return "Demo"
-        case .demoWithMotion: return "Demo + My Motion"
+        case .demo:           return "Silent Watch"
+        case .demoWithMotion: return "Watch + My Motion"
         case .guided:         return "Guided"
         case .coached:        return "Coached"
         case .open:           return "Open"
@@ -43,8 +43,8 @@ fileprivate enum PracticeAssistMode: String, CaseIterable, Identifiable {
     var explainer: String {
         switch self {
         case .autoCut:        return "Visual target preview. App playback is off for this mode."
-        case .demo:           return "ScratchLab plays the demo audio and moves the notation in time — watch and listen; this run isn't scored."
-        case .demoWithMotion: return "ScratchLab plays the demo audio and shows the target; your connected platter's motion is drawn over the target as you move. No camera, no mic — this run isn't scored."
+        case .demo:           return "Watch the authored canonical notation silently. No recording is played; this run isn't scored."
+        case .demoWithMotion: return "Watch silent canonical notation with your connected platter motion overlaid. No camera or mic; this run isn't scored."
         case .guided:         return "ScratchLab shows upcoming cut cues while you move the fader."
         case .coached:        return "Target pattern loops in time. Mic listens for your scratches and gives a practice estimate."
         case .open:           return "Static target reference. Mic listens; freestyle freely. No beat unless you turn one on."
@@ -88,13 +88,7 @@ struct PracticeModeView: View {
     // Bundled demo-audio player for the non-scored Demo assist mode. Reused
     // from the coach card; owned here so the live session can drive the demo
     // playback and the audio-synced notation playhead.
-    @StateObject private var demoPlayer = ScratchCoachDemoAudioPlayer()
 
-    // The call-and-response reel manifest backing the active Demo session,
-    // when a valid, audio-backed one is bundled. `nil` outside Demo mode or
-    // when the manifest is missing/invalid — the portrait reel then falls
-    // back to the horizontal demo chart. Set by configureDemoPlayback().
-    @State private var demoReel: PracticeReelTimeline?
 
     // Session state
     @State private var isSessionActive = false
@@ -116,6 +110,8 @@ struct PracticeModeView: View {
     // so the looping playhead / cue preview is one session-owned source of
     // truth that survives view rebuilds (e.g. rotation) instead of resetting.
     @State private var notationClockStartDate = Date()
+    @State private var notationPausedAt: Date?
+    @State private var watchBPM: Double?
     @State private var drillElapsedSeconds: TimeInterval = 0
     @State private var drillLoopCount: Int = 0
     @State private var drillBeatInLoop: Double = 0
@@ -196,15 +192,10 @@ struct PracticeModeView: View {
     // omitted (graceful), never a guessed fallback.
     private var targetNotation: ScratchNotation? {
         ScratchNotation.canonicalBeatPattern(forScratchID: scratch.id)?
-            .materialized(bpm: Double(practiceBeatStore.bpmValue))
+            .materialized(bpm: activeLaneBPM)
     }
 
-    private var practiceReadyTargetNotation: ScratchNotation? {
-        guard scratch.id == CaptureSessionScratchType.babyScratch.rawValue else {
-            return targetNotation
-        }
-        return ScratchNotation.babyScratch ?? targetNotation
-    }
+    private var practiceReadyTargetNotation: ScratchNotation? { targetNotation }
 
     private var assistModeBinding: Binding<PracticeAssistMode> {
         Binding(
@@ -223,23 +214,13 @@ struct PracticeModeView: View {
     // everywhere instead of scattering `== .demo` / `!= .demo` checks. Adding
     // `.demoWithMotion` only needed these to be taught the new case once.
 
-    /// Reference-only Demo: the bundled demo audio plays and the notation
-    /// follows it — nothing else runs. No live performed capture, no camera,
-    /// no mic analysis, no scoring, no results, no persisted attempt.
+    /// Silent authored-notation modes keep their persisted assist-mode names.
+    /// No camera, mic analysis, score, result, or persisted learner attempt.
     private var isReferenceOnlyDemo: Bool { practiceAssistMode == .demo }
-
-    /// A mode that plays the bundled demo audio instead of the scored mic
-    /// loop: `.demo` (reference only) and `.demoWithMotion` (same playback,
-    /// plus the learner's live platter motion drawn over the target). Neither
-    /// starts the camera or mic, and neither is scored or persisted.
-    private var isDemoAudioMode: Bool {
+    private var isSilentWatchMode: Bool {
         practiceAssistMode == .demo || practiceAssistMode == .demoWithMotion
     }
-
-    /// The scored practice loop — camera preview + mic analysis + running
-    /// score + post-take results + progression. Every mode that is not a
-    /// demo-audio mode.
-    private var isScoredPracticeMode: Bool { !isDemoAudioMode }
+    private var isScoredPracticeMode: Bool { !isSilentWatchMode }
 
     private var normalizedDrillEvents: [ScratchRenderEvent] {
         guard let drillTimeline else { return [] }
@@ -281,7 +262,12 @@ struct PracticeModeView: View {
     }
 
     private var activeSessionDuration: TimeInterval {
-        isComboChallengeMode ? comboSessionDuration : selectedDuration
+        if isSilentWatchMode { return targetNotation?.timelineDuration ?? 0 }
+        return isComboChallengeMode ? comboSessionDuration : selectedDuration
+    }
+
+    private var watchClock: LaneClock {
+        .bounded(start: notationClockStartDate, duration: activeSessionDuration)
     }
 
     private var currentSessionTitle: String {
@@ -427,6 +413,11 @@ struct PracticeModeView: View {
     }
 
     private var setupModeNote: String {
+        if isSilentWatchMode {
+            return targetNotation == nil
+                ? "Watch unavailable: no authored canonical notation for this technique. Listen is unavailable."
+                : "Silent canonical-notation Watch. No microphone, camera, or scratch recording; Listen is unavailable."
+        }
         if isComboChallengeMode {
             return "Deck video stays live while the phrase cue runs. Add optional beat guidance, or keep live audio only."
         }
@@ -476,26 +467,16 @@ struct PracticeModeView: View {
         self.usesSimplifiedReady = usesSimplifiedReady
     }
 
-    /// Single derived Practice presentation state over the real iOS Practice
-    /// state: `isSessionActive`/`isPaused`/`showingResults` (attempt/pause/
-    /// result), `demoPlayer.isPlaying` (reference-audio listen), and
-    /// `progressManager.isScratchMastered` (lesson completion). One axis, so
-    /// the ready overlay and the live/result surfaces can never contradict.
-    ///
-    /// Demo mode is reference playback (the Figma "Listen" state), never a live
-    /// copy attempt — it is mapped to `.listening`/`.paused` rather than folded
-    /// into `.copyActive`, so "Listen" stays reachable from the real
-    /// `demoPlayer.isPlaying` owner and the visible state never reads COPY
-    /// while the learner is only listening.
+    /// Derive presentation from the existing session owner, never an audio player.
     private var practicePresentationState: PracticePresentationState {
-        if isDemoAudioMode {
-            return isPaused ? .paused : .listening
+        if isSilentWatchMode && isSessionActive {
+            return isPaused ? .paused : .watching
         }
         return PracticePresentationState.derive(
             isSessionActive: isSessionActive,
             isPaused: isPaused,
             isResult: showingResults,
-            isListening: demoPlayer.isPlaying,
+            isListening: false,
             isLessonComplete: progressManager.isScratchMastered(activeScratch.id)
         )
     }
@@ -1429,37 +1410,15 @@ struct PracticeModeView: View {
         }
     }
 
-    /// The target rendered during the active session. Baby Scratch demo-audio
-    /// modes use the CXL audio with the existing canonical Baby Scratch
-    /// notation; scored modes keep the BPM-materialized canonical teaching pattern.
-    private var activeLaneTargetNotation: ScratchNotation? {
-        guard isDemoAudioMode,
-              activeScratch.id == CaptureSessionScratchType.babyScratch.rawValue else {
-            return targetNotation
-        }
-        return ScratchNotation.babyScratch ?? targetNotation
-    }
-
-    /// Beat-grid tempo for the active lane. The bundled CXL recording is a
-    /// fixed 79 BPM reference and must not inherit an unrelated user-selected
-    /// practice tempo.
+    /// Authored notation at the selected lesson tempo. No recorded trajectory.
+    private var activeLaneTargetNotation: ScratchNotation? { targetNotation }
     private var activeLaneBPM: Double {
-        if isDemoAudioMode,
-           activeScratch.id == CaptureSessionScratchType.babyScratch.rawValue {
-            return ScratchLabPracticeReference.cxlBabyScratchBPM
-        }
-        return Double(practiceBeatStore.bpmValue)
+        isSilentWatchMode && isSessionActive
+            ? (watchBPM ?? Double(practiceBeatStore.bpmValue))
+            : Double(practiceBeatStore.bpmValue)
     }
 
-    // The notation lane this mode + orientation should render, paired with its
-    // clock. Demo follows the exact bundled demo audio; Auto-cut / Guided loop
-    // the target pattern; Coached / Open hold it parked. `nil` when the active
-    // scratch ships no notation.
     private var activeLane: (content: LaneContent, clock: LaneClock)? {
-        if practiceAssistMode == .demo, let reel = demoReel {
-            return (LaneContent(reel: reel),
-                    .audioTime { demoPlayer.sampledPlaybackTime() })
-        }
         guard let notation = activeLaneTargetNotation else { return nil }
         // Pass the session's selected BPM through so `ScratchMotionLane`'s
         // existing beat-grid renderer (gated on `content.beatsPerMinute`)
@@ -1469,10 +1428,9 @@ struct PracticeModeView: View {
                                   beatsPerMinute: activeLaneBPM)
         switch practiceAssistMode {
         case .demo, .demoWithMotion:
-            // Follow the demo audio position. `.demo` with a valid reel took
-            // the branch above; `.demoWithMotion` always lands here (canonical
-            // target notation + a live performance lane, never the reel).
-            return (content, .audioTime { demoPlayer.sampledPlaybackTime() })
+            return (content, isPaused
+                ? .fixed(watchClock.now(at: notationPausedAt ?? Date()))
+                : watchClock)
         case .autoCut, .guided, .coached:
             // Coached promotes from `.fixed(0)` to a wall-clock loop so the
             // lane visibly moves under the action line while the mic listens.
@@ -1488,20 +1446,8 @@ struct PracticeModeView: View {
         }
     }
 
-    // The unified notation-first timing lane — the primary learning surface in
-    // every mode and orientation. Auto-cut / Guided / Coached / Open /
-    // Demo + My Motion render through the canonical `ScratchNotationPanel`
-    // (`ScratchPhraseChartView`) — the same renderer as the pre-session
-    // "TARGET — COPY THIS" card and macOS Review — so target geometry, colour
-    // tokens, turnaround markers, and direction cues read identically
-    // everywhere. Reference-only Demo keeps `ScratchMotionLane`: its
-    // call-and-response reel carries demo/copy segments and derived ghost
-    // strokes that `ScratchNotation` has no vocabulary for, and it never
-    // shows a live-performance overlay (see `updateLivePerformedNotation`'s
-    // `isReferenceOnlyDemo` guard). Demo + My Motion is *not* reference-only:
-    // it reuses the canonical target/performance surface below, adding a live
-    // performed lane driven by the demo-audio clock. A status chip names the
-    // runtime state.
+    // Both renderers consume the same authored notation and session-owned clock.
+    // Silent Watch never substitutes an extracted performance or an audio reel.
     @ViewBuilder
     private func notationLanePanel(axis: LaneAxis) -> some View {
         if let lane = activeLane {
@@ -1778,7 +1724,7 @@ struct PracticeModeView: View {
         }()
         let subtitle: String = {
             if segment != nil {
-                return isCopy ? "Copy what you heard" : "Watch & listen"
+                return isCopy ? "Copy the notation" : "Watch silently"
             }
             return "Play it on the line"
         }()
@@ -1906,14 +1852,15 @@ struct PracticeModeView: View {
         startSession()
     }
 
-    /// Production V3.2 "Watch" — runs the Demo assist mode (bundled demo audio
-    /// + notation play along; non-scored) so the learner watches and listens.
+    /// Non-scored silent Watch of the selected authored canonical pattern.
     private func startWatchPractice() {
         practiceAssistModeRaw = PracticeAssistMode.demo.rawValue
         startSession()
     }
 
     private func startSession() {
+        guard !isSilentWatchMode || targetNotation != nil else { return }
+        watchBPM = isSilentWatchMode ? Double(practiceBeatStore.bpmValue) : nil
         let sessionDuration = activeSessionDuration
         timeRemaining = sessionDuration
         currentScore = 0
@@ -1952,16 +1899,10 @@ struct PracticeModeView: View {
         // Stamp the notation preview clock so the looping playhead starts from
         // t = 0 together with this session.
         notationClockStartDate = Date()
+        notationPausedAt = nil
 
-        // Demo-audio modes are non-scored reference playback: play the bundled
-        // demo audio and skip live scratch analysis. `.demoWithMotion` also
-        // stays camera-free and mic-free — it only adds the live platter
-        // overlay, which rides the always-on MIDI feed. Every other mode runs
-        // scored mic analysis with the camera preview.
-        if isDemoAudioMode {
-            configureDemoPlayback()
-            demoPlayer.play()
-        } else {
+        // Silent Watch does not start microphone, camera, or scratch playback.
+        if !isSilentWatchMode {
             isCameraPreviewVisible = true
             audioEngine.startAnalyzing(for: activeScratch)
         }
@@ -1973,52 +1914,21 @@ struct PracticeModeView: View {
         startSessionTimer()
     }
 
-    /// Configures the Demo-mode audio and the matching notation surface.
-    ///
-    /// Baby Scratch uses the release-only CXL audio while retaining the
-    /// existing canonical Baby Scratch notation. The older call-and-response
-    /// reel remains a fallback for a future scratch with no dedicated audio.
-    private func configureDemoPlayback() {
-        if activeScratch.id == CaptureSessionScratchType.babyScratch.rawValue,
-           ScratchNotation.babyScratch != nil {
-            demoReel = nil
-            demoPlayer.configure(
-                withAudioFileNamed: ScratchLabPracticeReference.cxlBabyScratchAudioFileName
-            )
-            return
-        }
-
-        if let reel = loadDemoReelTimeline(), reel.isValid {
-            demoPlayer.configure(withAudioFileNamed: reel.audioFile)
-            // The manifest only drives the reel if its paired audio resolved.
-            demoReel = demoPlayer.isAudioAvailable ? reel : nil
-        } else {
-            demoReel = nil
-        }
-        if demoReel == nil {
-            demoPlayer.configure(with: coachInstruction)
-        }
-    }
-
-    /// Loads the call-and-response demo manifest for the active scratch, if one
-    /// is bundled. Only Baby Scratch ships a reel manifest today.
-    private func loadDemoReelTimeline() -> PracticeReelTimeline? {
-        guard activeScratch.id == "baby_scratch" else { return nil }
-        return PracticeReelTimeline.loadBundled(named: PracticeReelTimeline.babyReelManifestName)
-    }
-    
     private func pauseSession() {
+        if isSilentWatchMode { notationPausedAt = Date() }
         isPaused = true
         sessionTimer?.invalidate()
         audioEngine.stopAnalyzing()
         practiceBeatStore.stopPlayback()
-        demoPlayer.pause()
     }
     
     private func resumeSession() {
         isPaused = false
-        if isDemoAudioMode {
-            demoPlayer.play()
+        if isSilentWatchMode {
+            if let pausedAt = notationPausedAt {
+                notationClockStartDate = notationClockStartDate.addingTimeInterval(Date().timeIntervalSince(pausedAt))
+                notationPausedAt = nil
+            }
         } else {
             audioEngine.startAnalyzing(for: activeScratch)
         }
@@ -2029,11 +1939,9 @@ struct PracticeModeView: View {
     private func endSession() {
         midiControllerDispatcher.markCaptureStopped()
         finalizeComboLoopProgress()
-        demoReel = nil
         sessionTimer?.invalidate()
         audioEngine.stopAnalyzing()
         practiceBeatStore.stopPlayback()
-        demoPlayer.stop()
 
         isCameraPreviewVisible = false
         isSessionActive = false
@@ -2079,7 +1987,6 @@ struct PracticeModeView: View {
         sessionTipText = ""
         showingResults = false
         isSessionActive = false
-        demoReel = nil
     }
     
     private func cleanupSession() {
@@ -2087,9 +1994,7 @@ struct PracticeModeView: View {
         sessionTimer?.invalidate()
         audioEngine.stopAnalyzing()
         practiceBeatStore.stopPlayback()
-        demoPlayer.stop()
         isCameraPreviewVisible = false
-        demoReel = nil
         drillElapsedSeconds = 0
         drillLoopCount = 0
         drillBeatInLoop = 0
@@ -2241,8 +2146,14 @@ struct PracticeModeView: View {
     private func startSessionTimer() {
         sessionTimer?.invalidate()
 
-        let tick: TimeInterval = isGuidedDrillMode ? 0.1 : 1.0
+        let tick: TimeInterval = isGuidedDrillMode || isSilentWatchMode ? 0.1 : 1.0
         sessionTimer = Timer.scheduledTimer(withTimeInterval: tick, repeats: true) { _ in
+            if isSilentWatchMode {
+                let date = Date()
+                timeRemaining = max(0, activeSessionDuration - watchClock.now(at: date))
+                if watchClock.isComplete(at: date) { endSession() }
+                return
+            }
             if timeRemaining > tick {
                 timeRemaining -= tick
             } else {
@@ -2530,7 +2441,6 @@ struct PracticeModeView: View {
         sessionTimer?.invalidate()
         audioEngine.stopAnalyzing()
         practiceBeatStore.stopPlayback()
-        demoPlayer.stop()
 
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.7) {
             endSession()
@@ -3103,6 +3013,7 @@ private extension SessionSetupOverlay {
                 Text(startButtonTitle)
             }
             .scratchLabPrimaryButton(fillsWidth: true)
+            .disabled(isSilentWatchUnavailable)
             }
         }
     }
@@ -3565,7 +3476,11 @@ private struct PracticeReadyOverlay: View {
                     Text("Watch")
                 }
                 .scratchLabSecondaryButton(fillsWidth: true)
+                .disabled(targetNotation == nil)
             }
+            Text("Listen unavailable — no approved ScratchLab-owned scratch recording.")
+                .font(ScratchLabDesign.Typo.caption)
+                .foregroundStyle(.secondary)
 
             midiMappingCard
         }
@@ -3740,6 +3655,10 @@ private struct PracticeReadyOverlay: View {
                 Text("Watch")
             }
             .scratchLabSecondaryButton(fillsWidth: true)
+            .disabled(targetNotation == nil)
+            Text("Listen unavailable — no approved ScratchLab-owned scratch recording.")
+                .font(ScratchLabDesign.Typo.caption)
+                .foregroundStyle(.secondary)
         }
     }
 
@@ -3878,6 +3797,11 @@ struct SessionSetupOverlay: View {
     let onSelectInputSource: (AudioInputSource) -> Void
     let onStart: () -> Void
     let onBack: () -> Void
+
+    private var isSilentWatchUnavailable: Bool {
+        (selectedAssistMode == .demo || selectedAssistMode == .demoWithMotion)
+            && ScratchNotation.canonicalBeatPattern(forScratchID: scratch.id) == nil
+    }
 
     private func inputTileSubtitle(for source: AudioInputSource) -> String {
         if source == .lineIn, let detectedUSBDeviceName, !detectedUSBDeviceName.isEmpty {
@@ -4053,6 +3977,7 @@ struct SessionSetupOverlay: View {
                             Text(startButtonTitle)
                         }
                         .scratchLabPrimaryButton(fillsWidth: true)
+                        .disabled(isSilentWatchUnavailable)
                     }
                     .padding(.horizontal, 24)
 
@@ -4240,7 +4165,6 @@ private struct GuidedCutCueLayer: View {
 private struct ScratchCoachCard: View {
     let instruction: ScratchCoachInstruction
     @ObservedObject var practiceBeatStore: PracticeBeatStore
-    @StateObject private var demoPlayer = ScratchCoachDemoAudioPlayer()
 
     private let theme = ScratchCoachCardTheme(
         accentColor: ScratchLabDesign.Sem.accent,
@@ -4264,70 +4188,23 @@ private struct ScratchCoachCard: View {
     }
 
     private var demoStatusMessage: String {
-        if instruction.scratchType.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-            return "Choose a scratch to load a coach demo."
-        }
-        if isDemoPlaybackBlocked {
-            return "Stop the practice beat to hear the coach demo."
-        }
-        if !demoPlayer.isAudioAvailable {
-            return "Demo audio unavailable for this scratch."
-        }
-        return instruction.demoAudioRole == "withBeat"
-            ? "Coach demo includes beat and scratch together."
-            : "Coach demo is isolated for scratch focus."
+        "Listen unavailable — no approved ScratchLab-owned scratch recording."
     }
 
     var body: some View {
         ScratchCoachCardContent(
             instruction: instruction,
             demoStatusMessage: demoStatusMessage,
-            playbackTimeProvider: { demoPlayer.currentPlaybackTime },
-            isPlayingProvider: { demoPlayer.isActivelyPlayingAudio },
+            playbackTimeProvider: { 0 },
+            isPlayingProvider: { false },
             theme: theme
         ) {
-            VStack(alignment: .leading, spacing: 12) {
-                HStack(spacing: 10) {
-                    coachDemoButton(
-                        title: "Listen",
-                        icon: "play.fill",
-                        enabled: demoPlayer.isAudioAvailable && !isDemoPlaybackBlocked,
-                        action: demoPlayer.play
-                    )
-
-                    coachDemoButton(
-                        title: "Pause",
-                        icon: "pause.fill",
-                        enabled: demoPlayer.isPlaying && !isDemoPlaybackBlocked,
-                        action: demoPlayer.pause
-                    )
-
-                    coachDemoButton(
-                        title: "Replay",
-                        icon: "gobackward",
-                        enabled: demoPlayer.isAudioAvailable && !isDemoPlaybackBlocked,
-                        action: demoPlayer.replay
-                    )
-                }
-            }
+            Text("Listen unavailable").foregroundStyle(.secondary)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .scratchLabCard(.standard)
         .padding(.horizontal, 16)
         .accessibilityIdentifier("scratchlab-coach-card")
-        .onAppear {
-            demoPlayer.configure(with: instruction)
-        }
-        .onChange(of: demoInstructionKey) { _, _ in
-            demoPlayer.configure(with: instruction)
-        }
-        .onChange(of: practiceBeatStore.isPlaying) { _, isPlaying in
-            guard isPlaying else { return }
-            demoPlayer.stop()
-        }
-        .onDisappear {
-            demoPlayer.stop()
-        }
     }
 
     private func coachDemoButton(

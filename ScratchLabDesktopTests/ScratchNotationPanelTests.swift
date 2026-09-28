@@ -679,7 +679,7 @@ final class PracticePresentationStateTests: XCTestCase {
 
     func testIdleWatchingReadyDeriveToReady() {
         XCTAssertEqual(PracticePresentationState.derive(gameplay: .idle), .ready)
-        XCTAssertEqual(PracticePresentationState.derive(gameplay: .watching), .ready)
+        XCTAssertEqual(PracticePresentationState.derive(gameplay: .watching), .watching)
         XCTAssertEqual(PracticePresentationState.derive(gameplay: .ready), .ready)
     }
 

@@ -540,59 +540,42 @@ struct LaneWiringTests {
         #expect(!source.contains("TimingLaneView"))
     }
 
-    @Test("Demo follows the demo-audio clock; scored modes loop or park")
+    @Test("Silent Watch uses bounded notation time; scored modes still loop or park")
     func clockPerMode() throws {
         let source = try practiceSource()
-        let lane = try sliceBetween(source,
-            from: "private var activeLane",
-            to: "private func notationLanePanel")
-        #expect(lane.contains("LaneContent(reel: reel)"))
+        let lane = try sliceBetween(source, from: "private var activeLane", to: "private func notationLanePanel")
         #expect(lane.contains("LaneContent(notation: notation"))
-        #expect(lane.contains(".audioTime { demoPlayer.sampledPlaybackTime() }"))
+        #expect(lane.contains(": watchClock"))
+        #expect(!lane.contains("sampledPlaybackTime"))
         #expect(lane.contains(".looping(start: notationClockStartDate"))
         #expect(lane.contains(".fixed(0)"))
     }
 
-    @Test("Demo mode starts no scoring or live-mic analysis")
+    @Test("Silent Watch starts no microphone analysis or scratch recording")
     func demoStartsNoAnalysis() throws {
         let source = try practiceSource()
-        let startBody = try sliceBetween(source,
-            from: "private func startSession()",
-            to: "private func configureDemoPlayback")
-        #expect(startBody.contains("configureDemoPlayback()"))
+        let startBody = try sliceBetween(source, from: "private func startSession()", to: "private func pauseSession")
+        #expect(startBody.contains("if !isSilentWatchMode {"))
         #expect(startBody.contains("audioEngine.startAnalyzing(for: activeScratch)"))
-        let demoBranch = try sliceBetween(startBody,
-            from: "if isDemoAudioMode {", to: "} else {")
-        #expect(demoBranch.contains("demoPlayer.play()"))
-        #expect(!demoBranch.contains("startAnalyzing"))
+        #expect(!startBody.contains("demoPlayer"))
+        #expect(source.contains("guard isScoredPracticeMode else { return }"))
     }
 
-    @Test("iOS Baby Demo selects the clean CXL audio and notation before the legacy reel")
-    func babyDemoUsesCleanCXLReference() throws {
+    @Test("Baby Watch selects authored notation, never an archival performance")
+    func babyDemoUsesCanonicalNotation() throws {
         let source = try practiceSource()
-        let configuration = try sliceBetween(source,
-            from: "private func configureDemoPlayback()",
-            to: "private func loadDemoReelTimeline()")
-
-        #expect(configuration.contains("ScratchNotation.babyScratch != nil"))
-        #expect(configuration.contains("ScratchLabPracticeReference.cxlBabyScratchAudioFileName"))
-        #expect(configuration.contains("return"))
-        #expect(configuration.range(of: "ScratchLabPracticeReference.cxlBabyScratchAudioFileName")!.lowerBound
-            < configuration.range(of: "loadDemoReelTimeline()")!.lowerBound)
-
-        let lane = try sliceBetween(source,
-            from: "private var activeLaneTargetNotation",
-            to: "private func notationLanePanel")
-        #expect(lane.contains("ScratchNotation.babyScratch ?? targetNotation"))
-        #expect(lane.contains("ScratchLabPracticeReference.cxlBabyScratchBPM"))
+        #expect(source.contains("private var activeLaneTargetNotation: ScratchNotation? { targetNotation }"))
+        #expect(source.contains("ScratchNotation.canonicalBeatPattern"))
+        #expect(!source.contains("ScratchNotation.babyScratch"))
+        #expect(!source.contains("cxlBabyScratchAudioFileName"))
     }
 
-    @Test("A future non-Baby reel can still fall back gracefully")
-    func fallbackPathExists() throws {
+    @Test("No archival reel fallback exists")
+    func noArchiveFallback() throws {
         let source = try practiceSource()
-        #expect(source.contains("demoReel = demoPlayer.isAudioAvailable ? reel : nil"))
-        #expect(source.contains("demoPlayer.configure(with: coachInstruction)"))
-        #expect(source.contains("PracticeReelTimeline.loadBundled"))
+        #expect(!source.contains("demoReel"))
+        #expect(!source.contains("PracticeReelTimeline.loadBundled"))
+        #expect(!source.contains("sampledPlaybackTime()"))
     }
 
     @Test("The static iOS launch screen uses the compact launch-only logo")

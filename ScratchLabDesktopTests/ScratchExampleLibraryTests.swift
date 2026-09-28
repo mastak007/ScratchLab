@@ -3,23 +3,8 @@ import XCTest
 @testable import ScratchLab
 
 final class ScratchExampleLibraryTests: XCTestCase {
-    func testBundledCatalogueContainsCompleteUnapprovedExamplesAndVerifiedAssets() async throws {
-        let library = try await ScratchExampleLibrary.loadBundled()
-        let examples = library.manifest.examples
-        XCTAssertFalse(examples.isEmpty)
-        XCTAssertEqual(examples.count, 24)
-        XCTAssertEqual(examples.filter { $0.classLabel == "tears" }.count, 2)
-        XCTAssertEqual(examples.filter { $0.classLabel != "tears" }.count, 22)
-        XCTAssertEqual(examples.compactMap(\.sequence).count, 24)
-        XCTAssertEqual(examples.filter { $0.sequence?.audioRolesConfirmed == false }.count, 9)
-        XCTAssertEqual(Set(examples.map(\.classLabel)), Set(ScratchClassLabel.allCases.map(\.rawValue)))
-        XCTAssertTrue(examples.allSatisfy { !$0.canonicalApproval && $0.labelStatus == "sourceLabelUnreviewed" })
-        XCTAssertEqual(Set(library.manifest.models.map(\.modality)), Set(["audio", "motion"]))
-        XCTAssertTrue(library.manifest.models.allSatisfy(\.advisoryOnly))
-        for asset in library.manifest.assets {
-            let url = try await library.verifiedURL(assetID: asset.id)
-            XCTAssertTrue(url.isFileURL, asset.id)
-        }
+    func testArchivalCatalogueIsNotBundled() {
+        XCTAssertNil(Bundle.main.url(forResource: "manifest", withExtension: "json", subdirectory: "ReferenceExamples"))
     }
 
     func testLoadsProvenanceWithoutPromotingSourceLabelsAndVerifiesSelectedMedia() async throws {

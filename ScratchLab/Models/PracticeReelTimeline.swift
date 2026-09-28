@@ -1,13 +1,5 @@
 import Foundation
 
-// Audio-only target used by the learner release Practice surface. This is
-// deliberately separate from the Capture/CXL reference-motion resources:
-// Practice can ship a clean teaching phrase without changing authoring or
-// capture timing.
-enum ScratchLabPracticeReference {
-    static let cxlBabyScratchAudioFileName = "cxl_baby_target.wav"
-    static let cxlBabyScratchBPM = 79.0
-}
 
 // Call-and-response timing manifest for the practice Demo mode.
 //
@@ -149,32 +141,17 @@ struct PracticeReelTimeline: Decodable, Equatable, Sendable {
     }
 }
 
-// MARK: - Future audio assets
+// MARK: - Offline research schema
 //
-// The bundled interim asset is `baby_noBeat.wav` — a dry, beat-free Baby
-// Scratch take — described by `baby_reel.json` with `bpm` omitted. The
-// call-and-response model is already shaped for the planned over-beat asset,
-// so swapping it in is a manifest change with no code change:
+// Historical reel documents remain decodable for research/tests. They are not
+// canonical notation, shipping media, or a runtime Practice fallback. Adding an
+// audioFile to a manifest does not approve that recording for the application.
 //
-//   • Author one audio file alternating <baby scratch over beat> and
-//     <beat-only copy break>, e.g. demo / copy / demo / copy.
-//   • Point a manifest's `audioFile` at it and set `bpm` to the beat tempo —
-//     the Demo reel then renders a beat grid automatically.
-//   • Mark each "scratch over beat" span as a `demo` segment and each
-//     "beat-only" span as a `copy` segment; place reference `strokes` only
-//     inside the demo segments (copy windows derive their ghost targets via
-//     `derivedCopyGhostStrokes()`).
-//   • Keep `audioDuration` frame-accurate; `audioDurationIssue(actualDuration:)`
-//     cross-checks it against the real file.
-//
-// The loader resolves audio purely from the manifest's `audioFile` field — no
-// filename is hardcoded — so a new asset needs only a new or edited manifest.
-
 // MARK: - Loading
 
 extension PracticeReelTimeline {
 
-    /// Canonical notation view of the reel's authored reference strokes.
+    /// Legacy research notation view; not a canonical teaching pattern.
     ///
     /// The reel manifest is already the frame-aligned source of truth for
     /// Practice audio, including the deliberately empty copy windows. Keeping
@@ -211,10 +188,9 @@ extension PracticeReelTimeline {
 
     /// Resolves a bundled manifest JSON URL. Searches the `PracticeReelAudio`
     /// resource folder (where the paired reel audio lives), then the bundle root.
+    /// Offline manifest type only. Archival reels are not app resources.
     static func bundledManifestURL(named name: String, in bundle: Bundle = .main) -> URL? {
-        let base = (name as NSString).deletingPathExtension
-        return bundle.url(forResource: base, withExtension: "json", subdirectory: "PracticeReelAudio")
-            ?? bundle.url(forResource: base, withExtension: "json")
+        nil
     }
 
     /// Loads and decodes a bundled manifest. Returns `nil` when the manifest is
