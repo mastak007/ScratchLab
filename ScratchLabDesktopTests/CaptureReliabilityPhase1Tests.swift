@@ -1812,8 +1812,9 @@ final class CaptureReliabilityPhase1CoreTests: XCTestCase {
             try await Task.sleep(nanoseconds: 25_000_000)
         }
         let preparedResult = try XCTUnwrap(coordinator.lastResult)
-        coordinator.markSharePresented()
-        coordinator.handleShareOutcome(.cancelled)
+        let requestID = try XCTUnwrap(coordinator.shareRequest?.id)
+        coordinator.markSharePresented(requestID: requestID)
+        coordinator.handleShareOutcome(.cancelled, requestID: requestID)
 
         if case let .cancelled(cancelledResult) = coordinator.state {
             XCTAssertEqual(cancelledResult, preparedResult)
@@ -1831,7 +1832,7 @@ final class CaptureReliabilityPhase1CoreTests: XCTestCase {
         }
 
         let impossibleCompletion = SessionExportCoordinator()
-        impossibleCompletion.handleShareOutcome(.completed)
+        impossibleCompletion.handleShareOutcome(.completed, requestID: UUID())
         if case .failed(.unableToPresentShareOptions) = impossibleCompletion.state {
             XCTAssertTrue(impossibleCompletion.canRetry)
         } else {
@@ -2170,8 +2171,9 @@ final class CaptureReliabilityPhase1CoreTests: XCTestCase {
         }
 
         // Cancellation stays distinct from failure on this same path.
-        coordinator.markSharePresented()
-        coordinator.handleShareOutcome(.cancelled)
+        let requestID = try XCTUnwrap(coordinator.shareRequest?.id)
+        coordinator.markSharePresented(requestID: requestID)
+        coordinator.handleShareOutcome(.cancelled, requestID: requestID)
         XCTAssertTrue(coordinator.wasCancelled)
         XCTAssertFalse(coordinator.canRetry)
         XCTAssertEqual(coordinator.statusMessage, "Share cancelled.")
@@ -8917,9 +8919,11 @@ final class CaptureReliabilityPhase1CoreTests: XCTestCase {
             XCTAssertTrue(source.contains(label), "Missing Review label \(label)")
         }
 
-        XCTAssertTrue(source.contains("reviewDecisionByTakeID[reviewTakeID]"))
+        XCTAssertTrue(source.contains("reviewDecisionByTakeID[context.sidecarURL]"))
         XCTAssertTrue(source.contains("persistReviewDecision"))
-        XCTAssertTrue(source.contains("sidecar.reviewed"))
+        XCTAssertTrue(source.contains("try context.reviewed(sidecar"))
+        let core = try String(contentsOf: projectRootURL().appendingPathComponent("ScratchLab/Models/CaptureCore.swift"), encoding: .utf8)
+        XCTAssertTrue(core.contains("return sidecar.reviewed(status: status"))
         XCTAssertTrue(source.contains("Audio and video stay untouched."))
         XCTAssertTrue(source.contains("if hasRecordedTake {"))
         XCTAssertTrue(source.contains("if hasReviewNotationPreview {"))
@@ -25253,14 +25257,14 @@ final class SessionArchiveReferenceTearEvidenceTests: XCTestCase {
             let generatedAt = Date(timeIntervalSince1970: 1_710_000_001)
             let expectedMetadata = try builder.metadataDocument(for: package, sidecarSnapshots: snapshots)
             let expectedExportMetadata = try builder.exportMetadataDocument(for: package, options: SessionExportOptions(), sidecarSnapshots: snapshots)
-            let expectedReview = builder.reviewDocument(for: package, generatedAt: generatedAt, sidecarSnapshots: snapshots)
+            let expectedReview = try builder.reviewDocument(for: package, generatedAt: generatedAt, sidecarSnapshots: snapshots)
             let expectedReplay = builder.replayDocument(for: package, generatedAt: generatedAt, sidecarSnapshots: snapshots)
             var changed = original
             changed.detectedNotation = nil
             try changed.encodedData().write(to: take.sidecarURL, options: .atomic)
             XCTAssertEqual(try builder.metadataDocument(for: package, sidecarSnapshots: snapshots), expectedMetadata)
             XCTAssertEqual(try builder.exportMetadataDocument(for: package, options: SessionExportOptions(), sidecarSnapshots: snapshots), expectedExportMetadata)
-            XCTAssertEqual(builder.reviewDocument(for: package, generatedAt: generatedAt, sidecarSnapshots: snapshots), expectedReview)
+            XCTAssertEqual(try builder.reviewDocument(for: package, generatedAt: generatedAt, sidecarSnapshots: snapshots), expectedReview)
             XCTAssertEqual(builder.replayDocument(for: package, generatedAt: generatedAt, sidecarSnapshots: snapshots), expectedReplay)
             XCTAssertNotEqual(builder.replayDocument(for: package, generatedAt: generatedAt), expectedReplay)
         }.value
@@ -25641,5 +25645,2360 @@ final class WatchPendingStopRecoveryTests: XCTestCase {
             activeCommand: nil, stoppedTakeIdentities: terminalIdentities) else {
             return XCTFail("A retired Stop identity cannot be started after another take ends.")
         }
+    }
+}
+
+
+// Batch 3 read-only forensics: these assertions characterize CURRENT defects.
+// This is not a repaired-contract regression or a private SwiftUI action test.
+extension CaptureReliabilityPhase1CoreTests {
+    func testMacAnalyzerTakeAuthorityForensicTwoTakeDiagnostic() throws {
+        let root = try makeTemporaryDirectory()
+        let fixture = try makeCanonicalPackage(rootURL: root)
+        let package = fixture // A/B are exercised; the third existing fixture take remains a control.
+        let takeA = package.takes[0]
+        let takeB = package.takes[1]
+        XCTAssertNotEqual(takeA.takeID, takeB.takeID)
+        let decoder = JSONDecoder.captureCoreDecoder
+        var sidecarA = try decoder.decode(CaptureCore.LocalRecordingSidecar.self,
+            from: Data(contentsOf: takeA.sidecarURL))
+        var sidecarB = try decoder.decode(CaptureCore.LocalRecordingSidecar.self,
+            from: Data(contentsOf: takeB.sidecarURL))
+        let evidenceA = makeDetectedNotationSnapshot()
+        let evidenceB = CaptureCore.DetectedNotationSnapshot(
+            notationSource: evidenceA.notationSource, notationConfidence: 0.91,
+            detectedLabel: "Chirp", labelSource: "detected", labelConfidence: 91,
+            detectionSources: evidenceA.detectionSources,
+            recordMovementEvents: evidenceA.recordMovementEvents,
+            audioEvents: evidenceA.audioEvents, faderEvents: [], mixerMidiEvents: [],
+            capturedAt: evidenceA.capturedAt.addingTimeInterval(60))
+        sidecarA = sidecarA.withDetectedNotation(evidenceA).finalized(
+            endedAt: sidecarA.startedAt.addingTimeInterval(24),
+            mediaFileName: takeA.mediaURL.lastPathComponent, captureErrorDescription: nil)
+        sidecarB = sidecarB.withDetectedNotation(evidenceB)
+        let displayedA = TakeArtifactStatusSnapshot(takeID: takeA.takeID,
+            takeNumber: takeA.takeNumber, bpm: takeA.bpm, targetLabel: "Baby Scratch",
+            sessionConfig: sidecarA.sessionConfig, startedAt: sidecarA.startedAt,
+            audioSourceURL: takeA.audioArtifactURL, videoSourceURL: takeA.mediaURL,
+            audioExists: true, videoExists: true, audioBytes: 1, videoBytes: 1,
+            finalizedAt: sidecarA.endedAt, readiness: .ready, detectedNotation: evidenceA,
+            detectedLabel: evidenceA.effectiveDetectedLabel, labelConfidence: evidenceA.effectiveLabelConfidence)
+
+        // Same value sources as the source-traced private confirmation adapter:
+        // displayed A is selected, but the latest global detector still holds B.
+        let globalDetection = evidenceB
+        let acceptedA = sidecarA.reviewed(status: .accepted, label: "Chirp",
+            detectedLabel: globalDetection.detectedLabel, confidence: globalDetection.labelConfidence,
+            reviewedAt: evidenceB.capturedAt)
+        try acceptedA.encodedData().write(to: takeA.sidecarURL, options: .atomic)
+        let reloadedA = try decoder.decode(CaptureCore.LocalRecordingSidecar.self,
+            from: Data(contentsOf: takeA.sidecarURL))
+        XCTAssertEqual(displayedA.detectedLabel, "Baby Scratch")
+        XCTAssertEqual(reloadedA.takeID, takeA.takeID)
+        XCTAssertEqual(reloadedA.detectedNotation, evidenceA)
+        XCTAssertEqual(reloadedA.reviewDecision?.label, "Chirp")
+        XCTAssertEqual(reloadedA.reviewDecision?.detectedLabel, "Chirp")
+        XCTAssertEqual(reloadedA.reviewDecision?.confidence, 91)
+        XCTAssertNil(sidecarB.reviewDecision)
+
+        let configX = try XCTUnwrap(sidecarA.sessionConfig)
+        var setupY = configX
+        setupY.bpm = 120
+        setupY.scratchType = .chirp
+        setupY.handedness = .left
+        setupY.countInBeats = 8
+        let savedExportConfig = SessionExportMetadataResolver.mergedConfig(
+            preferredConfig: setupY, seedSidecar: sidecarA, sidecars: [sidecarA],
+            fallbackSessionID: sidecarA.sessionID, createdAt: configX.createdAt,
+            updatedAt: configX.updatedAt, takeCount: 1, totalDurationSeconds: 1)
+        XCTAssertEqual(savedExportConfig.bpm, configX.bpm)
+        XCTAssertEqual(savedExportConfig.scratchType, configX.scratchType)
+        XCTAssertEqual(savedExportConfig.handedness, configX.handedness)
+        let bpmX = Double(try XCTUnwrap(configX.bpm))
+        let bpmY = Double(try XCTUnwrap(setupY.bpm))
+        let clockX = try XCTUnwrap(PerformanceBeatClock(bpm: bpmX,
+            beatZeroTime: Double(configX.countInBeats) * 60 / bpmX))
+        let clockY = try XCTUnwrap(PerformanceBeatClock(bpm: bpmY,
+            beatZeroTime: Double(setupY.countInBeats) * 60 / bpmY))
+        XCTAssertNotEqual(clockX.beats(fromSeconds: 0.5), clockY.beats(fromSeconds: 0.5))
+        let scratchX = try XCTUnwrap(configX.scratchType)
+        let scratchY = try XCTUnwrap(setupY.scratchType)
+        let patternX = try XCTUnwrap(ScratchNotation.canonicalBeatPattern(forScratchID: scratchX.rawValue))
+        XCTAssertNotEqual(scratchX, scratchY)
+        // Chirp currently has no canonical pattern: changing setup makes this
+        // historical comparison unavailable rather than retaining saved Baby.
+        XCTAssertNil(ScratchNotation.canonicalBeatPattern(forScratchID: scratchY.rawValue))
+
+        // No take/session/revision identity exists in this presentation input.
+        let retainedSuccessForA = true
+        let selectedBInput = ReviewPresentationInput(hasTake: true, isExported: retainedSuccessForA)
+        XCTAssertEqual(ReviewPresentationState.derive(selectedBInput), .exported)
+        XCTAssertEqual(ReviewPresentationState.derive(.init(hasTake: true)), .ready)
+        let pendingURL = root.appendingPathComponent("not-finalized-B.mov")
+        XCTAssertFalse(FileManager.default.fileExists(atPath: pendingURL.path))
+        let lastRecordingURL: URL? = pendingURL
+        XCTAssertTrue(lastRecordingURL != nil) // Current header predicate.
+        XCTAssertEqual(ReviewPresentationState.derive(.init(hasTake: true, isFinalizing: true)), .finalizing)
+
+        let correctedA = sidecarA.reviewed(status: .corrected, label: "Transform",
+            detectedLabel: evidenceA.detectedLabel, confidence: evidenceA.labelConfidence,
+            reviewedAt: evidenceB.capturedAt).withReviewMetadata(
+                .init(labelOverride: "Flare"), audit: "Separate existing metadata override pathway",
+                recordedAt: evidenceB.capturedAt)
+        try correctedA.encodedData().write(to: takeA.sidecarURL, options: .atomic)
+        let correctedReload = try decoder.decode(CaptureCore.LocalRecordingSidecar.self,
+            from: Data(contentsOf: takeA.sidecarURL))
+        XCTAssertEqual(correctedReload.reviewDecision?.label, "Transform")
+        let snapshots = [takeA.takeID: correctedReload, takeB.takeID: sidecarB]
+        let builder = SessionArchiveBuilder()
+        let expectedConflict = SessionExportError.humanReviewConflict(sessionID: correctedReload.sessionID,
+            takeID: correctedReload.takeID)
+        XCTAssertEqual(correctedReload.reviewMetadata?.labelOverride, "Flare")
+        XCTAssertThrowsError(try builder.reviewDocument(for: package, generatedAt: evidenceB.capturedAt,
+            sidecarSnapshots: snapshots)) { XCTAssertEqual($0 as? SessionExportError, expectedConflict) }
+        XCTAssertEqual(displayedA.recordedDuration, 24)
+        XCTAssertEqual(SessionArchiveBuilder.playableMediaDurationSeconds(audioArtifactURL: takeA.audioArtifactURL), 1)
+        // The independent duration diagnostic uses its original non-conflicting snapshot.
+        let metadata = try builder.metadataDocument(for: package,
+            sidecarSnapshots: [takeA.takeID: sidecarA, takeB.takeID: sidecarB])
+        XCTAssertEqual(metadata.takes[0].actualTakeDurationSeconds, 1)
+        XCTAssertThrowsError(try builder.exportMetadataDocument(for: package, options: .init(),
+            sidecarSnapshots: snapshots)) { XCTAssertEqual($0 as? SessionExportError, expectedConflict) }
+        XCTAssertEqual(try Data(contentsOf: takeA.sidecarURL), try correctedA.encodedData())
+        print("MACAUTH_TRACE: A display=Baby Scratch; A persisted decision=Chirp/91 from B; B unchanged")
+        print("MACAUTH_TRACE: setup X=\(bpmX)/\(patternX.scratchID); Y=\(bpmY)/\(scratchY.rawValue) unavailable target; export keeps X")
+        print("MACAUTH_TRACE: A status wall span=24; playable audio=1; exported actual duration=1")
+        print("MACAUTH_TRACE: B presentation inherits A success; URL predicate true while finalizing and file absent")
+        print("MACAUTH_TRACE: persisted Transform and Flare conflict retained; new ordinary projection rejected")
+    }
+}
+
+
+// Permanent selected-take review ownership regressions. The earlier forensic
+// diagnostic remains unchanged and records the unsafe low-level caller input.
+extension CaptureReliabilityPhase1CoreTests {
+    private func reviewOwnershipFixture(in root: URL, session: String, number: Int = 1,
+                                        label: String? = "Baby Scratch", confidence: Double? = 57,
+                                        withEvidence: Bool = true) throws
+        -> (context: CaptureCore.TakeReviewContext, sidecar: CaptureCore.LocalRecordingSidecar) {
+        var sidecar = try makeTestSidecar(in: root, sessionID: session, takeNumber: number)
+        if withEvidence {
+            let template = makeDetectedNotationSnapshot()
+            sidecar = sidecar.withDetectedNotation(.init(
+                notationSource: template.notationSource, notationConfidence: template.notationConfidence,
+                detectedLabel: label, labelSource: template.labelSource, labelConfidence: confidence,
+                detectionSources: template.detectionSources, recordMovementEvents: template.recordMovementEvents,
+                audioEvents: template.audioEvents, faderEvents: template.faderEvents,
+                mixerMidiEvents: template.mixerMidiEvents, capturedAt: template.capturedAt))
+        }
+        let mediaURL = root.appendingPathComponent(sidecar.mediaFileName)
+        let sidecarURL = root.appendingPathComponent(sidecar.sidecarFileName)
+        try Data("unchanged media fixture".utf8).write(to: mediaURL)
+        try sidecar.encodedData().write(to: sidecarURL, options: .atomic)
+        // Production resolves saved evidence. Compare against the persisted
+        // baseline, including the existing ISO-8601 timestamp precision.
+        sidecar = try JSONDecoder.captureCoreDecoder.decode(CaptureCore.LocalRecordingSidecar.self,
+            from: Data(contentsOf: sidecarURL))
+        let context = try CaptureCore.TakeReviewContext(sessionID: session, takeID: sidecar.takeID,
+            mediaURL: mediaURL, sidecarURL: sidecarURL, detectedNotation: sidecar.detectedNotation)
+        return (context, sidecar)
+    }
+
+    private func persistOwnedReview(_ context: CaptureCore.TakeReviewContext,
+                                    status: CaptureCore.CaptureReviewDecision.Status = .accepted,
+                                    correction: String? = nil) throws -> CaptureCore.LocalRecordingSidecar {
+        let candidate = try JSONDecoder.captureCoreDecoder.decode(CaptureCore.LocalRecordingSidecar.self,
+            from: Data(contentsOf: context.sidecarURL))
+        let updated = try context.reviewed(candidate, status: status, correctedLabel: correction,
+            at: Date(timeIntervalSince1970: 1_780_000_000))
+        try updated.encodedData().write(to: context.sidecarURL, options: .atomic)
+        return try JSONDecoder.captureCoreDecoder.decode(CaptureCore.LocalRecordingSidecar.self,
+            from: Data(contentsOf: context.sidecarURL))
+    }
+
+    func testTakeBoundReviewAcceptUsesSavedAWhileGlobalBExists() throws {
+        let root = try makeTemporaryDirectory()
+        let a = try reviewOwnershipFixture(in: root, session: "review-A")
+        let globalB = try reviewOwnershipFixture(in: root, session: "review-B", number: 2,
+            label: "Chirp", confidence: 91)
+        XCTAssertEqual(globalB.context.detectedLabel, "Chirp")
+        XCTAssertEqual(globalB.context.confidence, 91)
+        let accepted = try persistOwnedReview(a.context)
+        XCTAssertEqual(accepted.reviewDecision?.label, "baby_scratch")
+        XCTAssertEqual(accepted.reviewDecision?.detectedLabel, a.context.detectedLabel)
+        XCTAssertEqual(accepted.reviewDecision?.confidence, 57)
+        XCTAssertNotEqual(accepted.reviewDecision?.confidence, globalB.context.confidence)
+        XCTAssertEqual(accepted.detectedNotation, a.sidecar.detectedNotation)
+    }
+
+    func testTakeBoundReviewWritesOnlySelectedAWhenBIsLatest() throws {
+        let root = try makeTemporaryDirectory()
+        let a = try reviewOwnershipFixture(in: root, session: "review-A")
+        let latestB = try reviewOwnershipFixture(in: root, session: "review-B", number: 2,
+            label: "Chirp", confidence: 91)
+        let beforeA = try Data(contentsOf: a.context.sidecarURL)
+        let beforeB = try Data(contentsOf: latestB.context.sidecarURL)
+        let mediaA = try Data(contentsOf: a.context.mediaURL)
+        let mediaB = try Data(contentsOf: latestB.context.mediaURL)
+        let result = try persistOwnedReview(a.context)
+        XCTAssertEqual(result.sessionID, "review-A")
+        XCTAssertEqual(result.takeID, a.context.takeID)
+        XCTAssertNotEqual(try Data(contentsOf: a.context.sidecarURL), beforeA)
+        XCTAssertEqual(try Data(contentsOf: latestB.context.sidecarURL), beforeB)
+        XCTAssertEqual(try Data(contentsOf: a.context.mediaURL), mediaA)
+        XCTAssertEqual(try Data(contentsOf: latestB.context.mediaURL), mediaB)
+    }
+
+    func testTakeBoundReviewRejectsMismatchedDestinationsWithoutWrites() throws {
+        let root = try makeTemporaryDirectory()
+        let a = try reviewOwnershipFixture(in: root, session: "review-A")
+        let b = try reviewOwnershipFixture(in: root, session: "review-B", number: 2)
+        let beforeA = try Data(contentsOf: a.context.sidecarURL)
+        let beforeB = try Data(contentsOf: b.context.sidecarURL)
+        for (session, take, media, sidecarURL) in [
+            (a.context.sessionID, a.context.takeID, b.context.mediaURL, b.context.sidecarURL),
+            (a.context.sessionID, a.context.takeID, a.context.mediaURL, b.context.sidecarURL),
+            (a.context.sessionID, b.context.takeID, a.context.mediaURL, a.context.sidecarURL),
+            ("", a.context.takeID, a.context.mediaURL, a.context.sidecarURL)
+        ] {
+            XCTAssertThrowsError(try CaptureCore.TakeReviewContext(sessionID: session, takeID: take,
+                mediaURL: media, sidecarURL: sidecarURL, detectedNotation: a.sidecar.detectedNotation)) {
+                XCTAssertEqual($0 as? CaptureCore.TakeReviewContext.Failure, .identityMismatch)
+            }
+        }
+        XCTAssertThrowsError(try a.context.reviewed(b.sidecar, status: .accepted)) {
+            XCTAssertEqual($0 as? CaptureCore.TakeReviewContext.Failure, .identityMismatch)
+        }
+        XCTAssertEqual(try Data(contentsOf: a.context.sidecarURL), beforeA)
+        XCTAssertEqual(try Data(contentsOf: b.context.sidecarURL), beforeB)
+    }
+
+    func testTakeBoundReviewRejectsReplacedDestinationSidecar() throws {
+        let root = try makeTemporaryDirectory()
+        let a = try reviewOwnershipFixture(in: root, session: "review-A")
+        let b = try reviewOwnershipFixture(in: root, session: "review-B", label: "Chirp", confidence: 91)
+        // Same ordinal is not sufficient: another session now occupies A's path.
+        let bBytes = try Data(contentsOf: b.context.sidecarURL)
+        try bBytes.write(to: a.context.sidecarURL, options: .atomic)
+        XCTAssertThrowsError(try persistOwnedReview(a.context)) {
+            XCTAssertEqual($0 as? CaptureCore.TakeReviewContext.Failure, .identityMismatch)
+        }
+        XCTAssertEqual(try Data(contentsOf: a.context.sidecarURL), bBytes)
+        XCTAssertEqual(try Data(contentsOf: b.context.sidecarURL), bBytes)
+    }
+
+    func testTakeBoundReviewMissingEvidenceRejectsAcceptWithoutGlobalFallback() throws {
+        let root = try makeTemporaryDirectory()
+        let a = try reviewOwnershipFixture(in: root, session: "review-A", withEvidence: false)
+        let globalB = try reviewOwnershipFixture(in: root, session: "review-B", label: "Chirp", confidence: 91)
+        let beforeA = try Data(contentsOf: a.context.sidecarURL)
+        let beforeB = try Data(contentsOf: globalB.context.sidecarURL)
+        XCTAssertNil(a.context.detectedLabel)
+        XCTAssertNil(a.context.confidence)
+        XCTAssertThrowsError(try persistOwnedReview(a.context)) {
+            XCTAssertEqual($0 as? CaptureCore.TakeReviewContext.Failure, .missingDetection)
+        }
+        XCTAssertEqual(try Data(contentsOf: a.context.sidecarURL), beforeA)
+        XCTAssertEqual(try Data(contentsOf: globalB.context.sidecarURL), beforeB)
+        let unknown = try persistOwnedReview(a.context, status: .unknown)
+        XCTAssertEqual(unknown.reviewDecision?.status, .unknown)
+        XCTAssertEqual(unknown.reviewDecision?.label, "unknown")
+        XCTAssertNil(unknown.reviewDecision?.detectedLabel)
+        XCTAssertNil(unknown.reviewDecision?.confidence)
+        XCTAssertNil(unknown.detectedNotation)
+    }
+
+    func testTakeBoundReviewCapturedOperationCannotRetargetAfterSelectionChange() throws {
+        let root = try makeTemporaryDirectory()
+        let a = try reviewOwnershipFixture(in: root, session: "review-A")
+        let b = try reviewOwnershipFixture(in: root, session: "review-B", label: "Chirp", confidence: 91)
+        var selected = a.context
+        let pendingAction = selected
+        let beforeB = try Data(contentsOf: b.context.sidecarURL)
+        selected = b.context
+        let result = try persistOwnedReview(pendingAction)
+        XCTAssertEqual(selected.sessionID, "review-B")
+        XCTAssertEqual(result.sessionID, "review-A")
+        XCTAssertEqual(result.reviewDecision?.detectedLabel, "Baby Scratch")
+        XCTAssertEqual(try Data(contentsOf: b.context.sidecarURL), beforeB)
+        // Persisted-decision caches must also distinguish session A/B take-001.
+        XCTAssertEqual(a.context.takeID, b.context.takeID)
+        let cache = [pendingAction.sidecarURL: try XCTUnwrap(result.reviewDecision)]
+        XCTAssertNil(cache[selected.sidecarURL])
+    }
+
+    func testTakeBoundReviewSingleTakeConfirmRoundTripPreservesRawAndAudit() throws {
+        let root = try makeTemporaryDirectory()
+        let a = try reviewOwnershipFixture(in: root, session: "review-A")
+        let result = try persistOwnedReview(a.context)
+        XCTAssertEqual(result.reviewDecision?.status, .accepted)
+        XCTAssertEqual(result.reviewDecision?.label, "baby_scratch")
+        XCTAssertEqual(result.reviewDecision?.reviewedAt, Date(timeIntervalSince1970: 1_780_000_000))
+        XCTAssertEqual(result.auditTrail.dropLast(), a.sidecar.auditTrail[...])
+        XCTAssertEqual(result.auditTrail.last?.category, "label_reviewed")
+        var withoutReview = result
+        withoutReview.reviewDecision = a.sidecar.reviewDecision
+        withoutReview.auditTrail = a.sidecar.auditTrail
+        XCTAssertEqual(withoutReview, a.sidecar, "Only review decision and its audit event may change.")
+    }
+
+    func testTakeBoundReviewCorrectionPreservesSavedDetectionAndRawEvidence() throws {
+        let root = try makeTemporaryDirectory()
+        let a = try reviewOwnershipFixture(in: root, session: "review-A")
+        let corrected = try persistOwnedReview(a.context, status: .corrected, correction: "transform")
+        XCTAssertEqual(corrected.reviewDecision?.status, .corrected)
+        XCTAssertEqual(corrected.reviewDecision?.label, "transform")
+        XCTAssertEqual(corrected.reviewDecision?.detectedLabel, "Baby Scratch")
+        XCTAssertEqual(corrected.reviewDecision?.confidence, 57)
+        XCTAssertEqual(corrected.detectedNotation, a.sidecar.detectedNotation)
+        XCTAssertEqual(corrected.sessionConfig, a.sidecar.sessionConfig)
+        let missing = try reviewOwnershipFixture(in: root, session: "legacy", withEvidence: false)
+        let manual = try persistOwnedReview(missing.context, status: .corrected, correction: "chirp")
+        XCTAssertEqual(manual.reviewDecision?.label, "chirp")
+        XCTAssertNil(manual.reviewDecision?.detectedLabel)
+        XCTAssertNil(manual.reviewDecision?.confidence)
+    }
+
+    func testTakeBoundReviewRejectsChangedEvidenceBeforeWriting() throws {
+        let root = try makeTemporaryDirectory()
+        let a = try reviewOwnershipFixture(in: root, session: "review-A")
+        let changed = try reviewOwnershipFixture(in: root, session: "review-A", label: "Chirp", confidence: 91)
+        let changedBytes = try Data(contentsOf: changed.context.sidecarURL)
+        XCTAssertThrowsError(try persistOwnedReview(a.context)) {
+            XCTAssertEqual($0 as? CaptureCore.TakeReviewContext.Failure, .evidenceChanged)
+        }
+        XCTAssertEqual(try Data(contentsOf: a.context.sidecarURL), changedBytes)
+        XCTAssertNil(changed.sidecar.reviewDecision)
+    }
+
+    func testTakeBoundReviewMissingConfidenceStaysMissing() throws {
+        let root = try makeTemporaryDirectory()
+        let a = try reviewOwnershipFixture(in: root, session: "review-A", confidence: nil)
+        let result = try persistOwnedReview(a.context)
+        XCTAssertEqual(result.reviewDecision?.detectedLabel, "Baby Scratch")
+        XCTAssertNil(result.reviewDecision?.confidence)
+    }
+
+    func testTakeBoundReviewUnclassifiedSnapshotCannotBecomeAccepted() throws {
+        let root = try makeTemporaryDirectory()
+        let a = try reviewOwnershipFixture(in: root, session: "review-A", label: nil, confidence: 91)
+        XCTAssertNil(a.context.detectedLabel)
+        XCTAssertNil(a.context.confidence)
+        XCTAssertThrowsError(try persistOwnedReview(a.context)) {
+            XCTAssertEqual($0 as? CaptureCore.TakeReviewContext.Failure, .missingDetection)
+        }
+    }
+
+    func testTakeBoundReviewUIUsesCapturedContextForDetectionDestinationAndCache() throws {
+        let source = try String(contentsOf: projectRootURL().appendingPathComponent(
+            "ScratchLabDesktop/Views/MacAnalyzerView.swift"), encoding: .utf8)
+        let action = try sourceSlice(in: source, from: "private func acceptReviewLabel()",
+            through: "private var currentReviewMetadata:")
+        for forbidden in ["lastScratchDetection", "lastRoutineRecordingURL", "routineSessionSetup", "await ", "Task {"] {
+            XCTAssertFalse(action.contains(forbidden), forbidden)
+        }
+        XCTAssertTrue(action.contains("let context = selectedTakeReviewContext"))
+        XCTAssertTrue(action.contains("try context.reviewed(sidecar"))
+        XCTAssertTrue(action.contains("write(to: context.sidecarURL, options: .atomic)"))
+        XCTAssertTrue(action.contains("reviewDecisionByTakeID[context.sidecarURL]"))
+        XCTAssertTrue(action.contains("catch CaptureCore.TakeReviewContext.Failure.identityMismatch"))
+        let display = try sourceSlice(in: source, from: "private var selectedTakeReviewContext:",
+            through: "private var reviewConfidenceColor:")
+        XCTAssertFalse(display.contains("lastScratchDetection"))
+        XCTAssertFalse(display.contains("routineSessionSetup"))
+        XCTAssertTrue(display.contains("selectedRoutineSession?.id"))
+        XCTAssertTrue(display.contains("detectedNotation: status.detectedNotation"))
+        XCTAssertTrue(display.contains("selectedTakeReviewContext?.detectedLabel"))
+        XCTAssertTrue(display.contains("selectedTakeReviewContext?.confidence"))
+    }
+}
+
+
+extension CaptureReliabilityPhase1CoreTests {
+    private func historicalFixture(in root: URL, session: String = "historical-A",
+                                   bpm: Int? = 70, scratch: CaptureSessionScratchType? = .babyScratch,
+                                   countIn: Int = 4, meter: Int = 4, omitConfiguration: Bool = false) throws
+        -> (context: CaptureCore.TakeReviewContext, sidecar: CaptureCore.LocalRecordingSidecar) {
+        let fixture = try reviewOwnershipFixture(in: root, session: session)
+        var config = try XCTUnwrap(fixture.sidecar.sessionConfig)
+        config.bpm = bpm
+        config.scratchType = scratch
+        config.countInBeats = countIn
+        config.beatsPerBar = meter
+        var object = try XCTUnwrap(JSONSerialization.jsonObject(with: fixture.sidecar.encodedData()) as? [String: Any])
+        let encoder = JSONEncoder()
+        encoder.dateEncodingStrategy = .iso8601
+        object["sessionConfig"] = omitConfiguration ? nil : try JSONSerialization.jsonObject(with: encoder.encode(config))
+        let data = try JSONSerialization.data(withJSONObject: object, options: [.sortedKeys])
+        try data.write(to: fixture.context.sidecarURL, options: .atomic)
+        let saved = try JSONDecoder.captureCoreDecoder.decode(CaptureCore.LocalRecordingSidecar.self, from: data)
+        return (fixture.context, saved)
+    }
+
+    private func historicalInput(_ fixture: (context: CaptureCore.TakeReviewContext,
+                                            sidecar: CaptureCore.LocalRecordingSidecar)) throws -> CaptureCore.HistoricalReviewInput {
+        try XCTUnwrap(CaptureCore.HistoricalReviewInput(context: fixture.context,
+            sidecarData: Data(contentsOf: fixture.context.sidecarURL)))
+    }
+
+    private func historicalTarget(_ input: CaptureCore.HistoricalReviewInput) throws -> ScratchNotation {
+        let pattern = try XCTUnwrap(ScratchNotation.canonicalBeatPattern(forScratchID: input.scratchType.rawValue))
+        let target = try XCTUnwrap(TargetScratchPhrase.phrase(repeating: pattern, cycles: 8))
+        return try XCTUnwrap(target.materializedNotation(bpm: input.bpm, scratchID: pattern.scratchID,
+            timingBasis: pattern.timingBasis, beatsPerBar: input.beatsPerBar, version: pattern.version))
+    }
+
+    func testHistoricalReviewScratchMutationKeepsSavedBabyTarget() throws {
+        let a = try historicalFixture(in: makeTemporaryDirectory())
+        var setup = try XCTUnwrap(a.sidecar.sessionConfig)
+        setup.scratchType = .chirp
+        let input = try historicalInput(a)
+        XCTAssertNil(ScratchNotation.canonicalBeatPattern(forScratchID: setup.scratchType!.rawValue))
+        XCTAssertEqual(input.scratchType, .babyScratch)
+        XCTAssertEqual(try historicalTarget(input).scratchID, "baby_scratch")
+    }
+
+    func testHistoricalReviewBPMMutationKeepsSavedClockAndTarget() throws {
+        let a = try historicalFixture(in: makeTemporaryDirectory())
+        var setup = try XCTUnwrap(a.sidecar.sessionConfig)
+        setup.bpm = 120
+        let input = try historicalInput(a)
+        XCTAssertEqual(setup.bpm, 120)
+        XCTAssertEqual(input.bpm, 70)
+        XCTAssertEqual(input.clock.seconds(fromBeats: 1), Double(4) * 60 / 70 + 60.0 / 70)
+        XCTAssertEqual(try historicalTarget(input).bpm, 70)
+    }
+
+    func testHistoricalReviewCombinedMutationLeavesTargetAndAttemptUnchanged() throws {
+        let a = try historicalFixture(in: makeTemporaryDirectory(), countIn: 0)
+        let before = try historicalInput(a)
+        var setup = try XCTUnwrap(a.sidecar.sessionConfig)
+        setup.scratchType = .chirp
+        setup.bpm = 120
+        setup.countInBeats = 8
+        let after = try historicalInput(a)
+        XCTAssertEqual(try historicalTarget(after), try historicalTarget(before))
+        XCTAssertEqual(after.clock, before.clock)
+        let pattern = try XCTUnwrap(ScratchNotation.canonicalBeatPattern(forScratchID: after.scratchType.rawValue))
+        let snapshot = try XCTUnwrap(after.context.detectedNotation)
+        let actual = PracticeAttemptEvidenceResolver.firstCycleAttempt(pattern: pattern,
+            bpm: after.bpm, countInBeats: after.countInBeats, snapshot: snapshot)
+        let expected = PracticeAttemptEvidenceResolver.firstCycleAttempt(pattern: pattern,
+            bpm: 70, countInBeats: 0, snapshot: snapshot)
+        XCTAssertNotNil(actual)
+        XCTAssertEqual(actual, expected)
+        XCTAssertEqual(setup.scratchType, .chirp)
+        XCTAssertEqual(setup.bpm, 120)
+    }
+
+    func testHistoricalReviewTwoTakesIgnoreThirdSetupAndRepeatedOrdinal() throws {
+        let root = try makeTemporaryDirectory()
+        let a = try historicalFixture(in: root)
+        let b = try historicalFixture(in: root, session: "historical-B", bpm: 110, countIn: 2, meter: 3)
+        var setup = try XCTUnwrap(a.sidecar.sessionConfig)
+        setup.scratchType = .chirp
+        setup.bpm = 120
+        setup.countInBeats = 8
+        let bytesA = try Data(contentsOf: a.context.sidecarURL)
+        let bytesB = try Data(contentsOf: b.context.sidecarURL)
+        for (selected, expectedBPM, expectedMeter) in [(a, 70.0, 4), (b, 110.0, 3), (a, 70.0, 4)] {
+            let input = try historicalInput(selected)
+            XCTAssertEqual(input.bpm, expectedBPM)
+            XCTAssertEqual(input.context.sidecarURL, selected.context.sidecarURL)
+            XCTAssertEqual(try historicalTarget(input).beatsPerBar, expectedMeter)
+        }
+        XCTAssertEqual(a.context.takeID, b.context.takeID)
+        XCTAssertNotEqual(try historicalTarget(historicalInput(a)), try historicalTarget(historicalInput(b)))
+        XCTAssertEqual(setup.bpm, 120)
+        XCTAssertEqual(try Data(contentsOf: a.context.sidecarURL), bytesA)
+        XCTAssertEqual(try Data(contentsOf: b.context.sidecarURL), bytesB)
+    }
+
+    func testHistoricalReviewMissingConfigurationNeverUsesValidSetup() throws {
+        let root = try makeTemporaryDirectory()
+        let validSetup = try historicalFixture(in: root, session: "valid")
+        XCTAssertNotNil(try historicalTarget(historicalInput(validSetup)))
+        let fixtures = [
+            try historicalFixture(in: root, session: "no-config", omitConfiguration: true),
+            try historicalFixture(in: root, session: "no-bpm", bpm: nil),
+            try historicalFixture(in: root, session: "no-scratch", scratch: nil),
+            try historicalFixture(in: root, session: "unknown", scratch: .unknown),
+            try historicalFixture(in: root, session: "zero-bpm", bpm: 0),
+            try historicalFixture(in: root, session: "bad-count", countIn: -1),
+            try historicalFixture(in: root, session: "bad-meter", meter: 0)
+        ]
+        for a in fixtures {
+            let bytes = try Data(contentsOf: a.context.sidecarURL)
+            XCTAssertNil(CaptureCore.HistoricalReviewInput(context: a.context, sidecarData: try Data(contentsOf: a.context.sidecarURL)))
+            XCTAssertEqual(try Data(contentsOf: a.context.sidecarURL), bytes)
+            XCTAssertNotNil(a.context.detectedNotation)
+        }
+    }
+
+    @MainActor
+    func testHistoricalReviewFutureCaptureSetupRemainsMutable() throws {
+        let a = try historicalFixture(in: makeTemporaryDirectory())
+        let input = try historicalInput(a)
+        let setup = SessionSetupViewModel(surface: .macRoutine)
+        setup.applyPersistedConfig(try XCTUnwrap(a.sidecar.sessionConfig))
+        setup.scratchType = .chirp
+        setup.bpmText = "120"
+        XCTAssertEqual(setup.config.scratchType, .chirp)
+        XCTAssertEqual(setup.config.bpm, 120)
+        XCTAssertEqual(input.scratchType, .babyScratch)
+        XCTAssertEqual(input.bpm, 70)
+        let source = try String(contentsOf: projectRootURL().appendingPathComponent(
+            "ScratchLabDesktop/Views/MacAnalyzerView.swift"), encoding: .utf8)
+        let capture = try sourceSlice(in: source, from: "private func resolvedCaptureConfigForRecording",
+            through: "private func acceptReviewLabel")
+        XCTAssertTrue(capture.contains("var config = routineSessionSetup.config"))
+        XCTAssertFalse(capture.contains("historicalReviewInput"))
+    }
+
+    func testHistoricalReviewSetupMutationPreservesSlice1ConfirmationOwnership() throws {
+        let root = try makeTemporaryDirectory()
+        let a = try historicalFixture(in: root)
+        let b = try historicalFixture(in: root, session: "historical-B", bpm: 120, scratch: .chirp)
+        let beforeB = try Data(contentsOf: b.context.sidecarURL)
+        var setup = try XCTUnwrap(b.sidecar.sessionConfig)
+        setup.countInBeats = 8
+        _ = try historicalInput(a)
+        let result = try persistOwnedReview(a.context)
+        XCTAssertEqual(result.sessionID, a.context.sessionID)
+        XCTAssertEqual(result.reviewDecision?.detectedLabel, "Baby Scratch")
+        XCTAssertEqual(result.reviewDecision?.confidence, 57)
+        XCTAssertEqual(result.sessionConfig, a.sidecar.sessionConfig)
+        XCTAssertEqual(try Data(contentsOf: b.context.sidecarURL), beforeB)
+        XCTAssertEqual(setup.countInBeats, 8)
+    }
+
+    func testHistoricalReviewCorrectFlowRetainsExistingTargetAndScore() throws {
+        let a = try historicalFixture(in: makeTemporaryDirectory(), countIn: 0)
+        let input = try historicalInput(a)
+        let pattern = try XCTUnwrap(ScratchNotation.canonicalBeatPattern(forScratchID: "baby_scratch"))
+        let target = try XCTUnwrap(TargetScratchPhrase.phrase(repeating: pattern, cycles: 8))
+        let expected = try XCTUnwrap(target.materializedNotation(bpm: 70, scratchID: pattern.scratchID,
+            timingBasis: pattern.timingBasis, beatsPerBar: 4, version: pattern.version))
+        XCTAssertEqual(try historicalTarget(input), expected)
+        let priorTarget = try XCTUnwrap(target.materializedNotation(bpm: 70, scratchID: pattern.scratchID,
+            timingBasis: pattern.timingBasis, beatsPerBar: pattern.beatsPerBar, version: pattern.version))
+        XCTAssertEqual(expected.strokes, priorTarget.strokes)
+        XCTAssertEqual(expected.faderEvents, priorTarget.faderEvents)
+        XCTAssertEqual(expected.timelineDuration, priorTarget.timelineDuration)
+        let snapshot = try XCTUnwrap(input.context.detectedNotation)
+        let result = PracticeAttemptEvidenceResolver.firstCycleAttempt(pattern: pattern, bpm: input.bpm,
+            countInBeats: input.countInBeats, snapshot: snapshot)
+        XCTAssertNotNil(result)
+        XCTAssertEqual(result, PracticeAttemptEvidenceResolver.firstCycleAttempt(pattern: pattern,
+            bpm: 70, countInBeats: 0, snapshot: snapshot))
+    }
+
+    func testHistoricalReviewSavedCountInAndMeterOwnClockAndGrid() throws {
+        let a = try historicalFixture(in: makeTemporaryDirectory(), countIn: 2, meter: 3)
+        let input = try historicalInput(a)
+        XCTAssertEqual(input.countInBeats, 2)
+        XCTAssertEqual(input.beatsPerBar, 3)
+        XCTAssertEqual(input.clock.beatZeroTime, 120.0 / 70)
+        XCTAssertEqual(try historicalTarget(input).beatsPerBar, 3)
+    }
+
+    func testHistoricalReviewRejectsOtherSessionConfiguration() throws {
+        let root = try makeTemporaryDirectory()
+        let a = try historicalFixture(in: root)
+        let b = try historicalFixture(in: root, session: "historical-B", bpm: 120)
+        XCTAssertNil(CaptureCore.HistoricalReviewInput(context: a.context, sidecarData: try Data(contentsOf: b.context.sidecarURL)))
+    }
+
+    func testHistoricalReviewUIReadsOnlySavedComparisonInputs() throws {
+        let source = try String(contentsOf: projectRootURL().appendingPathComponent(
+            "ScratchLabDesktop/Views/MacAnalyzerView.swift"), encoding: .utf8)
+        for (start, end) in [
+            ("private func reviewTargetReferenceNotation", "// MARK: - Review: target vs performed comparison"),
+            ("private var reviewFirstCycleAttempt:", "private func reviewGradeLabel"),
+            ("private var reviewPerformanceComparison:", "private var reviewTargetVsPerformedStageCard:"),
+            ("private var reviewOverlayDiffStageCard:", "private func reviewOverlayDiffEmptyState")
+        ] {
+            let part = try sourceSlice(in: source, from: start, through: end)
+            XCTAssertFalse(part.contains("routineSessionSetup"), start)
+        }
+        let comparison = try sourceSlice(in: source, from: "private var reviewPerformanceComparison:",
+            through: "private var reviewTargetVsPerformedStageCard:")
+        XCTAssertTrue(comparison.contains("let clock = input.clock"))
+        XCTAssertTrue(comparison.contains("input.context.detectedNotation"))
+        XCTAssertFalse(comparison.contains("currentRoutineNotationSnapshot"))
+        XCTAssertTrue(comparison.contains("beatsPerBar: input.beatsPerBar"))
+        XCTAssertTrue(source.contains("Data(contentsOf: context.sidecarURL)"))
+        XCTAssertTrue(source.contains("HistoricalReviewInput(context: context, sidecarData: data)"))
+        let summary = try sourceSlice(in: source, from: "private var currentRoutineReviewConfig:",
+            through: "private var reviewDurationLabel:")
+        XCTAssertFalse(summary.contains("matchingLastRoutineExportConfig"))
+        XCTAssertTrue(summary.contains("let bpm = historicalReviewInput?.bpm"))
+        let viewport = try sourceSlice(in: source, from: "private func reviewTargetNotationWindow",
+            through: "private var debugTargetNotationChipText:")
+        XCTAssertTrue(viewport.contains("historicalReviewInput?.context.detectedNotation"))
+        XCTAssertFalse(viewport.contains("currentRoutineNotationSnapshot"))
+        XCTAssertTrue(source.contains("overlayCache.sourceSnapshot == capturedSnapshot"))
+        XCTAssertTrue(source.contains("overlayCache.targetNotation == targetNotation"))
+    }
+}
+
+
+extension CaptureReliabilityPhase1CoreTests {
+    func testHistoricalReviewVersionedReferenceIsNotReplacedByOrdinaryPattern() throws {
+        let a = try historicalFixture(in: makeTemporaryDirectory())
+        var config = try XCTUnwrap(a.sidecar.sessionConfig)
+        config.referenceCaptureIntent = ReferenceCaptureIntent(
+            id: "saved-recipe", parentTechniqueID: "baby", parentTechniqueVersion: 2,
+            variantID: "saved-variant", recipeID: "saved-recipe", recipeVersion: 3,
+            startingPlatterDirection: .backward, faderForm: .faderOpenThroughout,
+            bpm: 70, beatsPerCycle: 2,
+            plan: .init(countInBars: 1, repetitionCount: 4, tailBars: 1), beatSpec: nil)
+        var object = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(contentsOf: a.context.sidecarURL)) as? [String: Any])
+        let encoder = JSONEncoder()
+        encoder.dateEncodingStrategy = .iso8601
+        object["sessionConfig"] = try JSONSerialization.jsonObject(with: encoder.encode(config))
+        let data = try JSONSerialization.data(withJSONObject: object)
+        XCTAssertNil(CaptureCore.HistoricalReviewInput(context: a.context, sidecarData: data))
+        XCTAssertEqual(config.referenceCaptureIntent?.recipeVersion, 3)
+        XCTAssertNotNil(CaptureCore.HistoricalReviewInput(context: a.context,
+            sidecarData: try Data(contentsOf: a.context.sidecarURL)))
+    }
+}
+
+
+extension CaptureReliabilityPhase1CoreTests {
+    func testHistoricalReviewMissingPersistedFieldsCannotBeFilledBySetupDecoder() throws {
+        let a = try historicalFixture(in: makeTemporaryDirectory())
+        let original = try Data(contentsOf: a.context.sidecarURL)
+        let object = try XCTUnwrap(JSONSerialization.jsonObject(with: original) as? [String: Any])
+        let config = try XCTUnwrap(object["sessionConfig"] as? [String: Any])
+        for key in ["sessionID", "scratchTypeID", "bpm", "countInBeats", "beatsPerBar"] {
+            var changed = object
+            var missing = config
+            missing.removeValue(forKey: key)
+            changed["sessionConfig"] = missing
+            let bytes = try JSONSerialization.data(withJSONObject: changed)
+            XCTAssertNil(CaptureCore.HistoricalReviewInput(context: a.context, sidecarData: bytes), key)
+        }
+        XCTAssertEqual(try Data(contentsOf: a.context.sidecarURL), original)
+    }
+
+    func testHistoricalReviewRejectsMalformedOrChangedSavedEvidence() throws {
+        let a = try historicalFixture(in: makeTemporaryDirectory())
+        let original = try Data(contentsOf: a.context.sidecarURL)
+        var object = try XCTUnwrap(JSONSerialization.jsonObject(with: original) as? [String: Any])
+        object.removeValue(forKey: "detectedNotation")
+        let changed = try JSONSerialization.data(withJSONObject: object)
+        XCTAssertNil(CaptureCore.HistoricalReviewInput(context: a.context, sidecarData: changed))
+        XCTAssertNil(CaptureCore.HistoricalReviewInput(context: a.context, sidecarData: Data("{invalid".utf8)))
+        XCTAssertNotNil(CaptureCore.HistoricalReviewInput(context: a.context, sidecarData: original))
+        XCTAssertEqual(try Data(contentsOf: a.context.sidecarURL), original)
+    }
+}
+
+
+// Batch 3 MacAnalyzer Slice 3: complete persisted human truth in ordinary archives.
+extension CaptureReliabilityPhase1CoreTests {
+    private struct HumanExportFixture {
+        let root: URL
+        let package: SessionExportPackage
+        let sidecar: CaptureCore.LocalRecordingSidecar
+        let bytes: Data
+        var take: SessionExportTake { package.takes[0] }
+    }
+
+    private func humanExportFixture(session: String = "human-review-A",
+                                    status: CaptureCore.CaptureReviewDecision.Status? = nil,
+                                    label: String = "baby_scratch", override: String? = nil,
+                                    metadataTime: Date? = nil) throws -> HumanExportFixture {
+        let root = try makeTemporaryDirectory()
+        let initial = try SessionArchiveBuilder().preparePackage(from: .package(
+            makeKeptLedgerPackage(rootURL: root,
+                sessionCreatedAt: Date(timeIntervalSince1970: 1_730_000_000), bpms: [70])))
+        let take = try XCTUnwrap(initial.takes.first)
+        var sidecar = try JSONDecoder.captureCoreDecoder.decode(CaptureCore.LocalRecordingSidecar.self,
+            from: Data(contentsOf: take.sidecarURL))
+        sidecar = sidecar.withDetectedNotation(makeDetectedNotationSnapshot())
+        if let status {
+            sidecar = sidecar.reviewed(status: status, label: label, detectedLabel: "Baby Scratch",
+                confidence: 42, reviewedAt: Date(timeIntervalSince1970: 1_730_000_030))
+        }
+        if override != nil || metadataTime != nil {
+            sidecar = sidecar.withReviewMetadata(.init(reviewState: .approved,
+                reviewedAt: metadataTime, reviewNotes: "Notes edited independently", labelOverride: override),
+                audit: "Compatibility metadata")
+        }
+        var object = try XCTUnwrap(JSONSerialization.jsonObject(with: sidecar.encodedData()) as? [String: Any])
+        object["sessionID"] = session
+        var config = try XCTUnwrap(object["sessionConfig"] as? [String: Any])
+        config["sessionID"] = session
+        config["takeCount"] = 1
+        object["sessionConfig"] = config
+        let bytes = try JSONSerialization.data(withJSONObject: object, options: [.sortedKeys])
+        try bytes.write(to: take.sidecarURL, options: .atomic)
+        sidecar = try JSONDecoder.captureCoreDecoder.decode(CaptureCore.LocalRecordingSidecar.self, from: bytes)
+        let metadata = SessionExportMetadata(config: try XCTUnwrap(sidecar.sessionConfig),
+            workflow: "guided_capture", platform: "macOS", sessionName: "Human review", totalDurationSeconds: 1)
+        return HumanExportFixture(root: root,
+            package: SessionExportPackage(metadata: metadata, takes: [take], calibrationData: nil),
+            sidecar: sidecar, bytes: bytes)
+    }
+
+    @discardableResult
+    private func assertHumanArchive(_ fixture: HumanExportFixture) throws -> URL {
+        let builder = SessionArchiveBuilder()
+        let archives = fixture.root.appendingPathComponent("archives")
+        try FileManager.default.createDirectory(at: archives, withIntermediateDirectories: true)
+        let prepared = try builder.preparePackage(from: .package(fixture.package))
+        let result = try builder.createArchive(from: prepared, options: .init(mixMode: .scratchOnly), in: archives)
+        XCTAssertGreaterThan(result.archiveSizeBytes, 0)
+        let extracted = try unzipArchive(result.archiveURL, to: fixture.root.appendingPathComponent("unpacked"))
+        let decoder = JSONDecoder.captureCoreDecoder
+        let review = try decoder.decode(SessionExportReviewDocument.self,
+            from: Data(contentsOf: extracted.appendingPathComponent("manifests/session_review.json")))
+        let notation = try decoder.decode(SessionExportNotationDocument.self,
+            from: Data(contentsOf: extracted.appendingPathComponent("notation/take-001_detected_notation.json")))
+        let metadata = try decoder.decode(SessionExportMetadataDocument.self,
+            from: Data(contentsOf: extracted.appendingPathComponent("manifests/session_metadata.json")))
+        let artifacts = try decoder.decode(SessionExportArtifactMetadataDocument.self,
+            from: Data(contentsOf: extracted.appendingPathComponent("manifests/export_metadata.json")))
+        let decision = fixture.sidecar.reviewDecision
+        let raw = fixture.sidecar.detectedNotation.map(SessionExportRawDetection.init)
+        XCTAssertEqual(review.sessionID, fixture.sidecar.sessionID)
+        XCTAssertEqual(review.takes.count, 1)
+        XCTAssertEqual(review.takes[0].takeID, fixture.sidecar.takeID)
+        XCTAssertEqual(review.takes[0].reviewDecision, decision)
+        XCTAssertEqual(review.takes[0].metadata, fixture.sidecar.reviewMetadata)
+        XCTAssertEqual(review.takes[0].rawDetection, raw)
+        XCTAssertEqual(notation.reviewDecision, decision)
+        XCTAssertEqual(metadata.takes[0].reviewDecision, decision)
+        XCTAssertEqual(artifacts.takes[0].reviewDecision, decision)
+        XCTAssertEqual(notation.legacyLabelOverride, fixture.sidecar.reviewMetadata?.labelOverride)
+        XCTAssertEqual(metadata.takes[0].legacyLabelOverride, notation.legacyLabelOverride)
+        XCTAssertEqual(artifacts.takes[0].legacyLabelOverride, notation.legacyLabelOverride)
+        XCTAssertEqual(notation.rawDetection, raw)
+        XCTAssertEqual(metadata.takes[0].rawDetection, raw)
+        XCTAssertEqual(artifacts.takes[0].rawDetection, raw)
+        XCTAssertEqual(notation.rawDetection?.label, "Baby Scratch")
+        XCTAssertEqual(notation.rawDetection?.confidence, 57)
+        XCTAssertEqual(notation.recordMovementEvents.count, 2)
+        XCTAssertEqual(notation.recordMovementEvents.first?.direction, "forward")
+        XCTAssertEqual(try Data(contentsOf: fixture.take.sidecarURL), fixture.bytes)
+        return extracted
+    }
+
+    private func assertHumanConflict(_ fixture: HumanExportFixture) throws {
+        let expected = SessionExportError.humanReviewConflict(sessionID: fixture.sidecar.sessionID,
+            takeID: fixture.sidecar.takeID)
+        let builder = SessionArchiveBuilder()
+        XCTAssertThrowsError(try builder.preparePackage(from: .package(fixture.package))) {
+            XCTAssertEqual($0 as? SessionExportError, expected)
+        }
+        let archives = fixture.root.appendingPathComponent("rejected")
+        try FileManager.default.createDirectory(at: archives, withIntermediateDirectories: true)
+        XCTAssertThrowsError(try builder.createArchive(from: fixture.package, in: archives)) {
+            XCTAssertEqual($0 as? SessionExportError, expected)
+        }
+        XCTAssertTrue(try FileManager.default.contentsOfDirectory(atPath: archives.path).isEmpty)
+        XCTAssertTrue(expected.userMessage.contains(fixture.sidecar.sessionID))
+        XCTAssertTrue(expected.userMessage.contains(fixture.sidecar.takeID))
+        XCTAssertTrue(expected.userMessage.contains("conflicting human labels"))
+        XCTAssertEqual(try Data(contentsOf: fixture.take.sidecarURL), fixture.bytes)
+    }
+
+    func testHumanReviewExportAcceptedKeepsRawAndDecisionSeparate() throws {
+        let a = try humanExportFixture(status: .accepted)
+        let archive = try assertHumanArchive(a)
+        let document = try JSONDecoder.captureCoreDecoder.decode(SessionExportNotationDocument.self,
+            from: Data(contentsOf: archive.appendingPathComponent("notation/take-001_detected_notation.json")))
+        XCTAssertEqual(document.labelSource, .detected)
+        XCTAssertEqual(document.reviewDecision?.status, .accepted)
+        XCTAssertEqual(document.reviewDecision?.label, "baby_scratch")
+        XCTAssertEqual(document.reviewDecision?.confidence, 42)
+        XCTAssertEqual(document.rawDetection?.confidence, 57)
+    }
+
+    func testHumanReviewExportCorrectedPreservesChirpAndOriginalBaby() throws {
+        let a = try humanExportFixture(status: .corrected, label: "Chirp")
+        let archive = try assertHumanArchive(a)
+        let document = try JSONDecoder.captureCoreDecoder.decode(SessionExportNotationDocument.self,
+            from: Data(contentsOf: archive.appendingPathComponent("notation/take-001_detected_notation.json")))
+        XCTAssertEqual(document.labelSource, .corrected)
+        XCTAssertEqual(document.reviewDecision?.label, "Chirp")
+        XCTAssertEqual(document.reviewDecision?.detectedLabel, "Baby Scratch")
+        XCTAssertEqual(document.reviewDecision?.reviewedAt, Date(timeIntervalSince1970: 1_730_000_030))
+    }
+
+    func testHumanReviewExportExplicitUnknownIsNotNoReview() throws {
+        let a = try humanExportFixture(status: .unknown, label: "unknown")
+        try assertHumanArchive(a)
+        XCTAssertEqual(SessionExportHumanReview.resolve(decision: a.sidecar.reviewDecision, metadata: nil), .unknown)
+    }
+
+    func testHumanReviewExportNoReviewStaysAbsent() throws {
+        let a = try humanExportFixture()
+        try assertHumanArchive(a)
+        XCTAssertEqual(SessionExportHumanReview.resolve(decision: nil, metadata: nil), .noReview)
+        XCTAssertFalse(try SessionArchiveBuilder().reviewDocument(for: a.package).hasReviewedTakes)
+    }
+
+    func testHumanReviewExportDecisionOnlyHasCompleteRoundTrip() throws {
+        let a = try humanExportFixture(status: .corrected, label: "Chirp")
+        let document = try SessionArchiveBuilder().reviewDocument(for: a.package,
+            generatedAt: Date(timeIntervalSince1970: 1_730_000_200))
+        let encoder = JSONEncoder(); encoder.dateEncodingStrategy = .iso8601
+        let decoded = try JSONDecoder.captureCoreDecoder.decode(SessionExportReviewDocument.self,
+            from: encoder.encode(document))
+        XCTAssertEqual(decoded, document)
+        XCTAssertEqual(decoded.takes[0].reviewDecision, a.sidecar.reviewDecision)
+        XCTAssertNil(decoded.takes[0].metadata)
+        XCTAssertTrue(decoded.hasReviewedTakes)
+    }
+
+    func testHumanReviewExportLegacyOverrideDoesNotInventDecision() throws {
+        let a = try humanExportFixture(override: "Chirp", metadataTime: Date(timeIntervalSince1970: 1_730_000_100))
+        try assertHumanArchive(a)
+        XCTAssertNil(a.sidecar.reviewDecision)
+        XCTAssertEqual(SessionExportHumanReview.resolve(decision: nil, metadata: a.sidecar.reviewMetadata), .legacyOverride)
+    }
+
+    func testHumanReviewExportMatchingDualLabelsKeepTheirOwnTimes() throws {
+        let a = try humanExportFixture(status: .corrected, label: "Chirp", override: " chirp ",
+            metadataTime: Date(timeIntervalSince1970: 1_730_000_100))
+        try assertHumanArchive(a)
+        XCTAssertNotEqual(a.sidecar.reviewDecision?.reviewedAt, a.sidecar.reviewMetadata?.reviewedAt)
+        XCTAssertEqual(SessionExportHumanReview.resolve(decision: a.sidecar.reviewDecision,
+            metadata: a.sidecar.reviewMetadata), .corrected)
+    }
+
+    func testHumanReviewExportConflictingDualLabelsRejectWithoutWriting() throws {
+        let a = try humanExportFixture(status: .corrected, label: "Transform", override: "Flare")
+        try assertHumanConflict(a)
+    }
+
+    func testHumanReviewExportNewerMetadataTimestampCannotWinConflict() throws {
+        let a = try humanExportFixture(status: .corrected, label: "Transform", override: "Flare",
+            metadataTime: Date(timeIntervalSince1970: 1_730_100_000))
+        try assertHumanConflict(a)
+    }
+
+    func testHumanReviewExportTwoTakesKeepIndependentDecisions() throws {
+        let root = try makeTemporaryDirectory()
+        let initial = try SessionArchiveBuilder().preparePackage(from: .package(
+            makeKeptLedgerPackage(rootURL: root,
+                sessionCreatedAt: Date(timeIntervalSince1970: 1_730_000_000), bpms: [70, 90])))
+        var sidecars: [CaptureCore.LocalRecordingSidecar] = []
+        for (index, take) in initial.takes.enumerated() {
+            var sidecar = try JSONDecoder.captureCoreDecoder.decode(CaptureCore.LocalRecordingSidecar.self,
+                from: Data(contentsOf: take.sidecarURL))
+            sidecar = sidecar.withDetectedNotation(makeDetectedNotationSnapshot())
+            sidecar = sidecar.reviewed(status: .corrected, label: index == 0 ? "Chirp" : "Transform",
+                detectedLabel: "Baby Scratch", confidence: index == 0 ? 42 : 91,
+                reviewedAt: Date(timeIntervalSince1970: 1_730_000_030 + Double(index)))
+            try sidecar.encodedData().write(to: take.sidecarURL, options: .atomic)
+            sidecars.append(sidecar)
+        }
+        XCTAssertEqual(sidecars[0].sessionID, sidecars[1].sessionID)
+        XCTAssertNotEqual(sidecars[0].takeID, sidecars[1].takeID)
+        let bBytes = try Data(contentsOf: initial.takes[1].sidecarURL)
+        var config = try XCTUnwrap(sidecars[0].sessionConfig)
+        config.takeCount = 1
+        let metadata = SessionExportMetadata(config: config, workflow: "guided_capture",
+            platform: "macOS", sessionName: "Selected A", totalDurationSeconds: 1)
+        let a = HumanExportFixture(root: root,
+            package: SessionExportPackage(metadata: metadata, takes: [initial.takes[0]], calibrationData: nil),
+            sidecar: sidecars[0], bytes: try Data(contentsOf: initial.takes[0].sidecarURL))
+        try assertHumanArchive(a)
+        XCTAssertEqual(try Data(contentsOf: initial.takes[1].sidecarURL), bBytes)
+        let review = try SessionArchiveBuilder().reviewDocument(for: a.package)
+        XCTAssertEqual(review.takes.count, 1)
+        XCTAssertEqual(review.takes[0].reviewDecision?.label, "Chirp")
+        XCTAssertEqual(review.takes[0].reviewDecision?.confidence, 42)
+        XCTAssertEqual(sidecars[1].reviewDecision?.label, "Transform")
+    }
+
+    func testHumanReviewExportCrossSessionSameOrdinalCannotLeak() throws {
+        let a = try humanExportFixture(session: "session-one", status: .accepted)
+        let b = try humanExportFixture(session: "session-two", status: .unknown, label: "unknown")
+        XCTAssertEqual(a.take.takeID, b.take.takeID)
+        XCTAssertNotEqual(a.sidecar.sessionID, b.sidecar.sessionID)
+        try assertHumanArchive(b)
+        XCTAssertEqual(try Data(contentsOf: a.take.sidecarURL), a.bytes)
+        var forged = a.package
+        forged = SessionExportPackage(metadata: a.package.metadata, takes: b.package.takes, calibrationData: nil)
+        XCTAssertThrowsError(try SessionArchiveBuilder().createArchive(from: forged, in: a.root))
+    }
+
+    func testHumanReviewExportCommonUIPathsStillUseOneBuilder() throws {
+        let service = try String(contentsOf: projectRootURL().appendingPathComponent(
+            "ScratchLab/Services/SessionExportCoordinator.swift"), encoding: .utf8)
+        let upload = try String(contentsOf: projectRootURL().appendingPathComponent(
+            "ScratchLab/Services/SessionUploadManager.swift"), encoding: .utf8)
+        for name in ["func prepareShare(", "func saveArchiveCopy("] {
+            let suffix = try XCTUnwrap(service.range(of: name)).upperBound
+            let part = String(service[suffix...].prefix(4500))
+            XCTAssertTrue(part.contains("SessionArchiveBuilder().preparePackage"))
+            XCTAssertTrue(part.contains("SessionArchiveBuilder().createArchive"))
+        }
+        XCTAssertTrue(upload.contains("SessionArchiveBuilder().preparePackage"))
+        XCTAssertTrue(upload.contains("SessionArchiveBuilder().createArchive"))
+    }
+
+    func testHumanReviewExportAliasesDoNotMergeDifferentTechniques() {
+        let date = Date(timeIntervalSince1970: 1_730_000_030)
+        let decision = CaptureCore.CaptureReviewDecision(status: .accepted, label: "baby_scratch",
+            detectedLabel: "Baby Scratch", confidence: 57, reviewedAt: date)
+        for alias in ["Baby Scratch", "babyScratch", "baby_scratch", "Baby"] {
+            XCTAssertEqual(SessionExportHumanReview.resolve(decision: decision,
+                metadata: .init(labelOverride: alias)), .accepted)
+        }
+        let flare = CaptureCore.CaptureReviewDecision(status: .corrected, label: "original_flare",
+            detectedLabel: "Baby Scratch", confidence: nil, reviewedAt: date)
+        XCTAssertEqual(SessionExportHumanReview.resolve(decision: flare,
+            metadata: .init(labelOverride: "flare_1click")), .conflict)
+    }
+
+    func testHumanReviewExportInvalidStatesFailButLegacyDecodingRemainsPossible() throws {
+        let a = try humanExportFixture(status: .corrected, label: " ")
+        XCTAssertEqual(SessionExportHumanReview.resolve(decision: a.sidecar.reviewDecision, metadata: nil), .invalid)
+        XCTAssertThrowsError(try SessionArchiveBuilder().preparePackage(from: .package(a.package))) {
+            XCTAssertEqual($0 as? SessionExportError, .invalidHumanReview(sessionID: a.sidecar.sessionID, takeID: a.take.takeID))
+        }
+        // Legacy JSON does not acquire new required fields or new decoder rejection rules.
+        let legacy = Data("{\"takeID\":\"take-001\",\"takeNumber\":1}".utf8)
+        let restored = try JSONDecoder().decode(SessionExportReviewTake.self, from: legacy)
+        XCTAssertNil(restored.reviewDecision)
+        XCTAssertNil(restored.rawDetection)
+        XCTAssertNil(restored.metadata)
+        var unknown = a.sidecar
+        unknown.reviewDecision = .init(status: .unknown, label: "Chirp", detectedLabel: nil,
+            confidence: nil, reviewedAt: Date(timeIntervalSince1970: 1_730_000_030))
+        XCTAssertEqual(SessionExportHumanReview.resolve(decision: unknown.reviewDecision, metadata: nil), .invalid)
+    }
+}
+
+
+extension CaptureReliabilityPhase1CoreTests {
+    func testHumanReviewExportReferenceBoundSidecarPreservesDecisionAndRejectsConflict() throws {
+        let a = try humanExportFixture(status: .corrected, label: "Chirp")
+        let prepared = try ReferenceBeatAssetStore.prepare(mode: .battleLoop, bpm: 70, loopBeats: 4,
+            rootURL: a.root.appendingPathComponent("beat_assets"))
+        var sidecar = a.sidecar
+        var config = try XCTUnwrap(sidecar.sessionConfig)
+        config.referenceCaptureIntent = .init(id: "human-review-binding", parentTechniqueID: "baby",
+            variantID: "baby.forward.open", recipeID: "exact_beat", startingPlatterDirection: .forward,
+            faderForm: .faderOpenThroughout, bpm: 70, beatsPerCycle: 4,
+            plan: .init(countInBars: 1, repetitionCount: 4, tailBars: 1), beatSpec: prepared.binding)
+        var object = try XCTUnwrap(JSONSerialization.jsonObject(with: sidecar.encodedData()) as? [String: Any])
+        let encoder = JSONEncoder(); encoder.dateEncodingStrategy = .iso8601
+        object["sessionConfig"] = try JSONSerialization.jsonObject(with: encoder.encode(config))
+        sidecar = try JSONDecoder.captureCoreDecoder.decode(CaptureCore.LocalRecordingSidecar.self,
+            from: JSONSerialization.data(withJSONObject: object))
+        try sidecar.encodedData().write(to: a.take.sidecarURL, options: .atomic)
+        let records = try SessionArchiveBuilder.boundBeatExportArtifacts(sidecar: sidecar,
+            mediaURL: a.take.mediaURL, sidecarURL: a.take.sidecarURL, takeNumber: 1)
+        let copy = try XCTUnwrap(records.first { $0.source == "reference_take_sidecar" })
+        let destination = a.root.appendingPathComponent("copied").appendingPathComponent(copy.relativePath)
+        try FileManager.default.createDirectory(at: destination.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try FileManager.default.copyItem(at: copy.sourceURL, to: destination)
+        let decoded = try JSONDecoder.captureCoreDecoder.decode(CaptureCore.LocalRecordingSidecar.self,
+            from: Data(contentsOf: destination))
+        XCTAssertEqual(decoded.reviewDecision, a.sidecar.reviewDecision)
+        XCTAssertEqual(decoded.detectedNotation, a.sidecar.detectedNotation)
+        let projection = try SessionArchiveBuilder().reviewDocument(for: a.package,
+            sidecarSnapshots: [a.take.takeID: sidecar])
+        XCTAssertEqual(projection.takes[0].reviewDecision, decoded.reviewDecision)
+        sidecar = sidecar.withReviewMetadata(.init(labelOverride: "Transform"), audit: "Conflict fixture")
+        try sidecar.encodedData().write(to: a.take.sidecarURL, options: .atomic)
+        let conflicting = HumanExportFixture(root: a.root, package: a.package, sidecar: sidecar,
+            bytes: try Data(contentsOf: a.take.sidecarURL))
+        try assertHumanConflict(conflicting)
+        XCTAssertThrowsError(try SessionArchiveBuilder.boundBeatExportArtifacts(sidecar: sidecar,
+            mediaURL: a.take.mediaURL, sidecarURL: a.take.sidecarURL, takeNumber: 1)) {
+            XCTAssertEqual($0 as? SessionExportError,
+                .humanReviewConflict(sessionID: sidecar.sessionID, takeID: sidecar.takeID))
+        }
+    }
+
+    func testHumanReviewExportAcceptedProvenanceCannotClaimDifferentRawLabel() throws {
+        let a = try humanExportFixture(status: .accepted, label: "Chirp")
+        XCTAssertEqual(SessionExportHumanReview.resolve(decision: a.sidecar.reviewDecision, metadata: nil), .invalid)
+        XCTAssertThrowsError(try SessionArchiveBuilder().reviewDocument(for: a.package)) {
+            XCTAssertEqual($0 as? SessionExportError,
+                .invalidHumanReview(sessionID: a.sidecar.sessionID, takeID: a.take.takeID))
+        }
+        XCTAssertEqual(try Data(contentsOf: a.take.sidecarURL), a.bytes)
+    }
+}
+
+
+extension CaptureReliabilityPhase1CoreTests {
+    func testHumanReviewExportLegacyProjectionFieldsRemainOptional() throws {
+        let fixture = try humanExportFixture(status: .corrected, label: "Chirp")
+        let extracted = try assertHumanArchive(fixture)
+        func legacyData(_ path: String, takeArray: Bool) throws -> Data {
+            var object = try XCTUnwrap(JSONSerialization.jsonObject(with:
+                Data(contentsOf: extracted.appendingPathComponent(path))) as? [String: Any])
+            let fields = ["reviewDecision", "legacyLabelOverride", "rawDetection"]
+            if takeArray {
+                var takes = try XCTUnwrap(object["takes"] as? [[String: Any]])
+                for index in takes.indices { for field in fields { takes[index].removeValue(forKey: field) } }
+                object["takes"] = takes
+            } else {
+                for field in fields { object.removeValue(forKey: field) }
+            }
+            return try JSONSerialization.data(withJSONObject: object)
+        }
+        let decoder = JSONDecoder.captureCoreDecoder
+        let notation = try decoder.decode(SessionExportNotationDocument.self, from:
+            legacyData("notation/take-001_detected_notation.json", takeArray: false))
+        let metadata = try decoder.decode(SessionExportMetadataDocument.self, from:
+            legacyData("manifests/session_metadata.json", takeArray: true))
+        let artifacts = try decoder.decode(SessionExportArtifactMetadataDocument.self, from:
+            legacyData("manifests/export_metadata.json", takeArray: true))
+        let review = try decoder.decode(SessionExportReviewDocument.self, from:
+            legacyData("manifests/session_review.json", takeArray: true))
+        XCTAssertNil(notation.reviewDecision)
+        XCTAssertNil(notation.rawDetection)
+        XCTAssertNil(notation.legacyLabelOverride)
+        XCTAssertEqual(notation.recordMovementEvents.count, 2)
+        XCTAssertNil(metadata.takes[0].reviewDecision)
+        XCTAssertNil(metadata.takes[0].rawDetection)
+        XCTAssertNil(metadata.takes[0].legacyLabelOverride)
+        XCTAssertNil(artifacts.takes[0].reviewDecision)
+        XCTAssertNil(artifacts.takes[0].rawDetection)
+        XCTAssertNil(artifacts.takes[0].legacyLabelOverride)
+        XCTAssertNil(review.takes[0].reviewDecision)
+        XCTAssertNil(review.takes[0].rawDetection)
+    }
+}
+
+
+// Batch 3 MacAnalyzer Slice 4: permanent membership, revision and receipt regressions.
+// Exercise production cache preparation with isolated storage and no network delivery.
+import Combine
+
+extension CaptureReliabilityPhase1CoreTests {
+    @MainActor
+    private func slice4Represents(_ coordinator: SessionExportCoordinator, _ package: SessionExportPackage) -> Bool {
+        let take = package.takes[0]
+        return coordinator.representations.represents(sessionID: package.metadata.sessionID,
+            takeID: take.takeID, sidecarURL: take.sidecarURL)
+    }
+
+    @MainActor
+    private func slice4Operation(_ coordinator: SessionExportCoordinator,
+                                 source: SessionExportSource, share: Bool = false) async -> SessionExportState {
+        if share { coordinator.prepareShare(for: source, options: .init(mixMode: .scratchOnly)) }
+        else { coordinator.saveArchiveCopy(for: source, options: .init(mixMode: .scratchOnly)) }
+        // Event-driven observation. No sleep, deadline, retry or polling loop.
+        for await state in coordinator.$state.values {
+            switch state {
+            case .readyToShare, .shareCompleted, .failed, .cancelled: return state
+            default: continue
+            }
+        }
+        return .idle
+    }
+
+    private func slice4Review(_ archive: URL) throws -> SessionExportReviewDocument {
+        let root = try unzipArchive(archive, to: try makeTemporaryDirectory())
+        return try JSONDecoder.captureCoreDecoder.decode(SessionExportReviewDocument.self,
+            from: Data(contentsOf: root.appendingPathComponent("manifests/session_review.json")))
+    }
+
+    private func slice4TwoTakes() throws -> (SessionExportPackage, SessionExportPackage, SessionExportPackage) {
+        let root = try makeTemporaryDirectory()
+        let original = try SessionArchiveBuilder().preparePackage(from: .package(makeKeptLedgerPackage(
+            rootURL: root, sessionCreatedAt: Date(timeIntervalSince1970: 1_730_000_000), bpms: [70, 70])))
+        let namedTakes = try original.takes.map { take -> SessionExportTake in
+            let base = CaptureCore.LocalRecordingNaming.baseName(sessionID: original.metadata.sessionID,
+                takeNumber: take.takeNumber, roleLabel: "camA")
+            let media = root.appendingPathComponent(base).appendingPathExtension("mov")
+            let audio = root.appendingPathComponent(base).appendingPathExtension("wav")
+            let sidecar = root.appendingPathComponent(base).appendingPathExtension("json")
+            try FileManager.default.copyItem(at: take.mediaURL, to: media)
+            try FileManager.default.copyItem(at: try XCTUnwrap(take.audioArtifactURL), to: audio)
+            try writeFinalizedSidecar(to: sidecar, sessionID: original.metadata.sessionID,
+                takeIdentity: CaptureCore.LocalRecordingNaming.takeIdentity(sessionID: original.metadata.sessionID,
+                    takeNumber: take.takeNumber), mediaURL: media, performerName: "DJ Ledger", bpm: 70,
+                createdAt: Date(timeIntervalSince1970: 1_730_000_000))
+            return SessionExportTake(takeID: take.takeID, takeNumber: take.takeNumber, bpm: take.bpm,
+                mediaURL: media, audioArtifactURL: audio, sidecarURL: sidecar, watchCaptureSession: nil,
+                drillName: take.drillName, duration: take.duration, quality: take.quality,
+                comboTagged: take.comboTagged, audioPresent: take.audioPresent, motionPresent: take.motionPresent,
+                syncStatus: take.syncStatus, recordingStatus: take.recordingStatus,
+                verbalSlateUsed: take.verbalSlateUsed, syncClapUsed: take.syncClapUsed, note: take.note)
+        }
+        let all = SessionExportPackage(metadata: original.metadata, takes: namedTakes, calibrationData: nil)
+        func single(_ take: SessionExportTake) throws -> SessionExportPackage {
+            var sidecar = try JSONDecoder.captureCoreDecoder.decode(CaptureCore.LocalRecordingSidecar.self,
+                from: Data(contentsOf: take.sidecarURL))
+            sidecar = sidecar.withDetectedNotation(makeDetectedNotationSnapshot())
+            sidecar = sidecar.reviewed(status: .accepted, label: "baby_scratch", detectedLabel: "Baby Scratch",
+                confidence: 57, reviewedAt: Date(timeIntervalSince1970: 1_730_000_030))
+            try sidecar.encodedData().write(to: take.sidecarURL, options: .atomic)
+            var config = try XCTUnwrap(sidecar.sessionConfig)
+            config.takeCount = 1
+            let name = "\(all.metadata.performerName ?? "") \(all.metadata.scratchTypeName ?? "") 70 BPM"
+            let metadata = SessionExportMetadata(config: config, workflow: "guided_capture", platform: "macOS",
+                sessionName: name, totalDurationSeconds: 1)
+            return SessionExportPackage(metadata: metadata, takes: [take], calibrationData: nil)
+        }
+        return (try single(all.takes[0]), try single(all.takes[1]), all)
+    }
+
+    @discardableResult
+    private func slice4PersistR2(_ package: SessionExportPackage) throws -> CaptureCore.LocalRecordingSidecar {
+        let take = package.takes[0]
+        let sidecar = try JSONDecoder.captureCoreDecoder.decode(CaptureCore.LocalRecordingSidecar.self,
+            from: Data(contentsOf: take.sidecarURL))
+        let context = try CaptureCore.TakeReviewContext(sessionID: sidecar.sessionID, takeID: sidecar.takeID,
+            mediaURL: take.mediaURL, sidecarURL: take.sidecarURL, detectedNotation: sidecar.detectedNotation)
+        return try persistOwnedReview(context, status: .corrected, correction: "Chirp")
+    }
+
+    @MainActor
+    func testSlice4AExportDoesNotRepresentAbsentBAndSurvivesAToBToA() async throws {
+        let (a, b, _) = try slice4TwoTakes()
+        let destination = try makeTemporaryDirectory().appendingPathComponent("A.zip")
+        let coordinator = SessionExportCoordinator(archiveSaveDestinationProvider: { _ in destination })
+        let state = await slice4Operation(coordinator, source: .package(a))
+        let result = try XCTUnwrap(coordinator.lastResult)
+        let review = try slice4Review(result.archiveURL)
+        XCTAssertEqual(review.sessionID, b.metadata.sessionID)
+        XCTAssertEqual(review.takes.map(\.takeID), [a.takes[0].takeID])
+        XCTAssertFalse(review.takes.contains { $0.takeID == b.takes[0].takeID })
+        XCTAssertTrue(slice4Represents(coordinator, a))
+        XCTAssertFalse(slice4Represents(coordinator, b))
+        XCTAssertTrue(slice4Represents(coordinator, a))
+    }
+
+    @MainActor
+    func testSlice4R1ArchiveDoesNotRepresentLegitimateR2() async throws {
+        let (a, _, _) = try slice4TwoTakes()
+        let destination = try makeTemporaryDirectory().appendingPathComponent("R1.zip")
+        let coordinator = SessionExportCoordinator(archiveSaveDestinationProvider: { _ in destination })
+        _ = await slice4Operation(coordinator, source: .package(a))
+        let before = try Data(contentsOf: destination)
+        let r1 = try slice4Review(destination)
+        let r2 = try slice4PersistR2(a)
+        XCTAssertEqual(r1.takes[0].reviewDecision?.status, .accepted)
+        XCTAssertEqual(r2.reviewDecision?.label, "Chirp")
+        XCTAssertNotEqual(r1.takes[0].reviewDecision, r2.reviewDecision)
+        coordinator.representations.invalidate(a.takes[0].sidecarURL)
+        await coordinator.representations.reconcile()
+        XCTAssertFalse(slice4Represents(coordinator, a))
+        XCTAssertEqual(try Data(contentsOf: destination), before)
+    }
+
+    @MainActor
+    func testSlice4IndependentAAndBArchivesRemainRepresented() async throws {
+        let (a, b, _) = try slice4TwoTakes()
+        let root = try makeTemporaryDirectory()
+        var destination = root.appendingPathComponent("A.zip")
+        let coordinator = SessionExportCoordinator(archiveSaveDestinationProvider: { _ in destination })
+        _ = await slice4Operation(coordinator, source: .package(a))
+        let aResult = try XCTUnwrap(coordinator.lastResult)
+        destination = root.appendingPathComponent("B.zip")
+        _ = await slice4Operation(coordinator, source: .package(b))
+        let bResult = try XCTUnwrap(coordinator.lastResult)
+        XCTAssertNotEqual(aResult.archiveURL, bResult.archiveURL)
+        XCTAssertEqual(try slice4Review(aResult.archiveURL).takes.map(\.takeID), [a.takes[0].takeID])
+        XCTAssertEqual(try slice4Review(bResult.archiveURL).takes.map(\.takeID), [b.takes[0].takeID])
+        XCTAssertEqual(coordinator.lastResult, bResult)
+        XCTAssertTrue(slice4Represents(coordinator, a))
+        XCTAssertTrue(slice4Represents(coordinator, b))
+    }
+
+    @MainActor
+    func testSlice4MultiTakeReceiptRemainsRepresentedAfterShareCancellation() async throws {
+        let (a, b, all) = try slice4TwoTakes()
+        let coordinator = SessionExportCoordinator()
+        let state = await slice4Operation(coordinator, source: .package(all), share: true)
+        let result = try XCTUnwrap(coordinator.lastResult)
+        let review = try slice4Review(result.archiveURL)
+        XCTAssertEqual(Set(review.takes.map(\.takeID)), [a.takes[0].takeID, b.takes[0].takeID])
+        XCTAssertTrue(slice4Represents(coordinator, a))
+        XCTAssertTrue(slice4Represents(coordinator, b))
+        let requestID = try XCTUnwrap(coordinator.shareRequest?.id)
+        coordinator.markSharePresented(requestID: requestID)
+        coordinator.handleShareOutcome(.cancelled, requestID: requestID)
+        XCTAssertTrue(FileManager.default.fileExists(atPath: result.archiveURL.path))
+        XCTAssertEqual(coordinator.lastResult, result)
+        XCTAssertTrue(slice4Represents(coordinator, a))
+        XCTAssertTrue(slice4Represents(coordinator, b))
+    }
+
+    @MainActor
+    func testSlice4SameOrdinalInOtherSessionIsNotRepresented() async throws {
+        let a = try humanExportFixture(session: "slice4-session-one", status: .accepted)
+        let b = try humanExportFixture(session: "slice4-session-two", status: .accepted)
+        let destination = try makeTemporaryDirectory().appendingPathComponent("session-one.zip")
+        let coordinator = SessionExportCoordinator(archiveSaveDestinationProvider: { _ in destination })
+        _ = await slice4Operation(coordinator, source: .package(a.package))
+        let review = try slice4Review(destination)
+        XCTAssertEqual(a.take.takeID, b.take.takeID)
+        XCTAssertNotEqual(review.sessionID, b.sidecar.sessionID)
+        XCTAssertTrue(slice4Represents(coordinator, a.package))
+        XCTAssertFalse(slice4Represents(coordinator, b.package))
+    }
+
+    @MainActor
+    func testSlice4FailedLaterRequestPreservesSavedArchiveRepresentation() async throws {
+        let (a, _, _) = try slice4TwoTakes()
+        let destination = try makeTemporaryDirectory().appendingPathComponent("retained-A.zip")
+        let coordinator = SessionExportCoordinator(archiveSaveDestinationProvider: { _ in destination })
+        _ = await slice4Operation(coordinator, source: .package(a))
+        let before = try Data(contentsOf: destination)
+        let invalid = SessionExportPackage(metadata: a.metadata, takes: [], calibrationData: nil)
+        let state = await slice4Operation(coordinator, source: .package(invalid))
+        if case .failed = state {} else { XCTFail("Expected failure") }
+        XCTAssertNotNil(coordinator.lastResult)
+        XCTAssertTrue(slice4Represents(coordinator, a))
+        XCTAssertEqual(try Data(contentsOf: destination), before)
+        XCTAssertEqual(try slice4Review(destination).takes.map(\.takeID), [a.takes[0].takeID])
+    }
+
+    @MainActor
+    func testSlice4UploadCacheRebuildsForRevisionAndMembershipChanges() async throws {
+        let (a, b, _) = try slice4TwoTakes()
+        let probe = SessionUploadManager(activateImmediately: false, storageRootOverride: try makeTemporaryDirectory())
+        let first = try await probe.prepareArchive(for: .package(a), djID: "diagnostic")
+        let before = try Data(contentsOf: first.zipURL)
+        let expectedLookup = SessionArchiveBuilder().archiveURL(for: a.metadata,
+            in: first.zipURL.deletingLastPathComponent())
+        XCTAssertNotEqual(expectedLookup, first.zipURL) // New generations must not overwrite historical ZIPs.
+        let r2 = try slice4PersistR2(a)
+        let second = try await probe.prepareArchive(for: .package(a), djID: "diagnostic")
+        XCTAssertNotEqual(first.zipURL, second.zipURL)
+        XCTAssertNotEqual(first.sha256, second.sha256)
+        XCTAssertEqual(try Data(contentsOf: first.zipURL), before)
+        XCTAssertEqual(try slice4Review(second.zipURL).takes[0].reviewDecision, r2.reviewDecision)
+        let forB = try await probe.prepareArchive(for: .package(b), djID: "diagnostic")
+        XCTAssertNotEqual(forB.zipURL, first.zipURL)
+        XCTAssertEqual(try slice4Review(forB.zipURL).takes.map(\.takeID), [b.takes[0].takeID])
+        XCTAssertFalse(try slice4Review(forB.zipURL).takes.contains { $0.takeID == a.takes[0].takeID })
+        let unchanged = try await probe.prepareArchive(for: .package(b), djID: "diagnostic")
+        XCTAssertEqual(unchanged.zipURL, forB.zipURL)
+        XCTAssertEqual(unchanged.sha256, forB.sha256)
+    }
+
+    @MainActor
+    func testSlice4ReviewConflictInvalidatesRepresentationAndBlocksCache() async throws {
+        let (a, _, _) = try slice4TwoTakes()
+        let destination = try makeTemporaryDirectory().appendingPathComponent("valid-old.zip")
+        let coordinator = SessionExportCoordinator(archiveSaveDestinationProvider: { _ in destination })
+        _ = await slice4Operation(coordinator, source: .package(a))
+        let before = try Data(contentsOf: destination)
+        let r2 = try slice4PersistR2(a)
+        let conflicted = r2.withReviewMetadata(.init(labelOverride: "Flare"), audit: "Forensic conflict",
+            recordedAt: Date(timeIntervalSince1970: 1_780_000_001))
+        try conflicted.encodedData().write(to: a.takes[0].sidecarURL, options: .atomic)
+        coordinator.representations.invalidate(a.takes[0].sidecarURL)
+        await coordinator.representations.reconcile()
+        XCTAssertFalse(slice4Represents(coordinator, a))
+        XCTAssertThrowsError(try SessionArchiveBuilder().preparePackage(from: .package(a))) {
+            XCTAssertEqual($0 as? SessionExportError, .humanReviewConflict(sessionID: conflicted.sessionID,
+                takeID: conflicted.takeID))
+        }
+        let probe = SessionUploadManager(activateImmediately: false, storageRootOverride: try makeTemporaryDirectory())
+        do { _ = try await probe.prepareArchive(for: .package(a), djID: "diagnostic"); XCTFail("Expected conflict") }
+        catch { XCTAssertEqual(error as? SessionExportError,
+            .humanReviewConflict(sessionID: conflicted.sessionID, takeID: conflicted.takeID)) }
+        XCTAssertEqual(try Data(contentsOf: destination), before)
+    }
+
+    func testSlice4PresentationAdaptersUseMemoryOnlyCompositeIdentity() throws {
+        let view = try String(contentsOf: projectRootURL().appendingPathComponent("ScratchLabDesktop/Views/MacAnalyzerView.swift"), encoding: .utf8)
+        let start = try XCTUnwrap(view.range(of: "    private var selectedTakeIsRepresented:"))
+        let end = try XCTUnwrap(view.range(of: "    private var reviewSummaryFooterCard:", range: start.upperBound..<view.endIndex))
+        let query = String(view[start.lowerBound..<end.lowerBound])
+        XCTAssertTrue(query.contains("sessionID: context.sessionID"))
+        XCTAssertTrue(query.contains("takeID: context.takeID"))
+        XCTAssertFalse(query.contains("Data(contentsOf:"))
+        XCTAssertFalse(query.contains("createArchive"))
+        XCTAssertFalse(query.contains("sourceRevision"))
+    }
+
+}
+
+
+extension CaptureReliabilityPhase1CoreTests {
+    func testSlice4SemanticRevisionDistinguishesReviewFromAuditOnlyChanges() throws {
+        let (a, _, _) = try slice4TwoTakes()
+        let builder = SessionArchiveBuilder()
+        let fixedDate = Date(timeIntervalSince1970: 1_780_000_010)
+        let manifestR1 = try builder.canonicalPreview(for: a).manifestData
+        let reviewR1 = try builder.reviewDocument(for: a, generatedAt: fixedDate)
+        let metadataR1 = try builder.metadataDocument(for: a)
+        let semanticR1 = try ExportSourceArtifact.read(a.takes[0].sidecarURL, semanticSidecar: true)
+        let bytesR1 = try Data(contentsOf: a.takes[0].sidecarURL)
+        let r2 = try slice4PersistR2(a)
+        let reviewR2 = try builder.reviewDocument(for: a, generatedAt: fixedDate)
+        XCTAssertNotEqual(reviewR1, reviewR2)
+        XCTAssertNotEqual(metadataR1, try builder.metadataDocument(for: a))
+        XCTAssertEqual(manifestR1, try builder.canonicalPreview(for: a).manifestData)
+        let semanticR2 = try ExportSourceArtifact.read(a.takes[0].sidecarURL, semanticSidecar: true)
+        XCTAssertNotEqual(semanticR1, semanticR2)
+        let bytesR2 = try Data(contentsOf: a.takes[0].sidecarURL)
+        XCTAssertNotEqual(bytesR1, bytesR2)
+        let decision = try XCTUnwrap(r2.reviewDecision)
+        let auditOnly = r2.reviewed(status: decision.status, label: decision.label,
+            detectedLabel: decision.detectedLabel, confidence: decision.confidence, reviewedAt: decision.reviewedAt)
+        try auditOnly.encodedData().write(to: a.takes[0].sidecarURL, options: .atomic)
+        XCTAssertNotEqual(bytesR2, try Data(contentsOf: a.takes[0].sidecarURL))
+        XCTAssertEqual(semanticR2, try ExportSourceArtifact.read(a.takes[0].sidecarURL, semanticSidecar: true))
+        XCTAssertEqual(reviewR2, try builder.reviewDocument(for: a, generatedAt: fixedDate))
+        XCTAssertEqual(manifestR1, try builder.canonicalPreview(for: a).manifestData)
+        print("SLICE4 revision: ordinary manifest misses R1->R2; sidecar bytes over-invalidate audit-only edits; semantic projection distinguishes both")
+    }
+}
+
+// Slice 4 receipt and bounded-identity regressions. No timing or media-size oracle.
+private final class Slice4IdentityReads: @unchecked Sendable {
+    private let lock = NSLock()
+    private var urls: [URL] = []
+    func record(_ url: URL) { lock.lock(); urls.append(url); lock.unlock() }
+    var count: Int { lock.lock(); defer { lock.unlock() }; return urls.count }
+    func count(_ url: URL) -> Int { lock.lock(); defer { lock.unlock() }; return urls.filter { $0 == url }.count }
+}
+
+private actor Slice4IdentityBarrier {
+    var started = false
+    var startWaiters: [CheckedContinuation<Void, Never>] = []
+    var releaseWaiter: CheckedContinuation<Void, Never>?
+    func waitForStart() async {
+        if started { return }
+        await withCheckedContinuation { startWaiters.append($0) }
+    }
+    func suspend() async {
+        started = true
+        startWaiters.forEach { $0.resume() }; startWaiters.removeAll()
+        await withCheckedContinuation { releaseWaiter = $0 }
+    }
+    func release() { releaseWaiter?.resume(); releaseWaiter = nil }
+}
+
+extension CaptureReliabilityPhase1CoreTests {
+    private func slice4SmallReceipt() throws -> (SessionExportResult, URL) {
+        let root = try makeTemporaryDirectory(), source = root.appendingPathComponent("take.json")
+        let archive = root.appendingPathComponent("archive.zip")
+        try Data("source-one".utf8).write(to: source)
+        try Data("validated-archive-fixture".utf8).write(to: archive)
+        let member = SessionExportMemberReceipt(sessionID: "session", takeID: "take-001", semanticRevision: "r1",
+            artifacts: [.init(role: "sidecar", url: source, semanticSidecar: false,
+                              identity: try .file(source), observedHint: SessionExportRepresentationStore.hint(source))])
+        return (.init(archiveURL: archive, archiveSizeBytes: 25, sessionName: "Fixture", createdAt: .distantPast,
+            shouldCleanupAfterUse: false, receipt: .init(version: 1, members: [member], packageRevision: "p1",
+                archiveIdentity: try .file(archive)), archiveHint: SessionExportRepresentationStore.hint(archive)), source)
+    }
+
+    @MainActor
+    func testSlice4PresentationQueriesReadNothingAndMissingProofCannotClaimExport() async throws {
+        let (result, source) = try slice4SmallReceipt(), reads = Slice4IdentityReads()
+        let store = SessionExportRepresentationStore(reader: { url, semantic in
+            reads.record(url); return try ExportSourceArtifact.read(url, semanticSidecar: semantic)
+        })
+        for _ in 0..<100 {
+            XCTAssertFalse(store.represents(sessionID: "session", takeID: "take-001", sidecarURL: source))
+        }
+        XCTAssertEqual(reads.count, 0)
+        await store.retain(result)
+        for _ in 0..<100 {
+            XCTAssertTrue(store.represents(sessionID: "session", takeID: "take-001", sidecarURL: source))
+        }
+        XCTAssertEqual(reads.count, 0, "Export-time validated identities must be installed without rereading content")
+    }
+
+    @MainActor
+    func testSlice4SamePathReplacementBecomesUnprovenThenDifferentIdentity() async throws {
+        let (result, source) = try slice4SmallReceipt(), reads = Slice4IdentityReads()
+        let store = SessionExportRepresentationStore(reader: { url, semantic in
+            reads.record(url); return try ExportSourceArtifact.read(url, semanticSidecar: semantic)
+        })
+        await store.retain(result)
+        try Data("source-two".utf8).write(to: source, options: .atomic)
+        store.invalidate(source)
+        XCTAssertFalse(store.represents(sessionID: "session", takeID: "take-001", sidecarURL: source))
+        await store.reconcile()
+        XCTAssertFalse(store.represents(sessionID: "session", takeID: "take-001", sidecarURL: source))
+        XCTAssertNotEqual(try ExportArtifactIdentity.file(source), result.receipt?.members[0].artifacts[0].identity)
+        XCTAssertGreaterThanOrEqual(reads.count(source), 1)
+        XCTAssertEqual(reads.count(result.archiveURL), 0)
+    }
+
+    @MainActor
+    func testSlice4ArchiveReplacementAndDeletionInvalidateReceipt() async throws {
+        let (result, source) = try slice4SmallReceipt()
+        let store = SessionExportRepresentationStore()
+        await store.retain(result)
+        try Data("other-archive".utf8).write(to: result.archiveURL, options: .atomic)
+        await store.reconcile()
+        XCTAssertFalse(store.represents(sessionID: "session", takeID: "take-001", sidecarURL: source))
+        try FileManager.default.removeItem(at: result.archiveURL)
+        await store.reconcile()
+        XCTAssertFalse(store.represents(sessionID: "session", takeID: "take-001", sidecarURL: source))
+    }
+
+    @MainActor
+    func testSlice4VerificationDeduplicatesAndStaleCompletionCannotPublish() async throws {
+        var (result, source) = try slice4SmallReceipt()
+        result.archiveHint = nil // Missing proof forces one controlled read.
+        let barrier = Slice4IdentityBarrier(), reads = Slice4IdentityReads()
+        let archiveURL = result.archiveURL
+        let store = SessionExportRepresentationStore(observeFileChanges: false, reader: { url, semantic in
+            reads.record(url)
+            let identity = try ExportSourceArtifact.read(url, semanticSidecar: semantic)
+            if url == archiveURL { await barrier.suspend() }
+            return identity
+        })
+        let first = Task { await store.retain(result) }
+        await barrier.waitForStart()
+        for _ in 0..<100 { XCTAssertFalse(store.represents(sessionID: "session", takeID: "take-001", sidecarURL: source)) }
+        XCTAssertEqual(reads.count(result.archiveURL), 1)
+        // Invalidate ownership without starting a second blocked archive read.
+        try Data("source-two".utf8).write(to: source, options: .atomic)
+        store.cancelVerification()
+        await barrier.release()
+        await first.value
+        XCTAssertFalse(store.represents(sessionID: "session", takeID: "take-001", sidecarURL: source))
+        XCTAssertEqual(reads.count(result.archiveURL), 1)
+    }
+
+    @MainActor
+    func testSlice4ReviewOnlyChangeReusesMediaProofAndR2ReexportIsRepresented() async throws {
+        let (a, _, _) = try slice4TwoTakes(), reads = Slice4IdentityReads()
+        let builder = SessionArchiveBuilder()
+        let r1 = try builder.createArchive(from: a, in: makeTemporaryDirectory())
+        let store = SessionExportRepresentationStore(reader: { url, semantic in
+            reads.record(url); return try ExportSourceArtifact.read(url, semanticSidecar: semantic)
+        })
+        await store.retain(r1)
+        XCTAssertEqual(reads.count, 0)
+        _ = try slice4PersistR2(a)
+        store.invalidate(a.takes[0].sidecarURL)
+        await store.reconcile()
+        XCTAssertFalse(store.represents(sessionID: a.metadata.sessionID, takeID: a.takes[0].takeID, sidecarURL: a.takes[0].sidecarURL))
+        XCTAssertEqual(reads.count(a.takes[0].mediaURL), 0)
+        XCTAssertEqual(reads.count(try XCTUnwrap(a.takes[0].audioArtifactURL)), 0)
+        let r2 = try builder.createArchive(from: a, in: makeTemporaryDirectory())
+        XCTAssertNotEqual(r1.receipt?.members[0].semanticRevision, r2.receipt?.members[0].semanticRevision)
+        await store.retain(r2)
+        XCTAssertTrue(store.represents(sessionID: a.metadata.sessionID, takeID: a.takes[0].takeID, sidecarURL: a.takes[0].sidecarURL))
+        XCTAssertTrue(FileManager.default.fileExists(atPath: r1.archiveURL.path))
+    }
+
+    func testSlice4ReceiptReusesValidatorVideoDigest() throws {
+        let (a, _, _) = try slice4TwoTakes(), reads = Slice4IdentityReads()
+        let builder = SessionArchiveBuilder(sourceIdentityReader: { url, semantic in
+            reads.record(url); return try ExportSourceArtifact.read(url, semanticSidecar: semantic)
+        })
+        let result = try builder.createArchive(from: a, in: makeTemporaryDirectory())
+        let member = try XCTUnwrap(result.receipt?.members.first)
+        XCTAssertEqual(member.artifacts.first { $0.role == "video" }?.identity, try ExportArtifactIdentity.file(a.takes[0].mediaURL))
+        XCTAssertEqual(reads.count(a.takes[0].mediaURL), 0)
+        XCTAssertEqual(reads.count(try XCTUnwrap(a.takes[0].audioArtifactURL)), 1)
+        XCTAssertEqual(member.exportedArtifacts["camA"], member.artifacts.first { $0.role == "video" }?.identity)
+        XCTAssertNotNil(member.exportedArtifacts["scratch_only"])
+    }
+
+    func testSlice4CanonicalScalarAndDictionaryOrderAndOptionsRevision() throws {
+        XCTAssertEqual(try ExportSemanticIdentity.digestJSON(Data("{\"z\":1,\"a\":[true,2]}".utf8)),
+                       try ExportSemanticIdentity.digestJSON(Data("{\"a\":[true,2.0],\"z\":1.0}".utf8)))
+        XCTAssertNotEqual(try ExportSemanticIdentity.digestJSON(Data("[1,2]".utf8)),
+                          try ExportSemanticIdentity.digestJSON(Data("[2,1]".utf8)))
+        let (a, _, all) = try slice4TwoTakes(), builder = SessionArchiveBuilder()
+        let first = try builder.sourceRevision(for: a)
+        XCTAssertEqual(first.packageRevision, try builder.sourceRevision(for: a).packageRevision)
+        let grouped = try builder.sourceRevision(for: all)
+        XCTAssertNotEqual(first.packageRevision, grouped.packageRevision)
+        XCTAssertEqual(first.members[0].semanticRevision, grouped.members.first { $0.takeID == first.members[0].takeID }?.semanticRevision)
+        XCTAssertNotEqual(first.packageRevision, try builder.sourceRevision(for: a, options: .init(mixMode: .stemsFolder)).packageRevision)
+    }
+
+    @MainActor
+    func testSlice4StaleShareOutcomeCannotFinishSuccessorRequest() async throws {
+        let (a, b, _) = try slice4TwoTakes(), coordinator = SessionExportCoordinator()
+        _ = await slice4Operation(coordinator, source: .package(a), share: true)
+        let oldID = try XCTUnwrap(coordinator.shareRequest?.id)
+        coordinator.markSharePresented(requestID: oldID)
+        _ = await slice4Operation(coordinator, source: .package(b), share: true)
+        let newID = try XCTUnwrap(coordinator.shareRequest?.id)
+        coordinator.markSharePresented(requestID: newID)
+        coordinator.handleShareOutcome(.completed, requestID: oldID)
+        if case .presentingShareSheet = coordinator.state {} else { XCTFail("Stale share outcome changed successor") }
+        XCTAssertEqual(coordinator.shareRequest?.id, newID)
+        coordinator.handleShareOutcome(.completed, requestID: newID)
+        if case .shareCompleted = coordinator.state {} else { XCTFail("Owned completion was rejected") }
+    }
+
+    @MainActor
+    func testSlice4UploadArchiveReplacementAndMissingLegacyReceiptRequireRebuild() async throws {
+        let (a, _, _) = try slice4TwoTakes()
+        let storage = try makeTemporaryDirectory()
+        let manager = SessionUploadManager(activateImmediately: false, storageRootOverride: storage)
+        let first = try await manager.prepareArchive(for: .package(a), djID: "fixture")
+        try Data("replacement".utf8).write(to: first.zipURL, options: .atomic)
+        let second = try await manager.prepareArchive(for: .package(a), djID: "fixture")
+        XCTAssertNotEqual(first.zipURL, second.zipURL)
+        XCTAssertEqual(try slice4Review(second.zipURL).takes.map(\.takeID), [a.takes[0].takeID])
+        var legacy = try XCTUnwrap(manager.job(for: a.metadata.sessionID))
+        legacy.exportReceipt = nil
+        let encoder = JSONEncoder(); encoder.dateEncodingStrategy = .iso8601
+        let object = try XCTUnwrap(JSONSerialization.jsonObject(with: encoder.encode(legacy)) as? [String: Any])
+        XCTAssertNil(object["exportReceipt"])
+        let decoder = JSONDecoder(); decoder.dateDecodingStrategy = .iso8601
+        XCTAssertNil(try decoder.decode(SessionUploadJob.self, from: encoder.encode(legacy)).exportReceipt)
+        try encoder.encode(legacy).write(to: storage.appendingPathComponent(a.metadata.sessionID).appendingPathComponent("job.json"), options: .atomic)
+        let restored = SessionUploadManager(activateImmediately: false, storageRootOverride: storage)
+        restored.loadPersistedJobs()
+        XCTAssertNil(restored.job(for: a.metadata.sessionID)?.exportReceipt)
+        let rebuilt = try await restored.prepareArchive(for: .package(a), djID: "fixture")
+        XCTAssertNotEqual(rebuilt.zipURL, second.zipURL)
+        let currentJob = try XCTUnwrap(restored.job(for: a.metadata.sessionID))
+        let currentBeforeChange = await restored.archiveIsCurrent(currentJob)
+        XCTAssertTrue(currentBeforeChange)
+        _ = try slice4PersistR2(a)
+        let currentAfterChange = await restored.archiveIsCurrent(currentJob)
+        XCTAssertFalse(currentAfterChange)
+        XCTAssertNotNil(SessionUploadManager.transferIdentity(currentJob))
+        XCTAssertNil(SessionUploadManager.transferIdentity(legacy))
+        var successorAttempt = currentJob
+        successorAttempt.uploadAttemptID = UUID()
+        XCTAssertNotEqual(SessionUploadManager.transferIdentity(currentJob), SessionUploadManager.transferIdentity(successorAttempt))
+    }
+}
+
+extension CaptureReliabilityPhase1CoreTests {
+    @MainActor
+    func testSlice4FilesystemEventInvalidatesInPlaceReplacementWithoutPolling() async throws {
+        let (result, source) = try slice4SmallReceipt()
+        let store = SessionExportRepresentationStore()
+        await store.retain(result)
+        let events = AsyncStream<Bool>.makeStream()
+        let observation = store.$isReconciling.sink { events.continuation.yield($0) }
+        defer { observation.cancel(); events.continuation.finish() }
+        try Data("source-two".utf8).write(to: source, options: .atomic)
+        var firstInvalidation = false
+        for await verifying in events.stream {
+            if verifying { firstInvalidation = true }
+            else if firstInvalidation { break }
+        }
+        try Data("source-three".utf8).write(to: source) // Replacement vnode must have been re-armed.
+        var sawInvalidation = false
+        for await verifying in events.stream {
+            if verifying { sawInvalidation = true }
+            else if sawInvalidation { break }
+        }
+        XCTAssertFalse(store.represents(sessionID: "session", takeID: "take-001", sidecarURL: source))
+    }
+
+    @MainActor
+    func testSlice4ReceiptRetentionIsBoundedWithoutDeletingSavedArchives() async throws {
+        let store = SessionExportRepresentationStore(observeFileChanges: false)
+        var originals: [SessionExportResult] = []
+        for _ in 0..<10 {
+            let (result, _) = try slice4SmallReceipt()
+            originals.append(result)
+            await store.retain(result)
+        }
+        XCTAssertEqual(store.entries.count, 8)
+        XCTAssertEqual(store.entries.map(\.url), originals.suffix(8).map(\.archiveURL))
+        XCTAssertTrue(originals.allSatisfy { FileManager.default.fileExists(atPath: $0.archiveURL.path) })
+    }
+}
+
+
+extension CaptureReliabilityPhase1CoreTests {
+    @MainActor
+    func testSlice4StaleUploadVerificationFailureCannotFailSuccessorPackage() async throws {
+        let (a, b, _) = try slice4TwoTakes()
+        let barrier = Slice4IdentityBarrier()
+        let manager = SessionUploadManager(activateImmediately: false, storageRootOverride: try makeTemporaryDirectory(),
+            archiveVerificationOverride: { _ in await barrier.suspend(); return false })
+        _ = try await manager.prepareArchive(for: .package(a), djID: "fixture")
+        let first = Task { await manager.beginUpload(for: a.metadata.sessionID) }
+        await barrier.waitForStart()
+        let successor = try await manager.prepareArchive(for: .package(b), djID: "fixture")
+        await barrier.release()
+        await first.value
+        let job = try XCTUnwrap(manager.job(for: b.metadata.sessionID))
+        XCTAssertEqual(job.zipURL, successor.zipURL)
+        XCTAssertEqual(job.state, .queued)
+        XCTAssertNil(job.lastErrorCategory)
+        XCTAssertEqual(job.exportReceipt?.members.map(\.takeID), [b.takes[0].takeID])
+    }
+}
+
+extension CaptureReliabilityPhase1CoreTests {
+    @MainActor
+    func testSlice4SaveToGeneratedArchiveURLPreservesValidatedReceipt() async throws {
+        let (a, _, _) = try slice4TwoTakes()
+        let directory = (FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask).first
+            ?? FileManager.default.temporaryDirectory).appendingPathComponent("ScratchLabSessionExports")
+        var chosen: URL?
+        let coordinator = SessionExportCoordinator(archiveSaveDestinationProvider: { name in
+            let url = directory.appendingPathComponent(name)
+            XCTAssertTrue(FileManager.default.fileExists(atPath: url.path), "Destination must be the actual generated ZIP")
+            chosen = url
+            return url
+        })
+        _ = await slice4Operation(coordinator, source: .package(a))
+        let result = try XCTUnwrap(coordinator.lastResult)
+        defer { try? FileManager.default.removeItem(at: result.archiveURL) }
+        XCTAssertEqual(result.archiveURL, chosen)
+        XCTAssertFalse(result.shouldCleanupAfterUse)
+        XCTAssertEqual(try ExportArtifactIdentity.file(result.archiveURL), result.receipt?.archiveIdentity)
+        XCTAssertTrue(slice4Represents(coordinator, a))
+    }
+}
+
+
+extension CaptureReliabilityPhase1CoreTests {
+    func testSlice4ArchiveReplacementDuringDigestCannotAcquireValidatedReceipt() throws {
+        let (a, _, _) = try slice4TwoTakes()
+        let output = try makeTemporaryDirectory()
+        let builder = SessionArchiveBuilder(archiveIdentityReader: { url in
+            let identity = try ExportArtifactIdentity.file(url)
+            try Data("replacement-after-digest".utf8).write(to: url, options: .atomic)
+            return identity
+        })
+        XCTAssertThrowsError(try builder.createArchive(from: a, in: output)) {
+            XCTAssertEqual($0 as? SessionExportError, .unableToCreateArchive)
+        }
+        XCTAssertTrue(try FileManager.default.contentsOfDirectory(at: output, includingPropertiesForKeys: nil).isEmpty)
+    }
+
+    @MainActor
+    func testSlice4UnknownReceiptVersionCannotClaimRepresentation() async throws {
+        var (result, source) = try slice4SmallReceipt()
+        let original = try XCTUnwrap(result.receipt)
+        result.receipt = .init(version: 999, members: original.members, packageRevision: original.packageRevision,
+                               archiveIdentity: original.archiveIdentity)
+        let reads = Slice4IdentityReads()
+        let store = SessionExportRepresentationStore(reader: { url, semantic in
+            reads.record(url); return try ExportSourceArtifact.read(url, semanticSidecar: semantic)
+        })
+        await store.retain(result)
+        XCTAssertTrue(store.entries.isEmpty)
+        XCTAssertFalse(store.represents(sessionID: "session", takeID: "take-001", sidecarURL: source))
+        XCTAssertEqual(reads.count, 0)
+    }
+}
+
+
+extension CaptureReliabilityPhase1CoreTests {
+    @MainActor
+    func testSlice4FailedLaterExportDoesNotSchedulePriorTemporaryArchiveDeletion() async throws {
+        let (a, _, _) = try slice4TwoTakes()
+        let coordinator = SessionExportCoordinator()
+        _ = await slice4Operation(coordinator, source: .package(a), share: true)
+        let prior = try XCTUnwrap(coordinator.lastResult)
+        defer { try? FileManager.default.removeItem(at: prior.archiveURL) }
+        XCTAssertTrue(prior.shouldCleanupAfterUse)
+        XCTAssertFalse(coordinator.hasArchiveCleanupRequest)
+        let invalid = SessionExportPackage(metadata: a.metadata, takes: [], calibrationData: nil)
+        let state = await slice4Operation(coordinator, source: .package(invalid), share: true)
+        if case .failed = state {} else { XCTFail("Expected independent operation failure") }
+        XCTAssertEqual(coordinator.lastResult, prior)
+        XCTAssertFalse(coordinator.hasArchiveCleanupRequest)
+        XCTAssertTrue(slice4Represents(coordinator, a))
+        XCTAssertTrue(FileManager.default.fileExists(atPath: prior.archiveURL.path))
+    }
+}
+
+// Batch 3 artifact-truth diagnostics converted to the repaired observation contract.
+// These exercise production projections, not a rendered SwiftUI interaction.
+extension CaptureReliabilityPhase1CoreTests {
+    private func artifactTruthFixture(_ session: String) throws -> (URL, CaptureCore.LocalRecordingSidecar) {
+        let root = try makeTemporaryDirectory()
+        let media = try makeLocalRecordingTake(in: root, sessionID: session, takeNumber: 1,
+            createdAt: Date(timeIntervalSince1970: 1_730_000_000), useRealMedia: true)
+        let sidecarURL = CaptureCore.LocalRecordingFiles.sidecarURL(forMediaURL: media)
+        let sidecar = try JSONDecoder.captureCoreDecoder.decode(CaptureCore.LocalRecordingSidecar.self,
+            from: Data(contentsOf: sidecarURL))
+        return (media, sidecar)
+    }
+
+    private func artifactTruthStatus(_ media: URL) throws -> TakeArtifactStatusSnapshot {
+        // Files are created completely before invoking the production preflight.
+        // No test sleep, delayed writer, retry or polling is introduced.
+        try XCTUnwrap(SessionArchiveBuilder().localRecordingArtifactStatuses(lastRecordingURL: media).first)
+    }
+
+    private func artifactTruthContext(_ media: URL, _ sidecar: CaptureCore.LocalRecordingSidecar) throws
+        -> CaptureCore.TakeReviewContext {
+        try .init(sessionID: sidecar.sessionID, takeID: sidecar.takeID, mediaURL: media,
+            sidecarURL: CaptureCore.LocalRecordingFiles.sidecarURL(forMediaURL: media),
+            detectedNotation: sidecar.detectedNotation)
+    }
+
+    @MainActor
+    func testArtifactTruthConvertedWallSpanVersusPlayableAudio() async throws {
+        let (media, original) = try artifactTruthFixture("truth-wall")
+        let sidecar = original.finalized(endedAt: original.startedAt.addingTimeInterval(24),
+            mediaFileName: media.lastPathComponent, captureErrorDescription: nil)
+        try sidecar.encodedData().write(to: CaptureCore.LocalRecordingFiles.sidecarURL(forMediaURL: media), options: .atomic)
+        let status = try artifactTruthStatus(media)
+        XCTAssertEqual(status.recordedDuration, 24)
+        XCTAssertEqual(SessionArchiveBuilder.playableMediaDurationSeconds(audioArtifactURL: status.audioSourceURL), 1)
+        let request = readyRequest(media, sidecar), store = TakeReviewObservationStore(observeFileChanges: false)
+        let bytes = try Data(contentsOf: CaptureCore.LocalRecordingFiles.sidecarURL(forMediaURL: media))
+        XCTAssertEqual(store.audioDurationLabel(for: request), "—")
+        await store.observe(request)
+        XCTAssertEqual(store.audioDurationLabel(for: request), "1.0 s")
+        XCTAssertEqual(store.audioMeasurement(for: request)?.frameCount, 44_100)
+        XCTAssertEqual(store.audioMeasurement(for: request)?.sampleRate, 44_100)
+        XCTAssertEqual(store.audioMeasurement(for: request)?.durationSeconds, 1)
+        XCTAssertEqual(try XCTUnwrap(status.finalizedAt).timeIntervalSince(XCTUnwrap(status.startedAt)), 24)
+        XCTAssertEqual(try Data(contentsOf: CaptureCore.LocalRecordingFiles.sidecarURL(forMediaURL: media)), bytes)
+    }
+
+    @MainActor
+    func testArtifactTruthConvertedURLWhileFinalizing() async throws {
+        try await testSlice5AFinalizingURLCannotClaimReadyOrProbe()
+    }
+
+    @MainActor
+    func testArtifactTruthConvertedFinalizedPlayable() async throws {
+        try await testSlice5AValidMediaWithoutArchiveOrAnalysisSupportsManualReview()
+    }
+
+    @MainActor
+    func testArtifactTruthConvertedFinalizedMissing() async throws {
+        try await testSlice5AMissingMoviePreservesLimitedEvidence()
+    }
+
+    @MainActor
+    func testArtifactTruthConvertedFinalizedUnreadable() async throws {
+        try await testSlice5AInvalidWAVIsUnreadable()
+    }
+
+    @MainActor
+    func testArtifactTruthConvertedAnalysisAbsentDoesNotPreventCurrentReviewContext() async throws {
+        try await testSlice5AValidMediaWithoutArchiveOrAnalysisSupportsManualReview()
+    }
+
+    @MainActor
+    func testArtifactTruthConvertedHeldAResultIsNotBContext() async throws {
+        try await testSlice5AHeldAObservationCannotPublishIntoB()
+    }
+
+    @MainActor
+    func testArtifactTruthConvertedSamePathMeasurementRetiresWithObservation() async throws {
+        let (media, sidecar) = try artifactTruthFixture("truth-replaced")
+        let context = try artifactTruthContext(media, sidecar)
+        let audio = media.deletingPathExtension().appendingPathExtension("wav")
+        let status = try artifactTruthStatus(media), request = readyRequest(media, sidecar)
+        let oldIdentity = try ExportArtifactIdentity.file(audio), reads = Slice4IdentityReads()
+        let store = TakeReviewObservationStore(observeFileChanges: false, probe: { url, kind in
+            reads.record(url); return await TakeReviewObservationStore.probeMedia(url, kind: kind)
+        })
+        await store.observe(request)
+        XCTAssertEqual(store.audioDurationLabel(for: request), "1.0 s")
+        let oldGeneration = store.observation?.generation
+        try writeDurationWAV(at: audio, frames: 88_200)
+        store.invalidate(audio)
+        XCTAssertNil(store.audioMeasurement(for: request))
+        XCTAssertEqual(store.audioDurationLabel(for: request), "—")
+        await store.observe(request)
+        XCTAssertEqual(store.audioDurationLabel(for: request), "2.0 s")
+        XCTAssertEqual(SessionArchiveBuilder.playableMediaDurationSeconds(audioArtifactURL: audio), 2)
+        XCTAssertNotEqual(store.observation?.generation, oldGeneration)
+        XCTAssertNotEqual(try ExportArtifactIdentity.file(audio), oldIdentity)
+        XCTAssertEqual(status.readiness, .ready, "The historical status remains audit data, not duration authority.")
+        XCTAssertNoThrow(try context.validate(sidecar), "Stable take identity does not bind replaced audio bytes.")
+        XCTAssertEqual(reads.count(audio), 2)
+        XCTAssertEqual(reads.count(media), 1, "Replacement measures only changed audio.")
+    }
+}
+
+
+// Slice 5A permanent readiness and owner-bound observation regressions.
+extension CaptureReliabilityPhase1CoreTests {
+    private func readyRequest(_ media: URL, _ sidecar: CaptureCore.LocalRecordingSidecar,
+                              readiness: TakeArtifactReadiness = .ready) -> TakeReviewObservationRequest {
+        .init(sessionID: sidecar.sessionID, artifact: .init(takeID: sidecar.takeID,
+            takeNumber: sidecar.appLocalTakeNumber, bpm: sidecar.sessionConfig?.bpm, targetLabel: nil,
+            sessionConfig: sidecar.sessionConfig, startedAt: sidecar.startedAt,
+            audioSourceURL: media.deletingPathExtension().appendingPathExtension("wav"), videoSourceURL: media,
+            audioExists: true, videoExists: true, audioBytes: 1, videoBytes: 1,
+            finalizedAt: sidecar.endedAt, readiness: readiness, detectedNotation: sidecar.detectedNotation,
+            detectedLabel: sidecar.detectedNotation?.effectiveDetectedLabel, labelConfidence: nil), selectedMediaURL: media)
+    }
+
+    @MainActor
+    func testSlice5AFinalizingURLCannotClaimReadyOrProbe() async throws {
+        let (media, sidecar) = try artifactTruthFixture("ready-finalizing")
+        let request = readyRequest(media, sidecar, readiness: .finalizing)
+        let reads = Slice4IdentityReads()
+        let store = TakeReviewObservationStore(observeFileChanges: false, probe: { url, kind in
+            reads.record(url); return await TakeReviewObservationStore.probeMedia(url, kind: kind)
+        })
+        await store.observe(request)
+        XCTAssertEqual(store.capabilities(for: request).state, .finalizing)
+        XCTAssertFalse(store.capabilities(for: request).completeReviewAvailable)
+        XCTAssertEqual(reads.count, 0)
+    }
+
+    @MainActor
+    func testSlice5AMissingMoviePreservesLimitedEvidence() async throws {
+        let (media, sidecar) = try artifactTruthFixture("ready-missing")
+        try FileManager.default.removeItem(at: media)
+        let request = readyRequest(media, sidecar)
+        let store = TakeReviewObservationStore(observeFileChanges: false)
+        await store.observe(request)
+        XCTAssertEqual(store.capabilities(for: request).state, .limitedEvidence(.missingMedia))
+        XCTAssertTrue(store.capabilities(for: request).canReviewEvidence)
+        XCTAssertFalse(store.capabilities(for: request).completeReviewAvailable)
+        let context = try artifactTruthContext(media, sidecar)
+        XCTAssertNoThrow(try context.reviewed(sidecar, status: .unknown))
+        XCTAssertNoThrow(try context.reviewed(sidecar, status: .corrected, correctedLabel: "chirp"))
+    }
+
+    @MainActor
+    func testSlice5AInvalidMovieIsUnreadable() async throws {
+        let (media, sidecar) = try artifactTruthFixture("ready-bad-mov")
+        try Data("nonempty invalid movie".utf8).write(to: media, options: .atomic)
+        let request = readyRequest(media, sidecar), store = TakeReviewObservationStore(observeFileChanges: false)
+        await store.observe(request)
+        XCTAssertEqual(store.observation?.video, .unreadable)
+        XCTAssertEqual(store.observation?.audio, .readable)
+        XCTAssertEqual(store.capabilities(for: request).state, .limitedEvidence(.unreadableMedia))
+        XCTAssertFalse(store.capabilities(for: request).completeReviewAvailable)
+    }
+
+    @MainActor
+    func testSlice5AInvalidWAVIsUnreadable() async throws {
+        let (media, sidecar) = try artifactTruthFixture("ready-bad-wav")
+        try Data("nonempty invalid audio".utf8).write(to: media.deletingPathExtension().appendingPathExtension("wav"), options: .atomic)
+        let request = readyRequest(media, sidecar), store = TakeReviewObservationStore(observeFileChanges: false)
+        await store.observe(request)
+        XCTAssertEqual(store.observation?.audio, .unreadable)
+        XCTAssertEqual(store.observation?.video, .readable)
+        XCTAssertEqual(store.capabilities(for: request).state, .limitedEvidence(.unreadableMedia))
+    }
+
+    @MainActor
+    func testSlice5AValidMediaWithoutArchiveOrAnalysisSupportsManualReview() async throws {
+        let (media, sidecar) = try artifactTruthFixture("ready-valid")
+        let request = readyRequest(media, sidecar), store = TakeReviewObservationStore(observeFileChanges: false)
+        XCTAssertNil(sidecar.detectedNotation)
+        await store.observe(request)
+        let capabilities = store.capabilities(for: request)
+        XCTAssertEqual(capabilities.state, .complete)
+        XCTAssertEqual(capabilities.label, "READY FOR REVIEW")
+        XCTAssertEqual(capabilities.detection, .absent)
+        XCTAssertFalse(capabilities.canAcceptDetection)
+        XCTAssertTrue(capabilities.canReviewEvidence)
+        let context = try artifactTruthContext(media, sidecar)
+        XCTAssertThrowsError(try context.reviewed(sidecar, status: .accepted)) {
+            XCTAssertEqual($0 as? CaptureCore.TakeReviewContext.Failure, .missingDetection)
+        }
+        XCTAssertNoThrow(try context.reviewed(sidecar, status: .unknown))
+        XCTAssertNoThrow(try context.reviewed(sidecar, status: .corrected, correctedLabel: "chirp"))
+        let files = try FileManager.default.contentsOfDirectory(atPath: media.deletingLastPathComponent().path)
+        XCTAssertFalse(files.contains { $0.hasSuffix(".zip") })
+    }
+
+    @MainActor
+    func testSlice5AMismatchedSidecarCannotConfirmOrOpenMedia() async throws {
+        let (media, sidecar) = try artifactTruthFixture("ready-owner")
+        let (_, foreign) = try artifactTruthFixture("ready-other")
+        try foreign.encodedData().write(to: CaptureCore.LocalRecordingFiles.sidecarURL(forMediaURL: media), options: .atomic)
+        let request = readyRequest(media, sidecar), reads = Slice4IdentityReads()
+        let store = TakeReviewObservationStore(observeFileChanges: false, probe: { url, kind in
+            reads.record(url); return await TakeReviewObservationStore.probeMedia(url, kind: kind)
+        })
+        await store.observe(request)
+        XCTAssertEqual(store.capabilities(for: request).state, .unavailable(.identityMismatch))
+        XCTAssertFalse(store.capabilities(for: request).canReviewEvidence)
+        XCTAssertEqual(reads.count, 0)
+    }
+
+    @MainActor
+    func testSlice5AHeldAObservationCannotPublishIntoB() async throws {
+        let (a, sa) = try artifactTruthFixture("ready-a"), (b, sb) = try artifactTruthFixture("ready-b")
+        let ra = readyRequest(a, sa), rb = readyRequest(b, sb), barrier = Slice4IdentityBarrier()
+        let store = TakeReviewObservationStore(observeFileChanges: false, probe: { url, kind in
+            let result = await TakeReviewObservationStore.probeMedia(url, kind: kind)
+            if url == a.deletingPathExtension().appendingPathExtension("wav") { await barrier.suspend() }
+            return result
+        })
+        let old = Task { await store.observe(ra) }
+        await barrier.waitForStart()
+        XCTAssertFalse(store.capabilities(for: rb).completeReviewAvailable)
+        await store.observe(rb)
+        let bObservation = try XCTUnwrap(store.observation)
+        XCTAssertEqual(bObservation.request, rb)
+        XCTAssertTrue(store.capabilities(for: rb).completeReviewAvailable)
+        await barrier.release(); await old.value
+        XCTAssertEqual(store.observation?.generation, bObservation.generation)
+        XCTAssertEqual(store.observation?.request, rb)
+        XCTAssertFalse(store.capabilities(for: ra).completeReviewAvailable)
+    }
+
+    @MainActor
+    func testSlice5AHeldA1CannotPublishAfterSamePathReplacement() async throws {
+        let (media, sidecar) = try artifactTruthFixture("ready-replacement")
+        let request = readyRequest(media, sidecar), barrier = Slice4IdentityBarrier(), reads = Slice4IdentityReads()
+        let audio = media.deletingPathExtension().appendingPathExtension("wav")
+        let store = TakeReviewObservationStore(observeFileChanges: false, probe: { url, kind in
+            reads.record(url)
+            let value = await TakeReviewObservationStore.probeMedia(url, kind: kind)
+            if url == audio, reads.count(audio) == 1 { await barrier.suspend() }
+            return value
+        })
+        let old = Task { await store.observe(request) }
+        await barrier.waitForStart()
+        try Data("replacement is not audio".utf8).write(to: audio, options: .atomic)
+        store.invalidate(audio)
+        XCTAssertEqual(store.capabilities(for: request).state, .checking)
+        await store.observe(request)
+        XCTAssertEqual(store.capabilities(for: request).state, .limitedEvidence(.unreadableMedia))
+        let currentGeneration = store.observation?.generation
+        await barrier.release(); await old.value
+        XCTAssertEqual(store.observation?.generation, currentGeneration)
+        XCTAssertFalse(store.capabilities(for: request).completeReviewAvailable)
+        XCTAssertEqual(reads.count(audio), 2)
+    }
+
+    @MainActor
+    func testSlice5AQueriesAndEquivalentRequestsDoNotProbeAgain() async throws {
+        let (media, sidecar) = try artifactTruthFixture("ready-counts")
+        let request = readyRequest(media, sidecar), barrier = Slice4IdentityBarrier(), reads = Slice4IdentityReads()
+        let audio = media.deletingPathExtension().appendingPathExtension("wav")
+        let store = TakeReviewObservationStore(observeFileChanges: false, probe: { url, kind in
+            reads.record(url)
+            if url == audio { await barrier.suspend() }
+            return await TakeReviewObservationStore.probeMedia(url, kind: kind)
+        })
+        for _ in 0..<100 { XCTAssertEqual(store.capabilities(for: request).state, .checking) }
+        XCTAssertEqual(reads.count, 0)
+        let initial = Task { await store.observe(request) }
+        await barrier.waitForStart()
+        let repeated = (0..<50).map { _ in Task { await store.observe(request) } }
+        for _ in 0..<100 { XCTAssertFalse(store.capabilities(for: request).completeReviewAvailable) }
+        XCTAssertEqual(reads.count(audio), 1)
+        await barrier.release(); await initial.value
+        for task in repeated { await task.value }
+        for _ in 0..<100 { await store.observe(request); XCTAssertTrue(store.capabilities(for: request).completeReviewAvailable) }
+        XCTAssertEqual(reads.count(audio), 1)
+        XCTAssertEqual(reads.count(media), 1)
+        XCTAssertEqual(reads.count, 2)
+        print("SLICE5A_PROBES: 100 unresolved queries=0; 50 concurrent requests=1 audio+1 video; 100 verified requests=0 extra")
+    }
+
+    @MainActor
+    func testSlice5AExportRepresentationCannotSupplyReadability() async throws {
+        let (package, _, _) = try slice4TwoTakes()
+        let result = try SessionArchiveBuilder().createArchive(from: package, in: makeTemporaryDirectory())
+        let exports = SessionExportRepresentationStore(observeFileChanges: false)
+        await exports.retain(result)
+        let take = package.takes[0]
+        XCTAssertTrue(exports.represents(sessionID: package.metadata.sessionID, takeID: take.takeID, sidecarURL: take.sidecarURL))
+        try Data("invalid replacement".utf8).write(to: take.mediaURL, options: .atomic)
+        let sidecar = try JSONDecoder.captureCoreDecoder.decode(CaptureCore.LocalRecordingSidecar.self, from: Data(contentsOf: take.sidecarURL))
+        let request = readyRequest(take.mediaURL, sidecar), store = TakeReviewObservationStore(observeFileChanges: false)
+        await store.observe(request)
+        XCTAssertFalse(store.capabilities(for: request).completeReviewAvailable)
+        XCTAssertEqual(store.observation?.video, .unreadable)
+        // Stale export proof cannot feed Review; export reconciles independently.
+        await exports.reconcile()
+        XCTAssertFalse(exports.represents(sessionID: package.metadata.sessionID, takeID: take.takeID, sidecarURL: take.sidecarURL))
+    }
+
+    @MainActor
+    func testSlice5AObservationDoesNotChangeExportRevisionOrDuration() async throws {
+        let (package, _, _) = try slice4TwoTakes(), builder = SessionArchiveBuilder()
+        let take = package.takes[0]
+        let sidecar = try JSONDecoder.captureCoreDecoder.decode(CaptureCore.LocalRecordingSidecar.self, from: Data(contentsOf: take.sidecarURL))
+        let before = try builder.sourceRevision(for: package, options: .init())
+        let sidecarBytes = try Data(contentsOf: take.sidecarURL)
+        let request = readyRequest(take.mediaURL, sidecar), store = TakeReviewObservationStore(observeFileChanges: false)
+        let wall = request.artifact?.recordedDuration
+        await store.observe(request)
+        XCTAssertTrue(store.capabilities(for: request).completeReviewAvailable)
+        let after = try builder.sourceRevision(for: package, options: .init())
+        XCTAssertEqual(after.packageRevision, before.packageRevision)
+        XCTAssertEqual(after.members, before.members)
+        XCTAssertEqual(try Data(contentsOf: take.sidecarURL), sidecarBytes)
+        XCTAssertEqual(request.artifact?.recordedDuration, wall)
+    }
+
+    @MainActor
+    func testSlice5AFilesystemReplacementInvalidatesWithoutPolling() async throws {
+        let (media, sidecar) = try artifactTruthFixture("ready-events")
+        let request = readyRequest(media, sidecar), store = TakeReviewObservationStore()
+        await store.observe(request)
+        XCTAssertTrue(store.capabilities(for: request).completeReviewAvailable)
+        let didObserve = expectation(description: "filesystem event publishes unreadable current generation")
+        let token = store.$observation.sink { observation in
+            if observation?.video == .unreadable { didObserve.fulfill() }
+        }
+        defer { token.cancel(); store.cancel() }
+        try Data("bad movie replacement".utf8).write(to: media, options: .atomic)
+        await fulfillment(of: [didObserve], timeout: 10)
+        XCTAssertEqual(store.capabilities(for: request).state, .limitedEvidence(.unreadableMedia))
+    }
+}
+
+
+extension CaptureReliabilityPhase1CoreTests {
+    @MainActor
+    func testSlice5ADeletedAndRecreatedAudioRequiresNewProof() async throws {
+        let (media, sidecar) = try artifactTruthFixture("ready-delete")
+        let request = readyRequest(media, sidecar), reads = Slice4IdentityReads()
+        let audio = media.deletingPathExtension().appendingPathExtension("wav")
+        let store = TakeReviewObservationStore(observeFileChanges: false, probe: { url, kind in
+            reads.record(url); return await TakeReviewObservationStore.probeMedia(url, kind: kind)
+        })
+        await store.observe(request)
+        XCTAssertTrue(store.capabilities(for: request).completeReviewAvailable)
+        XCTAssertEqual(reads.count, 2)
+        try FileManager.default.removeItem(at: audio)
+        store.invalidate(audio)
+        XCTAssertEqual(store.capabilities(for: request).state, .checking)
+        await store.observe(request)
+        XCTAssertEqual(store.capabilities(for: request).state, .limitedEvidence(.missingMedia))
+        XCTAssertEqual(reads.count, 2, "Missing audio needs no decoder; unchanged movie proof is reused.")
+        try writeTestWAV(at: audio)
+        store.invalidate(audio)
+        await store.observe(request)
+        XCTAssertTrue(store.capabilities(for: request).completeReviewAvailable)
+        XCTAssertEqual(reads.count(audio), 2)
+        XCTAssertEqual(reads.count(media), 1)
+        print("SLICE5A_PROBES replacement: initial=2; deletion=0; recreated audio=1; unchanged movie=0")
+    }
+
+    @MainActor
+    func testSlice5ASidecarOnlyChangeReusesMediaAndMismatchInvalidates() async throws {
+        let (media, sidecar) = try artifactTruthFixture("ready-sidecar")
+        let request = readyRequest(media, sidecar), reads = Slice4IdentityReads()
+        let store = TakeReviewObservationStore(observeFileChanges: false, probe: { url, kind in
+            reads.record(url); return await TakeReviewObservationStore.probeMedia(url, kind: kind)
+        })
+        await store.observe(request)
+        XCTAssertTrue(store.capabilities(for: request).completeReviewAvailable)
+        let url = CaptureCore.LocalRecordingFiles.sidecarURL(forMediaURL: media)
+        let reviewed = try artifactTruthContext(media, sidecar).reviewed(sidecar, status: .unknown)
+        try reviewed.encodedData().write(to: url, options: .atomic)
+        store.invalidate(url); await store.observe(request)
+        XCTAssertTrue(store.capabilities(for: request).completeReviewAvailable)
+        XCTAssertEqual(reads.count, 2)
+        let (_, foreign) = try artifactTruthFixture("ready-sidecar-other")
+        try foreign.encodedData().write(to: url, options: .atomic)
+        store.invalidate(url)
+        XCTAssertFalse(store.capabilities(for: request).canReviewEvidence)
+        await store.observe(request)
+        XCTAssertEqual(store.capabilities(for: request).state, .unavailable(.identityMismatch))
+        XCTAssertEqual(reads.count, 2)
+    }
+
+    @MainActor
+    func testSlice5AReplacementDuringProbeFailsClosedBeforeFilesystemNotification() async throws {
+        let (media, sidecar) = try artifactTruthFixture("ready-between")
+        let request = readyRequest(media, sidecar), barrier = Slice4IdentityBarrier()
+        let audio = media.deletingPathExtension().appendingPathExtension("wav")
+        let store = TakeReviewObservationStore(observeFileChanges: false, probe: { url, kind in
+            let result = await TakeReviewObservationStore.probeMedia(url, kind: kind)
+            if url == audio { await barrier.suspend() }
+            return result
+        })
+        let task = Task { await store.observe(request) }
+        await barrier.waitForStart()
+        try Data("changed during observation".utf8).write(to: media, options: .atomic)
+        await barrier.release(); await task.value
+        XCTAssertNil(store.observation)
+        XCTAssertEqual(store.capabilities(for: request).state, .checking)
+    }
+
+    @MainActor
+    func testSlice5ARecordingAndFailedCaptureCannotBecomeReady() async throws {
+        let (media, sidecar) = try artifactTruthFixture("ready-lifecycle")
+        let reads = Slice4IdentityReads()
+        let store = TakeReviewObservationStore(observeFileChanges: false, probe: { url, kind in
+            reads.record(url); return await TakeReviewObservationStore.probeMedia(url, kind: kind)
+        })
+        let recording = readyRequest(media, sidecar, readiness: .recording)
+        await store.observe(recording)
+        XCTAssertEqual(store.capabilities(for: recording).state, .recording)
+        let failed = readyRequest(media, sidecar, readiness: .failed("capture failed"))
+        await store.observe(failed)
+        XCTAssertEqual(store.capabilities(for: failed).state, .unavailable(.captureFailed))
+        XCTAssertEqual(reads.count, 0)
+    }
+
+    func testSlice5AMacReviewAdaptersUsePureCapabilities() throws {
+        let source = try String(contentsOf: projectRootURL().appendingPathComponent("ScratchLabDesktop/Views/MacAnalyzerView.swift"), encoding: .utf8)
+        XCTAssertTrue(source.contains("Text(reviewCapabilities.label)"))
+        XCTAssertTrue(source.contains("case .review: return reviewCapabilities.label"))
+        XCTAssertTrue(source.contains(".task(id: reviewObservationRequest)"))
+        XCTAssertTrue(source.contains(".disabled(!reviewCapabilities.canAcceptDetection)"))
+        XCTAssertTrue(source.contains(".disabled(!reviewCapabilities.canReviewEvidence)"))
+        XCTAssertFalse(source.contains("hasRecordedTake ? \"READY FOR REVIEW\""))
+        XCTAssertFalse(source.contains("hasRecordedTake ? \"TAKE READY\""))
+        XCTAssertTrue(source.contains("reviewObservations.audioDurationLabel(for: reviewObservationRequest)"))
+        XCTAssertTrue(source.contains("reviewFigmaMetric(\"Audio duration\", reviewDurationLabel)"))
+        XCTAssertFalse(source.contains("guard let duration = currentRoutineArtifactStatus?.recordedDuration"))
+    }
+}
+
+
+extension CaptureReliabilityPhase1CoreTests {
+    @MainActor
+    func testSlice5ASavedDetectionCanBeAcceptedWithoutExport() async throws {
+        let (media, original) = try artifactTruthFixture("ready-detection")
+        let sidecar = original.withDetectedNotation(makeDetectedNotationSnapshot())
+        try sidecar.encodedData().write(to: CaptureCore.LocalRecordingFiles.sidecarURL(forMediaURL: media), options: .atomic)
+        let request = readyRequest(media, sidecar), store = TakeReviewObservationStore(observeFileChanges: false)
+        await store.observe(request)
+        XCTAssertTrue(store.capabilities(for: request).completeReviewAvailable)
+        XCTAssertEqual(store.capabilities(for: request).detection, .available)
+        XCTAssertTrue(store.capabilities(for: request).canAcceptDetection)
+        let accepted = try artifactTruthContext(media, sidecar).reviewed(sidecar, status: .accepted)
+        XCTAssertEqual(accepted.reviewDecision?.status, .accepted)
+        XCTAssertEqual(accepted.detectedNotation, sidecar.detectedNotation)
+    }
+}
+
+
+extension CaptureReliabilityPhase1CoreTests {
+    @MainActor
+    func testSlice5APublishedMediaURLMustMatchObservedRow() async throws {
+        let (media, sidecar) = try artifactTruthFixture("ready-published-url")
+        let row = readyRequest(media, sidecar), reads = Slice4IdentityReads()
+        let store = TakeReviewObservationStore(observeFileChanges: false, probe: { url, kind in
+            reads.record(url); return await TakeReviewObservationStore.probeMedia(url, kind: kind)
+        })
+        await store.observe(row)
+        XCTAssertTrue(store.capabilities(for: row).completeReviewAvailable)
+        for selectedURL in [Optional(media.deletingLastPathComponent().appendingPathComponent("other.mov")), nil] {
+            let changed = TakeReviewObservationRequest(sessionID: row.sessionID, artifact: row.artifact, selectedMediaURL: selectedURL)
+            XCTAssertEqual(store.capabilities(for: changed).state, .unavailable(.identityMismatch))
+            await store.observe(changed)
+            XCTAssertFalse(store.capabilities(for: changed).canReviewEvidence)
+        }
+        XCTAssertEqual(reads.count, 2, "An incoherent published URL must not open media or reuse ready proof.")
+    }
+}
+
+// Slice 5B full-artifact duration facts share the Slice 5A owner and probe cache.
+extension CaptureReliabilityPhase1CoreTests {
+    private func writeDurationWAV(at url: URL, frames: AVAudioFrameCount) throws {
+        let replacement = try makeTemporaryDirectory().appendingPathComponent("duration.wav")
+        let format = try XCTUnwrap(AVAudioFormat(standardFormatWithSampleRate: 44_100, channels: 1))
+        let buffer = try XCTUnwrap(AVAudioPCMBuffer(pcmFormat: format, frameCapacity: frames))
+        buffer.frameLength = frames
+        try XCTUnwrap(buffer.floatChannelData)[0].initialize(repeating: 0, count: Int(frames))
+        do {
+            let file = try AVAudioFile(forWriting: replacement, settings: format.settings)
+            try file.write(from: buffer)
+        }
+        try Data(contentsOf: replacement).write(to: url, options: .atomic)
+    }
+
+    @MainActor
+    func testSlice5BFractionalAudioRetainsFramesAndSeparateVideoDuration() async throws {
+        let (media, sidecar) = try artifactTruthFixture("duration-fractional")
+        let audio = media.deletingPathExtension().appendingPathExtension("wav")
+        try writeDurationWAV(at: audio, frames: 55_125)
+        let request = readyRequest(media, sidecar), store = TakeReviewObservationStore(observeFileChanges: false)
+        await store.observe(request)
+        let measurement = try XCTUnwrap(store.audioMeasurement(for: request))
+        XCTAssertEqual(measurement.frameCount, 55_125)
+        XCTAssertEqual(measurement.sampleRate, 44_100)
+        XCTAssertEqual(measurement.durationSeconds, 1.25)
+        XCTAssertEqual(store.audioDurationLabel(for: request), String(format: "%.1f s", 1.25))
+        XCTAssertNotEqual(store.audioDurationLabel(for: request), "1.0 s")
+        XCTAssertEqual(SessionArchiveBuilder.playableMediaDurationSeconds(audioArtifactURL: audio), 1.25)
+        let video = try XCTUnwrap(store.observation?.videoMeasurement)
+        XCTAssertEqual(video.durationSeconds, 1)
+        XCTAssertEqual(video.width, 64)
+        XCTAssertEqual(video.height, 64)
+        XCTAssertNotEqual(video.durationSeconds, measurement.durationSeconds)
+    }
+
+    func testSlice5BInvalidRatesAndFrameCountsAreUnavailable() {
+        for rate in [0.0, -1, Double.nan, .infinity, -.infinity, Double.leastNonzeroMagnitude] {
+            XCTAssertNil(ReviewAudioMeasurement(frameCount: 44_100, sampleRate: rate))
+        }
+        for frames in [Int64(0), -1] {
+            XCTAssertNil(ReviewAudioMeasurement(frameCount: frames, sampleRate: 44_100))
+        }
+        XCTAssertEqual(ReviewAudioMeasurement(frameCount: 44_100, sampleRate: 44_100)?.durationSeconds, 1)
+    }
+
+    @MainActor
+    func testSlice5BMissingAudioAndVideoOnlyEvidenceNeverUseWallDuration() async throws {
+        let (media, sidecar) = try artifactTruthFixture("duration-missing")
+        try FileManager.default.removeItem(at: media.deletingPathExtension().appendingPathExtension("wav"))
+        let request = readyRequest(media, sidecar), store = TakeReviewObservationStore(observeFileChanges: false)
+        XCTAssertNotNil(request.artifact?.recordedDuration)
+        await store.observe(request)
+        XCTAssertEqual(store.capabilities(for: request).state, .limitedEvidence(.missingMedia))
+        XCTAssertEqual(store.observation?.video, .readable)
+        XCTAssertEqual(store.observation?.videoMeasurement?.durationSeconds, 1)
+        XCTAssertNil(store.audioMeasurement(for: request))
+        XCTAssertEqual(store.audioDurationLabel(for: request), "—")
+    }
+
+    @MainActor
+    func testSlice5BUnreadableAudioNeverUsesWallOrVideoDuration() async throws {
+        let (media, sidecar) = try artifactTruthFixture("duration-unreadable")
+        try Data("not audio".utf8).write(to: media.deletingPathExtension().appendingPathExtension("wav"), options: .atomic)
+        let request = readyRequest(media, sidecar), store = TakeReviewObservationStore(observeFileChanges: false)
+        await store.observe(request)
+        XCTAssertEqual(store.observation?.audio, .unreadable)
+        XCTAssertEqual(store.observation?.videoMeasurement?.durationSeconds, 1)
+        XCTAssertNil(store.audioMeasurement(for: request))
+        XCTAssertEqual(store.audioDurationLabel(for: request), "—")
+    }
+
+    @MainActor
+    func testSlice5BHeldAMeasurementCannotPublishIntoB() async throws {
+        let (a, sa) = try artifactTruthFixture("duration-held-a"), (b, sb) = try artifactTruthFixture("duration-held-b")
+        try writeDurationWAV(at: b.deletingPathExtension().appendingPathExtension("wav"), frames: 88_200)
+        let ra = readyRequest(a, sa), rb = readyRequest(b, sb), barrier = Slice4IdentityBarrier()
+        let store = TakeReviewObservationStore(observeFileChanges: false, probe: { url, kind in
+            let result = await TakeReviewObservationStore.probeMedia(url, kind: kind)
+            if url == a.deletingPathExtension().appendingPathExtension("wav") { await barrier.suspend() }
+            return result
+        })
+        let old = Task { await store.observe(ra) }
+        await barrier.waitForStart()
+        XCTAssertNil(store.audioMeasurement(for: rb))
+        await store.observe(rb)
+        XCTAssertEqual(store.audioDurationLabel(for: rb), "2.0 s")
+        let generation = store.observation?.generation
+        await barrier.release(); await old.value
+        XCTAssertEqual(store.observation?.generation, generation)
+        XCTAssertEqual(store.audioDurationLabel(for: rb), "2.0 s")
+        XCTAssertEqual(store.audioDurationLabel(for: ra), "—")
+    }
+
+    @MainActor
+    func testSlice5BHeldA1MeasurementCannotPublishAfterA2Replacement() async throws {
+        let (media, sidecar) = try artifactTruthFixture("duration-held-replaced")
+        let request = readyRequest(media, sidecar), barrier = Slice4IdentityBarrier(), reads = Slice4IdentityReads()
+        let audio = media.deletingPathExtension().appendingPathExtension("wav")
+        let store = TakeReviewObservationStore(observeFileChanges: false, probe: { url, kind in
+            reads.record(url)
+            let result = await TakeReviewObservationStore.probeMedia(url, kind: kind)
+            if url == audio, reads.count(audio) == 1 { await barrier.suspend() }
+            return result
+        })
+        let old = Task { await store.observe(request) }
+        await barrier.waitForStart()
+        try writeDurationWAV(at: audio, frames: 88_200)
+        store.invalidate(audio)
+        XCTAssertEqual(store.audioDurationLabel(for: request), "—")
+        await store.observe(request)
+        XCTAssertEqual(store.audioDurationLabel(for: request), "2.0 s")
+        let generation = store.observation?.generation
+        await barrier.release(); await old.value
+        XCTAssertEqual(store.observation?.generation, generation)
+        XCTAssertEqual(store.audioDurationLabel(for: request), "2.0 s")
+        XCTAssertEqual(reads.count(audio), 2)
+        XCTAssertEqual(reads.count(media), 1)
+    }
+
+    @MainActor
+    func testSlice5BDurationQueriesAndReviewOnlyChangeDoNotRemeasure() async throws {
+        let (package, _, _) = try slice4TwoTakes(), take = package.takes[0]
+        let sidecar = try JSONDecoder.captureCoreDecoder.decode(CaptureCore.LocalRecordingSidecar.self, from: Data(contentsOf: take.sidecarURL))
+        let request = readyRequest(take.mediaURL, sidecar), reads = Slice4IdentityReads()
+        let store = TakeReviewObservationStore(observeFileChanges: false, probe: { url, kind in
+            reads.record(url); return await TakeReviewObservationStore.probeMedia(url, kind: kind)
+        })
+        for _ in 0..<300 { XCTAssertEqual(store.audioDurationLabel(for: request), "—") }
+        XCTAssertEqual(reads.count, 0)
+        await store.observe(request)
+        let measurement = store.audioMeasurement(for: request)
+        for _ in 0..<300 { XCTAssertEqual(store.audioDurationLabel(for: request), "1.0 s") }
+        XCTAssertEqual(reads.count(take.mediaURL), 1)
+        XCTAssertEqual(reads.count(try XCTUnwrap(take.audioArtifactURL)), 1)
+        _ = try slice4PersistR2(package)
+        store.invalidate(take.sidecarURL)
+        XCTAssertNil(store.audioMeasurement(for: request))
+        await store.observe(request)
+        XCTAssertEqual(store.audioMeasurement(for: request), measurement)
+        XCTAssertEqual(reads.count, 2, "R1→R2 reuses both media measurements.")
+        print("SLICE5B_PROBES: unresolved 300=0; initial=1 audio+1 video; observed 300=0 extra; review R1→R2=0 extra")
+    }
+
+    @MainActor
+    func testSlice5BMeasurementMatchesExportWithoutChangingReceiptOrRevision() async throws {
+        let (package, _, _) = try slice4TwoTakes(), builder = SessionArchiveBuilder(), take = package.takes[0]
+        let sidecar = try JSONDecoder.captureCoreDecoder.decode(CaptureCore.LocalRecordingSidecar.self, from: Data(contentsOf: take.sidecarURL))
+        let revision = try builder.sourceRevision(for: package, options: .init())
+        let result = try builder.createArchive(from: package, in: makeTemporaryDirectory())
+        let exports = SessionExportRepresentationStore(observeFileChanges: false)
+        await exports.retain(result)
+        XCTAssertTrue(exports.represents(sessionID: package.metadata.sessionID, takeID: take.takeID, sidecarURL: take.sidecarURL))
+        let request = readyRequest(take.mediaURL, sidecar), store = TakeReviewObservationStore(observeFileChanges: false)
+        let sidecarBytes = try Data(contentsOf: take.sidecarURL)
+        await store.observe(request)
+        let metadata = try builder.metadataDocument(for: package)
+        XCTAssertEqual(store.audioMeasurement(for: request)?.durationSeconds, metadata.takes[0].actualTakeDurationSeconds)
+        XCTAssertEqual(store.audioMeasurement(for: request)?.durationSeconds, 1)
+        let after = try builder.sourceRevision(for: package, options: .init())
+        XCTAssertEqual(after.packageRevision, revision.packageRevision)
+        XCTAssertEqual(after.members, revision.members)
+        XCTAssertEqual(try Data(contentsOf: take.sidecarURL), sidecarBytes)
+        await exports.reconcile()
+        XCTAssertTrue(exports.represents(sessionID: package.metadata.sessionID, takeID: take.takeID, sidecarURL: take.sidecarURL))
+    }
+
+    @MainActor
+    func testSlice5BShortNotationRangeDoesNotReplaceFullArtifactDuration() async throws {
+        let (media, original) = try artifactTruthFixture("duration-range")
+        let sidecar = original.withDetectedNotation(makeDetectedNotationSnapshot())
+        try sidecar.encodedData().write(to: CaptureCore.LocalRecordingFiles.sidecarURL(forMediaURL: media), options: .atomic)
+        let request = readyRequest(media, sidecar), store = TakeReviewObservationStore(observeFileChanges: false)
+        XCTAssertLessThan(try XCTUnwrap(sidecar.detectedNotation?.capturedEvidenceEndTime), 1)
+        await store.observe(request)
+        XCTAssertEqual(store.audioMeasurement(for: request)?.durationSeconds, 1)
+        XCTAssertEqual(store.audioDurationLabel(for: request), "1.0 s")
+        let source = try String(contentsOf: projectRootURL().appendingPathComponent("ScratchLabDesktop/Views/MacAnalyzerView.swift"), encoding: .utf8)
+        let getter = try sourceSlice(in: source, from: "private var reviewDurationLabel:", through: "private var reviewArtifactIdentitySummary:")
+        XCTAssertTrue(getter.contains("reviewObservations.audioDurationLabel(for: reviewObservationRequest)"))
+        for forbidden in ["recordedDuration", "Range", "Notation", "routineSessionSetup", "AVAudioFile", "AVURLAsset", "Data(contentsOf:"] {
+            XCTAssertFalse(getter.contains(forbidden))
+        }
+    }
+}
+
+extension CaptureReliabilityPhase1CoreTests {
+    func testOrdinaryPostPreparationTimingSurvivesSidecarAndActualExport() throws {
+        let engine = ScratchLabBeatEngine()
+        var hostTime = AVAudioTime.hostTime(forSeconds: 100)
+        engine.testOnly_ordinaryPreparation = {
+            hostTime += AVAudioTime.hostTime(forSeconds: 86_400)
+            return try ScratchLabBeatEngine.makePlaybackSchedule(mode: .boomBapTrainer,
+                bpm: 95, sampleRate: 48_000)
+        }
+        engine.testOnly_ordinaryHostTime = { hostTime }
+        var callbackTimes: [UInt64] = []
+        engine.testOnly_ordinaryCallbackScheduled = { time, _ in callbackTimes.append(time) }
+        let started = try engine.start(mode: .boomBapTrainer, bpm: 95, usesClickCountIn: false)
+        let timing = CaptureTimingMetadata(clickStartHostTime: started.clickStartHostTime,
+            recordingStartHostTime: started.recordingStartHostTime)
+        let root = try makeTemporaryDirectory()
+        let auditDate = Date(timeIntervalSince1970: 1_710_000_800)
+        let movie = try makeLocalRecordingTake(in: root, sessionID: "ordinary-origin-export",
+            takeNumber: 1, bpm: 95, createdAt: auditDate, captureMode: .timedClick,
+            beatEngineMode: .boomBapTrainer, captureTiming: timing, useRealMedia: true)
+        let builder = SessionArchiveBuilder()
+        let package = try builder.preparePackage(from: .localRecordingSession(
+            lastRecordingURL: movie, sessionName: "Ordinary origin", config: nil))
+        let document = try builder.metadataDocument(for: package)
+        let take = try XCTUnwrap(document.takes.first)
+        XCTAssertEqual(take.clickStartHostTime, timing.clickStartHostTime)
+        XCTAssertEqual(take.recordingStartHostTime, timing.recordingStartHostTime)
+        XCTAssertEqual(take.recordingStartHostTime, callbackTimes.last)
+        XCTAssertGreaterThan(try XCTUnwrap(take.clickStartHostTime), hostTime)
+        XCTAssertEqual(take.beatEngineMode, BeatEngineMode.boomBapTrainer.rawValue)
     }
 }

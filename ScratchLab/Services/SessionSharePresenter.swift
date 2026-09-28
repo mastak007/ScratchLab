@@ -6,8 +6,8 @@ import UIKit
 
 struct SessionSharePresenter: View {
     @Binding var request: SessionShareRequest?
-    let onPresented: () -> Void
-    let onOutcome: (SessionShareOutcome) -> Void
+    let onPresented: (UUID) -> Void
+    let onOutcome: (SessionShareOutcome, UUID) -> Void
 
     var body: some View {
         Color.clear
@@ -46,8 +46,8 @@ private final class SessionShareItemSource: NSObject, UIActivityItemSource {
 
 private struct ActivitySharePresenter: UIViewControllerRepresentable {
     @Binding var request: SessionShareRequest?
-    let onPresented: () -> Void
-    let onOutcome: (SessionShareOutcome) -> Void
+    let onPresented: (UUID) -> Void
+    let onOutcome: (SessionShareOutcome, UUID) -> Void
 
     func makeCoordinator() -> Coordinator {
         Coordinator(request: $request, onPresented: onPresented, onOutcome: onOutcome)
@@ -76,11 +76,11 @@ private struct ActivitySharePresenter: UIViewControllerRepresentable {
         activityViewController.completionWithItemsHandler = { _, completed, _, activityError in
             DispatchQueue.main.async {
                 if activityError != nil {
-                    context.coordinator.finish(.failed)
+                    context.coordinator.finish(.failed, requestID: request.id)
                 } else if completed {
-                    context.coordinator.finish(.completed)
+                    context.coordinator.finish(.completed, requestID: request.id)
                 } else {
-                    context.coordinator.finish(.cancelled)
+                    context.coordinator.finish(.cancelled, requestID: request.id)
                 }
             }
         }
@@ -94,30 +94,31 @@ private struct ActivitySharePresenter: UIViewControllerRepresentable {
         let coordinator = context.coordinator
         coordinator.lastPresentedID = request.id
         uiViewController.present(activityViewController, animated: true) {
-            coordinator.onPresented()
+            coordinator.onPresented(request.id)
         }
     }
 
     final class Coordinator: NSObject {
         var request: Binding<SessionShareRequest?>
-        let onPresented: () -> Void
-        let onOutcome: (SessionShareOutcome) -> Void
+        let onPresented: (UUID) -> Void
+        let onOutcome: (SessionShareOutcome, UUID) -> Void
         var lastPresentedID: UUID?
 
         init(
             request: Binding<SessionShareRequest?>,
-            onPresented: @escaping () -> Void,
-            onOutcome: @escaping (SessionShareOutcome) -> Void
+            onPresented: @escaping (UUID) -> Void,
+            onOutcome: @escaping (SessionShareOutcome, UUID) -> Void
         ) {
             self.request = request
             self.onPresented = onPresented
             self.onOutcome = onOutcome
         }
 
-        func finish(_ outcome: SessionShareOutcome) {
-            request.wrappedValue = nil
+        func finish(_ outcome: SessionShareOutcome, requestID: UUID) {
+            guard lastPresentedID == requestID else { return }
+            if request.wrappedValue?.id == requestID { request.wrappedValue = nil }
             lastPresentedID = nil
-            onOutcome(outcome)
+            onOutcome(outcome, requestID)
         }
     }
 }
@@ -127,8 +128,8 @@ import AppKit
 
 struct SessionSharePresenter: View {
     @Binding var request: SessionShareRequest?
-    let onPresented: () -> Void
-    let onOutcome: (SessionShareOutcome) -> Void
+    let onPresented: (UUID) -> Void
+    let onOutcome: (SessionShareOutcome, UUID) -> Void
 
     var body: some View {
         Color.clear
@@ -145,8 +146,8 @@ struct SessionSharePresenter: View {
 
 private struct MacSharePickerPresenter: NSViewRepresentable {
     @Binding var request: SessionShareRequest?
-    let onPresented: () -> Void
-    let onOutcome: (SessionShareOutcome) -> Void
+    let onPresented: (UUID) -> Void
+    let onOutcome: (SessionShareOutcome, UUID) -> Void
 
     func makeCoordinator() -> Coordinator {
         Coordinator(request: $request, onPresented: onPresented, onOutcome: onOutcome)
@@ -169,32 +170,37 @@ private struct MacSharePickerPresenter: NSViewRepresentable {
             return
         }
 
+        context.coordinator.pickerOwners.removeAll()
+        context.coordinator.serviceOwners.removeAll()
         context.coordinator.currentRequest = request
         context.coordinator.lastPresentedID = request.id
         context.coordinator.didChooseService = false
 
         let coordinator = context.coordinator
         let picker = NSSharingServicePicker(items: [request.archiveURL])
+        coordinator.pickerOwners[ObjectIdentifier(picker)] = request.id
         picker.delegate = coordinator
         picker.show(relativeTo: nsView.bounds, of: nsView, preferredEdge: .maxY)
         Task { @MainActor in
             await Task.yield()
-            coordinator.onPresented()
+            coordinator.onPresented(request.id)
         }
     }
 
     final class Coordinator: NSObject, NSSharingServicePickerDelegate, NSSharingServiceDelegate {
         var request: Binding<SessionShareRequest?>
-        let onPresented: () -> Void
-        let onOutcome: (SessionShareOutcome) -> Void
+        let onPresented: (UUID) -> Void
+        let onOutcome: (SessionShareOutcome, UUID) -> Void
         var currentRequest: SessionShareRequest?
         var lastPresentedID: UUID?
         var didChooseService = false
+        var pickerOwners: [ObjectIdentifier: UUID] = [:]
+        var serviceOwners: [ObjectIdentifier: UUID] = [:]
 
         init(
             request: Binding<SessionShareRequest?>,
-            onPresented: @escaping () -> Void,
-            onOutcome: @escaping (SessionShareOutcome) -> Void
+            onPresented: @escaping (UUID) -> Void,
+            onOutcome: @escaping (SessionShareOutcome, UUID) -> Void
         ) {
             self.request = request
             self.onPresented = onPresented
@@ -218,6 +224,7 @@ private struct MacSharePickerPresenter: NSViewRepresentable {
             delegateFor sharingService: NSSharingService
         ) -> NSSharingServiceDelegate? {
             sharingService.subject = currentRequest?.subject
+            serviceOwners[ObjectIdentifier(sharingService)] = pickerOwners[ObjectIdentifier(sharingServicePicker)]
             return self
         }
 
@@ -226,26 +233,29 @@ private struct MacSharePickerPresenter: NSViewRepresentable {
             didChoose service: NSSharingService?
         ) {
             if service == nil {
-                finish(.cancelled)
+                finish(.cancelled, requestID: pickerOwners[ObjectIdentifier(sharingServicePicker)])
             } else {
                 didChooseService = true
             }
         }
 
         func sharingService(_ sharingService: NSSharingService, didShareItems items: [Any]) {
-            finish(.completed)
+            finish(.completed, requestID: serviceOwners[ObjectIdentifier(sharingService)])
         }
 
         func sharingService(_ sharingService: NSSharingService, didFailToShareItems items: [Any], error: Error) {
-            finish(.failed)
+            finish(.failed, requestID: serviceOwners[ObjectIdentifier(sharingService)])
         }
 
-        private func finish(_ outcome: SessionShareOutcome) {
-            request.wrappedValue = nil
+        private func finish(_ outcome: SessionShareOutcome, requestID: UUID?) {
+            guard let requestID, lastPresentedID == requestID else { return }
+            if request.wrappedValue?.id == requestID { request.wrappedValue = nil }
             currentRequest = nil
             lastPresentedID = nil
             didChooseService = false
-            onOutcome(outcome)
+            pickerOwners = pickerOwners.filter { $0.value != requestID }
+            serviceOwners = serviceOwners.filter { $0.value != requestID }
+            onOutcome(outcome, requestID)
         }
     }
 }

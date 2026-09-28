@@ -249,7 +249,8 @@ private struct DebugTimecodeCaptureCard: View {
 private final class OverlayCache: ObservableObject {
     var timeline: ReviewOverlayTimeline?
     var diagnostics: OverlayTimingDiagnostics?
-    var sourceStamp: Date?
+    var sourceSnapshot: CaptureCore.DetectedNotationSnapshot?
+    var targetNotation: ScratchNotation?
 }
 #endif
 
@@ -598,6 +599,7 @@ struct MacAnalyzerView: View {
     @StateObject private var beatEngine = ScratchLabBeatEngine()
     @StateObject private var seratoWindowMover = SeratoWindowMover()
     @StateObject private var sessionExportCoordinator = SessionExportCoordinator()
+    @StateObject private var reviewObservations = TakeReviewObservationStore()
     @StateObject private var routineSessionSetup = SessionSetupViewModel(surface: .macRoutine)
     @StateObject private var babyScratchDemo = BabyScratchDemoPlaybackCoordinator()
     @StateObject private var rawJSONInspector = RawJSONInspectorViewModel()
@@ -662,8 +664,8 @@ struct MacAnalyzerView: View {
     /// Whether the optional camera/visual-guide preview is expanded.
     @State private var showCaptureCamera = false
     @State private var reviewCorrectionSelection: ReviewCorrection = .unknown
-    @State private var reviewDecisionByTakeID: [String: ReviewCorrection] = [:]
-    @State private var reviewDecisionStatusByTakeID: [String: CaptureCore.CaptureReviewDecision.Status] = [:]
+    @State private var reviewDecisionByTakeID: [URL: ReviewCorrection] = [:]
+    @State private var reviewDecisionStatusByTakeID: [URL: CaptureCore.CaptureReviewDecision.Status] = [:]
     @State private var reviewStatusMessage = "Confirm before export."
     @State private var reviewMetadataByTakeID: [String: CaptureCore.CaptureReviewMetadata] = [:]
     @State private var reviewStateSelection: CaptureCore.SessionReviewState = .unreviewed
@@ -937,11 +939,11 @@ struct MacAnalyzerView: View {
         .background(
             SessionSharePresenter(
                 request: exportShareRequestBinding,
-                onPresented: {
-                    sessionExportCoordinator.markSharePresented()
+                onPresented: { requestID in
+                    sessionExportCoordinator.markSharePresented(requestID: requestID)
                 },
-                onOutcome: { outcome in
-                    sessionExportCoordinator.handleShareOutcome(outcome)
+                onOutcome: { outcome, requestID in
+                    sessionExportCoordinator.handleShareOutcome(outcome, requestID: requestID)
                 }
             )
         )
@@ -1298,7 +1300,7 @@ struct MacAnalyzerView: View {
             case .lessonComplete: return "COMPLETE"
             }
         case .capture: return "SESSION"
-        case .review: return hasRecordedTake ? "TAKE READY" : "EMPTY"
+        case .review: return reviewCapabilities.label
         case .advanced: return "TOOLS"
         }
     }
@@ -2337,6 +2339,18 @@ struct MacAnalyzerView: View {
             }
             .background(ScratchLabDesign.Surface.canvas)
         }
+        .task(id: reviewObservationRequest) { await reviewObservations.observe(reviewObservationRequest) }
+        .onDisappear { reviewObservations.cancel() }
+    }
+
+    private var reviewObservationRequest: TakeReviewObservationRequest {
+        .init(sessionID: selectedRoutineSession?.id, artifact: currentRoutineArtifactStatus,
+              selectedMediaURL: captureEngine.lastRoutineRecordingURL,
+              isRecording: captureEngine.isRoutineRecording)
+    }
+
+    private var reviewCapabilities: TakeReviewCapabilities {
+        reviewObservations.capabilities(for: reviewObservationRequest)
     }
 
     // MARK: - Figma Review workspace
@@ -2360,7 +2374,7 @@ struct MacAnalyzerView: View {
             Spacer(minLength: 20)
 
             VStack(alignment: .trailing, spacing: 5) {
-                Text(hasRecordedTake ? "READY FOR REVIEW" : "NO TAKE")
+                Text(reviewCapabilities.label)
                     .font(.system(size: 10, weight: .semibold))
                     .foregroundStyle(hasRecordedTake ? ScratchLabDesign.Sem.textPrimary : ScratchLabDesign.Sem.textSecondary)
                 Text(hasRecordedTake ? lastRoutineTakeDisplayName : "Capture required")
@@ -2440,7 +2454,7 @@ struct MacAnalyzerView: View {
                 reviewFigmaMetric("Session", reviewSessionName)
                 reviewFigmaMetric("BPM", reviewBPMDetailLabel)
                 reviewFigmaMetric("Mode", reviewModeLabel)
-                reviewFigmaMetric("Duration", reviewDurationLabel)
+                reviewFigmaMetric("Audio duration", reviewDurationLabel)
             }
 
             if let reviewArtifactIdentitySummary {
@@ -2464,9 +2478,11 @@ struct MacAnalyzerView: View {
                     .frame(width: 220, alignment: .leading)
                 }
                 Button("Confirm label") { acceptReviewLabel() }
+                    .disabled(!reviewCapabilities.canAcceptDetection)
                     .buttonStyle(.borderedProminent)
                     .controlSize(.large)
                 Button("Correct label") { correctReviewLabel() }
+                    .disabled(!reviewCapabilities.canReviewEvidence)
                     .buttonStyle(.bordered)
                     .controlSize(.large)
                 Spacer(minLength: 0)
@@ -2484,6 +2500,7 @@ struct MacAnalyzerView: View {
                 .disabled(sessionExportCoordinator.isPreparing || captureEngine.isRoutineRecording)
                 Spacer(minLength: 8)
                 Button("Leave unknown") { leaveReviewLabelUnknown() }
+                    .disabled(!reviewCapabilities.canReviewEvidence)
                     .buttonStyle(.plain)
                     .foregroundStyle(ScratchLabDesign.Sem.textSecondary)
                 Button("Record another") { prepareRetake() }
@@ -4919,41 +4936,45 @@ struct MacAnalyzerView: View {
             ?? "No take"
     }
 
+    /// The selected session and artifact row must agree. No latest-URL,
+    /// ordinal-only, live-detection or mutable-setup fallback is permitted.
+    private var selectedTakeReviewContext: CaptureCore.TakeReviewContext? {
+        guard let sessionID = selectedRoutineSession?.id,
+              let status = currentRoutineArtifactStatus,
+              status.sessionConfig.map({ $0.sessionID == sessionID }) ?? true,
+              let mediaURL = status.videoSourceURL else { return nil }
+        return try? CaptureCore.TakeReviewContext(
+            sessionID: sessionID, takeID: status.takeID, mediaURL: mediaURL,
+            sidecarURL: CaptureCore.LocalRecordingFiles.sidecarURL(forMediaURL: mediaURL),
+            detectedNotation: status.detectedNotation)
+    }
+
+    private var historicalReviewInput: CaptureCore.HistoricalReviewInput? {
+        guard let context = selectedTakeReviewContext,
+              let status = currentRoutineArtifactStatus,
+              status.takeID == context.takeID,
+              status.videoSourceURL?.standardizedFileURL == context.mediaURL,
+              let data = try? Data(contentsOf: context.sidecarURL) else { return nil }
+        return CaptureCore.HistoricalReviewInput(context: context, sidecarData: data)
+    }
+
+    private var selectedTakeReviewDecision: ReviewCorrection? {
+        selectedTakeReviewContext.flatMap { reviewDecisionByTakeID[$0.sidecarURL] }
+    }
+
+    private var selectedTakeReviewDecisionStatus: CaptureCore.CaptureReviewDecision.Status? {
+        selectedTakeReviewContext.flatMap { reviewDecisionStatusByTakeID[$0.sidecarURL] }
+    }
+
     private var reviewDetectedScratchLabel: String {
-        // Two distinct empty states:
-        // - no take recorded yet → "Awaiting take" (pre-record copy
-        //   preserved for the Capture tab's Last Take card).
-        // - take recorded but the audio classifier hasn't produced a
-        //   label → "Not yet classified" (avoids the misleading
-        //   "Awaiting take" badge sitting under a ready Take N status
-        //   line). PROFILE.md keeps classifier labels out of Practice/
-        //   Review as truth, so the audio classifier doesn't auto-run
-        //   per-take and this state is the honest default.
-        if let label = currentRoutineArtifactStatus?.detectedLabel {
-            return label
-        }
-        if let label = captureEngine.lastScratchDetection?.scratchName {
-            return label
-        }
-        return hasRecordedTake ? "Not yet classified" : "Awaiting take"
+        selectedTakeReviewContext?.detectedLabel
+            ?? (hasRecordedTake ? "Not yet classified" : "Awaiting take")
     }
 
     private var reviewConfidenceLabel: String {
-        // Distinguish "no confidence value" (em-dash) from a real low
-        // rating (classifier produced a value < 45). Real-value branches
-        // are byte-identical; only the nil fallback changed. Color falls
-        // through `.secondary` in `reviewConfidenceColor`'s default case
-        // for the em-dash, matching the prior "Low"-when-nil greying.
-        guard let confidence = currentRoutineArtifactStatus?.labelConfidence
-            ?? captureEngine.lastScratchDetection?.confidence else {
-            return "—"
-        }
-        if confidence >= 75 {
-            return "High"
-        }
-        if confidence >= 45 {
-            return "Medium"
-        }
+        guard let confidence = selectedTakeReviewContext?.confidence else { return "—" }
+        if confidence >= 75 { return "High" }
+        if confidence >= 45 { return "Medium" }
         return "Low"
     }
 
@@ -4979,8 +5000,7 @@ struct MacAnalyzerView: View {
 
     private var reviewDetectedStyle: ReviewDetectedStyle {
         let amber = ScratchLabDesign.Sem.warning
-        let rawLabel = currentRoutineArtifactStatus?.detectedLabel
-            ?? captureEngine.lastScratchDetection?.scratchName
+        let rawLabel = selectedTakeReviewContext?.detectedLabel
         guard let label = rawLabel, !label.isEmpty else {
             return ReviewDetectedStyle(color: .secondary, systemImage: "questionmark.circle")
         }
@@ -5014,7 +5034,7 @@ struct MacAnalyzerView: View {
         guard hasRecordedTake else {
             return "No take to review yet"
         }
-        if let decision = reviewDecisionByTakeID[reviewTakeID] {
+        if let decision = selectedTakeReviewDecision {
             return "Review label: \(decision.rawValue)"
         }
         if hasPartialReviewNotation {
@@ -5031,7 +5051,8 @@ struct MacAnalyzerView: View {
     }
 
     private var currentRoutineReviewConfig: CaptureSessionConfig? {
-        currentRoutineArtifactStatus?.sessionConfig ?? matchingLastRoutineExportConfig
+        guard selectedTakeReviewContext != nil else { return nil }
+        return currentRoutineArtifactStatus?.sessionConfig
     }
 
     private var reviewSessionName: String {
@@ -5039,8 +5060,8 @@ struct MacAnalyzerView: View {
     }
 
     private var reviewBPMDetailLabel: String {
-        let bpm = currentRoutineReviewConfig?.bpm ?? currentRoutineArtifactStatus?.bpm
-        return bpm.map { "\($0) BPM" } ?? "—"
+        let bpm = historicalReviewInput?.bpm
+        return bpm.map { "\(Int($0)) BPM" } ?? "—"
     }
 
     private var reviewModeLabel: String {
@@ -5049,8 +5070,7 @@ struct MacAnalyzerView: View {
     }
 
     private var reviewDurationLabel: String {
-        guard let duration = currentRoutineArtifactStatus?.recordedDuration else { return "—" }
-        return String(format: "%.1f s", duration)
+        reviewObservations.audioDurationLabel(for: reviewObservationRequest)
     }
 
     private var reviewArtifactIdentitySummary: String? {
@@ -5164,7 +5184,7 @@ struct MacAnalyzerView: View {
         let phraseSpan = max(0.1, notation.timelineDuration)
         let fallbackSpan: TimeInterval = 12
         let minSpan: TimeInterval = 4
-        let capturedSpan = currentRoutineNotationSnapshot?.capturedEvidenceEndTime
+        let capturedSpan = historicalReviewInput?.context.detectedNotation?.capturedEvidenceEndTime
         let rawSpan = capturedSpan ?? fallbackSpan
         let span = min(phraseSpan, max(minSpan, rawSpan))
         return 0 ... span
@@ -5178,12 +5198,12 @@ struct MacAnalyzerView: View {
     // timingBasis, and the F-B render-time window) without changing any
     // user-facing copy or behavior.
     private var debugTargetNotationChipText: String {
-        let notation = ScratchNotation.babyScratch
+        let notation = historicalReviewInput.flatMap { reviewTargetReferenceNotation(for: $0.scratchType) }
         let phrase = notation?.timelineDuration ?? .nan
         let phraseEnd = notation?.phraseEnd ?? .nan
         let demoEnd = notation?.demoEnd ?? .nan
         let strokes = notation?.strokes.count ?? 0
-        let bpm = routineSessionSetup.bpmValue ?? 90
+        let bpm = historicalReviewInput?.bpm ?? .nan
         let refAudio = BabyScratchDemoPlaybackCoordinator.audioDuration
         let refPhrase = BabyScratchDemoPlaybackCoordinator.phraseDuration
         let basis = notation?.timingBasis ?? "-"
@@ -5333,24 +5353,7 @@ struct MacAnalyzerView: View {
     }
 
     private var reviewArtifactStatusSummary: String {
-        guard let status = currentRoutineArtifactStatus else {
-            return "No take to review yet"
-        }
-        let takeLabel = "Take \(String(format: "%03d", status.takeNumber))"
-        switch status.readiness {
-        case .ready:
-            return "\(takeLabel) is ready for review and export."
-        case .recording:
-            return "\(takeLabel) is still recording."
-        case .finalizing:
-            return "\(takeLabel) is finalizing audio/video."
-        case .missingAudio:
-            return "\(takeLabel) audio is missing. Retake it before export."
-        case .missingVideo:
-            return "\(takeLabel) video is missing. Retake it before export."
-        case .failed(let message):
-            return "\(takeLabel) failed: \(message)"
-        }
+        reviewCapabilities.label
     }
 
     private enum ReviewStagePresentation {
@@ -5367,40 +5370,18 @@ struct MacAnalyzerView: View {
     }
 
     private var reviewStagePresentation: ReviewStagePresentation {
-        if captureEngine.isRoutineRecording {
-            return .recording("ScratchLab is recording your take. Stop the recording before reviewing it.")
-        }
-
-        guard let status = currentRoutineArtifactStatus else {
-            if hasRecordedTake {
-                return .finalizing("ScratchLab is verifying the saved audio and video. Review will update automatically.")
-            }
-            return .empty
-        }
-
-        let takeLabel = "Take \(String(format: "%03d", status.takeNumber))"
-        switch status.readiness {
-        case .ready:
-            return .ready
-        case .recording:
-            return .recording("\(takeLabel) is still recording. Stop the recording before reviewing it.")
-        case .finalizing:
-            return .finalizing("\(takeLabel) is finalizing its audio and video. Review will update automatically.")
-        case .missingAudio:
-            return .issue(
-                title: "Audio is missing",
-                message: "\(takeLabel) cannot be exported as a complete capture. Record another take; this take remains stored."
-            )
-        case .missingVideo:
-            return .issue(
-                title: "Video is missing",
-                message: "\(takeLabel) cannot be exported as a complete capture. Record another take; this take remains stored."
-            )
-        case .failed(let message):
-            return .issue(
-                title: "Take could not be completed",
-                message: "\(takeLabel) failed: \(message) Record another take; this take remains stored."
-            )
+        switch reviewCapabilities.state {
+        case .noTake: return .empty
+        case .recording: return .recording("Stop the recording before reviewing this take.")
+        case .finalizing: return .finalizing("This take is finalizing its audio and video.")
+        case .checking: return .finalizing("Checking the selected take's saved media.")
+        case .complete: return .ready
+        case .limitedEvidence:
+            return .issue(title: reviewCapabilities.label,
+                          message: "Saved evidence and manual review remain available. Complete media review is unavailable.")
+        case .unavailable:
+            return .issue(title: reviewCapabilities.label,
+                          message: "The selected take cannot currently be confirmed. Its stored artifacts remain available for recovery.")
         }
     }
 
@@ -5422,18 +5403,10 @@ struct MacAnalyzerView: View {
             isRecording: captureEngine.isRoutineRecording,
             isFinalizing: isFinalizing,
             hasIssue: hasIssue,
-            decisionStatus: reviewDecisionStatusByTakeID[reviewTakeID],
-            isExporting: sessionExportCoordinator.isPreparing,
-            isExported: {
-                switch sessionExportCoordinator.state {
-                case .readyToShare, .presentingShareSheet, .shareCompleted: return true
-                default: return false
-                }
-            }(),
-            didExportFail: {
-                if case .failed = sessionExportCoordinator.state { return true }
-                return false
-            }()
+            decisionStatus: selectedTakeReviewDecisionStatus,
+            isExporting: false, // Operation progress is presented separately from selected-take proof.
+            isExported: selectedTakeIsRepresented,
+            didExportFail: false
         ))
     }
 
@@ -5915,67 +5888,54 @@ struct MacAnalyzerView: View {
     }
 
     private func acceptReviewLabel() {
-        guard hasRecordedTake else { return }
-        let acceptedLabel: ReviewCorrection
-        switch captureEngine.lastScratchDetection?.scratchName.lowercased() {
-        case .some(let label) where label.contains("baby"):
-            acceptedLabel = .babyScratch
-        case .some(let label) where label.contains("chirp"):
-            acceptedLabel = .chirp
-        case .some(let label) where label.contains("transform"):
-            acceptedLabel = .transform
-        case .some(let label) where label.contains("flare"):
-            acceptedLabel = .flare
-        default:
-            acceptedLabel = .unknown
-        }
-        guard persistReviewDecision(acceptedLabel, status: .accepted) else { return }
-        reviewStatusMessage = "Accepted \(acceptedLabel.rawValue) for \(reviewTakeID)."
+        persistReviewDecision(status: .accepted)
     }
 
     private func correctReviewLabel() {
-        guard hasRecordedTake else { return }
-        guard persistReviewDecision(reviewCorrectionSelection, status: .corrected) else { return }
-        reviewStatusMessage = "Corrected \(reviewTakeID) to \(reviewCorrectionSelection.rawValue)."
+        persistReviewDecision(status: .corrected, correctedLabel: reviewCorrectionSelection.rawValue)
     }
 
     private func leaveReviewLabelUnknown() {
-        guard hasRecordedTake else { return }
-        guard persistReviewDecision(.unknown, status: .unknown) else { return }
-        reviewStatusMessage = "Left \(reviewTakeID) as unknown."
+        persistReviewDecision(status: .unknown)
     }
 
-    @discardableResult
     private func persistReviewDecision(
-        _ decision: ReviewCorrection,
-        status: CaptureCore.CaptureReviewDecision.Status
-    ) -> Bool {
-        guard let mediaURL = captureEngine.lastRoutineRecordingURL else {
-            reviewStatusMessage = "No recorded take is ready for review."
-            return false
+        status: CaptureCore.CaptureReviewDecision.Status,
+        correctedLabel: String? = nil
+    ) {
+        guard let context = selectedTakeReviewContext else {
+            reviewStatusMessage = "Could not save review: the selected take identity is unavailable."
+            return
         }
-
-        let sidecarURL = CaptureCore.LocalRecordingFiles.sidecarURL(forMediaURL: mediaURL)
+        // Synchronous read/validate/write: no suspension can retarget this
+        // action. Destination and cache key remain captured even if selection
+        // changes after the action; the next take never inherits this decision.
         do {
             let decoder = JSONDecoder()
             decoder.dateDecodingStrategy = .iso8601
-            let sidecar = try decoder.decode(
-                CaptureCore.LocalRecordingSidecar.self,
-                from: Data(contentsOf: sidecarURL)
-            )
-            let updatedSidecar = sidecar.reviewed(
-                status: status,
-                label: decision.rawValue,
-                detectedLabel: captureEngine.lastScratchDetection?.scratchName,
-                confidence: captureEngine.lastScratchDetection?.confidence
-            )
-            try updatedSidecar.encodedData().write(to: sidecarURL, options: .atomic)
-            reviewDecisionByTakeID[reviewTakeID] = decision
-            reviewDecisionStatusByTakeID[reviewTakeID] = status
-            return true
+            let sidecar = try decoder.decode(CaptureCore.LocalRecordingSidecar.self,
+                from: Data(contentsOf: context.sidecarURL))
+            let updatedSidecar = try context.reviewed(sidecar, status: status, correctedLabel: correctedLabel)
+            try updatedSidecar.encodedData().write(to: context.sidecarURL, options: .atomic)
+            sessionExportCoordinator.representations.invalidate(context.sidecarURL)
+            reviewObservations.invalidate(context.sidecarURL)
+            if let decision = updatedSidecar.reviewDecision {
+                reviewDecisionByTakeID[context.sidecarURL] = ReviewCorrection(rawValue: decision.label)
+                reviewDecisionStatusByTakeID[context.sidecarURL] = decision.status
+                switch status {
+                case .accepted: reviewStatusMessage = "Accepted \(decision.label) for \(context.takeID)."
+                case .corrected: reviewStatusMessage = "Corrected \(context.takeID) to \(decision.label)."
+                case .unknown: reviewStatusMessage = "Left \(context.takeID) as unknown."
+                }
+            }
+        } catch CaptureCore.TakeReviewContext.Failure.missingDetection {
+            reviewStatusMessage = "Could not save review: this take has no saved detection to accept."
+        } catch CaptureCore.TakeReviewContext.Failure.identityMismatch {
+            reviewStatusMessage = "Could not save review: the sidecar does not belong to the selected take."
+        } catch CaptureCore.TakeReviewContext.Failure.evidenceChanged {
+            reviewStatusMessage = "Could not save review: the saved evidence changed. Reopen Review before confirming."
         } catch {
-            reviewStatusMessage = "Could not save review for \(reviewTakeID): \(error.localizedDescription)"
-            return false
+            reviewStatusMessage = "Could not save review for \(context.takeID): \(error.localizedDescription)"
         }
     }
 
@@ -6012,6 +5972,8 @@ struct MacAnalyzerView: View {
             let next = transform(existing, warnings)
             let updatedSidecar = sidecar.withReviewMetadata(next, audit: reason)
             try updatedSidecar.encodedData().write(to: sidecarURL, options: .atomic)
+            sessionExportCoordinator.representations.invalidate(sidecarURL)
+            reviewObservations.invalidate(sidecarURL)
             reviewMetadataByTakeID[reviewTakeID] = next
             reviewStateSelection = next.reviewState
             reviewNotesDraft = next.reviewNotes ?? ""
@@ -6174,8 +6136,8 @@ struct MacAnalyzerView: View {
         reviewStateSelection = metadata.reviewState
         reviewNotesDraft = metadata.reviewNotes ?? ""
         reviewerNameDraft = metadata.reviewedBy ?? ""
-        reviewDecisionByTakeID.removeValue(forKey: reviewTakeID)
-        reviewDecisionStatusByTakeID.removeValue(forKey: reviewTakeID)
+        reviewDecisionByTakeID.removeValue(forKey: sidecarURL.standardizedFileURL)
+        reviewDecisionStatusByTakeID.removeValue(forKey: sidecarURL.standardizedFileURL)
         reviewStatusMessage = "Confirm before export."
 
         // Reload the persisted label decision too, so the header badge and
@@ -6184,10 +6146,14 @@ struct MacAnalyzerView: View {
         // shown as Pending while export + artifact status still read the
         // persisted `reviewDecision`. The status is always valid; the label is
         // restored only when it still maps to a known `ReviewCorrection`.
-        if let decision = sidecar.reviewDecision {
-            reviewDecisionStatusByTakeID[reviewTakeID] = decision.status
+        if let context = try? CaptureCore.TakeReviewContext(
+            sessionID: sidecar.sessionID, takeID: sidecar.takeID,
+            mediaURL: mediaURL, sidecarURL: sidecarURL, detectedNotation: sidecar.detectedNotation),
+           (try? context.validate(sidecar)) != nil,
+           let decision = sidecar.reviewDecision {
+            reviewDecisionStatusByTakeID[context.sidecarURL] = decision.status
             if let correction = ReviewCorrection(rawValue: decision.label) {
-                reviewDecisionByTakeID[reviewTakeID] = correction
+                reviewDecisionByTakeID[context.sidecarURL] = correction
             }
         }
     }
@@ -8080,21 +8046,24 @@ struct MacAnalyzerView: View {
                     Button("Accept") {
                         acceptReviewLabel()
                     }
+                    .disabled(!reviewCapabilities.canAcceptDetection)
                     .buttonStyle(.borderedProminent)
                     .controlSize(.regular)
 
                     Button("Correct label") {
                         correctReviewLabel()
                     }
+                    .disabled(!reviewCapabilities.canReviewEvidence)
                     .buttonStyle(.bordered)
                     .controlSize(.small)
 
                     Button("Leave unknown") {
                         leaveReviewLabelUnknown()
                     }
+                    .disabled(!reviewCapabilities.canReviewEvidence)
                     .scratchLabTertiaryButton()
 
-                    if currentRoutineArtifactStatus?.readiness != .ready {
+                    if !reviewCapabilities.completeReviewAvailable {
                         Spacer(minLength: 0)
                         Button("Retake") {
                             prepareRetake()
@@ -8151,7 +8120,7 @@ struct MacAnalyzerView: View {
                 }
             }
             .pickerStyle(.menu)
-            .disabled(!hasRecordedTake)
+            .disabled(!reviewCapabilities.canReviewEvidence)
 
             HStack(spacing: 8) {
                 Button("Approve") { approveSession() }
@@ -8160,7 +8129,7 @@ struct MacAnalyzerView: View {
                     .scratchLabDestructiveButton()
                 Spacer(minLength: 0)
             }
-            .disabled(!hasRecordedTake)
+            .disabled(!reviewCapabilities.canReviewEvidence)
 
             VStack(alignment: .leading, spacing: 6) {
                 Toggle("Flag low signal", isOn: Binding(
@@ -8184,7 +8153,7 @@ struct MacAnalyzerView: View {
                     set: { markTrainingQuality($0) }
                 ))
             }
-            .disabled(!hasRecordedTake)
+            .disabled(!reviewCapabilities.canReviewEvidence)
             .font(.system(size: 12))
 
             VStack(alignment: .leading, spacing: 6) {
@@ -8204,7 +8173,7 @@ struct MacAnalyzerView: View {
                 }
                 .pickerStyle(.menu)
                 .labelsHidden()
-                .disabled(!hasRecordedTake)
+                .disabled(!reviewCapabilities.canReviewEvidence)
                 if let override = metadata.labelOverride {
                     Text("Saved override: \(override)")
                         .font(.system(size: 11))
@@ -8218,7 +8187,7 @@ struct MacAnalyzerView: View {
                     .foregroundStyle(.secondary)
                 TextField("Initials or name", text: $reviewerNameDraft)
                     .textFieldStyle(.roundedBorder)
-                    .disabled(!hasRecordedTake)
+                    .disabled(!reviewCapabilities.canReviewEvidence)
                 Text("Notes")
                     .font(.system(size: 12, weight: .semibold))
                     .foregroundStyle(.secondary)
@@ -8228,7 +8197,7 @@ struct MacAnalyzerView: View {
                     .overlay(
                         RoundedRectangle(cornerRadius: 6).stroke(Color.secondary.opacity(0.25))
                     )
-                    .disabled(!hasRecordedTake)
+                    .disabled(!reviewCapabilities.canReviewEvidence)
                 HStack {
                     Text("\(reviewNotesDraft.count)/1000")
                         .font(.system(size: 10, design: .monospaced))
@@ -8236,7 +8205,7 @@ struct MacAnalyzerView: View {
                     Spacer(minLength: 0)
                     Button("Save notes") { commitReviewNotes() }
                         .controlSize(.small)
-                        .disabled(!hasRecordedTake)
+                        .disabled(!reviewCapabilities.canReviewEvidence)
                 }
             }
 
@@ -8654,7 +8623,8 @@ struct MacAnalyzerView: View {
     /// Non-canonical techniques return nil → the card's graceful "unavailable"
     /// copy, never a guessed pattern.
     private func reviewTargetReferenceNotation(for scratchType: CaptureSessionScratchType) -> ScratchNotation? {
-        guard let pattern = ScratchNotation.canonicalBeatPattern(forScratchID: scratchType.rawValue) else {
+        guard let input = historicalReviewInput, input.scratchType == scratchType,
+              let pattern = ScratchNotation.canonicalBeatPattern(forScratchID: scratchType.rawValue) else {
             return nil
         }
         guard let target = TargetScratchPhrase.phrase(
@@ -8664,38 +8634,39 @@ struct MacAnalyzerView: View {
             return nil
         }
         return target.materializedNotation(
-            bpm: Double(routineSessionSetup.bpmValue ?? 90),
+            bpm: input.bpm,
             scratchID: pattern.scratchID,
             timingBasis: pattern.timingBasis,
-            beatsPerBar: pattern.beatsPerBar,
+            beatsPerBar: input.beatsPerBar,
             version: pattern.version
         )
     }
 
     private var reviewTargetNotationStageCard: some View {
-        let scratchType = routineSessionSetup.scratchType ?? .babyScratch
-        let notation: ScratchNotation? = reviewTargetReferenceNotation(for: scratchType)
+        let input = historicalReviewInput
+        let scratchType = input?.scratchType
+        let notation = scratchType.flatMap { reviewTargetReferenceNotation(for: $0) }
         return VStack(alignment: .leading, spacing: 12) {
             HStack(alignment: .firstTextBaseline) {
                 Text("Target notation")
                     .font(.system(size: 14, weight: .semibold))
                     .foregroundStyle(ScratchLabDesign.Sem.textPrimary)
                 Spacer(minLength: 0)
-                Text("Target: \(scratchType.title)")
+                Text("Target: \(scratchType?.title ?? "Unavailable")")
                     .font(.system(size: 11, weight: .medium))
                     .foregroundStyle(ScratchLabDesign.Sem.textSecondary)
             }
             Group {
-                if let notation {
+                if let notation, let input {
                     ScratchPhraseChartView(
                         source: .target(notation),
-                        bpm: Double(routineSessionSetup.bpmValue ?? 90),
+                        bpm: input.bpm,
                         targetWindow: reviewTargetNotationWindow(for: notation)
                     )
                     .frame(height: 160)
                     .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
                 } else {
-                    Text("Target notation unavailable for this scratch type.")
+                    Text("Target notation unavailable for this take’s saved configuration.")
                         .font(.system(size: 12, weight: .medium))
                         .foregroundStyle(ScratchLabDesign.Sem.textSecondary)
                         .frame(maxWidth: .infinity, minHeight: 80, alignment: .leading)
@@ -8776,19 +8747,12 @@ struct MacAnalyzerView: View {
     /// replace, duplicate, or re-score `reviewPerformanceComparison`, which
     /// stays the whole-take comparison shown above it.
     private var reviewFirstCycleAttempt: PracticeAttemptResult? {
-        guard let scratchType = routineSessionSetup.scratchType,
-              let pattern = ScratchNotation.canonicalBeatPattern(forScratchID: scratchType.rawValue),
-              let bpmValue = routineSessionSetup.bpmValue, bpmValue > 0 else { return nil }
-        guard let snapshot = currentRoutineNotationSnapshot else { return nil }
-        // Delegates to the same evidence-resolution path the live practice
-        // coordinator uses (`PracticeGameplayCoordinator`/`ScratchGameplayAttempt.swift`)
-        // so a completed take's post-hoc preview and a live attempt agree on
-        // clock/threshold conventions rather than keeping two copies.
+        guard let input = historicalReviewInput,
+              let pattern = ScratchNotation.canonicalBeatPattern(forScratchID: input.scratchType.rawValue),
+              let snapshot = input.context.detectedNotation else { return nil }
         return PracticeAttemptEvidenceResolver.firstCycleAttempt(
-            pattern: pattern,
-            bpm: Double(bpmValue),
-            countInBeats: routineSessionSetup.config.countInBeats,
-            snapshot: snapshot
+            pattern: pattern, bpm: input.bpm,
+            countInBeats: input.countInBeats, snapshot: snapshot
         )
     }
 
@@ -8803,30 +8767,20 @@ struct MacAnalyzerView: View {
     }
 
     private var reviewPerformanceComparison: ReviewComparisonAvailability {
-        guard let scratchType = routineSessionSetup.scratchType else {
-            return .unavailable("Pick a scratch type to compare this take against its target pattern.")
+        guard let input = historicalReviewInput else {
+            return .unavailable("Saved take configuration is missing or unsupported; comparison stays off rather than guessing one.")
         }
+        let scratchType = input.scratchType
         guard let pattern = ScratchNotation.canonicalBeatPattern(forScratchID: scratchType.rawValue) else {
             return .unavailable("No canonical target pattern exists for \(scratchType.title) yet — comparison stays off rather than guessing one.")
         }
-        guard let bpmValue = routineSessionSetup.bpmValue, bpmValue > 0 else {
-            return .unavailable("Set a session BPM to compare timing against the target pattern.")
-        }
-        let bpm = Double(bpmValue)
-        guard let snapshot = currentRoutineNotationSnapshot,
+        let bpm = input.bpm
+        guard let snapshot = input.context.detectedNotation,
               !snapshot.recordMovementEvents.isEmpty else {
             return .unavailable("No captured movement evidence in this take to compare.")
         }
-        // Beat 0 of the click (incl. count-in) is at take-relative 0 in both
-        // click engines; the target phrase starts on the first post-count-in
-        // beat, so the anchor skips the configured count-in.
-        let countInBeats = routineSessionSetup.config.countInBeats
-        guard let clock = PerformanceBeatClock(
-            bpm: bpm,
-            beatZeroTime: Double(countInBeats) * 60.0 / bpm
-        ) else {
-            return .unavailable("Session tempo is unusable for beat alignment.")
-        }
+        // Preserve the existing post-count-in origin, using the saved take.
+        let clock = input.clock
         guard let thresholds = PerformedFaderEdgeThresholds(
             openAtOrAbove: Self.reviewFaderOpenAtOrAbove,
             closedAtOrBelow: Self.reviewFaderClosedAtOrBelow
@@ -8875,7 +8829,7 @@ struct MacAnalyzerView: View {
             bpm: bpm,
             scratchID: pattern.scratchID,
             timingBasis: pattern.timingBasis,
-            beatsPerBar: pattern.beatsPerBar,
+            beatsPerBar: input.beatsPerBar,
             version: pattern.version
         ) else {
             return .unavailable("Target pattern failed to materialize at this tempo.")
@@ -8949,17 +8903,17 @@ struct MacAnalyzerView: View {
 
             switch reviewPerformanceComparison {
             case .unavailable(let reason):
-                let scratchType = routineSessionSetup.scratchType ?? .babyScratch
-                let target = reviewTargetReferenceNotation(for: scratchType)
+                let input = historicalReviewInput
+                let target = input.flatMap { reviewTargetReferenceNotation(for: $0.scratchType) }
                 VStack(alignment: .leading, spacing: 10) {
                     VStack(alignment: .leading, spacing: 4) {
                         Label("TARGET", systemImage: "target")
                             .font(.system(size: 11, weight: .bold, design: .monospaced))
                             .foregroundStyle(ScratchLabDesign.Notation.targetTrace)
-                        if let target {
+                        if let target, let input {
                             ScratchPhraseChartView(
                                 source: .target(target),
-                                bpm: Double(routineSessionSetup.bpmValue ?? 90),
+                                bpm: input.bpm,
                                 targetWindow: reviewTargetNotationWindow(for: target)
                             )
                             .frame(height: 190)
@@ -8971,14 +8925,10 @@ struct MacAnalyzerView: View {
                         Label("MY PERFORMANCE", systemImage: "person.fill")
                             .font(.system(size: 11, weight: .bold, design: .monospaced))
                             .foregroundStyle(ScratchLabDesign.Notation.performanceTrace)
-                        ScratchPhraseChartView(
-                            source: .empty(reason),
-                            bpm: Double(routineSessionSetup.bpmValue ?? 90),
-                            showBeatGrid: false,
-                            backgroundColor: ScratchLabDesign.Notation.performanceCanvas
-                        )
-                        .frame(height: 118)
-                        .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+                        Text(reason)
+                            .font(.system(size: 12, weight: .medium))
+                            .foregroundStyle(ScratchLabDesign.Sem.textSecondary)
+                            .frame(maxWidth: .infinity, minHeight: 190, alignment: .leading)
                     }
                 }
             case .ready(let model):
@@ -9253,9 +9203,9 @@ struct MacAnalyzerView: View {
     /// explicit empty-state copy when either side is missing.
     @ViewBuilder
     private var reviewOverlayDiffStageCard: some View {
-        let scratchType = routineSessionSetup.scratchType ?? .babyScratch
-        let targetNotation: ScratchNotation? = reviewTargetReferenceNotation(for: scratchType)
-        let capturedSnapshot = currentRoutineNotationSnapshot
+        let input = historicalReviewInput
+        let targetNotation = input.flatMap { reviewTargetReferenceNotation(for: $0.scratchType) }
+        let capturedSnapshot = input?.context.detectedNotation
         let hasCaptured = capturedSnapshot?.hasDetectedEvents ?? false
 
         VStack(alignment: .leading, spacing: 12) {
@@ -9301,7 +9251,7 @@ struct MacAnalyzerView: View {
             subtitle = "No target notation available · No captured notation available"
         } else if !hasTarget {
             title = "No target notation available"
-            subtitle = "Pick a scratch type with a reference pattern to enable overlay comparison."
+            subtitle = "This take’s saved configuration has no supported reference pattern."
         } else {
             title = "No captured notation available"
             subtitle = "Capture a take to compare timing against the target."
@@ -9321,8 +9271,8 @@ struct MacAnalyzerView: View {
     }
 
     /// Returns a cached `(ReviewOverlayTimeline, OverlayTimingDiagnostics)`
-    /// pair, rebuilding only when the captured snapshot's identity
-    /// (`capturedAt` timestamp) changes.  Avoids calling the expensive
+    /// pair, rebuilding when either the saved evidence or historical target
+    /// changes. A timestamp alone cannot distinguish different takes/tempos.  Avoids calling the expensive
     /// `build()` + `compute()` path on every SwiftUI body evaluation.
     /// Cache is DEBUG-only; Release recomputes on every call (acceptable
     /// because the DEBUG funnel view isn't rendered in Release).
@@ -9331,10 +9281,10 @@ struct MacAnalyzerView: View {
         capturedSnapshot: CaptureCore.DetectedNotationSnapshot
     ) -> (ReviewOverlayTimeline, OverlayTimingDiagnostics) {
         #if DEBUG
-        let stamp = capturedSnapshot.capturedAt
         if let cached = overlayCache.timeline,
            let cachedDiag = overlayCache.diagnostics,
-           overlayCache.sourceStamp == stamp {
+           overlayCache.sourceSnapshot == capturedSnapshot,
+           overlayCache.targetNotation == targetNotation {
             return (cached, cachedDiag)
         }
         #endif
@@ -9349,7 +9299,8 @@ struct MacAnalyzerView: View {
         #if DEBUG
         overlayCache.timeline = built
         overlayCache.diagnostics = diag
-        overlayCache.sourceStamp = stamp
+        overlayCache.sourceSnapshot = capturedSnapshot
+        overlayCache.targetNotation = targetNotation
         #endif
         return (built, diag)
     }
@@ -9359,7 +9310,7 @@ struct MacAnalyzerView: View {
     /// in lock-step with `reviewPresentationState` (corrected ≠ confirmed) so
     /// the summary can never contradict the header badge.
     private var reviewLabelDecision: (value: String, systemImage: String, color: Color) {
-        switch reviewDecisionStatusByTakeID[reviewTakeID] {
+        switch selectedTakeReviewDecisionStatus {
         case .accepted:
             return ("Confirmed", "checkmark.seal.fill", ScratchLabDesign.Sem.success)
         case .corrected:
@@ -9371,26 +9322,25 @@ struct MacAnalyzerView: View {
         }
     }
 
-    /// Export-status presentation for the Review summary — derives from the real
-    /// `SessionExportCoordinator.state`, so it can never claim "Ready" while an
-    /// export is in flight, succeeded, or failed.
+    /// Selected-take representation is independent of operation progress/failure.
+    /// This query consumes memory-only source and archive proof.
+    private var selectedTakeIsRepresented: Bool {
+        guard let context = selectedTakeReviewContext else { return false }
+        return sessionExportCoordinator.representations.represents(sessionID: context.sessionID,
+            takeID: context.takeID, sidecarURL: context.sidecarURL)
+    }
+
     private var reviewExportMetric: (value: String, systemImage: String, color: Color) {
-        switch sessionExportCoordinator.state {
-        case .validating, .preparingArchive:
-            return ("Exporting", "arrow.triangle.2.circlepath", ScratchLabDesign.Sem.info)
-        case .readyToShare, .presentingShareSheet, .shareCompleted:
+        if selectedTakeIsRepresented {
             return ("Exported", "checkmark.seal.fill", ScratchLabDesign.Sem.success)
-        case .failed:
-            return ("Export failed", "exclamationmark.triangle.fill", ScratchLabDesign.Sem.danger)
-        case .idle, .cancelled:
-            let ready = currentRoutineArtifactStatus?.readiness == .ready
-            return (ready ? "Ready" : "Pending", "square.and.arrow.up",
-                    ready ? ScratchLabDesign.Sem.accent : .secondary)
         }
+        let ready = currentRoutineArtifactStatus?.readiness == .ready
+        return (ready ? "Ready" : "Pending", "square.and.arrow.up",
+                ready ? ScratchLabDesign.Sem.accent : .secondary)
     }
 
     private var reviewSummaryFooterCard: some View {
-        let scratchType = routineSessionSetup.scratchType ?? .babyScratch
+        let scratchType = historicalReviewInput?.scratchType
         let detectedLabel: String = {
             if let label = currentRoutineArtifactStatus?.detectedLabel, !label.isEmpty {
                 return label
@@ -9405,7 +9355,7 @@ struct MacAnalyzerView: View {
         let labelDecision = reviewLabelDecision
         let exportMetric = reviewExportMetric
         return HStack(alignment: .top, spacing: 12) {
-            reviewFooterMetric(title: "Target", value: scratchType.title, systemImage: "target", color: ScratchLabDesign.Sem.textPrimary)
+            reviewFooterMetric(title: "Target", value: scratchType?.title ?? "Unavailable", systemImage: "target", color: ScratchLabDesign.Sem.textPrimary)
             reviewFooterMetric(title: "Detected", value: detectedLabel, systemImage: reviewDetectedStyle.systemImage, color: reviewDetectedStyle.color)
             reviewFooterMetric(title: "Signal confidence", value: confidence, systemImage: "gauge.with.dots.needle.bottom.50percent", color: reviewConfidenceColor)
             reviewFooterMetric(title: "Label", value: labelDecision.value, systemImage: labelDecision.systemImage, color: labelDecision.color)
@@ -10560,7 +10510,7 @@ struct MacAnalyzerView: View {
                             }
                         }
 
-                        Button(currentRoutineUploadJob?.state == .completed ? "Uploaded" : "Upload Session") {
+                        Button("Upload Session") {
                             uploadLastRoutineSession()
                         }
                         .buttonStyle(.borderedProminent)
@@ -10568,7 +10518,6 @@ struct MacAnalyzerView: View {
                         .disabled(
                             !sessionUploadManager.isUploadAvailable
                                 || captureEngine.isRoutineRecording
-                                || currentRoutineUploadJob?.state == .completed
                                 || currentRoutineUploadJob?.state == .uploading
                                 || currentRoutineUploadJob?.state == .requestingUploadURL
                                 || currentRoutineUploadJob?.state == .preparing

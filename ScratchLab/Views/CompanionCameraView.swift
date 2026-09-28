@@ -125,11 +125,11 @@ struct CompanionCameraView: View {
         .background(
             SessionSharePresenter(
                 request: exportShareRequestBinding,
-                onPresented: {
-                    sessionExportCoordinator.markSharePresented()
+                onPresented: { requestID in
+                    sessionExportCoordinator.markSharePresented(requestID: requestID)
                 },
-                onOutcome: { outcome in
-                    sessionExportCoordinator.handleShareOutcome(outcome)
+                onOutcome: { outcome, requestID in
+                    sessionExportCoordinator.handleShareOutcome(outcome, requestID: requestID)
                 }
             )
         )

@@ -113,6 +113,8 @@ struct SessionUploadJob: Codable, Equatable, Identifiable, Sendable {
     var lastErrorCategory: SessionUploadErrorCategory?
     var lastErrorDetail: String?
     var cloudBackedAt: Date?
+    var exportReceipt: SessionExportReceipt? = nil
+    var uploadAttemptID: UUID? = nil
 
     var formattedFileSize: String {
         guard fileSizeBytes > 0 else { return "Size pending" }
@@ -166,7 +168,7 @@ struct SessionUploadJob: Codable, Equatable, Identifiable, Sendable {
     }
 }
 
-private struct SessionUploadPreparedArchive: Sendable {
+struct SessionUploadPreparedArchive: Sendable {
     let localSessionID: String
     let sessionName: String
     let takeCount: Int
@@ -380,6 +382,11 @@ final class SessionUploadManager: NSObject, ObservableObject {
     @Published private(set) var availabilityMessage: String?
 
     private let configuration: SessionUploadConfiguration
+    private let storageRootOverride: URL?
+    private let archiveVerificationOverride: (@Sendable (SessionUploadJob) async -> Bool)?
+    private var preparationIDs: [String: UUID] = [:]
+    private var startRequestIDs: [String: UUID] = [:]
+    private var authorizationIDs: [String: UUID] = [:]
     private let fileManager = FileManager.default
     private let archiveBuilder = SessionArchiveBuilder()
     private let apiClient: SessionUploadAPIClient
@@ -403,9 +410,13 @@ final class SessionUploadManager: NSObject, ObservableObject {
 
     init(
         configuration: SessionUploadConfiguration = .current(),
-        activateImmediately: Bool = true
+        activateImmediately: Bool = true,
+        storageRootOverride: URL? = nil,
+        archiveVerificationOverride: (@Sendable (SessionUploadJob) async -> Bool)? = nil
     ) {
         self.configuration = configuration
+        self.storageRootOverride = storageRootOverride
+        self.archiveVerificationOverride = archiveVerificationOverride
         self.apiClient = SessionUploadAPIClient(configuration: configuration)
         self.isUploadAvailable = configuration.isConfigured
         self.availabilityMessage = configuration.isConfigured
@@ -440,11 +451,16 @@ final class SessionUploadManager: NSObject, ObservableObject {
         guard isUploadAvailable else { return }
 
         let resolvedDJID = resolvedDJID(explicit: djID)
+        let requestKey = fallbackLocalSessionID(for: source)
+        let requestID = UUID()
+        startRequestIDs[requestKey] = requestID
         Task {
+            defer { if startRequestIDs[requestKey] == requestID { startRequestIDs.removeValue(forKey: requestKey) } }
             do {
                 if let report = await Task.detached(priority: .userInitiated, operation: {
                     SessionArchiveBuilder().validationReport(for: source)
                 }).value {
+                    guard startRequestIDs[requestKey] == requestID else { return }
                     recordFailure(
                         localSessionID: fallbackLocalSessionID(for: source),
                         sessionName: fallbackSessionName(for: source),
@@ -455,10 +471,13 @@ final class SessionUploadManager: NSObject, ObservableObject {
                     return
                 }
 
+                guard startRequestIDs[requestKey] == requestID else { return }
                 let preparedArchive = try await prepareArchive(for: source, djID: resolvedDJID)
+                guard startRequestIDs[requestKey] == requestID else { return }
                 guard job(for: preparedArchive.localSessionID)?.state != .completed else { return }
                 await requestUploadSessionAndStart(localSessionID: preparedArchive.localSessionID)
             } catch let serviceError as SessionUploadServiceError {
+                guard startRequestIDs[requestKey] == requestID else { return }
                 let category: SessionUploadErrorCategory
                 switch serviceError {
                 case .notConfigured:
@@ -474,6 +493,7 @@ final class SessionUploadManager: NSObject, ObservableObject {
                     detail: category.userMessage
                 )
             } catch {
+                guard startRequestIDs[requestKey] == requestID, !(error is CancellationError) else { return }
                 print("Session upload preparation failed: \(error)")
                 recordFailure(
                     localSessionID: fallbackLocalSessionID(for: source),
@@ -506,7 +526,7 @@ final class SessionUploadManager: NSObject, ObservableObject {
                 if uploadURLHasExpired(for: job) {
                     await requestUploadSessionAndStart(localSessionID: localSessionID)
                 } else if job.uploadURLString != nil {
-                    beginUpload(for: localSessionID)
+                    await beginUpload(for: localSessionID)
                 } else {
                     await requestUploadSessionAndStart(localSessionID: localSessionID)
                 }
@@ -522,17 +542,22 @@ final class SessionUploadManager: NSObject, ObservableObject {
         }
     }
 
-    private func prepareArchive(for source: SessionExportSource, djID: String) async throws -> SessionUploadPreparedArchive {
+    func prepareArchive(for source: SessionExportSource, djID: String) async throws -> SessionUploadPreparedArchive {
+        let requestKey = fallbackLocalSessionID(for: source)
+        let requestID = UUID()
+        preparationIDs[requestKey] = requestID
+        defer { if preparationIDs[requestKey] == requestID { preparationIDs.removeValue(forKey: requestKey) } }
         let package = try await Task.detached(priority: .userInitiated) {
             try SessionArchiveBuilder().preparePackage(from: source)
         }.value
 
         let localSessionID = package.metadata.sessionID
+        guard preparationIDs[requestKey] == requestID else { throw CancellationError() }
         let existingJob = job(for: localSessionID)
         let jobDirectory = try uploadJobDirectoryURL(for: localSessionID, createIfNeeded: true)
         let archiveURL = archiveBuilder.archiveURL(for: package.metadata, in: jobDirectory)
 
-        var preparedJob = existingJob ?? SessionUploadJob(
+        var preparedJob = SessionUploadJob(
             id: localSessionID,
             djID: djID,
             sessionName: package.metadata.sessionName,
@@ -555,70 +580,78 @@ final class SessionUploadManager: NSObject, ObservableObject {
             lastErrorDetail: nil,
             cloudBackedAt: nil
         )
-        preparedJob.sessionName = package.metadata.sessionName
-        preparedJob.takeCount = package.takes.count
-        preparedJob.zipURL = archiveURL
-        preparedJob.state = .preparing
-        preparedJob.lastErrorCategory = nil
-        preparedJob.lastErrorDetail = nil
-        upsertJob(preparedJob)
-
-        if fileManager.fileExists(atPath: archiveURL.path) {
-            let fileSize = fileSize(for: archiveURL)
-            let checksum: String
-            if let existingChecksum = preparedJob.sha256 {
-                checksum = existingChecksum
-            } else {
-                checksum = try await Task.detached(priority: .utility) {
-                    try SessionUploadFileHasher.sha256Hex(for: archiveURL)
-                }.value
+        let current = try await Task.detached(priority: .utility) {
+            try SessionArchiveBuilder().sourceRevision(for: package)
+        }.value
+        guard preparationIDs[requestKey] == requestID else { throw CancellationError() }
+        if let existingJob, let receipt = existingJob.exportReceipt, receipt.version == 1,
+           receipt.packageRevision == current.packageRevision {
+            let identity = try? await Task.detached(priority: .utility) {
+                try ExportArtifactIdentity.file(existingJob.zipURL)
+            }.value
+            guard preparationIDs[requestKey] == requestID else { throw CancellationError() }
+            if identity == receipt.archiveIdentity {
+                return SessionUploadPreparedArchive(localSessionID: localSessionID,
+                    sessionName: existingJob.sessionName, takeCount: existingJob.takeCount, zipURL: existingJob.zipURL,
+                    fileSizeBytes: receipt.archiveIdentity.bytes, sha256: receipt.archiveIdentity.sha256,
+                    createdAt: existingJob.createdAt)
             }
-
-            preparedJob.fileSizeBytes = fileSize
-            preparedJob.sha256 = checksum
-            preparedJob.state = .queued
-            upsertJob(preparedJob)
-
-            return SessionUploadPreparedArchive(
-                localSessionID: localSessionID,
-                sessionName: package.metadata.sessionName,
-                takeCount: package.takes.count,
-                zipURL: archiveURL,
-                fileSizeBytes: fileSize,
-                sha256: checksum,
-                createdAt: package.metadata.createdAt
-            )
         }
-
         let archiveResult = try await Task.detached(priority: .userInitiated) {
             try SessionArchiveBuilder().createArchive(from: package, in: jobDirectory)
         }.value
-
-        let checksum = try await Task.detached(priority: .utility) {
-            try SessionUploadFileHasher.sha256Hex(for: archiveResult.archiveURL)
-        }.value
-
+        guard preparationIDs[requestKey] == requestID else { throw CancellationError() }
+        guard let receipt = archiveResult.receipt else { throw SessionExportError.unableToPrepareExport }
+        preparedJob.zipURL = archiveResult.archiveURL
         preparedJob.fileSizeBytes = archiveResult.archiveSizeBytes
-        preparedJob.sha256 = checksum
+        preparedJob.sha256 = receipt.archiveIdentity.sha256
+        preparedJob.exportReceipt = receipt
         preparedJob.state = .queued
+        if let existingJob, let oldTransfer = Self.transferIdentity(existingJob) {
+            activeTaskIDs.remove(localSessionID)
+            uploadSession.getAllTasks { tasks in
+                tasks.filter { $0.taskDescription == oldTransfer }.forEach { $0.cancel() }
+            }
+        }
         upsertJob(preparedJob)
+        return SessionUploadPreparedArchive(localSessionID: localSessionID, sessionName: package.metadata.sessionName,
+            takeCount: package.takes.count, zipURL: archiveResult.archiveURL, fileSizeBytes: archiveResult.archiveSizeBytes,
+            sha256: receipt.archiveIdentity.sha256, createdAt: package.metadata.createdAt)
+    }
 
-        return SessionUploadPreparedArchive(
-            localSessionID: localSessionID,
-            sessionName: package.metadata.sessionName,
-            takeCount: package.takes.count,
-            zipURL: archiveResult.archiveURL,
-            fileSizeBytes: archiveResult.archiveSizeBytes,
-            sha256: checksum,
-            createdAt: package.metadata.createdAt
-        )
+    func archiveIsCurrent(_ job: SessionUploadJob) async -> Bool {
+        if let archiveVerificationOverride { return await archiveVerificationOverride(job) }
+        guard let receipt = job.exportReceipt, receipt.version == 1 else { return false }
+        return await Task.detached(priority: .utility) {
+            guard (try? ExportArtifactIdentity.file(job.zipURL)) == receipt.archiveIdentity else { return false }
+            return receipt.members.allSatisfy { member in
+                member.artifacts.allSatisfy {
+                    (try? ExportSourceArtifact.read($0.url, semanticSidecar: $0.semanticSidecar)) == $0.identity
+                }
+            }
+        }.value
+    }
+
+    nonisolated static func transferIdentity(_ job: SessionUploadJob) -> String? {
+        guard let receipt = job.exportReceipt, receipt.version == 1 else { return nil }
+        return job.id + "|" + receipt.packageRevision + "|" + receipt.archiveIdentity.sha256 + "|" + (job.uploadAttemptID?.uuidString ?? "unstarted")
     }
 
     private func requestUploadSessionAndStart(localSessionID: String) async {
+        let authorizationID = UUID()
+        authorizationIDs[localSessionID] = authorizationID
+        defer { if authorizationIDs[localSessionID] == authorizationID { authorizationIDs.removeValue(forKey: localSessionID) } }
         guard var existingJob = job(for: localSessionID) else { return }
         guard isUploadAvailable else { return }
         guard fileManager.fileExists(atPath: existingJob.zipURL.path) else {
             markFailure(localSessionID: localSessionID, category: .archiveMissing, autoRetry: false)
+            return
+        }
+        let isCurrent = await archiveIsCurrent(existingJob)
+        guard authorizationIDs[localSessionID] == authorizationID,
+              job(for: localSessionID)?.zipURL == existingJob.zipURL else { return }
+        guard isCurrent else {
+            markFailure(localSessionID: localSessionID, category: .preparation, autoRetry: false)
             return
         }
         guard let sha256 = existingJob.sha256 else {
@@ -640,6 +673,9 @@ final class SessionUploadManager: NSObject, ObservableObject {
                 fileSizeBytes: existingJob.fileSizeBytes,
                 sha256: sha256
             )
+            guard authorizationIDs[localSessionID] == authorizationID,
+                  job(for: localSessionID)?.exportReceipt == existingJob.exportReceipt,
+                  job(for: localSessionID)?.zipURL == existingJob.zipURL else { return }
             existingJob.backendSessionID = response.sessionID
             existingJob.objectKey = response.objectKey
             existingJob.uploadURLString = response.uploadURL
@@ -652,16 +688,28 @@ final class SessionUploadManager: NSObject, ObservableObject {
             existingJob.lastErrorDetail = nil
             upsertJob(existingJob)
 
-            beginUpload(for: localSessionID)
+            await beginUpload(for: localSessionID)
         } catch {
+            guard authorizationIDs[localSessionID] == authorizationID,
+                  job(for: localSessionID)?.zipURL == existingJob.zipURL else { return }
             print("Unable to request upload session for \(localSessionID): \(error)")
             markFailure(localSessionID: localSessionID, category: .request, autoRetry: true)
         }
     }
 
-    private func beginUpload(for localSessionID: String) {
+    func beginUpload(for localSessionID: String) async {
         guard !activeTaskIDs.contains(localSessionID) else { return }
         guard var existingJob = job(for: localSessionID) else { return }
+        let isCurrent = await archiveIsCurrent(existingJob)
+        // Ownership is checked before applying even a verification failure.
+        // A stale refusal must not mark a successor package as failed.
+        guard !activeTaskIDs.contains(localSessionID),
+              job(for: localSessionID)?.zipURL == existingJob.zipURL,
+              job(for: localSessionID)?.uploadAttemptID == existingJob.uploadAttemptID else { return }
+        guard isCurrent else {
+            markFailure(localSessionID: localSessionID, category: .preparation, autoRetry: false)
+            return
+        }
         guard fileManager.fileExists(atPath: existingJob.zipURL.path) else {
             markFailure(localSessionID: localSessionID, category: .archiveMissing, autoRetry: false)
             return
@@ -688,7 +736,8 @@ final class SessionUploadManager: NSObject, ObservableObject {
         }
 
         let uploadTask = uploadSession.uploadTask(with: request, fromFile: existingJob.zipURL)
-        uploadTask.taskDescription = localSessionID
+        existingJob.uploadAttemptID = UUID()
+        uploadTask.taskDescription = Self.transferIdentity(existingJob)
         activeTaskIDs.insert(localSessionID)
         existingJob.state = .uploading
         existingJob.lastErrorCategory = nil
@@ -716,6 +765,7 @@ final class SessionUploadManager: NSObject, ObservableObject {
                 bytesUploaded: existingJob.fileSizeBytes,
                 sha256: sha256
             )
+            guard job(for: localSessionID)?.uploadAttemptID == existingJob.uploadAttemptID && job(for: localSessionID)?.zipURL == existingJob.zipURL else { return }
             existingJob.state = .completed
             existingJob.cloudBackedAt = Date()
             existingJob.lastErrorCategory = nil
@@ -725,6 +775,7 @@ final class SessionUploadManager: NSObject, ObservableObject {
             existingJob.nextRetryAt = nil
             upsertJob(existingJob)
         } catch {
+            guard job(for: localSessionID)?.uploadAttemptID == existingJob.uploadAttemptID && job(for: localSessionID)?.zipURL == existingJob.zipURL else { return }
             print("Unable to confirm upload for \(localSessionID): \(error)")
             markFailure(localSessionID: localSessionID, category: .confirmation, autoRetry: true)
         }
@@ -952,7 +1003,7 @@ final class SessionUploadManager: NSObject, ObservableObject {
         let baseURL = fileManager.urls(for: .applicationSupportDirectory, in: .userDomainMask).first
             ?? fileManager.urls(for: .documentDirectory, in: .userDomainMask).first
             ?? fileManager.temporaryDirectory
-        let rootURL = baseURL.appendingPathComponent("ScratchLabUploads", isDirectory: true)
+        let rootURL = storageRootOverride ?? baseURL.appendingPathComponent("ScratchLabUploads", isDirectory: true)
         if createIfNeeded {
             try fileManager.createDirectory(at: rootURL, withIntermediateDirectories: true)
         }
@@ -973,7 +1024,7 @@ final class SessionUploadManager: NSObject, ObservableObject {
             .appendingPathComponent("job.json")
     }
 
-    private func loadPersistedJobs() {
+    func loadPersistedJobs() {
         guard let rootURL = try? uploadsRootDirectoryURL(createIfNeeded: true),
               let contents = try? fileManager.contentsOfDirectory(
                 at: rootURL,
@@ -1039,14 +1090,16 @@ final class SessionUploadManager: NSObject, ObservableObject {
         uploadSession.getAllTasks { [weak self] tasks in
             Task { @MainActor in
                 guard let self else { return }
-                self.activeTaskIDs = Set(tasks.compactMap(\.taskDescription))
+                self.activeTaskIDs = []
 
                 for task in tasks {
-                    guard let localSessionID = task.taskDescription,
-                          var existingJob = self.job(for: localSessionID) else {
+                    guard let transferID = task.taskDescription,
+                          var existingJob = self.jobs.first(where: { Self.transferIdentity($0) == transferID }) else {
                         continue
                     }
 
+                    let localSessionID = existingJob.id
+                    self.activeTaskIDs.insert(localSessionID)
                     if task.countOfBytesSent > 0 {
                         existingJob.progressBytesSent = max(existingJob.progressBytesSent, task.countOfBytesSent)
                     }
@@ -1095,20 +1148,22 @@ extension SessionUploadManager: URLSessionTaskDelegate, URLSessionDataDelegate {
         totalBytesSent: Int64,
         totalBytesExpectedToSend: Int64
     ) {
-        guard let localSessionID = task.taskDescription else { return }
+        guard let transferID = task.taskDescription else { return }
         Task { @MainActor in
+            guard let localSessionID = self.jobs.first(where: { Self.transferIdentity($0) == transferID })?.id else { return }
             self.handleUploadProgress(localSessionID: localSessionID, totalBytesSent: totalBytesSent)
         }
     }
 
     nonisolated func urlSession(_ session: URLSession, task: URLSessionTask, didCompleteWithError error: Error?) {
-        guard let localSessionID = task.taskDescription else { return }
+        guard let transferID = task.taskDescription else { return }
         let statusCode = (task.response as? HTTPURLResponse)?.statusCode
         let retryableError = SessionUploadManager.isRetryableUploadError(error)
         if let error {
-            print("Upload task failed for \(localSessionID): \(error)")
+            print("Upload task failed for \(transferID): \(error)")
         }
         Task { @MainActor in
+            guard let localSessionID = self.jobs.first(where: { Self.transferIdentity($0) == transferID })?.id else { return }
             self.handleUploadTaskCompletion(
                 localSessionID: localSessionID,
                 statusCode: statusCode,

@@ -10431,6 +10431,135 @@ enum CaptureCore {
         let reviewedAt: Date
     }
 
+    /// Immutable selection inputs for a review action. No live detector, setup,
+    /// file I/O or UI state participates. Validate the on-disk sidecar before use.
+    struct TakeReviewContext {
+        enum Failure: Error, Equatable {
+            case identityMismatch
+            case evidenceChanged
+            case missingDetection
+        }
+
+        let sessionID: String
+        let takeID: String
+        let mediaURL: URL
+        let sidecarURL: URL
+        let detectedNotation: DetectedNotationSnapshot?
+
+        init(sessionID: String, takeID: String, mediaURL: URL, sidecarURL: URL,
+             detectedNotation: DetectedNotationSnapshot?) throws {
+            let media = mediaURL.standardizedFileURL
+            let sidecar = sidecarURL.standardizedFileURL
+            guard !sessionID.isEmpty, mediaURL.isFileURL, sidecarURL.isFileURL,
+                  sidecar == LocalRecordingFiles.sidecarURL(forMediaURL: media),
+                  let number = LocalRecordingNaming.appLocalTakeNumber(
+                    for: media.deletingPathExtension().lastPathComponent, sessionID: sessionID),
+                  number > 0,
+                  takeID == LocalRecordingNaming.takeID(takeNumber: number) else {
+                throw Failure.identityMismatch
+            }
+            self.sessionID = sessionID
+            self.takeID = takeID
+            self.mediaURL = media
+            self.sidecarURL = sidecar
+            self.detectedNotation = detectedNotation
+        }
+
+        var detectedLabel: String? { detectedNotation?.effectiveDetectedLabel }
+        var confidence: Double? { detectedNotation?.effectiveLabelConfidence }
+
+        func validate(_ sidecar: LocalRecordingSidecar) throws {
+            guard sidecar.sessionID == sessionID, sidecar.takeID == takeID,
+                  sidecar.sessionConfig.map({ $0.sessionID == sessionID }) ?? true,
+                  sidecar.appLocalTakeNumber == LocalRecordingNaming.appLocalTakeNumber(
+                    for: mediaURL.deletingPathExtension().lastPathComponent, sessionID: sessionID),
+                  sidecar.mediaFileName == mediaURL.lastPathComponent,
+                  sidecar.sidecarFileName == sidecarURL.lastPathComponent,
+                  sidecar.recordingStatus == "completed" else {
+                throw Failure.identityMismatch
+            }
+            guard sidecar.detectedNotation == detectedNotation else {
+                throw Failure.evidenceChanged
+            }
+        }
+
+        func reviewed(_ sidecar: LocalRecordingSidecar,
+                      status: CaptureReviewDecision.Status, correctedLabel: String? = nil,
+                      at date: Date = Date()) throws -> LocalRecordingSidecar {
+            try validate(sidecar)
+            let label: String
+            switch status {
+            case .accepted:
+                guard let detectedLabel else { throw Failure.missingDetection }
+                // Preserve the existing acceptance vocabulary; raw detection
+                // remains verbatim below, separate from the human decision.
+                let normalized = detectedLabel.lowercased()
+                if normalized.contains("baby") { label = "baby_scratch" }
+                else if normalized.contains("chirp") { label = "chirp" }
+                else if normalized.contains("transform") { label = "transform" }
+                else if normalized.contains("flare") { label = "flare" }
+                else { label = "unknown" }
+            case .corrected:
+                guard let correctedLabel, !correctedLabel.isEmpty else {
+                    throw Failure.missingDetection
+                }
+                label = correctedLabel
+            case .unknown:
+                label = "unknown"
+            }
+            return sidecar.reviewed(status: status, label: label,
+                detectedLabel: detectedLabel, confidence: confidence, reviewedAt: date)
+        }
+    }
+
+    /// Historical interpretation reads persisted fields without CaptureSessionConfig's
+    /// setup normalization (which fills missing BPM and resets count-in/meter).
+    /// Pure decoding/validation only: the caller supplies the selected sidecar bytes.
+    struct HistoricalReviewInput {
+        private struct SavedFields: Decodable {
+            let sessionID: String
+            let scratchTypeID: CaptureSessionScratchType
+            let bpm: Int
+            let countInBeats: Int
+            let beatsPerBar: Int
+        }
+        private struct SavedEnvelope: Decodable {
+            let sessionConfig: SavedFields
+        }
+
+        let context: TakeReviewContext
+        let scratchType: CaptureSessionScratchType
+        let bpm: Double
+        let countInBeats: Int
+        let beatsPerBar: Int
+        let clock: PerformanceBeatClock
+
+        init?(context: TakeReviewContext, sidecarData: Data) {
+            do {
+                let decoder = JSONDecoder()
+                decoder.dateDecodingStrategy = .iso8601
+                let sidecar = try decoder.decode(LocalRecordingSidecar.self, from: sidecarData)
+                try context.validate(sidecar)
+                let saved = try JSONDecoder().decode(SavedEnvelope.self, from: sidecarData).sessionConfig
+                guard saved.sessionID == context.sessionID, saved.scratchTypeID != .unknown,
+                      saved.bpm > 0, saved.countInBeats >= 0, saved.beatsPerBar > 0,
+                      // Ordinary comparison cannot resolve a versioned CXL recipe.
+                      sidecar.sessionConfig?.referenceCaptureIntent == nil,
+                      let clock = PerformanceBeatClock(bpm: Double(saved.bpm),
+                        beatZeroTime: Double(saved.countInBeats) * 60.0 / Double(saved.bpm)) else { return nil }
+                self.context = context
+                self.scratchType = saved.scratchTypeID
+                self.bpm = Double(saved.bpm)
+                self.countInBeats = saved.countInBeats
+                self.beatsPerBar = saved.beatsPerBar
+                self.clock = clock
+            } catch {
+                // Missing, malformed, stale or unowned saved inputs are unavailable.
+                return nil
+            }
+        }
+    }
+
     enum SessionReviewState: String, Codable, Sendable, CaseIterable {
         case unreviewed
         case approved

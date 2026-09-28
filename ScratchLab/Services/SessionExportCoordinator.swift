@@ -1,6 +1,9 @@
 @preconcurrency import AVFoundation
 import CryptoKit
+import Combine
 import Foundation
+import CoreFoundation
+import Darwin
 #if os(macOS)
 import AppKit
 import UniformTypeIdentifiers
@@ -195,7 +198,7 @@ extension SessionExportMetadata {
     }
 }
 
-struct SessionExportTake: Sendable {
+struct SessionExportTake: Encodable, Sendable {
     let takeID: String
     let takeNumber: Int
     let bpm: Int
@@ -300,6 +303,68 @@ struct SessionExportTake: Sendable {
     }
 }
 
+/// Pure classification of persisted human labels. No timestamp, UI or write-order precedence.
+/// This is a production policy, not a decoder requirement for historical archives.
+enum SessionExportHumanReview: Equatable {
+    case noReview, accepted, corrected, unknown, legacyOverride, conflict, invalid
+
+    private static func semanticLabel(_ value: String) -> String {
+        let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        let compact = trimmed.filter { !$0.isWhitespace && $0 != "_" && $0 != "-" }
+        // Only known IDs/titles are aliases. Do not merge different Flare variants
+        // or guess equivalence between arbitrary human-written labels.
+        if compact == "baby" { return CaptureSessionScratchType.babyScratch.rawValue }
+        for type in CaptureSessionScratchType.allCases {
+            for spelling in [type.rawValue, type.title] {
+                if compact == spelling.lowercased().filter({ !$0.isWhitespace && $0 != "_" && $0 != "-" }) {
+                    return type.rawValue
+                }
+            }
+        }
+        return trimmed
+    }
+
+    static func resolve(decision: CaptureCore.CaptureReviewDecision?,
+                        metadata: CaptureCore.CaptureReviewMetadata?) -> Self {
+        let override = metadata?.labelOverride.map(semanticLabel).flatMap { $0.isEmpty ? nil : $0 }
+        guard let decision else { return override == nil ? .noReview : .legacyOverride }
+        let label = semanticLabel(decision.label)
+        guard !label.isEmpty else { return .invalid }
+        if let override, override != label { return .conflict }
+        switch decision.status {
+        case .accepted:
+            if let detected = decision.detectedLabel, semanticLabel(detected) != label { return .invalid }
+            return .accepted
+        case .corrected: return .corrected
+        case .unknown: return label == "unknown" ? .unknown : .invalid
+        }
+    }
+
+    static func validate(_ sidecar: CaptureCore.LocalRecordingSidecar) throws {
+        switch resolve(decision: sidecar.reviewDecision, metadata: sidecar.reviewMetadata) {
+        case .conflict:
+            throw SessionExportError.humanReviewConflict(sessionID: sidecar.sessionID, takeID: sidecar.takeID)
+        case .invalid:
+            throw SessionExportError.invalidHumanReview(sessionID: sidecar.sessionID, takeID: sidecar.takeID)
+        default: break
+        }
+    }
+}
+
+/// Original machine label/confidence, separate from the persisted human decision.
+/// Existing event projection and legacy labelConfidence fields retain their contracts.
+struct SessionExportRawDetection: Codable, Equatable, Sendable {
+    let label: String?
+    let labelSource: String
+    let confidence: Double?
+
+    init(_ snapshot: CaptureCore.DetectedNotationSnapshot) {
+        label = snapshot.detectedLabel
+        labelSource = snapshot.labelSource
+        confidence = snapshot.labelConfidence
+    }
+}
+
 struct SessionExportTakeCaptureMetadata: Codable, Equatable, Sendable {
     let takeID: String
     let takeNumber: Int
@@ -324,6 +389,9 @@ struct SessionExportTakeCaptureMetadata: Codable, Equatable, Sendable {
     let labelSource: String
     let labelConfidence: Double?
     let notationConfidence: Double?
+    let reviewDecision: CaptureCore.CaptureReviewDecision?
+    let legacyLabelOverride: String?
+    let rawDetection: SessionExportRawDetection?
     /// Why this take stopped: a `CaptureStopReason` raw value, or `nil` for a
     /// take recorded before stop reasons were captured.
     let stopReason: String?
@@ -405,17 +473,23 @@ struct SessionExportReviewTake: Codable, Equatable, Sendable {
     let takeNumber: Int
     let metadata: CaptureCore.CaptureReviewMetadata?
     let qualityReport: SessionQualityReport?
+    let reviewDecision: CaptureCore.CaptureReviewDecision?
+    let rawDetection: SessionExportRawDetection?
 
     init(
         takeID: String,
         takeNumber: Int,
         metadata: CaptureCore.CaptureReviewMetadata?,
-        qualityReport: SessionQualityReport? = nil
+        qualityReport: SessionQualityReport? = nil,
+        reviewDecision: CaptureCore.CaptureReviewDecision? = nil,
+        rawDetection: SessionExportRawDetection? = nil
     ) {
         self.takeID = takeID
         self.takeNumber = takeNumber
         self.metadata = metadata
         self.qualityReport = qualityReport
+        self.reviewDecision = reviewDecision
+        self.rawDetection = rawDetection
     }
 }
 
@@ -440,7 +514,7 @@ struct SessionExportReviewDocument: Codable, Equatable, Sendable {
     }
 
     var hasReviewedTakes: Bool {
-        takes.contains { $0.metadata != nil }
+        takes.contains { $0.metadata != nil || $0.reviewDecision != nil }
     }
 }
 
@@ -519,6 +593,9 @@ struct SessionExportArtifactMetadata: Codable, Equatable, Sendable {
     let labelSource: String
     let labelConfidence: Double?
     let notationConfidence: Double?
+    let reviewDecision: CaptureCore.CaptureReviewDecision?
+    let legacyLabelOverride: String?
+    let rawDetection: SessionExportRawDetection?
 }
 
 struct SessionExportArtifactMetadataDocument: Codable, Equatable, Sendable {
@@ -735,6 +812,9 @@ struct SessionExportNotationDocument: Codable, Equatable, Sendable {
     let mixerMidiEvents: [SessionExportMixerMidiEvent]
     let beatGrid: SessionExportNotationBeatGrid?
     let notes: String
+    let reviewDecision: CaptureCore.CaptureReviewDecision?
+    let legacyLabelOverride: String?
+    let rawDetection: SessionExportRawDetection?
 
     init(
         sessionID: String,
@@ -753,7 +833,10 @@ struct SessionExportNotationDocument: Codable, Equatable, Sendable {
         faderEvents: [SessionExportFaderEvent],
         mixerMidiEvents: [SessionExportMixerMidiEvent],
         beatGrid: SessionExportNotationBeatGrid?,
-        notes: String
+        notes: String,
+        reviewDecision: CaptureCore.CaptureReviewDecision? = nil,
+        legacyLabelOverride: String? = nil,
+        rawDetection: SessionExportRawDetection? = nil
     ) {
         self.schemaVersion = Self.currentSchemaVersion
         self.sessionID = sessionID
@@ -773,6 +856,9 @@ struct SessionExportNotationDocument: Codable, Equatable, Sendable {
         self.mixerMidiEvents = mixerMidiEvents
         self.beatGrid = beatGrid
         self.notes = notes
+        self.reviewDecision = reviewDecision
+        self.legacyLabelOverride = legacyLabelOverride
+        self.rawDetection = rawDetection
     }
 }
 
@@ -796,12 +882,242 @@ enum SessionExportSource: Sendable {
     )
 }
 
+// Export representation is evidence, independent of the most recent operation.
+struct ExportArtifactIdentity: Codable, Equatable, Sendable {
+    let sha256: String
+    let bytes: Int64
+
+    static func data(_ data: Data) -> Self {
+        .init(sha256: SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined(), bytes: Int64(data.count))
+    }
+
+    static func file(_ url: URL) throws -> Self {
+        let handle = try FileHandle(forReadingFrom: url)
+        defer { try? handle.close() }
+        var hash = SHA256(), count: Int64 = 0
+        while let data = try handle.read(upToCount: 1_048_576), !data.isEmpty {
+            try Task.checkCancellation()
+            hash.update(data: data)
+            count += Int64(data.count)
+        }
+        return .init(sha256: hash.finalize().map { String(format: "%02x", $0) }.joined(), bytes: count)
+    }
+}
+
+/// A versioned, length-delimited canonical tree: sorted object keys, ordered
+/// arrays, typed scalar values. JSON is only the Codable bridge, not the hash format.
+enum ExportSemanticIdentity {
+    static func digest<T: Encodable>(_ value: T) throws -> String {
+        let encoder = JSONEncoder()
+        encoder.dateEncodingStrategy = .iso8601
+        return try digestJSON(encoder.encode(value))
+    }
+    static func digestJSON(_ data: Data, excluding: Set<String> = []) throws -> String {
+        let object = try JSONSerialization.jsonObject(with: data, options: [.fragmentsAllowed])
+        func encode(_ value: Any) -> String {
+            if let map = value as? [String: Any] {
+                return "o" + map.keys.filter { !excluding.contains($0) }.sorted().map {
+                    "\($0.utf8.count):\($0)" + encode(map[$0]!)
+                }.joined() + ";"
+            }
+            if let array = value as? [Any] { return "a\(array.count):" + array.map(encode).joined() }
+            if value is NSNull { return "z" }
+            if let n = value as? NSNumber {
+                if CFGetTypeID(n) == CFBooleanGetTypeID() { return n.boolValue ? "t" : "f" }
+                return "n\(n.stringValue);"
+            }
+            let string = value as! String
+            return "s\(string.utf8.count):\(string)"
+        }
+        return ExportArtifactIdentity.data(Data(("export-semantic-v1:" + encode(object)).utf8)).sha256
+    }
+}
+
+struct ExportSourceArtifact: Codable, Equatable, Sendable {
+    let role: String
+    let url: URL
+    /// Ordinary sidecars export projections; bound evidence exports original bytes.
+    let semanticSidecar: Bool
+    let identity: ExportArtifactIdentity
+    let observedHint: String
+
+    static func read(_ url: URL, semanticSidecar: Bool) throws -> ExportArtifactIdentity {
+        guard FileManager.default.fileExists(atPath: url.path) else { return .init(sha256: "absent", bytes: -1) }
+        guard semanticSidecar else { return try .file(url) }
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .iso8601
+        let sidecar = try decoder.decode(CaptureCore.LocalRecordingSidecar.self, from: Data(contentsOf: url))
+        try SessionExportHumanReview.validate(sidecar)
+        let digest = try ExportSemanticIdentity.digestJSON(sidecar.encodedData(), excluding: ["auditTrail"])
+        return .init(sha256: digest, bytes: 0)
+    }
+}
+
+struct SessionExportMemberReceipt: Codable, Equatable, Sendable {
+    let sessionID: String
+    let takeID: String
+    let semanticRevision: String
+    let artifacts: [ExportSourceArtifact]
+    var exportedArtifacts: [String: ExportArtifactIdentity] = [:]
+}
+
+struct SessionExportReceipt: Codable, Equatable, Sendable {
+    let version: Int
+    let members: [SessionExportMemberReceipt]
+    let packageRevision: String
+    let archiveIdentity: ExportArtifactIdentity
+}
+
+/// Owns at most eight successful representations. Queries only inspect memory.
+/// Directory events catch atomic replacements and deletion; stat is solely an
+/// invalidation hint. A changed hint always requires new content proof.
+@MainActor
+final class SessionExportRepresentationStore: ObservableObject {
+    struct Entry: Equatable {
+        let url: URL
+        let receipt: SessionExportReceipt
+    }
+    @Published private(set) var entries: [Entry] = []
+    @Published private(set) var isReconciling = false
+    private var identities: [String: ExportArtifactIdentity] = [:]
+    private var hints: [String: String] = [:]
+    private var watchers: [DispatchSourceFileSystemObject] = []
+    private let observeFileChanges: Bool
+    private var pending: Task<Void, Never>?
+    private var refreshAfterPending = false
+    private var generation = UUID()
+    private let reader: @Sendable (URL, Bool) async throws -> ExportArtifactIdentity
+
+    init(observeFileChanges: Bool = true, reader: @escaping @Sendable (URL, Bool) async throws -> ExportArtifactIdentity = { try ExportSourceArtifact.read($0, semanticSidecar: $1) }) {
+        self.reader = reader
+        self.observeFileChanges = observeFileChanges
+    }
+    deinit { watchers.forEach { $0.cancel() }; pending?.cancel() }
+
+    private static func key(_ url: URL, _ semantic: Bool) -> String {
+        url.standardizedFileURL.path + (semantic ? "#semantic" : "#bytes")
+    }
+    nonisolated static func hint(_ url: URL) -> String {
+        var info = stat()
+        guard stat(url.path, &info) == 0 else { return "missing" }
+        return "\(info.st_ino):\(info.st_size):\(info.st_mtimespec.tv_sec):\(info.st_mtimespec.tv_nsec):\(info.st_ctimespec.tv_sec):\(info.st_ctimespec.tv_nsec)"
+    }
+    func retain(_ result: SessionExportResult) async {
+        guard let receipt = result.receipt, receipt.version == 1 else { return }
+        cancelVerification()
+        entries.removeAll { $0.url == result.archiveURL }
+        entries.append(.init(url: result.archiveURL, receipt: receipt))
+        entries = Array(entries.suffix(8))
+        for member in receipt.members {
+            for a in member.artifacts {
+                let key = Self.key(a.url, a.semanticSidecar)
+                identities[key] = a.identity; hints[key] = a.observedHint
+            }
+        }
+        if let hint = result.archiveHint {
+            identities[Self.key(result.archiveURL, false)] = receipt.archiveIdentity
+            hints[Self.key(result.archiveURL, false)] = hint
+        }
+        // Installation is a controlled boundary. Verify after installing watches
+        // so replacement between archive creation and publication cannot pass.
+        installWatchers()
+        await reconcile()
+    }
+    func represents(sessionID: String, takeID: String, sidecarURL: URL) -> Bool {
+        guard !isReconciling else { return false }
+        return entries.contains { entry in
+            guard identities[Self.key(entry.url, false)] == entry.receipt.archiveIdentity else { return false }
+            return entry.receipt.members.contains { member in
+                member.sessionID == sessionID && member.takeID == takeID &&
+                member.artifacts.contains { $0.role == "sidecar" && $0.url.standardizedFileURL == sidecarURL.standardizedFileURL } &&
+                member.artifacts.allSatisfy { identities[Self.key($0.url, $0.semanticSidecar)] == $0.identity }
+            }
+        }
+    }
+    /// Called synchronously by owned review writes, before the UI can claim R1.
+    func invalidate(_ url: URL) {
+        identities.removeValue(forKey: Self.key(url, true))
+        identities.removeValue(forKey: Self.key(url, false))
+        hints.removeValue(forKey: Self.key(url, true))
+        hints.removeValue(forKey: Self.key(url, false))
+        generation = UUID()
+        pending?.cancel(); pending = nil
+        Task { await reconcile() }
+    }
+    func cancelVerification() {
+        generation = UUID()
+        pending?.cancel(); pending = nil
+        refreshAfterPending = false
+        isReconciling = false
+    }
+    func reconcile() async {
+        if let pending { await pending.value; return }
+        let token = generation
+        var sources: [String: (URL, Bool)] = [:]
+        for entry in entries {
+            sources[Self.key(entry.url, false)] = (entry.url, false)
+            for member in entry.receipt.members {
+                for a in member.artifacts { sources[Self.key(a.url, a.semanticSidecar)] = (a.url, a.semanticSidecar) }
+            }
+        }
+        let oldHints = hints, oldIdentities = identities, read = reader
+        isReconciling = true
+        let task = Task { [weak self, sources] in
+            let worker = Task.detached(priority: .utility) { () -> ([String: String], [String: ExportArtifactIdentity]) in
+                var nextHints: [String: String] = [:], next: [String: ExportArtifactIdentity] = [:]
+                for (key, (url, semantic)) in sources {
+                    if Task.isCancelled { break }
+                    let before = Self.hint(url)
+                    if before == oldHints[key], let identity = oldIdentities[key] {
+                        next[key] = identity; nextHints[key] = before
+                    } else if let identity = try? await read(url, semantic), before == Self.hint(url) {
+                        next[key] = identity; nextHints[key] = before
+                    }
+                }
+                return (nextHints, next)
+            }
+            let result = await withTaskCancellationHandler(operation: { await worker.value }, onCancel: { worker.cancel() })
+            guard let self, self.generation == token, !Task.isCancelled else { return }
+            self.hints = result.0; self.identities = result.1
+            self.pending = nil
+            self.installWatchers() // Atomic replacement changes the watched vnode.
+            if self.refreshAfterPending {
+                self.refreshAfterPending = false
+                await self.reconcile()
+            } else { self.isReconciling = false }
+        }
+        pending = task
+        await task.value
+    }
+    private func installWatchers() {
+        watchers.forEach { $0.cancel() }; watchers.removeAll()
+        guard observeFileChanges else { return }
+        let urls = entries.flatMap { [$0.url] + $0.receipt.members.flatMap { $0.artifacts.map(\.url) } }
+        for watchedURL in Set(urls + urls.map { $0.deletingLastPathComponent() }) {
+            let fd = open(watchedURL.path, O_EVTONLY)
+            guard fd >= 0 else { continue }
+            let watcher = DispatchSource.makeFileSystemObjectSource(fileDescriptor: fd, eventMask: [.write, .rename, .delete, .attrib, .extend, .revoke], queue: .main)
+            watcher.setEventHandler { [weak self] in
+                guard let self else { return }
+                self.isReconciling = true
+                if self.pending != nil {
+                    self.refreshAfterPending = true
+                } else { Task { await self.reconcile() } }
+            }
+            watcher.setCancelHandler { close(fd) }
+            watchers.append(watcher); watcher.resume()
+        }
+    }
+}
+
 struct SessionExportResult: Identifiable, Equatable, Sendable {
     let archiveURL: URL
     let archiveSizeBytes: Int64
     let sessionName: String
     let createdAt: Date
     let shouldCleanupAfterUse: Bool
+    var receipt: SessionExportReceipt? = nil
+    var archiveHint: String? = nil
 
     var id: String { archiveURL.path }
     var displayName: String { archiveURL.lastPathComponent }
@@ -823,6 +1139,8 @@ enum SessionExportState {
 }
 
 enum SessionExportError: Error, Equatable, Sendable {
+    case humanReviewConflict(sessionID: String, takeID: String)
+    case invalidHumanReview(sessionID: String, takeID: String)
     case sessionFolderNotFound
     case missingRequiredFiles
     case invalidSessionMetadata
@@ -833,6 +1151,10 @@ enum SessionExportError: Error, Equatable, Sendable {
 
     var userMessage: String {
         switch self {
+        case .humanReviewConflict(let sessionID, let takeID):
+            return "Export blocked: conflicting human labels in session \(sessionID), take \(takeID). Resolve the saved decision and label override before exporting."
+        case .invalidHumanReview(let sessionID, let takeID):
+            return "Export blocked: incomplete or inconsistent human review in session \(sessionID), take \(takeID)."
         case .sessionFolderNotFound:
             return "Session folder not found."
         case .missingRequiredFiles:
@@ -1476,6 +1798,10 @@ final class SessionExportCoordinator: ObservableObject {
     @Published private(set) var validationReport: SessionValidationReport?
     @Published var shareRequest: SessionShareRequest?
 
+    let representations = SessionExportRepresentationStore()
+    private var representationObservation: AnyCancellable?
+    private var operationID = UUID()
+    private var presentedRequestID: UUID?
     private var cleanupWorkItem: DispatchWorkItem?
     private let archiveBuilder = SessionArchiveBuilder()
     private let journalRootDirectoryOverride: URL?
@@ -1491,11 +1817,13 @@ final class SessionExportCoordinator: ObservableObject {
         self.archiveSaveDestinationProvider = archiveSaveDestinationProvider
         self.journalRootDirectoryOverride = journalRootDirectoryOverride
         archiveBuilder.cleanupStaleExports()
+        representationObservation = representations.objectWillChange.sink { [weak self] _ in self?.objectWillChange.send() }
     }
     #else
     init(journalRootDirectoryOverride: URL? = nil) {
         self.journalRootDirectoryOverride = journalRootDirectoryOverride
         archiveBuilder.cleanupStaleExports()
+        representationObservation = representations.objectWillChange.sink { [weak self] _ in self?.objectWillChange.send() }
     }
     #endif
 
@@ -1513,6 +1841,10 @@ final class SessionExportCoordinator: ObservableObject {
         return false
     }
 
+    /// Lifecycle query used to verify that a later failure cannot schedule
+    /// destruction of an earlier validated temporary archive.
+    var hasArchiveCleanupRequest: Bool { cleanupWorkItem?.isCancelled == false }
+
     var wasCancelled: Bool {
         if case .cancelled = state { return true }
         return false
@@ -1523,9 +1855,11 @@ final class SessionExportCoordinator: ObservableObject {
         options: SessionExportOptions = SessionExportOptions()
     ) {
         guard !isPreparing else { return }
+        let requestID = UUID()
+        operationID = requestID
 
         cleanupWorkItem?.cancel()
-        discardPreviousTemporaryResult()
+        presentedRequestID = nil
         archiveBuilder.cleanupStaleExports()
         shareRequest = nil
         sizeWarning = nil
@@ -1538,6 +1872,7 @@ final class SessionExportCoordinator: ObservableObject {
                 let report = await Task.detached(priority: .userInitiated) {
                     SessionArchiveBuilder().validationReport(for: source)
                 }.value
+                guard operationID == requestID else { return }
                 if let report {
                     validationReport = report
                     recordValidationBlockIfNeeded(for: source, report: report)
@@ -1549,6 +1884,7 @@ final class SessionExportCoordinator: ObservableObject {
                 let package = try await Task.detached(priority: .userInitiated) {
                     try SessionArchiveBuilder().preparePackage(from: source)
                 }.value
+                guard operationID == requestID else { return }
 
                 state = .preparingArchive
                 statusMessage = "Creating ZIP archive..."
@@ -1556,7 +1892,10 @@ final class SessionExportCoordinator: ObservableObject {
                 let result = try await Task.detached(priority: .userInitiated) {
                     try SessionArchiveBuilder().createArchive(from: package, options: options)
                 }.value
+                guard operationID == requestID else { return }
 
+                await representations.retain(result)
+                guard operationID == requestID else { return }
                 lastResult = result
                 validationReport = nil
                 sizeWarning = result.archiveSizeBytes >= SessionArchiveBuilder.largeArchiveWarningThreshold
@@ -1566,6 +1905,7 @@ final class SessionExportCoordinator: ObservableObject {
                 statusMessage = "Ready to share"
                 shareRequest = SessionShareRequest(archiveURL: result.archiveURL, subject: result.subject)
             } catch let validationFailure as SessionExportValidationFailure {
+                guard operationID == requestID else { return }
                 // Surface which check rejected the export instead of only the
                 // coarse message. `handleFailure` already prefers the report's
                 // summary, so the operator sees the named conflict and the
@@ -1573,8 +1913,10 @@ final class SessionExportCoordinator: ObservableObject {
                 validationReport = validationFailure.validationReport
                 handleFailure(validationFailure.exportError)
             } catch let exportError as SessionExportError {
+                guard operationID == requestID else { return }
                 handleFailure(exportError)
             } catch {
+                guard operationID == requestID else { return }
                 print("Session export failed: \(error)")
                 handleFailure(.unableToCreateArchive)
             }
@@ -1587,9 +1929,11 @@ final class SessionExportCoordinator: ObservableObject {
         options: SessionExportOptions = SessionExportOptions()
     ) {
         guard !isPreparing else { return }
+        let requestID = UUID()
+        operationID = requestID
 
         cleanupWorkItem?.cancel()
-        discardPreviousTemporaryResult()
+        presentedRequestID = nil
         archiveBuilder.cleanupStaleExports()
         shareRequest = nil
         sizeWarning = nil
@@ -1602,6 +1946,7 @@ final class SessionExportCoordinator: ObservableObject {
                 let report = await Task.detached(priority: .userInitiated) {
                     SessionArchiveBuilder().validationReport(for: source)
                 }.value
+                guard operationID == requestID else { return }
                 if let report {
                     validationReport = report
                     recordValidationBlockIfNeeded(for: source, report: report)
@@ -1613,6 +1958,7 @@ final class SessionExportCoordinator: ObservableObject {
                 let package = try await Task.detached(priority: .userInitiated) {
                     try SessionArchiveBuilder().preparePackage(from: source)
                 }.value
+                guard operationID == requestID else { return }
 
                 state = .preparingArchive
                 statusMessage = "Creating ZIP archive..."
@@ -1620,6 +1966,7 @@ final class SessionExportCoordinator: ObservableObject {
                 let result = try await Task.detached(priority: .userInitiated) {
                     try SessionArchiveBuilder().createArchive(from: package, options: options)
                 }.value
+                guard operationID == requestID else { return }
 
                 statusMessage = "Choose save location"
                 guard let destinationURL = archiveSaveDestinationProvider(result.displayName) else {
@@ -1629,9 +1976,18 @@ final class SessionExportCoordinator: ObservableObject {
                     return
                 }
 
-                let savedURL = try await Task.detached(priority: .userInitiated) {
-                    try Self.copyArchive(result.archiveURL, to: destinationURL)
+                let savedCopy = try await Task.detached(priority: .userInitiated) {
+                    let url = try Self.copyArchive(result.archiveURL, to: destinationURL)
+                    let hint = SessionExportRepresentationStore.hint(url)
+                    guard let receipt = result.receipt,
+                          try ExportArtifactIdentity.file(url) == receipt.archiveIdentity,
+                          SessionExportRepresentationStore.hint(url) == hint else {
+                        throw SessionExportError.unableToSaveArchive
+                    }
+                    return (url, hint)
                 }.value
+                let savedURL = savedCopy.0
+                guard operationID == requestID else { return }
                 if !Self.urlsMatchSameFileLocation(savedURL, result.archiveURL) {
                     try? FileManager.default.removeItem(at: result.archiveURL)
                 }
@@ -1641,8 +1997,12 @@ final class SessionExportCoordinator: ObservableObject {
                     archiveSizeBytes: result.archiveSizeBytes,
                     sessionName: result.sessionName,
                     createdAt: result.createdAt,
-                    shouldCleanupAfterUse: false
+                    shouldCleanupAfterUse: false,
+                    receipt: result.receipt,
+                    archiveHint: savedCopy.1
                 )
+                await representations.retain(savedResult)
+                guard operationID == requestID else { return }
                 lastResult = savedResult
                 validationReport = nil
                 sizeWarning = savedResult.archiveSizeBytes >= SessionArchiveBuilder.largeArchiveWarningThreshold
@@ -1651,11 +2011,14 @@ final class SessionExportCoordinator: ObservableObject {
                 state = .shareCompleted(savedResult)
                 statusMessage = "Export saved."
             } catch let validationFailure as SessionExportValidationFailure {
+                guard operationID == requestID else { return }
                 validationReport = validationFailure.validationReport
                 handleFailure(validationFailure.exportError)
             } catch let exportError as SessionExportError {
+                guard operationID == requestID else { return }
                 handleFailure(exportError)
             } catch {
+                guard operationID == requestID else { return }
                 print("Session export save failed: \(error)")
                 handleFailure(.unableToSaveArchive)
             }
@@ -1664,11 +2027,14 @@ final class SessionExportCoordinator: ObservableObject {
     #endif
 
     func showFailure(_ error: SessionExportError) {
+        operationID = UUID()
         validationReport = nil
         handleFailure(error)
     }
 
-    func markSharePresented() {
+    func markSharePresented(requestID: UUID) {
+        guard shareRequest?.id == requestID else { return }
+        presentedRequestID = requestID
         guard case let .readyToShare(readyResult) = state,
               let lastResult,
               readyResult == lastResult,
@@ -1677,7 +2043,11 @@ final class SessionExportCoordinator: ObservableObject {
         statusMessage = "Ready to share"
     }
 
-    func handleShareOutcome(_ outcome: SessionShareOutcome) {
+    func handleShareOutcome(_ outcome: SessionShareOutcome, requestID: UUID) {
+        guard presentedRequestID == requestID else {
+            if case .idle = state { handleFailure(.unableToPresentShareOptions) }
+            return
+        }
         guard case let .presentingShareSheet(presentedResult) = state,
               lastResult == presentedResult else {
             // A late callback from an older sheet must not replace a newer
@@ -1722,7 +2092,6 @@ final class SessionExportCoordinator: ObservableObject {
     private func handleFailure(_ error: SessionExportError) {
         if let lastResult {
             state = .failed(error)
-            scheduleCleanupIfNeeded(after: 120)
             self.lastResult = lastResult
         } else {
             state = .failed(error)
@@ -1770,14 +2139,6 @@ final class SessionExportCoordinator: ObservableObject {
         }
         cleanupWorkItem = workItem
         DispatchQueue.main.asyncAfter(deadline: .now() + delay, execute: workItem)
-    }
-
-    private func discardPreviousTemporaryResult() {
-        guard let lastResult else { return }
-        if lastResult.shouldCleanupAfterUse {
-            try? FileManager.default.removeItem(at: lastResult.archiveURL)
-        }
-        self.lastResult = nil
     }
 
     #if os(macOS)
@@ -2418,9 +2779,17 @@ struct SessionArchiveBuilder: Sendable {
         encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
         return encoder
     }()
+    private let archiveIdentityReader: @Sendable (URL) throws -> ExportArtifactIdentity
+    private let sourceIdentityReader: @Sendable (URL, Bool) throws -> ExportArtifactIdentity
     private let artifactProbeOverride: ArtifactProbeOverride?
 
-    init(artifactProbeOverride: ArtifactProbeOverride? = nil) {
+    init(artifactProbeOverride: ArtifactProbeOverride? = nil,
+         sourceIdentityReader: @escaping @Sendable (URL, Bool) throws -> ExportArtifactIdentity = {
+             try ExportSourceArtifact.read($0, semanticSidecar: $1)
+         },
+         archiveIdentityReader: @escaping @Sendable (URL) throws -> ExportArtifactIdentity = { try .file($0) }) {
+        self.archiveIdentityReader = archiveIdentityReader
+        self.sourceIdentityReader = sourceIdentityReader
         self.artifactProbeOverride = artifactProbeOverride
     }
 
@@ -2574,10 +2943,7 @@ struct SessionArchiveBuilder: Sendable {
         let sessionRootName: String
 
         var boundSidecars: [String: CaptureCore.LocalRecordingSidecar] {
-            Dictionary(uniqueKeysWithValues: takes.compactMap { context in
-                context.referenceTearEvidence == nil && context.referenceReviewMetadata == nil
-                    ? nil : (context.take.takeID, context.sidecar)
-            })
+            Dictionary(uniqueKeysWithValues: takes.map { ($0.take.takeID, $0.sidecar) })
         }
     }
 
@@ -2742,13 +3108,7 @@ struct SessionArchiveBuilder: Sendable {
                     referenceTearEvidenceByTakeID: referenceTearEvidenceByTakeID,
                     referenceReviewMetadataByTakeID: referenceReviewMetadataByTakeID
                 )
-                let issues = packageValidationIssues(package)
-                return issues.isEmpty ? nil : SessionValidationReport(
-                    suggestedError: issues.contains(where: { $0.localizedCaseInsensitiveContains("missing") })
-                        ? .missingRequiredFiles
-                        : .invalidSessionMetadata,
-                    issues: issues
-                )
+                return packageValidationReport(for: package)
             } catch let error as SessionExportError {
                 return SessionValidationReport(
                     suggestedError: error,
@@ -2763,6 +3123,74 @@ struct SessionArchiveBuilder: Sendable {
         }
     }
 
+    struct SourceRevision: Sendable {
+        let members: [SessionExportMemberReceipt]
+        let packageRevision: String
+    }
+
+    /// Controlled preparation boundary, never called by presentation queries.
+    func sourceRevision(for package: SessionExportPackage, options: SessionExportOptions = .init()) throws -> SourceRevision {
+        try sourceRevision(for: package, options: options, context: canonicalContext(for: package))
+    }
+
+    private func sourceRevision(for package: SessionExportPackage, options: SessionExportOptions,
+                                context: CanonicalSessionContext) throws -> SourceRevision {
+        let members = try context.takes.enumerated().map { index, current -> SessionExportMemberReceipt in
+            let take = current.take
+            let validated = context.manifest.takes[index].artifacts
+            var artifacts: [ExportSourceArtifact] = []
+            func add(_ role: String, _ url: URL, semantic: Bool = false, validatedRole: String? = nil) throws {
+                let before = SessionExportRepresentationStore.hint(url)
+                let identity: ExportArtifactIdentity
+                if let key = validatedRole, let record = validated[key] {
+                    identity = .init(sha256: record.sha256, bytes: record.bytes)
+                } else { identity = try sourceIdentityReader(url, semantic) }
+                guard before == SessionExportRepresentationStore.hint(url) else { throw SessionExportError.unableToPrepareExport }
+                artifacts.append(.init(role: role, url: url, semanticSidecar: semantic, identity: identity, observedHint: before))
+            }
+            try add("video", take.mediaURL, validatedRole: "camA")
+            if let url = take.audioArtifactURL { try add("sourceAudio", url) }
+            let bound = try Self.boundBeatExportArtifacts(sidecar: current.sidecar, mediaURL: take.mediaURL,
+                                                          sidecarURL: take.sidecarURL, takeNumber: take.takeNumber)
+            let rawSidecar = bound.contains { $0.sourceURL == take.sidecarURL }
+            try add("sidecar", take.sidecarURL, semantic: !rawSidecar,
+                    validatedRole: rawSidecar ? bound.first { $0.sourceURL == take.sidecarURL }?.source : nil)
+            for artifact in bound where artifact.sourceURL != take.sidecarURL {
+                try add(artifact.source, artifact.sourceURL, validatedRole: artifact.source)
+            }
+            if let camera = current.sidecar.secondaryCamera, camera.status != .recording,
+               validated["camB"] != nil {
+                try add("secondCamera", SecondaryCameraEvidence.url(beside: take.mediaURL), validatedRole: "camB")
+            }
+            if let url = take.sourceWatchMotionURL { try add("sourceWatch", url) }
+            #if DEBUG
+            for suffix in ["raw_platter_debug", "movement_trace", "movement_diagnostics"] {
+                let url = take.sidecarURL.deletingLastPathComponent().appendingPathComponent("\(take.sidecarURL.deletingPathExtension().lastPathComponent)_\(suffix).json")
+                try add(suffix, url)
+            }
+            #endif
+            struct Member: Encodable {
+                let sessionID: String; let takeID: String; let take: String
+                let source: [String]; let tear: String?; let review: String?
+            }
+            let source = artifacts.sorted { $0.role < $1.role }.map { "\($0.role):\($0.identity.sha256):\($0.identity.bytes)" }
+            let revision = try ExportSemanticIdentity.digest(Member(sessionID: package.metadata.sessionID,
+                takeID: take.takeID, take: ExportSemanticIdentity.digest(take), source: source,
+                tear: package.referenceTearEvidenceByTakeID[take.takeID].map { ExportArtifactIdentity.data($0).sha256 },
+                review: package.referenceReviewMetadataByTakeID[take.takeID].map { ExportArtifactIdentity.data($0).sha256 }))
+            return .init(sessionID: package.metadata.sessionID, takeID: take.takeID,
+                         semanticRevision: revision, artifacts: artifacts,
+                         exportedArtifacts: validated.mapValues { .init(sha256: $0.sha256, bytes: $0.bytes) })
+        }.sorted { ($0.sessionID, $0.takeID) < ($1.sessionID, $1.takeID) }
+        struct Package: Encodable {
+            let metadata: SessionExportMetadata; let members: [String]; let mixMode: String; let calibration: String?
+        }
+        let revision = try ExportSemanticIdentity.digest(Package(metadata: package.metadata,
+            members: members.map { "\($0.sessionID):\($0.takeID):\($0.semanticRevision)" },
+            mixMode: options.mixMode.rawValue, calibration: package.calibrationData.map { ExportArtifactIdentity.data($0).sha256 }))
+        return .init(members: members, packageRevision: revision)
+    }
+
     func createArchive(
         from package: SessionExportPackage,
         options: SessionExportOptions = SessionExportOptions(),
@@ -2772,12 +3200,16 @@ struct SessionArchiveBuilder: Sendable {
         let archiveDirectory = try archiveDirectory ?? shareArchiveDirectoryURL(fileManager: fileManager)
         try validateArchiveDirectoryWritable(archiveDirectory, fileManager: fileManager)
 
+        let inputHints = Dictionary(uniqueKeysWithValues: Set(package.takes.flatMap {
+            [$0.mediaURL, $0.sidecarURL] + [$0.audioArtifactURL, $0.sourceWatchMotionURL].compactMap { $0 }
+        }).map { ($0, SessionExportRepresentationStore.hint($0)) })
         let canonicalContext = try canonicalContext(for: package)
+        let sourceProof = try sourceRevision(for: package, options: options, context: canonicalContext)
         let folderName = canonicalContext.sessionRootName
         let stagingRoot = archiveDirectory.appendingPathComponent("staging-\(UUID().uuidString)", isDirectory: true)
         let stagedSessionURL = stagingRoot.appendingPathComponent(folderName, isDirectory: true)
         let archiveURL = archiveDirectory
-            .appendingPathComponent(folderName)
+            .appendingPathComponent(folderName + "-" + UUID().uuidString)
             .appendingPathExtension("zip")
         let verificationRoot = archiveDirectory
             .appendingPathComponent("verify-\(UUID().uuidString)", isDirectory: true)
@@ -2813,6 +3245,14 @@ struct SessionArchiveBuilder: Sendable {
             guard archiveSize > 0 else {
                 throw SessionExportError.unableToCreateArchive
             }
+            // Bind the digest to the same ZIP subsequently extracted/validated.
+            // A replacement during hashing or validation cannot acquire its receipt.
+            let archiveHint = SessionExportRepresentationStore.hint(archiveURL)
+            let archiveIdentity = try archiveIdentityReader(archiveURL)
+            guard archiveIdentity.bytes == archiveSize,
+                  SessionExportRepresentationStore.hint(archiveURL) == archiveHint else {
+                throw SessionExportError.unableToCreateArchive
+            }
             try fileManager.createDirectory(at: verificationRoot, withIntermediateDirectories: true)
             try fileManager.unzipItem(at: archiveURL, to: verificationRoot)
             let extractedSessionURL = verificationRoot.appendingPathComponent(folderName, isDirectory: true)
@@ -2825,12 +3265,22 @@ struct SessionArchiveBuilder: Sendable {
             )
             try cleanupStagingRoot(verificationRoot, fileManager: fileManager)
             try cleanupStagingRoot(stagingRoot, fileManager: fileManager)
+            guard inputHints.allSatisfy({ SessionExportRepresentationStore.hint($0.key) == $0.value }),
+                  sourceProof.members.flatMap(\.artifacts).allSatisfy({
+                SessionExportRepresentationStore.hint($0.url) == $0.observedHint
+            }) else { throw SessionExportError.unableToPrepareExport }
+            guard SessionExportRepresentationStore.hint(archiveURL) == archiveHint else {
+                throw SessionExportError.unableToCreateArchive
+            }
             return SessionExportResult(
                 archiveURL: archiveURL,
                 archiveSizeBytes: archiveSize,
                 sessionName: package.metadata.sessionName,
                 createdAt: package.metadata.createdAt,
-                shouldCleanupAfterUse: true
+                shouldCleanupAfterUse: true,
+                receipt: .init(version: 1, members: sourceProof.members, packageRevision: sourceProof.packageRevision,
+                               archiveIdentity: archiveIdentity),
+                archiveHint: archiveHint
             )
         } catch let validationFailure as SessionExportValidationFailure {
             try? fileManager.removeItem(at: archiveURL)
@@ -2906,9 +3356,10 @@ struct SessionArchiveBuilder: Sendable {
         for package: SessionExportPackage,
         generatedAt: Date = Date(),
         sidecarSnapshots: [String: CaptureCore.LocalRecordingSidecar] = [:]
-    ) -> SessionExportReviewDocument {
-        let takes = package.takes.map { take -> SessionExportReviewTake in
+    ) throws -> SessionExportReviewDocument {
+        let takes = try package.takes.map { take -> SessionExportReviewTake in
             let sidecar = sidecarSnapshots[take.takeID] ?? (try? decodeSidecar(at: take.sidecarURL))
+            if let sidecar { try SessionExportHumanReview.validate(sidecar) }
             let report: SessionQualityReport? = {
                 guard let sidecar,
                       let snapshot = exportBoundedSnapshot(for: take, sidecar: sidecar) else { return nil }
@@ -2923,7 +3374,9 @@ struct SessionArchiveBuilder: Sendable {
                 takeID: take.takeID,
                 takeNumber: take.takeNumber,
                 metadata: sidecar?.reviewMetadata,
-                qualityReport: report
+                qualityReport: report,
+                reviewDecision: sidecar?.reviewDecision,
+                rawDetection: sidecar?.detectedNotation.map(SessionExportRawDetection.init)
             )
         }
         return SessionExportReviewDocument(
@@ -3053,7 +3506,10 @@ struct SessionArchiveBuilder: Sendable {
                 notationSource: notationExport.document.notationSource.rawValue,
                 labelSource: notationExport.document.labelSource.rawValue,
                 labelConfidence: notationExport.document.labelConfidence,
-                notationConfidence: notationExport.document.notationConfidence
+                notationConfidence: notationExport.document.notationConfidence,
+                reviewDecision: notationExport.document.reviewDecision,
+                legacyLabelOverride: notationExport.document.legacyLabelOverride,
+                rawDetection: notationExport.document.rawDetection
             )
         }
 
@@ -3437,7 +3893,7 @@ struct SessionArchiveBuilder: Sendable {
         try exportMetadataData.write(to: exportMetadataDocumentURL, options: .atomic)
 
         let reviewDocumentURL = manifestsURL.appendingPathComponent("session_review.json")
-        let reviewDocument = reviewDocument(for: package, sidecarSnapshots: context.boundSidecars)
+        let reviewDocument = try reviewDocument(for: package, sidecarSnapshots: context.boundSidecars)
         let reviewDocumentData = try Self.jsonEncoder.encode(reviewDocument)
         try reviewDocumentData.write(to: reviewDocumentURL, options: .atomic)
 
@@ -3815,7 +4271,7 @@ struct SessionArchiveBuilder: Sendable {
         // rounded, mutated, defaulted, or trusted.
         let expectedMetadata = try metadataDocument(for: package, sidecarSnapshots: context.boundSidecars)
         let expectedExportMetadata = try exportMetadataDocument(for: package, options: options, sidecarSnapshots: context.boundSidecars)
-        let expectedReview = reviewDocument(for: package, generatedAt: review.generatedAt, sidecarSnapshots: context.boundSidecars)
+        let expectedReview = try reviewDocument(for: package, generatedAt: review.generatedAt, sidecarSnapshots: context.boundSidecars)
         let expectedReplay = replayDocument(for: package, generatedAt: review.generatedAt, sidecarSnapshots: context.boundSidecars)
         let expectedTakeIDs = Set(context.takes.map(\.take.takeID))
 
@@ -4071,6 +4527,9 @@ struct SessionArchiveBuilder: Sendable {
             labelSource: notationExport.document.labelSource.rawValue,
             labelConfidence: notationExport.document.labelConfidence,
             notationConfidence: notationExport.document.notationConfidence,
+            reviewDecision: notationExport.document.reviewDecision,
+            legacyLabelOverride: notationExport.document.legacyLabelOverride,
+            rawDetection: notationExport.document.rawDetection,
             stopReason: sidecar.stopReason,
             plannedTakeDurationSeconds: RoutineCaptureDefaults.plannedTakeDurationSeconds(
                 for: SessionExportMetadataResolver.validatedSessionConfig(from: sidecar)
@@ -4122,6 +4581,7 @@ struct SessionArchiveBuilder: Sendable {
         sidecar: CaptureCore.LocalRecordingSidecar,
         packageMetadata: SessionExportMetadata
     ) throws -> ResolvedNotationExport {
+        try SessionExportHumanReview.validate(sidecar)
         let captureValues = resolvedTakeCaptureValues(
             for: take,
             sidecar: sidecar,
@@ -4238,7 +4698,10 @@ struct SessionArchiveBuilder: Sendable {
                 )
             },
             beatGrid: beatGrid,
-            notes: notes
+            notes: notes,
+            reviewDecision: sidecar.reviewDecision,
+            legacyLabelOverride: sidecar.reviewMetadata?.labelOverride,
+            rawDetection: sidecar.detectedNotation.map(SessionExportRawDetection.init)
         )
         return ResolvedNotationExport(
             fileName: fileName,
@@ -4332,6 +4795,7 @@ struct SessionArchiveBuilder: Sendable {
         sidecarURL: URL, takeNumber: Int
     ) throws -> [BoundBeatExportArtifact] {
         guard let binding = sidecar.sessionConfig?.referenceCaptureIntent?.beatSpec else { return [] }
+        try SessionExportHumanReview.validate(sidecar)
         let prepared = try ReferenceBeatAssetStore.resolve(
             binding: binding,
             rootURL: mediaURL.deletingLastPathComponent().appendingPathComponent("beat_assets", isDirectory: true)
@@ -5294,6 +5758,17 @@ struct SessionArchiveBuilder: Sendable {
     }
 
     private func packageValidationReport(for package: SessionExportPackage) -> SessionValidationReport? {
+        for take in package.takes {
+            guard let sidecar = try? decodeSidecar(at: take.sidecarURL) else { continue }
+            do {
+                try SessionExportHumanReview.validate(sidecar)
+            } catch let error as SessionExportError {
+                return SessionValidationReport(suggestedError: error, issues: [error.userMessage])
+            } catch {
+                return SessionValidationReport(suggestedError: .invalidSessionMetadata,
+                    issues: ["Could not validate human review for session \(package.metadata.sessionID), take \(take.takeID)."])
+            }
+        }
         let issues = packageValidationIssues(package)
         return issues.isEmpty ? nil : SessionValidationReport(
             suggestedError: issues.contains(where: { $0.localizedCaseInsensitiveContains("missing") })
@@ -5693,6 +6168,7 @@ struct SessionArchiveBuilder: Sendable {
                   sidecar.appLocalTakeNumber == take.takeNumber else {
                 throw SessionExportError.invalidSessionMetadata
             }
+            try SessionExportHumanReview.validate(sidecar)
             let mediaBaseName = take.mediaURL.deletingPathExtension().lastPathComponent
             guard take.sidecarURL.deletingPathExtension().lastPathComponent == mediaBaseName,
                   audioArtifactURL.deletingPathExtension().lastPathComponent == mediaBaseName,
@@ -6464,4 +6940,327 @@ struct SessionArchiveBuilder: Sendable {
         return "\"\(escaped)\""
     }
 
+}
+
+
+// Review observations are deliberately independent of export receipts.
+// The ordinary routine-capture route requires its movie AND captured WAV. Saved
+// sidecar evidence can still support inspection/manual review when either fails.
+struct TakeReviewObservationRequest: Equatable, Sendable {
+    let sessionID: String?
+    let artifact: TakeArtifactStatusSnapshot?
+    let selectedMediaURL: URL?
+    var isRecording = false
+
+    var mediaURLs: [URL] {
+        guard let artifact else { return [] }
+        return [artifact.videoSourceURL, artifact.audioSourceURL].compactMap { $0?.standardizedFileURL }
+    }
+    var sidecarURL: URL? {
+        artifact?.videoSourceURL.map { CaptureCore.LocalRecordingFiles.sidecarURL(forMediaURL: $0).standardizedFileURL }
+    }
+    var urls: [URL] { mediaURLs + (sidecarURL.map { [$0] } ?? []) }
+}
+
+enum ReviewMediaReadability: Equatable, Sendable {
+    case readable
+    case missing
+    case unreadable
+}
+
+/// Full readable artifact facts, retained only inside the owning observation.
+struct ReviewAudioMeasurement: Equatable, Sendable {
+    let frameCount: Int64
+    let sampleRate: Double
+    let durationSeconds: Double
+
+    init?(frameCount: Int64, sampleRate: Double) {
+        guard frameCount > 0, sampleRate.isFinite, sampleRate > 0 else { return nil }
+        let duration = Double(frameCount) / sampleRate
+        guard duration.isFinite, duration > 0 else { return nil }
+        self.frameCount = frameCount
+        self.sampleRate = sampleRate
+        self.durationSeconds = duration
+    }
+}
+
+struct ReviewVideoMeasurement: Equatable, Sendable {
+    let durationSeconds: Double?
+    let width: Double
+    let height: Double
+}
+
+struct ReviewMediaProbe: Sendable {
+    let readability: ReviewMediaReadability
+    var audio: ReviewAudioMeasurement? = nil
+    var video: ReviewVideoMeasurement? = nil
+    static let missing = Self(readability: .missing)
+    static let unreadable = Self(readability: .unreadable)
+}
+
+struct TakeReviewCapabilities: Equatable, Sendable {
+    enum Issue: Equatable, Sendable { case missingMedia, unreadableMedia, identityMismatch, captureFailed }
+    enum State: Equatable, Sendable {
+        case noTake, recording, finalizing, checking, complete
+        case limitedEvidence(Issue), unavailable(Issue)
+    }
+    // Only saved-label availability is known; nil does not mean failed or pending analysis.
+    enum Detection: Equatable, Sendable { case available, absent }
+    let state: State
+    var detection: Detection = .absent
+    var canReviewEvidence: Bool {
+        switch state { case .complete, .limitedEvidence: return true; default: return false }
+    }
+    var canAcceptDetection: Bool { canReviewEvidence && detection == .available }
+    var completeReviewAvailable: Bool { state == .complete }
+    var label: String {
+        switch state {
+        case .noTake: return "NO TAKE"
+        case .recording: return "RECORDING"
+        case .finalizing: return "FINALIZING"
+        case .checking: return "CHECKING MEDIA"
+        case .complete: return "READY FOR REVIEW"
+        case .limitedEvidence(.missingMedia): return "EVIDENCE ONLY · MEDIA MISSING"
+        case .limitedEvidence: return "EVIDENCE ONLY · MEDIA UNREADABLE"
+        case .unavailable(.identityMismatch): return "TAKE IDENTITY MISMATCH"
+        case .unavailable(.captureFailed): return "CAPTURE INCOMPLETE"
+        case .unavailable: return "REVIEW UNAVAILABLE"
+        }
+    }
+}
+
+struct TakeReviewObservation: Sendable {
+    let request: TakeReviewObservationRequest
+    let generation: UUID
+    let identityValid: Bool
+    let audio: ReviewMediaReadability
+    let video: ReviewMediaReadability
+    let hasDetection: Bool
+    let audioMeasurement: ReviewAudioMeasurement?
+    let videoMeasurement: ReviewVideoMeasurement?
+
+    static func capabilities(for request: TakeReviewObservationRequest,
+                             observation: Self?) -> TakeReviewCapabilities {
+        guard let artifact = request.artifact else {
+            return .init(state: request.isRecording ? .recording : .noTake)
+        }
+        if request.isRecording || artifact.readiness == .recording { return .init(state: .recording) }
+        if artifact.readiness == .finalizing { return .init(state: .finalizing) }
+        if case .failed = artifact.readiness { return .init(state: .unavailable(.captureFailed)) }
+        guard artifact.finalizedAt != nil else { return .init(state: .finalizing) }
+        guard let session = request.sessionID, !session.isEmpty,
+              artifact.sessionConfig.map({ $0.sessionID == session }) ?? true,
+              let media = artifact.videoSourceURL,
+              media.standardizedFileURL == request.selectedMediaURL?.standardizedFileURL else { return .init(state: .unavailable(.identityMismatch)) }
+        guard let observation, observation.request == request else { return .init(state: .checking) }
+        guard observation.identityValid else { return .init(state: .unavailable(.identityMismatch)) }
+        let detection: TakeReviewCapabilities.Detection = observation.hasDetection ? .available : .absent
+        if observation.audio == .missing || observation.video == .missing {
+            return .init(state: .limitedEvidence(.missingMedia), detection: detection)
+        }
+        if observation.audio == .unreadable || observation.video == .unreadable {
+            return .init(state: .limitedEvidence(.unreadableMedia), detection: detection)
+        }
+        return .init(state: .complete, detection: detection)
+    }
+}
+
+/// One selected owner, at most two cached media probes, one in-flight observation.
+/// Uses the Slice 4 filesystem invalidation hint; the hint never proves readability.
+/// Only a successful type-specific probe supplies that fact. No whole-file hashes,
+/// archive construction, decoder-wide scan or UI-getter I/O. Measurements share
+/// the same bounded open/read as readability and the same invalidation boundary.
+@MainActor
+final class TakeReviewObservationStore: ObservableObject {
+    enum MediaKind: Sendable { case audio, video }
+    typealias Probe = @Sendable (URL, MediaKind) async -> ReviewMediaProbe
+    @Published private(set) var observation: TakeReviewObservation?
+    private var request: TakeReviewObservationRequest?
+    private var generation = UUID()
+    private var pending: Task<Void, Never>?
+    private var watchers: [DispatchSourceFileSystemObject] = []
+    private var observedHints: [URL: String] = [:]
+    private var cache: [URL: CachedProbe] = [:]
+    private let probe: Probe
+    private let observeFileChanges: Bool
+    private struct CachedProbe: Sendable {
+        let hint: String
+        let value: ReviewMediaProbe
+    }
+    init(observeFileChanges: Bool = true, probe: @escaping Probe = TakeReviewObservationStore.probeMedia) {
+        self.observeFileChanges = observeFileChanges
+        self.probe = probe
+    }
+    deinit { pending?.cancel(); watchers.forEach { $0.cancel() } }
+
+    func capabilities(for request: TakeReviewObservationRequest) -> TakeReviewCapabilities {
+        TakeReviewObservation.capabilities(for: request, observation: observation)
+    }
+
+    /// Pure full-take audio presentation; never substitutes wall time or a range.
+    func audioMeasurement(for request: TakeReviewObservationRequest) -> ReviewAudioMeasurement? {
+        guard capabilities(for: request).canReviewEvidence,
+              let observation, observation.request == request, observation.audio == .readable else { return nil }
+        return observation.audioMeasurement
+    }
+
+    func audioDurationLabel(for request: TakeReviewObservationRequest) -> String {
+        guard let measurement = audioMeasurement(for: request) else { return "—" }
+        return String(format: "%.1f s", measurement.durationSeconds)
+    }
+
+    func observe(_ next: TakeReviewObservationRequest) async {
+        if request != next {
+            retire()
+            request = next
+            cache.removeAll()
+            observedHints = Dictionary(uniqueKeysWithValues: Set(next.urls).map { ($0, SessionExportRepresentationStore.hint($0)) })
+            installWatchers()
+        }
+        if let pending { await pending.value; return }
+        guard observation == nil, capabilities(for: next).state == .checking else { return }
+        let token = generation, oldCache = cache, read = probe
+        let task = Task { [weak self] in
+            let worker = Task.detached(priority: .utility) { () -> (TakeReviewObservation, [URL: CachedProbe], [URL: String])? in
+                let before = Dictionary(uniqueKeysWithValues: Set(next.urls).map { ($0, SessionExportRepresentationStore.hint($0)) })
+                var identityValid = false, hasDetection = false
+                if let session = next.sessionID, let status = next.artifact,
+                   let media = status.videoSourceURL, let sidecarURL = next.sidecarURL,
+                   status.audioSourceURL.map({ $0.standardizedFileURL == media.deletingPathExtension().appendingPathExtension("wav").standardizedFileURL }) ?? true,
+                   let context = try? CaptureCore.TakeReviewContext(sessionID: session, takeID: status.takeID,
+                        mediaURL: media, sidecarURL: sidecarURL, detectedNotation: status.detectedNotation),
+                   let data = try? Data(contentsOf: sidecarURL) {
+                    let decoder = JSONDecoder(); decoder.dateDecodingStrategy = .iso8601
+                    if let sidecar = try? decoder.decode(CaptureCore.LocalRecordingSidecar.self, from: data),
+                       (try? context.validate(sidecar)) != nil {
+                        identityValid = true; hasDetection = context.detectedLabel != nil
+                    }
+                }
+                var nextCache: [URL: CachedProbe] = [:]
+                func measure(_ url: URL?, kind: MediaKind) async -> ReviewMediaProbe {
+                    guard let url = url?.standardizedFileURL else { return .missing }
+                    let hint = before[url] ?? "missing"
+                    let value: ReviewMediaProbe
+                    if let cached = oldCache[url], cached.hint == hint { value = cached.value }
+                    else if hint == "missing" { value = .missing }
+                    else { value = await read(url, kind) }
+                    nextCache[url] = .init(hint: hint, value: value)
+                    return value
+                }
+                // Identity-invalid sidecars never cause unrelated media to be opened.
+                let audio = identityValid ? await measure(next.artifact?.audioSourceURL, kind: .audio) : .missing
+                guard !Task.isCancelled else { return nil }
+                let video = identityValid ? await measure(next.artifact?.videoSourceURL, kind: .video) : .missing
+                guard !Task.isCancelled,
+                      before.allSatisfy({ SessionExportRepresentationStore.hint($0.key) == $0.value }) else { return nil }
+                return (.init(request: next, generation: token, identityValid: identityValid,
+                              audio: audio.readability, video: video.readability, hasDetection: hasDetection,
+                              audioMeasurement: audio.audio, videoMeasurement: video.video), nextCache, before)
+            }
+            let result = await withTaskCancellationHandler(operation: { await worker.value }, onCancel: { worker.cancel() })
+            guard let self, !Task.isCancelled, self.generation == token, self.request == next else { return }
+            self.pending = nil
+            // Validate again AT the MainActor commit, after any executor hop.
+            guard let result, result.2.allSatisfy({ SessionExportRepresentationStore.hint($0.key) == $0.value }) else {
+                self.cache.removeAll(); self.retire(); self.installWatchers(); return
+            }
+            self.cache = result.1; self.observedHints = result.2
+            self.observation = result.0
+            self.installWatchers() // Atomic replacement changes the watched vnode.
+        }
+        pending = task
+        await task.value
+    }
+
+    /// Owned writes call this synchronously. Filesystem events call the same
+    /// boundary, retiring in-flight proof before scheduling the new generation.
+    func invalidate(_ url: URL) {
+        guard let current = request, current.urls.contains(url.standardizedFileURL) else { return }
+        cache.removeValue(forKey: url.standardizedFileURL)
+        observedHints[url.standardizedFileURL] = SessionExportRepresentationStore.hint(url)
+        retire()
+        Task { [weak self] in
+            guard let self, self.request == current else { return }
+            await self.observe(current)
+        }
+    }
+    func cancel() {
+        retire(); request = nil; cache.removeAll(); observedHints.removeAll()
+        watchers.forEach { $0.cancel() }; watchers.removeAll()
+    }
+    private func retire() {
+        generation = UUID(); pending?.cancel(); pending = nil; observation = nil
+    }
+    private func installWatchers() {
+        watchers.forEach { $0.cancel() }; watchers.removeAll()
+        guard observeFileChanges, let request else { return }
+        for url in Set(request.urls + request.urls.map { $0.deletingLastPathComponent() }) {
+            let fd = open(url.path, O_EVTONLY)
+            guard fd >= 0 else { continue }
+            let source = DispatchSource.makeFileSystemObjectSource(fileDescriptor: fd,
+                eventMask: [.write, .rename, .delete, .attrib, .extend, .revoke], queue: .main)
+            source.setEventHandler { [weak self] in
+                guard let self, let current = self.request else { return }
+                // Directory events unrelated to the take do not trigger probes.
+                let changed = current.urls.filter {
+                    SessionExportRepresentationStore.hint($0) != self.observedHints[$0]
+                }
+                guard !changed.isEmpty else { return }
+                for changedURL in changed {
+                    self.cache.removeValue(forKey: changedURL)
+                    self.observedHints[changedURL] = SessionExportRepresentationStore.hint(changedURL)
+                }
+                self.retire()
+                Task { [weak self] in
+                    guard let self, self.request == current else { return }
+                    await self.observe(current)
+                }
+            }
+            source.setCancelHandler { close(fd) }
+            watchers.append(source); source.resume()
+        }
+    }
+
+    nonisolated static func probeMedia(_ url: URL, kind: MediaKind) async -> ReviewMediaProbe {
+        guard FileManager.default.fileExists(atPath: url.path) else { return .missing }
+        do {
+            switch kind {
+            case .audio:
+                let file = try AVAudioFile(forReading: url)
+                let format = file.processingFormat
+                guard file.length > 0, format.sampleRate.isFinite, format.sampleRate > 0,
+                      format.channelCount > 0,
+                      let buffer = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: 1) else { return .unreadable }
+                try file.read(into: buffer, frameCount: 1)
+                guard buffer.frameLength == 1 else { return .unreadable }
+                return .init(readability: .readable,
+                             audio: ReviewAudioMeasurement(frameCount: file.length, sampleRate: format.sampleRate))
+            case .video:
+                let asset = AVURLAsset(url: url)
+                guard try await asset.load(.isPlayable),
+                      let track = try await asset.loadTracks(withMediaType: .video).first else { return .unreadable }
+                let size = try await track.load(.naturalSize)
+                guard size.width.isFinite, size.height.isFinite, size.width > 0, size.height > 0 else { return .unreadable }
+                let reader = try AVAssetReader(asset: asset)
+                // Decode one picture: compressed passthrough may yield a zero-sample
+                // timing marker before picture data even for a valid H.264 movie.
+                let output = AVAssetReaderTrackOutput(track: track, outputSettings: [
+                    kCVPixelBufferPixelFormatTypeKey as String: kCVPixelFormatType_32BGRA
+                ])
+                output.alwaysCopiesSampleData = false
+                guard reader.canAdd(output) else { return .unreadable }
+                reader.add(output)
+                defer { reader.cancelReading() }
+                guard reader.startReading(), let sample = output.copyNextSampleBuffer(),
+                      CMSampleBufferDataIsReady(sample), CMSampleBufferGetNumSamples(sample) > 0,
+                      CMSampleBufferGetImageBuffer(sample) != nil else { return .unreadable }
+                // Metadata from this same asset, not another open or decode pass.
+                // Failure to measure duration does not revoke established readability.
+                let seconds = try? await asset.load(.duration).seconds
+                let duration = seconds.flatMap { $0.isFinite && $0 > 0 ? $0 : nil }
+                return .init(readability: .readable,
+                             video: .init(durationSeconds: duration, width: Double(size.width), height: Double(size.height)))
+            }
+        } catch { return .unreadable }
+    }
 }

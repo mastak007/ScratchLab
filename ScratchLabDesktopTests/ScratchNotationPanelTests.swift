@@ -1413,11 +1413,11 @@ final class CrossWorkspaceFixRegressionTests: XCTestCase {
             "loadReviewMetadataForCurrentTake must read sidecar.reviewDecision to restore the label decision"
         )
         XCTAssertTrue(
-            source.contains("reviewDecisionStatusByTakeID[reviewTakeID] = decision.status"),
+            source.contains("reviewDecisionStatusByTakeID[context.sidecarURL] = decision.status"),
             "the persisted decision status must be restored into the header-badge source"
         )
         XCTAssertTrue(
-            source.contains("reviewDecisionByTakeID[reviewTakeID] = correction"),
+            source.contains("reviewDecisionByTakeID[context.sidecarURL] = correction"),
             "the persisted decision label must be restored into the summary source"
         )
     }
