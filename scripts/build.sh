@@ -5,6 +5,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 PROJECT_PATH="$REPO_ROOT/ScratchLab.xcodeproj"
 MODE="${1:-all}"
+export PYTHONDONTWRITEBYTECODE=1
 
 if ! command -v xcodebuild >/dev/null 2>&1; then
   echo "xcodebuild is not available. Install Xcode command line tools first."
@@ -16,18 +17,27 @@ if ! command -v python3 >/dev/null 2>&1; then
   exit 1
 fi
 
+run_supervisor_tests() {
+  echo "==> Running native gate supervisor and admission policy regressions"
+  python3 "$SCRIPT_DIR/test_mac_test_gate.py"
+  python3 "$SCRIPT_DIR/test_native_repository_preflight.py"
+}
+
 run_capture_pipeline_fixtures() {
   echo "==> Running capture-pipeline fixture tests"
   python3 "$SCRIPT_DIR/test_capture_pipeline.py"
 }
 
 run_mac_tests() {
-  echo "==> Running ScratchLabDesktop XCTest plan"
-  xcodebuild \
-    -project "$PROJECT_PATH" \
-    -scheme ScratchLabDesktop \
-    -destination 'platform=macOS' \
-    test
+  echo "==> Deterministic software gate; real-device integration is NOT opted in"
+  echo "==> A software pass does not establish HAL, Serato, or physical hardware acceptance"
+  python3 "$SCRIPT_DIR/run_mac_test_gate.py" --project "$PROJECT_PATH" --mode software
+}
+
+run_audio_integration() {
+  echo "==> Explicit real-device audio integration; installed device prerequisites still apply"
+  echo "==> This mode does not establish physical hardware acceptance"
+  python3 "$SCRIPT_DIR/run_mac_test_gate.py" --project "$PROJECT_PATH" --mode audio-integration
 }
 
 build_ios() {
@@ -71,28 +81,37 @@ build_watch() {
 }
 
 case "$MODE" in
+  audio-integration)
+    run_supervisor_tests
+    run_audio_integration
+    ;;
   ios)
+    run_supervisor_tests
     run_capture_pipeline_fixtures
     run_mac_tests
     build_ios
     ;;
   mac)
+    run_supervisor_tests
     run_capture_pipeline_fixtures
     run_mac_tests
     build_mac
     build_cxl
     ;;
   cxl)
+    run_supervisor_tests
     run_capture_pipeline_fixtures
     run_mac_tests
     build_cxl
     ;;
   watch)
+    run_supervisor_tests
     run_capture_pipeline_fixtures
     run_mac_tests
     build_watch
     ;;
   all)
+    run_supervisor_tests
     run_capture_pipeline_fixtures
     run_mac_tests
     build_ios
@@ -101,7 +120,7 @@ case "$MODE" in
     build_watch
     ;;
   *)
-    echo "Usage: scripts/build.sh [ios|mac|cxl|watch|all]"
+    echo "Usage: scripts/build.sh [ios|mac|cxl|watch|all|audio-integration]"
     exit 1
     ;;
 esac

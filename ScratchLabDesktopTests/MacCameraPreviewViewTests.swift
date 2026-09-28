@@ -842,6 +842,7 @@ final class ReferenceAuthoringRouteActivationTests: XCTestCase {
     }
 
     func testAttachedCaptureAudioReportsSilenceAndInvalidatesOnSourceChange() throws {
+        try RealAudioIntegrationAdmission.requireOptIn()
         guard let device = AVCaptureDevice.default(for: .audio) else {
             throw XCTSkip("No discoverable audio input; this test does not start hardware.")
         }

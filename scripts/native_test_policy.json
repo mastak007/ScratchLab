@@ -1,0 +1,18 @@
+{
+  "environmentKey": "SCRATCHLAB_RUN_REAL_AUDIO_INTEGRATION",
+  "softwareTimeoutSeconds": 3600,
+  "audioIntegrationTimeoutSeconds": 1800,
+  "integrationSelectors": [
+    "ScratchSamplePlaybackControllerTests/testSystemDefaultRouteMetersFreshSilentCallbacksAndClearsOnUnload",
+    "ScratchSamplePlaybackControllerTests/testExplicitDeviceToSystemDefaultRebindKeepsMeterAvailableWithoutStalePeak",
+    "ScratchSamplePlaybackControllerTests/testDVSNoDirectionFinishesOutputCaptureThroughProductionPath",
+    "ScratchSamplePlaybackControllerTests/testDVSNearStopSettlingProducesNoBursts",
+    "ScratchSamplePlaybackControllerTests/testManualCaptureArmAndExport",
+    "CXLBeatOutputRoutingTests/testActualMacOutputReadbackSurvivesRestart",
+    "ReferenceAuthoringRouteActivationTests/testAttachedCaptureAudioReportsSilenceAndInvalidatesOnSourceChange",
+    "CaptureReliabilityPhase1CoreTests/testMacCaptureEngineAudioSignalStatusSeparatesReadinessFromSignal",
+    "CaptureReliabilityPhase1CoreTests/testMacCaptureEngineStaleSignalResetsToZero",
+    "CaptureReliabilityPhase1CoreTests/testMacCaptureEngineStopResetsSignalLevel"
+  ],
+  "acceptance": "Software verification, real-device integration, and physical hardware acceptance are separate evidence."
+}

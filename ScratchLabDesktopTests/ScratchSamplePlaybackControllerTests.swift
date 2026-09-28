@@ -173,6 +173,7 @@ final class ScratchSamplePlaybackControllerTests: XCTestCase {
     /// silent callbacks must read as fresh zero, never as unavailable, and
     /// unloading must return to unavailable under a newer generation.
     func testSystemDefaultRouteMetersFreshSilentCallbacksAndClearsOnUnload() throws {
+        try RealAudioIntegrationAdmission.requireOptIn()
         guard MacScratchOutputRoute.defaultOutputDeviceID() != nil else { throw XCTSkip("No system output device.") }
         let controller = ScratchSamplePlaybackController()
         controller.setPreferredOutputDevice(deviceID: nil, deviceName: "System Default")
@@ -200,6 +201,7 @@ final class ScratchSamplePlaybackControllerTests: XCTestCase {
     /// an earlier generated peak across the route change. Uses the inaudible
     /// Serato Virtual Audio output for the explicit device when present.
     func testExplicitDeviceToSystemDefaultRebindKeepsMeterAvailableWithoutStalePeak() throws {
+        try RealAudioIntegrationAdmission.requireOptIn()
         guard MacScratchOutputRoute.defaultOutputDeviceID() != nil,
               let virtualID = Self.outputDevice(named: "Serato Virtual Audio"),
               MacScratchOutputRoute.defaultOutputDeviceID() != virtualID,
@@ -3767,6 +3769,7 @@ final class ScratchSamplePlaybackControllerTests: XCTestCase {
     /// path (not the test-only pausePlayback). Env-gated: requires
     /// SCRATCHLAB_CAPTURE_OUTPUT=1 so the tap is actually installed.
     func testDVSNoDirectionFinishesOutputCaptureThroughProductionPath() throws {
+        try RealAudioIntegrationAdmission.requireOptIn()
         guard ProcessInfo.processInfo.environment["SCRATCHLAB_CAPTURE_OUTPUT"] == "1" else {
             throw XCTSkip("SCRATCHLAB_CAPTURE_OUTPUT not set — capture finalization test requires it")
         }
@@ -3871,7 +3874,8 @@ final class ScratchSamplePlaybackControllerTests: XCTestCase {
     /// reversals unchanged; 12-o'clock cue mapping untouched; manual capture
     /// ownership untouched. Fixture + engine dependent, so it is verified
     /// through the live-engine driver (this harness cannot load app resources).
-    func testDVSNearStopSettlingProducesNoBursts() {
+    func testDVSNearStopSettlingProducesNoBursts() throws {
+        try RealAudioIntegrationAdmission.requireOptIn()
         let controller = ScratchSamplePlaybackController()
         guard loadDVSAhhhOrFail(controller) else { return }
         let window = 1.0 / 60.0
@@ -4083,6 +4087,7 @@ final class ScratchSamplePlaybackControllerTests: XCTestCase {
     /// is verified through the live-engine driver (this harness cannot load
     /// app resources); kept here for the driver's `-XCTest`-style run.
     func testManualCaptureArmAndExport() throws {
+        try RealAudioIntegrationAdmission.requireOptIn()
         let controller = ScratchSamplePlaybackController()
         guard loadDVSAhhhOrFail(controller) else { return }
         var results: [ScratchSamplePlaybackController.OutputCaptureDiagnosticsResult] = []
@@ -4224,5 +4229,94 @@ final class ScratchSamplePlaybackControllerTests: XCTestCase {
             "Grain-boundary sample deltas must not exceed interior deltas: " +
             "boundaryMax=\(boundaryMax) interiorMax=\(interiorMax)"
         )
+    }
+}
+
+
+/// Test-only admission shared by device-backed suites. Policy is owned by the
+/// repository's native gate, not inferred from installed devices or drivers.
+enum RealAudioIntegrationAdmission {
+    private static let policyURL = URL(fileURLWithPath: #filePath)
+        .deletingLastPathComponent().deletingLastPathComponent()
+        .appendingPathComponent("scripts/native_test_policy.json")
+
+    static var environmentKey: String {
+        // A malformed/missing test policy must fail closed, never admit hardware.
+        guard let data = try? Data(contentsOf: policyURL),
+              let policy = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let key = policy["environmentKey"] as? String else { return "" }
+        return key
+    }
+
+    static func requireOptIn(environment: [String: String] = ProcessInfo.processInfo.environment) throws {
+        let key = environmentKey
+        guard !key.isEmpty else {
+            throw NSError(domain: "NativeTestPolicy", code: 1,
+                userInfo: [NSLocalizedDescriptionKey: "Missing or invalid native_test_policy.json"])
+        }
+        guard environment[key] == "1" else {
+            throw XCTSkip("Real-device audio integration not opted in. Run scripts/build.sh audio-integration (\(key)=1). No HAL or physical-hardware acceptance is established.")
+        }
+    }
+
+    static func optionalDevice<Device>(environment: [String: String] = ProcessInfo.processInfo.environment,
+                                       discover: () -> Device?) -> Device? {
+        guard !environmentKey.isEmpty, environment[environmentKey] == "1" else { return nil }
+        return discover()
+    }
+}
+
+final class RealAudioIntegrationAdmissionTests: XCTestCase {
+    func testDefaultSkipsBeforeDiscoveryOrBinding() {
+        var reachedDevicePath = false
+        XCTAssertThrowsError(try {
+            try RealAudioIntegrationAdmission.requireOptIn(environment: [:])
+            reachedDevicePath = true
+        }()) { XCTAssertTrue($0 is XCTSkip) }
+        XCTAssertFalse(reachedDevicePath)
+    }
+
+    func testOptInReachesInjectedIntegrationPathWithoutHAL() throws {
+        var reachedDevicePath = false
+        try RealAudioIntegrationAdmission.requireOptIn(environment: [RealAudioIntegrationAdmission.environmentKey: "1"])
+        reachedDevicePath = true
+        XCTAssertTrue(reachedDevicePath)
+    }
+
+    func testInstalledSeratoDoesNotAuthorizeDiscovery() {
+        var discoveryCalls = 0
+        let device: String? = RealAudioIntegrationAdmission.optionalDevice(environment: [:]) {
+            discoveryCalls += 1
+            return "Serato Virtual Audio"
+        }
+        XCTAssertNil(device)
+        XCTAssertEqual(discoveryCalls, 0)
+    }
+
+    func testOptedInMissingDeviceKeepsExistingUnavailableContract() throws {
+        let environment = [RealAudioIntegrationAdmission.environmentKey: "1"]
+        var bindings = 0
+        XCTAssertThrowsError(try {
+            try RealAudioIntegrationAdmission.requireOptIn(environment: environment)
+            let device: String? = RealAudioIntegrationAdmission.optionalDevice(environment: environment) { nil }
+            guard device != nil else { throw XCTSkip("Requires a system output plus the Serato Virtual Audio output.") }
+            bindings += 1
+        }()) { XCTAssertTrue($0 is XCTSkip) }
+        XCTAssertEqual(bindings, 0)
+    }
+
+    func testOtherEnvironmentValuesDoNotOptIn() {
+        for value in ["", "0", "true", "yes"] {
+            XCTAssertThrowsError(try RealAudioIntegrationAdmission.requireOptIn(
+                environment: [RealAudioIntegrationAdmission.environmentKey: value]))
+        }
+    }
+
+    func testDeterministicPCMComponentRemainsAvailableWithoutOptIn() throws {
+        let format = try XCTUnwrap(AVAudioFormat(standardFormatWithSampleRate: 48_000, channels: 1))
+        let buffer = try XCTUnwrap(AVAudioPCMBuffer(pcmFormat: format, frameCapacity: 1))
+        buffer.frameLength = 1
+        buffer.floatChannelData![0][0] = 0.25
+        XCTAssertEqual(ScratchSamplePlaybackController.scratchOutputPeak(in: buffer), 0.25)
     }
 }

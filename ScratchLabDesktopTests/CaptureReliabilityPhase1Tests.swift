@@ -3086,7 +3086,7 @@ final class CaptureReliabilityPhase1CoreTests: XCTestCase {
         XCTAssertEqual(engine.audioReadinessText, "Audio Missing")
         XCTAssertEqual(engine.audioSignalStatusText, "No input")
 
-        let device = AVCaptureDevice.default(for: .audio)
+        let device = RealAudioIntegrationAdmission.optionalDevice { AVCaptureDevice.default(for: .audio) }
         if let device {
             engine.availableAudioDevices = [device]
             engine.selectedAudioDeviceUniqueID = device.uniqueID
@@ -3612,7 +3612,8 @@ final class CaptureReliabilityPhase1CoreTests: XCTestCase {
     }
 
     @MainActor
-    func testMacCaptureEngineStaleSignalResetsToZero() {
+    func testMacCaptureEngineStaleSignalResetsToZero() throws {
+        try RealAudioIntegrationAdmission.requireOptIn()
         let engine = MacCaptureEngine(autoRefreshDevices: false)
         let device = AVCaptureDevice.default(for: .audio)
         if let device {
@@ -3632,7 +3633,7 @@ final class CaptureReliabilityPhase1CoreTests: XCTestCase {
     @MainActor
     func testMacCaptureEngineStopResetsSignalLevel() {
         let engine = MacCaptureEngine(autoRefreshDevices: false)
-        let device = AVCaptureDevice.default(for: .audio)
+        let device = RealAudioIntegrationAdmission.optionalDevice { AVCaptureDevice.default(for: .audio) }
         if let device {
             engine.availableAudioDevices = [device]
             engine.selectedAudioDeviceUniqueID = device.uniqueID

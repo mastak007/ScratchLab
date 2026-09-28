@@ -445,6 +445,7 @@ final class CXLBeatOutputRoutingTests: XCTestCase {
     }
 
     func testActualMacOutputReadbackSurvivesRestart() throws {
+        try RealAudioIntegrationAdmission.requireOptIn()
         let router = MacReferenceBeatOutputRouter {
             .init(deviceID: nil, deviceName: "System Default", deviceUID: nil)
         }
