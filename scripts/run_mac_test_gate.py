@@ -333,7 +333,15 @@ def supervise(command, directory, timeout, *, environment=None,
     return receipt
 
 
-def native_invocation(project, mode, directory, only_testing=(), environment=None):
+def native_test_identity(directory, retained_identity=None):
+    identity = retained_identity if retained_identity is not None else (
+        "com.machelpnz.scratchlab.nativegate." + hashlib.sha256(str(directory).encode()).hexdigest()[:12])
+    if not isinstance(identity, str) or not re.fullmatch(r"com\.machelpnz\.scratchlab\.nativegate\.[0-9a-f]{12}", identity):
+        raise ValueError("Retained identity must be a dedicated nativegate bundle identifier")
+    return identity
+
+
+def native_invocation(project, mode, directory, only_testing=(), environment=None, *, retained_identity=None):
     policy = json.loads(POLICY_PATH.read_text())
     env = dict(os.environ if environment is None else environment)
     admitted = mode == "audio-integration"
@@ -350,8 +358,8 @@ def native_invocation(project, mode, directory, only_testing=(), environment=Non
                "-resultBundlePath", str(directory / "tests.xcresult"),
                "SYMROOT=" + str(products), "OBJROOT=" + str(directory / "Intermediates"),
                "test"]
-    identity = hashlib.sha256(str(directory).encode()).hexdigest()[:12]
-    command.append("PRODUCT_BUNDLE_IDENTIFIER=com.machelpnz.scratchlab.nativegate." + identity)
+    identity = native_test_identity(directory, retained_identity)
+    command.append("PRODUCT_BUNDLE_IDENTIFIER=" + identity)
     command.extend("-only-testing:ScratchLabDesktopTests/" + s for s in selectors)
     return command, env, products
 
@@ -370,14 +378,17 @@ def main():
     timeout = positive_seconds(args.timeout if args.timeout is not None else os.environ.get(timeout_key, default))
     args.evidence_root.mkdir(parents=True, exist_ok=True)
     prepared = os.environ.get("SCRATCHLAB_NATIVE_PREFLIGHT_CONTEXT")
+    retained_identity = None
     if prepared:
         from native_repository_preflight import prepared_context
         if args.mode != "software" or args.only_testing:
             raise ValueError("Prepared repository context is only for a complete software gate")
         directory = prepared_context(args.project.resolve(), Path(prepared))
+        retained_identity = json.loads((directory / "preflight-context.json").read_text())["identity"]
     else:
         directory = Path(tempfile.mkdtemp(prefix=args.mode + "-", dir=args.evidence_root)).resolve()
-    command, env, products = native_invocation(args.project.resolve(), args.mode, directory, args.only_testing)
+    command, env, products = native_invocation(args.project.resolve(), args.mode, directory, args.only_testing,
+                                               retained_identity=retained_identity)
     (directory / "invocation.json").write_text(json.dumps({"mode": args.mode, "command": command,
         "timeoutSeconds": timeout, "integrationAdmission": env[policy["environmentKey"]]}, indent=2) + "\n")
     print(f"Native test supervisor: {args.mode}, deadline {timeout:g}s; evidence {directory}", flush=True)

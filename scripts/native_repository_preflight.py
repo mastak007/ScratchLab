@@ -14,7 +14,7 @@ import subprocess
 import sys
 import tempfile
 
-from run_mac_test_gate import INFRASTRUCTURE_EXIT, native_invocation, supervise
+from run_mac_test_gate import INFRASTRUCTURE_EXIT, native_invocation, native_test_identity, supervise
 
 SELECTOR = "CaptureReliabilityPhase1CoreTests/testPythonBytecodeCachesAreIgnoredAndUntracked"
 PERMISSION_EXIT = 77
@@ -76,6 +76,14 @@ def prepared_context(project, directory):
             or (directory / "receipt.json").exists()
             or (directory / "invocation.json").exists()):
         raise ValueError("Preflight context is stale, unsuccessful, relocated or already consumed")
+    identity = context.get("identity")
+    if identity is None:
+        raise ValueError("Preflight context has no retained native host identity")
+    native_test_identity(directory, identity)
+    receipt = json.loads((directory / "preflight/receipt.json").read_text())
+    identities = [arg for arg in receipt["command"] if arg.startswith("PRODUCT_BUNDLE_IDENTIFIER=")]
+    if identities != ["PRODUCT_BUNDLE_IDENTIFIER=" + identity]:
+        raise ValueError("Preflight host identity does not match its supervised invocation")
     return directory
 
 
@@ -83,6 +91,7 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--project", type=Path, required=True)
     parser.add_argument("--evidence-root", type=Path, required=True)
+    parser.add_argument("--retained-identity", help="Preserve a previously permitted nativegate bundle identity; does not grant access")
     args = parser.parse_args()
     project = args.project.resolve()
     args.evidence_root.mkdir(parents=True, exist_ok=True)
@@ -91,7 +100,8 @@ def main():
     probe.mkdir()
     try:
         inputs = input_identity(project)
-        command, env, products = native_invocation(project, "software", directory, [SELECTOR])
+        command, env, products = native_invocation(project, "software", directory, [SELECTOR],
+                                                  retained_identity=args.retained_identity)
         command[command.index("-resultBundlePath") + 1] = str(probe / "tests.xcresult")
         identity = next(x.split("=", 1)[1] for x in command if x.startswith("PRODUCT_BUNDLE_IDENTIFIER="))
         (directory / "preflight-context.json").write_text(json.dumps({

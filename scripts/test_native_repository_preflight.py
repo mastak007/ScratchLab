@@ -7,6 +7,7 @@ import sys
 import tempfile
 import time
 import unittest
+from unittest import mock
 
 from native_repository_preflight import bounded_probe, input_identity, prepared_context
 from run_mac_test_gate import ProcessTable, native_invocation
@@ -66,21 +67,63 @@ class RepositoryPreflightTests(unittest.TestCase):
     def test_zero_test_success_cannot_pass_access_preflight(self):
         self.assertEqual(self.probe("pass")["status"], "INFRASTRUCTURE ERROR")
 
-    def test_prepared_context_preserves_exact_host_and_cannot_be_consumed_twice(self):
+    def retained_context(self):
         import native_repository_preflight as module
         project = Path(module.__file__).resolve().parent.parent / "ScratchLab.xcodeproj"
+        identity = "com.machelpnz.scratchlab.nativegate.0123456789ab"
         probe = self.root / "preflight"
         probe.mkdir()
+        command, _, _ = native_invocation(project, "software", self.root,
+                                          ["one/test"], retained_identity=identity)
         (probe / "access-result.json").write_text(json.dumps({"status": "PASS"}))
-        (self.root / "preflight-context.json").write_text(json.dumps({"project": str(project), "directory": str(self.root), "inputs": input_identity(project)}))
+        (probe / "receipt.json").write_text(json.dumps({"command": command}))
+        context = {"project": str(project), "directory": str(self.root),
+                   "inputs": input_identity(project), "identity": identity}
+        (self.root / "preflight-context.json").write_text(json.dumps(context))
+        return project, identity, context
+
+    def test_prepared_context_preserves_exact_host_and_cannot_be_consumed_twice(self):
+        import run_mac_test_gate as gate
+        project, identity, _ = self.retained_context()
         context = prepared_context(project, self.root)
-        a, _, pa = native_invocation(project, "software", context, ["one/test"])
-        b, _, pb = native_invocation(project, "software", context)
-        self.assertEqual(pa, pb)
-        self.assertEqual([x for x in a if x.startswith("PRODUCT_BUNDLE_IDENTIFIER=")], [x for x in b if x.startswith("PRODUCT_BUNDLE_IDENTIFIER=")])
-        (context / "invocation.json").write_text("{}")
+        with mock.patch.dict(os.environ, {"SCRATCHLAB_NATIVE_PREFLIGHT_CONTEXT": str(context)}), \
+             mock.patch.object(sys, "argv", ["gate", "--project", str(project),
+                                            "--evidence-root", str(self.root)]), \
+             mock.patch.object(gate, "supervise", return_value={"status": "PASS", "exitCode": 0}) as supervisor:
+            self.assertEqual(gate.main(), 0)
+        command = supervisor.call_args.args[0]
+        self.assertEqual([x for x in command if x.startswith("PRODUCT_BUNDLE_IDENTIFIER=")],
+                         ["PRODUCT_BUNDLE_IDENTIFIER=" + identity])
+        self.assertEqual(supervisor.call_args.kwargs["owned_executable_roots"], [self.root / "Products"])
         with self.assertRaises(ValueError):
             prepared_context(project, context)
+
+    def test_retained_identity_is_independent_of_evidence_location(self):
+        project = Path("/repository/ScratchLab.xcodeproj")
+        identity = "com.machelpnz.scratchlab.nativegate.0123456789ab"
+        commands = [native_invocation(project, "software", self.root / name,
+                                     retained_identity=identity)[0] for name in ["first", "second"]]
+        for command in commands:
+            self.assertEqual([x for x in command if x.startswith("PRODUCT_BUNDLE_IDENTIFIER=")],
+                             ["PRODUCT_BUNDLE_IDENTIFIER=" + identity])
+        self.assertNotEqual([x for x in commands[0] if x.startswith("SYMROOT=")],
+                            [x for x in commands[1] if x.startswith("SYMROOT=")])
+
+    def test_retained_identity_cannot_select_production_or_malformed_bundle(self):
+        for identity in ["com.machelpnz.scratchlab.cxl-authoring", "com.machelpnz.scratchlab",
+                         "", "com.machelpnz.scratchlab.nativegate.not-hex", 123]:
+            with self.subTest(identity=identity), self.assertRaises(ValueError):
+                native_invocation(Path("/repository/ScratchLab.xcodeproj"), "software",
+                                  self.root, retained_identity=identity)
+
+    def test_prepared_context_rejects_missing_or_different_observed_identity(self):
+        project, _, context = self.retained_context()
+        path = self.root / "preflight-context.json"
+        for identity in [None, "com.machelpnz.scratchlab.nativegate.abcdef012345"]:
+            context["identity"] = identity
+            path.write_text(json.dumps(context))
+            with self.subTest(identity=identity), self.assertRaises(ValueError):
+                prepared_context(project, self.root)
 
     def test_preflight_contains_no_security_mutation_commands(self):
         import native_repository_preflight as module
