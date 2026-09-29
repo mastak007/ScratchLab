@@ -1,0 +1,13 @@
+// Explicit local hardware-acceptance overlay for the ScratchLabCXL scheme.
+// Use with -configuration CXLRelease -xcconfig <this file>. The existing
+// CXLRelease configuration remains the Mac App Store submission contract.
+// Keep compilation, resources, bundle identity and runtime capabilities intact.
+CODE_SIGN_STYLE = Manual
+CODE_SIGN_IDENTITY = Developer ID Application
+DEVELOPMENT_TEAM = 2DDKGL33BU
+PROVISIONING_PROFILE =
+PROVISIONING_PROFILE_SPECIFIER =
+CODE_SIGN_ENTITLEMENTS = ScratchLabDesktop/ScratchLabDesktop.entitlements
+CODE_SIGN_INJECT_BASE_ENTITLEMENTS = NO
+ENABLE_HARDENED_RUNTIME = YES
+OTHER_CODE_SIGN_FLAGS = $(inherited) --timestamp
