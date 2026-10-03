@@ -47,6 +47,9 @@ struct ScratchPhraseChartView: View {
     /// changes no record, no direction and no evidence. `nil` (the default)
     /// keeps every existing lane exactly as it is.
     var wrapPeriod: Double? = nil
+    /// CXL controls share the chart clock and retain separate identities.
+    var mixerFaders: ScratchMixerFaderEvidence? = nil
+    var showsMixerFaderLanes: Bool = false
     /// Displayed time window for the `.captured` source. When set, the chart
     /// maps `[lowerBound, upperBound]` onto the full width instead of fitting
     /// the captured take's own `[0, maxEndTime]` span. The stacked TARGET / MY
@@ -149,7 +152,7 @@ struct ScratchPhraseChartView: View {
         let start = frame.timeRange.lowerBound
         let duration = frame.timeRange.upperBound - start
         let pps = size.width / CGFloat(duration)
-        let platterHeight = size.height * (1 - faderLaneFraction)
+        let platterHeight = size.height * (showsMixerFaderLanes ? 0.55 : (1 - faderLaneFraction))
         let style: ScratchMotionRenderer.Style = layer == .target ? .target : .performance
         drawBeatGrid(ctx: ctx, size: size, startTime: start, duration: duration, pps: pps,
                      labelBottomY: platterHeight - 2, beatsPerMinute: frame.beatsPerMinute)
@@ -165,47 +168,72 @@ struct ScratchPhraseChartView: View {
             .foregroundStyle(Color(white: 0.42)), at: CGPoint(x: 4, y: 3), anchor: .topLeading)
         drawLaneDivider(ctx: ctx, size: size, y: platterHeight)
 
-        let faderHeight = size.height - platterHeight
-        let openY = platterHeight + faderHeight * 0.15
-        let closedY = platterHeight + faderHeight * 0.88
-        for y in [openY, closedY] {
-            var guide = Path()
-            guide.move(to: CGPoint(x: 0, y: y)); guide.addLine(to: CGPoint(x: size.width, y: y))
-            ctx.stroke(guide, with: .color(Color(white: 0.28).opacity(0.16)), lineWidth: 0.5)
-        }
-        for interval in geometry.fader {
-            guard let state = interval.state else { continue }
-            let y = state == .open ? openY : closedY
-            var rail = Path()
-            rail.move(to: CGPoint(x: CGFloat(interval.range.lowerBound - start) * pps, y: y))
-            rail.addLine(to: CGPoint(x: CGFloat(interval.range.upperBound - start) * pps, y: y))
-            ctx.stroke(rail, with: .color(style.color.opacity(0.78)), lineWidth: 2.5)
-        }
-        drawUnknownIntervals(geometry.fader.filter { $0.state == nil }.map(\.range),
-                             label: "FADER UNKNOWN", ctx: ctx, start: start, pps: pps,
-                             top: openY, height: closedY - openY)
-        // Fader glyphs come ONLY from explicit supported fader transitions.
-        // A hold, reversal or two differently coloured rails cannot mint one.
-        for edge in geometry.faderEdges {
-            let x = CGFloat(edge.time - start) * pps
-            let y = edge.state == .open ? openY : closedY
-            var tick = Path()
-            tick.move(to: CGPoint(x: x, y: openY)); tick.addLine(to: CGPoint(x: x, y: closedY))
-            ctx.stroke(tick, with: .color(style.color.opacity(0.5)), lineWidth: 1.2)
-            var diamond = Path()
-            diamond.move(to: CGPoint(x: x, y: y - 2.5))
-            diamond.addLine(to: CGPoint(x: x + 2.5, y: y))
-            diamond.addLine(to: CGPoint(x: x, y: y + 2.5))
-            diamond.addLine(to: CGPoint(x: x - 2.5, y: y))
-            diamond.closeSubpath()
-            ctx.fill(diamond, with: .color(style.color.opacity(0.65)))
-        }
-        ctx.draw(Text("FADER").font(.system(size: 8.5, weight: .bold, design: .monospaced))
-            .foregroundStyle(Color(white: 0.40)), at: CGPoint(x: 4, y: platterHeight), anchor: .bottomLeading)
-        for (label, y, anchor) in [("OPEN", openY + 1, UnitPoint.topLeading),
-                                   ("CLOSED", closedY - 1, UnitPoint.bottomLeading)] {
-            ctx.draw(Text(label).font(.system(size: 7.5, weight: .medium, design: .monospaced))
-                .foregroundStyle(Color(white: 0.32)), at: CGPoint(x: 4, y: y), anchor: anchor)
+        if showsMixerFaderLanes {
+            let laneHeight = (size.height - platterHeight) / 2
+            for (index, control) in ScratchMixerFaderEvidence.Control.allCases.enumerated() {
+                let spans = mixerFaders?.spans(for: control, in: frame.timeRange)
+                    ?? (control == .crossfader
+                        ? geometry.fader.map { .init(start: $0.range.lowerBound, end: $0.range.upperBound,
+                            gain: $0.state.map { $0 == .closed ? 0 : 1 }) }
+                        : [.init(start: start, end: start + duration, gain: nil)])
+                drawMixerLane(control.title, spans: spans, ctx: ctx, size: size,
+                    start: start, pps: pps, top: platterHeight + CGFloat(index) * laneHeight,
+                    height: laneHeight, color: style.color)
+            }
+            if let mixerFaders {
+                for span in mixerFaders.combinedSpans(in: frame.timeRange) where span.state == .closed {
+                    let width = CGFloat(span.end - span.start) * pps
+                    if width >= 32 {
+                        ctx.draw(Text("MUTED").font(.system(size: 8, weight: .medium, design: .monospaced))
+                            .foregroundStyle(Color.secondary),
+                            at: CGPoint(x: CGFloat(span.start - start) * pps + width / 2,
+                                        y: platterHeight - 10))
+                    }
+                }
+            }
+        } else {
+            let faderHeight = size.height - platterHeight
+            let openY = platterHeight + faderHeight * 0.15
+            let closedY = platterHeight + faderHeight * 0.88
+            for y in [openY, closedY] {
+                var guide = Path()
+                guide.move(to: CGPoint(x: 0, y: y)); guide.addLine(to: CGPoint(x: size.width, y: y))
+                ctx.stroke(guide, with: .color(Color(white: 0.28).opacity(0.16)), lineWidth: 0.5)
+            }
+            for interval in geometry.fader {
+                guard let state = interval.state else { continue }
+                let y = state == .open ? openY : closedY
+                var rail = Path()
+                rail.move(to: CGPoint(x: CGFloat(interval.range.lowerBound - start) * pps, y: y))
+                rail.addLine(to: CGPoint(x: CGFloat(interval.range.upperBound - start) * pps, y: y))
+                ctx.stroke(rail, with: .color(style.color.opacity(0.78)), lineWidth: 2.5)
+            }
+            drawUnknownIntervals(geometry.fader.filter { $0.state == nil }.map(\.range),
+                                 label: "FADER UNKNOWN", ctx: ctx, start: start, pps: pps,
+                                 top: openY, height: closedY - openY)
+            // Fader glyphs come ONLY from explicit supported fader transitions.
+            // A hold, reversal or two differently coloured rails cannot mint one.
+            for edge in geometry.faderEdges {
+                let x = CGFloat(edge.time - start) * pps
+                let y = edge.state == .open ? openY : closedY
+                var tick = Path()
+                tick.move(to: CGPoint(x: x, y: openY)); tick.addLine(to: CGPoint(x: x, y: closedY))
+                ctx.stroke(tick, with: .color(style.color.opacity(0.5)), lineWidth: 1.2)
+                var diamond = Path()
+                diamond.move(to: CGPoint(x: x, y: y - 2.5))
+                diamond.addLine(to: CGPoint(x: x + 2.5, y: y))
+                diamond.addLine(to: CGPoint(x: x, y: y + 2.5))
+                diamond.addLine(to: CGPoint(x: x - 2.5, y: y))
+                diamond.closeSubpath()
+                ctx.fill(diamond, with: .color(style.color.opacity(0.65)))
+            }
+            ctx.draw(Text("FADER").font(.system(size: 8.5, weight: .bold, design: .monospaced))
+                .foregroundStyle(Color(white: 0.40)), at: CGPoint(x: 4, y: platterHeight), anchor: .bottomLeading)
+            for (label, y, anchor) in [("OPEN", openY + 1, UnitPoint.topLeading),
+                                       ("CLOSED", closedY - 1, UnitPoint.bottomLeading)] {
+                ctx.draw(Text(label).font(.system(size: 7.5, weight: .medium, design: .monospaced))
+                    .foregroundStyle(Color(white: 0.32)), at: CGPoint(x: 4, y: y), anchor: anchor)
+            }
         }
         if geometry.hasUnplacedEvidence {
             ctx.draw(Text("UNPLACED / INVALID EVIDENCE").font(.system(size: 9, design: .monospaced))
@@ -214,6 +242,41 @@ struct ScratchPhraseChartView: View {
         if showPlayhead {
             drawPlayhead(ctx: ctx, size: size, x: CGFloat(playheadTime - start) * pps)
         }
+    }
+
+    private func drawMixerLane(_ title: String, spans: [ScratchMixerFaderEvidence.Span],
+                               ctx: GraphicsContext, size: CGSize, start: Double, pps: CGFloat,
+                               top: CGFloat, height: CGFloat, color: Color) {
+        drawLaneDivider(ctx: ctx, size: size, y: top)
+        let openY = top + height * 0.34
+        let closedY = top + height * 0.87
+        ctx.draw(Text(title).font(.system(size: 8.5, weight: .bold, design: .monospaced))
+            .foregroundStyle(Color.secondary), at: CGPoint(x: 4, y: top + 2), anchor: .topLeading)
+        for y in [openY, closedY] {
+            var guide = Path()
+            guide.move(to: CGPoint(x: 0, y: y)); guide.addLine(to: CGPoint(x: size.width, y: y))
+            ctx.stroke(guide, with: .color(Color.secondary.opacity(0.15)), lineWidth: 0.5)
+        }
+        for span in spans {
+            guard let gain = span.gain else { continue }
+            let y = closedY - CGFloat(gain) * (closedY - openY)
+            var line = Path()
+            line.move(to: CGPoint(x: CGFloat(span.start - start) * pps, y: y))
+            line.addLine(to: CGPoint(x: CGFloat(span.end - start) * pps, y: y))
+            ctx.stroke(line, with: .color(color.opacity(0.8)), lineWidth: 2)
+        }
+        for (previous, next) in zip(spans, spans.dropFirst()) {
+            guard previous.end == next.start, let before = previous.gain,
+                  let after = next.gain, before != after else { continue }
+            let x = CGFloat(next.start - start) * pps
+            var edge = Path()
+            edge.move(to: CGPoint(x: x, y: closedY - CGFloat(before) * (closedY - openY)))
+            edge.addLine(to: CGPoint(x: x, y: closedY - CGFloat(after) * (closedY - openY)))
+            ctx.stroke(edge, with: .color(color.opacity(0.8)), lineWidth: 1)
+        }
+        drawUnknownIntervals(spans.filter { $0.gain == nil }.map { $0.start...$0.end },
+            label: "UNKNOWN", ctx: ctx, start: start, pps: pps,
+            top: openY, height: max(0, closedY - openY))
     }
 
     /// Unknown spans are shaded bands with a question mark, never a line at a

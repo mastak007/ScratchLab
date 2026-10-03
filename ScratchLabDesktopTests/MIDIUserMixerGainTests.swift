@@ -16,6 +16,7 @@
 
 import XCTest
 import AVFoundation
+import SwiftUI
 @testable import ScratchLab
 
 final class MIDIUserMixerGainTests: XCTestCase {
@@ -1214,5 +1215,422 @@ final class MIDIUserMixerGainTests: XCTestCase {
 
         XCTAssertNil(engine.currentMIDIDeviceMapping?.control(for: .crossfader)?.curveConfig, "must remain nil — no write for a no-op")
         XCTAssertEqual(publishedTargetUserMixerGain(engine), gainBefore, accuracy: 0.001, "gain must be untouched")
+    }
+}
+
+
+final class SeparateMixerFaderEvidenceTests: XCTestCase {
+    private func binding(inverted: Bool = false, minimum: Int = 0, maximum: Int = 127,
+                         curve: FaderCurveResponse = .init(zeroAt: 0, oneAt: 1, shape: .linear)) -> ScratchMixerFaderEvidence.Binding {
+        .init(sourceID: "test-rig", connectionGeneration: 7, channel: 1, controller: 28,
+              minimum: minimum, maximum: maximum, inverted: inverted, response: curve)
+    }
+
+    private func recorder(channel: Int? = 127, cross: Int? = 127) -> ScratchMixerFaderRecorder {
+        var recorder = ScratchMixerFaderRecorder()
+        if let cross { recorder.observe(control: .crossfader, binding: binding(), rawValue: cross, at: 9, admitted: false) }
+        if let channel { recorder.observe(control: .rightChannel, binding: binding(), rawValue: channel, at: 9, admitted: false) }
+        recorder.begin(at: 10, sessionID: "session", takeID: "take")
+        return recorder
+    }
+
+    func testHeldStateRetainsOriginalTimeWithoutInventingMIDIPackets() throws {
+        var r = recorder(); r.close(at: 12)
+        let e = try XCTUnwrap(r.snapshot(at: 20))
+        XCTAssertTrue(e.sealed)
+        XCTAssertEqual(e.end, 2)
+        XCTAssertEqual(e.observations.map(\.time), [-1, -1])
+        XCTAssertTrue(e.observations.allSatisfy { $0.kind == .heldAtStart })
+        XCTAssertTrue(e.combinedSpans(in: 0...2).allSatisfy { $0.state == .open })
+    }
+
+    func testEitherControlClosesTheCombinedGateWithoutOverwritingOtherLane() throws {
+        for control in ScratchMixerFaderEvidence.Control.allCases {
+            var r = recorder()
+            r.observe(control: control, binding: binding(), rawValue: 0, at: 11, admitted: true)
+            r.close(at: 12)
+            let e = try XCTUnwrap(r.snapshot(at: 12))
+            XCTAssertEqual(e.combinedSpans(in: 0...2).map(\.state), [.open, .closed])
+            let other: ScratchMixerFaderEvidence.Control = control == .crossfader ? .rightChannel : .crossfader
+            XCTAssertTrue(e.spans(for: other, in: 0...2).allSatisfy { $0.state == .open })
+        }
+    }
+
+    func testUnknownChannelDoesNotBecomeOpenAndKnownClosureStillMutes() throws {
+        var r = recorder(channel: nil)
+        r.observe(control: .crossfader, binding: binding(), rawValue: 0, at: 11, admitted: true)
+        let e = try XCTUnwrap(r.snapshot(at: 12))
+        XCTAssertEqual(e.combinedSpans(in: 0...2).map(\.state), [nil, .closed])
+        XCTAssertTrue(e.spans(for: .rightChannel, in: 0...2).allSatisfy { $0.gain == nil })
+    }
+
+    func testReopeningOneFaderDoesNotOpenTheOtherClosedFader() throws {
+        var r = recorder(channel: 0, cross: 0)
+        r.observe(control: .crossfader, binding: binding(), rawValue: 127, at: 11, admitted: true)
+        let e = try XCTUnwrap(r.snapshot(at: 12))
+        XCTAssertTrue(e.combinedSpans(in: 0...2).allSatisfy { $0.state == .closed })
+    }
+
+    func testDisconnectInvalidatesCoverageUntilANewObservation() throws {
+        var r = recorder()
+        r.invalidate(.rightChannel, at: 10.5)
+        r.observe(control: .rightChannel, binding: binding(), rawValue: 0, at: 11, admitted: true)
+        let e = try XCTUnwrap(r.snapshot(at: 12))
+        XCTAssertEqual(e.spans(for: .rightChannel, in: 0...2).map(\.state), [.open, nil, .closed])
+    }
+
+    func testClosedEpochRejectsPostStopEvidenceAndDoesNotExtendHeldCoverage() throws {
+        var r = recorder(); r.close(at: 11)
+        r.observe(control: .rightChannel, binding: binding(), rawValue: 0, at: 11.5, admitted: true)
+        r.close(at: 13)
+        let e = try XCTUnwrap(r.snapshot(at: 14))
+        XCTAssertEqual(e.end, 1)
+        XCTAssertEqual(e.observations.count, 2)
+        XCTAssertEqual(e.combinedSpans(in: 0...2).map(\.state), [.open, nil])
+    }
+
+    func testStaleWindowObservationCannotEnterCurrentTake() throws {
+        var r = recorder()
+        r.observe(control: .rightChannel, binding: binding(), rawValue: 0, at: 11, admitted: false)
+        let e = try XCTUnwrap(r.snapshot(at: 12))
+        XCTAssertTrue(e.combinedSpans(in: 0...2).allSatisfy { $0.state == .open })
+        XCTAssertEqual(e.observations.count, 2)
+    }
+
+    func testRangeInversionAndAudioCurveAreAppliedTogether() throws {
+        let b = binding(inverted: true, minimum: 10, maximum: 110,
+                        curve: .init(zeroAt: 0, oneAt: 0.05, shape: .linear))
+        XCTAssertEqual(b.gain(rawValue: 110), 0)
+        XCTAssertEqual(b.gain(rawValue: 10), 1)
+        XCTAssertEqual(try XCTUnwrap(b.gain(rawValue: 108)), 0.4, accuracy: 1e-12)
+        XCTAssertNil(binding(minimum: 30, maximum: 30).gain(rawValue: 30))
+    }
+
+    func testNewTakeStartsWithItsOwnIdentityAndNoPriorTimeline() throws {
+        var r = recorder()
+        r.observe(control: .rightChannel, binding: binding(), rawValue: 0, at: 11, admitted: true)
+        r.close(at: 12)
+        r.begin(at: 15, sessionID: "next-session", takeID: "next-take")
+        let e = try XCTUnwrap(r.snapshot(at: 16))
+        XCTAssertEqual(e.sessionID, "next-session"); XCTAssertEqual(e.takeID, "next-take")
+        XCTAssertEqual(e.observations.count, 2)
+        XCTAssertTrue(e.observations.allSatisfy { $0.time < 0 && $0.kind == .heldAtStart })
+    }
+
+    func testInvalidVersionAndOutOfOrderControlEvidenceStayUnknown() throws {
+        let b = binding()
+        for e in [
+            ScratchMixerFaderEvidence(version: 2, sessionID: nil, takeID: nil, epoch: 10, end: 2,
+                sealed: true, overflowed: false, observations: []),
+            ScratchMixerFaderEvidence(version: 1, sessionID: nil, takeID: nil, epoch: 10, end: 2,
+                sealed: true, overflowed: false, observations: [
+                    .init(control: .rightChannel, time: 1, kind: .message, binding: b, rawValue: 0),
+                    .init(control: .rightChannel, time: 0.5, kind: .message, binding: b, rawValue: 127)])
+        ] {
+            XCTAssertTrue(e.spans(for: .rightChannel, in: 0...2).allSatisfy { $0.gain == nil })
+        }
+    }
+
+    @MainActor
+    func testCombinedGatePreservesExactMotionAndRoundTripsSeparateControls() throws {
+        var r = recorder()
+        r.observe(control: .rightChannel, binding: binding(), rawValue: 0, at: 11, admitted: true)
+        r.close(at: 12)
+        let e = try XCTUnwrap(r.snapshot(at: 12))
+        let motion = ScratchNotation.GestureRecord.Evidence(provenance: .measured,
+            observation: .init(source: .platterTimeline, confidence: 1, reason: "test motion"))
+        let record = ScratchNotation.GestureRecord(id: "gesture", direction: .forward,
+            timingDomain: .seconds, coordinateSpace: .normalizedTakeLocalDisplacement, evidence: motion,
+            subdivisions: [.init(id: "travel", span: .init(startTime: 0, endTime: 2), evidence: motion,
+                measuredCurve: .init(points: [.init(time: 0, position: -0.2), .init(time: 1, position: 0.4),
+                                             .init(time: 2, position: 1.1)], evidence: motion))])
+        let original = ReferenceTearCanonicalProjection(records: [record], timeRange: 0...2,
+            positionRange: -0.2...1.1, coordinateSpace: .normalizedTakeLocalDisplacement, reasons: [])
+        let updated = original.applyingMixerFaders(e)
+        let frame = try XCTUnwrap(ScratchStrokeGeometry.CanonicalFrame(timeRange: 0...2,
+            positionRange: -0.2...1.1, coordinateSpace: .normalizedTakeLocalDisplacement, beatsPerMinute: 95))
+        let chart = ScratchPhraseChartView(source: .canonical(updated.records, layer: .performance, frame: frame),
+            showBeatGrid: false, mixerFaders: e, showsMixerFaderLanes: true)
+            .frame(width: 800, height: 320).background(Color.black).environment(\.colorScheme, .dark)
+        let image = try XCTUnwrap(ImageRenderer(content: chart).nsImage)
+        XCTAssertEqual(image.size.width, 800)
+        let attachment = XCTAttachment(image: image)
+        attachment.name = "Separate lanes - synthetic model fixture, not hardware evidence"
+        attachment.lifetime = .keepAlways
+        add(attachment)
+        XCTAssertEqual(updated.records[0].subdivisions, record.subdivisions)
+        XCTAssertEqual(updated.records[0].internalHolds, record.internalHolds)
+        XCTAssertEqual(updated.records[0].direction, record.direction)
+        XCTAssertEqual(updated.records[0].faderIntervals.map(\.state), [.open, .closed])
+        XCTAssertTrue(updated.records[0].faderValidationIssues().isEmpty)
+        XCTAssertEqual(updated, try JSONDecoder().decode(ReferenceTearCanonicalProjection.self,
+            from: JSONEncoder().encode(updated)))
+        XCTAssertNil(try JSONDecoder().decode(ReferenceTearCanonicalProjection.self,
+            from: JSONEncoder().encode(original)).mixerFaders)
+    }
+}
+
+
+extension SeparateMixerFaderEvidenceTests {
+    func testRecordedControlEvidenceUsesExactSourceConnectionAndLearnedAddress() throws {
+        let engine = MacCaptureEngine(autoRefreshDevices: false)
+        engine.selectedMIDIInputSourceID = "separate-lane-test-only"
+        let token = engine.testOnly_armTakeMIDIWindow()
+        defer { _ = engine.testOnly_releaseAbandonedTakeMIDIWindow(token: token) }
+        var mapping = MIDIDeviceMapping(deviceIdentifier: "separate-lane-test-only", deviceName: "Test")
+        mapping.upsert(.init(action: .rightUpfader, messageType: .controlChange,
+                            channel: 1, controlNumber: 28, deck: 1))
+        engine.testOnly_setDeviceMapping(mapping)
+        engine.testOnly_setLiveFaderContext(sourceID: "separate-lane-test-only",
+            connectionGeneration: 7, mapping: nil, calibrations: [])
+        let start = CACurrentMediaTime()
+        engine.testOnly_openTakeMIDIEpoch(at: start)
+        func send(_ source: String, _ generation: UInt64, _ channel: Int, _ controller: Int, _ value: Int, _ offset: Double) {
+            engine.recordReceivedMIDICCEvent(sourceIdentifier: source, sourceName: "Test",
+                channel: channel, controller: controller, value: value, mappedControl: "rightUpfader",
+                timestamp: start + offset, inputConnectionGeneration: generation)
+        }
+        send("other-source", 7, 1, 28, 0, 0.1)
+        send("separate-lane-test-only", 6, 1, 28, 0, 0.2)
+        send("separate-lane-test-only", 7, 0, 28, 0, 0.3)
+        send("separate-lane-test-only", 7, 1, 29, 0, 0.4)
+        send("separate-lane-test-only", 7, 1, 28, 0, 0.5)
+        engine.testOnly_closeTakeMIDIEpoch(at: start + 1, token: token)
+        let evidence = try XCTUnwrap(engine.mixerFaderEvidenceSnapshot())
+        XCTAssertEqual(evidence.observations.count, 1)
+        XCTAssertEqual(evidence.observations.first?.control, .rightChannel)
+        XCTAssertEqual(evidence.observations.first?.time ?? -1, 0.5, accuracy: 0.0001)
+        XCTAssertEqual(evidence.spans(for: .rightChannel, in: 0...1).map(\.state), [nil, .closed])
+        XCTAssertEqual(evidence.combinedSpans(in: 0...1).map(\.state), [nil, .closed])
+    }
+
+    func testTakeOverflowRemainsUnknownWhilePreviewRetainsBoundedRecentObservations() throws {
+        var take = recorder()
+        var preview = ScratchMixerFaderRecorder()
+        preview.begin(at: 10, sessionID: nil, takeID: nil, isPreview: true)
+        for i in 0..<32_010 {
+            let time = 10 + Double(i) / 1000
+            take.observe(control: .rightChannel, binding: binding(), rawValue: i % 128, at: time, admitted: true)
+            preview.observe(control: .rightChannel, binding: binding(), rawValue: i % 128, at: time, admitted: true)
+        }
+        let takeEvidence = try XCTUnwrap(take.snapshot(at: 43))
+        XCTAssertTrue(takeEvidence.overflowed)
+        XCTAssertNil(takeEvidence.combinedSpans(in: 32...33).first?.gain)
+        let previewEvidence = try XCTUnwrap(preview.snapshot(at: 43))
+        XCTAssertFalse(previewEvidence.overflowed)
+        XCTAssertLessThan(previewEvidence.observations.count, 32_000)
+        XCTAssertNotNil(previewEvidence.spans(for: .rightChannel, in: 32.01...33).first?.gain)
+        XCTAssertNil(previewEvidence.spans(for: .crossfader, in: 32...33).first?.gain)
+    }
+}
+
+
+extension SeparateMixerFaderEvidenceTests {
+    func testLivePollDiscardsMotionWhenMixerCaptureEpochChangesDuringRead() throws {
+        var r = recorder()
+        let old = try XCTUnwrap(r.snapshot(at: 12))
+        r.begin(at: 20, sessionID: "session", takeID: "next")
+        let next = try XCTUnwrap(r.snapshot(at: 22))
+        var current: ScratchMixerFaderEvidence? = old
+        let racing = LivePerformedNotationDataSource(selectedMIDISourceName: { "Test" },
+            capturedMidiCCEventsSnapshot: { current = next; return [] },
+            cameraMovementEventsSnapshot: { _ in nil }, mixerFaderEvidence: { current })
+        XCTAssertNil(LivePerformedNotationTracker.computeFrame(dataSource: racing, baselineTimestamp: 0))
+        let stable = try XCTUnwrap(LivePerformedNotationTracker.computeFrame(dataSource: racing, baselineTimestamp: 0))
+        XCTAssertEqual(stable.mixerFaders, next)
+        current = nil
+        let legacy = LivePerformedNotationDataSource(selectedMIDISourceName: { "Test" },
+            capturedMidiCCEventsSnapshot: { [] }, cameraMovementEventsSnapshot: { _ in nil })
+        XCTAssertNotNil(LivePerformedNotationTracker.computeFrame(dataSource: legacy, baselineTimestamp: 0))
+    }
+}
+
+
+extension SeparateMixerFaderEvidenceTests {
+    func testClearingWindowCannotRebindPriorTakeButPreservesOriginalHeldObservation() throws {
+        var r = recorder()
+        r.close(at: 12)
+        XCTAssertNotNil(r.snapshot(at: 12))
+        r.clearWindow()
+        XCTAssertNil(r.snapshot(at: 13))
+        r.close(at: 14)
+        XCTAssertNil(r.snapshot(at: 14), "A failed start cannot seal or reuse the previous timeline")
+        r.begin(at: 20, sessionID: "session", takeID: "next")
+        let e = try XCTUnwrap(r.snapshot(at: 21))
+        XCTAssertEqual(e.takeID, "next")
+        XCTAssertEqual(e.observations.map(\.time), [-11, -11])
+        XCTAssertTrue(e.observations.allSatisfy { $0.kind == .heldAtStart })
+    }
+
+    func testEngineDrainAndFailedStartClearTheAssociatedFaderTimeline() throws {
+        let engine = MacCaptureEngine(autoRefreshDevices: false)
+        engine.selectedMIDIInputSourceID = "separate-lane-failed-start-test"
+        let first = engine.testOnly_armTakeMIDIWindow()
+        let start = CACurrentMediaTime()
+        engine.testOnly_openTakeMIDIEpoch(at: start)
+        engine.testOnly_closeTakeMIDIEpoch(at: start + 1, token: first)
+        XCTAssertTrue(try XCTUnwrap(engine.mixerFaderEvidenceSnapshot()).sealed)
+        XCTAssertNotNil(engine.testOnly_drainTakeMIDIWindow(token: first))
+        XCTAssertNil(engine.mixerFaderEvidenceSnapshot())
+        let failed = engine.testOnly_armTakeMIDIWindow()
+        defer { _ = engine.testOnly_releaseAbandonedTakeMIDIWindow(token: failed) }
+        engine.testOnly_closeTakeMIDIEpoch(at: start + 2, token: failed)
+        XCTAssertNil(engine.mixerFaderEvidenceSnapshot())
+    }
+}
+
+
+extension SeparateMixerFaderEvidenceTests {
+    func testAdmittedOutOfOrderControlPacketsRemainVisibleAndInvalidateCoverage() throws {
+        var r = recorder()
+        r.observe(control: .rightChannel, binding: binding(), rawValue: 0, at: 11, admitted: true)
+        r.observe(control: .rightChannel, binding: binding(), rawValue: 127, at: 10.5, admitted: true)
+        r.close(at: 12)
+        let e = try XCTUnwrap(r.snapshot(at: 12))
+        XCTAssertEqual(e.observations.filter { $0.control == .rightChannel }.map(\.time), [-1, 1, 0.5])
+        XCTAssertTrue(e.spans(for: .rightChannel, in: 0...2).allSatisfy { $0.gain == nil })
+        r.clearWindow()
+        r.begin(at: 20, sessionID: "session", takeID: "next")
+        XCTAssertEqual(r.snapshot(at: 21)?.observations.first { $0.control == .rightChannel }?.rawValue, 0,
+                       "An older packet must not rewind the held position cache")
+    }
+}
+
+// The native fixtures intercept Core MIDI effects after the production reuse
+// decision. A non-reused connection follows the real mapping reload path.
+extension MIDIUserMixerGainTests {
+    @MainActor
+    private func settleMappingPublication() async {
+        await withCheckedContinuation { continuation in
+            DispatchQueue.main.async { continuation.resume() }
+        }
+    }
+
+    @MainActor
+    private func makeCaptureBoundaryEngine(_ id: String) async -> MacCaptureEngine {
+        cleanUpMIDIMapping(deviceIdentifier: id)
+        let engine = MacCaptureEngine(autoRefreshDevices: false)
+        engine.selectedMIDIInputSourceID = id
+        await settleMappingPublication()
+        var mapping = MIDIDeviceMapping(deviceIdentifier: id, deviceName: "Test controller")
+        mapping.upsert(.init(action: .crossfader, messageType: .controlChange, channel: 15, controlNumber: 8))
+        mapping.upsert(.init(action: .rightUpfader, messageType: .controlChange, channel: 1, controlNumber: 28, deck: 1))
+        MIDILearnedMappingStore.default.save(mapping)
+        engine.loadDeviceMappingForCurrentSource()
+        await settleMappingPublication()
+        engine.testOnly_setLiveFaderContext(sourceID: id, connectionGeneration: 1, mapping: nil, calibrations: [])
+        return engine
+    }
+
+    private func observeBoundaryFader(_ engine: MacCaptureEngine, id: String,
+                                     channel: Int, cc: Int, value: Int, time: Double) {
+        engine.evaluateUserMixerGainForCC(channel: channel, controller: cc, value: value)
+        engine.recordReceivedMIDICCEvent(sourceIdentifier: id, sourceName: "Test controller",
+            channel: channel, controller: cc, value: value, timestamp: time, inputConnectionGeneration: 1)
+        engine.testOnly_scratchPlaybackController.waitForAudioQueue()
+    }
+
+    @MainActor
+    func testCaptureBoundariesPreserveObservedFadersAndActualMixerGain() async throws {
+        // Includes both-closed then opening just one: no boundary may unmute it.
+        for (cross, channel) in [(127, 0), (0, 127), (0, 0), (127, 64)] {
+            let id = "midi_test_capture_boundary_\(cross)_\(channel)"
+            defer { cleanUpMIDIMapping(deviceIdentifier: id) }
+            let engine = await makeCaptureBoundaryEngine(id)
+            var decisions: [Bool] = []
+            engine.testOnly_setMIDIReconnectContext(sourceID: id, connected: true) { [weak engine] reused in
+                decisions.append(reused)
+                if !reused { engine?.loadDeviceMappingForCurrentSource() }
+            }
+            let observed = CACurrentMediaTime()
+            observeBoundaryFader(engine, id: id, channel: 15, cc: 8, value: cross, time: observed)
+            observeBoundaryFader(engine, id: id, channel: 1, cc: 28, value: channel, time: observed)
+            let gainBefore = publishedTargetUserMixerGain(engine)
+            XCTAssertLessThan(gainBefore, 1, "A reset to unity must be observable in every case")
+            for offset in [1.0, 3.0] {
+                let token = engine.testOnly_armTakeMIDIWindow()
+                await settleMappingPublication()
+                engine.testOnly_openTakeMIDIEpoch(at: observed + offset)
+                engine.testOnly_closeTakeMIDIEpoch(at: observed + offset + 1, token: token)
+                let evidence = try XCTUnwrap(engine.mixerFaderEvidenceSnapshot())
+                XCTAssertEqual(evidence.observations.count, 2)
+                XCTAssertTrue(evidence.observations.allSatisfy { $0.kind == .heldAtStart && $0.time == -offset })
+                XCTAssertEqual(evidence.observations.first { $0.control == .crossfader }?.rawValue, cross)
+                XCTAssertEqual(evidence.observations.first { $0.control == .rightChannel }?.rawValue, channel)
+                XCTAssertEqual(try XCTUnwrap(evidence.combinedSpans(in: 0...1).first?.gain), gainBefore, accuracy: 1e-12)
+                engine.testOnly_scratchPlaybackController.waitForAudioQueue()
+                XCTAssertEqual(publishedTargetUserMixerGain(engine), gainBefore, accuracy: 1e-12)
+                XCTAssertTrue(try XCTUnwrap(engine.testOnly_drainTakeMIDIWindow(token: token)).isEmpty,
+                              "Held observations must never become fabricated in-take MIDI messages")
+                engine.testOnly_restoreMIDIMonitoringAfterCapture()
+                await settleMappingPublication()
+            }
+            XCTAssertEqual(decisions, [true, true, true, true])
+        }
+    }
+
+    @MainActor
+    func testCaptureArmRejectsMissingChangedAndUnreadyConnections() async {
+        let id = "midi_test_capture_boundary_reject"
+        defer { cleanUpMIDIMapping(deviceIdentifier: id) }
+        let engine = await makeCaptureBoundaryEngine(id)
+        var decisions: [Bool] = []
+        for (source, endpoint, ready) in [(Optional(id), UInt32(1), false), (Optional(id), 2, true), (nil, 1, true)] {
+            engine.testOnly_setMIDIReconnectContext(sourceID: source, endpointRef: endpoint, connected: ready) {
+                decisions.append($0)
+            }
+            let token = engine.testOnly_armTakeMIDIWindow()
+            XCTAssertTrue(engine.testOnly_releaseAbandonedTakeMIDIWindow(token: token))
+        }
+        engine.testOnly_setLiveFaderContext(sourceID: "other-device", connectionGeneration: 2, mapping: nil, calibrations: [])
+        engine.testOnly_setMIDIReconnectContext(sourceID: id, connected: true) { decisions.append($0) }
+        let token = engine.testOnly_armTakeMIDIWindow()
+        XCTAssertTrue(engine.testOnly_releaseAbandonedTakeMIDIWindow(token: token))
+        XCTAssertEqual(decisions, [false, false, false, false])
+    }
+
+    @MainActor
+    func testExplicitReconnectStillInvalidatesHeldStateAndResetsGain() async throws {
+        let id = "midi_test_capture_boundary_explicit_reload"
+        defer { cleanUpMIDIMapping(deviceIdentifier: id) }
+        let engine = await makeCaptureBoundaryEngine(id)
+        var decisions: [Bool] = []
+        engine.testOnly_setMIDIReconnectContext(sourceID: id, connected: true) { [weak engine] reused in
+            decisions.append(reused)
+            if !reused { engine?.loadDeviceMappingForCurrentSource() }
+        }
+        let observed = CACurrentMediaTime()
+        observeBoundaryFader(engine, id: id, channel: 1, cc: 28, value: 0, time: observed)
+        XCTAssertEqual(publishedTargetUserMixerGain(engine), 0)
+        engine.testOnly_forceMIDIReconnect()
+        await settleMappingPublication()
+        engine.testOnly_scratchPlaybackController.waitForAudioQueue()
+        XCTAssertEqual(publishedTargetUserMixerGain(engine), 1)
+        let token = engine.testOnly_armTakeMIDIWindow()
+        defer { _ = engine.testOnly_releaseAbandonedTakeMIDIWindow(token: token) }
+        engine.testOnly_openTakeMIDIEpoch(at: observed + 1)
+        engine.testOnly_closeTakeMIDIEpoch(at: observed + 2, token: token)
+        let evidence = try XCTUnwrap(engine.mixerFaderEvidenceSnapshot())
+        XCTAssertTrue(evidence.observations.isEmpty)
+        XCTAssertTrue(evidence.combinedSpans(in: 0...1).allSatisfy { $0.gain == nil })
+        XCTAssertEqual(decisions, [false, true])
+    }
+
+    @MainActor
+    func testCaptureArmDoesNotInventAnUnobservedRightChannelPosition() async throws {
+        let id = "midi_test_capture_boundary_unknown"
+        defer { cleanUpMIDIMapping(deviceIdentifier: id) }
+        let engine = await makeCaptureBoundaryEngine(id)
+        engine.testOnly_setMIDIReconnectContext(sourceID: id, connected: true) { XCTAssertTrue($0) }
+        let observed = CACurrentMediaTime()
+        observeBoundaryFader(engine, id: id, channel: 15, cc: 8, value: 127, time: observed)
+        let token = engine.testOnly_armTakeMIDIWindow()
+        defer { _ = engine.testOnly_releaseAbandonedTakeMIDIWindow(token: token) }
+        engine.testOnly_openTakeMIDIEpoch(at: observed + 1)
+        engine.testOnly_closeTakeMIDIEpoch(at: observed + 2, token: token)
+        let evidence = try XCTUnwrap(engine.mixerFaderEvidenceSnapshot())
+        XCTAssertEqual(evidence.observations.map(\.control), [.crossfader])
+        XCTAssertTrue(evidence.spans(for: .rightChannel, in: 0...1).allSatisfy { $0.gain == nil })
+        XCTAssertTrue(evidence.combinedSpans(in: 0...1).allSatisfy { $0.gain == nil })
     }
 }

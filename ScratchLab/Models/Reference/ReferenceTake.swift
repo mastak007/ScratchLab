@@ -2741,6 +2741,7 @@ struct ReferenceTearCanonicalProjection: Codable, Equatable, Sendable {
     let positionRange: ClosedRange<Double>?
     let coordinateSpace: ScratchNotation.GestureRecord.CoordinateSpace
     let reasons: [ReferenceTearProjectionReason]
+    var mixerFaders: ScratchMixerFaderEvidence? = nil
 
     var isEmpty: Bool { records.isEmpty }
 }
@@ -2760,7 +2761,7 @@ extension ReferenceTearCanonicalProjection {
     }
 
     private enum CodingKeys: String, CodingKey {
-        case records, timeRange, positionRange, coordinateSpace, reasons
+        case records, timeRange, positionRange, coordinateSpace, reasons, mixerFaders
     }
 
     init(from decoder: any Decoder) throws {
@@ -2770,6 +2771,7 @@ extension ReferenceTearCanonicalProjection {
         positionRange = try values.decodeIfPresent(StoredBounds.self, forKey: .positionRange)?.range(codingPath: decoder.codingPath)
         coordinateSpace = try values.decode(ScratchNotation.GestureRecord.CoordinateSpace.self, forKey: .coordinateSpace)
         reasons = try values.decode([ReferenceTearProjectionReason].self, forKey: .reasons)
+        mixerFaders = try values.decodeIfPresent(ScratchMixerFaderEvidence.self, forKey: .mixerFaders)
     }
 
     func encode(to encoder: any Encoder) throws {
@@ -2779,6 +2781,44 @@ extension ReferenceTearCanonicalProjection {
         try values.encodeIfPresent(positionRange.map { StoredBounds(lowerBound: $0.lowerBound, upperBound: $0.upperBound) }, forKey: .positionRange)
         try values.encode(coordinateSpace, forKey: .coordinateSpace)
         try values.encode(reasons, forKey: .reasons)
+        try values.encodeIfPresent(mixerFaders, forKey: .mixerFaders)
+    }
+}
+
+extension ReferenceTearCanonicalProjection {
+    /// Replaces only the gate interpretation. Curves, holds, directions, IDs
+    /// and missing-motion regions are unchanged. Separate controls survive.
+    func applyingMixerFaders(_ evidence: ScratchMixerFaderEvidence?) -> Self {
+        guard let evidence else { return self }
+        let provenance = ScratchNotation.GestureRecord.Evidence(provenance: .measured,
+            observation: ScratchNotationEvidence(source: .mixerControls, confidence: 1,
+                reason: "recorded_crossfader_and_channel_software_gate"))
+        let updated = records.map { record -> ScratchNotation.GestureRecord in
+            guard record.timingDomain == .seconds,
+                  let first = record.subdivisions.first, let last = record.subdivisions.last,
+                  first.span.startTime.isFinite, last.span.endTime.isFinite,
+                  first.span.startTime < last.span.endTime else { return record }
+            var spans: [ScratchNotation.GestureRecord.FaderSpan] = []
+            for span in evidence.combinedSpans(in: first.span.startTime...last.span.endTime) {
+                guard let state = span.state else { continue }
+                if let prior = spans.last, prior.state == state, prior.span.endTime == span.start {
+                    spans[spans.count - 1] = .init(id: prior.id,
+                        span: .init(startTime: prior.span.startTime, endTime: span.end),
+                        state: state, evidence: provenance)
+                } else {
+                    spans.append(.init(id: "\(record.id)#mixer\(spans.count)",
+                        span: .init(startTime: span.start, endTime: span.end), state: state, evidence: provenance))
+                }
+            }
+            return .init(id: record.id, direction: record.direction, timingDomain: record.timingDomain,
+                coordinateSpace: record.coordinateSpace, evidence: record.evidence,
+                subdivisions: record.subdivisions, internalHolds: record.internalHolds,
+                faderTransitions: [], faderIntervals: spans)
+        }
+        var projection = Self(records: updated, timeRange: timeRange, positionRange: positionRange,
+                              coordinateSpace: coordinateSpace, reasons: reasons)
+        projection.mixerFaders = evidence
+        return projection
     }
 }
 
@@ -2801,6 +2841,7 @@ struct ReferenceTearEvidenceSourceBinding: Codable, Equatable, Sendable {
 /// legacy JSON/date representation. No existing export schema changes.
 struct ReferenceTearEvidenceDocument: Codable, Equatable, Sendable {
     static let currentSchemaVersion = "scratchlab_reference_tear_evidence_v1"
+    static let mixerSchemaVersion = "scratchlab_reference_tear_evidence_v2"
     let schemaVersion: String
     let sourceBinding: ReferenceTearEvidenceSourceBinding
     let referenceTakeID: String
@@ -2932,7 +2973,8 @@ enum ReferenceTearEvidenceCodec {
         performedLimitations: [String: [CanonicalTearComparison.UnavailableReason]] = [:]
     ) throws -> Data {
         let document = ReferenceTearEvidenceDocument(
-            schemaVersion: ReferenceTearEvidenceDocument.currentSchemaVersion,
+            schemaVersion: projection.mixerFaders == nil ? ReferenceTearEvidenceDocument.currentSchemaVersion
+                : ReferenceTearEvidenceDocument.mixerSchemaVersion,
             sourceBinding: sourceBinding, referenceTakeID: review.referenceTakeID,
             review: review, projection: projection, performedLimitations: performedLimitations)
         try validate(document)
@@ -2970,7 +3012,7 @@ enum ReferenceTearEvidenceCodec {
         let version: String
         do { version = try decoder.decode(Header.self, from: data).schemaVersion }
         catch { throw Error.malformedDocument(error.localizedDescription) }
-        guard version == ReferenceTearEvidenceDocument.currentSchemaVersion else {
+        guard [ReferenceTearEvidenceDocument.currentSchemaVersion, ReferenceTearEvidenceDocument.mixerSchemaVersion].contains(version) else {
             throw Error.unsupportedSchema(version)
         }
         let document: ReferenceTearEvidenceDocument
@@ -3007,7 +3049,7 @@ enum ReferenceTearEvidenceCodec {
     }
 
     private static func validate(_ document: ReferenceTearEvidenceDocument) throws {
-        guard document.schemaVersion == ReferenceTearEvidenceDocument.currentSchemaVersion else {
+        guard [ReferenceTearEvidenceDocument.currentSchemaVersion, ReferenceTearEvidenceDocument.mixerSchemaVersion].contains(document.schemaVersion) else {
             throw Error.unsupportedSchema(document.schemaVersion)
         }
         let binding = document.sourceBinding
@@ -3019,6 +3061,16 @@ enum ReferenceTearEvidenceCodec {
         guard !document.referenceTakeID.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
               review.referenceTakeID == document.referenceTakeID else {
             throw Error.identityMismatch("review and document reference identities disagree")
+        }
+        if document.schemaVersion == ReferenceTearEvidenceDocument.mixerSchemaVersion {
+            guard let mixer = projection.mixerFaders, mixer == source.mixerFaderEvidence,
+                  mixer.version == 1, mixer.sealed,
+                  mixer.sessionID == source.sessionID, mixer.takeID == source.takeID,
+                  projection.applyingMixerFaders(mixer).records == projection.records else {
+                throw Error.identityMismatch("mixer lanes or combined gate differ from the recorded source")
+            }
+        } else if projection.mixerFaders != nil || source.mixerFaderEvidence != nil {
+            throw Error.invalidSnapshot("separate mixer lanes require reference tear evidence v2")
         }
         guard review.rawMovementEvents == (source.detectedNotation?.recordMovementEvents ?? []) else {
             throw Error.identityMismatch("review raw movement observations differ from the original sidecar")

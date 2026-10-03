@@ -2800,6 +2800,15 @@ final class MacCaptureEngine: NSObject, ObservableObject {
                 .map { $0.resolvedCurveConfig.resolvedResponse(for: $0) }
             midiCaptureLock.lock()
             parkedCrossfaderCurveResponseStorage = response
+            let now = CACurrentMediaTime()
+            let controls: [(ScratchMixerFaderEvidence.Control, MIDILearnedControl?)] = [
+                (.crossfader, currentMIDIDeviceMapping?.control(for: .crossfader)),
+                (.rightChannel, currentMIDIDeviceMapping?.control(for: .rightUpfader))
+            ]
+            for (control, mapping) in controls where mixerFaderMappings[control]?.control != mapping {
+                mixerFaderRecorder.invalidate(control, at: now)
+                mixerFaderMappings[control] = mapping.map { (control: $0, validFrom: now) }
+            }
             if oldValue?.control(for: .crossfader) != currentMIDIDeviceMapping?.control(for: .crossfader) {
                 activeRoutineParkedCrossfaderCoverage = nil
             }
@@ -5716,24 +5725,45 @@ final class MacCaptureEngine: NSObject, ObservableObject {
     /// device that has since been unplugged and replugged", which a bare
     /// cached value cannot.
     ///
-    /// Deliberately NOT a count of `MIDIPortConnectSource` calls. Recording
-    /// start closes and reopens the input port on purpose
-    /// (`openMIDIInputForRecording`), and so does finalization; both target
-    /// the same endpoint and change nothing a reading was correlated
-    /// against. Counting them retired an operator's parked-fader observation
-    /// captured seconds earlier, which is the whole reason a pre-take
-    /// snapshot exists. See `nextMIDIConnectionGeneration` for the exact
+    /// Deliberately NOT a count of `MIDIPortConnectSource` calls. Capture
+    /// start/finalization reuse a successful unchanged connection. Explicit
+    /// same-endpoint rebinds likewise retain the device-session generation.
+    /// See `nextMIDIConnectionGeneration` for the exact
     /// advance rule — it fails closed on every case that is not a
     /// same-endpoint reconnect. Guarded by `midiCaptureLock`, like every
     /// other field the Core MIDI read thread touches.
     private var midiConnectionGenerationStorage: UInt64 = 0 {
         didSet {
-            if oldValue != midiConnectionGenerationStorage { liveCrossfaderObservationState = nil }
+            if oldValue != midiConnectionGenerationStorage {
+                midiConnectionReadyStorage = false
+                liveCrossfaderObservationState = nil
+                for control in ScratchMixerFaderEvidence.Control.allCases {
+                    mixerFaderRecorder.invalidate(control, at: CACurrentMediaTime())
+                }
+            }
         }
     }
     /// The endpoint `midiConnectionGenerationStorage` currently identifies,
     /// or `nil` when no input is connected. Guarded by `midiCaptureLock`.
-    private var midiConnectionEndpointIdentityStorage: MIDIConnectionEndpointIdentity?
+    private var midiConnectionEndpointIdentityStorage: MIDIConnectionEndpointIdentity? {
+        didSet {
+            if oldValue != midiConnectionEndpointIdentityStorage {
+                midiConnectionReadyStorage = false
+                for control in ScratchMixerFaderEvidence.Control.allCases {
+                    mixerFaderRecorder.invalidate(control, at: CACurrentMediaTime())
+                }
+            }
+        }
+    }
+    /// True only after a successful port connection, cleared before disconnect.
+    /// Endpoint identity is published earlier for ingress attribution, so identity
+    /// alone cannot prove that an in-flight or failed connect is reusable.
+    private var midiConnectionReadyStorage = false
+    #if DEBUG
+    private var testOnly_midiReconnectDecision: ((Bool) -> Void)?
+    #endif
+    private var mixerFaderRecorder = ScratchMixerFaderRecorder()
+    private var mixerFaderMappings: [ScratchMixerFaderEvidence.Control: (control: MIDILearnedControl, validFrom: Double)] = [:]
     /// The crossfader control state observed at the CURRENT take's media-start
     /// boundary, awaiting the sidecar write at finalization. Cleared with the
     /// rest of the per-take state. Guarded by `midiCaptureLock`.
@@ -8780,12 +8810,12 @@ final class MacCaptureEngine: NSObject, ObservableObject {
         // Token-scoped: a duplicated or stale finalization drains nothing and
         // publishes no release. `nil` here means "not this take's window any
         // more", which is not the same as "this take captured nothing".
+        let mixerFaders = mixerFaderEvidenceSnapshot()
         guard let capturedMidi = drainCapturedMidiCCEvents(token: midiTakeToken) else { return }
-        // Read BEFORE the reconnect below: reconnecting bumps the MIDI
-        // connection generation, and this record must carry the generation it
-        // was actually observed under.
+        // Read before restoring monitoring, which may need a new connection
+        // if the selected endpoint changed while this take finalized.
         let crossfaderTakeStartState = takeCrossfaderTakeStartState()
-        reconnectSelectedMIDIInput()
+        reconnectSelectedMIDIInput(reuseCurrentConnection: true)
 
         // Decode direct platter telemetry (RANE ONE MKII CC6 ring counter) into
         // movement events. This is the preferred record-movement source when
@@ -8903,6 +8933,12 @@ final class MacCaptureEngine: NSObject, ObservableObject {
         // avoid. A take that observed nothing trustworthy still gets an
         // explicit unknown record rather than no record at all.
         sidecar.crossfaderTakeStartState = crossfaderTakeStartState
+        if let mixerFaders, mixerFaders.sealed {
+            sidecar.mixerFaderEvidence = ScratchMixerFaderEvidence(
+                version: mixerFaders.version, sessionID: sidecar.sessionID, takeID: sidecar.takeID,
+                epoch: mixerFaders.epoch, end: mixerFaders.end, sealed: true,
+                overflowed: mixerFaders.overflowed, observations: mixerFaders.observations)
+        }
 
         #if DEBUG
         writeMovementCompanionFilesForTake(sidecar: sidecar, sidecarURL: sidecarURL)
@@ -11343,6 +11379,23 @@ final class MacCaptureEngine: NSObject, ObservableObject {
         // here at all (that function is also independently guarded
         // against them — see its own doc comment — but there is no reason
         // to compute a value this call site immediately discards).
+        let lane: ScratchMixerFaderEvidence.Control?
+        switch control.action {
+        case .crossfader: lane = .crossfader
+        case .rightUpfader: lane = .rightChannel
+        default: lane = nil
+        }
+        if let lane {
+            midiCaptureLock.lock()
+            let now = CACurrentMediaTime()
+            // Applying a curve resets the audio factor. Require a new observation
+            // instead of carrying a position interpreted under the previous factor.
+            mixerFaderRecorder.invalidate(lane, at: now)
+            if let entry = mixerFaderMappings[lane] {
+                mixerFaderMappings[lane] = (entry.control, now)
+            }
+            midiCaptureLock.unlock()
+        }
         switch control.action {
         case .crossfader:
             scratchPlaybackController.applyCrossfaderCurve(control.resolvedCurveConfig.resolvedResponse(for: control))
@@ -12738,11 +12791,15 @@ final class MacCaptureEngine: NSObject, ObservableObject {
         midiRecordingStartTime = epochStartHostTime
         midiWindowTakeTokenStorage = takeToken
         midiWindowGenerationStorage += 1
+        if epochStartHostTime > 0, owner != .idle {
+            mixerFaderRecorder.begin(at: epochStartHostTime, sessionID: nil, takeID: nil, isPreview: owner == .preview)
+        }
     }
 
     /// Clears the buffer and its retention bookkeeping together. MUST be
     /// called with `midiCaptureLock` held.
     private func lockedClearCapturedMidiCCEvents() {
+        mixerFaderRecorder.clearWindow()
         capturedMidiCCEvents = []
         midiRecordingEndHostTime = nil
         livePreviewOldestTimestamp = nil
@@ -12818,7 +12875,7 @@ final class MacCaptureEngine: NSObject, ObservableObject {
         debugMidiEventsCapturedThisTake = 0
         #endif
         midiCaptureLock.unlock()
-        reconnectSelectedMIDIInput()
+        reconnectSelectedMIDIInput(reuseCurrentConnection: true)
         return token
     }
 
@@ -12861,6 +12918,7 @@ final class MacCaptureEngine: NSObject, ObservableObject {
             // Freeze the same first-close boundary used by held fader coverage.
             // Later finish callbacks cannot extend it after epoch retirement.
             midiRecordingEndHostTime = endHostTime
+            mixerFaderRecorder.close(at: endHostTime)
             lockedSealParkedCrossfaderCoverage(token: token, at: endHostTime)
             lockedSetMIDICaptureWindow(owner: .take, epochStartHostTime: 0, takeToken: token)
         }
@@ -12901,9 +12959,16 @@ final class MacCaptureEngine: NSObject, ObservableObject {
     private func closeMIDIInput() {
         guard midiInputPort != 0 else { return }
         midiCaptureLock.lock()
+        midiConnectionReadyStorage = false
         // Even a same-endpoint mid-take port rebind interrupts observation.
         // The media-start candidate is created only after the normal arm rebind.
         activeRoutineParkedCrossfaderCoverage = nil
+        if midiRecordingStartTime > 0 {
+            let now = CACurrentMediaTime()
+            for control in ScratchMixerFaderEvidence.Control.allCases {
+                mixerFaderRecorder.invalidate(control, at: now)
+            }
+        }
         midiCaptureLock.unlock()
         for endpoint in midiSourceEndpoints.values {
             MIDIPortDisconnectSource(midiInputPort, endpoint)
@@ -13272,7 +13337,8 @@ final class MacCaptureEngine: NSObject, ObservableObject {
                 self?.activeCrossfaderTakeStartStateSnapshot()
             },
             activeCrossfaderState: { [weak self] in self?.activeLiveCrossfaderStateSnapshot() },
-            activePlaybackLoopContext: playbackLoopContext
+            activePlaybackLoopContext: playbackLoopContext,
+            mixerFaderEvidence: { [weak self] in self?.mixerFaderEvidenceSnapshot() }
         )
     }
 
@@ -13420,6 +13486,32 @@ final class MacCaptureEngine: NSObject, ObservableObject {
     /// compiled into a Release build.
     func testOnly_setDeviceMapping(_ mapping: MIDIDeviceMapping?) {
         currentMIDIDeviceMapping = mapping
+    }
+
+    /// Supplies discovery/connection readiness to the production reconnect
+    /// decision; the hook replaces only its Core MIDI effects in native tests.
+    func testOnly_setMIDIReconnectContext(
+        sourceID: String?, endpointRef: MIDIEndpointRef = 1, connected: Bool,
+        observe: @escaping (Bool) -> Void
+    ) {
+        if let sourceID {
+            let choice = MIDIInputSourceChoice(id: sourceID, name: "Test controller")
+            availableMIDISources = [choice]
+            midiSourceEndpoints = [choice: endpointRef]
+        } else {
+            availableMIDISources = []
+            midiSourceEndpoints = [:]
+        }
+        midiCaptureLock.withLock { midiConnectionReadyStorage = connected }
+        testOnly_midiReconnectDecision = observe
+    }
+
+    func testOnly_restoreMIDIMonitoringAfterCapture() {
+        reconnectSelectedMIDIInput(reuseCurrentConnection: true)
+    }
+
+    func testOnly_forceMIDIReconnect() {
+        reconnectSelectedMIDIInput()
     }
 
     /// Test-only seam: `scratchPlaybackController` is private. Fader-gain
@@ -13716,6 +13808,40 @@ final class MacCaptureEngine: NSObject, ObservableObject {
         }
     }
 
+    /// Uses the same resolved learned curve as playback, with exact connection
+    /// and capture-window ownership. Raw MIDI remains byte-for-byte independent.
+    private func recordMixerFaderObservation(sourceID: String?, connection: UInt64,
+        channel: Int, controller: Int, value: Int, timestamp: Double) {
+        midiCaptureLock.lock()
+        defer { midiCaptureLock.unlock() }
+        lockedRecordMixerFaderObservation(sourceID: sourceID, connection: connection,
+            channel: channel, controller: controller, value: value, timestamp: timestamp, admitted: false)
+    }
+
+    private func lockedRecordMixerFaderObservation(sourceID: String?, connection: UInt64,
+        channel: Int, controller: Int, value: Int, timestamp: Double, admitted: Bool) {
+        guard let sourceID, sourceID == midiConnectionEndpointIdentityStorage?.sourceID,
+              connection == midiConnectionGenerationStorage, connection > 0 else { return }
+        for control in ScratchMixerFaderEvidence.Control.allCases {
+            guard let entry = mixerFaderMappings[control], timestamp >= entry.validFrom,
+                  entry.control.messageType == .controlChange,
+                  entry.control.channel == channel, entry.control.controlNumber == controller else { continue }
+            let mapping = entry.control
+            let binding = ScratchMixerFaderEvidence.Binding(sourceID: sourceID,
+                connectionGeneration: connection, channel: channel, controller: controller,
+                minimum: mapping.minValue, maximum: mapping.maxValue, inverted: mapping.inverted,
+                response: mapping.resolvedCurveConfig.resolvedResponse(for: mapping))
+            mixerFaderRecorder.observe(control: control, binding: binding, rawValue: value,
+                at: timestamp, admitted: admitted)
+        }
+    }
+
+    func mixerFaderEvidenceSnapshot() -> ScratchMixerFaderEvidence? {
+        midiCaptureLock.lock()
+        defer { midiCaptureLock.unlock() }
+        return mixerFaderRecorder.snapshot(at: CACurrentMediaTime())
+    }
+
     // MARK: - Live MIDI CC observability (reference-authoring preflight/calibration)
 
     /// One MIDI address's most recent observation, independent of whether a
@@ -13943,6 +14069,11 @@ final class MacCaptureEngine: NSObject, ObservableObject {
             calibration: activeCalibration,
             observedAt: timestamp
         ) }
+        if !isTwelve, !consumedByLearn {
+            recordMixerFaderObservation(sourceID: effectiveSourceIdentifier,
+                connection: observationConnectionGeneration, channel: channel,
+                controller: controller, value: value, timestamp: timestamp)
+        }
         // Rane ONE MK2 pad candidate labelling — diagnostic only; no routing, no scoring.
         let padLabel = RaneOneMK2PadCandidateLabeler.label(channel: channel, cc: controller, value: value)
         let summary: String
@@ -14122,6 +14253,12 @@ final class MacCaptureEngine: NSObject, ObservableObject {
             calibratedPosition: calibratedPosition,
             calibrationID: calibrationID
         ))
+        if !isTwelve, !consumedByLearn {
+            // The gate event and its raw packet enter the SAME owned window.
+            lockedRecordMixerFaderObservation(sourceID: effectiveSourceIdentifier,
+                connection: observationConnectionGeneration, channel: channel,
+                controller: controller, value: value, timestamp: timestamp, admitted: true)
+        }
         // Running extremes, maintained in O(1). Not `first`/`last`: MIDI host
         // times are not guaranteed to arrive in order.
         livePreviewOldestTimestamp = min(livePreviewOldestTimestamp ?? timestamp, timestamp)
@@ -14460,9 +14597,30 @@ final class MacCaptureEngine: NSObject, ObservableObject {
         return current
     }
 
-    private func reconnectSelectedMIDIInput() {
+    private func reconnectSelectedMIDIInput(reuseCurrentConnection: Bool = false) {
+        let selectedEndpoint = availableMIDISources
+            .first { $0.id == selectedMIDIInputSourceID }
+            .flatMap { source in midiSourceEndpoints[source].map {
+                MIDIConnectionEndpointIdentity(sourceID: source.id, endpointRef: $0)
+            } }
+        let canReuse = midiCaptureLock.withLock {
+            reuseCurrentConnection && selectedEndpoint != nil
+                && midiConnectionReadyStorage && midiConnectionGenerationStorage > 0
+                && midiConnectionEndpointIdentityStorage == selectedEndpoint
+        }
+        #if DEBUG
+        // Intercept the actual lifecycle decision without opening a MIDI device.
+        if let observe = testOnly_midiReconnectDecision {
+            observe(canReuse)
+            return
+        }
+        #endif
         defer { reconnectTwelveMIDIInput() }
         guard midiInputPort != 0 else { return }
+        // Capture-window ownership changes independently of the input port.
+        // Rebinding an already connected endpoint reloads its mapping, resetting
+        // both software gains and the observed positions needed at media start.
+        if canReuse { return }
         closeMIDIInput()
         guard let selectedSource = availableMIDISources.first(where: { $0.id == selectedMIDIInputSourceID }),
               let endpoint = midiSourceEndpoints[selectedSource] else {
@@ -14514,6 +14672,11 @@ final class MacCaptureEngine: NSObject, ObservableObject {
                 self?.midiListeningState = "Connection failed (\(connectStatus))"
             }
             return
+        }
+        midiCaptureLock.withLock {
+            if midiConnectionEndpointIdentityStorage == endpointIdentity {
+                midiConnectionReadyStorage = true
+            }
         }
         // Load any saved device mapping for this source.
         loadDeviceMappingForCurrentSource()

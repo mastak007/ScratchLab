@@ -488,7 +488,8 @@ final class ReferenceAuthoringTests: XCTestCase {
         observedAddress: CrossfaderMIDIAddress? = ReferenceAuthoringTests.calibration.address,
         // Linked wrist evidence is the shared "clean take" default; the
         // pending / missing / mismatched states have their own cases.
-        watchEvidence: ReferenceWatchEvidence = .linked(motionFileName: "watch-motion.json")
+        watchEvidence: ReferenceWatchEvidence = .linked(motionFileName: "watch-motion.json"),
+        mixerFaderEvidence: ScratchMixerFaderEvidence? = nil
     ) -> ReferenceTakeEvidence {
         var resolvedBoundaries = boundaries ?? ReferencePhraseBoundaries.nominal(for: metadata)
         if resolvedBoundaries.selectedRepetitionIndex == nil {
@@ -512,7 +513,7 @@ final class ReferenceAuthoringTests: XCTestCase {
             observedCrossfaderAddress: observedAddress,
             platterMovementEventCount: platterEventCount,
             derivation: derivation ?? self.derivation([(.open, 0, 10)]),
-            watchEvidence: watchEvidence
+            watchEvidence: watchEvidence, mixerFaderEvidence: mixerFaderEvidence
         )
     }
 
@@ -3847,9 +3848,9 @@ final class ReferenceTearEvidenceCodecTests: XCTestCase {
 
     func testUnknownVersionAndTruncatedRequiredFieldsFailExplicitly() throws {
         let f = try fixture(), data = try encoded(f)
-        let future = try changed(data) { $0["schemaVersion"] = "scratchlab_reference_tear_evidence_v2" }
+        let future = try changed(data) { $0["schemaVersion"] = "scratchlab_reference_tear_evidence_v999" }
         XCTAssertThrowsError(try Codec.decodeDocument(future)) {
-            XCTAssertEqual($0 as? Codec.Error, .unsupportedSchema("scratchlab_reference_tear_evidence_v2"))
+            XCTAssertEqual($0 as? Codec.Error, .unsupportedSchema("scratchlab_reference_tear_evidence_v999"))
         }
         for key in ["review", "projection", "sourceBinding", "performedLimitations"] {
             let truncated = try changed(data) { $0.removeValue(forKey: key) }
@@ -4268,5 +4269,36 @@ final class SecondaryCameraTests: XCTestCase {
         let audioRange = try await audioTrack.load(.timeRange)
         XCTAssertEqual(audioRange.start.seconds, 0, accuracy: 0.001)
         XCTAssertGreaterThan(audioRange.duration.seconds, 0.8)
+    }
+}
+
+
+extension ReferenceAuthoringTests {
+    func testNewMixerEvidenceCannotApproveUnknownRightChannelAsOpen() {
+        let e = ScratchMixerFaderEvidence(version: 1, sessionID: "s", takeID: "t", epoch: 100,
+            end: 100, sealed: true, overflowed: false, observations: [])
+        let report = ReferenceValidator.validate(makeEvidence(metadata: makeMetadata(), mixerFaderEvidence: e))
+        XCTAssertTrue(report.findings.contains { if case .mixerFaderEvidenceInvalid = $0 { return true }; return false })
+        XCTAssertFalse(report.passes)
+    }
+
+    func testBabyScratchValidationIncludesRightChannelClosures() {
+        let binding = ScratchMixerFaderEvidence.Binding(sourceID: "test-rig", connectionGeneration: 1,
+            channel: 1, controller: 28, minimum: 0, maximum: 127, inverted: false,
+            response: .init(zeroAt: 0, oneAt: 1, shape: .linear))
+        var recorder = ScratchMixerFaderRecorder()
+        for control in ScratchMixerFaderEvidence.Control.allCases {
+            recorder.observe(control: control, binding: binding, rawValue: 127, at: 99, admitted: false)
+        }
+        recorder.begin(at: 100, sessionID: "s", takeID: "t")
+        recorder.observe(control: .rightChannel, binding: binding, rawValue: 0, at: 100.5, admitted: true)
+        recorder.close(at: 200)
+        let report = ReferenceValidator.validate(makeEvidence(metadata: makeMetadata(),
+            mixerFaderEvidence: recorder.snapshot(at: 200)))
+        XCTAssertTrue(report.findings.contains {
+            if case .mixerFaderEvidenceInvalid(let detail) = $0 { return detail.contains("muted repetition") }
+            return false
+        })
+        XCTAssertFalse(report.passes)
     }
 }

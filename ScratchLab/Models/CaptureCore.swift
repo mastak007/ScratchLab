@@ -5892,6 +5892,7 @@ enum ScratchNotationEvidenceSource: String, Codable, Equatable, Sendable, CaseIt
     case authored
     case platterTimeline
     case crossfaderRaw
+    case mixerControls
     case audioOnset
     case watchMotion
     case manualCorrection
@@ -5900,13 +5901,13 @@ enum ScratchNotationEvidenceSource: String, Codable, Equatable, Sendable, CaseIt
     var canEstablishPlatterMotion: Bool {
         switch self {
         case .authored, .platterTimeline, .watchMotion, .manualCorrection: return true
-        case .crossfaderRaw, .audioOnset, .unknown: return false
+        case .crossfaderRaw, .mixerControls, .audioOnset, .unknown: return false
         }
     }
 
     var canEstablishFaderState: Bool {
         switch self {
-        case .authored, .crossfaderRaw, .manualCorrection: return true
+        case .authored, .crossfaderRaw, .mixerControls, .manualCorrection: return true
         case .platterTimeline, .watchMotion, .audioOnset, .unknown: return false
         }
     }
@@ -6877,7 +6878,7 @@ extension ScratchNotation {
             var issues: [String] = []
             if evidence.provenance == .unknown { issues.append("unknown provenance cannot establish a state") }
             if evidence.provenance == .measured,
-               ![.platterTimeline, .watchMotion, .crossfaderRaw].contains(observation.source) {
+               ![.platterTimeline, .watchMotion, .crossfaderRaw, .mixerControls].contains(observation.source) {
                 issues.append("measured provenance requires a measurement source")
             }
             if !observation.confidence.isFinite || !(0...1).contains(observation.confidence) {
@@ -12476,6 +12477,9 @@ enum CaptureCore {
         /// never be mistaken for one of `mixerMidiEvents`. See
         /// `CrossfaderTakeStartState`.
         var crossfaderTakeStartState: CrossfaderTakeStartState?
+        /// Independent software mixer controls, including held-state provenance.
+        /// Missing in historical takes; absence never establishes an open channel.
+        var mixerFaderEvidence: ScratchMixerFaderEvidence? = nil
         var secondaryCamera: SecondaryCameraEvidence?
         var auditTrail: [CaptureAuditEvent]
 
@@ -13493,5 +13497,209 @@ struct SecondaryCameraEvidence: Codable, Equatable, Sendable {
             throw CocoaError(.fileReadCorruptFile)
         }
         return url
+    }
+}
+
+
+// MARK: - Independent captured mixer controls
+
+/// Versioned interpretation beside raw MIDI, never a replacement MIDI stream.
+/// Gains describe the software mixer gate, not proof that the sample is sounding.
+struct ScratchMixerFaderEvidence: Codable, Equatable, Sendable {
+    enum Control: String, Codable, CaseIterable, Sendable {
+        case crossfader, rightChannel
+        var title: String { self == .crossfader ? "CROSSFADER" : "RIGHT CHANNEL" }
+    }
+
+    struct Binding: Codable, Equatable, Sendable {
+        let sourceID: String
+        let connectionGeneration: UInt64
+        let channel: Int
+        let controller: Int
+        let minimum: Int
+        let maximum: Int
+        let inverted: Bool
+        let response: FaderCurveResponse
+
+        func gain(rawValue: Int) -> Double? {
+            guard !sourceID.isEmpty, connectionGeneration > 0,
+                  (0...15).contains(channel), (0...127).contains(controller),
+                  (0...127).contains(rawValue), minimum >= 0, maximum <= 127,
+                  maximum > minimum else { return nil }
+            let position = min(1, max(0, Double(rawValue - minimum) / Double(maximum - minimum)))
+            return FaderCurveResponse.gain(forNormalizedPosition: inverted ? 1 - position : position,
+                                          response: response)
+        }
+    }
+
+    struct Observation: Codable, Equatable, Sendable {
+        enum Kind: String, Codable, Sendable { case message, heldAtStart, invalidated }
+        let control: Control
+        /// Original observation time. Held-at-start observations keep negative time.
+        let time: Double
+        let kind: Kind
+        let binding: Binding?
+        let rawValue: Int?
+        var gain: Double? {
+            guard kind != .invalidated, let binding, let rawValue else { return nil }
+            return binding.gain(rawValue: rawValue)
+        }
+    }
+
+    struct Span: Equatable, Sendable {
+        let start: Double
+        let end: Double
+        let gain: Double?
+        var state: ScratchNotationFaderState? { gain.map { $0 == 0 ? .closed : .open } }
+    }
+
+    let version: Int
+    let sessionID: String?
+    let takeID: String?
+    let epoch: Double
+    let end: Double
+    let sealed: Bool
+    let overflowed: Bool
+    let observations: [Observation]
+
+    var isUsable: Bool {
+        version == 1 && epoch.isFinite && end.isFinite && end >= 0 && !overflowed
+            && observations.allSatisfy { $0.time.isFinite && $0.time <= end
+                && ($0.kind == .heldAtStart ? $0.time <= 0 : $0.time >= 0) }
+    }
+
+    /// Piecewise held state only within the witnessed ownership interval.
+    /// Invalid or out-of-order evidence fails closed for the whole control.
+    func spans(for control: Control, in range: ClosedRange<Double>) -> [Span] {
+        guard range.lowerBound.isFinite, range.upperBound.isFinite,
+              range.upperBound > range.lowerBound else { return [] }
+        let unknown = [Span(start: range.lowerBound, end: range.upperBound, gain: nil)]
+        guard isUsable else { return unknown }
+        let events = observations.filter { $0.control == control }
+        guard zip(events, events.dropFirst()).allSatisfy({ $0.time <= $1.time }),
+              events.filter({ $0.kind == .heldAtStart }).count <= 1,
+              !events.dropFirst().contains(where: { $0.kind == .heldAtStart }) else { return unknown }
+        var boundaries = [range.lowerBound, range.upperBound]
+        boundaries += [0, end].filter { $0 > range.lowerBound && $0 < range.upperBound }
+        boundaries += events.map(\.time).filter { $0 > range.lowerBound && $0 < range.upperBound }
+        boundaries = Array(Set(boundaries)).sorted()
+        var result: [Span] = []
+        var index = 0
+        var latest: Observation?
+        for (start, stop) in zip(boundaries, boundaries.dropFirst()) {
+            while index < events.count && events[index].time <= start {
+                latest = events[index]; index += 1
+            }
+            let gain = start >= 0 && start < end ? latest?.gain : nil
+            if let previous = result.last, previous.gain == gain {
+                result[result.count - 1] = Span(start: previous.start, end: stop, gain: gain)
+            } else { result.append(Span(start: start, end: stop, gain: gain)) }
+        }
+        return result
+    }
+
+    func combinedSpans(in range: ClosedRange<Double>) -> [Span] {
+        let cross = spans(for: .crossfader, in: range)
+        let channel = spans(for: .rightChannel, in: range)
+        let bounds = Array(Set((cross + channel).flatMap { [$0.start, $0.end] })).sorted()
+        var crossIndex = 0
+        var channelIndex = 0
+        return zip(bounds, bounds.dropFirst()).map { start, end in
+            while crossIndex + 1 < cross.count && cross[crossIndex].end <= start { crossIndex += 1 }
+            while channelIndex + 1 < channel.count && channel[channelIndex].end <= start { channelIndex += 1 }
+            let a = cross.indices.contains(crossIndex) ? cross[crossIndex].gain : nil
+            let b = channel.indices.contains(channelIndex) ? channel[channelIndex].gain : nil
+            let gain: Double?
+            if a == 0 || b == 0 { gain = 0 }
+            else if let a, let b { gain = a * b }
+            else { gain = nil }
+            return Span(start: start, end: end, gain: gain)
+        }
+    }
+}
+
+/// Lock-owned by the platform capture engine. No clocks, device APIs or UI.
+/// The bounded event log records invalidation as well as control changes.
+struct ScratchMixerFaderRecorder {
+    typealias Evidence = ScratchMixerFaderEvidence
+    private var latest: [Evidence.Control: Evidence.Observation] = [:]
+    private var captured: [Evidence.Observation] = []
+    private var epoch: Double?
+    private var closedAt: Double?
+    private var sessionID: String?
+    private var takeID: String?
+    private var overflowed = false
+    private let capacity = 32_000
+    private var isPreview = false
+
+    /// Clears only capture ownership. Current connection observations remain
+    /// available for an explicitly witnessed held state at the next media start.
+    mutating func clearWindow() {
+        epoch = nil; closedAt = nil; captured = []; overflowed = false
+        sessionID = nil; takeID = nil; isPreview = false
+    }
+
+    mutating func begin(at time: Double, sessionID: String?, takeID: String?, isPreview: Bool = false) {
+        self.isPreview = isPreview
+        epoch = time; closedAt = nil; captured = []; overflowed = false
+        self.sessionID = sessionID; self.takeID = takeID
+        for control in Evidence.Control.allCases {
+            if let previous = latest[control], previous.time <= time {
+                captured.append(.init(control: control, time: previous.time - time,
+                    kind: .heldAtStart, binding: previous.binding, rawValue: previous.rawValue))
+            }
+        }
+    }
+
+    mutating func observe(control: Evidence.Control, binding: Evidence.Binding,
+                          rawValue: Int, at time: Double, admitted: Bool) {
+        guard time.isFinite, binding.gain(rawValue: rawValue) != nil else { return }
+        let event = Evidence.Observation(control: control, time: time, kind: .message,
+                                         binding: binding, rawValue: rawValue)
+        if time < (latest[control]?.time ?? -.infinity) {
+            // Preserve admitted disorder so the control timeline becomes
+            // unknown instead of silently losing a packet. Do not rewind the
+            // independent current-position cache.
+            if admitted { append(event) }
+            return
+        }
+        latest[control] = event
+        if admitted { append(event) }
+    }
+
+    mutating func invalidate(_ control: Evidence.Control, at time: Double) {
+        latest[control] = nil
+        append(.init(control: control, time: time, kind: .invalidated, binding: nil, rawValue: nil))
+    }
+
+    mutating func close(at time: Double) {
+        guard closedAt == nil, let epoch, time.isFinite, time >= epoch else { return }
+        closedAt = time
+        // Events beyond the authoritative close are not part of this interval.
+        captured.removeAll { $0.time > time - epoch }
+    }
+
+    private mutating func append(_ event: Evidence.Observation) {
+        guard let epoch, closedAt == nil, event.time >= epoch, !overflowed else { return }
+        if captured.count >= capacity, isPreview {
+            // Preview is a rolling view. Keep the original last observation for
+            // each control before the retained window, never invent a new sample.
+            let removed = captured.prefix(capacity / 4)
+            let anchors = Evidence.Control.allCases.compactMap { control in
+                removed.last { $0.control == control }
+            }.sorted { $0.time < $1.time }
+            captured = anchors + captured.dropFirst(capacity / 4)
+        }
+        guard captured.count < capacity else { overflowed = true; return }
+        captured.append(.init(control: event.control, time: event.time - epoch,
+            kind: event.kind, binding: event.binding, rawValue: event.rawValue))
+    }
+
+    func snapshot(at now: Double) -> Evidence? {
+        guard let epoch, now.isFinite else { return nil }
+        let end = max(0, (closedAt ?? now) - epoch)
+        return Evidence(version: 1, sessionID: sessionID, takeID: takeID, epoch: epoch,
+            end: end, sealed: closedAt != nil, overflowed: overflowed,
+            observations: captured.filter { $0.time <= end })
     }
 }

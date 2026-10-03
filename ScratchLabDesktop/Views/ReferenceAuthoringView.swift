@@ -955,7 +955,7 @@ struct ReferenceAuthoringView: View {
                         platterEvidenceIntervals: liveNotationTracker.platterEvidenceIntervals,
                         derivation: liveNotationTracker.faderDerivation,
                         coordinates: liveNotationTracker.continuousPlatterCoordinates
-                    ),
+                    ).applyingMixerFaders(liveNotationTracker.mixerFaderEvidence),
                     emptyMessage: "Waiting for movement…"
                 )
             }
@@ -1745,6 +1745,8 @@ struct ReferenceAuthoringView: View {
                     bpm: chartBPM,
                     showBeatGrid: reviewTake?.evidence.metadata.captureIntent?.isMovementCheck != true,
                     wrapPeriod: wrapPeriod,
+                    mixerFaders: projection.mixerFaders,
+                    showsMixerFaderLanes: true,
                     backgroundColor: .clear
                 )
                 // Bounded, never `maxHeight: .infinity`: this card also lives

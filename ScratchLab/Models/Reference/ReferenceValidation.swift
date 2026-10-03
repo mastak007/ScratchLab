@@ -51,6 +51,7 @@ enum ReferenceValidationFinding: Equatable, Sendable {
         observed: String
     )
     case crossfaderEvidenceMissing
+    case mixerFaderEvidenceInvalid(detail: String)
     /// An open-fader technique produced no trustworthy calibrated reading, so
     /// whether the fader was open cannot be established either way.
     case faderOpenStateUnknown(technique: String, detail: String)
@@ -139,6 +140,8 @@ enum ReferenceValidationFinding: Equatable, Sendable {
             return "The stored crossfader calibration cannot be used: \(detail)"
         case .crossfaderCalibrationAddressMismatch(let calibrated, let observed):
             return "The crossfader calibration was measured on \(calibrated) but this take recorded fader traffic on \(observed). Recalibrate on the controller you are recording with."
+        case .mixerFaderEvidenceInvalid(let detail):
+            return "Mixer control evidence is incomplete: \(detail)"
         case .crossfaderEvidenceMissing:
             return "No crossfader MIDI was recorded for this take. Check that the controller is connected and the crossfader is mapped, then re-record."
         case .faderOpenStateUnknown(let technique, let detail):
@@ -381,6 +384,7 @@ struct ReferenceTakeEvidence: Codable, Equatable, Sendable {
     /// `ReferenceCrossfaderTakeStart.correlate`, and reported here rather than
     /// re-decided by each consumer.
     let crossfaderTakeStartOutcome: ReferenceCrossfaderTakeStart.Outcome?
+    let mixerFaderEvidence: ScratchMixerFaderEvidence?
     /// The derivation produced from the raw samples and the calibration.
     /// `nil` when derivation could not run (unusable or absent calibration).
     let derivation: CrossfaderDerivation?
@@ -406,7 +410,8 @@ struct ReferenceTakeEvidence: Codable, Equatable, Sendable {
         platterMovementEvents: [CaptureCore.DetectedNotationRecordMovementEvent] = [],
         platterEvidenceIntervals: [CaptureCore.PlatterEvidenceInterval] = [],
         crossfaderTakeStartState: CaptureCore.CrossfaderTakeStartState? = nil,
-        crossfaderTakeStartOutcome: ReferenceCrossfaderTakeStart.Outcome? = nil
+        crossfaderTakeStartOutcome: ReferenceCrossfaderTakeStart.Outcome? = nil,
+        mixerFaderEvidence: ScratchMixerFaderEvidence? = nil
     ) {
         self.watchEvidence = watchEvidence
         self.metadata = metadata
@@ -423,6 +428,7 @@ struct ReferenceTakeEvidence: Codable, Equatable, Sendable {
         self.platterEvidenceIntervals = platterEvidenceIntervals
         self.crossfaderTakeStartState = crossfaderTakeStartState
         self.crossfaderTakeStartOutcome = crossfaderTakeStartOutcome
+        self.mixerFaderEvidence = mixerFaderEvidence
         self.derivation = derivation
     }
 }
@@ -750,6 +756,23 @@ enum ReferenceValidator {
     ) -> [ReferenceValidationFinding] {
         var findings: [ReferenceValidationFinding] = []
 
+        if let mixer = evidence.mixerFaderEvidence {
+            if !mixer.isUsable || !mixer.sealed || mixer.sessionID == nil || mixer.takeID == nil {
+                findings.append(.mixerFaderEvidenceInvalid(detail: "the recorded control timeline is invalid or was not sealed at Stop."))
+            }
+            let repetitions = evidence.boundaries.selectedRepetition.map { [$0] } ?? evidence.boundaries.repetitions
+            for repetition in repetitions {
+                let start = max(0, repetition.startSeconds(metadata: evidence.metadata))
+                let end = repetition.endSeconds(metadata: evidence.metadata)
+                guard start.isFinite, end.isFinite, end > start else { continue }
+                for control in ScratchMixerFaderEvidence.Control.allCases {
+                    if mixer.spans(for: control, in: start...end).contains(where: { $0.gain == nil }) {
+                        findings.append(.mixerFaderEvidenceInvalid(detail: "\(control.title) has an unobserved interval in repetition \(repetition.index + 1)."))
+                    }
+                }
+            }
+        }
+
         // Crossfader requirements come from the TECHNIQUE, never from a
         // blanket "there must be fader movement" rule.
         //
@@ -759,7 +782,8 @@ enum ReferenceValidator {
         // `techniqueFindings` via `faderOpenEvidence`, which reports `unknown`
         // rather than silently passing. Requiring movement here made the one
         // authorable technique impossible to validate.
-        if !expectation.requiresContinuouslyOpenFader {
+        if !expectation.requiresContinuouslyOpenFader,
+           !(evidence.metadata.faderVariant == .upfader && evidence.mixerFaderEvidence != nil) {
             if evidence.crossfaderRawSamples.isEmpty {
                 findings.append(.crossfaderEvidenceMissing)
             } else if evidence.metadata.crossfaderCalibration?.isUsable == true, evidence.derivation == nil {
@@ -897,6 +921,17 @@ enum ReferenceValidator {
         // Evaluated BEFORE the derivation guard below: an open-fader technique
         // with no derivation at all is exactly the `unknown` case, and
         // returning early would have let it pass silently.
+        if expectation.requiresContinuouslyOpenFader, let mixer = evidence.mixerFaderEvidence {
+            let repetitions = evidence.boundaries.selectedRepetition.map { [$0] } ?? evidence.boundaries.repetitions
+            for repetition in repetitions {
+                let start = max(0, repetition.startSeconds(metadata: metadata))
+                let end = repetition.endSeconds(metadata: metadata)
+                guard start.isFinite, end.isFinite, end > start else { continue }
+                if mixer.combinedSpans(in: start...end).contains(where: { $0.state == .closed }) {
+                    findings.append(.mixerFaderEvidenceInvalid(detail: "\(metadata.technique.displayName) requires both controls open, but a recorded control muted repetition \(repetition.index + 1)."))
+                }
+            }
+        }
         if expectation.requiresContinuouslyOpenFader {
             switch faderOpenEvidence(for: evidence) {
             case .provenContinuouslyOpen:
@@ -918,6 +953,25 @@ enum ReferenceValidator {
             }
         }
 
+        if metadata.faderVariant == .upfader, let mixer = evidence.mixerFaderEvidence {
+            guard expectation.minimumCutEventsPerRepetition > 0,
+                  expectation.source.isOperatorConfirmed else { return findings }
+            for repetition in evidence.boundaries.repetitions {
+                let start = repetition.startSeconds(metadata: metadata)
+                let end = repetition.endSeconds(metadata: metadata)
+                guard start.isFinite, end.isFinite, end > max(0, start) else { continue }
+                let spans = mixer.spans(for: .rightChannel, in: max(0, start)...end)
+                // A cut requires a witnessed sounding-to-muted transition;
+                // an initial closed state or unknown-to-closed is not a cut.
+                let count = zip(spans, spans.dropFirst()).filter {
+                    $0.state == .open && $1.state == .closed && $0.end == $1.start
+                }.count
+                if count < expectation.minimumCutEventsPerRepetition {
+                    findings.append(.mixerFaderEvidenceInvalid(detail: "Right channel recorded \(count) closing cut(s) in repetition \(repetition.index + 1); the confirmed requirement is \(expectation.minimumCutEventsPerRepetition)."))
+                }
+            }
+            return findings
+        }
         guard let derivation = evidence.derivation else { return findings }
 
         // Cut-count requirements are TECHNIQUE-SHAPE claims — ScratchLab has

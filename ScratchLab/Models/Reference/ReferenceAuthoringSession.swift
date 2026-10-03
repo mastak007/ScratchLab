@@ -142,6 +142,7 @@ struct ReferenceRecordedTakeArtifacts: Equatable, Sendable {
     let witnessedTiming: ReferenceWitnessedTiming?
     let mediaTimeOrigin: ReferenceMediaTimeOrigin?
     let sourceState: ReferencePerTakeSourceState?
+    let mixerFaderEvidence: ScratchMixerFaderEvidence?
 
     init(
         audio: ReferenceArtifactMeasurement,
@@ -165,13 +166,15 @@ struct ReferenceRecordedTakeArtifacts: Equatable, Sendable {
         rawSidecarURL: URL? = nil,
         witnessedTiming: ReferenceWitnessedTiming? = nil,
         mediaTimeOrigin: ReferenceMediaTimeOrigin? = nil,
-        sourceState: ReferencePerTakeSourceState? = nil
+        sourceState: ReferencePerTakeSourceState? = nil,
+        mixerFaderEvidence: ScratchMixerFaderEvidence? = nil
     ) {
         self.tearEvidenceSourceBinding = tearEvidenceSourceBinding
         self.rawSidecarURL = rawSidecarURL
         self.witnessedTiming = witnessedTiming
         self.mediaTimeOrigin = mediaTimeOrigin
         self.sourceState = sourceState
+        self.mixerFaderEvidence = mixerFaderEvidence
         self.audio = audio
         self.video = video
         self.sidecar = sidecar
@@ -927,7 +930,8 @@ struct ReferenceAuthoringSession: Equatable, Sendable {
             platterMovementEvents: artifacts.platterMovementEvents,
             platterEvidenceIntervals: artifacts.platterEvidenceIntervals,
             crossfaderTakeStartState: artifacts.crossfaderTakeStartState,
-            crossfaderTakeStartOutcome: takeStartOutcome
+            crossfaderTakeStartOutcome: takeStartOutcome,
+            mixerFaderEvidence: artifacts.mixerFaderEvidence
         )
 
         let report = ReferenceValidator.validate(evidence, expectation: expectation, now: now)
@@ -1666,7 +1670,7 @@ struct ReferenceAuthoringTake: Equatable, Sendable, Identifiable {
         return ReferenceTearCanonicalProjectionBuilder.project(
             tearReview,
             platterTrajectorySegments: platterEvidence.trajectorySegments
-        )
+        ).applyingMixerFaders(evidence.mixerFaderEvidence)
     }
 
     /// Intrinsic limitations only. Inter-gesture gaps depend on the selected

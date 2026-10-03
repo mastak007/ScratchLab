@@ -5165,3 +5165,54 @@ extension ReferenceAuthoringViewModelTests {
         XCTAssertFalse(model.visibleMessage?.contains("Could not play") == true)
     }
 }
+
+
+extension ReferenceTearEvidencePipelineTests {
+    func testSeparateMixerLanesSurviveFinalizationDraftReopenAndZIPWithSourceBinding() async throws {
+        let original = try await fixture(Self.withFader(Self.tear(holds: 1)))
+        let decoder = JSONDecoder(); decoder.dateDecodingStrategy = .iso8601
+        var sidecar = try decoder.decode(CaptureCore.LocalRecordingSidecar.self, from: original.sidecarData)
+        let binding = ScratchMixerFaderEvidence.Binding(sourceID: "fixture-rig", connectionGeneration: 1,
+            channel: 1, controller: 28, minimum: 0, maximum: 127, inverted: false,
+            response: .init(zeroAt: 0, oneAt: 1, shape: .linear))
+        var recorder = ScratchMixerFaderRecorder()
+        for control in ScratchMixerFaderEvidence.Control.allCases {
+            recorder.observe(control: control, binding: binding, rawValue: 127, at: 99, admitted: false)
+        }
+        recorder.begin(at: 100, sessionID: sidecar.sessionID, takeID: sidecar.takeID)
+        recorder.observe(control: .rightChannel, binding: binding, rawValue: 0, at: 100.2, admitted: true)
+        recorder.observe(control: .rightChannel, binding: binding, rawValue: 127, at: 100.4, admitted: true)
+        let duration = Double(max(30, Int(ceil(((original.raw.map(\.takeRelativeTime).max() ?? 0) + 0.1) * 30)))) / 30
+        recorder.close(at: 100 + duration)
+        sidecar.mixerFaderEvidence = try XCTUnwrap(recorder.snapshot(at: 100 + duration))
+        let bytes = try sidecar.encodedData()
+        try bytes.write(to: original.sidecarURL, options: .atomic)
+        let files = Fixture(directory: original.directory, mediaURL: original.mediaURL,
+            sidecarURL: original.sidecarURL, sidecarData: bytes, config: original.config, raw: original.raw)
+        let draftRoot = files.directory.appendingPathComponent("separate-lane-drafts")
+        let owner = worker([files], draftStore: ReferenceDraftStore(directory: draftRoot))
+        let take = try await record(owner)
+        XCTAssertEqual(take.evidence.mixerFaderEvidence, sidecar.mixerFaderEvidence)
+        XCTAssertEqual(take.tearProjection.mixerFaders, sidecar.mixerFaderEvidence)
+        XCTAssertTrue(take.tearProjection.records.flatMap(\.faderIntervals).contains { $0.state == .closed })
+        let fresh = worker([files], draftStore: ReferenceDraftStore(directory: draftRoot))
+        let reopened = await fresh.reopenDraft(id: take.id)
+        XCTAssertNil(reopened.errorMessage)
+        XCTAssertEqual(reopened.state.session.takeInReview?.tearProjection, take.tearProjection)
+        XCTAssertEqual(reopened.state.session.takeInReview?.evidence.mixerFaderEvidence, sidecar.mixerFaderEvidence)
+        let optional = try await owner.rawCaptureExportSnapshot(config: files.config)
+        let snapshot = try XCTUnwrap(optional)
+        let archived = try await Task.detached { try Self.archive(snapshot.source, in: files.directory) }.value
+        let document = try ReferenceTearEvidenceCodec.decodeDocument(XCTUnwrap(archived.companions[sidecar.takeID]))
+        XCTAssertEqual(document.schemaVersion, ReferenceTearEvidenceDocument.mixerSchemaVersion)
+        XCTAssertEqual(document.projection, take.tearProjection)
+        XCTAssertEqual(document.sourceBinding.rawSidecarData, bytes)
+        XCTAssertEqual(try Data(contentsOf: files.sidecarURL), bytes)
+        // A companion cannot replace its control state while keeping the source hash.
+        let tamperedProjection = ReferenceTearCanonicalProjection(records: document.projection.records,
+            timeRange: document.projection.timeRange, positionRange: document.projection.positionRange,
+            coordinateSpace: document.projection.coordinateSpace, reasons: document.projection.reasons)
+        XCTAssertThrowsError(try ReferenceTearEvidenceCodec.encode(sourceBinding: document.sourceBinding,
+            review: document.review, projection: tamperedProjection, performedLimitations: document.performedLimitations))
+    }
+}

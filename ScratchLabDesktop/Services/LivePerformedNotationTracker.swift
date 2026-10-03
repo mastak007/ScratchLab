@@ -77,6 +77,7 @@ struct LivePerformedNotationDataSource {
     /// active playback owner. Nil means the loop cannot be aligned truthfully.
     /// Transient presentation input; never supplied to physical decoding.
     let activePlaybackLoopContext: () -> PlaybackLoopContext?
+    let mixerFaderEvidence: () -> ScratchMixerFaderEvidence?
 
     init(
         selectedMIDISourceName: @escaping () -> String,
@@ -86,7 +87,8 @@ struct LivePerformedNotationDataSource {
         activeCrossfaderCalibration: @escaping () -> CrossfaderCalibration? = { nil },
         activeCrossfaderTakeStartState: @escaping () -> CaptureCore.CrossfaderTakeStartState? = { nil },
         activeCrossfaderState: (() -> LiveCrossfaderStateSnapshot?)? = nil,
-        activePlaybackLoopContext: @escaping () -> PlaybackLoopContext? = { nil }
+        activePlaybackLoopContext: @escaping () -> PlaybackLoopContext? = { nil },
+        mixerFaderEvidence: @escaping () -> ScratchMixerFaderEvidence? = { nil }
     ) {
         self.selectedMIDISourceName = selectedMIDISourceName
         self.selectedMIDISourceIdentifier = selectedMIDISourceIdentifier
@@ -96,6 +98,7 @@ struct LivePerformedNotationDataSource {
         self.activeCrossfaderTakeStartState = activeCrossfaderTakeStartState
         self.activeCrossfaderState = activeCrossfaderState
         self.activePlaybackLoopContext = activePlaybackLoopContext
+        self.mixerFaderEvidence = mixerFaderEvidence
     }
 }
 
@@ -147,6 +150,7 @@ enum LiveNotationTrackingState: Equatable {
 /// `freeze()` stops polling while retaining the completed Practice trace.
 final class LivePerformedNotationTracker: ObservableObject {
     @Published private(set) var state: LiveNotationTrackingState = .waiting
+    @Published private(set) var mixerFaderEvidence: ScratchMixerFaderEvidence?
     /// Latest poll's counters. DEBUG surfaces only; never read by rendering.
     @Published private(set) var diagnostics: LiveNotationDiagnostics?
     @Published private(set) var isFrozen = false
@@ -471,7 +475,9 @@ final class LivePerformedNotationTracker: ObservableObject {
     private func tick() {
         let dataSource = self.dataSource
         let baseline = self.baselineTimestamp
-        let newState = Self.computeState(dataSource: dataSource, baselineTimestamp: baseline)
+        guard let frame = Self.computeFrame(dataSource: dataSource, baselineTimestamp: baseline) else { return }
+        let newState = frame.state
+        let mixerFaders = frame.mixerFaders
         let newDiagnostics = Self.diagnostics(
             dataSource: dataSource,
             baselineTimestamp: baseline,
@@ -480,8 +486,22 @@ final class LivePerformedNotationTracker: ObservableObject {
         Task { @MainActor [weak self] in
             guard let self, !self.isFrozen else { return }
             self.state = newState
+            self.mixerFaderEvidence = mixerFaders
             self.diagnostics = newDiagnostics
         }
+    }
+
+    /// A window transition between motion and mixer reads must not combine
+    /// two take-relative clocks. Discard that poll; the next poll reads the
+    /// new window normally. Legacy data sources have no mixer document.
+    static func computeFrame(dataSource: LivePerformedNotationDataSource,
+                             baselineTimestamp: Double)
+        -> (state: LiveNotationTrackingState, mixerFaders: ScratchMixerFaderEvidence?)? {
+        let initial = dataSource.mixerFaderEvidence()
+        let state = computeState(dataSource: dataSource, baselineTimestamp: baselineTimestamp)
+        let confirmed = dataSource.mixerFaderEvidence()
+        guard initial?.epoch == confirmed?.epoch else { return nil }
+        return (state, confirmed)
     }
 
     /// Pure counter derivation, testable without a timer. Reads the same

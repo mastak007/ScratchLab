@@ -889,6 +889,15 @@ final class ReferenceAuthoringCaptureBridge {
             ))
         }
 
+        if let mixer = sidecar.mixerFaderEvidence {
+            guard mixer.version == 1, mixer.sealed,
+                  mixer.sessionID == sidecar.sessionID, mixer.takeID == sidecar.takeID else {
+                return .failure(.recordingFailed(
+                    "Mixer control evidence does not belong to this finalized take."
+                ))
+            }
+        }
+
         // Identity, bytes and the measured hash describe one finalized snapshot.
         // Later sidecar rewrites must fail companion export, never silently rebind it.
         let sidecarMeasurement = ReferenceArtifactMeasurement(
@@ -975,7 +984,8 @@ final class ReferenceAuthoringCaptureBridge {
                 rawSidecarURL: sidecarURL,
                 witnessedTiming: witnessedTiming,
                 mediaTimeOrigin: mediaTimeOrigin,
-                sourceState: perTakeSourceState
+                sourceState: perTakeSourceState,
+                mixerFaderEvidence: sidecar.mixerFaderEvidence
             )
         )
     }
