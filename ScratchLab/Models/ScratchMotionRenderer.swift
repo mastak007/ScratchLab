@@ -159,24 +159,21 @@ enum ScratchMotionRenderer {
 
         // 1. A tight glow behind the STROKE ramps — holds stay quiet.
         if style.glow {
-            for item in drawn where !item.segment.isHold {
-                let color = strokeColor(for: item.segment, style: style)
-                let width = style.lineWidth * speedWeight(item.segment.speed) * glowWidthScale
-                layer.stroke(segmentPath(item.a, item.b),
-                             with: .color(color.opacity(0.3)),
-                             style: StrokeStyle(lineWidth: width, lineCap: .round))
+            for run in strokeRuns(drawn.filter { !$0.segment.isHold }, style: style) {
+                layer.stroke(run.path,
+                             with: .color(run.color.opacity(0.3 * run.appearance.opacity)),
+                             style: StrokeStyle(lineWidth: run.appearance.width * glowWidthScale,
+                                                lineCap: .round, lineJoin: .round))
             }
         }
 
         // 2. The notation line includes canonical holds. Legacy
         // padding stays hidden; closed/unknown fader state changes style only.
-        for item in drawn where item.segment.drawsLine {
-            let color = strokeColor(for: item.segment, style: style)
-            let appearance = lineAppearance(for: item.segment, style: style)
-            layer.stroke(segmentPath(item.a, item.b),
-                         with: .color(color.opacity(appearance.opacity)),
-                         style: StrokeStyle(lineWidth: appearance.width, lineCap: .round,
-                                            dash: appearance.dash))
+        for run in strokeRuns(drawn, style: style) {
+            layer.stroke(run.path,
+                         with: .color(run.color.opacity(run.appearance.opacity)),
+                         style: StrokeStyle(lineWidth: run.appearance.width, lineCap: .round,
+                                            lineJoin: .round, dash: run.appearance.dash))
         }
 
         // 3. Junction nodes — small neutral dots at every meaningful timing
@@ -517,6 +514,40 @@ enum ScratchMotionRenderer {
         let width: CGFloat
         let dash: [CGFloat]
         let opacity: Double
+    }
+
+    struct StrokeRun {
+        var path: Path
+        let color: Color
+        let appearance: LineAppearance
+    }
+
+    /// Composite a canonical run once. Stroking each dense sample separately
+    /// piles up translucent round caps and restarts every dash, making muted
+    /// motion look solid and open. Every measured vertex remains in the path;
+    /// exact time/position discontinuities lift the pen instead of connecting.
+    /// Legacy strokes retain their independent drawing operations.
+    static func strokeRuns(_ drawn: [ProjectedSegment], style: Style) -> [StrokeRun] {
+        var runs: [StrokeRun] = []
+        var previous: ProjectedSegment?
+        for item in drawn {
+            guard item.segment.drawsLine else { previous = nil; continue }
+            let color = strokeColor(for: item.segment, style: style)
+            let appearance = lineAppearance(for: item.segment, style: style)
+            if let previous, item.segment.evidenceStyle != .legacy,
+               previous.segment.evidenceStyle == item.segment.evidenceStyle,
+               !runs.isEmpty, runs[runs.count - 1].color == color,
+               runs[runs.count - 1].appearance == appearance {
+                if previous.segment.endTime != item.segment.startTime || previous.b != item.a {
+                    runs[runs.count - 1].path.move(to: item.a)
+                }
+                runs[runs.count - 1].path.addLine(to: item.b)
+            } else {
+                runs.append(StrokeRun(path: segmentPath(item.a, item.b), color: color, appearance: appearance))
+            }
+            previous = item
+        }
+        return runs
     }
 
     static func lineAppearance(for segment: MotionSegment, style: Style) -> LineAppearance {

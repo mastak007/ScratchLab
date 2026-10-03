@@ -1846,3 +1846,159 @@ final class CanonicalTearRendererTests: XCTestCase {
         }
     }
 }
+
+
+/// Raster coverage complements the semantic geometry tests above: independent
+/// short strokes can have correct style values yet overpaint to full brightness.
+final class DenseCanonicalMuteRenderingTests: XCTestCase {
+    @MainActor
+    private func renderedTrace(segmentCount: Int, evidence: MotionSegment.EvidenceStyle) throws -> (CGImage, Double) {
+        let segments = (0..<segmentCount).map { index in
+            MotionSegment(kind: .hold, startTime: Double(index) / Double(segmentCount),
+                endTime: Double(index + 1) / Double(segmentCount), startPosition: 0.5,
+                endPosition: 0.5, speed: .medium, isGhost: false, evidenceStyle: evidence)
+        }
+        let path = MotionPath(segments: segments, timeRange: 0...1)
+        return try renderedPath(path)
+    }
+
+    @MainActor
+    private func renderedPath(_ path: MotionPath) throws -> (CGImage, Double) {
+        let renderer = ImageRenderer(content: Canvas { context, size in
+            ScratchMotionRenderer.draw(path, in: context,
+                viewport: LaneViewport(size: size, now: 0, axis: .horizontal,
+                    actionLineFraction: 0, secondsAhead: 1),
+                style: .init(color: .white, showsNodes: false, backwardColor: .white))
+        }.frame(width: 512, height: 64).background(Color.black))
+        renderer.scale = 1
+        let image = try XCTUnwrap(renderer.cgImage)
+        var pixels = [UInt8](repeating: 0, count: 512 * 64 * 4)
+        try pixels.withUnsafeMutableBytes { bytes in
+            let context = try XCTUnwrap(CGContext(data: bytes.baseAddress, width: 512, height: 64,
+                bitsPerComponent: 8, bytesPerRow: 512 * 4, space: CGColorSpaceCreateDeviceRGB(),
+                bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue))
+            context.draw(image, in: CGRect(x: 0, y: 0, width: 512, height: 64))
+        }
+        let peak = (8..<504).flatMap { x in (0..<64).map { y in pixels[(y * 512 + x) * 4] } }.max() ?? 0
+        return (image, Double(peak) / 255)
+    }
+
+    @MainActor
+    func testDenseMutedTraceStaysDimInsteadOfOverpaintingOpaque() throws {
+        let (sparseImage, sparse) = try renderedTrace(segmentCount: 1, evidence: .closed)
+        let (denseImage, dense) = try renderedTrace(segmentCount: 4096, evidence: .closed)
+        let (_, open) = try renderedTrace(segmentCount: 4096, evidence: .open)
+        for (name, image) in [("Sparse muted synthetic trace", sparseImage), ("Dense muted synthetic trace", denseImage)] {
+            let attachment = XCTAttachment(image: NSImage(cgImage: image, size: NSSize(width: 512, height: 64)))
+            attachment.name = name; attachment.lifetime = .keepAlways; add(attachment)
+        }
+        XCTAssertGreaterThan(open, 0.9, "The raster must contain the open trace, not an empty render")
+        XCTAssertGreaterThan(sparse, 0.2, "Muted motion stays visible")
+        XCTAssertLessThanOrEqual(dense, open * 0.6, "Dense muted motion must remain visibly dim: sparse=\(sparse), dense=\(dense), open=\(open)")
+        XCTAssertEqual(dense, sparse, accuracy: 1.0 / 255, "Sampling density cannot change muted brightness")
+    }
+}
+
+extension DenseCanonicalMuteRenderingTests {
+    func testCanonicalDrawingRetainsEveryLineAndPenUpAtGapsAndWraps() {
+        func segment(_ start: Double, _ end: Double, _ a: CGFloat, _ b: CGFloat,
+                     _ evidence: MotionSegment.EvidenceStyle = .open) -> MotionSegment {
+            .init(kind: .stroke(.forward), startTime: start, endTime: end,
+                  startPosition: a, endPosition: b, speed: .medium, isGhost: false, evidenceStyle: evidence)
+        }
+        let path = MotionPath(segments: [segment(0, 1, 0.2, 0.3), segment(1, 2, 0.3, 0.4),
+            segment(3, 4, 0.5, 0.6), segment(4, 5, 0, 0.1),
+            segment(5, 6, 0.1, 0.2, .closed), segment(6, 7, 0.2, 0.3, .unknownFader)], timeRange: 0...7)
+        let viewport = LaneViewport(size: CGSize(width: 700, height: 100), now: 0,
+            axis: .horizontal, actionLineFraction: 0, secondsAhead: 7)
+        let projected = ScratchMotionRenderer.projectedSegments(path, viewport: viewport)
+        let runs = ScratchMotionRenderer.strokeRuns(projected, style: .performance)
+        var lines: [[CGPoint]] = [], moves = 0
+        for run in runs {
+            var position: CGPoint?
+            run.path.forEach { element in
+                switch element {
+                case .move(to: let point): position = point; moves += 1
+                case .line(to: let point):
+                    if let position { lines.append([position, point]) }
+                    position = point
+                default: XCTFail("Measured straight segments must not become curves or closed shapes")
+                }
+            }
+        }
+        // SwiftUI Path stores converted coordinates. Compare exactly with
+        // the former independent two-point paths, not unconverted model Doubles.
+        let originalLines = projected.map { item -> [CGPoint] in
+            var original = Path(); original.move(to: item.a); original.addLine(to: item.b)
+            var points: [CGPoint] = []
+            original.forEach { element in
+                switch element {
+                case .move(to: let point), .line(to: let point): points.append(point)
+                default: XCTFail("The original segment must remain straight")
+                }
+            }
+            return points
+        }
+        XCTAssertEqual(lines, originalLines, "No curve simplification or invented connectors")
+        XCTAssertEqual(moves, 5, "Time gaps, loop wraps and evidence boundaries retain pen-up")
+        XCTAssertEqual(runs.map(\.appearance.opacity), [1, 0.45, 0.65])
+        XCTAssertEqual(runs.map(\.appearance.dash), [[], [4, 3], [1, 3]])
+    }
+
+    func testLegacySegmentsAndDifferentDirectionColorsKeepTheirOwnDrawing() {
+        let segments = [MotionSegment(kind: .stroke(.forward), startTime: 0, endTime: 1,
+            startPosition: 0, endPosition: 1, speed: .medium, isGhost: false),
+            MotionSegment(kind: .stroke(.backward), startTime: 1, endTime: 2,
+            startPosition: 1, endPosition: 0, speed: .medium, isGhost: false)]
+        let viewport = LaneViewport(size: CGSize(width: 200, height: 100), now: 0,
+            axis: .horizontal, actionLineFraction: 0, secondsAhead: 2)
+        let legacy = ScratchMotionRenderer.projectedSegments(.init(segments: segments, timeRange: 0...2), viewport: viewport)
+        XCTAssertEqual(ScratchMotionRenderer.strokeRuns(legacy, style: .performance).count, 2)
+        let canonical = segments.map { segment -> MotionSegment in
+            var copy = segment; copy.evidenceStyle = .closed; return copy
+        }
+        let colored = ScratchMotionRenderer.projectedSegments(.init(segments: canonical, timeRange: 0...2), viewport: viewport)
+        let runs = ScratchMotionRenderer.strokeRuns(colored, style: .init(color: .red, backwardColor: .blue))
+        XCTAssertEqual(runs.count, 2)
+        XCTAssertEqual(runs.map(\.color), [.red, .blue])
+    }
+
+    @MainActor
+    func testEitherFaderClosureDimsDenseCanonicalMotionWithoutChangingItsShape() throws {
+        typealias Record = ScratchNotation.GestureRecord
+        let evidence = Record.Evidence(provenance: .measured,
+            observation: .init(source: .platterTimeline, confidence: 1, reason: "synthetic dense curve"))
+        let points = (0...512).map { Record.CurvePoint(time: Double($0) / 512, position: Double($0) / 512) }
+        let record = Record(id: "dense-curve", direction: .forward, timingDomain: .seconds,
+            coordinateSpace: .normalizedTakeLocalDisplacement, evidence: evidence,
+            subdivisions: [.init(id: "travel", span: .init(startTime: 0, endTime: 1), evidence: evidence,
+                measuredCurve: .init(points: points, evidence: evidence))])
+        let original = ReferenceTearCanonicalProjection(records: [record], timeRange: 0...1,
+            positionRange: 0...1, coordinateSpace: .normalizedTakeLocalDisplacement, reasons: [])
+        let frame = try XCTUnwrap(ScratchStrokeGeometry.CanonicalFrame(timeRange: 0...1,
+            positionRange: 0...1, coordinateSpace: .normalizedTakeLocalDisplacement, beatsPerMinute: 95))
+        let binding = ScratchMixerFaderEvidence.Binding(sourceID: "synthetic-render-test", connectionGeneration: 1,
+            channel: 1, controller: 28, minimum: 0, maximum: 127, inverted: false,
+            response: .init(zeroAt: 0, oneAt: 1, shape: .linear))
+        for (cross, channel, expected) in [(127, Optional(127), MotionSegment.EvidenceStyle.open),
+                (0, 127, .closed), (127, 0, .closed), (0, 0, .closed), (0, nil, .closed), (127, nil, .unknownFader)] {
+            var recorder = ScratchMixerFaderRecorder()
+            recorder.observe(control: .crossfader, binding: binding, rawValue: cross, at: 9, admitted: false)
+            if let channel { recorder.observe(control: .rightChannel, binding: binding, rawValue: channel, at: 9, admitted: false) }
+            recorder.begin(at: 10, sessionID: "synthetic-session", takeID: "synthetic-take"); recorder.close(at: 11)
+            let projection = original.applyingMixerFaders(try XCTUnwrap(recorder.snapshot(at: 11)))
+            XCTAssertEqual(projection.records[0].subdivisions, original.records[0].subdivisions)
+            let geometry = ScratchStrokeGeometry.canonicalGeometry(records: projection.records, layer: .performance, frame: frame)
+            XCTAssertTrue(geometry.missingMotion.isEmpty)
+            XCTAssertEqual(geometry.motion.segments.count, 512)
+            XCTAssertTrue(geometry.motion.segments.allSatisfy { $0.evidenceStyle == expected })
+            let (_, brightness) = try renderedPath(geometry.motion)
+            switch expected {
+            case .open: XCTAssertGreaterThan(brightness, 0.9)
+            case .closed: XCTAssertGreaterThan(brightness, 0.2); XCTAssertLessThanOrEqual(brightness, 0.6)
+            case .unknownFader: XCTAssertGreaterThan(brightness, 0.5); XCTAssertLessThan(brightness, 0.8)
+            case .legacy: XCTFail("Canonical evidence cannot use legacy styling")
+            }
+        }
+    }
+}

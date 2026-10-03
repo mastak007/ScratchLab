@@ -1139,15 +1139,29 @@ struct ScratchMotionRendererTests {
         let lineLoop = try sliceBetween(source,
             from: "// 2. The notation line",
             to: "// 3.")
-        #expect(lineLoop.contains("where item.segment.drawsLine"))
+        #expect(lineLoop.contains("strokeRuns(drawn, style: style)"))
         let padding = MotionSegment(kind: .hold, startTime: 0, endTime: 1,
             startPosition: 0.5, endPosition: 0.5, speed: .medium, isGhost: false)
         #expect(!padding.drawsLine)
+        let viewport = LaneViewport(size: CGSize(width: 200, height: 100), now: 0,
+            axis: .horizontal, actionLineFraction: 0, secondsAhead: 1)
+        func drawnRuns(_ segment: MotionSegment) -> [ScratchMotionRenderer.StrokeRun] {
+            let path = MotionPath(segments: [segment], timeRange: 0...1)
+            return ScratchMotionRenderer.strokeRuns(
+                ScratchMotionRenderer.projectedSegments(path, viewport: viewport), style: .performance)
+        }
+        #expect(drawnRuns(padding).isEmpty)
         for evidenceStyle in [MotionSegment.EvidenceStyle.open, .closed, .unknownFader] {
             var observed = padding
             observed.evidenceStyle = evidenceStyle
             #expect(observed.drawsLine)
             #expect(observed.startPosition == observed.endPosition)
+            let runs = drawnRuns(observed)
+            #expect(runs.count == 1)
+            let run = try #require(runs.first)
+            #expect(!run.path.isEmpty)
+            #expect(run.path.boundingRect.width == 200)
+            #expect(run.path.boundingRect.height == 0)
         }
         // No separate hold renderer or legacy hold-only tuning was added.
         #expect(!lineLoop.contains("if item.segment.isHold"))
