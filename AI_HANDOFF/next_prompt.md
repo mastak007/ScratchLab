@@ -959,3 +959,78 @@ publication-result.json for the final independently verified remote SHA.
 - [x] Build, sign, compare and install the corrected local CXL app side-by-side.
 - [ ] Open the new app when convenient; launch/visual acceptance remains NOT RUN.
 - [ ] Clarify continuous movement versus pause in the grey motion interval.
+
+### 2026-10-03 — Dense muted trace rendering repaired and verified
+
+Root cause: ScratchMotionRenderer stroked each tiny canonical segment separately.
+Overlapping translucent round caps compounded intended 45% muted opacity to
+99.6% brightness, and each segment restarted the dash pattern. Prior semantic
+state/style checks missed the composited appearance. The recorded fader states
+and earlier A7F4D464 startup/audio acceptance remain valid.
+
+Selected bounded task: keep muted platter motion visibly dim when either fader
+closes. Source commit 35bc27f3b9c7caae575a78931871f917fcf9b262 changes only
+ScratchLab/Models/ScratchMotionRenderer.swift,
+ScratchLabDesktopTests/ScratchNotationPanelTests.swift and
+ScratchLabDesktopTests/DemoTimingFoundationTests.swift. The shared renderer now
+strokes compatible canonical segments together, retaining every vertex and
+lifting the pen at exact time/position discontinuities. It does not bridge gaps
+or loop wraps. Evidence, width and color changes remain separate; legacy strokes
+retain independent drawing. The optional glow follows canonical mute opacity.
+No audio, capture, decoder, raw/canonical data, schema, calibration, resources,
+Store signing, or export changes. The same renderer covers shared consumers.
+
+Regression proof: the original production renderer failed the new dense pixel
+check in both configurations (sparse0.450980, dense0.996078, open1.0). With the fix,
+dense and sparse muted brightness agree within one pixel channel value. The
+first focused run exposed a new assertion comparing Path-converted coordinates
+with model Doubles. It was corrected to compare exact before/after drawing Path
+endpoints; no tolerance or geometry weakening was introduced. The initial
+failing runs and before/after ImageRenderer attachments are retained. Additional
+checks cover either control, both closed, missing-control evidence, every line,
+pen-up at gaps/wraps, direction colors and legacy drawing. Synthetic images are
+software evidence, not a physical capture.
+
+The first full gate stopped on an old renderer source-wiring assertion requiring
+the previous per-segment loop spelling. Its receipt remains in full-gate/.
+That assertion now verifies batched-renderer wiring and actual hidden legacy
+padding versus visible canonical hold paths. Existing semantic checks remain.
+The corrected full gate receipts are under verification-2/.
+
+Verification: focused 98 XCTest executions and
+14 Swift Testing executions PASS, zero failures or skips. Required scripts/build.sh all PASS: 9,174 XCTest passed,
+124 skipped, 0 failed;
+1,064 Swift Testing and 122 Python passed.
+All four new regressions ran twice. iOS, full macOS Release, CXLRelease and
+watchOS builds PASS. All child processes reaped with no survivors. Frozen source
+hashes equal the commit; the verifier was aligned by a normal non-forced checkout.
+
+Existing local Developer-ID overlay build PASS; only the expected five signing
+settings differ from the Store contract. Store/local functional payload comparison
+PASS for both architectures: runtime/data/resources exact; signing, build UUID
+and 158 explicitly classified debug-root path differences per architecture.
+Signature, team, entitlements, Hardened Runtime and timestamp verified.
+Gatekeeper accepted under the preexisting security-disabled override; policy was not changed and this is not notarization or normal-policy acceptance proof.
+Installed side-by-side: /Users/karlwatson/Applications/SL Capture muted trace 20261003.app
+Previous apps and Store products unchanged; user-data metadata unchanged during
+installation. New installed app launch/visual acceptance remains NOT RUN.
+
+Next operator action: save/quit the current app, open the muted-trace update and
+use Saved drafts > Open for Review on the existing finalized take. Muted portions of the main platter trace should
+now be visibly dim/dashed while separate control lanes remain visible. No new
+hardware recording is needed solely to verify this drawing correction. Preserve
+current running capture state; do not launch a competing capture instance.
+The separate grey MOTION UNKNOWN observation remains unresolved and unchanged.
+
+Evidence: /Users/karlwatson/ScratchLab-Local-Evidence/2026-10-03/muted-trace-rendering
+Read full-verification-summary.json, local-acceptance/install-receipt.json and
+publication-result.json for exact receipts and the independently verified remote
+commit. Publication is authorized on codex/cxl-fader-checkpoint-20261003; remote
+main is unchanged. New evidence/build output is local outside iCloud. Historical
+evidence, canonical checkout location, unrelated dirty/untracked files and older
+workflow entries are preserved. Only these new checkpoint entries are staged.
+
+- [x] Reproduce dense muted trace brightness failure with actual renderer pixels.
+- [x] Repair shared rendering and verify geometry, either-fader gating and legacy behavior.
+- [x] Complete focused/full software gates and signed side-by-side installation.
+- [ ] Open the installed update and visually check the existing take; no new recording required.
