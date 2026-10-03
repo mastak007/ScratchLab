@@ -1634,3 +1634,82 @@ extension MIDIUserMixerGainTests {
         XCTAssertTrue(evidence.combinedSpans(in: 0...1).allSatisfy { $0.gain == nil })
     }
 }
+
+extension SeparateMixerFaderEvidenceTests {
+    private func faderReasonProjection(
+        reasons: [ReferenceTearProjectionReason]
+    ) -> ReferenceTearCanonicalProjection {
+        let evidence = ScratchNotation.GestureRecord.Evidence(provenance: .measured,
+            observation: .init(source: .platterTimeline, confidence: 1, reason: "reason test motion"))
+        let record = ScratchNotation.GestureRecord(id: "reason-gesture", direction: .forward,
+            timingDomain: .seconds, coordinateSpace: .normalizedTakeLocalDisplacement, evidence: evidence,
+            subdivisions: [.init(id: "travel", span: .init(startTime: 0, endTime: 2), evidence: evidence,
+                measuredCurve: .init(points: [.init(time: 0, position: 0), .init(time: 2, position: 1)],
+                                     evidence: evidence))])
+        return .init(records: [record], timeRange: 0...2, positionRange: 0...1,
+                     coordinateSpace: .normalizedTakeLocalDisplacement, reasons: reasons)
+    }
+
+    func testCompleteMixerCoverageRemovesStaleLegacyWarningsWithoutChangingMotion() throws {
+        let original = faderReasonProjection(reasons: [.measuredPlatterTravel, .faderUnobserved,
+                                                       .ghostMovementPresent, .faderClicksCitedNotCounted])
+        var r = recorder(); r.close(at: 12)
+        let updated = original.applyingMixerFaders(try XCTUnwrap(r.snapshot(at: 12)))
+        XCTAssertEqual(updated.reasons, [.measuredPlatterTravel, .faderClicksCitedNotCounted])
+        XCTAssertEqual(updated.presentationReasons, updated.reasons)
+        XCTAssertEqual(updated.records[0].subdivisions, original.records[0].subdivisions)
+        XCTAssertEqual(updated.records[0].internalHolds, original.records[0].internalHolds)
+        XCTAssertEqual(updated.records[0].direction, original.records[0].direction)
+        XCTAssertEqual(updated.timeRange, original.timeRange)
+        XCTAssertEqual(updated.positionRange, original.positionRange)
+        XCTAssertTrue(original.reasons.contains(.faderUnobserved))
+        XCTAssertEqual(original.applyingMixerFaders(nil), original)
+        XCTAssertEqual(original.presentationReasons, original.reasons)
+    }
+
+    func testChannelOnlyMuteAddsGhostReasonAndMissingControlStillWarns() throws {
+        let original = faderReasonProjection(reasons: [.measuredPlatterTravel])
+        var channelClosed = recorder(channel: 0, cross: 127); channelClosed.close(at: 12)
+        let muted = original.applyingMixerFaders(try XCTUnwrap(channelClosed.snapshot(at: 12)))
+        XCTAssertEqual(muted.reasons, [.measuredPlatterTravel, .ghostMovementPresent])
+        XCTAssertTrue(muted.records[0].faderIntervals.allSatisfy { $0.state == .closed })
+
+        var missingChannel = recorder(channel: nil, cross: 0); missingChannel.close(at: 12)
+        let partlyObserved = original.applyingMixerFaders(try XCTUnwrap(missingChannel.snapshot(at: 12)))
+        XCTAssertEqual(partlyObserved.reasons,
+                       [.measuredPlatterTravel, .ghostMovementPresent, .faderUnobserved])
+        XCTAssertTrue(partlyObserved.records[0].faderIntervals.allSatisfy { $0.state == .closed })
+    }
+
+    func testRestoredProjectionCorrectsDisplayReasonsWithoutRewritingSnapshot() throws {
+        let original = faderReasonProjection(reasons: [.measuredPlatterTravel, .faderUnobserved])
+        var r = recorder(channel: 0); r.close(at: 12)
+        let mixer = try XCTUnwrap(r.snapshot(at: 12))
+        let applied = original.applyingMixerFaders(mixer)
+        let stored = ReferenceTearCanonicalProjection(records: applied.records, timeRange: applied.timeRange,
+            positionRange: applied.positionRange, coordinateSpace: applied.coordinateSpace,
+            reasons: original.reasons, mixerFaders: mixer)
+        let encoder = JSONEncoder(); encoder.outputFormatting = [.sortedKeys]
+        let before = try encoder.encode(stored)
+        let restored = try JSONDecoder().decode(ReferenceTearCanonicalProjection.self, from: before)
+        XCTAssertEqual(restored.presentationReasons, [.measuredPlatterTravel, .ghostMovementPresent])
+        XCTAssertEqual(restored.reasons, original.reasons)
+        XCTAssertEqual(try encoder.encode(restored), before)
+        XCTAssertEqual(restored.records, stored.records)
+        XCTAssertEqual(restored.mixerFaders, mixer)
+    }
+
+    func testExpiredAndOverflowedMixerCoverageCannotLoseUnknownWarning() throws {
+        let original = faderReasonProjection(reasons: [.measuredPlatterTravel, .ghostMovementPresent])
+        var r = recorder(); r.close(at: 11)
+        let expired = try XCTUnwrap(r.snapshot(at: 12))
+        let overflowed = ScratchMixerFaderEvidence(version: expired.version, sessionID: expired.sessionID,
+            takeID: expired.takeID, epoch: expired.epoch, end: 2, sealed: true, overflowed: true,
+            observations: expired.observations)
+        for evidence in [expired, overflowed] {
+            let updated = original.applyingMixerFaders(evidence)
+            XCTAssertEqual(updated.reasons, [.measuredPlatterTravel, .faderUnobserved])
+            XCTAssertEqual(updated.presentationReasons, updated.reasons)
+        }
+    }
+}

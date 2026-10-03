@@ -2786,6 +2786,43 @@ extension ReferenceTearCanonicalProjection {
 }
 
 extension ReferenceTearCanonicalProjection {
+    /// Restored snapshots keep their original bytes. Display fader-specific
+    /// explanations from the same mixer evidence as their two control lanes.
+    var presentationReasons: [ReferenceTearProjectionReason] {
+        mixerAdjustedReasons(using: mixerFaders, records: records)
+    }
+
+    private func mixerAdjustedReasons(
+        using evidence: ScratchMixerFaderEvidence?,
+        records: [ScratchNotation.GestureRecord]
+    ) -> [ReferenceTearProjectionReason] {
+        guard let evidence, let range = timeRange,
+              range.lowerBound.isFinite, range.upperBound.isFinite,
+              range.upperBound > range.lowerBound else { return reasons }
+        // A known closure can mute the combined gate while the other control
+        // remains unobserved. Keep that missing control explicit in the copy.
+        let hasUnobservedControl = ScratchMixerFaderEvidence.Control.allCases.contains { control in
+            evidence.spans(for: control, in: range).contains { $0.gain == nil }
+        }
+        let hasMutedMotion = records.contains { record in
+            record.faderIntervals.contains { $0.state == .closed }
+        }
+        var result = reasons.filter { reason in
+            switch reason {
+            case .faderUnobserved: return hasUnobservedControl
+            case .ghostMovementPresent: return hasMutedMotion
+            default: return true
+            }
+        }
+        if hasMutedMotion && !result.contains(.ghostMovementPresent) {
+            result.append(.ghostMovementPresent)
+        }
+        if hasUnobservedControl && !result.contains(.faderUnobserved) {
+            result.append(.faderUnobserved)
+        }
+        return result
+    }
+
     /// Replaces only the gate interpretation. Curves, holds, directions, IDs
     /// and missing-motion regions are unchanged. Separate controls survive.
     func applyingMixerFaders(_ evidence: ScratchMixerFaderEvidence?) -> Self {
@@ -2816,7 +2853,8 @@ extension ReferenceTearCanonicalProjection {
                 faderTransitions: [], faderIntervals: spans)
         }
         var projection = Self(records: updated, timeRange: timeRange, positionRange: positionRange,
-                              coordinateSpace: coordinateSpace, reasons: reasons)
+                              coordinateSpace: coordinateSpace,
+                              reasons: mixerAdjustedReasons(using: evidence, records: updated))
         projection.mixerFaders = evidence
         return projection
     }

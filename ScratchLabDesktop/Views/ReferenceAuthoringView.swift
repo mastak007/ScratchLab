@@ -1769,7 +1769,7 @@ struct ReferenceAuthoringView: View {
                 )
                 .frame(maxWidth: .infinity, minHeight: Self.canonicalTearChartMinimumHeight)
             }
-            ForEach(projection.reasons, id: \.rawValue) { reason in
+            ForEach(projection.presentationReasons, id: \.rawValue) { reason in
                 Text(reason.detail)
                     .font(.caption2)
                     .foregroundStyle(.secondary)
