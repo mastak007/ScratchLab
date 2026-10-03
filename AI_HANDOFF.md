@@ -1275,3 +1275,74 @@ Commit/publication receipts: /Users/karlwatson/ScratchLab-Local-Evidence/2026-10
 All new checkpoint artifacts are outside iCloud; canonical checkout remains
 at its original path. Read publication-result.json for the final remote SHA
 rather than inferring remote success from this pre-push checkpoint entry.
+
+
+### 2026-10-03 — Startup accepted; fader review warnings repaired and verified
+
+This entry supersedes the earlier startup NOT RUN and warning-repair-in-progress statuses.
+Karl supplied A7F4D464 and explicitly confirmed that opening only the crossfader
+kept sound muted, then opening the right channel restored it. The recorded take
+preserves both genuine held observations, complete separate-control coverage,
+and a closed combined gate until 11.526655s. All 868 in-take mixer messages match
+raw MIDI, all 55 canonical records agree with the controls, and saved draft,
+source binding, media hashes and ZIP integrity checks pass. The internal WAV is
+post-software-fader audio, not an external master-return measurement. Independent
+cuts and startup behavior are accepted; this does not claim full calibration or
+complete hardware acceptance. No repeat fader take is needed for this repair.
+
+Selected bounded task: correct stale fader-specific review warnings. Root cause:
+applyingMixerFaders updated the intervals but retained crossfader-only reasons.
+Source commit fea656ffacbf16ba98d68307fb84085d9459fbe6 changes only ReferenceTake.swift,
+ReferenceAuthoringView.swift and MIDIUserMixerGainTests.swift. Reasons now follow
+actual separate-control coverage and combined muted motion; an unobserved other
+control remains explicit even if a known closure already mutes the output.
+Restored snapshots use a read-only presentationReasons getter, preserving stored
+JSON and source evidence. Motion geometry, decoder thresholds, audio, schemas,
+calibration and the verified Store signing contract are unchanged.
+
+Verification: focused 132 named XCTest executions passed with zero
+failures/skips. Required scripts/build.sh all PASS: 9,166 XCTest
+passed, 124 skipped, 0 failed;
+1,064 Swift Testing and 122 Python passed.
+Each of the four new regressions ran twice. iOS, full macOS Release, CXLRelease
+and watchOS builds PASS. Process receipts prove child reaping and no survivors.
+The isolated verifier was aligned by normal checkout to the source commit after
+proving every frozen candidate blob identical; no source was changed after tests.
+
+Existing Developer-ID overlay build and Store/local functional payload parity
+PASS. Runtime/data/resources are exact; signature, UUID and explicitly classified
+debug-root paths account for nonfunctional differences. Signature, team,
+entitlements, Hardened Runtime and timestamp verified. Gatekeeper accepted under the preexisting security-disabled override; policy was not changed and this is not notarization or normal-policy acceptance proof.
+Installed side-by-side:
+/Users/karlwatson/Applications/SL Capture fader review 20261003.app
+Previous apps and Store products remain unchanged; user-data metadata was
+unchanged during installation. New app launch/visual acceptance is NOT RUN;
+do not interrupt the running capture app. Karl can save/quit it and open this
+update when convenient. No additional hardware recording is required solely
+for the review-warning change.
+
+The screenshot's grey motion regions at 3.645674-3.769341s and
+9.981029-11.474561s are separate retained decoder/normalization uncertainty.
+Whether Karl paused/slowed there remains unconfirmed. Do not invent holds,
+remove those gaps, or tie physical notation to AHH audio playback. This remains
+an open observation rather than a demonstrated decoder defect.
+
+Correction to the in-progress numeric note: generic notation endpoint differences
+are reproduced exactly by the existing boundedSnapshot interpolation formula,
+not JSON serialization. Thirteen derived endpoint values differ from original
+source, maximum absolute difference 5.551115123125783e-17. Raw and source-bound
+evidence remains exact; no tolerance or exporter change was introduced.
+
+Evidence and all new build output: /Users/karlwatson/ScratchLab-Local-Evidence/2026-10-03/fader-review-warning
+Hardware report: /Users/karlwatson/ScratchLab-Local-Evidence/2026-10-03/fader-start-hardware-A7F4D464/REPORT.md
+All destinations were checked outside iCloud. Historical evidence and canonical
+checkout location are preserved. Unrelated dirty/untracked source and workflow
+history remain unstaged. Commit/push authorized by Karl; publication is limited
+to codex/cxl-fader-checkpoint-20261003, with remote main unchanged. Read
+publication-result.json for the final independently verified remote SHA.
+
+- [x] Accept the recorded startup fader behavior and operator confirmation.
+- [x] Repair and verify stale fader warnings while preserving historical snapshots.
+- [x] Build, sign, compare and install the corrected local CXL app side-by-side.
+- [ ] Open the new app when convenient; launch/visual acceptance remains NOT RUN.
+- [ ] Clarify continuous movement versus pause in the grey motion interval.
