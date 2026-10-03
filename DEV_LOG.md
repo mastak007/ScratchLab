@@ -6609,3 +6609,54 @@ workflow entries are preserved. Only these new checkpoint entries are staged.
 - [x] Repair shared rendering and verify geometry, either-fader gating and legacy behavior.
 - [x] Complete focused/full software gates and signed side-by-side installation.
 - [ ] Open the installed update and visually check the existing take; no new recording required.
+
+### 2026-10-03 — Muted trace VISUAL PASS; bounded renderer task CLOSED
+
+Karl explicitly reports: "the main platter trace now dims/dashes when either
+fader is closed, SL Capture muted trace 20261003". Record only that visual
+acceptance. It supersedes the renderer checkpoint's pending visual check.
+The installed executable hash matches its receipt and its running process uses
+the named app path. Existing accepted A7F4D464 two-fader audio/state/export
+evidence and its limitations remain valid. No new recording or broader physical
+calibration, latency, UI reopen sequence or general hardware acceptance claim.
+
+Selected follow-on task is the user-requested read-only audit of A7F4D464
+MOTION UNKNOWN at 3.645674–3.769341 s and 9.981029–11.474561 s.
+Production defect NOT DEMONSTRATED; decoder behavior remains unchanged.
+The short gap has +42 steps/75.862 ms and −23 steps/47.806 ms; both fail the
+existing 80 ms minimum. The long gap contains 99 packets including boundaries:
+small decoder-rejected runs, three normalizer-rejected small/slow runs, and
+114.112/138.826 ms inter-packet gaps above the 100 ms continuity limit.
+The last −43-step run clears displacement but fails normalized speed 0.14.
+No observed-stillness provenance exists in either interval. Do not fabricate
+holds, remove gaps, relax confidence/loss rules, or infer motion from silence
+or video. Sparse observations do not by themselves prove hardware packet loss.
+
+Independent arithmetic audit exactly reproduces every saved decoder interval
+and all six normalization omissions in the full take: 12,293 platter packets,
+69 raw runs, 61 decoder-accepted runs, 55 saved movement events. This is not a
+fresh execution of Swift, XCTest or Swift Testing. Decoder and normalizer blocks
+match committed HEAD; original ZIP CRC/hash and bound sidecar hash/bytes PASS.
+Renderer's prior required full gate remains PASS: 9,174 XCTest, 124 skips,
+1,064 Swift Testing, 122 Python, all required builds. Build NOT RUN this turn:
+only workflow documentation and local audit artifacts change; no source edit.
+
+Physical continuous motion versus pause/slow/reversal remains unconfirmed.
+One short combined operator question for both existing-take intervals is pending;
+no new recording requested. Prior answer was "Not sure yet". An answer adds
+physical context, not permission to weaken the policy. Continue from
+/Users/karlwatson/ScratchLab-Local-Evidence/2026-10-03/motion-unknown-audit-A7F4D464/REPORT.md,
+raw-audit.json, integrity-and-source-checks.json and operator-motion-question.json.
+Read any later operator answer before continuing. No decoder implementation
+task is selected or justified by this audit alone.
+
+Files changed: AI_HANDOFF.md, AI_HANDOFF/next_prompt.md, DEV_LOG.md and TASKS.md
+receive only this checkpoint; TASKS.md closes the current renderer visual item.
+New analysis/receipts stay in the verified local evidence directory outside
+iCloud. No production/evidence rewrite, app restart, Learner, Watch, signing,
+calibration, hardware configuration or unrelated dirty work. Historical pending
+entries remain historical; this checkpoint supersedes the renderer visual item.
+
+- [x] Accept only confirmed muted main-trace behavior; close renderer task.
+- [x] Audit both existing motion gaps without changing decoder policy.
+- [ ] Obtain take-specific physical context for both motion intervals if Karl can recall it.
