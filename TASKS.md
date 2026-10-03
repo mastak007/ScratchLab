@@ -3084,3 +3084,58 @@ Selected documentation is insertion-only reconciliation history relative to comm
 - [ ] Clean committed-candidate full gate and all required platform builds.
 - [ ] Verified canonical macOS staging/install and software smoke.
 - [ ] Karl's physical hardware acceptance; software success is not hardware proof.
+
+
+### 2026-10-03 — Verified fader checkpoint (commit/push authorized)
+
+Karl requested a checkpoint, commit and push. Source commit 876f70f43cd963fa46190e470dd846543bbfb883
+(`fix(cxl): preserve separate fader evidence across capture and export`)
+contains the exact 12-file candidate previously verified in isolation. It adds
+separate Crossfader/Right channel evidence and notation, combined mute spans,
+and retention of real held observations and actual gain at normal capture
+boundaries. Real reconnect/mapping changes still invalidate state. Missing
+observations remain unknown. No audio DSP, motion decoder, scoring or Store
+signing changes were added during checkpointing.
+
+Validation retained without repeating unchanged tests: scripts/build.sh all
+PASS — 9,158 XCTest passed, 124 skipped, 0 failed; 1,064 Swift Testing passed;
+122 Python passed; iOS/full macOS Release/CXLRelease/watchOS builds PASS.
+Focused startup/persistence coverage: 124 executions PASS. Source commit tree
+and staged patch match the passed candidate exactly; all process receipts
+show reaped children/no survivors. This is software proof, not physical
+startup acceptance.
+
+Installed candidate: /Users/karlwatson/Applications/SL Capture fader start 20261003.app.
+It was built before the Git checkpoint from source identical to the committed
+candidate. Existing Developer-ID overlay, Hardened Runtime, signature,
+entitlements and Store/local functional payload parity verified. The Store
+contract is unchanged. New-app launch and physical startup acceptance were
+NOT RUN at the installation handoff. Earlier independent fader cuts were
+recorded/operator accepted; both-closed/reopen-one was operator-confirmed
+only and was absent from that recorded take. Do not promote these to complete
+hardware acceptance. MOTION UNKNOWN before AHH and physical calibration
+remain unresolved.
+
+Next operator action: save/quit the old app and open the installed update.
+One approximately 15-second Movement Check, no beat or Watch required:
+move both faders once and park both closed before Record; scratch through
+AHH without touching faders; open crossfader only (still muted), then right
+channel (audio returns); stop/save/export one ZIP. Both lanes must be known
+from the start; platter motion must remain shown while muted.
+
+Publication branch: codex/cxl-fader-checkpoint-20261003 on origin
+(https://github.com/mastak007/ScratchLab.git). Source and checkpoint notes
+are separate commits. This branch retains the 14 existing local ancestor
+commits through c96b88e; publication does not advance remote main. Unrelated
+dirty/untracked work and historical workflow entries remain local and
+unchanged. Only the new checkpoint entry is staged in each workflow file.
+No media, generated artifacts or machine credentials are added.
+
+Verification/report: /Users/karlwatson/ScratchLab-Local-Evidence/2026-10-03/recording-arm-fader-state/REPORT.md.
+Commit/publication receipts: /Users/karlwatson/ScratchLab-Local-Evidence/2026-10-03/fader-checkpoint-publish-20261003T004015Z.
+All new checkpoint artifacts are outside iCloud; canonical checkout remains
+at its original path. Read publication-result.json for the final remote SHA
+rather than inferring remote success from this pre-push checkpoint entry.
+
+- [x] Selectively commit exact verified fader candidate and checkpoint its software/install evidence.
+- [ ] Complete the single physical startup-state check above; startup remains NOT RUN.
