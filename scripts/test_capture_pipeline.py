@@ -1840,5 +1840,37 @@ class ReferenceReviewMetadataEvidenceTests(unittest.TestCase):
             self.assertTrue(self.validate(take, root))
 
 
+class NotationPNGValidationTests(unittest.TestCase):
+    def test_reference_png_identity_hash_and_page_contract(self) -> None:
+        import zlib
+        from validate_session import notation_png_artifact_record, validate_notation_pngs, is_notation_png_source
+        def chunk(kind, data):
+            return struct.pack(">I", len(data)) + kind + data + struct.pack(">I", zlib.crc32(kind + data))
+        png = (b"\x89PNG\r\n\x1a\n" + chunk(b"IHDR", struct.pack(">IIBBBBB", 1600, 1420, 8, 0, 0, 0, 0))
+               + chunk(b"IDAT", zlib.compress(bytes(1601 * 1420))) + chunk(b"IEND", b""))
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            path = root / "notation/take-001_detected_notation_reference_001.png"
+            path.parent.mkdir(); path.write_bytes(png)
+            artifact = notation_png_artifact_record(root, path)
+            take = {"files": {"notation": "notation/take-001_detected_notation.json", "notation_png_001": artifact["path"]},
+                    "artifacts": {"notation_png_001": artifact}}
+            errors = []
+            validate_notation_pngs(take, root, "take", errors)
+            self.assertEqual(errors, [])
+            self.assertTrue(is_notation_png_source("notation_png_001"))
+            for key in ["notation_png_000", "notation_png_999", "notation_png_x", "unrecognised"]:
+                self.assertFalse(is_notation_png_source(key))
+            take["files"]["notation"] = "notation/take-002_detected_notation.json"
+            validate_notation_pngs(take, root, "take", errors)
+            self.assertTrue(errors)
+            damaged = bytearray(png); damaged[24] ^= 1; path.write_bytes(damaged)
+            with self.assertRaisesRegex(ValueError, "CRC"):
+                notation_png_artifact_record(root, path)
+            path.write_bytes(png[:-8])
+            with self.assertRaises(ValueError):
+                notation_png_artifact_record(root, path)
+
+
 if __name__ == "__main__":
     unittest.main()

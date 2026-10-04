@@ -1085,3 +1085,6 @@ entries remain historical; this checkpoint supersedes the renderer visual item.
 - [x] Accept only confirmed muted main-trace behavior; close renderer task.
 - [x] Audit both existing motion gaps without changing decoder policy.
 - [ ] Obtain take-specific physical context for both motion intervals if Karl can recall it.
+
+## Current continuation — PNG export completed
+The Save Capture PNG feature and generic performer prerequisite passed software/build, image/archive and signed package checks. User authorized checkpoint/commit/push. See docs/checkpoints/2026-10-04-capture-png.md and /Users/karlwatson/ScratchLab-Local-Evidence/2026-10-04/capture-notation-png/GIT-RECEIPT.json for exact delivery/revision status. Use the new Pro DJ PNG ZIP, not the earlier package, for this feature. Preserve unrelated dirty work, original media and prior bounded hardware acceptance; no new physical acceptance is implied.

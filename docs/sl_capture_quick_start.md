@@ -45,6 +45,12 @@ Record Draft and perform the four timed slots through the automatic finish.
 Stopping early produces diagnostic evidence, not a complete reference take.
 Review picture and sound, mark the preferred repetition and add expert notes.
 Save Capture even if canonical approval is blocked; preserve original media.
+Each reference-authoring Save Capture ZIP includes PNG references in notation/:
+take-001_detected_notation_reference_001.png (and further numbered pages for longer takes).
+Open the ZIP to view them. Four seconds per row, up to four rows per image;
+unknown motion and separate fader evidence stay visible. Existing saved drafts
+can be opened for review and saved again to generate the PNGs without recording.
+The images are visual references; the JSON and original media remain the evidence.
 Saved drafts reopen on the recording Mac. A raw ZIP is not an importable draft.
 If evidence supports approval, Export Approved Package produces a separate
 reference package; use Reopen & Verify Last Export. Keep both export types.

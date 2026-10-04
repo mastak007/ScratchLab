@@ -1472,3 +1472,7 @@ entries remain historical; this checkpoint supersedes the renderer visual item.
 - [x] Accept only confirmed muted main-trace behavior; close renderer task.
 - [x] Audit both existing motion gaps without changing decoder policy.
 - [ ] Obtain take-specific physical context for both motion intervals if Karl can recall it.
+
+## Completed — Save Capture notation PNG, 4 October 2026
+
+User authorized checkpoint/commit/push after implementation. Save Capture now adds derived PNG references from the stored canonical projection, preserving independent fader cuts and unknown gaps. Existing drafts can be saved again without recording. 9188 XCTest executions passed, 124 skipped, zero failures; 1064 Swift Testing and 123 Python tests passed. iOS, macOS Release, macOS CXLRelease and watchOS builds passed. Updated signed universal ZIP: /Users/karlwatson/Downloads/SL-Capture-Pro-DJ-PNG-2026-10-04.zip. See docs/checkpoints/2026-10-04-capture-png.md and /Users/karlwatson/ScratchLab-Local-Evidence/2026-10-04/capture-notation-png. No app install, operator PNG/new-rig acceptance or decoder/audio changes. Existing accepted hardware evidence retained. Only verified generic performer and PNG source slices are checkpointed; unrelated dirty work is preserved.

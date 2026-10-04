@@ -6660,3 +6660,7 @@ entries remain historical; this checkpoint supersedes the renderer visual item.
 - [x] Accept only confirmed muted main-trace behavior; close renderer task.
 - [x] Audit both existing motion gaps without changing decoder policy.
 - [ ] Obtain take-specific physical context for both motion intervals if Karl can recall it.
+
+## 2026-10-04 — Save Capture PNG reference export
+
+Selected explicit user task: supply a PNG reference of each saved Capture take, then checkpoint/commit/push. Root cause: the existing exporter generated notation JSON but no image artifact. Added shared ImageRenderer-based canonical pages, source binding, manifested PNG hashes, staged/extracted verification, validator support, UI copy and guide. Four seconds per row, four rows per page; saved curves/fader cuts/unknown intervals retained. 9188 XCTest executions passed, 124 skipped, zero failures; 1064 Swift Testing and 123 Python tests passed. iOS, macOS Release, macOS CXLRelease and watchOS builds passed. Focused 34 XCTest executions and synthetic visual inspection passed. Developer ID build payload parity, signature and ZIP round-trip passed. No hardware/operator PNG acceptance or app install. New artifact: /Users/karlwatson/Downloads/SL-Capture-Pro-DJ-PNG-2026-10-04.zip. Full file/change/evidence details: docs/checkpoints/2026-10-04-capture-png.md.

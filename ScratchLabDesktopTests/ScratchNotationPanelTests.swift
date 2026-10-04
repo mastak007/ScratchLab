@@ -2002,3 +2002,98 @@ extension DenseCanonicalMuteRenderingTests {
         }
     }
 }
+
+@MainActor
+final class ReferenceNotationPNGTests: XCTestCase {
+    private func request(duration: Double = 22.469, projection: ReferenceTearCanonicalProjection? = nil) throws -> ReferenceNotationPNGExport.Request {
+        try .init(performer: "DJ reference", sessionID: "session", takeID: "take", takeNumber: 1,
+            scratchType: "Baby Scratch", bpm: 95, duration: duration, showBeatGrid: false,
+            projection: projection, sourceIdentity: "fixture")
+    }
+
+    func testPagesCoverEntireTakeWithoutOverlapsOrChangingStoredProjection() throws {
+        let projection = ReferenceTearCanonicalProjectionBuilder.project(movementEvents: [
+            .init(startTime: 0, endTime: 1, startPosition: 0, endPosition: 1,
+                direction: "forward", movementKind: .normalPush, speed: 1, confidence: 1, source: "test")
+        ])
+        let r = try request(projection: projection)
+        XCTAssertEqual(r.pageRanges, [[0...4, 4...8, 8...12, 12...16], [16...20, 20...22.469]])
+        XCTAssertEqual(r.projection, projection)
+        for range in r.pageRanges.flatMap({ $0 }) {
+            let frame = try XCTUnwrap(r.frame(for: range))
+            XCTAssertEqual(frame.timeRange, range)
+            XCTAssertEqual(frame.positionRange, r.frame(for: 0...4)?.positionRange)
+        }
+        XCTAssertThrowsError(try request(duration: .infinity))
+        XCTAssertThrowsError(try request(duration: 0))
+        XCTAssertThrowsError(try request(duration: 3601))
+    }
+
+    func testPNGUsesSavedDenseCurvesSeparateFadersAndUnknownGap() throws {
+        typealias Record = ScratchNotation.GestureRecord
+        let evidence = Record.Evidence(provenance: .measured,
+            observation: .init(source: .platterTimeline, confidence: 1, reason: "synthetic PNG fixture"))
+        let records = (0..<32).filter { $0 != 9 }.map { index -> Record in
+            let start = Double(index) / 2
+            let forward = index.isMultiple(of: 2)
+            let points = (0...128).map { step in
+                Record.CurvePoint(time: start + Double(step) / 256,
+                    position: forward ? Double(step) / 128 : 1 - Double(step) / 128)
+            }
+            return Record(id: "stroke-\(index)", direction: forward ? .forward : .backward,
+                timingDomain: .seconds, coordinateSpace: .normalizedTakeLocalDisplacement, evidence: evidence,
+                subdivisions: [.init(id: "curve-\(index)", span: .init(startTime: start, endTime: start + 0.5),
+                    evidence: evidence, measuredCurve: .init(points: points, evidence: evidence))])
+        }
+        let original = ReferenceTearCanonicalProjection(records: records, timeRange: 0...16,
+            positionRange: 0...1, coordinateSpace: .normalizedTakeLocalDisplacement, reasons: [])
+        let binding = ScratchMixerFaderEvidence.Binding(sourceID: "PNG test", connectionGeneration: 1,
+            channel: 1, controller: 28, minimum: 0, maximum: 127, inverted: false,
+            response: .init(zeroAt: 0, oneAt: 1, shape: .linear))
+        var recorder = ScratchMixerFaderRecorder()
+        for control in ScratchMixerFaderEvidence.Control.allCases {
+            recorder.observe(control: control, binding: binding, rawValue: 127, at: 99, admitted: false)
+        }
+        recorder.begin(at: 100, sessionID: "session", takeID: "take")
+        recorder.observe(control: .crossfader, binding: binding, rawValue: 0, at: 103, admitted: true)
+        recorder.observe(control: .crossfader, binding: binding, rawValue: 127, at: 104, admitted: true)
+        recorder.observe(control: .rightChannel, binding: binding, rawValue: 0, at: 109, admitted: true)
+        recorder.observe(control: .rightChannel, binding: binding, rawValue: 127, at: 110, admitted: true)
+        recorder.close(at: 116)
+        let projection = original.applyingMixerFaders(try XCTUnwrap(recorder.snapshot(at: 116)))
+        let r = try request(duration: 16, projection: projection)
+        XCTAssertEqual(r.projection, projection)
+        XCTAssertEqual(projection.records.map(\.subdivisions), records.map(\.subdivisions))
+        let geometry = ScratchStrokeGeometry.canonicalGeometry(records: projection.records, layer: .performance,
+            frame: try XCTUnwrap(r.frame(for: 0...16)))
+        XCTAssertEqual(geometry.missingMotion, [4.5...5])
+        for interval in [3.0...4.0, 9.0...10.0] {
+            let muted = geometry.motion.segments.filter { $0.startTime >= interval.lowerBound && $0.endTime <= interval.upperBound }
+            XCTAssertFalse(muted.isEmpty)
+            XCTAssertTrue(muted.allSatisfy { $0.evidenceStyle == .closed })
+        }
+        let data = try ReferenceNotationPNGExport.render(r, page: 0)
+        _ = try ReferenceNotationPNGExport.probe(data)
+        let attachment = XCTAttachment(data: data, uniformTypeIdentifier: "public.png")
+        attachment.name = "PNG reference - dense motion, two fader cuts and unknown gap (synthetic)"
+        attachment.lifetime = .keepAlways
+        add(attachment)
+    }
+
+    func testMissingEvidenceRendersAnHonestDecodablePNGAndRejectsBadImages() throws {
+        let r = try request(duration: 1)
+        XCTAssertNil(r.projection)
+        let data = try ReferenceNotationPNGExport.render(r, page: 0)
+        XCTAssertEqual(Array(data.prefix(8)), [137, 80, 78, 71, 13, 10, 26, 10])
+        let probe = try ReferenceNotationPNGExport.probe(data)
+        XCTAssertEqual(probe["width"], .int(1600))
+        XCTAssertEqual(probe["height"], .int(1420))
+        XCTAssertGreaterThan(data.count, 10_000)
+        XCTAssertThrowsError(try ReferenceNotationPNGExport.render(r, page: 1))
+        XCTAssertThrowsError(try ReferenceNotationPNGExport.probe(Data(data.prefix(24))))
+        let attachment = XCTAttachment(data: data, uniformTypeIdentifier: "public.png")
+        attachment.name = "PNG reference - missing evidence (synthetic)"
+        attachment.lifetime = .keepAlways
+        add(attachment)
+    }
+}

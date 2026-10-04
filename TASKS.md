@@ -3336,3 +3336,5 @@ entries remain historical; this checkpoint supersedes the renderer visual item.
 - [x] Accept only confirmed muted main-trace behavior; close renderer task.
 - [x] Audit both existing motion gaps without changing decoder policy.
 - [ ] Obtain take-specific physical context for both motion intervals if Karl can recall it.
+
+- [x] User-selected Save Capture PNG references (4 October 2026, SOFTWARE VERIFIED): saved canonical curves, independent faders and unknown motion retained in paginated PNGs; source-bound hashed ZIP round-trip, validator and all-platform gate passed. Updated signed package prepared. Operator PNG/new-rig acceptance not run. See docs/checkpoints/2026-10-04-capture-png.md.

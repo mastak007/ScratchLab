@@ -869,6 +869,7 @@ struct SessionExportPackage: Sendable {
     var referenceTearEvidenceByTakeID: [String: Data] = [:]
     /// Optional CXL recommendation/notes companions, bound like tear evidence.
     var referenceReviewMetadataByTakeID: [String: Data] = [:]
+    var notationPNGByTakeID: [String: ReferenceNotationPNGExport.Preview] = [:]
 }
 
 enum SessionExportSource: Sendable {
@@ -1146,6 +1147,7 @@ enum SessionExportError: Error, Equatable, Sendable {
     case invalidSessionMetadata
     case unableToPrepareExport
     case unableToCreateArchive
+    case unableToRenderNotation
     case unableToSaveArchive
     case unableToPresentShareOptions
 
@@ -1163,6 +1165,8 @@ enum SessionExportError: Error, Equatable, Sendable {
             return "This session has inconsistent metadata."
         case .unableToPrepareExport:
             return "Unable to prepare export."
+        case .unableToRenderNotation:
+            return "Unable to render the notation PNG. No capture ZIP was saved. Try Save Capture again."
         case .unableToCreateArchive:
             return "Unable to create ZIP archive."
         case .unableToSaveArchive:
@@ -1881,9 +1885,12 @@ final class SessionExportCoordinator: ObservableObject {
                     return
                 }
 
-                let package = try await Task.detached(priority: .userInitiated) {
+                let preparedPackage = try await Task.detached(priority: .userInitiated) {
                     try SessionArchiveBuilder().preparePackage(from: source)
                 }.value
+                guard operationID == requestID else { return }
+                statusMessage = "Rendering notation PNGs..."
+                let package = try await ReferenceNotationPNGExport.addingPreviews(to: preparedPackage)
                 guard operationID == requestID else { return }
 
                 state = .preparingArchive
@@ -1955,9 +1962,12 @@ final class SessionExportCoordinator: ObservableObject {
                     return
                 }
 
-                let package = try await Task.detached(priority: .userInitiated) {
+                let preparedPackage = try await Task.detached(priority: .userInitiated) {
                     try SessionArchiveBuilder().preparePackage(from: source)
                 }.value
+                guard operationID == requestID else { return }
+                statusMessage = "Rendering notation PNGs..."
+                let package = try await ReferenceNotationPNGExport.addingPreviews(to: preparedPackage)
                 guard operationID == requestID else { return }
 
                 state = .preparingArchive
@@ -2930,6 +2940,7 @@ struct SessionArchiveBuilder: Sendable {
         let notationDocument: SessionExportNotationDocument
         let referenceTearEvidence: ResolvedReferenceTearEvidence?
         let referenceReviewMetadata: ResolvedReferenceTearEvidence?
+        let notationPNG: ReferenceNotationPNGExport.Preview?
         let captureMetadata: SessionExportTakeCaptureMetadata
         let verbalSlateUsed: Bool
         let syncClapUsed: Bool
@@ -3171,13 +3182,14 @@ struct SessionArchiveBuilder: Sendable {
             #endif
             struct Member: Encodable {
                 let sessionID: String; let takeID: String; let take: String
-                let source: [String]; let tear: String?; let review: String?
+                let source: [String]; let tear: String?; let review: String?; let notationPNG: [String]?
             }
             let source = artifacts.sorted { $0.role < $1.role }.map { "\($0.role):\($0.identity.sha256):\($0.identity.bytes)" }
             let revision = try ExportSemanticIdentity.digest(Member(sessionID: package.metadata.sessionID,
                 takeID: take.takeID, take: ExportSemanticIdentity.digest(take), source: source,
                 tear: package.referenceTearEvidenceByTakeID[take.takeID].map { ExportArtifactIdentity.data($0).sha256 },
-                review: package.referenceReviewMetadataByTakeID[take.takeID].map { ExportArtifactIdentity.data($0).sha256 }))
+                review: package.referenceReviewMetadataByTakeID[take.takeID].map { ExportArtifactIdentity.data($0).sha256 },
+                notationPNG: package.notationPNGByTakeID[take.takeID]?.pages.map { ExportArtifactIdentity.data($0).sha256 }))
             return .init(sessionID: package.metadata.sessionID, takeID: take.takeID,
                          semanticRevision: revision, artifacts: artifacts,
                          exportedArtifacts: validated.mapValues { .init(sha256: $0.sha256, bytes: $0.bytes) })
@@ -3824,6 +3836,10 @@ struct SessionArchiveBuilder: Sendable {
             }
             let notationData = try Self.jsonEncoder.encode(takeContext.notationDocument)
             try notationData.write(to: notationURL, options: .atomic)
+            for (index, data) in (takeContext.notationPNG?.pages ?? []).enumerated() {
+                try data.write(to: stagedSessionURL.appendingPathComponent(
+                    ReferenceNotationPNGExport.relativePath(notationFileName: takeContext.notationFileName, page: index)), options: .atomic)
+            }
             if let evidence = takeContext.referenceTearEvidence {
                 try evidence.data.write(
                     to: stagedSessionURL.appendingPathComponent("notation/\(evidence.fileName)"),
@@ -4006,6 +4022,16 @@ struct SessionArchiveBuilder: Sendable {
             } else if manifestTake.files["reference_review_metadata"] != nil
                         || manifestTake.artifacts["reference_review_metadata"] != nil {
                 throw SessionExportValidationFailure(.stagedReferenceReviewMetadataMismatch)
+            }
+
+            for (index, data) in (takeContext.notationPNG?.pages ?? []).enumerated() {
+                let key = ReferenceNotationPNGExport.artifactKey(page: index)
+                let path = ReferenceNotationPNGExport.relativePath(notationFileName: takeContext.notationFileName, page: index)
+                guard manifestTake.files[key] == path, manifestTake.artifacts[key]?.path == path,
+                      try Data(contentsOf: stagedSessionURL.appendingPathComponent(path)) == data else {
+                    throw SessionExportValidationFailure(.stagedCanonicalArtifactMismatch)
+                }
+                _ = try ReferenceNotationPNGExport.probe(data)
             }
 
             let uniqueFiles = Set(manifestTake.files.values)
@@ -5851,7 +5877,8 @@ struct SessionArchiveBuilder: Sendable {
             takes: hydratedTakes,
             calibrationData: package.calibrationData,
             referenceTearEvidenceByTakeID: package.referenceTearEvidenceByTakeID,
-            referenceReviewMetadataByTakeID: package.referenceReviewMetadataByTakeID
+            referenceReviewMetadataByTakeID: package.referenceReviewMetadataByTakeID,
+            notationPNGByTakeID: package.notationPNGByTakeID
         )
     }
 
@@ -6315,6 +6342,7 @@ struct SessionArchiveBuilder: Sendable {
                     notationDocument: notationExport.document,
                     referenceTearEvidence: referenceTearEvidence,
                     referenceReviewMetadata: referenceReviewMetadata,
+                    notationPNG: package.notationPNGByTakeID[take.takeID],
                     captureMetadata: captureMetadata,
                     verbalSlateUsed: verbalSlateUsed,
                     syncClapUsed: syncClapUsed,
@@ -6323,6 +6351,18 @@ struct SessionArchiveBuilder: Sendable {
             )
         }
 
+        guard Set(package.notationPNGByTakeID.keys).isSubset(of: Set(takeContexts.map { $0.take.takeID })) else {
+            throw SessionExportError.invalidSessionMetadata
+        }
+        for context in takeContexts {
+            if let preview = context.notationPNG {
+                let request = try notationPNGRequest(for: context, metadata: package.metadata)
+                guard preview.sourceIdentity == (try request.identity), preview.pages.count == request.pageRanges.count else {
+                    throw SessionExportError.invalidSessionMetadata
+                }
+                for page in preview.pages { _ = try ReferenceNotationPNGExport.probe(page) }
+            }
+        }
         let manifestAllowedBPMs = try manifestAllowedBPMs(for: package.metadata.workflow, bpmCoverage: bpmCoverage)
         guard !manifestAllowedBPMs.isEmpty else {
             throw SessionExportError.invalidSessionMetadata
@@ -6401,6 +6441,25 @@ struct SessionArchiveBuilder: Sendable {
         )
     }
 
+    /// Only reference-authoring captures request derived pictures. Legacy exports remain compatible.
+    func notationPNGRequests(for package: SessionExportPackage) throws -> [ReferenceNotationPNGExport.Request] {
+        guard !package.referenceTearEvidenceByTakeID.isEmpty || !package.referenceReviewMetadataByTakeID.isEmpty else { return [] }
+        return try canonicalContext(for: package).takes.map { try notationPNGRequest(for: $0, metadata: package.metadata) }
+    }
+
+    private func notationPNGRequest(for context: CanonicalTakeContext, metadata: SessionExportMetadata) throws -> ReferenceNotationPNGExport.Request {
+        let evidence = try context.referenceTearEvidence.map { try ReferenceTearEvidenceCodec.decodeDocument($0.data) }
+        return try ReferenceNotationPNGExport.Request(
+            performer: metadata.performerName ?? "Performer not recorded",
+            sessionID: context.sidecar.sessionID, takeID: context.take.takeID,
+            takeNumber: context.take.takeNumber, scratchType: context.notationDocument.scratchType,
+            bpm: context.canonicalBPM, duration: context.take.duration,
+            showBeatGrid: context.sidecar.sessionConfig?.referenceCaptureIntent?.isMovementCheck != true,
+            projection: evidence?.projection,
+            sourceIdentity: ExportArtifactIdentity.data(context.referenceTearEvidence?.data ?? Data()).sha256
+                + ":" + (try ExportSemanticIdentity.digest(context.sidecar)))
+    }
+
     private func manifestAllowedBPMs(
         for workflow: String,
         bpmCoverage: Set<Int>
@@ -6451,6 +6510,10 @@ struct SessionArchiveBuilder: Sendable {
             "scratch_only": context.scratchOnlyRelativePath,
             "notation": "notation/\(context.notationFileName)"
         ]
+        for index in (context.notationPNG?.pages ?? []).indices {
+            files[ReferenceNotationPNGExport.artifactKey(page: index)] = ReferenceNotationPNGExport.relativePath(
+                notationFileName: context.notationFileName, page: index)
+        }
         if let camera = context.sidecar.secondaryCamera {
             let primary = URL(fileURLWithPath: context.videoFileName)
             files["camB_metadata"] = "video/" + primary.deletingPathExtension().appendingPathExtension("second-camera.json").lastPathComponent
@@ -6484,6 +6547,12 @@ struct SessionArchiveBuilder: Sendable {
 
     private func canonicalArtifactsMap(for context: CanonicalTakeContext, sessionRootURL: URL) throws -> [String: CanonicalArtifactRecord] {
         var artifacts: [String: CanonicalArtifactRecord] = [:]
+        for (index, data) in (context.notationPNG?.pages ?? []).enumerated() {
+            let path = ReferenceNotationPNGExport.relativePath(notationFileName: context.notationFileName, page: index)
+            artifacts[ReferenceNotationPNGExport.artifactKey(page: index)] = CanonicalArtifactRecord(
+                path: path, bytes: Int64(data.count), sha256: ExportArtifactIdentity.data(data).sha256,
+                probe: try ReferenceNotationPNGExport.probe(data))
+        }
         for artifact in try Self.boundBeatExportArtifacts(
             sidecar: context.sidecar, mediaURL: context.take.mediaURL,
             sidecarURL: context.take.sidecarURL, takeNumber: context.take.takeNumber

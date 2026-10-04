@@ -14118,11 +14118,21 @@ extension CaptureReliabilityPhase1CoreTests {
         XCTAssertEqual(ch2.displayName, "CC11 Ch2")
     }
 
-    func testMIDILearnStateTransitionsToListening() {
-        let engine = MacCaptureEngine(autoRefreshDevices: false)
+    @MainActor
+    func testMIDILearnStateTransitionsToListening() async throws {
+        let suite = "ScratchLab.MIDILearnTransitionTest.\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let engine = MacCaptureEngine(autoRefreshDevices: false, midiDefaults: defaults)
         XCTAssertEqual(engine.midiLearnState, .idle)
+        // Observe the scheduled publication, not a fixed 50 ms run-loop slice.
+        let didPublish = expectation(description: "MIDI Learn publishes Listening feedback")
+        let observation = engine.$midiLearnFeedback.filter { $0 == "Listening..." }.prefix(1).sink { _ in
+            didPublish.fulfill()
+        }
+        defer { observation.cancel(); engine.cancelMIDILearn() }
         engine.startMIDILearn()
-        RunLoop.main.run(until: Date().addingTimeInterval(0.05))
+        await fulfillment(of: [didPublish], timeout: 2)
         XCTAssertEqual(engine.midiLearnState, .listening)
         XCTAssertEqual(engine.midiLearnFeedback, "Listening...")
     }
@@ -24721,6 +24731,54 @@ final class SessionArchiveReferenceTearEvidenceTests: XCTestCase {
         try FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)
         addTeardownBlock { try? FileManager.default.removeItem(at: url) }
         return url
+    }
+
+    @MainActor
+    func testPNGReferenceRoundTripRetainsSourceAndManifestHashes() async throws {
+        let directory = try root()
+        let original = try await Task.detached {
+            var package = try Self.fixtures.makeCanonicalPackage(rootURL: directory, useRealMedia: true)
+            for take in package.takes {
+                package.referenceTearEvidenceByTakeID[take.takeID] = try Self.companion(
+                    for: take.sidecarURL, referenceID: "png-reference-\(take.takeNumber)")
+            }
+            return try SessionArchiveBuilder().preparePackage(from: .package(package))
+        }.value
+        let package = try await ReferenceNotationPNGExport.addingPreviews(to: original)
+        XCTAssertEqual(package.referenceTearEvidenceByTakeID, original.referenceTearEvidenceByTakeID)
+        XCTAssertEqual(package.notationPNGByTakeID.count, original.takes.count)
+        try await Task.detached {
+            let hydrated = try SessionArchiveBuilder().preparePackage(from: .package(package))
+            XCTAssertEqual(hydrated.notationPNGByTakeID.count, package.takes.count)
+            let extracted = try Self.archive(hydrated, root: directory)
+            let manifests = try Self.manifestTakes(at: extracted)
+            for (index, take) in package.takes.enumerated() {
+                let files = try XCTUnwrap(manifests[index]["files"] as? [String: String])
+                let artifacts = try XCTUnwrap(manifests[index]["artifacts"] as? [String: [String: Any]])
+                let preview = try XCTUnwrap(package.notationPNGByTakeID[take.takeID])
+                XCTAssertFalse(preview.pages.isEmpty)
+                for (page, bytes) in preview.pages.enumerated() {
+                    let key = ReferenceNotationPNGExport.artifactKey(page: page)
+                    let path = try XCTUnwrap(files[key])
+                    XCTAssertTrue(path.hasSuffix(String(format: "_reference_%03d.png", page + 1)))
+                    XCTAssertEqual(try Data(contentsOf: extracted.appendingPathComponent(path)), bytes)
+                    XCTAssertEqual(artifacts[key]?["sha256"] as? String, ExportArtifactIdentity.data(bytes).sha256)
+                    XCTAssertEqual((artifacts[key]?["bytes"] as? NSNumber)?.intValue, bytes.count)
+                    XCTAssertEqual(try ReferenceNotationPNGExport.probe(bytes)["kind"], .string("png"))
+                }
+                let evidencePath = try XCTUnwrap(files["reference_tear_evidence"])
+                XCTAssertEqual(try Data(contentsOf: extracted.appendingPathComponent(evidencePath)), original.referenceTearEvidenceByTakeID[take.takeID])
+            }
+            var stale = package
+            let first = try XCTUnwrap(package.takes.first)
+            let preview = try XCTUnwrap(package.notationPNGByTakeID[first.takeID])
+            stale.notationPNGByTakeID[first.takeID] = .init(sourceIdentity: "another take", pages: preview.pages)
+            XCTAssertThrowsError(try SessionArchiveBuilder().notationPNGRequests(for: stale))
+            var corrupt = package
+            corrupt.notationPNGByTakeID[first.takeID] = .init(sourceIdentity: preview.sourceIdentity,
+                pages: Array(repeating: Data("not PNG".utf8), count: preview.pages.count))
+            XCTAssertThrowsError(try SessionArchiveBuilder().notationPNGRequests(for: corrupt))
+        }.value
     }
 
     private static func companion(for url: URL, referenceID: String) throws -> Data {

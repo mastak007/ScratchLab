@@ -7,6 +7,8 @@ import hashlib
 import math
 import re
 import sys
+import struct
+import zlib
 from datetime import datetime
 from pathlib import Path
 from typing import Any
@@ -75,6 +77,75 @@ REFERENCE_REVIEW_NUMBERING = "repetitionNumber_1_based_repetitionIndex_0_based"
 OPTIONAL_MANIFEST_FILE_SOURCES = ({"notation", "scratch_only", "raw_original", REFERENCE_REVIEW_METADATA_SOURCE}
                                   | REFERENCE_BEAT_SOURCES)
 OPTIONAL_MANIFEST_ARTIFACT_SOURCES = {"scratch_only", "raw_original", REFERENCE_REVIEW_METADATA_SOURCE} | REFERENCE_BEAT_SOURCES
+
+
+def is_notation_png_source(source: str) -> bool:
+    match = re.fullmatch(r"notation_png_([0-9]{3})", source)
+    return match is not None and 1 <= int(match[1]) <= 225
+
+
+def notation_png_artifact_record(session_dir: Path, path: Path) -> dict[str, Any]:
+    """Inspect the derived PNG container; never use pixels as motion evidence."""
+    relative = path.resolve().relative_to(session_dir.resolve()).as_posix()
+    data = path.read_bytes()
+    if not data.startswith(b"\x89PNG\r\n\x1a\n"):
+        raise ValueError("invalid PNG signature")
+    offset, kinds, dimensions = 8, [], None
+    while offset < len(data):
+        if offset + 12 > len(data):
+            raise ValueError("truncated PNG chunk")
+        size = struct.unpack_from(">I", data, offset)[0]
+        end = offset + size + 12
+        if end > len(data):
+            raise ValueError("truncated PNG payload")
+        kind = data[offset + 4:offset + 8]
+        payload = data[offset + 8:end - 4]
+        if zlib.crc32(kind + payload) != struct.unpack_from(">I", data, end - 4)[0]:
+            raise ValueError("PNG CRC mismatch")
+        if kind == b"IHDR":
+            if kinds or size != 13:
+                raise ValueError("invalid PNG header")
+            dimensions = struct.unpack_from(">II", payload)
+        if kind == b"acTL":
+            raise ValueError("animated PNG is not a static reference")
+        kinds.append(kind)
+        offset = end
+        if kind == b"IEND":
+            if size != 0 or offset != len(data):
+                raise ValueError("invalid PNG end")
+            break
+    if dimensions != (1600, 1420) or not kinds or kinds[-1] != b"IEND" or b"IDAT" not in kinds:
+        raise ValueError("incomplete PNG or unexpected reference dimensions")
+    return {"path": relative, "bytes": len(data), "sha256": hashlib.sha256(data).hexdigest(),
+            "probe": {"kind": "png", "width": 1600, "height": 1420}}
+
+
+def validate_notation_pngs(take: dict[str, Any], session_dir: Path, label: str, errors: list[str]) -> None:
+    files, artifacts = take.get("files", {}), take.get("artifacts", {})
+    if not isinstance(files, dict) or not isinstance(artifacts, dict):
+        return
+    keys = {key for key in set(files) | set(artifacts) if is_notation_png_source(key)}
+    if not keys:
+        return  # Pre-PNG captures remain readable.
+    expected_keys = {f"notation_png_{index:03d}" for index in range(1, len(keys) + 1)}
+    if keys != expected_keys:
+        errors.append(f"{label}: notation PNG page sequence is incomplete.")
+    notation = files.get("notation")
+    if not isinstance(notation, str) or not re.fullmatch(r"notation/take-[0-9]{3,}_detected_notation\.json", notation):
+        errors.append(f"{label}: notation PNG has no canonical notation path.")
+        return
+    for key in sorted(keys):
+        expected = notation.removesuffix(".json") + f"_reference_{key[-3:]}.png"
+        artifact = artifacts.get(key)
+        if files.get(key) != expected or not isinstance(artifact, dict) or artifact.get("path") != expected:
+            errors.append(f"{label}: notation PNG page is not bound to its notation file: {key}.")
+            continue
+        try:
+            measured = notation_png_artifact_record(session_dir, session_dir / expected)
+            if artifact != measured:
+                raise ValueError("PNG byte/hash/probe record differs")
+        except (OSError, ValueError) as exc:
+            errors.append(f"{label}: invalid notation PNG {key}: {exc}")
 
 
 def reference_artifact_record(session_dir: Path, path: Path, source: str) -> dict[str, Any]:
@@ -699,7 +770,7 @@ def validate_manifest(
         else:
             file_sources = set(files)
             missing_file_sources = sorted(grouped_sources - file_sources)
-            unexpected_file_sources = sorted(file_sources - grouped_sources - OPTIONAL_MANIFEST_FILE_SOURCES)
+            unexpected_file_sources = sorted(file_sources - grouped_sources - OPTIONAL_MANIFEST_FILE_SOURCES - {s for s in file_sources if is_notation_png_source(s)})
             if missing_file_sources:
                 errors.append(
                     f"{take_label}: manifest files are missing source entries for: {', '.join(missing_file_sources)}."
@@ -754,7 +825,7 @@ def validate_manifest(
 
         artifact_sources = set(artifacts)
         missing_artifact_sources = sorted(grouped_sources - artifact_sources)
-        unexpected_artifact_sources = sorted(artifact_sources - grouped_sources - OPTIONAL_MANIFEST_ARTIFACT_SOURCES)
+        unexpected_artifact_sources = sorted(artifact_sources - grouped_sources - OPTIONAL_MANIFEST_ARTIFACT_SOURCES - {s for s in artifact_sources if is_notation_png_source(s)})
         if missing_artifact_sources:
             errors.append(
                 f"{take_label}: manifest artifacts are missing source entries for: {', '.join(missing_artifact_sources)}."
@@ -766,6 +837,7 @@ def validate_manifest(
 
         validate_reference_beat_evidence(take, session_dir, take_label, errors)
         validate_reference_review_metadata(take, session_dir, take_label, errors)
+        validate_notation_pngs(take, session_dir, take_label, errors)
 
         for source, artifact in artifacts.items():
             if not isinstance(artifact, dict):
@@ -785,6 +857,8 @@ def validate_manifest(
             try:
                 if source in REFERENCE_BEAT_SOURCES:
                     expected_artifact = reference_artifact_record(session_dir, artifact_path, source)
+                elif is_notation_png_source(source):
+                    expected_artifact = notation_png_artifact_record(session_dir, artifact_path)
                 elif source == REFERENCE_REVIEW_METADATA_SOURCE:
                     expected_artifact = review_metadata_artifact_record(session_dir, artifact_path)
                 else:

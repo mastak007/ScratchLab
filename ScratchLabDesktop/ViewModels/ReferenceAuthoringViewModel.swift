@@ -1539,7 +1539,7 @@ final class ReferenceAuthoringViewModel: ObservableObject {
     /// Stated wherever export is offered. Exporting is not approval,
     /// publication, installation or training eligibility.
     static let rawCaptureExportDisclaimer =
-        "Saving the capture copies recorded files and available tear review evidence. It does not approve, publish, "
+        "Saving the capture copies recorded files, notation PNG references and available tear review evidence. It does not approve, publish, "
             + "install, or make any reference eligible for training."
 
     // MARK: - Canonical tear notation

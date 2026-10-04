@@ -141,6 +141,7 @@
 		BCFC2E48C8DC97B933BA3EE3 /* TimecodeInputSample.swift in Sources */ = {isa = PBXBuildFile; fileRef = F7AD56A9978DD053CB2F5C9A /* TimecodeInputSample.swift */; };
 		BPF0011000BPF001BPF00001 /* BabyPlatterFixtureDecodeTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = BPF0010000BPF001BPF00001 /* BabyPlatterFixtureDecodeTests.swift */; };
 		C4BBF22D178BBE5493AC2B64 /* SessionExportCoordinator.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3C6C21E3D2ABD8AF9CE81ED0 /* SessionExportCoordinator.swift */; };
+		9A9182608B274A20B5000001 /* ReferenceNotationPNGExport.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9A9182608B274A20B5000003 /* ReferenceNotationPNGExport.swift */; };
 		C68BC19238996C9C92EB97A3 /* WatchMotionCapture.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8EDD250716FA81582843E833 /* WatchMotionCapture.swift */; };
 		C68BC19238996C9C92EB97A4 /* CaptureReliability.swift in Sources */ = {isa = PBXBuildFile; fileRef = C1000001A1B2C3D4E5F60701 /* CaptureReliability.swift */; };
 		C68BC19238996C9C92EB97A5 /* StagedCaptureRecovery.swift in Sources */ = {isa = PBXBuildFile; fileRef = 822770ADBBBDBC738DD6D0B2 /* StagedCaptureRecovery.swift */; };
@@ -227,6 +228,7 @@
 		ETM1001000ETM001ETM00002 /* Notation/Timing/ExpectedTiming.swift in Sources */ = {isa = PBXBuildFile; fileRef = ETM1000000ETM001ETM00001 /* Notation/Timing/ExpectedTiming.swift */; };
 		ETM2011000ETM002ETM00001 /* ExpectedTimingTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = ETM2010000ETM002ETM00001 /* ExpectedTimingTests.swift */; };
 		F22C528B2FD0DDE739AEC6CE /* SessionExportCoordinator.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3C6C21E3D2ABD8AF9CE81ED0 /* SessionExportCoordinator.swift */; };
+		9A9182608B274A20B5000002 /* ReferenceNotationPNGExport.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9A9182608B274A20B5000003 /* ReferenceNotationPNGExport.swift */; };
 		F3000002A1B2C3D4E5F60708 /* SessionUploadManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = F3000001A1B2C3D4E5F60708 /* SessionUploadManager.swift */; };
 		F3000003A1B2C3D4E5F60708 /* SessionUploadManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = F3000001A1B2C3D4E5F60708 /* SessionUploadManager.swift */; };
 		F6EB3C16D803B47D9D2E8BA5 /* Archive+ZIP64.swift in Sources */ = {isa = PBXBuildFile; fileRef = 42E9D62598A8188FCA3886F5 /* Archive+ZIP64.swift */; };
@@ -690,6 +692,7 @@
 		35E9E2CBF137FA7FC581005B /* ScratchLabWatchApp.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = ScratchLabWatchApp.swift; sourceTree = "<group>"; };
 		39027759E5376D51BFF6D1F0 /* FileManager+ZIP.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = "FileManager+ZIP.swift"; sourceTree = "<group>"; };
 		3C6C21E3D2ABD8AF9CE81ED0 /* SessionExportCoordinator.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = SessionExportCoordinator.swift; sourceTree = "<group>"; };
+		9A9182608B274A20B5000003 /* ReferenceNotationPNGExport.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = ReferenceNotationPNGExport.swift; sourceTree = "<group>"; };
 		402318FE35178B49FF365798 /* ScratchLab.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = ScratchLab.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		42E9D62598A8188FCA3886F5 /* Archive+ZIP64.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = "Archive+ZIP64.swift"; sourceTree = "<group>"; };
 		472ED49B7202325C8D3C8887 /* Archive+Progress.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = "Archive+Progress.swift"; sourceTree = "<group>"; };
@@ -1601,6 +1604,7 @@
 				822770ADBBBDBC738DD6D0B2 /* StagedCaptureRecovery.swift */,
 				822770ADBBBDBC738DD6D0B3 /* StagingInspector.swift */,
 				3C6C21E3D2ABD8AF9CE81ED0 /* SessionExportCoordinator.swift */,
+				9A9182608B274A20B5000003 /* ReferenceNotationPNGExport.swift */,
 				176C96FD0F739C88F75C490F /* SessionSharePresenter.swift */,
 				F3000001A1B2C3D4E5F60708 /* SessionUploadManager.swift */,
 				SRV0000000SRV001SRV00001 /* SessionReviewValidator.swift */,
@@ -2298,6 +2302,7 @@
 				C71F1103A1B2C3D4E5F60711 /* ClickTrackEngine.swift in Sources */,
 				C71F1203A1B2C3D4E5F60712 /* ScratchLabBeatEngine.swift in Sources */,
 				C4BBF22D178BBE5493AC2B64 /* SessionExportCoordinator.swift in Sources */,
+				9A9182608B274A20B5000001 /* ReferenceNotationPNGExport.swift in Sources */,
 				SRV0001000SRV001SRV00001 /* SessionReviewValidator.swift in Sources */,
 				SQA0001000SQA001SQA00001 /* SessionQualityAnalyzer.swift in Sources */,
 				SRK0001000SRK001SRK00001 /* SessionReplayClock.swift in Sources */,
@@ -2529,6 +2534,7 @@
 				2C64569FCF5593D3CB171D27 /* StagingInspector.swift in Sources */,
 				AE8F16D074A8978CDFC56DEA /* WatchCaptureHubView.swift in Sources */,
 				F22C528B2FD0DDE739AEC6CE /* SessionExportCoordinator.swift in Sources */,
+				9A9182608B274A20B5000002 /* ReferenceNotationPNGExport.swift in Sources */,
 				SRV0002000SRV001SRV00001 /* SessionReviewValidator.swift in Sources */,
 				SQA0002000SQA001SQA00001 /* SessionQualityAnalyzer.swift in Sources */,
 				SRK0002000SRK001SRK00001 /* SessionReplayClock.swift in Sources */,
