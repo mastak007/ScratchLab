@@ -1,3 +1,16 @@
+## Current Capture direction — 4 October 2026
+
+Use **SL Capture** as the generic product name for work with three professional
+DJs. New reference takes require the actual DJ/performer name, distinct from the
+capture operator. Keep that name consistent through recording, saved drafts and
+export; never invent a default performer. Use generic performer/reviewer wording
+in the app and handoff. Preserve historical performer credits and stable internal
+bundle/schema/storage identities. The current guide is
+[SL Capture quick start](docs/sl_capture_quick_start.md). See the latest handoff
+for verification and distribution status; this direction is not hardware proof.
+
+--- Historical context below ---
+
 
 # ScratchLab – AI Context
 

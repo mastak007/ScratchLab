@@ -452,7 +452,7 @@ enum ReferencePackageValidator {
         }
         if manifest.requiresExactSourceEvidence && !manifest.requiresExactWatchArtifact {
             if manifest.metadata.sourceState?.explicitlyOmitsWatch != true {
-                issues.append(.sourceStateInvalid(detail: "An exact CXL reference must explicitly record that optional Watch motion was not requested or unavailable."))
+                issues.append(.sourceStateInvalid(detail: "An exact reference take must explicitly record that optional Watch motion was not requested or unavailable."))
             }
             if manifest.artifact(role: .watchMotion) != nil {
                 issues.append(.sourceStateInvalid(detail: "Watch motion cannot be packaged while the source declares no Watch."))

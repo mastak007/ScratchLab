@@ -128,7 +128,7 @@ struct ReferenceAuthoringView: View {
         ScrollViewReader { scroll in
         ScrollView {
             VStack(alignment: .leading, spacing: 16) {
-                Text("CXL Reference Authoring")
+                Text("SL Capture Reference Authoring")
                     .font(.title2.weight(.semibold))
                 Text("Check one movement without a beat, or record four timed repetitions for reference review. Approval does not install or publish training data.")
                     .foregroundStyle(.secondary)
@@ -1020,6 +1020,10 @@ struct ReferenceAuthoringView: View {
     private var setupSection: some View {
         GroupBox("1. Technique, pattern and variant") {
             VStack(alignment: .leading, spacing: 10) {
+                TextField("DJ / performer name", text: $viewModel.performerName)
+                    .disabled(viewModel.isWorking || viewModel.session.captureIntent != nil)
+                Text("Enter the DJ who is performing. Use New scratch before changing performers.")
+                    .font(.caption).foregroundStyle(.secondary)
                 Text("Operator: \(viewModel.session.operatorName)")
                     .font(.caption)
                     .foregroundStyle(.secondary)
@@ -1545,7 +1549,7 @@ struct ReferenceAuthoringView: View {
                             .font(.caption).foregroundStyle(.secondary)
                     } else {
                     Text("Four repetitions").font(.headline)
-                    Text("Play each repetition to check it. Start and End beat trim its review range. Mark as Preferred records CXL's best repetition (1–4); it is saved with the draft, included in Save Capture and used if you approve. Change your pick by marking another repetition, or use Clear. Marking does not approve the take or change the original recording.")
+                    Text("Play each repetition to check it. Start and End beat trim its review range. Mark as Preferred records the performer's best repetition (1–4); it is saved with the draft, included in Save Capture and used if you approve. Change your pick by marking another repetition, or use Clear. Marking does not approve the take or change the original recording.")
                         .font(.caption).foregroundStyle(.secondary)
                     if let preferred = take.evidence.boundaries.selectedRepetitionIndex {
                         Text("Preferred: repetition \(preferred + 1)" + (take.preferenceMark.map {

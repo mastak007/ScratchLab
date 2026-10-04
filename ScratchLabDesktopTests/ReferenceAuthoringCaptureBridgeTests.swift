@@ -63,6 +63,17 @@ final class ReferenceAuthoringCaptureBridgeTests: XCTestCase {
         }
     }
 
+    func testSelectedPerformerFlowsToRecordingSidecarConfiguration() throws {
+        for name in ["DJ One", "DJ Two", "DJ Three"] {
+            let configuration = ReferenceAuthoringBridgeTakeConfiguration(
+                performerName: name, technique: .babyScratch, bpm: 95)
+            let config = configuration.recordingSessionConfig(existing: nil, now: Date())
+            XCTAssertEqual(config.performerName, name)
+            let data = try JSONEncoder().encode(config)
+            XCTAssertEqual(try JSONDecoder().decode(CaptureSessionConfig.self, from: data).performerName, name)
+        }
+    }
+
     func testBoundCapturePlansOnlyRecordedRepetitionsAndTailAndSeparatesNewSetup() throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: root) }

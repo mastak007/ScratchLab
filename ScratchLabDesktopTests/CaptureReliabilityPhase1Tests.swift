@@ -12047,7 +12047,7 @@ final class CaptureRecoveryPhase2CoreTests: XCTestCase {
         )
         XCTAssertTrue(
             source.contains(
-                "#if DEBUG\n            case .referenceAuthoringHardwareTest: return \"CXL Reference Authoring — Hardware Test\""
+                "#if DEBUG\n            case .referenceAuthoringHardwareTest: return \"SL Capture Reference Authoring — Hardware Test\""
             ),
             "The hardware-test label must remain inside the AdvancedSection DEBUG gate"
         )
@@ -24118,6 +24118,7 @@ final class ReferencePackageIORoundTripTests: XCTestCase {
             referenceTakeID: "ref-take-io-0001",
             authoringSessionID: "auth-io-0001",
             takeNumber: 1,
+            performerName: "Fixture DJ",
             operatorName: "Karl",
             technique: .babyScratch,
             pattern: ReferencePatternIdentity(id: "quarter_notes", name: "Quarter notes", phraseBars: 1),

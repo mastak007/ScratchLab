@@ -978,7 +978,7 @@ final class CompanionCameraBroadcaster: NSObject, ObservableObject {
                 case .ready:
                     DispatchQueue.main.async {
                         if self.connectedPeerNames.isEmpty {
-                            self.connectionStatus = "Waiting for ScratchLab CXL"
+                            self.connectionStatus = "Waiting for SL Capture"
                         }
                     }
                 case .failed(let error):
@@ -1037,7 +1037,7 @@ final class CompanionCameraBroadcaster: NSObject, ObservableObject {
                     DispatchQueue.main.async {
                         self.connectedPeerNames = []
                         self.isBroadcasting = false
-                        self.connectionStatus = "Waiting for ScratchLab CXL"
+                        self.connectionStatus = "Waiting for SL Capture"
                     }
                 }
             default:
@@ -1051,7 +1051,7 @@ final class CompanionCameraBroadcaster: NSObject, ObservableObject {
         if case .hostPort(let host, _) = endpoint {
             return host.debugDescription
         }
-        return "ScratchLab CXL"
+        return "SL Capture"
     }
 
     private func receiveDirectPacketLength(on connection: NWConnection, peerName: String) {

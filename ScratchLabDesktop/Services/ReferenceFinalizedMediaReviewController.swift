@@ -320,7 +320,7 @@ final class ReferenceFinalizedMediaReviewController: ObservableObject {
             return
         }
         guard let rootURL else {
-            throw ReviewError("Set CXL_BEAT_PILOT_ROOT to the unapproved candidate directory for synchronized review.")
+            throw ReviewError("The selected backing audio is unavailable. Restore the original beat files before synchronized review.")
         }
         let directory = rootURL.appendingPathComponent(beat.id, isDirectory: true)
         let master = directory.appendingPathComponent(beat.productionMasterFileName)

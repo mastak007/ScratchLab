@@ -717,7 +717,7 @@ enum ReferencePerTakeSourceState: Codable, Equatable, Sendable {
 struct ReferenceTakeMetadata: Codable, Equatable, Sendable, Identifiable {
 
     static let currentSchemaVersion = "scratchlab_reference_take_v1"
-    static let defaultPerformerName = "CXL"
+    static let defaultPerformerName = ""
     static let defaultRepetitionCount = 4
     static let defaultCountInBars = 1
     static let defaultTailBars = 1
@@ -732,7 +732,7 @@ struct ReferenceTakeMetadata: Codable, Equatable, Sendable, Identifiable {
 
     let performerName: String
     /// Who operated the capture. Distinct from the performer: the same take
-    /// can be performed by CXL and operated by someone else.
+    /// can be performed by one DJ and operated by someone else.
     let operatorName: String
 
     let technique: ReferenceTechnique

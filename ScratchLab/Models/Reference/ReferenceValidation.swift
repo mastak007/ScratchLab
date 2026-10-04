@@ -204,7 +204,7 @@ enum ReferenceValidationFinding: Equatable, Sendable {
         case .captureIntentInvalid(let detail):
             return "The immutable capture intent does not match this take: \(detail)"
         case .witnessedTimingInvalid(let detail):
-            return "The finalized take timing is not CXL-ready: \(detail)"
+            return "The finalized take timing is not ready for reference capture: \(detail)"
         case .lifecycleTransitionNotPermitted(let from, let to):
             return "A reference cannot move from \(from) to \(to). The order is draft → reviewed → approved canonical → published, and diagnostic, rejected and deprecated takes never re-enter it."
         }

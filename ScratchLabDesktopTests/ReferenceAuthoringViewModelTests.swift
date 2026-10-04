@@ -1442,7 +1442,7 @@ final class ReferenceTearEvidencePipelineTests: XCTestCase {
     private func worker(_ fixtures: [Fixture], draftStore: ReferenceDraftStore? = nil, preparedBeat: ReferencePreparedBeat? = nil, technique: ReferenceTechnique = .tear, late: LateFixtureState? = nil) -> ReferenceAuthoringWorker {
         let sequence = RecordingSequence(fixtures, bindIdentity: preparedBeat != nil)
         let calibration = Self.calibration
-        var session = ReferenceAuthoringSession(authoringSessionID: "pipeline-authoring", operatorName: "Synthetic Reviewer")
+        var session = ReferenceAuthoringSession(performerName: "Fixture DJ", authoringSessionID: "pipeline-authoring", operatorName: "Synthetic Reviewer")
         session.selectTechnique(technique)
         session.selectPattern(ReferencePatternIdentity(id: "pipeline", name: "Pipeline", phraseBars: 1), bpm: 120)
         session.declareVariant(startingDirection: .forward, faderVariant: .faderOpenThroughout, handedness: .right)
@@ -2551,7 +2551,7 @@ final class ReferenceAuthoringViewModelTests: XCTestCase {
             latestCalibrationObservation: { nil }
         )
         var initialSession = ReferenceAuthoringSession(
-            authoringSessionID: "synthetic-configuring-session",
+            performerName: "Fixture DJ", authoringSessionID: "synthetic-configuring-session",
             operatorName: "Karl"
         )
         initialSession.selectTechnique(.babyScratch)
@@ -2765,7 +2765,7 @@ final class ReferenceAuthoringViewModelTests: XCTestCase {
     }
 
     func testUntokenedStopBeforeRecordingFailsWhileTokenScopedStopRemainsANoop() async {
-        for session in [ReferenceAuthoringSession(authoringSessionID: "not-started", operatorName: "Karl"), readySession()] {
+        for session in [ReferenceAuthoringSession(performerName: "Fixture DJ", authoringSessionID: "not-started", operatorName: "Karl"), readySession()] {
             let stopCalls = LockedBox(0)
             let statusReads = LockedBox(0)
             let token = RoutineRecordingRequestToken(generation: 101)
@@ -3725,7 +3725,7 @@ final class ReferenceAuthoringViewModelTests: XCTestCase {
     }
 
     private func readySession() -> ReferenceAuthoringSession {
-        var session = ReferenceAuthoringSession(authoringSessionID: "synthetic-session", operatorName: "Karl")
+        var session = ReferenceAuthoringSession(performerName: "Fixture DJ", authoringSessionID: "synthetic-session", operatorName: "Karl")
         session.selectTechnique(.babyScratch)
         session.selectPattern(
             ReferencePatternIdentity(id: "synthetic-pattern", name: "Synthetic Pattern", phraseBars: 1),
@@ -4065,7 +4065,7 @@ final class ReferenceTearSegmentationViewModelTests: XCTestCase {
     }
 
     private func readySession() -> ReferenceAuthoringSession {
-        var session = ReferenceAuthoringSession(authoringSessionID: "synthetic-session", operatorName: "Karl")
+        var session = ReferenceAuthoringSession(performerName: "Fixture DJ", authoringSessionID: "synthetic-session", operatorName: "Karl")
         session.selectTechnique(.babyScratch)
         session.selectPattern(
             ReferencePatternIdentity(id: "synthetic-pattern", name: "Synthetic Pattern", phraseBars: 1),
@@ -4357,6 +4357,7 @@ final class ReferenceTearSegmentationViewModelTests: XCTestCase {
             referenceTakeID: "ref-take-advisory",
             authoringSessionID: "synthetic-session",
             takeNumber: 1,
+            performerName: "Fixture DJ",
             operatorName: "Karl",
             technique: technique,
             pattern: ReferencePatternIdentity(
@@ -4951,7 +4952,7 @@ final class ReferenceAuthoringCalibrationReuseAndExportTests: XCTestCase {
         store: CrossfaderCalibrationStore,
         finalizedURL: URL? = nil
     ) -> ReferenceAuthoringViewModel {
-        var session = ReferenceAuthoringSession(authoringSessionID: "auth-tear", operatorName: "Karl")
+        var session = ReferenceAuthoringSession(performerName: "Fixture DJ", authoringSessionID: "auth-tear", operatorName: "Karl")
         session.selectTechnique(.tear)
         session.selectPattern(
             ReferencePatternIdentity(id: "tear_1bar", name: "Tear · 1 bar", phraseBars: 1),
@@ -5083,6 +5084,7 @@ final class ReferenceAuthoringCalibrationReuseAndExportTests: XCTestCase {
 final class ReferenceMotionReviewViewportTests: XCTestCase {
     private func metadata(offset: Double = 4) -> ReferenceTakeMetadata {
         ReferenceTakeMetadata(referenceTakeID: "motion-review", authoringSessionID: "review", takeNumber: 1,
+            performerName: "Fixture DJ",
             operatorName: "Fixture", technique: .tear,
             pattern: .init(id: "slow-tear", name: "Slow tear", phraseBars: 1), bpm: 60,
             startingPlatterDirection: .forward, faderVariant: .faderOpenThroughout,

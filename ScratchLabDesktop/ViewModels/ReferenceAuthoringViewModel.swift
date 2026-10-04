@@ -305,6 +305,7 @@ final class ReferenceAuthoringWorker: @unchecked Sendable {
     }
 
     func configure(
+        performerName: String? = nil,
         technique: ReferenceTechnique,
         pattern: ReferencePatternIdentity,
         bpm: Int,
@@ -316,6 +317,7 @@ final class ReferenceAuthoringWorker: @unchecked Sendable {
         capturePurpose: ReferenceCapturePurpose = .canonicalReference
     ) async -> ReferenceAuthoringWorkerUpdate {
         await enqueue { worker in
+            if let performerName { worker.session.selectPerformer(performerName) }
             worker.session.selectTechnique(technique)
             worker.session.selectPattern(pattern, bpm: bpm)
             worker.session.declareVariant(
@@ -551,6 +553,7 @@ final class ReferenceAuthoringWorker: @unchecked Sendable {
             }
             worker.driver.setPendingConfiguration(
                 ReferenceAuthoringBridgeTakeConfiguration(
+                    performerName: worker.session.performerName,
                     technique: technique,
                     bpm: bpm,
                     beatEngineMode: worker.session.selectedBeatEngineMode,
@@ -981,6 +984,7 @@ final class ReferenceAuthoringViewModel: ObservableObject {
     /// refreshes `workflowStatusText` without a second published source.
     private var isApplyingSetup = false
 
+    @Published var performerName = ""
     @Published var selectedTechnique: ReferenceTechnique?
     @Published var patternID = ""
     @Published var patternName = ""
@@ -1118,6 +1122,7 @@ final class ReferenceAuthoringViewModel: ObservableObject {
                 approvedPackageURL = nil
                 mediaReview.load(take: take, mediaURL: lastFinalizedRecordingURL, beatRootURL: nil)
                 visibleMessage = "Saved draft reopened. Review it and select a repetition when ready."
+                performerName = session.performerName
                 navigationRequest = .init(destination: .review)
             }
             isWorking = false
@@ -1205,6 +1210,7 @@ final class ReferenceAuthoringViewModel: ObservableObject {
         self.worker = worker
         self.state = initialState
         let applied = initialState.session
+        performerName = applied.performerName
         selectedTechnique = applied.selectedTechnique
         patternID = applied.selectedPattern?.id ?? ""
         patternName = applied.selectedPattern?.name ?? ""
@@ -1329,6 +1335,10 @@ final class ReferenceAuthoringViewModel: ObservableObject {
     func applySetup() {
         stopBeatPreview()
         visibleMessage = nil
+        guard !performerName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            visibleMessage = "Enter the DJ / performer name before applying setup."
+            return
+        }
         guard let technique = selectedTechnique else {
             visibleMessage = "Select an authorable technique. Flare references must name an explicit click count."
             return
@@ -1360,6 +1370,7 @@ final class ReferenceAuthoringViewModel: ObservableObject {
         Task { [weak self] in
             guard let self else { return }
             let update = await worker.configure(
+                performerName: performerName,
                 technique: technique,
                 pattern: pattern,
                 bpm: bpm,
@@ -1792,7 +1803,8 @@ final class ReferenceAuthoringViewModel: ObservableObject {
         guard !isWorking else { return }
         stopBeatPreview()
         mediaReview.stop()
-        guard session.selectedTechnique == selectedTechnique,
+        guard session.performerName == performerName.trimmingCharacters(in: .whitespacesAndNewlines),
+              session.selectedTechnique == selectedTechnique,
               session.selectedPattern?.id == patternID.trimmingCharacters(in: .whitespacesAndNewlines),
               session.selectedPattern?.name == patternName.trimmingCharacters(in: .whitespacesAndNewlines),
               session.selectedPattern?.phraseBars == phraseBars,
@@ -2037,6 +2049,7 @@ final class ReferenceAuthoringViewModel: ObservableObject {
             let update = await worker.prepareNewScratchSetup(afterTakeID: takeID)
             apply(update)
             if update.errorMessage == nil {
+                performerName = session.performerName
                 selectedTechnique = nil
                 patternID = ""
                 patternName = ""

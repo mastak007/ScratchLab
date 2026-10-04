@@ -526,7 +526,7 @@ struct MacAnalyzerView: View {
             case .midiFader:      return "MIDI & fader"
             case .monitor:        return "Performer Monitor"
 #if DEBUG
-            case .referenceAuthoringHardwareTest: return "CXL Reference Authoring — Hardware Test"
+            case .referenceAuthoringHardwareTest: return "SL Capture Reference Authoring — Hardware Test"
             case .captureDetails: return "Diagnostics"
             case .timecodeInput:  return "DVS / timecode"
 #endif

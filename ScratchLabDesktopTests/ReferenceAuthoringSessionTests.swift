@@ -144,7 +144,7 @@ final class ReferenceAuthoringSessionTests: XCTestCase {
     private func makeConfiguredSession(
         technique: ReferenceTechnique = .babyScratch
     ) -> ReferenceAuthoringSession {
-        var session = ReferenceAuthoringSession(authoringSessionID: "auth-0001", operatorName: "Karl")
+        var session = ReferenceAuthoringSession(performerName: "Fixture DJ", authoringSessionID: "auth-0001", operatorName: "Karl")
         session.selectTechnique(technique)
         session.selectPattern(
             ReferencePatternIdentity(id: "quarter_notes", name: "Quarter notes", phraseBars: 1),
@@ -158,10 +158,45 @@ final class ReferenceAuthoringSessionTests: XCTestCase {
         return session
     }
 
+    func testMissingPerformerCannotBecomeARecordingSetup() throws {
+        var session = makeConfiguredSession()
+        session.selectPerformer("  \n ")
+        XCTAssertFalse(session.configurationIsComplete)
+        XCTAssertThrowsError(try session.prepareCaptureIntentForRecording())
+        XCTAssertEqual(ReferenceTakeMetadata.defaultPerformerName, "")
+    }
+
+    func testThreePerformersRemainBoundToTheirOwnTakes() throws {
+        var session = makeConfiguredSession()
+        let hooks = ReferenceAuthoringRecordingHooks(
+            startRecording: { .success(()) },
+            stopRecording: { .success(self.goodArtifacts()) },
+            currentPreflightSnapshot: { self.passingSnapshot() },
+            latestCalibrationObservation: { nil })
+        for name in ["DJ One", "DJ Two", "DJ Three"] {
+            session.selectPerformer("  " + name + "  ")
+            session.selectTechnique(.babyScratch)
+            session.selectPattern(.init(id: "baby", name: "Baby", phraseBars: 1), bpm: 95)
+            session.declareVariant(startingDirection: .forward,
+                faderVariant: .faderOpenThroughout, handedness: .right)
+            _ = try session.beginRecording(using: hooks).get()
+            session.selectPerformer("Must not replace the recording performer")
+            _ = try session.finishRecording(using: hooks).get()
+            let take = try XCTUnwrap(session.latestRecordedTake)
+            XCTAssertEqual(take.evidence.metadata.performerName, name)
+            let bytes = try JSONEncoder().encode(take.evidence.metadata)
+            let reopened = try JSONDecoder().decode(ReferenceTakeMetadata.self, from: bytes)
+            XCTAssertEqual(reopened.performerName, name)
+            try session.prepareNewScratchSetup(afterTakeID: take.id)
+        }
+        XCTAssertEqual(session.takes.map { $0.evidence.metadata.performerName },
+                       ["DJ One", "DJ Two", "DJ Three"])
+    }
+
     // MARK: - Configuration order (steps 1–3)
 
     func testConfigurationIsIncompleteUntilAllFourFieldsAreSet() {
-        var session = ReferenceAuthoringSession(authoringSessionID: "auth-0001", operatorName: "Karl")
+        var session = ReferenceAuthoringSession(performerName: "Fixture DJ", authoringSessionID: "auth-0001", operatorName: "Karl")
         XCTAssertFalse(session.configurationIsComplete)
         session.selectTechnique(.chirp)
         XCTAssertFalse(session.configurationIsComplete)
@@ -2109,7 +2144,7 @@ final class ReferenceTearSegmentationReviewTests: XCTestCase {
         movementEvents: [CaptureCore.DetectedNotationRecordMovementEvent]? = nil,
         derivation: CrossfaderDerivation? = nil
     ) -> ReferenceAuthoringSession {
-        var session = ReferenceAuthoringSession(authoringSessionID: "auth-0001", operatorName: "Karl")
+        var session = ReferenceAuthoringSession(performerName: "Fixture DJ", authoringSessionID: "auth-0001", operatorName: "Karl")
         session.selectTechnique(.babyScratch)
         session.selectPattern(
             ReferencePatternIdentity(id: "quarter_notes", name: "Quarter notes", phraseBars: 1),
@@ -2730,7 +2765,7 @@ final class ReferenceTearAuthoringSliceTests: XCTestCase {
     }
 
     private func makeConfiguredTearSession() -> ReferenceAuthoringSession {
-        var session = ReferenceAuthoringSession(authoringSessionID: "auth-tear", operatorName: "Karl")
+        var session = ReferenceAuthoringSession(performerName: "Fixture DJ", authoringSessionID: "auth-tear", operatorName: "Karl")
         session.selectTechnique(.tear)
         session.selectPattern(
             ReferencePatternIdentity(id: "tear_1bar", name: "Tear · 1 bar", phraseBars: 1),

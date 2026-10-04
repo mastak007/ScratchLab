@@ -337,6 +337,7 @@ struct ReferenceAuthoringSession: Equatable, Sendable {
 
     let authoringSessionID: String
     let operatorName: String
+    private(set) var performerName: String
     var phase: ReferenceAuthoringPhase
 
     var selectedTechnique: ReferenceTechnique?
@@ -393,14 +394,16 @@ struct ReferenceAuthoringSession: Equatable, Sendable {
     /// lifecycle state, not a deletion.
     private(set) var takes: [ReferenceAuthoringTake] = []
 
-    init(authoringSessionID: String, operatorName: String) {
+    init(performerName: String = "", authoringSessionID: String, operatorName: String) {
+        self.performerName = performerName.trimmingCharacters(in: .whitespacesAndNewlines)
         self.authoringSessionID = authoringSessionID
         self.operatorName = operatorName
         self.phase = .configuring
     }
 
     var configurationIsComplete: Bool {
-        selectedTechnique != nil
+        !performerName.isEmpty
+            && selectedTechnique != nil
             && selectedPattern != nil
             && (selectedBPM.map { CaptureClickTrackDefaults.supportedBPMRange.contains($0) } ?? false)
             && selectedStartingDirection != nil
@@ -422,6 +425,7 @@ struct ReferenceAuthoringSession: Equatable, Sendable {
                 || metadata.lifecycleState == .approvedCanonical else {
             throw ReferenceAuthoringError.recordingFailed("This saved take cannot be reopened for review.")
         }
+        performerName = metadata.performerName
         selectedTechnique = metadata.technique
         selectedPattern = metadata.pattern
         selectedBPM = metadata.bpm
@@ -446,6 +450,11 @@ struct ReferenceAuthoringSession: Equatable, Sendable {
     }
 
     // MARK: Step 1–3: configuration
+
+    mutating func selectPerformer(_ name: String) {
+        guard captureIntent == nil else { return }
+        performerName = name.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
 
     mutating func selectTechnique(_ technique: ReferenceTechnique) {
         guard captureIntent == nil else { return }
@@ -827,6 +836,7 @@ struct ReferenceAuthoringSession: Equatable, Sendable {
             referenceTakeID: "\(authoringSessionID)-take-\(String(format: "%03d", takeNumber))",
             authoringSessionID: authoringSessionID,
             takeNumber: takeNumber,
+            performerName: performerName,
             operatorName: operatorName,
             technique: technique,
             pattern: pattern,

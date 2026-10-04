@@ -44,6 +44,7 @@ import AVFoundation
 /// steps 1–3 but has no way to hand to a parameterless `startRecording()`
 /// closure.
 struct ReferenceAuthoringBridgeTakeConfiguration: Equatable {
+    let performerName: String
     let technique: ReferenceTechnique
     let bpm: Int
     let beatEngineMode: BeatEngineMode
@@ -55,6 +56,7 @@ struct ReferenceAuthoringBridgeTakeConfiguration: Equatable {
     var isMovementCheck: Bool { captureIntent?.isMovementCheck == true }
 
     init(
+        performerName: String = "",
         technique: ReferenceTechnique,
         bpm: Int,
         beatEngineMode: BeatEngineMode = .boomBapTrainer,
@@ -63,6 +65,7 @@ struct ReferenceAuthoringBridgeTakeConfiguration: Equatable {
         captureIntent: ReferenceCaptureIntent? = nil,
         preparedBeat: ReferencePreparedBeat? = nil
     ) {
+        self.performerName = performerName
         self.technique = technique
         self.bpm = bpm
         self.beatEngineMode = beatEngineMode
@@ -77,7 +80,7 @@ struct ReferenceAuthoringBridgeTakeConfiguration: Equatable {
         // old sidecars/configuration remain attached to the previous group.
         let sameSetup = existing?.referenceCaptureIntent?.id == captureIntent?.id
         return CaptureSessionConfig(
-            performerName: ReferenceTakeMetadata.defaultPerformerName,
+            performerName: performerName,
             bpm: bpm,
             scratchType: technique.scratchType,
             drillMode: .fullCapture,
@@ -1047,7 +1050,7 @@ final class ReferenceAuthoringCaptureBridge {
             )
         case .missing(let syncState):
             if sidecar.watchSyncState == .unavailable {
-                return .unavailable(policy: "Watch was unavailable under the supported CXL policy")
+                return .unavailable(policy: "Watch was unavailable under the supported capture policy")
             }
             if sidecar.watchSyncState == .timedOut {
                 return .timedOut(identity: identity)

@@ -259,6 +259,7 @@ final class ReferenceExactBeatExportTests: XCTestCase {
         let decision = ReferenceReviewDecision(outcome: .approved, decidedBy: "Fixture", decidedAt: date,
             notes: "Synthetic package verification only", selectedRepetitionIndex: 0)
         let metadata = ReferenceTakeMetadata(referenceTakeID: "reference-take", authoringSessionID: "authoring", takeNumber: 1,
+            performerName: "Fixture DJ",
             operatorName: "Fixture", technique: .tear, pattern: .init(id: "exact_beat", name: "Exact beat", phraseBars: 1),
             bpm: beat.bpm, startingPlatterDirection: .forward, faderVariant: .faderOpenThroughout,
             captureIntent: intent(beat: beat), witnessedTiming: timing, mediaTimeOrigin: origin,
@@ -319,6 +320,7 @@ final class ReferenceAuthoringTests: XCTestCase {
             referenceTakeID: "ref-take-0001",
             authoringSessionID: "auth-0001",
             takeNumber: 1,
+            performerName: "Fixture DJ",
             operatorName: "Karl",
             technique: technique,
             pattern: ReferencePatternIdentity(
@@ -791,6 +793,7 @@ final class ReferenceAuthoringTests: XCTestCase {
             referenceTakeID: metadata.referenceTakeID,
             authoringSessionID: metadata.authoringSessionID,
             takeNumber: metadata.takeNumber,
+            performerName: "Fixture DJ",
             operatorName: metadata.operatorName,
             technique: metadata.technique,
             pattern: metadata.pattern,
@@ -1919,6 +1922,7 @@ final class ReferenceCaptureIntentTests: XCTestCase {
             referenceTakeID: "authoring-take-001",
             authoringSessionID: "authoring",
             takeNumber: 1,
+            performerName: "Fixture DJ",
             operatorName: "Karl",
             technique: .tear,
             pattern: .init(id: "tear_1bar", name: "Tear", phraseBars: 1),
