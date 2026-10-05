@@ -6,9 +6,14 @@ See [the checkpoint](checkpoints/2026-10-04-capture-png.md) for receipts and lim
 Save Capture / Approve & Save Capture creates derived PNG references after finalization,
 inside the ZIP's `notation/` folder. `take-001_detected_notation_reference_001.png`
 is the first page of take 1. Longer takes receive further numbered pages. Each
-1600 x 1420 PNG has four-second rows, up to four rows per page, performer/take/session
+1600 x 1420 PNG has whole-bar rows for timed takes (at least four seconds), or
+four-second rows for Movement check, up to four rows per page, performer/take/session
 identity and recorded tempo (or Movement check). All rows use the saved projection's
-same vertical range; no target is substituted and no hold or gap is inferred.
+same vertical range and horizontal time scale. The final partial row occupies only
+its proportional width; remaining space is outside the recording, not unknown motion.
+At 90 BPM in 4/4, a row spans two bars (5.333 seconds). Rows retain the chart’s
+existing take-relative beat origin; the recording is not retimed. Labels and strokes are enlarged
+only in the PNG. No target is substituted and no hold or gap is inferred.
 The existing canonical chart draws the saved curves, dim/dashed muted trace,
 separate mixer fader lanes and unknown-motion bands. No evidence produces an explicit
 unavailable picture, never an invented performance.
@@ -28,3 +33,5 @@ an unbounded image. Normal reference takes and movement checks are much shorter.
 Verification receipts and distribution package:
 `/Users/karlwatson/ScratchLab-Local-Evidence/2026-10-04/capture-notation-png`.
 No new physical/operator acceptance is claimed by these software checks.
+
+The 5 October layout correction and current package are documented in [the layout checkpoint](checkpoints/2026-10-05-png-layout.md).

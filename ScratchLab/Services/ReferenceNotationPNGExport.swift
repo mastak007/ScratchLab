@@ -18,6 +18,7 @@ enum ReferenceNotationPNGExport {
         let takeNumber: Int
         let scratchType: String
         let bpm: Int
+        let beatsPerBar: Int
         let duration: Double
         let showBeatGrid: Bool
         let projection: ReferenceTearCanonicalProjection?
@@ -25,23 +26,39 @@ enum ReferenceNotationPNGExport {
 
         init(performer: String, sessionID: String, takeID: String, takeNumber: Int,
              scratchType: String, bpm: Int, duration: Double, showBeatGrid: Bool,
-             projection: ReferenceTearCanonicalProjection?, sourceIdentity: String) throws {
+             projection: ReferenceTearCanonicalProjection?, sourceIdentity: String,
+             beatsPerBar: Int = 4) throws {
             // Bound allocations before converting an externally persisted duration to Int.
-            guard duration.isFinite, duration > 0, duration <= 3600, bpm > 0 else {
+            guard duration.isFinite, duration > 0, duration <= 3600, bpm > 0, (1...32).contains(beatsPerBar) else {
                 throw SessionExportError.invalidSessionMetadata
             }
             self.performer = performer; self.sessionID = sessionID; self.takeID = takeID
             self.takeNumber = takeNumber; self.scratchType = scratchType; self.bpm = bpm
             self.duration = duration; self.showBeatGrid = showBeatGrid
+            self.beatsPerBar = beatsPerBar
             self.projection = projection; self.sourceIdentity = sourceIdentity
         }
 
         var identity: String { get throws { try ExportSemanticIdentity.digest(self) } }
 
+        /// Whole bars for timed takes, never less than four seconds per row.
+        /// The lower bound also preserves the existing 225-page allocation limit.
+        var rowDuration: Double {
+            guard showBeatGrid else { return secondsPerRow }
+            let barDuration = Double(beatsPerBar) * 60 / Double(bpm)
+            return max(secondsPerRow, ceil(secondsPerRow / barDuration) * barDuration)
+        }
+
+        /// Keep the final partial row at the same seconds-per-pixel scale.
+        /// Unrecorded time stays blank outside the chart, not labelled unknown.
+        func widthFraction(for range: ClosedRange<Double>) -> Double {
+            min(1, max(0, (range.upperBound - range.lowerBound) / rowDuration))
+        }
+
         var pageRanges: [[ClosedRange<Double>]] {
-            let rows = (0..<Int(ceil(duration / secondsPerRow))).map { index in
-                let start = Double(index) * secondsPerRow
-                return start...min(duration, start + secondsPerRow)
+            let rows = (0..<Int(ceil(duration / rowDuration))).map { index in
+                let start = Double(index) * rowDuration
+                return start...min(duration, start + rowDuration)
             }
             return stride(from: 0, to: rows.count, by: rowsPerPage).map {
                 Array(rows[$0..<min(rows.count, $0 + rowsPerPage)])
@@ -133,12 +150,22 @@ private struct ReferenceNotationPNGPage: View {
                     Text(String(format: "%.3f–%.3f seconds", range.lowerBound, range.upperBound))
                         .font(.system(size: 14, design: .monospaced)).foregroundStyle(.secondary)
                     if let projection = request.projection, let frame = request.frame(for: range) {
-                        ScratchPhraseChartView(
-                            source: .canonical(projection.records, layer: .performance, frame: frame),
-                            bpm: Double(request.bpm), showBeatGrid: request.showBeatGrid,
-                            mixerFaders: projection.mixerFaders, showsMixerFaderLanes: true,
-                            backgroundColor: .clear)
-                            .frame(height: 240).clipped()
+                        GeometryReader { geometry in
+                            // Enlarge the existing chart's strokes and labels only here.
+                            // Its measured geometry and all other app charts are unchanged.
+                            let scale: CGFloat = 1.5
+                            let width = geometry.size.width * request.widthFraction(for: range)
+                            ScratchPhraseChartView(
+                                source: .canonical(projection.records, layer: .performance, frame: frame),
+                                bpm: Double(request.bpm), showBeatGrid: request.showBeatGrid,
+                                mixerFaders: projection.mixerFaders, showsMixerFaderLanes: true,
+                                backgroundColor: .clear)
+                                .frame(width: width / scale, height: 240 / scale)
+                                .scaleEffect(scale, anchor: .topLeading)
+                                .frame(width: width, height: 240, alignment: .topLeading)
+                                .clipped()
+                        }
+                        .frame(height: 240)
                     } else {
                         Text("MOTION UNKNOWN — no saved canonical notation available")
                             .foregroundStyle(.secondary).frame(maxWidth: .infinity, minHeight: 240)
@@ -147,10 +174,9 @@ private struct ReferenceNotationPNGPage: View {
             }
             Spacer(minLength: 0)
             Text("Dim/dashed platter = fader closed · Shaded gaps = unknown motion · Separate fader lanes retain recorded controls")
-            Text("Position uses the saved take’s coordinate scale; each row shares the same vertical range. Visual reference only; not approval or training data.")
-            if let projection = request.projection, !projection.presentationReasons.isEmpty {
-                Text(projection.presentationReasons.map(\.detail).joined(separator: " ")).lineLimit(3)
-            }
+            Text("Same time and position scale on every row. Blank space after the final row is outside the recording.")
+            Text("Travel uses this take’s saved coordinate scale. Visual reference only; not calibration, approval or training data.")
+            Text("Motion gaps and confidence details are retained in the accompanying notation JSON.")
             Text("Page \(page + 1) of \(request.pageRanges.count) · \(request.duration, specifier: "%.3f") seconds total")
         }
         .font(.system(size: 13))

@@ -1476,3 +1476,34 @@ entries remain historical; this checkpoint supersedes the renderer visual item.
 ## Completed — Save Capture notation PNG, 4 October 2026
 
 User authorized checkpoint/commit/push after implementation. Save Capture now adds derived PNG references from the stored canonical projection, preserving independent fader cuts and unknown gaps. Existing drafts can be saved again without recording. 9188 XCTest executions passed, 124 skipped, zero failures; 1064 Swift Testing and 123 Python tests passed. iOS, macOS Release, macOS CXLRelease and watchOS builds passed. Updated signed universal ZIP: /Users/karlwatson/Downloads/SL-Capture-Pro-DJ-PNG-2026-10-04.zip. See docs/checkpoints/2026-10-04-capture-png.md and /Users/karlwatson/ScratchLab-Local-Evidence/2026-10-04/capture-notation-png. No app install, operator PNG/new-rig acceptance or decoder/audio changes. Existing accepted hardware evidence retained. Only verified generic performer and PNG source slices are checkpointed; unrelated dirty work is preserved.
+
+
+## 2026-10-05 — PNG musical rows and consistent tail scale (verification in progress)
+
+User selected this bounded repair before distributing the app to professional DJs.
+The supplied 24.136-second Baby capture exposed the final 0.136-second row filling
+an entire four-second-width chart. Timed rows now use whole bars of at least four
+seconds, using recorded BPM/meter; Movement check keeps four-second rows. Every
+row retains equal seconds per pixel; outside-recording space is blank. PNG-only
+1.5x chart scaling improves labels/strokes; concise footer replaces raw diagnostics,
+which remain in original JSON. All original projection/fader/evidence data retained.
+No decoder, audio, canonical confidence, Learner, signing or capture-state changes.
+Files: ReferenceNotationPNGExport.swift, SessionExportCoordinator.swift,
+ScratchNotationPanelTests.swift and capture PNG/workflow documentation.
+Focused real-capture render + regression checks and required full gate in progress.
+New verification output: /Users/karlwatson/ScratchLab-Local-Evidence/2026-10-05/png-layout-repair.
+Do not distribute a replacement until software/build/package receipts pass.
+
+
+## 2026-10-05 — PNG layout repair VERIFIED; updated DJ package ready
+
+Supersedes the earlier in-progress entry. Corrected inconsistent partial-tail
+scale, whole-bar row durations and PNG label readability. Saved curves, faders,
+unknown motion, decoder/audio/capture behavior and all unrelated work preserved.
+36 focused XCTest executions passed including real-take render inspection; final
+full gate: 9,190 XCTest passed, 124 existing skips, zero failures; 1,064 Swift
+Testing and 123 Python passed. All required platform builds passed. Signed Mac
+build, payload equivalence, staging and ZIP round-trip verified. No install or
+new hardware/operator acceptance. Distribution: /Users/karlwatson/Downloads/SL-Capture-Pro-DJ-PNG-2026-10-05.zip.
+Existing drafts can re-export; new DJ rigs need their own short capture check.
+Full files, receipts and limits: docs/checkpoints/2026-10-05-png-layout.md.

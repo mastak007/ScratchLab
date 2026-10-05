@@ -2029,6 +2029,35 @@ final class ReferenceNotationPNGTests: XCTestCase {
         XCTAssertThrowsError(try request(duration: 3601))
     }
 
+    func testTimedRowsKeepWholeBarsAndPartialTailScale() throws {
+        let r = try ReferenceNotationPNGExport.Request(performer: "DJ", sessionID: "session",
+            takeID: "take", takeNumber: 1, scratchType: "Baby Scratch", bpm: 90,
+            duration: 24.136190476190475, showBeatGrid: true, projection: nil, sourceIdentity: "fixture")
+        XCTAssertEqual(r.rowDuration, 16.0 / 3, accuracy: 1e-12)
+        let rows = r.pageRanges.flatMap { $0 }
+        XCTAssertEqual(rows.count, 5)
+        XCTAssertEqual(rows.first?.lowerBound, 0)
+        XCTAssertEqual(rows.last?.upperBound, r.duration)
+        for pair in zip(rows, rows.dropFirst()) { XCTAssertEqual(pair.0.upperBound, pair.1.lowerBound) }
+        for row in rows {
+            // Pixels per second must stay identical even on a partial row.
+            XCTAssertEqual(1536 * r.widthFraction(for: row) / (row.upperBound - row.lowerBound),
+                1536 / r.rowDuration, accuracy: 1e-9)
+        }
+        let beatless = try request(duration: r.duration)
+        let tail = try XCTUnwrap(beatless.pageRanges.last?.last)
+        XCTAssertEqual(tail.lowerBound, 24)
+        XCTAssertEqual(beatless.widthFraction(for: tail), 0.034047619047619, accuracy: 1e-9)
+        for bpm in [40, 90, 95, 120, 300] {
+            let long = try ReferenceNotationPNGExport.Request(performer: "DJ", sessionID: "session",
+                takeID: "take", takeNumber: 1, scratchType: "Baby", bpm: bpm, duration: 3600,
+                showBeatGrid: true, projection: nil, sourceIdentity: "fixture", beatsPerBar: 3)
+            XCTAssertLessThanOrEqual(long.pageRanges.count, 225)
+            let bars = long.rowDuration / (180 / Double(bpm))
+            XCTAssertEqual(bars, bars.rounded(), accuracy: 1e-9)
+        }
+    }
+
     func testPNGUsesSavedDenseCurvesSeparateFadersAndUnknownGap() throws {
         typealias Record = ScratchNotation.GestureRecord
         let evidence = Record.Evidence(provenance: .measured,

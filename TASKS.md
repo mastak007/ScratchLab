@@ -3338,3 +3338,5 @@ entries remain historical; this checkpoint supersedes the renderer visual item.
 - [ ] Obtain take-specific physical context for both motion intervals if Karl can recall it.
 
 - [x] User-selected Save Capture PNG references (4 October 2026, SOFTWARE VERIFIED): saved canonical curves, independent faders and unknown motion retained in paginated PNGs; source-bound hashed ZIP round-trip, validator and all-platform gate passed. Updated signed package prepared. Operator PNG/new-rig acceptance not run. See docs/checkpoints/2026-10-04-capture-png.md.
+
+- [x] User-selected PNG layout repair (5 October 2026): whole-bar rows, constant partial-tail scale and readable chart labels verified; full required tests/builds and signed updated DJ ZIP passed. No new hardware/operator acceptance. See docs/checkpoints/2026-10-05-png-layout.md.
