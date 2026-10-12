@@ -58,6 +58,7 @@ struct ReferenceAuthoringView: View {
     @State private var expandedTearGroupIDs: Set<String>?
     /// Inspection focus is local to this view and never selects an approval.
     @State private var motionReviewFocus: ReferenceMotionReviewFocus?
+    @State private var reviewMovementDetail = true
     /// The EXISTING session-archive pipeline, reused verbatim for the raw
     /// diagnostic export. This screen adds no second archive format.
     @StateObject private var exportCoordinator = SessionExportCoordinator()
@@ -1556,10 +1557,14 @@ struct ReferenceAuthoringView: View {
             }
             Text("Retake keeps the same setup. New scratch lets you choose a different technique. Previous takes stay saved; approval is separate.")
                 .font(.caption).foregroundStyle(.secondary)
-            if let reason = viewModel.continuationBlockReason(newScratch: true,
-                isExportPreparing: exportCoordinator.isPreparing) {
-                Text(reason).font(.caption).foregroundStyle(.secondary)
-            }
+            let reason = viewModel.continuationBlockReason(newScratch: true,
+                isExportPreparing: exportCoordinator.isPreparing)
+            // Keep the save-status slot at its natural wrapped height so
+            // committing a trim does not move the notation below it.
+            Text(reason ?? "Wait for the current operation to finish.")
+                .font(.caption).foregroundStyle(.secondary)
+                .opacity(reason == nil ? 0 : 1)
+                .accessibilityHidden(reason == nil)
         }
     }
 
@@ -1642,6 +1647,43 @@ struct ReferenceAuthoringView: View {
 
                     Divider()
                     if take.evidence.metadata.captureIntent?.isMovementCheck == true {
+                        Text("Movement check").font(.headline)
+                        Text("Use Play whole take to review this movement. Save Capture exports the recorded files. No timed repetitions or canonical approval are assigned to this check.")
+                            .font(.caption).foregroundStyle(.secondary)
+                    } else {
+                    Text("Four repetitions").font(.headline)
+                    Text("Play each repetition to check it. Start and End beat trim its review range. Mark as Preferred records the performer's best repetition (1–4); it is saved with the draft, included in Save Capture and used if you approve. Change your pick by marking another repetition, or use Clear. Marking does not approve the take or change the original recording.")
+                        .font(.caption).foregroundStyle(.secondary)
+                    if let preferred = take.evidence.boundaries.selectedRepetitionIndex {
+                        Text("Preferred: repetition \(preferred + 1)" + (take.preferenceMark.map {
+                            " · marked by \($0.markedBy) · \($0.markedAt.formatted(date: .abbreviated, time: .shortened))"
+                        } ?? ""))
+                        .font(.caption.weight(.semibold))
+                    } else {
+                        Text("No preferred repetition marked.").font(.caption).foregroundStyle(.secondary)
+                    }
+                    Text("Beat \(take.evidence.metadata.countInBars * take.evidence.metadata.pattern.beatsPerBar) is the first beat after count-in. Review uses the recorded timing to find that beat in the media.")
+                        .font(.caption).foregroundStyle(.secondary)
+                    ForEach(take.evidence.boundaries.repetitions) { boundary in
+                        repetitionRow(boundary, take: take)
+                    }
+                    }
+
+                    Divider()
+                    if take.evidence.metadata.technique == .tear {
+                        tearSegmentationSection(take)
+                        #if DEBUG
+                        Divider()
+                        tearComparisonSection(take)
+                        #endif
+                    } else {
+                        recordedMotionSection(take)
+                    }
+
+                    reviewCompletionControls(take)
+
+                    Divider()
+                    if take.evidence.metadata.captureIntent?.isMovementCheck == true {
                         Text("Movement check — play and save").font(.headline)
                         Text("This check does not request canonical approval.")
                             .font(.caption).foregroundStyle(.secondary)
@@ -1675,43 +1717,6 @@ struct ReferenceAuthoringView: View {
                         ForEach(viewModel.approvalBlockReasons, id: \.self) { reason in
                             Text(reason).font(.callout).foregroundStyle(.orange)
                         }
-                    }
-
-                    Divider()
-                    if take.evidence.metadata.captureIntent?.isMovementCheck == true {
-                        Text("Movement check").font(.headline)
-                        Text("Use Play whole take to review this movement. Save Capture exports the recorded files. No timed repetitions or canonical approval are assigned to this check.")
-                            .font(.caption).foregroundStyle(.secondary)
-                    } else {
-                    Text("Four repetitions").font(.headline)
-                    Text("Play each repetition to check it. Start and End beat trim its review range. Mark as Preferred records the performer's best repetition (1–4); it is saved with the draft, included in Save Capture and used if you approve. Change your pick by marking another repetition, or use Clear. Marking does not approve the take or change the original recording.")
-                        .font(.caption).foregroundStyle(.secondary)
-                    if let preferred = take.evidence.boundaries.selectedRepetitionIndex {
-                        Text("Preferred: repetition \(preferred + 1)" + (take.preferenceMark.map {
-                            " · marked by \($0.markedBy) · \($0.markedAt.formatted(date: .abbreviated, time: .shortened))"
-                        } ?? ""))
-                        .font(.caption.weight(.semibold))
-                    } else {
-                        Text("No preferred repetition marked.").font(.caption).foregroundStyle(.secondary)
-                    }
-                    Text("Beat \(take.evidence.metadata.countInBars * take.evidence.metadata.pattern.beatsPerBar) is the first beat after count-in. Review uses the recorded timing to find that beat in the media.")
-                        .font(.caption).foregroundStyle(.secondary)
-                    ForEach(take.evidence.boundaries.repetitions) { boundary in
-                        repetitionRow(boundary, take: take)
-                    }
-                    }
-
-                    reviewCompletionControls(take)
-
-                    Divider()
-                    if take.evidence.metadata.technique == .tear {
-                        tearSegmentationSection(take)
-                        #if DEBUG
-                        Divider()
-                        tearComparisonSection(take)
-                        #endif
-                    } else {
-                        recordedMotionSection(take)
                     }
 
                     TextField("Review notes (saved with the draft and Save Capture)", text: $viewModel.reviewNotes, axis: .vertical)
@@ -1861,16 +1866,25 @@ struct ReferenceAuthoringView: View {
         isLive: Bool = false,
         chartHeight: CGFloat? = nil
     ) -> some View {
-        let minimumChartHeight = chartHeight ?? (reviewTake == nil ? Self.canonicalTearChartMinimumHeight : 300)
+        let minimumChartHeight = chartHeight ?? (reviewTake == nil ? Self.canonicalTearChartMinimumHeight : 400)
         let chartBPM = Double(recordedBPM ?? viewModel.bpm)
         VStack(alignment: .leading, spacing: 6) {
             Text(title)
                 .font(.system(size: 10, weight: .bold, design: .monospaced))
                 .foregroundStyle(Color(white: 0.55))
-            if let fullFrame = preparedChart?.frame ?? ReferenceAuthoringViewModel.canonicalFrame(
+            if let sourceFrame = preparedChart?.frame ?? ReferenceAuthoringViewModel.canonicalFrame(
                 for: projection,
                 bpm: chartBPM
             ), !projection.isEmpty {
+                // Review spans recorded media, including silence before/after
+                // decoded motion. Canonical evidence/export keeps its own frame.
+                let recordedDuration = reviewTake?.evidence.metadata.witnessedTiming?.measuredWAVDurationSeconds
+                let fullFrame = recordedDuration.flatMap { duration -> ScratchStrokeGeometry.CanonicalFrame? in
+                    guard duration.isFinite, duration > 0 else { return nil }
+                    return ScratchStrokeGeometry.CanonicalFrame(timeRange: 0...duration,
+                        positionRange: sourceFrame.positionRange, coordinateSpace: sourceFrame.coordinateSpace,
+                        beatsPerMinute: sourceFrame.beatsPerMinute)
+                } ?? sourceFrame
                 let boundary = reviewTake.flatMap { focusedBoundary(for: $0) }
                 let focus = reviewTake.flatMap { motionReviewFocus?.takeID == $0.id ? motionReviewFocus : nil }
                 let selectedRange = reviewTake.flatMap { take in
@@ -1941,10 +1955,18 @@ struct ReferenceAuthoringView: View {
                                     isZoomed: zoomed, sectionIndex: focus?.sectionIndex ?? 0)
                             }
                             .disabled(heightScale <= 1)
-                            Text(!zoomed ? "Whole-take scale" : "Short detail · full trace below")
+                            Text(!zoomed ? "Whole-take scale" : (fullFrame.timeRange.upperBound - fullFrame.timeRange.lowerBound < 8
+                                ? "Complete recording" : "Complete repetition · at least 8 seconds"))
                                 .foregroundStyle(.secondary)
                         }
                         .font(.caption)
+                        if zoomed {
+                            Picker("Display", selection: $reviewMovementDetail) {
+                                Text("Movement detail").tag(true)
+                                Text("Recorded travel").tag(false)
+                            }
+                            .pickerStyle(.segmented).frame(maxWidth: 330)
+                        }
                     }
                     if selectedRange == nil {
                         Text("This repetition is outside the recorded range. Adjust its Start and End beats.")
@@ -1953,13 +1975,20 @@ struct ReferenceAuthoringView: View {
                 }
                 if let take = reviewTake, zoomed {
                     ReferenceMotionDetailView(controller: viewModel.mediaReview,
-                        takeID: take.id, initialTime: selectedRange?.lowerBound ?? fullFrame.timeRange.lowerBound,
+                        takeID: take.id,
                         request: .init(records: projection.records, fullFrame: fullFrame,
                             mixerFaders: projection.mixerFaders, samplePlayback: take.recordedSamplePlayback,
                             showBeatGrid: take.evidence.metadata.captureIntent?.isMovementCheck != true,
                             beatOffset: take.evidence.metadata.mediaTimeOrigin?.recordingStartOffsetSeconds ?? 0,
-                            unavailableReason: take.samplePlaybackUnavailableReason),
-                        height: displayHeight)
+                            unavailableReason: take.samplePlaybackUnavailableReason,
+                            selectedRange: selectedRange, enhancesMovement: reviewMovementDetail),
+                        height: displayHeight, boundary: boundary, metadata: take.evidence.metadata,
+                        canEdit: viewModel.canEditReviewedTake && !exportCoordinator.isPreparing,
+                        commitBoundary: { adjusted in
+                            viewModel.adjustRepetitionBoundary(index: adjusted.index,
+                                startBeat: adjusted.startBeat, endBeat: adjusted.endBeat, expectedTakeID: take.id)
+                        })
+                        .id(take.id)
                 } else {
                     ScratchPhraseChartView(
                         source: preparedChart.map { .preparedCanonical($0) }
@@ -1981,8 +2010,22 @@ struct ReferenceAuthoringView: View {
                     .clipped()
                     .overlay {
                         if let selectedRange, !zoomed {
-                            ReferenceMotionSelectionOverlay(selectedRange: selectedRange, viewport: frame.timeRange)
-                                .allowsHitTesting(false)
+                            if let take = reviewTake, let boundary {
+                                ReferenceMotionTimelineEditor(takeID: take.id, boundary: boundary,
+                                    metadata: take.evidence.metadata, viewport: frame.timeRange,
+                                    recordedDuration: recordedDuration ?? frame.timeRange.upperBound,
+                                    canEdit: viewModel.canEditReviewedTake && !exportCoordinator.isPreparing,
+                                    editingBegan: { viewModel.mediaReview.stop() }, commit: { adjusted in
+                                        viewModel.adjustRepetitionBoundary(index: adjusted.index,
+                                            startBeat: adjusted.startBeat, endBeat: adjusted.endBeat, expectedTakeID: take.id)
+                                    })
+                                    .id(ReferenceMotionTimelineEditor.identity(takeID: take.id,
+                                        boundary: boundary, viewport: frame.timeRange,
+                                        canEdit: viewModel.canEditReviewedTake && !exportCoordinator.isPreparing))
+                            } else {
+                                ReferenceMotionSelectionOverlay(selectedRange: selectedRange, viewport: frame.timeRange)
+                                    .allowsHitTesting(false)
+                            }
                         }
                     }
                     .overlay {
@@ -2606,7 +2649,7 @@ struct ReferenceAuthoringView: View {
                 .disabled(!viewModel.canEditReviewedTake)
             }
             if focusedBoundary(for: take)?.index == boundary.index {
-                HStack(alignment: .top, spacing: 16) {
+                VStack(alignment: .leading, spacing: 12) {
                     ReferenceBoundaryMediaReview(
                         controller: viewModel.mediaReview,
                         boundary: boundary,
@@ -2614,7 +2657,7 @@ struct ReferenceAuthoringView: View {
                     )
                     .frame(maxWidth: .infinity, alignment: .topLeading)
                     canonicalTearChart(
-                        title: "BOUNDARY NOTATION",
+                        title: "REPETITION NOTATION",
                         projection: take.tearProjection,
                         emptyMessage: "No notation is available for this take.",
                         recordedBPM: take.evidence.metadata.bpm,
@@ -2801,8 +2844,8 @@ private struct ReferenceReviewPlaybackOverlay: View {
     }
 }
 
-/// Immutable drawing pages are prepared once off the UI thread. The playback
-/// leaf only chooses a page and moves a cursor; it never decodes capture data.
+/// Static review geometry is prepared off the UI thread. The complete
+/// repetition stays visible while only the independent playback cursor moves.
 struct ReferenceMotionDetailPages: Equatable, Sendable {
     struct Request: Equatable, Sendable {
         let records: [ScratchNotation.GestureRecord]
@@ -2812,10 +2855,13 @@ struct ReferenceMotionDetailPages: Equatable, Sendable {
         let showBeatGrid: Bool
         let beatOffset: Double
         var unavailableReason: String? = nil
+        var selectedRange: ClosedRange<Double>? = nil
+        var enhancesMovement: Bool = true
     }
     struct Page: Equatable, Sendable {
         let chart: ScratchStrokeGeometry.PreparedCanonicalChart
         let resets: [ScratchStrokeGeometry.PlaybackResetMarker]
+        var isMovementDetail = false
     }
     let pages: [Page]
     let overview: ScratchStrokeGeometry.PreparedCanonicalChart
@@ -2823,168 +2869,137 @@ struct ReferenceMotionDetailPages: Equatable, Sendable {
 
     static func prepare(_ request: Request) -> Self {
         let full = request.fullFrame
+        let overview = ScratchStrokeGeometry.PreparedCanonicalChart(records: request.records,
+            layer: .performance, frame: full, mixerFaders: request.mixerFaders)
         let sample = request.samplePlayback.flatMap {
             ScratchStrokeGeometry.samplePlaybackChart(timeline: $0, records: request.records,
                 frame: full, mixerFaders: request.mixerFaders)
         }
-        let duration = full.timeRange.upperBound - full.timeRange.lowerBound
-        // Two beats expose individual forward/back strokes. Beatless checks use
-        // two seconds. Bound preparation for unusually long imported recordings.
-        let width = max(request.showBeatGrid ? 120 / full.beatsPerMinute : 2, max(duration / 2048, Double.leastNonzeroMagnitude))
-        var pages: [Page] = []
-        for index in 0..<Int(min(2048, ceil(duration / width))) {
-            if Task.isCancelled { break }
-            let start = full.timeRange.lowerBound + Double(index) * width
-            let end = min(start + width, full.timeRange.upperBound)
-            guard end > start else { continue }
-            if let detail = sample?.windowed(to: start...end) {
-                pages.append(.init(chart: detail.prepared, resets: detail.resets))
-            } else {
-                let frame = ReferenceMotionReviewViewport.frame(full, selectedRange: start...end,
-                    zoomed: true, records: request.records)
-                pages.append(.init(chart: .init(records: request.records, layer: .performance,
-                    frame: frame, mixerFaders: request.mixerFaders), resets: []))
-            }
+        let selected = request.selectedRange ?? full.timeRange.lowerBound...min(full.timeRange.upperBound, full.timeRange.lowerBound + 8)
+        guard let window = ScratchStrokeGeometry.reviewTimeRange(selected: selected, within: full.timeRange),
+              !Task.isCancelled else { return .init(pages: [], overview: overview, usesSamplePosition: sample != nil) }
+        let page: Page
+        if let detail = sample?.windowed(to: window) {
+            page = .init(chart: detail.prepared, resets: detail.resets)
+        } else {
+            let frame = ReferenceMotionReviewViewport.frame(full, selectedRange: window,
+                zoomed: true, records: request.records)
+            page = .init(chart: .init(records: request.records, layer: .performance,
+                frame: frame, mixerFaders: request.mixerFaders), resets: [])
         }
-        return Self(pages: pages, overview: .init(records: request.records, layer: .performance,
-            frame: full, mixerFaders: request.mixerFaders), usesSamplePosition: sample != nil)
+        let displayed: Page
+        if request.enhancesMovement,
+           let detail = ScratchStrokeGeometry.movementDetailChart(page.chart, resetMarkers: page.resets) {
+            displayed = .init(chart: detail, resets: page.resets, isMovementDetail: true)
+        } else {
+            displayed = page
+        }
+        return Self(pages: [displayed], overview: overview, usesSamplePosition: sample != nil)
     }
 
-    func pageIndex(at time: Double) -> Int {
-        guard time.isFinite, !pages.isEmpty else { return 0 }
-        // Pages are contiguous. A shared edge belongs to the next page; the
-        // final recorded endpoint remains visible on the last page.
-        var lower = 0, upper = pages.count
-        while lower < upper {
-            let middle = (lower + upper) / 2
-            if pages[middle].chart.frame.timeRange.upperBound <= time { lower = middle + 1 }
-            else { upper = middle }
-        }
-        return min(pages.count - 1, lower)
-    }
+    func pageIndex(at time: Double) -> Int { 0 }
 }
 
 private struct ReferenceMotionDetailView: View {
     @ObservedObject var controller: ReferenceFinalizedMediaReviewController
     let takeID: String
-    let initialTime: Double
     let request: ReferenceMotionDetailPages.Request
     let height: CGFloat
+    let boundary: ReferenceRepetitionBoundary?
+    let metadata: ReferenceTakeMetadata
+    let canEdit: Bool
+    let commitBoundary: (ReferenceRepetitionBoundary) -> Void
     @State private var prepared: ReferenceMotionDetailPages?
-    @State private var pinnedPage: Int?
-    @State private var followedPage = 0
+    @State private var preparedTakeID: String?
 
     var body: some View {
         Group {
-            if let prepared, !prepared.pages.isEmpty {
-                let index = min(prepared.pages.count - 1, pinnedPage ?? followedPage)
-                    let page = prepared.pages[index]
-                    VStack(alignment: .leading, spacing: 6) {
-                        HStack(spacing: 8) {
-                            Button { pinnedPage = max(0, index - 1) } label: {
-                                Image(systemName: "chevron.left")
-                            }
-                            .accessibilityLabel("Previous scratch detail")
-                            .disabled(index == 0)
-                            Text("Detail \(page.chart.frame.timeRange.lowerBound, specifier: "%.2f")–\(page.chart.frame.timeRange.upperBound, specifier: "%.2f") s")
-                                .monospacedDigit().frame(minWidth: 145, alignment: .leading)
-                            Button { pinnedPage = min(prepared.pages.count - 1, index + 1) } label: {
-                                Image(systemName: "chevron.right")
-                            }
-                            .accessibilityLabel("Next scratch detail")
-                            .disabled(index == prepared.pages.count - 1)
-                            Spacer(minLength: 0)
-                            Toggle("Follow playhead", isOn: Binding(
-                                get: { pinnedPage == nil },
-                                set: { pinnedPage = $0 ? nil : index }))
-                                .toggleStyle(.checkbox)
-                        }
-                        .font(.caption)
-                        ScratchPhraseChartView(source: .preparedCanonical(page.chart),
-                            bpm: request.fullFrame.beatsPerMinute, showBeatGrid: request.showBeatGrid,
-                            beatTimelineOffsetSeconds: request.beatOffset,
-                            showsMixerFaderLanes: true, reviewDetail: true,
-                            sampleResetMarkers: page.resets, samplePosition: prepared.usesSamplePosition,
-                            backgroundColor: .clear)
-                            .frame(height: height)
-                            .clipped()
-                            .overlay {
-                                ReferenceReviewPlaybackOverlay(controller: controller,
-                                    takeID: takeID, viewport: page.chart.frame.timeRange)
-                            }
-                        Text(prepared.usesSamplePosition
-                            ? "Sample position · loop/cue restarts return to centre · one scale throughout"
-                            : (request.unavailableReason ?? "Local motion scale · sample restart timing unavailable"))
-                            .font(.caption2).foregroundStyle(.secondary)
-                        Text("WHOLE TAKE · PHYSICAL MOTION")
-                            .font(.system(size: 9, weight: .bold, design: .monospaced))
-                            .foregroundStyle(.secondary)
-                        ScratchPhraseChartView(source: .preparedCanonical(prepared.overview),
-                            bpm: request.fullFrame.beatsPerMinute, showBeatGrid: false,
-                            showsMixerFaderLanes: true, backgroundColor: .clear)
-                            .frame(height: 76)
-                            .clipped()
-                            .overlay {
-                                ReferenceMotionSelectionOverlay(selectedRange: page.chart.frame.timeRange,
-                                    viewport: request.fullFrame.timeRange)
+            if let prepared, preparedTakeID == takeID, let page = prepared.pages.first {
+                VStack(alignment: .leading, spacing: 6) {
+                    Text("Visible \(page.chart.frame.timeRange.lowerBound, specifier: "%.2f")–\(page.chart.frame.timeRange.upperBound, specifier: "%.2f") s")
+                        .font(.caption).monospacedDigit()
+                    ScratchPhraseChartView(source: .preparedCanonical(page.chart),
+                        bpm: request.fullFrame.beatsPerMinute, showBeatGrid: request.showBeatGrid,
+                        beatTimelineOffsetSeconds: request.beatOffset,
+                        showsMixerFaderLanes: true, reviewDetail: true,
+                        sampleResetMarkers: page.resets, samplePosition: prepared.usesSamplePosition,
+                        backgroundColor: .clear)
+                        .frame(height: height)
+                        .clipped()
+                        .overlay {
+                            if let selected = request.selectedRange,
+                               let fractions = ReferenceMotionReviewViewport.visibleFractions(
+                                selected, in: page.chart.frame.timeRange),
+                               fractions.lowerBound > 0 || fractions.upperBound < 1 {
+                                // Keep the extra eight-second context readable
+                                // while marking the actual repetition bounds.
+                                ReferenceMotionSelectionOverlay(selectedRange: selected,
+                                    viewport: page.chart.frame.timeRange)
                                     .allowsHitTesting(false)
                             }
-                            .overlay {
-                                ReferenceReviewPlaybackOverlay(controller: controller,
-                                    takeID: takeID, viewport: request.fullFrame.timeRange)
+                        }
+                        .overlay {
+                            ReferenceReviewPlaybackOverlay(controller: controller,
+                                takeID: takeID, viewport: page.chart.frame.timeRange)
+                        }
+                    if page.isMovementDetail {
+                        Text("Movement detail · long travel compressed; timing and direction unchanged")
+                            .font(.caption2).foregroundStyle(.secondary)
+                    } else if request.enhancesMovement {
+                        Text("Recorded travel shown · movement detail unavailable for this evidence")
+                            .font(.caption2).foregroundStyle(.secondary)
+                    }
+                    Text(prepared.usesSamplePosition
+                        ? "Sample position · loop/cue restarts return to centre"
+                        : (request.unavailableReason ?? "Recorded motion · sample restart timing unavailable"))
+                        .font(.caption2).foregroundStyle(.secondary)
+                    HStack {
+                        Text("WHOLE TAKE · RECORDED TRAVEL")
+                            .font(.system(size: 9, weight: .bold, design: .monospaced))
+                        Spacer()
+                        if boundary != nil {
+                            Text(canEdit ? "Drag the box to move the repetition · drag its edges to trim" : "Repetition bounds · read-only")
+                                .font(.caption2)
+                        }
+                    }.foregroundStyle(.secondary)
+                    ScratchPhraseChartView(source: .preparedCanonical(prepared.overview),
+                        bpm: request.fullFrame.beatsPerMinute, showBeatGrid: false,
+                        showsMixerFaderLanes: true, backgroundColor: .clear)
+                        .frame(height: 86)
+                        .clipped()
+                        .overlay {
+                            if let boundary {
+                                ReferenceMotionTimelineEditor(takeID: takeID, boundary: boundary,
+                                    metadata: metadata, viewport: request.fullFrame.timeRange,
+                                    recordedDuration: request.fullFrame.timeRange.upperBound,
+                                    canEdit: canEdit, editingBegan: { controller.stop() }, commit: commitBoundary)
+                                    .id(ReferenceMotionTimelineEditor.identity(takeID: takeID,
+                                        boundary: boundary, viewport: request.fullFrame.timeRange, canEdit: canEdit))
+                            } else {
+                                ReferenceMotionSelectionOverlay(selectedRange: page.chart.frame.timeRange,
+                                    viewport: request.fullFrame.timeRange).allowsHitTesting(false)
                             }
-                    }
-                    .background {
-                        ReferenceMotionPageFollower(controller: controller, takeID: takeID,
-                            initialTime: initialTime, prepared: prepared) { followedPage = $0 }
-                    }
+                        }
+                        .overlay {
+                            ReferenceReviewPlaybackOverlay(controller: controller,
+                                takeID: takeID, viewport: request.fullFrame.timeRange)
+                        }
+                }
             } else {
-                Text("Preparing scratch detail…")
+                Text("Preparing repetition notation…")
                     .font(.caption).foregroundStyle(.secondary)
-                    .frame(maxWidth: .infinity)
-                    .frame(height: height + 150)
+                    .frame(maxWidth: .infinity).frame(height: height + 145)
             }
         }
         .task(id: request) {
-            prepared = nil
             let input = request
             let work = Task.detached(priority: .userInitiated) { ReferenceMotionDetailPages.prepare(input) }
             let result = await withTaskCancellationHandler(operation: { await work.value },
                 onCancel: { work.cancel() })
             guard !Task.isCancelled else { return }
-            followedPage = result.pageIndex(at: controller.currentPlaybackTime(for: takeID) ?? initialTime)
+            preparedTakeID = takeID
             prepared = result
         }
-        .onChange(of: initialTime) { time in
-            // Explicit section/repetition navigation wins over a paused clock.
-            pinnedPage = prepared?.pageIndex(at: time)
-        }
-        .onReceive(controller.$state) { _ in
-            // Playback and completed Show start/end seeks reveal their cursor.
-            // Manual detail paging alone never changes the media clock.
-            pinnedPage = nil
-        }
-    }
-}
-
-/// Only this zero-size leaf reads the clock at display cadence. It publishes
-/// a page change at most once per boundary; static full-take geometry is never
-/// redrawn thirty times a second just to move the independent cursor overlay.
-private struct ReferenceMotionPageFollower: View {
-    @ObservedObject var controller: ReferenceFinalizedMediaReviewController
-    let takeID: String
-    let initialTime: Double
-    let prepared: ReferenceMotionDetailPages
-    let didChangePage: (Int) -> Void
-
-    var body: some View {
-        TimelineView(.animation(minimumInterval: 1.0 / 30, paused: !controller.isPlaying)) { _ in
-            let index = prepared.pageIndex(at: controller.currentPlaybackTime(for: takeID) ?? initialTime)
-            Color.clear.onChange(of: index, initial: true) { _, value in didChangePage(value) }
-        }
-        .frame(width: 0, height: 0)
-        .allowsHitTesting(false)
-        .accessibilityHidden(true)
     }
 }
 
@@ -3059,10 +3074,10 @@ private struct ReferenceBoundaryMediaReview: View {
     let take: ReferenceAuthoringTake
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 6) {
+        HStack(alignment: .top, spacing: 14) {
             if let player = controller.videoPlayer {
                 ReferenceRecordedVideo(player: player)
-                    .frame(height: 180)
+                    .frame(width: 200, height: 112)
                     .overlay(alignment: .bottomLeading) {
                         TimelineView(.animation(minimumInterval: 0.1, paused: !controller.isPlaying)) { _ in
                             let time = controller.currentPlaybackTime(for: take.id)
@@ -3072,22 +3087,27 @@ private struct ReferenceBoundaryMediaReview: View {
                         }
                     }
             }
-            HStack {
-                Button("Show start") { controller.previewBoundary(boundary, take: take) }
-                Button("Show end") { controller.previewBoundary(boundary, take: take, atEnd: true) }
-                Button("Play with rest context") {
-                    controller.play(repetition: boundary, take: take, contextBeats: 4)
+            VStack(alignment: .leading, spacing: 8) {
+                HStack {
+                    Button("Show start") { controller.previewBoundary(boundary, take: take) }
+                    Button("Show end") { controller.previewBoundary(boundary, take: take, atEnd: true) }
+                    Button("Play with rest context") {
+                        controller.play(repetition: boundary, take: take, contextBeats: 4)
+                    }
+                    Button("Play whole take") { controller.playWholeTake() }
+                }.disabled(!controller.canPlay)
+                Text("Review the full repetition below. Drag its timeline box or edges to set the range; original media stays unchanged.")
+                    .font(.caption).foregroundStyle(.secondary)
+                if let message = controller.playbackMessage {
+                    Text(message).font(.caption).foregroundStyle(.orange)
                 }
-                Button("Play whole take") { controller.playWholeTake() }
-            }.disabled(!controller.canPlay)
-            Text("Play repetition checks the chosen bounds. Rest context includes up to four beats before and after, so you can hear a cut-off movement. Changing a bound pauses and shows that edge. Original media stays unchanged.")
-                .font(.caption).foregroundStyle(.secondary)
-            if let message = controller.playbackMessage {
-                Text(message).font(.caption).foregroundStyle(.orange)
-            }
+            }.frame(maxWidth: .infinity, alignment: .leading)
         }
-        .onChange(of: boundary.startBeat) { _, _ in controller.previewBoundary(boundary, take: take) }
-        .onChange(of: boundary.endBeat) { _, _ in controller.previewBoundary(boundary, take: take, atEnd: true) }
+        .onChange(of: boundary) { old, new in
+            // One atomic move changes both edges; issue exactly one seek.
+            controller.previewBoundary(new, take: take,
+                atEnd: old.startBeat == new.startBeat && old.endBeat != new.endBeat)
+        }
     }
 }
 
@@ -3330,12 +3350,12 @@ enum ReferenceMotionReviewViewport {
         return valid.first { $0.index == preferredIndex } ?? valid.first
     }
 
-    /// Beatless movement checks have no repetitions. Inspect fixed four-second
+    /// Beatless movement checks have no repetitions. Inspect fixed eight-second
     /// sections without inventing repetition metadata or following playback.
     static func section(in timeRange: ClosedRange<Double>, index: Int) -> ClosedRange<Double>? {
         guard index >= 0, timeRange.lowerBound.isFinite, timeRange.upperBound.isFinite else { return nil }
-        let start = timeRange.lowerBound + Double(index) * 4
-        let end = min(start + 4, timeRange.upperBound)
+        let start = timeRange.lowerBound + Double(index) * 8
+        let end = min(start + 8, timeRange.upperBound)
         guard start.isFinite, end.isFinite, end > start else { return nil }
         return start...end
     }
@@ -3369,7 +3389,159 @@ enum ReferenceMotionReviewViewport {
     }
 }
 
-private struct ReferenceMotionSelectionOverlay: View {
+/// A local drag preview changes only the overlay. One release commits both
+/// authored beats through the existing guarded save/revalidation path.
+private struct ReferenceMotionTimelineEditor: View {
+    let takeID: String
+    let boundary: ReferenceRepetitionBoundary
+    let metadata: ReferenceTakeMetadata
+    let viewport: ClosedRange<Double>
+    let recordedDuration: Double
+    let canEdit: Bool
+    let editingBegan: () -> Void
+    let commit: (ReferenceRepetitionBoundary) -> Void
+
+    private struct DragState {
+        let takeID: String
+        let original: ReferenceRepetitionBoundary
+        let edge: ReferenceRepetitionBoundary.DragEdge
+        let viewport: ClosedRange<Double>
+        let width: CGFloat
+        var proposed: ReferenceRepetitionBoundary
+    }
+    @State private var drag: DragState?
+
+    // Parent identity tears down an in-flight gesture when its source changes;
+    // old cumulative translation can never restart against a new take/range.
+    static func identity(takeID: String, boundary: ReferenceRepetitionBoundary,
+                         viewport: ClosedRange<Double>, canEdit: Bool) -> String {
+        "\(takeID)/\(boundary.index)/\(boundary.startBeat)/\(boundary.endBeat)/\(viewport.lowerBound)/\(viewport.upperBound)/\(canEdit)"
+    }
+
+    private var displayed: ReferenceRepetitionBoundary { drag?.proposed ?? boundary }
+    private var selectedRange: ClosedRange<Double>? {
+        ReferenceMotionReviewViewport.range(for: displayed, metadata: metadata,
+            recordedEnd: recordedDuration)
+    }
+
+    var body: some View {
+        GeometryReader { geometry in
+            if let selectedRange,
+               let fractions = ReferenceMotionReviewViewport.visibleFractions(selectedRange, in: viewport) {
+                let left = CGFloat(fractions.lowerBound) * geometry.size.width
+                let right = CGFloat(fractions.upperBound) * geometry.size.width
+                ZStack(alignment: .topLeading) {
+                    ReferenceMotionSelectionOverlay(selectedRange: selectedRange, viewport: viewport)
+                        .allowsHitTesting(false)
+                    if canEdit {
+                        // Separate edge hit targets win over the movable body.
+                        Rectangle().fill(Color.accentColor.opacity(0.08))
+                            .frame(width: max(0, right - left - 24), height: geometry.size.height)
+                            .contentShape(Rectangle())
+                            .offset(x: left + 12)
+                            .gesture(dragGesture(.move, width: geometry.size.width))
+                            .accessibilityLabel("Move repetition range")
+                            .accessibilityValue(Text("Beats \(displayed.startBeat, specifier: "%.2f") to \(displayed.endBeat, specifier: "%.2f")"))
+                            .accessibilityAdjustableAction { adjust(.move, direction: $0) }
+                            .help("Drag left or right to move both boundaries together")
+                        handle(.start, at: left, size: geometry.size, compact: right - left < 24)
+                        handle(.end, at: right, size: geometry.size, compact: right - left < 24)
+                        // A narrow trimmed range still has a usable move grip.
+                        Image(systemName: "arrow.left.and.right")
+                            .font(.system(size: 10, weight: .bold)).foregroundStyle(.white)
+                            .frame(width: 32, height: 22)
+                            .background(Color.accentColor, in: RoundedRectangle(cornerRadius: 4))
+                            .contentShape(Rectangle())
+                            .position(x: min(max(16, (left + right) / 2), max(16, geometry.size.width - 16)),
+                                y: geometry.size.height - 11)
+                            .highPriorityGesture(dragGesture(.move, width: geometry.size.width))
+                            .accessibilityLabel("Move repetition range grip")
+                            .accessibilityAdjustableAction { adjust(.move, direction: $0) }
+                    }
+                    if drag != nil {
+                        Text("In \(displayed.startBeat, specifier: "%.2f") · Out \(displayed.endBeat, specifier: "%.2f") beats")
+                            .font(.caption.monospacedDigit()).padding(4)
+                            .background(.black.opacity(0.8)).foregroundStyle(.white)
+                            .padding(.leading, 24).allowsHitTesting(false)
+                    }
+                }
+            }
+        }
+        .coordinateSpace(name: "repetitionTimeline")
+        .onChange(of: takeID) { _, _ in drag = nil }
+        .onChange(of: boundary) { _, _ in drag = nil }
+        .onChange(of: viewport) { _, _ in drag = nil }
+        .onChange(of: canEdit) { _, allowed in if !allowed { drag = nil } }
+        .onDisappear { drag = nil }
+    }
+
+    private func handle(_ edge: ReferenceRepetitionBoundary.DragEdge, at x: CGFloat,
+                        size: CGSize, compact: Bool) -> some View {
+        RoundedRectangle(cornerRadius: 3).fill(Color.accentColor)
+            .overlay {
+                Image(systemName: "line.3.horizontal")
+                    .rotationEffect(.degrees(90)).font(.system(size: 10, weight: .bold))
+                    .foregroundStyle(.white)
+            }
+            // Stagger handles for sub-pixel/very narrow selections so one
+            // edge never covers the other's entire hit target.
+            .frame(width: 20, height: compact ? size.height * 0.42 : size.height)
+            .contentShape(Rectangle())
+            .position(x: min(max(10, x), max(10, size.width - 10)),
+                y: compact ? size.height * (edge == .start ? 0.23 : 0.69) : size.height / 2)
+            .highPriorityGesture(dragGesture(edge, width: size.width))
+            .accessibilityLabel(edge == .start ? "Repetition in point" : "Repetition out point")
+            .accessibilityValue(String(format: "Beat %.2f", edge == .start ? displayed.startBeat : displayed.endBeat))
+            .accessibilityAdjustableAction { adjust(edge, direction: $0) }
+            .help(edge == .start ? "Drag to trim the start" : "Drag to trim the end")
+    }
+
+    private func dragGesture(_ edge: ReferenceRepetitionBoundary.DragEdge, width: CGFloat) -> some Gesture {
+        DragGesture(minimumDistance: 2, coordinateSpace: .named("repetitionTimeline"))
+            .onChanged { value in
+                guard canEdit, width.isFinite, width > 0 else { drag = nil; return }
+                if drag == nil {
+                    editingBegan()
+                    drag = DragState(takeID: takeID, original: boundary, edge: edge,
+                        viewport: viewport, width: width, proposed: boundary)
+                }
+                guard var current = drag, current.takeID == takeID, current.original == boundary,
+                      current.viewport == viewport, current.edge == edge else { drag = nil; return }
+                let seconds = Double(value.translation.width / current.width)
+                    * (current.viewport.upperBound - current.viewport.lowerBound)
+                guard let proposed = current.original.adjustedForDrag(deltaSeconds: seconds, edge: edge,
+                    metadata: metadata, recordedDurationSeconds: recordedDuration) else { return }
+                current.proposed = proposed
+                drag = current
+            }
+            .onEnded { value in
+                defer { drag = nil }
+                guard canEdit, let current = drag, current.takeID == takeID,
+                      current.original == boundary, current.viewport == viewport, current.edge == edge else { return }
+                let seconds = Double(value.translation.width / current.width)
+                    * (current.viewport.upperBound - current.viewport.lowerBound)
+                guard let proposed = current.original.adjustedForDrag(deltaSeconds: seconds, edge: edge,
+                    metadata: metadata, recordedDurationSeconds: recordedDuration), proposed != boundary else { return }
+                commit(proposed)
+            }
+    }
+
+    private func adjust(_ edge: ReferenceRepetitionBoundary.DragEdge, direction: AccessibilityAdjustmentDirection) {
+        guard canEdit, metadata.bpm > 0 else { return }
+        let sign: Double
+        switch direction {
+        case .increment: sign = 1
+        case .decrement: sign = -1
+        @unknown default: return
+        }
+        guard let proposed = boundary.adjustedForDrag(deltaSeconds: sign * 15 / Double(metadata.bpm),
+            edge: edge, metadata: metadata, recordedDurationSeconds: recordedDuration), proposed != boundary else { return }
+        editingBegan()
+        commit(proposed)
+    }
+}
+
+struct ReferenceMotionSelectionOverlay: View {
     let selectedRange: ClosedRange<Double>
     let viewport: ClosedRange<Double>
 

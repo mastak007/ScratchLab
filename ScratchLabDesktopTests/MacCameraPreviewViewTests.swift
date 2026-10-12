@@ -604,15 +604,56 @@ final class MacCameraPreviewViewTests: XCTestCase {
     /// over the camera image.
     func testCameraAndNotationRemainSeparatePanels() throws {
         let source = try authoringViewSource()
-        XCTAssertFalse(
-            source.contains("ZStack("),
-            "notation must not be overlaid on the camera preview"
-        )
-        XCTAssertFalse(source.contains("CalibrationCameraOverlay"))
-        XCTAssertTrue(
-            source.contains("private var framingContent: some View"),
-            "camera and notation remain separate content below the recording controls"
-        )
+        func scope(from start: String, to end: String) throws -> String {
+            let lower = try XCTUnwrap(source.range(of: start)).lowerBound
+            let upper = try XCTUnwrap(source.range(of: end, range: lower..<source.endIndex)).lowerBound
+            return String(source[lower..<upper])
+        }
+        // These layout scopes contain balanced SwiftUI closures. Comparing
+        // their nesting protects sibling panels, not just the presence of a
+        // VStack somewhere in a camera/notation overlay.
+        func depth(before marker: String, in scope: String) throws -> Int {
+            let index = try XCTUnwrap(scope.range(of: marker)).lowerBound
+            return scope[..<index].reduce(0) { level, character in
+                level + (character == "{" ? 1 : (character == "}" ? -1 : 0))
+            }
+        }
+        let framing = try scope(from: "private var framingContent: some View",
+            to: "private func captureBoard(")
+        let board = try scope(from: "private func captureBoard(",
+            to: "private func verticalSamplePositionContent(")
+        let repetition = try scope(from: "private func repetitionRow(",
+            to: "private func focusedBoundary(")
+        let media = try scope(from: "private struct ReferenceBoundaryMediaReview: View",
+            to: "private struct ReferenceRepetitionPlaybackControls: View")
+        // Timeline handles and selection have their own ZStack elsewhere;
+        // the camera and notation composition must still never use one.
+        for layout in [framing, board, repetition, media] {
+            XCTAssertNil(layout.range(of: #"\bZStack\s*(?:\(|\{)"#, options: .regularExpression),
+                "notation must not be overlaid on the camera preview")
+            XCTAssertFalse(layout.contains("CalibrationCameraOverlay"))
+        }
+        XCTAssertTrue(framing.contains("captureBoard(cameraHeight: Self.captureBoardCameraHeight,"))
+        XCTAssertTrue(framing.contains("notationHeight: Self.canonicalTearChartMinimumHeight"))
+        XCTAssertTrue(board.contains("VStack(alignment: .leading, spacing: 12)"))
+        XCTAssertTrue(board.contains("HStack(alignment: .top, spacing: 12)"))
+        XCTAssertTrue(board.contains("previewHeight: cameraHeight"))
+        XCTAssertTrue(board.contains("liveNotationContent(chartHeight: notationHeight)"))
+        XCTAssertEqual(try depth(before: "captureBoardTile(\"MAIN CAMERA\")", in: board), 3,
+            "the camera belongs to the bounded upper HStack")
+        XCTAssertEqual(try depth(before: "captureBoardTile(\"LIVE NOTATION\")", in: board), 2,
+            "notation must be a separate child of the outer VStack, below the camera row")
+        XCTAssertTrue(repetition.contains("VStack(alignment: .leading, spacing: 12)"))
+        XCTAssertEqual(try depth(before: "ReferenceBoundaryMediaReview(", in: repetition), 4)
+        XCTAssertEqual(try depth(before: "canonicalTearChart(", in: repetition), 4,
+            "recorded camera and review notation remain sibling panels")
+        XCTAssertTrue(media.contains("HStack(alignment: .top, spacing: 14)"))
+        XCTAssertTrue(media.contains("ReferenceRecordedVideo(player: player)"))
+        XCTAssertTrue(media.contains(".frame(width: 200, height: 112)"),
+            "the review camera remains bounded independently of the notation height")
+        for notation in ["canonicalTearChart(", "liveNotationContent(", "ScratchPhraseChartView("] {
+            XCTAssertFalse(media.contains(notation), "the recorded-video view must not embed notation")
+        }
     }
 
     /// The canonical renderer is still the one drawing, and the view still

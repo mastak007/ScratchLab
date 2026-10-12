@@ -324,6 +324,173 @@ enum ScratchStrokeGeometry {
 // MARK: - Recorded sample playback (presentation only)
 
 extension ScratchStrokeGeometry {
+    /// Fits the complete selected repetition on one stable review timeline.
+    /// Short selections gain surrounding context, shifted inward at the file
+    /// edges; a recording shorter than the requested width stays its true size.
+    /// This changes only the viewport, never saved bounds or motion geometry.
+    static func reviewTimeRange(selected: ClosedRange<Double>,
+                                within available: ClosedRange<Double>,
+                                minimumDuration: Double = 8) -> ClosedRange<Double>? {
+        guard selected.lowerBound.isFinite, selected.upperBound.isFinite,
+              selected.upperBound > selected.lowerBound,
+              (selected.upperBound - selected.lowerBound).isFinite,
+              available.lowerBound.isFinite, available.upperBound.isFinite,
+              available.upperBound > available.lowerBound,
+              (available.upperBound - available.lowerBound).isFinite,
+              minimumDuration.isFinite, minimumDuration > 0 else { return nil }
+        let selectedStart = max(selected.lowerBound, available.lowerBound)
+        let selectedEnd = min(selected.upperBound, available.upperBound)
+        guard selectedEnd > selectedStart else { return nil }
+        let selectedDuration = selectedEnd - selectedStart
+        if selectedDuration >= minimumDuration { return selectedStart...selectedEnd }
+        if available.upperBound - available.lowerBound <= minimumDuration { return available }
+
+        let padding = (minimumDuration - selectedDuration) / 2
+        let start = max(available.lowerBound,
+                        min(selectedStart - padding, available.upperBound - minimumDuration))
+        // Preserve both selected endpoints exactly even when adding the width
+        // rounds at the last bit. No measured timestamp is rounded or replaced.
+        let end = min(available.upperBound, max(selectedEnd, start + minimumDuration))
+        guard start.isFinite, end.isFinite, end > start,
+              start <= selectedStart, end >= selectedEnd else { return nil }
+        return start...end
+    }
+
+    /// Explicit, non-metric review presentation. A whole directional run gets
+    /// one square-root travel scale, so small scratches remain visible beside
+    /// long releases while larger excursions still draw larger. Every point
+    /// inside that run retains its proportional progress and exact time.
+    ///
+    /// This does not change captured records, physical coordinates, exported
+    /// notation or default rendering. The caller must label it Movement detail
+    /// and retain the original chart as Recorded travel. The retained frame
+    /// supplies time/domain context; this derived path has no physical Y scale.
+    static func movementDetailChart(_ prepared: PreparedCanonicalChart,
+                                    resetMarkers: [PlaybackResetMarker] = []) -> PreparedCanonicalChart? {
+        let source = prepared.geometry.motion.segments
+        guard !source.isEmpty else { return nil }
+        var lastReset = -Double.infinity
+        for marker in resetMarkers {
+            guard marker.time.isFinite, marker.time > lastReset else { return nil }
+            lastReset = marker.time
+        }
+        struct Run {
+            var start: Int
+            var end: Int
+            var direction: Int?
+        }
+        var runs: [Run] = []
+        var markerIndex = 0
+        for (index, segment) in source.enumerated() {
+            guard segment.startTime.isFinite, segment.endTime.isFinite,
+                  segment.endTime > segment.startTime,
+                  segment.startPosition.isFinite, segment.endPosition.isFinite,
+                  prepared.frame.timeRange.contains(segment.startTime),
+                  prepared.frame.timeRange.contains(segment.endTime) else { return nil }
+            let delta = Double(segment.endPosition) - Double(segment.startPosition)
+            guard delta.isFinite else { return nil }
+            switch segment.kind {
+            case .hold: guard delta == 0 else { return nil }
+            case .stroke(.forward): guard delta >= 0 else { return nil }
+            case .stroke(.backward): guard delta <= 0 else { return nil }
+            }
+            while markerIndex < resetMarkers.count, resetMarkers[markerIndex].time < segment.startTime {
+                markerIndex += 1
+            }
+            if markerIndex < resetMarkers.count,
+               resetMarkers[markerIndex].time > segment.startTime,
+               resetMarkers[markerIndex].time < segment.endTime { return nil }
+            let startsAtReset = markerIndex < resetMarkers.count
+                && resetMarkers[markerIndex].time == segment.startTime
+            let direction: Int? = delta == 0 ? nil : (delta > 0 ? 1 : -1)
+            if index > 0 {
+                let previous = source[index - 1]
+                guard previous.endTime <= segment.startTime else { return nil }
+                if !startsAtReset, previous.endTime == segment.startTime,
+                   previous.endPosition == segment.startPosition, var run = runs.last,
+                   direction == nil || run.direction == nil || direction == run.direction {
+                    run.end = index
+                    run.direction = run.direction ?? direction
+                    runs[runs.count - 1] = run
+                    continue
+                }
+            }
+            runs.append(Run(start: index, end: index, direction: direction))
+        }
+
+        var positions: [(start: Double, end: Double)] = []
+        positions.reserveCapacity(source.count)
+        var cursor = 0.0
+        var minimum = Double.infinity, maximum = -Double.infinity
+        markerIndex = 0
+        for run in runs {
+            let first = source[run.start], last = source[run.end]
+            var resetInGap = false
+            while markerIndex < resetMarkers.count, resetMarkers[markerIndex].time <= first.startTime {
+                let time = resetMarkers[markerIndex].time
+                if run.start == 0 || time >= source[run.start - 1].endTime { resetInGap = true }
+                markerIndex += 1
+            }
+            if resetInGap {
+                cursor = 0
+            } else if run.start > 0 {
+                // Preserve a known endpoint offset across a pen-up. This
+                // transforms only the display anchor; no trajectory or reset
+                // marker is invented inside an unavailable interval.
+                let offset = Double(first.startPosition) - Double(source[run.start - 1].endPosition)
+                guard offset.isFinite else { return nil }
+                cursor += offset < 0 ? -sqrt(-offset) : sqrt(offset)
+            }
+            let origin = Double(first.startPosition)
+            let travel = Double(last.endPosition) - origin
+            guard travel.isFinite, cursor.isFinite else { return nil }
+            let magnitude = abs(travel)
+            let scale = magnitude > 0 ? sqrt(magnitude) / magnitude : 1
+            let start = cursor
+            for index in run.start...run.end {
+                let segment = source[index]
+                let from = start + (Double(segment.startPosition) - origin) * scale
+                let to = start + (Double(segment.endPosition) - origin) * scale
+                guard from.isFinite, to.isFinite,
+                      segment.startPosition == segment.endPosition || from != to else { return nil }
+                positions.append((from, to))
+                minimum = min(minimum, min(from, to)); maximum = max(maximum, max(from, to))
+                cursor = to
+            }
+        }
+        let lower: Double, upper: Double
+        if !resetMarkers.isEmpty {
+            let radius = max(abs(minimum), abs(maximum))
+            let extent = radius > 0 ? radius * 1.125 : 0.5
+            lower = -extent; upper = extent
+        } else {
+            let span = maximum - minimum
+            let padding = span > 0 ? span * 0.125 : 0.5
+            lower = minimum - padding; upper = maximum + padding
+        }
+        let span = upper - lower
+        guard lower.isFinite, upper.isFinite, span.isFinite, span > 0 else { return nil }
+        var motion: [MotionSegment] = []
+        motion.reserveCapacity(source.count)
+        for (segment, position) in zip(source, positions) {
+            let from = CGFloat((position.start - lower) / span)
+            let to = CGFloat((position.end - lower) / span)
+            guard from.isFinite, to.isFinite,
+                  segment.startPosition == segment.endPosition || from != to else { return nil }
+            motion.append(MotionSegment(kind: segment.kind,
+                startTime: segment.startTime, endTime: segment.endTime,
+                startPosition: from, endPosition: to, speed: segment.speed,
+                isGhost: segment.isGhost, evidenceStyle: segment.evidenceStyle))
+        }
+        let geometry = prepared.geometry
+        return PreparedCanonicalChart(frame: prepared.frame, layer: prepared.layer,
+            geometry: CanonicalGeometry(motion: MotionPath(segments: motion,
+                timeRange: geometry.motion.timeRange), missingMotion: geometry.missingMotion,
+                fader: geometry.fader, faderEdges: geometry.faderEdges,
+                hasUnplacedEvidence: geometry.hasUnplacedEvidence),
+            mixerSpans: prepared.mixerSpans, combinedMixerSpans: prepared.combinedMixerSpans)
+    }
+
     struct PlaybackResetMarker: Equatable, Sendable {
         enum Kind: Equatable, Sendable { case loop, sampleRestart }
         let time: Double
@@ -762,7 +929,7 @@ extension ScratchStrokeGeometry {
             combinedMixerSpans = mixerFaders?.combinedSpans(in: frame.timeRange)
         }
 
-        fileprivate init(frame: CanonicalFrame, layer: CanonicalLayer,
+        init(frame: CanonicalFrame, layer: CanonicalLayer,
                          geometry: CanonicalGeometry,
                          mixerSpans: [ScratchMixerFaderEvidence.Control: [ScratchMixerFaderEvidence.Span]]?,
                          combinedMixerSpans: [ScratchMixerFaderEvidence.Span]?) {

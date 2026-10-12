@@ -921,6 +921,8 @@ struct ReferenceDeviceInfo: Codable, Equatable, Sendable {
 /// BPM, so an operator nudging a boundary moves it on the grid rather than off
 /// it. `isSelected` marks the repetition the operator chose as canonical.
 struct ReferenceRepetitionBoundary: Codable, Equatable, Sendable, Identifiable {
+    enum DragEdge: Sendable { case move, start, end }
+
     let index: Int
     /// Take-relative start, in beats from the start of the recording
     /// (including the count-in bar).
@@ -951,6 +953,66 @@ struct ReferenceRepetitionBoundary: Codable, Equatable, Sendable, Identifiable {
         self.index = index
         self.startBeat = startBeat
         self.endBeat = endBeat
+    }
+
+    /// One reversible trim proposal from the drag's original boundary. The
+    /// quarter-beat grid matches the steppers; measured media edges win when
+    /// the recording ends between grid points. Moving retains exact duration.
+    /// Neighbours, selection and approval are intentionally outside this math.
+    func adjustedForDrag(
+        deltaSeconds: Double,
+        edge: DragEdge,
+        metadata: ReferenceTakeMetadata,
+        recordedDurationSeconds: Double
+    ) -> Self? {
+        let step = 0.25
+        let secondsPerBeat = metadata.secondsPerBeat
+        let mediaOrigin = metadata.mediaSeconds(forBeat: 0)
+        guard startBeat.isFinite, endBeat.isFinite, endBeat - startBeat >= step,
+              deltaSeconds.isFinite, secondsPerBeat.isFinite, secondsPerBeat > 0,
+              mediaOrigin.isFinite, recordedDurationSeconds.isFinite,
+              recordedDurationSeconds > 0 else { return nil }
+        let firstBeat = max(0, -mediaOrigin / secondsPerBeat)
+        let lastBeat = min(Double(metadata.totalBeats),
+            (recordedDurationSeconds - mediaOrigin) / secondsPerBeat)
+        let deltaBeats = deltaSeconds / secondsPerBeat
+        guard firstBeat.isFinite, lastBeat.isFinite, deltaBeats.isFinite,
+              lastBeat - firstBeat >= step else { return nil }
+
+        func snap(_ value: Double) -> Double { (value / step).rounded() * step }
+        func clamp(_ value: Double, _ lower: Double, _ upper: Double) -> Double {
+            min(max(value, lower), upper)
+        }
+        switch edge {
+        case .move:
+            let duration = endBeat - startBeat
+            let snappedDelta = snap(deltaBeats)
+            guard duration.isFinite, duration <= lastBeat - firstBeat,
+                  snappedDelta.isFinite else { return nil }
+            let movedStart = clamp(startBeat + snappedDelta, firstBeat, lastBeat - duration)
+            return Self(index: index, startBeat: movedStart, endBeat: movedStart + duration)
+        case .start:
+            let proposed = snap(startBeat + deltaBeats)
+            guard proposed.isFinite, endBeat <= lastBeat,
+                  endBeat - firstBeat >= step else { return nil }
+            return Self(index: index, startBeat: clamp(proposed, firstBeat, endBeat - step), endBeat: endBeat)
+        case .end:
+            let proposed = snap(endBeat + deltaBeats)
+            // An unchanged nominal first downbeat may precede WAV zero by
+            // the existing one-frame admission allowance. Trimming its out
+            // point must not require changing that valid authored start.
+            let sampleTolerance = metadata.witnessedTiming.flatMap {
+                $0.sampleRate > 0 ? 1.0 / Double($0.sampleRate) : nil
+            } ?? 1e-9
+            let nominalFirstBeat = Double(metadata.countInBars * metadata.pattern.beatsPerBar)
+            let preservesFirstFrameQuantization = metadata.mediaTimeOrigin != nil && index == 0
+                && startBeat == nominalFirstBeat
+                && startSeconds(metadata: metadata)
+                    >= -ReferenceRecordingOriginPolicy.maximumLatenessSeconds - sampleTolerance
+            guard proposed.isFinite, startBeat >= firstBeat || preservesFirstFrameQuantization,
+                  lastBeat - startBeat >= step else { return nil }
+            return Self(index: index, startBeat: startBeat, endBeat: clamp(proposed, startBeat + step, lastBeat))
+        }
     }
 }
 
@@ -3906,8 +3968,8 @@ enum ReferenceReviewMetadataCodec {
         }
     }
 
-    /// Nil when there is nothing to record (no preference and blank notes), so
-    /// exports without a recommendation keep their existing shape.
+    /// Unchanged, unmarked repetitions with blank notes need no companion.
+    /// An edited trim is review metadata even without a preferred repetition.
     static func makeDocument(
         evidence: ReferenceTakeEvidence,
         preferenceMark: ReferenceRepetitionPreferenceMark?,
@@ -3926,7 +3988,9 @@ enum ReferenceReviewMetadataCodec {
             preferred = repetition(boundary, metadata: metadata)
         }
         let notes = reviewNotes.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? "" : reviewNotes
-        guard preferred != nil || !notes.isEmpty else { return nil }
+        let editedBoundaries = !isMovementCheck
+            && evidence.boundaries.repetitions != ReferencePhraseBoundaries.nominal(for: metadata).repetitions
+        guard preferred != nil || !notes.isEmpty || editedBoundaries else { return nil }
         let document = Document(schemaVersion: Document.currentSchemaVersion,
             repetitionNumbering: Document.repetitionNumbering, sourceBinding: sourceBinding,
             referenceTakeID: metadata.referenceTakeID, authoringSessionID: metadata.authoringSessionID,
@@ -4021,8 +4085,8 @@ enum ReferenceReviewMetadataCodec {
         guard document.reviewNotes.count <= Document.maximumNotesLength else {
             throw Error.invalid("review notes are too long")
         }
-        guard document.preferredRepetition != nil || !isBlank(document.reviewNotes) else {
-            throw Error.invalid("review metadata without a preference or notes must be omitted")
+        guard document.preferredRepetition != nil || !isBlank(document.reviewNotes) || !recorded.isEmpty else {
+            throw Error.invalid("review metadata without repetition ranges, a preference or notes must be omitted")
         }
     }
 

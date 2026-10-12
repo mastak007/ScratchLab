@@ -13,6 +13,217 @@ import AVFoundation
 import XCTest
 @testable import ScratchLab
 
+final class RecordedMovementDetailGeometryTests: XCTestCase {
+    private typealias Geometry = ScratchStrokeGeometry
+
+    private func segment(_ start: Double, _ end: Double, _ from: Double, _ to: Double,
+                         kind: MotionSegmentKind? = nil,
+                         style: MotionSegment.EvidenceStyle = .open) -> MotionSegment {
+        .init(kind: kind ?? (to == from ? .hold : .stroke(to > from ? .forward : .backward)),
+              startTime: start, endTime: end, startPosition: CGFloat(from), endPosition: CGFloat(to),
+              speed: .medium, isGhost: false, evidenceStyle: style)
+    }
+
+    private func chart(_ segments: [MotionSegment], missing: [ClosedRange<Double>] = []) throws
+        -> Geometry.PreparedCanonicalChart {
+        let frame = try XCTUnwrap(Geometry.CanonicalFrame(timeRange: 0...6, positionRange: 0...1,
+            coordinateSpace: .normalizedTakeLocalDisplacement, beatsPerMinute: 95))
+        return .init(frame: frame, layer: .performance,
+            geometry: .init(motion: .init(segments: segments, timeRange: frame.timeRange),
+                missingMotion: missing, fader: [.init(range: 0...6, state: .open)],
+                faderEdges: [.init(time: 1, state: .closed)], hasUnplacedEvidence: true),
+            mixerSpans: [.crossfader: [.init(start: 0, end: 1, gain: 1), .init(start: 1, end: 6, gain: 0)]],
+            combinedMixerSpans: [.init(start: 0, end: 1, gain: 1), .init(start: 1, end: 6, gain: 0)])
+    }
+
+    func testDirectionalRunCompressionPreservesDenseShapeAndSmallLargeOrdering() throws {
+        let source = try chart([
+            segment(0, 0.5, 0, 0.01), segment(0.5, 1, 0.01, 0.04), segment(1, 2, 0.04, 0),
+            segment(2, 2.25, 0, 0.16), segment(2.25, 3, 0.16, 0.64), segment(3, 4, 0.64, 0)
+        ])
+        let result = try XCTUnwrap(Geometry.movementDetailChart(source))
+        let motion = result.geometry.motion.segments
+        let small = motion[1].endPosition - motion[0].startPosition
+        let large = motion[4].endPosition - motion[3].startPosition
+        XCTAssertGreaterThan(small, 0)
+        XCTAssertGreaterThan(large, small, "A long release must remain visibly larger than a small scratch")
+        XCTAssertEqual(large / small, 4, accuracy: 1e-12,
+                       "One common sqrt scale compresses the original 16-to-1 excursion ratio to 4-to-1")
+        XCTAssertEqual(motion[0].travel / small, 0.25, accuracy: 1e-12)
+        XCTAssertEqual(motion[3].travel / large, 0.25, accuracy: 1e-12)
+        XCTAssertEqual(motion.last?.endPosition, motion.first?.startPosition,
+                       "Balanced forward/back travel must still close")
+        XCTAssertEqual(motion.map(\.kind), source.geometry.motion.segments.map(\.kind))
+        XCTAssertTrue(motion.allSatisfy { (0...1).contains($0.startPosition) && (0...1).contains($0.endPosition) })
+    }
+
+    func testDenseSamplingDoesNotChangeDirectionalRunGain() throws {
+        let dense = try XCTUnwrap(Geometry.movementDetailChart(chart([
+            segment(0, 0.5, 0, 0.01), segment(0.5, 1, 0.01, 0.04), segment(1, 2, 0.04, 0),
+            segment(2, 2.25, 0, 0.16), segment(2.25, 3, 0.16, 0.64), segment(3, 4, 0.64, 0)
+        ])))
+        let coarse = try XCTUnwrap(Geometry.movementDetailChart(chart([
+            segment(0, 1, 0, 0.04), segment(1, 2, 0.04, 0),
+            segment(2, 3, 0, 0.64), segment(3, 4, 0.64, 0)
+        ])))
+        for time in [0.0, 1, 2, 3, 4] {
+            XCTAssertEqual(dense.geometry.motion.position(at: time), coarse.geometry.motion.position(at: time),
+                           accuracy: 1e-12, "Gain belongs to the run, never its MIDI/sample density")
+        }
+    }
+
+    func testSameDirectionHoldsAndFaderEdgesDoNotResetCompression() throws {
+        let source = try chart([
+            segment(0, 1, 0, 0.16), segment(1, 2, 0.16, 0.16, style: .closed),
+            segment(2, 3, 0.16, 0.64, style: .unknownFader), segment(3, 4, 0.64, 0)
+        ])
+        let result = try XCTUnwrap(Geometry.movementDetailChart(source))
+        let motion = result.geometry.motion.segments
+        XCTAssertEqual(motion[0].travel / motion[2].travel, 1.0 / 3, accuracy: 1e-12)
+        XCTAssertEqual(motion[1].kind, .hold)
+        XCTAssertEqual(motion[1].startPosition, motion[1].endPosition)
+        XCTAssertEqual(motion[0].endPosition, motion[1].startPosition)
+        XCTAssertEqual(motion[1].endPosition, motion[2].startPosition)
+        XCTAssertEqual(motion.map(\.evidenceStyle), source.geometry.motion.segments.map(\.evidenceStyle))
+    }
+
+    func testUnknownGapsAndWitnessedLoopRemainPenUpWithCentredReset() throws {
+        let source = try chart([
+            segment(0, 1, 0, 0.1), segment(2, 3, 0.2, 0.4),
+            segment(3.1, 4, 0.5, 0.7), segment(4, 5, 0.7, 0.5)
+        ], missing: [1...2, 5...6])
+        let markers: [Geometry.PlaybackResetMarker] = [.init(time: 0, kind: .sampleRestart),
+                                                     .init(time: 3.1, kind: .loop)]
+        let result = try XCTUnwrap(Geometry.movementDetailChart(source, resetMarkers: markers))
+        XCTAssertEqual(result.geometry.missingMotion, source.geometry.missingMotion)
+        XCTAssertEqual(result.geometry.motion.segments.count, source.geometry.motion.segments.count)
+        XCTAssertEqual(result.geometry.motion.segments[2].startPosition, 0.5)
+        XCTAssertEqual(result.geometry.motion.segments[3].endPosition, 0.5)
+        XCTAssertEqual(result.geometry.motion.segments.map(\.startTime), [0, 2, 3.1, 4])
+        XCTAssertEqual(result.geometry.motion.segments.map(\.endTime), [1, 3, 4, 5])
+    }
+
+    func testMovementDetailPreservesOriginalChartAndAllIndependentEvidence() throws {
+        let source = try chart([segment(0, 1, 0, 0.04), segment(1, 2, 0.04, 0),
+                                segment(3, 4, 0.1, 0.74)], missing: [2...3, 4...6])
+        let original = source
+        let result = try XCTUnwrap(Geometry.movementDetailChart(source))
+        XCTAssertEqual(source, original)
+        XCTAssertNotEqual(result.geometry.motion, source.geometry.motion)
+        XCTAssertEqual(result.frame, source.frame)
+        XCTAssertEqual(result.layer, source.layer)
+        XCTAssertEqual(result.geometry.motion.timeRange, source.geometry.motion.timeRange)
+        XCTAssertEqual(result.geometry.missingMotion, source.geometry.missingMotion)
+        XCTAssertEqual(result.geometry.fader, source.geometry.fader)
+        XCTAssertEqual(result.geometry.faderEdges, source.geometry.faderEdges)
+        XCTAssertEqual(result.geometry.hasUnplacedEvidence, source.geometry.hasUnplacedEvidence)
+        XCTAssertEqual(result.mixerSpans, source.mixerSpans)
+        XCTAssertEqual(result.combinedMixerSpans, source.combinedMixerSpans)
+        for (after, before) in zip(result.geometry.motion.segments, source.geometry.motion.segments) {
+            XCTAssertEqual(after.startTime, before.startTime)
+            XCTAssertEqual(after.endTime, before.endTime)
+            XCTAssertEqual(after.kind, before.kind)
+            XCTAssertEqual(after.speed, before.speed)
+            XCTAssertEqual(after.isGhost, before.isGhost)
+            XCTAssertEqual(after.evidenceStyle, before.evidenceStyle)
+        }
+    }
+
+    func testStationaryMovementDetailStaysFlatWithoutInventedReversals() throws {
+        let source = try chart([segment(0, 2, 0.7, 0.7), segment(2, 4, 0.7, 0.7)])
+        let result = try XCTUnwrap(Geometry.movementDetailChart(source))
+        XCTAssertTrue(result.geometry.motion.segments.allSatisfy {
+            $0.kind == .hold && $0.startPosition == 0.5 && $0.endPosition == 0.5
+        })
+    }
+
+    func testInvalidMovementDetailFailsClosed() throws {
+        let invalid = [
+            [], [segment(0, 0, 0, 1)], [segment(0, 2, 0, 0.1), segment(1, 3, 0.1, 0)],
+            [segment(0, 1, 0.1, 0, kind: .stroke(.forward))], [segment(0, 1, 0, 0.1, kind: .hold)],
+            [segment(0, 1, 0, .infinity)], [segment(.nan, 1, 0, 0.1)], [segment(0, 7, 0, 0.1)],
+            [segment(0, 1, -Double.greatestFiniteMagnitude, Double.greatestFiniteMagnitude)],
+            [segment(0, 1, 0, 1e308), segment(1, 2, 1e308, 0), segment(2, 3, 0, 1e-300)]
+        ]
+        for segments in invalid {
+            XCTAssertNil(Geometry.movementDetailChart(try chart(segments)))
+        }
+        let valid = try chart([segment(0, 1, 0, 0.1)])
+        XCTAssertNil(Geometry.movementDetailChart(valid, resetMarkers: [.init(time: 0.5, kind: .loop)]))
+        XCTAssertNil(Geometry.movementDetailChart(valid, resetMarkers: [
+            .init(time: 1, kind: .loop), .init(time: 0, kind: .sampleRestart)]))
+        XCTAssertNil(Geometry.movementDetailChart(valid, resetMarkers: [.init(time: .nan, kind: .loop)]))
+    }
+}
+
+final class ReferenceReviewTimeRangeTests: XCTestCase {
+    func testFullLongRepetitionAndWholeTakeStayVisibleWithoutPaging() {
+        let available = 0.0...22.90273
+        let offset = 2.407685235317331
+        let selected = (10.75 * 60 / 95 - offset)...(35.75 * 60 / 95 - offset)
+        XCTAssertEqual(ScratchStrokeGeometry.reviewTimeRange(selected: selected, within: available), selected,
+                       "The complete edited 15.79-second repetition must remain visible")
+        XCTAssertEqual(ScratchStrokeGeometry.reviewTimeRange(selected: available, within: available), available)
+        XCTAssertEqual(ScratchStrokeGeometry.reviewTimeRange(selected: 2...10, within: available), 2...10)
+    }
+
+    func testShortRepetitionGetsCentredEightSecondContext() {
+        XCTAssertEqual(ScratchStrokeGeometry.reviewTimeRange(selected: 8...10, within: 0...23), 5...13)
+        XCTAssertEqual(ScratchStrokeGeometry.reviewTimeRange(selected: 8...10, within: 0...23,
+                                                            minimumDuration: 12), 3...15)
+    }
+
+    func testContextShiftsInwardAtRecordingEdgesAndShortTakeKeepsRealDuration() {
+        XCTAssertEqual(ScratchStrokeGeometry.reviewTimeRange(selected: 0.25...1, within: 0...23), 0...8)
+        XCTAssertEqual(ScratchStrokeGeometry.reviewTimeRange(selected: 22...22.5, within: 0...23), 15...23)
+        XCTAssertEqual(ScratchStrokeGeometry.reviewTimeRange(selected: 6...7, within: 5...9), 5...9)
+        XCTAssertEqual(ScratchStrokeGeometry.reviewTimeRange(selected: 2...4, within: 0...8), 0...8)
+    }
+
+    func testSelectionOutsideRecordingClipsOnlyToAvailableMedia() {
+        XCTAssertEqual(ScratchStrokeGeometry.reviewTimeRange(selected: -2...2, within: 0...20), 0...8)
+        XCTAssertEqual(ScratchStrokeGeometry.reviewTimeRange(selected: 18...24, within: 0...20), 12...20)
+        XCTAssertEqual(ScratchStrokeGeometry.reviewTimeRange(selected: -1...25, within: 0...20), 0...20)
+        XCTAssertNil(ScratchStrokeGeometry.reviewTimeRange(selected: 20...22, within: 0...20))
+        XCTAssertNil(ScratchStrokeGeometry.reviewTimeRange(selected: -3 ... -1, within: 0...20))
+    }
+
+    func testInvalidReviewRangesFailClosed() {
+        XCTAssertNil(ScratchStrokeGeometry.reviewTimeRange(selected: 3...3, within: 0...20))
+        XCTAssertNil(ScratchStrokeGeometry.reviewTimeRange(selected: 1...3, within: 2...2))
+        XCTAssertNil(ScratchStrokeGeometry.reviewTimeRange(selected: 1...Double.infinity, within: 0...20))
+        XCTAssertNil(ScratchStrokeGeometry.reviewTimeRange(selected: 1...3, within: 0...Double.infinity))
+        XCTAssertNil(ScratchStrokeGeometry.reviewTimeRange(
+            selected: -Double.greatestFiniteMagnitude...Double.greatestFiniteMagnitude, within: 0...20))
+        XCTAssertNil(ScratchStrokeGeometry.reviewTimeRange(selected: 1...3,
+            within: -Double.greatestFiniteMagnitude...Double.greatestFiniteMagnitude))
+        for minimum in [Double.nan, .infinity, -.infinity, 0, -1] {
+            XCTAssertNil(ScratchStrokeGeometry.reviewTimeRange(selected: 1...3, within: 0...20,
+                                                              minimumDuration: minimum))
+        }
+    }
+
+    func testFractionalSelectionEndpointsRemainExactAcrossPaddedViews() throws {
+        let available = 0.13377147303253878...21.968267098025535
+        for index in 0..<40 {
+            let start = available.lowerBound + Double(index) * 0.51
+            let end = min(start + 0.39123456789, available.upperBound)
+            let selected = start...end
+            let viewport = try XCTUnwrap(ScratchStrokeGeometry.reviewTimeRange(selected: selected, within: available))
+            XCTAssertLessThanOrEqual(viewport.lowerBound, selected.lowerBound)
+            XCTAssertGreaterThanOrEqual(viewport.upperBound, selected.upperBound)
+            XCTAssertGreaterThanOrEqual(viewport.lowerBound, available.lowerBound)
+            XCTAssertLessThanOrEqual(viewport.upperBound, available.upperBound)
+            XCTAssertEqual(viewport.upperBound - viewport.lowerBound, 8, accuracy: 1e-12,
+                           "Only floating-point addition of display padding permits last-bit rounding")
+            XCTAssertTrue(viewport.contains(start))
+            XCTAssertTrue(viewport.contains(end))
+            XCTAssertEqual(ScratchStrokeGeometry.reviewTimeRange(selected: selected, within: available), viewport,
+                           "The viewport is stable and independent of the moving playhead")
+        }
+    }
+}
+
 final class RecordedSamplePlaybackGeometryTests: XCTestCase {
     private typealias Timeline = RecordedPlaybackLoopTimeline
     private typealias Geometry = ScratchStrokeGeometry
@@ -1598,6 +1809,45 @@ final class ReferenceAuthoringTests: XCTestCase {
         XCTAssertTrue(ReferenceValidator.validate(makeEvidence(metadata: metadata, boundaries: boundaries))
             .failureMessages.contains { $0.contains("repetition 2 starts") && $0.contains("before the recording") },
             "The nominal first beat does not grant a later repetition the first-frame allowance.")
+    }
+
+    func testBoundaryOutDragPreservesOnlyValidNominalFirstFrameAllowance() throws {
+        let origin = ReferenceMediaTimeOrigin(clickStartHostTime: 100, recordingStartHostTime: 200,
+            recordingStartOffsetSeconds: 4.0 * 60 / 90 + 0.02)
+        let metadata = makeMetadata(bpm: 90, mediaTimeOrigin: origin)
+        var boundaries = ReferencePhraseBoundaries.nominal(for: metadata)
+        let original = boundaries.repetitions[0]
+        let delta = -metadata.secondsPerBeat * 0.25
+        XCTAssertTrue(ReferenceValidator.validate(makeEvidence(metadata: metadata, boundaries: boundaries)).passes)
+
+        let trimmed = try XCTUnwrap(original.adjustedForDrag(deltaSeconds: delta, edge: .end,
+            metadata: metadata, recordedDurationSeconds: 20))
+        XCTAssertEqual(trimmed.startBeat, original.startBeat)
+        XCTAssertEqual(trimmed.endBeat, original.endBeat - 0.25)
+        XCTAssertEqual(trimmed.startSeconds(metadata: metadata), -0.02, accuracy: 1e-9)
+        boundaries.repetitions[0] = trimmed
+        XCTAssertTrue(ReferenceValidator.validate(makeEvidence(metadata: metadata, boundaries: boundaries)).passes,
+            "An out-point trim retains the existing valid nominal first-frame allowance.")
+
+        let lateOrigin = ReferenceMediaTimeOrigin(clickStartHostTime: 100, recordingStartHostTime: 200,
+            recordingStartOffsetSeconds: 4.0 * 60 / 90 + ReferenceRecordingOriginPolicy.maximumLatenessSeconds + 0.01)
+        let lateMetadata = makeMetadata(bpm: 90, mediaTimeOrigin: lateOrigin)
+        XCTAssertNil(original.adjustedForDrag(deltaSeconds: delta, edge: .end,
+            metadata: lateMetadata, recordedDurationSeconds: 20),
+            "An origin beyond the admission allowance must not become a valid drag context.")
+        XCTAssertTrue(ReferenceValidator.validate(makeEvidence(metadata: lateMetadata))
+            .failureMessages.contains { $0.contains("before the recording") })
+
+        var earlier = original
+        earlier.startBeat = 3.99
+        XCTAssertNil(earlier.adjustedForDrag(deltaSeconds: delta, edge: .end,
+            metadata: metadata, recordedDurationSeconds: 20),
+            "An earlier authored start cannot borrow the nominal first-frame allowance.")
+        let laterRepetition = ReferenceRepetitionBoundary(index: 1,
+            startBeat: original.startBeat, endBeat: original.endBeat)
+        XCTAssertNil(laterRepetition.adjustedForDrag(deltaSeconds: delta, edge: .end,
+            metadata: metadata, recordedDurationSeconds: 20),
+            "Another repetition at the same beat cannot borrow the first-frame allowance.")
     }
 
     func testNonfiniteReviewBoundsFailClosed() {

@@ -1259,6 +1259,166 @@ final class ReferenceAuthoringSessionTests: XCTestCase {
         return session
     }
 
+    private func boundaryDragMetadata(bpm: Int = 120, origin: ReferenceMediaTimeOrigin? = nil) -> ReferenceTakeMetadata {
+        ReferenceTakeMetadata(referenceTakeID: "drag-fixture", authoringSessionID: "drag-session", takeNumber: 1,
+            performerName: "Fixture DJ", operatorName: "Fixture reviewer", technique: .babyScratch,
+            pattern: .init(id: "quarter", name: "Quarter notes", phraseBars: 1), bpm: bpm,
+            startingPlatterDirection: .forward, faderVariant: .faderOpenThroughout, mediaTimeOrigin: origin,
+            referenceVersion: 1, crossfaderCalibration: nil,
+            deviceInfo: .init(platform: "macOS", appVersion: "test", controllerName: "Synthetic",
+                controllerIdentifier: "fixture", audioDeviceName: nil, videoDeviceName: nil, watchLinked: false),
+            recordedAt: Date(timeIntervalSince1970: 100))
+    }
+
+    func testBoundaryDragMovesOnQuarterBeatGridAndPreservesExactDuration() throws {
+        let original = ReferenceRepetitionBoundary(index: 2, startBeat: 4.1, endBeat: 8.9)
+        let moved = try XCTUnwrap(original.adjustedForDrag(deltaSeconds: 0.14, edge: .move,
+            metadata: boundaryDragMetadata(), recordedDurationSeconds: 12))
+        XCTAssertEqual(moved.index, original.index)
+        XCTAssertEqual(moved.startBeat, 4.35, accuracy: 1e-9)
+        XCTAssertEqual(moved.endBeat, 9.15, accuracy: 1e-9)
+        XCTAssertEqual(moved.durationBeats, original.durationBeats, accuracy: 1e-9)
+        XCTAssertEqual(original.startBeat, 4.1)
+        XCTAssertEqual(original.endBeat, 8.9)
+    }
+
+    func testBoundaryDragMoveClampsUsingRecordedOriginAndWAVEnd() throws {
+        let metadata = boundaryDragMetadata(origin: .init(clickStartHostTime: 100, recordingStartHostTime: 200,
+            recordingStartOffsetSeconds: 2))
+        let original = ReferenceRepetitionBoundary(index: 1, startBeat: 8, endBeat: 12)
+        let first = try XCTUnwrap(original.adjustedForDrag(deltaSeconds: -100, edge: .move,
+            metadata: metadata, recordedDurationSeconds: 8.1))
+        XCTAssertEqual(first.startBeat, 4, accuracy: 1e-9)
+        XCTAssertEqual(first.startSeconds(metadata: metadata), 0, accuracy: 1e-9)
+        XCTAssertEqual(first.durationBeats, original.durationBeats, accuracy: 1e-9)
+        let last = try XCTUnwrap(original.adjustedForDrag(deltaSeconds: 100, edge: .move,
+            metadata: metadata, recordedDurationSeconds: 8.1))
+        XCTAssertEqual(last.endBeat, 20.2, accuracy: 1e-9)
+        XCTAssertEqual(last.endSeconds(metadata: metadata), 8.1, accuracy: 1e-9)
+        XCTAssertEqual(last.durationBeats, original.durationBeats, accuracy: 1e-9)
+    }
+
+    func testBoundaryDragEdgesSnapAndCannotCrossOrCollapse() throws {
+        let boundary = ReferenceRepetitionBoundary(index: 0, startBeat: 4, endBeat: 8)
+        let metadata = boundaryDragMetadata()
+        let start = try XCTUnwrap(boundary.adjustedForDrag(deltaSeconds: 0.13, edge: .start,
+            metadata: metadata, recordedDurationSeconds: 12))
+        XCTAssertEqual(start.startBeat, 4.25)
+        XCTAssertEqual(start.endBeat, 8)
+        let end = try XCTUnwrap(boundary.adjustedForDrag(deltaSeconds: -0.13, edge: .end,
+            metadata: metadata, recordedDurationSeconds: 12))
+        XCTAssertEqual(end.startBeat, 4)
+        XCTAssertEqual(end.endBeat, 7.75)
+        let crossedStart = try XCTUnwrap(boundary.adjustedForDrag(deltaSeconds: 100, edge: .start,
+            metadata: metadata, recordedDurationSeconds: 12))
+        let crossedEnd = try XCTUnwrap(boundary.adjustedForDrag(deltaSeconds: -100, edge: .end,
+            metadata: metadata, recordedDurationSeconds: 12))
+        XCTAssertEqual(crossedStart.startBeat, 7.75)
+        XCTAssertEqual(crossedEnd.endBeat, 4.25)
+        XCTAssertEqual(crossedStart.durationBeats, 0.25)
+        XCTAssertEqual(crossedEnd.durationBeats, 0.25)
+    }
+
+    func testBoundaryDragClampsToAuthoredEndWithoutInventingLongerTake() throws {
+        let metadata = boundaryDragMetadata()
+        let boundary = ReferenceRepetitionBoundary(index: 0, startBeat: 4, endBeat: 8)
+        let end = try XCTUnwrap(boundary.adjustedForDrag(deltaSeconds: 100, edge: .end,
+            metadata: metadata, recordedDurationSeconds: 100))
+        XCTAssertEqual(end.endBeat, Double(metadata.totalBeats))
+        let moved = try XCTUnwrap(boundary.adjustedForDrag(deltaSeconds: 100, edge: .move,
+            metadata: metadata, recordedDurationSeconds: 100))
+        XCTAssertEqual(moved.endBeat, Double(metadata.totalBeats))
+        XCTAssertEqual(moved.durationBeats, 4)
+    }
+
+    func testBoundaryDragRejectsInvalidTimingAndInsufficientMedia() {
+        let boundary = ReferenceRepetitionBoundary(index: 0, startBeat: 4, endBeat: 8)
+        let metadata = boundaryDragMetadata()
+        for invalid in [Double.nan, .infinity, -.infinity] {
+            XCTAssertNil(boundary.adjustedForDrag(deltaSeconds: invalid, edge: .move,
+                metadata: metadata, recordedDurationSeconds: 12))
+            XCTAssertNil(boundary.adjustedForDrag(deltaSeconds: 0, edge: .start,
+                metadata: metadata, recordedDurationSeconds: invalid))
+            XCTAssertNil(ReferenceRepetitionBoundary(index: 0, startBeat: invalid, endBeat: 8)
+                .adjustedForDrag(deltaSeconds: 0, edge: .end, metadata: metadata, recordedDurationSeconds: 12))
+        }
+        XCTAssertNil(boundary.adjustedForDrag(deltaSeconds: 0, edge: .move,
+            metadata: boundaryDragMetadata(bpm: 0), recordedDurationSeconds: 12))
+        XCTAssertNil(boundary.adjustedForDrag(deltaSeconds: 0, edge: .move,
+            metadata: boundaryDragMetadata(origin: .init(clickStartHostTime: 100, recordingStartHostTime: 200,
+                recordingStartOffsetSeconds: .nan)), recordedDurationSeconds: 12))
+        XCTAssertNil(boundary.adjustedForDrag(deltaSeconds: 0, edge: .move,
+            metadata: metadata, recordedDurationSeconds: 1))
+        XCTAssertNil(boundary.adjustedForDrag(deltaSeconds: 0, edge: .end,
+            metadata: metadata, recordedDurationSeconds: 0))
+        XCTAssertNil(ReferenceRepetitionBoundary(index: 0, startBeat: 8, endBeat: 4)
+            .adjustedForDrag(deltaSeconds: 0, edge: .move, metadata: metadata, recordedDurationSeconds: 12))
+    }
+
+    func testBoundaryDragCommitPreservesNeighboursEvidenceAndOverlapApprovalGate() throws {
+        var session = try reviewedSessionWithPendingWatch()
+        session.updateWatchEvidenceForTakeInReview(.linked(motionFileName: "scratch-motion.json"))
+        session.selectRepetitionForApproval(0)
+        let before = try XCTUnwrap(session.takeInReview)
+        XCTAssertNil(session.approvalBlockReason())
+        let first = try XCTUnwrap(before.evidence.boundaries.repetitions.first)
+        let proposal = try XCTUnwrap(first.adjustedForDrag(deltaSeconds: before.evidence.metadata.secondsPerBeat * 0.25,
+            edge: .move, metadata: before.evidence.metadata, recordedDurationSeconds: 20))
+        session.adjustRepetitionBoundary(repetitionIndex: first.index,
+            startBeat: proposal.startBeat, endBeat: proposal.endBeat)
+        session.revalidateTakeInReview()
+        let after = try XCTUnwrap(session.takeInReview)
+        XCTAssertEqual(Array(after.evidence.boundaries.repetitions.dropFirst()),
+            Array(before.evidence.boundaries.repetitions.dropFirst()))
+        XCTAssertEqual(after.evidence.boundaries.selectedRepetitionIndex, 0)
+        var expectedEvidence = before.evidence
+        expectedEvidence.boundaries.repetitions[0] = proposal
+        XCTAssertEqual(after.evidence, expectedEvidence, "A trim must change only the authored repetition bounds.")
+        XCTAssertTrue(session.approvalBlockReason()?.contains("starts before") == true)
+        XCTAssertThrowsError(try session.approveTakeInReview(notes: ""))
+        XCTAssertEqual(session.takeInReview?.evidence.metadata.lifecycleState, .draft)
+    }
+
+    func testBoundaryDragCannotMutateAnApprovedReadOnlyTake() throws {
+        var session = try reviewedSessionWithPendingWatch()
+        session.updateWatchEvidenceForTakeInReview(.linked(motionFileName: "scratch-motion.json"))
+        session.selectRepetitionForApproval(0)
+        try session.approveTakeInReview(notes: "Fixture approval")
+        let before = session.takes
+        session.adjustRepetitionBoundary(repetitionIndex: 0, startBeat: 5, endBeat: 9)
+        XCTAssertEqual(session.takes, before)
+    }
+
+    func testBoundaryOnlyReviewMetadataRoundTripsWithoutPreferenceNotesOrApproval() throws {
+        let session = try reviewedSessionWithPendingWatch()
+        var evidence = try XCTUnwrap(session.takeInReview).evidence
+        let sidecar = CaptureCore.LocalRecordingSidecar(sessionID: "drag-export-session", takeID: "take-001",
+            appLocalTakeNumber: 1, recordingRole: "routine", platform: "macOS", appSurface: "CXL",
+            sourceDeviceName: "Fixture Mac", startedAt: Date(timeIntervalSince1970: 100),
+            recordingStatus: "completed", mediaFileName: "take-001.mov", sidecarFileName: "take-001.json")
+        let encoder = JSONEncoder(); encoder.dateEncodingStrategy = .iso8601
+        let originalSidecar = try encoder.encode(sidecar)
+        let binding = try ReferenceTearEvidenceCodec.makeSourceBinding(rawSidecarData: originalSidecar,
+            fileName: "take-001.json")
+        let media = [ReferenceReviewMetadataDocument.OriginalMedia(fileName: "take-001.wav",
+            sha256: String(repeating: "a", count: 64))]
+        XCTAssertNil(try ReferenceReviewMetadataCodec.makeDocument(evidence: evidence, preferenceMark: nil,
+            reviewNotes: "", sourceBinding: binding, originalMedia: media), "Unchanged historical exports keep their shape.")
+        evidence.boundaries.repetitions[0].startBeat += 0.25
+        let document = try XCTUnwrap(ReferenceReviewMetadataCodec.makeDocument(evidence: evidence,
+            preferenceMark: nil, reviewNotes: "", sourceBinding: binding, originalMedia: media))
+        let restored = try XCTUnwrap(ReferenceReviewMetadataCodec.decode(
+            ReferenceReviewMetadataCodec.encode(document), expectedSource: binding))
+        XCTAssertEqual(restored, document)
+        XCTAssertEqual(restored.recordedRepetitions.first?.startBeat, evidence.boundaries.repetitions[0].startBeat)
+        XCTAssertNil(restored.preferredRepetition)
+        XCTAssertNil(restored.preferenceMark)
+        XCTAssertEqual(restored.reviewNotes, "")
+        XCTAssertEqual(restored.lifecycleStateAtExport, .draft)
+        XCTAssertEqual(restored.sourceBinding.rawSidecarData, originalSidecar)
+        XCTAssertEqual(restored.originalMedia, media)
+    }
+
     /// The 2026-09-05 take-003 shape: acknowledged, stopped, motion still
     /// transferring when media finalization read the sidecar.
     func testATakeFinalizedWhileTheTransferIsPendingIsPendingNotMissing() throws {

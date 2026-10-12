@@ -621,9 +621,13 @@ final class ReferenceAuthoringWorker: @unchecked Sendable {
     func adjustRepetitionBoundary(
         repetitionIndex: Int,
         startBeat: Double,
-        endBeat: Double
+        endBeat: Double,
+        expectedTakeID: String? = nil
     ) async -> ReferenceAuthoringWorkerUpdate {
         await enqueue { worker in
+            if let expectedTakeID, worker.session.takeInReview?.id != expectedTakeID {
+                return worker.makeUpdate()
+            }
             worker.session.adjustRepetitionBoundary(
                 repetitionIndex: repetitionIndex,
                 startBeat: startBeat,
@@ -1948,15 +1952,21 @@ final class ReferenceAuthoringViewModel: ObservableObject {
         isWaitingForWatchTransfer = false
     }
 
-    func adjustRepetitionBoundary(index: Int, startBeat: Double, endBeat: Double) {
-        guard canEditReviewedTake else { return }
+    func adjustRepetitionBoundary(index: Int, startBeat: Double, endBeat: Double, expectedTakeID: String? = nil) {
+        guard canEditReviewedTake, let takeID = session.takeInReview?.id,
+              expectedTakeID == nil || expectedTakeID == takeID else { return }
         if mediaReview.state != .loading { mediaReview.stop() }
+        // Freeze edit controls until the displayed bounds include this save;
+        // another drag must not start from the previous boundary snapshot.
+        isWorking = true
         Task { [weak self] in
             guard let self else { return }
+            defer { isWorking = false }
             apply(await worker.adjustRepetitionBoundary(
                 repetitionIndex: index,
                 startBeat: startBeat,
-                endBeat: endBeat
+                endBeat: endBeat,
+                expectedTakeID: takeID
             ))
         }
     }
