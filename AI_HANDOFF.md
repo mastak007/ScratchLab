@@ -1,3 +1,17 @@
+## 12 October 2026 — 90 BPM review correction verified and packaged
+
+Selected explicit task: repair the user-rejected review shown in six screenshots and take 16459396. The prior candidate's operator visual acceptance remains FAIL; this candidate's operator and Intel performance acceptance are NOT RUN.
+
+Confirmed fixes: Height 1x/2x enlarges the actual canvas without cropping fitted motion; the screen and PNG beat rulers use the saved fractional media origin and retain edge labels; retained previous takes are presented as read-only with the existing saved-draft reopening action. Playing the selected repetition preserves height/framing. Notes, preference edits and approval remain guarded by the existing domain state. Real saved ramps, unknown motion, media, boundaries and timestamps were preserved.
+
+Files changed: ScratchLabDesktop/Views/ReferenceAuthoringView.swift; ScratchLabDesktop/ViewModels/ReferenceAuthoringViewModel.swift; ScratchLabDesktop/Views/ScratchPhraseChartView.swift; ScratchLab/Services/ReferenceNotationPNGExport.swift; ScratchLab/Services/SessionExportCoordinator.swift; ScratchLabDesktopTests/ReferenceAuthoringViewModelTests.swift; ScratchLabDesktopTests/ScratchNotationPanelTests.swift. Four workflow records were finalized separately from tested code.
+
+Exact complete 752-path snapshot 99a8780029f285e32321224564bfed605759d1d9767ea5ac82a9091b5275733b passed scripts/build.sh all: 9,350 XCTest passes, 124 skips, zero failures; 1,064 named Swift Testing passes; 123 Python tests; iOS, macOS Release/CXLRelease and Watch builds PASS. All 21 required regressions ran twice. All eight real-take chart renders passed visual review: seven match the reviewed bootstrap bytes, and repetition 1 at 1x was reinspected after a single-pixel, one-channel-level difference. The full signed universal Developer ID Capture build and strict signature/ZIP round-trip passed. Earlier compile-failed/interrupted candidates are superseded, not PASS receipts.
+
+Package: SL-Capture-Review-Correction-2026-10-12.zip, SHA-256 d53bfffdbc1a30a2fb424716b017eb164b9d18197e70d5a40a57fc4fc8ebe94e. The delivery location, source archive, receipts, exact changed-file list and same-take verification steps are recorded in /Users/karlwatson/ScratchLab-Local-Evidence/2026-10-12/review-correction-16459396/RESULT.md. The original ZIP and protected untracked CoachDemoMotion/cxl_baby_target.json remain unchanged. No app was installed or launched; existing apps and unsaved work were preserved. Package is not notarized. No new physical audio, calibration or Intel responsiveness claim is made.
+
+Checkpoint/commit/push were explicitly authorized earlier in this same repair. Their observed completion, commit and remote identity are recorded in /Users/karlwatson/ScratchLab-Local-Evidence/2026-10-12/review-correction-16459396/GIT-RECEIPT.json after Git succeeds. Do not infer remote completion from this pre-commit record. Code/test bytes must match the frozen source; only these four workflow records may advance. Use the existing saved 90 BPM draft to verify all four repetitions at both heights; no new take is required for this display check. Do not restart completed verification or implement unrelated pending tasks.
+
 <!-- all-capture-checkpoint-20261012 begin -->
 ## 12 October 2026 — all current Capture changes authorized for checkpoint
 

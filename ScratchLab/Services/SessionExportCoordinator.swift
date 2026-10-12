@@ -6472,7 +6472,8 @@ struct SessionArchiveBuilder: Sendable {
             projection: evidence?.projection,
             sourceIdentity: ExportArtifactIdentity.data(context.referenceTearEvidence?.data ?? Data()).sha256
                 + ":" + (try ExportSemanticIdentity.digest(context.sidecar)),
-            beatsPerBar: context.sidecar.sessionConfig?.beatsPerBar ?? metadata.beatsPerBar)
+            beatsPerBar: context.sidecar.sessionConfig?.beatsPerBar ?? metadata.beatsPerBar,
+            beatTimelineOffsetSeconds: context.sidecar.captureTiming?.recordingStartOffsetSeconds ?? 0)
     }
 
     private func manifestAllowedBPMs(

@@ -35,6 +35,10 @@ struct ScratchPhraseChartView: View {
     /// Beatless audio references still need the notation renderer, but must not
     /// imply a tempo by drawing beat/subdivision lines and beat numbers.
     var showBeatGrid: Bool = true
+    /// The saved delay from the authored beat clock to recorded media zero.
+    /// This moves only ruler ticks/labels; motion, faders and playhead keep
+    /// their existing media-relative coordinates. Live/legacy callers use zero.
+    var beatTimelineOffsetSeconds: Double = 0
     /// Review-only render-time window for the `.target` source. When `nil`,
     /// the chart renders the full notation timeline (Practice/iOS/preview
     /// behaviour preserved). When set, the chart maps `[lowerBound, upperBound]`
@@ -812,6 +816,36 @@ struct ScratchPhraseChartView: View {
 
     // MARK: - Helpers
 
+    struct BeatTimeline {
+        let beatInterval: Double
+        let offsetSeconds: Double
+
+        init?(beatsPerMinute: Double, offsetSeconds: Double = 0) {
+            guard beatsPerMinute.isFinite, beatsPerMinute > 0 else { return nil }
+            let interval = 60 / beatsPerMinute
+            guard interval.isFinite, interval > 0 else { return nil }
+            self.beatInterval = interval
+            self.offsetSeconds = offsetSeconds.isFinite ? offsetSeconds : 0
+        }
+
+        func mediaTime(forBeat beat: Double) -> Double {
+            beat * beatInterval - offsetSeconds
+        }
+
+        func beat(atMediaTime time: Double) -> Double {
+            (time + offsetSeconds) / beatInterval
+        }
+
+        /// Clamp floating-point edge roundoff only, never an out-of-frame tick.
+        func gridX(forBeat beat: Double, startTime: Double, duration: Double, width: CGFloat) -> CGFloat? {
+            guard duration.isFinite, duration > 0, width.isFinite, width > 0 else { return nil }
+            let x = CGFloat((mediaTime(forBeat: beat) - startTime) / duration) * width
+            let edgeTolerance: CGFloat = 0.000001
+            guard x.isFinite, x >= -edgeTolerance, x <= width + edgeTolerance else { return nil }
+            return min(width, max(0, x))
+        }
+    }
+
     private func drawDots(ctx: GraphicsContext, p1: CGPoint, p2: CGPoint, alpha: Double = 1) {
         let r: CGFloat = 4
         ctx.fill(Path(ellipseIn: CGRect(x: p1.x - r, y: p1.y - r, width: r * 2, height: r * 2)),
@@ -824,8 +858,10 @@ struct ScratchPhraseChartView: View {
                               startTime: Double = 0,
                               duration: Double, pps: CGFloat,
                               labelBottomY: CGFloat, beatsPerMinute: Double? = nil) {
-        guard showBeatGrid else { return }
-        let beatInterval = 60.0 / (beatsPerMinute ?? max(bpm, 1))
+        guard showBeatGrid,
+              let timeline = BeatTimeline(beatsPerMinute: beatsPerMinute ?? max(bpm, 1),
+                  offsetSeconds: beatTimelineOffsetSeconds) else { return }
+        let beatInterval = timeline.beatInterval
         let subdivInterval = beatInterval / 2  // eighth-note subdivision
 
         // Width-aware density. Subdivisions only appear when a beat is wide
@@ -836,14 +872,16 @@ struct ScratchPhraseChartView: View {
         let showSubdivisions = beatSpacing >= 9
 
         let gridStep = showSubdivisions ? subdivInterval : beatInterval
+        let subdivisionsPerBeat = showSubdivisions ? 2 : 1
         let endTime = startTime + duration
-        var index = Int((startTime / gridStep).rounded(.down))
-        var t = Double(index) * gridStep
-        while t <= endTime + gridStep * 0.5 {
-            let x = CGFloat(t - startTime) * pps
-            if x >= 0 && x <= size.width {
-                let beatIndex = Int((t / beatInterval).rounded())
-                let onBeat = abs(t - Double(beatIndex) * beatInterval) < beatInterval * 0.25
+        guard let firstIndex = Int(exactly: ((startTime + timeline.offsetSeconds) / gridStep).rounded(.down)),
+              let lastIndex = Int(exactly: ((endTime + timeline.offsetSeconds) / gridStep).rounded(.up)),
+              endTime.isFinite, firstIndex <= lastIndex else { return }
+        for index in firstIndex...lastIndex {
+            let beat = Double(index) / Double(subdivisionsPerBeat)
+            if let x = timeline.gridX(forBeat: beat, startTime: startTime, duration: duration, width: size.width) {
+                let beatIndex = index / subdivisionsPerBeat
+                let onBeat = index.isMultiple(of: subdivisionsPerBeat)
                 let isBar = onBeat && beatIndex % 4 == 0
 
                 // Bar > beat > subdivision, by weight and opacity — a quiet
@@ -866,17 +904,17 @@ struct ScratchPhraseChartView: View {
 
                 // Numerals track absolute timeline beats; subdivisions carry none.
                 if onBeat, beatIndex > 0, beatIndex % labelStride == 0 {
-                    ctx.draw(
-                        Text("\(beatIndex)")
+                    let label = ctx.resolve(Text("\(beatIndex)")
                             .font(.system(size: 10, design: .monospaced))
-                            .foregroundStyle(Color(white: 0.55)),
-                        at: CGPoint(x: x + 2, y: labelBottomY),
-                        anchor: .bottomLeading
+                            .foregroundStyle(Color(white: 0.55)))
+                    let labelWidth = label.measure(in: CGSize(width: CGFloat.infinity, height: CGFloat.infinity)).width
+                    let trailing = x + 2 + labelWidth > size.width
+                    ctx.draw(label,
+                        at: CGPoint(x: trailing ? min(x, size.width - 2) : x + 2, y: labelBottomY),
+                        anchor: trailing ? .bottomTrailing : .bottomLeading
                     )
                 }
             }
-            t += gridStep
-            index += 1
         }
     }
 

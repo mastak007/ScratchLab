@@ -1059,6 +1059,7 @@ final class ReferenceAuthoringViewModel: ObservableObject {
 
     /// Keep partial validation and the playback/beat gate visible together.
     var approvalBlockReasons: [String] {
+        guard !isShowingReadOnlyTake else { return [] }
         var seen = Set<String>()
         return [session.approvalBlockReason(), approvalBlockReason, mediaReview.beatBindingIssue]
             .compactMap { $0 }
@@ -1066,6 +1067,8 @@ final class ReferenceAuthoringViewModel: ObservableObject {
     }
 
     var canEditReviewedTake: Bool { session.takeInReview != nil && !isWorking }
+
+    var isShowingReadOnlyTake: Bool { reviewedTake != nil && session.takeInReview == nil }
 
     var canApprove: Bool { approvalBlockReason == nil }
 

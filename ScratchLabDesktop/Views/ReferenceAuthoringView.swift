@@ -185,8 +185,8 @@ struct ReferenceAuthoringView: View {
             motionReviewFocus = nil
         }
         .onChange(of: viewModel.reviewedTake?.evidence.boundaries.repetitions) { _, _ in
-            // A trim changes the inspected window; discard its extra height zoom.
-            motionReviewFocus?.verticalZoom = 1
+            // A trim changes the inspected window; restore the compact chart height.
+            motionReviewFocus?.heightScale = 1
         }
         .onChange(of: viewModel.selectedTechnique) { _, _ in
             viewModel.refreshAutofilledPatternIdentity()
@@ -1627,9 +1627,8 @@ struct ReferenceAuthoringView: View {
                     evidenceSummary(take)
                     ReferenceMediaReviewStatus(controller: viewModel.mediaReview,
                         showsVideo: focusedBoundary(for: take) == nil)
-                    if viewModel.session.takeInReview == nil {
-                        Text("Previous take — read-only. You can play or save it; recording a new take starts a new review.")
-                            .font(.callout).foregroundStyle(.secondary)
+                    if viewModel.isShowingReadOnlyTake {
+                        readOnlyTakeStatus(take)
                     }
 
                     // The detector is limited to Baby Scratch, so on a Tear
@@ -1717,6 +1716,7 @@ struct ReferenceAuthoringView: View {
 
                     TextField("Review notes (saved with the draft and Save Capture)", text: $viewModel.reviewNotes, axis: .vertical)
                         .lineLimit(2...4)
+                        .disabled(!viewModel.canEditReviewedTake)
 
                     // Approval's scope, stated wherever approval is offered.
                     // Approving marks ONE draft canonical inside this session.
@@ -1765,7 +1765,7 @@ struct ReferenceAuthoringView: View {
                                 .font(.caption)
                                 .foregroundStyle(.secondary)
                         }
-                    } else {
+                    } else if !viewModel.isShowingReadOnlyTake {
                         HStack {
                             Button("Reject Take") { viewModel.rejectTake() }
                                 .disabled(!viewModel.canRejectReviewedTake)
@@ -1793,9 +1793,21 @@ struct ReferenceAuthoringView: View {
         }
     }
 
+    private func readOnlyTakeStatus(_ take: ReferenceAuthoringTake) -> some View {
+        HStack {
+            Text("Previous take · read-only. Playback and Save Capture are available.")
+                .font(.callout).foregroundStyle(.secondary)
+            if viewModel.savedDrafts.contains(where: { $0.id == take.id }) {
+                Button("Open for Review") { viewModel.reopenDraft(take.id) }
+                    .disabled(!viewModel.canOpenSavedDraft || exportCoordinator.isPreparing)
+            }
+        }
+    }
+
     private func reviewCompletionControls(_ take: ReferenceAuthoringTake) -> some View {
         VStack(alignment: .leading, spacing: 6) {
-            if take.evidence.metadata.lifecycleState != .approvedCanonical,
+            if !viewModel.isShowingReadOnlyTake,
+               take.evidence.metadata.lifecycleState != .approvedCanonical,
                take.evidence.metadata.captureIntent?.isMovementCheck != true {
                 Button("Approve & Save Capture…") { saveRawCapture(approvingCanonical: true) }
                     .buttonStyle(.borderedProminent)
@@ -1870,15 +1882,14 @@ struct ReferenceAuthoringView: View {
                     return ReferenceMotionReviewViewport.section(in: fullFrame.timeRange, index: focus?.sectionIndex ?? 0)
                 }
                 let zoomed = selectedRange != nil && (focus?.isZoomed ?? true)
-                let verticalZoom = focus?.verticalZoom ?? 1
+                let heightScale = focus?.heightScale ?? 1
                 let selectedFrame = ReferenceMotionReviewViewport.frame(fullFrame,
                     selectedRange: selectedRange, zoomed: true)
                 let fittedFrame = selectedRange == nil ? nil
                     : selectedFrame.fittedVisibleMotionFrame(in: projection.records, layer: .performance)
-                let frame = zoomed
-                    ? fittedFrame.map { ReferenceMotionReviewViewport.zoomHeight($0, factor: verticalZoom) }
-                        ?? selectedFrame
-                    : fullFrame
+                let frame = zoomed ? fittedFrame ?? selectedFrame : fullFrame
+                let displayHeight = ReferenceMotionReviewViewport.displayHeight(
+                    base: minimumChartHeight, scale: heightScale)
                 if let take = reviewTake {
                     VStack(alignment: .leading, spacing: 4) {
                         HStack {
@@ -1911,28 +1922,27 @@ struct ReferenceAuthoringView: View {
                             Text("Height")
                             Button("−") {
                                 motionReviewFocus = .init(takeID: take.id, repetitionIndex: boundary?.index ?? -1,
-                                    isZoomed: true, sectionIndex: focus?.sectionIndex ?? 0,
-                                    verticalZoom: max(1, verticalZoom / 2))
+                                    isZoomed: zoomed, sectionIndex: focus?.sectionIndex ?? 0,
+                                    heightScale: max(1, heightScale / 2))
                             }
-                            .accessibilityLabel("Zoom out vertically")
-                            .disabled(!zoomed || fittedFrame == nil || verticalZoom <= 1)
-                            Text("\(zoomed ? verticalZoom : 1, specifier: "%.0f")×")
+                            .accessibilityLabel("Decrease chart height")
+                            .disabled(heightScale <= 1)
+                            Text("\(heightScale, specifier: "%.0f")×")
                                 .monospacedDigit().frame(width: 28)
                             Button("+") {
                                 motionReviewFocus = .init(takeID: take.id, repetitionIndex: boundary?.index ?? -1,
-                                    isZoomed: true, sectionIndex: focus?.sectionIndex ?? 0,
-                                    verticalZoom: min(8, verticalZoom * 2))
+                                    isZoomed: zoomed, sectionIndex: focus?.sectionIndex ?? 0,
+                                    heightScale: min(2, heightScale * 2))
                             }
-                            .accessibilityLabel("Zoom in vertically")
-                            .disabled(fittedFrame == nil || verticalZoom >= 8)
-                            Button("Re-centre") {
+                            .accessibilityLabel("Increase chart height")
+                            .disabled(heightScale >= 2)
+                            Button("Reset height") {
                                 motionReviewFocus = .init(takeID: take.id, repetitionIndex: boundary?.index ?? -1,
-                                    isZoomed: true, sectionIndex: focus?.sectionIndex ?? 0)
+                                    isZoomed: zoomed, sectionIndex: focus?.sectionIndex ?? 0)
                             }
-                            .disabled(fittedFrame == nil)
+                            .disabled(heightScale <= 1)
                             Text(!zoomed ? "Whole-take scale" : fittedFrame == nil
-                                ? "No supported motion to fit" : verticalZoom == 1
-                                ? "Fitted height · view only" : "Height zoom · view only")
+                                ? "No supported motion to fit" : "Full trace · fitted range")
                                 .foregroundStyle(.secondary)
                         }
                         .font(.caption)
@@ -1947,6 +1957,7 @@ struct ReferenceAuthoringView: View {
                         ?? .canonical(projection.records, layer: .performance, frame: frame),
                     bpm: chartBPM,
                     showBeatGrid: reviewTake?.evidence.metadata.captureIntent?.isMovementCheck != true,
+                    beatTimelineOffsetSeconds: reviewTake?.evidence.metadata.mediaTimeOrigin?.recordingStartOffsetSeconds ?? 0,
                     wrapPeriod: wrapPeriod,
                     mixerFaders: projection.mixerFaders,
                     showsMixerFaderLanes: true,
@@ -1956,7 +1967,8 @@ struct ReferenceAuthoringView: View {
                 // inside an unbounded `ScrollView`, where `.infinity` resolves
                 // to the IDEAL height and collapses the lane — the same trap
                 // documented on `liveNotationMinimumHeight`.
-                .frame(maxWidth: .infinity, minHeight: minimumChartHeight)
+                .frame(maxWidth: .infinity)
+                .frame(height: displayHeight)
                 .clipped()
                 .overlay {
                     if let selectedRange, !zoomed {
@@ -2159,6 +2171,7 @@ struct ReferenceAuthoringView: View {
                 axis: .vertical
             )
             .lineLimit(1...3)
+            .disabled(!viewModel.canCorrectTearReview)
             HStack {
                 Button("Save Tear Review Notes") { viewModel.commitTearReviewNotes() }
                     .disabled(!viewModel.canCorrectTearReview)
@@ -2539,6 +2552,9 @@ struct ReferenceAuthoringView: View {
         VStack(alignment: .leading, spacing: 6) {
             HStack {
                 Text("Repetition \(boundary.index + 1)").font(.callout.weight(.semibold))
+                if viewModel.isShowingReadOnlyTake {
+                    Text("Read-only").font(.caption).foregroundStyle(.secondary)
+                }
                 Spacer()
                 Button(focusedBoundary(for: take)?.index == boundary.index ? "Review selected" : "Review bounds") {
                     focusMotion(on: boundary, take: take)
@@ -2618,7 +2634,8 @@ struct ReferenceAuthoringView: View {
     }
 
     private func focusMotion(on boundary: ReferenceRepetitionBoundary, take: ReferenceAuthoringTake) {
-        motionReviewFocus = .init(takeID: take.id, repetitionIndex: boundary.index, isZoomed: true)
+        motionReviewFocus = ReferenceMotionReviewFocus.selecting(takeID: take.id,
+            repetitionIndex: boundary.index, current: motionReviewFocus)
     }
 
     private func startBeatBinding(for boundary: ReferenceRepetitionBoundary) -> Binding<Double> {
@@ -3061,12 +3078,19 @@ private struct ReferenceRecordedVideo: NSViewRepresentable {
 }
 
 
-private struct ReferenceMotionReviewFocus {
+struct ReferenceMotionReviewFocus: Equatable {
     let takeID: String
     let repetitionIndex: Int
     let isZoomed: Bool
     var sectionIndex: Int = 0
-    var verticalZoom: Double = 1
+    var heightScale: Double = 1
+
+    static func selecting(takeID: String, repetitionIndex: Int, current: Self?) -> Self {
+        if let current, current.takeID == takeID, current.repetitionIndex == repetitionIndex {
+            return current
+        }
+        return .init(takeID: takeID, repetitionIndex: repetitionIndex, isZoomed: true)
+    }
 }
 
 /// Presentation-only framing. Saved records and export coordinates stay
@@ -3097,25 +3121,20 @@ enum ReferenceMotionReviewViewport {
 
     static func frame(_ fullFrame: ScratchStrokeGeometry.CanonicalFrame,
                       selectedRange: ClosedRange<Double>?, zoomed: Bool,
-                      records: [ScratchNotation.GestureRecord] = [],
-                      verticalZoom: Double = 1) -> ScratchStrokeGeometry.CanonicalFrame {
+                      records: [ScratchNotation.GestureRecord] = []) -> ScratchStrokeGeometry.CanonicalFrame {
         guard zoomed, let selectedRange,
               let selected = ScratchStrokeGeometry.CanonicalFrame(timeRange: selectedRange,
                 positionRange: fullFrame.positionRange, coordinateSpace: fullFrame.coordinateSpace,
                 beatsPerMinute: fullFrame.beatsPerMinute) else { return fullFrame }
         guard let fitted = selected.fittedVisibleMotionFrame(in: records, layer: .performance) else { return selected }
-        return zoomHeight(fitted, factor: verticalZoom)
+        return fitted
     }
 
-    static func zoomHeight(_ frame: ScratchStrokeGeometry.CanonicalFrame,
-                           factor: Double) -> ScratchStrokeGeometry.CanonicalFrame {
-        guard factor.isFinite, factor > 1 else { return frame }
-        let centre = frame.positionRange.lowerBound / 2 + frame.positionRange.upperBound / 2
-        let halfSpan = (frame.positionRange.upperBound - frame.positionRange.lowerBound) / (2 * min(factor, 8))
-        guard centre.isFinite, halfSpan.isFinite, halfSpan > 0 else { return frame }
-        return ScratchStrokeGeometry.CanonicalFrame(timeRange: frame.timeRange,
-            positionRange: (centre - halfSpan)...(centre + halfSpan), coordinateSpace: frame.coordinateSpace,
-            beatsPerMinute: frame.beatsPerMinute) ?? frame
+    /// Enlarge the canvas, not the coordinate range: every measured extremum
+    /// and unknown interval must remain visible at both supported heights.
+    static func displayHeight(base: CGFloat, scale: Double) -> CGFloat {
+        let boundedScale = scale.isFinite ? min(2, max(1, scale)) : 1
+        return base * CGFloat(boundedScale)
     }
 
     static func visibleFractions(_ selection: ClosedRange<Double>,

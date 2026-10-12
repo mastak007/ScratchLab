@@ -2180,6 +2180,70 @@ extension DenseCanonicalMuteRenderingTests {
 }
 
 @MainActor
+final class ScratchPhraseBeatTimelineTests: XCTestCase {
+    func testSavedFractionalOriginAlignsFirstAndThirdRepetitionBeatLabels() throws {
+        let timeline = try XCTUnwrap(ScratchPhraseChartView.BeatTimeline(
+            beatsPerMinute: 90, offsetSeconds: 2.549308774))
+        // Timing from take 16459396. These are clock-alignment assertions,
+        // not an invented replacement for the recorded movement or audio.
+        XCTAssertEqual(timeline.mediaTime(forBeat: 4), 0.11735789266666652, accuracy: 1e-12)
+        XCTAssertEqual(timeline.mediaTime(forBeat: 20), 10.784024559333333, accuracy: 1e-12)
+        for beat in [4.0, 12, 20, 28] {
+            XCTAssertEqual(timeline.beat(atMediaTime: timeline.mediaTime(forBeat: beat)), beat, accuracy: 1e-12)
+        }
+        XCTAssertEqual(timeline.beat(atMediaTime: 0), 3.823963161, accuracy: 1e-12,
+            "The actual fractional origin must not be rounded to the four-beat count-in")
+    }
+
+    func testDefaultBeatTimelinePreservesMediaZeroForLiveAndLegacyCharts() throws {
+        let timeline = try XCTUnwrap(ScratchPhraseChartView.BeatTimeline(beatsPerMinute: 90))
+        XCTAssertEqual(timeline.offsetSeconds, 0)
+        XCTAssertEqual(timeline.mediaTime(forBeat: 0), 0)
+        XCTAssertEqual(timeline.mediaTime(forBeat: 4), 8.0 / 3, accuracy: 1e-12)
+        XCTAssertEqual(timeline.beat(atMediaTime: 8), 12)
+        XCTAssertEqual(ScratchPhraseChartView(source: .empty("fixture")).beatTimelineOffsetSeconds, 0)
+    }
+
+    func testAllFourSavedRepetitionRulersIncludeBothEdgesAndExcludeOutsideTicks() throws {
+        let timeline = try XCTUnwrap(ScratchPhraseChartView.BeatTimeline(
+            beatsPerMinute: 90, offsetSeconds: 2.549308774))
+        let width: CGFloat = 868
+        for first in [4.0, 12, 20, 28] {
+            let last = first + 8
+            let start = timeline.mediaTime(forBeat: first)
+            let duration = timeline.mediaTime(forBeat: last) - start
+            for index in 0...16 {
+                let x = try XCTUnwrap(timeline.gridX(forBeat: first + Double(index) / 2,
+                    startTime: start, duration: duration, width: width))
+                XCTAssertEqual(x, CGFloat(index) * width / 16, accuracy: 1e-9)
+            }
+            XCTAssertEqual(timeline.gridX(forBeat: first.nextDown,
+                startTime: start, duration: duration, width: width), 0,
+                "One representable step of roundoff must not drop the left edge")
+            XCTAssertEqual(timeline.gridX(forBeat: last.nextUp,
+                startTime: start, duration: duration, width: width), width,
+                "One representable step of roundoff must not drop the right edge")
+            for outside in [first - 0.001, last + 0.001, first - 0.5, last + 0.5] {
+                XCTAssertNil(timeline.gridX(forBeat: outside,
+                    startTime: start, duration: duration, width: width))
+            }
+        }
+    }
+
+    func testBeatTimelineRejectsInvalidTempoAndSafelyDefaultsNonfiniteDisplayOffset() throws {
+        for bpm in [0, -90, Double.nan, .infinity, -.infinity, .leastNonzeroMagnitude] {
+            XCTAssertNil(ScratchPhraseChartView.BeatTimeline(beatsPerMinute: bpm))
+        }
+        for offset in [Double.nan, .infinity, -.infinity] {
+            let timeline = try XCTUnwrap(ScratchPhraseChartView.BeatTimeline(
+                beatsPerMinute: 90, offsetSeconds: offset))
+            XCTAssertEqual(timeline.offsetSeconds, 0)
+            XCTAssertEqual(timeline.mediaTime(forBeat: 4), 8.0 / 3, accuracy: 1e-12)
+        }
+    }
+}
+
+@MainActor
 final class ReferenceNotationPNGTests: XCTestCase {
     private func request(duration: Double = 22.469, projection: ReferenceTearCanonicalProjection? = nil) throws -> ReferenceNotationPNGExport.Request {
         try .init(performer: "DJ reference", sessionID: "session", takeID: "take", takeNumber: 1,
@@ -2231,6 +2295,83 @@ final class ReferenceNotationPNGTests: XCTestCase {
             XCTAssertLessThanOrEqual(long.pageRanges.count, 225)
             let bars = long.rowDuration / (180 / Double(bpm))
             XCTAssertEqual(bars, bars.rounded(), accuracy: 1e-9)
+        }
+    }
+
+    func testTimedPNGRulerUsesFractionalOriginWithoutChangingStoredMotionOrRowFrames() throws {
+        let projection = ReferenceTearCanonicalProjectionBuilder.project(movementEvents: [
+            .init(startTime: 0.2, endTime: 3, startPosition: 0, endPosition: 1,
+                direction: "forward", movementKind: .normalPush, speed: 1, confidence: 1, source: "test")
+        ])
+        func timedRequest(offset: Double = 0) throws -> ReferenceNotationPNGExport.Request {
+            try .init(performer: "Synthetic timing fixture", sessionID: "fixture", takeID: "fixture", takeNumber: 1,
+                scratchType: "Baby Scratch", bpm: 90, duration: 12, showBeatGrid: true,
+                projection: projection, sourceIdentity: "synthetic", beatTimelineOffsetSeconds: offset)
+        }
+        let legacy = try timedRequest()
+        let aligned = try timedRequest(offset: 2.549308774)
+        XCTAssertEqual(legacy.beatTimelineOffsetSeconds, 0)
+        XCTAssertEqual(aligned.beatTimelineOffsetSeconds, 2.549308774)
+        XCTAssertNotEqual(try aligned.identity, try legacy.identity,
+            "The preview cache must not reuse a PNG with the previous ruler")
+        XCTAssertEqual(aligned.projection, legacy.projection)
+        XCTAssertEqual(aligned.pageRanges, legacy.pageRanges)
+        for range in aligned.pageRanges.flatMap({ $0 }) {
+            XCTAssertEqual(aligned.frame(for: range), legacy.frame(for: range))
+        }
+        let oldPNG = try ReferenceNotationPNGExport.render(legacy, page: 0)
+        let alignedPNG = try ReferenceNotationPNGExport.render(aligned, page: 0)
+        _ = try ReferenceNotationPNGExport.probe(alignedPNG)
+        XCTAssertNotEqual(alignedPNG, oldPNG, "The shared PNG chart must receive the saved timing offset")
+        let attachment = XCTAttachment(data: alignedPNG, uniformTypeIdentifier: "public.png")
+        attachment.name = "Synthetic 90 BPM ruler with saved fractional recording origin"
+        attachment.lifetime = .keepAlways
+        add(attachment)
+        for offset in [Double.nan, .infinity, -.infinity, -0.1] {
+            XCTAssertThrowsError(try timedRequest(offset: offset),
+                "Invalid persisted timing must not be exported with a plausible zero-origin ruler")
+        }
+    }
+
+    func testPNGRequestReadsBoundSidecarOriginAndPreservesLegacyMissingOrigin() throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("PNGBeatOrigin-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        addTeardownBlock { try? FileManager.default.removeItem(at: directory) }
+        let fixtures = CaptureReliabilityPhase1CoreTests(selector: NSSelectorFromString(
+            "testCanonicalMultiTakeArchiveContainsEveryUniqueArtifactAndManifestRecord"))
+        var package = try fixtures.makeCanonicalPackage(rootURL: directory, useRealMedia: true)
+        var sourceBytes: [String: Data] = [:]
+        for take in package.takes {
+            var sidecar = try SessionArchiveBuilder().decodeSidecarForAudit(at: take.sidecarURL)
+            if take.bpm == 90 {
+                sidecar.captureTiming = .init(clickStartHostTime: 100, recordingStartHostTime: 200,
+                    recordingStartOffsetSeconds: 2.549308774)
+            } else {
+                sidecar.captureTiming = nil
+            }
+            sidecar = sidecar.withDetectedNotation(fixtures.makeDetectedNotationSnapshot(),
+                recordedAt: sidecar.endedAt ?? sidecar.startedAt)
+            let bytes = try sidecar.encodedData()
+            try bytes.write(to: take.sidecarURL, options: .atomic)
+            sourceBytes[take.takeID] = bytes
+            let binding = try ReferenceTearEvidenceCodec.makeSourceBinding(
+                rawSidecarData: bytes, fileName: take.sidecarURL.lastPathComponent)
+            let review = ReferenceTearSegmentationReviewBuilder.build(referenceTakeID: "fixture-\(take.takeNumber)",
+                movementEvents: try XCTUnwrap(sidecar.detectedNotation).recordMovementEvents, derivation: nil)
+            package.referenceTearEvidenceByTakeID[take.takeID] = try ReferenceTearEvidenceCodec.encode(
+                sourceBinding: binding, review: review, projection: ReferenceTearCanonicalProjectionBuilder.project(review),
+                performedLimitations: review.requiredIntrinsicComparisonLimitations)
+        }
+        let requests = try SessionArchiveBuilder().notationPNGRequests(for: package)
+        XCTAssertEqual(requests.count, package.takes.count)
+        for take in package.takes {
+            let request = try XCTUnwrap(requests.first { $0.takeID == take.takeID })
+            XCTAssertEqual(request.beatTimelineOffsetSeconds, take.bpm == 90 ? 2.549308774 : 0)
+            let original = try ReferenceTearEvidenceCodec.decodeDocument(
+                XCTUnwrap(package.referenceTearEvidenceByTakeID[take.takeID]))
+            XCTAssertEqual(request.projection, original.projection)
+            XCTAssertEqual(try Data(contentsOf: take.sidecarURL), sourceBytes[take.takeID])
         }
     }
 

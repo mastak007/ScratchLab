@@ -21,20 +21,23 @@ enum ReferenceNotationPNGExport {
         let beatsPerBar: Int
         let duration: Double
         let showBeatGrid: Bool
+        let beatTimelineOffsetSeconds: Double
         let projection: ReferenceTearCanonicalProjection?
         let sourceIdentity: String
 
         init(performer: String, sessionID: String, takeID: String, takeNumber: Int,
              scratchType: String, bpm: Int, duration: Double, showBeatGrid: Bool,
              projection: ReferenceTearCanonicalProjection?, sourceIdentity: String,
-             beatsPerBar: Int = 4) throws {
+             beatsPerBar: Int = 4, beatTimelineOffsetSeconds: Double = 0) throws {
             // Bound allocations before converting an externally persisted duration to Int.
-            guard duration.isFinite, duration > 0, duration <= 3600, bpm > 0, (1...32).contains(beatsPerBar) else {
+            guard duration.isFinite, duration > 0, duration <= 3600, bpm > 0, (1...32).contains(beatsPerBar),
+                  beatTimelineOffsetSeconds.isFinite, beatTimelineOffsetSeconds >= 0 else {
                 throw SessionExportError.invalidSessionMetadata
             }
             self.performer = performer; self.sessionID = sessionID; self.takeID = takeID
             self.takeNumber = takeNumber; self.scratchType = scratchType; self.bpm = bpm
             self.duration = duration; self.showBeatGrid = showBeatGrid
+            self.beatTimelineOffsetSeconds = beatTimelineOffsetSeconds
             self.beatsPerBar = beatsPerBar
             self.projection = projection; self.sourceIdentity = sourceIdentity
         }
@@ -158,6 +161,7 @@ private struct ReferenceNotationPNGPage: View {
                             ScratchPhraseChartView(
                                 source: .canonical(projection.records, layer: .performance, frame: frame),
                                 bpm: Double(request.bpm), showBeatGrid: request.showBeatGrid,
+                                beatTimelineOffsetSeconds: request.beatTimelineOffsetSeconds,
                                 mixerFaders: projection.mixerFaders, showsMixerFaderLanes: true,
                                 backgroundColor: .clear)
                                 .frame(width: width / scale, height: 240 / scale)
